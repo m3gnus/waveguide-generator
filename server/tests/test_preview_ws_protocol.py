@@ -140,6 +140,48 @@ def test_app_owned_preview_service_rejects_work_after_bounded_shutdown() -> None
     asyncio.run(scenario())
 
 
+def test_preview_service_reuses_and_evicts_bounded_geometry() -> None:
+    service = PreviewComputeService(max_workers=1, max_cache_entries=1, max_cache_bytes=10)
+    builds = 0
+
+    def build() -> object:
+        nonlocal builds
+        builds += 1
+        return object()
+
+    first = service.get_or_build("first", build, size_of=lambda _value: 4)
+    assert service.get_or_build("first", build, size_of=lambda _value: 4) is first
+    service.get_or_build("second", build, size_of=lambda _value: 4)
+    service.get_or_build("first", build, size_of=lambda _value: 4)
+    assert builds == 3
+
+
+def test_protocol_reuses_injected_builder_for_identical_geometry_requests() -> None:
+    async def scenario() -> None:
+        builds = 0
+
+        def builder(_config: Mapping[str, Any], _options: Any):
+            nonlocal builds
+            builds += 1
+            return _small_geometry()
+
+        transport = FakeTransport()
+        protocol = PreviewProtocol(epoch=72, preview_builder=builder)
+        task = asyncio.create_task(protocol.run(transport))
+        await _wait_until(lambda: bool(transport.json))
+        await transport.incoming.put(_request(72, 1, revision=10))
+        await _wait_until(lambda: len(transport.binary) == 1)
+        await transport.incoming.put(_request(72, 2, revision=11))
+        await _wait_until(lambda: len(transport.binary) == 2)
+        await transport.incoming.put(None)
+        await task
+
+        assert builds == 1
+        assert [decode(frame)[0]["seq"] for frame in transport.binary] == [1, 2]
+
+    asyncio.run(scenario())
+
+
 def test_one_pending_slot_is_latest_wins_and_reports_replacement() -> None:
     async def scenario() -> None:
         started = threading.Event()
@@ -269,6 +311,8 @@ def test_lod_names_map_to_complete_mesher_presets() -> None:
         assert options.include_enclosure
         assert options.include_source_cap
         assert options.include_rear_cap
+    assert coarse.include_curvature is False
+    assert fine.include_curvature is True
 
 
 def test_curve_kind_coalesces_through_binary_codec() -> None:

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from itertools import count
 import json
 import math
+import threading
 import time
 from typing import Any, Literal, Protocol
 
@@ -29,16 +31,28 @@ CLOSE_TOO_LARGE = 4413
 CLOSE_RESTARTING = 1012
 
 _EPOCHS = count(1)
+_INJECTED_BUILDER_NAMESPACES = count(1)
 
 
 class PreviewComputeService:
     """Application-owned executor with an explicit bounded shutdown policy."""
 
-    def __init__(self, *, max_workers: int = 4) -> None:
+    def __init__(
+        self,
+        *,
+        max_workers: int = 4,
+        max_cache_entries: int = 16,
+        max_cache_bytes: int = 64 * 1024 * 1024,
+    ) -> None:
         self._executor = ThreadPoolExecutor(
             max_workers=max_workers, thread_name_prefix="wg-preview"
         )
         self._closed = False
+        self._max_cache_entries = max(0, max_cache_entries)
+        self._max_cache_bytes = max(0, max_cache_bytes)
+        self._cache_bytes = 0
+        self._cache: OrderedDict[str, tuple[Any, int]] = OrderedDict()
+        self._cache_lock = threading.Lock()
 
     @property
     def closed(self) -> bool:
@@ -50,10 +64,51 @@ class PreviewComputeService:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(self._executor, function, *args)
 
+    def get_or_build(
+        self,
+        key: str,
+        builder: Callable[[], Any],
+        *,
+        size_of: Callable[[Any], int],
+    ) -> Any:
+        """Reuse immutable geometry for exact undo/redo and repeated requests."""
+
+        with self._cache_lock:
+            cached = self._cache.pop(key, None)
+            if cached is not None:
+                self._cache[key] = cached
+                return cached[0]
+        value = builder()
+        size = max(0, int(size_of(value)))
+        if (
+            self._max_cache_entries == 0
+            or self._max_cache_bytes == 0
+            or size > self._max_cache_bytes
+        ):
+            return value
+        with self._cache_lock:
+            existing = self._cache.pop(key, None)
+            if existing is not None:
+                self._cache_bytes -= existing[1]
+            self._cache[key] = (value, size)
+            self._cache_bytes += size
+            while (
+                len(self._cache) > self._max_cache_entries
+                or self._cache_bytes > self._max_cache_bytes
+            ):
+                _evicted_key, (_evicted_value, evicted_size) = self._cache.popitem(
+                    last=False
+                )
+                self._cache_bytes -= evicted_size
+        return value
+
     async def shutdown(self) -> None:
         if self._closed:
             return
         self._closed = True
+        with self._cache_lock:
+            self._cache.clear()
+            self._cache_bytes = 0
         # Queued work is cancelled and running native work is boundedly
         # abandoned; ThreadPoolExecutor workers finish in the background.
         self._executor.shutdown(wait=False, cancel_futures=True)
@@ -135,7 +190,24 @@ def preview_options(lod: Literal["coarse", "fine"]):
         include_enclosure=True,
         include_source_cap=True,
         include_rear_cap=True,
+        include_curvature=lod == "fine",
     )
+
+
+def _geometry_nbytes(geometry: Any) -> int:
+    total = 0
+    for surface in geometry.surfaces:
+        for field in (
+            "positions",
+            "indices",
+            "normals",
+            "curvature_mean",
+            "curvature_principal",
+        ):
+            values = getattr(surface, field, None)
+            if isinstance(values, np.ndarray):
+                total += values.nbytes
+    return total
 
 
 def _json_safe(value: Any) -> Any:
@@ -345,6 +417,11 @@ class PreviewProtocol:
         self.heartbeat_seconds = heartbeat_seconds
         self.max_frame_bytes = max_frame_bytes
         self._preview_builder = preview_builder
+        self._preview_builder_namespace = (
+            "default"
+            if preview_builder is None
+            else f"injected:{next(_INJECTED_BUILDER_NAMESPACES)}"
+        )
         self._preview_service = preview_service or PreviewComputeService()
         self._owns_preview_service = preview_service is None
         self._transport: PreviewTransport | None = None
@@ -605,7 +682,23 @@ class PreviewProtocol:
             from hornlab_mesher.preview.api import build_preview_geometry
 
             builder = build_preview_geometry
-        geometry = builder(config, preview_options(request.lod))
+        cache_key = json.dumps(
+            {
+                # Test/application-injected builders use the production cache
+                # path but have an unambiguous per-protocol namespace.
+                "builder": self._preview_builder_namespace,
+                "lod": request.lod,
+                "config": config,
+            },
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        geometry = self._preview_service.get_or_build(
+            cache_key,
+            lambda: builder(config, preview_options(request.lod)),
+            size_of=_geometry_nbytes,
+        )
         elapsed = (time.perf_counter() - began) * 1000.0
         return encode_preview_geometry(
             geometry,

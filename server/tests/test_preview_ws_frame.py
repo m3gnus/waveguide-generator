@@ -36,20 +36,22 @@ def test_real_preview_geometry_round_trips_with_normals_for_every_surface() -> N
             "mesh": {"wall_thickness": 3},
         }
     )
-    geometry = build_preview_geometry(design_to_mesher_config(design), preview_options("coarse"))
+    # Fine frames carry inspection curvature; coarse interaction frames omit it
+    # so parameter scrubbing stays responsive.
+    geometry = build_preview_geometry(design_to_mesher_config(design), preview_options("fine"))
     frame = encode_preview_geometry(
         geometry,
         epoch=7,
         seq=11,
         design_revision=19,
-        lod="coarse",
+        lod="fine",
         eval_ms=4.2,
     )
     header, arrays = decode(frame)
     assert header["epoch"] == 7
     assert header["seq"] == 11
     assert header["designRevision"] == 19
-    assert header["lod"] == "coarse"
+    assert header["lod"] == "fine"
     assert header["previewMetadata"]["api_version"] == "hornlab.preview/1"
     assert header["fidelity"]["surfaces"] == geometry.metadata["fidelity"]
     assert len(header["surfaces"]) == len(geometry.surfaces)
