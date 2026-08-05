@@ -52,21 +52,23 @@ function Rating({ job, onError }: { job: JobItem; onError: (message: string) => 
     >★</button>)}</span>
   </div>;
 }
-function MiniJob({ job, onRemove }: { job: JobItem; onRemove: (job: JobItem) => void }) {
-  return <div className="mini-job">
-    <button className="mini-job-main" onClick={() => job.has_results && compareSelection.setPrimary(job.id)} title={job.has_results ? 'Show results' : job.error_message ?? job.status}>
-      <i style={{ background: job.status === 'error' ? 'var(--red)' : job.status === 'cancelled' ? 'var(--fg3)' : 'var(--green)' }}/>
-      <span>{name(job)}</span>
-      <em>{job.rating ? `${'★'.repeat(job.rating)}${'☆'.repeat(5 - job.rating)}` : ''}</em>
-      <time>{clock(job.completed_at ?? job.created_at)}</time>
-    </button>
-    <button className="job-remove" aria-label={`Remove ${name(job)}`} title="Remove this job" onClick={() => onRemove(job)}><Icon name="close"/></button>
-  </div>;
+
+/**
+ * Selecting a run shows it: its results drive the charts and its design snapshot
+ * goes back into the viewport. Both stores are set synchronously so the row
+ * expands on the same frame as the click; the results payload is served from
+ * the LRU cache and the geometry preview catches up behind it.
+ */
+export function selectJob(job: JobItem): void {
+  if (job.has_results) compareSelection.setPrimary(job.id);
+  // Undoable: browsing runs must not be able to discard the working design.
+  if (canLoadDesign(job)) replaceWithJobDesign(job, { keepHistory: true });
 }
 
-function JobCard({ job, now, run, onError, onRemove }: {
+function JobCard({ job, now, selected, run, onError, onRemove }: {
   job: JobItem;
   now: number;
+  selected: boolean;
   run: (design: DesignDocument, designRevision?: number) => Promise<void>;
   onError: (message: string) => void;
   onRemove: (job: JobItem) => void;
@@ -75,13 +77,26 @@ function JobCard({ job, now, run, onError, onRemove }: {
   const running = job.status === 'running' || job.status === 'queued';
   const failed = job.status === 'error';
   const snapshot = hydrateJobDesign(job);
+  const rating = job.rating ?? 0;
   const retry = () => void run(snapshot ?? currentDesign, snapshot ? job.design_revision : undefined).catch((error) => onError(String(error)));
-  const load = () => {
-    if (snapshot) replaceWithJobDesign(job);
-    if (job.has_results) compareSelection.setPrimary(job.id);
-  };
-  return <article className={`job-card ${running ? 'running' : failed ? 'failed' : 'complete'}`}>
-    <header><i/><b>{name(job)} <em>· {job.id.slice(0, 6)}</em></b><time>{running ? duration(secondsBetween(job.started_at ?? job.queued_at, null, now)) : clock(job.completed_at)}</time>{!running && <button className="job-remove" aria-label={`Remove ${name(job)}`} title="Remove this job" onClick={() => onRemove(job)}><Icon name="close"/></button>}</header>
+  // A run in flight or one that failed still has to show its progress or its
+  // diagnostic; only finished runs collapse down to their name.
+  const expanded = selected || running || failed;
+  const selectable = !running && (job.has_results || canLoadDesign(job));
+  const heading = <>
+    <i/>
+    <b>{name(job)}{expanded && <em> · {job.id.slice(0, 6)}</em>}</b>
+    {/* Stars are a label here, shown only once a run has actually been rated. */}
+    {!expanded && rating > 0 && <span className="job-stars" aria-label={`Rated ${rating} of 5`}>{'★'.repeat(rating)}</span>}
+    <time>{running ? duration(secondsBetween(job.started_at ?? job.queued_at, null, now)) : clock(job.completed_at ?? job.created_at)}</time>
+  </>;
+  return <article className={`job-card ${running ? 'running' : failed ? 'failed' : 'complete'}${selected ? ' selected' : ''}${expanded ? '' : ' collapsed'}`} aria-current={selected ? 'true' : undefined}>
+    <header>
+      {selectable
+        ? <button className="job-select" aria-pressed={selected} title={selected ? 'Showing this run' : 'Show this run in the viewport and charts'} onClick={() => selectJob(job)}>{heading}</button>
+        : <span className="job-select" title={job.error_message ?? job.status}>{heading}</span>}
+      {!running && <button className="job-remove" aria-label={`Remove ${name(job)}`} title="Remove this job" onClick={() => onRemove(job)}><Icon name="close"/></button>}
+    </header>
     {running ? <>
       <p>{metrics(job, now)}</p>
       <div className="job-stage"><span>{job.stage_message ?? job.stage ?? 'waiting…'}</span><b>{Math.round(job.progress * 100)}%</b></div>
@@ -92,16 +107,19 @@ function JobCard({ job, now, run, onError, onRemove }: {
       <p>failed after {duration(secondsBetween(job.started_at ?? job.queued_at, job.completed_at, now))} · {job.stage ?? 'solve'} stage</p>
       <div className="job-error" title={job.error_message ?? undefined}>{job.error_message ?? 'Simulation failed without a diagnostic.'}</div>
       <footer><button onClick={retry}>Retry</button><button onClick={() => window.open(`/api/jobs/${encodeURIComponent(job.id)}/log`, '_blank')}>Open log</button></footer>
-    </> : <>
+    </> : expanded && <>
       <p>{metrics(job, now)}</p>
       <Rating job={job} onError={onError}/>
-      <footer><button className="primary" disabled={!canLoadDesign(job)} onClick={load}>Load design</button><button onClick={retry}>Rerun</button><button disabled={!job.has_results} onClick={() => compareSelection.setPrimary(job.id)}>Results</button></footer>
+      {/* Selecting the run already loaded its design and results, so the only
+          action left is running it again. */}
+      <footer><button className="primary" onClick={retry}>Rerun</button><button onClick={() => window.open(`/api/jobs/${encodeURIComponent(job.id)}/log`, '_blank')}>Log</button></footer>
     </>}
   </article>;
 }
 
 export function JobsPanel() {
   const snapshot = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot);
+  const selection = useSyncExternalStore(compareSelection.subscribe, compareSelection.getSnapshot, compareSelection.getSnapshot);
   const coordinator = useSyncExternalStore(jobsCoordinatorBridge.subscribe, jobsCoordinatorBridge.getSnapshot, jobsCoordinatorBridge.getSnapshot);
   const preferences = usePreferences();
   const [now, setNow] = useState(Date.now());
@@ -113,13 +131,6 @@ export function JobsPanel() {
   }, []);
 
   const visibleJobs = useMemo(() => applyJobPreferences(snapshot.jobs, preferences.jobSort, preferences.minRating), [snapshot.jobs, preferences.jobSort, preferences.minRating]);
-  const { cards, earlier } = useMemo(() => {
-    const active = visibleJobs.filter((job) => job.status === 'running' || job.status === 'queued');
-    const complete = visibleJobs.filter((job) => job.status === 'complete').slice(0, 2);
-    const failed = visibleJobs.filter((job) => job.status === 'error').slice(0, 1);
-    const prominent = new Set([...active, ...complete, ...failed].map((job) => job.id));
-    return { cards: visibleJobs.filter((job) => prominent.has(job.id)), earlier: visibleJobs.filter((job) => !prominent.has(job.id)) };
-  }, [visibleJobs]);
   const failedCount = visibleJobs.filter((job) => job.status === 'error').length;
   const remove = (job: JobItem) => {
     if (!window.confirm(`Remove “${name(job)}” and its saved results?`)) return;
@@ -132,7 +143,6 @@ export function JobsPanel() {
     {(coordinator.actionError || snapshot.error) && <div className="job-error" role="alert" style={{ margin: 7 }}>{coordinator.actionError ?? snapshot.error}</div>}
     {snapshot.jobs.length === 0 && snapshot.connection === 'connected' && <div className="coming-soon"><b>NO JOBS YET</b><span>Use Solve to run the current design.</span></div>}
     {snapshot.jobs.length > 0 && visibleJobs.length === 0 && <div className="coming-soon"><b>NO MATCHING JOBS</b><span>Lower the minimum rating filter to show more jobs.</span></div>}
-    {cards.map((job) => <JobCard key={job.id} job={job} now={now} run={coordinator.run} onError={coordinator.reportError} onRemove={remove}/>)}
-    {earlier.length > 0 && <><div className="earlier"><span>Earlier today</span><i/></div>{earlier.map((job) => <MiniJob key={job.id} job={job} onRemove={remove}/>)}</>}
+    {visibleJobs.map((job) => <JobCard key={job.id} job={job} now={now} selected={job.id === selection.primary} run={coordinator.run} onError={coordinator.reportError} onRemove={remove}/>)}
   </div>;
 }

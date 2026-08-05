@@ -27,4 +27,20 @@ describe('versioned job design snapshots', () => {
     useDesignStore.getState().undo();
     expect(useDesignStore.getState().design.r0).toBe(12.7);
   });
+
+  it('keeps the working design undoable when a run is selected for viewing', () => {
+    useDesignStore.getState().updateField('a', 33);
+    const job = {
+      script_snapshot: { version: 1, design: { formula: 'OSSE', r0: { value: 12.7, raw: '6.35*2' }, a: 41 } },
+    };
+
+    expect(replaceWithJobDesign(job, { keepHistory: true })).toBe(true);
+    expect(useDesignStore.getState().design.r0).toBe(12.7);
+    expect(useDesignStore.getState().design.a).toBe(41);
+
+    // Clicking through runs is browsing, not opening a document: the design
+    // that was on screen beforehand must still come back.
+    useDesignStore.getState().undo();
+    expect(useDesignStore.getState().design.a).toBe(33);
+  });
 });

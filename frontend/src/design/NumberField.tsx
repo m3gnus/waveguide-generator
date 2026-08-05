@@ -60,11 +60,15 @@ export function NumberField({
   endDragCallback.current = onEndDrag;
   currentValue.current = value;
   const parsed = Number(draft);
-  const showEvaluatedExpression = Boolean(
-    expression?.raw
-    && expression.value !== null
-    && !Number.isFinite(Number(expression.raw.trim())),
-  );
+  /**
+   * ATH designs carry formulas like `48.5 - 7*cos(2*p)^5 - 16*sin(p)^12` in
+   * ordinary numeric fields. They cannot share a row with their label at rail
+   * width, and right-aligning them hides the start of the formula, so a field
+   * holding one switches to its own full-width line.
+   */
+  const rawExpression = expression?.raw?.trim() ?? '';
+  const holdsExpression = Boolean(rawExpression) && !Number.isFinite(Number(rawExpression));
+  const showEvaluatedExpression = holdsExpression && expression?.value != null;
   const draftMessage = draft.trim() && Number.isFinite(parsed) ? validate?.(parsed) : undefined;
   const isExpression = allowExpression && draft.trim() !== '' && !Number.isFinite(parsed);
   const invalid = draft.trim() === '' || (!isExpression && (!Number.isFinite(parsed) || parsed < min || parsed > max || Boolean(draftMessage)));
@@ -108,6 +112,9 @@ export function NumberField({
 
   const onLabelPointerDown = (event: PointerEvent<HTMLLabelElement>) => {
     if (disabled) return;
+    // Scrubbing commits a plain number, which would silently overwrite the
+    // formula this field holds. Expressions are edited by typing only.
+    if (holdsExpression) return;
     if (event.button !== 0) return;
     event.preventDefault();
     drag.current = { x: event.clientX, value };
@@ -157,12 +164,14 @@ export function NumberField({
   }, []);
 
   return (
-    <div className={`field-row${modified ? ' modified' : ''}${disabled ? ' field-disabled' : ''}`} title={disabledReason}>
+    <div className={`field-row${modified ? ' modified' : ''}${disabled ? ' field-disabled' : ''}${holdsExpression ? ' expression-row' : ''}`} title={disabledReason}>
       <i className="modified-dot" />
       <label
         htmlFor={id}
         className="field-label"
-        title="Drag horizontally to adjust"
+        // Long parameter names ellipsize against the value control, so the
+        // tooltip always carries the full label as well as the drag hint.
+        title={holdsExpression ? `${label} — formula field, edit the expression below` : `${label} — drag horizontally to adjust`}
         onPointerDown={onLabelPointerDown}
         onPointerMove={onLabelPointerMove}
         onPointerUp={endDrag}
@@ -171,6 +180,8 @@ export function NumberField({
       >
         {label}{symbol && <span className="field-symbol">{symbol}</span>}
       </label>
+      {holdsExpression && <span className="expr-badge" aria-hidden="true">fx</span>}
+      {showEvaluatedExpression && <span className="expr-value" title="Evaluated expression value">= {Number(expression!.value!.toPrecision(8))}{unit}</span>}
       <div className={`number-control${editing ? ' editing' : ''}${invalid ? ' invalid' : ''}${expression?.raw ? ' expression' : ''}`}>
         {dragDelta !== null && (
           <span className="scrub-tip">drag <b>{dragDelta >= 0 ? '+' : ''}{dragDelta.toFixed(precision)}{unit}</b></span>
@@ -179,19 +190,20 @@ export function NumberField({
           id={id}
           aria-invalid={invalid}
           aria-describedby={(draftMessage ?? invalidMessage) ? `${id}-error` : undefined}
-          inputMode="decimal"
+          inputMode={holdsExpression ? 'text' : 'decimal'}
           spellCheck={false}
           disabled={disabled}
+          title={holdsExpression ? draft : undefined}
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
           onFocus={() => setEditing(true)}
           onBlur={commit}
           onKeyDown={onKeyDown}
         />
-        {unit && <span className="unit">{unit}</span>}
-        <i className="number-track" style={{ '--fill': `${Math.max(5, Math.min(100, ((value - min) / (max - min)) * 100 || 50))}%` } as React.CSSProperties} />
+        {unit && !holdsExpression && <span className="unit">{unit}</span>}
+        {/* The scrub track reads as a value within a range, which a formula has not got. */}
+        {!holdsExpression && <i className="number-track" style={{ '--fill': `${Math.max(5, Math.min(100, ((value - min) / (max - min)) * 100 || 50))}%` } as React.CSSProperties} />}
       </div>
-      {showEvaluatedExpression && <span className="expr-value" title="Evaluated expression value">= {Number(expression!.value!.toPrecision(8))}</span>}
       {(draftMessage ?? invalidMessage) && <span id={`${id}-error`} className="sr-only">{draftMessage ?? invalidMessage}</span>}
     </div>
   );

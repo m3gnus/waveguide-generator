@@ -1,6 +1,6 @@
 import type { SVGProps } from 'react';
 
-type IconName = 'undo' | 'redo' | 'search' | 'play' | 'moon' | 'sun' | 'layout' | 'settings' | 'reset' | 'chip' | 'folder' | 'clay' | 'wire' | 'xray' | 'zebra' | 'curve' | 'section' | 'box' | 'close' | 'expand' | 'metrics';
+type IconName = 'undo' | 'redo' | 'search' | 'play' | 'moon' | 'sun' | 'layout' | 'settings' | 'reset' | 'chip' | 'folder' | 'clay' | 'wire' | 'xray' | 'zebra' | 'curve' | 'section' | 'box' | 'close' | 'expand' | 'metrics' | 'caret' | 'plus' | 'info';
 
 const paths: Record<IconName, string[]> = {
   undo: ['M6 4.2 3.1 7.1 6 10', 'M3.1 7.1h6.1a3.7 3.7 0 0 1 0 7.4H6.4'],
@@ -24,6 +24,9 @@ const paths: Record<IconName, string[]> = {
   close: ['m4 4 8 8M12 4l-8 8'],
   expand: ['M6.2 3H3v3.2M9.8 13H13V9.8M3 6.2 6.3 3M13 9.8 9.7 13'],
   metrics: ['M3 12V8.8M6.3 12V5.8M9.7 12V7.1M13 12V3.4'],
+  caret: ['m4.6 6.6 3.4 3.4 3.4-3.4'],
+  plus: ['M8 3.4v9.2M3.4 8h9.2'],
+  info: ['M14 8A6 6 0 1 1 2 8a6 6 0 0 1 12 0Z', 'M8 7.3v3.9', 'M8 5.1v.1'],
 };
 
 export function Icon({ name, ...props }: SVGProps<SVGSVGElement> & { name: IconName }) {

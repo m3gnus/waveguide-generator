@@ -31,11 +31,45 @@ function labelFor(id: string, jobs: ReturnType<typeof jobsSocket.getSnapshot>['j
   return job?.label || `${String(job?.config_summary.formula_type ?? 'job').toLowerCase()} ${id.slice(0, 6)}`;
 }
 
-function axes(tokens: ChartTokens) {
+/**
+ * How much chrome a chart can afford. A card in the six-panel dock is barely
+ * 100px tall: spending 20px on a legend row and 27px on a repeated
+ * "Frequency [Hz]" caption leaves single digits of actual plot. Axis titles and
+ * padding are therefore scaled to the panel, and the identifying labels the
+ * compact charts drop are carried by the card's own title chip instead.
+ */
+export type ChartDensity = 'compact' | 'regular' | 'full';
+
+export function chartDensity(width: number, height: number): ChartDensity {
+  if (height >= 300 && width >= 440) return 'full';
+  if (height >= 172 && width >= 300) return 'regular';
+  return 'compact';
+}
+
+const LABEL_FONT: Record<ChartDensity, number> = { compact: 9, regular: 10, full: 11 };
+/** `top` is the band reserved for the floating title chip and the legend. */
+const LINE_GRID: Record<ChartDensity, { left: number; right: number; top: number; bottom: number }> = {
+  compact: { left: 30, right: 8, top: 16, bottom: 17 },
+  regular: { left: 40, right: 10, top: 20, bottom: 22 },
+  full: { left: 54, right: 16, top: 30, bottom: 42 },
+};
+const MAP_GRID: Record<ChartDensity, { left: number; right: number; top: number; bottom: number }> = {
+  compact: { left: 27, right: 23, top: 16, bottom: 16 },
+  regular: { left: 34, right: 32, top: 20, bottom: 22 },
+  full: { left: 46, right: 46, top: 14, bottom: 38 },
+};
+/** Colour ramp height, kept inside the shortest card it can appear in. */
+const MAP_RAMP: Record<ChartDensity, number> = { compact: 38, regular: 74, full: 150 };
+/** Legend clears the hover-revealed expand/close buttons in the same band. */
+const LEGEND_INSET = 46;
+
+function axes(tokens: ChartTokens, density: ChartDensity = 'regular') {
   return {
     axisLine: { lineStyle: { color: tokens.spine ?? tokens.grid } },
     axisTick: { lineStyle: { color: tokens.muted } },
-    axisLabel: { color: tokens.muted, fontSize: 9 },
+    // Log-frequency ticks crowd as soon as a card narrows; dropping the
+    // colliding ones beats printing "4001,000".
+    axisLabel: { color: tokens.muted, fontSize: LABEL_FONT[density], margin: density === 'compact' ? 5 : 8, hideOverlap: true },
     splitLine: { lineStyle: { color: tokens.grid, width: .7 } },
     minorSplitLine: { show: true, lineStyle: { color: tokens.gridMinor, width: .5 } },
   };
@@ -51,25 +85,41 @@ export function frequencyBounds(series: EChartsOption['series']): [number, numbe
   return frequencies.length ? [Math.min(...frequencies), Math.max(...frequencies)] : undefined;
 }
 
-export function lineOption(series: EChartsOption['series'], tokens: ChartTokens, yName: string): EChartsOption {
+export function lineOption(series: EChartsOption['series'], tokens: ChartTokens, yName: string, density: ChartDensity = 'regular'): EChartsOption {
   const bounds = frequencyBounds(series);
+  const inset = LINE_GRID[density];
   return {
     animationDuration: 180,
     backgroundColor: tokens.background,
     color: tokens.series,
     textStyle: { color: tokens.foreground, fontFamily: 'Inter, system-ui, sans-serif' },
     tooltip: { trigger: 'axis', confine: true, backgroundColor: tokens.background, borderColor: tokens.spine ?? tokens.grid, textStyle: { color: tokens.foreground, fontSize: 10 }, axisPointer: { type: 'cross', lineStyle: { color: tokens.muted } } },
-    legend: { top: 1, right: 5, textStyle: { color: tokens.muted, fontSize: 8 }, itemWidth: 12, itemHeight: 2 },
-    grid: { left: 39, right: 9, top: 20, bottom: 27, containLabel: false },
-    xAxis: { type: 'log', logBase: 10, min: bounds?.[0], max: bounds?.[1], name: 'Frequency [Hz]', nameLocation: 'middle', nameGap: 18, nameTextStyle: { color: tokens.muted, fontSize: 8 }, minorTick: { show: true }, ...axes(tokens) },
-    yAxis: { type: 'value', name: yName, nameTextStyle: { color: tokens.muted, fontSize: 9 }, ...axes(tokens) },
+    // Compact legends truncate rather than crowd the title chip, and scroll in
+    // a single row rather than wrapping down over the plot on a narrow card.
+    // The tooltip and the detail view still name every series in full.
+    legend: {
+      ...(density === 'compact' ? { type: 'scroll' as const, width: '46%', pageIconSize: 7, pageIconColor: tokens.muted, pageIconInactiveColor: tokens.grid, pageTextStyle: { color: tokens.muted, fontSize: 8 } } : {}),
+      top: density === 'full' ? 2 : 1,
+      right: density === 'full' ? 8 : LEGEND_INSET,
+      textStyle: { color: tokens.muted, fontSize: density === 'compact' ? 8 : 9, ...(density === 'compact' ? { width: 32, overflow: 'truncate' as const } : {}) },
+      itemWidth: density === 'compact' ? 10 : 14,
+      itemHeight: 2,
+      itemGap: density === 'compact' ? 6 : 10,
+    },
+    grid: { ...inset, containLabel: false },
+    // The tick labels already read as frequencies; the caption only earns its
+    // 20px on a chart big enough to spare them.
+    xAxis: { type: 'log', logBase: 10, min: bounds?.[0], max: bounds?.[1], ...(density === 'full' ? { name: 'Frequency [Hz]', nameLocation: 'middle' as const, nameGap: 24, nameTextStyle: { color: tokens.muted, fontSize: 10 } } : {}), minorTick: { show: true }, ...axes(tokens, density) },
+    // In-grid cards carry the unit in their title chip, which occupies exactly
+    // the top-left corner an axis name would be drawn into.
+    yAxis: { type: 'value', ...(density === 'full' ? { name: yName, nameGap: 10, nameTextStyle: { color: tokens.muted, fontSize: 10, align: 'left' as const } } : {}), ...axes(tokens, density) },
     dataZoom: [{ type: 'inside', xAxisIndex: 0, filterMode: 'none', zoomOnMouseWheel: 'ctrl', moveOnMouseWheel: true }],
     series,
   };
 }
 
-function splOption(items: NamedResult[], tokens: ChartTokens, smoothing: ReturnType<typeof usePreferences>['smoothing']): EChartsOption {
-  return lineOption(splSeries(items, smoothing).map((series, index) => ({ ...series, lineStyle: { width: index ? 1.2 : 2, type: index ? 'dashed' : 'solid' } })), tokens, 'dB SPL');
+function splOption(items: NamedResult[], tokens: ChartTokens, smoothing: ReturnType<typeof usePreferences>['smoothing'], density: ChartDensity): EChartsOption {
+  return lineOption(splSeries(items, smoothing).map((series, index) => ({ ...series, lineStyle: { width: index ? 1.2 : 2, type: index ? 'dashed' : 'solid' } })), tokens, 'dB SPL', density);
 }
 
 export function heatmapFrequencyLabel(value: number): string {
@@ -206,11 +256,12 @@ export function contourPolylines(segments: ContourSegment[]): ContourPoint[][] {
  * fails silently. Index the cells against category axes instead. The frequency
  * axis still reads logarithmically because the sweep itself is log-spaced.
  */
-export function heatmapOption(result: ResultPayload, tokens: ChartTokens, plane: string, mapReference: number): EChartsOption {
+export function heatmapOption(result: ResultPayload, tokens: ChartTokens, plane: string, mapReference: number, density: ChartDensity = 'regular'): EChartsOption {
   const grid = interpolateDirectivityGrid(result, plane);
   const floor = mapReference * 5;
+  const inset = MAP_GRID[density];
   const cells = grid.values.flatMap((rowValues, row) => rowValues.flatMap((level, column) => level === null ? [] : [[column, row, Math.max(floor, Math.min(0, level)), level, grid.frequencies[column], grid.angles[row]]]));
-  const categoryAxis = { ...axes(tokens), axisTick: { alignWithLabel: true }, axisLabel: { ...axes(tokens).axisLabel, hideOverlap: true } };
+  const categoryAxis = { ...axes(tokens, density), axisTick: { alignWithLabel: true }, axisLabel: { ...axes(tokens, density).axisLabel, hideOverlap: true } };
   const contourLevels = [...new Set([-3, -6, -12, mapReference])].filter((level) => level >= floor).sort((a, b) => b - a);
   const contourSeries = contourLevels.flatMap((level, contourIndex) => {
     const polylines = contourPolylines(contourSegments(grid.values, level)).filter((points) => points.length > 1);
@@ -237,22 +288,47 @@ export function heatmapOption(result: ResultPayload, tokens: ChartTokens, plane:
       const [, , , level, frequencyValue, angleValue] = (Array.isArray(params) ? params[0] : params).value as number[];
       return `${heatmapFrequencyLabel(frequencyValue)}Hz · ${Number(angleValue.toFixed(2))}° · ${level.toFixed(1)} dB`;
     } },
-    grid: { left: 35, right: 38, top: 4, bottom: 24 },
-    xAxis: { type: 'category', data: grid.frequencies.map((frequency) => heatmapFrequencyLabel(frequency)), name: 'Frequency [Hz]', nameLocation: 'middle', nameGap: 16, nameTextStyle: { color: tokens.muted, fontSize: 8 }, ...categoryAxis, axisLabel: { ...categoryAxis.axisLabel, interval: Math.max(0, grid.factor * 2 - 1) } },
-    yAxis: { type: 'category', data: grid.angles.map((angle) => String(Number(angle.toFixed(2)))), name: '°', nameTextStyle: { color: tokens.muted }, ...categoryAxis, axisLabel: { ...categoryAxis.axisLabel, interval: Math.max(0, grid.factor * 2 - 1) } },
-    visualMap: { min: floor, max: 0, dimension: 2, seriesIndex: 0, right: 1, top: 'middle', itemWidth: 7, itemHeight: 70, text: ['0', `${floor}`], textStyle: { color: tokens.muted, fontSize: 7 }, inRange: { color: tokens.colormap } },
+    grid: inset,
+    xAxis: { type: 'category', data: grid.frequencies.map((frequency) => heatmapFrequencyLabel(frequency)), ...(density === 'full' ? { name: 'Frequency [Hz]', nameLocation: 'middle' as const, nameGap: 22, nameTextStyle: { color: tokens.muted, fontSize: 10 } } : {}), ...categoryAxis, axisLabel: { ...categoryAxis.axisLabel, interval: Math.max(0, grid.factor * 2 - 1) } },
+    yAxis: { type: 'category', data: grid.angles.map((angle) => String(Number(angle.toFixed(2)))), ...(density === 'full' ? { name: 'Angle [°]', nameGap: 10, nameTextStyle: { color: tokens.muted, fontSize: 10, align: 'left' as const } } : {}), ...categoryAxis, axisLabel: { ...categoryAxis.axisLabel, interval: Math.max(0, grid.factor * 2 - 1) } },
+    visualMap: { min: floor, max: 0, dimension: 2, seriesIndex: 0, right: 2, top: 'middle', itemWidth: density === 'compact' ? 6 : 8, itemHeight: MAP_RAMP[density], text: ['0', `${floor}`], textStyle: { color: tokens.muted, fontSize: density === 'compact' ? 7 : 8 }, inRange: { color: tokens.colormap } },
     // Cartesian heatmaps do not chunk safely in ECharts: progressive mode can
     // stop after the first angle band and leave the rest of the map blank.
     series: [{ type: 'heatmap', progressive: 0, z: 1, data: cells, emphasis: { itemStyle: { borderColor: tokens.accent, borderWidth: 1.2, shadowBlur: 7, shadowColor: tokens.accent } } }, ...contourSeries] as EChartsOption['series'],
   };
 }
 
-function impedanceOption(result: ResultPayload, tokens: ChartTokens, smoothing: ReturnType<typeof usePreferences>['smoothing']): EChartsOption {
-  return { ...lineOption(impedanceSeries(result, 'cartesian', smoothing), tokens, 'Z/ρc'), color: [tokens.series[0], tokens.series[1]] };
+function impedanceOption(result: ResultPayload, tokens: ChartTokens, smoothing: ReturnType<typeof usePreferences>['smoothing'], density: ChartDensity): EChartsOption {
+  return { ...lineOption(impedanceSeries(result, 'cartesian', smoothing), tokens, 'Z/ρc', density), color: [tokens.series[0], tokens.series[1]] };
 }
 
 function chartLabel(chartType: ChartType): string {
   return CHART_TYPES.find(({ id }) => id === chartType)?.label ?? chartType;
+}
+
+/**
+ * Names and units for the floating title chip. Both are far shorter than the
+ * menu labels, which would truncate into the legend; the unit matters most,
+ * because compact charts drop their axis titles and this states them instead.
+ */
+const CHART_BADGES: Record<ChartType, { short: string; long?: string; unit?: string }> = {
+  frequency_response: { short: 'SPL', long: 'On-axis SPL', unit: 'dB' },
+  directivity_map_h: { short: 'Dir H', long: 'Directivity H', unit: 'dB' },
+  directivity_map_v: { short: 'Dir V', long: 'Directivity V', unit: 'dB' },
+  directivity_map: { short: 'Dir', long: 'Directivity', unit: 'dB' },
+  directivity_index: { short: 'DI', long: 'Directivity index', unit: 'dB' },
+  beam_shape: { short: 'Beam', long: 'Beam width', unit: '°' },
+  beam_map: { short: 'Beam map' },
+  balloon: { short: 'Balloon' },
+  impedance: { short: 'Impedance', unit: 'Z/ρc' },
+  summary: { short: 'Summary' },
+};
+
+/** Longer name when the card can carry it, short name when it cannot. */
+export function chartTitle(chartType: ChartType, wide: boolean): string {
+  const badge = CHART_BADGES[chartType];
+  if (!badge) return chartType;
+  return wide ? badge.long ?? badge.short : badge.short;
 }
 
 export function resolvedPolarStepNotice(result: JobResults): string | null {
@@ -268,45 +344,75 @@ export function resolvedPolarStepNotice(result: JobResults): string | null {
 
 function Summary({ result }: { result: ResultPayload }) {
   const warnings = Array.isArray(result.metadata?.warnings) ? result.metadata.warnings.length : Number(result.metadata?.warning_count ?? 0);
-  const cells = [
+  const cells: Array<[string, string | number]> = [
     ['Frequencies', result.frequencies.length],
     ['Range', result.frequencies.length ? `${frequency(result.frequencies[0])} – ${frequency(result.frequencies.at(-1))}` : '—'],
-    ['Directivity planes', Object.keys(result.directivity ?? {}).join(', ') || 'none'],
-    ['Balloon samples', result.balloon?.spl_norm_db.length ?? 0],
+    ['Planes', Object.keys(result.directivity ?? {}).join(' · ') || 'none'],
+    ['Balloon', result.balloon?.spl_norm_db.length ?? 0],
     ['Warnings', warnings],
     ['Contract', String(result.metadata?.result_contract_version ?? 'legacy')],
   ];
-  return <dl style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, margin: 10 }}>{cells.map(([label, value]) => <div key={label}><dt style={{ color: 'var(--fg3)', fontSize: 9 }}>{label}</dt><dd style={{ margin: 0, color: 'var(--fg1)', font: '11px var(--mono)' }}>{value}</dd></div>)}</dl>;
+  return <dl className="result-summary">{cells.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>;
 }
 
-function ResultChart({ chartType, result, named, tokens }: { chartType: ChartType; result: ResultPayload; named: NamedResult[]; tokens: ChartTokens }) {
+function ResultChart({ chartType, result, named, tokens, density }: { chartType: ChartType; result: ResultPayload; named: NamedResult[]; tokens: ChartTokens; density: ChartDensity }) {
   const preferences = usePreferences();
   return useMemo(() => {
-    if (chartType === 'frequency_response') return result.spl_on_axis?.spl?.length ? <EChart option={splOption(named, tokens, preferences.smoothing)} label="Interactive HornLab sound pressure frequency response"/> : <ChartStub reason="Frequency Response needs spl_on_axis data from a completed solve."/>;
+    if (chartType === 'frequency_response') return result.spl_on_axis?.spl?.length ? <EChart option={splOption(named, tokens, preferences.smoothing, density)} label="Interactive HornLab sound pressure frequency response"/> : <ChartStub reason="Frequency Response needs spl_on_axis data from a completed solve."/>;
     if (chartType === 'directivity_map_h' || chartType === 'directivity_map_v') {
       const plane = chartType.endsWith('_v') ? 'vertical' : 'horizontal';
-      return result.directivity?.[plane]?.length ? <EChart option={heatmapOption(result, tokens, plane, preferences.mapReference)} label={`Interactive HornLab ${plane} directivity heatmap`}/> : <ChartStub reason={`Directivity Map (${plane === 'horizontal' ? 'H' : 'V'}) needs the ${plane} polar plane in the result payload.`}/>;
+      return result.directivity?.[plane]?.length ? <EChart option={heatmapOption(result, tokens, plane, preferences.mapReference, density)} label={`Interactive HornLab ${plane} directivity heatmap`}/> : <ChartStub reason={`Directivity Map (${plane === 'horizontal' ? 'H' : 'V'}) needs the ${plane} polar plane in the result payload.`}/>;
     }
     if (chartType === 'directivity_map') {
       const directivity = result.directivity as Record<string, unknown[]> | undefined;
       const planes = Object.keys(directivity ?? {}).filter((plane) => directivity?.[plane]?.length);
-      return planes.length ? <div className="directivity-multiplane">{planes.map((plane) => <div key={plane}><span>{plane}</span><EChart option={heatmapOption(result, tokens, plane, preferences.mapReference)} label={`Interactive ${plane} directivity heatmap`}/></div>)}</div> : <ChartStub reason="Directivity Map needs at least one polar plane in the result payload."/>;
+      return planes.length ? <div className="directivity-multiplane">{planes.map((plane) => <div key={plane}><span>{plane}</span><EChart option={heatmapOption(result, tokens, plane, preferences.mapReference, density)} label={`Interactive ${plane} directivity heatmap`}/></div>)}</div> : <ChartStub reason="Directivity Map needs at least one polar plane in the result payload."/>;
     }
     if (chartType === 'directivity_index') {
       const series = directivityIndexSeries(result, preferences.smoothing);
-      return series.length ? <EChart option={lineOption(series, tokens, 'DI [dB]')} label="Interactive HornLab directivity index by frequency"/> : <ChartStub reason="Directivity Index needs the optional di result block."/>;
+      return series.length ? <EChart option={lineOption(series, tokens, 'DI [dB]', density)} label="Interactive HornLab directivity index by frequency"/> : <ChartStub reason="Directivity Index needs the optional di result block."/>;
     }
-    if (chartType === 'beam_shape') return result.beam_shape?.frequencies?.length ? <EChart option={lineOption(beamShapeSeries(result), tokens, 'Beam width [°]')} label="Interactive HornLab horizontal and vertical forward beam width"/> : <ChartStub reason="Forward Beam Shape needs spherical balloon sampling and a valid −6 dB contour fit."/>;
+    if (chartType === 'beam_shape') return result.beam_shape?.frequencies?.length ? <EChart option={lineOption(beamShapeSeries(result), tokens, 'Beam width [°]', density)} label="Interactive HornLab horizontal and vertical forward beam width"/> : <ChartStub reason="Forward Beam Shape needs spherical balloon sampling and a valid −6 dB contour fit."/>;
     if (chartType === 'beam_map') return <ForwardBeamRenderer result={result}/>;
     if (chartType === 'balloon') return <BalloonRenderer result={result}/>;
-    if (chartType === 'impedance') return result.impedance?.frequencies?.length ? <EChart option={impedanceOption(result, tokens, preferences.smoothing)} label="Interactive HornLab normalized acoustic impedance by frequency"/> : <ChartStub reason="Acoustic Impedance needs the optional impedance result block."/>;
+    if (chartType === 'impedance') return result.impedance?.frequencies?.length ? <EChart option={impedanceOption(result, tokens, preferences.smoothing, density)} label="Interactive HornLab normalized acoustic impedance by frequency"/> : <ChartStub reason="Acoustic Impedance needs the optional impedance result block."/>;
     return <Summary result={result}/>;
-  }, [chartType, named, preferences.mapReference, preferences.smoothing, result, tokens]);
+  }, [chartType, density, named, preferences.mapReference, preferences.smoothing, result, tokens]);
+}
+
+export interface CardMetrics {
+  density: ChartDensity;
+  /** Whether the card is wide enough for the chart's full name. */
+  wide: boolean;
+}
+
+/**
+ * Watches a card's box and reports only the two derived, discrete values the
+ * chart cares about. Collapsing to an enum keeps drag-resizing from rebuilding
+ * an ECharts option on every animation frame.
+ */
+export function useCardMetrics(target: React.RefObject<HTMLElement | null>): CardMetrics {
+  const [metrics, setMetrics] = useState<CardMetrics>({ density: 'regular', wide: true });
+  useEffect(() => {
+    const element = target.current;
+    if (!element || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect;
+      if (!width || !height) return;
+      const next: CardMetrics = { density: chartDensity(width, height), wide: width >= 300 };
+      setMetrics((previous) => previous.density === next.density && previous.wide === next.wide ? previous : next);
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [target]);
+  return metrics;
 }
 
 function ChartCard({ index, chartType, result, named, tokens }: { index: number; chartType: ChartType; result: ResultPayload; named: NamedResult[]; tokens: ChartTokens }) {
   const [expanded, setExpanded] = useState(false);
   const detail = useRef<HTMLElement>(null);
+  const card = useRef<HTMLElement>(null);
+  const { density, wide } = useCardMetrics(card);
   useEffect(() => {
     if (!expanded) return;
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -328,15 +434,31 @@ function ChartCard({ index, chartType, result, named, tokens }: { index: number;
   }, [expanded]);
   const polarStep = chartType.startsWith('directivity_map') ? resolvedPolarStepNotice(result) : null;
   const subtitle = chartType.startsWith('directivity_map') ? `ref ${preferencesStore.getSnapshot().mapReference} dB${polarStep ? ` · ${polarStep}` : ''}` : chartType === 'frequency_response' ? splSubtitle(result) : null;
+  const unit = CHART_BADGES[chartType]?.unit;
   return <>
-    <section className={`result-card result-${index}`}>
-      <header><select aria-label={`Panel ${index + 1} chart type`} value={chartType} onChange={(event) => preferencesStore.setChartType(index, event.target.value as ChartType)}>{CHART_TYPES.map(({ id, label }) => <option key={id} value={id}>{label}</option>)}</select>{subtitle && <span>{subtitle}</span>}<button className="result-card-expand" aria-label={`Expand panel ${index + 1}`} title="Open detail view" onClick={() => setExpanded(true)}><Icon name="expand"/></button><button className="result-card-close" aria-label={`Close panel ${index + 1}`} title="Close chart" onClick={() => preferencesStore.closeChart(index)}><Icon name="close"/></button></header>
-      <div className="chart-placeholder" title="Hover for values · double-click for detail" onDoubleClick={() => setExpanded(true)}><ResultChart chartType={chartType} result={result} named={named} tokens={tokens}/></div>
+    <section ref={card} className={`result-card result-${index}`} data-density={density}>
+      <div className="chart-placeholder" title="Hover for values · double-click for detail" onDoubleClick={() => setExpanded(true)}>
+        <ResultChart chartType={chartType} result={result} named={named} tokens={tokens} density={density}/>
+      </div>
+      {/* Chrome floats over the plot rather than reserving a row of its own:
+          a fixed header costs a quarter of a six-panel card's height. */}
+      <div className="result-chrome">
+        <span className="result-title">
+          <b>{chartTitle(chartType, wide)}</b>
+          {unit && <em>{unit}</em>}
+          <Icon name="caret"/>
+          <select aria-label={`Panel ${index + 1} chart type`} value={chartType} onChange={(event) => preferencesStore.setChartType(index, event.target.value as ChartType)}>{CHART_TYPES.map(({ id, label }) => <option key={id} value={id}>{label}</option>)}</select>
+        </span>
+        {subtitle && density !== 'compact' && <span className="result-subtitle">{subtitle}</span>}
+        <span className="result-chrome-spacer"/>
+        <button className="result-card-expand" aria-label={`Expand panel ${index + 1}`} title="Open detail view" onClick={() => setExpanded(true)}><Icon name="expand"/></button>
+        <button className="result-card-close" aria-label={`Close panel ${index + 1}`} title="Close chart" onClick={() => preferencesStore.closeChart(index)}><Icon name="close"/></button>
+      </div>
     </section>
     {expanded && createPortal(<div className="result-detail-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setExpanded(false); }}>
       <section ref={detail} className="result-detail" role="dialog" aria-modal="true" aria-label={`${chartLabel(chartType)} detail`}>
         <header><div><b>{chartLabel(chartType)}</b>{subtitle && <span>{subtitle}</span>}</div><small>Hover to inspect · Ctrl/scroll to zoom lines</small><button aria-label="Close detail view" onClick={() => setExpanded(false)}><Icon name="close"/></button></header>
-        <div className="result-detail-chart"><ResultChart chartType={chartType} result={result} named={named} tokens={tokens}/></div>
+        <div className="result-detail-chart"><ResultChart chartType={chartType} result={result} named={named} tokens={tokens} density="full"/></div>
       </section>
     </div>, document.body)}
   </>;
@@ -371,11 +493,19 @@ export function ResultsPanel() {
   const [exporting, setExporting] = useState(false);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
 
+  // Jobs arrive newest-first, so the first finished one is the latest solve.
+  const latest = useMemo(() => jobs.find((job) => job.status === 'complete' && job.has_results) ?? null, [jobs]);
   useEffect(() => {
+    // While following, every solve that finishes takes the primary slot as soon
+    // as its results exist — the charts repaint without anyone selecting a job.
+    if (selection.following) {
+      if ((latest?.id ?? null) !== selection.primary) compareSelection.followLatest(latest?.id ?? null);
+      return;
+    }
+    // A pinned result that no longer exists falls back to following again.
     if (selection.primary && jobs.some((job) => job.id === selection.primary && job.has_results)) return;
-    const latest = jobs.find((job) => job.status === 'complete' && job.has_results);
-    if (latest) compareSelection.setPrimary(latest.id); else if (selection.primary) compareSelection.setPrimary(null);
-  }, [jobs, selection.primary]);
+    compareSelection.followLatest(latest?.id ?? null);
+  }, [jobs, latest, selection.following, selection.primary]);
 
   const ids = useMemo(() => [selection.primary, ...selection.overlays].filter((id): id is string => Boolean(id)), [selection]);
   useEffect(() => {
@@ -412,12 +542,18 @@ export function ResultsPanel() {
 
   return <div className="results-panel panel-scroll">
     <div className="results-toolbar">
-      {ids.map((id, index) => <button key={id} className={`result-chip ${index ? 'muted' : ''}`} onClick={() => compareSelection.remove(id)} title="Remove from comparison"><i/>{labelFor(id, jobs)} ×</button>)}
-      <select aria-label="Add comparison result" value="" onChange={(event) => { if (event.target.value) compareSelection.toggleOverlay(event.target.value); }} style={{ color: 'var(--fg2)', background: 'var(--ctl-grad)', border: '1px dashed var(--hair)', borderRadius: 10, fontSize: 10 }}><option value="">+ compare</option>{available.map((job) => <option key={job.id} value={job.id}>{labelFor(job.id, jobs)}</option>)}</select>
+      <button
+        className={`result-follow${selection.following ? ' on' : ''}`}
+        aria-pressed={selection.following}
+        title={selection.following ? 'Following the latest solve — charts repaint when results land. Click to pin this result.' : 'Pinned to a chosen result. Click to follow the latest solve again.'}
+        onClick={() => selection.following ? compareSelection.setPrimary(selection.primary) : compareSelection.followLatest(latest?.id ?? null)}
+      ><i/>{selection.following ? 'Latest' : 'Pinned'}</button>
+      {ids.map((id, index) => <button key={id} className={`result-chip ${index ? 'muted' : ''}`} onClick={() => compareSelection.remove(id)} title={`${labelFor(id, jobs)} — remove from comparison`}><i/><span>{labelFor(id, jobs)}</span> ×</button>)}
+      <select className="result-compare-add" aria-label="Add comparison result" value="" onChange={(event) => { if (event.target.value) compareSelection.toggleOverlay(event.target.value); }}><option value="">+ compare</option>{available.map((job) => <option key={job.id} value={job.id}>{labelFor(job.id, jobs)}</option>)}</select>
       <span className="spacer"/>
-      <label className="result-count-control">Charts<select aria-label="Results panel count" value={RESULT_PANEL_COUNTS.includes(preferences.chartTypes.length as never) ? preferences.chartTypes.length : ''} onChange={(event) => preferencesStore.setChartCount(Number(event.target.value))}><option value="" disabled>{preferences.chartTypes.length}</option>{RESULT_PANEL_COUNTS.map((count) => <option key={count} value={count}>{count}</option>)}</select></label>
-      <button disabled={preferences.chartTypes.length >= MAX_RESULT_PANELS} onClick={() => preferencesStore.addChart()}>+ chart</button>
-      <button disabled={exporting || !primary || !preferences.exportFormats.length} title="Export the current result using the formats enabled in Results preferences" onClick={() => void exportSelected()}>{exporting ? 'Exporting…' : `Export result (${preferences.exportFormats.length})`}</button>
+      <label className="result-count-control" title="Number of chart panels">Charts<select aria-label="Results panel count" value={RESULT_PANEL_COUNTS.includes(preferences.chartTypes.length as never) ? preferences.chartTypes.length : ''} onChange={(event) => preferencesStore.setChartCount(Number(event.target.value))}><option value="" disabled>{preferences.chartTypes.length}</option>{RESULT_PANEL_COUNTS.map((count) => <option key={count} value={count}>{count}</option>)}</select></label>
+      <button className="toolbar-icon" disabled={preferences.chartTypes.length >= MAX_RESULT_PANELS} aria-label="Add chart" title="Add chart panel" onClick={() => preferencesStore.addChart()}><Icon name="plus"/></button>
+      <button disabled={exporting || !primary || !preferences.exportFormats.length} title="Export the current result using the formats enabled in Results preferences" onClick={() => void exportSelected()}>{exporting ? 'Exporting…' : `Export (${preferences.exportFormats.length})`}</button>
       <button className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Results preferences" aria-expanded={preferencesOpen} title="Results & export preferences" onClick={() => setPreferencesOpen((value) => !value)}><Icon name="settings"/></button>
     </div>
     {preferencesOpen && <ResultsPreferencesSurface popover onClose={() => setPreferencesOpen(false)}/>}

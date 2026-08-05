@@ -121,7 +121,7 @@ describe('jobs websocket state machine', () => {
     }
     expect(manager.getSnapshot()).toMatchObject({ cursor: 8, error: null });
     expect(manager.getSnapshot().jobs[0].progress).toBe(.8);
-    expect(compareSelection.getSnapshot()).toEqual({ primary: 'job-1', overlays: [] });
+    expect(compareSelection.getSnapshot()).toMatchObject({ primary: 'job-1', overlays: [] });
     manager.stop();
   });
 

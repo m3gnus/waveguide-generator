@@ -1,6 +1,6 @@
 import * as echarts from 'echarts';
 import { describe, expect, it } from 'vitest';
-import { contourPolylines, contourSegments, frequencyBounds, heatmapFrequencyLabel, heatmapOption, interpolateDirectivityGrid, lineOption } from './ResultsPanel';
+import { chartDensity, contourPolylines, contourSegments, frequencyBounds, heatmapFrequencyLabel, heatmapOption, interpolateDirectivityGrid, lineOption } from './ResultsPanel';
 import { readChartTokens, type ChartTokens } from '../results/EChart';
 import type { ResultPayload } from '../results/types';
 
@@ -94,6 +94,27 @@ describe('directivity heatmap', () => {
     const series = [{ type: 'line' as const, data: [[100, 1], [1_000, 2], [20_000, 3]] }];
     expect(frequencyBounds(series)).toEqual([100, 20_000]);
     expect((lineOption(series, tokens, 'dB').xAxis as { min: number; max: number })).toMatchObject({ min: 100, max: 20_000 });
+  });
+
+  it('scales chart chrome to the panel so small cards keep their plot area', () => {
+    expect(chartDensity(227, 96)).toBe('compact');
+    expect(chartDensity(360, 220)).toBe('regular');
+    expect(chartDensity(900, 560)).toBe('full');
+
+    const series = [{ type: 'line' as const, data: [[100, 1], [20_000, 3]] }];
+    const grids = (['compact', 'regular', 'full'] as const).map((density) => lineOption(series, tokens, 'dB', density).grid as { top: number; bottom: number; left: number });
+    // Every inset grows with the density; none of them shrink.
+    expect(grids[0].top + grids[0].bottom + grids[0].left).toBeLessThan(grids[1].top + grids[1].bottom + grids[1].left);
+    expect(grids[1].top + grids[1].bottom + grids[1].left).toBeLessThan(grids[2].top + grids[2].bottom + grids[2].left);
+
+    // Axis captions cost more than a compact card can spare, so only the
+    // detail view carries them; the card's title chip states the unit instead.
+    const compact = lineOption(series, tokens, 'dB', 'compact');
+    expect((compact.xAxis as { name?: string }).name).toBeUndefined();
+    expect((compact.yAxis as { name?: string }).name).toBeUndefined();
+    const full = lineOption(series, tokens, 'dB', 'full');
+    expect((full.xAxis as { name?: string }).name).toBe('Frequency [Hz]');
+    expect((full.yAxis as { name?: string }).name).toBe('dB');
   });
 
   it('uses a light HornLab-compatible chart surface with the light app theme', () => {

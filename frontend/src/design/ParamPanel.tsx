@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { convertDesignToFreeform } from '../api/designIo';
 import { fetchSymmetry, type SymmetryResolution } from '../jobs/actions';
 import { useDesignStore, type DesignDocument, type DesignFamily, type DesignValue } from '../stores/design';
@@ -6,6 +6,7 @@ import { useSolveOptionsStore, type SymmetryMode } from '../stores/solveOptions'
 import { DirectivityMapControls, SolveOptionsControls } from './SolveOptionsSections';
 import { EditablePointTable, EditableStationTable } from './FreeformEditors';
 import { NumberField } from './NumberField';
+import { Icon } from '../shell/icons';
 import {
   PARAMETER_REGISTRY,
   PARAMETER_SECTION_DEFINITIONS,
@@ -38,8 +39,43 @@ function storedSectionState(title: string): boolean {
   }
 }
 
+/**
+ * Section blurbs explain the rail once and then cost height on every scroll —
+ * a third of a metre of prose across the geometry tab. They are off by default
+ * and toggled for the whole rail at once, so the explanation stays one click
+ * away instead of permanently between the reader and the next field.
+ */
+const HELP_KEY = 'wg-param-help-visible';
+
+function storedHelpVisible(): boolean {
+  try { return localStorage.getItem(HELP_KEY) === 'true'; } catch { return false; }
+}
+
+class ParameterHelpStore {
+  private value = storedHelpVisible();
+  private readonly listeners = new Set<() => void>();
+  getSnapshot = (): boolean => this.value;
+  subscribe = (listener: () => void): (() => void) => {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  };
+  toggle(): void {
+    this.value = !this.value;
+    try { localStorage.setItem(HELP_KEY, String(this.value)); } catch { /* storage is optional */ }
+    this.listeners.forEach((listener) => listener());
+  }
+  resetForTests(): void { this.value = false; }
+}
+
+export const parameterHelpStore = new ParameterHelpStore();
+
+export function useParameterHelp(): boolean {
+  return useSyncExternalStore(parameterHelpStore.subscribe, parameterHelpStore.getSnapshot, parameterHelpStore.getSnapshot);
+}
+
 function Section({ title, summary, description, children, forceOpen }: SectionProps) {
   const [open, setOpen] = useState(() => storedSectionState(title));
+  const helpVisible = useParameterHelp();
   const shownOpen = forceOpen || open;
   const toggle = () => {
     const next = !open;
@@ -53,7 +89,7 @@ function Section({ title, summary, description, children, forceOpen }: SectionPr
         <span className="section-summary">{summary}</span>
       </button>
       {shownOpen && <div className="section-body">
-        {description && <p className="section-description">{description}</p>}
+        {description && helpVisible && <p className="section-description">{description}</p>}
         {children}
       </div>}
     </section>
@@ -383,6 +419,7 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
   const design = useDesignStore((state) => state.design);
   const setFamily = useDesignStore((state) => state.setFamily);
   const loadDesign = useDesignStore((state) => state.loadDesign);
+  const helpVisible = useParameterHelp();
   const [query, setQuery] = useState('');
   const [freeformChoice, setFreeformChoice] = useState(false);
   const [conversionError, setConversionError] = useState<string | null>(null);
@@ -476,6 +513,13 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
         <label className="sr-only" htmlFor={`parameter-filter-${tab}`}>Filter {tab} parameters</label>
         <input id={`parameter-filter-${tab}`} type="search" value={query} placeholder="Filter labels or keys…" onChange={(event) => setQuery(event.target.value)} />
         {query && <button aria-label="Clear parameter filter" onClick={() => setQuery('')}>×</button>}
+        <button
+          className={`parameter-help-toggle${helpVisible ? ' on' : ''}`}
+          aria-label="Show section descriptions"
+          aria-pressed={helpVisible}
+          title={helpVisible ? 'Hide section descriptions' : 'Show section descriptions'}
+          onClick={() => parameterHelpStore.toggle()}
+        ><Icon name="info" /></button>
       </div>
       {!searching && tab === 'geometry' && modelTypeSection}
       {definitions.map((definition) => <div key={definition.title}>

@@ -18,9 +18,12 @@ export function hydrateJobDesign(job: Pick<JobItem, 'script_snapshot'>): DesignD
   try { return hydrateDesignDocument(wire); } catch { return null; }
 }
 
-export function replaceWithJobDesign(job: Pick<JobItem, 'script_snapshot'>): boolean {
+export function replaceWithJobDesign(
+  job: Pick<JobItem, 'script_snapshot'>,
+  options?: { keepHistory?: boolean },
+): boolean {
   const design = hydrateJobDesign(job);
   if (!design) return false;
-  useDesignStore.getState().replaceDesign(design);
+  useDesignStore.getState().replaceDesign(design, options);
   return true;
 }

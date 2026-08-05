@@ -39,7 +39,7 @@
 .viewer-pref-scroll fieldset label { display: flex; align-items: center; gap: 4px; font-size: 9.5px; }
 .viewer-preferences footer { padding: 8px 11px; border-top: 1px solid var(--hair); }
 .viewer-preferences footer button { padding: 5px 8px; border: 1px solid var(--hair-hi); border-radius: 5px; background: var(--ov2); color: var(--fg2); font-size: 9px; }
-.wg2-viewport .viewport-tools .projection-toggle { min-width: 38px; color: var(--acc); }
+.wg2-viewport .viewport-tools .projection-toggle { min-width: calc(var(--tool-size) * 1.42); color: var(--acc); }
 .wg2-viewport .wg2-stats { top: 52px; left: 12px; width: min(390px, calc(100% - 24px)); transform: none; }
 .wg2-viewport .wg2-stats .surface-list { max-height: min(240px, 38vh); }
 .wg2-tool-divider { width: 1px; height: 19px; margin: 3px 2px; background: var(--hair-hi); }

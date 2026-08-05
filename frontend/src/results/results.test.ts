@@ -56,7 +56,37 @@ describe('results LRU', () => {
     selection.toggleOverlay('keep');
     selection.toggleOverlay('deleted');
     selection.prune(new Set(['keep']));
-    expect(selection.getSnapshot()).toEqual({ primary: null, overlays: ['keep'] });
+    expect(selection.getSnapshot()).toEqual({ primary: null, overlays: ['keep'], following: true });
+  });
+
+  it('follows the newest solve until a result is chosen by hand', () => {
+    const selection = new CompareStore();
+    expect(selection.getSnapshot().following).toBe(true);
+    selection.followLatest('solve-1');
+    expect(selection.getSnapshot()).toMatchObject({ primary: 'solve-1', following: true });
+    selection.followLatest('solve-2');
+    expect(selection.getSnapshot().primary).toBe('solve-2');
+
+    selection.setPrimary('older');
+    expect(selection.getSnapshot()).toMatchObject({ primary: 'older', following: false });
+    selection.followLatest('solve-3');
+    expect(selection.getSnapshot()).toMatchObject({ primary: 'solve-3', following: true });
+  });
+
+  it('resumes following once a pinned result is dropped', () => {
+    const selection = new CompareStore();
+    selection.setPrimary('pinned');
+    expect(selection.getSnapshot().following).toBe(false);
+    selection.remove('pinned');
+    expect(selection.getSnapshot()).toMatchObject({ primary: null, following: true });
+  });
+
+  it('keeps a pinned result pinned when unrelated jobs are pruned', () => {
+    const selection = new CompareStore();
+    selection.setPrimary('pinned');
+    selection.toggleOverlay('gone');
+    selection.prune(new Set(['pinned']));
+    expect(selection.getSnapshot()).toEqual({ primary: 'pinned', overlays: [], following: false });
   });
 });
 

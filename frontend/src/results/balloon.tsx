@@ -155,9 +155,11 @@ function FrequencyCanvas({ result, kind }: { result: ResultPayload; kind: 'ballo
     }
     return parts.join(' · ');
   }, [beam, frequencies, index, kind]);
-  return <div style={{ position: 'absolute', inset: 0, display: 'grid', gridTemplateRows: 'minmax(0, 1fr) auto' }}>
-    <canvas ref={canvas} role="img" aria-label={kind === 'balloon' ? '3D directivity balloon' : 'Front-facing directivity map'} style={{ width: '100%', height: '100%' }}/>
-    <label style={{ display: 'flex', gap: 7, alignItems: 'center', padding: '2px 5px', color: 'var(--fg3)', fontSize: 9 }}><input aria-label={kind === 'balloon' ? 'Balloon frequency' : 'Forward beam frequency'} type="range" min={0} max={Math.max(0, frequencies.length - 1)} value={index} onChange={(event) => setIndex(Number(event.target.value))} style={{ flex: 1 }}/><span>{readout}</span></label>
+  // The scrubber floats over the render rather than taking a row from it, so a
+  // short card spends all of its height on the plot.
+  return <div className="frequency-canvas">
+    <canvas ref={canvas} role="img" aria-label={kind === 'balloon' ? '3D directivity balloon' : 'Front-facing directivity map'}/>
+    <label className="frequency-scrub"><input aria-label={kind === 'balloon' ? 'Balloon frequency' : 'Forward beam frequency'} type="range" min={0} max={Math.max(0, frequencies.length - 1)} value={index} onChange={(event) => setIndex(Number(event.target.value))}/><span>{readout}</span></label>
   </div>;
 }
 

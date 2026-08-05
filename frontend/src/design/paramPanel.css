@@ -19,7 +19,19 @@
 .lambda-hint.warning { color: var(--amber); }
 .param-text-row > input { width: 132px; height: 21px; padding: 0 7px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg); font: 10.5px var(--mono); }
 .number-control.expression { width: 132px; border-color: rgba(var(--acc-rgb), .25); }
-.expr-value { position: absolute; right: 0; top: 21px; z-index: 2; color: var(--green); font: 8.5px var(--mono); }
+.expr-value { color: var(--green); font: 8.5px var(--mono); }
+
+/* A field holding an ATH formula gets its own full-width line: the label and
+   the evaluated result stay on top, the expression reads left-to-right beneath
+   them, and the whole formula is visible instead of its last twelve characters. */
+.field-row.expression-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 3px 6px; align-items: center; padding: 3px 0 5px; }
+.field-row.expression-row .field-label { grid-column: 1; cursor: default; }
+.field-row.expression-row .expr-badge { grid-column: 2; padding: 0 4px; border: 1px solid rgba(var(--acc-rgb), .3); border-radius: 3px; color: var(--acc); font: 8px var(--mono); font-style: italic; letter-spacing: .04em; }
+.field-row.expression-row .expr-value { grid-column: 3; justify-self: end; white-space: nowrap; }
+.field-row.expression-row .number-control { grid-column: 1 / -1; width: 100%; height: 24px; padding: 0 7px; }
+/* A single-line input cannot wrap, so the formula is set a little smaller and
+   reads from its start; the rest scrolls, and the title carries the whole text. */
+.field-row.expression-row .number-control input { text-align: left; font-size: 9.5px; }
 .readonly-parameter-table { margin: 5px 0 8px; overflow: hidden; border: 1px solid var(--hair-soft); border-radius: var(--r3); background: var(--ov1); }
 .readonly-table-head { display: flex; justify-content: space-between; padding: 5px 6px; border-bottom: 1px solid var(--hair-soft); color: var(--fg2); font-size: 10px; }
 .readonly-table-head b { color: var(--fg1); font-weight: 560; }
@@ -89,3 +101,41 @@
 .editable-parameter-table td button { width: 24px; height: 24px; border-radius: var(--r3); }
 .point-paste textarea { padding: 8px; border-radius: var(--r3); font-size: var(--type-2); line-height: 1.45; }
 .point-paste label { font-size: var(--type-2); }
+
+.parameter-help-toggle { flex: none; width: var(--control-h); border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov2); color: var(--fg3); }
+.parameter-help-toggle svg { width: 15px; height: 15px; }
+.parameter-help-toggle:hover { border-color: var(--hair-hi); color: var(--fg1); }
+.parameter-help-toggle.on { border-color: rgba(var(--acc-rgb), .38); background: rgba(var(--acc-rgb), .1); color: var(--acc); }
+
+/* The rail is resizable, so its field layout answers to its own width rather
+   than the window's: dragged past ~430px it pairs fields into two columns and
+   halves the scroll length instead of stretching every control across the gap. */
+.param-panel { container-type: inline-size; container-name: param-rail; }
+
+@container param-rail (min-width: 430px) {
+  .section-body {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(196px, 1fr));
+    gap: 0 14px;
+    align-items: start;
+  }
+  /* Anything that is not a single labelled control keeps the full width. */
+  .section-body > .section-description,
+  .section-body > .readonly-parameter-table,
+  .section-body > .editable-parameter-table,
+  .section-body > .axis-toggles,
+  .section-body > .point-paste,
+  .section-body > .family-row,
+  .section-body > .family-switch-choice,
+  .section-body > .outer-body-mode,
+  .section-body > .resolved-mode,
+  .section-body > .section-note,
+  .section-body > .filter-note,
+  .section-body > .parameter-empty,
+  .section-body > .field-error,
+  .section-body > .schema-gap,
+  .section-body > .point-paste,
+  .section-body > p { grid-column: 1 / -1; }
+  /* Formula fields take the full rail so long ATH expressions get the width. */
+  .section-body > .parameter-entry:has(.expression-row) { grid-column: 1 / -1; }
+}

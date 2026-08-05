@@ -155,6 +155,37 @@ describe('NumberField', () => {
     expect(commitExpression).toHaveBeenCalledWith({ raw: '140 + p', value: null });
   });
 
+  it('gives an ATH formula its own row and refuses to scrub it away', () => {
+    const commit = vi.fn();
+    const commitExpression = vi.fn();
+    const formula = '48.5 - 7*cos(2*p)^5 - 16*sin(p)^12';
+    act(() => root.render(<NumberField label="Mouth coverage angle" value={33.7} unit="°" expression={{ raw: formula, value: 33.7 }} allowExpression onCommit={commit} onCommitExpression={commitExpression} />));
+
+    const row = host.querySelector('.field-row')!;
+    expect(row.classList.contains('expression-row')).toBe(true);
+    // The whole formula is present, reading from its start rather than clipped.
+    expect(host.querySelector<HTMLInputElement>('input')!.value).toBe(formula);
+    // A range track would imply a scrubbable value; a formula has none.
+    expect(host.querySelector('.number-track')).toBeNull();
+
+    const label = host.querySelector<HTMLLabelElement>('.field-label')!;
+    label.setPointerCapture = vi.fn();
+    act(() => {
+      label.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 }));
+      label.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 90 }));
+      label.dispatchEvent(new MouseEvent('pointerup', { bubbles: true }));
+    });
+    expect(commit).not.toHaveBeenCalled();
+    expect(commitExpression).not.toHaveBeenCalled();
+    expect(host.querySelector<HTMLInputElement>('input')!.value).toBe(formula);
+  });
+
+  it('keeps a plain numeric field scrubbable', () => {
+    act(() => root.render(<NumberField label="Scale" value={1} onCommit={vi.fn()} />));
+    expect(host.querySelector('.field-row')!.classList.contains('expression-row')).toBe(false);
+    expect(host.querySelector('.number-track')).not.toBeNull();
+  });
+
   it('does not repeat a plain numeric imported value as a green evaluation', () => {
     act(() => root.render(<NumberField label="Sweep start" value={100} expression={{ raw: '100', value: 100 }} allowExpression onCommit={vi.fn()} />));
     expect(host.querySelector<HTMLInputElement>('input')?.value).toBe('100');
