@@ -279,12 +279,15 @@ export function Workspace({ resetKey }: { resetKey: number }) {
       return true;
     };
     const initialSize = measureHost(host.current, dockview.api);
+    const initialLayoutSize = seedSize(initialSize);
     const stored = localStorage.getItem(LAYOUT_KEY);
     let restored = false;
     if (stored) {
       try {
         dockview.api.fromJSON(JSON.parse(stored) as ReturnType<DockviewApi['toJSON']>);
-        if (initialSize[0] && initialSize[1]) dockview.api.layout(initialSize[0], initialSize[1]);
+        // Restored layouts see the same transient 10x100 mount measurement as
+        // new layouts. Applying it can permanently collapse the Results rows.
+        dockview.api.layout(initialLayoutSize[0], initialLayoutSize[1]);
         restored = true;
       } catch {
         localStorage.removeItem(LAYOUT_KEY);
@@ -294,7 +297,7 @@ export function Workspace({ resetKey }: { resetKey: number }) {
       coldStartSeeded.current = true;
       addDefaultLayout(dockview.api, host.current);
     }
-    const resizeLayout = createResizeLayoutHandler(dockview.api, seedSize(initialSize));
+    const resizeLayout = createResizeLayoutHandler(dockview.api, initialLayoutSize);
     // The mount-time size is unreliable (see nextLayoutAction), so keep watching
     // and resize the existing dock as soon as the host reports its real size.
     let observer: ResizeObserver | undefined;

@@ -1,6 +1,6 @@
 import * as echarts from 'echarts';
 import { describe, expect, it } from 'vitest';
-import { contourSegments, heatmapFrequencyLabel, heatmapOption, interpolateDirectivityGrid } from './ResultsPanel';
+import { contourPolylines, contourSegments, frequencyBounds, heatmapFrequencyLabel, heatmapOption, interpolateDirectivityGrid, lineOption } from './ResultsPanel';
 import { readChartTokens, type ChartTokens } from '../results/EChart';
 import type { ResultPayload } from '../results/types';
 
@@ -80,6 +80,20 @@ describe('directivity heatmap', () => {
     ], -6)).toHaveLength(1);
     const option = heatmapOption(payload(), tokens, 'horizontal', -6) as { series: Array<{ name?: string }> };
     expect(option.series.map((series) => series.name)).toEqual(expect.arrayContaining(['-3 dB contour', '-6 dB contour', '-12 dB contour']));
+  });
+
+  it('joins adjacent contour fragments into smoothable continuous paths', () => {
+    expect(contourPolylines([
+      [0, 0, 1, 1],
+      [2, 1, 1, 1],
+      [2, 1, 3, 0],
+    ])).toEqual([[[0, 0], [1, 1], [2, 1], [3, 0]]]);
+  });
+
+  it('pins line charts to the exact positive frequencies present in the solve', () => {
+    const series = [{ type: 'line' as const, data: [[100, 1], [1_000, 2], [20_000, 3]] }];
+    expect(frequencyBounds(series)).toEqual([100, 20_000]);
+    expect((lineOption(series, tokens, 'dB').xAxis as { min: number; max: number })).toMatchObject({ min: 100, max: 20_000 });
   });
 
   it('uses a light HornLab-compatible chart surface with the light app theme', () => {

@@ -41,16 +41,27 @@ function axes(tokens: ChartTokens) {
   };
 }
 
-function lineOption(series: EChartsOption['series'], tokens: ChartTokens, yName: string): EChartsOption {
+type CartesianSeries = { data?: Array<number[] | { value?: number[] }> };
+
+export function frequencyBounds(series: EChartsOption['series']): [number, number] | undefined {
+  const frequencies = (Array.isArray(series) ? series : [series])
+    .flatMap((item) => ((item as CartesianSeries | undefined)?.data ?? []))
+    .map((item) => Number(Array.isArray(item) ? item[0] : item.value?.[0]))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  return frequencies.length ? [Math.min(...frequencies), Math.max(...frequencies)] : undefined;
+}
+
+export function lineOption(series: EChartsOption['series'], tokens: ChartTokens, yName: string): EChartsOption {
+  const bounds = frequencyBounds(series);
   return {
     animationDuration: 180,
     backgroundColor: tokens.background,
     color: tokens.series,
     textStyle: { color: tokens.foreground, fontFamily: 'Inter, system-ui, sans-serif' },
     tooltip: { trigger: 'axis', confine: true, backgroundColor: tokens.background, borderColor: tokens.spine ?? tokens.grid, textStyle: { color: tokens.foreground, fontSize: 10 }, axisPointer: { type: 'cross', lineStyle: { color: tokens.muted } } },
-    legend: { top: 4, right: 8, textStyle: { color: tokens.muted, fontSize: 9 }, itemWidth: 14, itemHeight: 3 },
-    grid: { left: 49, right: 18, top: 30, bottom: 34, containLabel: false },
-    xAxis: { type: 'log', logBase: 10, name: 'Frequency [Hz]', nameLocation: 'middle', nameGap: 22, nameTextStyle: { color: tokens.muted, fontSize: 9 }, minorTick: { show: true }, ...axes(tokens) },
+    legend: { top: 1, right: 5, textStyle: { color: tokens.muted, fontSize: 8 }, itemWidth: 12, itemHeight: 2 },
+    grid: { left: 39, right: 9, top: 20, bottom: 27, containLabel: false },
+    xAxis: { type: 'log', logBase: 10, min: bounds?.[0], max: bounds?.[1], name: 'Frequency [Hz]', nameLocation: 'middle', nameGap: 18, nameTextStyle: { color: tokens.muted, fontSize: 8 }, minorTick: { show: true }, ...axes(tokens) },
     yAxis: { type: 'value', name: yName, nameTextStyle: { color: tokens.muted, fontSize: 9 }, ...axes(tokens) },
     dataZoom: [{ type: 'inside', xAxisIndex: 0, filterMode: 'none', zoomOnMouseWheel: 'ctrl', moveOnMouseWheel: true }],
     series,
@@ -153,6 +164,41 @@ export function contourSegments(values: Array<Array<number | null>>, level: numb
   return segments;
 }
 
+type ContourPoint = [number, number];
+
+/** Join marching-squares fragments into continuous paths so contour lines can
+ * be rounded and anti-aliased as curves rather than drawn as tiny segments. */
+export function contourPolylines(segments: ContourSegment[]): ContourPoint[][] {
+  const unused = new Set(segments.map((_segment, index) => index));
+  const close = (a: ContourPoint, b: ContourPoint) => Math.abs(a[0] - b[0]) < 1e-7 && Math.abs(a[1] - b[1]) < 1e-7;
+  const polylines: ContourPoint[][] = [];
+  while (unused.size) {
+    const first = unused.values().next().value as number;
+    unused.delete(first);
+    const segment = segments[first];
+    const points: ContourPoint[] = [[segment[0], segment[1]], [segment[2], segment[3]]];
+    let joined = true;
+    while (joined) {
+      joined = false;
+      for (const index of unused) {
+        const candidate = segments[index];
+        const start: ContourPoint = [candidate[0], candidate[1]];
+        const end: ContourPoint = [candidate[2], candidate[3]];
+        if (close(points.at(-1)!, start)) points.push(end);
+        else if (close(points.at(-1)!, end)) points.push(start);
+        else if (close(points[0], end)) points.unshift(start);
+        else if (close(points[0], start)) points.unshift(end);
+        else continue;
+        unused.delete(index);
+        joined = true;
+        break;
+      }
+    }
+    polylines.push(points);
+  }
+  return polylines;
+}
+
 /**
  * ECharts only draws cartesian heatmap cells on two *category* axes. On a log
  * or value axis every cell is emitted with an empty path — nothing renders, and
@@ -167,23 +213,18 @@ export function heatmapOption(result: ResultPayload, tokens: ChartTokens, plane:
   const categoryAxis = { ...axes(tokens), axisTick: { alignWithLabel: true }, axisLabel: { ...axes(tokens).axisLabel, hideOverlap: true } };
   const contourLevels = [...new Set([-3, -6, -12, mapReference])].filter((level) => level >= floor).sort((a, b) => b - a);
   const contourSeries = contourLevels.flatMap((level, contourIndex) => {
-    const segments = contourSegments(grid.values, level);
-    if (!segments.length) return [];
-    const labelIndex = segments.reduce((best, segment, index) => {
-      const target = Math.max(0, grid.frequencies.length - 1) * Math.min(.9, .58 + contourIndex * .1);
-      const midpoint = (segment[0] + segment[2]) / 2;
-      const bestMidpoint = (segments[best][0] + segments[best][2]) / 2;
-      return Math.abs(midpoint - target) < Math.abs(bestMidpoint - target) ? index : best;
-    }, 0);
+    const polylines = contourPolylines(contourSegments(grid.values, level)).filter((points) => points.length > 1);
+    if (!polylines.length) return [];
+    const labelIndex = polylines.reduce((best, points, index) => points.length > polylines[best].length ? index : best, 0);
     const color = contourIndex === 0 ? tokens.foreground : contourIndex === 1 ? tokens.accent : tokens.series[Math.min(contourIndex, tokens.series.length - 1)] ?? tokens.muted;
     return [{
       name: `${level} dB contour`, type: 'custom', coordinateSystem: 'cartesian2d', silent: true, z: 6, clip: true,
-      data: segments.map((segment, index) => [...segment, level, index === labelIndex ? 1 : 0]),
+      data: polylines.map((_points, index) => [index, index === labelIndex ? 1 : 0]),
       renderItem: (_params: unknown, api: { value: (index: number) => unknown; coord: (value: number[]) => number[] }) => {
-        const start = api.coord([Number(api.value(0)), Number(api.value(1))]);
-        const end = api.coord([Number(api.value(2)), Number(api.value(3))]);
-        const children: Array<Record<string, unknown>> = [{ type: 'line', shape: { x1: start[0], y1: start[1], x2: end[0], y2: end[1] }, style: { stroke: color, lineWidth: level === mapReference ? 1.6 : 1.05, opacity: .9, lineDash: level <= -12 ? [4, 3] : undefined } }];
-        if (Number(api.value(5))) children.push({ type: 'text', style: { x: (start[0] + end[0]) / 2 + 3, y: (start[1] + end[1]) / 2 - 3, text: `${level} dB`, fill: color, font: '9px ui-monospace, monospace', backgroundColor: tokens.background, padding: [2, 3], borderRadius: 2 } });
+        const points = polylines[Number(api.value(0))].map((point) => api.coord(point));
+        const middle = points[Math.floor(points.length / 2)];
+        const children: Array<Record<string, unknown>> = [{ type: 'polyline', shape: { points, smooth: .22 }, style: { fill: null, stroke: color, lineWidth: level === mapReference ? 1.6 : 1.05, opacity: .92, lineCap: 'round', lineJoin: 'round', lineDash: level <= -12 ? [4, 3] : undefined } }];
+        if (Number(api.value(1))) children.push({ type: 'text', style: { x: middle[0] + 3, y: middle[1] - 3, text: `${level} dB`, fill: color, font: '8px ui-monospace, monospace', backgroundColor: tokens.background, padding: [1, 2], borderRadius: 2 } });
         return { type: 'group', children };
       },
     }];
@@ -196,10 +237,10 @@ export function heatmapOption(result: ResultPayload, tokens: ChartTokens, plane:
       const [, , , level, frequencyValue, angleValue] = (Array.isArray(params) ? params[0] : params).value as number[];
       return `${heatmapFrequencyLabel(frequencyValue)}Hz · ${Number(angleValue.toFixed(2))}° · ${level.toFixed(1)} dB`;
     } },
-    grid: { left: 45, right: 51, top: 15, bottom: 30 },
-    xAxis: { type: 'category', data: grid.frequencies.map((frequency) => heatmapFrequencyLabel(frequency)), name: 'Frequency [Hz]', nameLocation: 'middle', nameGap: 20, nameTextStyle: { color: tokens.muted, fontSize: 9 }, ...categoryAxis, axisLabel: { ...categoryAxis.axisLabel, interval: Math.max(0, grid.factor * 2 - 1) } },
+    grid: { left: 35, right: 38, top: 4, bottom: 24 },
+    xAxis: { type: 'category', data: grid.frequencies.map((frequency) => heatmapFrequencyLabel(frequency)), name: 'Frequency [Hz]', nameLocation: 'middle', nameGap: 16, nameTextStyle: { color: tokens.muted, fontSize: 8 }, ...categoryAxis, axisLabel: { ...categoryAxis.axisLabel, interval: Math.max(0, grid.factor * 2 - 1) } },
     yAxis: { type: 'category', data: grid.angles.map((angle) => String(Number(angle.toFixed(2)))), name: '°', nameTextStyle: { color: tokens.muted }, ...categoryAxis, axisLabel: { ...categoryAxis.axisLabel, interval: Math.max(0, grid.factor * 2 - 1) } },
-    visualMap: { min: floor, max: 0, dimension: 2, seriesIndex: 0, right: 4, top: 'middle', itemWidth: 9, itemHeight: 82, text: ['0 dB', `${floor} dB`], textStyle: { color: tokens.muted, fontSize: 8 }, inRange: { color: tokens.colormap } },
+    visualMap: { min: floor, max: 0, dimension: 2, seriesIndex: 0, right: 1, top: 'middle', itemWidth: 7, itemHeight: 70, text: ['0', `${floor}`], textStyle: { color: tokens.muted, fontSize: 7 }, inRange: { color: tokens.colormap } },
     // Cartesian heatmaps do not chunk safely in ECharts: progressive mode can
     // stop after the first angle band and leave the rest of the map blank.
     series: [{ type: 'heatmap', progressive: 0, z: 1, data: cells, emphasis: { itemStyle: { borderColor: tokens.accent, borderWidth: 1.2, shadowBlur: 7, shadowColor: tokens.accent } } }, ...contourSeries] as EChartsOption['series'],
@@ -286,15 +327,15 @@ function ChartCard({ index, chartType, result, named, tokens }: { index: number;
     };
   }, [expanded]);
   const polarStep = chartType.startsWith('directivity_map') ? resolvedPolarStepNotice(result) : null;
-  const subtitle = chartType.startsWith('directivity_map') ? `ref ${preferencesStore.getSnapshot().mapReference} dB${polarStep ? ` · ${polarStep}` : ''}` : chartType === 'frequency_response' ? splSubtitle(result) : chartLabel(chartType);
+  const subtitle = chartType.startsWith('directivity_map') ? `ref ${preferencesStore.getSnapshot().mapReference} dB${polarStep ? ` · ${polarStep}` : ''}` : chartType === 'frequency_response' ? splSubtitle(result) : null;
   return <>
     <section className={`result-card result-${index}`}>
-      <header><select aria-label={`Panel ${index + 1} chart type`} value={chartType} onChange={(event) => preferencesStore.setChartType(index, event.target.value as ChartType)}>{CHART_TYPES.map(({ id, label }) => <option key={id} value={id}>{label}</option>)}</select><span>{subtitle}</span><button className="result-card-expand" aria-label={`Expand panel ${index + 1}`} title="Open detail view" onClick={() => setExpanded(true)}><Icon name="expand"/></button><button className="result-card-close" aria-label={`Close panel ${index + 1}`} title="Close chart" onClick={() => preferencesStore.closeChart(index)}><Icon name="close"/></button></header>
+      <header><select aria-label={`Panel ${index + 1} chart type`} value={chartType} onChange={(event) => preferencesStore.setChartType(index, event.target.value as ChartType)}>{CHART_TYPES.map(({ id, label }) => <option key={id} value={id}>{label}</option>)}</select>{subtitle && <span>{subtitle}</span>}<button className="result-card-expand" aria-label={`Expand panel ${index + 1}`} title="Open detail view" onClick={() => setExpanded(true)}><Icon name="expand"/></button><button className="result-card-close" aria-label={`Close panel ${index + 1}`} title="Close chart" onClick={() => preferencesStore.closeChart(index)}><Icon name="close"/></button></header>
       <div className="chart-placeholder" title="Hover for values · double-click for detail" onDoubleClick={() => setExpanded(true)}><ResultChart chartType={chartType} result={result} named={named} tokens={tokens}/></div>
     </section>
     {expanded && createPortal(<div className="result-detail-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setExpanded(false); }}>
       <section ref={detail} className="result-detail" role="dialog" aria-modal="true" aria-label={`${chartLabel(chartType)} detail`}>
-        <header><div><b>{chartLabel(chartType)}</b><span>{subtitle}</span></div><small>Hover to inspect · Ctrl/scroll to zoom lines</small><button aria-label="Close detail view" onClick={() => setExpanded(false)}><Icon name="close"/></button></header>
+        <header><div><b>{chartLabel(chartType)}</b>{subtitle && <span>{subtitle}</span>}</div><small>Hover to inspect · Ctrl/scroll to zoom lines</small><button aria-label="Close detail view" onClick={() => setExpanded(false)}><Icon name="close"/></button></header>
         <div className="result-detail-chart"><ResultChart chartType={chartType} result={result} named={named} tokens={tokens}/></div>
       </section>
     </div>, document.body)}
@@ -376,7 +417,7 @@ export function ResultsPanel() {
       <span className="spacer"/>
       <label className="result-count-control">Charts<select aria-label="Results panel count" value={RESULT_PANEL_COUNTS.includes(preferences.chartTypes.length as never) ? preferences.chartTypes.length : ''} onChange={(event) => preferencesStore.setChartCount(Number(event.target.value))}><option value="" disabled>{preferences.chartTypes.length}</option>{RESULT_PANEL_COUNTS.map((count) => <option key={count} value={count}>{count}</option>)}</select></label>
       <button disabled={preferences.chartTypes.length >= MAX_RESULT_PANELS} onClick={() => preferencesStore.addChart()}>+ chart</button>
-      <button disabled={exporting || !primary || !preferences.exportFormats.length} onClick={() => void exportSelected()}>{exporting ? 'Exporting…' : `Export selected (${preferences.exportFormats.length})`}</button>
+      <button disabled={exporting || !primary || !preferences.exportFormats.length} title="Export the current result using the formats enabled in Results preferences" onClick={() => void exportSelected()}>{exporting ? 'Exporting…' : `Export result (${preferences.exportFormats.length})`}</button>
       <button className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Results preferences" aria-expanded={preferencesOpen} title="Results & export preferences" onClick={() => setPreferencesOpen((value) => !value)}><Icon name="settings"/></button>
     </div>
     {preferencesOpen && <ResultsPreferencesSurface popover onClose={() => setPreferencesOpen(false)}/>}
