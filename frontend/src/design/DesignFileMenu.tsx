@@ -46,9 +46,10 @@ export function DesignFileMenu() {
   const design = useDesignStore((state) => state.design);
   const revision = useDesignStore((state) => state.designRevision);
   const replaceDesign = useDesignStore((state) => state.replaceDesign);
-  const [savedRevision, setSavedRevision] = useState(() => useDesignStore.getState().designRevision);
   const filename = useDocumentStore((state) => state.filename);
+  const savedRevision = useDocumentStore((state) => state.savedRevision);
   const setFilename = useDocumentStore((state) => state.setFilename);
+  const markSaved = useDocumentStore((state) => state.markSaved);
   const [open, setOpen] = useState(false);
   const [exportsOpen, setExportsOpen] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -89,7 +90,7 @@ export function DesignFileMenu() {
       const opened = await openDesignText(text);
       replaceDesign(hydrateDesignDocument(opened.design));
       setFilename(`${filenameStem(file.name)}.cfg`);
-      setSavedRevision(useDesignStore.getState().designRevision);
+      markSaved(useDesignStore.getState().designRevision);
       setMessage(reportText(opened));
     });
   }
@@ -100,7 +101,7 @@ export function DesignFileMenu() {
       const response = await saveDesignDocument(design, filename);
       downloadText(response.text, filename || response.suggestedFilename);
       setFilename(response.suggestedFilename);
-      setSavedRevision(savingRevision);
+      markSaved(savingRevision);
       setMessage(`Saved ${response.suggestedFilename}`);
     });
   }

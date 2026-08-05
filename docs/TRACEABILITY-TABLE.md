@@ -19,10 +19,13 @@ A second pass on 2026-08-04 (post-cutover bug sweep) settled one more:
 
 - **D016b — R-OSSE with an enclosure.** v1 throws for this combination (`buildWaveguideMesh.js:41-46`: "R-OSSE enclosure is not supported by the default geometry contract"), and v2 does not. That restriction belonged to v1's own JS geometry engine, which v2 does not use: the HornLab mesher builds R-OSSE + enclosure without complaint, producing the full surface set (`horn.inner`, `mouth_rim`, `enclosure.front/side/rear/roundover`, `source_cap`) over sensible bounds. **The missing guard is correct — do not "restore parity" by adding one.**
 
+A third pass on 2026-08-05 closed the remaining crash-recovery item:
+
+- **N002 — autosave.** Versioned local draft recovery restores the design, filename, dirty/saved state, and monotonic revision before React mounts; edits are debounced and visibility/unload transitions flush synchronously (`frontend/src/stores/autosave.ts`, `frontend/src/stores/autosave.test.ts`). No v1 contract existed.
+
 Still genuinely open, unchanged by the build:
 
 - **V013 / Q006 — generic section-curve overlays.** No owning v1 contract was ever located. Do not claim parity.
-- **N002 — autosave.** Not implemented in v2; no v1 contract either.
 - **N006 / N007 / N008 — command palette, named snapshots, layout presets.** Accepted post-cutover deferrals.
 - **T001 — the six-tab settings modal.** V2 has no consolidated settings surface; the equivalent controls live in panel-inline preference strips plus a viewer-preferences panel (`frontend/src/prefs/`, `frontend/src/viewerprefs/`). This is an architectural difference to confirm or close deliberately, not an accidental omission.
 
@@ -133,7 +136,7 @@ Still genuinely open, unchanged by the build:
 | P013 | Installers and launchers select a backend interpreter through shared priority rules | `server/README.md:35-48`; `server/start.sh:73-116` | platform | P1/P6 | clean install matrix | Required | None |
 | P014 | Runtime capability helper maps Python, Gmsh, mesher, Metal, and BEMPP readiness to feature-specific guidance | `src/ui/runtimeCapabilities.js:110-175` | platform | P6 | degraded-capability UI matrix | Required | None |
 | N001 | Grouped-drag undo transactions | RESOLVED 2026-08-04 — new-v2 behavior; no v1 contract | design-schema | P2 | `frontend/src/stores/design.test.ts:59,70` | New | None |
-| N002 | Autosave | OPEN — not implemented in v2; no v1 contract either | workspace | TBD | crash/restart E2E | New | None |
+| N002 | Autosave | RESOLVED 2026-08-05 — versioned `localStorage` draft with corrupt-record rejection, 750 ms debounce, visibility/unload flush, and pre-mount restore of design/filename/saved state | workspace | P6 | `frontend/src/stores/autosave.test.ts` | New | None |
 | N003 | WebSocket job streaming | RESOLVED 2026-08-04 — snapshot+cursor protocol with resume-based gap recovery | jobs | P1/P3 | `frontend/src/jobs/jobsSocket.test.ts` | New | None |
 | N004 | Persisted dockview layout | RESOLVED 2026-08-04 — `localStorage` serialize/reseed with corrupt-payload reset (`frontend/src/shell/Workspace.tsx:116-128`); v1 stored a simpler layout object (`src/ui/settings/layoutSettings.js:31-46`) | results | P4 | `frontend/src/shell/Workspace.test.tsx` | New | None |
 | N005 | Scene colors follow `prefers-color-scheme`; an explicit dark/light v2 theme choice is new | `src/viewer/index.js:47-58` | viewer | P6 | theme persistence/visual test | New | None |
