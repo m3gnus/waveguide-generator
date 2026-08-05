@@ -1,0 +1,2 @@
+# Development and qualification tools for the v2-local environment.
+pytest==9.0.3
