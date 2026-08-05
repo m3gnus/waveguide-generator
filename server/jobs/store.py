@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 import json
 import logging
+import os
 from pathlib import Path
 import re
 import sqlite3
@@ -217,6 +218,144 @@ class JobStore:
             changed = self._update_job(conn, job_id, fields)
             event = self._append_event(conn, job_id, event_type, payload) if changed else None
             return changed, event
+
+    def persist_runtime_update(
+        self,
+        job_id: str,
+        fields: Mapping[str, Any],
+        *,
+        stage_payload: Mapping[str, Any] | None = None,
+        log_lines: Sequence[str] = (),
+        expected_log_size: int | None = None,
+        max_log_lines: int = 200,
+        max_log_chars: int = 32_000,
+        max_log_event_chars: int = 2_000,
+    ) -> tuple[bool, list[dict[str, Any]]]:
+        """Persist one coalesced runtime checkpoint and its visible events.
+
+        Native solvers can report a callback for every frequency.  Combining
+        the latest stage/progress values and all log lines in one transaction
+        avoids opening SQLite and the log file for every callback while keeping
+        the event cursor consistent with the durable job row.
+
+        The log file is appended and fsynced before its metadata/event becomes
+        visible. ``expected_log_size`` makes that append idempotent: if SQLite
+        commit fails after the append, retry recognizes the exact durable batch
+        instead of writing it twice. A mismatched file suffix fails closed.
+
+        Log event ``lines`` is the authoritative line-preserving delta. The
+        single-line ``chunk`` remains for older clients and names the newest
+        line, never a newline-joined pseudo-line.
+        """
+
+        values = dict(fields)
+        full_lines = [
+            logical_line
+            for message in log_lines
+            for logical_line in str(message).replace("\r", "").split("\n")
+        ]
+        with self._lock, self._transaction() as conn:
+            row = conn.execute(
+                """SELECT status, cancellation_requested, task_metadata_json
+                   FROM simulation_jobs WHERE id = ?""",
+                (job_id,),
+            ).fetchone()
+            if (
+                row is None
+                or row["status"] not in {"queued", "running"}
+            ):
+                return False, []
+
+            cancellation_requested = bool(row["cancellation_requested"])
+            if cancellation_requested:
+                # A cancellation stage already owns the visible state. Logs
+                # that raced with the request are still durable, but stale
+                # progress must not restore the prior solve stage.
+                values = {}
+                stage_payload = None
+
+            event_lines: list[str] = []
+            if full_lines:
+                path = self._job_log_path(job_id)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                batch = "".join(f"{line}\n" for line in full_lines).encode("utf-8")
+                expected = (
+                    int(expected_log_size)
+                    if expected_log_size is not None
+                    else (path.stat().st_size if path.exists() else 0)
+                )
+                actual = path.stat().st_size if path.exists() else 0
+                if actual < expected:
+                    raise OSError(
+                        f"Job log shrank from expected offset {expected} to {actual}"
+                    )
+                already_appended = False
+                if actual > expected:
+                    with path.open("rb") as handle:
+                        handle.seek(expected)
+                        suffix = handle.read()
+                    if suffix != batch:
+                        raise OSError(
+                            "Job log changed outside the buffered runtime writer"
+                        )
+                    already_appended = True
+                if not already_appended:
+                    with path.open("ab") as handle:
+                        handle.write(batch)
+                        handle.flush()
+                        os.fsync(handle.fileno())
+
+                metadata = json.loads(row["task_metadata_json"] or "{}")
+                tail = [str(line) for line in metadata.get("log_tail") or []]
+                bounded = [line[-max_log_event_chars:] for line in full_lines]
+                tail.extend(bounded)
+                tail = tail[-max_log_lines:]
+                tail_chars = sum(len(line) + 1 for line in tail)
+                while tail and tail_chars > max_log_chars:
+                    tail_chars -= len(tail.pop(0)) + 1
+                metadata["log_tail"] = tail
+                values["task_metadata_json"] = json.dumps(metadata)
+                remaining = max_log_event_chars
+                reversed_lines: list[str] = []
+                for line in reversed(bounded):
+                    if remaining <= 0:
+                        break
+                    if len(line) > remaining:
+                        if reversed_lines:
+                            break
+                        line = line[-remaining:]
+                    reversed_lines.append(line)
+                    remaining -= len(line)
+                event_lines = list(reversed(reversed_lines))
+
+            if not values:
+                return False, []
+            changed = self._update_job(conn, job_id, values)
+            if not changed:
+                return False, []
+
+            events: list[dict[str, Any]] = []
+            if stage_payload is not None:
+                events.append(self._append_event(conn, job_id, "stage", stage_payload))
+            if event_lines:
+                events.append(
+                    self._append_event(
+                        conn,
+                        job_id,
+                        "log",
+                        {"chunk": event_lines[-1], "lines": event_lines},
+                    )
+                )
+            return True, events
+
+    def job_log_size(self, job_id: str) -> int:
+        """Return the byte offset used to make the next batch append idempotent."""
+
+        with self._lock:
+            try:
+                return self._job_log_path(job_id).stat().st_size
+            except FileNotFoundError:
+                return 0
 
     def request_cancellation(
         self,

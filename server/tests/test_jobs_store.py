@@ -91,6 +91,152 @@ def test_store_round_trips_jobs_results_artifacts_and_metadata(tmp_path: Path) -
     assert store.get_mesh_artifact("roundtrip").startswith("$MeshFormat")
 
 
+def test_coalesced_runtime_checkpoint_updates_state_log_tail_and_events(
+    tmp_path: Path,
+) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    record = _job("runtime", "running")
+    record["task_metadata"] = {"rating": 4, "log_tail": ["existing"]}
+    store.create_job(record)
+
+    changed, events = store.persist_runtime_update(
+        "runtime",
+        {
+            "stage": "solve",
+            "stage_message": "frequency 3",
+            "progress": 0.6,
+        },
+        stage_payload={"stage": "solve", "message": "frequency 3", "progress": 0.6},
+        log_lines=("frequency 1", "frequency 2", "frequency 3"),
+    )
+
+    assert changed is True
+    assert [event["type"] for event in events] == ["stage", "log"]
+    assert events[1]["payload"] == {
+        "chunk": "frequency 3",
+        "lines": ["frequency 1", "frequency 2", "frequency 3"],
+    }
+    row = store.get_job_row("runtime")
+    assert row["stage"] == "solve"
+    assert row["progress"] == 0.6
+    assert row["task_metadata"]["rating"] == 4
+    assert row["task_metadata"]["log_tail"] == [
+        "existing",
+        "frequency 1",
+        "frequency 2",
+        "frequency 3",
+    ]
+    assert store.get_job_log("runtime") == (
+        "frequency 1\nfrequency 2\nfrequency 3\n"
+    )
+
+
+def test_cancel_requested_checkpoint_keeps_logs_without_restoring_stale_stage(
+    tmp_path: Path,
+) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    record = _job("cancelling", "running")
+    record.update(
+        {
+            "stage": "cancelling",
+            "stage_message": "Cancellation requested",
+            "cancellation_requested": True,
+        }
+    )
+    store.create_job(record)
+
+    changed, events = store.persist_runtime_update(
+        "cancelling",
+        {
+            "stage": "solve",
+            "stage_message": "late frequency",
+            "progress": 0.75,
+        },
+        stage_payload={
+            "stage": "solve",
+            "message": "late frequency",
+            "progress": 0.75,
+        },
+        log_lines=("late frequency",),
+        expected_log_size=0,
+    )
+
+    assert changed is True
+    assert [event["type"] for event in events] == ["log"]
+    row = store.get_job_row("cancelling")
+    assert row["stage"] == "cancelling"
+    assert row["stage_message"] == "Cancellation requested"
+    assert row["progress"] == 0.0
+    assert row["task_metadata"]["log_tail"] == ["late frequency"]
+    assert store.get_job_log("cancelling") == "late frequency\n"
+
+
+def test_runtime_log_delta_preserves_lines_inside_multiline_messages(
+    tmp_path: Path,
+) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    store.create_job(_job("multiline", "running"))
+
+    changed, events = store.persist_runtime_update(
+        "multiline",
+        {},
+        log_lines=("first\nsecond", "third"),
+        expected_log_size=0,
+    )
+
+    assert changed is True
+    assert events[0]["payload"] == {
+        "chunk": "third",
+        "lines": ["first", "second", "third"],
+    }
+    assert store.get_job_row("multiline")["task_metadata"]["log_tail"] == [
+        "first",
+        "second",
+        "third",
+    ]
+    assert store.get_job_log("multiline") == "first\nsecond\nthird\n"
+
+
+def test_runtime_log_append_retry_is_idempotent_after_sql_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    store.create_job(_job("retry", "running"))
+    original_update = store._update_job
+
+    def fail_update(*_args: object, **_kwargs: object) -> bool:
+        raise sqlite3.OperationalError("simulated commit path failure")
+
+    monkeypatch.setattr(store, "_update_job", fail_update)
+    with pytest.raises(sqlite3.OperationalError, match="simulated"):
+        store.persist_runtime_update(
+            "retry",
+            {},
+            log_lines=("only once",),
+            expected_log_size=0,
+        )
+    assert store.get_job_log("retry") == "only once\n"
+    assert store.get_job_row("retry")["task_metadata"] == {}
+
+    monkeypatch.setattr(store, "_update_job", original_update)
+    changed, events = store.persist_runtime_update(
+        "retry",
+        {},
+        log_lines=("only once",),
+        expected_log_size=0,
+    )
+    assert changed is True
+    assert [event["type"] for event in events] == ["log"]
+    assert store.get_job_log("retry") == "only once\n"
+    assert store.get_job_row("retry")["task_metadata"]["log_tail"] == [
+        "only once"
+    ]
+
+
 def test_transactions_rollback_a_duplicate_create_without_extra_event(tmp_path: Path) -> None:
     store = JobStore(tmp_path / "jobs.db")
     store.initialize()

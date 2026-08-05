@@ -234,6 +234,160 @@ def test_full_job_log_is_on_disk_while_metadata_remains_tail_only(tmp_path: Path
     asyncio.run(scenario())
 
 
+def test_frequency_progress_and_logs_are_coalesced_until_stage_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        store = JobStore.for_data_dir(tmp_path)
+        store.initialize()
+        store.create_job(_record("coalesced"))
+        runtime = JobRuntime(store, persistence_interval_seconds=60.0)
+        runtime._started = True
+        original = store.persist_runtime_update
+        writes = 0
+
+        def observed(*args: Any, **kwargs: Any) -> Any:
+            nonlocal writes
+            writes += 1
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(store, "persist_runtime_update", observed)
+        for index in range(25):
+            await runtime._report_real_stage(
+                "coalesced",
+                "frequency_solve",
+                index / 24,
+                f"frequency-{index}",
+            )
+
+        # The first stage boundary is immediate; the remaining 24 callbacks
+        # are represented by one pending latest-value checkpoint.
+        assert writes == 1
+        assert store.get_job_row("coalesced")["progress"] == 0.35
+
+        await runtime._report_real_stage(
+            "coalesced", "finalizing", 1.0, "packaging-results"
+        )
+        assert writes == 3
+        row = store.get_job_row("coalesced")
+        assert row["stage"] == "postprocess"
+        assert row["progress"] == pytest.approx(0.99)
+        assert row["task_metadata"]["log_tail"][-2:] == [
+            "frequency-24",
+            "packaging-results",
+        ]
+        assert store.get_job_log("coalesced").count("frequency-") == 25
+
+        events = store.replay_events(0)
+        assert [event["type"] for event in events] == [
+            "stage",
+            "log",
+            "stage",
+            "log",
+            "stage",
+            "log",
+        ]
+        assert events[2]["payload"]["message"] == "frequency-24"
+        assert events[3]["payload"]["chunk"] == "frequency-24"
+        assert events[3]["payload"]["lines"] == [
+            f"frequency-{index}" for index in range(1, 25)
+        ]
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_real_completion_flushes_latest_coalesced_progress_and_log(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        store = JobStore(tmp_path / "jobs.db")
+        store.initialize()
+        store.create_job(_record("terminal"))
+        runtime = JobRuntime(store, persistence_interval_seconds=60.0)
+        runtime._started = True
+
+        class Engine:
+            name = "mock"
+
+            async def run(self, _request: Any, *, cancel_cb: Any, stage_cb: Any) -> Any:
+                for index in range(20):
+                    stage_cb(
+                        "frequency_solve",
+                        index / 19,
+                        f"terminal-frequency-{index}",
+                    )
+                await asyncio.sleep(0)
+                return SimpleNamespace(
+                    results={"metadata": {}}, msh_text=None, mesh_stats=None
+                )
+
+        await runtime._run_real_engine("terminal", _request(), Engine())
+        row = store.get_job_row("terminal")
+        assert row["status"] == "complete"
+        assert row["task_metadata"]["log_tail"][-1] == "terminal-frequency-19"
+        assert store.get_job_log("terminal").endswith("terminal-frequency-19\n")
+        events = store.replay_events(0)
+        assert events[-1]["type"] == "completed"
+        assert events[-3]["type"] == "stage"
+        assert events[-3]["payload"]["message"] == "terminal-frequency-19"
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_graceful_shutdown_flushes_last_buffered_log(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        store = JobStore(tmp_path / "jobs.db")
+        store.initialize()
+        store.create_job(_record("shutdown"))
+        runtime = JobRuntime(store, persistence_interval_seconds=60.0)
+        runtime._started = True
+        await runtime._append_log("shutdown", "last-before-shutdown")
+
+        await runtime.shutdown()
+
+        row = store.get_job_row("shutdown")
+        assert row["status"] == "running"
+        assert row["task_metadata"]["log_tail"] == ["last-before-shutdown"]
+        assert store.get_job_log("shutdown") == "last-before-shutdown\n"
+
+    asyncio.run(scenario())
+
+
+def test_forgotten_runtime_buffer_rejects_detached_callback_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        store = JobStore(tmp_path / "jobs.db")
+        store.initialize()
+        store.create_job(_record("detached"))
+        runtime = JobRuntime(store, persistence_interval_seconds=60.0)
+        runtime._started = True
+        detached = runtime._runtime_update_state("detached")
+        await runtime._flush_runtime_update("detached", forget=True)
+        assert detached.closed is True
+        assert "detached" not in runtime._pending_updates
+
+        monkeypatch.setattr(
+            runtime, "_runtime_update_state", lambda _job_id: detached
+        )
+        await runtime._queue_runtime_update(
+            "detached",
+            stage="solve",
+            progress=0.5,
+            message="must-not-persist",
+            log_message="must-not-persist",
+        )
+
+        assert detached.pending is False
+        assert store.get_job_log("detached") == ""
+        assert store.replay_events(0) == []
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
 class _Transport:
     def __init__(self) -> None:
         self.json: list[dict[str, Any]] = []

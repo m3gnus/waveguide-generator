@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from dataclasses import dataclass, field
 from datetime import datetime
 import inspect
 import json
@@ -31,6 +32,7 @@ MAX_LOG_LINES = 200
 MAX_LOG_CHARS = 32_000
 MAX_LOG_EVENT_CHARS = 2_000
 CANCELLED_MESSAGE = "Simulation cancelled by user"
+RUNTIME_PERSIST_INTERVAL_SECONDS = 0.15
 
 
 def _now_iso() -> str:
@@ -63,6 +65,26 @@ class SymmetryValidationError(ValueError):
 
 class _CancelledAtCheckpoint(RuntimeError):
     pass
+
+
+@dataclass
+class _PendingRuntimeUpdate:
+    """Latest visible state and complete logs waiting for one durable flush."""
+
+    persisted_stage: str | None
+    last_persisted_at: float
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    stage: str | None = None
+    progress: float | None = None
+    message: str | None = None
+    log_lines: list[str] = field(default_factory=list)
+    timer_task: asyncio.Task[Any] | None = None
+    expected_log_size: int | None = None
+    closed: bool = False
+
+    @property
+    def pending(self) -> bool:
+        return self.stage is not None or bool(self.log_lines)
 
 
 class EventBroker:
@@ -99,7 +121,11 @@ class JobRuntime:
     """One-worker FIFO runtime with a durable HTTP correctness path."""
 
     def __init__(
-        self, store: JobStore, *, engine_registry: EngineRegistry | None = None
+        self,
+        store: JobStore,
+        *,
+        engine_registry: EngineRegistry | None = None,
+        persistence_interval_seconds: float = RUNTIME_PERSIST_INTERVAL_SECONDS,
     ) -> None:
         self.store = store
         self.engine_registry = engine_registry or EngineRegistry(factory=get_engine)
@@ -108,6 +134,10 @@ class JobRuntime:
         self._running: set[str] = set()
         self._background_tasks: set[asyncio.Task[Any]] = set()
         self._scheduler_task: asyncio.Task[Any] | None = None
+        self._pending_updates: dict[str, _PendingRuntimeUpdate] = {}
+        self._persistence_interval_seconds = max(
+            0.01, float(persistence_interval_seconds)
+        )
         self._started = False
         self._shutting_down = False
         self._start_lock = asyncio.Lock()
@@ -148,6 +178,10 @@ class JobRuntime:
         """Stop local tasks without rewriting running rows; startup recovery owns them."""
 
         self._shutting_down = True
+        # Stop accepting new buffered callbacks, then persist the last accepted
+        # checkpoint before cancelling the scheduler. Cancelling first could
+        # abandon an asyncio.to_thread file/SQLite write that is already running.
+        await self._flush_all_runtime_updates(forget=True)
         tasks = tuple(self._background_tasks)
         for task in tasks:
             task.cancel()
@@ -252,6 +286,7 @@ class JobRuntime:
         if status not in {"queued", "running"}:
             raise JobConflictError(f"Cannot stop job with status: {status}")
         if status == "queued":
+            await self._flush_runtime_update(job_id, forget=True)
             self._remove_from_queue(job_id)
             event = self._transition(
                 job_id,
@@ -270,6 +305,9 @@ class JobRuntime:
             self.events.publish(event)
             return {"message": f"Job {job_id} has been cancelled", "status": "cancelled"}
 
+        # Do not let a delayed progress checkpoint overwrite the visible
+        # cancelling stage after this method returns.
+        await self._flush_runtime_update(job_id, forget=True)
         event = self.store.request_cancellation(
             job_id,
             {
@@ -326,6 +364,7 @@ class JobRuntime:
     async def get_log(self, job_id: str) -> str:
         await self.start()
         self._require_job(job_id)
+        await self._flush_runtime_update(job_id)
         return await asyncio.to_thread(self.store.get_job_log, job_id)
 
     async def patch_metadata(self, job_id: str, fields: Mapping[str, Any]) -> None:
@@ -546,6 +585,8 @@ class JobRuntime:
             self._check_cancelled(job_id)
             await self._append_log(job_id, "Dry-run result persistence ready")
 
+            await self._flush_runtime_update(job_id, forget=True)
+
             completed_at = _now_iso()
             try:
                 event = await asyncio.to_thread(
@@ -577,6 +618,7 @@ class JobRuntime:
                 return
             self.events.publish(event)
         except _CancelledAtCheckpoint:
+            await self._flush_runtime_update(job_id, forget=True)
             event = self._transition(
                 job_id,
                 {
@@ -709,6 +751,7 @@ class JobRuntime:
                 self.store.update_job(job_id, has_mesh_artifact=False)
 
         self._check_cancelled(job_id)
+        await self._flush_runtime_update(job_id, forget=True)
         completed_at = _now_iso()
         try:
             event = await asyncio.to_thread(
@@ -774,39 +817,166 @@ class JobRuntime:
         self, job_id: str, stage: str, progress: float, message: str, delay: float
     ) -> None:
         self._check_cancelled(job_id)
-        event = self._transition(
+        await self._queue_runtime_update(
             job_id,
-            {"stage": stage, "stage_message": message, "progress": progress},
-            "stage",
-            {"stage": stage, "message": message, "progress": progress},
+            stage=stage,
+            progress=progress,
+            message=message,
+            log_message=message,
         )
-        self.events.publish(event)
-        await self._append_log(job_id, message)
         await asyncio.sleep(delay)
-        self._check_cancelled(job_id)
+        if delay:
+            self._check_cancelled(job_id)
 
     async def _append_log(self, job_id: str, message: str) -> None:
+        await self._queue_runtime_update(job_id, log_message=str(message))
+
+    def _runtime_update_state(self, job_id: str) -> _PendingRuntimeUpdate:
+        state = self._pending_updates.get(job_id)
+        if state is not None:
+            return state
         row = self._require_job(job_id)
-        metadata = dict(row.get("task_metadata") or {})
-        lines = [str(line) for line in metadata.get("log_tail") or []]
-        line = str(message)[-MAX_LOG_EVENT_CHARS:]
-        await asyncio.to_thread(self.store.append_job_log, job_id, str(message))
-        lines.append(line)
-        lines = lines[-MAX_LOG_LINES:]
-        while lines and sum(len(item) + 1 for item in lines) > MAX_LOG_CHARS:
-            lines.pop(0)
-        metadata["log_tail"] = lines
-        changed, event = self.store.update_job_with_event(
-            job_id,
-            {"task_metadata_json": json.dumps(metadata)},
-            "log",
-            {"chunk": line},
+        state = _PendingRuntimeUpdate(
+            persisted_stage=(str(row["stage"]) if row.get("stage") is not None else None),
+            last_persisted_at=time.monotonic(),
         )
-        if changed and event is not None:
-            self.events.publish(event)
+        self._pending_updates[job_id] = state
+        return state
+
+    async def _queue_runtime_update(
+        self,
+        job_id: str,
+        *,
+        stage: str | None = None,
+        progress: float | None = None,
+        message: str | None = None,
+        log_message: str | None = None,
+    ) -> None:
+        if self._shutting_down:
+            return
+        state = self._runtime_update_state(job_id)
+        async with state.lock:
+            if (
+                self._shutting_down
+                or state.closed
+                or self._pending_updates.get(job_id) is not state
+            ):
+                return
+            stage_changed = stage is not None and stage != (
+                state.stage if state.stage is not None else state.persisted_stage
+            )
+            if stage_changed and state.pending:
+                await self._flush_runtime_update_locked(job_id, state)
+
+            if stage is not None:
+                state.stage = str(stage)
+                state.progress = float(progress if progress is not None else 0.0)
+                state.message = str(message or "")
+            if log_message is not None:
+                state.log_lines.append(str(log_message))
+
+            elapsed = time.monotonic() - state.last_persisted_at
+            if stage_changed or elapsed >= self._persistence_interval_seconds:
+                await self._flush_runtime_update_locked(job_id, state)
+            else:
+                self._schedule_runtime_flush(
+                    job_id,
+                    state,
+                    self._persistence_interval_seconds - elapsed,
+                )
+
+    def _schedule_runtime_flush(
+        self, job_id: str, state: _PendingRuntimeUpdate, delay: float
+    ) -> None:
+        if state.timer_task is not None and not state.timer_task.done():
+            return
+
+        async def flush_later() -> None:
+            try:
+                await asyncio.sleep(max(0.0, delay))
+                async with state.lock:
+                    await self._flush_runtime_update_locked(job_id, state)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Buffered runtime persistence failed for job %s", job_id)
+            finally:
+                if state.timer_task is asyncio.current_task():
+                    state.timer_task = None
+
+        task = asyncio.create_task(flush_later(), name=f"wg2-persist-{job_id}")
+        state.timer_task = task
+        self._keep_task(task)
+
+    async def _flush_runtime_update_locked(
+        self, job_id: str, state: _PendingRuntimeUpdate
+    ) -> None:
+        timer = state.timer_task
+        if timer is not None and timer is not asyncio.current_task() and not timer.done():
+            timer.cancel()
+        state.timer_task = None
+        if state.closed or not state.pending:
+            return
+
+        fields: dict[str, Any] = {}
+        stage_payload: dict[str, Any] | None = None
+        if state.stage is not None:
+            fields = {
+                "stage": state.stage,
+                "stage_message": state.message or "",
+                "progress": state.progress if state.progress is not None else 0.0,
+            }
+            stage_payload = {
+                "stage": state.stage,
+                "message": state.message or "",
+                "progress": state.progress if state.progress is not None else 0.0,
+            }
+        log_lines = tuple(state.log_lines)
+        if log_lines and state.expected_log_size is None:
+            state.expected_log_size = await asyncio.to_thread(
+                self.store.job_log_size, job_id
+            )
+        changed, events = await asyncio.to_thread(
+            self.store.persist_runtime_update,
+            job_id,
+            fields,
+            stage_payload=stage_payload,
+            log_lines=log_lines,
+            expected_log_size=state.expected_log_size,
+            max_log_lines=MAX_LOG_LINES,
+            max_log_chars=MAX_LOG_CHARS,
+            max_log_event_chars=MAX_LOG_EVENT_CHARS,
+        )
+        if changed:
+            if state.stage is not None:
+                state.persisted_stage = state.stage
+            for event in events:
+                self.events.publish(event)
+        state.stage = None
+        state.progress = None
+        state.message = None
+        state.log_lines.clear()
+        state.expected_log_size = None
+        state.last_persisted_at = time.monotonic()
+
+    async def _flush_runtime_update(self, job_id: str, *, forget: bool = False) -> None:
+        state = self._pending_updates.get(job_id)
+        if state is None:
+            return
+        async with state.lock:
+            await self._flush_runtime_update_locked(job_id, state)
+            if forget:
+                state.closed = True
+        if forget and self._pending_updates.get(job_id) is state:
+            self._pending_updates.pop(job_id, None)
+
+    async def _flush_all_runtime_updates(self, *, forget: bool = False) -> None:
+        for job_id in tuple(self._pending_updates):
+            await self._flush_runtime_update(job_id, forget=forget)
 
     async def _fail_job(self, job_id: str, message: str) -> None:
         try:
+            await self._flush_runtime_update(job_id, forget=True)
             event = self._transition(
                 job_id,
                 {

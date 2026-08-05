@@ -122,9 +122,11 @@ def test_log_event_chunks_are_bounded(tmp_path: Path) -> None:
         runtime = JobRuntime(store)
         runtime._started = True
         await runtime._append_log("log", "x" * 10_000)
+        await runtime._flush_runtime_update("log")
         replay = store.replay_events(0)
         assert replay[-1]["type"] == "log"
         assert len(replay[-1]["payload"]["chunk"]) == 2000
+        assert replay[-1]["payload"]["lines"] == [replay[-1]["payload"]["chunk"]]
         assert len((store.get_job_row("log")["task_metadata"])["log_tail"][0]) == 2000
 
     asyncio.run(scenario())
