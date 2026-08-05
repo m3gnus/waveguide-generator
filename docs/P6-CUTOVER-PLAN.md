@@ -41,20 +41,35 @@ So the migration is **copy, open, verify** — not an importer. That moves P6.1
 from a multi-week workstream to a few days, most of which is the backup/rollback
 harness and the verification evidence G6 wants, not transformation code.
 
-### 0.2 Legacy jobs have no design provenance — and never did
+### 0.2 No migrated job can be reopened or rerun — for two different reasons
 
-`script_snapshot_json` is **NULL for all 35** v1 jobs. The column exists (a later
-v1 ALTER) but nothing populated it for this history.
+Of the 35 v1 jobs, **26 carry a design snapshot and 9 do not**
+(`script_snapshot_json` is NULL; the column arrived in a later v1 ALTER and was
+not backfilled). Neither group can currently be reopened in v2:
 
-This is not a migration defect and no migration can fix it: the design that
-produced those results was never stored. It means migrated jobs can be listed,
-and their results and meshes read, but they **cannot be reopened as a design or
-rerun**. v2's UI currently assumes a snapshot is available for rerun.
+- **The 9 without a snapshot** — the design was never stored. No migration can
+  recover it.
+- **The 26 with one** — the snapshot is v1's flat parameter bag: keyed `type`
+  (`"OSSE"`), mixing v1 field names (`r0`, `a0`, `q`, `morphCorner`) with
+  ATH-style keys (`Coverage.Angle`, `Term.q`, `Throat.Diameter`) and a `_blocks`
+  map of ATH sections. v2's `DesignConfig` is a discriminated union on
+  `formula`, so all 26 fail validation with `union_tag_not_found`.
 
-**New P6 requirement:** v2 must degrade gracefully on snapshot-less rows — Rerun
-disabled with a stated reason, "no design snapshot" surfaced in the job detail,
-and no crash path through the rerun/compare flows. Add fixtures from the real v1
-database, not synthetic rows.
+The migration itself is unaffected — the snapshots copy byte-for-byte and their
+hashes are verified. What is missing is v2's ability to *interpret* them, which
+the rebuild plan never required for G6.
+
+**Required (P6.1):** v2 degrades gracefully on every imported job — Rerun
+disabled with a stated reason, the cause surfaced in job detail, no crash path
+through rerun/compare. Fixtures come from the real v1 database, not synthetic
+rows.
+
+**Optional, and cheap enough to consider (decision §3.5):** because the v1 bag
+already carries ATH-style keys and `_blocks`, a legacy snapshot can be rendered
+back to ATH text and fed through v2's existing, well-tested `textcfg.parse` —
+the same reader that opens legacy `.mwg` files — rather than needing a new field
+mapping. That would make the 26 reopenable. It is a feature, not a data-safety
+requirement, so it should not gate cutover.
 
 ### 0.3 The Node-free install goal is not yet true
 
@@ -81,9 +96,30 @@ anyway.
 Ordered by dependency, not by size. P6.1 and P6.3 can run in parallel; P6.2
 blocks P6.4 and P6.5.
 
-### P6.1 — v1 → v2 data migration
+### P6.1 — v1 → v2 data migration — **done**
 
-*Size: S (was L).* Owner deliverable: a migration command plus its evidence.
+*Size: S (was L).* Shipped as `scripts/migrate_v1.py`, covered by
+`server/tests/test_migrate_v1.py` (12 tests).
+
+```
+python scripts/migrate_v1.py --v1-root "../Waveguide Generator" --dry-run
+python scripts/migrate_v1.py --v1-root "../Waveguide Generator" --report migration.json
+python scripts/migrate_v1.py --rollback <backup-directory>
+```
+
+Verified end to end against the real 113 MB v1 database merging into a copy of a
+live 12-job v2 database: **12 → 47 jobs, 62 content hashes all matching, 312
+workspace projects copied, in under a second**; re-running imported nothing; and
+rollback returned the database to byte-identical 12 jobs with an empty workspace.
+
+Two defects the tests caught, both now fixed: second-resolution backup directory
+names collided on a quick re-run and aborted the migration, and rollback left
+imported projects behind whenever the pre-migration workspace was empty.
+
+Still open here: item 6 below (graceful degradation for imported jobs, §0.2) is
+UI work and is not done.
+
+The requirements this satisfies:
 
 1. **Backup first, always.** Copy the v1 database and the v2 data directory to a
    timestamped backup path before touching anything; refuse to run if the backup
@@ -91,19 +127,23 @@ blocks P6.4 and P6.5.
 2. **Copy, don't transform.** Place the v1 file at v2's `db/` location, open it
    through `JobStore.initialize()` so `job_events` is added, leave
    `user_version` alone.
-3. **Idempotent.** Re-running detects an already-migrated database (marker row or
-   a v2-side migration record) and no-ops rather than duplicating. Migrating into
-   a *non-empty* v2 database must merge by job id, or refuse — decide and state
-   which; refusing is acceptable for the first release.
+3. **Idempotent.** A `v1_migrations` marker keyed on a source fingerprint (size
+   plus a digest of the job ids) short-circuits a repeat, and `INSERT OR IGNORE`
+   keeps row-level idempotence even if the marker is lost. A non-empty v2
+   database is **merged by job id**; the existing v2 row always wins.
 4. **Verify and report.** Pre/post counts per table, plus content hashes of
    `results_json` and `msh_text` per job id. G6 evidence is this report.
 5. **Prove rollback.** Restore from the backup and re-verify counts and hashes —
    a scripted test, not a manual step.
-6. **Snapshot-less jobs** (§0.2): fixtures from the real database, graceful
-   degradation, no rerun crash path.
-7. **Also migrate:** workspace preferences and current editor state. These are
-   *not* in the database — locate the v1 sources and handle them explicitly
-   rather than letting them fall through the copy.
+6. **Imported jobs** (§0.2): fixtures from the real database, graceful
+   degradation, no rerun crash path. **Not done — the only P6.1 item left.**
+7. **Also migrate:** saved projects. v1 keeps them in `output/` beside the
+   checkout (312 folders, 86 MB here) unless redirected by
+   `server/data/workspace_settings.json`, which the tool honours. v1's
+   `.waveguide/` holds machine-local launcher state and is deliberately not
+   migrated. The in-browser editor state cannot be moved by a script — it is
+   `localStorage` on a different origin — so that path stays "save from v1, open
+   in v2", which v2's legacy `.mwg` reader already supports.
 
 **Gate evidence:** migration report with pre/post counts and hashes, a rollback
 test in CI, and one full round trip on a real 109 MB database.
@@ -206,26 +246,32 @@ Cutover happens when every row is true and its evidence is linked.
 | 1 | Fresh-machine install on macOS | G6 | Blocked on P6.2 |
 | 2 | Fresh-machine install on Windows | G6 | Blocked on P6.2, P6.4 |
 | 3 | Linux smoke | G6 | Blocked on P6.3 |
-| 4 | Upgrade-over-v1 E2E, both OSes | G6 | Blocked on P6.1, P6.2 |
-| 5 | Rollback E2E, both OSes | G6 / R1-P0-6 | Blocked on P6.1 |
-| 6 | Migration pre/post counts + artifact hashes | R1-P0-6 | Blocked on P6.1 |
+| 4 | Upgrade-over-v1 E2E, both OSes | G6 | Migration done; blocked on P6.2 |
+| 5 | Rollback E2E, both OSes | G6 / R1-P0-6 | **Done on macOS** (scripted); Windows pending |
+| 6 | Migration pre/post counts + artifact hashes | R1-P0-6 | **Done** — `--report` emits it |
 | 7 | Two-week beta against a defined matrix | G6 | Blocked on P6.5 |
 | 8 | Traceability-table sweep — every row tested, deferrals have written workarounds | §3, G6 | Table exists; sweep not run |
 | 9 | Qualification-runner evidence linked from the gate | R2-P1.3 | Runner exists; publishing not wired |
-| 10 | Snapshot-less legacy jobs degrade gracefully | §0.2, new | Not started |
+| 10 | Imported jobs degrade gracefully (no reopen/rerun) | §0.2, new | Not started |
 
 ---
 
 ## 3. Open decisions
 
 1. **Distribution (§0.3)** — A, B, or C. Blocks P6.2. Recommend A.
-2. **Migrating into a non-empty v2 database** — merge by job id, or refuse?
-   Refusing is fine for the first release if it is stated clearly.
+2. ~~**Migrating into a non-empty v2 database** — merge or refuse?~~ **Settled:
+   merge by job id.** Refusing was never viable — this machine already has 12 v2
+   jobs alongside 35 v1 jobs, so refusing would force discarding one side. An
+   existing v2 row always wins; re-running imports nothing twice.
 3. **v1's fate after cutover** — one release cycle installable is the plan;
    confirm the retirement date when the beta starts.
 4. **Whether the internal `docs/BATCH-*-BRIEF.md` and review documents stay in
    the published repo.** They are honest engineering history and cost nothing to
    keep, but they are agent working notes, not user documentation.
+5. **Legacy snapshot translation (§0.2)** — build the v1-bag → ATH text →
+   `textcfg.parse` path so the 26 snapshot-carrying jobs can be reopened, or
+   ship with rerun disabled for all imported jobs? Not a cutover blocker either
+   way.
 
 ---
 
