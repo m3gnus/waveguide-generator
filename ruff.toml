@@ -1,0 +1,17 @@
+# Explicit rule selection so a ruff release cannot turn CI red on its own.
+line-length = 100
+target-version = "py313"
+
+[lint]
+# The set the codebase is already written against. Widening it (import sorting,
+# pyupgrade, bugbear) is a repo-wide reformat and belongs in its own change, not
+# in a gate that has to be green to publish.
+select = ["E", "F", "W"]
+ignore = [
+  "E501",  # long lines are a review conversation, not a hard gate
+]
+
+[lint.per-file-ignores]
+# Tests bind `call = lambda: ...` to defer invocation into pytest.raises, which
+# is what the idiom is for; a def would say the same thing in more lines.
+"server/tests/*" = ["E731"]

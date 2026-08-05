@@ -1,0 +1,90 @@
+name: CI
+
+# Hosted CI never runs real solvers (WG-REBUILD-PLAN R2-P1.3): Metal and bempp
+# parity live on the owned qualification runners, whose archived evidence the
+# gates link to. What runs here is everything that is deterministic on a hosted
+# runner -- suites, build, and the drift gates that keep generated files honest.
+
+on:
+  push:
+    branches: [v2, main]
+  pull_request:
+    branches: [v2, main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install
+        working-directory: frontend
+        run: npm ci
+      - name: Unit tests
+        working-directory: frontend
+        run: npm test
+      - name: Typecheck and build
+        working-directory: frontend
+        run: npm run build
+
+  shared-codec:
+    name: Shared frame codec
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      # The JS decoder and the Python encoder must agree on WS-PROTOCOL frames;
+      # this suite is the only thing that pins both ends to the same fixtures.
+      - name: Frame codec tests
+        run: node --test shared/js/frame.test.mjs
+
+  drift:
+    name: Generated-file drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      # requirements-pins.txt is generated from pins.json. A hand-edit here is
+      # how a consumer silently ends up on a different module build than the
+      # manifest claims.
+      - name: Pinned requirements match pins.json
+        run: python scripts/gen_requirements.py --check
+      - name: Lint
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff
+          ruff check server scripts shared
+
+  server:
+    name: Server (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install locked dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r server/requirements-lock.txt
+          pip install --no-deps -r server/requirements-pins.txt
+          pip install -r server/requirements-dev.txt
+      - name: Server tests
+        run: python -m pytest server/tests -q

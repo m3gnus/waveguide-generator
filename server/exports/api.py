@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 import re
-from typing import Any, Literal
+from typing import Literal
 
 from fastapi import APIRouter, FastAPI, HTTPException, Query
 from fastapi.responses import Response

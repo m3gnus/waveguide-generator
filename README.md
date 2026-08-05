@@ -1,6 +1,18 @@
 # Waveguide Generator v2
 
-In development — see ../WG-REBUILD-PLAN.md and docs/.
+Interactive 3D design and BEM simulation for acoustic waveguides — a
+from-scratch rebuild of the Waveguide Generator application on a TypeScript/React
+frontend and a FastAPI backend, with the mesher as the single geometry authority.
+
+**Status: beta, not yet the default.** v1 remains the supported release and lives
+on the `v1` branch of this repository. v2 runs beside it on port 3100 with its
+own data directory, so both can be installed at once. Cutover — installers, the
+v1→v2 jobs-database migration, Windows qualification, and the beta matrix — is
+tracked in [docs/P6-CUTOVER-PLAN.md](docs/P6-CUTOVER-PLAN.md).
+
+Design and contract documents live in [docs/](docs/); the traceability table
+mapping every v1 behavior to its v2 owner is
+[docs/TRACEABILITY-TABLE.md](docs/TRACEABILITY-TABLE.md).
 
 ## Launch
 
@@ -38,3 +50,14 @@ Flags: `--no-browser`, `--data-dir` (or `WG2_DATA_DIR`); `WG2_ENABLE_DRYRUN=1` e
 Python: `.venv/bin/python -m pytest server/tests -q`
 
 JS frame codec (explicit file path — directory mode trips the node runner): `node --test shared/js/frame.test.mjs`
+
+Frontend: `cd frontend && npm ci && npm test && npm run build`
+
+Real solves are never run in hosted CI; Metal and bempp parity run on owned
+qualification hardware, and their archived reports back the release gates.
+
+## License
+
+AGPL-3.0-or-later. See [LICENSE](LICENSE). The pinned HornLab solver, mesher,
+and plotting modules are separate AGPL repositories referenced by commit SHA in
+[pins.json](pins.json).

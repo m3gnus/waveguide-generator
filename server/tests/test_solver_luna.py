@@ -183,7 +183,6 @@ def test_temp_path_exists_before_write_and_cleanup_never_masks_solver_error(
 def test_temp_cleanup_oserror_does_not_mask_native_solver_error(
     adapter: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    module = metal if adapter == "metal" else bempp
     captured_path: list[str] = []
 
     def fail_solve(path: str, _config: Any) -> None:

@@ -107,7 +107,6 @@ class InstanceLock:
                 f"Could not open instance lock {self.path}: {exc}. Check that the data "
                 "directory is writable, then start again."
             ) from exc
-        info = InstanceInfo(pid=self._pid, port=port)
         try:
             fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:

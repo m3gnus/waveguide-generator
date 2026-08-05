@@ -7,7 +7,6 @@ The axisymmetric factor-of-two integral and missing-sample rules are from v1
 from __future__ import annotations
 
 import math
-from typing import Any
 
 import numpy as np
 
