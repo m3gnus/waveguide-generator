@@ -42,8 +42,8 @@ Our `.npz` files carry `spl_db[frequency, plane, angle]`, `frequency_hz`,
 `angles_deg` and `planes`, on the shared grid: 40 log frequencies 100 Hz -
 20 kHz, planes `horizontal, vertical, diagonal`, 37 angles 0 - 180 deg at 5 deg.
 
-The meshes are deliberately *not* copied here. Both solvers read the ATH exports
-in Dropbox directly, byte for byte — `asro2.msh` md5 `1c74051f…` and
+The meshes are deliberately *not* copied here. Both solvers read the external
+ATH exports directly, byte for byte — `asro2.msh` md5 `1c74051f…` and
 `250917asro68.msh` md5 `a66d124f…`. Regenerating or re-exporting either would
 break the comparison silently, so the paths stay external and hashed.
 

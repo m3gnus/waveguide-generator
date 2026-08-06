@@ -38,7 +38,7 @@
     "acoustics",
     "bem-solver"
   ],
-  "author": "Magnus Andersen",
+  "author": "m-a",
   "repository": {
     "type": "git",
     "url": "https://github.com/m3gnus/waveguide-generator.git"
