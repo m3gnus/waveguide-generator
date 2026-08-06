@@ -19,6 +19,10 @@ CORPUS = sorted((V1 / "output").glob("*/script.snapshot.mwg")) + sorted(
 )
 
 
+@pytest.mark.skipif(
+    not any(path.suffix == ".mwg" for path in CORPUS),
+    reason="the v1 checkout is not beside this one",
+)
 def test_open_real_legacy_mwg_reports_dialect_and_passthrough() -> None:
     path = next(path for path in CORPUS if path.suffix == ".mwg")
     result = asyncio.run(open_design(path.read_text()))

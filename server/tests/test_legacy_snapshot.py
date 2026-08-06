@@ -17,7 +17,15 @@ from server.design.legacy_snapshot import (
 from server.design.textcfg import ParsedDesign
 
 
-DB_PATH = Path("/Users/magnus/Code/hornlab-workspace/Waveguide Generator/server/data/simulations.db")
+# Sibling to this checkout, the way every other v1-corpus test locates it. An
+# absolute path would exist on exactly one machine.
+DB_PATH = (
+    Path(__file__).resolve().parents[2].parent
+    / "Waveguide Generator"
+    / "server"
+    / "data"
+    / "simulations.db"
+)
 
 
 # These are reduced parameter bags copied from real rows 250917asro, horn_design,
@@ -285,9 +293,22 @@ def test_freeform_legacy_snapshot_requires_reentry() -> None:
 
 
 @pytest.mark.skipif(not DB_PATH.exists(), reason="v1 simulation database is not available")
-def test_all_25_real_non_freeform_snapshots_validate() -> None:
-    snapshots = [snapshot for snapshot in _db_snapshots() if snapshot["params"].get("type") != "FREEFORM"]
-    assert len(snapshots) == 25
+def test_every_real_non_freeform_snapshot_validates() -> None:
+    """Every snapshot in the live database converts -- however many there are.
+
+    This database is Magnus's working solve history, so it grows and shrinks as
+    he runs and deletes jobs. Asserting a fixed count made the suite fail the
+    first time one was deleted, which says nothing about the converter. What
+    matters is that none of them fail; the inline fixtures carry the fixed
+    expectations.
+    """
+
+    snapshots = [
+        snapshot for snapshot in _db_snapshots() if snapshot["params"].get("type") != "FREEFORM"
+    ]
+    assert snapshots, "the v1 database exists but holds no convertible snapshots"
+    families = {snapshot["params"].get("type") for snapshot in snapshots}
+    assert {"OSSE", "R-OSSE"} <= families, f"corpus lost a family: {families}"
     for snapshot in snapshots:
         assert isinstance(snapshot_to_design(snapshot), ParsedDesign)
 
@@ -310,9 +331,11 @@ def test_real_family_values_are_preserved() -> None:
 
 
 @pytest.mark.skipif(not DB_PATH.exists(), reason="v1 simulation database is not available")
-def test_all_5_real_enclosures_are_preserved() -> None:
-    snapshots = [snapshot for snapshot in _db_snapshots() if snapshot["params"].get("encDepth", 0) > 0]
-    assert len(snapshots) == 5
+def test_real_enclosures_are_preserved() -> None:
+    snapshots = [
+        snapshot for snapshot in _db_snapshots() if snapshot["params"].get("encDepth", 0) > 0
+    ]
+    assert snapshots, "no enclosure snapshots left in the live database to check"
     for snapshot in snapshots:
         params = snapshot["params"]
         enclosure = snapshot_to_design(snapshot).design.root.enclosure

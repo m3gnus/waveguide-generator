@@ -20,6 +20,16 @@ def _id(path: Path) -> str:
     return str(path.relative_to(V1))
 
 
+# The corpus is the v1 checkout sitting beside this one. It is the strongest
+# evidence the text format still round-trips, so the counts stay exact wherever
+# it exists -- but it is not in the repository, so a machine without it (any CI
+# runner) must skip rather than fail.
+requires_corpus = pytest.mark.skipif(
+    not CORPUS, reason="the v1 checkout is not beside this one"
+)
+
+
+@requires_corpus
 def test_corpus_inventory_is_complete() -> None:
     assert len(SNAPSHOTS) == 191
     assert len(ATH_FIXTURES) == 3
