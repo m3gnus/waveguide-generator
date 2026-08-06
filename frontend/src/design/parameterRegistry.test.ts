@@ -54,7 +54,16 @@ describe('complete parameter registry', () => {
     }
 
     const sectionFor = (id: string) => PARAMETER_REGISTRY.find((field) => field.id === id)?.section;
-    expect(sectionFor('mesh.angular_segments')).toBe('Viewport mesh');
+    // The segment counts size the exported and solved mesh; the viewport
+    // overrides them with its own adaptive sampling, so they must not sit in a
+    // section that promises live preview control.
+    expect(sectionFor('mesh.angular_segments')).toBe('Surface sampling');
+    expect(sectionFor('mesh.length_segments')).toBe('Surface sampling');
+    expect(sectionFor('mesh.corner_segments')).toBe('Surface sampling');
+    // Inert ATH keys: the mesher rejects Mesh.ThroatSegments and never reads a
+    // slice density, so they belong with the other round-trip-only values.
+    expect(sectionFor('mesh.throat_segments')).toBe('Output & Passthrough');
+    expect(sectionFor('mesh.throat_slice_density')).toBe('Output & Passthrough');
     expect(sectionFor('mesh.throat_resolution')).toBe('Solve & export mesh');
     expect(sectionFor('mesh.wall_thickness')).toBe('Wall & Enclosure');
     expect(sectionFor('mesh.quadrants')).toBe('Solve & export mesh');

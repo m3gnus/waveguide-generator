@@ -179,7 +179,23 @@ class _Request:
 
 
 def preview_options(lod: Literal["coarse", "fine"]):
-    """Map protocol LOD names onto the mesher's stable preview presets."""
+    """Map protocol LOD names onto the mesher's stable preview presets.
+
+    The preview is error-bounded, not segment-driven: ``build_preview_geometry``
+    takes chord-error, normal-step, and silhouette targets and *derives* its own
+    azimuthal and axial sampling, overwriting ``mesh.angular_segments`` and
+    ``mesh.length_segments`` in the config it is handed. Those design fields
+    therefore size the exported and solved mesh only, which is what the
+    "Surface sampling" section now says.
+
+    Do not forward them as ``PreviewOptionsV1`` overrides to make the old
+    "live preview tessellation" label true. ``min_silhouette_segments`` is a
+    fidelity floor, not an ATH segment count: the design default of 40 sits
+    below both presets' floors (64 coarse, 128 fine), so wiring it would let a
+    solve-mesh field silently move the viewport off the LOD contract that
+    ``lod`` is supposed to pin. The WS test named
+    ``..._size_the_export_mesh_and_not_the_preview`` fails if this changes.
+    """
 
     from hornlab_mesher.preview.api import PreviewOptionsV1
 
@@ -625,14 +641,16 @@ class PreviewProtocol:
                 frame = await self._preview_service.run(self._compute_frame, current)
             except FrameError as exc:
                 if exc.rule == "frame-too-large":
-                    await self._close(CLOSE_TOO_LARGE)
-                    return
-                await self._error(
-                    current.seq,
-                    current.design_revision,
-                    "validation",
-                    fields={"design" if current.kind == "preview" else "points": str(exc)},
-                )
+                    await self._frame_too_large(current, exc.detail)
+                else:
+                    await self._error(
+                        current.seq,
+                        current.design_revision,
+                        "validation",
+                        fields={
+                            "design" if current.kind == "preview" else "points": str(exc)
+                        },
+                    )
             except ValueError as exc:
                 await self._error(
                     current.seq,
@@ -649,11 +667,13 @@ class PreviewProtocol:
                 )
             else:
                 if len(frame) > self.max_frame_bytes:
-                    await self._close(CLOSE_TOO_LARGE)
-                    return
-                # Transport failures must escape the compute-error handlers so
-                # task supervision can terminate a receive() blocked forever.
-                await self._send_bytes(frame)
+                    await self._frame_too_large(
+                        current, f"{len(frame)} > {self.max_frame_bytes}"
+                    )
+                else:
+                    # Transport failures must escape the compute-error handlers
+                    # so task supervision can terminate a blocked receive().
+                    await self._send_bytes(frame)
             current = self._pending
             self._pending = None
         self._worker = None
@@ -709,11 +729,31 @@ class PreviewProtocol:
             eval_ms=elapsed,
         )
 
+    async def _frame_too_large(self, request: _Request, detail: str) -> None:
+        """Report an over-budget frame without dropping the connection.
+
+        Closing with 4413 wedges the viewport: the client reconnects, resends
+        the same design, and the fine LOD closes the socket again forever while
+        coarse keeps succeeding. The size ceiling is a property of one request,
+        not of the connection, so it is reported like any other per-request
+        failure and the socket stays up on the last frame that fit.
+        """
+
+        await self._error(
+            request.seq,
+            request.design_revision,
+            "too-large",
+            message=(
+                f"preview frame exceeds the {self.max_frame_bytes}-byte limit "
+                f"({detail}); reduce the geometry detail or stay at a coarser view"
+            ),
+        )
+
     async def _error(
         self,
         seq: int | None,
         revision: int | None,
-        code: Literal["validation", "internal"],
+        code: Literal["validation", "internal", "too-large"],
         *,
         fields: Mapping[str, str] | None = None,
         message: str | None = None,

@@ -34,6 +34,7 @@ Handshake: server sends `{"v":1,"kind":"hello","epoch":N,"heartbeatSec":15,"limi
 - Compute runs off the event loop (`asyncio.to_thread`); the socket stays responsive while a slow family (ICW rollback ≈1 s) computes.
 - Reply per computed request: one binary frame (FRAME-SPEC), header `{epoch, seq, designRevision, lod, evalMs}`.
 - Validation failure → `{"kind":"error","seq":S,"designRevision":R,"code":"validation","fields":{...}}`; runtime failure → `code:"internal"` with message. Errors carry revision so the client drops errors for superseded edits.
+- A computed frame over `limits.maxFrameBytes` → `code:"too-large"` with message; **the socket stays open**. Closing with 4413 here wedges the viewport: the client reconnects, resends the same design, and the fine LOD closes the socket again forever while coarse keeps succeeding. The ceiling belongs to one request, not to the connection. 4413 remains the answer for an oversized *inbound* message, which is refused before any compute.
 
 ### Client rules
 
@@ -70,7 +71,7 @@ Design principle (review R2-P1.1): **WS is the fast path; HTTP remains the corre
 | 4400 | unsupported protocol version |
 | 4401 | origin rejected (localhost guard) |
 | 4408 | heartbeat timeout (server-initiated) |
-| 4413 | frame/message too large |
+| 4413 | inbound message too large (an over-budget outbound frame is a `too-large` error, not a close) |
 | 1012 | server restarting (client: reconnect with backoff) |
 
 ## 4. Conformance tests (gate G2)

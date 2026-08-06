@@ -6,7 +6,7 @@ export type ParameterSection =
   | 'Morph Target'
   | 'Wall & Enclosure'
   | 'Guiding Curve'
-  | 'Viewport mesh'
+  | 'Surface sampling'
   | 'Frequency Sweep'
   | 'Source Definition'
   | 'Solve & export mesh'
@@ -56,7 +56,7 @@ const throatExtension = 'Throat Extension' as const;
 const morphTarget = 'Morph Target' as const;
 const wallEnclosure = 'Wall & Enclosure' as const;
 const guidingCurve = 'Guiding Curve' as const;
-const viewportMesh = 'Viewport mesh' as const;
+const surfaceSampling = 'Surface sampling' as const;
 const frequencySweep = 'Frequency Sweep' as const;
 const sourceDefinition = 'Source Definition' as const;
 const solveExportMesh = 'Solve & export mesh' as const;
@@ -182,14 +182,17 @@ export const PARAMETER_REGISTRY: ParameterDefinition[] = [
   number('enclosure.front_resolution', 'encFrontResolution', 'enclosure.front_resolution', solveExportMesh, 'Front baffle mesh resolution', { unit: 'mm', min: .01, max: 1_000, description: 'One value or a four-value ATH resolution tuple.' }),
   number('enclosure.back_resolution', 'encBackResolution', 'enclosure.back_resolution', solveExportMesh, 'Rear baffle mesh resolution', { unit: 'mm', min: .01, max: 1_000, description: 'One value or a four-value ATH resolution tuple.' }),
 
-  // Viewport tessellation is intentionally separate from the solve/export mesh.
-  number('mesh.angular_segments', 'angularSegments', 'mesh.angular_segments', viewportMesh, 'Surface angular samples', { min: 0, max: 4_096, step: 1, precision: 0 }),
-  number('mesh.length_segments', 'lengthSegments', 'mesh.length_segments', viewportMesh, 'Surface length samples', { min: 0, max: 4_096, step: 1, precision: 0 }),
-  number('mesh.corner_segments', 'cornerSegments', 'mesh.corner_segments', viewportMesh, 'Surface corner samples', { min: 0, max: 1_024, step: 1, precision: 0 }),
-  number('mesh.throat_segments', 'throatSegments', 'mesh.throat_segments', viewportMesh, 'Throat slice samples', { min: 0, max: 4_096, step: 1, precision: 0 }),
-  number('mesh.throat_slice_density', 'throatSliceDensity', 'mesh.throat_slice_density', viewportMesh, 'Preview slice bias', { min: .01, max: .99, step: .01 }),
-  select('mesh.sampling_mode', 'samplingMode', 'mesh.sampling_mode', viewportMesh, 'Z-map sampling mode', [{ value: 'uniform', label: 'Uniform' }, { value: 'ath-default-zmap', label: 'ATH default Z-map' }, { value: 'zmap', label: 'Custom Z-map points' }]),
-  { id: 'mesh.z_map_points', legacyKey: 'zMapPoints', path: 'mesh.z_map_points', section: viewportMesh, label: 'Z-map points', kind: 'text', visibleWhen: (design) => design.mesh.sampling_mode === 'zmap', description: 'ATH point expression, preserved verbatim.' },
+  // How the horn surface itself is sampled, which is what reaches the exported
+  // and solved geometry. The preview is error-bounded rather than segment
+  // driven: it derives its own azimuthal and axial sampling from a chord-error
+  // budget and overwrites the angular and length counts (see
+  // server/preview/core.py preview_options). Corner samples and the Z-map do
+  // survive into it, so only the first two are labelled as export-only.
+  number('mesh.angular_segments', 'angularSegments', 'mesh.angular_segments', surfaceSampling, 'Surface angular samples', { min: 0, max: 4_096, step: 1, precision: 0, description: 'Azimuthal samples around the horn in the exported and solved mesh. The viewport substitutes its own adaptive count.' }),
+  number('mesh.length_segments', 'lengthSegments', 'mesh.length_segments', surfaceSampling, 'Surface length samples', { min: 0, max: 4_096, step: 1, precision: 0, description: 'Axial samples along the profile in the exported and solved mesh. The viewport substitutes its own adaptive count.' }),
+  number('mesh.corner_segments', 'cornerSegments', 'mesh.corner_segments', surfaceSampling, 'Surface corner samples', { min: 0, max: 1_024, step: 1, precision: 0, description: 'Extra azimuthal budget for morph corners, spent as (angular + corner) / 4 points per quadrant. This one does reach the viewport.' }),
+  select('mesh.sampling_mode', 'samplingMode', 'mesh.sampling_mode', surfaceSampling, 'Z-map sampling mode', [{ value: 'uniform', label: 'Uniform' }, { value: 'ath-default-zmap', label: 'ATH default Z-map' }, { value: 'zmap', label: 'Custom Z-map points' }], { description: 'Axial station distribution. An explicit Z-map is honored by the viewport as well as by the export.' }),
+  { id: 'mesh.z_map_points', legacyKey: 'zMapPoints', path: 'mesh.z_map_points', section: surfaceSampling, label: 'Z-map points', kind: 'text', visibleWhen: (design) => design.mesh.sampling_mode === 'zmap', description: 'ATH point expression, preserved verbatim.' },
   number('mesh.throat_resolution', 'throatResolution', 'mesh.throat_resolution', solveExportMesh, 'Throat mesh resolution', { unit: 'mm', min: .01, max: 1_000 }),
   number('mesh.mouth_resolution', 'mouthResolution', 'mesh.mouth_resolution', solveExportMesh, 'Mouth mesh resolution', { unit: 'mm', min: .01, max: 1_000, description: 'For 20 kHz, λ/6 is approximately 2.86 mm.' }),
   number('schema-gap.max_edge', 'maxEdge', 'mesh.max_edge', solveExportMesh, 'Maximum edge guard', { unit: 'mm', min: .01, max: 10_000, description: 'Optional post-build guard for the longest realized triangle edge.' }),
@@ -208,6 +211,13 @@ export const PARAMETER_REGISTRY: ParameterDefinition[] = [
   // solver takes it automatically for a body of revolution. The stored values
   // stay as ATH spells them so designs round-trip; only the labels changed.
   select('simulation.solver_mode', 'solverMode', 'simulation.solver_mode', solveExportMesh, 'Solver mode', [{ value: 'auto', label: 'Auto — meridian when eligible' }, { value: 'full_3d', label: 'Force full 3D' }, { value: 'circsym', label: 'Force axisymmetric meridian' }], { description: 'Auto solves a body of revolution on one rotated meridian slice and everything else in full 3D. Forcing the meridian path fails clearly when the geometry is not eligible.' }),
+
+  // Editable so imported ATH configs round-trip byte-for-byte, but inert here:
+  // the HornLab mesher rejects Mesh.ThroatSegments outright (config_parser.py
+  // "not supported; remove it or use Mesh.ZMapPoints") and has no notion of a
+  // slice density, so neither value reaches the viewport, solve, or export.
+  number('mesh.throat_segments', 'throatSegments', 'mesh.throat_segments', 'Output & Passthrough', 'ATH throat slice samples', { min: 0, max: 4_096, step: 1, precision: 0, description: 'Preserved for ATH round-trip only. Use Z-map sampling to bias axial stations toward the throat.' }),
+  number('mesh.throat_slice_density', 'throatSliceDensity', 'mesh.throat_slice_density', 'Output & Passthrough', 'ATH throat slice density', { min: .01, max: .99, step: .01, description: 'Preserved for ATH round-trip only; the HornLab mesher does not read it.' }),
 
   select('output.stl', 'outputSTL', 'output.stl', 'Output & Passthrough', 'STL output flag', yesNo),
   select('output.msh', 'outputMSH', 'output.msh', 'Output & Passthrough', 'MSH output flag', yesNo),
@@ -269,9 +279,9 @@ export const PARAMETER_SECTION_DEFINITIONS: readonly ParameterSectionDefinition[
     description: 'OSSE-only throat profile, rotation, and guide-shape controls used to bend or infer the horn profile.',
   },
   {
-    title: 'Viewport mesh',
+    title: 'Surface sampling',
     tab: 'geometry',
-    description: 'Live preview tessellation controls. They change viewport smoothness and responsiveness, not the BEM solve mesh.',
+    description: 'How the horn surface is sampled into a mesh for export and for the BEM solve. The live viewport ignores the angular and length counts — it tessellates adaptively to a chord-error budget and refines on its own once you stop editing — so raising them costs solve time without making the preview smoother.',
   },
   {
     title: 'Frequency Sweep',
@@ -291,7 +301,7 @@ export const PARAMETER_SECTION_DEFINITIONS: readonly ParameterSectionDefinition[
   {
     title: 'Output & Passthrough',
     tab: 'simulation',
-    description: 'Output flags and imported configuration content preserved for lossless export.',
+    description: 'Output flags, plus imported configuration content preserved verbatim for lossless export. Values here round-trip; they do not change the viewport, the solve, or the exported geometry.',
   },
 ];
 

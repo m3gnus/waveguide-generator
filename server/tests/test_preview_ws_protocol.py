@@ -22,7 +22,7 @@ from server.preview.core import (
     PreviewProtocol,
     preview_options,
 )
-from server.protocol.frame import decode
+from server.protocol.frame import FrameError, decode
 
 
 class FakeTransport:
@@ -492,3 +492,153 @@ def test_background_send_failure_ends_blocked_receive_loop(failure: str) -> None
         await asyncio.wait_for(task, 0.5)
 
     asyncio.run(scenario())
+
+
+def _sized_geometry(triangles: int):
+    """Disjoint unit triangles, so the caller picks the encoded frame size."""
+
+    from hornlab_mesher.preview.api import PreviewGeometryV1, PreviewSurfaceV1
+
+    corners = np.asarray([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+    shift = np.arange(triangles, dtype=np.float64).repeat(3).reshape(-1, 1)
+    positions = np.tile(corners, (triangles, 1)) + shift * np.asarray([[2.0, 0.0, 0.0]])
+    return PreviewGeometryV1(
+        surfaces=[
+            PreviewSurfaceV1(
+                role="horn.inner",
+                positions=positions,
+                indices=np.arange(3 * triangles, dtype=np.uint32),
+                normals=np.tile([0.0, 0.0, 1.0], (3 * triangles, 1)),
+                shading="smooth",
+                normal_method="analytic-parametric",
+                closed_phi=False,
+            )
+        ],
+        metadata={"api_version": "hornlab.preview/1", "fidelity": {}},
+    )
+
+
+def test_oversize_frame_errors_and_leaves_the_socket_open() -> None:
+    """A fine frame over budget must not wedge the viewport at coarse.
+
+    Closing with 4413 made this unrecoverable: the client reconnects, resends
+    the same design, coarse succeeds, and fine closes the socket again forever.
+    """
+
+    def builder(_config: Mapping[str, Any], options: Any) -> Any:
+        return _small_geometry() if options.lod == "coarse" else _sized_geometry(2_000)
+
+    async def scenario() -> None:
+        transport = FakeTransport()
+        protocol = PreviewProtocol(
+            epoch=61, max_frame_bytes=64 * 1024, preview_builder=builder
+        )
+        task = asyncio.create_task(protocol.run(transport))
+        await _wait_until(lambda: bool(transport.json))
+        await transport.incoming.put(_request(61, 1, revision=5, lod="coarse"))
+        await _wait_until(lambda: len(transport.binary) == 1)
+        await transport.incoming.put(_request(61, 2, revision=5, lod="fine"))
+        await _wait_until(lambda: any(m.get("kind") == "error" for m in transport.json))
+        error = next(m for m in transport.json if m.get("kind") == "error")
+        assert error["code"] == "too-large"
+        assert error["seq"] == 2
+        assert error["designRevision"] == 5
+        assert str(64 * 1024) in error["message"]
+        assert transport.closes == []
+        # The connection must still answer the next request rather than wedge.
+        await transport.incoming.put(_request(61, 3, revision=6, lod="coarse"))
+        await _wait_until(lambda: len(transport.binary) == 2)
+        assert transport.closes == []
+        await transport.incoming.put(None)
+        await task
+
+    asyncio.run(scenario())
+
+
+def test_encoder_frame_too_large_takes_the_same_open_socket_path() -> None:
+    """``encode`` enforces its own 32 MiB ceiling before the protocol's."""
+
+    def builder(_config: Mapping[str, Any], _options: Any) -> Any:
+        raise FrameError("frame-too-large", "40000000 > 33554432")
+
+    async def scenario() -> None:
+        transport = FakeTransport()
+        protocol = PreviewProtocol(epoch=62, preview_builder=builder)
+        task = asyncio.create_task(protocol.run(transport))
+        await _wait_until(lambda: bool(transport.json))
+        await transport.incoming.put(_request(62, 1, revision=9))
+        await _wait_until(lambda: any(m.get("kind") == "error" for m in transport.json))
+        error = next(m for m in transport.json if m.get("kind") == "error")
+        assert error["code"] == "too-large"
+        assert error["designRevision"] == 9
+        assert "40000000 > 33554432" in error["message"]
+        assert transport.closes == []
+        await transport.incoming.put(None)
+        await task
+
+    asyncio.run(scenario())
+
+
+def _osse_design(angular_segments: int) -> dict[str, Any]:
+    return {
+        "formula": "OSSE",
+        "L": 120,
+        "a": 45,
+        "a0": 10,
+        "r0": 12.7,
+        "k": 1,
+        "n": 4,
+        "q": 0.99,
+        "s": 0.8,
+        "mesh": {"wall_thickness": 3, "angular_segments": angular_segments},
+    }
+
+
+def test_angular_segments_size_the_export_mesh_and_not_the_preview() -> None:
+    """Pin the contract the 'Surface sampling' section now advertises.
+
+    ``build_preview_geometry`` is error-bounded: it derives its own azimuthal
+    sampling from the LOD's chord/normal/silhouette targets and overwrites
+    ``mesh.angular_segments``. Two designs differing only in that field must
+    therefore render identically, while still translating to different mesher
+    configs so the export and solve paths keep honoring it.
+    """
+
+    async def scenario() -> list[bytes]:
+        transport = FakeTransport()
+        protocol = PreviewProtocol(epoch=63)
+        task = asyncio.create_task(protocol.run(transport))
+        await _wait_until(lambda: bool(transport.json))
+        for index, angular in enumerate((40, 400)):
+            await transport.incoming.put(
+                _request(
+                    63,
+                    index + 1,
+                    revision=index + 1,
+                    design=_osse_design(angular),
+                )
+            )
+            await _wait_until(lambda: len(transport.binary) == index + 1, timeout=60.0)
+        await transport.incoming.put(None)
+        await task
+        return list(transport.binary)
+
+    sparse, dense = asyncio.run(scenario())
+    sparse_header, sparse_arrays = decode(sparse)
+    dense_header, dense_arrays = decode(dense)
+    assert sparse_header["surfaces"] == dense_header["surfaces"]
+    assert sparse_header["fidelity"] == dense_header["fidelity"]
+    assert sparse_arrays.keys() == dense_arrays.keys()
+    for name, values in sparse_arrays.items():
+        assert np.array_equal(values, dense_arrays[name]), name
+
+    # Not dead, though: the same edit still reaches the export/solve mesh.
+    from server.design.schema import DesignConfig
+    from server.preview.translate import design_to_mesher_config
+
+    translated = [
+        design_to_mesher_config(DesignConfig.model_validate(_osse_design(angular)))
+        for angular in (40, 400)
+    ]
+    assert translated[0]["mesh"]["angularSegments"] == 40
+    assert translated[1]["mesh"]["angularSegments"] == 400
