@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { designForFamily } from '../stores/design';
 import type { SolveOptions } from '../stores/solveOptions';
-import { fetchSymmetry, formatApiDetail, getCapabilities, resolveEngine, submitDesign } from './actions';
+import { fetchSymmetry, formatApiDetail, getCapabilities, postSymmetry, resolveEngine, submitDesign, toSolveDesign } from './actions';
 
 describe('API validation errors', () => {
   it('formats structured FastAPI detail arrays with locations', async () => {
@@ -51,5 +51,38 @@ describe('solve submission', () => {
     await expect(fetchSymmetry(designForFamily('R-OSSE'), fetcher as typeof fetch)).resolves.toMatchObject({ quadrants: 1, xz: true, yz: true });
     expect(path).toBe('/api/design/symmetry');
     expect(body?.formula).toBe('R-OSSE');
+  });
+});
+
+describe('symmetry resolution', () => {
+  it('sends the caller\'s exact bytes and forwards the abort signal', async () => {
+    // Callers key their cache on the serialised payload, so re-serialising the
+    // live design here would race an edit landing between keying and sending.
+    const body = JSON.stringify({ formula: 'OSSE', marker: 'exact-bytes' });
+    const controller = new AbortController();
+    let seen: RequestInit | undefined;
+    const fetcher = async (_input: RequestInfo | URL, init?: RequestInit) => {
+      seen = init;
+      return new Response(JSON.stringify({ quadrants: 14, xz: false, yz: true, reasons: { xz: [], yz: [] }, tolerance_mm: 1e-7, relative_tolerance: 2e-4 }), {
+        status: 200, headers: { 'Content-Type': 'application/json' },
+      });
+    };
+    const resolution = await postSymmetry(body, fetcher as typeof fetch, controller.signal);
+    expect(seen?.body).toBe(body);
+    expect(seen?.signal).toBe(controller.signal);
+    expect(resolution.quadrants).toBe(14);
+  });
+
+  it('keeps fetchSymmetry serialising the solve design for its callers', async () => {
+    let body: unknown;
+    const fetcher = async (_input: RequestInfo | URL, init?: RequestInit) => {
+      body = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ quadrants: 1234, xz: false, yz: false, reasons: { xz: ['a'], yz: ['b'] }, tolerance_mm: 1e-7, relative_tolerance: 2e-4 }), {
+        status: 200, headers: { 'Content-Type': 'application/json' },
+      });
+    };
+    const design = designForFamily('R-OSSE');
+    await fetchSymmetry(design, fetcher as typeof fetch);
+    expect(body).toEqual(toSolveDesign(design));
   });
 });

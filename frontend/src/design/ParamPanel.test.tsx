@@ -1,8 +1,21 @@
-import { act } from 'react';
+import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
 import { ParamPanel, domainName, parameterRevealRequest, requestParameterReveal, resolveOuterBodyMode, symmetrySummary } from './ParamPanel';
+
+/**
+ * The panel reads capabilities and symmetry through React Query, exactly as
+ * `ReactPanelRenderer` mounts it behind `AppQueryProvider`. A per-test client
+ * keeps one test's cached answers out of the next one's, and no retries keep a
+ * failed jsdom fetch from rescheduling after the test has torn the root down.
+ */
+let queryClient: QueryClient;
+
+function withQueryClient(children: ReactNode) {
+  return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+}
 
 describe('outer-body precedence', () => {
   it('matches all four server resolution branches', () => {
@@ -29,14 +42,16 @@ describe('ParamPanel inventory UX', () => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     localStorage.clear();
     resetDesignStore();
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     host = document.createElement('div');
     document.body.append(host);
     root = createRoot(host);
-    act(() => root.render(<ParamPanel tab="geometry" />));
+    act(() => root.render(withQueryClient(<ParamPanel tab="geometry" />)));
   });
   afterEach(() => {
     act(() => root.unmount());
     host.remove();
+    queryClient.clear();
   });
 
   it('filters across labels and ATH/v1 keys, including a mode-hidden field', () => {
@@ -70,7 +85,7 @@ describe('ParamPanel inventory UX', () => {
   });
 
   it('reveals and focuses a parameter routed from the command palette', async () => {
-    act(() => root.render(<ParamPanel tab="simulation" />));
+    act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
     await act(async () => {
       requestParameterReveal({ id: 'simulation.f1', tab: 'simulation', query: 'Sweep start' });
       await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
@@ -82,7 +97,7 @@ describe('ParamPanel inventory UX', () => {
   });
 
   it('persists section collapse state', () => {
-    act(() => root.render(<ParamPanel tab="simulation" />));
+    act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
     const source = host.querySelector<HTMLElement>('[data-section="Source Definition"]')!;
     act(() => source.querySelector<HTMLButtonElement>('.section-head')!.click());
     expect(localStorage.getItem('wg-param-section-open:Source Definition')).toBe('false');
@@ -117,7 +132,7 @@ describe('ParamPanel inventory UX', () => {
   });
 
   it('rejects prospective inverted frequency bounds before committing', () => {
-    act(() => root.render(<ParamPanel tab="simulation" />));
+    act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
     const entry = host.querySelector<HTMLElement>('[data-parameter-id="simulation.f1"]')!;
     const input = entry.querySelector<HTMLInputElement>('input')!;
     act(() => {
@@ -131,7 +146,7 @@ describe('ParamPanel inventory UX', () => {
   });
 
   it('enforces the legacy Source.Velocity 1/2 domain', () => {
-    act(() => root.render(<ParamPanel tab="simulation" />));
+    act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
     act(() => useDesignStore.getState().setSourceConvention('legacy'));
     const entry = host.querySelector<HTMLElement>('[data-parameter-id="source.velocity"]')!;
     const input = entry.querySelector<HTMLInputElement>('input')!;
@@ -146,7 +161,7 @@ describe('ParamPanel inventory UX', () => {
   });
 
   it('renders the solve/directivity contracts and editable FREEFORM tables', () => {
-    act(() => root.render(<ParamPanel tab="simulation" />));
+    act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
     expect(host.querySelector('[data-section="Solve options"]')).not.toBeNull();
     expect(host.querySelector('[data-section="Directivity Map"]')).not.toBeNull();
     for (const id of ['solve-engine', 'mesh-validation-mode', 'frequency-spacing', 'solve-verbose', 'polar-angle-start', 'polar-angle-end', 'polar-angle-step', 'polar-distance', 'polar-norm-angle', 'polar-diagonal-angle', 'polar-observation-origin', 'polar-spherical-sampling']) {
@@ -154,7 +169,7 @@ describe('ParamPanel inventory UX', () => {
     }
     act(() => {
       useDesignStore.getState().setFamily('FREEFORM');
-      root.render(<ParamPanel tab="geometry" />);
+      root.render(withQueryClient(<ParamPanel tab="geometry" />));
     });
     expect(host.querySelectorAll('.editable-parameter-table')).toHaveLength(3);
     expect(host.querySelectorAll('.point-paste textarea')).toHaveLength(2);

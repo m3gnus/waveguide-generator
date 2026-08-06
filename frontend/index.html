@@ -6,9 +6,117 @@
     <meta name="color-scheme" content="dark light" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <title>Waveguide Generator 2 — tritonia_mk2.cfg</title>
+    <script>
+      // The theme lives in localStorage and used to be applied by TopBar's
+      // effect, so a light-theme user got a dark flash until React mounted.
+      // Reading it here settles the attribute before the first paint, which
+      // also keeps the boot skeleton below on the right side of the palette.
+      try {
+        if (localStorage.getItem('wg2.theme') === 'light') {
+          document.documentElement.dataset.theme = 'light';
+        }
+      } catch (error) {
+        /* private mode or a blocked store: the dark default is fine */
+      }
+    </script>
+    <style>
+      /* Enough of the shell to paint the frame before the 1.65 MB of app
+         JavaScript has parsed. Duplicated from styles/tokens.css and
+         styles/app.css on purpose: those arrive in the bundled stylesheet, and
+         this block has to stand alone. Keep the greys and the three sizes
+         (44px top, 24px status, 300/320px rails) in step with them so the
+         skeleton lines up with the real chrome it hands over to. */
+      :root {
+        --boot-bg: radial-gradient(1400px 700px at 52% -14%, #131a26 0%, #0a0d13 52%, #080a0f 100%);
+        --boot-topbar: linear-gradient(180deg, #12161e, #0c1017);
+        --boot-status: linear-gradient(180deg, #0c1017, #090c12);
+        --boot-hair: #1b222e;
+        --boot-block: rgba(255, 255, 255, .045);
+      }
+      [data-theme="light"] {
+        --boot-bg: radial-gradient(1400px 720px at 52% -14%, #fffdf8 0%, #f8f2e9 50%, #f1eade 100%);
+        --boot-topbar: linear-gradient(180deg, #fffdfa, #f5efe4);
+        --boot-status: linear-gradient(180deg, #f5efe4, #efe8db);
+        --boot-hair: #ddd7cd;
+        --boot-block: rgba(30, 34, 48, .055);
+      }
+      html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+      body { background: var(--boot-bg) fixed; }
+      .boot-shell {
+        display: grid;
+        grid-template-rows: 44px minmax(0, 1fr) 24px;
+        width: 100%;
+        height: 100%;
+      }
+      .boot-topbar {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        padding: 0 10px 0 12px;
+        border-bottom: 1px solid var(--boot-hair);
+        background: var(--boot-topbar);
+      }
+      .boot-statusbar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 0 10px;
+        border-top: 1px solid var(--boot-hair);
+        background: var(--boot-status);
+      }
+      .boot-main { display: grid; grid-template-columns: 300px minmax(0, 1fr) 320px; }
+      .boot-main > * + * { border-left: 1px solid var(--boot-hair); }
+      .boot-rail { padding: 12px 10px; }
+      .boot-block { border-radius: 3px; background: var(--boot-block); }
+      .boot-rail .boot-block { height: 11px; margin-bottom: 11px; }
+      .boot-rail .boot-block:nth-child(3n) { width: 62%; }
+      .boot-rail .boot-block:nth-child(3n + 2) { width: 84%; }
+      .boot-topbar .boot-block { height: 15px; }
+      .boot-statusbar .boot-block { height: 8px; }
+      /* One slow pulse across the whole skeleton reads as "still working"
+         without drawing the eye anywhere in particular. */
+      .boot-shell { animation: boot-fade 1.6s ease-in-out infinite alternate; }
+      @keyframes boot-fade { from { opacity: 1; } to { opacity: .72; } }
+      @media (prefers-reduced-motion: reduce) {
+        .boot-shell { animation: none; }
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <!-- Replaced wholesale by React's first commit; createRoot clears the
+           container and inserts the app in the same commit, so there is no
+           intermediate blank frame. -->
+      <div class="boot-shell" role="status" aria-label="Waveguide Generator is starting">
+        <div class="boot-topbar">
+          <div class="boot-block" style="width: 132px"></div>
+          <div class="boot-block" style="width: 128px"></div>
+          <div class="boot-block" style="width: 54px"></div>
+          <div class="boot-block" style="flex: 1 1 auto; max-width: 400px; margin: 0 auto"></div>
+          <div class="boot-block" style="width: 74px"></div>
+          <div class="boot-block" style="width: 96px"></div>
+        </div>
+        <div class="boot-main">
+          <div class="boot-rail">
+            <div class="boot-block"></div><div class="boot-block"></div><div class="boot-block"></div>
+            <div class="boot-block"></div><div class="boot-block"></div><div class="boot-block"></div>
+            <div class="boot-block"></div><div class="boot-block"></div><div class="boot-block"></div>
+            <div class="boot-block"></div><div class="boot-block"></div><div class="boot-block"></div>
+          </div>
+          <div></div>
+          <div class="boot-rail">
+            <div class="boot-block"></div><div class="boot-block"></div><div class="boot-block"></div>
+            <div class="boot-block"></div><div class="boot-block"></div><div class="boot-block"></div>
+          </div>
+        </div>
+        <div class="boot-statusbar">
+          <div class="boot-block" style="width: 104px"></div>
+          <div class="boot-block" style="width: 130px"></div>
+          <div class="boot-block" style="flex: 1 1 auto"></div>
+          <div class="boot-block" style="width: 118px"></div>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

@@ -1,5 +1,4 @@
-import { useEffect, useState } from 'react';
-import { getCapabilities, type EngineCapability } from '../jobs/actions';
+import { useCapabilities } from '../jobs/useCapabilities';
 import {
   useSolveOptionsStore,
   type FrequencySpacing,
@@ -17,14 +16,7 @@ export const solverModeLabels = {
 
 export function SolveOptionsControls() {
   const store = useSolveOptionsStore();
-  const [engines, setEngines] = useState<EngineCapability[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    let active = true;
-    void getCapabilities().then((capabilities) => { if (active) setEngines(capabilities.engines); })
-      .catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : String(reason)); });
-    return () => { active = false; };
-  }, []);
+  const { engines, error } = useCapabilities();
   const backendEngines = engines.filter((engine) => engine.name.toLowerCase() !== 'circsym');
   const selectedEngine = store.engine === 'auto'
     ? ['metal', 'bempp', 'dryrun'].flatMap((name) => backendEngines.filter((engine) => engine.available && engine.name.toLowerCase() === name))[0]

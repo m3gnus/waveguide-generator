@@ -59,7 +59,11 @@ export async function getCapabilities(fetcher: typeof fetch = fetch): Promise<Ca
   return response.json() as Promise<Capabilities>;
 }
 
-export function resolveEngine(engine: string, capabilities: Capabilities, solverMode = 'auto'): string {
+export function resolveEngine(
+  engine: string,
+  capabilities: { engines: readonly EngineCapability[] },
+  solverMode = 'auto',
+): string {
   if (engine.toLowerCase() !== 'auto') return engine.toLowerCase();
   void solverMode;
   const order = ['metal', 'bempp', 'dryrun'];
@@ -71,11 +75,31 @@ export function resolveEngine(engine: string, capabilities: Capabilities, solver
 export async function fetchSymmetry(
   design: DesignDocument,
   fetcher: typeof fetch = fetch,
+  signal?: AbortSignal,
+): Promise<SymmetryResolution> {
+  return postSymmetry(JSON.stringify(toSolveDesign(design)), fetcher, signal);
+}
+
+/**
+ * Resolve symmetry for an already-serialised solve design.
+ *
+ * Callers that cache on the wire payload need to send exactly the bytes they
+ * keyed on; re-serialising the live design here would race an edit that landed
+ * between keying and sending.
+ *
+ * `signal` abandons the response, it does not cancel the work: the endpoint
+ * resolves in `asyncio.to_thread`, which runs to completion regardless.
+ */
+export async function postSymmetry(
+  body: string,
+  fetcher: typeof fetch = fetch,
+  signal?: AbortSignal,
 ): Promise<SymmetryResolution> {
   const response = await fetcher('/api/design/symmetry', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(toSolveDesign(design)),
+    body,
+    signal,
   });
   if (!response.ok) throw new Error(await detail(response));
   return response.json() as Promise<SymmetryResolution>;

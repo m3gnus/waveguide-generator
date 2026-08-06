@@ -1,7 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { jobsSocket } from '../api/jobsSocket';
 import { fetchJobResults } from '../api/results';
-import { getCapabilities, resolveEngine, submitDesign, type EngineCapability } from '../jobs/actions';
+import { resolveEngine, submitDesign } from '../jobs/actions';
+import { useCapabilities, useCapabilityRefreshOnReconnect } from '../jobs/useCapabilities';
 import { JobAutomation } from '../jobs/automation';
 import { hydrateJobDesign } from '../jobs/jobDesign';
 import { jobBaseName, preferencesStore, usePreferences } from '../prefs/preferences';
@@ -57,28 +58,22 @@ export function incrementJobVersion(): void {
   preferencesStore.update({ jobVersion: Math.min(999_999, current + 1) });
 }
 
+const jobsConnection = () => jobsSocket.getSnapshot().connection;
+
 export function JobsCoordinator({ children }: { children: ReactNode }) {
   const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
+  // This component owns the jobs socket, so it is where a reconnect is visible.
+  useCapabilityRefreshOnReconnect(useSyncExternalStore(jobsSocket.subscribe, jobsConnection, jobsConnection));
   const design = useDesignStore((state) => state.design);
   const revision = useDesignStore((state) => state.designRevision);
   const selectedEngine = useSolveOptionsStore((state) => state.engine);
   const preferences = usePreferences();
   const automation = useRef(new JobAutomation()).current;
-  const [capabilities, setCapabilities] = useState<EngineCapability[]>([]);
-  const [capabilityError, setCapabilityError] = useState<string | null>(null);
+  const { engines: capabilities, error: capabilityError } = useCapabilities();
   const [actionError, setActionError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => { jobsSocket.start(); return () => jobsSocket.stop(); }, []);
-  useEffect(() => {
-    let live = true;
-    void getCapabilities().then((value) => {
-      if (live) setCapabilities(value.engines);
-    }).catch((error) => {
-      if (live) setCapabilityError(error instanceof Error ? error.message : String(error));
-    });
-    return () => { live = false; };
-  }, []);
 
   let effectiveEngine = selectedEngine;
   if (selectedEngine === 'auto') {
