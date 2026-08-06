@@ -2,7 +2,7 @@
 
 Build the real v2 shell in `frontend/` from the chosen design reference: `../wg-v2-ui-sketches/opus-sketch.html` (open and study it — layout, tokens, spacing, micro-details; it has a dark default and a `[data-theme="light"]` parchment theme, fully token-driven).
 
-**Path discipline (concurrent agents): work ONLY inside `frontend/` (except: you may READ anywhere). Do not run `npm install` — every dependency you need is already in `frontend/package.json`/lockfile (react 19, dockview 7, zustand+zundo, @tanstack/react-query, tailwind v4 via `@tailwindcss/vite`, echarts, three/r3f — the last two are NOT used in this batch). Node: `/Users/magnus/.nvm/versions/node/v24.13.0/bin/node` (npx/npm for scripts only).**
+**Path discipline (concurrent agents): work ONLY inside `frontend/` (except: you may READ anywhere). Do not run `npm install` — every dependency you need is already in `frontend/package.json`/lockfile (react 19, dockview 7, zustand+zundo, @tanstack/react-query, tailwind v4 via `@tailwindcss/vite`, echarts, three/r3f — the last two are NOT used in this batch). Node: `node` (npx/npm for scripts only).**
 
 ## Deliverables
 

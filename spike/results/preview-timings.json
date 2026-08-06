@@ -3,7 +3,7 @@
   "generatedAt": "2026-08-03T12:08:32.846905+00:00",
   "platform": "macOS-26.5.2-arm64-arm-64bit-Mach-O",
   "python": "3.13.1",
-  "pythonExecutable": "/Users/magnus/Code/hornlab-workspace/Waveguide Generator/.venv/bin/python",
+  "pythonExecutable": "https://github.com/m3gnus/waveguide-generator/blob/v1/.venv/bin/python",
   "warmRuns": 40,
   "lods": {
     "coarse": {

@@ -1,6 +1,6 @@
 # Batch UX — workspace chrome: results layout, compact tabs, settings, command palette
 
-Repo: `/Users/magnus/Code/hornlab-workspace/waveguide-generator-v2`, branch `freeform-simplify` (already checked out; other lanes have uncommitted edits under `server/` and `frontend/src/viewport/` — leave every file outside your path list alone).
+Repo: `.`, branch `freeform-simplify` (already checked out; other lanes have uncommitted edits under `server/` and `frontend/src/viewport/` — leave every file outside your path list alone).
 
 Frontend: `cd frontend && npm test` (baseline 193 passed) and `npx tsc --noEmit`. Build with `npm run build`. A dev server for this branch is already running on **http://127.0.0.1:3111** — do not start or stop servers; the overseer live-verifies.
 

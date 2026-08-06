@@ -1,6 +1,6 @@
 # Batch AS — automatic symmetry + demoting CircSym from a backend to a fast path
 
-Repo: `/Users/magnus/Code/hornlab-workspace/waveguide-generator-v2`, branch `freeform-simplify` (already checked out; there are uncommitted edits in `frontend/` — leave them alone, they are another lane's work).
+Repo: `.`, branch `freeform-simplify` (already checked out; there are uncommitted edits in `frontend/` — leave them alone, they are another lane's work).
 
 Python: `"../Waveguide Generator/.venv/bin/python"`. Server tests: `"../Waveguide Generator/.venv/bin/python" -m pytest server/tests -q` (baseline 669 passed / 1 skipped).
 

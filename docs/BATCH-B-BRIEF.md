@@ -4,7 +4,7 @@ Implement FRAME-SPEC v1.1 (`docs/FRAME-SPEC.md` — read it fully; it is the con
 
 **Path discipline (other agents work in this repo concurrently): you may create/modify ONLY `server/protocol/**`, `shared/**`, and `server/tests/test_frame_*.py`. Touch nothing else — not docs/, not spike/, not server/design/.**
 
-Runtime: Python via `../Waveguide Generator/.venv/bin/python` (numpy, pytest available; no new deps). JavaScript via `/Users/magnus/.nvm/versions/node/v24.13.0/bin/node` — plain ES modules (`.mjs`) with JSDoc types, `node --test` for tests, no build step, no npm installs.
+Runtime: Python via `../Waveguide Generator/.venv/bin/python` (numpy, pytest available; no new deps). JavaScript via `node` — plain ES modules (`.mjs`) with JSDoc types, `node --test` for tests, no build step, no npm installs.
 
 ## Deliverables
 
