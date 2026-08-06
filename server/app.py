@@ -10,6 +10,7 @@ from pathlib import Path
 import time
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -20,6 +21,7 @@ from server.design_io import mount_design_io
 from server.exports import mount_exports
 from server.jobs import mount_jobs
 from server.mesh.gmsh_worker import prewarm_gmsh_worker, shutdown_gmsh_worker
+from server.mesh.prewarm import prewarm_mesher, shutdown_mesher_prewarm
 from server.platform.origin import local_origin
 from server.platform.paths import resolve_data_dir
 from server.preview.service import mount_preview
@@ -50,10 +52,21 @@ def create_app(*, data_dir: str | Path | None = None) -> FastAPI:
     engine_registry = EngineRegistry(detector=detect_engines)
     application.state.engine_registry = engine_registry
     logging.getLogger("wg2").info("Waveguide Generator v%s application initialized", VERSION)
+    # The SPA is 1.65 MB of JavaScript and 185 kB of CSS.  Even on loopback that
+    # is worth compressing: it gzips to roughly a quarter of the bytes, and the
+    # same middleware covers the multi-hundred-kB results payloads.  500 bytes
+    # keeps the small JSON replies uncompressed, where framing would dominate.
+    application.add_middleware(GZipMiddleware, minimum_size=500)
     # One persistent owner thread services every gmsh call.  Prewarming here
     # retains the v1 off-main-thread ``interruptible=False`` invariant from
     # ``server/services/gmsh_worker.py:44-84`` and removes the first-build cliff.
     application.router.add_event_handler("startup", prewarm_gmsh_worker)
+    # The mesher imports lazily at every call site, so without this the first
+    # control a user touches pays for the whole import graph.
+    application.router.add_event_handler("startup", prewarm_mesher)
+    # Likewise the engine probe: it is the page load's slowest request, and
+    # leaving it lazy made it contend with the first symmetry resolution.
+    application.router.add_event_handler("startup", engine_registry.prewarm)
 
     @application.middleware("http")
     async def origin_guard(request: Request, call_next):
@@ -140,6 +153,8 @@ def create_app(*, data_dir: str | Path | None = None) -> FastAPI:
     mount_workspace(application)
     mount_charts(application)
     # Job tasks stop first; only then may their shared gmsh owner be finalized.
+    application.router.add_event_handler("shutdown", shutdown_mesher_prewarm)
+    application.router.add_event_handler("shutdown", engine_registry.shutdown_prewarm)
     application.router.add_event_handler("shutdown", shutdown_gmsh_worker)
     application.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
     return application

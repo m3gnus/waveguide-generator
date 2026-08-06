@@ -1,0 +1,356 @@
+"""Coverage for the startup and transfer costs paid on every cold load.
+
+Two independent findings from the 2026-08-06 load review:
+
+* the SPA and the results payloads were served uncompressed, and
+* every mesher entry point imports lazily, so the first control a user touched
+  paid for the whole import graph (``POST /api/design/symmetry`` measured at
+  1152 ms first call against a running server, 57-150 ms after).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import gzip
+import json
+from pathlib import Path
+import threading
+import time
+from typing import Any
+
+import pytest
+
+from server.app import create_app
+from server.engines.registry import EngineInfo, EngineRegistry
+from server.mesh import prewarm
+from server.platform.warmup import BackgroundWarmup
+
+
+class HeaderClient:
+    """Dependency-free ASGI harness that keeps the response headers.
+
+    ``test_app_batch_e.py`` has a sibling of this that drops them; content
+    negotiation is exactly what these tests are about.
+    """
+
+    __test__ = False
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    def get(self, path: str, headers: dict[str, str] | None = None) -> tuple[int, dict[str, str], bytes]:
+        async def request() -> tuple[int, dict[str, str], bytes]:
+            sent: list[dict[str, Any]] = []
+            delivered = False
+
+            async def receive() -> dict[str, Any]:
+                nonlocal delivered
+                if not delivered:
+                    delivered = True
+                    return {"type": "http.request", "body": b"", "more_body": False}
+                return {"type": "http.disconnect"}
+
+            async def send(message: dict[str, Any]) -> None:
+                sent.append(message)
+
+            raw_headers = [(b"host", b"testserver")]
+            raw_headers.extend(
+                (name.lower().encode("latin-1"), value.encode("latin-1"))
+                for name, value in (headers or {}).items()
+            )
+            await self.app(
+                {
+                    "type": "http",
+                    "asgi": {"version": "3.0", "spec_version": "2.3"},
+                    "http_version": "1.1",
+                    "method": "GET",
+                    "scheme": "http",
+                    "path": path,
+                    "raw_path": path.encode("ascii"),
+                    "query_string": b"",
+                    "root_path": "",
+                    "headers": raw_headers,
+                    "client": ("127.0.0.1", 12345),
+                    "server": ("127.0.0.1", 3100),
+                },
+                receive,
+                send,
+            )
+            start = next(message for message in sent if message["type"] == "http.response.start")
+            body = b"".join(
+                message.get("body", b"")
+                for message in sent
+                if message["type"] == "http.response.body"
+            )
+            decoded = {
+                name.decode("latin-1").lower(): value.decode("latin-1")
+                for name, value in start.get("headers", [])
+            }
+            return start["status"], decoded, body
+
+        return asyncio.run(request())
+
+
+def test_spa_document_is_gzipped_for_clients_that_accept_it(tmp_path: Path) -> None:
+    client = HeaderClient(create_app(data_dir=tmp_path))
+    status, headers, body = client.get("/", headers={"Accept-Encoding": "gzip"})
+    assert status == 200
+    assert headers.get("content-encoding") == "gzip"
+    # The compressed bytes must still be the document, not merely smaller.
+    assert b"<div id=\"root\">" in gzip.decompress(body)
+
+
+def test_uncompressed_client_still_gets_the_plain_document(tmp_path: Path) -> None:
+    client = HeaderClient(create_app(data_dir=tmp_path))
+    status, headers, body = client.get("/")
+    assert status == 200
+    assert "content-encoding" not in headers
+    assert b"<div id=\"root\">" in body
+
+
+def test_api_json_over_the_floor_is_compressed_and_still_parses(tmp_path: Path) -> None:
+    """The SPA is the biggest win, but result payloads run to hundreds of kB.
+
+    ``/openapi.json`` is the fixture rather than a domain route because its size
+    does not depend on the host: ``/api/capabilities`` is 423-620 bytes
+    depending on how verbose the engine probe's reasons are on this machine,
+    which straddles the 500-byte floor and makes the assertion a coin flip.
+    """
+
+    client = HeaderClient(create_app(data_dir=tmp_path))
+    status, headers, body = client.get("/openapi.json", headers={"Accept-Encoding": "gzip"})
+    assert status == 200
+    assert headers.get("content-encoding") == "gzip"
+    decompressed = gzip.decompress(body)
+    assert len(decompressed) > 500
+    assert "openapi" in json.loads(decompressed)
+
+
+@pytest.mark.parametrize("path", ["/ws/preview", "/ws/jobs"])
+def test_gzip_middleware_leaves_websockets_alone(tmp_path: Path, path: str) -> None:
+    """A middleware that mishandled the websocket scope would kill the preview.
+
+    These two sockets carry every live geometry frame and every job event, and
+    they now traverse GZipMiddleware plus the two http-only middlewares on the
+    way to their route. This is a passthrough guard, not a proof that GZip is
+    installed -- removing GZip would leave it passing, which is the point.
+    """
+
+    application = create_app(data_dir=tmp_path)
+    sent: list[dict[str, Any]] = []
+
+    async def connect() -> None:
+        incoming: list[dict[str, Any]] = [{"type": "websocket.connect"}]
+
+        async def receive() -> dict[str, Any]:
+            if incoming:
+                return incoming.pop(0)
+            return {"type": "websocket.disconnect", "code": 1000}
+
+        async def send(message: dict[str, Any]) -> None:
+            sent.append(message)
+
+        await application(
+            {
+                "type": "websocket",
+                "asgi": {"version": "3.0", "spec_version": "2.3"},
+                "http_version": "1.1",
+                "scheme": "ws",
+                "path": path,
+                "raw_path": path.encode("ascii"),
+                "query_string": b"",
+                "root_path": "",
+                "headers": [(b"host", b"testserver")],
+                "client": ("127.0.0.1", 12345),
+                "server": ("127.0.0.1", 3100),
+                "subprotocols": [],
+            },
+            receive,
+            send,
+        )
+
+    asyncio.run(connect())
+    kinds = [message["type"] for message in sent]
+    assert "websocket.accept" in kinds, kinds
+    # Accepted, not refused by a middleware that treated it as a request.
+    assert kinds[0] == "websocket.accept"
+
+
+def test_small_json_stays_uncompressed(tmp_path: Path) -> None:
+    """Below the 500-byte floor, framing costs more than compression saves."""
+
+    client = HeaderClient(create_app(data_dir=tmp_path))
+    status, headers, body = client.get("/health", headers={"Accept-Encoding": "gzip"})
+    assert status == 200
+    assert "content-encoding" not in headers
+    assert len(body) < 500
+    assert json.loads(body)["uptime"] >= 0
+
+
+def test_create_app_registers_every_prewarm(tmp_path: Path) -> None:
+    application = create_app(data_dir=tmp_path)
+    startup = {handler.__name__ for handler in application.router.on_startup}
+    shutdown = {handler.__name__ for handler in application.router.on_shutdown}
+    assert {"prewarm_gmsh_worker", "prewarm_mesher", "prewarm"} <= startup
+    assert {"shutdown_mesher_prewarm", "shutdown_prewarm"} <= shutdown
+
+
+def test_import_mesher_modules_reports_only_what_imported() -> None:
+    imported = prewarm.import_mesher_modules(
+        ["json", "server.mesh.prewarm_does_not_exist", "gzip"]
+    )
+    assert imported == ["json", "gzip"]
+
+
+def test_a_broken_optional_mesher_never_fails_startup() -> None:
+    """The lazy import at the real call site owns the useful error message."""
+
+    assert prewarm.import_mesher_modules(["hornlab_mesher_absent.nothing"]) == []
+
+
+def test_prewarm_runs_in_the_background_and_shuts_down_cleanly() -> None:
+    async def scenario() -> None:
+        await prewarm.prewarm_mesher()
+        task = prewarm.mesher_warmup.task
+        assert task is not None
+        # Startup must not block on the import graph.
+        assert not task.done()
+        await prewarm.shutdown_mesher_prewarm()
+        assert task.done()
+        assert prewarm.mesher_warmup.task is None
+
+    asyncio.run(scenario())
+
+
+def test_prewarm_does_not_stack_duplicate_tasks() -> None:
+    async def scenario() -> None:
+        await prewarm.prewarm_mesher()
+        first = prewarm.mesher_warmup.task
+        await prewarm.prewarm_mesher()
+        assert prewarm.mesher_warmup.task is first
+        await prewarm.shutdown_mesher_prewarm()
+
+    asyncio.run(scenario())
+
+
+def test_shutdown_without_a_prewarm_is_a_no_op() -> None:
+    asyncio.run(prewarm.shutdown_mesher_prewarm())
+    assert prewarm.mesher_warmup.task is None
+
+
+def test_engine_probe_is_warmed_off_the_request_path() -> None:
+    """The probe imports Metal and BEMPP: 500-950 ms on the first request."""
+
+    probes = 0
+
+    def detector() -> list[EngineInfo]:
+        nonlocal probes
+        probes += 1
+        return [EngineInfo(name="dryrun", available=True, reason="test", version="builtin")]
+
+    async def scenario() -> None:
+        registry = EngineRegistry(detector=detector)
+        await registry.prewarm()
+        assert probes == 0, "startup must not block on the probe"
+        await asyncio.sleep(0)
+        while registry.warmup.task is not None and not registry.warmup.task.done():
+            await asyncio.sleep(0)
+        assert probes == 1
+        # The request that follows reads the cache the warmup filled.
+        assert (await registry.capabilities())[0].name == "dryrun"
+        assert probes == 1
+        await registry.shutdown_prewarm()
+
+    asyncio.run(scenario())
+
+
+def test_shutdown_drains_thread_work_instead_of_abandoning_it() -> None:
+    """`task.cancel()` does not stop `asyncio.to_thread`, so stop() waits."""
+
+    finished = threading.Event()
+
+    def slow_work() -> None:
+        time.sleep(0.05)
+        finished.set()
+
+    async def scenario() -> None:
+        warmup = BackgroundWarmup("slow", lambda: asyncio.to_thread(slow_work))
+        await warmup.start()
+        assert not finished.is_set()
+        await warmup.stop()
+        # Quiescence, not just a reaped task: the thread really is done.
+        assert finished.is_set()
+        assert warmup.task is None
+
+    asyncio.run(scenario())
+
+
+def test_a_wedged_warmup_cannot_block_shutdown_forever() -> None:
+    """Past the drain timeout the task is cancelled and shutdown proceeds."""
+
+    async def never_finishes() -> None:
+        await asyncio.Event().wait()
+
+    async def scenario() -> None:
+        warmup = BackgroundWarmup("wedged", never_finishes)
+        await warmup.start()
+        began = time.monotonic()
+        await warmup.stop(drain_timeout=0.05)
+        elapsed = time.monotonic() - began
+        assert 0.05 <= elapsed < 2.0, f"drained in {elapsed:.3f}s"
+        assert warmup.task is None
+
+    asyncio.run(scenario())
+
+
+def test_a_wedged_thread_releases_the_loop_but_keeps_running() -> None:
+    """The honest limit of the drain: `stop()` bounds the *loop*, not the thread.
+
+    Both real warmups work inside ``asyncio.to_thread``, and no timeout can
+    reach into a running executor thread. So past the drain timeout `stop()`
+    returns on schedule while the thread is still going -- which is the
+    behaviour to know about, because the loop's own executor shutdown then
+    waits for it. The 39-260 ms these warmups actually take is why that is
+    tolerable rather than a hazard.
+    """
+
+    entered = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+
+    def wedged() -> None:
+        entered.set()
+        release.wait(timeout=10.0)
+        finished.set()
+
+    async def scenario() -> None:
+        warmup = BackgroundWarmup("wedged-thread", lambda: asyncio.to_thread(wedged))
+        await warmup.start()
+        await asyncio.to_thread(entered.wait, 5.0)
+        began = time.monotonic()
+        await warmup.stop(drain_timeout=0.05)
+        assert time.monotonic() - began < 2.0, "stop() must not wait on the thread"
+        assert not finished.is_set(), "the thread is still running, as documented"
+        # Let it go before the loop closes, or shutdown_default_executor blocks.
+        release.set()
+        await asyncio.to_thread(finished.wait, 5.0)
+
+    asyncio.run(scenario())
+    assert finished.is_set()
+
+
+def test_a_failing_probe_never_escapes_the_warmup() -> None:
+    def detector() -> list[EngineInfo]:
+        raise RuntimeError("probe exploded")
+
+    async def scenario() -> None:
+        registry = EngineRegistry(detector=detector)
+        await registry.prewarm()
+        task = registry.warmup.task
+        assert task is not None
+        await task
+        # Swallowed here; the real /api/capabilities call raises it where the
+        # message is useful.
+        assert task.exception() is None
+
+    asyncio.run(scenario())

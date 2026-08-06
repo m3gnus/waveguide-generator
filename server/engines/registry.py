@@ -13,6 +13,8 @@ from dataclasses import dataclass
 import os
 from typing import Any, Callable, Mapping, Sequence
 
+from server.platform.warmup import BackgroundWarmup
+
 
 @dataclass(frozen=True, slots=True)
 class EngineInfo:
@@ -150,6 +152,20 @@ class EngineRegistry:
         self._factory = factory
         self._cache: tuple[EngineInfo, ...] | None = None
         self._lock = asyncio.Lock()
+        # Probing imports the Metal and BEMPP stacks, which measured 500-950 ms
+        # on the first request. Doing it during boot keeps it off the page load,
+        # where it used to contend with the first symmetry resolution.
+        self.warmup = BackgroundWarmup("engine-probe", self.capabilities)
+
+    async def prewarm(self) -> None:
+        """Fill the capability cache in the background.  Never blocks startup."""
+
+        await self.warmup.start()
+
+    async def shutdown_prewarm(self) -> None:
+        """Finish a probe still running when the server stops."""
+
+        await self.warmup.stop()
 
     async def capabilities(self) -> tuple[EngineInfo, ...]:
         if self._cache is None:
