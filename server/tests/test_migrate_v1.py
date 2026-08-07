@@ -9,11 +9,17 @@ and rollback returns the database to exactly its previous state (R1-P0-6).
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+import getpass
 import hashlib
 import importlib.util
+import json
+import os
 from pathlib import Path
 import sqlite3
+import subprocess
 import sys
+from typing import Iterator
 
 import pytest
 
@@ -219,8 +225,11 @@ def test_missing_v1_database_is_a_clean_error(tmp_path: Path):
 def test_custom_v1_workspace_location_is_honoured(v1_root: Path, tmp_path: Path):
     elsewhere = tmp_path / "Custom Output Folder"
     (elsewhere / "moved-project").mkdir(parents=True)
+    # Serialise rather than interpolate: a Windows path interpolated into JSON
+    # produces invalid \escapes, so the migration read a corrupt settings file
+    # instead of the custom location this test is about.
     (v1_root / "server" / "data" / "workspace_settings.json").write_text(
-        f'{{"path": "{elsewhere}"}}', encoding="utf-8"
+        json.dumps({"path": str(elsewhere)}), encoding="utf-8"
     )
     data_dir = tmp_path / "v2data"
 
@@ -228,6 +237,37 @@ def test_custom_v1_workspace_location_is_honoured(v1_root: Path, tmp_path: Path)
 
     assert (data_dir / "workspace" / "moved-project").is_dir()
     assert not (data_dir / "workspace" / "project-a").exists()
+
+
+@contextmanager
+def _unwritable(directory: Path) -> Iterator[None]:
+    """Stop the current user creating entries in ``directory``, then restore it.
+
+    chmod is not that on Windows: it only toggles the read-only attribute, which
+    directories ignore for creation, so the backup would quietly succeed and the
+    test would assert nothing. A deny ACE is the equivalent instrument there.
+    """
+
+    if sys.platform == "win32":
+        domain = os.environ.get("USERDOMAIN")
+        account = f"{domain}\\{getpass.getuser()}" if domain else getpass.getuser()
+        subprocess.run(
+            ["icacls", str(directory), "/deny", f"{account}:(WD,AD)"],
+            check=True, capture_output=True,
+        )
+        try:
+            yield
+        finally:
+            subprocess.run(
+                ["icacls", str(directory), "/remove:d", account],
+                check=True, capture_output=True,
+            )
+    else:
+        directory.chmod(0o500)  # readable and traversable, not writable
+        try:
+            yield
+        finally:
+            directory.chmod(0o700)
 
 
 def test_backup_failure_stops_before_writing(v1_root: Path, tmp_path: Path):
@@ -242,12 +282,9 @@ def test_backup_failure_stops_before_writing(v1_root: Path, tmp_path: Path):
 
     backups = data_dir / "backups"
     backups.mkdir(exist_ok=True)
-    backups.chmod(0o500)  # readable and traversable, not writable
-    try:
+    with _unwritable(backups):
         with pytest.raises(migrate_v1.MigrationError, match="Nothing has been changed"):
             migrate_v1.migrate(v1_root, data_dir)
-    finally:
-        backups.chmod(0o700)
 
     assert _job_ids(database) == untouched
 
