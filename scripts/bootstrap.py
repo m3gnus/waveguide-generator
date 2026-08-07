@@ -78,17 +78,20 @@ def _run(command: list[str], *, quiet: bool = False) -> subprocess.CompletedProc
     )
 
 
-def _locked_versions() -> dict[str, str]:
-    versions = {"pip": PIP_VERSION}
+def _locked_versions() -> dict[str, tuple[str, str | None]]:
+    """Map every locked distribution to its version and its PEP 508 marker."""
+
+    versions: dict[str, tuple[str, str | None]] = {"pip": (PIP_VERSION, None)}
     lock_path = REPO_ROOT / "server" / "requirements-lock.txt"
     for raw_line in lock_path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
-        name, separator, version = line.partition("==")
+        requirement, _, marker = line.partition(";")
+        name, separator, version = requirement.strip().partition("==")
         if not separator or not name or not version:
             raise RuntimeError(f"Invalid exact constraint in {lock_path}: {raw_line!r}")
-        versions[name] = version
+        versions[name] = (version, marker.strip() or None)
     return versions
 
 
@@ -124,9 +127,15 @@ def _validate(environment: Path, expected_fingerprint: str) -> tuple[bool, str]:
     expected_git_commits = _locked_git_commits()
     probe = (
         "import json, sys; from importlib.metadata import distribution, version; "
+        "from packaging.markers import Marker; "
         f"assert sys.version_info[:2] == {PYTHON_SERIES!r}; "
         f"expected = {expected_versions!r}; "
-        "assert all(version(name) == wanted for name, wanted in expected.items()); "
+        # A marked lock entry is only required where its marker applies: uvloop
+        # is POSIX-only, so demanding it everywhere fails every Windows install.
+        # Markers are evaluated in the environment under test because the
+        # interpreter running this bootstrap has no third-party packages.
+        "assert all(version(name) == wanted for name, (wanted, marker) in expected.items() "
+        "if marker is None or Marker(marker).evaluate()); "
         f"[version(name) for name in {REQUIRED_DISTRIBUTIONS!r}]; "
         f"git_expected = {expected_git_commits!r}; "
         "direct_urls = {name: json.loads(distribution(name).read_text('direct_url.json') or '{}') "
