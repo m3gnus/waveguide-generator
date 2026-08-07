@@ -189,6 +189,11 @@ class JobRuntime:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._scheduler_task = None
         self._background_tasks.clear()
+        # Store connections are long-lived now. Windows will not let a test's
+        # temporary directory be removed, nor the migration tool replace the
+        # database, while a handle is still open on it.
+        await asyncio.to_thread(self.store.close)
+        self._started = False
 
     async def submit(self, request: SolveRequest) -> str:
         await self.start()
@@ -344,11 +349,16 @@ class JobRuntime:
         return [self._serialize_job(row) for row in rows], total
 
     async def get_results(self, job_id: str) -> dict[str, Any]:
+        return json.loads(await self.get_results_text(job_id))
+
+    async def get_results_text(self, job_id: str) -> str:
+        """The stored results JSON, read off the event loop and not re-parsed."""
+
         await self.start()
         row = self._require_job(job_id)
         if row["status"] != "complete":
             raise JobConflictError(f"Job not complete. Current status: {row['status']}")
-        results = self.store.get_results(job_id)
+        results = await asyncio.to_thread(self.store.get_results_text, job_id)
         if results is None:
             raise JobResourceUnavailableError("Results not available")
         return results
@@ -995,10 +1005,13 @@ class JobRuntime:
         self.events.publish(event)
 
     def _check_cancelled(self, job_id: str) -> None:
-        row = self.store.get_job_row(job_id)
-        if row is None:
+        # Deliberately synchronous: the solver thread calls this from inside a
+        # native progress callback, where there is no event loop to await on.
+        state = self.store.cancellation_state(job_id)
+        if state is None:
             raise JobNotFoundError(job_id)
-        if row.get("cancellation_requested") or row.get("status") == "cancelled":
+        status, cancellation_requested = state
+        if cancellation_requested or status == "cancelled":
             raise _CancelledAtCheckpoint(CANCELLED_MESSAGE)
 
     def _transition(
