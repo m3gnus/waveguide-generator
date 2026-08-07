@@ -50,15 +50,30 @@ set "PYTHON=%WG2_PYTHON%"
 set "PYTHON_IS_OVERRIDE=1"
 
 :run
+rem Only worth probing for the overridden interpreter. For the repository
+rem environment this asks a question that has already been answered: the
+rem bootstrap check ends with the same "import fastapi, uvicorn", and serve.py
+rem imports both at module scope anyway and reports a real traceback if they
+rem are missing. Running it unconditionally cost a whole extra interpreter
+rem start -- measured at 0.83 s, and on Windows each start is two process
+rem creations because .venv\Scripts\python.exe is a launcher stub.
+if not defined PYTHON_IS_OVERRIDE goto :start_server
 call :python_can_serve
 if errorlevel 1 goto :unusable_environment
 
+:start_server
 echo Starting Waveguide Generator v2...
 echo Close this window or press Control-C to stop it.
 echo.
 "%PYTHON%" launch\serve.py %*
 set "RESULT=%ERRORLEVEL%"
-if not "%RESULT%"=="0" call :pause_when_double_clicked
+if "%RESULT%"=="0" exit /b 0
+rem Exit 2 is the documented "another instance already owns the lock" answer,
+rem not a failure: serve.py has already opened the browser on the running
+rem instance. Pausing on it would turn a second double-click into a scary
+rem dialog about a server that is working perfectly.
+if "%RESULT%"=="2" exit /b 2
+call :pause_when_double_clicked
 exit /b %RESULT%
 
 
