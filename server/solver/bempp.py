@@ -9,9 +9,11 @@ capability state and never gets faked.
 from __future__ import annotations
 
 import asyncio
+from functools import lru_cache
 import importlib
 import importlib.metadata
 import logging
+import os
 import platform
 import tempfile
 import time
@@ -50,11 +52,41 @@ class BemppUnavailable(RuntimeError):
 logger = logging.getLogger(__name__)
 
 
+@lru_cache(maxsize=1)
 def _version() -> str | None:
+    # Resolving a distribution version walks sys.path for *.dist-info; the
+    # answer cannot change inside a running process.
     try:
         return importlib.metadata.version("hornlab-bempp-bem")
     except importlib.metadata.PackageNotFoundError:
         return None
+
+
+def _resolved_workers() -> int:
+    """How many processes the frequency sweep may use.
+
+    Zero means the engine's own auto mode, which is the default and is
+    self-limiting: ``hornlab_bempp_bem`` splits only when each worker would get
+    at least 40 frequencies, because a spawned worker re-imports bempp-cl and
+    re-JITs its kernels before it can solve anything. Short sweeps therefore
+    stay in one warm process, where they are dramatically faster.
+
+    The caveat that comes with splitting is real and is why this is reported in
+    the solve metadata rather than being silent: Stop cannot cancel frequencies
+    already running in sibling worker processes. ``WG2_SOLVE_WORKERS=1`` forces
+    the single-process behaviour back.
+    """
+
+    raw = os.environ.get("WG2_SOLVE_WORKERS", "").strip()
+    if not raw:
+        return 0
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        logger.warning(
+            "Ignoring WG2_SOLVE_WORKERS=%r: expected a non-negative integer", raw
+        )
+        return 0
 
 
 def _load_api() -> bool:
@@ -206,9 +238,15 @@ def _assembly_backend_status() -> tuple[bool, str, str | None, str | None]:
     return True, warning, FALLBACK_ASSEMBLY_BACKEND, warning
 
 
-def bempp_status() -> dict[str, Any]:
-    """Report whether a solve can run, not merely whether the wrapper imports."""
+class _BemppProbeUnavailable(RuntimeError):
+    """Carries an unavailable probe result past the cache, which must not keep it."""
 
+    def __init__(self, status: dict[str, Any]) -> None:
+        super().__init__(status.get("reason", "bempp is unavailable"))
+        self.status = status
+
+
+def _probe_bempp_status() -> dict[str, Any]:
     if not _load_api():
         return {
             "available": False,
@@ -225,6 +263,37 @@ def bempp_status() -> dict[str, Any]:
         "assembly_backend": backend,
         "warning": warning,
     }
+
+
+@lru_cache(maxsize=1)
+def _cached_successful_bempp_status() -> dict[str, Any]:
+    status = _probe_bempp_status()
+    if not status["available"]:
+        # functools does not cache exceptions, so an unavailable result is
+        # re-probed next time -- installing an OpenCL runtime must take effect
+        # without restarting the server.
+        raise _BemppProbeUnavailable(status)
+    return status
+
+
+def bempp_status() -> dict[str, Any]:
+    """Report whether a solve can run, not merely whether the wrapper imports.
+
+    Successful probes are cached, following ``server/solver/metal.py``. The
+    probe imports ``bempp_cl.api``, enumerates every OpenCL platform and its
+    devices -- which loads ICD DLLs -- and reads distribution metadata, and it
+    was being run again at the start of every single solve.
+    """
+
+    try:
+        status = _cached_successful_bempp_status()
+    except _BemppProbeUnavailable as exc:
+        status = exc.status
+    return dict(status)
+
+
+# The public cache-maintenance hook, matching metal_status.
+bempp_status.cache_clear = _cached_successful_bempp_status.cache_clear  # type: ignore[attr-defined]
 
 
 def _closed_mode(context: SolverContext) -> bool:
@@ -327,6 +396,22 @@ def solve_bempp_from_msh_text(
         config.require_closed_mesh = (
             context.mesh_validation_mode == "strict" and _closed_mode(context)
         )
+    workers = _resolved_workers()
+    if hasattr(config, "workers"):
+        config.workers = workers
+        if workers != 1 and context.num_frequencies >= 80:
+            # 80 is the engine's own threshold for splitting at all (two
+            # workers, 40 frequencies each). Saying so before the solve starts
+            # means nobody discovers the cancellation caveat by pressing Stop.
+            message = (
+                f"This sweep of {context.num_frequencies} frequencies may run across "
+                "several worker processes. Stop cannot cancel a frequency already "
+                "running in one; set WG2_SOLVE_WORKERS=1 to keep the solve in a "
+                "single cancellable process."
+            )
+            logger.info("%s", message)
+            if stage_callback:
+                stage_callback("setup", 0.0, message)
 
     path: Path | None = None
     try:
@@ -372,6 +457,7 @@ def solve_bempp_from_msh_text(
             "assembly_backend": backend,
             "opencl_device": getattr(config, "opencl_device", "cpu"),
             "precision": getattr(config, "precision", "single"),
+            "workers": getattr(config, "workers", 1),
             "solver_log": json_safe_native_value(response_solver_log(getattr(result, "solver_log", []))),
         },
     }
