@@ -22,8 +22,8 @@ passed.
 | Install path | a parent directory containing a space: `…\Hornlab - Workspace\wg2` |
 | Data directory | `%APPDATA%\WaveguideGenerator2` — `db/`, `logs/`, `locks/`, `workspace/` all created as documented |
 
-The absence of a real GPU only affects check 8. It does not affect the solver,
-which is CPU BEM.
+The absence of a real GPU means the viewport renders through a software
+rasteriser (check 8). It does not affect the solver, which is CPU BEM.
 
 ---
 
@@ -86,7 +86,7 @@ Installed solver stack: `bempp-cl 0.4.2`, `numba 0.66.0`, `llvmlite 0.48.0`,
 | 5 | Capability detection | **pass** |
 | 6 | Real bempp solve, end to end from the UI | **pass** |
 | 7 | AUTO engine resolution | **pass** |
-| 8 | 3D viewport | **partial** — pipeline verified, pixels not |
+| 8 | 3D viewport | **pass** |
 | 9 | Exports | **pass** |
 | 10 | Shutdown and restart | **pass** for crash/restart; graceful Ctrl+C **not verified** |
 
@@ -247,37 +247,47 @@ three independent layers:
 
 Re-confirmed after every restart. No defect here.
 
-### 8. The 3D viewport — partial
+### 8. The 3D viewport — pass
 
-**Verified.** The geometry pipeline works end to end. The viewport's own frame
-stats report a displayed binary frame with per-part vertex counts:
+**Geometry appears, and it orbits.** Both captured from Microsoft Edge 151 in
+headless mode, driven over the DevTools Protocol.
+
+| Before the drag | After a left-drag across the canvas |
+|---|---|
+| ![viewport before orbit](windows-validation/viewport-before-orbit.png) | ![viewport after orbit](windows-validation/viewport-after-orbit.png) |
+
+The camera rotates from the three-quarter view to a near edge-on one and the
+orientation gizmo turns with it, while the rest of the interface is pixel-identical
+— so the change is the camera, not a re-layout or a reload. The full-page capture
+also shows the result charts from check 6 rendering correctly (on-axis SPL,
+directivity H and V heat maps, DI, impedance, summary).
+
+Reproduce with:
 
 ```
-LATEST DISPLAYED BINARY FRAME   REVISION 1   LOD fine   EVAL 2668.15 ms
-horn.inner 24,832 · horn.outer 24,576 · wall.throat_band 512
-mouth_rim 512 · source_cap 4,097 · wall.rear_cap 257
+msedge --headless=new --enable-unsafe-swiftshader --use-gl=angle --use-angle=swiftshader --window-size=1600,1000 --virtual-time-budget=30000 --screenshot=viewport.png http://localhost:3100/
 ```
 
-A WebGL 2.0 context is created successfully and three.js initialises with no
-errors — the only console output in the whole session was one
-`THREE.Clock: This module has been deprecated` warning.
+The renderer initialises cleanly. The only console output in the entire session
+was one `THREE.Clock: This module has been deprecated` warning — no errors.
 
 ```
 WebGL 2.0 (OpenGL ES 3.0 Chromium)
 vendor:   Google Inc. (Microsoft)
 renderer: ANGLE (Microsoft, Microsoft Basic Render Driver (0x0000008C), Direct3D11 vs_5_0 ps_5_0, D3D11)
-browser:  Chromium 148 (Electron 42) on Windows NT 10.0 Win64
 ```
 
-**Not verified.** Pixels on screen, and orbiting. `Microsoft Basic Render
-Driver` is WARP, the software rasteriser — this VM exposes no GPU, so even a
-successful render would not represent a real user's machine. The browser pane
-also never composited: `requestAnimationFrame` did not fire within 4 s, so both
-a screenshot and a `gl.readPixels` histogram of the drawing buffer returned
-nothing. Orbit was therefore not exercised either.
+**The one caveat:** every render here goes through a software rasteriser.
+`Microsoft Basic Render Driver` is WARP, and the headless captures force
+SwiftShader, because this VM exposes no GPU. So ANGLE's Direct3D11 path is
+exercised, but never against a real display driver, and nothing can be said
+about frame rates. Correctness of the viewport on Windows is established;
+performance on real hardware is not.
 
-This check needs re-running on a Windows box with a real GPU before it can be
-called green.
+An earlier attempt to capture this through the in-app browser pane failed —
+`requestAnimationFrame` never fired because the pane was not displayed, so both
+screenshots and `gl.readPixels` came back empty. That was a property of that
+pane, not of Windows or of the app; a headless browser renders it fine.
 
 ### 9. Exports — pass
 
@@ -452,8 +462,10 @@ Ordered by how much it matters.
 1. **Graceful shutdown is unverified, and probably unreachable except by
    Ctrl+C.** Check 10. Needs a human at a keyboard, or a `SIGBREAK` handler in
    `serve.py` if console-close and Ctrl+Break should also shut down cleanly.
-2. **The 3D viewport was never seen.** Check 8. This VM has no GPU and the
-   browser pane did not composite. Re-run on real Windows hardware.
+2. **The viewport has never rendered on a real GPU.** Check 8 passes, but every
+   render on this machine goes through WARP or SwiftShader because the VM
+   exposes no display adapter. Correctness is established; frame rates and the
+   hardware ANGLE/D3D11 driver path are not.
 3. **No installer.** This change ships a *launcher*. The `install.bat` /
    `install-and-update.bat` equivalent, the prerequisite checks with version
    floors, git self-update, and the documented uninstall are all P6.2 and are
