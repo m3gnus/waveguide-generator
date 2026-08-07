@@ -1,5 +1,17 @@
 import { compareSelection } from './results';
 
+/**
+ * Reference-compares own properties. Nested values are compared by identity,
+ * which is deliberately conservative: a freshly parsed payload always looks
+ * changed, so this can only ever suppress a notification that carried nothing.
+ */
+function shallowEqual(a: object, b: object): boolean {
+  if (a === b) return true;
+  const keys = Object.keys(a) as (keyof typeof a)[];
+  if (keys.length !== Object.keys(b).length) return false;
+  return keys.every((key) => Object.is(a[key], (b as typeof a)[key]));
+}
+
 export type JobStatus = 'queued' | 'running' | 'complete' | 'error' | 'cancelled';
 export type JobsConnection = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'disconnected';
 export interface AutoExportFormatStatus {
@@ -273,12 +285,14 @@ export class JobsSocketManager {
     if (cursor !== null && message.cursor <= cursor) return;
     if (this.gapTargetCursor !== null) {
       if (cursor === null || message.cursor !== cursor + 1) return;
-      this.update({ cursor: message.cursor });
       if (message.type === 'deleted') {
         this.invalidateJob(message.jobId);
-        this.update({ jobs: this.snapshot.jobs.filter((job) => job.id !== message.jobId) });
+        this.update({
+          cursor: message.cursor,
+          jobs: this.snapshot.jobs.filter((job) => job.id !== message.jobId),
+        });
       } else {
-        this.applyDelta(message);
+        this.commitEvent(message);
         if (this.eventNeedsRefresh(message)) void this.refreshJob(message.jobId);
       }
       if (message.cursor >= this.gapTargetCursor) {
@@ -300,14 +314,29 @@ export class JobsSocketManager {
       }
       return;
     }
-    this.update({ cursor: message.cursor });
     if (message.type === 'deleted') {
       this.invalidateJob(message.jobId);
-      this.update({ jobs: this.snapshot.jobs.filter((job) => job.id !== message.jobId) });
+      this.update({
+        cursor: message.cursor,
+        jobs: this.snapshot.jobs.filter((job) => job.id !== message.jobId),
+      });
       return;
     }
-    this.applyDelta(message);
+    this.commitEvent(message);
     if (this.eventNeedsRefresh(message)) void this.refreshJob(message.jobId);
+  }
+
+  /**
+   * Advance the cursor and apply the event's effect in one update.
+   *
+   * Two updates would mean two notifications, and the cursor always moves --
+   * so subscribers were woken for every event whether or not anything they
+   * render had changed. The cursor is internal resume bookkeeping; nothing in
+   * the interface displays it.
+   */
+  private commitEvent(message: EventMessage): void {
+    const jobs = this.applyDelta(message);
+    this.update(jobs === null ? { cursor: message.cursor } : { cursor: message.cursor, jobs });
   }
 
   private eventNeedsRefresh(message: EventMessage): boolean {
@@ -318,7 +347,8 @@ export class JobsSocketManager {
       || message.type === 'cancelled';
   }
 
-  private applyDelta(message: EventMessage): void {
+  /** The job list this event implies, or null when it changes nothing. */
+  private applyDelta(message: EventMessage): JobItem[] | null {
     const payload = message.payload ?? {};
     const patch: Partial<JobItem> = {};
     if (message.type === 'queued') Object.assign(patch, { status: 'queued', progress: 0 });
@@ -343,7 +373,7 @@ export class JobsSocketManager {
     if (message.type === 'metadata' && payload.changed && typeof payload.changed === 'object') {
       Object.assign(patch, payload.changed as Partial<JobItem>);
     }
-    this.patchJob(message.jobId, patch);
+    return this.patchedJobs(message.jobId, patch);
   }
 
   private async refetchJobs(): Promise<void> {
@@ -393,13 +423,36 @@ export class JobsSocketManager {
     this.nextJobGeneration(jobId);
   }
 
+  /** Apply a patch immediately, for local optimistic edits such as a rating. */
   private patchJob(jobId: string, patch: Partial<JobItem>): void {
-    const jobs = this.snapshot.jobs.map((job) => job.id === jobId ? { ...job, ...patch } : job);
-    this.update({ jobs: this.sortJobs(jobs) });
+    const jobs = this.patchedJobs(jobId, patch);
+    if (jobs !== null) this.update({ jobs });
+  }
+
+  /** Merge a patch into one job, returning null when nothing actually changes. */
+  private patchedJobs(jobId: string, patch: Partial<JobItem>): JobItem[] | null {
+    let changed = false;
+    const jobs = this.snapshot.jobs.map((job) => {
+      if (job.id !== jobId) return job;
+      const merged = { ...job, ...patch };
+      // A running solve emits progress, stage and log events continuously, and
+      // many carry values the list already holds. Returning the same object
+      // keeps the snapshot identity stable so nothing downstream re-renders.
+      if (shallowEqual(job, merged)) return job;
+      changed = true;
+      return merged;
+    });
+    // No re-sort: created_at never changes, so a patch cannot reorder the list.
+    return changed ? jobs : null;
   }
 
   private sortJobs(jobs: JobItem[]): JobItem[] {
-    return [...jobs].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+    // Only for calls that change membership. Date.parse is called once per job
+    // rather than twice per comparison, which matters at the 200-job page size.
+    return jobs
+      .map((job) => ({ job, at: Date.parse(job.created_at) }))
+      .sort((a, b) => b.at - a.at)
+      .map((entry) => entry.job);
   }
 
   private scheduleReconnect(): void {
@@ -425,8 +478,18 @@ export class JobsSocketManager {
   }
 
   private update(patch: Partial<JobsSnapshot>): void {
-    this.snapshot = { ...this.snapshot, ...patch };
+    const previous = this.snapshot;
+    const next = { ...previous, ...patch };
+    this.snapshot = next;
     if (patch.jobs) compareSelection.prune(new Set(patch.jobs.map((job) => job.id)));
+    // Every subscriber reads the whole snapshot through useSyncExternalStore,
+    // which compares by identity -- so any notification re-renders the Results
+    // panel, the Jobs panel and the coordinator. Two things must therefore not
+    // wake them: an update that changed nothing at all, and the event cursor,
+    // which advances on every single event of a running solve but is internal
+    // resume bookkeeping that no part of the interface displays. The value is
+    // still written above, so a render triggered by anything else sees it.
+    if (shallowEqual({ ...previous, cursor: next.cursor }, next)) return;
     this.listeners.forEach((listener) => listener());
   }
 }

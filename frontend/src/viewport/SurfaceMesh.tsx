@@ -20,12 +20,19 @@ export function SurfaceMesh({ surface, mode, visible, sectionCut, materials, sch
     () => mode === 'curvature' && surface.curvature ? curvatureColors(surface.curvature) : null,
     [mode, surface.curvature],
   );
+  // Keyed on the typed arrays, not on `surface`. Every decoded preview frame
+  // builds fresh SceneSurface objects, so keying on the object meant this memo
+  // never hit and the boundary extraction -- a per-vertex string key, a Map
+  // over 3N edges, and an O(normals) feature test per edge -- re-ran at up to
+  // 30 Hz during a drag. The arrays are the stable-by-content identity: new
+  // geometry always means new buffers.
   const boundary = useMemo(() => {
     if (mode !== 'edges') return null;
     const geometry = new BufferGeometry();
     geometry.setAttribute('position', new BufferAttribute(surfaceBoundaryPositions(surface), 3));
     return geometry;
-  }, [mode, surface]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- positions/indices identify the surface's geometry
+  }, [mode, surface.positions, surface.indices, surface.normals]);
   const material = materials.surfaces[surface.materialClass];
   const edgeFallback = mode === 'edges' && Math.floor(surface.indices.length / 3) > MAX_EDGE_TRIANGLES;
   const edgeFillMaterial = useMemo(() => {
