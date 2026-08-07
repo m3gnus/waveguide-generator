@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import fcntl
 import logging
 from logging.handlers import RotatingFileHandler
 import os
@@ -32,14 +31,16 @@ from server.platform.paths import ensure_data_layout
 
 
 def test_advisory_lock_rejects_partially_written_live_owner(tmp_path: Path) -> None:
+    # Lock the file the way another instance would, but write no metadata, so
+    # the conflict is decided by the lock alone rather than by what it contains.
     path = tmp_path / "server.pid"
-    descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
-    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    descriptor = os.open(path, instance.LOCK_OPEN_FLAGS, 0o600)
+    instance.lock_exclusive(descriptor)
     try:
         with pytest.raises(InstanceAlreadyRunning):
             InstanceLock(tmp_path).acquire(3100)
     finally:
-        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        instance.unlock(descriptor)
         os.close(descriptor)
 
 
