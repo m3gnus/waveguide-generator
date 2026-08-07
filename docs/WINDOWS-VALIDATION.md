@@ -8,14 +8,9 @@ Against P6.4's five items, and deliberately not claiming more than was done:
 |---|---|
 | 1. Bootstrap and serve | **done** |
 | 2. gmsh worker thread | **done** — meshed on the worker for every solve here, no Windows-specific failure |
-| 3. bempp solve *through the qualification runner* | **partial** — a real bempp solve completed from the UI (check 6), but it was the numba assembly path and it was not run through the qualification runner |
+| 3. bempp/OpenCL solve *through the qualification runner* | **partial** — a real bempp solve completed from the UI on the **OpenCL** backend (§2.2, check 6); it has not been run through the qualification runner |
 | 4. Installer, and the parent-path-with-spaces case | **partial** — the spaces case is done and a *launcher* exists; the installer does not |
-| 5. Upgrade-over-v1 and rollback E2E | **not started** |
-
-Note on item 3: the plan calls this "the bempp/OpenCL solve path". On Windows
-there is no OpenCL path to exercise — v2 pins the numba assembly backend
-(§2.2) — so either the plan's wording needs revising or an OpenCL variant needs
-building before that item can be closed as written.
+| 5. Upgrade-over-v1 and rollback E2E | **done for the tool** — see check 11; not done against a real v1 install, which does not exist on this machine |
 
 Everything below was measured on the machine described in §1. Where a check
 could not be completed, it says so and why, rather than being narrowed until it
@@ -68,23 +63,48 @@ server will not even import, because `server/app.py` mounts it as `StaticFiles`
 at module scope. Until a `v*` tag exists and `.github/workflows/release.yml`
 has published an SPA archive, a Windows install from a clone needs Node.
 
-### 2.2 bempp needs no OpenCL runtime on Windows
+### 2.2 OpenCL is the solve path, and it works
 
-This was expected to be the fiddly part. It is not, because v2 never takes the
-OpenCL path: `server/solver/bempp.py` pins `assembly_backend="numba"` when it
-builds the `SolveConfig`. Confirmed on the installed environment:
+v2 previously pinned `assembly_backend="numba"` in `server/solver/bempp.py`.
+That was wrong on its own terms: the pinned wrapper's `SolveConfig` **defaults**
+to `assembly_backend="opencl"`, and its `resolve_assembly_backend()` describes
+OpenCL as "the production OpenCL Bempp backend". v2 was overriding the engine's
+own production choice with its fallback. It now asks for OpenCL.
 
-- `pyopencl` is **not installed** and is not in `requirements-lock.txt`
-- `bempp-cl 0.4.2` imports as `bempp_cl` (the top-level module was renamed from
-  `bempp`; `import bempp` fails and that is correct, not a broken install)
-- the solve in check 6 ran to completion with `assembly_backend: numba`,
-  `device_interface.selected: bempp-cl-numba`
+The runtime was already present here and needed no installation:
 
-The only native dependency that matters is therefore the VC++ redistributable,
-which numba and llvmlite need for their compiled extensions.
+| | |
+|---|---|
+| ICD | `intelocl64.dll`, registered under `HKLM\SOFTWARE\Khronos\OpenCL\Vendors` |
+| Loader | `C:\Windows\System32\OpenCL.dll` 3.0.6.0 |
+| Platform | Intel(R) OpenCL 3.0 |
+| Device | AMD Ryzen 7 5825U — CPU device, 12 compute units, 16 GB, fp64 |
 
-Installed solver stack: `bempp-cl 0.4.2`, `numba 0.66.0`, `llvmlite 0.48.0`,
-`gmsh 4.15.2`, `numpy 2.4.6`, `scipy 1.17.1`.
+Note the device is a **CPU**: Intel's CPU runtime drives an AMD processor
+perfectly well, and no GPU is involved. `pyopencl==2026.1.2` installs from PyPI
+with no build step and is now in `requirements-runtime.txt`.
+
+`bempp-cl 0.4.2` imports as `bempp_cl` — the top-level module was renamed from
+`bempp`, so `import bempp` failing is correct and not a broken install.
+
+**numba remains as a warned fallback, never a silent one.** If OpenCL cannot be
+used, `bempp_status()` still reports the engine available, but the reason it
+returns *is* the warning, naming what to fix:
+
+> Falling back to the numba assembly backend because OpenCL is unusable: …
+> Until that is fixed, solves assemble on numba, which is slower, and the first
+> solve after each start spends roughly a minute compiling kernels during which
+> Stop cannot take effect.
+
+That text reaches `/api/capabilities`, the solve log, and the job's
+`assembly_backend_warning` metadata. `test_numba_fallback_is_never_silent` pins
+it.
+
+Native dependencies that matter: an OpenCL ICD, and the VC++ redistributable
+that the compiled extensions need.
+
+Installed solver stack: `bempp-cl 0.4.2`, `pyopencl 2026.1.2`, `numba 0.66.0`,
+`llvmlite 0.48.0`, `gmsh 4.15.2`, `numpy 2.4.6`, `scipy 1.17.1`.
 
 ---
 
@@ -101,7 +121,9 @@ Installed solver stack: `bempp-cl 0.4.2`, `numba 0.66.0`, `llvmlite 0.48.0`,
 | 7 | AUTO engine resolution | **pass** |
 | 8 | 3D viewport | **pass** |
 | 9 | Exports | **pass** |
-| 10 | Shutdown and restart | **pass** for crash/restart; graceful Ctrl+C **not verified** |
+| 10 | Shutdown and restart | **pass** |
+| 11 | Upgrade-over-v1 and rollback (added) | **pass** against a constructed v1 install |
+| 12 | Stop latency during a solve (added) | **measured** — see check 12; improved, not eliminated |
 
 ### 1. Bootstrap — pass, after fixing a hard blocker
 
@@ -235,7 +257,7 @@ panel, Solve pressed, results and charts read back.
 | Sweep | 500 Hz – 2 kHz, 20 frequencies, logarithmic |
 | Solve mesh | **164 triangles / 103 vertices** in the solved quarter domain (656 full-domain), max edge 50.3 mm |
 | Symmetry | auto → 1 quadrant (both mirror planes hold) |
-| Engine | AUTO → bempp, `assembly_backend: numba`, `solver_mode: full_3d` |
+| Engine | AUTO → bempp, `assembly_backend: opencl`, `solver_mode: full_3d` |
 | **Wall clock** | **58.5 s** (15:19:11.215 → 15:20:09.724); engine-reported `total_time_seconds` 58.03 |
 | Result | `status: complete`, no error, `has_results: true` |
 
@@ -352,22 +374,94 @@ clean restarts over a lock file naming a dead pid. Also covered by
 `test_instance_lock_acquire_conflict_and_release`, which does
 acquire → conflict → release → re-acquire and passes on Windows.
 
-**Not verified: the graceful Ctrl+C path.** `launch/serve.py` installs handlers
-for `SIGINT` and `SIGTERM`, and the launcher tells the user "Close this window
-or press Control-C to stop it". On Windows that path could not be exercised
-safely: there is no `kill(pid, SIGINT)` — `os.kill` maps to `TerminateProcess` —
-so the only way to deliver a real Ctrl+C is `GenerateConsoleCtrlEvent`, which
-signals *every* process attached to the console, including the harness driving
-this validation. The attempt was abandoned rather than risk that.
+**Graceful shutdown: pass.** `launch/serve.py` now also handles `SIGBREAK`,
+which is what Ctrl+Break raises on Windows, alongside `SIGINT` and `SIGTERM`.
+That is worth having on its own — `SIGTERM` cannot be delivered by another
+process on Windows at all, since `os.kill` maps to `TerminateProcess` — and it
+is also the only stop signal that can be addressed to a *specific* process
+group, which is what finally made this testable. `CTRL_BREAK_EVENT` aimed at
+the server's own group cannot touch any other console, unlike
+`GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0)`, which signals every process sharing
+the caller's console and is why the first attempt at this check was abandoned.
 
-By inspection, and stated as analysis rather than measurement: `SIGTERM` cannot
-be sent by another process on Windows, and neither closing the console window
-(`CTRL_CLOSE_EVENT`) nor Ctrl+Break (`SIGBREAK`) is handled by `serve.py`. If
-that reading is right, the graceful path is reachable only by pressing Ctrl+C in
-the launcher window, and every other way of stopping the app is an abrupt exit.
-The consequences of an abrupt exit are already covered above and are benign, so
-this is a loose end rather than a blocker. **It needs someone at a real
-keyboard to confirm.**
+```
+sending CTRL_BREAK_EVENT to that group only
+  Received SIGBREAK; finishing active requests and shutting down
+  Shutdown complete; instance lock released
+exited with code 0 after 0.61s
+  re-acquired the lock cleanly -> it was released
+```
+
+Still not handled: closing the console window. Windows delivers that as
+`CTRL_CLOSE_EVENT`, which Python does not surface as a signal, so it remains an
+abrupt exit. The consequences of an abrupt exit are the crash-recovery path
+above, which is proven, so this is a rough edge rather than a defect.
+
+**A Windows detail worth knowing:** the pid you spawn is usually not the pid
+that serves. `.venv\Scripts\python.exe` is a launcher stub that runs the real
+interpreter as a child, so `serve.py` appears twice in the process list with
+identical command lines, and it is the **child** that owns the instance lock.
+Anything that signals or tracks the server by the pid it spawned will address
+the stub. Console control events go to the process group, so they reach both.
+
+### 11. Upgrade-over-v1 and rollback — pass, against a constructed v1 install
+
+The real 109 MB v1 database is not on this machine, so the v1 side was built to
+the shape `migrate_v1.py` reads — v1 schema at `user_version 4`, 40 jobs with
+results and mesh artifacts, 25 `output/` projects — under a path containing a
+space. What this exercises is the tool and v2's reader, on Windows.
+
+| Step | Result |
+|---|---|
+| `--dry-run` | reports the full plan; **no v2 database created** |
+| migrate `--report` | 40 jobs / 40 results / 40 artifacts, 25 workspace projects |
+| re-run | *"already migrated (40 jobs). Nothing to do."* — counts unchanged |
+| `--rollback` | back to 0 jobs and 0 projects, and it names both the directory it restored into and where it saved the state it replaced |
+
+It also correctly warns that no imported job can be reopened: 10 of 40 have no
+design snapshot and 30 carry v1's parameter shape.
+
+Cloning v1 beside this checkout also un-skipped the corpus tests, which now run
+against v1's real ATH fixtures: **9 skips became 7**, and 476 tests pass.
+
+### 12. Stop latency during a solve — measured, improved, not solved
+
+Reported from real use: pressing Stop does not stop the solve immediately. It is
+reproducible and it is not a Windows defect — it is cooperative cancellation
+meeting a long uninterruptible block.
+
+From the job's own event log, on the numba backend:
+
+```
+19:50:33.374  stage=assemble   "Configuring BEMPP BEM solve"  progress 0.30
+19:50:57.210  stage=cancelling  <- Stop pressed
+19:51:25.958  cancelled                                        28.7s later
+```
+
+`_check_cancelled` only runs at stage checkpoints, and inside the engine the
+only checkpoint is the per-frequency progress callback. The first callback does
+not fire until the first assembly finishes, so Stop cannot land during it.
+
+Measured cold-versus-warm, 3 frequencies, same design:
+
+| Backend | First solve after start | Blocked, no checkpoint | Second solve |
+|---|---|---|---|
+| numba | 64.3 s | **53.8 s** | 0.8 s |
+| OpenCL, first ever | 24.5 s | 22.9 s | 1.0 s |
+| OpenCL, later starts | 18.3 s | **17.5 s** | 0.7 s |
+
+Switching to OpenCL cuts the unstoppable window roughly threefold, and pyopencl's
+on-disk program cache takes a little more off after the first run. It does not
+remove it. Two things would:
+
+- **Warm the backend at boot**, extending the existing `BackgroundWarmup` used
+  for the capability probe. It moves the cost off the user's first solve
+  entirely, at the price of that CPU on every start.
+- **Process-isolated solves**, which the cutover plan explicitly defers — that
+  is the only way Stop becomes immediate rather than merely prompt.
+
+Neither is done. numba's kernels are mostly not `cache=True` (14 of 103
+decorations), so `NUMBA_CACHE_DIR` would not have helped that path.
 
 ---
 
@@ -531,26 +625,28 @@ instead of asserting a POSIX mechanism.
 
 Ordered by how much it matters.
 
-1. **Graceful shutdown is unverified, and probably unreachable except by
-   Ctrl+C.** Check 10. Needs a human at a keyboard, or a `SIGBREAK` handler in
-   `serve.py` if console-close and Ctrl+Break should also shut down cleanly.
-2. **The viewport has never rendered on a real GPU.** Check 8 passes, but every
-   render on this machine goes through WARP or SwiftShader because the VM
-   exposes no display adapter. Correctness is established; frame rates and the
-   hardware ANGLE/D3D11 driver path are not.
-3. **No installer.** This change ships a *launcher*. The `install.bat` /
+1. **No installer.** This change ships a *launcher*. The `install.bat` /
    `install-and-update.bat` equivalent, the prerequisite checks with version
    floors, git self-update, and the documented uninstall are all P6.2 and are
    not started. v1's two installer contract suites
    (`tests/installer-contract.test.js`, `installer-env-contract.test.js`) are
    correspondingly **not ported** — v2 has no automated installer coverage.
-4. **Upgrade-over-v1 and rollback E2E on Windows: not reached.** P6.4 item 5.
-   No v1 checkout exists on this machine, which is also why 6 tests skip. G6
-   row 5 stays "Windows pending".
-5. **The VC++ failure mode was never seen.** The redistributable was already
-   installed, so `bempp_status()`'s missing-DLL branch and its remediation
-   message are still untested against a real clean Windows box. The success
-   branch is proven accurate.
+   This is the single largest gap remaining.
+2. **Stop is prompt, not immediate.** Check 12. The first solve after a start
+   still has a ~17 s window with no cancellation checkpoint in it. Fixing it
+   properly needs either a boot-time backend warmup or process-isolated solves.
+3. **The viewport has never rendered on a real GPU.** Check 8 passes, but every
+   render on this machine goes through WARP or SwiftShader because the VM
+   exposes no display adapter. Correctness is established; frame rates and the
+   hardware ANGLE/D3D11 driver path are not. **This cannot be closed on this
+   machine at all** — it needs different hardware.
+4. **The v1 migration was never run against a real v1 install.** Check 11 used a
+   constructed one, because no v1 database or `output/` history exists here.
+   Three `test_legacy_snapshot.py` tests still skip for the same reason.
+5. **The VC++ and OpenCL failure modes were never seen for real.** Both
+   runtimes were already installed, so the missing-DLL branch and the
+   no-OpenCL-runtime branch are covered by tests with faked failures rather
+   than by a genuinely clean box.
 6. **No Windows CI job.** P6.3 lists it as blocked on P6.4; P6.4 is now far
    enough along to add one.
 7. **`docs/TRACEABILITY-TABLE.md` is now stale.** Its P011/Q007 row says the
@@ -558,8 +654,11 @@ Ordered by how much it matters.
    depending on platform. Left unedited deliberately — this task was scoped to
    add a report under `docs/`, not to modify other documents.
 8. **Solve accuracy was not assessed.** Check 6 used a deliberately coarse mesh
-   to prove the path. No Windows-vs-macOS numerical parity comparison was run;
-   that belongs to the qualification runner.
+   to prove the path. No Windows-vs-macOS numerical parity comparison was run,
+   and switching the assembly backend to OpenCL makes that comparison more
+   interesting, not less; it belongs to the qualification runner.
+9. **The qualification runner was not used.** P6.4 item 3 asks for the bempp
+   path through it. The solve here was driven from the interface.
 
 ---
 
@@ -593,6 +692,16 @@ Beyond the launcher and lock work already described:
   `%LOCALAPPDATA%\Microsoft\WindowsApps` that opens the Store. The launcher
   skips it; anything else calling `python` directly will not.
 - **The STL export is binary.** It contains no `facet normal` text.
+- **A sqlite3 connection used as a context manager commits but does not close.**
+  On POSIX the leaked handle is invisible; on Windows it stops the file being
+  deleted or replaced, with `WinError 32`. This broke rollback, and it was
+  present in both `scripts/migrate_v1.py` and the migration tests' own helpers.
+  `contextlib.closing` is the fix; write paths need `closing(conn) as c, c` to
+  keep the commit.
+- **`sqlite3.connect` creates the file it cannot find**, so an existence check
+  written after a connect attempt manufactures the empty database it reports.
+- **The venv's `python.exe` is a launcher stub.** It runs the real interpreter
+  as a child process, so the pid you spawn is not the pid that serves.
 
 None of these are v2 design faults; they are the platform. They are recorded
 here so the next person does not spend the same afternoon on them.
