@@ -10,11 +10,9 @@ and rollback returns the database to exactly its previous state (R1-P0-6).
 from __future__ import annotations
 
 from contextlib import contextmanager
-import getpass
 import hashlib
 import importlib.util
 import json
-import os
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -239,6 +237,22 @@ def test_custom_v1_workspace_location_is_honoured(v1_root: Path, tmp_path: Path)
     assert not (data_dir / "workspace" / "project-a").exists()
 
 
+def _current_user_sid() -> str:
+    """The SID of the process token, which is not always the named user.
+
+    getpass.getuser() reads the environment, so under a service, container or
+    sandboxed runner it can name a different account than the token actually
+    running the test. Denying that account leaves the directory writable and the
+    test fails for a reason that has nothing to do with the migration.
+    """
+
+    completed = subprocess.run(
+        ["whoami", "/user", "/fo", "csv", "/nh"],
+        check=True, capture_output=True, text=True,
+    )
+    return completed.stdout.strip().rsplit(",", 1)[-1].strip().strip('"')
+
+
 @contextmanager
 def _unwritable(directory: Path) -> Iterator[None]:
     """Stop the current user creating entries in ``directory``, then restore it.
@@ -249,8 +263,7 @@ def _unwritable(directory: Path) -> Iterator[None]:
     """
 
     if sys.platform == "win32":
-        domain = os.environ.get("USERDOMAIN")
-        account = f"{domain}\\{getpass.getuser()}" if domain else getpass.getuser()
+        account = f"*{_current_user_sid()}"
         subprocess.run(
             ["icacls", str(directory), "/deny", f"{account}:(WD,AD)"],
             check=True, capture_output=True,
