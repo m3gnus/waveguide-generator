@@ -9,7 +9,7 @@ and rollback returns the database to exactly its previous state (R1-P0-6).
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 import hashlib
 import importlib.util
 import json
@@ -89,12 +89,15 @@ def _make_v1(root: Path, jobs: int = 3, *, with_snapshot: int = 2, tag: str = "v
 
 
 def _job_ids(database: Path) -> set[str]:
-    with sqlite3.connect(database) as conn:
+    # closing(), not a bare `with`: a sqlite3 connection used as a context
+    # manager commits without closing, and the leaked handle stops Windows
+    # deleting or replacing the file the migration is about to rewrite.
+    with closing(sqlite3.connect(database)) as conn:
         return {row[0] for row in conn.execute("SELECT id FROM simulation_jobs")}
 
 
 def _content_digest(database: Path) -> str:
-    with sqlite3.connect(database) as conn:
+    with closing(sqlite3.connect(database)) as conn:
         rows = sorted(conn.execute("SELECT job_id, results_json FROM simulation_results"))
         meshes = sorted(conn.execute("SELECT job_id, msh_text FROM simulation_artifacts"))
     return hashlib.sha256(repr((rows, meshes)).encode("utf-8")).hexdigest()
@@ -144,7 +147,7 @@ def test_existing_v2_job_is_never_overwritten(v1_root: Path, tmp_path: Path):
     data_dir = tmp_path / "v2data"
     migrate_v1.migrate(v1_root, data_dir)
     database = data_dir / "db" / "simulations.db"
-    with sqlite3.connect(database) as conn:
+    with closing(sqlite3.connect(database)) as conn, conn:
         conn.execute(
             "UPDATE simulation_results SET results_json = ? WHERE job_id = ?",
             ('{"spl": ["edited in v2"]}', "v1-job-0"),
@@ -156,7 +159,7 @@ def test_existing_v2_job_is_never_overwritten(v1_root: Path, tmp_path: Path):
     report = migrate_v1.migrate(other, data_dir)
 
     assert "v1-job-0" in report.skipped_existing
-    with sqlite3.connect(database) as conn:
+    with closing(sqlite3.connect(database)) as conn:
         kept = conn.execute(
             "SELECT results_json FROM simulation_results WHERE job_id = ?", ("v1-job-0",)
         ).fetchone()[0]
@@ -300,6 +303,32 @@ def test_backup_failure_stops_before_writing(v1_root: Path, tmp_path: Path):
             migrate_v1.migrate(v1_root, data_dir)
 
     assert _job_ids(database) == untouched
+
+
+def test_rollback_saves_the_state_it_replaces(v1_root: Path, tmp_path: Path):
+    """Rollback was the one destructive path in a tool built to be safe.
+
+    Restoring the wrong backup -- or restoring into the default data directory
+    because --data-dir was omitted -- overwrote live jobs with nothing to
+    recover from. Now the replaced state is itself backed up first.
+    """
+
+    data_dir = tmp_path / "v2data"
+    migrate_v1.migrate(v1_root, data_dir)
+    database = data_dir / "db" / "simulations.db"
+    live = _job_ids(database)
+    assert live, "the fixture must leave jobs to be destroyed"
+
+    empty_backup = tmp_path / "empty-backup"
+    (empty_backup / "workspace").mkdir(parents=True)
+
+    replaced = migrate_v1.rollback(empty_backup, data_dir)
+
+    # Existence first: sqlite3.connect creates a missing file, so probing the
+    # other way round would manufacture the empty database it claims to find.
+    assert not database.is_file() or _job_ids(database) == set()
+    assert replaced is not None and replaced.is_dir()
+    assert _job_ids(replaced / "simulations.db") == live
 
 
 def test_repeated_backups_in_the_same_second_do_not_collide(v1_root: Path, tmp_path: Path):
