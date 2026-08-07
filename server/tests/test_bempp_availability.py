@@ -23,6 +23,21 @@ import pytest
 from server.solver import bempp
 
 
+@pytest.fixture(autouse=True)
+def _clear_probe_cache():
+    """Successful probes are cached process-wide, so isolate every case.
+
+    ``bempp_status`` memoizes a successful probe -- it imports bempp_cl and
+    enumerates OpenCL devices, which was being paid again at the start of every
+    solve. On a host where the real probe succeeds, that cached success would
+    otherwise answer the monkeypatched failure cases below.
+    """
+
+    bempp.bempp_status.cache_clear()
+    yield
+    bempp.bempp_status.cache_clear()
+
+
 def _refusing(target, message):
     """Import everything normally except ``target``, which fails as on Windows."""
 
