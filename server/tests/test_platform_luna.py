@@ -44,6 +44,27 @@ def test_advisory_lock_rejects_partially_written_live_owner(tmp_path: Path) -> N
         os.close(descriptor)
 
 
+def test_pid_liveness_probe_answers_without_killing() -> None:
+    """The probe must report on a process, never terminate it.
+
+    os.kill(pid, 0) is a liveness check on POSIX but resolves to
+    TerminateProcess on Windows, so the survival assertion matters as much as
+    the answer does.
+    """
+
+    child = subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.read()"], stdin=subprocess.PIPE)
+    try:
+        assert instance._pid_is_running(child.pid) is True
+        assert child.poll() is None
+    finally:
+        child.kill()
+        child.wait()
+
+    assert instance._pid_is_running(child.pid) is False
+    assert instance._pid_is_running(os.getpid()) is True
+    assert instance._pid_is_running(0) is False
+
+
 def test_lock_filesystem_oserror_is_wrapped(tmp_path: Path) -> None:
     (tmp_path / "server.pid").mkdir()
     with pytest.raises(InstanceLockError, match="Could not open instance lock"):
