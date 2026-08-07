@@ -5,6 +5,10 @@ gmsh==4.15.2
 matplotlib==3.10.9
 meshio==5.3.5
 numpy==2.4.6
+# scripts/bootstrap.py evaluates the lock file's environment markers with
+# packaging.markers. It arrives transitively today, but the bootstrap contract
+# must not rest on matplotlib and pytest happening to require it.
+packaging==26.3
 pillow==12.2.0
 pydantic==2.13.4
 python-multipart==0.0.32
