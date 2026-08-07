@@ -63,6 +63,23 @@ def _open_browser_when_ready(port: int, stop: threading.Event) -> None:
         )
 
 
+def _shutdown_signals() -> tuple[int, ...]:
+    """Signals that mean "stop the server", including Windows' Ctrl+Break.
+
+    Windows cannot deliver SIGTERM from another process -- os.kill maps to
+    TerminateProcess -- so SIGINT from Ctrl+C is otherwise the only way in.
+    SIGBREAK is what Ctrl+Break raises, and it is the only stop signal that can
+    be sent to a specific process group, which is what makes the graceful path
+    testable there at all.
+    """
+
+    signals = [signal.SIGINT, signal.SIGTERM]
+    windows_break = getattr(signal, "SIGBREAK", None)
+    if windows_break is not None:
+        signals.append(windows_break)
+    return tuple(signals)
+
+
 def _install_shutdown_handlers(server: uvicorn.Server) -> dict[int, object]:
     previous: dict[int, object] = {}
 
@@ -73,7 +90,7 @@ def _install_shutdown_handlers(server: uvicorn.Server) -> dict[int, object]:
         )
         server.should_exit = True
 
-    for signum in (signal.SIGINT, signal.SIGTERM):
+    for signum in _shutdown_signals():
         previous[signum] = signal.getsignal(signum)
         signal.signal(signum, request_shutdown)
     server.install_signal_handlers = lambda: None  # type: ignore[method-assign]
