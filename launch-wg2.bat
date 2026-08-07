@@ -6,7 +6,13 @@ rem Unlike v1's install.bat this script never pulls over itself, so it does not
 rem need install-and-update.bat's copy-to-TEMP dance: cmd.exe tracks its position
 rem in a batch file by byte offset, and only a script that rewrites itself
 rem resumes at a meaningless one.
-setlocal EnableExtensions EnableDelayedExpansion
+rem Delayed expansion is deliberately OFF. With it on, every value expanded from
+rem %~dp0, %WG2_PYTHON%, a for variable or %* is rescanned for ! and ^, so a
+rem repository under "C:\My ! Projects" silently loses characters and the
+rem launcher then cannot find itself. Nothing below needs it: `if defined` is
+rem evaluated at execution time, and every value that would otherwise want it is
+rem read on a later line or inside a subroutine.
+setlocal EnableExtensions DisableDelayedExpansion
 
 set "REPO_DIR=%~dp0"
 if "%REPO_DIR:~-1%"=="\" set "REPO_DIR=%REPO_DIR:~0,-1%"
@@ -28,7 +34,7 @@ call :find_bootstrap_python
 if errorlevel 1 goto :no_python
 
 echo Preparing the Waveguide Generator v2 Python environment...
-"!BOOTSTRAP_PYTHON!" scripts\bootstrap.py
+"%BOOTSTRAP_PYTHON%" scripts\bootstrap.py
 if errorlevel 1 goto :bootstrap_failed
 
 :environment_ready
@@ -36,8 +42,12 @@ set "PYTHON=%REPO_DIR%\.venv\Scripts\python.exe"
 goto :run
 
 :use_explicit_python
-if not exist "%WG2_PYTHON%" goto :bad_explicit_python
+rem A directory satisfies `if exist`, so reject one here instead of letting it
+rem fail later as "cannot import FastAPI", which sends the user to the wrong fix.
+call :is_regular_file "%WG2_PYTHON%"
+if errorlevel 1 goto :bad_explicit_python
 set "PYTHON=%WG2_PYTHON%"
+set "PYTHON_IS_OVERRIDE=1"
 
 :run
 call :python_can_serve
@@ -68,6 +78,15 @@ exit /b %ERRORLEVEL%
 :python_can_serve
 "%PYTHON%" -c "import fastapi, uvicorn" >nul 2>&1
 exit /b %ERRORLEVEL%
+
+:is_regular_file
+rem `if exist "path\"` reports a plain file as a directory on current Windows,
+rem so read the attribute letters instead: %~a1 is empty when nothing is there
+rem and begins with d for a directory.
+set "ATTRS=%~a1"
+if "%ATTRS%"=="" exit /b 1
+if /i "%ATTRS:~0,1%"=="d" exit /b 1
+exit /b 0
 
 :is_python_313
 rem Exit 0 when the given interpreter is CPython 3.13, which is the only series
@@ -105,11 +124,15 @@ for /f "delims=" %%w in ('py -3.13 -c "import sys; print(sys.executable)" 2^>nul
 exit /b 0
 
 :consider_candidate
-echo %~1| find /i "\WindowsApps\" >nul 2>&1
-if not errorlevel 1 goto :candidate_is_store_alias
-call :is_python_313 "%~1"
+rem Test for the alias by substring replacement rather than `echo ... | find`.
+rem The piped form re-parses the candidate as command text, so an interpreter
+rem path containing & runs its tail as a command. Substitution is also
+rem case-insensitive, which is what `find /i` was there for.
+set "CANDIDATE=%~1"
+if not "%CANDIDATE:\WindowsApps\=%"=="%CANDIDATE%" goto :candidate_is_store_alias
+call :is_python_313 "%CANDIDATE%"
 if errorlevel 1 exit /b 0
-set "BOOTSTRAP_PYTHON=%~1"
+set "BOOTSTRAP_PYTHON=%CANDIDATE%"
 exit /b 0
 
 :candidate_is_store_alias
@@ -117,9 +140,11 @@ set "STORE_ALIAS_SEEN=1"
 exit /b 0
 
 :pause_when_double_clicked
-rem Only pause when launched by double-click. When a console was already
-rem attached, cmdcmdline contains the script path with /c and pausing would
-rem block scripted or CI runs.
+rem Pause only when the console would otherwise vanish with the error still in
+rem it. v1's test is whether cmd's own command line names this script, which
+rem Explorer's double-click does -- but so does an explicit `cmd /c "...bat"`,
+rem so scripted callers get an escape hatch rather than a hang.
+if defined WG2_NO_PAUSE exit /b 0
 echo %CMDCMDLINE% | find /i "%~nx0" >nul 2>&1
 if not errorlevel 1 pause
 exit /b 0
@@ -155,8 +180,10 @@ exit /b 1
 
 :bad_explicit_python
 echo.
-echo ERROR: WG2_PYTHON does not point at an existing interpreter:
+echo ERROR: WG2_PYTHON must name a Python executable, not a folder or a
+echo        missing path. It is currently:
 echo        %WG2_PYTHON%
+echo        Unset it to use the repository environment instead.
 call :pause_when_double_clicked
 exit /b 1
 
@@ -192,6 +219,17 @@ exit /b 1
 echo.
 echo ERROR: The selected Python environment cannot import FastAPI and Uvicorn:
 echo        %PYTHON%
+rem Sending someone to bootstrap the repository .venv is the wrong advice when
+rem WG2_PYTHON is pinning a different interpreter: the rebuild would succeed and
+rem the launcher would still use the override, and still fail.
+if defined PYTHON_IS_OVERRIDE goto :unusable_override
 echo        Run: py -3.13 scripts\bootstrap.py --force
+call :pause_when_double_clicked
+exit /b 1
+
+:unusable_override
+echo        That interpreter is pinned by WG2_PYTHON. Either unset WG2_PYTHON to
+echo        use the repository environment, or install the v2 requirements into
+echo        that interpreter.
 call :pause_when_double_clicked
 exit /b 1
