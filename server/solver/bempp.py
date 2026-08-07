@@ -12,6 +12,7 @@ import asyncio
 import importlib
 import importlib.metadata
 import logging
+import platform
 import tempfile
 import time
 from pathlib import Path
@@ -71,8 +72,59 @@ def _load_api() -> bool:
     return True
 
 
+# Compiled-extension runtime DLLs that Windows does not ship by default. numba
+# and llvmlite link against these; the diagnosis and remedy are v1's
+# ``server/scripts/check_solver_engine.py``.
+_WINDOWS_RUNTIME_DLLS = ("vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll")
+
+_VCREDIST_GUIDANCE = (
+    "Install the Microsoft Visual C++ Redistributable (x64), then start again: "
+    "winget install --id Microsoft.VCRedist.2015+.x64 --scope user "
+    "(or https://aka.ms/vs/17/release/vc_redist.x64.exe)"
+)
+
+
+def _missing_windows_runtime_dlls() -> list[str]:
+    """Return the VC++ runtime DLLs that will not load. Windows only."""
+
+    if platform.system() != "Windows":
+        return []
+    import ctypes
+
+    missing = []
+    for name in _WINDOWS_RUNTIME_DLLS:
+        try:
+            ctypes.CDLL(name)
+        except OSError:
+            missing.append(name)
+    return missing
+
+
+def _assembly_backend_status() -> tuple[bool, str]:
+    """Can an assembly backend actually run, or does it only import?
+
+    ``hornlab_bempp_bem`` is a thin pure-Python wrapper, so it imports happily
+    on a host where bempp-cl's engine cannot load at all. v1 hit exactly this on
+    clean Windows: the installer said "Bempp ready", the preflight said READY,
+    and every solve then died on ``ImportError: Numba could not be imported``
+    because numba's compiled extensions need a redistributable Windows does not
+    install by default. Reporting importability as availability reproduces that
+    bug, so probe the backend the solve path really uses.
+    """
+
+    try:
+        importlib.import_module("numba")
+    except BaseException as exc:  # noqa: BLE001 - numba raises bare ImportError chains
+        detail = f"{type(exc).__name__}: {str(exc).splitlines()[0][:200]}"
+        missing = _missing_windows_runtime_dlls()
+        if missing:
+            return False, f"numba cannot load ({detail}). Missing {', '.join(missing)}. {_VCREDIST_GUIDANCE}"
+        return False, f"numba cannot load, so no assembly backend can run a solve ({detail})."
+    return True, "hornlab-bempp-bem is importable and its numba assembly backend loads."
+
+
 def bempp_status() -> dict[str, Any]:
-    """Report real importability; CPU/numba is valid without OpenCL."""
+    """Report whether a solve can run, not merely whether the wrapper imports."""
 
     if not _load_api():
         return {
@@ -81,11 +133,12 @@ def bempp_status() -> dict[str, Any]:
             "version": _version(),
             "assembly_backend": None,
         }
+    usable, reason = _assembly_backend_status()
     return {
-        "available": True,
-        "reason": "hornlab-bempp-bem is importable; CPU/numba fallback is available.",
+        "available": usable,
+        "reason": reason,
         "version": _version(),
-        "assembly_backend": "numba",
+        "assembly_backend": "numba" if usable else None,
     }
 
 
