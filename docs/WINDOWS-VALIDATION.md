@@ -1,8 +1,21 @@
 # Windows validation — P6.4
 
-**Status:** first native Windows run of v2, 2026-08-07. Covers P6.4 items 1–4
-(bootstrap, serve, bempp solve, launcher and the parent-path-with-spaces case).
-Item 5 — upgrade-over-v1 and rollback E2E — was not reached; see §5.
+**Status:** first native Windows run of v2, 2026-08-07.
+
+Against P6.4's five items, and deliberately not claiming more than was done:
+
+| P6.4 item | State |
+|---|---|
+| 1. Bootstrap and serve | **done** |
+| 2. gmsh worker thread | **done** — meshed on the worker for every solve here, no Windows-specific failure |
+| 3. bempp solve *through the qualification runner* | **partial** — a real bempp solve completed from the UI (check 6), but it was the numba assembly path and it was not run through the qualification runner |
+| 4. Installer, and the parent-path-with-spaces case | **partial** — the spaces case is done and a *launcher* exists; the installer does not |
+| 5. Upgrade-over-v1 and rollback E2E | **not started** |
+
+Note on item 3: the plan calls this "the bempp/OpenCL solve path". On Windows
+there is no OpenCL path to exercise — v2 pins the numba assembly backend
+(§2.2) — so either the plan's wording needs revising or an OpenCL variant needs
+building before that item can be closed as written.
 
 Everything below was measured on the machine described in §1. Where a check
 could not be completed, it says so and why, rather than being narrowed until it
@@ -144,6 +157,13 @@ Neither assertion was weakened. The first now serialises with `json.dumps`; the
 second makes the directory genuinely unwritable with a deny ACE on Windows and
 keeps `chmod` on POSIX, so both platforms still exercise the real failure path.
 
+The deny ACE names the **SID of the process token**, read from `whoami /user`,
+not `getpass.getuser()`. That function reads the environment, which under a
+service, container or sandboxed runner can name a different account than the
+token actually running the test — review found exactly that divergence in a
+sandbox here. Denying the wrong account would leave the directory writable and
+fail the test for a reason unrelated to the migration.
+
 Other suites:
 
 ```
@@ -231,9 +251,18 @@ a 2 kHz ceiling this is roughly λ/3.4 — **fast, not acoustically converged.**
 This check proves the Windows solve path works; it is not a physics result and
 should not be used as one.
 
-**The `bempp_status()` probe has no gap.** It reported available, and the solve
-then completed. It did not report available and die inside numba, which is the
-failure this task warned about.
+**The `bempp_status()` probe told the truth here** — it reported available and
+the solve then completed, rather than reporting available and dying inside
+numba, which is the failure v1 suffered.
+
+That is one machine's result, not proof the probe is gap-free, and it is worth
+being precise about what it actually checks. `_assembly_backend_status()`
+imports `numba`; `_load_api()` imports `hornlab_bempp_bem`. Measured here, that
+wrapper does **not** import `bempp_cl` at module scope — after importing it,
+no `bempp_cl` module is in `sys.modules` — so the probe never touches the
+assembler that does the work. A broken `bempp_cl`, an ABI mismatch, or a first
+JIT failure would still get past capability detection. Closing that would take
+a minimal assembly smoke test in the probe; it is not done.
 
 ### 7. AUTO engine resolution — pass
 
@@ -372,6 +401,13 @@ Two Windows-specific details were measured, not guessed:
   landing on disk as `…}\r\n`. The lock file now reads back byte-for-byte on
   every platform.
 
+`InstanceLock` also gained a reentrant `threading.RLock` around `acquire`,
+`update_port` and `release`. The single descriptor's file position is now moved
+by locking and unlocking as well as by every metadata rewrite, so two threads
+could interleave a seek with another's truncate and leave malformed metadata.
+No caller does this today — `serve.py` holds one lock on one thread — but the
+extra seeks are mine, so the hazard is mine to close.
+
 ### 4.1a `_pid_is_running()` was a process killer on Windows
 
 Not required to make anything start, fixed because leaving it would be a
@@ -388,6 +424,13 @@ someone would wire into stale-lock handling next. It now branches to
 `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` + `GetExitCodeProcess` on
 Windows, treating `ERROR_ACCESS_DENIED` as "alive but not ours to open".
 
+Those three Win32 calls carry explicit `argtypes`/`restype`. Without them ctypes
+assumes a C `int` return, but a `HANDLE` is pointer-sized: on 64-bit Windows the
+handle would be truncated, `GetExitCodeProcess` would fail, the function would
+answer "running" for a dead process, and `CloseHandle` would leak the real
+handle while closing a bogus value. `test_pid_liveness_probe_answers_without_killing`
+now pins both halves — the answer and the survival of the process asked about.
+
 ### 4.2 `requirements-lock.txt` and `scripts/bootstrap.py` — the uvloop blocker
 
 The lock now carries the marker that was always implied:
@@ -399,8 +442,13 @@ uvloop==0.22.1; sys_platform != "win32"
 and `_locked_versions()` parses the marker while `_validate()`'s in-environment
 probe evaluates it with `packaging.markers.Marker`. Marker evaluation has to
 happen inside the environment under test because the interpreter running the
-bootstrap has no third-party packages. `packaging` is itself in the lock, so it
-is always available where the probe runs.
+bootstrap has no third-party packages.
+
+`packaging` is therefore a real bootstrap dependency and is now named in
+`requirements-runtime.txt`. Appearing in `requirements-lock.txt` would not have
+been enough: the lock is passed with `-c`, and a constraint only bounds a
+version, it does not install anything. It arrived transitively via matplotlib
+and pytest, which is a dependency of theirs to change, not a promise to us.
 
 `gen_requirements.py` only generates `requirements-pins.txt`, so editing the
 lock cannot trip the CI drift gate. `pins.json` and the pinned SHAs are
@@ -430,12 +478,36 @@ copy-to-`%TEMP%` staging. `%~dp0` is genuinely the repository here, which is
 why `cd /d "%REPO_DIR%"` is safe. A v2 *installer* that self-updates would need
 v1's `install-and-update.bat` dance, and that is P6.2, not this change.
 
+Four further Windows-specific defects were found by review after the first
+draft, each reproduced before being fixed:
+
+- **Delayed expansion corrupted valid paths.** `setlocal EnableDelayedExpansion`
+  makes cmd rescan every expanded value for `!` and `^`, so a repository under
+  a folder containing `!` lost those characters, `cd /d` failed, and the
+  launcher reported it was in the *caller's* directory. Verified against eight
+  path shapes: `bang! dir` failed before, all eight pass now. Delayed expansion
+  is simply off — nothing here needed it, because `if defined` is evaluated at
+  execution time and the one interpolated value is read on a later line.
+- **The Store-alias probe re-parsed its argument.** `echo %~1| find …` turns an
+  interpreter path containing `&` into two commands; reproduced as
+  `C:\tools\py&thing\python.exe` echoing `C:\tools\py` and then trying to run
+  `thing\python.exe`. It is now a case-insensitive substring replacement, which
+  never treats the candidate as command text and needs no subprocess.
+- **`if exist "path\"` calls a file a directory.** Confirmed on this build: the
+  idiom returns true for `python.exe`. The directory rejection for `WG2_PYTHON`
+  now reads the attribute letters via `%~a1` instead, which distinguishes file,
+  directory and missing correctly.
+- **The wrong repair was suggested for an overridden interpreter.** When
+  `WG2_PYTHON` pins an environment that cannot import FastAPI, telling the user
+  to bootstrap `.venv` fixes something the launcher will not use. It now says to
+  unset the override or install into that interpreter.
+
 It also pauses only when double-clicked, using v1's `CMDCMDLINE` test. That test
 inherits v1's blind spot, observed here: it matches the script's own filename,
-so an explicit `cmd /c "…\launch-wg2.bat"` looks like a double-click and does
-pause on the failure path. It exits immediately when stdin is not interactive,
-which is the CI case, so this was left as v1 has it rather than diverging from
-the reference implementation. Worth knowing before scripting the launcher.
+so an explicit `cmd /c "…\launch-wg2.bat"` looks like a double-click and pauses
+on the failure path. Rather than diverge from the reference implementation's
+heuristic, scripted callers get an explicit opt-out: **set `WG2_NO_PAUSE=1`**
+and the launcher never pauses.
 
 ### 4.5 `.gitattributes` — batch files check out CRLF
 
