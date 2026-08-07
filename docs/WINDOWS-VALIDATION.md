@@ -420,8 +420,21 @@ copy-to-`%TEMP%` staging. `%~dp0` is genuinely the repository here, which is
 why `cd /d "%REPO_DIR%"` is safe. A v2 *installer* that self-updates would need
 v1's `install-and-update.bat` dance, and that is P6.2, not this change.
 
-It also pauses only when double-clicked, using v1's `CMDCMDLINE` test, so
-scripted runs are not blocked.
+It also pauses only when double-clicked, using v1's `CMDCMDLINE` test. That test
+inherits v1's blind spot, observed here: it matches the script's own filename,
+so an explicit `cmd /c "…\launch-wg2.bat"` looks like a double-click and does
+pause on the failure path. It exits immediately when stdin is not interactive,
+which is the CI case, so this was left as v1 has it rather than diverging from
+the reference implementation. Worth knowing before scripting the launcher.
+
+### 4.5 `.gitattributes` — batch files check out CRLF
+
+`launch-wg2.bat` is stored with LF and would otherwise take its line endings
+from the cloning user's `core.autocrlf`, so a clone with it disabled hands
+cmd.exe an LF-only batch file. That mostly works and then does not, around
+labels and `goto`. The attribute is scoped to `*.bat`, so nothing else in the
+tree is renormalised. Verified: a fresh checkout produces 197 CRLF endings and
+the launcher runs correctly from it.
 
 ### 4.4 Test fixes
 
