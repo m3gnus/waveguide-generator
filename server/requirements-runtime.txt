@@ -10,6 +10,11 @@ numpy==2.4.6
 # must not rest on matplotlib and pytest happening to require it.
 packaging==26.3
 pillow==12.2.0
+# The bempp solve path assembles through OpenCL, which is hornlab-bempp-bem's
+# own default and what it calls its production backend. pyopencl imports without
+# a runtime present, so a host with no ICD reports the engine unavailable rather
+# than failing at solve time.
+pyopencl==2026.1.2
 pydantic==2.13.4
 python-multipart==0.0.32
 scipy==1.17.1

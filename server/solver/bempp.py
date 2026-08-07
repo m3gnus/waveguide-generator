@@ -100,27 +100,110 @@ def _missing_windows_runtime_dlls() -> list[str]:
     return missing
 
 
-def _assembly_backend_status() -> tuple[bool, str]:
-    """Can an assembly backend actually run, or does it only import?
+PREFERRED_ASSEMBLY_BACKEND = "opencl"
+FALLBACK_ASSEMBLY_BACKEND = "numba"
+
+_OPENCL_GUIDANCE = (
+    "Install an OpenCL runtime and start again. A CPU runtime is enough: on "
+    "Windows the Intel CPU Runtime for OpenCL registers an ICD under "
+    "HKLM\\SOFTWARE\\Khronos\\OpenCL\\Vendors; on Linux install pocl or your "
+    "vendor's ICD; on macOS the system OpenCL framework already provides one."
+)
+
+
+def _describe(exc: BaseException) -> str:
+    return f"{type(exc).__name__}: {str(exc).splitlines()[0][:200]}"
+
+
+def _opencl_status() -> tuple[bool, str]:
+    """Is there a device to assemble on, not merely a pyopencl import?
+
+    pyopencl imports cleanly with no ICD installed and only fails when something
+    asks for a platform, which would be the solve. Enumerating here keeps a
+    missing runtime a capability answer instead of a mid-solve crash.
+    """
+
+    try:
+        import pyopencl
+    except BaseException as exc:  # noqa: BLE001 - a broken build raises more than ImportError
+        return False, f"pyopencl cannot load ({_describe(exc)}). {_OPENCL_GUIDANCE}"
+
+    try:
+        platforms = pyopencl.get_platforms()
+    except Exception as exc:  # noqa: BLE001 - pyopencl raises its own LogicError
+        return False, f"no OpenCL platform is usable ({_describe(exc)}). {_OPENCL_GUIDANCE}"
+    for platform_entry in platforms:
+        try:
+            devices = platform_entry.get_devices()
+        except Exception:  # noqa: BLE001 - one broken ICD must not hide a working one
+            continue
+        if devices:
+            return True, (
+                f"bempp-cl assembles on OpenCL device {devices[0].name.strip()} "
+                f"({platform_entry.name.strip()})"
+            )
+    return False, f"an OpenCL runtime is present but exposes no device. {_OPENCL_GUIDANCE}"
+
+
+def numba_fallback_warning(opencl_reason: str) -> str:
+    """Say which backend is really running and exactly what to fix."""
+
+    return (
+        "Falling back to the numba assembly backend because OpenCL is unusable: "
+        f"{opencl_reason} Until that is fixed, solves assemble on numba, which is "
+        "slower, and the first solve after each start spends roughly a minute "
+        "compiling kernels during which Stop cannot take effect."
+    )
+
+
+def _assembly_backend_status() -> tuple[bool, str, str | None, str | None]:
+    """Resolve the backend a solve would really use: (usable, reason, backend, warning).
 
     ``hornlab_bempp_bem`` is a thin pure-Python wrapper, so it imports happily
     on a host where bempp-cl's engine cannot load at all. v1 hit exactly this on
     clean Windows: the installer said "Bempp ready", the preflight said READY,
     and every solve then died on ``ImportError: Numba could not be imported``
-    because numba's compiled extensions need a redistributable Windows does not
+    because the compiled extensions need a redistributable Windows does not
     install by default. Reporting importability as availability reproduces that
     bug, so probe the backend the solve path really uses.
+
+    OpenCL is the production backend and is preferred. numba remains a working
+    fallback rather than a hard failure, but it is never chosen silently: the
+    reason it was chosen, and the remedy, travel with the capability report.
+
+    This still stops short of assembling an operator: a kernel that only fails
+    once it is built would get past it.
     """
+
+    try:
+        importlib.import_module("bempp_cl.api")
+    except BaseException as exc:  # noqa: BLE001 - these raise bare ImportError chains
+        detail = _describe(exc)
+        missing = _missing_windows_runtime_dlls()
+        if missing:
+            return False, f"bempp_cl cannot load ({detail}). Missing {', '.join(missing)}. {_VCREDIST_GUIDANCE}", None, None
+        return False, f"bempp_cl cannot load, so no assembly backend can run a solve ({detail}).", None, None
+
+    opencl_usable, opencl_reason = _opencl_status()
+    if opencl_usable:
+        return True, opencl_reason, PREFERRED_ASSEMBLY_BACKEND, None
 
     try:
         importlib.import_module("numba")
     except BaseException as exc:  # noqa: BLE001 - numba raises bare ImportError chains
-        detail = f"{type(exc).__name__}: {str(exc).splitlines()[0][:200]}"
+        detail = _describe(exc)
         missing = _missing_windows_runtime_dlls()
-        if missing:
-            return False, f"numba cannot load ({detail}). Missing {', '.join(missing)}. {_VCREDIST_GUIDANCE}"
-        return False, f"numba cannot load, so no assembly backend can run a solve ({detail})."
-    return True, "hornlab-bempp-bem is importable and its numba assembly backend loads."
+        remedy = f" Missing {', '.join(missing)}. {_VCREDIST_GUIDANCE}" if missing else ""
+        return (
+            False,
+            f"no assembly backend can run a solve. OpenCL: {opencl_reason} numba also "
+            f"failed ({detail}).{remedy}",
+            None,
+            None,
+        )
+
+    warning = numba_fallback_warning(opencl_reason)
+    return True, warning, FALLBACK_ASSEMBLY_BACKEND, warning
 
 
 def bempp_status() -> dict[str, Any]:
@@ -132,13 +215,15 @@ def bempp_status() -> dict[str, Any]:
             "reason": "hornlab-bempp-bem is not importable (optional CPU fallback not installed).",
             "version": _version(),
             "assembly_backend": None,
+            "warning": None,
         }
-    usable, reason = _assembly_backend_status()
+    usable, reason, backend, warning = _assembly_backend_status()
     return {
         "available": usable,
         "reason": reason,
         "version": _version(),
-        "assembly_backend": "numba" if usable else None,
+        "assembly_backend": backend,
+        "warning": warning,
     }
 
 
@@ -178,9 +263,16 @@ def solve_bempp_from_msh_text(
     status = bempp_status()
     if not status["available"]:
         raise BemppUnavailable(status["reason"])
+    backend = status.get("assembly_backend") or PREFERRED_ASSEMBLY_BACKEND
     started = time.time()
+    if status.get("warning"):
+        # The user asked for a solve, not for a lecture, but silently assembling
+        # on the slow backend is how someone spends a week wondering why.
+        logger.warning("%s", status["warning"])
+        if stage_callback:
+            stage_callback("setup", 0.0, status["warning"])
     if stage_callback:
-        stage_callback("setup", 0.0, "Configuring BEMPP BEM solve")
+        stage_callback("setup", 0.0, f"Configuring BEMPP BEM solve ({backend})")
 
     def progress(index: int, total: int, frequency_hz: float) -> None:
         if cancellation_callback:
@@ -216,7 +308,7 @@ def solve_bempp_from_msh_text(
             progress_callback=progress,
             mesh_scale=1.0,
             native_symmetry_plane=native_symmetry_plane(context),
-            assembly_backend="numba",
+            assembly_backend=backend,
             opencl_device="cpu",
             precision="single",
         )
@@ -260,9 +352,13 @@ def solve_bempp_from_msh_text(
         "solver_mode": "full_3d",
         "engine": "hornlab-bempp-bem",
         "phase_time_convention": "exp(+ikr)",
-        "assembly_backend": "numba",
-        "assemblyBackend": "numba",
-        "device_interface": {"selected": "bempp-cl-numba", "bempp-cl-numba": status},
+        "assembly_backend": backend,
+        "assemblyBackend": backend,
+        "assembly_backend_warning": status.get("warning"),
+        "device_interface": {
+            "selected": f"bempp-cl-{backend}",
+            f"bempp-cl-{backend}": status,
+        },
         "mesh_validation": {"mode": context.mesh_validation_mode, "backend": "hornlab-bempp-bem"},
         "verbose": context.verbose,
         "performance": {
@@ -273,7 +369,7 @@ def solve_bempp_from_msh_text(
             "native_symmetry_plane": getattr(config, "native_symmetry_plane", None),
             "formulation": json_safe_native_value(getattr(config, "formulation", formulation)),
             "complex_k_shift": float(getattr(config, "complex_k_shift", DEFAULT_COMPLEX_K_SHIFT)),
-            "assembly_backend": "numba",
+            "assembly_backend": backend,
             "opencl_device": getattr(config, "opencl_device", "cpu"),
             "precision": getattr(config, "precision", "single"),
             "solver_log": json_safe_native_value(response_solver_log(getattr(result, "solver_log", []))),
