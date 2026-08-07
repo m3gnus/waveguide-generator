@@ -249,6 +249,13 @@ def migrate(
     store = JobStore.for_data_dir(paths.root)
     if not dry_run:
         store.initialize()
+        # The store keeps its connections open now, and it runs in WAL mode.
+        # Both matter here: an open handle stops rollback unlinking or
+        # replacing the file on Windows, and a checkpoint is what guarantees
+        # the single .db file this tool copies is not missing commits that are
+        # still only in the -wal sidecar.
+        store.checkpoint()
+        store.close()
 
     existing_ids: set[str] = set()
     if target_db.is_file():
@@ -381,17 +388,40 @@ def rollback(backup_dir: Path, data_dir: Path | None) -> Path | None:
     if (paths.db / "simulations.db").is_file() or any(paths.workspace.iterdir()):
         replaced = take_backup(paths, _timestamp(), prefix="pre-rollback")
     saved_db = backup_dir / "simulations.db"
+    live_db = paths.db / "simulations.db"
+    # v2 runs the job database in WAL mode, so committed data can live in a
+    # -wal sidecar rather than in the .db file. Replacing or removing the .db
+    # while its sidecars survive is not merely incomplete, it is dangerous:
+    # SQLite would recover that leftover WAL -- containing the state we are
+    # rolling *back* -- on top of the restored database. The backup itself is
+    # taken through sqlite3's backup API, which already folds the WAL in, so
+    # there is nothing to preserve here.
+    _discard_wal_sidecars(live_db)
     if saved_db.is_file():
-        shutil.copy2(saved_db, paths.db / "simulations.db")
-    elif (paths.db / "simulations.db").is_file():
+        shutil.copy2(saved_db, live_db)
+    elif live_db.is_file():
         # An empty pre-migration state is still a state worth restoring to.
-        (paths.db / "simulations.db").unlink()
+        live_db.unlink()
     saved_workspace = backup_dir / "workspace"
     if saved_workspace.is_dir():
         if paths.workspace.is_dir():
             shutil.rmtree(paths.workspace)
         shutil.copytree(saved_workspace, paths.workspace)
     return replaced
+
+
+def _discard_wal_sidecars(database: Path) -> None:
+    """Remove a database's -wal and -shm companions, if any."""
+
+    for suffix in ("-wal", "-shm"):
+        sidecar = database.with_name(database.name + suffix)
+        try:
+            sidecar.unlink(missing_ok=True)
+        except OSError as exc:
+            raise MigrationError(
+                f"Could not remove {sidecar}: {exc}. Close any running Waveguide "
+                "Generator v2 instance and try again."
+            ) from exc
 
 
 def _print_report(report: Report) -> None:
