@@ -9,7 +9,6 @@ import struct
 import tempfile
 from typing import Any, Mapping
 
-import meshio
 import numpy as np
 
 from server.design.schema import DesignConfig, Expr
@@ -262,24 +261,34 @@ def binary_stl(
     header = model_name.encode("utf-8")[:79]
     output[: len(header)] = header
     struct.pack_into("<I", output, 80, len(triangles))
-    offset = 84
-    for triangle in triangles:
-        v0, v2, v1 = transformed[triangle]
-        normal = np.cross(v1 - v0, v2 - v0)
-        magnitude = float(np.linalg.norm(normal))
-        if magnitude > 0:
-            normal /= magnitude
-        struct.pack_into(
-            "<12fH",
-            output,
-            offset,
-            *(float(value) for value in normal),
-            *(float(value) for value in v0),
-            *(float(value) for value in v1),
-            *(float(value) for value in v2),
-            0,
+    if len(triangles):
+        # Built as one array rather than a struct.pack_into per triangle with an
+        # np.cross and an np.linalg.norm on 3-vectors inside the loop. A real
+        # export is tens of thousands of triangles, and the per-call NumPy
+        # dispatch dominated. The winding swap is preserved exactly: the loop
+        # unpacked `v0, v2, v1`, so column 1 of the triangle is the *third*
+        # vertex written and column 2 is the second.
+        corners = transformed[triangles]
+        v0 = corners[:, 0]
+        v1 = corners[:, 2]
+        v2 = corners[:, 1]
+        normals = np.cross(v1 - v0, v2 - v0)
+        magnitudes = np.sqrt(np.einsum("ij,ij->i", normals, normals))
+        # Exactly the loop's rule: normalise only where the magnitude is
+        # positive, and leave a zero-area facet's normal as the raw zero vector.
+        np.divide(normals, magnitudes[:, None], out=normals, where=magnitudes[:, None] > 0)
+        facets = np.empty(
+            len(triangles),
+            dtype=np.dtype(
+                [("n", "<f4", 3), ("v0", "<f4", 3), ("v1", "<f4", 3), ("v2", "<f4", 3), ("attr", "<u2")]
+            ),
         )
-        offset += 50
+        facets["n"] = normals
+        facets["v0"] = v0
+        facets["v1"] = v1
+        facets["v2"] = v2
+        facets["attr"] = 0
+        output[84:] = facets.tobytes()
     return bytes(output)
 
 
@@ -292,6 +301,11 @@ def _build_stl_mesh_sync(design_dump: dict[str, Any]) -> dict[str, list[Any]]:
         raise RuntimeError(
             "hornlab-waveguide-mesher is unavailable; install the pinned server requirements"
         ) from exc
+    # meshio is imported here rather than at module scope: it pulls its own CLI
+    # entry point and rich with it, which was 145 ms on every server start for
+    # a parser that only runs when somebody exports geometry.
+    import meshio
+
     design = DesignConfig.model_validate(design_dump)
     config = _solver_mesher_config(design)
     config.setdefault("mesh", {}).update(

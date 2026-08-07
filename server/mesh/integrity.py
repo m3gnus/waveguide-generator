@@ -7,13 +7,27 @@ see ``server/solver/metal_solver.py:232-252`` and
 
 from __future__ import annotations
 
-from collections import Counter, defaultdict
 from typing import Any
 
 import numpy as np
 
 
 SYMMETRY_PLANE_TOLERANCE_M = 1.0e-9
+
+
+def _first_occurrences(rows: np.ndarray) -> np.ndarray:
+    """Mask marking, for each row, whether it is the first of its value.
+
+    The equivalent of walking the array once and asking whether a set has seen
+    this row before, which is what the per-triangle loop this replaced did.
+    """
+
+    if not len(rows):
+        return np.zeros(0, dtype=bool)
+    _values, first = np.unique(rows, axis=0, return_index=True)
+    mask = np.zeros(len(rows), dtype=bool)
+    mask[first] = True
+    return mask
 
 
 def mesh_integrity_report(
@@ -68,53 +82,91 @@ def mesh_integrity_report(
             "off_plane_open_edges_sample": [],
         }
 
-    edge_counts: Counter[tuple[int, int]] = Counter()
-    edge_directions: dict[tuple[int, int], list[int]] = defaultdict(list)
-    degenerate = 0
-    invalid = 0
-    duplicate = 0
-    seen_index_faces: set[tuple[int, int, int]] = set()
-    seen_geometric_faces: set[tuple[tuple[float, float, float], ...]] = set()
-    for face in faces:
-        a, b, c = (int(face[0]), int(face[1]), int(face[2]))
-        if min(a, b, c) < 0 or max(a, b, c) >= len(points):
-            invalid += 1
-            continue
-        if len({a, b, c}) < 3:
-            degenerate += 1
-            continue
-        index_key = tuple(sorted((a, b, c)))
-        geometric_key = tuple(
-            sorted(tuple(float(value) for value in points[index]) for index in (a, b, c))
-        )
-        if index_key in seen_index_faces or geometric_key in seen_geometric_faces:
-            duplicate += 1
-        seen_index_faces.add(index_key)
-        seen_geometric_faces.add(geometric_key)
-        cross = np.cross(points[b] - points[a], points[c] - points[a])
-        if not np.all(np.isfinite(cross)) or float(np.linalg.norm(cross)) <= 1.0e-15:
-            degenerate += 1
-        for first, second in ((a, b), (b, c), (c, a)):
-            edge = (min(first, second), max(first, second))
-            edge_counts[edge] += 1
-            edge_directions[edge].append(1 if first < second else -1)
+    # Vectorised, because this used to be a Python loop with an np.cross and an
+    # np.linalg.norm on a 3-vector *inside* it -- roughly 20-40 us per triangle,
+    # so 0.4-0.8 s at the 18,000-triangle warning threshold, and it runs on the
+    # single gmsh worker thread that every other mesh operation queues behind.
+    # Every count below is defined exactly as the loop defined it, including the
+    # order the loop applied its rules in: an out-of-range face is counted and
+    # skipped entirely, a repeated-index face is degenerate and skipped, and the
+    # remaining faces contribute duplicates, zero-area degeneracy, and edges.
+    indices = np.asarray(faces, dtype=np.int64)
+    in_range = np.all((indices >= 0) & (indices < len(points)), axis=1)
+    invalid = int(np.count_nonzero(~in_range))
+    addressable = indices[in_range]
 
-    open_edges = sorted(edge for edge, count in edge_counts.items() if count == 1)
-    off_plane_open_edges = [
-        edge
-        for edge in open_edges
-        if not any(
-            abs(points[edge[0], axis]) <= SYMMETRY_PLANE_TOLERANCE_M
-            and abs(points[edge[1], axis]) <= SYMMETRY_PLANE_TOLERANCE_M
-            for axis in symmetry_plane_axes
-        )
-    ]
-    nonmanifold = sum(1 for count in edge_counts.values() if count > 2)
-    inconsistent = sum(
-        1
-        for directions in edge_directions.values()
-        if len(directions) == 2 and directions[0] == directions[1]
+    repeated_index = (
+        (addressable[:, 0] == addressable[:, 1])
+        | (addressable[:, 1] == addressable[:, 2])
+        | (addressable[:, 0] == addressable[:, 2])
     )
+    degenerate = int(np.count_nonzero(repeated_index))
+    usable = addressable[~repeated_index]
+
+    duplicate = 0
+    if len(usable):
+        # A face is a duplicate if either key has been seen before it, so it is
+        # a duplicate unless it is the first occurrence of *both* keys.
+        first_by_index = _first_occurrences(np.sort(usable, axis=1))
+
+        corners = points[usable]
+        # Lexicographic by (x, y, z) per triangle, matching the sorted tuple of
+        # coordinate tuples the loop built. np.lexsort takes its primary key
+        # last.
+        order = np.lexsort((corners[:, :, 2], corners[:, :, 1], corners[:, :, 0]), axis=1)
+        geometry = np.take_along_axis(corners, order[:, :, None], axis=1).reshape(len(usable), 9)
+        first_by_geometry = _first_occurrences(geometry)
+        # A tuple containing NaN never equals another, so a face with a
+        # non-finite corner was never a geometric duplicate. np.unique collapses
+        # NaNs, so restore that.
+        first_by_geometry |= ~np.isfinite(geometry).all(axis=1)
+        duplicate = int(np.count_nonzero(~(first_by_index & first_by_geometry)))
+
+        cross = np.cross(
+            corners[:, 1] - corners[:, 0],
+            corners[:, 2] - corners[:, 0],
+        )
+        finite = np.isfinite(cross).all(axis=1)
+        areas = np.zeros(len(usable), dtype=float)
+        np.sqrt(np.einsum("ij,ij->i", cross, cross, optimize=True), out=areas, where=finite)
+        degenerate += int(np.count_nonzero(~finite | (areas <= 1.0e-15)))
+
+    if len(usable):
+        directed = np.concatenate(
+            (usable[:, [0, 1]], usable[:, [1, 2]], usable[:, [2, 0]]), axis=0
+        )
+        directions = np.where(directed[:, 0] < directed[:, 1], 1, -1)
+        undirected = np.sort(directed, axis=1)
+        unique_edges, inverse, counts = np.unique(
+            undirected, axis=0, return_inverse=True, return_counts=True
+        )
+        inverse = inverse.reshape(-1)
+        open_edges = [
+            (int(edge[0]), int(edge[1])) for edge in unique_edges[counts == 1]
+        ]
+        nonmanifold = int(np.count_nonzero(counts > 2))
+        # Two faces sharing an edge must traverse it in opposite directions, so
+        # their signs sum to zero. A magnitude of two means both agreed, which
+        # is the inconsistency.
+        sums = np.bincount(inverse, weights=directions, minlength=len(unique_edges))
+        inconsistent = int(np.count_nonzero((counts == 2) & (np.abs(sums) == 2)))
+    else:
+        open_edges = []
+        nonmanifold = 0
+        inconsistent = 0
+
+    if open_edges and symmetry_plane_axes:
+        ends = np.asarray(open_edges, dtype=np.int64)
+        on_a_plane = np.zeros(len(ends), dtype=bool)
+        for axis in symmetry_plane_axes:
+            on_a_plane |= (
+                np.abs(points[ends[:, 0], axis]) <= SYMMETRY_PLANE_TOLERANCE_M
+            ) & (np.abs(points[ends[:, 1], axis]) <= SYMMETRY_PLANE_TOLERANCE_M)
+        off_plane_open_edges = [
+            edge for edge, on_plane in zip(open_edges, on_a_plane) if not on_plane
+        ]
+    else:
+        off_plane_open_edges = list(open_edges)
     topologically_closed = (
         len(faces) > 0
         and invalid == 0
@@ -123,6 +175,7 @@ def mesh_integrity_report(
         and duplicate == 0
         and not open_edges
     )
+    faces = np.asarray(faces)
     signed_volume = 0.0
     if len(faces) and invalid == 0:
         p0 = points[faces[:, 0]]
