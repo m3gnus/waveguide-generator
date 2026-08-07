@@ -138,4 +138,6 @@
   .section-body > p { grid-column: 1 / -1; }
   /* Formula fields take the full rail so long ATH expressions get the width. */
   .section-body > .parameter-entry:has(.expression-row) { grid-column: 1 / -1; }
+  /* Same for the quadrant control: it is a stack of four rows, not a field. */
+  .section-body > .parameter-entry:has(.quadrant-wrap) { grid-column: 1 / -1; }
 }

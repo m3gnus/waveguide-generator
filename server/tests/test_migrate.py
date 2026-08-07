@@ -104,6 +104,34 @@ def test_js_undefined_lines_dropped() -> None:
     assert any(item.name == "003_js_undefined_lines_dropped" for item in applied)
 
 
+def test_js_null_lines_dropped() -> None:
+    """A JSON-null parameter reaches the v1 writer as 'key = null' (``${null}``).
+
+    ``Number('null')`` is NaN just like the other two artifact tokens, so it has
+    to be dropped with them; otherwise it validates as ``Expr(raw='null')`` with
+    no value and reaches the mesher as a non-finite coordinate.
+    """
+    from server.design.migrate import apply_migrations
+
+    payload = {
+        "formula": "OSSE",
+        "a": {"raw": "null", "value": None},
+        "L": "null",
+        "coverage_mode": "null",
+        "mesh": {"angular_segments": "null", "length_segments": 40},
+        "extra_keys": {"Report.PolarData": "null"},
+    }
+    migrated, applied = apply_migrations(payload)
+    assert "a" not in migrated
+    assert "L" not in migrated
+    assert "angular_segments" not in migrated["mesh"]
+    assert migrated["mesh"]["length_segments"] == 40
+    # Only schema-numeric paths are touched: string fields and passthrough keep it.
+    assert migrated["coverage_mode"] == "null"
+    assert migrated["extra_keys"] == {"Report.PolarData": "null"}
+    assert [item.name for item in applied] == ["003_js_undefined_lines_dropped"]
+
+
 def test_js_artifacts_are_dropped_only_for_schema_numeric_paths() -> None:
     payload = {
         "formula": "OSSE",

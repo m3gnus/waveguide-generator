@@ -105,3 +105,66 @@ describe('Viewport preview errors', () => {
     expect(refreshCalls).toHaveLength(1);
   });
 });
+
+describe('Viewport geometry warnings', () => {
+  let host: HTMLDivElement;
+  let root: Root;
+  const savedError = previewSnapshot.error;
+
+  const render = (warnings: string[] | undefined, { error = null as string | null } = {}) => {
+    previewSnapshot.error = error;
+    frame.header.previewMetadata = warnings ? { warnings } : undefined;
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root.render(<Viewport />));
+  };
+
+  beforeEach(() => {
+    (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    resetDesignStore();
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+    previewSnapshot.error = savedError;
+    frame.header.previewMetadata = undefined;
+  });
+
+  // The mesher reports a guiding curve its coverage solver could not reach.
+  // The geometry still builds, so nothing else in the viewport would say that
+  // the mouth is off the guide shape and the coverage angle is pinned.
+  const UNREACHABLE =
+    'guiding curve unreachable at every probed azimuth: the coverage angle is pinned at 0.5 deg, '
+    + 'so the mouth radius is 581.3 mm instead of the requested 500.0 mm; shorten the horn (Length), '
+    + 'reduce the termination shape s, or widen the guiding curve';
+
+  it('surfaces a mesher geometry warning over a scene that still renders', () => {
+    render([UNREACHABLE]);
+    const banner = host.querySelector<HTMLElement>('.viewport-warning-banner');
+    expect(banner).not.toBeNull();
+    expect(banner?.getAttribute('role')).toBe('status');
+    expect(banner?.textContent).toContain('guiding curve unreachable');
+    expect(banner?.textContent).toContain('581.3 mm instead of the requested 500.0 mm');
+  });
+
+  it('counts the remaining warnings instead of stacking banners', () => {
+    render([UNREACHABLE, 'canonical azimuth reference clamped to 4096 samples']);
+    const banners = host.querySelectorAll('.viewport-warning-banner');
+    expect(banners).toHaveLength(1);
+    expect(banners[0]?.textContent).toContain('+1 more');
+  });
+
+  it('stays out of the way when the mesher reports nothing', () => {
+    render(undefined);
+    expect(host.querySelector('.viewport-warning-banner')).toBeNull();
+    render([]);
+    expect(host.querySelector('.viewport-warning-banner')).toBeNull();
+  });
+
+  it('drops below a preview error rather than overlapping it', () => {
+    render([UNREACHABLE], { error: 'ATH expression is unsupported' });
+    expect(host.querySelector('.viewport-warning-banner')?.className).toContain('below-error');
+  });
+});

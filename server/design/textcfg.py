@@ -254,10 +254,39 @@ def _put(payload: dict[str, Any], path: tuple[str, ...], value: Any) -> None:
     target[path[-1]] = value
 
 
+_GENERATED_DOUBLING = re.compile(r"\s*2\s*\*\s*\(")
+
+
+def _unwrap_generated_doubling(value: str) -> str | None:
+    """Undo the writer's ``2*(<raw>)`` spelling, matching parens properly.
+
+    A greedy ``2\\s*\\*\\s*\\((.*)\\)`` stops at the *last* closing paren, so a
+    hand-written ``Throat.Diameter = 2*(a)*(b)`` unwrapped to the unbalanced
+    fragment ``a)*(b``.  Only the writer's own spelling -- where the paren that
+    matches the opening one is the final character -- may be unwrapped; anything
+    else has to fall through to the general ``(<value>) / 2`` path.
+    """
+
+    opening = _GENERATED_DOUBLING.match(value)
+    if opening is None:
+        return None
+    start = opening.end()
+    depth = 1
+    for index in range(start, len(value)):
+        character = value[index]
+        if character == "(":
+            depth += 1
+        elif character == ")":
+            depth -= 1
+            if depth == 0:
+                return value[start:index] if not value[index + 1 :].strip() else None
+    return None
+
+
 def _numeric_or_expression_divide_by_two(value: str) -> Any:
-    generated = re.fullmatch(r"\s*2\s*\*\s*\((.*)\)\s*", value, flags=re.DOTALL)
+    generated = _unwrap_generated_doubling(value)
     if generated is not None:
-        return generated.group(1)
+        return generated
     try:
         number = float(value)
         return number / 2.0 if math.isfinite(number) else value

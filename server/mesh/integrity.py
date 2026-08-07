@@ -13,11 +13,15 @@ from typing import Any
 import numpy as np
 
 
+SYMMETRY_PLANE_TOLERANCE_M = 1.0e-9
+
+
 def mesh_integrity_report(
     vertices: Any,
     triangles: Any,
     *,
     expected_volume_sign: int | None = 1,
+    symmetry_plane_axes: tuple[int, ...] = (),
 ) -> dict[str, Any]:
     """Report topology and orientation of a canonical triangle mesh.
 
@@ -26,10 +30,18 @@ def mesh_integrity_report(
     pass ``expected_volume_sign=-1``. Open meshes have no translation-invariant
     volume orientation, but their shared edges must still be consistently
     directed.
+
+    ``symmetry_plane_axes`` names the coordinate axes the mesh was cut on (0
+    for the yz plane, 1 for the xz plane). Free edges lying on those planes are
+    closed by the solver's mirror and are expected; free edges anywhere else
+    are a hole the solver will happily radiate through, which a bare
+    ``open_edge_count`` cannot tell apart on a reduced domain.
     """
 
     if expected_volume_sign not in {-1, 1, None}:
         raise ValueError("expected_volume_sign must be -1, 1, or None")
+    if any(axis not in {0, 1, 2} for axis in symmetry_plane_axes):
+        raise ValueError("symmetry_plane_axes entries must be 0, 1, or 2")
 
     points = np.asarray(vertices, dtype=float)
     faces = np.asarray(triangles, dtype=np.int64)
@@ -52,6 +64,8 @@ def mesh_integrity_report(
             "signed_volume": 0.0,
             "orientation_valid": False,
             "open_edges_sample": [],
+            "off_plane_open_edge_count": 0,
+            "off_plane_open_edges_sample": [],
         }
 
     edge_counts: Counter[tuple[int, int]] = Counter()
@@ -86,6 +100,15 @@ def mesh_integrity_report(
             edge_directions[edge].append(1 if first < second else -1)
 
     open_edges = sorted(edge for edge, count in edge_counts.items() if count == 1)
+    off_plane_open_edges = [
+        edge
+        for edge in open_edges
+        if not any(
+            abs(points[edge[0], axis]) <= SYMMETRY_PLANE_TOLERANCE_M
+            and abs(points[edge[1], axis]) <= SYMMETRY_PLANE_TOLERANCE_M
+            for axis in symmetry_plane_axes
+        )
+    ]
     nonmanifold = sum(1 for count in edge_counts.values() if count > 2)
     inconsistent = sum(
         1
@@ -137,6 +160,10 @@ def mesh_integrity_report(
         "signed_volume": signed_volume,
         "orientation_valid": orientation_valid,
         "open_edges_sample": [list(edge) for edge in open_edges[:20]],
+        "off_plane_open_edge_count": len(off_plane_open_edges),
+        "off_plane_open_edges_sample": [
+            list(edge) for edge in off_plane_open_edges[:20]
+        ],
     }
 
 

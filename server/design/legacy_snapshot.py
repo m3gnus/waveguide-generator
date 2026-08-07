@@ -22,6 +22,16 @@ def _defined(params: Mapping[str, Any], key: str) -> bool:
     return key in params and params[key] is not None
 
 
+# ECMA-262 StringNumericLiteral trims WhiteSpace plus LineTerminator, a set that
+# neither contains nor is contained by the one ``str.strip()`` uses: JavaScript
+# also trims U+FEFF, and Python also trims U+001C-U+001F.  Spelling it out keeps
+# the two from disagreeing about which characters are padding.
+_JS_WHITESPACE = (
+    "\t\n\v\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006"
+    "\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
+)
+
+
 def _js_number(value: Any) -> float | None:
     """Return the useful part of JavaScript's Number coercion."""
 
@@ -37,9 +47,20 @@ def _js_number(value: Any) -> float | None:
         joined = ",".join(_js_string(item) if item is not None else "" for item in value)
         return _js_number(joined)
     if isinstance(value, str):
-        stripped = value.strip()
+        stripped = value.strip(_JS_WHITESPACE)
         if not stripped:
             return 0.0
+        # ``float`` is more permissive than ``Number``: it takes "inf", "nan",
+        # digit separators such as "1_000", and non-ASCII decimal digits, all of
+        # which JavaScript answers with NaN.  Only the exact "Infinity" spelling
+        # is a JavaScript numeric literal.
+        if not stripped.isascii() or "_" in stripped:
+            return math.nan
+        body = stripped[1:] if stripped[:1] in ("+", "-") else stripped
+        if body.lower() in ("inf", "infinity", "nan"):
+            if body != "Infinity":
+                return math.nan
+            return -math.inf if stripped[:1] == "-" else math.inf
         if stripped.lower().startswith(("0x", "0b", "0o")):
             try:
                 return float(int(stripped, 0))
@@ -58,7 +79,8 @@ def _js_string(value: Any) -> str:
     if value is _UNDEFINED:
         return "undefined"
     if value is None:
-        return "undefined"
+        # ``${null}`` is "null"; only a missing property spells "undefined".
+        return "null"
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, (list, tuple)):
@@ -128,6 +150,35 @@ def _js_or(value: Any, fallback: Any) -> Any:
     return value if _js_truthy(value) else fallback
 
 
+def _is_throat_formula(r0: Any) -> bool:
+    """Match v1's isThroatFormula: single-line expression text, not a junk token."""
+
+    return (
+        isinstance(r0, str)
+        and "\n" not in r0
+        and r0.strip() not in ("", "NaN", "undefined")
+    )
+
+
+def _throat_diameter(r0: Any) -> Any:
+    """Double a throat radius, keeping formula text as an expression.
+
+    ``r0`` is formula-capable in v1, so a snapshot can carry raw expression text
+    such as ``"6.35*2"`` or ``"10 + 2*p"``. v1's ``${params.r0 * 2}`` flattened
+    that to ``NaN``. Both writers now emit the ``2*(<raw>)`` spelling that
+    ``textcfg`` already uses, and plain numbers keep the historical numeric path.
+    Persisted ``function anonymous(`` sources and the ``NaN``/``undefined`` tokens
+    stay on the NaN path so migration 003 keeps dropping them.
+    """
+
+    number = _js_number(r0)
+    if number is not None and not math.isnan(number):
+        return number * 2
+    if _is_throat_formula(r0):
+        return f"2*({r0})"
+    return math.nan
+
+
 def _line(lines: list[str], key: str, value: Any) -> None:
     lines.append(f"{key} = {_js_string(value)}")
 
@@ -194,9 +245,7 @@ def _write_osse(lines: list[str], params: Mapping[str, Any]) -> None:
     _line(lines, "Term.q", params.get("q", _UNDEFINED))
     _line(lines, "Term.s", params.get("s", _UNDEFINED))
     _line(lines, "Throat.Angle", params.get("a0", _UNDEFINED))
-    r0 = _js_number(params.get("r0", _UNDEFINED))
-    diameter = math.nan if r0 is None else r0 * 2
-    _line(lines, "Throat.Diameter", diameter)
+    _line(lines, "Throat.Diameter", _throat_diameter(params.get("r0", _UNDEFINED)))
     if not _defined(params, "throatProfile"):
         lines.append("Throat.Profile = 1")
     _line(lines, "OS.k", params.get("k", _UNDEFINED))
@@ -357,7 +406,11 @@ def _write_passthrough_blocks(lines: list[str], params: Mapping[str, Any]) -> No
         lines.append(f"{block_name} = {{")
         block_lines = block.get("_lines", _UNDEFINED)
         if _js_truthy(block_lines) and len(block_lines) > 0:
-            lines.append("\n".join(_js_string(value) for value in block_lines))
+            # ``Array.prototype.join`` spells null and undefined as "", unlike the
+            # template interpolation used for ``_items`` values just below.
+            lines.append(
+                "\n".join("" if value is None else _js_string(value) for value in block_lines)
+            )
         block_items = block.get("_items", _UNDEFINED)
         if _js_truthy(block_items):
             if not isinstance(block_items, Mapping):

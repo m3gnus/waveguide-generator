@@ -34,6 +34,13 @@ export interface FrameHeader {
     vertexCapLimited?: boolean;
     surfaces?: Record<string, unknown>;
   };
+  /**
+   * The mesher's own preview metadata, forwarded verbatim by the server.
+   * `warnings` carries non-fatal geometry diagnoses — a guiding curve the
+   * coverage solver cannot reach, a clamped sampling budget — that the scene
+   * cannot show on its own because the geometry still renders.
+   */
+  previewMetadata?: { warnings?: string[] };
   surfaces?: FrameSurface[];
   sections: Array<{
     name: string;

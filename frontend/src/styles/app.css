@@ -195,14 +195,27 @@ kbd { padding: 1.5px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 
 .segments { display: flex; gap: 2px; padding: 2px; border: 1px solid var(--hair-soft); border-radius: var(--r3); background: var(--seg-bg); }
 .segments button { padding: 2px 7px; border-radius: 3px; background: transparent; color: var(--fg2); font-size: 10.5px; text-transform: capitalize; }
 .segments button.on { background: var(--seg-on); box-shadow: var(--seg-on-sh); color: var(--fg); }
-.quadrant-wrap { display: flex; align-items: center; gap: 11px; padding: 3px 0 5px; }
-.quadrants { position: relative; display: grid; grid-template: repeat(2, 20px) / repeat(2, 20px); gap: 2px; }
+/* A column, not a row: this control carries a select, an auto-resolution
+   readout, the tile grid and a note, and laying those out side by side pushed
+   ~505px of content through a ~230px rail — which scrolled the whole rail
+   sideways and took every other parameter row's alignment with it. */
+.quadrant-wrap { display: flex; flex-direction: column; gap: 7px; padding: 3px 0 5px; }
+.quadrant-wrap > .select-row, .quadrant-wrap > .resolved-mode, .quadrant-wrap > .section-note { margin: 0; }
+.quadrant-title { color: var(--fg1); font-size: 11.5px; }
+/* The domain names are the whole point of this select and none of them fit the
+   fixed 132px every other select in the rail takes, so the label goes above it
+   and the select gets the full width — which also matches .quadrant-title. */
+.quadrant-wrap > .select-row { flex-direction: column; align-items: stretch; gap: 4px; }
+.quadrant-wrap > .select-row label { flex: none; }
+.quadrant-wrap > .select-row select { width: 100%; min-width: 0; }
+.quadrant-picker { display: flex; align-items: center; gap: 11px; }
+.quadrants { position: relative; flex: none; display: grid; grid-template: repeat(2, 20px) / repeat(2, 20px); gap: 2px; }
 .quadrants::before, .quadrants::after { content: ""; position: absolute; z-index: 0; background: var(--ov5); }
 .quadrants::before { top: 50%; right: -4px; left: -4px; height: 1px; }
 .quadrants::after { top: -4px; bottom: -4px; left: 50%; width: 1px; }
 .quadrants button { z-index: 1; border: 1px solid var(--hair-hi); border-radius: 2px; background: var(--ov1); color: var(--fg3); font: 8.5px var(--mono); }
 .quadrants button.on { border-color: rgba(var(--acc-rgb), .65); background: rgba(var(--acc-rgb), .18); color: var(--acc); }
-.quadrant-meta { display: flex; flex-direction: column; color: var(--fg2); font-size: 10.5px; }
+.quadrant-meta { display: flex; flex-direction: column; min-width: 0; gap: 1px; color: var(--fg2); font-size: 10.5px; }
 .quadrant-meta b { color: var(--fg1); font-size: 11px; font-weight: 560; }
 .quadrant-meta em { color: var(--green); font: normal 9.5px var(--mono); }
 .field-error { padding: 1px 0 3px; color: var(--red); font-size: 10px; }
@@ -556,6 +569,7 @@ textarea:disabled { opacity: .48; }
 .section-body { padding: 4px 10px 12px; }
 .select-row { min-height: 30px; height: auto; margin-bottom: 2px; }
 .select-row label,
+.quadrant-title,
 .field-label { font-size: var(--type-3); }
 .select-row select,
 .static-select { height: var(--control-h-sm); font-size: var(--type-3); }

@@ -22,7 +22,7 @@ import numpy as np
 
 from server.design.schema import DesignConfig, Expr
 from server.preview.translate import design_to_mesher_config
-from server.solver.quadrants import normalise_quadrants
+from server.solver.quadrants import FULL_DOMAIN_QUADRANTS, normalise_quadrants
 
 from .cache import SolverMeshArtifactCache, SolverMeshCacheInfo
 from .gmsh_worker import run_on_gmsh_worker
@@ -101,11 +101,10 @@ def _solver_mesher_config(design: DesignConfig) -> dict[str, Any]:
         if raw_velocity not in {1.0, 2.0}:
             raise ValueError("source.velocity must be 1 (normal) or 2 (axial)")
 
-    enclosure_depth = (
+    if root.enclosure is not None:
+        # Reject a non-scalar depth here rather than letting the mesher decide
+        # what a formula-valued box is.
         _strict_scalar(root.enclosure.depth, 0.0, "enclosure.depth")
-        if root.enclosure is not None
-        else 0.0
-    )
     config = design_to_mesher_config(design)
     mesh = config.setdefault("mesh", {})
     quadrants = normalise_quadrants(
@@ -119,21 +118,31 @@ def _solver_mesher_config(design: DesignConfig) -> dict[str, Any]:
     if quadrants in {1, 12} and abs(_number(root.mesh.vertical_offset)) > 0.0:
         mesh["verticalOffset"] = 0.0
 
-    # A reduced enclosure roundover that consumes its smallest front margin can
-    # tear the symmetry-cut join.  Use the same sharp-edge fallback as v1
-    # ``mesher_adapter.py:167-187``.
-    if root.enclosure is not None and enclosure_depth > 0.0 and quadrants != 1234:
-        edge = _number(root.enclosure.edge_radius, 18.0)
-        margins = [
-            _number(root.enclosure.space_l),
-            _number(root.enclosure.space_t),
-            _number(root.enclosure.space_r),
-            _number(root.enclosure.space_b),
-        ]
-        positive = [margin for margin in margins if margin > 0.0]
-        if edge > 0.0 and positive and edge >= min(positive) - 1.0e-9:
-            config.setdefault("enclosure", {})["edge"] = 0.0
+    # No sharp-edge fallback here.  V1 flattened the enclosure roundover to zero
+    # on any reduced domain whose edge radius reached its smallest margin
+    # (``mesher_adapter.py:167-187``), because a roundover that ate its margin
+    # used to leave a sliver front baffle that tore the symmetry-cut join open.
+    # The mesher owns that clamp now (``_clamp_edge_roundover`` /
+    # ``enclosure_box_bounds``), and it clamps to a smaller roundover instead of
+    # discarding it -- so keeping the v1 rule here made a reduced solve model a
+    # sharp box while the identical full-domain solve kept a 17 mm roundover.
+    # That divergence is the bug, not the protection: the mesh the solver runs
+    # on must not depend on which domain the resolver happened to pick.  If the
+    # clamp ever regresses, ``off_plane_open_edge_count`` now reports the torn
+    # seam directly rather than being pre-empted by a blunt geometry change.
     return config
+
+
+def _symmetry_plane_axes(config: Mapping[str, Any]) -> tuple[int, ...]:
+    """Return the coordinate axes a reduced mesh was cut on (0=x, 1=y).
+
+    A reduced mesh is legitimately open along its cut planes; the solver's
+    mirror closes it. Naming those axes lets the integrity report separate
+    that from a genuine hole.
+    """
+
+    quadrants = normalise_quadrants((config.get("mesh") or {}).get("quadrants"))
+    return {1: (0, 1), 12: (1,), 14: (0,), FULL_DOMAIN_QUADRANTS: ()}[quadrants]
 
 
 def _distribution_version(name: str) -> str:
@@ -280,6 +289,7 @@ def _build_sync(
             if str(config.get("mode", "")).strip().lower() == "infinite-baffle"
             else 1
         ),
+        symmetry_plane_axes=_symmetry_plane_axes(config),
     )
     semantic_orientation = mesh_semantic_orientation_report(
         vertices,
@@ -335,6 +345,20 @@ def _build_sync(
     if not integrity["valid"]:
         warnings.append(
             "Solver mesh contains invalid, degenerate, or non-manifold triangles."
+        )
+    off_plane_open_edges = int(integrity.get("off_plane_open_edge_count", 0))
+    # Only the shell modes owe closure. A bare horn is an open sheet whose mouth
+    # rim is free by construction (Metal disables its own open-edge guard for
+    # exactly that reason), and the coupled infinite-baffle aperture has its own
+    # contract check inside the mesher.
+    if off_plane_open_edges and str(config.get("mode", "")).strip().lower() in {
+        "enclosure",
+        "freestanding",
+    }:
+        warnings.append(
+            f"Solver mesh has {off_plane_open_edges:,} free edges away from its "
+            "symmetry cut planes: the model is not closed, and sound will leak "
+            "through the gap instead of being blocked by it."
         )
 
     stats = {

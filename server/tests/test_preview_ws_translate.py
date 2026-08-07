@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 from pathlib import Path
 
 import pytest
@@ -335,3 +336,154 @@ def test_tritonia_reference_import_translates_to_mesher_config() -> None:
         "morphRate": "3",
         "morphFixed": "0.0",
     }
+
+
+def test_every_expression_capable_field_survives_translation() -> None:
+    """No formula field may be flattened on the way to the mesher.
+
+    v1 lost this at its JS-to-Python payload bridge: guiding-curve, morph and
+    circular-arc scalars were coerced with a float converter, so a formula
+    silently became the field's default and the solved mesh disagreed with the
+    viewport. v2 carries Expr end-to-end; this pins that down for the fields
+    where v1 got it wrong, including the two the frontend registry marks as
+    expression-capable but the v1 contract typed as bare floats.
+    """
+
+    expr = "7 + 3*cos(p)"
+    config = _translate(
+        {
+            "formula": "OSSE",
+            "L": expr,
+            "a": expr,
+            "rotation": expr,
+            "throat_ext_angle": expr,
+            "slot_length": expr,
+            "circ_arc_term_angle": expr,
+            "circ_arc_radius": expr,
+            "guiding_curve": {
+                "curve_type": 1,
+                "distance": expr,
+                "width": expr,
+                "aspect_ratio": expr,
+                "superellipse_n": expr,
+                "rotation": expr,
+                "sf_a": expr,
+            },
+            "morph": {
+                "target_shape": 1,
+                "target_width": expr,
+                "target_height": expr,
+                "corner_radius": expr,
+                "rate": expr,
+                "fixed_part": expr,
+            },
+        }
+    )
+
+    for key in ("gcurveDist", "gcurveWidth", "gcurveAspectRatio", "gcurveSeN", "gcurveRot", "gcurveSfA"):
+        assert config["gcurve"][key] == expr, f"{key} was flattened"
+    for key in ("morphWidth", "morphHeight", "morphCorner", "morphRate", "morphFixed"):
+        assert config["morph"][key] == expr, f"{key} was flattened"
+    for key in (
+        "L",
+        "a",
+        "rot",
+        "throatExtAngle",
+        "slotLength",
+        "circArcTermAngle",
+        "circArcRadius",
+    ):
+        assert config["profile"][key] == expr, f"{key} was flattened"
+
+
+def test_guiding_curve_expressions_reach_the_mesher_intact() -> None:
+    """End-to-end: the translated config drives the mesher's own evaluator."""
+
+    from hornlab_mesher.profile_morph import _guiding_curve_target_radius
+
+    config = _translate(
+        {
+            "formula": "OSSE",
+            "L": 400,
+            "guiding_curve": {
+                "curve_type": 1,
+                "width": "1000 - 200*cos(2*p)^2",
+                "superellipse_n": 2,
+            },
+        }
+    )
+    params = config["gcurve"]
+    radii = [
+        _guiding_curve_target_radius(math.radians(deg), params) for deg in (0, 45, 90)
+    ]
+    assert radii == pytest.approx([400.0, 500.0, 400.0], abs=1e-9)
+
+
+def _frame_header(blob: bytes) -> dict[str, object]:
+    """Pull the JSON header the frontend reads off the front of a frame."""
+
+    text = blob.decode("utf-8", "ignore")
+    start = text.index("{")
+    depth = 0
+    for index, char in enumerate(text[start:], start):
+        depth += (char == "{") - (char == "}")
+        if depth == 0:
+            return json.loads(text[start:index + 1])
+    raise AssertionError("no JSON header in frame")
+
+
+_UNREACHABLE_GUIDE = {
+    "formula": "OSSE",
+    "L": 900,
+    "a": 45,
+    "a0": 10,
+    "r0": 25.4,
+    "k": 7,
+    "s": 0.85,
+    "n": 4,
+    "q": 0.991,
+    "guiding_curve": {
+        "curve_type": 1,
+        "width": 1000,
+        "aspect_ratio": 1,
+        "superellipse_n": 2,
+        "distance": 1,
+    },
+}
+
+
+def _build_frame(design: dict[str, object]) -> dict[str, object]:
+    from server.preview.core import encode_preview_geometry
+
+    config = design_to_mesher_config(DesignConfig.model_validate(design))
+    geometry = build_preview_geometry(config, preview_options("coarse"))
+    blob = encode_preview_geometry(
+        geometry, epoch=1, seq=1, design_revision=1, lod="coarse", eval_ms=1.0
+    )
+    return _frame_header(blob)
+
+
+@pytest.mark.skipif(
+    not hasattr(
+        __import__("hornlab_mesher.preview.api", fromlist=["api"]),
+        "_guiding_curve_warnings",
+    ),
+    reason="pinned mesher predates the guiding-curve saturation guard",
+)
+def test_unreachable_guiding_curve_reaches_the_frontend_as_a_frame_warning() -> None:
+    """Server-to-frame forwarding, not just the mesher's own warnings list.
+
+    The viewport banner reads header["previewMetadata"]["warnings"]; the DOM
+    test injects that field directly, so only this test proves the server
+    actually puts it there.
+    """
+
+    header = _build_frame(_UNREACHABLE_GUIDE)
+    warnings = header["previewMetadata"]["warnings"]
+    assert any("guiding curve unreachable" in warning for warning in warnings), warnings
+    assert any("the mouth radius is" in warning for warning in warnings), warnings
+
+
+def test_a_reachable_guiding_curve_leaves_the_frame_warning_free() -> None:
+    header = _build_frame({**_UNREACHABLE_GUIDE, "L": 400})
+    assert header["previewMetadata"]["warnings"] == []

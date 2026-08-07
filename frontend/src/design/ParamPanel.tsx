@@ -372,7 +372,7 @@ function AutoSymmetryReadout({ design }: { design: DesignDocument }) {
   </div>;
 }
 
-function QuadrantControl({ design }: { design: DesignDocument }) {
+function QuadrantControl({ design, label }: { design: DesignDocument; label: string }) {
   const setQuadrants = useDesignStore((state) => state.setQuadrants);
   const symmetry = useSolveOptionsStore((state) => state.symmetry);
   const setSymmetry = useSolveOptionsStore((state) => state.setSymmetry);
@@ -384,16 +384,21 @@ function QuadrantControl({ design }: { design: DesignDocument }) {
       </select>
     </div>
     {symmetry === 'auto' && <AutoSymmetryReadout design={design} />}
-    <div className="quadrants">
-      {[2, 1, 3, 4].map((quadrant) => <button key={quadrant} className={design.quadrants.includes(quadrant) ? 'on' : ''} onClick={() => {
-        const next = design.quadrants.includes(quadrant) ? design.quadrants.filter((item) => item !== quadrant) : [...design.quadrants, quadrant];
-        if (next.length) setQuadrants(next);
-      }}>Q{quadrant}</button>)}
-    </div>
-    <div className="quadrant-meta">
-      <b>{domainName(design.mesh.quadrants)}</b>
-      <span>{design.quadrants.length} of 4 quadrants</span>
-      <em>schema mask {design.mesh.quadrants}</em>
+    <span className="quadrant-title">{label}</span>
+    {/* The tile grid and its readout are the only pair that belongs side by
+        side; everything else in this control is a full-width row. */}
+    <div className="quadrant-picker">
+      <div className="quadrants">
+        {[2, 1, 3, 4].map((quadrant) => <button key={quadrant} className={design.quadrants.includes(quadrant) ? 'on' : ''} onClick={() => {
+          const next = design.quadrants.includes(quadrant) ? design.quadrants.filter((item) => item !== quadrant) : [...design.quadrants, quadrant];
+          if (next.length) setQuadrants(next);
+        }}>Q{quadrant}</button>)}
+      </div>
+      <div className="quadrant-meta">
+        <b>{domainName(design.mesh.quadrants)}</b>
+        <span>{design.quadrants.length} of 4 quadrants</span>
+        <em>schema mask {design.mesh.quadrants}</em>
+      </div>
     </div>
     {symmetry === 'auto' && <p className="section-note">This is the design&rsquo;s own ATH <code>Mesh.Quadrants</code> field and is saved as written. Auto decides the solved domain instead.</p>}
   </div>;
@@ -489,7 +494,7 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
   }, [tab]);
 
   const renderField = (field: ParameterDefinition) => <div className="parameter-entry" data-parameter-id={field.id} data-parameter-key={field.legacyKey} key={field.id}>
-    {field.id === 'mesh.quadrants' ? <QuadrantControl design={design} /> : <FieldControl field={field} design={design} />}
+    {field.id === 'mesh.quadrants' ? <QuadrantControl design={design} label={field.label} /> : <FieldControl field={field} design={design} />}
   </div>;
 
   const renderRegistrySection = (definition: ParameterSectionDefinition) => {

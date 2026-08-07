@@ -10,6 +10,7 @@
 .wg2-viewport .viewport-empty,
 .wg2-viewport .viewport-mode-empty,
 .wg2-viewport .viewport-connection-banner,
+.wg2-viewport .viewport-warning-banner,
 .wg2-viewport .viewport-error-banner { z-index: 3; }
 .wg2-viewport .viewport-tools { pointer-events: auto; }
 .mesh-file-input { display: none; }
@@ -64,6 +65,13 @@
 .viewport-connection-banner span > i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; box-shadow: 0 0 7px rgba(var(--amber-rgb), .55); }
 .viewport-connection-banner b { overflow: hidden; color: var(--fg2); font: 500 9px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
 .viewport-connection-banner.below-error { top: 82px; }
+/* Geometry diagnoses are full sentences with numbers in them, so this one
+   wraps instead of ellipsing like the connection banner's short status text. */
+.viewport-warning-banner { position: absolute; top: 43px; left: 50%; display: flex; align-items: flex-start; gap: 11px; max-width: min(520px, calc(100% - 24px)); padding: 6px 9px; border: 1px solid rgba(var(--amber-rgb), .25); border-radius: 7px; background: var(--glass-bg); box-shadow: var(--glass-sh); color: var(--amber); font-size: 9.5px; line-height: 1.45; transform: translateX(-50%); backdrop-filter: blur(10px); }
+.viewport-warning-banner span { display: flex; align-items: flex-start; gap: 6px; }
+.viewport-warning-banner span > i { flex: none; width: 5px; height: 5px; margin-top: 4px; border-radius: 50%; background: currentColor; box-shadow: 0 0 7px rgba(var(--amber-rgb), .55); }
+.viewport-warning-banner b { flex: none; color: var(--fg2); font: 500 9px var(--mono); }
+.viewport-warning-banner.below-error { top: 82px; }
 .viewport-error-banner { position: absolute; top: 43px; left: 50%; display: flex; align-items: center; gap: 9px; width: max-content; max-width: calc(100% - 24px); padding: 6px 7px 6px 9px; border: 1px solid rgba(var(--red-rgb), .35); border-radius: 7px; background: var(--glass-bg); box-shadow: var(--glass-sh); color: var(--red); font-size: 9.5px; transform: translateX(-50%); backdrop-filter: blur(10px); }
 .viewport-error-banner span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .viewport-error-banner button { display: grid; flex: none; place-items: center; width: 20px; height: 20px; border-radius: 5px; background: transparent; color: currentColor; font-size: 15px; line-height: 1; }

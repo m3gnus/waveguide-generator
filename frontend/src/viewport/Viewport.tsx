@@ -99,6 +99,11 @@ export function Viewport() {
   const badge = previewBadge(preferences.liveUpdate, preview.connection, preview.error, preview.stale);
   const previewError = preview.error ? previewErrorMessage(preview.error, preview.errorRevision, designRevision) : null;
   const showPreviewError = previewError !== null && dismissedPreviewError !== preview.error;
+  // Geometry that builds but is not what was asked for. An unreachable guiding
+  // curve is the motivating case: the coverage solver clamps, the mouth quietly
+  // leaves the guide shape, and from the rail it looks like the parameters
+  // stopped responding. An imported mesh is not ours to diagnose.
+  const geometryWarnings = importedMesh ? [] : selected?.header.previewMetadata?.warnings ?? [];
   const behindDesign = preview.stale || preview.displayedRevision !== designRevision;
   const refresh = () => {
     setDismissedPreviewError(null);
@@ -237,6 +242,10 @@ export function Viewport() {
     {activeScene && connectionInterrupted && !importedMesh && <div className={`viewport-connection-banner${showPreviewError ? ' below-error' : ''}`} role="status">
       <span><i />{preview.connection === 'reconnecting' ? 'Reconnecting to preview engine' : 'Preview connection interrupted'}</span>
       <b>Last valid geometry retained</b>
+    </div>}
+    {activeScene && geometryWarnings.length > 0 && <div className={`viewport-warning-banner${showPreviewError ? ' below-error' : ''}`} role="status">
+      <span><i />{geometryWarnings[0]}</span>
+      {geometryWarnings.length > 1 && <b>+{geometryWarnings.length - 1} more</b>}
     </div>}
     {activeScene && hasSurfaces && !webgl && !renderFailure && <div className="viewport-empty"><b>WebGL unavailable</b><span>The geometry is valid, but this environment cannot create a WebGL2 context.</span></div>}
     {activeScene && !hasSurfaces && <div className="viewport-empty" role="status"><b>No geometry surfaces</b><span>The scene is valid but contains no renderable surfaces.</span></div>}

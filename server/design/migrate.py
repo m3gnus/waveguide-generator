@@ -275,7 +275,11 @@ def _migrate_inflection_allow(payload: Payload) -> None:
         payload["inflectionPolicy"] = "warn"
 
 
-_JS_ARTIFACT_TOKENS = frozenset({"undefined", "NaN"})
+# "null" belongs here with the other two: v1's writer interpolates a JSON-null
+# parameter as ``key = null`` (``${null}``), which ``Number()`` reads as NaN just
+# like the other two tokens.  Without it a null would validate as an opaque
+# raw expression with no value and reach the mesher as a non-finite coordinate.
+_JS_ARTIFACT_TOKENS = frozenset({"undefined", "NaN", "null"})
 
 
 def _numeric_paths_for_annotation(
@@ -531,7 +535,7 @@ MIGRATIONS: tuple[Migration, ...] = (
         applies_if=_has_js_undefined,
         transform=_migrate_js_undefined,
         note=(
-            "Dropped 'key = undefined' and 'key = NaN' assignments (v1 JS exporter "
+            "Dropped 'key = undefined', 'key = NaN', and 'key = null' assignments (v1 JS exporter "
             "artifacts in old job snapshots); absent parameters fall back to family "
             "defaults, matching v1's absent-key behavior. Found live in real corpus "
             "snapshots (e.g. 260311_simulation_2: Throat.Diameter = NaN broke mesh "

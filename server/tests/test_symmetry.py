@@ -79,12 +79,20 @@ def test_rotated_guiding_curve_resolves_full_with_geometric_reasons() -> None:
     assert "sampled horn surface misses the yz mirror" in resolution.reasons["yz"][0]
 
 
-def test_vertical_offset_kills_only_xz_plane() -> None:
+def test_vertical_offset_keeps_both_planes() -> None:
+    """A rigid +y placement cannot destroy a mirror plane.
+
+    ``_solver_mesher_config`` drops the offset for the y-cut domains, so the
+    reduced mesh is still cut on y=0 and reconstructs about y=0.  Vetoing the
+    xz plane here used to push every vertically offset design onto a half (or
+    full) domain that solves to the same answer at two (or four) times the cost.
+    """
+
     resolution = resolve_symmetry(_rosse(mesh={"vertical_offset": 2}))
-    assert resolution.quadrants == 14
-    assert resolution.xz is False
+    assert resolution.quadrants == 1
+    assert resolution.xz is True
     assert resolution.yz is True
-    assert "vertical_offset=2" in resolution.reasons["xz"][0]
+    assert resolution.reasons == {"xz": [], "yz": []}
 
 
 def test_asymmetric_enclosure_spacing_kills_matching_plane() -> None:

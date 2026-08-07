@@ -287,6 +287,249 @@ def test_inline_real_family_values_and_passthrough_order() -> None:
     assert "Mesh.Enclosure" not in text[text.index("Report = {") :]
 
 
+@pytest.mark.parametrize(
+    ("r0", "expected"),
+    [
+        (12.7, "25.4"),
+        ("12.7", "25.4"),
+        (0, "0"),
+        (12.699882, "25.399764"),
+        (None, "0"),
+        ("NaN", "NaN"),
+        ("undefined", "NaN"),
+        ("function anonymous(p\n) {\nreturn 12.7;\n}", "NaN"),
+    ],
+)
+def test_numeric_throat_radius_keeps_the_historical_doubled_literal(r0: Any, expected: str) -> None:
+    """Byte-for-byte guard on the pre-formula spelling, v1 mwgConfig.js parity."""
+
+    params = dict(INLINE_OSSE["params"], r0=r0)
+    assert f"\nThroat.Diameter = {expected}\n" in snapshot_to_ath_text(params)
+
+
+@pytest.mark.parametrize("raw", ["6.35*2", "10 + 2*p", "12.7 - 2*sin(p)^2"])
+def test_formula_throat_radius_exports_a_doubling_expression(raw: str) -> None:
+    text = snapshot_to_ath_text(dict(INLINE_OSSE["params"], r0=raw))
+    assert "Throat.Diameter = NaN" not in text
+    assert f"\nThroat.Diameter = 2*({raw})\n" in text
+
+
+def _import_r0(diameter: str) -> Any:
+    from server.design.textcfg import parse as parse_text
+
+    text = "\n".join(
+        [
+            "; Parameter config",
+            "Coverage.Angle = 45",
+            "Length = 120",
+            "Term.n = 4",
+            "Term.q = 1",
+            "Term.s = 0.6",
+            "Throat.Angle = 15.5",
+            f"Throat.Diameter = {diameter}",
+            "OS.k = 7",
+            "",
+        ]
+    )
+    r0 = parse_text(text).design.root.r0
+    assert r0 is not None
+    return r0
+
+
+@pytest.mark.parametrize(
+    ("diameter", "expected"),
+    [
+        ("2*(10 + 2*p)", "10 + 2*p"),
+        ("25.4*cos(p)", "(25.4*cos(p)) / 2"),
+        ("50 - 10*sin(p)^2", "(50 - 10*sin(p)^2) / 2"),
+    ],
+)
+def test_formula_throat_diameter_imports_as_a_halved_radius(diameter: str, expected: str) -> None:
+    assert _import_r0(diameter).raw == expected
+
+
+@pytest.mark.parametrize(
+    ("diameter", "expected"),
+    [
+        # A greedy unwrap stopped at the last ')' and produced the unbalanced
+        # fragment 'a)*(b'. These are products, not the writer's doubling spelling.
+        ("2*(a)*(b)", "(2*(a)*(b)) / 2"),
+        ("2*(p)*(1 + k)", "(2*(p)*(1 + k)) / 2"),
+        # Nested parens that really are one group still unwrap.
+        ("2*((a+b))", "(a+b)"),
+        ("2*(a*(b+c))", "a*(b+c)"),
+        # Trailing text after the matching paren disqualifies the unwrap.
+        ("2*(a) + 3", "(2*(a) + 3) / 2"),
+        # An unterminated group is not the generated spelling either.
+        ("2*(a", "(2*(a) / 2"),
+    ],
+)
+def test_hand_written_doubling_only_unwraps_when_the_parens_balance(
+    diameter: str, expected: str
+) -> None:
+    assert _import_r0(diameter).raw == expected
+
+
+def test_unbalanced_doubling_survives_a_second_export_import_lap() -> None:
+    from server.design.textcfg import parse as parse_text
+
+    halved = _import_r0("2*(a)*(b)").raw
+    assert halved == "(2*(a)*(b)) / 2"
+    text = snapshot_to_ath_text(dict(INLINE_OSSE["params"], r0=halved))
+    assert f"\nThroat.Diameter = 2*({halved})\n" in text
+    assert parse_text(text).design.root.r0.raw == halved
+
+
+@pytest.mark.parametrize("raw", ["6.35*2", "10 + 2*p"])
+def test_formula_throat_radius_survives_a_snapshot_export_import_round_trip(raw: str) -> None:
+    parsed = snapshot_to_design(dict(INLINE_OSSE["params"], r0=raw))
+    r0 = parsed.design.root.r0
+    assert r0 is not None
+    assert r0.raw == raw
+
+    # A second lap is a fixed point, so repeated save/open does not grow the text.
+    from server.design.textcfg import parse as parse_text
+    from server.design.textcfg import serialize
+
+    reparsed = parse_text(serialize(parsed.design)).design.root.r0
+    assert reparsed is not None
+    assert reparsed.raw == raw
+
+
+# Every ATH key whose value reaches the writer through a bare `${...}` template,
+# so a JSON null in the snapshot lands in the file as the literal text "null".
+# Confirmed field by field against v1 generateMWGConfigContent over the inline
+# fixtures and every row of the live v1 job database.
+_NULL_INTERPOLATED_OSSE = (
+    ("a", "Coverage.Angle"),
+    ("L", "Length"),
+    ("n", "Term.n"),
+    ("q", "Term.q"),
+    ("s", "Term.s"),
+    ("a0", "Throat.Angle"),
+    ("k", "OS.k"),
+    ("angularSegments", "Mesh.AngularSegments"),
+    ("lengthSegments", "Mesh.LengthSegments"),
+)
+_NULL_INTERPOLATED_ROSSE = (
+    ("R", "R"),
+    ("a", "a"),
+    ("a0", "a0"),
+    ("b", "b"),
+    ("k", "k"),
+    ("m", "m"),
+    ("q", "q"),
+    ("r", "r"),
+    ("r0", "r0"),
+    ("tmax", "tmax"),
+    ("angularSegments", "Mesh.AngularSegments"),
+    ("lengthSegments", "Mesh.LengthSegments"),
+)
+_NULL_INTERPOLATED_ENCLOSURE = (
+    ("encEdge", "EdgeRadius"),
+    ("encEdgeType", "EdgeType"),
+)
+
+
+@pytest.mark.parametrize(
+    ("base", "param", "key"),
+    [
+        *(("OSSE", param, key) for param, key in _NULL_INTERPOLATED_OSSE),
+        *(("R-OSSE", param, key) for param, key in _NULL_INTERPOLATED_ROSSE),
+        *(("ENCLOSURE", param, key) for param, key in _NULL_INTERPOLATED_ENCLOSURE),
+    ],
+)
+def test_json_null_is_written_as_null_not_undefined(base: str, param: str, key: str) -> None:
+    """v1 interpolates ``${null}`` as "null"; only a missing key spells "undefined"."""
+
+    fixtures = {"OSSE": INLINE_OSSE, "R-OSSE": INLINE_ROSSE, "ENCLOSURE": INLINE_ENCLOSURE}
+    params = dict(fixtures[base]["params"], **{param: None})
+    text = snapshot_to_ath_text(params)
+    assert f"\n{key} = null\n" in text
+    assert f"\n{key} = undefined\n" not in text
+
+
+@pytest.mark.parametrize("base", ["OSSE", "R-OSSE", "ENCLOSURE"])
+def test_a_missing_key_still_spells_undefined(base: str) -> None:
+    """The undefined spelling is reserved for an absent property, as in v1."""
+
+    fixtures = {"OSSE": INLINE_OSSE, "R-OSSE": INLINE_ROSSE, "ENCLOSURE": INLINE_ENCLOSURE}
+    params = {k: v for k, v in fixtures[base]["params"].items() if k != "angularSegments"}
+    assert "\nMesh.AngularSegments = undefined\n" in snapshot_to_ath_text(params)
+
+
+def test_null_passthrough_block_lines_join_as_empty_text() -> None:
+    """``Array.prototype.join`` spells null "", unlike an ``${...}`` item value."""
+
+    params = json.loads(json.dumps(INLINE_ENCLOSURE["params"]))
+    params["_blocks"]["Report"]["_lines"] = ["report row", None, "second row"]
+    params["_blocks"]["Report"]["_items"]["PolarData"] = None
+    text = snapshot_to_ath_text(params)
+    assert "\nreport row\n\nsecond row\n" in text
+    assert "\nPolarData = null\n" in text
+    assert "= undefined" not in text[text.index("Report = {") :]
+
+
+@pytest.mark.parametrize(
+    ("param", "path"),
+    [("a", ("a",)), ("L", ("L",)), ("angularSegments", ("mesh", "angular_segments"))],
+)
+def test_null_lines_are_dropped_on_load_like_undefined_and_nan(
+    param: str, path: tuple[str, ...]
+) -> None:
+    """Migration 003 has to cover "null" too, or it validates as a value-less Expr.
+
+    Without it the field survives as ``Expr(value=None, raw='null')``, which is a
+    non-finite coordinate by the time it reaches the mesher.
+    """
+
+    parsed = snapshot_to_design(dict(INLINE_OSSE["params"], **{param: None}))
+    assert "003_js_undefined_lines_dropped" in parsed.migration_names
+    field: Any = parsed.design.root
+    for name in path:
+        field = getattr(field, name)
+    assert field is None
+
+
+# Every expectation below was read off `node -e 'Number(...)'`, not guessed.
+# `float()` is the looser of the two: it takes "inf", "nan", digit separators,
+# and non-ASCII decimal digits, none of which are JavaScript numeric literals.
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("inf", "NaN"),
+        ("-inf", "NaN"),
+        ("infinity", "NaN"),
+        ("INFINITY", "NaN"),
+        ("nan", "NaN"),
+        ("NaN", "NaN"),
+        ("Infinity", "Infinity"),
+        ("+Infinity", "Infinity"),
+        ("-Infinity", "-Infinity"),
+        ("1_000", "NaN"),
+        ("١٢", "NaN"),
+        ("", "0"),
+        ("   ", "0"),
+        (" 12.5 ", "12.5"),
+        ("﻿12", "12"),
+        ("0x1F", "31"),
+        ("0X1f", "31"),
+        ("-0x10", "NaN"),
+        ("+0x10", "NaN"),
+        ("0b101", "5"),
+        ("0o17", "15"),
+        ("017", "17"),
+        ("1.", "1"),
+        (".5", "0.5"),
+        ("1e400", "Infinity"),
+    ],
+)
+def test_js_number_matches_javascript_number_coercion(text: str, expected: str) -> None:
+    from server.design.legacy_snapshot import _js_number, _js_string
+
+    assert _js_string(_js_number(text)) == expected
+
+
 def test_freeform_legacy_snapshot_requires_reentry() -> None:
     with pytest.raises(LegacySnapshotError, match="FREEFORM legacy snapshots are not supported"):
         snapshot_to_design(INLINE_FREEFORM)
