@@ -41,8 +41,52 @@ request_log = logging.getLogger("wg2.requests")
 _local_origin = local_origin
 
 
-def create_app(*, data_dir: str | Path | None = None) -> FastAPI:
-    """Assemble an app instance without creating persistent directories."""
+async def prewarm_solver() -> None:
+    """Start the solver warmup. Deliberately imported late and never awaited."""
+
+    from server.solver.warmup import start_solver_warmup
+
+    start_solver_warmup()
+
+
+class _HashedAssetStaticFiles(StaticFiles):
+    """Serve the SPA with cache lifetimes that match how Vite names files.
+
+    Everything under ``/assets/`` carries a content hash in its filename, so a
+    changed build is a changed URL and the old URL can never be stale.  Those
+    are safe to mark immutable, which stops the browser revalidating three
+    multi-hundred-kB chunks on every single page load.  ``index.html`` is the
+    one file whose name never changes and is what points at the hashed names,
+    so it must never be cached: a stale copy pins the whole app to a build
+    that may no longer be on disk.
+    """
+
+    def file_response(self, full_path, stat_result, scope, status_code=200):  # type: ignore[no-untyped-def,override]
+        response = super().file_response(full_path, stat_result, scope, status_code)
+        # Decide from the file on disk rather than from the response: a
+        # conditional request comes back as a 304 with no ``path`` attribute,
+        # and a 304 that forgot to repeat ``immutable`` would teach the browser
+        # to keep revalidating the very files this exists to stop revalidating.
+        served = str(full_path).replace("\\", "/")
+        response.headers["cache-control"] = (
+            "public, max-age=31536000, immutable"
+            if "/assets/" in served
+            else "no-cache"
+        )
+        return response
+
+
+def create_app(
+    *, data_dir: str | Path | None = None, solver_warmup: bool = False
+) -> FastAPI:
+    """Assemble an app instance without creating persistent directories.
+
+    ``solver_warmup`` compiles the BEM solver's kernels in a background thread
+    at boot; see ``server/solver/warmup.py`` for why that matters and what it
+    costs. It defaults to off so the many tests that build an app pay nothing,
+    and ``launch/serve.py`` -- the only caller serving a real user -- turns it
+    on.
+    """
 
     started = time.monotonic()
     resolved_data_dir = resolve_data_dir(data_dir)
@@ -52,11 +96,18 @@ def create_app(*, data_dir: str | Path | None = None) -> FastAPI:
     engine_registry = EngineRegistry(detector=detect_engines)
     application.state.engine_registry = engine_registry
     logging.getLogger("wg2").info("Waveguide Generator v%s application initialized", VERSION)
-    # The SPA is 1.65 MB of JavaScript and 185 kB of CSS.  Even on loopback that
+    # The SPA is 2.27 MB of JavaScript and 187 kB of CSS.  Even on loopback that
     # is worth compressing: it gzips to roughly a quarter of the bytes, and the
     # same middleware covers the multi-hundred-kB results payloads.  500 bytes
     # keeps the small JSON replies uncompressed, where framing would dominate.
-    application.add_middleware(GZipMiddleware, minimum_size=500)
+    #
+    # Level 1, not Starlette's default of 9.  Compression runs synchronously on
+    # the event loop, and measured over the real dist assets a cold page load
+    # costs 125 ms of loop CPU at level 9, 90 ms at level 6 and 36 ms at level
+    # 1 -- while level 9 produces only 0.3% fewer bytes than level 6.  Trading
+    # 0.3% of loopback bytes for 89 ms of first-paint latency is not a trade
+    # worth making.
+    application.add_middleware(GZipMiddleware, minimum_size=500, compresslevel=1)
     # One persistent owner thread services every gmsh call.  Prewarming here
     # retains the v1 off-main-thread ``interruptible=False`` invariant from
     # ``server/services/gmsh_worker.py:44-84`` and removes the first-build cliff.
@@ -67,6 +118,8 @@ def create_app(*, data_dir: str | Path | None = None) -> FastAPI:
     # Likewise the engine probe: it is the page load's slowest request, and
     # leaving it lazy made it contend with the first symmetry resolution.
     application.router.add_event_handler("startup", engine_registry.prewarm)
+    if solver_warmup:
+        application.router.add_event_handler("startup", prewarm_solver)
 
     @application.middleware("http")
     async def origin_guard(request: Request, call_next):
@@ -156,8 +209,29 @@ def create_app(*, data_dir: str | Path | None = None) -> FastAPI:
     application.router.add_event_handler("shutdown", shutdown_mesher_prewarm)
     application.router.add_event_handler("shutdown", engine_registry.shutdown_prewarm)
     application.router.add_event_handler("shutdown", shutdown_gmsh_worker)
-    application.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
+    application.mount(
+        "/", _HashedAssetStaticFiles(directory=FRONTEND_DIST, html=True), name="frontend"
+    )
     return application
 
 
-app = create_app()
+def __getattr__(name: str) -> object:
+    """Build the module-level ASGI app only if something actually asks for it.
+
+    ``app = create_app()`` used to run at import time, which meant every
+    ``import server.app`` -- including the one ``launch/serve.py`` does before
+    it builds the app it will really serve -- constructed a second FastAPI
+    instance, a second preview ThreadPoolExecutor and a second StaticFiles
+    mount, then dropped them.  Worse, it resolved the data directory at import
+    time, before ``main()`` has had the chance to honour ``--data-dir``, so the
+    orphan pointed at the default location.
+
+    The name still exists for ``uvicorn server.app:app``, which is the only
+    thing that ever wanted it.  PEP 562 makes that lazy.
+    """
+
+    if name == "app":
+        application = create_app()
+        globals()["app"] = application
+        return application
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

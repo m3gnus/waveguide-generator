@@ -89,15 +89,26 @@ def test_runtime_file_handler_rotates_during_logging(
     monkeypatch.setattr(logging_setup, "MAX_LOG_BYTES", 256)
     paths = ensure_data_layout(tmp_path)
     logger = logging_setup.setup_logging(paths)
+    # The writing handlers moved behind a QueueListener so that formatting and
+    # disk I/O leave the calling thread -- which for every request and job
+    # event is the event loop. They are still exactly one rotating file
+    # handler, they are just no longer attached to the root logger.
     file_handlers = [
         handler
-        for handler in logging.getLogger().handlers
+        for handler in logging_setup.log_sinks()
         if isinstance(handler, RotatingFileHandler)
     ]
     assert len(file_handlers) == 1
+    assert not any(
+        isinstance(handler, RotatingFileHandler)
+        for handler in logging.getLogger().handlers
+    )
     logger.warning("x" * 220)
     logger.warning("y" * 220)
-    file_handlers[0].flush()
+    # Delivery is asynchronous now, so rotation cannot be asserted until the
+    # queue has drained. Stopping the listener is the drain, and it is what the
+    # server itself does on the way out.
+    logging_setup.flush_logs()
     assert (paths.logs / "server.log.1").exists()
 
 

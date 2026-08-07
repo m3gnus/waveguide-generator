@@ -22,6 +22,7 @@ if str(REPO_ROOT) not in sys.path:
 import uvicorn
 
 from server.app import VERSION, create_app
+from server.platform.console import harden_console
 from server.platform.instance import (
     InstanceAlreadyRunning,
     InstanceLock,
@@ -117,6 +118,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Waveguide Generator v2 could not start: {exc}", file=sys.stderr)
         return 1
 
+    open_browser = not args.no_browser and os.environ.get("WG2_NO_BROWSER") != "1"
+
     lock = InstanceLock(paths.locks)
     try:
         # The process lock is authoritative and must be checked before any port
@@ -124,6 +127,19 @@ def main(argv: list[str] | None = None) -> int:
         lock.acquire(preferred_port)
     except InstanceAlreadyRunning as exc:
         print(str(exc), file=sys.stderr)
+        # Double-clicking the launcher a second time is a request to use the
+        # application, not a request for an error message. The lock metadata
+        # already names the live port, so honour the intent and show the
+        # running instance. The exit code stays 2: that is the documented
+        # contract, and the launcher distinguishes it from a real failure.
+        if open_browser and exc.info.port > 0:
+            url = f"http://{HOST}:{exc.info.port}/"
+            try:
+                webbrowser.open(url)
+            except Exception:  # noqa: BLE001 - a missing browser is not an error here
+                pass
+            else:
+                print(f"Opened the running instance at {url}", file=sys.stderr)
         flush_logs()
         return 2
     except InstanceLockError as exc:
@@ -145,12 +161,37 @@ def main(argv: list[str] | None = None) -> int:
     stop_browser = threading.Event()
     previous_handlers: dict[int, object] = {}
     try:
-        app = create_app(data_dir=paths.root)
-        config = uvicorn.Config(app, host=HOST, port=port, log_config=None)
+        app = create_app(data_dir=paths.root, solver_warmup=True)
+        config = uvicorn.Config(
+            app,
+            host=HOST,
+            port=port,
+            log_config=None,
+            # Every websocket message is deflated on the event loop unless this
+            # is off. The preview socket carries 170-335 kB geometry frames of
+            # float32 at up to 30 Hz while a control is being dragged, which is
+            # both poorly compressible and the most latency-sensitive traffic
+            # in the application -- 2-6 ms of compression per frame, spent on
+            # the one thread that also has to answer every request. On loopback
+            # the bytes were never the constraint.
+            ws_per_message_deflate=False,
+            # The application logs every request itself, with timings, in
+            # server/app.py. Uvicorn's access log duplicates that line through
+            # the same handlers, so leaving both on formatted and wrote every
+            # request twice.
+            access_log=False,
+            # Without a timeout this waits forever for connections to drain,
+            # and the SPA holds two long-lived websockets: a browser that has
+            # been suspended by the OS never answers the close frame, and quit
+            # hangs until the user kills the window.
+            timeout_graceful_shutdown=3,
+        )
         server = uvicorn.Server(config)
         previous_handlers = _install_shutdown_handlers(server)
+        # Windows-only, and a no-op anywhere else or without a console.
+        harden_console(lambda: setattr(server, "should_exit", True))
 
-        if not args.no_browser and os.environ.get("WG2_NO_BROWSER") != "1":
+        if open_browser:
             threading.Thread(
                 target=_open_browser_when_ready,
                 args=(port, stop_browser),
