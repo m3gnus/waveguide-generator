@@ -52,6 +52,19 @@ def test_osse_family_and_guiding_curve_golden() -> None:
     assert config["gcurve"] == {"gcurveType": 2.0, "gcurveWidth": 180.0, "gcurveSfM1": 4.0}
 
 
+def test_legacy_math_and_function_wrappers_are_normalized_only_for_mesher_execution() -> None:
+    wrapped = "function anonymous(p\n) {\nreturn 45 - 2*Math.cos(p)**2;\n}"
+    design = DesignConfig.model_validate(
+        {"formula": "OSSE", "a": {"value": 43, "raw": wrapped}}
+    )
+    config = design_to_mesher_config(design)
+
+    assert design.root.a is not None
+    assert design.root.a.raw == wrapped
+    assert design.root.a.text() == wrapped
+    assert config["profile"]["a"] == "45 - 2*cos(p)**2"
+
+
 def test_rosse_family_golden_excludes_other_family_keys() -> None:
     config = _translate(
         {
@@ -247,8 +260,18 @@ def test_scale_applies_once_to_v1_waveguide_lengths_but_not_enclosure() -> None:
 @pytest.mark.parametrize(
     "payload",
     [
-        {"formula": "OSSE", "enclosure": {"depth": "80*p"}},
-        {"formula": "OSSE", "mesh": {"quadrants": "1 + p"}},
+        {
+            "formula": "OSSE",
+            "enclosure": {"depth": {"value": 80, "raw": "80*p"}},
+        },
+        {
+            "formula": "OSSE",
+            "mesh": {"quadrants": {"value": 1, "raw": "1 + p"}},
+        },
+        {
+            "formula": "OSSE",
+            "source": {"shape": {"value": 2, "raw": "2 - p"}},
+        },
     ],
 )
 def test_non_scalar_structural_controls_are_rejected(payload: dict[str, object]) -> None:

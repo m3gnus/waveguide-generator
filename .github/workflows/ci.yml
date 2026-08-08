@@ -79,7 +79,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -106,4 +106,4 @@ jobs:
           pip install --no-deps -r server/requirements-pins.txt
           pip install -r server/requirements-dev.txt
       - name: Server tests
-        run: python -m pytest server/tests -q
+        run: python -m pytest server/tests scripts/tests -q

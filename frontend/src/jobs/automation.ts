@@ -4,6 +4,7 @@ import type { ExportFormat } from '../prefs/preferences';
 
 export interface AutomationDependencies {
   downloadMesh(job: JobItem): Promise<string>;
+  markMeshDownloaded(job: JobItem, filename: string): Promise<void>;
   exportCompleted(job: JobItem, formats: ExportFormat[]): Promise<{ files: string[]; failures: Array<{ format: ExportFormat; reason: string }> }>;
   markExported(job: JobItem, files: string[], formats: JobItem['auto_export_formats'], completedAt: string | null): Promise<void>;
   incrementCounter(): void;
@@ -17,13 +18,28 @@ export class JobAutomation {
 
   async process(jobs: JobItem[], preferences: Preferences, dependencies: AutomationDependencies): Promise<void> {
     const tasks: Promise<void>[] = [];
-    if (preferences.autoDownloadMesh) jobs.filter((job) => job.has_mesh_artifact).forEach((job) => {
+    if (preferences.autoDownloadMesh) jobs.filter((job) => job.has_mesh_artifact && !job.mesh_artifact_file).forEach((job) => {
       if (this.meshStarted.has(job.id)) return;
       this.meshStarted.add(job.id);
-      tasks.push(dependencies.downloadMesh(job).then(() => undefined).catch((error) => {
-        this.meshStarted.delete(job.id);
-        dependencies.reportError(`Mesh auto-download failed for ${job.id.slice(0, 6)}: ${error instanceof Error ? error.message : String(error)}`);
-      }));
+      tasks.push((async () => {
+        let filename: string;
+        try {
+          filename = await dependencies.downloadMesh(job);
+        } catch (error) {
+          // Nothing reached the browser, so a later job update may safely retry.
+          this.meshStarted.delete(job.id);
+          dependencies.reportError(`Mesh auto-download failed for ${job.id.slice(0, 6)}: ${error instanceof Error ? error.message : String(error)}`);
+          return;
+        }
+        try {
+          await dependencies.markMeshDownloaded(job, filename);
+        } catch (error) {
+          // The download already happened. Keep the session guard so a failed
+          // metadata write cannot duplicate it; an unmarked job retries after
+          // an app restart, when this in-memory guard intentionally resets.
+          dependencies.reportError(`Could not record mesh auto-download for ${job.id.slice(0, 6)}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      })());
     });
     if (preferences.autoExportOnComplete && preferences.exportFormats.length) jobs.filter((job) => job.status === 'complete' && job.has_results && !job.auto_export_completed_at).forEach((job) => {
       if (this.exportStarted.has(job.id)) return;
@@ -44,9 +60,11 @@ export class JobAutomation {
         await dependencies.markExported(job, result.files, formatStatus, allSelectedComplete ? attemptedAt : null);
         if (result.files.length) dependencies.incrementCounter();
         if (result.failures.length) dependencies.reportError(`Auto-export for ${job.id.slice(0, 6)} completed with ${result.failures.length} failure${result.failures.length === 1 ? '' : 's'}: ${result.failures.map(({ format, reason }) => `${format} (${reason})`).join(', ')}`);
-        if (!allSelectedComplete) this.exportStarted.delete(job.id);
       }).catch((error) => {
-        this.exportStarted.delete(job.id);
+        // Whether export preparation or its metadata patch failed, retrying on
+        // the next jobs event can duplicate browser downloads. Keep one attempt
+        // per job per app session; persisted null/failed state remains eligible
+        // when a fresh JobAutomation is created after restart.
         dependencies.reportError(`Auto-export failed for ${job.id.slice(0, 6)}: ${error instanceof Error ? error.message : String(error)}`);
       }));
     });

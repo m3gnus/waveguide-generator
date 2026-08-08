@@ -8,6 +8,7 @@ import json
 import logging
 from pathlib import Path
 import sqlite3
+import threading
 from types import SimpleNamespace
 from typing import Any
 
@@ -54,6 +55,62 @@ def test_frequency_range_rejects_every_nonfinite_bound(bound: float) -> None:
         SolveOptions(frequency_range=[bound, 1000.0])
 
 
+@pytest.mark.parametrize(
+    ("simulation", "message"),
+    [
+        ({"f1": "cos(p)", "f2": 1000}, "f1 must be a scalar"),
+        (
+            {"f1": {"value": 200, "raw": "200 + cos(p)"}, "f2": 1000},
+            "f1 must be a scalar",
+        ),
+        ({"f1": 2000, "f2": 1000}, "positive and increasing"),
+        ({"num_frequencies": "cos(p)"}, "num_frequencies must be a scalar"),
+        ({"num_frequencies": 1.5}, "integer from 1 to 401"),
+        ({"num_frequencies": 402}, "integer from 1 to 401"),
+    ],
+)
+def test_solve_request_rejects_design_sweep_values_that_would_silently_default(
+    simulation: dict[str, Any], message: str
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        SolveRequest.model_validate(
+            {"design": {"formula": "OSSE", "simulation": simulation}}
+        )
+
+
+def test_solve_request_accepts_cached_parameterized_geometry_expression() -> None:
+    request = SolveRequest.model_validate(
+        {
+            "design": {
+                "formula": "OSSE",
+                "a": {"value": 45, "raw": "45 + cos(p)"},
+            }
+        }
+    )
+    assert request.design.root.a is not None
+    assert request.design.root.a.execution_text() == "45 + cos(p)"
+
+
+@pytest.mark.parametrize(
+    ("design_patch", "field"),
+    [
+        ({"source": {"shape": {"value": 2, "raw": "2 - p"}}}, "source.shape"),
+        ({"mesh": {"quadrants": {"value": 1, "raw": "1 + p"}}}, "mesh.quadrants"),
+        (
+            {"enclosure": {"depth": {"value": 80, "raw": "80 * p"}}},
+            "enclosure.depth",
+        ),
+    ],
+)
+def test_solve_request_rejects_cached_parameterized_structural_controls(
+    design_patch: dict[str, Any], field: str
+) -> None:
+    with pytest.raises(ValidationError, match=field):
+        SolveRequest.model_validate(
+            {"design": {"formula": "OSSE", **design_patch}}
+        )
+
+
 def test_metadata_normalizes_v1_export_fields() -> None:
     patch = JobMetadataPatch(
         exported_files=[" first.csv ", "first.csv", "", " second.json "],
@@ -65,6 +122,30 @@ def test_metadata_normalizes_v1_export_fields() -> None:
     assert patch.auto_export_completed_at == "2026-08-04T12:00:00Z"
     assert patch.raw_results_file == "results.json"
     assert patch.mesh_artifact_file is None
+
+
+def test_mesh_artifact_database_read_runs_off_the_event_loop(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        store = JobStore(tmp_path / "jobs.db")
+        store.initialize()
+        store.create_job(_record("mesh", "complete"))
+        store.store_mesh_artifact("mesh", "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n")
+        runtime = JobRuntime(store)
+        runtime._started = True
+        caller_thread = threading.get_ident()
+        observed_threads: list[int] = []
+        original = store.get_mesh_artifact
+
+        def observed(job_id: str) -> str | None:
+            observed_threads.append(threading.get_ident())
+            return original(job_id)
+
+        store.get_mesh_artifact = observed  # type: ignore[method-assign]
+        assert (await runtime.get_mesh_artifact("mesh")).startswith("$MeshFormat")
+        assert observed_threads and observed_threads[0] != caller_thread
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
 
 
 def test_initialize_schema_ddl_rolls_back_as_one_transaction(
@@ -151,25 +232,32 @@ def test_post_job_retention_runs_for_each_completed_work_item(
         store = JobStore(tmp_path / "jobs.db")
         store.initialize()
         store.create_job(_record("one", "queued"))
+        store.create_job(_record("expired", "complete"))
+        store.update_job("expired", completed_at="2000-01-01T00:00:00")
         runtime = JobRuntime(store)
         runtime._started = True
         runtime._queue.append("one")
+        subscriber = runtime.events.subscribe()
         calls = 0
 
         async def finish(_job_id: str, _row: Any) -> None:
             return None
 
-        original = store.prune_terminal_jobs
+        original = store.prune_terminal_jobs_with_events
 
-        def observed(**kwargs: Any) -> int:
+        def observed(**kwargs: Any) -> tuple[list[str], list[dict[str, Any]]]:
             nonlocal calls
             calls += 1
             return original(**kwargs)
 
         runtime._run_job = finish  # type: ignore[method-assign]
-        monkeypatch.setattr(store, "prune_terminal_jobs", observed)
+        monkeypatch.setattr(store, "prune_terminal_jobs_with_events", observed)
         await runtime._drain_scheduler()
         assert calls == 1
+        event = subscriber.get_nowait()
+        assert event["type"] == "deleted"
+        assert event["jobId"] == "expired"
+        assert event["payload"] == {"reason": "retention"}
 
     asyncio.run(scenario())
 

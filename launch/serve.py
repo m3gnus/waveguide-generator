@@ -34,6 +34,7 @@ from server.platform.instance import (
 from server.platform.logging_setup import flush_logs, setup_logging
 from server.platform.paths import ensure_data_layout
 from server.platform.signal_rearm import register_signal_rearm, unregister_signal_rearm
+from server.protocol.frame import DEFAULT_MAX_FRAME_BYTES
 
 
 HOST = "127.0.0.1"
@@ -198,6 +199,13 @@ def main(argv: list[str] | None = None) -> int:
             # the one thread that also has to answer every request. On loopback
             # the bytes were never the constraint.
             ws_per_message_deflate=False,
+            # Keep transport framing aligned with the limit advertised and
+            # enforced by the application protocol. The protocol receive loop
+            # continuously drains into its own one-slot latest-wins queue, so a
+            # single transport-level pending message provides backpressure
+            # without changing preview coalescing semantics.
+            ws_max_size=DEFAULT_MAX_FRAME_BYTES,
+            ws_max_queue=1,
             # The application logs every request itself, with timings, in
             # server/app.py. Uvicorn's access log duplicates that line through
             # the same handlers, so leaving both on formatted and wrote every

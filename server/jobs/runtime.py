@@ -350,15 +350,25 @@ class JobRuntime:
 
     async def get_job(self, job_id: str) -> dict[str, Any]:
         await self.start()
-        return self._serialize_job(self._require_job(job_id), detailed=True)
+
+        def load() -> dict[str, Any]:
+            return self._serialize_job(self._require_job(job_id), detailed=True)
+
+        return await asyncio.to_thread(load)
 
     async def list_jobs(
         self, *, status: str | None, limit: int, offset: int
     ) -> tuple[list[dict[str, Any]], int]:
         await self.start()
         statuses = self.parse_status_filter(status)
-        rows, total = self.store.list_jobs(statuses=statuses, limit=limit, offset=offset)
-        return [self._serialize_job(row) for row in rows], total
+
+        def load() -> tuple[list[dict[str, Any]], int]:
+            rows, total = self.store.list_jobs(
+                statuses=statuses, limit=limit, offset=offset
+            )
+            return [self._serialize_job(row) for row in rows], total
+
+        return await asyncio.to_thread(load)
 
     async def get_results(self, job_id: str) -> dict[str, Any]:
         return json.loads(await self.get_results_text(job_id))
@@ -378,7 +388,9 @@ class JobRuntime:
     async def get_mesh_artifact(self, job_id: str) -> str:
         await self.start()
         self._require_job(job_id)
-        artifact = self.store.get_mesh_artifact(job_id)
+        # Real MSH artifacts are multi-megabyte text blobs. Reading one through
+        # SQLite on the event loop stalls both WS channels for the full copy.
+        artifact = await asyncio.to_thread(self.store.get_mesh_artifact, job_id)
         if not artifact:
             raise JobResourceUnavailableError("No mesh artifact available for this job")
         return artifact
@@ -459,8 +471,16 @@ class JobRuntime:
             "jobs": [self._serialize_job(row) for row in rows],
         }
 
+    async def snapshot_async(self) -> dict[str, Any]:
+        """Build the potentially large/cold snapshot without blocking both WS loops."""
+
+        return await asyncio.to_thread(self.snapshot)
+
     def resume(self, cursor: int) -> list[dict[str, Any]] | None:
         return self.store.replay_events(cursor)
+
+    async def resume_async(self, cursor: int) -> list[dict[str, Any]] | None:
+        return await asyncio.to_thread(self.resume, cursor)
 
     def _ensure_scheduler(self) -> None:
         if self._shutting_down or not self._started or not self._queue:
@@ -490,11 +510,13 @@ class JobRuntime:
                 finally:
                     self._running.discard(job_id)
                     try:
-                        await asyncio.to_thread(
-                            self.store.prune_terminal_jobs,
+                        _removed_ids, prune_events = await asyncio.to_thread(
+                            self.store.prune_terminal_jobs_with_events,
                             retention_days=30,
                             max_terminal_jobs=1000,
                         )
+                        for event in prune_events:
+                            self.events.publish(event)
                     except Exception:
                         logger.exception("Post-job retention pruning failed")
         finally:

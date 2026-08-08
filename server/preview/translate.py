@@ -24,17 +24,16 @@ def _clean(values: Mapping[str, Any]) -> dict[str, Any]:
 def _expr(value: Expr | None) -> str | float | None:
     if value is None:
         return None
-    if value.raw is not None:
-        return value.raw
-    return value.value
+    return value.execution_text()
 
 
 def _structural_number(value: Expr | None, field: str, fallback: float = 0.0) -> float:
     if value is None:
         return fallback
-    if value.value is None:
+    number = value.constant_value()
+    if number is None:
         raise ValueError(f"{field} must be a scalar expression")
-    return float(value.value)
+    return float(number)
 
 
 def _scale_factor(value: Expr | None) -> float:
@@ -51,10 +50,12 @@ def _scaled_expr(value: Expr | None, scale: float) -> str | float | None:
     if translated is None or scale == 1.0:
         return translated
     if value is not None and value.raw is not None:
+        execution = value.execution_text()
+        assert isinstance(execution, str)
         try:
-            numeric = float(value.raw.strip())
+            numeric = float(execution.strip())
         except (OverflowError, ValueError):
-            return f"({value.raw}) * {scale:.15g}"
+            return f"({execution}) * {scale:.15g}"
         if math.isfinite(numeric):
             return numeric * scale
         raise ValueError("scaled length must be finite")
@@ -70,8 +71,9 @@ def _first_number(value: ResolutionExpr | None) -> float | None:
         return None
     if isinstance(value, tuple):
         value = value[0]
-    if value.value is not None:
-        return float(value.value)
+    number = value.constant_value()
+    if number is not None:
+        return float(number)
     for item in (value.raw or "").split(","):
         try:
             number = float(item.strip())
@@ -83,14 +85,13 @@ def _first_number(value: ResolutionExpr | None) -> float | None:
 
 
 def _source_shape(value: Expr | None) -> str | float | None:
-    if value is not None and value.value is None:
+    numeric = value.constant_value() if value is not None else None
+    if value is not None and numeric is None:
         raise ValueError("source.shape must be a scalar expression")
-    translated = _expr(value)
-    numeric = value.value if value is not None else None
     if numeric is not None and numeric.is_integer() and int(numeric) == 2:
         # V1: 2 is a flat disc. The mesher uses 0 for the same shape.
         return 0.0
-    return translated
+    return numeric
 
 
 def _profile_points(

@@ -32,7 +32,7 @@ the published checksum before extracting anything:
 or double-click install-wg2.command.
 
 If you are working on the interface itself, build it instead:
-  cd frontend && npm install && npm run build"
+  cd frontend && npm ci && npm run build"
 fi
 
 # WG2_PYTHON can explicitly select another interpreter. Otherwise the launcher

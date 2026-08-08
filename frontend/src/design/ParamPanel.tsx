@@ -533,8 +533,16 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
     {freeformChoice && <div className="family-switch-choice" role="group" aria-label="Switch to FREEFORM">
       <b>Switch to FREEFORM</b><span>Choose how to initialize the editable profiles.</span>
       <div><button onClick={() => { setFamily('FREEFORM'); setFreeformChoice(false); }}>Start blank</button><button disabled={converting} onClick={() => {
+        const sourceRevision = useDesignStore.getState().designRevision;
         setConverting(true); setConversionError(null);
-        void convertDesignToFreeform(design).then((converted) => { loadDesign(converted); setFreeformChoice(false); }).catch((error) => setConversionError(error instanceof Error ? error.message : String(error))).finally(() => setConverting(false));
+        void convertDesignToFreeform(design).then((converted) => {
+          if (useDesignStore.getState().designRevision !== sourceRevision) {
+            setConversionError('The design changed while it was being converted. Review the edits and try again.');
+            return;
+          }
+          loadDesign(converted);
+          setFreeformChoice(false);
+        }).catch((error) => setConversionError(error instanceof Error ? error.message : String(error))).finally(() => setConverting(false));
       }}>{converting ? 'Converting…' : 'Convert current design'}</button><button onClick={() => setFreeformChoice(false)}>Cancel</button></div>
       {conversionError && <div className="field-error" role="alert">{conversionError}</div>}
     </div>}

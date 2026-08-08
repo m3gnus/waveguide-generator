@@ -170,15 +170,21 @@ set "SPA_SUMMARY=Interface: left untouched (--skip-spa)."
 echo   Skipped by request. frontend\dist is whatever you built there.
 goto spa_done
 :spa_failed
-rem A checkout whose declared version was never tagged has no release to
-rem download, which is the normal state of a development clone. An interface
-rem that is already present beats a failed install.
-if not exist "frontend\dist\index.html" goto spa_fatal
+if defined FORCE goto spa_replacement_failed
+if defined SPA_ARCHIVE goto spa_replacement_failed
+if defined SPA_BASE_URL goto spa_replacement_failed
+rem Keep an offline fallback only when it was checksum-verified for this exact
+rem version. Local builds and stale releases require explicit --skip-spa.
+set "SPA_CHECK_ARGS=--check"
+if defined SPA_VERSION set SPA_CHECK_ARGS=%SPA_CHECK_ARGS% --version "%SPA_VERSION%"
+"%BOOTSTRAP_PYTHON%" "%WG_ROOT%\scripts\fetch_spa.py" %SPA_CHECK_ARGS%
+if errorlevel 1 goto spa_fatal
 echo.
 echo   WARNING: the release interface could not be installed ^(see above^), but
-echo            frontend\dist\index.html already exists, so the build you have
-echo            there is being kept.
-set "SPA_SUMMARY=Interface: kept the existing frontend\dist; no release archive was installed."
+echo            the installed interface is a checksum-verified copy of this
+echo            version, so it is being kept.
+set "SPA_SUMMARY=Interface: kept the matching checksum-verified frontend\dist."
+goto spa_done
 :spa_done
 
 echo.
@@ -398,6 +404,7 @@ git checkout --quiet "%TAG%"
 if errorlevel 1 goto tag_checkout_failed
 echo   Checked out %TAG% ^(detached HEAD; fast-forward updates are off until you
 echo   switch back to a branch^).
+set "CODE_UPDATED=1"
 exit /b 0
 :tag_needs_clean_tree
 echo ERROR: Cannot check out %TAG%: this checkout has uncommitted changes.
@@ -466,12 +473,21 @@ exit /b 0
 
 :spa_fatal
 echo.
-echo ERROR: The prebuilt interface could not be installed, and none is present.
-echo        v2 will not start without it. See the reason above.
+echo ERROR: The prebuilt interface could not be installed, and the existing
+echo        frontend\dist is not a checksum-verified copy of the requested version.
+echo        v2 will not start with a stale or unverified interface. See above.
 echo.
 echo        If you are working on the interface itself, build it locally:
 echo          cd frontend ^&^& npm ci ^&^& npm run build
 echo        then run this installer again with --skip-spa.
+exit /b 1
+
+:spa_replacement_failed
+echo.
+echo ERROR: The requested SPA replacement could not be installed.
+echo        The existing interface was left intact, but an explicit --force,
+echo        --spa-archive, or --spa-base-url request is never successful when
+echo        its download or checksum verification fails. See the reason above.
 exit /b 1
 
 :bootstrap_failed

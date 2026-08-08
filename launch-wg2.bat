@@ -188,7 +188,7 @@ echo against the published checksum before extracting anything:
 echo   scripts\install-and-update.bat
 echo.
 echo If you are working on the interface itself, build it instead:
-echo   cd frontend ^&^& npm install ^&^& npm run build
+echo   cd frontend ^&^& npm ci ^&^& npm run build
 call :pause_when_double_clicked
 exit /b 1
 

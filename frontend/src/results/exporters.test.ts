@@ -34,6 +34,26 @@ describe('result exporters', () => {
     await runExportFormat('stl', context);
     expect(fetcher.mock.calls.map(([input]) => String(input))).toEqual(['/api/design/save', '/api/export/step', '/api/export/stl']);
   });
+  it('stages both Fusion CSV responses before downloading either file', async () => {
+    const saveBlob = vi.fn();
+    const failedFetcher = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      const path = String(input);
+      if (path.endsWith('kind=slices')) return new Response('slices failed', { status: 500 });
+      return new Response(new Blob(['profiles']), { status: 200 });
+    });
+    const context = { preferences: preferencesStore.getSnapshot(), design: designForFamily('OSSE'), fetcher: failedFetcher, saveBlob };
+
+    await expect(runExportFormat('fusion_csv', context)).rejects.toThrow('500');
+    expect(saveBlob).not.toHaveBeenCalled();
+
+    const successfulFetcher = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      const kind = String(input).endsWith('kind=slices') ? 'slices' : 'profiles';
+      return new Response(new Blob([kind]), { status: 200, headers: { 'Content-Disposition': `attachment; filename="horn_1_${kind}.csv"` } });
+    });
+    const files = await runExportFormat('fusion_csv', { ...context, fetcher: successfulFetcher });
+    expect(files).toEqual(['horn_1_profiles.csv', 'horn_1_slices.csv']);
+    expect(saveBlob).toHaveBeenCalledTimes(2);
+  });
   it('sends the selected theme to the PNG renderer endpoint', async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ charts: { spl: 'data:image/png;base64,AQ==' } }), { status: 200 }));
     const context = { preferences: { ...preferencesStore.getSnapshot(), chartTheme: 'paper' }, result, fetcher, saveBlob: vi.fn() };

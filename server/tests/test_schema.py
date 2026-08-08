@@ -57,6 +57,99 @@ def test_expr_object_with_raw_only_derives_scalar_value() -> None:
     assert Expr.model_validate({"raw": "45 + cos(p)"}).value is None
 
 
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "'x' * 1000000000",
+        "[0] * 100000000",
+        "10 ** 1000000000",
+        "pow(10, 1000000000)",
+        " + ".join(["1"] * 300),
+        "(" * 1500 + "1" + ")" * 1500,
+    ],
+)
+def test_expr_rejects_resource_exhausting_source_before_adapter_execution(
+    raw: str,
+) -> None:
+    with pytest.raises(ValidationError, match="expression"):
+        Expr.model_validate(raw)
+
+
+def test_expr_rejects_parameter_dependent_exponents() -> None:
+    with pytest.raises(ValidationError, match="bounded constants"):
+        Expr.model_validate("10 ** (1000000 * p)")
+
+
+def test_expr_preserves_bounded_ath_superformula_tuple() -> None:
+    expression = Expr.model_validate("1,1,8,0.6,5,2")
+    assert expression.value is None
+    assert expression.raw == "1,1,8,0.6,5,2"
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("2^8", 256.0),
+        ("sqrt(81) + abs(-3)", 12.0),
+        ("min(9, 4, 7) + max(1, 2)", 6.0),
+        ("cos(pi)", -1.0),
+    ],
+)
+def test_expr_bounded_evaluator_preserves_numeric_ath_arithmetic(
+    raw: str, expected: float
+) -> None:
+    assert Expr.model_validate(raw).value == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("raw", ["ceil(1.2)", "floor(1.2)", "log(10)", "exp(1)"])
+def test_expr_rejects_functions_the_pinned_mesher_cannot_execute(raw: str) -> None:
+    with pytest.raises(ValidationError, match="unknown expression function"):
+        Expr.model_validate(raw)
+
+
+def test_expr_supports_mesher_atan2_and_e_constant() -> None:
+    expression = Expr.model_validate("atan2(1, 1) + e")
+    assert expression.value == pytest.approx(3.5036799919)
+
+
+def test_expr_preserves_legacy_math_source_but_normalizes_execution_text() -> None:
+    expression = Expr.model_validate({"value": 45, "raw": "45 + Math.sin(p)"})
+    assert expression.raw == "45 + Math.sin(p)"
+    assert expression.execution_text() == "45 + sin(p)"
+
+
+@pytest.mark.parametrize("raw", ["1e309", "-1e309"])
+def test_expr_rejects_nonfinite_numeric_spellings(raw: str) -> None:
+    with pytest.raises(ValidationError, match="finite"):
+        Expr.model_validate(raw)
+
+
+def test_expr_normalizes_legacy_boolean_execution_without_losing_source() -> None:
+    expression = Expr.model_validate("false")
+    assert expression.value == 0
+    assert expression.raw == "false"
+    assert expression.execution_text() == "0"
+
+
+def test_expr_rejects_conflicting_value_and_raw_representations() -> None:
+    with pytest.raises(ValidationError, match="does not match constant raw source"):
+        Expr.model_validate({"value": 1, "raw": "999"})
+
+    parameterized = Expr.model_validate({"value": 45, "raw": "45 + cos(p)"})
+    assert parameterized.value == 45
+    assert parameterized.raw == "45 + cos(p)"
+
+
+def test_parameterized_expression_cached_value_survives_schema_wire_round_trip() -> None:
+    design = DesignConfig.model_validate(
+        {"formula": "OSSE", "a": {"value": 45, "raw": "45 + cos(p)"}}
+    )
+    reopened = DesignConfig.model_validate(design.model_dump(mode="json"))
+    assert reopened.root.a is not None
+    assert reopened.root.a.value == 45
+    assert reopened.root.a.raw == "45 + cos(p)"
+
+
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), {"value": "NaN"}])
 def test_expr_rejects_non_finite_values(value: object) -> None:
     with pytest.raises(ValidationError, match="finite"):
@@ -153,6 +246,53 @@ def test_freeform_rejects_non_positive_length(length: float) -> None:
         DesignConfig.model_validate(payload)
 
 
+@pytest.mark.parametrize(
+    ("replacement", "message"),
+    [
+        (
+            {"length": {"value": 120, "raw": "120 + p"}},
+            "FREEFORM length must be scalar",
+        ),
+        (
+            {
+                "profile_h": {
+                    "points": [
+                        {"t": 0, "r": 1},
+                        {"t": {"value": 1, "raw": "1 - p"}, "r": 2},
+                    ]
+                }
+            },
+            "point t values must be scalar",
+        ),
+        (
+            {
+                "cross_sections": [
+                    {"t": 0, "shape": "ellipse"},
+                    {"t": {"value": 1, "raw": "1 - p"}, "shape": "ellipse"},
+                ]
+            },
+            "station t values must be scalar",
+        ),
+    ],
+)
+def test_freeform_rejects_cached_parameterized_structural_values(
+    replacement: dict[str, object], message: str
+) -> None:
+    payload: dict[str, object] = {
+        "formula": "FREEFORM",
+        "length": 120,
+        "profile_h": {"points": [{"t": 0, "r": 1}, {"t": 1, "r": 2}]},
+        "profile_v": {"points": [{"t": 0, "r": 1}, {"t": 1, "r": 2}]},
+        "cross_sections": [
+            {"t": 0, "shape": "ellipse"},
+            {"t": 1, "shape": "ellipse"},
+        ],
+    }
+    payload.update(replacement)
+    with pytest.raises(ValidationError, match=message):
+        DesignConfig.model_validate(payload)
+
+
 def test_freeform_length_change_preserves_interior_anchors_and_validation() -> None:
     payload = {
         "formula": "FREEFORM",
@@ -173,3 +313,14 @@ def test_v1_sim_type_convention_has_named_schema_values() -> None:
     free = DesignConfig.model_validate({"formula": "OSSE", "simulation": {"sim_type": 2}})
     assert infinite.root.simulation.sim_type == "infinite-baffle"
     assert free.root.simulation.sim_type == "freestanding"
+
+
+def test_solver_mode_is_normalized_and_rejects_unknown_backend_dependent_values() -> None:
+    design = DesignConfig.model_validate(
+        {"formula": "OSSE", "simulation": {"solver_mode": " FULL_3D "}}
+    )
+    assert design.root.simulation.solver_mode == "full_3d"
+    with pytest.raises(ValidationError, match="auto|full_3d|circsym"):
+        DesignConfig.model_validate(
+            {"formula": "OSSE", "simulation": {"solver_mode": "fastest"}}
+        )

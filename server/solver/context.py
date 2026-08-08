@@ -18,9 +18,12 @@ from .quadrants import FULL_DOMAIN_QUADRANTS, normalise_quadrants
 
 
 def _number(value: Expr | None, fallback: float) -> float:
-    if value is None or value.value is None:
+    if value is None:
         return fallback
-    return float(value.value)
+    number = value.constant_value()
+    if number is None:
+        raise ValueError("solver control must be a finite scalar expression")
+    return float(number)
 
 
 @dataclass(slots=True)

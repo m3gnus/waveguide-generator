@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
+import threading
 from typing import Any
 
 from server.jobs.events import CLOSE_UNSUPPORTED_VERSION, JobsProtocol
@@ -75,6 +76,32 @@ def test_protocol_sends_hello_then_snapshot_and_live_persisted_event(tmp_path: P
         assert transport.json[2]["epoch"] == 17
         await transport.incoming.put(None)
         await task
+
+    asyncio.run(scenario())
+
+
+def test_protocol_builds_snapshot_off_the_event_loop(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        store = JobStore(tmp_path / "jobs.db")
+        store.initialize()
+        runtime = JobRuntime(store)
+        runtime._started = True
+        caller_thread = threading.get_ident()
+        observed_threads: list[int] = []
+        original = runtime.snapshot
+
+        def observed() -> dict[str, Any]:
+            observed_threads.append(threading.get_ident())
+            return original()
+
+        runtime.snapshot = observed  # type: ignore[method-assign]
+        transport = FakeTransport()
+        protocol = JobsProtocol(runtime, epoch=18, heartbeat_seconds=1)
+        task = asyncio.create_task(protocol.run(transport))
+        await _wait_until(lambda: len(transport.json) >= 2)
+        await transport.incoming.put(None)
+        await task
+        assert observed_threads and observed_threads[0] != caller_thread
 
     asyncio.run(scenario())
 

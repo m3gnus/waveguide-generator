@@ -4,15 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from collections.abc import Mapping
 import hashlib
 import io
 import json
+import math
 import threading
 from collections import OrderedDict
 from typing import Any
 
 from fastapi import APIRouter, FastAPI, HTTPException, Query
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 DEFAULT_CHART_THEME = "hornlab"
@@ -39,7 +41,30 @@ def _theme(value: str | None) -> str:
 
 
 class ChartModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_nested_nonfinite_numbers(cls, value: Any) -> Any:
+        """Keep NaN/Infinity out of the free-form legacy chart mappings too."""
+
+        stack = [value]
+        seen: set[int] = set()
+        while stack:
+            item = stack.pop()
+            if isinstance(item, float) and not math.isfinite(item):
+                raise ValueError("chart numeric values must be finite")
+            if isinstance(item, Mapping):
+                marker = id(item)
+                if marker not in seen:
+                    seen.add(marker)
+                    stack.extend(item.values())
+            elif isinstance(item, (list, tuple)):
+                marker = id(item)
+                if marker not in seen:
+                    seen.add(marker)
+                    stack.extend(item)
+        return value
 
 
 class ChartsReferencePayload(ChartModel):

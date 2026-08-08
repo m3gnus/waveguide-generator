@@ -446,7 +446,7 @@ def _scalar_number(value: Any) -> float | None:
     """Return a finite scalar without manufacturing a fallback geometry value."""
 
     try:
-        number = Expr.model_validate(value).value
+        number = Expr.model_validate(value).constant_value()
     except (OverflowError, TypeError, ValueError):
         return None
     return number if number is not None and math.isfinite(number) else None

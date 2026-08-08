@@ -40,10 +40,20 @@ describe('solve and directivity options', () => {
 
   it('converts angular step to a sample count and never allows zero enabled planes', () => {
     expect(polarConfigFromUi({ ...useSolveOptionsStore.getState().polar, angleStart: -30, angleEnd: 90, angleStep: 10 }).angle_range).toEqual([-30, 90, 13]);
+    expect(polarConfigFromUi({ ...useSolveOptionsStore.getState().polar, angleStart: 0, angleEnd: .3, angleStep: .1 }).angle_range).toEqual([0, .3, 4]);
+    expect(polarConfigFromUi({ ...useSolveOptionsStore.getState().polar, angleStart: 0, angleEnd: 180, angleStep: 7 }).angle_range).toEqual([0, 180, 26]);
     useSolveOptionsStore.getState().toggleAxis('horizontal');
     useSolveOptionsStore.getState().toggleAxis('vertical');
     useSolveOptionsStore.getState().toggleAxis('diagonal');
     expect(useSolveOptionsStore.getState().polar.enabledAxes).toEqual(['diagonal']);
+  });
+
+  it('rejects polar settings that the server contract cannot run', () => {
+    const polar = useSolveOptionsStore.getState().polar;
+    expect(() => polarConfigFromUi({ ...polar, angleEnd: polar.angleStart })).toThrow(/end must be greater/);
+    expect(() => polarConfigFromUi({ ...polar, angleStep: 0 })).toThrow(/step must be greater/);
+    expect(() => polarConfigFromUi({ ...polar, distance: 0.05 })).toThrow(/at least 0.1/);
+    expect(() => polarConfigFromUi({ ...polar, angleStart: 0, angleEnd: 180, angleStep: 0.1 })).toThrow(/at most 721/);
   });
 });
 

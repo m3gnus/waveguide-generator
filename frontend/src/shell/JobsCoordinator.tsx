@@ -108,6 +108,7 @@ export function JobsCoordinator({ children }: { children: ReactNode }) {
   useEffect(() => {
     void automation.process(jobs, preferences, {
       downloadMesh: (job) => downloadMeshArtifact(job.id),
+      markMeshDownloaded: (job, filename) => jobsSocket.patchMetadata(job.id, { mesh_artifact_file: filename }),
       exportCompleted: async (job, formats) => runExportBundle({
         result: await fetchJobResults(job.id) as ResultPayload,
         design: hydrateJobDesign(job) ?? undefined,

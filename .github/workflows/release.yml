@@ -37,12 +37,19 @@ jobs:
         # The version reaches the UI, /health and the update checker from this
         # one file. A tag that disagrees with it ships a build that misreports
         # itself, which is worse than a failed release.
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
-          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          tag="$RELEASE_TAG"
           declared="v$(python -c 'import json; print(json.load(open("shared/version.json"))["version"])')"
           if [ "$tag" != "$declared" ]; then
             echo "Tag $tag does not match shared/version.json ($declared)." >&2
+            exit 1
+          fi
+          if ! tagged_commit="$(git rev-parse --verify "$tag^{commit}")" \
+             || [ "$(git rev-parse HEAD)" != "$tagged_commit" ]; then
+            echo "$tag is not a tag for the checked-out commit." >&2
             exit 1
           fi
           echo "version=${declared#v}" >> "$GITHUB_ENV"
@@ -60,14 +67,18 @@ jobs:
           tar -czf "$name.tar.gz" -C frontend dist
           sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
           echo "artifact=$name" >> "$GITHUB_ENV"
-          tar -tzf "$name.tar.gz" | head -5
+          # sed consumes the complete listing. With pipefail, `head` may close
+          # the pipe early and turn a successful tar into SIGPIPE exit 141.
+          tar -tzf "$name.tar.gz" | sed -n '1,5p'
 
       - name: Refuse to ship an empty bundle
         # A silently-successful build that produced no index.html would install
         # cleanly and then serve nothing.
         run: |
           set -euo pipefail
-          tar -tzf "${{ env.artifact }}.tar.gz" | grep -q "^dist/index.html$"
+          # Do not use grep -q here: it can close the pipe on the first match
+          # and make tar's otherwise-successful SIGPIPE fail the release step.
+          tar -tzf "${{ env.artifact }}.tar.gz" | grep -Fx "dist/index.html"
 
       - name: Attach to the release
         uses: softprops/action-gh-release@v2

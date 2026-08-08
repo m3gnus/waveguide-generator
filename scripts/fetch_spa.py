@@ -22,8 +22,11 @@ that is the whole claim being made for it.
 from __future__ import annotations
 
 import argparse
+from collections.abc import Iterator
+from contextlib import contextmanager
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -32,6 +35,11 @@ import tarfile
 import tempfile
 import urllib.error
 import urllib.request
+
+if sys.platform == "win32":
+    import msvcrt
+else:
+    import fcntl
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -42,6 +50,7 @@ DIST = FRONTEND / "dist"
 STAMP_NAME = ".wg2-spa.json"
 STAGING_NAME = ".wg2-spa-staging"
 PREVIOUS_NAME = ".wg2-dist-previous"
+LOCK_NAME = ".wg2-spa-install.lock"
 MEMBER_ROOT = "dist"
 DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 
@@ -53,6 +62,91 @@ BUILD_LOCALLY = (
 
 class SpaError(RuntimeError):
     """A failure whose message is already written for the person installing."""
+
+
+def _lock_descriptor(descriptor: int) -> None:
+    """Acquire the lock, subject to the platform runtime's contention window.
+
+    POSIX flock waits for the owner. Windows' standard-library byte lock retries
+    for roughly ten seconds and then reports contention to the caller.
+    """
+
+    if sys.platform == "win32":
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        msvcrt.locking(descriptor, msvcrt.LK_LOCK, 1)
+    else:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+
+
+def _unlock_descriptor(descriptor: int) -> None:
+    if sys.platform == "win32":
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+    else:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+
+
+def _repository_lock_path(root: Path) -> Path:
+    """Keep the persistent lock in Git metadata when this is a checkout."""
+
+    marker = root / ".git"
+    if marker.is_dir():
+        return marker / LOCK_NAME.lstrip(".")
+    if marker.is_file():
+        try:
+            label, value = marker.read_text(encoding="utf-8").strip().split(":", 1)
+            if label.strip().lower() == "gitdir":
+                git_dir = Path(value.strip())
+                if not git_dir.is_absolute():
+                    git_dir = marker.parent / git_dir
+                return git_dir.resolve() / LOCK_NAME.lstrip(".")
+        except (OSError, ValueError):
+            pass
+    # Source archives have no Git metadata. A persistent dotfile is harmless
+    # there and, unlike unlinking a lock after use, cannot create an inode race.
+    return root / "frontend" / LOCK_NAME
+
+
+@contextmanager
+def _spa_install_lock(root: Path) -> Iterator[None]:
+    """Serialize every recovery/check/install operation for one checkout.
+
+    This deliberately does not use the application's instance lock: installing
+    a release asset and owning the running server are different lifetimes.  A
+    persistent, repository-local lock file also works before ``.venv`` exists.
+    """
+
+    frontend = root / "frontend"
+    frontend.mkdir(parents=True, exist_ok=True)
+    path = _repository_lock_path(root)
+    try:
+        descriptor = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    except OSError as exc:
+        raise SpaError(f"Could not open the SPA installer lock {path}: {exc}") from exc
+
+    locked = False
+    try:
+        # Windows byte-range locks require the byte being locked to exist.
+        if os.fstat(descriptor).st_size == 0:
+            os.write(descriptor, b"\0")
+        try:
+            _lock_descriptor(descriptor)
+            locked = True
+        except OSError as exc:
+            raise SpaError(
+                f"Could not acquire the SPA installer lock {path}: {exc}. "
+                "Another installer may still be running; wait for it to finish and try again."
+            ) from exc
+        yield
+    finally:
+        if locked:
+            try:
+                _unlock_descriptor(descriptor)
+            except OSError:
+                # Closing the descriptor releases the OS lock even if an
+                # explicit unlock was interrupted or otherwise failed.
+                pass
+        os.close(descriptor)
 
 
 def declared_version(root: Path = REPO_ROOT) -> str:
@@ -208,7 +302,16 @@ def _remove(path: Path) -> None:
         path.unlink()
 
 
-def install_archive(
+def _recover_interrupted_swap(frontend: Path) -> None:
+    """Restore the old SPA when a process died between the two atomic renames."""
+
+    dist = frontend / "dist"
+    previous = frontend / PREVIOUS_NAME
+    if not dist.exists() and previous.is_dir():
+        previous.rename(dist)
+
+
+def _install_archive_locked(
     archive: Path,
     *,
     version: str,
@@ -216,7 +319,7 @@ def install_archive(
     source: str,
     root: Path = REPO_ROOT,
 ) -> Path:
-    """Extract a *verified* archive over ``frontend/dist``.
+    """Extract a *verified* archive while the checkout's SPA lock is held.
 
     The live directory is only swapped once a complete, self-consistent tree
     exists beside it, so an interrupted install leaves the previous interface
@@ -229,6 +332,7 @@ def install_archive(
     previous = frontend / PREVIOUS_NAME
 
     frontend.mkdir(parents=True, exist_ok=True)
+    _recover_interrupted_swap(frontend)
     _remove(staging)
     _remove(previous)
     staging.mkdir()
@@ -276,21 +380,65 @@ def install_archive(
     return dist
 
 
-def installed(root: Path = REPO_ROOT) -> dict[str, object] | None:
-    """What the currently installed SPA says about itself, if it says anything.
+def install_archive(
+    archive: Path,
+    *,
+    version: str,
+    digest: str,
+    source: str,
+    root: Path = REPO_ROOT,
+) -> Path:
+    """Serialize and atomically install a verified archive over ``frontend/dist``."""
+
+    with _spa_install_lock(root):
+        return _install_archive_locked(
+            archive,
+            version=version,
+            digest=digest,
+            source=source,
+            root=root,
+        )
+
+
+def _installed_locked(root: Path) -> dict[str, object] | None:
+    """Read/recover the installed SPA while the checkout's lock is held.
 
     A locally built ``frontend/dist`` carries no stamp; that is reported as
     "present but unstamped" rather than as absent, because replacing a
     developer's build without saying so would be worse than re-downloading.
     """
 
-    dist = root / "frontend" / "dist"
+    frontend = root / "frontend"
+    _recover_interrupted_swap(frontend)
+    dist = frontend / "dist"
     if not (dist / "index.html").is_file():
         return None
     try:
-        return json.loads((dist / STAMP_NAME).read_text(encoding="utf-8"))
+        stamp = json.loads((dist / STAMP_NAME).read_text(encoding="utf-8"))
+        return stamp if isinstance(stamp, dict) else {}
     except (OSError, ValueError):
         return {}
+
+
+def installed(root: Path = REPO_ROOT) -> dict[str, object] | None:
+    """Serialize recovery and report what the currently installed SPA declares."""
+
+    with _spa_install_lock(root):
+        return _installed_locked(root)
+
+
+def _has_verified_stamp(current: dict[str, object] | None, version: str) -> bool:
+    """Whether ``current`` records a checksum-verified install of ``version``.
+
+    Older and developer-built distributions can have no stamp, or a stamp that
+    records only a version.  Neither is evidence that the release archive was
+    verified, so installers must not use them as an offline fallback.
+    """
+
+    if current is None or current.get("version") != version:
+        return False
+    digest = current.get("sha256")
+    return isinstance(digest, str) and DIGEST_RE.fullmatch(digest.lower()) is not None
 
 
 def _resolve_local_checksum(archive: Path, given: str | None) -> str:
@@ -312,45 +460,63 @@ def run(args: argparse.Namespace) -> int:
     root = args.root.resolve()
     version = args.version or declared_version(root)
     name = asset_name(version)
-    current = installed(root)
+    # Hold one lock from recovery/current-version inspection through the final
+    # swap. Concurrent installers therefore do not both decide to update, and
+    # neither can remove the other's shared staging or rollback directory.
+    with _spa_install_lock(root):
+        current = _installed_locked(root)
 
-    if args.check:
-        if current is None:
-            print("The built interface is missing.", file=sys.stderr)
+        if args.check:
+            if current is None:
+                print("The built interface is missing.", file=sys.stderr)
+                return 1
+            if _has_verified_stamp(current, version):
+                print(f"SPA {version} is installed.")
+                return 0
+            stamped = current.get("version")
+            if stamped != version:
+                label = stamped or "an unrecorded build"
+                print(f"The installed interface is {label}, not {version}.", file=sys.stderr)
+            else:
+                print(
+                    f"The installed interface says it is {version}, but its stamp has "
+                    "no valid verified-archive checksum.",
+                    file=sys.stderr,
+                )
             return 1
-        if current.get("version") == version:
-            print(f"SPA {version} is installed.")
+
+        if not args.force and _has_verified_stamp(current, version):
+            print(f"SPA {version} is already installed; nothing to download.")
             return 0
-        stamped = current.get("version") or "an unrecorded build"
-        print(f"The installed interface is {stamped}, not {version}.", file=sys.stderr)
-        return 1
 
-    if not args.force and current is not None and current.get("version") == version:
-        print(f"SPA {version} is already installed; nothing to download.")
-        return 0
+        with tempfile.TemporaryDirectory(prefix="wg2-spa-") as scratch:
+            if args.archive:
+                archive = args.archive.resolve()
+                if not archive.is_file():
+                    raise SpaError(f"No such archive: {archive}")
+                digest = _resolve_local_checksum(archive, args.sha256)
+                source = str(archive)
+            else:
+                base = (args.base_url or release_base_url(args.repo, version)).rstrip("/")
+                source = f"{base}/{name}"
+                print(f"Downloading {name}")
+                # Checksum first: it is a few dozen bytes, and fetching it before the
+                # archive means a release that was published without one fails before
+                # anything large is transferred.
+                checksum_text = _read_url(f"{source}.sha256", args.timeout).decode("utf-8", "replace")
+                digest = expected_digest(checksum_text, name)
+                archive = Path(scratch) / name
+                archive.write_bytes(_read_url(source, args.timeout))
 
-    with tempfile.TemporaryDirectory(prefix="wg2-spa-") as scratch:
-        if args.archive:
-            archive = args.archive.resolve()
-            if not archive.is_file():
-                raise SpaError(f"No such archive: {archive}")
-            digest = _resolve_local_checksum(archive, args.sha256)
-            source = str(archive)
-        else:
-            base = (args.base_url or release_base_url(args.repo, version)).rstrip("/")
-            source = f"{base}/{name}"
-            print(f"Downloading {name}")
-            # Checksum first: it is a few dozen bytes, and fetching it before the
-            # archive means a release that was published without one fails before
-            # anything large is transferred.
-            checksum_text = _read_url(f"{source}.sha256", args.timeout).decode("utf-8", "replace")
-            digest = expected_digest(checksum_text, name)
-            archive = Path(scratch) / name
-            archive.write_bytes(_read_url(source, args.timeout))
-
-        verify_archive(archive, digest)
-        print(f"Checksum verified: {digest}")
-        install_archive(archive, version=version, digest=digest, source=source, root=root)
+            verify_archive(archive, digest)
+            print(f"Checksum verified: {digest}")
+            _install_archive_locked(
+                archive,
+                version=version,
+                digest=digest,
+                source=source,
+                root=root,
+            )
 
     print(f"Installed the prebuilt interface at {root / 'frontend' / 'dist'}")
     return 0

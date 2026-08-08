@@ -381,14 +381,24 @@ bempp_status.cache_clear = _cached_successful_bempp_status.cache_clear  # type: 
 
 def _closed_mode(context: SolverContext) -> bool:
     root = context.design.root
+    enclosure_value = (
+        root.enclosure.depth.constant_value()
+        if root.enclosure is not None and root.enclosure.depth is not None
+        else None
+    )
     enclosure = (
-        float(root.enclosure.depth.value)
-        if root.enclosure is not None and root.enclosure.depth is not None and root.enclosure.depth.value is not None
+        float(enclosure_value)
+        if enclosure_value is not None
         else 0.0
     )
+    wall_value = (
+        root.mesh.wall_thickness.constant_value()
+        if root.mesh.wall_thickness is not None
+        else None
+    )
     wall = (
-        float(root.mesh.wall_thickness.value)
-        if root.mesh.wall_thickness is not None and root.mesh.wall_thickness.value is not None
+        float(wall_value)
+        if wall_value is not None
         else 0.0
     )
     return enclosure > 0.0 or wall > 0.0

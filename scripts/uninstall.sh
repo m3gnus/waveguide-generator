@@ -47,14 +47,16 @@ done
 # answer depends on the platform and on WG2_DATA_DIR, and a second copy of that
 # logic would drift from server/platform/paths.py the first time either moved.
 resolve_data_dir() {
-    local interpreter
+    local interpreter candidate
     for interpreter in "$ROOT/.venv/bin/python" python3.13 python3; do
         if [[ -x "$interpreter" ]] || command -v "$interpreter" >/dev/null 2>&1; then
-            if "$interpreter" -c \
+            if IFS= read -r candidate < <("$interpreter" -c \
                 'import sys; sys.path.insert(0, sys.argv[1]); from server.platform.paths import resolve_data_dir; print(resolve_data_dir())' \
-                "$ROOT" 2>/dev/null
+                "$ROOT" 2>/dev/null)
             then
-                return 0
+                "$interpreter" "$ROOT/scripts/validate_uninstall_target.py" \
+                    --repo-root "$ROOT" "$candidate"
+                return $?
             fi
         fi
     done
@@ -73,6 +75,10 @@ if [[ "$REMOVE_DATA" -eq 1 ]]; then
     if DATA_DIR="$(resolve_data_dir)" && [[ -n "$DATA_DIR" ]]; then
         [[ -d "$DATA_DIR" ]] && TARGETS+=("$DATA_DIR")
     else
+        resolve_result=$?
+        if [[ "$resolve_result" -eq 2 ]]; then
+            exit 1
+        fi
         say "WARNING: could not ask v2 where its data directory is -- no usable Python."
         say "         Remove it by hand. Unless WG2_DATA_DIR overrides it, it is:"
         say "           macOS:  ~/Library/Application Support/WaveguideGenerator2"

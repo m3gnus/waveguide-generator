@@ -231,6 +231,59 @@ class SolveRequest(JobModel):
         return normalized or None
 
     @model_validator(mode="after")
+    def validate_design_sweep_controls(self) -> "SolveRequest":
+        """Reject design sweep values that would otherwise silently default."""
+
+        root = self.design.root
+        simulation = root.simulation
+
+        def scalar(expr: Any, default: float, field: str) -> float:
+            if expr is None:
+                return default
+            number = expr.constant_value()
+            if number is None:
+                raise ValueError(f"design.simulation.{field} must be a scalar number")
+            return float(number)
+
+        if (
+            self.options.frequencies_hz is None
+            and self.options.frequency_range is None
+        ):
+            start = scalar(simulation.f1, 200.0, "f1")
+            end = scalar(simulation.f2, 20_000.0, "f2")
+            if start <= 0.0 or end <= start:
+                raise ValueError(
+                    "design simulation frequency bounds must be positive and increasing"
+                )
+
+        if self.options.frequencies_hz is None and self.options.num_frequencies is None:
+            count = scalar(simulation.num_frequencies, 24.0, "num_frequencies")
+            if not count.is_integer() or not 1 <= int(count) <= 401:
+                raise ValueError(
+                    "design.simulation.num_frequencies must be an integer from 1 to 401"
+                )
+
+        structural_controls = [
+            (root.scale, "design.scale"),
+            (root.mesh.quadrants, "design.mesh.quadrants"),
+            (root.mesh.wall_thickness, "design.mesh.wall_thickness"),
+            (root.mesh.max_edge, "design.mesh.max_edge"),
+            (root.source.shape, "design.source.shape"),
+            (
+                root.enclosure.depth if root.enclosure is not None else None,
+                "design.enclosure.depth",
+            ),
+        ]
+        if root.source.velocity_convention in {None, "legacy"}:
+            structural_controls.append(
+                (root.source.velocity, "design.source.velocity")
+            )
+        for expression, field in structural_controls:
+            if expression is not None and expression.constant_value() is None:
+                raise ValueError(f"{field} must be a scalar number")
+        return self
+
+    @model_validator(mode="after")
     def validate_snapshot_matches_design(self) -> "SolveRequest":
         if self.design_snapshot is None:
             # Backward-compatible API callers still become atomic records: the

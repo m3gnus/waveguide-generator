@@ -663,8 +663,10 @@ def _serialize_freeform(lines: list[str], config: FreeformConfig) -> None:
         )
         rows = []
         for point in profile.points[1:-1]:
-            assert point.t.value is not None and length.value is not None
-            z_mm = round(point.t.value * length.value, 12)
+            point_t = point.t.constant_value()
+            length_value = length.constant_value()
+            assert point_t is not None and length_value is not None
+            z_mm = round(point_t * length_value, 12)
             values = [_text(Expr(value=z_mm)), _text(point.r)]
             if point.angle_deg is not None:
                 values.append(_text(point.angle_deg))

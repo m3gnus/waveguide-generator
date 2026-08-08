@@ -162,6 +162,22 @@ def test_results_text_is_the_stored_bytes_and_still_parses(tmp_path: Path) -> No
         store.close()
 
 
+def test_results_store_rejects_non_json_nan_instead_of_serving_invalid_json(
+    tmp_path: Path,
+) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    store.create_job(_job("nonfinite"))
+    try:
+        with pytest.raises(ValueError, match="JSON compliant"):
+            store.store_results(
+                "nonfinite", {"frequencies": [100.0], "spl": [float("nan")]}
+            )
+        assert store.get_results_text("nonfinite") is None
+    finally:
+        store.close()
+
+
 def test_the_redundant_event_index_is_dropped_on_existing_installs(tmp_path: Path) -> None:
     """job_events.id is a rowid alias, so indexing it duplicated the table.
 
@@ -398,6 +414,29 @@ def test_event_ids_are_persisted_monotonic_and_resume_or_snapshot(tmp_path: Path
     reopened = JobStore(tmp_path / "jobs.db", event_retention=3)
     reopened.initialize()
     assert reopened.current_event_cursor() == 5
+
+
+def test_live_retention_prune_persists_a_deleted_event_for_every_removed_job(
+    tmp_path: Path,
+) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    for job_id in ("oldest", "newest"):
+        store.create_job(_job(job_id), initial_event=("queued", {}))
+        store.update_job(
+            job_id, status="complete", completed_at="2000-01-01T00:00:00"
+        )
+
+    removed, events = store.prune_terminal_jobs_with_events(
+        retention_days=30, max_terminal_jobs=1000
+    )
+
+    assert set(removed) == {"oldest", "newest"}
+    assert [event["jobId"] for event in events] == removed
+    assert [event["type"] for event in events] == ["deleted", "deleted"]
+    assert all(event["payload"] == {"reason": "retention"} for event in events)
+    assert store.list_jobs()[1] == 0
+    assert [event["jobId"] for event in store.replay_events(2)] == removed
 
 
 def test_snapshot_cursor_and_rows_are_from_one_store_view(tmp_path: Path) -> None:

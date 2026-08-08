@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import ipaddress
 from typing import Any, Mapping
-from urllib.parse import urlsplit
 
 from fastapi import APIRouter, FastAPI, WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 
+from server.platform.origin import local_origin
 from server.preview.core import (
     CLOSE_ORIGIN_REJECTED,
     PreviewComputeService,
@@ -17,17 +16,7 @@ from server.preview.core import (
 )
 
 
-def _local_origin(origin: str) -> bool:
-    try:
-        parsed = urlsplit(origin)
-        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-            return False
-        if parsed.username is not None or parsed.password is not None:
-            return False
-        host = parsed.hostname.rstrip(".").lower()
-        return host == "localhost" or ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return False
+_local_origin = local_origin
 
 
 class _FastAPITransport:
