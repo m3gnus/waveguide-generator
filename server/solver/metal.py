@@ -27,18 +27,25 @@ from .result_mapping import (
     build_solver_response,
     json_safe_native_value,
     native_symmetry_plane,
+    native_observation_frame,
     observation_config,
     response_solver_log,
 )
 
 
 try:
-    from hornlab_metal_bem import ObservationConfig, native_config, solve as native_solve
+    from hornlab_metal_bem import (
+        ObservationConfig,
+        ObservationFrame,
+        native_config,
+        solve as native_solve,
+    )
     from hornlab_metal_bem import solve_frequencies as native_solve_frequencies
     from hornlab_metal_bem.backends import discover_metal_backend
     from hornlab_metal_bem.metal.native import discover_native_runtime
 except (ImportError, OSError):  # clean capability absence or native loader failure
     ObservationConfig = None  # type: ignore[assignment]
+    ObservationFrame = None  # type: ignore[assignment]
     native_config = None  # type: ignore[assignment]
     native_solve = None  # type: ignore[assignment]
     native_solve_frequencies = None  # type: ignore[assignment]
@@ -156,13 +163,19 @@ def metal_status() -> dict[str, Any]:
 metal_status.cache_clear = _cached_successful_metal_status.cache_clear  # type: ignore[attr-defined]
 
 
-def _observation(context: SolverContext, msh_text: str) -> Any:
+def _observation(
+    context: SolverContext,
+    msh_text: str,
+    *,
+    aperture_tag: int | None = None,
+) -> Any:
     return observation_config(
         context,
         ObservationConfig,
         MetalUnavailable,
         "hornlab-metal-bem",
         msh_text=msh_text,
+        aperture_tag=aperture_tag,
     )
 
 
@@ -228,6 +241,12 @@ def solve_metal_from_msh_text(
             )
 
     aperture_tag = require_full_3d_aperture_tag(context, mesh_metadata)
+    frame_override = native_observation_frame(
+        context,
+        msh_text,
+        ObservationFrame,
+        aperture_tag=aperture_tag,
+    )
     kwargs: dict[str, Any] = {
         "freq_min_hz": context.frequency_range[0],
         "freq_max_hz": context.frequency_range[1],
@@ -235,13 +254,19 @@ def solve_metal_from_msh_text(
         "freq_spacing": context.frequency_spacing,
         "formulation": DEFAULT_BEM_FORMULATION,
         "complex_k_shift": DEFAULT_COMPLEX_K_SHIFT,
-        "observation": _observation(context, msh_text),
+        "observation": _observation(
+            context,
+            msh_text,
+            aperture_tag=aperture_tag,
+        ),
         "progress_callback": progress,
         "mesh_scale": 1.0,
         "native_symmetry_plane": native_symmetry_plane(context),
         "native_check_open_edges": _native_check_open_edges(context),
         "mesh_validate": context.mesh_validation_mode != "off",
     }
+    if frame_override is not None:
+        kwargs["frame_override"] = frame_override
     if aperture_tag is not None:
         kwargs.update({"aperture_tag": aperture_tag, "mesh_validate": True})
     if context.source_motion != "normal":
@@ -258,6 +283,8 @@ def solve_metal_from_msh_text(
             raise MetalUnavailable("Installed hornlab-metal-bem does not support the required BEM formulation option.") from exc
         if "complex_k_shift" in feature:
             raise MetalUnavailable("Installed hornlab-metal-bem does not support the required complex-k shift option.") from exc
+        if "frame_override" in feature:
+            raise MetalUnavailable("Installed hornlab-metal-bem does not support the required explicit observation frame.") from exc
         raise
 
     path: Path | None = None

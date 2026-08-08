@@ -11,6 +11,8 @@ import {
 } from '../api/designIo';
 import { useDesignStore } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
+import { jobsSocket } from '../api/jobsSocket';
+import { nextFileJobNaming, preferencesStore } from '../prefs/preferences';
 import { Icon } from '../shell/icons';
 import { filenameStem } from '../viewport/presentation';
 
@@ -91,6 +93,10 @@ export function DesignFileMenu() {
       const opened = await openDesignText(text);
       replaceDesign(hydrateDesignDocument(opened.design));
       setFilename(`${filenameStem(file.name)}.cfg`);
+      preferencesStore.update(nextFileJobNaming(
+        file.name,
+        jobsSocket.getSnapshot().jobs.map((job) => job.label),
+      ));
       markSaved(useDesignStore.getState().designRevision);
       setMessage(reportText(opened));
     });

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { JobItem } from '../api/jobsSocket';
-import { applyJobPreferences, CHART_TYPES, EXPORT_FORMATS, exportBaseName, jobBaseName, loadPreferences, MAP_REFERENCES, nextJobNaming, nextVersionFor, parseJobName, preferencesStore, readPreferences, STORAGE_VERSION } from './preferences';
+import { applyJobPreferences, CHART_TYPES, EXPORT_FORMATS, exportBaseName, jobBaseName, loadPreferences, MAP_REFERENCES, nextFileJobNaming, nextJobNaming, nextVersionFor, parseJobName, preferencesStore, readPreferences, STORAGE_VERSION } from './preferences';
 
 function job(id: string, rating: number | null, created: string, completed = created): JobItem {
   return { id, rating, created_at: created, completed_at: completed, label: id, status: 'complete', progress: 1, stage: null, stage_message: null, queued_at: created, started_at: created, config_summary: {}, has_results: true, has_mesh_artifact: false, error_message: null, cancellation_requested: false, mesh_stats: null, script_snapshot: null, design_revision: 0, polar_grid: {}, exported_files: [], auto_export_completed_at: null, auto_export_formats: {}, raw_results_file: null, mesh_artifact_file: null, log_tail: [] };
@@ -43,16 +43,27 @@ describe('client preferences', () => {
     // Nothing to inherit from an unversioned label.
     expect(nextJobNaming('osse_1a2b3c4d', stored)).toBeNull();
   });
-  it('turns the date prefix on for a profile stored before it was the default', () => {
+  it('derives standalone file names and versions from old config filenames', () => {
+    const stored = ['260808_horn_v14', 'horn_v09', '260808_other_v30', null];
+    expect(nextFileJobNaming('260701_horn_v13.cfg', stored)).toEqual({ outputName: 'horn', jobVersion: 15 });
+    expect(nextFileJobNaming('2026-07-01_horn_v20.mwg', stored)).toEqual({ outputName: 'horn', jobVersion: 21 });
+    expect(nextFileJobNaming('/archive/My favorite horn.txt', stored)).toEqual({ outputName: 'My_favorite_horn', jobVersion: 1 });
+    expect(nextFileJobNaming('horn.cfg', stored)).toEqual({ outputName: 'horn', jobVersion: 15 });
+  });
+  it('preserves an explicitly disabled date prefix during v4 migration', () => {
     const stored = JSON.stringify({ version: 4, preferences: { outputName: 'tritonia', datePrefix: false } });
     const migrated = loadPreferences(stored);
-    expect(migrated.datePrefix).toBe(true);
+    expect(migrated.datePrefix).toBe(false);
     expect(migrated.outputName).toBe('tritonia');
+  });
+  it('uses the enabled default when an old profile never stored datePrefix', () => {
+    const stored = JSON.stringify({ version: 4, preferences: { outputName: 'tritonia' } });
+    expect(loadPreferences(stored).datePrefix).toBe(true);
   });
   it('runs every migration step from the stored version onwards', () => {
     // A v3 profile used to stop after v3->v4 and never reach v4->v5.
     const stored = JSON.stringify({ version: 3, preferences: { outputName: 'tritonia', datePrefix: false } });
-    expect(loadPreferences(stored).datePrefix).toBe(true);
+    expect(loadPreferences(stored).datePrefix).toBe(false);
   });
   it('resets only the panel selection when migrating a v1 layout', () => {
     const stored = JSON.stringify({ version: 1, preferences: {

@@ -6,7 +6,7 @@ import asyncio
 import importlib.util
 import sys
 import threading
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import numpy as np
 import pytest
@@ -14,6 +14,15 @@ import pytest
 from server.design.schema import DesignConfig, Expr
 from server.mesh import builder as mesh_builder
 from server.mesh.builder import (
+    DENSE_SOLVER_MEMORY_LIMIT_BYTES,
+    MAX_SOLVER_MESH_ARTIFACT_TRIANGLES,
+    _dense_solver_memory_requirements,
+    _enforce_artifact_triangle_ceiling,
+    _enforce_dense_solver_memory_ceiling,
+    _large_mesh_warnings,
+    _mesh_policy,
+    _require_closed_acoustic_topology,
+    _solver_mesher_config,
     build_solver_mesh,
     clear_solver_mesh_cache,
     solver_mesh_cache_info,
@@ -46,6 +55,217 @@ def _tiny_design() -> DesignConfig:
             "source": {"shape": 2, "radius": -1, "curvature": 0},
             "simulation": {"f1": 500, "f2": 1000, "num_frequencies": 2},
         }
+    )
+
+
+def test_user_triangle_budget_is_advisory_but_dense_ceiling_is_not() -> None:
+    design = _tiny_design().model_copy(deep=True)
+    design.root.mesh.max_triangles = Expr(value=4_500.0)
+    design.root.mesh.allow_large_mesh = Expr(value=0.0)
+    guarded, warning_limit, multiplier = _mesh_policy(
+        design, _solver_mesher_config(design)
+    )
+
+    assert warning_limit == 4_500
+    assert multiplier == 4
+    # The mesher converts its full-domain limit back to this actual-domain cap
+    # for both its estimate and generated-count checks.
+    assert guarded["mesh"]["maxTriangles"] == (
+        MAX_SOLVER_MESH_ARTIFACT_TRIANGLES * 4
+    )
+    assert guarded["mesh"]["allowLargeMesh"] is False
+    # Neither the old approval flag nor a ten-million user threshold can lift
+    # the independent process-safety limit.
+    design.root.mesh.max_triangles = Expr(value=10_000_000.0)
+    design.root.mesh.allow_large_mesh = Expr(value=1.0)
+    guarded, warning_limit, _ = _mesh_policy(design, _solver_mesher_config(design))
+    assert warning_limit == 10_000_000
+    assert guarded["mesh"]["maxTriangles"] == (
+        MAX_SOLVER_MESH_ARTIFACT_TRIANGLES * 4
+    )
+    assert guarded["mesh"]["allowLargeMesh"] is False
+
+
+def test_7173_triangle_mesh_continues_with_advisory_warning() -> None:
+    warnings = _large_mesh_warnings(
+        triangle_count=7_173,
+        full_domain_count=7_173,
+        budget_full_domain=4_500,
+        domain_multiplier=1.0,
+        metadata={"meshTriangleDominantRegion": "rear", "meshTriangleDominantTargetMm": 8},
+    )
+    assert len(warnings) == 1
+    assert "7,173" in warnings[0]
+    assert "warning threshold of 4,500" in warnings[0]
+    assert "solve will continue" in warnings[0]
+    assert _large_mesh_warnings(
+        triangle_count=4_500,
+        full_domain_count=4_500,
+        budget_full_domain=4_500,
+        domain_multiplier=1.0,
+        metadata={},
+    ) == []
+
+
+def test_build_solver_mesh_continues_past_user_budget_and_preserves_warning(
+    monkeypatch, tmp_path
+) -> None:
+    """Exercise the public build path with the former 7,173-vs-4,500 failure."""
+
+    triangle_count = 7_173
+    triangles = np.tile(np.asarray([[0, 1, 2]], dtype=np.int64), (triangle_count, 1))
+    tags = np.full(triangle_count, 2, dtype=np.int32)
+    parsed = SimpleNamespace(
+        points=np.asarray([[0, 0, 0], [0.001, 0, 0], [0, 0.001, 0]], dtype=float),
+        cells=[SimpleNamespace(type="triangle", data=triangles)],
+        cell_data={"gmsh:physical": [tags]},
+    )
+
+    def fake_build_from_config(config, mesh_path, *, allow_large_mesh):
+        assert config["mesh"]["maxTriangles"] == MAX_SOLVER_MESH_ARTIFACT_TRIANGLES
+        assert config["mesh"]["allowLargeMesh"] is False
+        assert allow_large_mesh is False
+        mesh_path.write_text("$MeshFormat\n", encoding="utf-8")
+        return SimpleNamespace(
+            # Deliberately spoofed low: quadrants, not metadata, must control
+            # full-domain warning and memory accounting.
+            metadata={
+                "meshDomainMultiplier": 0.001,
+                "meshTriangleDominantRegion": "rear",
+                "meshTriangleDominantTargetMm": 8,
+            },
+            units="m",
+        )
+
+    fake_package = ModuleType("hornlab_mesher")
+    fake_package.__path__ = [str(tmp_path)]  # type: ignore[attr-defined]
+    fake_config_builder = ModuleType("hornlab_mesher.config_builder")
+    fake_config_builder.build_from_config = fake_build_from_config  # type: ignore[attr-defined]
+    fake_meshio = ModuleType("meshio")
+    fake_meshio.read = lambda _path: parsed  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "hornlab_mesher", fake_package)
+    monkeypatch.setitem(
+        sys.modules, "hornlab_mesher.config_builder", fake_config_builder
+    )
+    monkeypatch.setitem(sys.modules, "meshio", fake_meshio)
+
+    design = _tiny_design().model_copy(deep=True)
+    design.root.mesh.wall_thickness = Expr(value=0.0)
+    design.root.mesh.quadrants = Expr(value=1234.0)
+    design.root.mesh.max_triangles = Expr(value=4_500.0)
+    clear_solver_mesh_cache()
+    try:
+        result = asyncio.run(
+            build_solver_mesh(
+                design,
+                {"mesh_validation_mode": "off"},
+                force_rebuild=True,
+            )
+        )
+    finally:
+        clear_solver_mesh_cache()
+
+    assert result["stats"]["triangle_count"] == 7_173
+    assert result["stats"]["domain_multiplier"] == 1.0
+    assert result["stats"]["full_domain_triangle_count"] == 7_173
+    assert result["stats"]["dense_solver_used_vertex_count"] == 3
+    assert result["stats"]["dense_solver_domain_multiplier"] == 1
+    assert result["stats"]["dense_solver_metal_bytes_per_dof_squared"] == 88
+    assert result["stats"]["dense_solver_bempp_bytes_per_vertex_squared"] == 24
+    assert result["stats"]["dense_solver_memory_estimate_bytes"] == max(
+        result["stats"]["dense_solver_metal_estimate_bytes"],
+        result["stats"]["dense_solver_bempp_estimate_bytes"],
+    )
+    assert len(result["stats"]["warnings"]) == 1
+    warning = result["stats"]["warnings"][0]
+    assert "7,173" in warning
+    assert "warning threshold of 4,500" in warning
+    assert "solve will continue" in warning
+
+
+def test_actual_domain_artifact_ceiling_is_enforced_post_build() -> None:
+    _enforce_artifact_triangle_ceiling(MAX_SOLVER_MESH_ARTIFACT_TRIANGLES)
+    with pytest.raises(RuntimeError, match="solver-artifact sanity ceiling"):
+        _enforce_artifact_triangle_ceiling(MAX_SOLVER_MESH_ARTIFACT_TRIANGLES + 1)
+
+
+def _triangles_using(vertex_count: int) -> np.ndarray:
+    padded = vertex_count + (-vertex_count % 3)
+    return (np.arange(padded, dtype=np.int64) % vertex_count).reshape((-1, 3))
+
+
+@pytest.mark.parametrize(
+    ("quadrants", "allowed_vertices", "rejected_vertices"),
+    [(1234, 9_879, 9_880), (12, 9_879, 9_880), (1, 9_459, 9_460)],
+)
+def test_dense_solver_memory_ceiling_boundaries_follow_p1_dofs_and_symmetry(
+    quadrants: int, allowed_vertices: int, rejected_vertices: int
+) -> None:
+    allowed = _enforce_dense_solver_memory_ceiling(
+        _triangles_using(allowed_vertices), quadrants
+    )
+    assert allowed["used_vertex_count"] == allowed_vertices
+    assert allowed["estimated_bytes"] <= DENSE_SOLVER_MEMORY_LIMIT_BYTES
+    with pytest.raises(RuntimeError, match="8 GiB safety ceiling"):
+        _enforce_dense_solver_memory_ceiling(
+            _triangles_using(rejected_vertices), quadrants
+        )
+
+
+def test_dense_solver_guard_counts_only_vertices_referenced_by_triangles() -> None:
+    # A parsed artifact may retain unused point records. They are not P1 DOFs
+    # and therefore must not inflate the dense-system estimate.
+    triangles = np.asarray([[0, 4_999, 9_999]], dtype=np.int64)
+    requirements = _dense_solver_memory_requirements(triangles, 1234)
+    assert requirements["used_vertex_count"] == 3
+    assert requirements["metal_dof_count"] == 3
+
+
+def test_infinite_baffle_aperture_p0_unknowns_raise_the_memory_estimate() -> None:
+    triangles = _triangles_using(8_000)
+    tags = np.full(len(triangles), 12, dtype=np.int32)
+    ordinary = _dense_solver_memory_requirements(triangles, 1234)
+    coupled = _dense_solver_memory_requirements(
+        triangles,
+        1234,
+        mode="infinite-baffle",
+        tags=tags,
+    )
+    assert coupled["aperture_triangle_count"] == len(triangles)
+    assert coupled["metal_dof_count"] == 8_000 + len(triangles)
+    assert coupled["estimated_bytes"] > ordinary["estimated_bytes"]
+    with pytest.raises(RuntimeError, match="aperture P0 DOFs"):
+        _enforce_dense_solver_memory_ceiling(
+            triangles,
+            1234,
+            mode="infinite-baffle",
+            tags=tags,
+        )
+
+
+@pytest.mark.parametrize("mode", ["enclosure", "freestanding", "infinite-baffle"])
+@pytest.mark.parametrize(
+    "integrity",
+    [
+        {"valid": True, "off_plane_open_edge_count": 3},
+        {"valid": False, "off_plane_open_edge_count": 0},
+    ],
+)
+def test_closed_acoustic_models_fail_closed_for_holes_or_invalid_topology(
+    mode: str, integrity: dict[str, object]
+) -> None:
+    with pytest.raises(RuntimeError, match=f"Closed {mode} acoustic model rejected"):
+        _require_closed_acoustic_topology({"mode": mode}, integrity)
+
+
+def test_bare_horn_and_reduced_cut_plane_exceptions_remain() -> None:
+    # A bare horn owns an open mouth rim. A reduced closed model owns only cut
+    # plane edges, which the integrity report has already excluded here.
+    _require_closed_acoustic_topology(
+        {"mode": "bare"}, {"valid": False, "off_plane_open_edge_count": 7}
+    )
+    _require_closed_acoustic_topology(
+        {"mode": "enclosure"}, {"valid": True, "off_plane_open_edge_count": 0}
     )
 
 
