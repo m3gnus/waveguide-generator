@@ -431,6 +431,45 @@ def test_no_batch_file_expands_a_path_variable_bare_inside_a_block():
                 )
 
 
+def test_no_batch_for_loop_runs_a_command_string_that_starts_with_a_quote():
+    """`for /f ('"C:\\path\\python.exe" -c ...')` is not reliably parsed.
+
+    cmd runs a `for /f` command string through `cmd /c`, which strips the
+    outermost quotes under conditions that are famously hard to predict, so a
+    quoted interpreter path in the first position can be mangled. Every command
+    string in these files begins with a bare command name; where a specific
+    interpreter is needed it is reached by a relative path, which cannot contain
+    a space.
+    """
+
+    for path in ALL_BATCH_FILES:
+        for line in batch_code(read(path)).splitlines():
+            for match in re.finditer(r"\bin \('", line):
+                assert not line[match.end():].startswith('"'), (
+                    f"{path.name}: a for /f command string starts with a quoted path.\n"
+                    f"  {line.strip()}"
+                )
+
+
+def test_batch_for_loops_expand_path_variables_only_inside_quotes():
+    # `for ... in (...)` is a parenthesised context like any other, so a bare
+    # %VAR% holding a path with ')' in it closes the list early. Quoting is what
+    # makes `for %%i in ("%WG_ROOT%")` safe, and the same rule has to hold for
+    # every command string a for /f runs.
+    for path in ALL_BATCH_FILES:
+        for line in batch_code(read(path)).splitlines():
+            match = re.search(r"\bin \((.*)\) do\b", line)
+            if match is None:
+                continue
+            body = match.group(1)
+            for name in PATH_VARIABLES:
+                bare = re.compile(rf"(^|[^\"%]){re.escape('%' + name + '%')}([^\"]|$)")
+                assert not bare.search(body), (
+                    f"{path.name}: %{name}% is expanded unquoted inside a for list, "
+                    f"which breaks on a path containing ')'.\n  {line.strip()}"
+                )
+
+
 def test_batch_files_that_disable_delayed_expansion_never_use_it():
     # With delayed expansion ON, every expanded value is rescanned for ! and ^,
     # so a repository under "C:\My ! Projects" silently loses characters. These

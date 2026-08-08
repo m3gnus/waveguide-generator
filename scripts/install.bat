@@ -235,7 +235,11 @@ if errorlevel 1 goto git_missing
 for /f "tokens=3" %%v in ('git --version') do if not defined GIT_VERSION set "GIT_VERSION=%%v"
 if not defined GIT_VERSION goto git_version_unknown
 for /f "tokens=1,2 delims=." %%a in ("%GIT_VERSION%") do call :note_git_series %%a %%b
+rem Both halves, because `if %GIT_MINOR% LSS 20` with GIT_MINOR undefined is not
+rem a false comparison -- it is a syntax error that aborts the installer with
+rem "LSS was unexpected at this time."
 if not defined GIT_MAJOR goto git_version_unknown
+if not defined GIT_MINOR goto git_version_unknown
 if %GIT_MAJOR% LSS 2 goto git_too_old
 if %GIT_MAJOR% GTR 2 goto git_ok
 if %GIT_MINOR% LSS 20 goto git_too_old
