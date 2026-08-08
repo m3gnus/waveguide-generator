@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { designForFamily } from '../stores/design';
+import { hydrateDesignDocument } from '../api/designIo';
+import { designForFamily, serializeDesign } from '../stores/design';
 import type { SolveOptions } from '../stores/solveOptions';
 import { fetchSymmetry, formatApiDetail, getCapabilities, postSymmetry, resolveEngine, submitDesign, toSolveDesign } from './actions';
 
@@ -38,6 +39,34 @@ describe('solve submission', () => {
     expect(body?.options).toEqual(options);
     expect(body).toMatchObject({ label: 'atomic', design_revision: 19, design_snapshot: { version: 1 } });
     expect((body?.design_snapshot as { design: unknown }).design).toEqual(body?.design);
+  });
+
+  it('submits the sweep displayed for an imported design whose sweep controls were absent', async () => {
+    const design = hydrateDesignDocument({
+      formula: 'R-OSSE',
+      simulation: { f1: null, f2: 16_000, num_frequencies: null },
+    });
+    const savedSimulation = serializeDesign(design).simulation as Record<string, unknown>;
+    expect(savedSimulation).toMatchObject({ f1: null, f2: 16_000, num_frequencies: null });
+
+    let body: Record<string, unknown> | undefined;
+    const fetcher = async (_input: RequestInfo | URL, init?: RequestInit) => {
+      body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(JSON.stringify({ job_id: 'job-sweep' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    };
+    const options: SolveOptions = {
+      engine: 'auto', symmetry: 'auto', mesh_validation_mode: 'warn', verbose: false, frequency_spacing: 'log',
+      polar_config: { angle_range: [0, 180, 37], angle_step: 5, distance: 2, norm_angle: 5, inclination: 45, enabled_axes: ['horizontal'], observation_origin: 'mouth', spherical_sampling: false },
+    };
+    await submitDesign(design, options, fetcher as typeof fetch);
+
+    const submittedSimulation = (body?.design as { simulation: Record<string, unknown> }).simulation;
+    expect(submittedSimulation).toMatchObject({
+      f1: design.simulation.f1,
+      f2: design.simulation.f2,
+      num_frequencies: design.simulation.num_frequencies,
+    });
+    expect(((body?.design_snapshot as { design: unknown }).design as { simulation: unknown }).simulation).toEqual(submittedSimulation);
   });
 
   it('posts the canonical design to the live symmetry resolver', async () => {

@@ -264,11 +264,12 @@ function FieldControl({ field, design }: { field: ParameterDefinition; design: D
   }
   if (field.kind === 'text') return <TextField field={field} value={String(value ?? '')} disabled={disabled} onCommit={commit} />;
   const error = validationMessage(field, design);
+  const optional = field.path === 'mesh.max_edge';
   return <>
     <NumberField
       label={field.label}
       symbol={field.symbol}
-      value={typeof value === 'number' ? value : 0}
+      value={typeof value === 'number' ? value : optional ? undefined : 0}
       expression={field.path ? design._expressions?.[field.path] : undefined}
       allowExpression={fieldAcceptsExpression(field)}
       unit={field.unit}
@@ -281,6 +282,8 @@ function FieldControl({ field, design }: { field: ParameterDefinition; design: D
       invalidMessage={error}
       validate={(next) => prospectiveValidation(field, design, next)}
       onCommit={(next) => commit(next)}
+      optional={optional}
+      onClear={optional ? () => commit(null) : undefined}
       onCommitExpression={(expression) => { if (field.path && !disabled) updateExpression(field.path, expression); }}
       onBeginDrag={beginDrag}
       onEndDrag={endDrag}

@@ -55,6 +55,16 @@ describe('NumberField', () => {
     expect(input.value).toBe('12.0');
   });
 
+  it('does not round a higher-precision value when focus leaves without an edit', () => {
+    const commit = vi.fn();
+    act(() => root.render(<NumberField label="Throat radius" value={18.091} precision={2} onCommit={commit}/>));
+    const input = host.querySelector<HTMLInputElement>('input')!;
+    expect(input.value).toBe('18.09');
+    act(() => input.focus());
+    act(() => input.blur());
+    expect(commit).not.toHaveBeenCalled();
+  });
+
   it('cancels with Escape without letting blur commit the stale draft', () => {
     const commit = vi.fn();
     act(() => root.render(<NumberField label="Depth" value={42} onCommit={commit}/>));
@@ -153,6 +163,17 @@ describe('NumberField', () => {
       input.blur();
     });
     expect(commitExpression).toHaveBeenCalledWith({ raw: '140 + p', value: null });
+  });
+
+  it('preserves a cached expression value when focus leaves without an edit', () => {
+    const commitExpression = vi.fn();
+    const expression = { raw: '48.5 - 7*cos(2*p)^5', value: 33.7 };
+    act(() => root.render(<NumberField label="Coverage" value={33.7} expression={expression} allowExpression onCommit={vi.fn()} onCommitExpression={commitExpression} />));
+    const input = host.querySelector<HTMLInputElement>('input')!;
+    expect(host.textContent).toContain('= 33.7');
+    act(() => input.focus());
+    act(() => input.blur());
+    expect(commitExpression).not.toHaveBeenCalled();
   });
 
   it('gives an ATH formula its own row and refuses to scrub it away', () => {

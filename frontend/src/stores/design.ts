@@ -151,7 +151,7 @@ export interface DesignDocument {
     aperture_resolution_scale: number;
     max_triangles: number;
     allow_large_mesh: number;
-    max_edge?: number;
+    max_edge?: number | null;
   };
   simulation: {
     f1: number;
@@ -773,6 +773,16 @@ export function serializeDesign(design: DesignDocument): Record<string, unknown>
     setWirePath(payload, path, expression);
   });
   (_absent ?? []).forEach((path) => setWirePath(payload, path, null));
+  return payload;
+}
+
+/** Keep save round-trips lossless while ensuring a solve runs the sweep shown in the panel. */
+export function serializeSolveDesign(design: DesignDocument): Record<string, unknown> {
+  const payload = serializeDesign(design);
+  const absent = new Set(design._absent ?? []);
+  (['f1', 'f2', 'num_frequencies'] as const).forEach((key) => {
+    if (absent.has(`simulation.${key}`)) setWirePath(payload, `simulation.${key}`, design.simulation[key]);
+  });
   return payload;
 }
 

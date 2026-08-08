@@ -160,6 +160,32 @@ describe('ParamPanel inventory UX', () => {
     expect(useDesignStore.getState().design.source.velocity).toBe(1);
   });
 
+  it('treats the optional maximum-edge guard as unset and lets a value be cleared', () => {
+    act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
+    const entry = host.querySelector<HTMLElement>('[data-parameter-id="schema-gap.max_edge"]')!;
+    const input = entry.querySelector<HTMLInputElement>('input')!;
+    const setInputValue = (value: string) => Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, value);
+
+    expect(input.value).toBe('');
+    expect(input.getAttribute('aria-invalid')).toBe('false');
+    act(() => {
+      input.focus();
+      setInputValue('8.5');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    act(() => input.blur());
+    expect(useDesignStore.getState().design.mesh.max_edge).toBe(8.5);
+
+    act(() => {
+      input.focus();
+      setInputValue('');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(input.getAttribute('aria-invalid')).toBe('false');
+    act(() => input.blur());
+    expect(useDesignStore.getState().design.mesh.max_edge).toBeNull();
+  });
+
   it('renders the solve/directivity contracts and editable FREEFORM tables', () => {
     act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
     expect(host.querySelector('[data-section="Solve options"]')).not.toBeNull();
