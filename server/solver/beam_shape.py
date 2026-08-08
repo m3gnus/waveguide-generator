@@ -69,6 +69,90 @@ def _ray_crossing_radius(
     return float(radii[index - 1] + (radii[index] - radii[index - 1]) * fraction)
 
 
+def _ray_crossings(
+    theta_grid_deg: np.ndarray,
+    phi_grid_deg: np.ndarray,
+    spl_grid_db: np.ndarray,
+    psi_deg: np.ndarray,
+    theta_samples_deg: np.ndarray,
+    level_db: float,
+) -> dict[int, float]:
+    """Interpolate and find every ray crossing in one array operation."""
+
+    if not (
+        np.all(np.diff(theta_grid_deg) > 0.0)
+        and np.all(np.diff(phi_grid_deg) > 0.0)
+    ):
+        crossings: dict[int, float] = {}
+        for index, psi in enumerate(psi_deg):
+            ray = _interp_meridian(
+                theta_grid_deg,
+                phi_grid_deg,
+                spl_grid_db,
+                psi,
+                theta_samples_deg,
+            )
+            crossing = _ray_crossing_radius(theta_samples_deg, ray, level_db)
+            if crossing is not None:
+                crossings[index] = crossing
+        return crossings
+
+    phi_query = np.mod(psi_deg, 360.0)
+    phi_indices = np.searchsorted(phi_grid_deg, phi_query, side="right") - 1
+    phi_indices = np.clip(phi_indices, 0, phi_grid_deg.size - 2)
+    phi_spans = phi_grid_deg[phi_indices + 1] - phi_grid_deg[phi_indices]
+    phi_weights = np.divide(
+        phi_query - phi_grid_deg[phi_indices],
+        phi_spans,
+        out=np.zeros_like(phi_query),
+        where=phi_spans > 0.0,
+    )
+    columns = (
+        (1.0 - phi_weights)[None, :] * spl_grid_db[:, phi_indices]
+        + phi_weights[None, :] * spl_grid_db[:, phi_indices + 1]
+    )
+
+    theta_indices = np.searchsorted(theta_grid_deg, theta_samples_deg, side="right") - 1
+    theta_indices = np.clip(theta_indices, 0, theta_grid_deg.size - 2)
+    theta_spans = theta_grid_deg[theta_indices + 1] - theta_grid_deg[theta_indices]
+    theta_weights = np.divide(
+        theta_samples_deg - theta_grid_deg[theta_indices],
+        theta_spans,
+        out=np.zeros_like(theta_samples_deg),
+        where=theta_spans > 0.0,
+    )
+    theta_weights = np.where(theta_samples_deg <= theta_grid_deg[0], 0.0, theta_weights)
+    theta_weights = np.where(theta_samples_deg >= theta_grid_deg[-1], 1.0, theta_weights)
+    rays = (
+        (1.0 - theta_weights)[:, None] * columns[theta_indices]
+        + theta_weights[:, None] * columns[theta_indices + 1]
+    )
+
+    below = rays <= level_db
+    first_indices = np.argmax(below, axis=0)
+    valid = np.all(np.isfinite(rays), axis=0) & np.any(below, axis=0) & (first_indices > 0)
+    ray_indices = np.flatnonzero(valid)
+    if ray_indices.size == 0:
+        return {}
+    first_indices = first_indices[ray_indices]
+    previous_values = rays[first_indices - 1, ray_indices]
+    crossing_values = rays[first_indices, ray_indices]
+    radii = np.tan(np.deg2rad(theta_samples_deg))
+    fractions = np.divide(
+        previous_values - level_db,
+        previous_values - crossing_values,
+        out=np.ones_like(previous_values),
+        where=previous_values != crossing_values,
+    )
+    crossing_radii = radii[first_indices - 1] + (
+        radii[first_indices] - radii[first_indices - 1]
+    ) * fractions
+    return {
+        int(index): float(radius)
+        for index, radius in zip(ray_indices, crossing_radii, strict=True)
+    }
+
+
 def _superellipse_radius(
     psi_rad: np.ndarray, a: float, b: float, exponent: float
 ) -> np.ndarray:
@@ -133,12 +217,14 @@ def _fit_frequency(
         0.0, min(MAX_FRONT_ANGLE_DEG, float(theta_grid_deg[-1])), RAY_SAMPLES
     )
     psi_deg = np.arange(RAY_COUNT, dtype=np.float64) * (360.0 / RAY_COUNT)
-    crossings: dict[int, float] = {}
-    for index, psi in enumerate(psi_deg):
-        ray = _interp_meridian(theta_grid_deg, phi_grid_deg, spl_grid_db, psi, theta_samples)
-        crossing = _ray_crossing_radius(theta_samples, ray, level_db)
-        if crossing is not None:
-            crossings[index] = crossing
+    crossings = _ray_crossings(
+        theta_grid_deg,
+        phi_grid_deg,
+        spl_grid_db,
+        psi_deg,
+        theta_samples,
+        level_db,
+    )
     if len(crossings) < max(24, RAY_COUNT // 4):
         return None
 

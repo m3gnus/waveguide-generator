@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import logging
 import os
 from pathlib import Path
@@ -32,6 +33,7 @@ from server.platform.instance import (
 )
 from server.platform.logging_setup import flush_logs, setup_logging
 from server.platform.paths import ensure_data_layout
+from server.platform.signal_rearm import register_signal_rearm, unregister_signal_rearm
 
 
 HOST = "127.0.0.1"
@@ -81,7 +83,18 @@ def _shutdown_signals() -> tuple[int, ...]:
     return tuple(signals)
 
 
-def _install_shutdown_handlers(server: uvicorn.Server) -> dict[int, object]:
+@contextmanager
+def _capture_shutdown_signals(server: uvicorn.Server):
+    """Install WG2's handlers after Uvicorn has created its event loop.
+
+    Uvicorn 0.49 enters ``Server.capture_signals`` inside the loop runner and
+    re-raises every captured signal after restoring the prior handler. On
+    uvloop, SIGTERM's prior handler is the platform default by then, so the
+    re-raise terminates the process before WG2's outer ``finally`` can release
+    its lock and stop logging. Owning the capture context keeps graceful exit
+    semantics and lets ``main`` finish all application cleanup.
+    """
+
     previous: dict[int, object] = {}
 
     def request_shutdown(signum: int, _frame: object) -> None:
@@ -89,18 +102,25 @@ def _install_shutdown_handlers(server: uvicorn.Server) -> dict[int, object]:
             "Received %s; finishing active requests and shutting down",
             signal.Signals(signum).name,
         )
-        server.should_exit = True
+        if server.should_exit and signum == signal.SIGINT:
+            server.force_exit = True
+        else:
+            server.should_exit = True
+
+    def install() -> None:
+        for signum in _shutdown_signals():
+            signal.signal(signum, request_shutdown)
 
     for signum in _shutdown_signals():
         previous[signum] = signal.getsignal(signum)
-        signal.signal(signum, request_shutdown)
-    server.install_signal_handlers = lambda: None  # type: ignore[method-assign]
-    return previous
-
-
-def _restore_signal_handlers(previous: dict[int, object]) -> None:
-    for signum, handler in previous.items():
-        signal.signal(signum, handler)  # type: ignore[arg-type]
+    token = register_signal_rearm(install)
+    install()
+    try:
+        yield
+    finally:
+        unregister_signal_rearm(token)
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)  # type: ignore[arg-type]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -116,6 +136,10 @@ def main(argv: list[str] | None = None) -> int:
         preferred_port = requested_port(args.port)
     except (OSError, RuntimeError, ValueError) as exc:
         print(f"Waveguide Generator v2 could not start: {exc}", file=sys.stderr)
+        # setup_logging runs before requested_port so this path can already own
+        # a QueueListener (for example, when WG2_PORT is invalid). Treat early
+        # configuration failures like every later exit and drain it explicitly.
+        flush_logs()
         return 1
 
     open_browser = not args.no_browser and os.environ.get("WG2_NO_BROWSER") != "1"
@@ -159,7 +183,6 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     stop_browser = threading.Event()
-    previous_handlers: dict[int, object] = {}
     try:
         app = create_app(data_dir=paths.root, solver_warmup=True)
         config = uvicorn.Config(
@@ -187,7 +210,10 @@ def main(argv: list[str] | None = None) -> int:
             timeout_graceful_shutdown=3,
         )
         server = uvicorn.Server(config)
-        previous_handlers = _install_shutdown_handlers(server)
+        # Uvicorn enters this context only after its loop (uvloop when
+        # available) exists, which is late enough that the loop cannot replace
+        # the handlers we need for the outer cleanup path.
+        server.capture_signals = lambda: _capture_shutdown_signals(server)  # type: ignore[method-assign]
         # Windows-only, and a no-op anywhere else or without a console.
         harden_console(lambda: setattr(server, "should_exit", True))
 
@@ -216,8 +242,6 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     finally:
         stop_browser.set()
-        if previous_handlers:
-            _restore_signal_handlers(previous_handlers)
         if listener is not None:
             listener.close()
         if lock is not None:

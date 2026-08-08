@@ -15,6 +15,10 @@ from collections.abc import Callable
 from typing import Any, TypeVar
 
 from server.platform.warmup import BackgroundWarmup
+from server.platform.signal_rearm import (
+    rearm_registered_signals,
+    signal_rearm_is_needed,
+)
 
 
 GMSH_WORKER_THREAD_NAME = "gmsh-worker"
@@ -41,7 +45,36 @@ def _gmsh_executor() -> concurrent.futures.ThreadPoolExecutor:
         return _executor
 
 
-def _run_in_gmsh_session(fn: Callable[..., T], /, *args: Any, **kwargs: Any) -> T:
+def _rearm_signals_on_loop(loop: asyncio.AbstractEventLoop) -> None:
+    """Undo native signal changes before Gmsh work continues."""
+
+    if not signal_rearm_is_needed():
+        return
+    completed = threading.Event()
+
+    def rearm() -> None:
+        try:
+            rearm_registered_signals()
+        finally:
+            completed.set()
+
+    try:
+        loop.call_soon_threadsafe(rearm)
+    except RuntimeError:
+        return
+    # The event loop is live whenever this function is reached through the
+    # public async worker. Bound the handshake anyway so shutdown cannot wedge
+    # if a caller tears an unusual loop down underneath an in-flight request.
+    completed.wait(timeout=1.0)
+
+
+def _run_in_gmsh_session(
+    fn: Callable[..., T],
+    /,
+    *args: Any,
+    _signal_loop: asyncio.AbstractEventLoop | None = None,
+    **kwargs: Any,
+) -> T:
     """Open and close a worker-owned gmsh session around one queued operation.
 
     Mesher builders reuse an existing session.  Opening it here suppresses their
@@ -57,11 +90,15 @@ def _run_in_gmsh_session(fn: Callable[..., T], /, *args: Any, **kwargs: Any) -> 
     if gmsh is not None and not gmsh.isInitialized():
         gmsh.initialize(interruptible=False)
         opened_here = True
+        if _signal_loop is not None:
+            _rearm_signals_on_loop(_signal_loop)
     try:
         return fn(*args, **kwargs)
     finally:
         if opened_here and gmsh is not None and gmsh.isInitialized():
             gmsh.finalize()
+            if _signal_loop is not None:
+                _rearm_signals_on_loop(_signal_loop)
 
 
 async def run_on_gmsh_worker(fn: Callable[..., T], /, *args: Any, **kwargs: Any) -> T:
@@ -73,7 +110,14 @@ async def run_on_gmsh_worker(fn: Callable[..., T], /, *args: Any, **kwargs: Any)
 
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
-        _gmsh_executor(), functools.partial(_run_in_gmsh_session, fn, *args, **kwargs)
+        _gmsh_executor(),
+        functools.partial(
+            _run_in_gmsh_session,
+            fn,
+            *args,
+            _signal_loop=loop,
+            **kwargs,
+        ),
     )
 
 

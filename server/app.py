@@ -81,11 +81,11 @@ def create_app(
 ) -> FastAPI:
     """Assemble an app instance without creating persistent directories.
 
-    ``solver_warmup`` compiles the BEM solver's kernels in a background thread
-    at boot; see ``server/solver/warmup.py`` for why that matters and what it
-    costs. It defaults to off so the many tests that build an app pay nothing,
-    and ``launch/serve.py`` -- the only caller serving a real user -- turns it
-    on.
+    ``solver_warmup`` exercises AUTO's selected physical solver in a background
+    thread at boot; see ``server/solver/warmup.py`` for why that matters and
+    what it costs. It defaults to off so the many tests that build an app pay
+    nothing, and ``launch/serve.py`` -- the only caller serving a real user --
+    turns it on.
     """
 
     started = time.monotonic()

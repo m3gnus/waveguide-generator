@@ -248,6 +248,60 @@ def test_the_solver_warmup_can_be_switched_off() -> None:
             os.environ["WG2_SOLVER_WARMUP"] = previous
 
 
+def test_solver_warmup_follows_auto_engine_priority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Metal host must not spend seconds warming an unused BEMPP fallback."""
+
+    from server.solver import metal, warmup
+
+    calls: list[str] = []
+    monkeypatch.setattr(metal, "metal_status", lambda: {"available": True})
+    monkeypatch.setattr(warmup, "_warm_metal", lambda: calls.append("metal"))
+    monkeypatch.setattr(
+        warmup,
+        "_warm_bempp",
+        lambda _status: calls.append("bempp"),
+    )
+
+    warmup._run_warmup()
+
+    assert calls == ["metal"]
+
+
+def test_solver_warmup_falls_back_to_bempp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from server.solver import bempp, metal, warmup
+
+    calls: list[tuple[str, object]] = []
+    status = {"available": True, "assembly_backend": "numba"}
+    monkeypatch.setattr(metal, "metal_status", lambda: {"available": False})
+    monkeypatch.setattr(bempp, "bempp_status", lambda: status)
+    monkeypatch.setattr(warmup, "_warm_metal", lambda: calls.append(("metal", None)))
+    monkeypatch.setattr(warmup, "_warm_bempp", lambda value: calls.append(("bempp", value)))
+
+    warmup._run_warmup()
+
+    assert calls == [("bempp", status)]
+
+
+def test_solver_warmup_skips_when_no_physical_engine_is_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from server.solver import bempp, metal, warmup
+
+    calls: list[str] = []
+    monkeypatch.setattr(metal, "metal_status", lambda: {"available": False, "reason": "no Metal"})
+    monkeypatch.setattr(bempp, "bempp_status", lambda: {"available": False, "reason": "no BEMPP"})
+    monkeypatch.setattr(warmup, "_warm_metal", lambda: calls.append("metal"))
+    monkeypatch.setattr(warmup, "_warm_bempp", lambda _status: calls.append("bempp"))
+
+    warmup._run_warmup()
+
+    assert calls == []
+
+
 def test_warmup_solver_chatter_is_filtered_but_our_own_line_survives() -> None:
     """A hundred lines of assembler timings must not land in the user's log.
 
