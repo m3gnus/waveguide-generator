@@ -336,6 +336,17 @@ export function fieldAppliesToFamily(field: ParameterDefinition, family: DesignF
   return !field.families || field.families.includes(family);
 }
 
+export function findParameterByPath(
+  path: string,
+  family: DesignFamily,
+  resolvePath: (candidate: string) => string = (candidate) => candidate,
+): ParameterDefinition | undefined {
+  const resolvedPath = resolvePath(path);
+  return PARAMETER_REGISTRY.find((field) => fieldAppliesToFamily(field, family)
+    && [field.path, ...(field.mirrorPaths ?? [])]
+      .some((candidate) => candidate !== undefined && resolvePath(candidate) === resolvedPath));
+}
+
 export function fieldIsVisible(field: ParameterDefinition, design: DesignDocument): boolean {
   return fieldAppliesToFamily(field, design.formula) && (!field.visibleWhen || field.visibleWhen(design));
 }
