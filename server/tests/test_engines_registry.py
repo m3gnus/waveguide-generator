@@ -156,3 +156,55 @@ def test_real_runtime_persists_mesh_before_a_native_solve_failure(
         await runtime.shutdown()
 
     asyncio.run(scenario())
+
+
+def test_real_runtime_persists_advisory_mesh_warning_in_job_log(
+    tmp_path: Path, monkeypatch
+) -> None:
+    warning = (
+        "Large solve mesh: 7,173 triangles against a warning threshold of "
+        "4,500. The solve will continue."
+    )
+
+    class WarningMetal:
+        name = "metal"
+
+        async def run(self, request, *, cancel_cb, stage_cb, artifact_cb):
+            cancel_cb()
+            await artifact_cb(
+                "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n",
+                {"triangle_count": 7_173, "warnings": [warning]},
+            )
+            return EngineRunResult(
+                results={
+                    "frequencies": [500.0],
+                    "directivity": {},
+                    "spl_on_axis": {"frequencies": [500.0], "spl": [90.0]},
+                    "metadata": {},
+                },
+            )
+
+    request = SolveRequest.model_validate(
+        {
+            "design": {"formula": "OSSE", "simulation": {"f1": 500, "f2": 501}},
+            "options": {"engine": "metal"},
+        }
+    )
+
+    async def scenario() -> None:
+        runtime = JobRuntime(
+            JobStore(tmp_path / "warning.db"),
+            engine_registry=registry.EngineRegistry(
+                detector=lambda: [registry.EngineInfo("metal", True, "test", "1")],
+                factory=lambda _name: WarningMetal(),
+            ),
+        )
+        job_id = await runtime.submit(request)
+        await runtime.wait_idle()
+        job = await runtime.get_job(job_id)
+        assert job["status"] == "complete"
+        assert job["mesh_stats"]["warnings"] == [warning]
+        assert warning in job["log_tail"]
+        await runtime.shutdown()
+
+    asyncio.run(scenario())

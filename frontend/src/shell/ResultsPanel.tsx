@@ -11,9 +11,9 @@ import { runExportBundle } from '../results/exporters';
 import type { ResultPayload } from '../results/types';
 import { CHART_TYPES, MAX_RESULT_PANELS, RESULT_PANEL_COUNTS, preferencesStore, usePreferences, type ChartType } from '../prefs/preferences';
 import { ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
+import { hydrateJobDesign } from '../jobs/jobDesign';
 import { Icon } from './icons';
 import { trapDialogFocus } from './SettingsDialog';
-import { hydrateJobDesign } from '../jobs/jobDesign';
 
 function frequency(value: number | undefined): string {
   if (!value) return '—';
@@ -541,13 +541,25 @@ export function ResultsChartGrid({ chartTypes, result, named, tokens }: {
   </div>;
 }
 
+interface ResultDisplaySnapshot {
+  key: string;
+  primaryId: string;
+  ids: string[];
+  results: Record<string, ResultPayload>;
+}
+
+interface ResultFetchError {
+  key: string;
+  message: string;
+}
+
 export function ResultsPanel() {
   const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
   const selection = useSyncExternalStore(compareSelection.subscribe, compareSelection.getSnapshot, compareSelection.getSnapshot);
   const preferences = usePreferences();
   const tokens = useChartTokens();
-  const [loaded, setLoaded] = useState<Record<string, ResultPayload>>({});
-  const [error, setError] = useState<string | null>(null);
+  const [display, setDisplay] = useState<ResultDisplaySnapshot | null>(null);
+  const [fetchError, setFetchError] = useState<ResultFetchError | null>(null);
   const [exportStatus, setExportStatus] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
@@ -567,26 +579,55 @@ export function ResultsPanel() {
   }, [jobs, latest, selection.following, selection.primary]);
 
   const ids = useMemo(() => [selection.primary, ...selection.overlays].filter((id): id is string => Boolean(id)), [selection]);
+  const selectionKey = ids.join('\u0000');
   useEffect(() => {
     let live = true;
-    if (!ids.length) { setLoaded({}); return; }
-    setError(null);
-    void Promise.all(ids.map(async (id) => [id, await fetchJobResults(id) as ResultPayload] as const)).then((pairs) => { if (live) setLoaded(Object.fromEntries(pairs)); }).catch((reason) => live && setError(reason instanceof Error ? reason.message : String(reason)));
+    const requestedIds = selectionKey ? selectionKey.split('\u0000') : [];
+    if (!requestedIds.length || !selection.primary) { setDisplay(null); setFetchError(null); return; }
+    setFetchError(null);
+    void Promise.all(requestedIds.map(async (id) => [id, await fetchJobResults(id) as ResultPayload] as const))
+      .then((pairs) => {
+        if (!live) return;
+        setDisplay({
+          key: selectionKey,
+          primaryId: selection.primary!,
+          ids: requestedIds,
+          results: Object.fromEntries(pairs),
+        });
+      })
+      .catch((reason) => {
+        if (!live) return;
+        // Never leave the outgoing charts under the incoming job's toolbar.
+        setDisplay(null);
+        setFetchError({
+          key: selectionKey,
+          message: reason instanceof Error ? reason.message : String(reason),
+        });
+      });
     return () => { live = false; };
-  }, [ids.join('|')]);
+  }, [selection.primary, selectionKey]);
 
-  const primary = selection.primary ? loaded[selection.primary] : undefined;
-  // Keyed on the labels themselves rather than on `jobs`. The jobs array gets a
-  // new identity on every progress event of a running solve, and all this needs
-  // from it is a display name that changes only when someone renames a job.
-  // NUL-joined because labels contain spaces, and nothing a user can type
-  // produces a NUL, so the key encodes the list unambiguously.
-  const labels = ids.map((id) => labelFor(id, jobs)).join('\u0000');
+  const currentDisplay = display?.key === selectionKey ? display : null;
+  const primary = selection.primary && currentDisplay
+    ? currentDisplay.results[selection.primary]
+    : undefined;
+  // One keyed snapshot owns the primary and every overlay. During a transition
+  // the complete outgoing set may remain visible, but no incoming result is
+  // combined with it; the whole set swaps only after Promise.all succeeds.
+  const shown = selection.primary && display
+    ? display.results[display.primaryId]
+    : undefined;
+  const displayLabels = display?.ids.map((id) => labelFor(id, jobs)).join('\u0000') ?? '';
   const named = useMemo(
-    () => ids.flatMap((id, index) => loaded[id] ? [{ id, label: labels.split('\u0000')[index], result: loaded[id] }] : []),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `labels` is the stable projection of `jobs` this needs
-    [ids, labels, loaded],
+    () => display?.ids.map((id, index) => ({
+      id,
+      label: displayLabels.split('\u0000')[index],
+      result: display.results[id],
+    })) ?? NO_NAMED_RESULTS,
+    [display, displayLabels],
   );
+  const error = fetchError?.key === selectionKey ? fetchError.message : null;
+  const showingPrevious = Boolean(selection.primary && display && display.key !== selectionKey && !error);
   const available = useMemo(() => jobs.filter((job) => job.status === 'complete' && job.has_results && !ids.includes(job.id)), [ids, jobs]);
   const exportSelected = async () => {
     if (!primary) return;
@@ -608,7 +649,11 @@ export function ResultsPanel() {
     {preferencesOpen && <ResultsPreferencesSurface popover onClose={() => setPreferencesOpen(false)}/>}<div className="coming-soon" role="status"><b>NO RESULTS</b><span>Run a solve to populate result charts.</span></div>
   </div>;
 
-  return <div className="results-panel panel-scroll">
+  return <div
+    className="results-panel panel-scroll"
+    data-result-primary={shown ? display?.primaryId : undefined}
+    data-result-set={shown ? display?.key : undefined}
+  >
     <div className="results-toolbar">
       <button
         className={`result-follow${selection.following ? ' on' : ''}`}
@@ -626,8 +671,9 @@ export function ResultsPanel() {
     </div>
     {preferencesOpen && <ResultsPreferencesSurface popover onClose={() => setPreferencesOpen(false)}/>}
     {(error || exportStatus) && <div className={error ? 'job-error' : ''} role="status" style={{ margin: 7, color: error ? undefined : 'var(--fg2)', fontSize: 9 }}>{error ?? exportStatus}</div>}
-    {!primary
-      ? <div className="coming-soon"><b>LOADING RESULTS</b><span>Fetching selected job data…</span></div>
-      : <ResultsChartGrid chartTypes={preferences.chartTypes} result={primary} named={named} tokens={tokens}/>}
+    {showingPrevious && <div className="job-warning" role="status" style={{ margin: 7 }}>Showing previous results while fetching the selected run…</div>}
+    {!shown
+      ? <div className="coming-soon"><b>{error ? 'RESULTS UNAVAILABLE' : 'LOADING RESULTS'}</b><span>{error ? 'The selected run could not be loaded.' : 'Fetching selected job data…'}</span></div>
+      : <ResultsChartGrid chartTypes={preferences.chartTypes} result={shown} named={named} tokens={tokens}/>}
   </div>;
 }
