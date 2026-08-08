@@ -444,9 +444,11 @@ export class JobsSocketManager {
 
   private async refreshJob(jobId: string): Promise<void> {
     const generation = this.nextJobGeneration(jobId);
+    const mutationBaseline = this.jobMutationVersions.get(jobId) ?? 0;
     try {
       const response = await this.fetcher(`/api/status/${encodeURIComponent(jobId)}`);
-      if (this.jobGenerations.get(jobId) !== generation) return;
+      if (this.jobGenerations.get(jobId) !== generation
+        || (this.jobMutationVersions.get(jobId) ?? 0) > mutationBaseline) return;
       if (response.status === 404) {
         this.invalidateJob(jobId);
         this.markJobMutation(jobId);
@@ -455,7 +457,8 @@ export class JobsSocketManager {
       }
       if (!response.ok) throw await responseError(response);
       const job = await response.json() as JobItem;
-      if (this.jobGenerations.get(jobId) !== generation) return;
+      if (this.jobGenerations.get(jobId) !== generation
+        || (this.jobMutationVersions.get(jobId) ?? 0) > mutationBaseline) return;
       this.markJobMutation(jobId);
       const jobs = this.snapshot.jobs.filter((item) => item.id !== job.id);
       this.update({ jobs: this.sortJobs([...jobs, job]), error: null });

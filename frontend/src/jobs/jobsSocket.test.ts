@@ -353,6 +353,59 @@ describe('jobs websocket state machine', () => {
     expect(compareSelection.getSnapshot().primary).toBeNull();
     manager.stop();
   });
+
+  it('preserves newer live fields when a queued-job status refresh returns late', async () => {
+    let resolveStatus!: (response: Response) => void;
+    const fetcher = vi.fn(() => new Promise<Response>((resolve) => { resolveStatus = resolve; }));
+    const socket = new MockSocket();
+    const manager = new JobsSocketManager(() => socket, fetcher, 'ws://test/ws/jobs');
+    manager.start();
+    socket.message({ v: 1, kind: 'hello', epoch: 1, heartbeatSec: 15 });
+    socket.message({ v: 1, kind: 'snapshot', epoch: 1, cursor: 1, jobs: [job()] });
+
+    socket.message({ v: 1, kind: 'event', epoch: 1, cursor: 2, jobId: 'job-1', type: 'queued', payload: {} });
+    socket.message({ v: 1, kind: 'event', epoch: 1, cursor: 3, jobId: 'job-1', type: 'started', payload: { started_at: '2026-08-03T10:00:01Z' } });
+    socket.message({ v: 1, kind: 'event', epoch: 1, cursor: 4, jobId: 'job-1', type: 'stage', payload: { stage: 'solve', message: 'Solving' } });
+    socket.message({ v: 1, kind: 'event', epoch: 1, cursor: 5, jobId: 'job-1', type: 'progress', payload: { progress: .42 } });
+    expect(manager.getSnapshot().jobs[0]).toMatchObject({ status: 'running', progress: .42, stage: 'solve' });
+
+    resolveStatus(json(job()));
+    await flush();
+
+    expect(manager.getSnapshot().jobs[0]).toMatchObject({
+      status: 'running',
+      progress: .42,
+      stage: 'solve',
+      stage_message: 'Solving',
+      started_at: '2026-08-03T10:00:01Z',
+    });
+    manager.stop();
+  });
+
+  it('preserves an optimistic rating and its metadata event across a late status response', async () => {
+    let resolveStatus!: (response: Response) => void;
+    const fetcher = vi.fn((input: RequestInfo | URL) => String(input).startsWith('/api/status/')
+      ? new Promise<Response>((resolve) => { resolveStatus = resolve; })
+      : Promise.resolve(json({ status: 'ok' })));
+    const socket = new MockSocket();
+    const manager = new JobsSocketManager(() => socket, fetcher, 'ws://test/ws/jobs');
+    manager.start();
+    socket.message({ v: 1, kind: 'hello', epoch: 1, heartbeatSec: 15 });
+    socket.message({ v: 1, kind: 'snapshot', epoch: 1, cursor: 1, jobs: [job()] });
+
+    socket.message({ v: 1, kind: 'event', epoch: 1, cursor: 2, jobId: 'job-1', type: 'completed', payload: {} });
+    await manager.patchRating('job-1', 4);
+    socket.message({
+      v: 1, kind: 'event', epoch: 1, cursor: 3, jobId: 'job-1', type: 'metadata', payload: { changed: { rating: 4 } },
+    });
+    expect(manager.getSnapshot().jobs[0].rating).toBe(4);
+
+    resolveStatus(json(job({ status: 'complete', progress: 1, has_results: true, rating: null })));
+    await flush();
+
+    expect(manager.getSnapshot().jobs[0].rating).toBe(4);
+    manager.stop();
+  });
 });
 
 describe('rating metadata', () => {
