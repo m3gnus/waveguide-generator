@@ -1,6 +1,6 @@
 import { GizmoHelper, GizmoViewport, OrbitControls } from '@react-three/drei';
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
-import { Component, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentRef, type ErrorInfo, type ReactNode, type RefObject } from 'react';
+import { Component, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentRef, type ErrorInfo, type ReactNode, type RefObject } from 'react';
 import { CanvasTexture, OrthographicCamera, PerspectiveCamera, Plane, Vector3 } from 'three';
 import type { CameraProjection, ViewerPreferences } from '../viewerprefs/viewerPreferences';
 import { calculateCameraFit, clippingRange, presetDirection, viewDirection, zoomedOrthographicValue, type CameraDirection } from './cameraMath';
@@ -87,6 +87,20 @@ export function cameraFitDisposition(
   if (applied.fit === next.fit) return 'settled';
   if (applied.view === next.view && cameraIsUsers) return 'record';
   return 'apply';
+}
+
+/** Update only the depth bracket, preserving a user-owned position and target. */
+export function rebracketCamera(
+  camera: PerspectiveCamera | OrthographicCamera,
+  target: Vector3,
+  boundsRadius: number,
+): boolean {
+  const { near, far } = clippingRange(camera.position.distanceTo(target), boundsRadius);
+  if (camera.near === near && camera.far === far) return false;
+  camera.near = near;
+  camera.far = far;
+  camera.updateProjectionMatrix();
+  return true;
 }
 
 export function installContextLossFallback(canvas: HTMLCanvasElement, onFailure: (message: string) => void): void {
@@ -285,6 +299,7 @@ function CameraRig({ bounds, request, zoomRequest, projection, preferences, sche
     );
     if (disposition === 'settled') return;
     if (disposition === 'record') {
+      if (rebracketCamera(camera, controls.current?.target ?? center, boundsRadius)) scheduler.schedule();
       appliedRequest.current = fitRequestKey;
       return;
     }
@@ -309,7 +324,7 @@ function CameraRig({ bounds, request, zoomRequest, projection, preferences, sche
     controls.current?.update();
     appliedRequest.current = fitRequestKey;
     scheduler.schedule();
-  }, [aspect, camera, direction, fit, fitRequestKey, scheduler, viewKey]);
+  }, [aspect, boundsRadius, camera, center, direction, fit, fitRequestKey, scheduler, viewKey]);
 
   // Re-centring the orbit target belongs to the same decision: a pan the user
   // made is theirs to keep, and the layout effect above has already recorded
@@ -361,12 +376,7 @@ function CameraRig({ bounds, request, zoomRequest, projection, preferences, sche
   // enough for every distance wastes the whole depth buffer. Re-bracket the
   // model against the camera's actual distance whenever the controls move.
   const rebracket = () => {
-    const target = controls.current?.target ?? center;
-    const { near, far } = clippingRange(camera.position.distanceTo(target), boundsRadius);
-    if (camera.near === near && camera.far === far) return;
-    camera.near = near;
-    camera.far = far;
-    camera.updateProjectionMatrix();
+    rebracketCamera(camera, controls.current?.target ?? center, boundsRadius);
   };
 
   return <OrbitControls
@@ -642,7 +652,7 @@ function useCanvasRemeasure(host: RefObject<HTMLDivElement | null>): void {
   }, [host]);
 }
 
-export function ViewportCanvas({ onRenderFailure, ...props }: ViewportCanvasProps) {
+export const ViewportCanvas = memo(function ViewportCanvas({ onRenderFailure, ...props }: ViewportCanvasProps) {
   const host = useRef<HTMLDivElement>(null);
   useCanvasRemeasure(host);
   return <CanvasErrorBoundary onError={onRenderFailure}><div ref={host} className="wg2-viewport-canvas-host"><Canvas
@@ -659,4 +669,4 @@ export function ViewportCanvas({ onRenderFailure, ...props }: ViewportCanvasProp
   >
     <Scene {...props} />
   </Canvas></div></CanvasErrorBoundary>;
-}
+});

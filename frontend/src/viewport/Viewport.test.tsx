@@ -14,6 +14,7 @@ const frame: DecodedFrame = {
     seq: 9,
     designRevision: 0,
     lod: 'fine',
+    evalMs: 1_388,
     sections: [],
     surfaces: [{
       role: 'horn.inner',
@@ -103,6 +104,13 @@ describe('Viewport preview errors', () => {
     expect(refresh?.textContent).toContain('Refresh');
     act(() => refresh?.click());
     expect(refreshCalls).toHaveLength(1);
+  });
+
+  it('presents server evaluation and request-to-paint as overlapping timings', () => {
+    const timing = [...host.querySelectorAll<HTMLElement>('.viewport-live > span')]
+      .find((element) => element.textContent?.startsWith('server '));
+    expect(timing?.textContent).toBe('server 1388.0 ms · request→paint — ms');
+    expect(timing?.textContent).not.toContain('+ client');
   });
 });
 

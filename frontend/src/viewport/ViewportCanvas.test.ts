@@ -1,7 +1,7 @@
-import { Box3, Vector3 } from 'three';
+import { Box3, PerspectiveCamera, Vector3 } from 'three';
 import { describe, expect, it, vi } from 'vitest';
-import { calculateCameraFit } from './cameraMath';
-import { axisColorsFromTokens, cameraFitDisposition, cameraFitKey, canRenderWebGL, canvasNeedsRemeasure, gizmoAxisDirection, installContextLossFallback, pickGizmoAxis, scheduleAppliedTask, shouldShowAxisGizmo, type GizmoAxis } from './ViewportCanvas';
+import { calculateCameraFit, clippingRange } from './cameraMath';
+import { axisColorsFromTokens, cameraFitDisposition, cameraFitKey, canRenderWebGL, canvasNeedsRemeasure, gizmoAxisDirection, installContextLossFallback, pickGizmoAxis, rebracketCamera, scheduleAppliedTask, shouldShowAxisGizmo, type GizmoAxis } from './ViewportCanvas';
 
 class FakeScheduler {
   private readonly tasks = new Set<() => void>();
@@ -144,6 +144,23 @@ describe('cameraFitDisposition', () => {
 
   it('takes the camera back when the user asks for a view', () => {
     expect(cameraFitDisposition({ fit: 'a', view }, { fit: 'b', view: otherView }, true)).toBe('apply');
+  });
+
+  it('re-brackets changed bounds without moving a user-owned camera', () => {
+    const camera = new PerspectiveCamera();
+    const target = new Vector3();
+    camera.position.set(0, 0, 410);
+    Object.assign(camera, clippingRange(410, 100));
+    const originalPosition = camera.position.clone();
+    const updateProjectionMatrix = vi.spyOn(camera, 'updateProjectionMatrix');
+
+    expect(rebracketCamera(camera, target, 500)).toBe(true);
+    expect({ near: camera.near, far: camera.far }).toEqual(clippingRange(410, 500));
+    expect(camera.position.toArray()).toEqual(originalPosition.toArray());
+    expect(updateProjectionMatrix).toHaveBeenCalledOnce();
+
+    expect(rebracketCamera(camera, target, 500)).toBe(false);
+    expect(updateProjectionMatrix).toHaveBeenCalledOnce();
   });
 });
 
