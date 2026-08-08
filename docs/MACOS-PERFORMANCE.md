@@ -390,3 +390,121 @@ still nested Python loops over every output node; `_triangle_orientation_analysi
 runs twice per surface, once to choose the winding and once to check it. At fine
 LOD the ranking differs — `analytic_grid_normals` costs 33.6 ms and its
 `_phi_derivative` allocates several full-grid copies through `np.roll`.
+
+### The second mesher pass — 2026-08-08
+
+That list is now done where the output contract allowed it. The baseline for
+this pass is `715d4d7`, the fourth local mesher commit described above. As
+before, these changes are only in the unpushed `hornlab-waveguide-mesher`
+checkout; v2 still receives none of them until that repository is pushed and
+`server/requirements-pins.txt` is deliberately bumped.
+
+The refinement interval now selects the largest squared distance, reduces it
+once and takes one square root of the winner. Its three-component sum remains
+exactly `(deltas * deltas).sum(axis=-1)`: changing it to `einsum` would be a
+different floating-point association. `_angle_degrees` now uses scalar
+`math.acos`/`math.degrees`; on this Apple/Python/NumPy combination that pipeline
+matched the old NumPy scalar dispatch bit-for-bit over more than a million
+random, dense and edge probes and over 20,000 real preview calls. That is an
+empirical result for this platform, not a claim that every libm is identical.
+
+The two nested bilinear loops are arrays now, without changing their operation
+order: interpolate in phi to form `a` and `b`, then interpolate those in t.
+Closed-phi differentiation writes the shifted neighbours into a preallocated
+result through slices instead of making full grids with `np.roll`; both wrap
+columns are still evaluated explicitly. The outer offset shell similarly
+recognises a broadcast azimuth row, computes its coordinate weights once,
+spells the three-component cross product directly, skips the missing-normal
+walk on a regular grid and reuses the normal lengths it already reduced.
+
+The orientation check was only partly removable. An unchanged internal index
+buffer carries a single-use proof bound both to the exact position, index and
+normal array objects and to a BLAKE2b-256 digest of their dtype, shape and
+bytes. Proofs are issued only for canonical contiguous buffers, so
+`PreviewSurfaceV1` can reuse the analysis it just performed without trusting a
+same-object buffer whose contents changed. Coarse seed builds make seven
+orientation-classifier calls instead of ten; fine builds make eight instead of
+twelve. Public construction, combined surfaces, mutated buffers and every
+buffer that was actually flipped still run the final contract check.
+
+FREEFORM's rounded-rectangle sampler had become its own small-dispatch wall:
+196 ring-builder calls in a coarse build and 772 in a fine one, plus a handful
+of `np.isclose` arrays for every ring. Its invariant uniform basis and
+scalar-math arc trig are now cached, quadrant mirroring fills one array, and
+all rings' required cardinals are checked in one broadcast batch. The full
+reduced-domain validation remains; it was not replaced by a cheaper endpoint
+assumption.
+
+### Measured against `715d4d7`
+
+Best across two paired five-build passes, with the detached before worktree and
+the checkout run in both orders in the same session:
+
+| design | coarse before | after | | fine before | after | |
+|---|---:|---:|---:|---:|---:|---:|
+| seed R-OSSE | 29.1 ms | **25.1 ms** | 1.16x | 130.9 ms | **109.8 ms** | 1.19x |
+| R-OSSE, per-azimuth ATH formulas | 29.8 ms | **24.7 ms** | 1.21x | 133.4 ms | **112.2 ms** | 1.19x |
+| OSSE | 24.4 ms | **20.3 ms** | 1.20x | 83.8 ms | **74.7 ms** | 1.12x |
+| ICW, flat baffle | 18.2 ms | **14.2 ms** | 1.28x | 65.2 ms | **52.4 ms** | 1.24x |
+| FREEFORM, rounded rectangle | 34.3 ms | **24.4 ms** | 1.41x | 138.9 ms | **95.8 ms** | 1.45x |
+| FREEFORM, circular | 20.8 ms | **18.8 ms** | 1.11x | 85.8 ms | **78.5 ms** | 1.09x |
+| LOOKUP | 16.4 ms | **12.6 ms** | 1.30x | 69.6 ms | **56.8 ms** | 1.23x |
+
+Vertex and triangle counts are unchanged in every row. Taken cumulatively from
+the pre-vectorisation numbers earlier in this section, the application's seed
+design is now 7.2x faster coarse and 11.5x faster fine. The uninstrumented
+coarse builder is about 40 builds/s on this host.
+
+The same low-overhead wrappers show where the time moved. These numbers are
+paired measurements and include wrapper overhead, so they explain the change;
+the table above is the user-facing build time.
+
+| function | coarse before | after | fine before | after |
+|---|---:|---:|---:|---:|
+| `_axis_interval_error` | 9.57 ms | 7.92 ms | 33.53 ms | 29.87 ms |
+| `_triangle_orientation_analysis` | 5.35 ms / 10 calls | 3.98 ms / 7 | 20.72 ms / 12 | 14.62 ms / 8 |
+| orientation-proof digest | — | 1.13 ms / 6 calls | — | 4.63 ms / 8 calls |
+| `analytic_grid_normals` | 2.91 ms | 2.83 ms | 35.40 ms | 31.91 ms |
+| — of which `_phi_derivative` | 1.62 ms | 1.51 ms | 19.42 ms | 16.87 ms |
+| `_outer_offset_shell` | 1.96 ms | 1.32 ms | 17.15 ms | 10.13 ms |
+| vector/grid bilinear resampling | 2.07 ms | 0.11 ms | 4.93 ms | 0.14 ms |
+| instrumented wall | 30.6 ms | **25.0 ms** | 141.6 ms | **115.1 ms** |
+
+### Exactness and gates
+
+The before archive came from a detached `715d4d7` worktree and the final archive
+used an asserted `PYTHONPATH` to the checkout. **All 1,716 of 1,716 arrays are
+byte-for-byte identical**, with no build failures. Therefore the cumulative
+comparison to published `8a8f383` remains exactly the result already recorded
+above: 1,692 identical arrays, with only the 24 per-azimuth-ATH-formula arrays
+moving by at most 1.13e-12 mm. This pass adds no divergence at all.
+
+`./run-ath-parity.sh --full` is 1,134 passed, 0 skipped. The count grew by 37
+because the new array, sampling and orientation invariants have direct
+differential regressions. In v2's concurrently changing working tree, all 65
+`server/tests/test_preview*.py` tests pass against the checkout, including the
+byte-exact websocket frame test. The whole server suite reached 1,098 passed
+and 3 skipped, but had three failures in `test_bempp_availability.py`: the
+selected venv has no `bempp_cl`. Those same three tests fail without the mesher
+`PYTHONPATH`, so they are an unrelated environment/concurrent-solver issue and
+were not changed in this pass.
+
+### Measured and deliberately not done
+
+The second orientation analysis was not removed wholesale. Swapping `(a,b,c)`
+to `(a,c,b)` also changes the association of the three vertex-normal additions.
+A regression fixture with three unit normals close to exact cancellation makes
+both the original and flipped buffers classify negative; the final pass catches
+it. Trusting the first counts after a flip would weaken the published winding
+contract, so only the literally unchanged buffer gets a reusable proof.
+
+The outer shell was not calculated directly in the original unswapped xyz
+layout. That experiment moved 824 of 6,448 sampled floats by up to 2.84e-14 and
+was 35–50% slower. FREEFORM's arc was not changed to NumPy trig because that
+moves low bits on this platform; caching the existing scalar `math.sin` and
+`math.cos` results gives the reuse without changing arithmetic. Preallocating
+the ring list by itself measured as noise, and the required-cardinal check was
+batched rather than deleted. Finally, the remaining fine-LOD normal work was
+not fused into a new algebraic expression: after the exact slice rewrite its
+composed gain is modest, and reassociating its cross/normalisation arithmetic
+would spend output stability for an unproven win.
