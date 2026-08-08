@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { temporal } from 'zundo';
+import { findParameterByPath } from '../design/parameterRegistry';
 
 export type DesignFamily = 'OSSE' | 'R-OSSE' | 'ICW' | 'FREEFORM';
 export type MutationReason = 'edit' | 'drag' | 'undo' | 'redo' | 'load' | 'family';
@@ -260,6 +261,248 @@ export function designForFamily(family: DesignFamily): DesignDocument {
   };
 }
 
+const FAMILY_SPECIFIC_FIELDS = {
+  OSSE: [
+    'L', 'a', 'a0', 'r0', 'k', 's', 'n', 'q', 'h', 'throat_profile',
+    'rotation', 'guiding_curve', 'circ_arc_radius', 'circ_arc_term_angle',
+  ],
+  'R-OSSE': ['R', 'a', 'a0', 'r0', 'k', 'm', 'b', 'r', 'q', 'tmax'],
+  ICW: [
+    'R', 'L', 'r0', 'a0', 'a', 'k', 'q', 'coverage_angle', 'hold_start',
+    'hold_end', 'n_coeff', 'termination', 'theta1_deg', 'depth', 'curl',
+  ],
+  FREEFORM: [
+    'length', 'profile_h', 'profile_v', 'cross_sections', 'inflection_policy',
+    'corner_grids',
+  ],
+} as const satisfies Record<DesignFamily, readonly (keyof DesignDocument)[]>;
+
+const ALL_FAMILY_SPECIFIC_FIELDS = new Set<keyof DesignDocument>(
+  Object.values(FAMILY_SPECIFIC_FIELDS).flat(),
+);
+
+interface CarriedScalar {
+  value: number;
+  expression?: ExprNumber;
+}
+
+interface CompatibleFamilyValues {
+  throatRadius?: CarriedScalar;
+  throatAngle?: CarriedScalar;
+  length?: CarriedScalar;
+  mouthRadius?: CarriedScalar;
+  mouthAngle?: CarriedScalar;
+}
+
+function expressionAtPath(design: DesignDocument, path: string): ExprNumber | undefined {
+  return Object.entries(design._expressions ?? {})
+    .find(([candidate]) => resolveConcretePath(design, candidate) === path)?.[1];
+}
+
+function pathIsAbsent(design: DesignDocument, path: string): boolean {
+  return (design._absent ?? [])
+    .some((candidate) => resolveConcretePath(design, candidate) === path);
+}
+
+function scalarCarry(design: DesignDocument, path: string, value: number | undefined): CarriedScalar | undefined {
+  if (typeof value !== 'number' || pathIsAbsent(design, path)) return undefined;
+  return { value, expression: expressionAtPath(design, path) };
+}
+
+function pairedScalarCarry(
+  design: DesignDocument,
+  leftPath: string,
+  left: number | undefined,
+  rightPath: string,
+  right: number | undefined,
+): CarriedScalar | undefined {
+  if (typeof left !== 'number' || typeof right !== 'number' || !Object.is(left, right)) return undefined;
+  if (pathIsAbsent(design, leftPath) || pathIsAbsent(design, rightPath)) return undefined;
+  const leftExpression = expressionAtPath(design, leftPath);
+  const rightExpression = expressionAtPath(design, rightPath);
+  const expression = JSON.stringify(leftExpression) === JSON.stringify(rightExpression)
+    ? leftExpression
+    : undefined;
+  return { value: left, expression };
+}
+
+function compatibleFamilyValues(design: DesignDocument): CompatibleFamilyValues {
+  if (design.formula !== 'FREEFORM') {
+    return {
+      throatRadius: scalarCarry(design, 'r0', design.r0),
+      throatAngle: scalarCarry(design, 'a0', design.a0),
+      length: design.formula === 'OSSE' || design.formula === 'ICW'
+        ? scalarCarry(design, 'L', design.L)
+        : undefined,
+      mouthRadius: design.formula === 'R-OSSE' || design.formula === 'ICW'
+        ? scalarCarry(design, 'R', design.R)
+        : undefined,
+      mouthAngle: design.formula === 'OSSE' || design.formula === 'R-OSSE'
+        ? scalarCarry(design, 'a', design.a)
+        : undefined,
+    };
+  }
+
+  const horizontal = design.profile_h;
+  const vertical = design.profile_v;
+  const horizontalMouth = horizontal?.points.at(-1);
+  const verticalMouth = vertical?.points.at(-1);
+  const horizontalMouthPath = `profile_h.points.${Math.max(0, (horizontal?.points.length ?? 1) - 1)}.r`;
+  const verticalMouthPath = `profile_v.points.${Math.max(0, (vertical?.points.length ?? 1) - 1)}.r`;
+  return {
+    throatRadius: pairedScalarCarry(
+      design,
+      'profile_h.points.0.r', horizontal?.points[0]?.r,
+      'profile_v.points.0.r', vertical?.points[0]?.r,
+    ),
+    throatAngle: pairedScalarCarry(
+      design,
+      'profile_h.throat_angle_deg', horizontal?.throat_angle_deg,
+      'profile_v.throat_angle_deg', vertical?.throat_angle_deg,
+    ),
+    length: scalarCarry(design, 'length', design.length),
+    mouthRadius: pairedScalarCarry(
+      design,
+      horizontalMouthPath, horizontalMouth?.r,
+      verticalMouthPath, verticalMouth?.r,
+    ),
+    mouthAngle: pairedScalarCarry(
+      design,
+      'profile_h.mouth_angle_deg', horizontal?.mouth_angle_deg,
+      'profile_v.mouth_angle_deg', vertical?.mouth_angle_deg,
+    ),
+  };
+}
+
+function copyCarriedExpression(
+  target: DesignDocument,
+  carried: CarriedScalar,
+  targetPaths: readonly string[],
+  requireScalar = false,
+): void {
+  const expression = carried.expression;
+  if (requireScalar && expression?.value === null) return;
+  if (!expression) return;
+  target._expressions = { ...target._expressions };
+  targetPaths.forEach((path) => { target._expressions![path] = structuredClone(expression); });
+}
+
+function carriedValueFitsTarget(
+  target: DesignDocument,
+  carried: CarriedScalar,
+  targetPaths: readonly string[],
+): boolean {
+  const resolvePath = (path: string) => resolveConcretePath(target, path);
+  return targetPaths.every((path) => {
+    const field = findParameterByPath(path, target.formula, resolvePath);
+    if (!field) return true;
+    if (field.min !== undefined && !(carried.value >= field.min)) return false;
+    if (field.max !== undefined && !(carried.value <= field.max)) return false;
+    return true;
+  });
+}
+
+function applyCarriedScalar(
+  target: DesignDocument,
+  carried: CarriedScalar | undefined,
+  targetPaths: readonly string[],
+  assign: (value: number) => void,
+  requireScalar = false,
+): void {
+  if (!carried || !carriedValueFitsTarget(target, carried, targetPaths)) return;
+  assign(carried.value);
+  copyCarriedExpression(target, carried, targetPaths, requireScalar);
+}
+
+function applyCompatibleFamilyValues(
+  target: DesignDocument,
+  compatible: CompatibleFamilyValues,
+): void {
+  if (target.formula === 'FREEFORM') {
+    const horizontalMouthIndex = target.profile_h!.points.length - 1;
+    const verticalMouthIndex = target.profile_v!.points.length - 1;
+    applyCarriedScalar(target, compatible.length, ['length'], (value) => {
+      target.length = value;
+    }, true);
+    applyCarriedScalar(target, compatible.throatRadius, [
+      'profile_h.points.0.r', 'profile_v.points.0.r',
+    ], (value) => {
+      target.profile_h!.points[0].r = value;
+      target.profile_v!.points[0].r = value;
+    });
+    applyCarriedScalar(target, compatible.throatAngle, [
+      'profile_h.throat_angle_deg', 'profile_v.throat_angle_deg',
+    ], (value) => {
+      target.profile_h!.throat_angle_deg = value;
+      target.profile_v!.throat_angle_deg = value;
+    });
+    applyCarriedScalar(target, compatible.mouthRadius, [
+      `profile_h.points.${horizontalMouthIndex}.r`,
+      `profile_v.points.${verticalMouthIndex}.r`,
+    ], (value) => {
+      target.profile_h!.points[horizontalMouthIndex].r = value;
+      target.profile_v!.points[verticalMouthIndex].r = value;
+    });
+    applyCarriedScalar(target, compatible.mouthAngle, [
+      'profile_h.mouth_angle_deg', 'profile_v.mouth_angle_deg',
+    ], (value) => {
+      target.profile_h!.mouth_angle_deg = value;
+      target.profile_v!.mouth_angle_deg = value;
+    });
+    return;
+  }
+
+  applyCarriedScalar(target, compatible.throatRadius, ['r0'], (value) => {
+    target.r0 = value;
+  });
+  applyCarriedScalar(target, compatible.throatAngle, ['a0'], (value) => {
+    target.a0 = value;
+  });
+  if (target.formula === 'OSSE' || target.formula === 'ICW') {
+    applyCarriedScalar(target, compatible.length, ['L'], (value) => {
+      target.L = value;
+    });
+  }
+  if (target.formula === 'R-OSSE' || target.formula === 'ICW') {
+    applyCarriedScalar(target, compatible.mouthRadius, ['R'], (value) => {
+      target.R = value;
+    });
+  }
+  if (target.formula === 'OSSE' || target.formula === 'R-OSSE') {
+    applyCarriedScalar(target, compatible.mouthAngle, ['a'], (value) => {
+      target.a = value;
+    });
+  }
+}
+
+function pathBelongsToSharedState(path: string): boolean {
+  const root = path.split('.')[0] as keyof DesignDocument;
+  return root !== 'formula' && !ALL_FAMILY_SPECIFIC_FIELDS.has(root);
+}
+
+/** Merge a family template with the current document's non-formula state. */
+export function mergeDesignForFamily(current: DesignDocument, family: DesignFamily): DesignDocument {
+  if (current.formula === family) return structuredClone(current);
+
+  const compatible = compatibleFamilyValues(current);
+  const shared: Partial<DesignDocument> = structuredClone(current);
+  delete shared.formula;
+  ALL_FAMILY_SPECIFIC_FIELDS.forEach((field) => { delete shared[field]; });
+
+  const expressions = Object.fromEntries(Object.entries(current._expressions ?? {})
+    .filter(([path]) => pathBelongsToSharedState(path))
+    .map(([path, expression]) => [path, structuredClone(expression)]));
+  if (Object.keys(expressions).length) shared._expressions = expressions;
+  else delete shared._expressions;
+  const absent = (current._absent ?? []).filter(pathBelongsToSharedState);
+  if (absent.length) shared._absent = absent;
+  else delete shared._absent;
+
+  const next = { ...designForFamily(family), ...shared, formula: family } as DesignDocument;
+  applyCompatibleFamilyValues(next, compatible);
+  return next;
+}
+
 export interface RevisionEvent {
   revision: number;
   reason: MutationReason;
@@ -423,7 +666,7 @@ export const useDesignStore = create<DesignStore>()(
       setFamily: (family) => {
         cancelRevisionTimers();
         get().endDrag();
-        set((state) => ({ design: designForFamily(family), designRevision: state.designRevision + 1 }));
+        set((state) => ({ design: mergeDesignForFamily(state.design, family), designRevision: state.designRevision + 1 }));
         bump('family', true);
       },
       loadDesign: (design) => {
