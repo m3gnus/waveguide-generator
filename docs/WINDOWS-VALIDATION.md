@@ -625,21 +625,28 @@ instead of asserting a POSIX mechanism.
 
 Ordered by how much it matters.
 
-1. **No installer.** This change ships a *launcher*. The `install.bat` /
-   `install-and-update.bat` equivalent, the prerequisite checks with version
-   floors, git self-update, and the documented uninstall are all P6.2 and are
-   not started. v1's two installer contract suites
-   (`tests/installer-contract.test.js`, `installer-env-contract.test.js`) are
-   correspondingly **not ported** — v2 has no automated installer coverage.
-   This is the single largest gap remaining.
+1. ~~**No installer.**~~ **Built 2026-08-08**, after this report was written.
+   `scripts/install.sh` + `install-wg2.command`, `scripts/install.bat` +
+   `scripts/install-and-update.bat`, `scripts/uninstall.{sh,bat}`,
+   `scripts/fetch_spa.py` (download, checksum-verify and install the release
+   SPA) and `scripts/check_backends.py`, with v1's two contract suites ported
+   to `server/tests/test_installer_contract.py` and
+   `test_installer_env_contract.py`. See `docs/P6-CUTOVER-PLAN.md` §P6.2 for
+   what is proven by execution versus written-but-unexecuted — **all three
+   batch files are in the second category**, having been written on macOS, and
+   no release artifact has ever been fetched over HTTPS because no `v*` tag
+   exists yet.
 2. **Stop is prompt, not immediate.** Check 12. The first solve after a start
    still has a ~17 s window with no cancellation checkpoint in it. Fixing it
    properly needs either a boot-time backend warmup or process-isolated solves.
-3. **The viewport has never rendered on a real GPU.** Check 8 passes, but every
-   render on this machine goes through WARP or SwiftShader because the VM
-   exposes no display adapter. Correctness is established; frame rates and the
-   hardware ANGLE/D3D11 driver path are not. **This cannot be closed on this
-   machine at all** — it needs different hardware.
+3. **The viewport has never rendered on a real GPU** — and by decision
+   (Magnus, 2026-08-08) it never has to: *"the windows machine doesn't have GPU,
+   and the program shouldn't need gpu."* Software rasterisation is a supported
+   target, not a degraded one, so this row is no longer a gap to close but a
+   constraint to design against. Check 8 passes; every render on this machine
+   goes through WARP or SwiftShader because the VM exposes no display adapter.
+   What remains unmeasured is the hardware ANGLE/D3D11 path, which needs
+   different hardware and is not required to work well.
 4. **The v1 migration was never run against a real v1 install.** Check 11 used a
    constructed one, because no v1 database or `output/` history exists here.
    Three `test_legacy_snapshot.py` tests still skip for the same reason.
@@ -649,10 +656,10 @@ Ordered by how much it matters.
    than by a genuinely clean box.
 6. **No Windows CI job.** P6.3 lists it as blocked on P6.4; P6.4 is now far
    enough along to add one.
-7. **`docs/TRACEABILITY-TABLE.md` is now stale.** Its P011/Q007 row says the
-   instance lock is implemented with `fcntl`. It is now `fcntl` or `msvcrt`
-   depending on platform. Left unedited deliberately — this task was scoped to
-   add a report under `docs/`, not to modify other documents.
+7. ~~**`docs/TRACEABILITY-TABLE.md` is now stale.**~~ **Corrected 2026-08-08**
+   when this branch merged: P011/Q007 now says `fcntl` on POSIX, `msvcrt.locking`
+   plus a Win32 liveness probe on Windows, and names the module-scope `fcntl`
+   import that had made the module unloadable there.
 8. **Solve accuracy was not assessed.** Check 6 used a deliberately coarse mesh
    to prove the path. No Windows-vs-macOS numerical parity comparison was run,
    and switching the assembly backend to OpenCL makes that comparison more
