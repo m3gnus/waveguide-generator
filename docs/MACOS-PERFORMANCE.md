@@ -61,6 +61,12 @@ only when neither physical engine is available. Scheduling still returned in
 0.091 ms; the first measured background Metal warmup took 629.9 ms including
 cold imports, status probing, and the solve.
 
+These measurements do not make warmup a release default. It is a real native
+solve with no cancellation seam, is not serialized with user solves, and has
+no safe fast-shutdown join. The production launcher therefore leaves it off;
+`WG2_SOLVER_WARMUP=1` is the only launcher opt-in for diagnostics or controlled
+performance experiments.
+
 ## STL and mesh integrity
 
 A fixed OSSE design was exported from `3ceffc2~1` and from `1791083`.
@@ -113,8 +119,9 @@ being a GPU-only problem.
   the bootstrap probe.
 - Three automated launches reached `/health` in 468.8, 479.4, and 476.6 ms
   (474.9 ms mean), and `/` in 479.8, 490.9, and 499.2 ms (490.0 ms mean).
-- A quit sent immediately after health waited roughly 550-561 ms for background
-  warmups. After warmups had settled, three SIGTERM-to-exit trials took 326.9,
+- In the measured, explicitly warmup-enabled run, a quit sent immediately after
+  health waited roughly 550-561 ms for background warmups. After warmups had
+  settled, three SIGTERM-to-exit trials took 326.9,
   337.8, and 330.8 ms (331.8 ms mean). That is plainly slower than the 20 ms
   Windows measurement.
 
@@ -479,7 +486,7 @@ comparison to published `8a8f383` remains exactly the result already recorded
 above: 1,692 identical arrays, with only the 24 per-azimuth-ATH-formula arrays
 moving by at most 1.13e-12 mm. This pass adds no divergence at all.
 
-`./run-ath-parity.sh --full` is 1,134 passed, 0 skipped. The count grew by 37
+`./run-ath-parity.sh --full` is 1,135 passed, 0 skipped. The count grew by 38
 because the new array, sampling and orientation invariants have direct
 differential regressions. In v2's concurrently changing working tree, all 65
 `server/tests/test_preview*.py` tests pass against the checkout, including the

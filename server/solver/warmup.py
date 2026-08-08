@@ -1,4 +1,4 @@
-"""Pay the selected solver's one-off per-process start-up cost at boot, not at Solve.
+"""Optionally pay the selected solver's one-off per-process start-up cost.
 
 ``docs/WINDOWS-VALIDATION.md`` check 12 measured the problem this exists to
 fix. The first bempp solve after every server start spends a long time inside
@@ -12,8 +12,10 @@ whole block. The second solve is 0.7-1.0 s.
 The cost is per process and cannot be moved to disk. bempp-cl's hot numba
 kernels are declared without ``cache=True``, so the JIT runs again in every new
 interpreter; only pyopencl's *program* cache survives a restart, and that is
-the smaller half. What can be moved is *when* it is paid, and paying it in the
-background while the user is still choosing a design costs them nothing.
+the smaller half. A controlled benchmark can move when this cost is paid, but
+the warmup is itself a real, non-cancellable native solve. It is not serialized
+with user jobs and has no fast shutdown hook, so the production launcher keeps
+it off unless the operator explicitly sets ``WG2_SOLVER_WARMUP=1``.
 
 Measured phases in a fresh interpreter on the development Windows VM:
 
@@ -31,11 +33,12 @@ will. The engine must match AUTO resolution. Apple Silicon normally resolves
 to Metal; warming the fallback BEMPP engine there wastes several seconds and
 does not remove Metal's smaller first-solve cost.
 
-Deliberately a plain daemon thread rather than ``asyncio.to_thread``. The
-default executor's threads are joined during interpreter shutdown, so a
-warmup still compiling kernels when the user quits would hold the process open
-for the remainder of its ~30 s. A daemon thread is abandoned at exit, which is
-exactly right for work whose only product is a warm cache.
+The explicitly requested experiment uses a plain daemon thread rather than
+``asyncio.to_thread``. The default executor's threads are joined during
+interpreter shutdown and could hold Quit open for the remainder of the native
+initialization block. Abandoning a daemon in native code is not a clean
+production shutdown guarantee; that is why release launches do not start this
+thread automatically.
 """
 
 from __future__ import annotations
@@ -198,11 +201,13 @@ def _run_warmup() -> None:
 
 
 def start_solver_warmup() -> threading.Thread | None:
-    """Begin warming the solver in the background. Never blocks, never raises.
+    """Begin an explicitly requested background warmup. Never blocks or raises.
 
     Returns the live thread, or ``None`` when warming is switched off with
     ``WG2_SOLVER_WARMUP=0``. Calling twice while one is running returns the
-    running thread rather than starting a second.
+    running thread rather than starting a second. The production launcher
+    calls this path only when ``WG2_SOLVER_WARMUP=1``; direct callers opt in by
+    calling it or by passing ``solver_warmup=True`` to ``create_app``.
     """
 
     global _thread

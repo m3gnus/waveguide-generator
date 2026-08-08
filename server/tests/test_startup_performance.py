@@ -197,11 +197,7 @@ def test_create_app_registers_every_prewarm(tmp_path: Path) -> None:
 
 
 def test_the_solver_warmup_is_opt_in(tmp_path: Path) -> None:
-    """Tests build dozens of apps; none of them may compile BEM kernels.
-
-    The warmup takes ~26 s of CPU on the development machine, so it belongs
-    only to the process that is serving a real user.
-    """
+    """The explicit app API remains available without making it a default."""
 
     default_startup = {
         handler.__name__ for handler in create_app(data_dir=tmp_path).router.on_startup
@@ -306,7 +302,7 @@ def test_warmup_solver_chatter_is_filtered_but_our_own_line_survives() -> None:
     """A hundred lines of assembler timings must not land in the user's log.
 
     Filtering on the thread rather than on the library keeps a real solve's
-    diagnostics intact even if one happens to overlap the warmup.
+    diagnostics intact if an explicitly requested warmup overlaps it.
     """
 
     from server.solver.warmup import WARMUP_THREAD_NAME, _QuietWarmupFilter

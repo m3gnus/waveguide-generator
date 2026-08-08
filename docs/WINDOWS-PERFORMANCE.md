@@ -201,7 +201,8 @@ the first bempp solve after every server start spends 17.5 s (OpenCL) to 53.8 s
 effect**, because the engine's only cancellation checkpoint is its
 per-frequency progress callback and the first callback does not fire until the
 first assembly finishes. The second solve is 0.7–1.0 s. That report named
-boot-time warmup as one of the two fixes; this is it.
+boot-time warmup as one possible mitigation; the implementation below remains
+available for explicit diagnostics and performance experiments.
 
 `server/solver/warmup.py` runs one real single-frequency solve on a checked-in
 410-triangle mesh, in a background daemon thread, started from a `create_app`
@@ -221,9 +222,12 @@ startup handler. Measured phases in a fresh interpreter here:
 - **A daemon thread, not `asyncio.to_thread`.** The default executor's threads
   are joined at interpreter shutdown, so a warmup still compiling kernels when
   the user quits would hold the process open for the rest of its ~26 s. A
-  daemon thread is abandoned. The measured 20 ms stop is this working.
-- **Off by default in `create_app`**, on only from `launch/serve.py`, so the
-  test suite never pays it. `WG2_SOLVER_WARMUP=0` disables it.
+  daemon avoids that join, but abandoning a thread inside native code is not a
+  clean production-shutdown guarantee; this path is experimental only.
+- **Off by default in both `create_app` and the production launcher.** Set
+  `WG2_SOLVER_WARMUP=1` to opt in explicitly. The native warmup is not
+  serialized with user jobs and cannot be cancelled or joined safely during a
+  fast shutdown, so release launches must not start it automatically.
 - **The solver's own log output is filtered while the warmup thread runs** —
   about a hundred lines of assembler timings and GMRES iterations, per start,
   about a mesh nobody asked to solve. Filtering is by *thread*, so a real solve
@@ -232,9 +236,10 @@ startup handler. Measured phases in a fresh interpreter here:
   so the wrapper's mirror-reduced-mesh warning does not appear in the user's
   log on every start describing a problem they do not have.
 
-This does not make Stop *immediate*. It moves the unstoppable window off the
-user's first solve. Process-isolated solves remain the only way to make Stop
-immediate, and remain deferred (`docs/P6-CUTOVER-PLAN.md`).
+When explicitly enabled, this does not make Stop *immediate*. It can move the
+unstoppable window off the user's first solve, but a solve started during the
+warmup can contend with it. Process-isolated solves remain the only way to make
+Stop immediate, and remain deferred (`docs/P6-CUTOVER-PLAN.md`).
 
 ### 4.2 The capability probe is cached
 
