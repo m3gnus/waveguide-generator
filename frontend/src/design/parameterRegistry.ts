@@ -198,8 +198,11 @@ export const PARAMETER_REGISTRY: ParameterDefinition[] = [
   number('schema-gap.max_edge', 'maxEdge', 'mesh.max_edge', solveExportMesh, 'Maximum edge guard', { unit: 'mm', min: .01, max: 10_000, description: 'Optional post-build guard for the longest realized triangle edge.' }),
   number('mesh.rear_resolution', 'rearResolution', 'mesh.rear_resolution', solveExportMesh, 'Rear mesh resolution', { unit: 'mm', min: .01, max: 1_000 }),
   number('mesh.aperture_resolution_scale', 'apertureResolutionScale', 'mesh.aperture_resolution_scale', solveExportMesh, 'Aperture mesh scale', { min: .01, max: 100 }),
-  number('mesh.max_triangles', 'maxTriangles', 'mesh.max_triangles', solveExportMesh, 'Hard triangle limit', { min: 1, max: 10_000_000, step: 1_000, precision: 0 }),
-  select('mesh.allow_large_mesh', 'allowLargeMesh', 'mesh.allow_large_mesh', solveExportMesh, 'Large mesh approval', [{ value: 0, label: 'Block over budget' }, { value: 1, label: 'Approve over budget' }]),
+  number('mesh.max_triangles', 'maxTriangles', 'mesh.max_triangles', solveExportMesh, 'Triangle warning threshold', { min: 1, max: 10_000_000, step: 1_000, precision: 0, description: 'Advisory full-domain-equivalent threshold. Solves continue above it unless they reach the independent dense-solver safety ceiling.' }),
+  // Kept in the registry solely for text/wire traceability. The old approval
+  // control is intentionally absent from the panel because the threshold is
+  // advisory and the independent process-safety ceiling cannot be bypassed.
+  select('mesh.allow_large_mesh', 'allowLargeMesh', 'mesh.allow_large_mesh', solveExportMesh, 'Legacy large-mesh approval', [{ value: 0, label: 'Ignored' }, { value: 1, label: 'Ignored' }], { visibleWhen: () => false, description: 'Compatibility-only imported value; it does not change solve limits.' }),
   number('mesh.vertical_offset', 'verticalOffset', 'mesh.vertical_offset', solveExportMesh, 'Export vertical offset', { unit: 'mm', min: -10_000, max: 10_000 }),
   number('mesh.wall_thickness', 'wallThickness', 'mesh.wall_thickness', wallEnclosure, 'Wall thickness', { unit: 'mm', min: 0, max: 1_000, description: "Leaving this unset uses ATH's 5 mm default.", visibleWhen: (design) => design.enclosure.depth <= 0 && design.mesh.wall_thickness > 0 }),
 

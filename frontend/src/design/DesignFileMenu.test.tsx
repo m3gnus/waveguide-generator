@@ -1,7 +1,10 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { resetDesignStore } from '../stores/design';
+import { jobsSocket, type JobsSnapshot } from '../api/jobsSocket';
+import { preferencesStore } from '../prefs/preferences';
+import { resetDesignStore, useDesignStore } from '../stores/design';
+import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { DesignFileMenu } from './DesignFileMenu';
 
 /**
@@ -17,6 +20,8 @@ const requested: string[] = [];
 
 beforeEach(() => {
   resetDesignStore();
+  resetDocumentStore();
+  preferencesStore.resetForTests();
   requested.length = 0;
   container = document.createElement('div');
   document.body.appendChild(container);
@@ -73,5 +78,50 @@ describe('design file export menu', () => {
     const item = itemNamed('STEP inner surface');
     await act(async () => { item.click(); });
     expect(requested).toEqual(['/api/export/step?body=surface']);
+  });
+
+  it('names the next run from a successfully opened standalone config', async () => {
+    vi.mocked(fetch).mockImplementationOnce(async () => new Response(JSON.stringify({
+      dialect: 'ath', migrationsApplied: [],
+      passthrough: { keysPreserved: [], blocksPreserved: [], keyCount: 0, blockCount: 0 },
+      design: useDesignStore.getState().design,
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    vi.spyOn(jobsSocket, 'getSnapshot').mockReturnValue({
+      connection: 'connected', epoch: 1, cursor: 1, error: null,
+      jobs: [
+        { label: '260808_horn_v14' },
+        { label: 'horn_v09' },
+      ],
+    } as unknown as JobsSnapshot);
+
+    act(() => root.render(<DesignFileMenu/>));
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+    Object.defineProperty(input, 'files', {
+      configurable: true,
+      value: [{ name: '260701_horn_v13.cfg', text: async () => 'Length = 120' }],
+    });
+    await act(async () => { input.dispatchEvent(new Event('change', { bubbles: true })); });
+
+    expect(preferencesStore.getSnapshot()).toMatchObject({ outputName: 'horn', jobVersion: 15 });
+    expect(useDocumentStore.getState().filename).toBe('260701_horn_v13.cfg');
+  });
+
+  it('does not change run naming when opening a config fails', async () => {
+    preferencesStore.update({ outputName: 'keep-me', jobVersion: 7 });
+    vi.mocked(fetch).mockImplementationOnce(async () => new Response(
+      JSON.stringify({ detail: 'invalid config' }),
+      { status: 422, headers: { 'Content-Type': 'application/json' } },
+    ));
+
+    act(() => root.render(<DesignFileMenu/>));
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+    Object.defineProperty(input, 'files', {
+      configurable: true,
+      value: [{ name: 'should_not_replace_v99.cfg', text: async () => 'invalid' }],
+    });
+    await act(async () => { input.dispatchEvent(new Event('change', { bubbles: true })); });
+
+    expect(preferencesStore.getSnapshot()).toMatchObject({ outputName: 'keep-me', jobVersion: 7 });
+    expect(useDocumentStore.getState().filename).not.toBe('should_not_replace_v99.cfg');
   });
 });

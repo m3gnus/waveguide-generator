@@ -3,7 +3,8 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { preferencesStore, usePreferences, type ChartType } from '../prefs/preferences';
 import type { ChartTokens } from '../results/EChart';
-import { ResultsChartGrid, resolvedPolarStepNotice, resultLayoutClass } from './ResultsPanel';
+import { designForFamily, serializeDesign } from '../stores/design';
+import { ResultsChartGrid, resolvedPolarStepNotice, resultExportSnapshot, resultLayoutClass } from './ResultsPanel';
 
 const tokens: ChartTokens = { foreground: '#fff', muted: '#aaa', grid: '#333', gridMinor: '#222', accent: '#0ff', series: ['#0ff'], colormap: ['#000', '#fff'] };
 const result = { frequencies: [], metadata: {} };
@@ -22,6 +23,27 @@ describe('Directivity Map resolved grid label', () => {
       frequencies: [],
       metadata: { polar_grid: { requested_step: 5, resolved_step: 5 } },
     })).toBeNull();
+  });
+});
+
+describe('result export design snapshot', () => {
+  it('uses the selected job snapshot and revision rather than the live editor design', () => {
+    const solved = designForFamily('OSSE');
+    solved.L = 321;
+    const snapshot = resultExportSnapshot({
+      design_revision: 47,
+      script_snapshot: { version: 1, design: serializeDesign(solved) },
+    });
+    expect(snapshot.design?.formula).toBe('OSSE');
+    expect(snapshot.design?.L).toBe(321);
+    expect(snapshot.designRevision).toBe(47);
+  });
+
+  it('does not substitute the live design when a job has no readable snapshot', () => {
+    expect(resultExportSnapshot({ design_revision: 12, script_snapshot: null })).toEqual({
+      design: undefined,
+      designRevision: 12,
+    });
   });
 });
 

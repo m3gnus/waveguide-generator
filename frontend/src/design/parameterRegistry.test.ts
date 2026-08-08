@@ -65,6 +65,10 @@ describe('complete parameter registry', () => {
     expect(sectionFor('mesh.throat_segments')).toBe('Output & Passthrough');
     expect(sectionFor('mesh.throat_slice_density')).toBe('Output & Passthrough');
     expect(sectionFor('mesh.throat_resolution')).toBe('Solve & export mesh');
+    const triangleWarning = PARAMETER_REGISTRY.find((field) => field.id === 'mesh.max_triangles')!;
+    expect(triangleWarning.label).toBe('Triangle warning threshold');
+    const legacyApproval = PARAMETER_REGISTRY.find((field) => field.id === 'mesh.allow_large_mesh')!;
+    expect(fieldIsVisible(legacyApproval, designForFamily('OSSE'))).toBe(false);
     expect(sectionFor('mesh.wall_thickness')).toBe('Wall & Enclosure');
     expect(sectionFor('mesh.quadrants')).toBe('Solve & export mesh');
     expect(sectionFor('source.shape')).toBe('Source Definition');

@@ -37,7 +37,7 @@ function metrics(job: JobItem, now: number): string {
     .filter(Boolean).join(' · ');
 }
 
-function meshWarnings(job: JobItem): string[] {
+export function meshWarnings(job: Pick<JobItem, 'mesh_stats'>): string[] {
   const warnings = (job.mesh_stats as { warnings?: unknown } | null)?.warnings;
   return Array.isArray(warnings) ? warnings.map((warning) => String(warning)) : [];
 }
@@ -152,8 +152,8 @@ function RunNameField({ jobs }: { jobs: readonly JobItem[] }) {
   const preferences = usePreferences();
   // Keyed on the joined labels: the jobs array is replaced on every progress
   // event, and only a name appearing or disappearing can change the answer.
-  const key = jobs.map((job) => job.label ?? '').join(' ');
-  const labels = useMemo(() => key.split(' '), [key]);
+  const key = jobs.map((job) => job.label ?? '').join('\u0000');
+  const labels = useMemo(() => key.split('\u0000'), [key]);
   // Committed on blur, not per keystroke: renumbering while a name is half
   // typed would settle on the version free for `hor` rather than for `horn`.
   const commit = (value: string) =>

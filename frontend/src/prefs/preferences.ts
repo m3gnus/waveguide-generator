@@ -132,11 +132,9 @@ function migrateV3ToV4(preferences: Partial<Preferences>): Partial<Preferences> 
 }
 
 function migrateV4ToV5(preferences: Partial<Preferences>): Partial<Preferences> {
-  // The date prefix is what puts runs in order, so it is on by default now.
-  // Dropping a stored `false` adopts that default; a stored `true` was already
-  // asking for it and survives either way.
-  const { datePrefix: _adopted, ...carried } = preferences;
-  return carried;
+  // New profiles adopt the default, but migration must not overwrite an
+  // explicit preference that an existing profile already stored.
+  return preferences;
 }
 
 /**
@@ -187,6 +185,23 @@ export function nextJobNaming(
   const parsed = parseJobName(label);
   if (!parsed) return null;
   return { outputName: parsed.name, jobVersion: nextVersionFor(parsed.name, existingLabels) };
+}
+
+/** Derive the next run name after successfully opening a standalone config. */
+export function nextFileJobNaming(
+  filename: string,
+  existingLabels: readonly (string | null)[] = [],
+): { outputName: string; jobVersion: number } {
+  const stem = String(filename).replace(/^.*[\\/]/, '').replace(/\.(cfg|txt|mwg)$/i, '') || 'waveguide';
+  const parsed = parseJobName(stem);
+  if (parsed) {
+    return {
+      outputName: parsed.name,
+      jobVersion: Math.max(parsed.version + 1, nextVersionFor(parsed.name, existingLabels)),
+    };
+  }
+  const outputName = normalizeOutputName(stem);
+  return { outputName, jobVersion: nextVersionFor(outputName, existingLabels) };
 }
 
 /** One past the highest version any stored run already uses under `name`. */
