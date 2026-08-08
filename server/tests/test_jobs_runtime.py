@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from server.engines.dryrun import DryRunEngine
 from server.jobs.models import SolveRequest
 from server.jobs.runtime import JobConflictError, JobNotFoundError, JobRuntime
 from server.jobs.store import JobStore
@@ -306,6 +307,67 @@ def test_queued_stop_active_delete_and_terminal_delete(tmp_path: Path, monkeypat
         await runtime.stop(first)
         await runtime.wait_idle()
         await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "resolved_engine", [DryRunEngine(), None], ids=["available", "unavailable"]
+)
+def test_queued_stop_wins_while_scheduler_resolves_engine(
+    resolved_engine: DryRunEngine | None,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WG2_ENABLE_DRYRUN", "1")
+
+    class PausedRegistry:
+        def __init__(self) -> None:
+            self.entered = asyncio.Event()
+            self.release = asyncio.Event()
+            self.calls = 0
+
+        async def get_engine(self, _name: str) -> DryRunEngine | None:
+            self.calls += 1
+            if self.calls == 1:
+                # Submission validates availability before the scheduler later
+                # resolves the engine again. Only the scheduler lookup is the
+                # race window under test.
+                return DryRunEngine()
+            self.entered.set()
+            await self.release.wait()
+            return resolved_engine
+
+    async def scenario() -> None:
+        store = JobStore(tmp_path / "jobs.db")
+        registry = PausedRegistry()
+        runtime = JobRuntime(store, engine_registry=registry)  # type: ignore[arg-type]
+        try:
+            job_id = await runtime.submit(_request(delay_ms=0))
+            await asyncio.wait_for(registry.entered.wait(), 1)
+
+            assert store.get_job_row(job_id)["status"] == "queued"
+            assert job_id in runtime.running_job_ids
+            response = await runtime.stop(job_id)
+            assert response["status"] == "cancelled"
+
+            registry.release.set()
+            await runtime.wait_idle()
+            row = store.get_job_row(job_id)
+            assert row is not None
+            assert row["status"] == "cancelled"
+            assert store.get_results(job_id) is None
+            event_types = [
+                event["type"]
+                for event in store.replay_events(0) or []
+                if event["jobId"] == job_id
+            ]
+            assert "started" not in event_types
+            assert "completed" not in event_types
+            assert "failed" not in event_types
+        finally:
+            registry.release.set()
+            await runtime.shutdown()
 
     asyncio.run(scenario())
 

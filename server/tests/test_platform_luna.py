@@ -10,6 +10,7 @@ from pathlib import Path
 import subprocess
 import sys
 import threading
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -18,6 +19,7 @@ from launch import serve
 from server import app as app_module
 from server.engines.dryrun import DryRunEngine
 from server.engines.registry import EngineInfo
+from server.mesh import gmsh_worker
 from server.mesh.gmsh_worker import shutdown_gmsh_worker
 from server.platform import console, instance, logging_setup
 from server.platform.instance import (
@@ -340,6 +342,55 @@ def test_registered_native_signal_rearm_callbacks_are_removable() -> None:
     assert calls == ["rearmed"]
 
 
+def test_public_gmsh_worker_rearms_registered_signals_on_the_main_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    main_thread = threading.get_ident()
+    state = {"initialized": False, "initialize_kwargs": [], "finalized": 0}
+    callback_threads: list[int] = []
+    work_threads: list[int] = []
+
+    def initialize(**kwargs: Any) -> None:
+        state["initialize_kwargs"].append(kwargs)
+        state["initialized"] = True
+
+    def finalize() -> None:
+        state["initialized"] = False
+        state["finalized"] += 1
+
+    monkeypatch.setitem(
+        sys.modules,
+        "gmsh",
+        SimpleNamespace(
+            isInitialized=lambda: state["initialized"],
+            initialize=initialize,
+            finalize=finalize,
+        ),
+    )
+
+    async def scenario() -> None:
+        token = register_signal_rearm(
+            lambda: callback_threads.append(threading.get_ident())
+        )
+        try:
+            def observe() -> str:
+                work_threads.append(threading.get_ident())
+                assert state["initialized"] is True
+                assert callback_threads == [main_thread]
+                return "ok"
+
+            assert await gmsh_worker.run_on_gmsh_worker(observe) == "ok"
+        finally:
+            unregister_signal_rearm(token)
+
+    asyncio.run(scenario())
+
+    assert state["initialize_kwargs"] == [{"interruptible": False}]
+    assert state["finalized"] == 1
+    assert work_threads and work_threads[0] != main_thread
+    assert callback_threads == [main_thread, main_thread]
+
+
 def test_port_reservation_retries_bind_failures_without_real_sockets(
     monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -362,6 +413,50 @@ def test_port_reservation_retries_bind_failures_without_real_sockets(
     assert isinstance(listener, FakeSocket)
     assert port == 3102
     assert attempts == [3100, 3101, 3102]
+
+
+def test_windows_port_checks_require_exclusive_address_use(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: list[Any] = []
+    exclusive = -5
+
+    class FakeSocket:
+        def __init__(self) -> None:
+            self.options: list[tuple[int, int, int]] = []
+            self.closed = False
+            created.append(self)
+
+        def __enter__(self) -> "FakeSocket":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            self.close()
+
+        def setsockopt(self, level: int, option: int, value: int) -> None:
+            self.options.append((level, option, value))
+
+        def bind(self, _address: tuple[str, int]) -> None:
+            pass
+
+        def close(self) -> None:
+            self.closed = True
+
+    monkeypatch.setattr(instance.sys, "platform", "win32")
+    monkeypatch.setattr(
+        instance.socket, "SO_EXCLUSIVEADDRUSE", exclusive, raising=False
+    )
+    monkeypatch.setattr(instance.socket, "socket", lambda *_args: FakeSocket())
+
+    assert instance.port_is_available(3100) is True
+    listener, port = instance.reserve_port(3100)
+
+    assert port == 3100
+    assert listener is created[1]
+    assert [item.options for item in created] == [
+        [(instance.socket.SOL_SOCKET, exclusive, 1)],
+        [(instance.socket.SOL_SOCKET, exclusive, 1)],
+    ]
 
 
 def test_capability_probe_runs_off_thread_and_is_cached(

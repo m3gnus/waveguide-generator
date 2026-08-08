@@ -539,19 +539,48 @@ class JobRuntime:
             )
             request = request.model_copy(deep=True)
             request.design.root.mesh.quadrants = Expr(value=float(resolved_quadrants))
-            engine = await self.engine_registry.get_engine(request.options.engine)
+            try:
+                engine = await self.engine_registry.get_engine(request.options.engine)
+            except Exception:
+                state = self.store.cancellation_state(job_id)
+                if state is not None and state[0] != "queued":
+                    return
+                raise
             if engine is None:
-                raise EngineUnavailableError(f"Solve engine '{request.options.engine}' became unavailable")
+                state = self.store.cancellation_state(job_id)
+                if state is not None and state[0] != "queued":
+                    return
+                raise EngineUnavailableError(
+                    f"Solve engine '{request.options.engine}' became unavailable"
+                )
             # Batch Q extends only this established engine-call seam.  FIFO
             # scheduling/recovery remains untouched; real adapters own their
             # gmsh-worker + asyncio.to_thread orchestration, following v1
             # ``simulation_runner.py:397-427,430-527``.
             if request.options.engine != "dryrun":
+                event = self.store.start_job(
+                    job_id,
+                    {
+                        "status": "running",
+                        "started_at": _now_iso(),
+                        "stage": "initializing",
+                        "stage_message": f"Initializing {engine.name} solver",
+                        "progress": 0.05,
+                    },
+                    {
+                        "status": "running",
+                        "stage": "initializing",
+                        "progress": 0.05,
+                    },
+                )
+                if event is None:
+                    return
+                self.events.publish(event)
                 await self._run_real_engine(
                     job_id, request, engine, symmetry_metadata=symmetry_metadata
                 )
                 return
-            event = self._transition(
+            event = self.store.start_job(
                 job_id,
                 {
                     "status": "running",
@@ -560,9 +589,10 @@ class JobRuntime:
                     "stage_message": "Building dry-run mesh",
                     "progress": 0.05,
                 },
-                "started",
                 {"status": "running", "stage": "mesh", "progress": 0.05},
             )
+            if event is None:
+                return
             self.events.publish(event)
 
             design = request.design.model_dump(mode="json")
@@ -710,19 +740,6 @@ class JobRuntime:
         ``server/services/simulation_runner.py:263-294``.
         """
 
-        event = self._transition(
-            job_id,
-            {
-                "status": "running",
-                "started_at": _now_iso(),
-                "stage": "initializing",
-                "stage_message": f"Initializing {engine.name} solver",
-                "progress": 0.05,
-            },
-            "started",
-            {"status": "running", "stage": "initializing", "progress": 0.05},
-        )
-        self.events.publish(event)
         await self._append_log(job_id, f"Initializing {engine.name} solver")
         if request.options.verbose:
             await self._append_log(

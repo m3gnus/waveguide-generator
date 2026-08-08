@@ -54,11 +54,14 @@ class TestClient:
             async def send(message: dict[str, Any]) -> None:
                 sent.append(message)
 
-            raw_headers = [(b"host", b"testserver")]
-            raw_headers.extend(
-                (name.lower().encode("latin-1"), value.encode("latin-1"))
-                for name, value in (headers or {}).items()
+            request_headers = {"host": "127.0.0.1:3100"}
+            request_headers.update(
+                {name.lower(): value for name, value in (headers or {}).items()}
             )
+            raw_headers = [
+                (name.encode("latin-1"), value.encode("latin-1"))
+                for name, value in request_headers.items()
+            ]
             await self.app(
                 {
                     "type": "http",
@@ -134,8 +137,16 @@ def test_origin_guard_rejects_remote_and_allows_loopback(tmp_path: Path) -> None
     assert rejected.status_code == 403
     assert "Non-local Origin" in rejected.json()["detail"]
 
+    rebound = client.get("/health", headers={"Host": "attacker.test:3100"})
+    assert rebound.status_code == 403
+    assert "Non-local Host" in rebound.json()["detail"]
+
     for origin in ("http://localhost:3100", "http://127.0.0.1:3100", "http://[::1]:3100"):
         assert client.get("/health", headers={"Origin": origin}).status_code == 200
+    for host in ("localhost:3100", "127.0.0.1:3100", "[::1]:3100"):
+        assert client.get("/health", headers={"Host": host}).status_code == 200
+    for host in ("localhost", "127.0.0.1:3101", "[::1]:3101"):
+        assert client.get("/health", headers={"Host": host}).status_code == 403
 
 
 def test_pins_preserve_oracle_inventory_and_render_deterministically(tmp_path: Path) -> None:

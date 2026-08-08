@@ -8,6 +8,7 @@ import json
 import logging
 from pathlib import Path
 import time
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.gzip import GZipMiddleware
@@ -39,6 +40,36 @@ VERSION = str(
 FRONTEND_DIST = Path(__file__).resolve().parents[1] / "frontend" / "dist"
 request_log = logging.getLogger("wg2.requests")
 _local_origin = local_origin
+
+
+def _local_request_host(
+    host_header: str | None, *, scheme: str, bound_port: object
+) -> bool:
+    """Accept a loopback Host authority only for the socket that received it."""
+
+    if not host_header:
+        return False
+    try:
+        parsed = urlsplit(f"//{host_header}")
+        expected_port = int(bound_port)
+        effective_port = parsed.port
+    except (TypeError, ValueError):
+        return False
+    if (
+        not parsed.netloc
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+        or parsed.username is not None
+        or parsed.password is not None
+        or not 1 <= expected_port <= 65535
+    ):
+        return False
+    if effective_port is None:
+        effective_port = 443 if scheme in {"https", "wss"} else 80
+    return effective_port == expected_port and _local_origin(
+        f"{'https' if scheme in {'https', 'wss'} else 'http'}://{host_header}"
+    )
 
 
 async def prewarm_solver() -> None:
@@ -123,6 +154,31 @@ def create_app(
 
     @application.middleware("http")
     async def origin_guard(request: Request, call_next):
+        server = request.scope.get("server")
+        bound_port = (
+            server[1]
+            if isinstance(server, (list, tuple)) and len(server) > 1
+            else None
+        )
+        host = request.headers.get("host")
+        if not _local_request_host(
+            host,
+            scheme=request.url.scheme,
+            bound_port=bound_port,
+        ):
+            request_log.warning(
+                "Rejected %s %s for non-local Host %r; use the local application URL",
+                request.method,
+                request.url.path,
+                host,
+            )
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "detail": "Non-local Host rejected. Open Waveguide Generator v2 "
+                    "from the loopback URL printed by the launcher."
+                },
+            )
         origin = request.headers.get("origin")
         if origin is not None and not _local_origin(origin):
             request_log.warning(
