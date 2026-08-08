@@ -178,15 +178,14 @@ exit /b 1
 
 :missing_interface
 rem Running v2 is not supposed to require Node. Releases ship the built SPA as
-rem an attached archive, so point there first and leave the local build as the
-rem developer path rather than the only one.
+rem an attached archive, so point at the installer that fetches and verifies it
+rem and leave the local build as the developer path rather than the only one.
 echo.
 echo ERROR: The built interface is missing.
 echo.
-echo Download waveguide-generator-v2-spa-^<version^>.tar.gz from the release:
-echo   https://github.com/m3gnus/waveguide-generator/releases
-echo and extract it so that frontend\dist\index.html exists:
-echo   tar -xzf waveguide-generator-v2-spa-^<version^>.tar.gz -C frontend
+echo Run the installer, which downloads it from the release and verifies it
+echo against the published checksum before extracting anything:
+echo   scripts\install-and-update.bat
 echo.
 echo If you are working on the interface itself, build it instead:
 echo   cd frontend ^&^& npm install ^&^& npm run build
