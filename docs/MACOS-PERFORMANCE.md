@@ -155,3 +155,141 @@ native frequency axes, and a balloon with one invalid cell. For the full
 benchmark fixtures, compact JSON byte lengths and SHA-256 hashes were identical
 before and after for directivity, sanitized balloon data, and the beam-shape
 summary.
+
+---
+
+# Viewport frame rate — 2026-08-08
+
+Follow-up pass on the same host (10-core Apple M1 Max, macOS 26.5.2, Python
+3.13.1, Node 24.13.0), aimed at the question the section above left open: why
+the displayed geometry advanced about 0.6 frames per second while the interface
+committed about 104 design revisions per second.
+
+## 1. Where the frames were going: the client threw all of them away
+
+Not the GPU, not decoding, not React. `previewSocket.onFrame` rendered a frame
+only while its `designRevision` still equalled the store's, which no continuous
+gesture can satisfy — the store commits a revision per `pointermove` while
+building a preview takes hundreds of milliseconds, so the revision has always
+moved on by the time geometry comes back.
+
+Reproduced end to end by driving the real `PreviewProtocol` and the real mesher
+with a simulated drag — revisions at 104 Hz, coarse requests at 30 Hz, and the
+client's exact acceptance rule:
+
+| design | frames the server produced | frames the client accepted |
+|---|---:|---:|
+| OSSE with a chamfered enclosure | 21 | **0** |
+| the application's own seed R-OSSE | 7 | **0** |
+
+Zero, not "few". In a real browser the occasional acceptance comes only from a
+frame landing in a gap between pointer events, which is the measured 0.6/s.
+
+A frame that lags the design by a few revisions is what the stale badge exists
+to describe, so it is now rendered. A frame older than a *discontinuous* edit —
+undo, redo, load, family switch — is refused, because that geometry answers a
+design the user has rejected rather than an earlier point on the same gesture.
+Those edits already carry `immediate`, so their revision is the barrier.
+`WS-PROTOCOL.md` §1 carries the new rule; conformance case 2 is unchanged and
+now has its own test.
+
+After the change the same harness accepts every frame the server produces:
+
+| design | before | after |
+|---|---:|---:|
+| OSSE with a chamfered enclosure | 0.00 displayed frames/s | **5.68** |
+| the application's own seed R-OSSE | 0.00 displayed frames/s | **1.89** |
+
+## 2. Feature-edge extraction, 3.3–6.6x
+
+Edge extraction is the most expensive per-frame client work, and it now runs on
+every frame rather than almost never. It built a `Map` keyed on a string per
+vertex and a second keyed on a string per edge, and gave every edge a list of
+freshly allocated normal tuples. Same algorithm, open-addressed typed-array
+tables, per-edge normals as a chain of triangle indices; output verified
+byte-identical, with the old implementation kept in the test file as a
+differential oracle over hand-built and randomised meshes.
+
+| case | before | after | |
+|---|---:|---:|---:|
+| 12,820-triangle coarse scene | 6.34 ms | 1.91 ms | 3.3x |
+| 59,844-triangle fine scene | 36.20 ms | 6.90 ms | 5.3x |
+| 79,202-triangle single surface | 61.67 ms | 9.41 ms | 6.6x |
+
+The last row is the 66.76 ms case measured above.
+
+## 3. One re-render per gesture instead of one per pointermove
+
+`PreviewSocketManager.update` published a new snapshot object unconditionally,
+and `onRevision` calls it on every committed mutation only to set `stale` —
+which goes true on the first revision of a gesture and stays true. Every one of
+those was a full re-render of Viewport, the Canvas, the Scene and every
+SurfaceMesh, through `useSyncExternalStore`'s identity comparison. A 60-move
+drag now notifies once.
+
+## 4. The camera stopped stealing the user's view
+
+The camera fit key contains the model bounds, so every frame asks for a refit,
+and the fit is computed from the last *requested* direction — re-applying it
+discards an orbit and snaps back to the preset. That fired about once per pause
+before, because frames only landed between gestures; at the new frame rate it
+would fire several times a second. An automatic refit now yields to a camera
+the user has moved, while a view they ask for takes it back. Confirmed in a
+real browser: orbit to a side view, drag Mouth radius 140 → 134 mm, geometry
+updates, camera holds.
+
+## 5. Load waterfall
+
+`index.html` linked only the entry bundle, so the 946 kB Viewport chunk was not
+requested until the entry had downloaded, parsed and mounted. Measured over
+localhost in a real browser:
+
+| | entry JS | Viewport chunk |
+|---|---|---|
+| before | 11 → 30 ms | 100 → **123 ms** |
+| after (build-time `modulepreload`) | 11 → 44 ms | 11 → **51 ms** |
+
+The chart renderer gets `prefetch`, not `modulepreload`: nothing needs it until
+a solve has produced results.
+
+## 6. Measured and deliberately not done
+
+- **Stripping dockview's nine unreachable colour themes.** 64.6 kB of the
+  176.6 kB stylesheet, 3.5 kB gzipped, and below the browser timer's resolution
+  to parse. Doing it safely means doing it before Vite hashes the asset, and
+  postcss-import inlines the file inside `vite:css` where no plugin hook can
+  reach it; rewriting it in `generateBundle` would leave the content hash naming
+  content the file no longer has, while `/assets/` is served `immutable` for a
+  year. Not worth that machinery for 3.5 kB.
+- **Pure-ASGI origin guard and request log.** `BaseHTTPMiddleware` costs
+  0.7–2.2 ms per request, and — contrary to the reasoning in
+  `WINDOWS-PERFORMANCE.md` §7.6 — that cost is *fixed*, not proportional to the
+  body: a 4 MiB response and a small JSON one cost the same. On the only large
+  responses the application actually serves, the streamed `/assets/` chunks, the
+  difference was not measurable next to gzip's own 10 ms. A whole session makes
+  about twenty HTTP requests.
+- **Throttling coarse requests to the server's turnaround.** At 30 Hz against a
+  255 ms build, seven of every eight requests are coalesced away. Serialising
+  one costs 0.033 ms, so the client spends 1.0 ms per second of drag on requests
+  that get dropped, and the server about 13 ms per second validating them. Real,
+  but too small to justify the extra state.
+- **Dropping curvature from fine frames** (1430 → 1372 ms, 1.04x) and **omitting
+  the outer wall** (1372 → **1619 ms**, i.e. slower, and slower at coarse too).
+
+## 7. What is now the wall
+
+Server geometry generation. For the application's own seed design a coarse
+preview is 255 ms and a fine preview 1.85 s on this host; the Windows reference
+machine is roughly twice as slow. A profile of one coarse build shows 74,496
+scalar calls to `hornlab_mesher.profile_formulas.calculate_rosse` and 1.71
+million to `eval_param` — pure-Python evaluation inside the pinned mesher, and
+about 5.5 profile evaluations for every vertex that reaches the frame.
+
+Nothing at the v2 boundary changes that by much. Sweeping every fidelity knob
+`PreviewOptionsV1` exposes, the only combination that helps materially is
+chord 0.60 mm + normal step 14° + silhouette 32 + 3,000 vertices: **252 ms →
+120.6 ms (2.1x)**, at an achieved chord error of 0.46 mm against today's
+0.0068 mm, and with the angular resolution halved. `max_vertices` alone barely
+moves it (252 → 218 ms for a quarter of the triangles), which is the tell: the
+cost is the adaptive refinement search, not the output. Vectorising the profile
+evaluation in the mesher is the change that would matter.
