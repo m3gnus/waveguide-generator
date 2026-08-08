@@ -8,6 +8,11 @@ function paramOrDefault(value, fallback) {
   return value === undefined || value === null || value === '' ? fallback : value;
 }
 
+// Bracket for the guiding-curve coverage inversion. Kept in step with
+// _COVERAGE_ANGLE_MIN/_MAX in hornlab_mesher.profile_morph.
+const COVERAGE_ANGLE_MIN = 0.5;
+const COVERAGE_ANGLE_MAX = 89;
+
 function computeOsseBaseRadius(z, r0, k, a0, a) {
   const term1 = (k * r0) ** 2;
   const term2 = 2 * k * r0 * z * Math.tan(a0);
@@ -135,20 +140,37 @@ function evaluateCircularArc(zMain, r0Main, mouthR, params, p, L) {
   return center.y + sign * Math.sqrt(under);
 }
 
-function computeCoverageAngleFromGuidingCurve(p, params, config, coverageCache = null) {
+/**
+ * Solve the coverage angle that puts the OSSE mouth on the guiding curve.
+ *
+ * Returns `{ angle, saturated, achieved, target }`. `saturated` is `'min'` or
+ * `'max'` when the guiding curve is out of reach of the coverage bracket, in
+ * which case `achieved` is the mouth radius the geometry actually gets and
+ * `target` the one that was asked for. `saturated` is `null` both when the
+ * curve is met and when no guiding curve applies (the explicit `a` is used).
+ */
+function solveCoverageFromGuidingCurve(p, params, config, coverageCache = null) {
   if (coverageCache instanceof Map) {
     const key = p.toFixed(6);
     if (coverageCache.has(key)) return coverageCache.get(key);
 
-    const computed = computeCoverageAngleFromGuidingCurve(p, params, config, null);
+    const computed = solveCoverageFromGuidingCurve(p, params, config, null);
     coverageCache.set(key, computed);
     return computed;
   }
 
   const { totalLength, extLen, slotLen, r0Base, a0Deg, L } = config;
+  const explicit = () => ({
+    angle: evalParam(params.a, p),
+    saturated: null,
+    achieved: NaN,
+    target: NaN,
+    stationZ: NaN,
+    atMouth: true,
+  });
 
   const targetR = getGuidingCurveRadius(p, params);
-  if (!Number.isFinite(targetR)) return evalParam(params.a, p);
+  if (!Number.isFinite(targetR)) return explicit();
 
   // Canonical semantics (hornlab_mesher.profile_morph): gcurveDist is a
   // fraction of the MAIN OSSE length (throat extension/slot excluded);
@@ -161,30 +183,90 @@ function computeCoverageAngleFromGuidingCurve(p, params, config, coverageCache =
   let zMain = distParam > 0 && distParam <= 1 ? mainLength * distParam : distParam;
   if (!Number.isFinite(zMain) || zMain <= 0) zMain = mainLength;
   zMain = Math.min(mainLength, zMain);
-  if (zMain <= 0) return evalParam(params.a, p);
+  if (zMain <= 0) return explicit();
 
   // ATH anchors r0 at the MAIN throat; the extension tapers back from it.
   const r0Main = r0Base;
 
-  let low = 0.5;
-  let high = 89;
-  for (let i = 0; i < 24; i += 1) {
-    const mid = (low + high) / 2;
-    const rMid = computeOsseRadius(zMain, p, params, {
-      L,
-      aDeg: mid,
-      a0Deg,
-      r0: r0Main,
-    });
-    if (!Number.isFinite(rMid)) break;
-    if (rMid < targetR) {
-      low = mid;
-    } else {
-      high = mid;
-    }
-  }
+  const radiusAt = (aDeg) =>
+    computeOsseRadius(zMain, p, params, { L, aDeg, a0Deg, r0: r0Main });
 
-  return clamp((low + high) / 2, 0.5, 89);
+  const bisect = (lowStart, highStart) => {
+    let low = lowStart;
+    let high = highStart;
+    for (let i = 0; i < 24; i += 1) {
+      const mid = (low + high) / 2;
+      const rMid = radiusAt(mid);
+      if (!Number.isFinite(rMid)) break;
+      if (rMid < targetR) {
+        low = mid;
+      } else {
+        high = mid;
+      }
+    }
+    return clamp((low + high) / 2, COVERAGE_ANGLE_MIN, COVERAGE_ANGLE_MAX);
+  };
+
+  const atMouth = Math.abs(zMain - mainLength) <= 1e-9;
+  const settled = (angle, saturated, achieved) =>
+    ({ angle, saturated, achieved, target: targetR, stationZ: zMain, atMouth });
+
+  // Probe the bracket ends before bisecting. computeOsseRadius is monotonic in
+  // the coverage angle, so a target outside [r(0.5), r(89)] is unreachable and
+  // the bisection would silently converge onto the bracket end — the mouth
+  // then misses the guiding curve entirely and no further parameter change can
+  // bring it back. Mirrors hornlab_mesher.profile_morph so the local fallback
+  // renderer and the backend mesher agree on both the angle and the diagnosis.
+  const rLow = radiusAt(COVERAGE_ANGLE_MIN);
+  const rHigh = radiusAt(COVERAGE_ANGLE_MAX);
+  if (!Number.isFinite(rLow) || !Number.isFinite(rHigh)) {
+    // The radius is undefined somewhere in the bracket, so the probe supports
+    // no verdict. Bisect as before and report no diagnosis rather than putting
+    // a NaN in front of the user.
+    const angle = bisect(COVERAGE_ANGLE_MIN, COVERAGE_ANGLE_MAX);
+    return settled(angle, null, radiusAt(angle));
+  }
+  // Strict comparisons: a target exactly equal to a bracket end is reachable
+  // AT that end, not outside it.
+  if (targetR < rLow) return settled(COVERAGE_ANGLE_MIN, 'min', rLow);
+  if (targetR > rHigh) return settled(COVERAGE_ANGLE_MAX, 'max', rHigh);
+
+  const angle = bisect(COVERAGE_ANGLE_MIN, COVERAGE_ANGLE_MAX);
+  return settled(angle, null, radiusAt(angle));
+}
+
+/**
+ * Reason the guiding curve cannot be met at azimuth `p`, or `null` if it can.
+ *
+ * Mirrors `osse_coverage_saturation` in hornlab_mesher.profile_formulas so the
+ * local engine can diagnose the same condition as the backend mesher: the
+ * coverage solver clamps to its bracket instead of failing, which presents to
+ * the user as the mouth being stuck and every other parameter having no effect.
+ */
+export function getOsseCoverageSaturation(p, params) {
+  if (Number(evalParam(paramOrDefault(params.gcurveType, 0), p)) === 0) return null;
+  const { L, totalLength, extLen, slotLen } = resolveOsseLengthConfig(params, p);
+  const r0Base = evalParam(params.r0, p);
+  const a0Deg = evalParam(params.a0, p);
+  const config = { totalLength, extLen, slotLen, r0Base, a0Deg, L };
+  const solved = solveCoverageFromGuidingCurve(p, params, config);
+  if (!solved.saturated) return null;
+  const phiDeg = (((p * 180) / Math.PI) % 360 + 360) % 360;
+  const remedy =
+    solved.saturated === 'min'
+      ? 'shorten the horn (Length), reduce the termination shape s, or widen the guiding curve'
+      : 'lengthen the horn (Length) or narrow the guiding curve';
+  // The inversion is solved where the guiding curve sits, which is the mouth
+  // only when GCurve.Dist is 1 — and the schema still defaults it to 0.5.
+  const station = solved.atMouth
+    ? 'the mouth radius'
+    : `the radius at the guiding-curve distance (z=${solved.stationZ.toFixed(1)} mm)`;
+  return (
+    `guiding curve unreachable at phi=${phiDeg.toFixed(1)} deg: the coverage angle ` +
+    `is pinned at ${solved.angle} deg, so ${station} is ` +
+    `${solved.achieved.toFixed(1)} mm instead of the requested ` +
+    `${solved.target.toFixed(1)} mm; ${remedy}`
+  );
 }
 
 export function calculateOSSE(z, p, params, options = {}) {
@@ -213,7 +295,7 @@ export function calculateOSSE(z, p, params, options = {}) {
     options.coverageAngle ??
     (gcurveType === 0
       ? evalParam(params.a, p)
-      : computeCoverageAngleFromGuidingCurve(p, params, config, options.gcurveCache));
+      : solveCoverageFromGuidingCurve(p, params, config, options.gcurveCache).angle);
 
   let radius;
   if (z <= extLen) {
