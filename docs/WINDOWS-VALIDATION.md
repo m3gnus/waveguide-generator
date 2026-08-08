@@ -58,10 +58,13 @@ be built locally. `npm ci` and `npm run build` both succeeded first time on
 7.58 s with no Windows-specific failures. So the Node requirement cost one
 build, not debugging.
 
-It remains a real gap for end users: without `frontend/dist/index.html` the
-server will not even import, because `server/app.py` mounts it as `StaticFiles`
-at module scope. Until a `v*` tag exists and `.github/workflows/release.yml`
-has published an SPA archive, a Windows install from a clone needs Node.
+It remains a real gap for end users. Without `frontend/dist/` the module still
+imports, because the module-level ASGI app is lazy, but `create_app()` raises
+when it constructs the `StaticFiles` mount. The server cannot start and tests
+that construct the SPA-mounting app fail; the launchers separately require
+`frontend/dist/index.html`. Until a `v*` tag exists and
+`.github/workflows/release.yml` has published an SPA archive, a Windows install
+from a clone needs Node.
 
 ### 2.2 OpenCL is the solve path, and it works
 
@@ -676,8 +679,10 @@ Ordered by how much it matters.
    runtimes were already installed, so the missing-DLL branch and the
    no-OpenCL-runtime branch are covered by tests with faked failures rather
    than by a genuinely clean box.
-6. **No Windows CI job.** P6.3 lists it as blocked on P6.4; P6.4 is now far
-   enough along to add one.
+6. **Windows CI leg is written but unexecuted (as of 2026-08-08).** The server
+   matrix in `.github/workflows/ci.yml` includes `windows-latest`, but no v2
+   workflow run has exercised it yet. This is another never-run path, not a job
+   that remains to be implemented.
 7. ~~**`docs/TRACEABILITY-TABLE.md` is now stale.**~~ **Corrected 2026-08-08**
    when this branch merged: P011/Q007 now says `fcntl` on POSIX, `msvcrt.locking`
    plus a Win32 liveness probe on Windows, and names the module-scope `fcntl`
