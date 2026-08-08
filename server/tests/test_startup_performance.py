@@ -54,7 +54,7 @@ class HeaderClient:
             async def send(message: dict[str, Any]) -> None:
                 sent.append(message)
 
-            raw_headers = [(b"host", b"testserver")]
+            raw_headers = [(b"host", b"127.0.0.1:3100")]
             raw_headers.extend(
                 (name.lower().encode("latin-1"), value.encode("latin-1"))
                 for name, value in (headers or {}).items()

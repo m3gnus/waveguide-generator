@@ -14,10 +14,10 @@ The accepted distance is `max(1e-7 mm, 2e-4 * D)`, where `D` is the sampled mode
 
 The point grid does not contain every terminal surface, so the resolver separately audits:
 
-- `mesh.vertical_offset`: any non-zero or non-scalar value rejects xz because the completed mesh is translated in y while the native mirror remains at y=0. It does not affect yz.
+- `mesh.vertical_offset`: Only a non-finite or non-scalar value rejects xz. A finite non-zero value is a rigid +y placement applied after the cut planes are built at the origin; `_solver_mesher_config` drops that placement for y-cut domains (quadrants 1 and 12), so it cannot destroy the xz reduction. It does not affect yz.
 - Active enclosure spacing: yz requires `space_l == space_r`; xz requires `space_t == space_b`. Omitted values use the mesher's 25 mm defaults. Non-scalar values reject the affected plane. Enclosure values are ignored when enclosure depth is inactive or infinite-baffle mode takes precedence.
 - Source geometry: the supported flat-disc and rounded-cap sources are axis-centred constructions derived from the sampled throat ring. `source.radius` and `source.curvature` only change the axisymmetric cap profile, so they introduce no additional lateral asymmetry. Unsupported `source.contours` already fails the authoritative translation path; the resolver conservatively rejects both planes with that failure.
-- Infinite baffle: the coupled baffle and aperture are constructed from the sampled mouth and centred source rings and expose no independent left/right or top/bottom offsets. Their plane symmetry therefore follows the sampled surface. `mesh.vertical_offset` remains an explicit xz rejection in this mode.
+- Infinite baffle: the coupled baffle and aperture are constructed from the sampled mouth and centred source rings and expose no independent left/right or top/bottom offsets. Their plane symmetry therefore follows the sampled surface. `mesh.vertical_offset` follows the same finite-scalar rule and rigid-placement treatment in this mode.
 - Profile/formula geometry, morph target and dimensions, OSSE guiding curves and rotation, cross-section parameters, global rotation/scale, throat extension, and slot geometry are covered by the sampled surface itself.
 
 ## Resolution and precedence

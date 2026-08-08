@@ -103,6 +103,44 @@ def test_golden_units_phase_nulls_impedance_di_and_partial_warning() -> None:
     assert response["metadata"]["balloon_sampling"]["status"] == "disabled"
 
 
+def test_plane_di_keeps_the_native_on_axis_reference_when_display_norm_changes() -> None:
+    """The polar display reference must not change the integrated plane DI."""
+
+    angles = np.linspace(0.0, 180.0, 181)
+    levels = -6.0 * np.square(angles / 30.0)
+    result = _native_result()
+    result.observation_angles_deg = angles
+    result.pressure_complex = np.ones((2, 2, angles.size), dtype=np.complex128) * 20.0e-6
+    result.directivity_db = np.tile(levels, (2, 2, 1))
+
+    on_axis_context = _context()
+    on_axis_context.polar_config["norm_angle"] = 0.0
+    ten_degree_context = _context()
+    ten_degree_context.polar_config["norm_angle"] = 10.0
+
+    on_axis = build_solver_response(
+        result=result,
+        config=_config(),
+        context=on_axis_context,
+        start_time=0.0,
+        metadata={},
+    )
+    ten_degree = build_solver_response(
+        result=result,
+        config=_config(),
+        context=ten_degree_context,
+        start_time=0.0,
+        metadata={},
+    )
+
+    assert on_axis["directivity"]["horizontal"][0][10][1] == pytest.approx(-2.0 / 3.0)
+    assert ten_degree["directivity"]["horizontal"][0][10][1] == pytest.approx(0.0)
+    assert on_axis["di"]["di"] == ten_degree["di"]["di"]
+    assert ten_degree["di"]["di"]["horizontal"] == pytest.approx(
+        [13.18860501875189, 13.18860501875189]
+    )
+
+
 @pytest.mark.parametrize(
     ("requested", "configured", "with_sphere", "status"),
     [
