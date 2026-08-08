@@ -150,13 +150,20 @@ def _gmsh22_observation_frame(
         axis = projected_axis / np.linalg.norm(projected_axis)
     centroids = np.mean(source, axis=1)
     source_center = np.average(centroids, weights=areas, axis=0)
-    projections = vertices @ axis
-    span = float(np.ptp(projections))
-    if span > 1.0e-12:
-        from_min = abs(float(source_center @ axis) - float(np.min(projections))) / span
-        from_max = abs(float(source_center @ axis) - float(np.max(projections))) / span
-        if min(from_min, from_max) <= 0.25 and from_min >= from_max:
-            axis = -axis
+    # The source cap's outward normal already points from the throat into the
+    # fluid, which is forward by construction: the mesher only emits artifacts
+    # whose winding it has verified (``require_positive_volume``), and the
+    # builder re-checks it as ``semantic_orientation.source_normal_projection``.
+    #
+    # The native backends additionally second-guess that normal against the
+    # mesh extents, flipping the axis when the source sits nearer the far end
+    # than a quarter of the span.  That test assumes the mesh is a bare horn,
+    # whose throat is the rearmost thing in it.  Put the same horn in a cabinet
+    # roughly four times its own depth and the throat lands inside the front
+    # quarter, the test "corrects" a perfectly good +z axis to -z, and every
+    # polar is then measured two metres behind the closed back panel -- a
+    # near-silent, frequency-collapsing response that looks like a leaking box.
+    # Nothing here needs the guess, so nothing here makes it.
     along_axis = vertices @ axis
     threshold = float(np.max(along_axis) - 0.02 * np.ptp(along_axis))
     mouth_center = np.mean(vertices[along_axis >= threshold], axis=0)
@@ -241,17 +248,28 @@ def observation_config(
             break
     if supports("normalization_angle_deg"):
         kwargs["normalization_angle_deg"] = float(polar.get("norm_angle", 10.0))
-    if (
-        msh_text is not None
-        and not native_inclination
+    needs_custom_inclination = (
+        not native_inclination
         and "diagonal" in kwargs["planes"]
         and not math.isclose(float(polar.get("inclination", 45.0)), 45.0)
-    ):
-        if not supports("custom_points"):
-            raise unavailable_error(
-                f"Installed {package_name} cannot represent a custom diagonal inclination."
-            )
-        kwargs["custom_points"] = _custom_observation_points(context, msh_text)
+    )
+    # Supply the arcs outright whenever the artifact is at hand, rather than
+    # letting the backend re-derive which way the horn faces from the mesh it
+    # was handed.  ``_gmsh22_observation_frame`` reads the same source cap the
+    # backend would, minus the extent guess that points a deep cabinet's polars
+    # out through its own back panel (see that function).  A mesh without
+    # source-tagged triangles has no frame to build, so it keeps the native
+    # inference -- unless a non-45 degree diagonal made the points mandatory.
+    if msh_text is not None and supports("custom_points"):
+        try:
+            kwargs["custom_points"] = _custom_observation_points(context, msh_text)
+        except ValueError:
+            if needs_custom_inclination:
+                raise
+    elif needs_custom_inclination:
+        raise unavailable_error(
+            f"Installed {package_name} cannot represent a custom diagonal inclination."
+        )
     if polar.get("spherical_sampling"):
         kwargs["sphere_grid"] = (
             int(polar.get("spherical_theta_count") or 37),

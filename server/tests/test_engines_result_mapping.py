@@ -128,3 +128,100 @@ def test_balloon_four_state_and_pole_normalization(
         assert response["balloon"]["spl_norm_db"][0][0] == [0.0, 0.0, 0.0]
         assert response["balloon"]["spl_norm_db"][0][1] == pytest.approx([-6.02] * 3)
         assert response["balloon"]["hemisphere"] is True
+
+
+def _cabinet_msh(*, back_z: float) -> str:
+    """A source cap facing +z at the mouth, with a box stretching back to ``back_z``.
+
+    Three physical-tag-2 nodes wound for a +z normal, plus wall triangles that
+    set the extents: the mouth plane just ahead of the cap and the closed back
+    panel ``back_z`` behind it.
+    """
+
+    return f"""$MeshFormat
+2.2 0 8
+$EndMeshFormat
+$Nodes
+9
+1 0 0 0
+2 0.02 0 0
+3 0 0.02 0
+4 0 0 0.01
+5 0.2 0 0.01
+6 0 0.2 0.01
+7 0 0 {back_z}
+8 0.2 0 {back_z}
+9 0 0.2 {back_z}
+$EndNodes
+$Elements
+3
+1 2 2 2 2 1 2 3
+2 2 2 1 1 4 5 6
+3 2 2 1 1 7 8 9
+$EndElements
+"""
+
+
+@pytest.mark.parametrize("back_z", [-0.02, -0.16, -0.28, -2.0])
+def test_a_cabinet_never_points_the_polar_arcs_out_through_its_back_panel(
+    back_z: float,
+) -> None:
+    """The forward axis is the source cap's, at every cabinet depth.
+
+    Deep boxes used to put the throat inside the front quarter of the mesh
+    span, which flipped the axis and measured every polar two metres behind the
+    closed back panel -- silent, and collapsing with frequency.
+    """
+
+    from server.solver.result_mapping import _gmsh22_observation_frame
+
+    axis, origin, _horizontal, _vertical = _gmsh22_observation_frame(
+        _cabinet_msh(back_z=back_z), origin_at="mouth", symmetry_plane="yz+xz"
+    )
+    assert axis.tolist() == pytest.approx([0.0, 0.0, 1.0])
+    assert origin[0] == pytest.approx(0.0)
+    assert origin[1] == pytest.approx(0.0)
+    assert origin[2] > 0.0  # the mouth plane, never the back panel at back_z
+
+
+def test_the_observation_frame_is_supplied_rather_than_inferred_natively() -> None:
+    """Backends that accept explicit points are given them, not left to guess."""
+
+    from server.solver.result_mapping import observation_config
+
+    class NativeObservationConfig:
+        def __init__(self, *, custom_points: dict[str, object] | None = None, **_: object) -> None:
+            self.custom_points = custom_points
+
+    context = _context()
+    native = observation_config(
+        context,
+        NativeObservationConfig,
+        RuntimeError,
+        "test-adapter",
+        msh_text=_cabinet_msh(back_z=-0.28),
+    )
+    assert native.custom_points is not None
+    for plane in context.polar_config["enabled_axes"]:
+        on_axis = np.asarray(native.custom_points[plane])[0]
+        assert on_axis[2] > 0.0
+
+
+def test_a_mesh_without_a_source_tag_keeps_the_native_inference() -> None:
+    """No source cap means no frame to supply; the backend still gets a config."""
+
+    from server.solver.result_mapping import observation_config
+
+    class NativeObservationConfig:
+        def __init__(self, *, custom_points: dict[str, object] | None = None, **_: object) -> None:
+            self.custom_points = custom_points
+
+    sourceless = _cabinet_msh(back_z=-0.28).replace("1 2 2 2 2 1 2 3", "1 2 2 1 1 1 2 3")
+    native = observation_config(
+        _context(),
+        NativeObservationConfig,
+        RuntimeError,
+        "test-adapter",
+        msh_text=sourceless,
+    )
+    assert native.custom_points is None

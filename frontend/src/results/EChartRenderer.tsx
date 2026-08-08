@@ -39,6 +39,16 @@ export function EChartRenderer({ option, label }: { option: EChartsOption; label
     };
   }, []);
 
+  // Every call here redraws the chart from nothing, which is a visible flash.
+  // That is correct for a genuinely new result and wrong for anything else, so
+  // the discipline this depends on lives upstream: `option` must keep its
+  // identity while the data behind it has not changed. It used to churn on
+  // every jobs message, which is what made a running solve flicker.
+  //
+  // Merging instead of replacing was tried and reverted: `replaceMerge` keeps
+  // the dataZoom component across the swap, and its retained window then
+  // clipped the incoming series -- the SPL and impedance panels drew the first
+  // fifth of their data stretched across the whole card.
   useEffect(() => {
     chart.current?.setOption(option, { notMerge: true, lazyUpdate: true });
   }, [option]);

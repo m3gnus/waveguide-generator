@@ -68,7 +68,7 @@ const defaults: Preferences = {
   outputName: 'horn',
   counter: 1,
   jobVersion: 1,
-  datePrefix: false,
+  datePrefix: true,
   jobSort: 'completed_desc',
   minRating: 0,
 };
@@ -105,13 +105,13 @@ export function normalize(raw: Partial<Preferences> = {}): Preferences {
     outputName: normalizeOutputName(raw.outputName),
     counter: Number.isFinite(Number(raw.counter)) ? Math.max(1, Math.min(999_999, Math.floor(Number(raw.counter)))) : defaults.counter,
     jobVersion: Number.isFinite(Number(raw.jobVersion)) ? Math.max(1, Math.min(999_999, Math.floor(Number(raw.jobVersion)))) : defaults.jobVersion,
-    datePrefix: raw.datePrefix === true,
+    datePrefix: raw.datePrefix === undefined ? defaults.datePrefix : raw.datePrefix === true,
     jobSort: jobSortIds.has(raw.jobSort as JobSort) ? raw.jobSort as JobSort : defaults.jobSort,
     minRating: Number.isFinite(Number(raw.minRating)) ? Math.max(0, Math.min(5, Math.floor(Number(raw.minRating)))) : defaults.minRating,
   };
 }
 
-export const STORAGE_VERSION = 4;
+export const STORAGE_VERSION = 5;
 
 function migrateV1ToV2(preferences: Partial<Preferences>): Partial<Preferences> {
   const { chartTypes: _replaced, ...carried } = preferences;
@@ -131,35 +131,100 @@ function migrateV3ToV4(preferences: Partial<Preferences>): Partial<Preferences> 
   return preferences;
 }
 
+function migrateV4ToV5(preferences: Partial<Preferences>): Partial<Preferences> {
+  // The date prefix is what puts runs in order, so it is on by default now.
+  // Dropping a stored `false` adopts that default; a stored `true` was already
+  // asking for it and survives either way.
+  const { datePrefix: _adopted, ...carried } = preferences;
+  return carried;
+}
+
+/**
+ * `260808_horn_v14` — YYMMDD, so a plain A–Z sort of the stored labels is also
+ * a chronological one, in the runs list and in every export folder.
+ */
+export function datePrefixFor(now = new Date()): string {
+  return [now.getFullYear() % 100, now.getMonth() + 1, now.getDate()]
+    .map((part) => String(part).padStart(2, '0'))
+    .join('');
+}
+
 export function jobBaseName(
   preferences: Pick<Preferences, 'outputName' | 'jobVersion' | 'datePrefix'>,
   now = new Date(),
 ): string {
-  const prefix = preferences.datePrefix
-    ? `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}_`
-    : '';
+  const prefix = preferences.datePrefix ? `${datePrefixFor(now)}_` : '';
   const version = Math.max(1, Math.min(999_999, Math.floor(preferences.jobVersion)));
   return `${prefix}${normalizeOutputName(preferences.outputName)}_v${String(version).padStart(2, '0')}`;
 }
 
 /**
+ * Split a stored run label back into the name the user typed and its version.
+ *
+ * Tolerates both date prefixes this app has written (`260808_` and the earlier
+ * `2026-08-08_`) and returns null for anything that is not a versioned name --
+ * a hand-edited label, or one of the `osse_1a2b3c4d` fallbacks a run with no
+ * label at all displays under.
+ */
+export function parseJobName(label: string | null | undefined): { name: string; version: number } | null {
+  const match = /^(?:\d{6}_|\d{4}-\d{2}-\d{2}_)?(.+)_v(\d{1,6})$/.exec(String(label ?? '').trim());
+  if (!match) return null;
+  return { name: normalizeOutputName(match[1]), version: Number(match[2]) };
+}
+
+/**
+ * The naming a run of `label`'s design should get: same name, next free number.
+ *
+ * Reopening an old config and solving it again should read as another take on
+ * that design rather than as an unrelated run, so it inherits the name -- but
+ * it must not collide with the run it came from, or with anything solved since,
+ * so the version clears every version already used under that name.
+ */
+export function nextJobNaming(
+  label: string | null | undefined,
+  existingLabels: readonly (string | null)[] = [],
+): { outputName: string; jobVersion: number } | null {
+  const parsed = parseJobName(label);
+  if (!parsed) return null;
+  return { outputName: parsed.name, jobVersion: nextVersionFor(parsed.name, existingLabels) };
+}
+
+/** One past the highest version any stored run already uses under `name`. */
+export function nextVersionFor(name: string, existingLabels: readonly (string | null)[] = []): number {
+  const wanted = normalizeOutputName(name);
+  const used = existingLabels
+    .map((label) => parseJobName(label))
+    .filter((parsed): parsed is { name: string; version: number } => parsed?.name === wanted)
+    .map((parsed) => parsed.version);
+  return Math.min(999_999, Math.max(0, ...used) + 1);
+}
+
+/**
  * Migrations are intentionally sequential. v1→v2 replaced two unusable seeded
  * panels while preserving unrelated settings; v2→v3 makes the chart list's
- * stored length authoritative; v3→v4 adds independent job-version naming.
+ * stored length authoritative; v3→v4 adds independent job-version naming;
+ * v4→v5 puts the date prefix on by default. Each stored version runs every
+ * step from its own onwards -- v3 used to run only its first step, so a v3
+ * profile would have skipped v4→v5 entirely.
  */
+const MIGRATIONS: Record<number, (preferences: Partial<Preferences>) => Partial<Preferences>> = {
+  1: migrateV1ToV2,
+  2: migrateV2ToV3,
+  3: migrateV3ToV4,
+  4: migrateV4ToV5,
+};
+
 export function readPreferences(raw: string | null): { value: Preferences; migrated: boolean } {
   try {
     const parsed = JSON.parse(raw ?? '{}') as { version?: number; preferences?: Partial<Preferences> };
     if (parsed.version === STORAGE_VERSION) return { value: normalize(parsed.preferences), migrated: false };
-    if (parsed.version === 3) {
-      return { value: normalize(migrateV3ToV4(parsed.preferences ?? {})), migrated: true };
-    }
-    if (parsed.version === 2) {
-      return { value: normalize(migrateV2ToV3(parsed.preferences ?? {})), migrated: true };
-    }
-    if (parsed.version === 1) {
-      const v2 = migrateV1ToV2(parsed.preferences ?? {});
-      return { value: normalize(migrateV2ToV3(v2)), migrated: true };
+    const from = Number(parsed.version);
+    if (Number.isInteger(from) && from >= 1 && from < STORAGE_VERSION) {
+      let carried = parsed.preferences ?? {};
+      for (let version = from; version < STORAGE_VERSION; version += 1) {
+        carried = MIGRATIONS[version](carried);
+      }
+      return { value: normalize(carried), migrated: true };
     }
     return { value: { ...defaults }, migrated: raw !== null };
   } catch {

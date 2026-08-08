@@ -88,6 +88,42 @@ describe('results LRU', () => {
     selection.prune(new Set(['pinned']));
     expect(selection.getSnapshot()).toEqual({ primary: 'pinned', overlays: [], following: false });
   });
+
+  it('holds one snapshot identity while the selection is unchanged', () => {
+    // Every jobs message prunes this store, so during a solve it is written to
+    // several times a second. A new identity for an unchanged selection
+    // rebuilt every chart's ECharts option, which read on screen as a blink.
+    const selection = new CompareStore();
+    selection.followLatest('solve-1');
+    selection.toggleOverlay('overlay-1');
+    const before = selection.getSnapshot();
+    let notifications = 0;
+    const stop = selection.subscribe(() => { notifications += 1; });
+
+    selection.followLatest('solve-1');
+    selection.prune(new Set(['solve-1', 'overlay-1']));
+    selection.prune(new Set(['solve-1', 'overlay-1']));
+    expect(selection.getSnapshot()).toBe(before);
+    expect(notifications).toBe(0);
+
+    selection.followLatest('solve-2');
+    expect(selection.getSnapshot()).not.toBe(before);
+    expect(notifications).toBe(1);
+    stop();
+  });
+
+  it('notifies when only the follow state changes', () => {
+    const selection = new CompareStore();
+    selection.followLatest('solve-1');
+    let notifications = 0;
+    const stop = selection.subscribe(() => { notifications += 1; });
+    // Same primary, same overlays: only the pin changed, and the toolbar has
+    // to see it.
+    selection.setPrimary('solve-1');
+    expect(selection.getSnapshot()).toMatchObject({ primary: 'solve-1', following: false });
+    expect(notifications).toBe(1);
+    stop();
+  });
 });
 
 describe('chart data mappers', () => {
