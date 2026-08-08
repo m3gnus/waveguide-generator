@@ -133,6 +133,17 @@ export class CompareStore {
     this.set({ primary, overlays, following: primary === null ? true : this.value.following });
   }
   private set(value: CompareSelection): void {
+    // A selection that did not change must not get a new identity. This store
+    // is pruned on every jobs message, so during a solve it was handing out a
+    // fresh snapshot several times a second; everything downstream that keys
+    // off it -- the id list, the overlay list, and through them each chart's
+    // ECharts option -- was rebuilt each time for an unchanged selection.
+    if (
+      value.primary === this.value.primary
+      && value.following === this.value.following
+      && value.overlays.length === this.value.overlays.length
+      && value.overlays.every((id, index) => id === this.value.overlays[index])
+    ) return;
     this.value = value;
     this.listeners.forEach((listener) => listener());
   }

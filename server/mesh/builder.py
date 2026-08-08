@@ -15,6 +15,7 @@ import json
 import math
 import tempfile
 from collections.abc import Callable, Mapping
+from copy import deepcopy
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -34,7 +35,14 @@ if TYPE_CHECKING:  # pragma: no cover - meshio is imported where it is used
 
 
 CANONICAL_SURFACE_TAGS = {1, 2, 3, 4, 12}
+MOUTH_APERTURE_SURFACE_TAG = 12
 LARGE_MESH_WARNING_FULL_DOMAIN_TRIANGLES = 18_000
+# The mesher can estimate and count triangles, but it cannot know the P1
+# vertex/DOF count that governs the dense solver's memory. Keep this loose
+# actual-domain limit as an artifact/preflight sanity check; the independent
+# vertex/DOF guard below is the authoritative dense-memory safety limit.
+MAX_SOLVER_MESH_ARTIFACT_TRIANGLES = 22_000
+DENSE_SOLVER_MEMORY_LIMIT_BYTES = 8 * 1024**3
 SOLVER_MESH_CACHE_FORMAT_VERSION = 1
 
 _solver_mesh_cache = SolverMeshArtifactCache()
@@ -126,6 +134,197 @@ def _solver_mesher_config(design: DesignConfig) -> dict[str, Any]:
     # clamp ever regresses, ``off_plane_open_edge_count`` now reports the torn
     # seam directly rather than being pre-empted by a blunt geometry change.
     return config
+
+
+def _domain_multiplier_for_quadrants(quadrants: int) -> int:
+    return {1: 4, 12: 2, 14: 2, FULL_DOMAIN_QUADRANTS: 1}[quadrants]
+
+
+def _mesh_policy(
+    design: DesignConfig,
+    config: Mapping[str, Any],
+) -> tuple[dict[str, Any], int, int]:
+    """Apply the non-bypassable artifact sanity cap to a mesher config.
+
+    ``mesh.max_triangles`` remains the user's full-domain-equivalent warning
+    threshold. The mesher still needs a hard limit, so a private copy replaces
+    that threshold with the actual-domain artifact cap converted to its
+    full-domain convention. Its estimate gate applies its own 1.25 safety
+    margin; the exact 22,000-triangle limit is repeated on the parsed artifact.
+    The legacy ``allow_large_mesh`` field is accepted on import and the wire,
+    but cannot bypass either check. Dense memory is checked from used P1
+    vertices after parsing because triangle counts cannot predict it.
+    """
+
+    warning_limit = int(
+        round(
+            _strict_scalar(
+                design.root.mesh.max_triangles,
+                float(LARGE_MESH_WARNING_FULL_DOMAIN_TRIANGLES),
+                "mesh.max_triangles",
+            )
+        )
+    )
+    if warning_limit <= 0:
+        raise ValueError("mesh.max_triangles must be greater than zero")
+    quadrants = normalise_quadrants((config.get("mesh") or {}).get("quadrants"))
+    multiplier = _domain_multiplier_for_quadrants(quadrants)
+    guarded = deepcopy(dict(config))
+    guarded_mesh = guarded.setdefault("mesh", {})
+    guarded_mesh["maxTriangles"] = (
+        MAX_SOLVER_MESH_ARTIFACT_TRIANGLES * multiplier
+    )
+    guarded_mesh["allowLargeMesh"] = False
+    return guarded, warning_limit, multiplier
+
+
+def _enforce_artifact_triangle_ceiling(triangle_count: int) -> None:
+    """Repeat the mesher artifact sanity check on the parsed output."""
+
+    if triangle_count > MAX_SOLVER_MESH_ARTIFACT_TRIANGLES:
+        raise RuntimeError(
+            "Solver mesh contains "
+            f"{triangle_count:,} actual-domain triangles, exceeding the "
+            "non-bypassable solver-artifact sanity ceiling of "
+            f"{MAX_SOLVER_MESH_ARTIFACT_TRIANGLES:,}. Coarsen the relevant "
+            "mm mesh resolution before solving."
+        )
+
+
+def _dense_solver_memory_requirements(
+    triangles: np.ndarray,
+    quadrants: int,
+    *,
+    mode: str = "",
+    tags: np.ndarray | None = None,
+) -> dict[str, int]:
+    """Return conservative Metal and symmetry-expanded BEMPP storage.
+
+    Dense-system dimensions follow used P1 vertices, not triangle count. The
+    11 complex64 dense systems cover the concurrent Metal workload. Coupled
+    infinite-baffle Metal adds one P0 velocity unknown per aperture triangle.
+    A BEMPP symmetry solve additionally operates on mirrored full geometry and
+    keeps three reduced-row by full-trial arrays. Taking the larger backend
+    estimate prevents symmetry or aperture coupling from understating memory.
+    """
+
+    used_vertex_count = int(np.unique(triangles).size)
+    multiplier = _domain_multiplier_for_quadrants(normalise_quadrants(quadrants))
+    aperture_triangle_count = 0
+    if (
+        str(mode).strip().lower() == "infinite-baffle"
+        and tags is not None
+    ):
+        # This is a physical-group contract, not optional mesher metadata. A
+        # missing or spoofed apertureTag value therefore cannot undercount the
+        # coupled P0 unknowns.
+        aperture_triangle_count = int(
+            np.count_nonzero(tags == MOUTH_APERTURE_SURFACE_TAG)
+        )
+    metal_dof_count = used_vertex_count + aperture_triangle_count
+    metal_bytes = 11 * 8 * metal_dof_count**2
+    bempp_bytes = 3 * 8 * multiplier * used_vertex_count**2
+    return {
+        "used_vertex_count": used_vertex_count,
+        "aperture_triangle_count": aperture_triangle_count,
+        "metal_dof_count": metal_dof_count,
+        "domain_multiplier": multiplier,
+        "metal_bytes_per_dof_squared": 11 * 8,
+        "bempp_bytes_per_vertex_squared": 3 * 8 * multiplier,
+        "metal_bytes": metal_bytes,
+        "bempp_bytes": bempp_bytes,
+        "estimated_bytes": max(metal_bytes, bempp_bytes),
+    }
+
+
+def _enforce_dense_solver_memory_ceiling(
+    triangles: np.ndarray,
+    quadrants: int,
+    *,
+    mode: str = "",
+    tags: np.ndarray | None = None,
+) -> dict[str, int]:
+    """Fail before assembly when conservative dense storage exceeds 8 GiB."""
+
+    requirements = _dense_solver_memory_requirements(
+        triangles,
+        quadrants,
+        mode=mode,
+        tags=tags,
+    )
+    used_vertex_count = requirements["used_vertex_count"]
+    estimated_bytes = requirements["estimated_bytes"]
+    if estimated_bytes > DENSE_SOLVER_MEMORY_LIMIT_BYTES:
+        multiplier = _domain_multiplier_for_quadrants(normalise_quadrants(quadrants))
+        coupled = (
+            f" plus {requirements['aperture_triangle_count']:,} aperture P0 DOFs"
+            if requirements["aperture_triangle_count"]
+            else ""
+        )
+        raise RuntimeError(
+            "Solver mesh uses "
+            f"{used_vertex_count:,} P1 vertex/DOFs{coupled} in a "
+            f"{multiplier}x symmetry domain, with a conservative dense-solver "
+            "memory estimate of "
+            f"{estimated_bytes / 1024**3:.2f} GiB. This exceeds the "
+            f"{DENSE_SOLVER_MEMORY_LIMIT_BYTES / 1024**3:.0f} GiB safety "
+            "ceiling; coarsen the relevant mm mesh resolution before solving."
+        )
+    return requirements
+
+
+def _require_closed_acoustic_topology(
+    config: Mapping[str, Any], integrity: Mapping[str, Any]
+) -> None:
+    """Reject leaks and invalid topology for models that claim to be closed."""
+
+    mode = str(config.get("mode", "")).strip().lower()
+    if mode not in {"enclosure", "freestanding", "infinite-baffle"}:
+        return
+    off_plane_open_edges = int(integrity.get("off_plane_open_edge_count", 0))
+    invalid = not bool(integrity.get("valid", False))
+    if not invalid and off_plane_open_edges == 0:
+        return
+    reasons = []
+    if invalid:
+        reasons.append("invalid, degenerate, non-manifold, or misoriented topology")
+    if off_plane_open_edges:
+        reasons.append(
+            f"{off_plane_open_edges:,} free edges away from symmetry cut planes"
+        )
+    raise RuntimeError(
+        f"Closed {mode} acoustic model rejected: " + " and ".join(reasons) + "."
+    )
+
+
+def _large_mesh_warnings(
+    *,
+    triangle_count: int,
+    full_domain_count: int,
+    budget_full_domain: int,
+    domain_multiplier: float,
+    metadata: Mapping[str, Any],
+) -> list[str]:
+    """Describe an advisory budget overrun without deciding whether to solve."""
+
+    if full_domain_count <= budget_full_domain:
+        return []
+    effective_budget = max(1, int(round(budget_full_domain / domain_multiplier)))
+    dominant = metadata.get("meshTriangleDominantRegion")
+    dominant_mm = metadata.get("meshTriangleDominantTargetMm")
+    advice = (
+        f" The heaviest region is the {dominant} at {float(dominant_mm):.3g} mm."
+        if dominant and isinstance(dominant_mm, (int, float))
+        else ""
+    )
+    return [
+        "Large solve mesh: "
+        f"{triangle_count:,} triangles against a warning threshold of "
+        f"{effective_budget:,} ({full_domain_count:,} vs {budget_full_domain:,} "
+        "full-domain equivalent). The solve will continue, but may take "
+        "significantly longer and use more memory."
+        f"{advice} Coarsen that mm resolution or raise mesh.max_triangles."
+    ]
 
 
 def _symmetry_plane_axes(config: Mapping[str, Any]) -> tuple[int, ...]:
@@ -245,11 +444,31 @@ def _build_sync(
 
     design = DesignConfig.model_validate(design_dump)
     _check_cancel(cancel_cb)
-    config = _solver_mesher_config(design)
+    config, warning_limit_full_domain, expected_domain_multiplier = _mesh_policy(
+        design, _solver_mesher_config(design)
+    )
     _check_cancel(cancel_cb)
     with tempfile.TemporaryDirectory(prefix="wg2-solver-mesh-") as temp_dir:
         mesh_path = Path(temp_dir) / "waveguide.msh"
-        result = build_from_config(config, mesh_path)
+        # The user budget is advice. _mesh_policy replaced it in this private
+        # config with the independent artifact sanity cap. The mesher applies
+        # its 1.25 estimate margin before building; the exact cap is repeated on
+        # the parsed artifact below.
+        try:
+            result = build_from_config(config, mesh_path, allow_large_mesh=False)
+        except Exception as exc:
+            detail = str(exc)
+            if "triangle" in detail.lower() and (
+                "effective limit" in detail.lower()
+                or "pre-mesh safety margin" in detail.lower()
+            ):
+                raise RuntimeError(
+                    "Solver mesh exceeds the non-bypassable actual-domain "
+                    f"artifact sanity ceiling of "
+                    f"{MAX_SOLVER_MESH_ARTIFACT_TRIANGLES:,} triangles. "
+                    "Coarsen the relevant mm mesh resolution before solving."
+                ) from exc
+            raise
         _check_cancel(cancel_cb)
         msh_text = mesh_path.read_text(encoding="utf-8", errors="replace")
         parsed = meshio.read(mesh_path)
@@ -269,6 +488,17 @@ def _build_sync(
         raise RuntimeError(
             "hornlab-waveguide-mesher produced invalid or non-finite vertices"
         )
+    mode = str(config.get("mode", "")).strip().lower()
+    quadrants = normalise_quadrants((config.get("mesh") or {}).get("quadrants"))
+    triangle_count = int(len(triangles))
+    _enforce_artifact_triangle_ceiling(triangle_count)
+    metadata = _json_safe(getattr(result, "metadata", None) or {})
+    dense_memory = _enforce_dense_solver_memory_ceiling(
+        triangles,
+        quadrants,
+        mode=mode,
+        tags=tags,
+    )
     unique_tags, unique_counts = np.unique(tags, return_counts=True)
     tag_count_values = {
         int(tag): int(count)
@@ -282,13 +512,12 @@ def _build_sync(
     if 2 not in tag_count_values:
         raise RuntimeError("HornLab mesher returned no source-tagged elements (tag 2)")
 
-    metadata = _json_safe(getattr(result, "metadata", None) or {})
     integrity = mesh_integrity_report(
         vertices,
         triangles,
         expected_volume_sign=(
             -1
-            if str(config.get("mode", "")).strip().lower() == "infinite-baffle"
+            if mode == "infinite-baffle"
             else 1
         ),
         symmetry_plane_axes=_symmetry_plane_axes(config),
@@ -297,19 +526,19 @@ def _build_sync(
         vertices,
         triangles,
         tags,
-        mode=str(config.get("mode", "")),
+        mode=mode,
     )
     integrity["semantic_orientation"] = semantic_orientation
     integrity["valid"] = bool(integrity["valid"] and semantic_orientation["valid"])
+    _require_closed_acoustic_topology(config, integrity)
     tag_counts = {
         str(tag): tag_count_values.get(tag, 0) for tag in sorted(CANONICAL_SURFACE_TAGS)
     }
     bounds_min = np.min(vertices, axis=0)
     bounds_max = np.max(vertices, axis=0)
-    domain_multiplier = float(metadata.get("meshDomainMultiplier", 1.0) or 1.0)
-    if not math.isfinite(domain_multiplier) or domain_multiplier <= 0.0:
-        domain_multiplier = 1.0
-    triangle_count = int(len(triangles))
+    # Quadrants are the authoritative solve-domain contract. Mesher metadata is
+    # diagnostic and must not be able to understate warnings or memory.
+    domain_multiplier = float(expected_domain_multiplier)
     max_edge_squared = 0.0
     for start, end in ((0, 1), (1, 2), (2, 0)):
         edge = vertices[triangles[:, end]] - vertices[triangles[:, start]]
@@ -337,25 +566,52 @@ def _build_sync(
                 f"{max_edge_mm:.6g} mm > {max_edge_guard_mm:.6g} mm"
             )
     full_domain_count = int(round(triangle_count * domain_multiplier))
-    warnings: list[str] = []
-    if full_domain_count > LARGE_MESH_WARNING_FULL_DOMAIN_TRIANGLES:
-        warnings.append(
-            "Large solve mesh: "
-            f"{triangle_count:,} triangles ({full_domain_count:,} full-domain equivalent). "
-            "The solve may take significantly longer and use more memory."
-        )
+    # Prefer the design's own budget over the built-in threshold so the warning
+    # names the number the user set. They coincide by default: mesh.max_triangles
+    # defaults to the same 18,000 full-domain equivalent.
+    budget_full_domain = warning_limit_full_domain
+    metadata.update(
+        {
+            # Preserve the established metadata meaning even though the private
+            # mesher config used the independent safety ceiling.
+            "meshTriangleLimit": budget_full_domain,
+            "meshEffectiveTriangleLimit": max(
+                1, int(round(budget_full_domain / domain_multiplier))
+            ),
+            "meshTriangleLimitExceeded": full_domain_count > budget_full_domain,
+            "meshArtifactActualDomainTriangleLimit": MAX_SOLVER_MESH_ARTIFACT_TRIANGLES,
+            "meshDenseMemoryLimitBytes": DENSE_SOLVER_MEMORY_LIMIT_BYTES,
+            "meshDenseMemoryEstimateBytes": dense_memory["estimated_bytes"],
+            "meshDenseMetalEstimateBytes": dense_memory["metal_bytes"],
+            "meshDenseBemppEstimateBytes": dense_memory["bempp_bytes"],
+            "meshAllowLarge": bool(
+                _strict_scalar(
+                    design.root.mesh.allow_large_mesh,
+                    0.0,
+                    "mesh.allow_large_mesh",
+                )
+            ),
+        }
+    )
+    warnings = _large_mesh_warnings(
+        triangle_count=triangle_count,
+        full_domain_count=full_domain_count,
+        budget_full_domain=budget_full_domain,
+        domain_multiplier=domain_multiplier,
+        metadata=metadata,
+    )
     if not integrity["valid"]:
         warnings.append(
             "Solver mesh contains invalid, degenerate, or non-manifold triangles."
         )
     off_plane_open_edges = int(integrity.get("off_plane_open_edge_count", 0))
-    # Only the shell modes owe closure. A bare horn is an open sheet whose mouth
-    # rim is free by construction (Metal disables its own open-edge guard for
-    # exactly that reason), and the coupled infinite-baffle aperture has its own
-    # contract check inside the mesher.
+    # Only a bare horn owns an intentionally open mouth rim. Closed shell and
+    # coupled infinite-baffle models have already failed above if any free edge
+    # lies away from a legitimate symmetry cut plane.
     if off_plane_open_edges and str(config.get("mode", "")).strip().lower() in {
         "enclosure",
         "freestanding",
+        "infinite-baffle",
     }:
         warnings.append(
             f"Solver mesh has {off_plane_open_edges:,} free edges away from its "
@@ -387,7 +643,24 @@ def _build_sync(
         "full_domain_triangle_count": full_domain_count,
         "max_edge_mm": max_edge_mm,
         "max_edge_guard_mm": max_edge_guard_mm,
-        "soft_warning_full_domain_triangle_limit": LARGE_MESH_WARNING_FULL_DOMAIN_TRIANGLES,
+        "soft_warning_full_domain_triangle_limit": budget_full_domain,
+        "artifact_actual_domain_triangle_limit": MAX_SOLVER_MESH_ARTIFACT_TRIANGLES,
+        "dense_solver_memory_limit_bytes": DENSE_SOLVER_MEMORY_LIMIT_BYTES,
+        "dense_solver_memory_estimate_bytes": dense_memory["estimated_bytes"],
+        "dense_solver_used_vertex_count": dense_memory["used_vertex_count"],
+        "dense_solver_metal_dof_count": dense_memory["metal_dof_count"],
+        "dense_solver_metal_estimate_bytes": dense_memory["metal_bytes"],
+        "dense_solver_bempp_estimate_bytes": dense_memory["bempp_bytes"],
+        "dense_solver_domain_multiplier": dense_memory["domain_multiplier"],
+        "dense_solver_metal_bytes_per_dof_squared": dense_memory[
+            "metal_bytes_per_dof_squared"
+        ],
+        "dense_solver_bempp_bytes_per_vertex_squared": dense_memory[
+            "bempp_bytes_per_vertex_squared"
+        ],
+        "dense_solver_aperture_triangle_count": dense_memory[
+            "aperture_triangle_count"
+        ],
         "warnings": warnings,
         "integrity": integrity,
     }
@@ -454,7 +727,10 @@ async def build_solver_mesh(
 
 __all__ = [
     "CANONICAL_SURFACE_TAGS",
+    "DENSE_SOLVER_MEMORY_LIMIT_BYTES",
     "LARGE_MESH_WARNING_FULL_DOMAIN_TRIANGLES",
+    "MAX_SOLVER_MESH_ARTIFACT_TRIANGLES",
+    "MOUTH_APERTURE_SURFACE_TAG",
     "SOLVER_MESH_CACHE_FORMAT_VERSION",
     "build_solver_mesh",
     "clear_solver_mesh_cache",

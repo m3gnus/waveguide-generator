@@ -12,6 +12,7 @@ import enum
 import inspect
 import math
 import time
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -97,10 +98,22 @@ def _project_to_symmetry(vector: np.ndarray, plane: str | None) -> np.ndarray:
     return projected
 
 
-def _gmsh22_observation_frame(
-    msh_text: str, *, origin_at: str, symmetry_plane: str | None
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Infer the native observation frame from the authoritative Gmsh 2.2 artifact."""
+@dataclass(frozen=True)
+class _ObservationFrameParts:
+    axis: np.ndarray
+    mouth_center: np.ndarray
+    source_center: np.ndarray
+    horizontal: np.ndarray
+    vertical: np.ndarray
+
+
+def _gmsh22_observation_frame_parts(
+    msh_text: str,
+    *,
+    symmetry_plane: str | None,
+    aperture_tag: int | None = None,
+) -> _ObservationFrameParts:
+    """Read the authoritative observation basis and centres from a Gmsh artifact."""
 
     lines = msh_text.splitlines()
     try:
@@ -110,27 +123,41 @@ def _gmsh22_observation_frame(
         element_count = int(lines[elements_start + 1])
     except (ValueError, IndexError) as exc:
         raise ValueError(
-            "custom diagonal inclination requires an ASCII Gmsh 2.2 solver artifact"
+            "observation framing requires an ASCII Gmsh 2.2 solver artifact"
         ) from exc
     node_rows = lines[nodes_start + 2 : nodes_start + 2 + node_count]
     nodes: dict[int, np.ndarray] = {}
-    for row in node_rows:
-        parts = row.split()
-        if len(parts) >= 4:
-            nodes[int(parts[0])] = np.asarray(parts[1:4], dtype=float)
-    source_triangles: list[list[np.ndarray]] = []
-    for row in lines[elements_start + 2 : elements_start + 2 + element_count]:
-        parts = row.split()
-        if len(parts) < 6 or int(parts[1]) != 2:
-            continue
-        tag_count = int(parts[2])
-        physical_tag = int(parts[3]) if tag_count else 0
-        node_ids = [int(value) for value in parts[3 + tag_count : 6 + tag_count]]
-        if physical_tag == 2 and all(node_id in nodes for node_id in node_ids):
-            source_triangles.append([nodes[node_id] for node_id in node_ids])
+    try:
+        for row in node_rows:
+            parts = row.split()
+            if len(parts) >= 4:
+                nodes[int(parts[0])] = np.asarray(parts[1:4], dtype=float)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("solver artifact contains invalid Gmsh nodes") from exc
+
+    tagged_triangles: dict[int, list[list[np.ndarray]]] = {}
+    try:
+        for row in lines[elements_start + 2 : elements_start + 2 + element_count]:
+            parts = row.split()
+            if len(parts) < 3 or int(parts[1]) != 2:
+                continue
+            tag_count = int(parts[2])
+            first_node = 3 + tag_count
+            if tag_count < 1 or len(parts) < first_node + 3:
+                continue
+            physical_tag = int(parts[3])
+            node_ids = [int(value) for value in parts[first_node : first_node + 3]]
+            if all(node_id in nodes for node_id in node_ids):
+                tagged_triangles.setdefault(physical_tag, []).append(
+                    [nodes[node_id] for node_id in node_ids]
+                )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("solver artifact contains invalid Gmsh elements") from exc
+
+    source_triangles = tagged_triangles.get(2, [])
     if not nodes or not source_triangles:
         raise ValueError(
-            "custom diagonal inclination requires source-tagged triangles (physical tag 2)"
+            "observation framing requires source-tagged triangles (physical tag 2)"
         )
     vertices = np.stack(list(nodes.values()))
     source = np.asarray(source_triangles, dtype=float)
@@ -150,29 +177,131 @@ def _gmsh22_observation_frame(
         axis = projected_axis / np.linalg.norm(projected_axis)
     centroids = np.mean(source, axis=1)
     source_center = np.average(centroids, weights=areas, axis=0)
-    projections = vertices @ axis
-    span = float(np.ptp(projections))
-    if span > 1.0e-12:
-        from_min = abs(float(source_center @ axis) - float(np.min(projections))) / span
-        from_max = abs(float(source_center @ axis) - float(np.max(projections))) / span
-        if min(from_min, from_max) <= 0.25 and from_min >= from_max:
-            axis = -axis
-    along_axis = vertices @ axis
-    threshold = float(np.max(along_axis) - 0.02 * np.ptp(along_axis))
-    mouth_center = np.mean(vertices[along_axis >= threshold], axis=0)
+
+    if aperture_tag is None:
+        along_axis = vertices @ axis
+        threshold = float(np.max(along_axis) - 0.02 * np.ptp(along_axis))
+        mouth_center = np.mean(vertices[along_axis >= threshold], axis=0)
+    else:
+        aperture = np.asarray(tagged_triangles.get(int(aperture_tag), []), dtype=float)
+        if not aperture.size:
+            raise ValueError(
+                f"solver artifact has no aperture triangles with physical tag {aperture_tag}"
+            )
+        aperture_normals = np.cross(
+            aperture[:, 1] - aperture[:, 0], aperture[:, 2] - aperture[:, 0]
+        )
+        aperture_areas = np.linalg.norm(aperture_normals, axis=1)
+        aperture_valid = aperture_areas > 1.0e-15
+        if not np.any(aperture_valid):
+            raise ValueError(
+                f"aperture triangles with physical tag {aperture_tag} cannot define an origin"
+            )
+        aperture_centroids = np.mean(aperture[aperture_valid], axis=1)
+        mouth_center = np.average(
+            aperture_centroids,
+            weights=aperture_areas[aperture_valid],
+            axis=0,
+        )
+
     reference_axis = np.asarray([1.0, 0.0, 0.0])
     if abs(float(axis @ reference_axis)) >= 0.9:
         reference_axis = np.asarray([0.0, 1.0, 0.0])
     horizontal = reference_axis - float(reference_axis @ axis) * axis
     horizontal /= np.linalg.norm(horizontal)
     vertical = np.cross(axis, horizontal)
-    origin = mouth_center if origin_at == "mouth" else source_center
+    return _ObservationFrameParts(
+        axis=axis,
+        mouth_center=mouth_center,
+        source_center=source_center,
+        horizontal=horizontal,
+        vertical=vertical,
+    )
+
+
+def _gmsh22_observation_frame(
+    msh_text: str,
+    *,
+    origin_at: str,
+    symmetry_plane: str | None,
+    aperture_tag: int | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Infer the native observation frame from the authoritative Gmsh 2.2 artifact."""
+
+    parts = _gmsh22_observation_frame_parts(
+        msh_text,
+        symmetry_plane=symmetry_plane,
+        aperture_tag=aperture_tag,
+    )
+    # The source cap's outward normal already points from the throat into the
+    # fluid, which is forward by construction: the mesher only emits artifacts
+    # whose winding it has verified (``require_positive_volume``), and the
+    # builder re-checks it as ``semantic_orientation.source_normal_projection``.
+    #
+    # The native backends additionally second-guess that normal against the
+    # mesh extents, flipping the axis when the source sits nearer the far end
+    # than a quarter of the span.  That test assumes the mesh is a bare horn,
+    # whose throat is the rearmost thing in it.  Put the same horn in a cabinet
+    # roughly four times its own depth and the throat lands inside the front
+    # quarter, the test "corrects" a perfectly good +z axis to -z, and every
+    # polar is then measured two metres behind the closed back panel -- a
+    # near-silent, frequency-collapsing response that looks like a leaking box.
+    # Nothing here needs the guess, so nothing here makes it.
+    origin = parts.mouth_center if origin_at == "mouth" else parts.source_center
     origin = _project_to_symmetry(origin, symmetry_plane)
-    return axis, origin, horizontal, vertical
+    return parts.axis, origin, parts.horizontal, parts.vertical
+
+
+def native_observation_frame(
+    context: SolverContext,
+    msh_text: str,
+    observation_frame_cls: Any,
+    *,
+    aperture_tag: int | None = None,
+) -> Any | None:
+    """Build the pinned helper's explicit frame, retaining native centre semantics."""
+
+    if observation_frame_cls is None:
+        return None
+    try:
+        parts = _gmsh22_observation_frame_parts(
+            msh_text,
+            symmetry_plane=native_symmetry_plane(context),
+            aperture_tag=aperture_tag,
+        )
+    except ValueError:
+        if aperture_tag is not None:
+            # Coupled infinite-baffle evaluation is defined by that physical
+            # aperture. Falling back to an extent-derived mouth would silently
+            # move the observation origin when metadata and artifact disagree.
+            raise
+        # Direct adapter callers may still supply a legacy artifact the helper
+        # itself knows how to read. Authoritative v2 builds always have tag 2,
+        # and coupled infinite-baffle builds additionally have aperture_tag.
+        return None
+    origin_at = str(context.polar_config.get("observation_origin") or "mouth")
+    origin = parts.mouth_center if origin_at == "mouth" else parts.source_center
+    origin = _project_to_symmetry(origin, native_symmetry_plane(context))
+    mouth_center = (
+        _project_to_symmetry(parts.mouth_center, native_symmetry_plane(context))
+        if aperture_tag is not None
+        else parts.mouth_center
+    )
+    return observation_frame_cls(
+        axis=parts.axis,
+        origin=origin,
+        u=parts.horizontal,
+        v=parts.vertical,
+        mouth_center=mouth_center,
+        source_center=parts.source_center,
+    )
 
 
 def _custom_observation_points(
-    context: SolverContext, msh_text: str
+    context: SolverContext,
+    msh_text: str,
+    *,
+    aperture_tag: int | None = None,
 ) -> dict[str, np.ndarray]:
     polar = context.polar_config
     start, end, count = polar["angle_range"]
@@ -181,6 +310,7 @@ def _custom_observation_points(
         msh_text,
         origin_at=str(polar["observation_origin"]),
         symmetry_plane=native_symmetry_plane(context),
+        aperture_tag=aperture_tag,
     )
     inclination = math.radians(float(polar["inclination"]))
     transverse = {
@@ -206,6 +336,7 @@ def observation_config(
     package_name: str,
     *,
     msh_text: str | None = None,
+    aperture_tag: int | None = None,
 ) -> Any:
     """Build native observation config with the v1 sphere-feature fallback."""
 
@@ -241,17 +372,26 @@ def observation_config(
             break
     if supports("normalization_angle_deg"):
         kwargs["normalization_angle_deg"] = float(polar.get("norm_angle", 10.0))
-    if (
-        msh_text is not None
-        and not native_inclination
+    needs_custom_inclination = (
+        not native_inclination
         and "diagonal" in kwargs["planes"]
         and not math.isclose(float(polar.get("inclination", 45.0)), 45.0)
-    ):
-        if not supports("custom_points"):
+    )
+    # The adapters supply the authoritative frame through SolveConfig. Explicit
+    # points remain necessary only for helpers that lack a native diagonal
+    # inclination control; using them for every solve would leave sphere grids
+    # and axial source logic on the helper's separately inferred (and possibly
+    # backwards) frame.
+    if needs_custom_inclination:
+        if msh_text is None or not supports("custom_points"):
             raise unavailable_error(
                 f"Installed {package_name} cannot represent a custom diagonal inclination."
             )
-        kwargs["custom_points"] = _custom_observation_points(context, msh_text)
+        kwargs["custom_points"] = _custom_observation_points(
+            context,
+            msh_text,
+            aperture_tag=aperture_tag,
+        )
     if polar.get("spherical_sampling"):
         kwargs["sphere_grid"] = (
             int(polar.get("spherical_theta_count") or 37),

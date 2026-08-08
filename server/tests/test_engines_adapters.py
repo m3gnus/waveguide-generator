@@ -124,6 +124,33 @@ class _Config(SimpleNamespace):
     pass
 
 
+def _cabinet_msh(*, aperture: bool = False) -> str:
+    aperture_element = "2 2 2 12 12 4 5 6" if aperture else "2 2 2 1 1 4 5 6"
+    far_z = 0.50 if aperture else -0.28
+    return f"""$MeshFormat
+2.2 0 8
+$EndMeshFormat
+$Nodes
+9
+1 0 0 0
+2 0.02 0 0
+3 0 0.02 0
+4 0 0 0.05
+5 0.12 0 0.05
+6 0 0.12 0.05
+7 0 0 {far_z}
+8 0.20 0 {far_z}
+9 0 0.20 {far_z}
+$EndNodes
+$Elements
+3
+1 2 2 2 2 1 2 3
+{aperture_element}
+3 2 2 1 1 7 8 9
+$EndElements
+"""
+
+
 def test_metal_adapter_maps_quadrants_axial_drive_stages_and_cancellation(monkeypatch) -> None:
     captured = {}
     callbacks = []
@@ -152,13 +179,16 @@ def test_metal_adapter_maps_quadrants_axial_drive_stages_and_cancellation(monkey
         cancellations += 1
 
     response = metal.solve_metal_from_msh_text(
-        "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n",
+        _cabinet_msh(),
         _context(axial=True),
         stage_callback=lambda *values: callbacks.append(values),
         cancellation_callback=cancel,
     )
     assert captured["native_symmetry_plane"] == "yz"
     assert captured["source_motion"] == "axial"
+    assert captured["frame_override"].axis.tolist() == pytest.approx([0.0, 0.0, 1.0])
+    assert captured["frame_override"].origin.tolist() == pytest.approx([0.0, 0.04, 0.05])
+    assert getattr(captured["observation"], "custom_points", None) is None
     assert captured["native_check_open_edges"] is False
     assert cancellations == 3
     assert [stage for stage, _, _ in callbacks] == [
@@ -179,16 +209,26 @@ def test_metal_infinite_baffle_requires_and_maps_aperture_tag(monkeypatch) -> No
     with pytest.raises(RuntimeError, match="aperture tag"):
         metal.solve_metal_from_msh_text("msh", _context(sim_type=1), mesh_metadata={})
     response = metal.solve_metal_from_msh_text(
-        "msh", _context(sim_type=1), mesh_metadata={"apertureTag": 12}
+        _cabinet_msh(aperture=True),
+        _context(sim_type=1),
+        mesh_metadata={"apertureTag": 12},
     )
     assert captured["aperture_tag"] == 12
     assert captured["mesh_validate"] is True
+    assert captured["frame_override"].origin.tolist() == pytest.approx([0.0, 0.04, 0.05])
     assert response["metadata"]["infinite_baffle"]["backend"] == "full_3d_coupled"
 
 
 def test_bempp_adapter_is_cpu_fallback_and_rejects_infinite_baffle(monkeypatch) -> None:
     captured = {}
-    monkeypatch.setattr(bempp, "SolveConfig", lambda **kwargs: captured.update(kwargs) or _Config(**kwargs))
+    created = {}
+
+    def config_factory(**kwargs):
+        captured.update(kwargs)
+        created["config"] = _Config(source_motion="normal", **kwargs)
+        return created["config"]
+
+    monkeypatch.setattr(bempp, "SolveConfig", config_factory)
     monkeypatch.setattr(bempp, "bempp_solve", lambda path, config: _result())
     monkeypatch.setattr(bempp, "BIEFormulation", SimpleNamespace(COMPLEX_K="complex_k"))
     monkeypatch.setattr(bempp, "ObservationConfig", lambda **kwargs: SimpleNamespace(**kwargs))
@@ -197,9 +237,13 @@ def test_bempp_adapter_is_cpu_fallback_and_rejects_infinite_baffle(monkeypatch) 
         "bempp_status",
         lambda: {"available": True, "reason": "mock CPU", "assembly_backend": "numba"},
     )
-    response = bempp.solve_bempp_from_msh_text("msh", _context())
+    response = bempp.solve_bempp_from_msh_text(_cabinet_msh(), _context(axial=True))
     assert captured["assembly_backend"] == "numba"
     assert captured["native_symmetry_plane"] == "yz"
+    assert created["config"].source_motion == "axial"
+    assert captured["frame_override"].axis.tolist() == pytest.approx([0.0, 0.0, 1.0])
+    assert captured["frame_override"].origin.tolist() == pytest.approx([0.0, 0.04, 0.05])
+    assert getattr(captured["observation"], "custom_points", None) is None
     assert response["metadata"]["solver_backend"] == "bempp"
     with pytest.raises(ValueError, match="cannot solve coupled infinite-baffle"):
         bempp.solve_bempp_from_msh_text("msh", _context(sim_type=1))

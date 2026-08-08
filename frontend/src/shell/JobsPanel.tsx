@@ -4,7 +4,7 @@ import { compareSelection } from '../api/results';
 import { DesignAvailabilityNotice, RerunButton } from '../jobs/DesignAvailability';
 import { canLoadJobDesign, hydrateJobDesign, replaceWithJobDesign } from '../jobs/jobDesign';
 import { type DesignDocument } from '../stores/design';
-import { applyJobPreferences, usePreferences } from '../prefs/preferences';
+import { applyJobPreferences, jobBaseName, nextJobNaming, nextVersionFor, preferencesStore, usePreferences } from '../prefs/preferences';
 import { JobsPreferencesSurface } from '../prefs/PreferencesSurface';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { Icon } from './icons';
@@ -37,6 +37,11 @@ function metrics(job: JobItem, now: number): string {
     .filter(Boolean).join(' · ');
 }
 
+export function meshWarnings(job: Pick<JobItem, 'mesh_stats'>): string[] {
+  const warnings = (job.mesh_stats as { warnings?: unknown } | null)?.warnings;
+  return Array.isArray(warnings) ? warnings.map((warning) => String(warning)) : [];
+}
+
 export const canLoadDesign = canLoadJobDesign;
 
 function Rating({ job, onError }: { job: JobItem; onError: (message: string) => void }) {
@@ -61,7 +66,13 @@ function Rating({ job, onError }: { job: JobItem; onError: (message: string) => 
 export function selectJob(job: JobItem): void {
   if (job.has_results) compareSelection.setPrimary(job.id);
   // Undoable: browsing runs must not be able to discard the working design.
-  if (canLoadDesign(job)) replaceWithJobDesign(job, { keepHistory: true });
+  if (!canLoadDesign(job)) return;
+  replaceWithJobDesign(job, { keepHistory: true });
+  // Reopening a config puts its design on screen, so the next solve is a new
+  // take on *that* design and should be named for it -- at the next free
+  // number, so it never lands back on top of the run it came from.
+  const naming = nextJobNaming(job.label, jobsSocket.getSnapshot().jobs.map((item) => item.label));
+  if (naming) preferencesStore.update(naming);
 }
 
 function JobCard({ job, now, selected, run, onError, onRemove }: {
@@ -114,6 +125,10 @@ function JobCard({ job, now, selected, run, onError, onRemove }: {
       <footer><RerunButton job={job} onRerun={retry} label="Retry" className=""/><button onClick={() => window.open(`/api/jobs/${encodeURIComponent(job.id)}/log`, '_blank')}>Open log</button></footer>
     </> : expanded && <>
       <p>{metrics(job, now)}</p>
+      {/* The mesh diagnoses that used to end the solve. The run finished, so
+          these are advice about why it was slow or what it approximated --
+          neither an error nor, as they were until now, silence. */}
+      {meshWarnings(job).map((warning) => <div key={warning} className="job-warning" title={warning}>{warning}</div>)}
       <Rating job={job} onError={onError}/>
       {/* Selecting the run already loaded its design and results, so the only
           action left is running it again -- unless this job came from v1
@@ -123,6 +138,49 @@ function JobCard({ job, now, selected, run, onError, onRemove }: {
       <footer><RerunButton job={job} onRerun={retry}/><button onClick={() => window.open(`/api/jobs/${encodeURIComponent(job.id)}/log`, '_blank')}>Log</button></footer>
     </>}
   </article>;
+}
+
+/**
+ * What the next solve will be called, and the one control that changes it.
+ *
+ * Naming used to live only in the preferences popover, which meant runs were
+ * named by whatever was set there several sessions ago and nobody noticed until
+ * the history read `horn_v09 … horn_v14`. The name belongs next to the runs it
+ * names, showing the label it will actually store.
+ */
+function RunNameField({ jobs }: { jobs: readonly JobItem[] }) {
+  const preferences = usePreferences();
+  // Keyed on the joined labels: the jobs array is replaced on every progress
+  // event, and only a name appearing or disappearing can change the answer.
+  const key = jobs.map((job) => job.label ?? '').join('\u0000');
+  const labels = useMemo(() => key.split('\u0000'), [key]);
+  // Committed on blur, not per keystroke: renumbering while a name is half
+  // typed would settle on the version free for `hor` rather than for `horn`.
+  const commit = (value: string) =>
+    preferencesStore.update({ outputName: value, jobVersion: nextVersionFor(value, labels) });
+  // A stored version can be stale against the history — a profile that has
+  // never solved starts at v01 next to a `horn_v14`, and a browser that solved
+  // elsewhere is behind. Names are not unique keys, so that would quietly
+  // produce two runs called the same thing. Compared on the parsed version
+  // rather than the whole label, because the date prefix moved and the runs
+  // named before it are still `horn_v13`. Only ever raised: a version set
+  // deliberately past the history is a choice, not a collision.
+  const free = nextVersionFor(preferences.outputName, labels);
+  useEffect(() => {
+    if (preferences.jobVersion >= free) return;
+    preferencesStore.update({ jobVersion: free });
+  }, [free, preferences.jobVersion]);
+  return <div className="run-name-field">
+    <label className="ui-field">Run name<input
+      aria-label="Run name"
+      value={preferences.outputName}
+      placeholder="horn"
+      onChange={(event) => preferencesStore.update({ outputName: event.target.value })}
+      onBlur={(event) => commit(event.target.value)}
+      onKeyDown={(event) => { if (event.key === 'Enter') { commit(event.currentTarget.value); event.currentTarget.blur(); } }}
+    /></label>
+    <span className="run-name-preview" title="The name the next solve is stored under">next · <b>{jobBaseName(preferences)}</b></span>
+  </div>;
 }
 
 export function JobsPanel() {
@@ -148,6 +206,7 @@ export function JobsPanel() {
   return <div className="jobs-panel panel-scroll">
     <div className="panel-meta"><span className="pill">{visibleJobs.filter((job) => job.status === 'running' || job.status === 'queued').length} active</span><span>{snapshot.connection} · {visibleJobs.length}/{snapshot.jobs.length} shown</span><span className="spacer"/>{failedCount > 0 && <button className="panel-text-action panel-text-action--danger" onClick={() => void jobsSocket.clearFailed().catch((error) => coordinator.reportError(String(error)))}>Clear failed</button>}<button className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Job preferences" aria-expanded={preferencesOpen} title="Job preferences" onClick={() => setPreferencesOpen((value) => !value)}><Icon name="settings"/></button></div>
     {preferencesOpen && <JobsPreferencesSurface popover onClose={() => setPreferencesOpen(false)}/>}
+    <RunNameField jobs={snapshot.jobs}/>
     {(coordinator.actionError || snapshot.error) && <div className="job-error" role="alert" style={{ margin: 7 }}>{coordinator.actionError ?? snapshot.error}</div>}
     {snapshot.jobs.length === 0 && snapshot.connection === 'connected' && <div className="coming-soon"><b>NO JOBS YET</b><span>Use Solve to run the current design.</span></div>}
     {snapshot.jobs.length > 0 && visibleJobs.length === 0 && <div className="coming-soon"><b>NO MATCHING JOBS</b><span>Lower the minimum rating filter to show more jobs.</span></div>}

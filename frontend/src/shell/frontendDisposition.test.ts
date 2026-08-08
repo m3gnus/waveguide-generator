@@ -1,11 +1,32 @@
-import { describe, expect, it } from 'vitest';
-import { designForFamily } from '../stores/design';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
+import { preferencesStore } from '../prefs/preferences';
+import { designForFamily, resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
 import type { JobResults } from '../api/results';
 import { splSubtitle } from './ResultsPanel';
 import { documentLabel, engineStatusLabel, solveSummary } from './StatusBar';
-import { canLoadDesign } from './JobsPanel';
+import { canLoadDesign, meshWarnings, selectJob } from './JobsPanel';
+
+function selectableJob(id: string, label: string, scriptSnapshot: JobItem['script_snapshot']): JobItem {
+  return {
+    id, label, script_snapshot: scriptSnapshot, status: 'complete', progress: 1,
+    stage: null, stage_message: null, created_at: '2026-08-08T00:00:00Z',
+    queued_at: '2026-08-08T00:00:00Z', started_at: null,
+    completed_at: '2026-08-08T00:00:01Z', config_summary: {}, has_results: true,
+    has_mesh_artifact: false, error_message: null, cancellation_requested: false,
+    mesh_stats: null, design_revision: 1, polar_grid: {}, rating: null,
+    exported_files: [], auto_export_completed_at: null, auto_export_formats: {},
+    raw_results_file: null, mesh_artifact_file: null, log_tail: [],
+  };
+}
 
 describe('frontend result and status labels', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    resetDesignStore();
+    preferencesStore.resetForTests();
+  });
+  afterEach(() => vi.restoreAllMocks());
   it('labels SPL as absolute at the effective observation distance', () => {
     const result: JobResults = {
       frequencies: [], metadata: { observation: { requested_distance_m: 2, effective_distance_m: 1.75 } },
@@ -41,5 +62,51 @@ describe('frontend result and status labels', () => {
   it('enables Load design only for jobs carrying a design snapshot', () => {
     expect(canLoadDesign({ script_snapshot: null })).toBe(false);
     expect(canLoadDesign({ script_snapshot: { formula: 'OSSE' } })).toBe(true);
+  });
+
+  it('surfaces advisory mesh warnings on the completed run card', () => {
+    expect(meshWarnings({ mesh_stats: {
+      triangle_count: 7_173,
+      warnings: ['Large solve mesh: 7,173 triangles; the solve will continue.'],
+    } })).toEqual(['Large solve mesh: 7,173 triangles; the solve will continue.']);
+    expect(meshWarnings({ mesh_stats: { warnings: 'not an array' } })).toEqual([]);
+  });
+
+  it('loads a selected run design and names the next run past full history', () => {
+    const solved = designForFamily('OSSE');
+    solved.L = 321;
+    const selected = selectableJob(
+      'selected',
+      '260807_horn_v13',
+      { version: 1, design: serializeDesign(solved) },
+    );
+    vi.spyOn(jobsSocket, 'getSnapshot').mockReturnValue({
+      connection: 'connected', epoch: 1, cursor: 1, error: null,
+      jobs: [selected, selectableJob('newer', '260808_horn_v14', null)],
+    } as JobsSnapshot);
+
+    selectJob(selected);
+
+    expect(useDesignStore.getState().design.L).toBe(321);
+    expect(preferencesStore.getSnapshot()).toMatchObject({
+      outputName: 'horn', jobVersion: 15,
+    });
+  });
+
+  it('leaves run naming unchanged when a selected snapshot is unreadable', () => {
+    preferencesStore.update({ outputName: 'keep-me', jobVersion: 7 });
+    const unreadable = selectableJob(
+      'unreadable',
+      '260808_other_v99',
+      { version: 1, design: { formula: 'not-a-family' } },
+    );
+    const snapshotSpy = vi.spyOn(jobsSocket, 'getSnapshot');
+
+    selectJob(unreadable);
+
+    expect(snapshotSpy).not.toHaveBeenCalled();
+    expect(preferencesStore.getSnapshot()).toMatchObject({
+      outputName: 'keep-me', jobVersion: 7,
+    });
   });
 });

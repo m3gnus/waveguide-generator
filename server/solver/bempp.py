@@ -30,6 +30,7 @@ from .infinite_baffle import reject_bempp_infinite_baffle
 from .result_mapping import (
     build_solver_response,
     json_safe_native_value,
+    native_observation_frame,
     native_symmetry_plane,
     observation_config,
     response_solver_log,
@@ -37,11 +38,18 @@ from .result_mapping import (
 
 
 try:
-    from hornlab_bempp_bem import BIEFormulation, ObservationConfig, SolveConfig, solve as bempp_solve
+    from hornlab_bempp_bem import (
+        BIEFormulation,
+        ObservationConfig,
+        ObservationFrame,
+        SolveConfig,
+        solve as bempp_solve,
+    )
     from hornlab_bempp_bem import solve_frequencies as bempp_solve_frequencies
 except (ImportError, OSError):
     BIEFormulation = None  # type: ignore[assignment]
     ObservationConfig = None  # type: ignore[assignment]
+    ObservationFrame = None  # type: ignore[assignment]
     SolveConfig = None  # type: ignore[assignment]
     bempp_solve = None  # type: ignore[assignment]
     bempp_solve_frequencies = None  # type: ignore[assignment]
@@ -142,14 +150,20 @@ def _sweep_will_split(workers: int, num_frequencies: int) -> bool:
 
 
 def _load_api() -> bool:
-    global BIEFormulation, ObservationConfig, SolveConfig, bempp_solve
+    global BIEFormulation, ObservationConfig, ObservationFrame, SolveConfig, bempp_solve
     global bempp_solve_frequencies
-    if ObservationConfig is not None and SolveConfig is not None and bempp_solve is not None:
+    if (
+        ObservationConfig is not None
+        and ObservationFrame is not None
+        and SolveConfig is not None
+        and bempp_solve is not None
+    ):
         return True
     try:
         package = importlib.import_module("hornlab_bempp_bem")
         BIEFormulation = getattr(package, "BIEFormulation")
         ObservationConfig = getattr(package, "ObservationConfig")
+        ObservationFrame = getattr(package, "ObservationFrame")
         SolveConfig = getattr(package, "SolveConfig")
         bempp_solve = getattr(package, "solve")
         # Optional: an older pin without it stays usable for generated grids and
@@ -471,6 +485,11 @@ def solve_bempp_from_msh_text(
                 "hornlab-bempp-bem",
                 msh_text=msh_text,
             ),
+            frame_override=native_observation_frame(
+                context,
+                msh_text,
+                ObservationFrame,
+            ),
             progress_callback=progress,
             mesh_scale=1.0,
             native_symmetry_plane=native_symmetry_plane(context),
@@ -484,6 +503,8 @@ def solve_bempp_from_msh_text(
             raise BemppUnavailable("Installed hornlab-bempp-bem does not support the required BEM formulation option.") from exc
         if "complex_k_shift" in message:
             raise BemppUnavailable("Installed hornlab-bempp-bem does not support the required complex-k shift option.") from exc
+        if "frame_override" in message:
+            raise BemppUnavailable("Installed hornlab-bempp-bem does not support the required explicit observation frame.") from exc
         raise
     if context.source_motion != "normal":
         if not hasattr(config, "source_motion"):

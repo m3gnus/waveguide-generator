@@ -386,6 +386,11 @@ kbd { padding: 1.5px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 
 
 /* jobs rail */
 .jobs-panel { position: relative; padding-bottom: 10px; }
+.job-warning { margin: 3px 0; padding: 4px 6px; border-left: 2px solid var(--amber); border-radius: 3px; background: color-mix(in srgb, var(--amber) 10%, transparent); color: var(--fg2); font-size: 9px; line-height: 1.35; }
+.run-name-field { display: grid; grid-template-columns: minmax(0, 1fr); gap: 3px; padding: 4px 7px 7px; border-bottom: 1px solid var(--hair); }
+.run-name-field .ui-field { margin: 0; }
+.run-name-preview { overflow: hidden; color: var(--fg4); font: 8.5px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+.run-name-preview b { color: var(--acc); font-weight: 500; }
 .job-card { position: relative; margin: 7px 7px 0; padding: 8px 9px 8px 10px; border: 1px solid var(--hair); border-radius: var(--r2); background: var(--ov1); }
 .job-card::before { content: ""; position: absolute; top: 9px; bottom: 9px; left: 0; width: 2px; background: var(--fg4); }
 .job-card.running::before { background: var(--acc); }.job-card.complete::before { background: var(--green); }.job-card.failed::before { background: var(--red); }
