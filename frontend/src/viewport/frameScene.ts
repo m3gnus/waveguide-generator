@@ -54,8 +54,16 @@ function curvatureName(frame: DecodedFrame, surface: FrameSurface): string | nul
 }
 
 export function frameToScene(frame: DecodedFrame): FrameScene {
-  const bounds = new Box3();
-  const point = new Vector3();
+  // Scalar min/max rather than Box3.expandByPoint. This runs over every vertex
+  // of every surface on every decoded frame -- up to 30 a second while a
+  // control is being dragged -- and expandByPoint costs a Vector3.set plus two
+  // component-wise Vector3 calls per vertex where six comparisons will do.
+  let minX = Infinity;
+  let minY = Infinity;
+  let minZ = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let maxZ = -Infinity;
   const surfaces = (frame.header.surfaces ?? []).map((surface, index): SceneSurface => {
     const positions = section(frame, surface.positions, Float32Array);
     const normals = section(frame, surface.normals, Float32Array);
@@ -64,8 +72,15 @@ export function frameToScene(frame: DecodedFrame): FrameScene {
     const curvatureValues = curvatureSection ? section(frame, curvatureSection, Float32Array) : null;
     const curvature = curvatureValues?.length === positions.length / 3 ? curvatureValues : null;
     for (let offset = 0; offset < positions.length; offset += 3) {
-      point.set(positions[offset], positions[offset + 1], positions[offset + 2]);
-      bounds.expandByPoint(point);
+      const x = positions[offset];
+      const y = positions[offset + 1];
+      const z = positions[offset + 2];
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (z < minZ) minZ = z;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+      if (z > maxZ) maxZ = z;
     }
     return {
       key: `${index}:${surface.role}:${surface.positions}`,
@@ -79,6 +94,8 @@ export function frameToScene(frame: DecodedFrame): FrameScene {
       curvature,
     };
   });
+  const bounds = new Box3();
+  if (minX <= maxX) bounds.set(new Vector3(minX, minY, minZ), new Vector3(maxX, maxY, maxZ));
   if (bounds.isEmpty()) bounds.set(new Vector3(-50, -50, -50), new Vector3(50, 50, 50));
   return {
     surfaces,

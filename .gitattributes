@@ -1,0 +1,4 @@
+# Batch files are read by cmd.exe, which is not reliably tolerant of LF-only
+# line endings around labels and goto. Pin them regardless of the checking-out
+# user's core.autocrlf, and leave every other path to Git's defaults.
+*.bat text eol=crlf

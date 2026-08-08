@@ -9,11 +9,15 @@ and rollback returns the database to exactly its previous state (R1-P0-6).
 
 from __future__ import annotations
 
+from contextlib import closing, contextmanager
 import hashlib
 import importlib.util
+import json
 from pathlib import Path
 import sqlite3
+import subprocess
 import sys
+from typing import Iterator
 
 import pytest
 
@@ -85,12 +89,15 @@ def _make_v1(root: Path, jobs: int = 3, *, with_snapshot: int = 2, tag: str = "v
 
 
 def _job_ids(database: Path) -> set[str]:
-    with sqlite3.connect(database) as conn:
+    # closing(), not a bare `with`: a sqlite3 connection used as a context
+    # manager commits without closing, and the leaked handle stops Windows
+    # deleting or replacing the file the migration is about to rewrite.
+    with closing(sqlite3.connect(database)) as conn:
         return {row[0] for row in conn.execute("SELECT id FROM simulation_jobs")}
 
 
 def _content_digest(database: Path) -> str:
-    with sqlite3.connect(database) as conn:
+    with closing(sqlite3.connect(database)) as conn:
         rows = sorted(conn.execute("SELECT job_id, results_json FROM simulation_results"))
         meshes = sorted(conn.execute("SELECT job_id, msh_text FROM simulation_artifacts"))
     return hashlib.sha256(repr((rows, meshes)).encode("utf-8")).hexdigest()
@@ -140,7 +147,7 @@ def test_existing_v2_job_is_never_overwritten(v1_root: Path, tmp_path: Path):
     data_dir = tmp_path / "v2data"
     migrate_v1.migrate(v1_root, data_dir)
     database = data_dir / "db" / "simulations.db"
-    with sqlite3.connect(database) as conn:
+    with closing(sqlite3.connect(database)) as conn, conn:
         conn.execute(
             "UPDATE simulation_results SET results_json = ? WHERE job_id = ?",
             ('{"spl": ["edited in v2"]}', "v1-job-0"),
@@ -152,7 +159,7 @@ def test_existing_v2_job_is_never_overwritten(v1_root: Path, tmp_path: Path):
     report = migrate_v1.migrate(other, data_dir)
 
     assert "v1-job-0" in report.skipped_existing
-    with sqlite3.connect(database) as conn:
+    with closing(sqlite3.connect(database)) as conn:
         kept = conn.execute(
             "SELECT results_json FROM simulation_results WHERE job_id = ?", ("v1-job-0",)
         ).fetchone()[0]
@@ -219,8 +226,11 @@ def test_missing_v1_database_is_a_clean_error(tmp_path: Path):
 def test_custom_v1_workspace_location_is_honoured(v1_root: Path, tmp_path: Path):
     elsewhere = tmp_path / "Custom Output Folder"
     (elsewhere / "moved-project").mkdir(parents=True)
+    # Serialise rather than interpolate: a Windows path interpolated into JSON
+    # produces invalid \escapes, so the migration read a corrupt settings file
+    # instead of the custom location this test is about.
     (v1_root / "server" / "data" / "workspace_settings.json").write_text(
-        f'{{"path": "{elsewhere}"}}', encoding="utf-8"
+        json.dumps({"path": str(elsewhere)}), encoding="utf-8"
     )
     data_dir = tmp_path / "v2data"
 
@@ -228,6 +238,52 @@ def test_custom_v1_workspace_location_is_honoured(v1_root: Path, tmp_path: Path)
 
     assert (data_dir / "workspace" / "moved-project").is_dir()
     assert not (data_dir / "workspace" / "project-a").exists()
+
+
+def _current_user_sid() -> str:
+    """The SID of the process token, which is not always the named user.
+
+    getpass.getuser() reads the environment, so under a service, container or
+    sandboxed runner it can name a different account than the token actually
+    running the test. Denying that account leaves the directory writable and the
+    test fails for a reason that has nothing to do with the migration.
+    """
+
+    completed = subprocess.run(
+        ["whoami", "/user", "/fo", "csv", "/nh"],
+        check=True, capture_output=True, text=True,
+    )
+    return completed.stdout.strip().rsplit(",", 1)[-1].strip().strip('"')
+
+
+@contextmanager
+def _unwritable(directory: Path) -> Iterator[None]:
+    """Stop the current user creating entries in ``directory``, then restore it.
+
+    chmod is not that on Windows: it only toggles the read-only attribute, which
+    directories ignore for creation, so the backup would quietly succeed and the
+    test would assert nothing. A deny ACE is the equivalent instrument there.
+    """
+
+    if sys.platform == "win32":
+        account = f"*{_current_user_sid()}"
+        subprocess.run(
+            ["icacls", str(directory), "/deny", f"{account}:(WD,AD)"],
+            check=True, capture_output=True,
+        )
+        try:
+            yield
+        finally:
+            subprocess.run(
+                ["icacls", str(directory), "/remove:d", account],
+                check=True, capture_output=True,
+            )
+    else:
+        directory.chmod(0o500)  # readable and traversable, not writable
+        try:
+            yield
+        finally:
+            directory.chmod(0o700)
 
 
 def test_backup_failure_stops_before_writing(v1_root: Path, tmp_path: Path):
@@ -242,14 +298,37 @@ def test_backup_failure_stops_before_writing(v1_root: Path, tmp_path: Path):
 
     backups = data_dir / "backups"
     backups.mkdir(exist_ok=True)
-    backups.chmod(0o500)  # readable and traversable, not writable
-    try:
+    with _unwritable(backups):
         with pytest.raises(migrate_v1.MigrationError, match="Nothing has been changed"):
             migrate_v1.migrate(v1_root, data_dir)
-    finally:
-        backups.chmod(0o700)
 
     assert _job_ids(database) == untouched
+
+
+def test_rollback_saves_the_state_it_replaces(v1_root: Path, tmp_path: Path):
+    """Rollback was the one destructive path in a tool built to be safe.
+
+    Restoring the wrong backup -- or restoring into the default data directory
+    because --data-dir was omitted -- overwrote live jobs with nothing to
+    recover from. Now the replaced state is itself backed up first.
+    """
+
+    data_dir = tmp_path / "v2data"
+    migrate_v1.migrate(v1_root, data_dir)
+    database = data_dir / "db" / "simulations.db"
+    live = _job_ids(database)
+    assert live, "the fixture must leave jobs to be destroyed"
+
+    empty_backup = tmp_path / "empty-backup"
+    (empty_backup / "workspace").mkdir(parents=True)
+
+    replaced = migrate_v1.rollback(empty_backup, data_dir)
+
+    # Existence first: sqlite3.connect creates a missing file, so probing the
+    # other way round would manufacture the empty database it claims to find.
+    assert not database.is_file() or _job_ids(database) == set()
+    assert replaced is not None and replaced.is_dir()
+    assert _job_ids(replaced / "simulations.db") == live
 
 
 def test_repeated_backups_in_the_same_second_do_not_collide(v1_root: Path, tmp_path: Path):

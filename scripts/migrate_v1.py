@@ -20,6 +20,7 @@ solver settings but no design. They cannot be reopened or rerun.
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import datetime
 import hashlib
@@ -126,12 +127,16 @@ def resolve_v1_sources(v1_root: Path) -> tuple[Path, Path | None]:
     return database, workspace if workspace.is_dir() else None
 
 
-def take_backup(paths, stamp: str) -> Path:
+def _timestamp() -> str:
+    return datetime.now().strftime("%Y%m%d-%H%M%S")
+
+
+def take_backup(paths, stamp: str, *, prefix: str = "pre-v1-migration") -> Path:
     """Copy everything the migration can touch. Refuse to continue without it."""
 
     # Two runs inside the same second must not collide -- a second-resolution
     # name made a quick re-run abort with "File exists".
-    base = paths.root / "backups" / f"pre-v1-migration-{stamp}"
+    base = paths.root / "backups" / f"{prefix}-{stamp}"
     backup_dir = base
     suffix = 1
     while backup_dir.exists():
@@ -143,8 +148,13 @@ def take_backup(paths, stamp: str) -> Path:
         if database.is_file():
             # sqlite3's backup API copies a consistent snapshot even if another
             # process holds the database open; a file copy does not.
-            with _connect(database) as source, sqlite3.connect(
-                str(backup_dir / "simulations.db")
+            #
+            # closing() matters: a sqlite3 connection used as a context manager
+            # commits, it does not close. The leaked handle keeps the file open,
+            # and Windows then refuses to unlink or replace it -- which rollback
+            # does immediately afterwards.
+            with closing(_connect(database)) as source, closing(
+                sqlite3.connect(str(backup_dir / "simulations.db"))
             ) as target:
                 source.backup(target)
         if paths.workspace.is_dir():
@@ -173,7 +183,7 @@ def _ensure_marker(conn: sqlite3.Connection) -> None:
 def _fingerprint(database: Path) -> str:
     """Identify a source database by size and its job ids, not by path."""
 
-    with _connect(database, read_only=True) as conn:
+    with closing(_connect(database, read_only=True)) as conn:
         ids = [row[0] for row in conn.execute("SELECT id FROM simulation_jobs ORDER BY id")]
     digest = hashlib.sha256("\n".join(ids).encode("utf-8")).hexdigest()
     return f"{database.stat().st_size}:{digest[:32]}"
@@ -199,7 +209,7 @@ def migrate(
 ) -> Report:
     database, workspace = resolve_v1_sources(v1_root)
     paths = data_paths(data_dir) if dry_run else ensure_data_layout(data_dir)
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    stamp = _timestamp()
     report = Report(
         started_at=datetime.now().isoformat(timespec="seconds"),
         v1_root=str(v1_root),
@@ -208,7 +218,7 @@ def migrate(
     )
 
     target_db = paths.db / "simulations.db"
-    with _connect(database, read_only=True) as source:
+    with closing(_connect(database, read_only=True)) as source:
         report.source = _counts(source)
         report.jobs_without_design = int(
             source.execute(
@@ -239,10 +249,17 @@ def migrate(
     store = JobStore.for_data_dir(paths.root)
     if not dry_run:
         store.initialize()
+        # The store keeps its connections open now, and it runs in WAL mode.
+        # Both matter here: an open handle stops rollback unlinking or
+        # replacing the file on Windows, and a checkpoint is what guarantees
+        # the single .db file this tool copies is not missing commits that are
+        # still only in the -wal sidecar.
+        store.checkpoint()
+        store.close()
 
     existing_ids: set[str] = set()
     if target_db.is_file():
-        with _connect(target_db) as conn:
+        with closing(_connect(target_db)) as conn, conn:
             report.before = _counts(conn)
             try:
                 existing_ids = {row[0] for row in conn.execute("SELECT id FROM simulation_jobs")}
@@ -269,7 +286,7 @@ def migrate(
 
     report.backup_dir = str(take_backup(paths, stamp))
 
-    with _connect(target_db) as conn:
+    with closing(_connect(target_db)) as conn, conn:
         _ensure_marker(conn)
         fingerprint = _fingerprint(database)
         already = conn.execute(
@@ -354,21 +371,57 @@ def migrate(
     return report
 
 
-def rollback(backup_dir: Path, data_dir: Path | None) -> None:
+def rollback(backup_dir: Path, data_dir: Path | None) -> Path | None:
+    """Restore a backup, after snapshotting whatever it is about to replace.
+
+    Migration backs up before it writes; rollback did not, so it was the one
+    destructive path in a tool whose whole point is being safe to run. Restoring
+    the wrong backup, or restoring into the default data directory because
+    --data-dir was omitted, overwrote live jobs with no way back. The safety copy
+    costs a file copy and turns that into an inconvenience.
+    """
+
     if not backup_dir.is_dir():
         raise MigrationError(f"No backup directory at {backup_dir}")
     paths = ensure_data_layout(data_dir)
+    replaced = None
+    if (paths.db / "simulations.db").is_file() or any(paths.workspace.iterdir()):
+        replaced = take_backup(paths, _timestamp(), prefix="pre-rollback")
     saved_db = backup_dir / "simulations.db"
+    live_db = paths.db / "simulations.db"
+    # v2 runs the job database in WAL mode, so committed data can live in a
+    # -wal sidecar rather than in the .db file. Replacing or removing the .db
+    # while its sidecars survive is not merely incomplete, it is dangerous:
+    # SQLite would recover that leftover WAL -- containing the state we are
+    # rolling *back* -- on top of the restored database. The backup itself is
+    # taken through sqlite3's backup API, which already folds the WAL in, so
+    # there is nothing to preserve here.
+    _discard_wal_sidecars(live_db)
     if saved_db.is_file():
-        shutil.copy2(saved_db, paths.db / "simulations.db")
-    elif (paths.db / "simulations.db").is_file():
+        shutil.copy2(saved_db, live_db)
+    elif live_db.is_file():
         # An empty pre-migration state is still a state worth restoring to.
-        (paths.db / "simulations.db").unlink()
+        live_db.unlink()
     saved_workspace = backup_dir / "workspace"
     if saved_workspace.is_dir():
         if paths.workspace.is_dir():
             shutil.rmtree(paths.workspace)
         shutil.copytree(saved_workspace, paths.workspace)
+    return replaced
+
+
+def _discard_wal_sidecars(database: Path) -> None:
+    """Remove a database's -wal and -shm companions, if any."""
+
+    for suffix in ("-wal", "-shm"):
+        sidecar = database.with_name(database.name + suffix)
+        try:
+            sidecar.unlink(missing_ok=True)
+        except OSError as exc:
+            raise MigrationError(
+                f"Could not remove {sidecar}: {exc}. Close any running Waveguide "
+                "Generator v2 instance and try again."
+            ) from exc
 
 
 def _print_report(report: Report) -> None:
@@ -417,8 +470,13 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.rollback is not None:
-            rollback(args.rollback, args.data_dir)
+            replaced = rollback(args.rollback, args.data_dir)
             print(f"Restored from {args.rollback}")
+            # Name the directory that was written to. Without --data-dir this is
+            # the default one, which is not always the one the caller meant.
+            print(f"  restored into: {ensure_data_layout(args.data_dir).root}")
+            if replaced is not None:
+                print(f"  the state it replaced was saved to: {replaced}")
             return 0
         if args.v1_root is None:
             parser.error("--v1-root is required unless --rollback is given")

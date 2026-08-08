@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import json
 from pathlib import Path
 import sqlite3
 
@@ -64,6 +65,135 @@ def test_v1_schema_columns_are_exact_and_live_under_wg2_data_dir(tmp_path: Path)
     assert columns == EXPECTED_JOB_COLUMNS
     assert {"simulation_jobs", "simulation_results", "simulation_artifacts"} <= tables
     assert version == 4
+
+
+def test_the_database_runs_in_wal_mode_with_a_busy_timeout(tmp_path: Path) -> None:
+    """WAL and connection reuse are only fast together; both must be in place.
+
+    Measured on Windows over 150 checkpoint-shaped transactions: 8.44 ms each
+    with the rollback journal and a fresh connection per call, 10.51 ms with
+    WAL but still reopening, 0.05 ms with WAL on a reused connection. A solve
+    writes one of these every 150 ms.
+    """
+
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    try:
+        conn = store._connect()
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
+        assert conn.execute("PRAGMA synchronous").fetchone()[0] == 1  # NORMAL
+        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
+        # Reused, not reopened: the measured win depends on it.
+        assert store._connect() is conn
+    finally:
+        store.close()
+
+
+def test_closing_the_store_releases_the_file_for_windows(tmp_path: Path) -> None:
+    """An open handle stops Windows deleting or replacing the database.
+
+    That is not hypothetical here: the v1 migration tool's rollback replaces
+    this exact file, and every test fixture removes the directory holding it.
+    """
+
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    store.create_job(_job("held"))
+    store.close()
+    store.db_path.unlink()
+    assert not store.db_path.exists()
+
+
+def test_a_snapshot_leaves_no_transaction_open(tmp_path: Path) -> None:
+    """A long-lived connection makes an unfinished read transaction permanent.
+
+    It would pin the WAL so it could never be checkpointed, and the file would
+    grow without bound.
+    """
+
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    store.create_job(_job("snap"))
+    try:
+        store.snapshot_jobs()
+        assert not store._connect().in_transaction
+        # A checkpoint is what a pinned WAL would block.
+        store.checkpoint()
+    finally:
+        store.close()
+
+
+def test_cancellation_state_reads_only_what_a_checkpoint_needs(tmp_path: Path) -> None:
+    """The solver asks this once per frequency, from its own thread.
+
+    ``get_job_row`` answers the same question by selecting every column and
+    parsing four JSON blobs, two of which hold a whole copy of the design.
+    """
+
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    store.create_job(_job("cancel-me", "running"))
+    try:
+        assert store.cancellation_state("cancel-me") == ("running", False)
+        assert store.cancellation_state("absent") is None
+        store.request_cancellation(
+            "cancel-me",
+            {"stage": "cancelling", "cancellation_requested": True},
+            {"stage": "cancelling"},
+        )
+        assert store.cancellation_state("cancel-me") == ("running", True)
+    finally:
+        store.close()
+
+
+def test_results_text_is_the_stored_bytes_and_still_parses(tmp_path: Path) -> None:
+    """The HTTP route hands these straight to the browser; parsing is waste."""
+
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    store.create_job(_job("textual"))
+    store.store_results("textual", {"frequencies": [100.0], "spl": [95.0]})
+    try:
+        text = store.get_results_text("textual")
+        assert isinstance(text, str)
+        assert json.loads(text) == store.get_results("textual")
+        assert store.get_results_text("absent") is None
+    finally:
+        store.close()
+
+
+def test_the_redundant_event_index_is_dropped_on_existing_installs(tmp_path: Path) -> None:
+    """job_events.id is a rowid alias, so indexing it duplicated the table.
+
+    The planner never used it and every insert and retention delete paid for
+    it, so initialize() removes it rather than merely stopping creating it.
+    """
+
+    database = tmp_path / "jobs.db"
+    with sqlite3.connect(database) as conn:
+        conn.execute(
+            """CREATE TABLE job_events (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 created_at TEXT NOT NULL,
+                 job_id TEXT NOT NULL,
+                 event_type TEXT NOT NULL,
+                 payload_json TEXT NOT NULL)"""
+        )
+        conn.execute("CREATE INDEX idx_job_events_id ON job_events(id)")
+
+    store = JobStore(database)
+    store.initialize()
+    try:
+        indexes = {
+            row["name"]
+            for row in store._connect().execute(
+                "SELECT name FROM sqlite_master WHERE type='index'"
+            )
+        }
+    finally:
+        store.close()
+    assert "idx_job_events_id" not in indexes
+    assert "idx_simulation_jobs_created" in indexes
 
 
 def test_store_round_trips_jobs_results_artifacts_and_metadata(tmp_path: Path) -> None:

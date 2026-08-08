@@ -77,6 +77,11 @@ _SCHEMA_STATEMENTS = (
     )""",
     """CREATE INDEX IF NOT EXISTS idx_simulation_jobs_status_created
       ON simulation_jobs(status, created_at DESC)""",
+    # The index above only serves a *filtered* list. The unfiltered list and
+    # the WS snapshot both order by created_at with no status predicate, and
+    # were scanning the table and building a temporary sort every time.
+    """CREATE INDEX IF NOT EXISTS idx_simulation_jobs_created
+      ON simulation_jobs(created_at DESC)""",
     """CREATE TABLE IF NOT EXISTS job_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       created_at TEXT NOT NULL,
@@ -84,7 +89,12 @@ _SCHEMA_STATEMENTS = (
       event_type TEXT NOT NULL,
       payload_json TEXT NOT NULL
     )""",
-    "CREATE INDEX IF NOT EXISTS idx_job_events_id ON job_events(id)",
+    # job_events.id is INTEGER PRIMARY KEY AUTOINCREMENT, which is an alias for
+    # the rowid, so an index on it duplicates the table's own B-tree. The
+    # planner never chose it; every event insert and every retention delete
+    # paid to maintain it. Dropped rather than merely not created, so existing
+    # installations stop paying too.
+    "DROP INDEX IF EXISTS idx_job_events_id",
 )
 
 
@@ -113,6 +123,9 @@ class JobStore:
             Path(job_logs_dir) if job_logs_dir is not None else self.db_path.parent / "job-logs"
         )
         self._lock = threading.RLock()
+        self._local = threading.local()
+        self._connections: set[sqlite3.Connection] = set()
+        self._connections_lock = threading.Lock()
 
     @classmethod
     def for_data_dir(cls, data_dir: str | Path, **kwargs: Any) -> "JobStore":
@@ -277,14 +290,19 @@ class JobStore:
             event_lines: list[str] = []
             if full_lines:
                 path = self._job_log_path(job_id)
-                path.parent.mkdir(parents=True, exist_ok=True)
+                self._ensure_job_logs_dir()
                 batch = "".join(f"{line}\n" for line in full_lines).encode("utf-8")
+                # One stat, not the two-to-four that exists()+stat() pairs cost.
+                # This runs every 150 ms during a solve, alongside an fsync that
+                # is genuinely load-bearing, so the syscalls around it are worth
+                # counting.
+                try:
+                    actual = path.stat().st_size
+                except FileNotFoundError:
+                    actual = 0
                 expected = (
-                    int(expected_log_size)
-                    if expected_log_size is not None
-                    else (path.stat().st_size if path.exists() else 0)
+                    int(expected_log_size) if expected_log_size is not None else actual
                 )
-                actual = path.stat().st_size if path.exists() else 0
                 if actual < expected:
                     raise OSError(
                         f"Job log shrank from expected offset {expected} to {actual}"
@@ -300,10 +318,18 @@ class JobStore:
                         )
                     already_appended = True
                 if not already_appended:
-                    with path.open("ab") as handle:
-                        handle.write(batch)
-                        handle.flush()
-                        os.fsync(handle.fileno())
+                    try:
+                        with path.open("ab") as handle:
+                            handle.write(batch)
+                            handle.flush()
+                            # Load-bearing, not incidental: the durable file
+                            # length is what makes a retry after a failed
+                            # commit recognise its own batch instead of
+                            # writing it twice.
+                            os.fsync(handle.fileno())
+                    except FileNotFoundError:
+                        self._job_logs_dir_ready = False
+                        raise
 
                 metadata = json.loads(row["task_metadata_json"] or "{}")
                 tail = [str(line) for line in metadata.get("log_tail") or []]
@@ -421,12 +447,38 @@ class JobStore:
         """Read the WS snapshot and matching durable cursor consistently."""
 
         with self._lock, self._connection() as conn:
+            # One read transaction, so the rows and the cursor are the same
+            # view of the database. It must be ended explicitly: the connection
+            # is now long-lived, and an open read transaction left behind would
+            # pin the WAL and stop it ever being checkpointed.
             conn.execute("BEGIN")
-            cursor = self._event_cursor(conn)
-            rows = conn.execute(
-                "SELECT * FROM simulation_jobs ORDER BY created_at DESC"
-            ).fetchall()
+            try:
+                cursor = self._event_cursor(conn)
+                rows = conn.execute(
+                    "SELECT * FROM simulation_jobs ORDER BY created_at DESC"
+                ).fetchall()
+            finally:
+                conn.rollback()
             return [self._row_to_job(row) for row in rows], cursor
+
+    def cancellation_state(self, job_id: str) -> tuple[str, bool] | None:
+        """Just the two columns a cancellation checkpoint needs.
+
+        ``get_job_row`` is ``SELECT *`` and then parses four JSON columns, two
+        of which hold a complete copy of the design. The solver calls this once
+        per frequency from its own thread -- up to 401 times a sweep, each
+        taking the store lock the event loop also wants -- to answer a
+        question that is two booleans wide.
+        """
+
+        with self._lock, self._connection() as conn:
+            row = conn.execute(
+                "SELECT status, cancellation_requested FROM simulation_jobs WHERE id = ?",
+                (job_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return str(row["status"]), bool(row["cancellation_requested"])
 
     def store_results(self, job_id: str, results: Mapping[str, Any]) -> None:
         """Upsert results and availability as in v1 ``server/db.py:201-221``."""
@@ -468,15 +520,6 @@ class JobStore:
             self._upsert_results(conn, job_id, results)
             return self._append_event(conn, job_id, "completed", payload)
 
-    def append_job_log(self, job_id: str, line: str) -> None:
-        """Append to the complete per-job log kept outside bounded WS metadata."""
-
-        path = self._job_log_path(job_id)
-        with self._lock:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with path.open("a", encoding="utf-8", newline="\n") as handle:
-                handle.write(str(line).replace("\r", "") + "\n")
-
     def get_job_log(self, job_id: str) -> str:
         with self._lock:
             try:
@@ -485,11 +528,25 @@ class JobStore:
                 return ""
 
     def get_results(self, job_id: str) -> dict[str, Any] | None:
+        text = self.get_results_text(job_id)
+        return json.loads(text) if text is not None else None
+
+    def get_results_text(self, job_id: str) -> str | None:
+        """The stored results exactly as they were written, without parsing.
+
+        A finished sweep's results run to megabytes, and the HTTP route only
+        ever hands them straight back to the browser. Parsing them into Python
+        objects so that FastAPI can validate them, re-serialise them and then
+        JSON-encode them again is four full walks of the same data, all on the
+        event loop -- long enough to stall the preview socket and the job
+        events. The bytes in the database are already the answer.
+        """
+
         with self._lock, self._connection() as conn:
             row = conn.execute(
                 "SELECT results_json FROM simulation_results WHERE job_id = ?", (job_id,)
             ).fetchone()
-            return json.loads(row["results_json"]) if row else None
+            return str(row["results_json"]) if row else None
 
     def store_mesh_artifact(self, job_id: str, msh_text: str) -> None:
         """Upsert original MSH text as in v1 ``server/db.py:233-253``."""
@@ -612,14 +669,22 @@ class JobStore:
                 (cutoff,),
             )
             deleted = int(cur.rowcount or 0)
-            rows = conn.execute(
-                """
-                SELECT id FROM simulation_jobs
-                WHERE status IN ('complete', 'error', 'cancelled')
-                ORDER BY COALESCE(completed_at, updated_at, created_at) DESC
-                """
-            ).fetchall()
-            overflow = [row["id"] for row in rows[int(max_terminal_jobs) :]]
+            # Ask SQLite for the overflow rather than materialising every
+            # terminal row and slicing in Python. This runs after *every* job,
+            # and at the 1000-row cap that was a thousand rows fetched to
+            # discover, almost always, that nothing needs removing.
+            overflow = [
+                row["id"]
+                for row in conn.execute(
+                    """
+                    SELECT id FROM simulation_jobs
+                    WHERE status IN ('complete', 'error', 'cancelled')
+                    ORDER BY COALESCE(completed_at, updated_at, created_at) DESC
+                    LIMIT -1 OFFSET ?
+                    """,
+                    (int(max_terminal_jobs),),
+                ).fetchall()
+            ]
             if overflow:
                 removed_ids.extend(str(value) for value in overflow)
                 placeholders = ",".join("?" for _ in overflow)
@@ -733,14 +798,104 @@ class JobStore:
         return value
 
     def _connect(self) -> sqlite3.Connection:
+        """This thread's connection, opened and configured once.
+
+        Both halves of this matter, and only together. Measured on Windows over
+        150 transactions shaped like ``persist_runtime_update`` -- one UPDATE
+        plus an event INSERT inside ``BEGIN IMMEDIATE``:
+
+        ======================================  ==========  =========
+        configuration                           mean        p95
+        ======================================  ==========  =========
+        rollback journal, connection per call     8.44 ms    10.00 ms
+        rollback journal, connection reused       6.69 ms     8.49 ms
+        WAL, connection per call                 10.51 ms    12.46 ms
+        WAL + synchronous=NORMAL, reused          0.05 ms     0.10 ms
+        ======================================  ==========  =========
+
+        WAL *alone* is slower here, because reopening pays to re-establish the
+        shared-memory index every time. Reuse alone barely helps, because the
+        rollback journal still creates and deletes a file per transaction --
+        two NTFS metadata operations that antivirus watches closely. Together
+        they are 170x, and a solve writes a checkpoint every 150 ms.
+
+        ``synchronous=NORMAL`` under WAL means a power cut can lose the last
+        commits but cannot corrupt the database. For a local design tool whose
+        durable product is the exported file, that is the right trade; the
+        alternative was paying a device-cache flush every 150 ms for progress
+        bars.
+
+        Per thread rather than one shared connection because SQLite connection
+        objects serialize internally and the solver thread, the event loop and
+        the thread-pool workers all reach the store; ``check_same_thread=False``
+        is retained so the existing RLock stays the ordering authority.
+        """
+
+        existing = getattr(self._local, "conn", None)
+        if existing is not None:
+            return existing
         conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = NORMAL")
+        # Without this any contention raises "database is locked" immediately.
+        # The RLock makes that unreachable today, which is precisely why it
+        # should not be the only thing standing between us and that error.
+        conn.execute("PRAGMA busy_timeout = 5000")
         conn.execute("PRAGMA foreign_keys = ON")
+        self._local.conn = conn
+        with self._connections_lock:
+            self._connections.add(conn)
         return conn
+
+    def close(self) -> None:
+        """Close every connection this store opened, on every thread.
+
+        Necessary on Windows, where an open handle blocks deleting or replacing
+        the database file: tests use temporary directories, and the v1
+        migration tool's rollback replaces the file wholesale.
+        """
+
+        with self._connections_lock:
+            connections = tuple(self._connections)
+            self._connections.clear()
+        for conn in connections:
+            try:
+                conn.close()
+            except sqlite3.Error:  # pragma: no cover - closing twice is harmless
+                pass
+        self._local = threading.local()
+
+    def checkpoint(self) -> None:
+        """Fold the WAL back into the database file.
+
+        Anything that copies, moves or replaces ``simulations.db`` as a single
+        file -- backup, the v1 migration's rollback -- must call this first, or
+        it captures a database missing every commit still living in the
+        ``-wal`` sidecar.
+        """
+
+        with self._lock:
+            conn = self._connect()
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
     def _job_log_path(self, job_id: str) -> Path:
         safe = _SAFE_LOG_NAME.sub("_", str(job_id)).strip("._") or "job"
         return self.job_logs_dir / f"{safe}.log"
+
+    def _ensure_job_logs_dir(self) -> None:
+        """Create the log directory once, not on every 150 ms checkpoint.
+
+        ``mkdir(exist_ok=True)`` still costs a syscall that fails, and the
+        directory cannot stop existing under a running server. If something
+        removes it anyway, the flag is reset on the failure so the next flush
+        recreates it rather than failing forever.
+        """
+
+        if getattr(self, "_job_logs_dir_ready", False):
+            return
+        self.job_logs_dir.mkdir(parents=True, exist_ok=True)
+        self._job_logs_dir_ready = True
 
     def _delete_job_logs(self, job_ids: Sequence[str]) -> None:
         for job_id in dict.fromkeys(job_ids):
@@ -751,11 +906,8 @@ class JobStore:
 
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
-        conn = self._connect()
-        try:
-            yield conn
-        finally:
-            conn.close()
+        # The connection outlives the block now; ``close()`` owns its lifetime.
+        yield self._connect()
 
     @contextmanager
     def _transaction(self) -> Iterator[sqlite3.Connection]:
@@ -767,8 +919,6 @@ class JobStore:
         except BaseException:
             conn.rollback()
             raise
-        finally:
-            conn.close()
 
     @staticmethod
     def _row_to_job(row: sqlite3.Row) -> dict[str, Any]:
