@@ -21,6 +21,17 @@ if [[ ! -f "scripts/install.sh" ]]; then
     exit 1
 fi
 
+# --no-launch is handled here as well as passed through, because the launcher is
+# started below rather than by install.sh: the server must not run inside the
+# `tee` pipeline, where its output would be appended to the log for as long as
+# it stays up.
+LAUNCH_AFTER=1
+for argument in "$@"; do
+    if [[ "$argument" == "--no-launch" ]]; then
+        LAUNCH_AFTER=0
+    fi
+done
+
 LOG_DIR="$HOME/Library/Application Support/WaveguideGenerator2/logs"
 mkdir -p "$LOG_DIR" 2>/dev/null || LOG_DIR="${TMPDIR:-/tmp}"
 LOG="$LOG_DIR/install.log"
@@ -37,6 +48,9 @@ RESULT="${PIPESTATUS[0]}"
 echo
 if [[ "$RESULT" -eq 0 ]]; then
     echo "Install log: $LOG"
+    if [[ "$LAUNCH_AFTER" -eq 0 ]]; then
+        exit 0
+    fi
     echo
     echo "Starting Waveguide Generator v2..."
     exec "$REPO_DIR/launch-wg2.command"
