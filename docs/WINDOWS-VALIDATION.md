@@ -657,8 +657,10 @@ Ordered by how much it matters.
    `docs/P6-CUTOVER-PLAN.md` §P6.2 has the full table of what is proven by
    execution versus written-but-unexecuted.
 2. **Stop is prompt, not immediate.** Check 12. The first solve after a start
-   still has a ~17 s window with no cancellation checkpoint in it. Fixing it
-   properly needs either a boot-time backend warmup or process-isolated solves.
+   still has a ~17 s window with no cancellation checkpoint in it. An explicit
+   `WG2_SOLVER_WARMUP=1` experiment can move that cost earlier, but it is not a
+   release default because it can overlap a user solve and native shutdown.
+   Fixing this properly needs process-isolated solves.
 3. **The viewport has never rendered on a real GPU** — and by decision
    (Magnus, 2026-08-08) it never has to: *"the windows machine doesn't have GPU,
    and the program shouldn't need gpu."* Software rasterisation is a supported

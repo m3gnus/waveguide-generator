@@ -81,11 +81,11 @@ def create_app(
 ) -> FastAPI:
     """Assemble an app instance without creating persistent directories.
 
-    ``solver_warmup`` exercises AUTO's selected physical solver in a background
-    thread at boot; see ``server/solver/warmup.py`` for why that matters and
-    what it costs. It defaults to off so the many tests that build an app pay
-    nothing, and ``launch/serve.py`` -- the only caller serving a real user --
-    turns it on.
+    Explicit callers may set ``solver_warmup`` to exercise AUTO's selected
+    physical solver in a background thread at boot. It defaults to off because
+    that native solve is not coordinated with either user jobs or application
+    shutdown. The production launcher passes true only for an explicit
+    ``WG2_SOLVER_WARMUP=1`` diagnostic opt-in.
     """
 
     started = time.monotonic()

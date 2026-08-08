@@ -40,6 +40,17 @@ from server.protocol.frame import DEFAULT_MAX_FRAME_BYTES
 HOST = "127.0.0.1"
 
 
+def _solver_warmup_enabled() -> bool:
+    """Enable the native solver warmup only by explicit operator request.
+
+    The warmup is a real, non-cancellable solve in a daemon thread. It is not
+    serialized with user jobs and cannot be joined safely during a fast
+    shutdown, so release launches must not start it implicitly.
+    """
+
+    return os.environ.get("WG2_SOLVER_WARMUP") == "1"
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, help="preferred local port (default: 3100)")
@@ -185,7 +196,10 @@ def main(argv: list[str] | None = None) -> int:
 
     stop_browser = threading.Event()
     try:
-        app = create_app(data_dir=paths.root, solver_warmup=True)
+        app = create_app(
+            data_dir=paths.root,
+            solver_warmup=_solver_warmup_enabled(),
+        )
         config = uvicorn.Config(
             app,
             host=HOST,

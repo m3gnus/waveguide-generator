@@ -430,9 +430,11 @@ depend on has never been produced.
    essentially sweep end: parallel Stop does not stop the solve, it discards
    the result once it finishes. The parent can only raise between progress
    events, and must then join every sibling chunk. Parallelism also re-creates
-   the cold-start window `server/solver/warmup.py` exists to keep off the
-   user's first solve, because each spawned worker re-JITs bempp-cl's kernels:
-   the first cancellable moment moves from 0.6 s to 21 s.
+   the cold-start window `server/solver/warmup.py` was designed to mask,
+   because each spawned worker re-JITs bempp-cl's kernels:
+   the first cancellable moment moves from 0.6 s to 21 s. That warmup is now an
+   explicit `WG2_SOLVER_WARMUP=1` diagnostic only: it is not serialized with
+   user solves and cannot provide safe cancellation or fast shutdown.
 
    Correctness is not at stake. Serial and parallel payloads for the same
    design and sweep were **byte-identical** in compact JSON (SHA-256 equal) at

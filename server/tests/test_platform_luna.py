@@ -171,11 +171,35 @@ def test_launcher_stops_log_listener_on_early_port_failure(
     assert logging_setup._listener is None
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (None, False),
+        ("0", False),
+        ("true", False),
+        ("yes", False),
+        ("1", True),
+    ],
+)
+def test_launcher_requires_exact_solver_warmup_opt_in(
+    value: str | None,
+    expected: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if value is None:
+        monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
+    else:
+        monkeypatch.setenv("WG2_SOLVER_WARMUP", value)
+
+    assert serve._solver_warmup_enabled() is expected
+
+
 def test_launcher_aligns_websocket_transport_limits_with_frame_protocol(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     paths = ensure_data_layout(tmp_path)
     config_kwargs: dict[str, Any] = {}
+    app_kwargs: dict[str, Any] = {}
     listener_closed = False
     lock_released = False
 
@@ -203,6 +227,10 @@ def test_launcher_aligns_websocket_transport_limits_with_frame_protocol(
         config_kwargs.update(kwargs)
         return real_config(*args, **kwargs)
 
+    def create_application(**kwargs: Any) -> object:
+        app_kwargs.update(kwargs)
+        return object()
+
     class FakeServer:
         def __init__(self, _config: Any) -> None:
             self.should_exit = False
@@ -211,12 +239,13 @@ def test_launcher_aligns_websocket_transport_limits_with_frame_protocol(
             assert sockets == [listener]
 
     monkeypatch.delenv("WG2_PORT", raising=False)
+    monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
     monkeypatch.setattr(serve, "ensure_data_layout", lambda: paths)
     monkeypatch.setattr(serve, "setup_logging", lambda _paths: None)
     monkeypatch.setattr(serve, "flush_logs", lambda: None)
     monkeypatch.setattr(serve, "InstanceLock", lambda _path: FakeLock())
     monkeypatch.setattr(serve, "reserve_port", lambda *_args, **_kwargs: (listener, 3100))
-    monkeypatch.setattr(serve, "create_app", lambda **_kwargs: object())
+    monkeypatch.setattr(serve, "create_app", create_application)
     monkeypatch.setattr(serve.uvicorn, "Config", capture_config)
     monkeypatch.setattr(serve.uvicorn, "Server", FakeServer)
     monkeypatch.setattr(serve, "harden_console", lambda _callback: None)
@@ -224,6 +253,7 @@ def test_launcher_aligns_websocket_transport_limits_with_frame_protocol(
     assert serve.main(["--no-browser"]) == 0
     assert config_kwargs["ws_max_size"] == DEFAULT_MAX_FRAME_BYTES
     assert config_kwargs["ws_max_queue"] == 1
+    assert app_kwargs["solver_warmup"] is False
     assert listener_closed is True
     assert lock_released is True
 
