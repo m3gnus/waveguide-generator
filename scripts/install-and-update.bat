@@ -109,6 +109,17 @@ exit /b 1
 set "WG_TMP_INSTALLER=%TEMP%\wg2-install-%RANDOM%%RANDOM%.bat"
 copy /y "%WG_ROOT%\scripts\install.bat" "%WG_TMP_INSTALLER%" >nul
 if errorlevel 1 goto stage_failed
+rem Preserve each caller argument as one environment value. Interpolating %%*
+rem into the PowerShell program would discard cmd's grouping quotes around a
+rem value containing spaces and would let PowerShell parse metacharacters in it.
+set "WG_INSTALL_ARG_COUNT=0"
+:collect_installer_args
+if "%~1"=="" goto installer_args_ready
+set "WG_INSTALL_ARG_%WG_INSTALL_ARG_COUNT%=%~1"
+set /a WG_INSTALL_ARG_COUNT+=1 >nul
+shift
+goto collect_installer_args
+:installer_args_ready
 rem Show progress live AND keep a full transcript. A plain cmd pipe takes its
 rem ERRORLEVEL from the right-hand side, destroying the installer's exit code --
 rem which the exit-10 relaunch depends on. PowerShell's Tee-Object preserves
@@ -119,7 +130,7 @@ rem Paths reach PowerShell through the environment, never interpolated by cmd:
 rem '%WG_ROOT%' would be substituted before PowerShell ever parsed the line, so
 rem a path containing a quote or an apostrophe would rewrite the script.
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "& $env:WG_TMP_INSTALLER --root $env:WG_ROOT --no-launch %* 2>&1 | Tee-Object -FilePath $env:WG_LOG -Append; exit $LASTEXITCODE"
+  "$wgArgs = @(for ($i = 0; $i -lt [int]$env:WG_INSTALL_ARG_COUNT; $i++) { [Environment]::GetEnvironmentVariable('WG_INSTALL_ARG_' + $i) }); & $env:WG_TMP_INSTALLER --root $env:WG_ROOT --no-launch @wgArgs 2>&1 | Tee-Object -FilePath $env:WG_LOG -Append; exit $LASTEXITCODE"
 set "RUN_RESULT=%ERRORLEVEL%"
 del "%WG_TMP_INSTALLER%" >nul 2>&1
 exit /b %RUN_RESULT%
