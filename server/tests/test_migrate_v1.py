@@ -244,6 +244,18 @@ def test_rerunning_imports_nothing_twice(v1_root: Path, tmp_path: Path):
     assert _job_ids(data_dir / "db" / "simulations.db") == first
 
 
+def test_rerun_can_copy_workspace_omitted_by_first_run(v1_root: Path, tmp_path: Path):
+    data_dir = tmp_path / "v2data"
+    first_report = migrate_v1.migrate(v1_root, data_dir, include_workspace=False)
+
+    second_report = migrate_v1.migrate(v1_root, data_dir, include_workspace=True)
+
+    assert first_report.workspace_copied == 0
+    assert second_report.imported == dict.fromkeys(migrate_v1.JOB_TABLES, 0)
+    assert second_report.workspace_copied == 1
+    assert (data_dir / "workspace" / "project-a" / "waveguide.project.v1.json").is_file()
+
+
 def test_dry_run_honours_same_source_marker_when_a_target_row_is_missing(
     v1_root: Path, tmp_path: Path
 ):
@@ -270,6 +282,30 @@ def test_dry_run_honours_same_source_marker_when_a_target_row_is_missing(
         migrate_v1.JOB_TABLES, 0
     )
     assert "already migrated (3 jobs)" in " ".join(dry_report.warnings)
+
+
+def test_copy_failure_preserves_original_exception_and_rolls_back(
+    v1_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    data_dir = tmp_path / "v2data"
+    source_database = v1_root / "server" / "data" / "simulations.db"
+    source_before = source_database.read_bytes()
+    real_table_columns = migrate_v1._table_columns
+
+    def fail_after_first_insert(
+        conn: sqlite3.Connection, table: str, schema: str = "main"
+    ) -> list[str]:
+        if table == "simulation_results" and schema == "main":
+            raise OSError("simulated copy failure")
+        return real_table_columns(conn, table, schema)
+
+    monkeypatch.setattr(migrate_v1, "_table_columns", fail_after_first_insert)
+
+    with pytest.raises(OSError, match="simulated copy failure"):
+        migrate_v1.migrate(v1_root, data_dir)
+
+    assert source_database.read_bytes() == source_before
+    assert _job_ids(data_dir / "db" / "simulations.db") == set()
 
 
 def test_existing_v2_job_is_never_overwritten(v1_root: Path, tmp_path: Path):
@@ -476,7 +512,7 @@ def test_reports_which_migrated_jobs_can_be_reopened_and_which_cannot(
 
     report = migrate_v1.migrate(v1_root, tmp_path / "v2data", dry_run=True)
 
-    assert report.jobs_without_design == 1
+    assert report.jobs_without_snapshot == 1
     assert report.designs == {"recovered_from_design_state": 2, "no_stored_design": 1}
     assert sum(report.designs.values()) == report.source["simulation_jobs"]
     assert report.unrecoverable_job_ids == ["v1-job-2"]
@@ -487,6 +523,37 @@ def test_reports_which_migrated_jobs_can_be_reopened_and_which_cannot(
     assert "recovered from design state" not in warning
     # The report is the G6 artifact, so it has to survive JSON.
     assert json.loads(json.dumps(report.as_dict()))["designs"] == report.designs
+
+
+def test_report_calls_a_missing_snapshot_a_snapshot_not_a_missing_design(
+    v1_root: Path, tmp_path: Path
+):
+    database = v1_root / "server" / "data" / "simulations.db"
+    config = {"options": {"mesh": {"waveguide_params": {"formula_type": "OSSE"}}}}
+    with closing(sqlite3.connect(database)) as conn, conn:
+        conn.execute(
+            "UPDATE simulation_jobs SET config_json = ? WHERE id = ?",
+            (json.dumps(config), "v1-job-2"),
+        )
+
+    report_path = tmp_path / "migration-report.json"
+    exit_code = migrate_v1.main(
+        [
+            "--v1-root",
+            str(v1_root),
+            "--data-dir",
+            str(tmp_path / "v2data"),
+            "--dry-run",
+            "--report",
+            str(report_path),
+        ]
+    )
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+
+    assert exit_code == 0
+    assert payload["designs"]["recovered_from_mesher_payload"] == 1
+    assert payload["jobs_without_snapshot"] == 1
+    assert "jobs_without_design" not in payload
 
 
 def test_a_freeform_v1_job_is_reported_as_needing_re_entry(v1_root: Path, tmp_path: Path):

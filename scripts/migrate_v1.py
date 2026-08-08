@@ -12,9 +12,11 @@ compares content hashes rather than trusting the copy.
     python scripts/migrate_v1.py --v1-root "../Waveguide Generator" --dry-run
     python scripts/migrate_v1.py --rollback <backup-directory>
 
-Known limitation, and no migration can fix it: v1 never populated
-``script_snapshot_json``, so imported jobs carry results, mesh artifacts and
-solver settings but no design. They cannot be reopened or rerun.
+Imported designs are classified with the same recovery path the running v2
+server uses. A missing ``script_snapshot_json`` is not itself a lost design:
+v1 often retains the solved geometry in its mesher payload. The report separates
+designs recovered from v1 state or that payload from legacy designs that really
+cannot be reopened, such as FREEFORM profiles that require manual re-entry.
 """
 
 from __future__ import annotations
@@ -71,7 +73,7 @@ class Report:
     workspace_skipped: int = 0
     hash_checked: int = 0
     hash_mismatches: list[str] = field(default_factory=list)
-    jobs_without_design: int = 0
+    jobs_without_snapshot: int = 0
     #: How each source job's design will read in v2, counted by the same code
     #: the server uses. This is the half of the migration that is *not* a byte
     #: copy, so it is the half that needs evidence.
@@ -342,7 +344,7 @@ def _migrate_with_paths(
     target_db = paths.db / "simulations.db"
     with closing(_connect(database, read_only=True)) as source:
         report.source = _counts(source)
-        report.jobs_without_design = int(
+        report.jobs_without_snapshot = int(
             source.execute(
                 "SELECT COUNT(*) FROM simulation_jobs WHERE script_snapshot_json IS NULL"
             ).fetchone()[0]
@@ -426,14 +428,17 @@ def _migrate_with_paths(
         already_imported = _marker_jobs_imported(conn, fingerprint)
         if already_imported is not None:
             report.warnings.append(
-                f"This v1 database was already migrated ({already_imported} jobs). Nothing to do."
+                f"This v1 database was already migrated ({already_imported} jobs); "
+                "no database rows to import."
             )
             report.after = _counts(conn)
             report.imported = dict.fromkeys(JOB_TABLES, 0)
-            return report
-
-        conn.execute("ATTACH DATABASE ? AS v1", (_file_uri(database, read_only=True),))
-        try:
+        else:
+            conn.execute("ATTACH DATABASE ? AS v1", (_file_uri(database, read_only=True),))
+            # The enclosing transaction context rolls back before closing() closes
+            # the connection and releases the attached database. An explicit
+            # DETACH in a finally block would run too early and could replace the
+            # exception that caused the rollback.
             imported = {}
             for table in JOB_TABLES:
                 target_columns = _table_columns(conn, table)
@@ -479,8 +484,6 @@ def _migrate_with_paths(
                     report.hash_checked += 1
                     if actual.get(job_id) != digest:
                         report.hash_mismatches.append(f"{table}:{job_id}")
-        finally:
-            conn.execute("DETACH DATABASE v1")
 
     if include_workspace and workspace is not None:
         for entry in sorted(workspace.iterdir()):

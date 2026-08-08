@@ -40,9 +40,44 @@ LAUNCHER_BATCH = ROOT / "launch-wg2.bat"
 ALL_BATCH_FILES = (BATCH_INSTALLER, BATCH_ENTRY_POINT, BATCH_UNINSTALLER, LAUNCHER_BATCH)
 BOTH_INSTALLERS = (SHELL_INSTALLER, BATCH_INSTALLER)
 
+VENV_REFERENCE = re.compile(r"\.venv(?:\b|[/\\])", re.IGNORECASE)
+DESTRUCTIVE_COMMAND = re.compile(
+    r"\b(?:rm|mv|rd|rmdir|del|move|ren|rename|rmtree|remove_tree|delete_tree)\b|"
+    r"\bremove-item\b",
+    re.IGNORECASE,
+)
+
 
 def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def destroys_virtual_environment(source: str) -> bool:
+    code_lines = [
+        "" if re.match(r"\s*(?:#|rem\b|::)", line, re.IGNORECASE) else line
+        for line in source.splitlines()
+    ]
+    if any(
+        VENV_REFERENCE.search(line) and DESTRUCTIVE_COMMAND.search(line)
+        for line in code_lines
+    ):
+        return True
+
+    # uninstall.sh registers concrete paths and deletes them through one generic
+    # target loop. Recognise that actual in-repository idiom as a positive control
+    # without making every unrelated `rm` elsewhere in a script suspicious.
+    code = "\n".join(code_lines)
+    registers_venv_target = re.search(
+        r"^\s*[^\n]*TARGETS\+=\([^\n]*\.venv",
+        code,
+        re.IGNORECASE | re.MULTILINE,
+    )
+    recursively_deletes_target = re.search(
+        r"^\s*rm\s+-\S*[rf]\S*\s+[\"']?\$\{?target(?:\}|\b)",
+        code,
+        re.IGNORECASE | re.MULTILINE,
+    )
+    return registers_venv_target is not None and recursively_deletes_target is not None
 
 
 def batch_code(source: str) -> str:
@@ -186,16 +221,30 @@ def test_environment_creation_is_delegated_to_bootstrap():
 
 
 def test_no_installer_deletes_or_renames_the_environment_behind_the_user():
-    destructive = re.compile(r"(rm\s+-rf?\s+[\"']?\S*\.venv|rd\s+/s\s+/q\s+\"?\.?\\?\.venv|mv\s+[\"']?\.venv|move\s+\"\.venv\")", re.IGNORECASE)
     for path in (*BOTH_INSTALLERS, BATCH_ENTRY_POINT, SHELL_ENTRY_POINT):
-        assert not destructive.search(read(path)), (
+        assert not destroys_virtual_environment(read(path)), (
             f"{path.name} destroys .venv. bootstrap.py decides what to do with an "
             "environment; an installer that removes one silently discards a "
             "multi-hundred-MB download the user may not be able to repeat."
         )
-    # The uninstallers are the ones allowed to, and are why this is not simply absent.
-    assert ".venv" in read(SHELL_UNINSTALLER)
-    assert ".venv" in read(BATCH_UNINSTALLER)
+    # The uninstallers are the ones allowed to. Requiring the detector to find
+    # both makes this an actual positive control rather than a spelling check.
+    assert destroys_virtual_environment(read(SHELL_UNINSTALLER))
+    assert destroys_virtual_environment(read(BATCH_UNINSTALLER))
+
+
+@pytest.mark.parametrize(
+    "command",
+    (
+        'rd /s /q "%WG_ROOT%\\.venv"',
+        'rmdir /s /q "%WG_ROOT%\\.venv"',
+        'rm -fr "$ROOT/.venv"',
+        'move /y ".venv" ".venv.bak"',
+        'shutil.rmtree(root / ".venv")',
+    ),
+)
+def test_the_environment_destruction_check_recognises_real_idioms(command: str):
+    assert destroys_virtual_environment(command)
 
 
 # ---------------------------------------------------------------------------
@@ -347,6 +396,35 @@ def test_the_windows_entry_point_passes_paths_to_powershell_through_the_environm
     # A plain cmd pipe takes ERRORLEVEL from the right-hand side, which would
     # destroy the exit code the exit-10 relaunch depends on.
     assert re.search(r"Tee-Object[\s\S]*exit \$LASTEXITCODE", source)
+
+
+def test_the_windows_entry_point_passes_forwarded_arguments_as_values():
+    """Caller arguments must not become part of the PowerShell program text.
+
+    A quoted cmd argument such as ``--spa-archive "C:\\My Files\\spa.tar.gz"``
+    loses those grouping quotes when nested in the outer ``-Command`` string.
+    PowerShell then sees two arguments; ``;``, ``$`` and backticks are worse,
+    because they are parsed as PowerShell syntax.  Store each cmd argument in
+    the environment and splat the reconstructed array instead.
+    """
+
+    source = batch_code(read(BATCH_ENTRY_POINT))
+    command = re.search(
+        r"powershell\b[\s\S]*?(?=^set \"RUN_RESULT=)",
+        source,
+        re.IGNORECASE | re.MULTILINE,
+    )
+    assert command is not None, "the transcript PowerShell invocation is missing"
+    assert "%*" not in command.group(), (
+        "%* inside -Command turns caller-controlled argument text into PowerShell code"
+    )
+    assert 'set "WG_INSTALL_ARG_%WG_INSTALL_ARG_COUNT%=%~1"' in source, (
+        "cmd must preserve each caller argument in a separate environment value"
+    )
+    assert "GetEnvironmentVariable('WG_INSTALL_ARG_' + $i)" in command.group()
+    assert "@wgArgs" in command.group(), (
+        "the reconstructed caller arguments must be splatted as an array"
+    )
 
 
 def test_the_entry_points_keep_the_installers_exit_status_through_the_transcript():

@@ -61,3 +61,5 @@ def test_corpus_parse_validate_round_trip(path: Path) -> None:
     assert emitted == source
     assert first.semantic_data() == second.semantic_data()
 
+    canonical = serialize(first.design)
+    assert parse(canonical).design.formula == first.design.formula

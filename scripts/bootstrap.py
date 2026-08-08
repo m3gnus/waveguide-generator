@@ -170,12 +170,12 @@ def _venv_evidence(environment: Path) -> dict[str, object] | None:
     somebody pip-installing into ``.venv`` out of band, because the manifest
     fingerprint alone cannot see that.
 
-    This sees it for about 2 ms: the set of installed distributions is exactly
-    the set of ``*.dist-info`` directories, and one ``scandir`` enumerates them
-    without importing anything or reading any metadata. Pair that with the
-    interpreter's own size and mtime and an environment that still matches has
-    not been touched. Anything that does not match falls through to the full
-    check, so this can only ever save time, never approve a broken venv.
+    This sees it cheaply: one ``scandir`` enumerates the set of ``*.dist-info``
+    directories, and four small ``direct_url.json`` reads capture the identity
+    of the Git-pinned distributions. Pair that with the interpreter's own size
+    and mtime and an environment that still matches has not been touched.
+    Anything that does not match falls through to the full check, so this can
+    only ever save time, never approve a broken venv.
 
     Returns ``None`` when the evidence cannot be gathered, which is itself a
     reason to take the slow path.
@@ -192,17 +192,40 @@ def _venv_evidence(environment: Path) -> dict[str, object] | None:
             for entry in os.scandir(site_packages)
             if entry.name.endswith(".dist-info")
         )
+        direct_urls: list[tuple[str, bytes]] = []
+        for distribution in sorted(_locked_git_commits()):
+            normalized = re.sub(r"[-_.]+", "_", distribution).casefold()
+            matches = [
+                name
+                for name in names
+                if name.casefold().startswith(f"{normalized}-")
+            ]
+            if len(matches) != 1:
+                return None
+            direct_urls.append(
+                (
+                    distribution,
+                    (site_packages / matches[0] / "direct_url.json").read_bytes(),
+                )
+            )
     except OSError:
         return None
     digest = hashlib.sha256()
     for name in names:
         digest.update(name.encode())
         digest.update(b"\0")
+    git_digest = hashlib.sha256()
+    for distribution, direct_url in direct_urls:
+        git_digest.update(distribution.encode())
+        git_digest.update(b"\0")
+        git_digest.update(direct_url)
+        git_digest.update(b"\0")
     return {
         "pythonSize": stat.st_size,
         "pythonMtimeNs": stat.st_mtime_ns,
         "distributions": digest.hexdigest(),
         "distributionCount": len(names),
+        "gitDirectUrls": git_digest.hexdigest(),
     }
 
 
@@ -290,10 +313,10 @@ def _validate(
     if stamp.get("fingerprint") != expected_fingerprint:
         return False, "the dependency manifests or bootstrap version changed"
 
-    # An environment this bootstrap itself installed, whose interpreter and
-    # installed-distribution set are both unchanged since, cannot have drifted
-    # from what the slow path would find. A stamp written by an older bootstrap
-    # has no evidence recorded and correctly falls through.
+    # An environment this bootstrap itself installed, whose interpreter,
+    # installed-distribution set, and pinned Git provenance are unchanged since,
+    # cannot have drifted from what the slow path would find. A stamp written by
+    # an older bootstrap has no evidence recorded and correctly falls through.
     recorded_evidence = stamp.get("venvEvidence")
     if (
         allow_fast_path
@@ -465,9 +488,7 @@ def main(argv: list[str] | None = None) -> int:
         fingerprint = _fingerprint()
         if args.check:
             with _bootstrap_lock(environment):
-                valid, reason = _validate(
-                    environment, fingerprint, record_evidence=False
-                )
+                valid, reason = _validate(environment, fingerprint)
             if valid:
                 print(f"Waveguide Generator v2 environment is ready: {environment}")
                 return 0

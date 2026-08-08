@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+from contextlib import nullcontext
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -62,6 +63,22 @@ def _ready_environment(bootstrap, tmp_path) -> Path:
     site_packages.mkdir(parents=True)
     (site_packages / "fastapi-0.1.dist-info").mkdir()
     (site_packages / "uvicorn-0.2.dist-info").mkdir()
+    for name, sha in bootstrap._locked_git_commits().items():
+        dist_info = site_packages / f"{name.replace('-', '_')}-0.1.0.dist-info"
+        dist_info.mkdir()
+        (dist_info / "direct_url.json").write_text(
+            json.dumps(
+                {
+                    "url": f"https://example.invalid/{name}.git",
+                    "vcs_info": {
+                        "vcs": "git",
+                        "commit_id": sha,
+                        "requested_revision": sha,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
     return environment
 
 
@@ -111,6 +128,30 @@ def test_installing_a_package_out_of_band_defeats_the_fast_path(tmp_path, monkey
     assert commands, "a changed distribution set must fall through to the full check"
 
 
+def test_changing_a_pinned_git_commit_defeats_the_fast_path(tmp_path, monkeypatch) -> None:
+    bootstrap = _load_bootstrap()
+    environment = _ready_environment(bootstrap, tmp_path)
+    fingerprint = bootstrap._fingerprint()
+    bootstrap._write_stamp(environment, fingerprint)
+
+    site_packages = bootstrap._site_packages(environment)
+    assert site_packages is not None
+    name = next(iter(bootstrap._locked_git_commits()))
+    direct_url = site_packages / f"{name.replace('-', '_')}-0.1.0.dist-info" / "direct_url.json"
+    metadata = json.loads(direct_url.read_text(encoding="utf-8"))
+    metadata["vcs_info"]["commit_id"] = "0" * 40
+    direct_url.write_text(json.dumps(metadata), encoding="utf-8")
+
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        bootstrap,
+        "_run",
+        lambda command, **_kwargs: commands.append(command) or SimpleNamespace(returncode=0),
+    )
+    assert bootstrap._validate(environment, fingerprint) == (True, "ready")
+    assert commands, "changed Git provenance must fall through to the full check"
+
+
 def test_a_replaced_interpreter_defeats_the_fast_path(tmp_path, monkeypatch) -> None:
     bootstrap = _load_bootstrap()
     environment = _ready_environment(bootstrap, tmp_path)
@@ -158,9 +199,37 @@ def test_the_stamp_records_the_evidence_the_fast_path_needs(tmp_path) -> None:
     bootstrap._write_stamp(environment, bootstrap._fingerprint())
     stamp = json.loads((environment / bootstrap.STAMP_NAME).read_text(encoding="utf-8"))
     evidence = stamp["venvEvidence"]
-    assert evidence["distributionCount"] == 2
+    assert evidence["distributionCount"] == 2 + len(bootstrap._locked_git_commits())
     assert evidence["pythonSize"] > 0
     assert evidence["distributions"]
+    assert evidence["gitDirectUrls"]
+
+
+def test_check_restamps_an_environment_after_successful_slow_validation(
+    tmp_path, monkeypatch
+) -> None:
+    bootstrap = _load_bootstrap()
+    environment = _ready_environment(bootstrap, tmp_path)
+    fingerprint = bootstrap._fingerprint()
+    (environment / bootstrap.STAMP_NAME).write_text(
+        json.dumps({"fingerprint": fingerprint}), encoding="utf-8"
+    )
+    commands: list[list[str]] = []
+    monkeypatch.setattr(bootstrap, "_fingerprint", lambda: fingerprint)
+    monkeypatch.setattr(bootstrap, "_bootstrap_lock", lambda _environment: nullcontext())
+    monkeypatch.setattr(
+        bootstrap,
+        "_run",
+        lambda command, **_kwargs: commands.append(command) or SimpleNamespace(returncode=0),
+    )
+
+    assert bootstrap.main(["--check", "--venv", str(environment)]) == 0
+    assert len(commands) == 2
+    stamp = json.loads((environment / bootstrap.STAMP_NAME).read_text(encoding="utf-8"))
+    assert stamp["venvEvidence"] == bootstrap._venv_evidence(environment)
+
+    assert bootstrap.main(["--check", "--venv", str(environment)]) == 0
+    assert len(commands) == 2, "the second check should use the newly recorded fast path"
 
 
 def test_bootstrap_force_reinstalls_git_pins_after_manifest_change(tmp_path, monkeypatch) -> None:
