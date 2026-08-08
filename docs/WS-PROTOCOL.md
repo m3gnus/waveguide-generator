@@ -38,7 +38,9 @@ Handshake: server sends `{"v":1,"kind":"hello","epoch":N,"heartbeatSec":15,"limi
 
 ### Client rules
 
-- Render a frame only if `epoch` is current AND `designRevision == store.currentRevision` (stale-but-matching seq is fine — latest revision wins, not latest seq).
+- Render a frame if `epoch` is current AND its `designRevision` is **not older than the displayed one and not older than the last discontinuous edit** (see below). Mark the viewport stale whenever `designRevision != store.currentRevision`.
+- The original rule — render only when `designRevision == store.currentRevision` — is unreachable during any continuous gesture and was measured doing real damage: the store commits a revision per `pointermove` (~104/s in a real browser) while building a coarse preview takes 96 ms on an M1 Max and 192 ms on the Windows reference machine, so the revision has always moved on by the time geometry returns. Reproduced end to end against the real mesher: a 2.2 s drag produced 21 valid coarse frames and the client accepted **0**. That is the "0.6 displayed frames/s against 104 UI revisions/s" in `MACOS-PERFORMANCE.md`.
+- A frame that lags the design by a few revisions is what the stale badge exists to describe. A frame older than a **discontinuous** edit is different: undo, redo, load and family-switch replace the design rather than advance it, so geometry in flight for a pre-undo revision is the state the user just rejected. Those edits all carry `immediate`, and their revision becomes a barrier that older frames never pass — which is conformance case 2 in §4 below.
 - On revision mismatch: keep displaying `lastValidRevision`'s geometry with a **stale badge** (v1 FREEFORM behavior, kept deliberately).
 - Undo/redo/load/family-switch: cancel debounce timers, bump revision, send immediately (plan §4.2).
 - Reconnect: new epoch from `hello`, then immediately resend current full state (`preview` at current revision, fine LOD). Nothing is replayed server-side; the preview channel is stateless per request.
