@@ -374,10 +374,12 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return run(args)
-    except SpaError as exc:
-        print(f"\nERROR: {exc}", file=sys.stderr)
-        return 2
-    except OSError as exc:
+    except (SpaError, OSError) as exc:
+        # Progress goes to stdout and this goes to stderr. When the installer's
+        # output is piped to a log the two are buffered independently, and
+        # without this the error appears above the line explaining what was
+        # being attempted.
+        sys.stdout.flush()
         print(f"\nERROR: {exc}", file=sys.stderr)
         return 2
 
