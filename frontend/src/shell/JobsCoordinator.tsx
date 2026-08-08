@@ -118,7 +118,12 @@ export function JobsCoordinator({ children }: { children: ReactNode }) {
         result: await fetchJobResults(job.id) as ResultPayload,
         design: hydrateJobDesign(job) ?? undefined,
         designRevision: job.design_revision,
-        preferences,
+        // Automatic exports belong to a stored run, so name them from that run
+        // instead of sharing the current editor's export basename across jobs.
+        preferences: {
+          ...preferences,
+          outputName: job.label?.trim() || `${preferences.outputName}_${job.id}`,
+        },
       }, formats),
       markExported: async (job, files, formats, completedAt) => jobsSocket.patchMetadata(job.id, {
         exported_files: [...new Set([...(job.exported_files ?? []), ...files])],

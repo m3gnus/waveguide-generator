@@ -22,6 +22,19 @@ describe('result exporters', () => {
     expect(buildPolarCsv(result)).toContain('200,horizontal,-90,-20');
     expect(buildImpedanceCsv(result)).toContain('200,,-0.5');
   });
+  it('builds only the selected client-side format', async () => {
+    const toJSON = vi.fn(() => { throw new Error('unselected JSON builder ran'); });
+    const saveText = vi.fn();
+    const csvResult = { ...result, toJSON };
+
+    await expect(runExportFormat('csv', {
+      result: csvResult,
+      preferences: preferencesStore.getSnapshot(),
+      saveText,
+    })).resolves.toEqual(['horn_1.csv']);
+    expect(toJSON).not.toHaveBeenCalled();
+    expect(saveText).toHaveBeenCalledOnce();
+  });
   it('posts config and geometry selectors to their existing endpoints', async () => {
     const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input) => {
       const path = String(input);

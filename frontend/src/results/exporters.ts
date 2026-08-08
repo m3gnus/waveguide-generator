@@ -269,15 +269,15 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
   }
   if (format === 'png') return chartPng(context);
   const result = requireResult(context);
-  const builders: Record<Exclude<ExportFormat, 'mwg_config' | 'step' | 'stl' | 'fusion_csv' | 'png'>, [string, string, string]> = {
-    csv: [buildFrequencyCsv(result, context.preferences), `${baseName}.csv`, 'text/csv;charset=utf-8'],
-    json: [buildFullResultsJson(result, context.preferences, now), `${baseName}.json`, 'application/json;charset=utf-8'],
-    txt: [buildSummaryText(result, context.preferences, now), `${baseName}.txt`, 'text/plain;charset=utf-8'],
-    polar_csv: [buildPolarCsv(result), `${baseName}_polar.csv`, 'text/csv;charset=utf-8'],
-    impedance_csv: [buildImpedanceCsv(result), `${baseName}_impedance.csv`, 'text/csv;charset=utf-8'],
-    vacs: [buildVacs(result, now), `${baseName}_spectrum.txt`, 'text/plain;charset=utf-8'],
+  const builders: Record<Exclude<ExportFormat, 'mwg_config' | 'step' | 'stl' | 'fusion_csv' | 'png'>, () => [string, string, string]> = {
+    csv: () => [buildFrequencyCsv(result, context.preferences), `${baseName}.csv`, 'text/csv;charset=utf-8'],
+    json: () => [buildFullResultsJson(result, context.preferences, now), `${baseName}.json`, 'application/json;charset=utf-8'],
+    txt: () => [buildSummaryText(result, context.preferences, now), `${baseName}.txt`, 'text/plain;charset=utf-8'],
+    polar_csv: () => [buildPolarCsv(result), `${baseName}_polar.csv`, 'text/csv;charset=utf-8'],
+    impedance_csv: () => [buildImpedanceCsv(result), `${baseName}_impedance.csv`, 'text/csv;charset=utf-8'],
+    vacs: () => [buildVacs(result, now), `${baseName}_spectrum.txt`, 'text/plain;charset=utf-8'],
   };
-  const [content, filename, type] = builders[format];
+  const [content, filename, type] = builders[format]();
   saveText(content, filename, type);
   return [filename];
 }

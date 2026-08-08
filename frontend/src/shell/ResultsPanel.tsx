@@ -560,6 +560,7 @@ export function ResultsPanel() {
   const tokens = useChartTokens();
   const [display, setDisplay] = useState<ResultDisplaySnapshot | null>(null);
   const [fetchError, setFetchError] = useState<ResultFetchError | null>(null);
+  const [fetchAttempt, setFetchAttempt] = useState(0);
   const [exportStatus, setExportStatus] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
@@ -605,7 +606,7 @@ export function ResultsPanel() {
         });
       });
     return () => { live = false; };
-  }, [selection.primary, selectionKey]);
+  }, [selection.primary, selectionKey, fetchAttempt]);
 
   const currentDisplay = display?.key === selectionKey ? display : null;
   const primary = selection.primary && currentDisplay
@@ -670,7 +671,7 @@ export function ResultsPanel() {
       <button className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Results preferences" aria-expanded={preferencesOpen} title="Results & export preferences" onClick={() => setPreferencesOpen((value) => !value)}><Icon name="settings"/></button>
     </div>
     {preferencesOpen && <ResultsPreferencesSurface popover onClose={() => setPreferencesOpen(false)}/>}
-    {(error || exportStatus) && <div className={error ? 'job-error' : ''} role="status" style={{ margin: 7, color: error ? undefined : 'var(--fg2)', fontSize: 9 }}>{error ?? exportStatus}</div>}
+    {(error || exportStatus) && <div className={error ? 'job-error' : ''} role="status" style={{ margin: 7, color: error ? undefined : 'var(--fg2)', fontSize: 9 }}>{error ?? exportStatus}{error && <button type="button" onClick={() => { setFetchError(null); setFetchAttempt((value) => value + 1); }}>Retry</button>}</div>}
     {showingPrevious && <div className="job-warning" role="status" style={{ margin: 7 }}>Showing previous results while fetching the selected run…</div>}
     {!shown
       ? <div className="coming-soon"><b>{error ? 'RESULTS UNAVAILABLE' : 'LOADING RESULTS'}</b><span>{error ? 'The selected run could not be loaded.' : 'Fetching selected job data…'}</span></div>

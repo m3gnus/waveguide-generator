@@ -109,6 +109,43 @@ describe('atomic results display transitions', () => {
     await act(async () => { pending.get('new')!(response([200])); });
   });
 
+  it('retries a failed pinned result without changing the selection', async () => {
+    compareSelection.setPrimary('broken');
+    await act(async () => { root.render(<ResultsPanel/>); });
+    await act(async () => { pending.get('broken')!(response([], false)); });
+
+    expect(host.textContent).toContain('RESULTS UNAVAILABLE');
+    const retry = [...host.querySelectorAll('button')].find((button) => button.textContent === 'Retry');
+    expect(retry).toBeDefined();
+
+    await act(async () => { retry!.click(); });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    await act(async () => { pending.get('broken')!(response([315])); });
+
+    expect(compareSelection.getSnapshot()).toMatchObject({ primary: 'broken', following: false });
+    expect(host.textContent).not.toContain('RESULTS UNAVAILABLE');
+    expect(host.querySelector('.results-panel')?.getAttribute('data-result-primary')).toBe('broken');
+  });
+
+  it('retries a failed result while following the latest solve', async () => {
+    publishJobs([job('broken'), job('old')]);
+    compareSelection.followLatest('broken');
+    await act(async () => { root.render(<ResultsPanel/>); });
+    await act(async () => { pending.get('broken')!(response([], false)); });
+
+    expect(host.textContent).toContain('RESULTS UNAVAILABLE');
+    const retry = [...host.querySelectorAll('button')].find((button) => button.textContent === 'Retry');
+    expect(retry).toBeDefined();
+
+    await act(async () => { retry!.click(); });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    await act(async () => { pending.get('broken')!(response([400])); });
+
+    expect(compareSelection.getSnapshot()).toMatchObject({ primary: 'broken', following: true });
+    expect(host.textContent).not.toContain('RESULTS UNAVAILABLE');
+    expect(host.querySelector('.results-panel')?.getAttribute('data-result-primary')).toBe('broken');
+  });
+
   it('does not mix a resolved new primary with a still-loading overlay', async () => {
     act(() => compareSelection.toggleOverlay('old-overlay'));
     await act(async () => { root.render(<ResultsPanel/>); });
