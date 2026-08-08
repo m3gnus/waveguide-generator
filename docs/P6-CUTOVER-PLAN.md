@@ -41,48 +41,84 @@ So the migration is **copy, open, verify** — not an importer. That moves P6.1
 from a multi-week workstream to a few days, most of which is the backup/rollback
 harness and the verification evidence G6 wants, not transformation code.
 
-### 0.2 No migrated job can be reopened or rerun — for two different reasons
+### 0.2 Imported jobs — **closed 2026-08-08**
 
-Of the 35 v1 jobs, **26 carry a design snapshot and 9 do not**
-(`script_snapshot_json` is NULL; the column arrived in a later v1 ALTER and was
-not backfilled). Neither group can currently be reopened in v2:
+The original finding was that no migrated job could be reopened or rerun, for
+two reasons: 9 of 35 had `script_snapshot_json` NULL (the column arrived in a
+later v1 ALTER and was never backfilled), and the other 26 carried v1's flat
+parameter bag, which v2's `formula`-discriminated `DesignConfig` rejects with
+`union_tag_not_found`. The migration itself was never affected — snapshots copy
+byte-for-byte and their hashes are verified — only v2's ability to *interpret*
+them.
 
-- **The 9 without a snapshot** — the design was never stored. No migration can
-  recover it.
-- **The 26 with one** — the snapshot is v1's flat parameter bag: keyed `type`
-  (`"OSSE"`), mixing v1 field names (`r0`, `a0`, `q`, `morphCorner`) with
-  ATH-style keys (`Coverage.Angle`, `Term.q`, `Throat.Diameter`) and a `_blocks`
-  map of ATH sections. v2's `DesignConfig` is a discriminated union on
-  `formula`, so all 26 fail validation with `union_tag_not_found`.
-
-The migration itself is unaffected — the snapshots copy byte-for-byte and their
-hashes are verified. What is missing is v2's ability to *interpret* them, which
-the rebuild plan never required for G6.
-
-**Required (P6.1):** v2 degrades gracefully on every imported job — Rerun
-disabled with a stated reason, the cause surfaced in job detail, no crash path
-through rerun/compare. Fixtures come from the real v1 database, not synthetic
-rows.
-
-**Recovery — built (Magnus, 2026-08-05).** `server/design/legacy_snapshot.py`
+**Recovery, first pass (Magnus, 2026-08-05).** `server/design/legacy_snapshot.py`
 ports v1's own `generateMWGConfigContent` serializer, so a legacy bag is
 rendered back to ATH text and read by the existing `textcfg.parse` rather than
 through a second field mapping that would drift from the first. Checked against
-the JavaScript itself: running v1's real serializer under node over all 25
-non-FREEFORM snapshots gives output byte-identical to the port. **25 of 26 are
-recoverable**; the one FREEFORM job raises and must be re-entered.
+the JavaScript itself: running v1's real serializer under node over the
+non-FREEFORM snapshots gives output byte-identical to the port.
 
-That leaves the 9 snapshot-less jobs, which remain unrecoverable by
-construction, and the graceful-degradation UI work below.
+**Two things that pass turned out to be wrong (2026-08-08).**
 
-**Found while verifying this, unrelated to migration:** 12 of the 25 recovered
-R-OSSE designs fail `build_preview_geometry` with `horn.outer: inconsistent
-local orientation`. It is not a migration defect — a from-scratch R-OSSE design
-reproduces it, and sweeping wall thickness 0–12 mm in 0.1 steps shows **only
-5.1–6.0 mm fails**. The offset shell folds near the rollback where the wall is
-comparable to the local radius of curvature; the orientation guard is correctly
-refusing the result. The whole preview raises, so the viewport shows nothing.
-Tracked separately; it blocks no P6 gate but it does affect ordinary use.
+1. **It was reading the wrong copy of the design.** v1 stores the design twice
+   per job: `script_snapshot.stateSnapshot` is the editor state at submit time,
+   and `script_snapshot.params` is the bag it *derived* to feed the mesher.
+   v1's own loader prefers the first and its source says the second "is not
+   equivalent" (`src/modules/simulation/jobs.js:7-10`). Preparing that bag
+   evaluates and drops every formula-valued field: over the 22 snapshot-carrying
+   jobs in the live database, the derived bag has **no `R`, `a` or `k` at all on
+   16 of them**. Conversion succeeded and produced an R-OSSE with no radius.
+   Nothing said so. The state snapshot needs no new mapping — the same verified
+   port renders it — but its family lives in `stateSnapshot.type` rather than in
+   the params, and handing it over unmerged reads a FREEFORM design straight
+   down the OSSE branch and validates.
+2. **The 9 snapshot-less jobs are not lost.** Every row in that database also
+   stores the prepared mesher payload at
+   `config_json.options.mesh.waveguide_params`, and that payload is v1's own
+   parameter bag with snake_case keys — not the mesher's nested config — so it
+   renames into the same writer (`server/design/legacy_payload.py`). It is the
+   lower-fidelity source and is used only where no snapshot exists: it carries
+   no ATH passthrough blocks, no `Scale`, no sweep bounds, and the recovered
+   job says so. On every live job that stored both copies, the two independent
+   routes produce identical geometry — which is what makes the rename table
+   trustworthy rather than merely plausible.
+
+**Where that leaves the reference database (31 jobs, 2026-08-08):**
+
+| | |
+|---|---|
+| Recovered from v1's design state | **21** |
+| Recovered from the mesher payload | **8** |
+| Refused with a stated reason | **2** — both FREEFORM, which has no ATH text form |
+
+`server/jobs/legacy_design.py` resolves this once per job and rewrites a
+recovered design into v2's own `{"version": 1, "design": …}` snapshot shape, so
+reopen, rerun, compare and export need no legacy branch anywhere; a job that
+cannot be recovered keeps its original bytes and carries a `design_availability`
+verdict instead. Rerun and Retry are the same control
+(`frontend/src/jobs/DesignAvailability.tsx`), disabled only when both the server
+verdict and client hydration agree the design is unusable, with the reason on
+the control *and* as a sentence in the card. The `snapshot ?? currentDesign`
+fallback in the job card is gone: it ran the editor's current design under an
+old job's name and revision, and reported success.
+
+Fixtures are seven verbatim rows from the real v1 database
+(`server/tests/fixtures/v1_jobs.json`), covering both recovery sources, both
+refusal causes, and both job statuses. The corpus tests also stopped opening the
+live 109 MB v1 database read-write.
+
+`scripts/migrate_v1.py --report` now counts these verdicts, using the same
+resolver the server runs, so G6's evidence is measured rather than predicted.
+
+**Found while verifying this, unrelated to migration — and since closed.** On
+2026-08-05, 12 of the recovered R-OSSE designs failed `build_preview_geometry`
+with `horn.outer: inconsistent local orientation`; it was never a migration
+defect, since a from-scratch R-OSSE reproduced it and only wall thicknesses of
+5.1–6.0 mm did. Re-measured 2026-08-08 against the pinned mesher
+(`8a8f3837`, the non-editable copy the venv actually runs): **all 29 recovered
+designs build a preview, and the from-scratch reproduction at 5.0/5.5/6.0 mm no
+longer fails.** Which of the mesher changes between those pins closed it was not
+chased down.
 
 ### 0.3 The Node-free install goal is not yet true
 
@@ -119,7 +155,7 @@ blocks P6.4 and P6.5.
 ### P6.1 — v1 → v2 data migration — **done**
 
 *Size: S (was L).* Shipped as `scripts/migrate_v1.py`, covered by
-`server/tests/test_migrate_v1.py` (12 tests).
+`server/tests/test_migrate_v1.py` (14 tests).
 
 ```
 python scripts/migrate_v1.py --v1-root "../Waveguide Generator" --dry-run
@@ -136,8 +172,7 @@ Two defects the tests caught, both now fixed: second-resolution backup directory
 names collided on a quick re-run and aborted the migration, and rollback left
 imported projects behind whenever the pre-migration workspace was empty.
 
-Still open here: item 6 below (graceful degradation for imported jobs, §0.2) is
-UI work and is not done.
+Item 6 below — imported jobs — closed 2026-08-08; see §0.2.
 
 The requirements this satisfies:
 
@@ -156,7 +191,8 @@ The requirements this satisfies:
 5. **Prove rollback.** Restore from the backup and re-verify counts and hashes —
    a scripted test, not a manual step.
 6. **Imported jobs** (§0.2): fixtures from the real database, graceful
-   degradation, no rerun crash path. **Not done — the only P6.1 item left.**
+   degradation, no rerun crash path. **Done** — and better than the requirement:
+   29 of the 31 reference jobs are recovered rather than degraded.
 7. **Also migrate:** saved projects. v1 keeps them in `output/` beside the
    checkout (312 folders, 86 MB here) unless redirected by
    `server/data/workspace_settings.json`, which the tool honours. v1's
@@ -302,7 +338,7 @@ Cutover happens when every row is true and its evidence is linked.
 | 7 | Two-week beta against a defined matrix | G6 | Blocked on P6.5 |
 | 8 | Traceability-table sweep — every row tested, deferrals have written workarounds | §3, G6 | Table exists; sweep not run |
 | 9 | Qualification-runner evidence linked from the gate | R2-P1.3 | Runner exists; publishing not wired |
-| 10 | Imported jobs degrade gracefully (no reopen/rerun) | §0.2, new | Not started |
+| 10 | Imported jobs degrade gracefully (no reopen/rerun) | §0.2, new | **Done** — 21 recovered from v1's design state, 8 from the mesher payload, 2 refused by name (FREEFORM); measured by `--report` against the real 31-job database |
 
 Two things gate the gate itself, and neither is a row above: **CI has never run
 on v2** (P6.3), so the whole suite-and-drift half of the evidence is untested on
@@ -326,10 +362,9 @@ depend on has never been produced.
 4. **Whether the internal `docs/BATCH-*-BRIEF.md` and review documents stay in
    the published repo.** They are honest engineering history and cost nothing to
    keep, but they are agent working notes, not user documentation.
-5. **Legacy snapshot translation (§0.2)** — build the v1-bag → ATH text →
-   `textcfg.parse` path so the 26 snapshot-carrying jobs can be reopened, or
-   ship with rerun disabled for all imported jobs? Not a cutover blocker either
-   way.
+5. ~~**Legacy snapshot translation (§0.2)** — build the v1-bag → ATH text →
+   `textcfg.parse` path, or ship with rerun disabled for all imported jobs?~~
+   **Settled: build it**, and the second source too. §0.2 has the outcome.
 6. **Parallel BEMPP sweeps, and what they cost Stop.** The Windows pass enabled
    the engine's own `auto` worker mode, which splits sweeps of 80+ frequencies
    across processes. Stop then cannot cancel a frequency already running in a
