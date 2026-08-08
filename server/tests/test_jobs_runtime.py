@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 from pathlib import Path
+import sqlite3
 from typing import Any
 
 import pytest
@@ -24,6 +25,24 @@ def _request(*, delay_ms: int = 2, count: int = 5) -> SolveRequest:
             "options": {"engine": "dryrun", "stage_delay_ms": delay_ms},
         }
     )
+
+
+def _running_job(job_id: str) -> dict[str, Any]:
+    now = datetime.now().isoformat()
+    return {
+        "id": job_id,
+        "status": "running",
+        "created_at": now,
+        "updated_at": now,
+        "queued_at": now,
+        "started_at": now,
+        "progress": 0.5,
+        "stage": "solve",
+        "stage_message": "Solving",
+        "config_json": _request(delay_ms=0).model_dump(mode="json"),
+        "config_summary_json": {"formula_type": "OSSE"},
+        "task_metadata": {},
+    }
 
 
 async def _wait_stage(store: JobStore, job_id: str, stage: str) -> None:
@@ -153,6 +172,119 @@ def test_result_db_write_failure_transitions_to_error(
 
     class sqlite_error(RuntimeError):
         pass
+
+    asyncio.run(scenario())
+
+
+def test_runtime_log_retry_pins_batch_when_buffer_grows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        store = JobStore(tmp_path / "jobs.db")
+        store.initialize()
+        store.create_job(_running_job("retry"))
+        runtime = JobRuntime(store, persistence_interval_seconds=60.0)
+        runtime._started = True
+        original_update = store._update_job
+
+        def fail_update(*_args: object, **_kwargs: object) -> bool:
+            raise sqlite3.OperationalError("simulated commit path failure")
+
+        await runtime._append_log("retry", "first")
+        monkeypatch.setattr(store, "_update_job", fail_update)
+        with pytest.raises(sqlite3.OperationalError, match="simulated"):
+            await runtime._flush_runtime_update("retry")
+        assert store.get_job_log("retry") == "first\n"
+
+        monkeypatch.setattr(store, "_update_job", original_update)
+        await runtime._append_log("retry", "second")
+        await runtime._flush_runtime_update("retry")
+        await runtime._append_log("retry", "third")
+        await runtime._flush_runtime_update("retry")
+
+        assert store.get_job_log("retry") == "first\nsecond\nthird\n"
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_failure_transition_survives_log_flush_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        store = JobStore(tmp_path / "jobs.db")
+        store.initialize()
+        store.create_job(_running_job("failed"))
+        runtime = JobRuntime(store, persistence_interval_seconds=60.0)
+        runtime._started = True
+        subscriber = runtime.events.subscribe()
+        await runtime._append_log("failed", "last buffered line")
+        pending = runtime._pending_updates["failed"]
+        original_persist = store.persist_runtime_update
+
+        def fail_flush(*_args: object, **_kwargs: object) -> None:
+            raise OSError("log device unavailable")
+
+        monkeypatch.setattr(store, "persist_runtime_update", fail_flush)
+        try:
+            await runtime._fail_job("failed", "solver exploded")
+
+            row = store.get_job_row("failed")
+            assert row is not None
+            assert row["status"] == "error"
+            assert row["stage"] == "error"
+            durable = [
+                event
+                for event in store.replay_events(0)
+                if event["jobId"] == "failed" and event["type"] == "failed"
+            ]
+            assert len(durable) == 1
+            assert subscriber.qsize() == 1
+            assert subscriber.get_nowait()["type"] == "failed"
+            assert pending.closed is True
+            assert "failed" not in runtime._pending_updates
+        finally:
+            monkeypatch.setattr(store, "persist_runtime_update", original_persist)
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_successful_solve_survives_final_log_flush_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("WG2_ENABLE_DRYRUN", "1")
+
+    async def scenario() -> None:
+        store = JobStore(tmp_path / "jobs.db")
+        runtime = JobRuntime(store)
+        original_persist = store.persist_runtime_update
+        injected = False
+
+        def fail_final_flush(*args: Any, **kwargs: Any) -> Any:
+            nonlocal injected
+            log_lines = tuple(kwargs.get("log_lines") or ())
+            if not injected and "Dry-run result persistence ready" in log_lines:
+                injected = True
+                raise OSError("log device unavailable")
+            return original_persist(*args, **kwargs)
+
+        monkeypatch.setattr(store, "persist_runtime_update", fail_final_flush)
+        job_id = await runtime.submit(_request(delay_ms=0))
+        await runtime.wait_idle()
+
+        row = await runtime.get_job(job_id)
+        assert injected is True
+        assert row["status"] == "complete"
+        assert store.get_results(job_id) is not None
+        terminal_types = [
+            event["type"]
+            for event in store.replay_events(0)
+            if event["jobId"] == job_id
+            and event["type"] in {"completed", "failed", "cancelled"}
+        ]
+        assert terminal_types == ["completed"]
+        await runtime.shutdown()
 
     asyncio.run(scenario())
 

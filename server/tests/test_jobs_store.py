@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import json
+import logging
 from pathlib import Path
 import sqlite3
 
@@ -381,6 +382,44 @@ def test_runtime_log_append_retry_is_idempotent_after_sql_failure(
     assert store.get_job_row("retry")["task_metadata"]["log_tail"] == [
         "only once"
     ]
+
+
+def test_runtime_log_mismatch_warns_resynchronizes_and_keeps_progressing(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    store.create_job(_job("mismatch", "running"))
+    log_path = store._job_log_path("mismatch")
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("external\n", encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING, logger="server.jobs.store"):
+        changed, events = store.persist_runtime_update(
+            "mismatch",
+            {},
+            log_lines=("writer",),
+            expected_log_size=0,
+        )
+
+    assert changed is True
+    assert [event["type"] for event in events] == ["log"]
+    assert "Job log integrity mismatch" in caplog.text
+    assert store.get_job_log("mismatch") == "external\nwriter\n"
+    assert store.get_job_row("mismatch")["task_metadata"]["log_tail"] == [
+        "writer"
+    ]
+
+    expected = store.job_log_size("mismatch")
+    changed, events = store.persist_runtime_update(
+        "mismatch",
+        {},
+        log_lines=("after-resync",),
+        expected_log_size=expected,
+    )
+    assert changed is True
+    assert [event["type"] for event in events] == ["log"]
+    assert store.get_job_log("mismatch") == "external\nwriter\nafter-resync\n"
 
 
 def test_transactions_rollback_a_duplicate_create_without_extra_event(tmp_path: Path) -> None:
