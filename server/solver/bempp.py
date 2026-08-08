@@ -64,31 +64,81 @@ def _version() -> str | None:
         return None
 
 
+#: The sweep runs in one cancellable process unless the operator asks for more.
+#:
+#: ``WG2_SOLVE_WORKERS=0`` selects the engine's own auto mode, which splits a
+#: sweep across processes once each worker would get at least 40 frequencies;
+#: any positive integer forces that count. Auto was the default until it was
+#: measured on an M1 Max (10 cores, macOS 15.5), 766-triangle quarter-domain
+#: OSSE mesh, numba assembly backend, wall clock as mean over 3 repeats:
+#:
+#:   frequencies   workers=1          auto              workers=4
+#:   79            64.1 s (sd 4.4)    66.3 s (1 proc)   59.7 s (sd 3.3)
+#:   80            65.6 s (sd 5.2)    67.4 s (2 proc)   59.2 s (sd 4.5)
+#:   200          166.7 s (sd 8.0)   111.4 s (5 proc)  116.0 s (sd 5.4)
+#:
+#: One process already draws 5.1 CPU-seconds per wall-second of the ten
+#: available, so splitting the sweep buys the remaining headroom rather than
+#: idle cores: 200 frequencies across five workers spent 24% more total CPU
+#: (954 against 771 CPU-seconds) to finish 1.33x sooner in that run, and at 80
+#: -- where auto first splits -- the difference was inside the run-to-run
+#: spread.
+#:
+#: What it costs is Stop. The parent can only raise between progress events and
+#: must then join every sibling chunk, so a cancelled 200-frequency sweep
+#: returned after 88 s instead of 0.3 s, having solved the whole sweep anyway;
+#: and because each spawned worker re-JITs bempp-cl's kernels, the first
+#: cancellable moment moves from 0.6 s to 21 s, re-creating the cold-start
+#: window ``server/solver/warmup.py`` exists to keep off the user's solve.
+#: Charging 88 s to the user who just said the remaining time was not worth it,
+#: to save 55 s for the user who did not, is the wrong way round.
+#:
+#: Results themselves are not at stake: serial and parallel payloads for the
+#: same design and sweep were byte-identical in compact JSON at both 80 and 200
+#: frequencies, once per-frequency wall-clock timings were excluded.
+DEFAULT_SOLVE_WORKERS = 1
+
+
 def _resolved_workers() -> int:
     """How many processes the frequency sweep may use.
 
-    Zero means the engine's own auto mode, which is the default and is
-    self-limiting: ``hornlab_bempp_bem`` splits only when each worker would get
-    at least 40 frequencies, because a spawned worker re-imports bempp-cl and
-    re-JITs its kernels before it can solve anything. Short sweeps therefore
-    stay in one warm process, where they are dramatically faster.
-
-    The caveat that comes with splitting is real and is why this is reported in
-    the solve metadata rather than being silent: Stop cannot cancel frequencies
-    already running in sibling worker processes. ``WG2_SOLVE_WORKERS=1`` forces
-    the single-process behaviour back.
+    Zero means the engine's own auto mode; see ``DEFAULT_SOLVE_WORKERS`` for
+    what it was measured to cost and why it is not the default.
     """
 
     raw = os.environ.get("WG2_SOLVE_WORKERS", "").strip()
     if not raw:
-        return 0
+        return DEFAULT_SOLVE_WORKERS
     try:
         return max(0, int(raw))
     except ValueError:
         logger.warning(
             "Ignoring WG2_SOLVE_WORKERS=%r: expected a non-negative integer", raw
         )
-        return 0
+        return DEFAULT_SOLVE_WORKERS
+
+
+#: ``hornlab_bempp_bem`` splits an auto sweep only when every worker would get
+#: at least this many frequencies, because a spawned worker re-imports bempp-cl
+#: and re-JITs its kernels before it can solve anything.
+_ENGINE_MIN_FREQUENCIES_PER_WORKER = 40
+
+
+def _sweep_will_split(workers: int, num_frequencies: int) -> bool:
+    """Will this sweep really run in more than one process?
+
+    An explicit count above one always splits -- the engine honours the caller
+    over its own arithmetic -- while auto splits only once the sweep is long
+    enough. Both cases cost the same thing at Stop, so both have to be said out
+    loud, and neither may be claimed when the solve is going to stay in one
+    process after all.
+    """
+
+    if workers == 1:
+        return False
+    if workers > 1:
+        return True
+    return num_frequencies >= 2 * _ENGINE_MIN_FREQUENCIES_PER_WORKER
 
 
 def _load_api() -> bool:
@@ -141,11 +191,19 @@ def _missing_windows_runtime_dlls() -> list[str]:
 PREFERRED_ASSEMBLY_BACKEND = "opencl"
 FALLBACK_ASSEMBLY_BACKEND = "numba"
 
+#: The device type the solve really asks bempp-cl for, below. The probe has to
+#: look for the same one: bempp-cl's dense assembly does not run on a GPU-only
+#: inventory, and reporting a GPU as proof that OpenCL works is how Apple
+#: Silicon got a READY capability report and then an ``OpenCL cpu device could
+#: not be initialized`` in the middle of every solve.
+OPENCL_DEVICE_TYPE = "cpu"
+
 _OPENCL_GUIDANCE = (
-    "Install an OpenCL runtime and start again. A CPU runtime is enough: on "
-    "Windows the Intel CPU Runtime for OpenCL registers an ICD under "
+    "Install an OpenCL CPU runtime and start again: on Windows the Intel CPU "
+    "Runtime for OpenCL registers an ICD under "
     "HKLM\\SOFTWARE\\Khronos\\OpenCL\\Vendors; on Linux install pocl or your "
-    "vendor's ICD; on macOS the system OpenCL framework already provides one."
+    "vendor's ICD. Apple Silicon has no CPU OpenCL device at all, so BEMPP "
+    "assembles on numba there and Metal is the engine to prefer."
 )
 
 
@@ -159,6 +217,12 @@ def _opencl_status() -> tuple[bool, str]:
     pyopencl imports cleanly with no ICD installed and only fails when something
     asks for a platform, which would be the solve. Enumerating here keeps a
     missing runtime a capability answer instead of a mid-solve crash.
+
+    The device has to be of the type the solve will ask for -- see
+    ``OPENCL_DEVICE_TYPE``. Accepting any device made this probe answer a
+    different question from the one the solve asks, which on Apple Silicon,
+    whose ICD exposes the GPU and no CPU, meant a READY report followed by a
+    failure inside every solve.
     """
 
     try:
@@ -170,17 +234,30 @@ def _opencl_status() -> tuple[bool, str]:
         platforms = pyopencl.get_platforms()
     except Exception as exc:  # noqa: BLE001 - pyopencl raises its own LogicError
         return False, f"no OpenCL platform is usable ({_describe(exc)}). {_OPENCL_GUIDANCE}"
+    try:
+        wanted = getattr(pyopencl.device_type, OPENCL_DEVICE_TYPE.upper())
+    except AttributeError as exc:  # a partial build is unusable, not fatal
+        return False, f"pyopencl exposes no device types ({_describe(exc)}). {_OPENCL_GUIDANCE}"
+    seen: list[str] = []
     for platform_entry in platforms:
         try:
-            devices = platform_entry.get_devices()
-        except Exception:  # noqa: BLE001 - one broken ICD must not hide a working one
-            continue
+            devices = platform_entry.get_devices(device_type=wanted)
+        except Exception:  # noqa: BLE001 - DEVICE_NOT_FOUND, and broken ICDs, are both "no"
+            devices = []
         if devices:
             return True, (
                 f"bempp-cl assembles on OpenCL device {devices[0].name.strip()} "
                 f"({platform_entry.name.strip()})"
             )
-    return False, f"an OpenCL runtime is present but exposes no device. {_OPENCL_GUIDANCE}"
+        try:
+            seen.extend(device.name.strip() for device in platform_entry.get_devices())
+        except Exception:  # noqa: BLE001 - naming what is there is a courtesy, not a contract
+            continue
+    inventory = f" Devices found: {', '.join(seen)}." if seen else ""
+    return False, (
+        f"an OpenCL runtime is present but exposes no {OPENCL_DEVICE_TYPE} device, "
+        f"which is the one bempp-cl assembles on.{inventory} {_OPENCL_GUIDANCE}"
+    )
 
 
 def numba_fallback_warning(opencl_reason: str) -> str:
@@ -388,7 +465,7 @@ def solve_bempp_from_msh_text(
             mesh_scale=1.0,
             native_symmetry_plane=native_symmetry_plane(context),
             assembly_backend=backend,
-            opencl_device="cpu",
+            opencl_device=OPENCL_DEVICE_TYPE,
             precision="single",
         )
     except TypeError as exc:
@@ -409,15 +486,15 @@ def solve_bempp_from_msh_text(
     workers = _resolved_workers()
     if hasattr(config, "workers"):
         config.workers = workers
-        if workers != 1 and context.num_frequencies >= 80:
-            # 80 is the engine's own threshold for splitting at all (two
-            # workers, 40 frequencies each). Saying so before the solve starts
-            # means nobody discovers the cancellation caveat by pressing Stop.
+        if _sweep_will_split(workers, context.num_frequencies):
+            # Saying so before the solve starts means nobody discovers the
+            # cancellation caveat by pressing Stop.
             message = (
-                f"This sweep of {context.num_frequencies} frequencies may run across "
-                "several worker processes. Stop cannot cancel a frequency already "
-                "running in one; set WG2_SOLVE_WORKERS=1 to keep the solve in a "
-                "single cancellable process."
+                f"WG2_SOLVE_WORKERS={workers} splits this sweep of "
+                f"{context.num_frequencies} frequencies across worker processes. "
+                "Stop cannot cancel a frequency already running in one, so a "
+                "cancelled sweep returns only once every worker has finished; "
+                "unset the variable for the default single cancellable process."
             )
             logger.info("%s", message)
             if stage_callback:
@@ -470,7 +547,7 @@ def solve_bempp_from_msh_text(
             "formulation": json_safe_native_value(getattr(config, "formulation", formulation)),
             "complex_k_shift": float(getattr(config, "complex_k_shift", DEFAULT_COMPLEX_K_SHIFT)),
             "assembly_backend": backend,
-            "opencl_device": getattr(config, "opencl_device", "cpu"),
+            "opencl_device": getattr(config, "opencl_device", OPENCL_DEVICE_TYPE),
             "precision": getattr(config, "precision", "single"),
             "workers": getattr(config, "workers", 1),
             "solver_log": json_safe_native_value(response_solver_log(getattr(result, "solver_log", []))),

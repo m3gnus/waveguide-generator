@@ -394,13 +394,71 @@ depend on has never been produced.
 5. ~~**Legacy snapshot translation (§0.2)** — build the v1-bag → ATH text →
    `textcfg.parse` path, or ship with rerun disabled for all imported jobs?~~
    **Settled: build it**, and the second source too. §0.2 has the outcome.
-6. **Parallel BEMPP sweeps, and what they cost Stop.** The Windows pass enabled
-   the engine's own `auto` worker mode, which splits sweeps of 80+ frequencies
-   across processes. Stop then cannot cancel a frequency already running in a
-   sibling worker. The trade is announced in the solve log and job metadata
-   before the solve starts, and `WG2_SOLVE_WORKERS=1` restores serial behaviour,
-   but shipping it *on* by default is a judgement about which surprise is worse.
-   Reverting the default is one line.
+6. ~~**Parallel BEMPP sweeps, and what they cost Stop.**~~ **Settled by
+   measurement: the default is serial again** (`server/solver/bempp.py`,
+   `DEFAULT_SOLVE_WORKERS = 1`). `WG2_SOLVE_WORKERS=0` still selects the
+   engine's auto mode and any positive integer still forces that count, so
+   nothing is lost to anyone who wants the throughput.
+
+   Measured on an M1 Max (10 cores, macOS 15.5), 766-triangle quarter-domain
+   OSSE mesh (3,064 full-domain), **numba** assembly backend, wall clock as
+   mean over 3 repeats:
+
+   | frequencies | `workers=1` | 2 | 4 | `auto` |
+   |---|---|---|---|---|
+   | 79 | 64.1 s (sd 4.4) | 65.0 s (sd 4.0) | 59.7 s (sd 3.3) | 66.3 s — 1 process |
+   | 80 | 65.6 s (sd 5.2) | 69.1 s (sd 1.7) | 59.2 s (sd 4.5) | 67.4 s — 2 processes |
+   | 200 | 166.7 s (sd 8.0) | 139.1 s (sd 3.0) | 116.0 s (sd 5.4) | **111.4 s (sd 6.0)** — 5 processes |
+
+   Only the 200-frequency sweep gains anything: 1.50x. At 80 — the point where
+   `auto` first splits — the difference is inside the run-to-run spread. The
+   ceiling is not process count but the machine: one serial process already
+   draws **5.14 CPU-seconds per wall-second** of the ten available, so splitting
+   competes for the same cores. 200 frequencies across five workers spent
+   **24% more total CPU** (954 vs 771 CPU-s) to finish 1.33x sooner in that run.
+   A 24-frequency sweep forced onto two workers was 1.5x *slower* (31.1 vs
+   20.7 s), which is what the engine's 40-per-worker threshold exists to avoid.
+
+   What it costs is Stop, and the cost is not marginal:
+
+   | | first cancellable moment | Stop at t=0 | Stop at t=25 s |
+   |---|---|---|---|
+   | serial | 0.55–0.58 s | 0.58 s | **0.26–0.37 s** |
+   | `auto` (5 workers, n=200) | 20.8–21.5 s | 101–116 s | **85–88 s** |
+
+   The uninterrupted parallel sweep is ~111 s, so a cancelled one returns at
+   essentially sweep end: parallel Stop does not stop the solve, it discards
+   the result once it finishes. The parent can only raise between progress
+   events, and must then join every sibling chunk. Parallelism also re-creates
+   the cold-start window `server/solver/warmup.py` exists to keep off the
+   user's first solve, because each spawned worker re-JITs bempp-cl's kernels:
+   the first cancellable moment moves from 0.6 s to 21 s.
+
+   Correctness is not at stake. Serial and parallel payloads for the same
+   design and sweep were **byte-identical** in compact JSON (SHA-256 equal) at
+   both 80 and 200 frequencies, once per-frequency wall-clock timings were
+   excluded; those timings were the only differing leaves.
+
+   So: ~55 s saved on a 200-frequency solve, against ~88 s charged to the user
+   who has already said the remaining time is not worth it — and nothing at all
+   saved at the threshold where it switches on. Serial by default.
+
+   **These numbers do not transfer to Windows.** The Windows pass measured an
+   Intel OpenCL CPU device on an 8-core Ryzen VM; this is macOS on Apple
+   Silicon, where the OpenCL backend cannot run at all (item 7) and BEMPP
+   assembles on numba. Re-measure before changing the default for Windows.
+7. ~~**BEMPP's OpenCL backend does not run on Apple Silicon, and said it did.**~~
+   **Fixed.** Found while forcing the BEMPP engine for the measurement above.
+   `server/requirements-runtime.txt` pins `pyopencl`, and with it installed the
+   capability probe reported `assembly_backend: opencl`, READY — because it
+   accepted *any* OpenCL device, and Apple's ICD exposes the M1 Max GPU. The
+   solve always asks bempp-cl for a **cpu** device, which does not exist there,
+   so every solve died with `OpenCL cpu device could not be initialized`
+   (verified end to end). This is the same failure mode the module docstring
+   records from v1 on clean Windows. `_opencl_status()` now looks for the
+   device type the solve will ask for (`OPENCL_DEVICE_TYPE`), names the devices
+   it did find, and falls back to numba honestly. AUTO picks Metal on macOS, so
+   this only ever bit an explicit BEMPP selection.
 
 ---
 
