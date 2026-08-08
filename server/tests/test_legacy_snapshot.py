@@ -241,7 +241,17 @@ INLINE_FREEFORM = {
 
 
 def _db_snapshots() -> list[dict[str, Any]]:
-    with sqlite3.connect(DB_PATH) as connection:
+    """Read the live v1 database without being able to write to it.
+
+    ``sqlite3.connect(path)`` opens read-write, and using the connection as a
+    context manager commits on exit -- which bumped the file change counter in
+    the header of a 109 MB database this suite has no business touching, three
+    times per run. ``mode=ro`` makes that impossible rather than unlikely, and
+    ``closing`` releases the handle instead of leaving it to the collector.
+    """
+
+    connection = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+    try:
         return [
             json.loads(row[0])
             for row in connection.execute(
@@ -249,6 +259,8 @@ def _db_snapshots() -> list[dict[str, Any]]:
                 "where script_snapshot_json is not null"
             )
         ]
+    finally:
+        connection.close()
 
 
 def _expr_value(parsed: ParsedDesign, name: str) -> float:

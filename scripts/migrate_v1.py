@@ -63,6 +63,11 @@ class Report:
     hash_checked: int = 0
     hash_mismatches: list[str] = field(default_factory=list)
     jobs_without_design: int = 0
+    #: How each source job's design will read in v2, counted by the same code
+    #: the server uses. This is the half of the migration that is *not* a byte
+    #: copy, so it is the half that needs evidence.
+    designs: dict[str, int] = field(default_factory=dict)
+    unrecoverable_job_ids: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict:
@@ -200,6 +205,33 @@ def _row_hashes(conn: sqlite3.Connection, table: str, column: str) -> dict[str, 
     return hashes
 
 
+def _classify_designs(conn: sqlite3.Connection) -> tuple[dict[str, int], list[str]]:
+    """Say, per source job, whether v2 will be able to reopen it.
+
+    Deliberately the *same* code path the running server uses rather than a
+    second opinion written for the report -- an evidence artifact that agrees
+    with a re-implementation instead of with the product is worth nothing.
+    """
+
+    from server.jobs.legacy_design import resolve_job_design
+
+    counts: dict[str, int] = {}
+    unrecoverable: list[str] = []
+    for row in conn.execute(
+        "SELECT id, config_json, script_snapshot_json FROM simulation_jobs ORDER BY created_at"
+    ):
+        snapshot = json.loads(row["script_snapshot_json"]) if row["script_snapshot_json"] else None
+        config = json.loads(row["config_json"] or "{}")
+        verdict = resolve_job_design(snapshot, config)
+        key = "native" if verdict.reason_code == "ok" else verdict.reason_code
+        if verdict.reopenable and verdict.reason_code == "recovered":
+            key = f"recovered_from_{verdict.source.removeprefix('v1-').replace('-', '_')}"
+        counts[key] = counts.get(key, 0) + 1
+        if not verdict.reopenable:
+            unrecoverable.append(str(row["id"]))
+    return counts, unrecoverable
+
+
 def migrate(
     v1_root: Path,
     data_dir: Path | None,
@@ -228,18 +260,23 @@ def migrate(
         source_ids = {row[0] for row in source.execute("SELECT id FROM simulation_jobs")}
         source_results = _row_hashes(source, "simulation_results", "results_json")
         source_meshes = _row_hashes(source, "simulation_artifacts", "msh_text")
+        report.designs, report.unrecoverable_job_ids = _classify_designs(source)
 
     total_jobs = report.source["simulation_jobs"]
-    legacy_shape = total_jobs - report.jobs_without_design
-    if total_jobs:
-        # Two separate causes, and neither is a migration defect. Say both, so
-        # nobody reads "9 of 35" as "the other 26 are fine".
+    unrecoverable = len(report.unrecoverable_job_ids)
+    if unrecoverable:
+        # Not a migration defect, and not a count anyone should have to derive
+        # from the others: these jobs keep their results, their mesh and their
+        # solver settings, and lose only the ability to be run again.
+        by_cause = ", ".join(
+            f"{count} {cause.replace('_', ' ')}"
+            for cause, count in sorted(report.designs.items())
+            if count and cause != "native" and not cause.startswith("recovered_from_")
+        )
         report.warnings.append(
-            f"No imported job can be reopened or rerun in v2. Results, mesh artifacts and solver "
-            f"settings all migrate; the design behind them does not. "
-            f"{report.jobs_without_design} of {total_jobs} jobs have no design snapshot at all "
-            f"(v1 never populated it), and {legacy_shape} carry v1's parameter shape, which v2's "
-            f"design schema does not accept."
+            f"{unrecoverable} of {total_jobs} imported jobs cannot be reopened or rerun ({by_cause}). "
+            f"Their results, mesh artifacts and solver settings migrate normally; only the design "
+            f"behind them is gone. v2 states the cause on each job."
         )
 
     # v2's own schema creation is the only thing that should ever author this
@@ -445,6 +482,10 @@ def _print_report(report: Report) -> None:
             f"  workspace: {report.workspace_copied} copied, "
             f"{report.workspace_skipped} already present"
         )
+    if report.designs:
+        print("\n  designs, as v2 will read them:")
+        for cause, count in sorted(report.designs.items()):
+            print(f"    {cause.replace('_', ' '):<34} {count:>4}")
     for warning in report.warnings:
         print(f"\n  ! {warning}")
     if report.hash_mismatches:
