@@ -12,8 +12,8 @@ scipy
 meshio>=4.0.16
 
 # Pinned VCS dependencies for reproducible public installs.
-git+https://github.com/m3gnus/hornlab-waveguide-mesher.git@d6ac47954ab3bdafa3380d40da32e58ca504c7e9
-git+https://github.com/m3gnus/hornlab-metal-bem.git@c89086ea19c1237a556db23c71be10955a20676b
+git+https://github.com/m3gnus/hornlab-waveguide-mesher.git@8a8f3837da20416d3865b1a5bb1f65906a232764
+git+https://github.com/m3gnus/hornlab-metal-bem.git@4bcf889cf8f1740b0a4b8de734624cd434f7dcbe
 
 # Canonical plot renderer (theme-aware result charts). If this install is
 # absent the backend falls back to the in-repo server/solver charts renderer,
