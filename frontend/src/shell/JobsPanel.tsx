@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { compareSelection } from '../api/results';
-import { hydrateJobDesign, jobDesignWire, replaceWithJobDesign } from '../jobs/jobDesign';
-import { useDesignStore, type DesignDocument } from '../stores/design';
+import { DesignAvailabilityNotice, RerunButton } from '../jobs/DesignAvailability';
+import { canLoadJobDesign, hydrateJobDesign, replaceWithJobDesign } from '../jobs/jobDesign';
+import { type DesignDocument } from '../stores/design';
 import { applyJobPreferences, usePreferences } from '../prefs/preferences';
 import { JobsPreferencesSurface } from '../prefs/PreferencesSurface';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
@@ -36,9 +37,7 @@ function metrics(job: JobItem, now: number): string {
     .filter(Boolean).join(' · ');
 }
 
-export function canLoadDesign(job: Pick<JobItem, 'script_snapshot'>): boolean {
-  return jobDesignWire(job) !== null && hydrateJobDesign(job) !== null;
-}
+export const canLoadDesign = canLoadJobDesign;
 
 function Rating({ job, onError }: { job: JobItem; onError: (message: string) => void }) {
   const rating = job.rating ?? 0;
@@ -73,12 +72,17 @@ function JobCard({ job, now, selected, run, onError, onRemove }: {
   onError: (message: string) => void;
   onRemove: (job: JobItem) => void;
 }) {
-  const currentDesign = useDesignStore((state) => state.design);
   const running = job.status === 'running' || job.status === 'queued';
   const failed = job.status === 'error';
   const snapshot = hydrateJobDesign(job);
   const rating = job.rating ?? 0;
-  const retry = () => void run(snapshot ?? currentDesign, snapshot ? job.design_revision : undefined).catch((error) => onError(String(error)));
+  // Only ever this job's own design. Falling back to whatever was on screen
+  // ran a *different* waveguide under this job's name and looked like it
+  // worked; RerunButton refuses instead, and says why.
+  const retry = () => {
+    if (!snapshot) return;
+    void run(snapshot, job.design_revision).catch((error) => onError(String(error)));
+  };
   // A run in flight or one that failed still has to show its progress or its
   // diagnostic; only finished runs collapse down to their name.
   const expanded = selected || running || failed;
@@ -106,13 +110,17 @@ function JobCard({ job, now, selected, run, onError, onRemove }: {
     </> : failed ? <>
       <p>failed after {duration(secondsBetween(job.started_at ?? job.queued_at, job.completed_at, now))} · {job.stage ?? 'solve'} stage</p>
       <div className="job-error" title={job.error_message ?? undefined}>{job.error_message ?? 'Simulation failed without a diagnostic.'}</div>
-      <footer><button onClick={retry}>Retry</button><button onClick={() => window.open(`/api/jobs/${encodeURIComponent(job.id)}/log`, '_blank')}>Open log</button></footer>
+      <DesignAvailabilityNotice job={job}/>
+      <footer><RerunButton job={job} onRerun={retry} label="Retry" className=""/><button onClick={() => window.open(`/api/jobs/${encodeURIComponent(job.id)}/log`, '_blank')}>Open log</button></footer>
     </> : expanded && <>
       <p>{metrics(job, now)}</p>
       <Rating job={job} onError={onError}/>
       {/* Selecting the run already loaded its design and results, so the only
-          action left is running it again. */}
-      <footer><button className="primary" onClick={retry}>Rerun</button><button onClick={() => window.open(`/api/jobs/${encodeURIComponent(job.id)}/log`, '_blank')}>Log</button></footer>
+          action left is running it again -- unless this job came from v1
+          without a design v2 can read, in which case rerunning it would
+          silently run whatever is on screen instead, under its name. */}
+      <DesignAvailabilityNotice job={job}/>
+      <footer><RerunButton job={job} onRerun={retry}/><button onClick={() => window.open(`/api/jobs/${encodeURIComponent(job.id)}/log`, '_blank')}>Log</button></footer>
     </>}
   </article>;
 }
