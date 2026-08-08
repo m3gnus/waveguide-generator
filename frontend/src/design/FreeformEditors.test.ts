@@ -13,6 +13,7 @@ describe('FREEFORM editor workflows', () => {
     expect(parsePointPaste('0 12.7 15\n120 140 60').points.at(-1)).toEqual({ t: 1, r: 140, angle_deg: 60 });
     expect(() => parsePointPaste('10 20 95')).toThrow('angle must be between');
     expect(() => parsePointPaste('10 20 20 1')).toThrow('strength was removed');
+    expect(() => parsePointPaste('0 12.7\n50 30\n50 40\n120 140')).toThrow('strictly increasing');
   });
 
   it('uses a server converter when available and falls back to endpoint-preserving conversion on older servers', async () => {

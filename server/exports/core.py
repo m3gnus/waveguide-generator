@@ -21,16 +21,11 @@ MAX_EXPORT_SEGMENT_INPUT = 1_000_000.0
 
 
 def _number(value: Expr | None, fallback: float) -> float:
-    if value is not None and value.value is not None and math.isfinite(value.value):
-        return float(value.value)
     if value is not None:
-        try:
-            parsed = float(value.raw or "")
-        except (TypeError, ValueError):
-            pass
-        else:
-            if math.isfinite(parsed):
-                return parsed
+        number = value.constant_value()
+        if number is not None and math.isfinite(number):
+            return float(number)
+        raise ValueError("export mesh controls must be finite scalar expressions")
     return fallback
 
 

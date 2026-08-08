@@ -64,6 +64,12 @@ class JobsProtocol:
         replay = self.runtime.resume(cursor)
         return self.runtime.snapshot() if replay is None else replay
 
+    async def _resume_payload_async(
+        self, cursor: int
+    ) -> list[dict[str, Any]] | dict[str, Any]:
+        replay = await self.runtime.resume_async(cursor)
+        return await self.runtime.snapshot_async() if replay is None else replay
+
     async def run(self, transport: JobsTransport) -> None:
         await self.runtime.start()
         self._transport = transport
@@ -81,7 +87,7 @@ class JobsProtocol:
                     "limits": {"maxFrameBytes": self.max_message_bytes},
                 }
             )
-            snapshot = self.runtime.snapshot()
+            snapshot = await self.runtime.snapshot_async()
             snapshot["epoch"] = self.epoch
             await transport.send_json(snapshot)
             last_live_cursor = int(snapshot["cursor"])
@@ -179,11 +185,11 @@ class JobsProtocol:
             return True, None
         cursor = value.get("cursor")
         if not isinstance(cursor, int) or isinstance(cursor, bool):
-            snapshot = self.runtime.snapshot()
+            snapshot = await self.runtime.snapshot_async()
             snapshot["epoch"] = self.epoch
             await transport.send_json(snapshot)
             return True, int(snapshot["cursor"])
-        payload = self.resume_payload(cursor)
+        payload = await self._resume_payload_async(cursor)
         if isinstance(payload, dict):
             payload = dict(payload)
             payload["epoch"] = self.epoch

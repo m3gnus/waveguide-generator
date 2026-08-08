@@ -53,6 +53,16 @@ describe('preview socket state machine', () => {
     manager.stop();
   });
 
+  it('does not accept a hello from an unsupported protocol version', () => {
+    const socket = new MockSocket();
+    const manager = new PreviewSocketManager(() => socket, 'ws://test/ws/preview');
+    manager.start();
+    socket.message(JSON.stringify({ v: 2, kind: 'hello', epoch: 3, heartbeatSec: 15 }));
+    expect(manager.getSnapshot()).toMatchObject({ connection: 'connecting', error: 'Unsupported preview protocol message' });
+    expect(socket.sent).toHaveLength(0);
+    manager.stop();
+  });
+
   it('drops frames from a stale epoch', () => {
     const socket = new MockSocket();
     const manager = new PreviewSocketManager(() => socket, 'ws://test/ws/preview');
@@ -169,7 +179,7 @@ describe('preview socket state machine', () => {
     manager.start();
     socket.message(JSON.stringify({ v: 1, kind: 'hello', epoch: 3, heartbeatSec: 15 }));
     useDesignStore.setState({ designRevision: 58 });
-    socket.message(JSON.stringify({ kind: 'error', epoch: 3, designRevision: 57, code: 'internal', message: 'inconsistent local orientation' }));
+    socket.message(JSON.stringify({ v: 1, kind: 'error', epoch: 3, designRevision: 57, code: 'internal', message: 'inconsistent local orientation' }));
     // Discarding this used to leave the viewport reading STALE with no reason.
     expect(manager.getSnapshot().error).toBe('inconsistent local orientation');
     expect(manager.getSnapshot().errorRevision).toBe(57);
@@ -183,7 +193,7 @@ describe('preview socket state machine', () => {
     useDesignStore.setState({ designRevision: 57 });
     manager.start();
     socket.message(JSON.stringify({ v: 1, kind: 'hello', epoch: 3, heartbeatSec: 15 }));
-    socket.message(JSON.stringify({ kind: 'error', epoch: 3, designRevision: 57, code: 'validation', message: 'bad expression' }));
+    socket.message(JSON.stringify({ v: 1, kind: 'error', epoch: 3, designRevision: 57, code: 'validation', message: 'bad expression' }));
     expect(manager.getSnapshot().error).toBe('bad expression');
     socket.message(fixture());
     expect(manager.getSnapshot().error).toBeNull();

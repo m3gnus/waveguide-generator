@@ -48,8 +48,9 @@ interface HelloMessage {
   limits?: { maxFrameBytes?: number };
 }
 
-interface DroppedMessage { kind: 'dropped'; epoch?: number; seq: number }
+interface DroppedMessage { v: 1; kind: 'dropped'; epoch?: number; seq: number }
 interface ErrorMessage {
+  v: 1;
   kind: 'error';
   epoch?: number;
   designRevision: number;
@@ -183,6 +184,10 @@ export class PreviewSocketManager {
       this.update({ error: 'Malformed preview control message' });
       return;
     }
+    if ((message as { v?: unknown }).v !== 1) {
+      this.update({ error: 'Unsupported preview protocol message' });
+      return;
+    }
     if (message.kind === 'hello') {
       if (this.helloSeen) return;
       this.helloSeen = true;
@@ -242,7 +247,9 @@ export class PreviewSocketManager {
     const revision = useDesignStore.getState().designRevision;
     const frameRevision = header.designRevision ?? -1;
     if (
-      header.epoch !== this.snapshot.epoch
+      header.v !== 1
+      || header.kind !== 'preview'
+      || header.epoch !== this.snapshot.epoch
       || frameRevision < this.barrierRevision
       || frameRevision < (this.snapshot.displayedRevision ?? 0)
     ) {

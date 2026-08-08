@@ -33,6 +33,7 @@ from server.platform.signal_rearm import (
     register_signal_rearm,
     unregister_signal_rearm,
 )
+from server.protocol.frame import DEFAULT_MAX_FRAME_BYTES
 
 
 def test_advisory_lock_rejects_partially_written_live_owner(tmp_path: Path) -> None:
@@ -168,6 +169,63 @@ def test_launcher_stops_log_listener_on_early_port_failure(
 
     assert serve.main(["--no-browser", "--data-dir", str(tmp_path)]) == 1
     assert logging_setup._listener is None
+
+
+def test_launcher_aligns_websocket_transport_limits_with_frame_protocol(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = ensure_data_layout(tmp_path)
+    config_kwargs: dict[str, Any] = {}
+    listener_closed = False
+    lock_released = False
+
+    class FakeListener:
+        def close(self) -> None:
+            nonlocal listener_closed
+            listener_closed = True
+
+    listener = FakeListener()
+
+    class FakeLock:
+        def acquire(self, _port: int) -> None:
+            pass
+
+        def update_port(self, _port: int) -> None:
+            pass
+
+        def release(self) -> None:
+            nonlocal lock_released
+            lock_released = True
+
+    real_config = serve.uvicorn.Config
+
+    def capture_config(*args: Any, **kwargs: Any) -> Any:
+        config_kwargs.update(kwargs)
+        return real_config(*args, **kwargs)
+
+    class FakeServer:
+        def __init__(self, _config: Any) -> None:
+            self.should_exit = False
+
+        def run(self, *, sockets: list[Any]) -> None:
+            assert sockets == [listener]
+
+    monkeypatch.delenv("WG2_PORT", raising=False)
+    monkeypatch.setattr(serve, "ensure_data_layout", lambda: paths)
+    monkeypatch.setattr(serve, "setup_logging", lambda _paths: None)
+    monkeypatch.setattr(serve, "flush_logs", lambda: None)
+    monkeypatch.setattr(serve, "InstanceLock", lambda _path: FakeLock())
+    monkeypatch.setattr(serve, "reserve_port", lambda *_args, **_kwargs: (listener, 3100))
+    monkeypatch.setattr(serve, "create_app", lambda **_kwargs: object())
+    monkeypatch.setattr(serve.uvicorn, "Config", capture_config)
+    monkeypatch.setattr(serve.uvicorn, "Server", FakeServer)
+    monkeypatch.setattr(serve, "harden_console", lambda _callback: None)
+
+    assert serve.main(["--no-browser"]) == 0
+    assert config_kwargs["ws_max_size"] == DEFAULT_MAX_FRAME_BYTES
+    assert config_kwargs["ws_max_queue"] == 1
+    assert listener_closed is True
+    assert lock_released is True
 
 
 def test_registered_native_signal_rearm_callbacks_are_removable() -> None:

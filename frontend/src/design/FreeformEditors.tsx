@@ -27,6 +27,9 @@ export function parsePointPaste(text: string): ParsedPointPaste {
       if (point.angle_deg !== undefined && (point.angle_deg < -90 || point.angle_deg > 90)) throw new Error(`Line ${index + 1}: angle must be between −90 and 90°.`);
     });
     points.sort((left, right) => left.z - right.z);
+    if (points.some((point, index) => index > 0 && point.z <= points[index - 1].z)) {
+      throw new Error('Profile z values must be strictly increasing; duplicate positions are not allowed.');
+    }
     if (points.length > 64) throw new Error('A profile supports at most 62 interior points.');
   };
   if (compact) {
@@ -116,7 +119,12 @@ export function EditablePointTable({ field, points }: { field: ParameterDefiniti
       if (key === 'z' && (value < 1 || value > length - 1)) return;
       if (key === 'r' && value <= 0) return;
       if (key === 'angle_deg' && (value <= -90 || value >= 90)) return;
-      if (key === 'z') target.t = value / length;
+      if (key === 'z') {
+        const t = value / length;
+        if (next.some((point, pointIndex) => pointIndex !== index + 1 && Math.abs(point.t - t) < 1e-9)) return;
+        target.t = t;
+        next.sort((left, right) => left.t - right.t);
+      }
       else target[key] = value as never;
     }
     updateValue(path, next);

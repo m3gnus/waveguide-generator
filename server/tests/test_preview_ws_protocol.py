@@ -128,6 +128,25 @@ def test_hello_has_one_epoch_heartbeat_and_limit() -> None:
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"heartbeat_seconds": float("nan")}, "heartbeat_seconds"),
+        ({"heartbeat_seconds": float("inf")}, "heartbeat_seconds"),
+        ({"heartbeat_seconds": True}, "heartbeat_seconds"),
+        ({"max_frame_bytes": 1.5}, "max_frame_bytes"),
+        ({"max_frame_bytes": True}, "max_frame_bytes"),
+        ({"epoch": 0}, "epoch"),
+        ({"epoch": True}, "epoch"),
+    ],
+)
+def test_protocol_constructor_rejects_invalid_wire_limits(
+    kwargs: dict[str, Any], message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        PreviewProtocol(**kwargs)
+
+
 def test_app_owned_preview_service_rejects_work_after_bounded_shutdown() -> None:
     async def scenario() -> None:
         service = PreviewComputeService(max_workers=1)
@@ -280,6 +299,102 @@ def test_oversize_message_closes_4413_without_computing() -> None:
         await task
         assert transport.closes == [CLOSE_TOO_LARGE]
         assert not transport.binary
+
+    asyncio.run(scenario())
+
+
+def test_recursive_mapping_is_a_validation_error_without_killing_the_socket() -> None:
+    async def scenario() -> None:
+        transport = FakeTransport()
+        protocol = PreviewProtocol(epoch=23)
+        task = asyncio.create_task(protocol.run(transport))
+        await _wait_until(lambda: bool(transport.json))
+
+        recursive_design: dict[str, Any] = {"formula": "OSSE"}
+        cursor = recursive_design
+        for _ in range(1500):
+            child: dict[str, Any] = {}
+            cursor["child"] = child
+            cursor = child
+        await transport.incoming.put(_request(23, 1, design=recursive_design))
+
+        await _wait_until(lambda: len(transport.json) >= 2)
+        assert transport.json[-1]["kind"] == "error"
+        assert transport.json[-1]["code"] == "validation"
+        assert transport.json[-1]["seq"] == 1
+        assert transport.json[-1]["designRevision"] == 1
+        assert not transport.closes
+        await transport.incoming.put(None)
+        await task
+
+    asyncio.run(scenario())
+
+
+def test_preview_rejects_conflicting_expression_representations_before_build() -> None:
+    """The /ws/preview validation path must not validate one L and execute another."""
+
+    async def scenario() -> None:
+        builds = 0
+
+        def builder(_config: Mapping[str, Any], _options: Any) -> Any:
+            nonlocal builds
+            builds += 1
+            return _small_geometry()
+
+        transport = FakeTransport()
+        protocol = PreviewProtocol(epoch=24, preview_builder=builder)
+        task = asyncio.create_task(protocol.run(transport))
+        await _wait_until(lambda: bool(transport.json))
+        await transport.incoming.put(
+            _request(
+                24,
+                1,
+                design={"formula": "OSSE", "L": {"value": 1, "raw": "999"}},
+            )
+        )
+
+        await _wait_until(lambda: len(transport.json) >= 2)
+        error = transport.json[-1]
+        assert error["kind"] == "error"
+        assert error["code"] == "validation"
+        assert error["seq"] == 1
+        assert error["designRevision"] == 1
+        assert builds == 0
+        assert not transport.closes
+        await transport.incoming.put(None)
+        await task
+
+    asyncio.run(scenario())
+
+
+def test_preview_preserves_parameterized_raw_with_cached_numeric_sidecar() -> None:
+    """The /ws/preview path executes raw p-formulas while retaining editor samples."""
+
+    async def scenario() -> None:
+        translated: list[Any] = []
+
+        def builder(config: Mapping[str, Any], _options: Any) -> Any:
+            translated.append(config["profile"]["a"])
+            return _small_geometry()
+
+        transport = FakeTransport()
+        protocol = PreviewProtocol(epoch=25, preview_builder=builder)
+        task = asyncio.create_task(protocol.run(transport))
+        await _wait_until(lambda: bool(transport.json))
+        await transport.incoming.put(
+            _request(
+                25,
+                1,
+                design={
+                    "formula": "OSSE",
+                    "a": {"value": 45, "raw": "45 + cos(p)"},
+                },
+            )
+        )
+        await _wait_until(lambda: bool(transport.binary))
+        await transport.incoming.put(None)
+        await task
+        assert translated == ["45 + cos(p)"]
 
     asyncio.run(scenario())
 

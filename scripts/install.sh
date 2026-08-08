@@ -214,7 +214,9 @@ update_from_git() {
         git checkout --quiet "$TAG"
         say "  Checked out $TAG (detached HEAD; fast-forward updates are off until you"
         say "  switch back to a branch)."
-        return 0
+        say "  Restarting with the installer from $TAG."
+        exec bash "$ROOT/scripts/install.sh" --after-pull \
+            "${ORIGINAL_ARGS[@]+"${ORIGINAL_ARGS[@]}"}"
     fi
 
     if ! git symbolic-ref --quiet HEAD >/dev/null; then
@@ -274,22 +276,33 @@ else
     [[ "$FORCE" -eq 1 ]] && spa_args+=(--force)
     if "$BOOTSTRAP_PYTHON" "$ROOT/scripts/fetch_spa.py" "${spa_args[@]+"${spa_args[@]}"}"; then
         SPA_SUMMARY="Interface: installed."
-    elif [[ -f "$ROOT/frontend/dist/index.html" ]]; then
-        # A checkout whose declared version was never tagged has no release to
-        # download -- which is the normal state of a development clone. An
-        # interface that is already present is better than a failed install.
-        say ""
-        say "  WARNING: the release interface could not be installed (see above),"
-        say "           but frontend/dist/index.html already exists, so the build"
-        say "           you have there is being kept."
-        SPA_SUMMARY="Interface: kept the existing frontend/dist; no release archive was installed."
     else
-        fail "The prebuilt interface could not be installed, and none is present.
-       v2 will not start without it. See the reason above.
+        if [[ "$FORCE" -eq 1 ]] || [[ -n "$SPA_ARCHIVE" ]] || [[ -n "$SPA_BASE_URL" ]]; then
+            fail "The requested SPA replacement could not be installed.
+       The existing interface was left intact, but an explicit --force,
+       --spa-archive, or --spa-base-url request is never treated as successful
+       when its download or checksum verification fails. See the reason above."
+        fi
+        # A previously checksum-verified copy of this exact version is safe to
+        # keep when a release host is temporarily unreachable. Unstamped local
+        # builds and stale releases are accepted only through explicit --skip-spa.
+        spa_check_args=(--check)
+        [[ -n "$SPA_VERSION" ]] && spa_check_args+=(--version "$SPA_VERSION")
+        if ! "$BOOTSTRAP_PYTHON" "$ROOT/scripts/fetch_spa.py" \
+            "${spa_check_args[@]}"; then
+            fail "The prebuilt interface could not be installed, and the existing
+       frontend/dist is not a checksum-verified copy of the requested version.
+       v2 will not start with a stale or unverified interface. See the reasons above.
 
        If you are working on the interface itself, build it locally:
          cd frontend && npm ci && npm run build
        then run this script again with --skip-spa."
+        fi
+        say ""
+        say "  WARNING: the release interface could not be installed (see above),"
+        say "           but the installed interface is a checksum-verified copy of"
+        say "           this version, so it is being kept."
+        SPA_SUMMARY="Interface: kept the matching checksum-verified frontend/dist."
     fi
 fi
 

@@ -43,24 +43,13 @@ CancelCallback = Callable[[], None]
 ProgressCallback = Callable[[str, float, str], None]
 
 
-def _number(value: Expr | None, fallback: float = 0.0) -> float:
-    if value is None:
-        return fallback
-    if value.value is not None and math.isfinite(value.value):
-        return float(value.value)
-    try:
-        parsed = float(value.raw or "")
-    except (TypeError, ValueError):
-        return fallback
-    return parsed if math.isfinite(parsed) else fallback
-
-
 def _strict_scalar(value: Expr | None, fallback: float, field: str) -> float:
     if value is None:
         return fallback
-    if value.value is None or not math.isfinite(value.value):
+    number = value.constant_value()
+    if number is None or not math.isfinite(number):
         raise ValueError(f"{field} must be a finite scalar expression")
-    return float(value.value)
+    return float(number)
 
 
 def _option(options: Any, name: str, fallback: Any = None) -> Any:
@@ -101,7 +90,7 @@ def _solver_mesher_config(design: DesignConfig) -> dict[str, Any]:
     if root.source.velocity_convention not in {None, "normal", "axial", "legacy"}:
         raise ValueError("source velocity convention must be normal, axial, or legacy")
     if root.source.velocity_convention in {None, "legacy"} and velocity is not None:
-        raw_velocity = _number(velocity, 1.0)
+        raw_velocity = _strict_scalar(velocity, 1.0, "source.velocity")
         if raw_velocity not in {1.0, 2.0}:
             raise ValueError("source.velocity must be 1 (normal) or 2 (axial)")
 
@@ -119,7 +108,9 @@ def _solver_mesher_config(design: DesignConfig) -> dict[str, Any]:
     # A y-offset moves the y-cut rim away from its native symmetry plane.  V1
     # preserves the requested domain but omits that unsafe placement
     # (``mesher_adapter.py:147-156``).
-    if quadrants in {1, 12} and abs(_number(root.mesh.vertical_offset)) > 0.0:
+    if quadrants in {1, 12} and abs(
+        _strict_scalar(root.mesh.vertical_offset, 0.0, "mesh.vertical_offset")
+    ) > 0.0:
         mesh["verticalOffset"] = 0.0
 
     # No sharp-edge fallback here.  V1 flattened the enclosure roundover to zero

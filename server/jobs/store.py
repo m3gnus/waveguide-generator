@@ -650,8 +650,41 @@ class JobStore:
     def prune_terminal_jobs(self, retention_days: int = 30, max_terminal_jobs: int = 1000) -> int:
         """Apply v1's age/count retention policy (``server/db.py:316-347``)."""
 
+        removed_ids, _events = self._prune_terminal_jobs(
+            retention_days=retention_days,
+            max_terminal_jobs=max_terminal_jobs,
+            emit_events=False,
+        )
+        return len(removed_ids)
+
+    def prune_terminal_jobs_with_events(
+        self, retention_days: int = 30, max_terminal_jobs: int = 1000
+    ) -> tuple[list[str], list[dict[str, Any]]]:
+        """Prune rows and retain matching WS deletion events atomically.
+
+        Startup uses :meth:`prune_terminal_jobs` before clients can subscribe.
+        Runtime pruning, however, must publish every removed id so an already
+        connected client can converge from events alone.
+        """
+
+        return self._prune_terminal_jobs(
+            retention_days=retention_days,
+            max_terminal_jobs=max_terminal_jobs,
+            emit_events=True,
+        )
+
+    def _prune_terminal_jobs(
+        self,
+        *,
+        retention_days: int,
+        max_terminal_jobs: int,
+        emit_events: bool,
+    ) -> tuple[list[str], list[dict[str, Any]]]:
+        """Shared retention transaction for silent startup and live pruning."""
+
         cutoff = (datetime.now() - timedelta(days=int(retention_days))).isoformat()
         removed_ids: list[str] = []
+        events: list[dict[str, Any]] = []
         with self._lock, self._transaction() as conn:
             aged = conn.execute(
                 """SELECT id FROM simulation_jobs
@@ -692,8 +725,23 @@ class JobStore:
                     f"DELETE FROM simulation_jobs WHERE id IN ({placeholders})", overflow
                 )
                 deleted += int(cur.rowcount or 0)
+            # ``job_events`` deliberately has no foreign key to the retained
+            # row. Append after the deletes but inside the same transaction so
+            # observers cannot see a missing job without its terminal event.
+            removed_ids = list(dict.fromkeys(removed_ids))
+            if emit_events:
+                events = [
+                    self._append_event(conn, job_id, "deleted", {"reason": "retention"})
+                    for job_id in removed_ids
+                ]
         self._delete_job_logs(removed_ids)
-        return deleted
+        if deleted != len(removed_ids):  # pragma: no cover - SQLite rowcount invariant
+            logger.warning(
+                "Retention selected %d job ids but SQLite reported %d deletions",
+                len(removed_ids),
+                deleted,
+            )
+        return removed_ids, events
 
     def append_event(
         self, job_id: str, event_type: str, payload: Mapping[str, Any]
@@ -748,7 +796,10 @@ class JobStore:
             INSERT INTO simulation_results (job_id, results_json) VALUES (?, ?)
             ON CONFLICT(job_id) DO UPDATE SET results_json = excluded.results_json
             """,
-            (job_id, json.dumps(results)),
+            # The HTTP route serves these bytes verbatim as application/json.
+            # Python's default NaN/Infinity spelling is not valid JSON and makes
+            # browser JSON.parse fail after an otherwise "complete" solve.
+            (job_id, json.dumps(results, allow_nan=False)),
         )
         conn.execute(
             "UPDATE simulation_jobs SET has_results = 1, updated_at = ? WHERE id = ?",

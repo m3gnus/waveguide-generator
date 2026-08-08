@@ -35,9 +35,18 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from server.platform.paths import data_paths, ensure_data_layout  # noqa: E402
+from server.platform.instance import (  # noqa: E402
+    DEFAULT_PORT,
+    InstanceLock,
+    InstanceLockError,
+)
 
 JOB_TABLES = ("simulation_jobs", "simulation_results", "simulation_artifacts")
 MARKER_TABLE = "v1_migrations"
+BACKUP_MANIFEST_NAME = ".wg2-migration-backup.json"
+BACKUP_INCOMPLETE_NAME = ".wg2-migration-backup.incomplete"
+BACKUP_FORMAT_VERSION = 1
+BACKUP_PRODUCER = "waveguide-generator-v2/migrate_v1.py"
 
 
 class MigrationError(RuntimeError):
@@ -106,6 +115,39 @@ def _counts(conn: sqlite3.Connection) -> dict[str, int]:
     return counts
 
 
+def _row_keys(conn: sqlite3.Connection, table: str) -> set[str]:
+    """Primary keys used by INSERT OR IGNORE, for an exact dry-run forecast."""
+
+    column = "id" if table == "simulation_jobs" else "job_id"
+    try:
+        return {str(row[0]) for row in conn.execute(f"SELECT {column} FROM {table}")}
+    except sqlite3.OperationalError:
+        return set()
+
+
+def _marker_jobs_imported(conn: sqlite3.Connection, fingerprint: str) -> int | None:
+    """Return the completed migration's job count, if this source is marked."""
+
+    if not _table_columns(conn, MARKER_TABLE):
+        return None
+    row = conn.execute(
+        f"SELECT jobs_imported FROM {MARKER_TABLE} WHERE source_fingerprint = ?",
+        (fingerprint,),
+    ).fetchone()
+    return None if row is None else int(row[0])
+
+
+def _acquire_mutation_lock(paths) -> InstanceLock:
+    """Exclude a running server (or another migration) from mutating v2 data."""
+
+    lock = InstanceLock(paths.locks)
+    try:
+        lock.acquire(DEFAULT_PORT)
+    except InstanceLockError as exc:
+        raise MigrationError(str(exc)) from exc
+    return lock
+
+
 def resolve_v1_sources(v1_root: Path) -> tuple[Path, Path | None]:
     """Return the v1 database and workspace directory.
 
@@ -147,8 +189,12 @@ def take_backup(paths, stamp: str, *, prefix: str = "pre-v1-migration") -> Path:
     while backup_dir.exists():
         backup_dir = base.with_name(f"{base.name}-{suffix}")
         suffix += 1
+    created = False
     try:
         backup_dir.mkdir(parents=True, exist_ok=False)
+        created = True
+        incomplete = backup_dir / BACKUP_INCOMPLETE_NAME
+        incomplete.write_text("backup is being created\n", encoding="utf-8")
         database = paths.db / "simulations.db"
         if database.is_file():
             # sqlite3's backup API copies a consistent snapshot even if another
@@ -162,15 +208,38 @@ def take_backup(paths, stamp: str, *, prefix: str = "pre-v1-migration") -> Path:
                 sqlite3.connect(str(backup_dir / "simulations.db"))
             ) as target:
                 source.backup(target)
-        if paths.workspace.is_dir():
-            # Copy it even when empty. "There was nothing here" is a state
-            # rollback has to be able to restore, and skipping the empty case
-            # left a first migration's imported projects behind on undo.
-            shutil.copytree(paths.workspace, backup_dir / "workspace")
+        # Copy it even when empty. "There was nothing here" is a state rollback
+        # has to be able to restore. All production callers ensure the data
+        # layout first; making this unconditional also prevents this function
+        # from ever publishing a backup without its legacy provenance marker.
+        shutil.copytree(paths.workspace, backup_dir / "workspace")
+        manifest = {
+            "formatVersion": BACKUP_FORMAT_VERSION,
+            "producer": BACKUP_PRODUCER,
+            "database": database.is_file(),
+            "workspace": True,
+        }
+        manifest_path = backup_dir / BACKUP_MANIFEST_NAME
+        manifest_temporary = manifest_path.with_suffix(".json.tmp")
+        manifest_temporary.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        manifest_temporary.replace(manifest_path)
+        incomplete.unlink()
     except (OSError, sqlite3.Error) as exc:
+        cleanup_note = ""
+        if created:
+            try:
+                shutil.rmtree(backup_dir)
+            except OSError as cleanup_exc:
+                cleanup_note = (
+                    f" The incomplete backup remains at {backup_dir} and will not be "
+                    f"accepted for rollback: {cleanup_exc}."
+                )
         raise MigrationError(
             f"Could not write the backup at {backup_dir}: {exc}. "
             "Nothing has been changed. Free some space or fix permissions, then retry."
+            f"{cleanup_note}"
         ) from exc
     return backup_dir
 
@@ -241,6 +310,27 @@ def migrate(
 ) -> Report:
     database, workspace = resolve_v1_sources(v1_root)
     paths = data_paths(data_dir) if dry_run else ensure_data_layout(data_dir)
+    if dry_run:
+        return _migrate_with_paths(
+            v1_root, database, workspace, paths,
+            dry_run=True, include_workspace=include_workspace,
+        )
+    with _acquire_mutation_lock(paths):
+        return _migrate_with_paths(
+            v1_root, database, workspace, paths,
+            dry_run=False, include_workspace=include_workspace,
+        )
+
+
+def _migrate_with_paths(
+    v1_root: Path,
+    database: Path,
+    workspace: Path | None,
+    paths,
+    *,
+    dry_run: bool,
+    include_workspace: bool,
+) -> Report:
     stamp = _timestamp()
     report = Report(
         started_at=datetime.now().isoformat(timespec="seconds"),
@@ -257,7 +347,8 @@ def migrate(
                 "SELECT COUNT(*) FROM simulation_jobs WHERE script_snapshot_json IS NULL"
             ).fetchone()[0]
         )
-        source_ids = {row[0] for row in source.execute("SELECT id FROM simulation_jobs")}
+        source_keys = {table: _row_keys(source, table) for table in JOB_TABLES}
+        source_ids = source_keys["simulation_jobs"]
         source_results = _row_hashes(source, "simulation_results", "results_json")
         source_meshes = _row_hashes(source, "simulation_artifacts", "msh_text")
         report.designs, report.unrecoverable_job_ids = _classify_designs(source)
@@ -294,19 +385,19 @@ def migrate(
         store.checkpoint()
         store.close()
 
-    existing_ids: set[str] = set()
+    existing_keys = {table: set() for table in JOB_TABLES}
+    already_imported: int | None = None
     if target_db.is_file():
-        with closing(_connect(target_db)) as conn, conn:
+        with closing(_connect(target_db, read_only=dry_run)) as conn:
             report.before = _counts(conn)
-            try:
-                existing_ids = {row[0] for row in conn.execute("SELECT id FROM simulation_jobs")}
-            except sqlite3.OperationalError:
-                existing_ids = set()
+            existing_keys = {table: _row_keys(conn, table) for table in JOB_TABLES}
+            if dry_run:
+                already_imported = _marker_jobs_imported(conn, _fingerprint(database))
     else:
         # A first migration into a machine that has never run v2.
         report.before = dict.fromkeys(JOB_TABLES, 0)
 
-    report.skipped_existing = sorted(source_ids & existing_ids)
+    report.skipped_existing = sorted(source_ids & existing_keys["simulation_jobs"])
     if report.skipped_existing:
         report.warnings.append(
             f"{len(report.skipped_existing)} job ids already exist in v2 and were left untouched; "
@@ -315,10 +406,16 @@ def migrate(
 
     if dry_run:
         report.after = dict(report.before)
-        report.imported = {
-            table: max(0, report.source[table] - report.before.get(table, 0))
-            for table in JOB_TABLES
-        }
+        if already_imported is not None:
+            report.warnings.append(
+                f"This v1 database was already migrated ({already_imported} jobs). Nothing to do."
+            )
+            report.imported = dict.fromkeys(JOB_TABLES, 0)
+        else:
+            report.imported = {
+                table: len(source_keys[table] - existing_keys[table])
+                for table in JOB_TABLES
+            }
         return report
 
     report.backup_dir = str(take_backup(paths, stamp))
@@ -326,13 +423,10 @@ def migrate(
     with closing(_connect(target_db)) as conn, conn:
         _ensure_marker(conn)
         fingerprint = _fingerprint(database)
-        already = conn.execute(
-            f"SELECT jobs_imported FROM {MARKER_TABLE} WHERE source_fingerprint = ?",
-            (fingerprint,),
-        ).fetchone()
-        if already is not None:
+        already_imported = _marker_jobs_imported(conn, fingerprint)
+        if already_imported is not None:
             report.warnings.append(
-                f"This v1 database was already migrated ({already[0]} jobs). Nothing to do."
+                f"This v1 database was already migrated ({already_imported} jobs). Nothing to do."
             )
             report.after = _counts(conn)
             report.imported = dict.fromkeys(JOB_TABLES, 0)
@@ -418,9 +512,96 @@ def rollback(backup_dir: Path, data_dir: Path | None) -> Path | None:
     costs a file copy and turns that into an inconvenience.
     """
 
-    if not backup_dir.is_dir():
+    # Validation must precede even layout creation. Otherwise a typo here can
+    # create directories in the target and, more importantly, an unrelated
+    # empty directory can reach the destructive "no saved database" branch.
+    paths = data_paths(data_dir)
+    backup_dir = _validate_rollback_source(backup_dir, paths)
+    paths = ensure_data_layout(paths.root)
+    with _acquire_mutation_lock(paths):
+        return _rollback_with_paths(backup_dir, paths)
+
+
+def _validate_rollback_source(backup_dir: Path, paths) -> Path:
+    """Return a canonical, safe migration backup before touching live data.
+
+    Older backups predate the manifest, so the workspace directory remains the
+    backward-compatible provenance marker: ``take_backup`` has always copied it,
+    including when it was empty. New backups carry a manifest as stronger
+    evidence and its claimed contents must agree with the directory.
+    """
+
+    try:
+        source = backup_dir.expanduser().resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise MigrationError(f"No backup directory at {backup_dir}: {exc}") from exc
+    if not source.is_dir():
         raise MigrationError(f"No backup directory at {backup_dir}")
-    paths = ensure_data_layout(data_dir)
+
+    target = paths.root.expanduser().resolve()
+    backups_root = (target / "backups").resolve()
+    try:
+        source.relative_to(target)
+    except ValueError:
+        pass
+    else:
+        # Backups made by this tool normally live below the data root. They are
+        # safe because rollback mutates db/, workspace/, and locks/, not the
+        # distinct backups/ tree. Every other overlap is unsafe; notably, a
+        # source below workspace/ would be deleted before it could be copied.
+        try:
+            relative_backup = source.relative_to(backups_root)
+        except ValueError:
+            relative_backup = None
+        if relative_backup is None or not relative_backup.parts:
+            raise MigrationError(
+                f"Refusing rollback from {source}: the backup overlaps the live data root "
+                f"{target}. Use a backup below {backups_root} or outside the data root."
+            )
+
+    saved_workspace = source / "workspace"
+    if saved_workspace.is_symlink() or not saved_workspace.is_dir():
+        raise MigrationError(
+            f"Refusing rollback from {source}: it is not a Waveguide Generator v2 "
+            "migration backup (the workspace directory is missing or unsafe)."
+        )
+    saved_db = source / "simulations.db"
+    if saved_db.is_symlink() or (saved_db.exists() and not saved_db.is_file()):
+        raise MigrationError(
+            f"Refusing rollback from {source}: simulations.db is not a regular file."
+        )
+
+    incomplete_path = source / BACKUP_INCOMPLETE_NAME
+    if incomplete_path.exists() or incomplete_path.is_symlink():
+        raise MigrationError(
+            f"Refusing rollback from {source}: the backup was not completed."
+        )
+    manifest_path = source / BACKUP_MANIFEST_NAME
+    if manifest_path.is_symlink() or (manifest_path.exists() and not manifest_path.is_file()):
+        raise MigrationError(f"Refusing rollback from {source}: its backup manifest is unsafe.")
+    if manifest_path.is_file():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise MigrationError(
+                f"Refusing rollback from {source}: its backup manifest is invalid: {exc}"
+            ) from exc
+        expected_database = saved_db.is_file()
+        if (
+            not isinstance(manifest, dict)
+            or manifest.get("formatVersion") != BACKUP_FORMAT_VERSION
+            or manifest.get("producer") != BACKUP_PRODUCER
+            or manifest.get("workspace") is not True
+            or manifest.get("database") is not expected_database
+        ):
+            raise MigrationError(
+                f"Refusing rollback from {source}: its backup manifest does not match "
+                "this migration tool or the saved contents."
+            )
+    return source
+
+
+def _rollback_with_paths(backup_dir: Path, paths) -> Path | None:
     replaced = None
     if (paths.db / "simulations.db").is_file() or any(paths.workspace.iterdir()):
         replaced = take_backup(paths, _timestamp(), prefix="pre-rollback")

@@ -127,6 +127,8 @@ export class JobsSocketManager {
   private heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
   private heartbeatMs = 30_000;
   private refetchGeneration = 0;
+  private jobMutationCounter = 0;
+  private readonly jobMutationVersions = new Map<string, number>();
   private gapTargetCursor: number | null = null;
   private readonly jobGenerations = new Map<string, number>();
   private readonly ratingMutations = new Map<string, {
@@ -182,7 +184,10 @@ export class JobsSocketManager {
     if (!response.ok) throw await responseError(response);
     const body = await response.json() as { deleted_ids?: string[] };
     const deleted = new Set(body.deleted_ids ?? []);
-    deleted.forEach((jobId) => this.invalidateJob(jobId));
+    deleted.forEach((jobId) => {
+      this.invalidateJob(jobId);
+      this.markJobMutation(jobId);
+    });
     this.update({ jobs: this.snapshot.jobs.filter((job) => !deleted.has(job.id)) });
   }
 
@@ -190,6 +195,7 @@ export class JobsSocketManager {
     const response = await this.fetcher(`/api/jobs/${encodeURIComponent(jobId)}`, { method: 'DELETE' });
     if (!response.ok) throw await responseError(response);
     this.invalidateJob(jobId);
+    this.markJobMutation(jobId);
     this.update({ jobs: this.snapshot.jobs.filter((job) => job.id !== jobId) });
   }
 
@@ -256,9 +262,13 @@ export class JobsSocketManager {
       this.update({ error: 'Malformed jobs message' });
       return;
     }
+    if ((message as { v?: unknown }).v !== 1) {
+      this.update({ error: 'Unsupported jobs protocol message' });
+      return;
+    }
     if (message.kind === 'hello') {
       const hello = message as HelloMessage;
-      if (hello.v !== 1 || this.helloSeen) return;
+      if (this.helloSeen) return;
       this.helloSeen = true;
       this.reconnectAttempt = 0;
       this.heartbeatMs = Math.max(250, hello.heartbeatSec * 2_000);
@@ -274,6 +284,8 @@ export class JobsSocketManager {
     if (message.kind === 'snapshot') {
       const incoming = message as SnapshotMessage;
       this.gapTargetCursor = null;
+      new Set([...this.snapshot.jobs.map((job) => job.id), ...incoming.jobs.map((job) => job.id)])
+        .forEach((jobId) => this.markJobMutation(jobId));
       this.update({ cursor: incoming.cursor, jobs: this.sortJobs(incoming.jobs), error: null });
       return;
     }
@@ -285,6 +297,7 @@ export class JobsSocketManager {
     if (cursor !== null && message.cursor <= cursor) return;
     if (this.gapTargetCursor !== null) {
       if (cursor === null || message.cursor !== cursor + 1) return;
+      this.markJobMutation(message.jobId);
       if (message.type === 'deleted') {
         this.invalidateJob(message.jobId);
         this.update({
@@ -314,6 +327,7 @@ export class JobsSocketManager {
       }
       return;
     }
+    this.markJobMutation(message.jobId);
     if (message.type === 'deleted') {
       this.invalidateJob(message.jobId);
       this.update({
@@ -378,14 +392,50 @@ export class JobsSocketManager {
 
   private async refetchJobs(): Promise<void> {
     const generation = ++this.refetchGeneration;
+    const mutationBaseline = this.jobMutationCounter;
     try {
-      const response = await this.fetcher('/api/jobs?limit=200&offset=0');
-      if (!response.ok) throw await responseError(response);
-      const body = await response.json() as { items: JobItem[] };
-      if (generation !== this.refetchGeneration) return;
-      new Set([...this.snapshot.jobs.map((job) => job.id), ...body.items.map((job) => job.id)])
+      const pageSize = 200;
+      const fetched = new Map<string, JobItem>();
+      let offset = 0;
+      let total = Infinity;
+      while (offset < total) {
+        const response = await this.fetcher(`/api/jobs?limit=${pageSize}&offset=${offset}`);
+        if (!response.ok) throw await responseError(response);
+        const body = await response.json() as { items: JobItem[]; total?: number };
+        if (generation !== this.refetchGeneration) return;
+        body.items.forEach((job) => fetched.set(job.id, job));
+        offset += body.items.length;
+        total = Number.isInteger(body.total) && Number(body.total) >= 0 ? Number(body.total) : offset;
+        // A changing database can legitimately make the final page shorter
+        // than the count observed on an earlier page. Never spin on an empty
+        // page while trying to reach a now-stale total.
+        if (body.items.length === 0) break;
+      }
+      // REST pages are not one atomic server snapshot. Preserve current
+      // membership when a mutation could have shifted an offset boundary, then
+      // overlay each job changed through WS/status/local traffic. A changed id
+      // absent from the current list represents a concurrent deletion and must
+      // not be resurrected by an older page.
+      const current = new Map(this.snapshot.jobs.map((job) => [job.id, job]));
+      if (this.jobMutationCounter !== mutationBaseline) {
+        // Insertions/deletions shift offset pagination. If anything changed
+        // during the walk, a still-live row missing from every fetched page may
+        // simply have crossed a page boundary. Preserve those current rows;
+        // per-id tombstones below still remove jobs actually deleted.
+        current.forEach((job, jobId) => {
+          if (!fetched.has(jobId)) fetched.set(jobId, job);
+        });
+      }
+      this.jobMutationVersions.forEach((version, jobId) => {
+        if (version <= mutationBaseline) return;
+        const live = current.get(jobId);
+        if (live) fetched.set(jobId, live);
+        else fetched.delete(jobId);
+      });
+      const items = [...fetched.values()];
+      new Set([...this.snapshot.jobs.map((job) => job.id), ...items.map((job) => job.id)])
         .forEach((jobId) => this.invalidateJob(jobId));
-      this.update({ jobs: this.sortJobs(body.items), error: this.gapTargetCursor === null ? null : this.snapshot.error });
+      this.update({ jobs: this.sortJobs(items), error: this.gapTargetCursor === null ? null : this.snapshot.error });
     } catch (error) {
       if (generation !== this.refetchGeneration) return;
       this.update({ error: error instanceof Error ? error.message : String(error) });
@@ -399,12 +449,14 @@ export class JobsSocketManager {
       if (this.jobGenerations.get(jobId) !== generation) return;
       if (response.status === 404) {
         this.invalidateJob(jobId);
+        this.markJobMutation(jobId);
         this.update({ jobs: this.snapshot.jobs.filter((job) => job.id !== jobId) });
         return;
       }
       if (!response.ok) throw await responseError(response);
       const job = await response.json() as JobItem;
       if (this.jobGenerations.get(jobId) !== generation) return;
+      this.markJobMutation(jobId);
       const jobs = this.snapshot.jobs.filter((item) => item.id !== job.id);
       this.update({ jobs: this.sortJobs([...jobs, job]), error: null });
     } catch (error) {
@@ -423,8 +475,14 @@ export class JobsSocketManager {
     this.nextJobGeneration(jobId);
   }
 
+  private markJobMutation(jobId: string): void {
+    this.jobMutationCounter += 1;
+    this.jobMutationVersions.set(jobId, this.jobMutationCounter);
+  }
+
   /** Apply a patch immediately, for local optimistic edits such as a rating. */
   private patchJob(jobId: string, patch: Partial<JobItem>): void {
+    this.markJobMutation(jobId);
     const jobs = this.patchedJobs(jobId, patch);
     if (jobs !== null) this.update({ jobs });
   }

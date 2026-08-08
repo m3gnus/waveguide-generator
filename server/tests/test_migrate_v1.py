@@ -29,6 +29,9 @@ migrate_v1 = importlib.util.module_from_spec(_spec)
 sys.modules["migrate_v1"] = migrate_v1
 _spec.loader.exec_module(migrate_v1)
 
+InstanceLock = migrate_v1.InstanceLock
+ensure_data_layout = migrate_v1.ensure_data_layout
+
 
 V1_SCHEMA = """
 CREATE TABLE simulation_jobs (
@@ -103,6 +106,13 @@ def _content_digest(database: Path) -> str:
     return hashlib.sha256(repr((rows, meshes)).encode("utf-8")).hexdigest()
 
 
+def _assert_instance_lock_available(data_dir: Path) -> None:
+    paths = ensure_data_layout(data_dir)
+    lock = InstanceLock(paths.locks)
+    lock.acquire(3100)
+    lock.release()
+
+
 @pytest.fixture
 def v1_root(tmp_path: Path) -> Path:
     root = tmp_path / "Waveguide Generator"  # the real one has a space; keep it
@@ -132,6 +142,97 @@ def test_dry_run_writes_nothing(v1_root: Path, tmp_path: Path):
     assert not (data_dir / "db" / "simulations.db").exists()
 
 
+def test_failed_backup_removes_its_incomplete_restore_point(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    paths = ensure_data_layout(tmp_path / "v2data")
+    (paths.workspace / "live.txt").write_text("live", encoding="utf-8")
+
+    def fail_workspace_copy(_source: Path, destination: Path):
+        destination.mkdir()
+        raise OSError("injected copy failure")
+
+    monkeypatch.setattr(migrate_v1.shutil, "copytree", fail_workspace_copy)
+    with pytest.raises(migrate_v1.MigrationError, match="injected copy failure"):
+        migrate_v1.take_backup(paths, "test-stamp")
+
+    assert list((paths.root / "backups").iterdir()) == []
+
+
+def test_running_instance_blocks_migration_before_any_data_mutation(
+    v1_root: Path, tmp_path: Path
+):
+    data_dir = tmp_path / "v2data"
+    paths = ensure_data_layout(data_dir)
+    sentinel = paths.workspace / "keep.txt"
+    sentinel.write_text("live workspace", encoding="utf-8")
+    lock = InstanceLock(paths.locks)
+    lock.acquire(3100)
+    try:
+        with pytest.raises(migrate_v1.MigrationError, match="already running"):
+            migrate_v1.migrate(v1_root, data_dir)
+    finally:
+        lock.release()
+
+    assert not (paths.db / "simulations.db").exists()
+    assert sentinel.read_text(encoding="utf-8") == "live workspace"
+    assert not (paths.root / "backups").exists()
+
+
+def test_dry_run_remains_available_while_instance_lock_is_held(
+    v1_root: Path, tmp_path: Path
+):
+    data_dir = tmp_path / "v2data"
+    paths = ensure_data_layout(data_dir)
+    lock = InstanceLock(paths.locks)
+    lock.acquire(3100)
+    try:
+        report = migrate_v1.migrate(v1_root, data_dir, dry_run=True)
+    finally:
+        lock.release()
+
+    assert report.imported == dict.fromkeys(migrate_v1.JOB_TABLES, 3)
+    assert not (paths.db / "simulations.db").exists()
+
+
+def test_migration_releases_instance_lock_after_failure(
+    v1_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    data_dir = tmp_path / "v2data"
+
+    def fail_backup(*_args, **_kwargs):
+        raise RuntimeError("injected migration failure")
+
+    monkeypatch.setattr(migrate_v1, "take_backup", fail_backup)
+    with pytest.raises(RuntimeError, match="injected migration failure"):
+        migrate_v1.migrate(v1_root, data_dir)
+
+    _assert_instance_lock_available(data_dir)
+
+
+def test_instance_lock_filesystem_error_is_a_clean_cli_error(
+    v1_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    class BrokenInstanceLock:
+        def __init__(self, _locks_dir: Path):
+            pass
+
+        def acquire(self, _port: int):
+            raise migrate_v1.InstanceLockError("injected lock filesystem error")
+
+    monkeypatch.setattr(migrate_v1, "InstanceLock", BrokenInstanceLock)
+
+    exit_code = migrate_v1.main(
+        ["--v1-root", str(v1_root), "--data-dir", str(tmp_path / "v2data")]
+    )
+
+    assert exit_code == 2
+    assert "ERROR: injected lock filesystem error" in capsys.readouterr().err
+
+
 def test_rerunning_imports_nothing_twice(v1_root: Path, tmp_path: Path):
     data_dir = tmp_path / "v2data"
     migrate_v1.migrate(v1_root, data_dir)
@@ -141,6 +242,34 @@ def test_rerunning_imports_nothing_twice(v1_root: Path, tmp_path: Path):
 
     assert second_report.imported["simulation_jobs"] == 0
     assert _job_ids(data_dir / "db" / "simulations.db") == first
+
+
+def test_dry_run_honours_same_source_marker_when_a_target_row_is_missing(
+    v1_root: Path, tmp_path: Path
+):
+    data_dir = tmp_path / "v2data"
+    migrate_v1.migrate(v1_root, data_dir)
+    database = data_dir / "db" / "simulations.db"
+    with closing(sqlite3.connect(database)) as conn, conn:
+        conn.execute(
+            "DELETE FROM simulation_artifacts WHERE job_id = ?",
+            ("v1-job-0",),
+        )
+
+    dry_report = migrate_v1.migrate(v1_root, data_dir, dry_run=True)
+    real_report = migrate_v1.migrate(v1_root, data_dir)
+
+    expected_counts = {
+        "simulation_jobs": 3,
+        "simulation_results": 3,
+        "simulation_artifacts": 2,
+    }
+    assert dry_report.before == real_report.before == expected_counts
+    assert dry_report.after == real_report.after == expected_counts
+    assert dry_report.imported == real_report.imported == dict.fromkeys(
+        migrate_v1.JOB_TABLES, 0
+    )
+    assert "already migrated (3 jobs)" in " ".join(dry_report.warnings)
 
 
 def test_existing_v2_job_is_never_overwritten(v1_root: Path, tmp_path: Path):
@@ -205,6 +334,133 @@ def test_rollback_restores_the_workspace(v1_root: Path, tmp_path: Path):
     migrate_v1.rollback(Path(report.backup_dir), data_dir)
 
     assert not (data_dir / "workspace" / "project-a").exists()
+
+
+def test_rollback_rejects_unrelated_empty_directory_before_target_mutation(
+    tmp_path: Path,
+):
+    backup_dir = tmp_path / "not-a-backup"
+    backup_dir.mkdir()
+    data_dir = tmp_path / "v2data"
+
+    with pytest.raises(migrate_v1.MigrationError, match="workspace directory"):
+        migrate_v1.rollback(backup_dir, data_dir)
+
+    assert not data_dir.exists()
+    assert list(backup_dir.iterdir()) == []
+
+
+def test_rollback_rejects_incomplete_new_backup_before_target_mutation(tmp_path: Path):
+    backup_dir = tmp_path / "incomplete-backup"
+    (backup_dir / "workspace").mkdir(parents=True)
+    (backup_dir / migrate_v1.BACKUP_INCOMPLETE_NAME).write_text(
+        "backup is being created\n", encoding="utf-8"
+    )
+    data_dir = tmp_path / "v2data"
+
+    with pytest.raises(migrate_v1.MigrationError, match="backup was not completed"):
+        migrate_v1.rollback(backup_dir, data_dir)
+
+    assert not data_dir.exists()
+
+
+def test_rollback_rejects_backup_inside_live_workspace_before_mutation(tmp_path: Path):
+    data_dir = tmp_path / "v2data"
+    live_workspace = data_dir / "workspace"
+    backup_dir = live_workspace / "nested-restore-point"
+    (backup_dir / "workspace").mkdir(parents=True)
+    (backup_dir / "workspace" / "saved.txt").write_text("saved", encoding="utf-8")
+    live_db = data_dir / "db" / "simulations.db"
+    live_db.parent.mkdir(parents=True)
+    live_db.write_bytes(b"live database sentinel")
+
+    with pytest.raises(migrate_v1.MigrationError, match="overlaps the live data root"):
+        migrate_v1.rollback(backup_dir, data_dir)
+
+    assert live_db.read_bytes() == b"live database sentinel"
+    assert (backup_dir / "workspace" / "saved.txt").read_text(encoding="utf-8") == "saved"
+    assert not (data_dir / "locks").exists()
+    assert not (data_dir / "backups").exists()
+
+
+def test_rollback_accepts_legacy_database_backup_outside_data_root(tmp_path: Path):
+    data_dir = tmp_path / "v2data"
+    paths = ensure_data_layout(data_dir)
+    (paths.workspace / "live.txt").write_text("live", encoding="utf-8")
+    backup_dir = tmp_path / "legacy-restore-point"
+    (backup_dir / "workspace").mkdir(parents=True)
+    (backup_dir / "workspace" / "saved.txt").write_text("saved", encoding="utf-8")
+    saved_database = b"saved database sentinel"
+    (backup_dir / "simulations.db").write_bytes(saved_database)
+
+    replaced = migrate_v1.rollback(backup_dir, data_dir)
+
+    assert replaced is not None
+    assert (paths.db / "simulations.db").read_bytes() == saved_database
+    assert not (paths.workspace / "live.txt").exists()
+    assert (paths.workspace / "saved.txt").read_text(encoding="utf-8") == "saved"
+
+
+def test_rollback_accepts_legacy_empty_prestate_backup(tmp_path: Path):
+    data_dir = tmp_path / "v2data"
+    paths = ensure_data_layout(data_dir)
+    live_db = paths.db / "simulations.db"
+    with closing(sqlite3.connect(live_db)) as conn, conn:
+        conn.execute("CREATE TABLE live_state (value TEXT)")
+        conn.execute("INSERT INTO live_state VALUES ('keep in safety backup')")
+    (paths.workspace / "live.txt").write_text("live", encoding="utf-8")
+    backup_dir = tmp_path / "legacy-empty-prestate"
+    (backup_dir / "workspace").mkdir(parents=True)
+
+    replaced = migrate_v1.rollback(backup_dir, data_dir)
+
+    assert replaced is not None
+    assert not live_db.exists()
+    assert list(paths.workspace.iterdir()) == []
+
+
+def test_running_instance_blocks_rollback_before_any_data_mutation(tmp_path: Path):
+    data_dir = tmp_path / "v2data"
+    paths = ensure_data_layout(data_dir)
+    live_db = paths.db / "simulations.db"
+    live_db.write_bytes(b"live database sentinel")
+    live_workspace = paths.workspace / "keep.txt"
+    live_workspace.write_text("live workspace", encoding="utf-8")
+    backup_dir = tmp_path / "restore-point"
+    (backup_dir / "workspace").mkdir(parents=True)
+    (backup_dir / "simulations.db").write_bytes(b"saved database")
+    (backup_dir / "workspace" / "restored.txt").write_text("saved", encoding="utf-8")
+
+    lock = InstanceLock(paths.locks)
+    lock.acquire(3100)
+    try:
+        with pytest.raises(migrate_v1.MigrationError, match="already running"):
+            migrate_v1.rollback(backup_dir, data_dir)
+    finally:
+        lock.release()
+
+    assert live_db.read_bytes() == b"live database sentinel"
+    assert live_workspace.read_text(encoding="utf-8") == "live workspace"
+    assert not (paths.root / "backups").exists()
+
+
+def test_rollback_releases_instance_lock_after_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    data_dir = tmp_path / "v2data"
+    paths = ensure_data_layout(data_dir)
+    (paths.workspace / "keep.txt").write_text("live", encoding="utf-8")
+    backup_dir = tmp_path / "restore-point"
+    (backup_dir / "workspace").mkdir(parents=True)
+
+    def fail_backup(*_args, **_kwargs):
+        raise RuntimeError("injected rollback failure")
+
+    monkeypatch.setattr(migrate_v1, "take_backup", fail_backup)
+    with pytest.raises(RuntimeError, match="injected rollback failure"):
+        migrate_v1.rollback(backup_dir, data_dir)
+
+    _assert_instance_lock_available(data_dir)
 
 
 def test_reports_which_migrated_jobs_can_be_reopened_and_which_cannot(

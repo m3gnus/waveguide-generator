@@ -96,8 +96,23 @@ export const defaultPolarUi: PolarUiState = {
 };
 
 export function polarConfigFromUi(ui: PolarUiState): PolarConfig {
+  const numeric = [ui.angleStart, ui.angleEnd, ui.angleStep, ui.distance, ui.normAngle, ui.diagonalAngle];
+  if (!numeric.every(Number.isFinite)) throw new Error('Directivity settings must be finite numbers.');
+  if (ui.angleEnd <= ui.angleStart) throw new Error('Directivity sweep end must be greater than its start.');
+  if (ui.angleStep <= 0) throw new Error('Directivity angular step must be greater than 0 degrees.');
+  if (ui.distance < 0.1) throw new Error('Directivity measurement distance must be at least 0.1 m.');
+  if (ui.enabledAxes.length === 0) throw new Error('Select at least one directivity plane.');
   const span = ui.angleEnd - ui.angleStart;
-  const count = Math.max(2, Math.floor(span / Math.max(1e-9, ui.angleStep)) + 1);
+  const intervals = span / ui.angleStep;
+  const nearestIntervals = Math.round(intervals);
+  // Decimal inputs such as 0.3 / 0.1 can land one ULP below an integer. Treat
+  // only that floating-point fringe as divisible; genuinely non-divisible
+  // spans still floor so their resolved step remains observable in metadata.
+  const resolvedIntervals = Math.abs(intervals - nearestIntervals) <= Math.max(1e-9, Math.abs(intervals) * 1e-12)
+    ? nearestIntervals
+    : Math.floor(intervals);
+  const count = Math.max(2, resolvedIntervals + 1);
+  if (count > 721) throw new Error(`Directivity sweep supports at most 721 angle samples (got ${count}).`);
   return {
     angle_range: [ui.angleStart, ui.angleEnd, count],
     angle_step: ui.angleStep,

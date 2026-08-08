@@ -46,9 +46,10 @@ class SymmetryResolution:
 def _scalar(value: Expr | None, default: float | None = None) -> float | None:
     if value is None:
         return default
-    if value.value is None or not math.isfinite(value.value):
+    number = value.constant_value()
+    if number is None or not math.isfinite(number):
         return None
-    return float(value.value)
+    return float(number)
 
 
 def _reshape_surface(raw: Any, n_phi: int, n_length: int) -> np.ndarray | None:

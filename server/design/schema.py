@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import math
+import operator
 import re
 from collections.abc import Mapping
 from typing import Annotated, Any, Literal
@@ -30,11 +31,8 @@ _SAFE_FUNCTIONS = {
     "acos": math.acos,
     "asin": math.asin,
     "atan": math.atan,
-    "ceil": math.ceil,
+    "atan2": math.atan2,
     "cos": math.cos,
-    "exp": math.exp,
-    "floor": math.floor,
-    "log": math.log,
     "max": max,
     "min": min,
     "pow": pow,
@@ -42,57 +40,281 @@ _SAFE_FUNCTIONS = {
     "sqrt": math.sqrt,
     "tan": math.tan,
 }
+_SAFE_CONSTANTS = {"pi": math.pi, "e": math.e}
+_MAX_CONSTANT_EXPRESSION_CHARS = 16 * 1024
+_MAX_CONSTANT_EXPRESSION_NODES = 256
+_MAX_EXPRESSION_NESTING = 128
+# ATH formulas use small shape exponents (commonly 2--16). This leaves ample
+# compatibility headroom without inviting pathological power expressions.
+_MAX_POWER_EXPONENT = 1_024.0
+_BINARY_OPERATORS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.FloorDiv: operator.floordiv,
+    ast.Mod: operator.mod,
+    ast.Pow: operator.pow,
+}
+_UNARY_OPERATORS = {ast.UAdd: operator.pos, ast.USub: operator.neg}
+_BOOLEAN_OPERATORS = (ast.And, ast.Or)
+_COMPARE_OPERATORS = (ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE)
+
+
+class _NonConstantExpression(ValueError):
+    """The ATH source is not a bounded scalar expression."""
+
+
+def _expression_candidate(raw: str) -> str:
+    candidate = raw.strip()
+    # Some v1 snapshots accidentally persisted Function#toString output. Its
+    # return expression is still useful for validation and scalar recovery.
+    returns = re.findall(r"\breturn\s+(.+?);?(?:\n|$)", candidate)
+    if returns:
+        candidate = returns[-1].strip().rstrip(";")
+    if candidate.lower() == "true":
+        return "1"
+    if candidate.lower() == "false":
+        return "0"
+    return (
+        candidate.replace("Math.PI", "pi")
+        .replace("Math.E", "e")
+        .replace("Math.", "")
+        .replace("^", "**")
+    )
+
+
+def _validate_execution_node(node: ast.AST) -> None:
+    """Mirror hornlab_mesher.profile_common's public expression grammar."""
+
+    if isinstance(node, ast.Expression):
+        _validate_execution_node(node.body)
+    elif isinstance(node, ast.Constant):
+        if isinstance(node.value, bool) or not isinstance(node.value, (int, float)):
+            raise ValueError("expression literals must be numeric")
+    elif isinstance(node, ast.Name):
+        # Lossless imports intentionally retain hand-written symbolic names
+        # (legacy Throat.Diameter round-trip tests use a/b/k). They cannot be
+        # scalar-derived here, and an execution path reports them if the pinned
+        # mesher cannot resolve them. Calls are stricter because accepting a
+        # known-incompatible function such as log()/ceil() creates a misleading
+        # locally-derived value for an expression guaranteed to fail downstream.
+        return
+    elif isinstance(node, ast.BinOp):
+        if type(node.op) not in _BINARY_OPERATORS:
+            raise ValueError(f"unsupported expression operator {type(node.op).__name__}")
+        _validate_execution_node(node.left)
+        _validate_execution_node(node.right)
+    elif isinstance(node, ast.UnaryOp):
+        if type(node.op) not in _UNARY_OPERATORS:
+            raise ValueError(
+                f"unsupported expression unary operator {type(node.op).__name__}"
+            )
+        _validate_execution_node(node.operand)
+    elif isinstance(node, ast.BoolOp):
+        if not isinstance(node.op, _BOOLEAN_OPERATORS):
+            raise ValueError(
+                f"unsupported expression boolean operator {type(node.op).__name__}"
+            )
+        for value in node.values:
+            _validate_execution_node(value)
+    elif isinstance(node, ast.IfExp):
+        _validate_execution_node(node.test)
+        _validate_execution_node(node.body)
+        _validate_execution_node(node.orelse)
+    elif isinstance(node, ast.Compare):
+        _validate_execution_node(node.left)
+        for comparison, comparator in zip(node.ops, node.comparators):
+            if not isinstance(comparison, _COMPARE_OPERATORS):
+                raise ValueError(
+                    f"unsupported expression comparison {type(comparison).__name__}"
+                )
+            _validate_execution_node(comparator)
+    elif isinstance(node, ast.Call):
+        if (
+            not isinstance(node.func, ast.Name)
+            or node.func.id not in _SAFE_FUNCTIONS
+            or node.keywords
+        ):
+            name = node.func.id if isinstance(node.func, ast.Name) else "indirect call"
+            raise ValueError(f"unknown expression function {name!r}")
+        for argument in node.args:
+            _validate_execution_node(argument)
+    else:
+        raise ValueError(f"unsupported expression syntax {type(node).__name__}")
+
+
+def _bounded_constant_node(node: ast.AST) -> float:
+    """Evaluate only numeric scalar AST nodes, converting at every operation."""
+
+    if isinstance(node, ast.Expression):
+        return _bounded_constant_node(node.body)
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, bool) or not isinstance(node.value, (int, float)):
+            raise _NonConstantExpression
+        try:
+            result = float(node.value)
+        except (OverflowError, TypeError, ValueError) as exc:
+            raise _NonConstantExpression from exc
+    elif isinstance(node, ast.Name):
+        if node.id not in _SAFE_CONSTANTS:
+            raise _NonConstantExpression
+        result = _SAFE_CONSTANTS[node.id]
+    elif isinstance(node, ast.UnaryOp) and type(node.op) in _UNARY_OPERATORS:
+        result = _UNARY_OPERATORS[type(node.op)](_bounded_constant_node(node.operand))
+    elif isinstance(node, ast.BinOp) and type(node.op) in _BINARY_OPERATORS:
+        left = _bounded_constant_node(node.left)
+        right = _bounded_constant_node(node.right)
+        if isinstance(node.op, ast.Pow) and abs(right) > _MAX_POWER_EXPONENT:
+            raise _NonConstantExpression
+        result = _BINARY_OPERATORS[type(node.op)](left, right)
+    elif isinstance(node, ast.Call):
+        if (
+            not isinstance(node.func, ast.Name)
+            or node.func.id not in _SAFE_FUNCTIONS
+            or node.keywords
+        ):
+            raise _NonConstantExpression
+        arguments = [_bounded_constant_node(argument) for argument in node.args]
+        if node.func.id == "pow" and len(arguments) >= 2:
+            if abs(arguments[1]) > _MAX_POWER_EXPONENT:
+                raise _NonConstantExpression
+        result = _SAFE_FUNCTIONS[node.func.id](*arguments)
+    else:
+        raise _NonConstantExpression
+
+    try:
+        number = float(result)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise _NonConstantExpression from exc
+    if not math.isfinite(number):
+        raise _NonConstantExpression
+    return number
+
+
+def _validate_expression_source(raw: str) -> None:
+    """Reject expressions that are unsafe to forward to mesher evaluators."""
+
+    candidate = raw.strip()
+    if len(candidate) > _MAX_CONSTANT_EXPRESSION_CHARS:
+        raise ValueError(
+            f"expression source must not exceed {_MAX_CONSTANT_EXPRESSION_CHARS} characters"
+        )
+    if not candidate:
+        return
+    if _NUMBER.fullmatch(candidate):
+        try:
+            number = float(candidate)
+        except (OverflowError, ValueError) as exc:
+            raise ValueError("numeric expression must be a finite float") from exc
+        if not math.isfinite(number):
+            raise ValueError("numeric expression must be finite")
+        return
+    nesting = 0
+    for character in candidate:
+        if character in "([{":
+            nesting += 1
+            if nesting > _MAX_EXPRESSION_NESTING:
+                raise ValueError(
+                    f"expression nesting must not exceed {_MAX_EXPRESSION_NESTING} levels"
+                )
+        elif character in ")]}":
+            nesting = max(0, nesting - 1)
+    candidate = _expression_candidate(candidate)
+    if candidate.strip().lower() in {
+        "undefined",
+        "null",
+        "nan",
+        "infinity",
+        "+infinity",
+        "-infinity",
+    }:
+        # Historical missing-value tokens remain lossless for import/export.
+        # Structural execution paths already reject them where a scalar is
+        # required, while optional fields can preserve old files unchanged.
+        return
+    try:
+        tree = ast.parse(candidate, mode="eval")
+    except RecursionError as exc:
+        raise ValueError("expression nesting is too deep") from exc
+    except (SyntaxError, ValueError):
+        # Preserve unparseable legacy spellings losslessly. They are not
+        # evaluated by this module; execution paths will still report that the
+        # particular design field is unsupported.
+        return
+    nodes = list(ast.walk(tree))
+    if len(nodes) > _MAX_CONSTANT_EXPRESSION_NODES:
+        raise ValueError(
+            f"expression must not exceed {_MAX_CONSTANT_EXPRESSION_NODES} syntax nodes"
+        )
+    # ATH's SuperFormula field is historically encoded as one comma-separated
+    # numeric tuple (for example ``1,1,8,0.6,5,2``), despite sharing Expr's wire
+    # shape. Preserve that bounded root form without allowing tuple arithmetic.
+    root_tuple = tree.body if isinstance(tree.body, ast.Tuple) else None
+    if root_tuple is not None:
+        if len(root_tuple.elts) > 32:
+            raise ValueError("expression tuples must not exceed 32 values")
+        try:
+            for element in root_tuple.elts:
+                _bounded_constant_node(element)
+        except (ArithmeticError, _NonConstantExpression, TypeError, ValueError) as exc:
+            raise ValueError("expression tuple values must be numeric constants") from exc
+        return
+    _validate_execution_node(tree)
+    for node in nodes:
+        if isinstance(node, ast.Constant) and (
+            isinstance(node.value, bool) or not isinstance(node.value, (int, float))
+        ):
+            raise ValueError("expression literals must be numeric")
+        if isinstance(node, (ast.Dict, ast.List, ast.Set)) or (
+            isinstance(node, ast.Tuple) and node is not root_tuple
+        ):
+            raise ValueError("expression containers are not supported")
+        exponent: ast.AST | None = None
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Pow):
+            exponent = node.right
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "pow"
+            and len(node.args) >= 2
+        ):
+            exponent = node.args[1]
+        if exponent is not None:
+            try:
+                power = _bounded_constant_node(exponent)
+            except (ArithmeticError, _NonConstantExpression, TypeError, ValueError) as exc:
+                raise ValueError("expression exponents must be bounded constants") from exc
+            if abs(power) > _MAX_POWER_EXPONENT:
+                raise ValueError(
+                    f"expression exponent magnitude must not exceed {_MAX_POWER_EXPONENT:g}"
+                )
 
 
 def _constant_expression_value(raw: str) -> float | None:
     """Evaluate scalar-only ATH syntax without accepting arbitrary Python."""
 
     candidate = raw.strip()
+    if len(candidate) > _MAX_CONSTANT_EXPRESSION_CHARS:
+        return None
     if _NUMBER.fullmatch(candidate):
-        value = float(candidate)
+        try:
+            value = float(candidate)
+        except (OverflowError, ValueError):
+            return None
         return value if math.isfinite(value) else None
 
-    # Some v1 snapshots accidentally persisted Function#toString output.  Its
-    # return expression is still useful for recognizing a constant expression.
-    returns = re.findall(r"\breturn\s+(.+?);?(?:\n|$)", candidate)
-    if returns:
-        candidate = returns[-1].strip().rstrip(";")
-    candidate = candidate.replace("Math.", "").replace("^", "**")
+    candidate = _expression_candidate(candidate)
     try:
         tree = ast.parse(candidate, mode="eval")
-    except (SyntaxError, ValueError):
+    except (RecursionError, SyntaxError, ValueError):
         return None
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Name) and node.id not in {*_SAFE_FUNCTIONS, "pi"}:
-            return None
-        if isinstance(node, ast.Call):
-            if not isinstance(node.func, ast.Name) or node.func.id not in _SAFE_FUNCTIONS:
-                return None
-        if isinstance(
-            node,
-            (
-                ast.Attribute,
-                ast.Await,
-                ast.Dict,
-                ast.Lambda,
-                ast.ListComp,
-                ast.SetComp,
-                ast.GeneratorExp,
-                ast.NamedExpr,
-                ast.Subscript,
-            ),
-        ):
-            return None
+    if sum(1 for _node in ast.walk(tree)) > _MAX_CONSTANT_EXPRESSION_NODES:
+        return None
     try:
-        result = eval(  # noqa: S307 - AST and globals are deliberately restricted above.
-            compile(tree, "<ATH expression>", "eval"),
-            {"__builtins__": {}, **_SAFE_FUNCTIONS, "pi": math.pi},
-            {},
-        )
-        number = float(result)
-    except (ArithmeticError, TypeError, ValueError):
+        return _bounded_constant_node(tree)
+    except (ArithmeticError, _NonConstantExpression, TypeError, ValueError):
         return None
-    return number if math.isfinite(number) else None
 
 
 class StrictModel(BaseModel):
@@ -128,12 +350,15 @@ class Expr(StrictModel):
                 raise ValueError("numeric design values must be finite")
             return {"value": number, "raw": None}
         if isinstance(value, str):
+            _validate_expression_source(value)
             return {"value": _constant_expression_value(value), "raw": value}
         if isinstance(value, Mapping):
             result = dict(value)
             raw = result.get("raw")
-            if result.get("value") is None and isinstance(raw, str):
-                result["value"] = _constant_expression_value(raw)
+            if isinstance(raw, str):
+                _validate_expression_source(raw)
+                if result.get("value") is None:
+                    result["value"] = _constant_expression_value(raw)
             return result
         return value
 
@@ -150,6 +375,24 @@ class Expr(StrictModel):
             raise ValueError("numeric design values must be finite")
         return number
 
+    @model_validator(mode="after")
+    def _source_matches_value(self) -> "Expr":
+        """Reject dual representations that would execute different geometry."""
+
+        if self.raw is None:
+            return self
+        derived = _constant_expression_value(self.raw)
+        if derived is None:
+            # Parameterized ATH formulas intentionally carry the editor's
+            # current numeric sample as a sidecar. The raw source remains the
+            # executable geometry; only constant raw can be cross-checked.
+            return self
+        if self.value is None or not math.isclose(
+            self.value, derived, rel_tol=1e-12, abs_tol=1e-12
+        ):
+            raise ValueError("expression value does not match constant raw source")
+        return self
+
     def text(self) -> str:
         """Return the v1-readable spelling, preferring the preserved source."""
 
@@ -158,6 +401,25 @@ class Expr(StrictModel):
         if self.value is None:
             return ""
         return str(int(self.value)) if self.value.is_integer() else format(self.value, ".15g")
+
+    def execution_text(self) -> str | float | None:
+        """Return mesher-compatible syntax without changing lossless ``raw``."""
+
+        if self.raw is not None:
+            return _expression_candidate(self.raw)
+        return self.value
+
+    def constant_value(self) -> float | None:
+        """Return a scalar only when the executable source is actually constant.
+
+        Parameterized expressions may carry a cached editor sample in ``value``.
+        That sidecar is useful to the UI but must not drive discrete controls such
+        as a frequency count, quadrant selection, or FREEFORM station position.
+        """
+
+        if self.raw is None:
+            return self.value
+        return _constant_expression_value(self.raw)
 
 
 def _resolution_expression(value: Any) -> Any:
@@ -246,7 +508,7 @@ class SimulationConfig(StrictModel):
     f2: Expr | None = None
     num_frequencies: Expr | None = None
     sim_type: Literal["freestanding", "infinite-baffle"] | None = None
-    solver_mode: str | None = None
+    solver_mode: Literal["auto", "full_3d", "circsym"] | None = None
 
     @field_validator("sim_type", mode="before")
     @classmethod
@@ -255,6 +517,11 @@ class SimulationConfig(StrictModel):
 
         normalized = str(value).strip().lower() if value is not None else None
         return {"1": "infinite-baffle", "2": "freestanding"}.get(normalized, normalized)
+
+    @field_validator("solver_mode", mode="before")
+    @classmethod
+    def _solver_mode(cls, value: Any) -> Any:
+        return str(value).strip().lower() if value is not None else None
 
 
 class OutputConfig(StrictModel):
@@ -366,7 +633,7 @@ class FreeformProfile(StrictModel):
     def _valid_point_domain(cls, points: list[FreeformPoint]) -> list[FreeformPoint]:
         if len(points) < 2:
             raise ValueError("FREEFORM profiles require at least 2 points")
-        values = [point.t.value for point in points]
+        values = [point.t.constant_value() for point in points]
         if any(value is None for value in values):
             raise ValueError("FREEFORM profile point t values must be scalar")
         scalars = [float(value) for value in values if value is not None]
@@ -408,9 +675,10 @@ class FreeformConfig(DesignCommon):
     @field_validator("length")
     @classmethod
     def _valid_length(cls, length: Expr) -> Expr:
-        if length.value is None:
+        value = length.constant_value()
+        if value is None:
             raise ValueError("FREEFORM length must be scalar")
-        if length.value <= 0:
+        if value <= 0:
             raise ValueError("FREEFORM length must be greater than 0")
         return length
 
@@ -419,7 +687,7 @@ class FreeformConfig(DesignCommon):
     def _valid_cross_section_domain(
         cls, stations: list[CrossSectionStation]
     ) -> list[CrossSectionStation]:
-        values = [station.t.value for station in stations]
+        values = [station.t.constant_value() for station in stations]
         if any(value is None for value in values):
             raise ValueError("cross-section station t values must be scalar")
         scalars = [float(value) for value in values if value is not None]

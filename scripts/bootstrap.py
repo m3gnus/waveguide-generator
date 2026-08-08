@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Iterator
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -11,12 +13,19 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import time
 import venv
+
+if sys.platform == "win32":
+    import msvcrt
+else:
+    import fcntl
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_VENV = REPO_ROOT / ".venv"
 STAMP_NAME = ".wg2-bootstrap.json"
+LOCK_NAME_PREFIX = "wg2-bootstrap-"
 BOOTSTRAP_VERSION = 1
 PYTHON_SERIES = (3, 13)
 PIP_VERSION = "26.1.2"
@@ -45,6 +54,95 @@ REQUIRED_DISTRIBUTIONS = (
 GIT_REQUIREMENT_RE = re.compile(
     r"^git\+[^@]+@(?P<sha>[0-9a-f]{40})#egg=(?P<name>[A-Za-z0-9_.-]+)$"
 )
+
+
+def _lock_descriptor(descriptor: int) -> None:
+    """Block until this process exclusively owns the persistent lock file."""
+
+    if sys.platform == "win32":
+        # LK_LOCK gives up after roughly ten seconds. A bootstrap can take much
+        # longer, so retry the non-blocking operation until the owner exits.
+        while True:
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            try:
+                msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+                return
+            except OSError as exc:
+                if exc.errno not in {13, 33, 36}:
+                    raise
+                time.sleep(0.1)
+    else:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+
+
+def _unlock_descriptor(descriptor: int) -> None:
+    if sys.platform == "win32":
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+    else:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+
+
+def _repository_git_directory(root: Path) -> Path | None:
+    marker = root / ".git"
+    if marker.is_dir():
+        return marker
+    if marker.is_file():
+        try:
+            label, value = marker.read_text(encoding="utf-8").strip().split(":", 1)
+            if label.strip().lower() == "gitdir":
+                git_dir = Path(value.strip())
+                if not git_dir.is_absolute():
+                    git_dir = marker.parent / git_dir
+                return git_dir.resolve()
+        except (OSError, ValueError):
+            pass
+    return None
+
+
+def _bootstrap_lock_path(environment: Path) -> Path:
+    """Locate a persistent lock named for the canonical environment path."""
+
+    canonical = environment.expanduser().resolve()
+    identity = os.path.normcase(str(canonical)).encode("utf-8")
+    suffix = hashlib.sha256(identity).hexdigest()
+    git_dir = _repository_git_directory(REPO_ROOT)
+    if git_dir is not None:
+        # Git metadata is persistent but never dirties the checkout.
+        return git_dir / f"{LOCK_NAME_PREFIX}{suffix}.lock"
+    # A source archive has no Git status to dirty. Keep the lock outside the
+    # not-yet-created environment so validation cannot mistake it for a venv.
+    return REPO_ROOT / f".{LOCK_NAME_PREFIX}{suffix}.lock"
+
+
+@contextmanager
+def _bootstrap_lock(environment: Path) -> Iterator[None]:
+    """Serialize every inspection and mutation of one resolved environment."""
+
+    path = _bootstrap_lock_path(environment)
+    try:
+        descriptor = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    except OSError as exc:
+        raise RuntimeError(f"Could not open bootstrap lock {path}: {exc}") from exc
+    locked = False
+    try:
+        # Windows byte-range locks require the locked byte to exist.
+        if os.fstat(descriptor).st_size == 0:
+            os.write(descriptor, b"\0")
+        try:
+            _lock_descriptor(descriptor)
+            locked = True
+        except OSError as exc:
+            raise RuntimeError(f"Could not acquire bootstrap lock {path}: {exc}") from exc
+        yield
+    finally:
+        if locked:
+            try:
+                _unlock_descriptor(descriptor)
+            except OSError:
+                # Closing also releases the OS lock.
+                pass
+        os.close(descriptor)
 
 
 def _venv_python(environment: Path) -> Path:
@@ -167,7 +265,11 @@ def _locked_git_commits() -> dict[str, str]:
 
 
 def _validate(
-    environment: Path, expected_fingerprint: str, allow_fast_path: bool = True
+    environment: Path,
+    expected_fingerprint: str,
+    allow_fast_path: bool = True,
+    *,
+    record_evidence: bool = True,
 ) -> tuple[bool, str]:
     """Is this environment ready to serve?
 
@@ -232,7 +334,8 @@ def _validate(
     # earlier bootstrap -- or simply one that was already correct -- would pay
     # the two subprocesses forever, because nothing else rewrites the stamp on
     # a successful check.
-    _record_validated_evidence(environment, expected_fingerprint)
+    if record_evidence:
+        _record_validated_evidence(environment, expected_fingerprint)
     return True, "ready"
 
 
@@ -279,6 +382,12 @@ def _write_stamp(
 
 
 def bootstrap(environment: Path, *, force: bool = False) -> None:
+    environment = environment.expanduser().resolve()
+    with _bootstrap_lock(environment):
+        _bootstrap_locked(environment, force=force)
+
+
+def _bootstrap_locked(environment: Path, *, force: bool = False) -> None:
     _require_supported_python()
     fingerprint = _fingerprint()
     valid, reason = _validate(environment, fingerprint)
@@ -296,6 +405,11 @@ def bootstrap(environment: Path, *, force: bool = False) -> None:
         print(f"Creating CPython {PYTHON_SERIES[0]}.{PYTHON_SERIES[1]} environment at {environment}")
         venv.EnvBuilder(with_pip=True).create(environment)
 
+    # Once pip starts mutating an environment, its previous proof is no longer
+    # valid. In particular, a failed --force reinstall uses the same manifest
+    # fingerprint; leaving the old stamp behind could let the cheap evidence
+    # path approve the half-reinstalled environment on the next launch.
+    (environment / STAMP_NAME).unlink(missing_ok=True)
     print(f"Installing locked dependencies ({reason})")
     commands = (
         [str(python), "-m", "pip", "install", f"pip=={PIP_VERSION}"],
@@ -350,7 +464,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         fingerprint = _fingerprint()
         if args.check:
-            valid, reason = _validate(environment, fingerprint)
+            with _bootstrap_lock(environment):
+                valid, reason = _validate(
+                    environment, fingerprint, record_evidence=False
+                )
             if valid:
                 print(f"Waveguide Generator v2 environment is ready: {environment}")
                 return 0

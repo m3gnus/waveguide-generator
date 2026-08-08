@@ -455,3 +455,14 @@ def test_chart_routes_expose_ten_themes_and_use_hornlab_plots(monkeypatch) -> No
         ("charts", "blueprint"),
         ("directivity", "sepia"),
     ]
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_chart_requests_reject_nonfinite_typed_and_legacy_values(value: float) -> None:
+    with pytest.raises(ValidationError, match="finite"):
+        charts_api.ChartsRenderRequest(frequencies=[value])
+    with pytest.raises(ValidationError, match="finite"):
+        charts_api.DirectivityRenderRequest(
+            frequencies=[100.0],
+            directivity={"horizontal": [[[0.0, value]]]},
+        )

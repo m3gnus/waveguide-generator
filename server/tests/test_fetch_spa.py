@@ -214,6 +214,50 @@ def test_check_reports_a_locally_built_dist_as_unrecorded(checkout, release, cap
     assert "an unrecorded build" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize(
+    ("stamp", "message"),
+    [
+        ({"version": "1.9.9", "sha256": "a" * 64}, "not 2.0.0"),
+        ({"version": "2.0.0"}, "no valid verified-archive checksum"),
+        (
+            {"version": "2.0.0", "sha256": "not-a-sha256"},
+            "no valid verified-archive checksum",
+        ),
+    ],
+)
+def test_check_rejects_stale_or_unverified_stamps(checkout, capsys, stamp, message):
+    dist = checkout / "frontend" / "dist"
+    dist.mkdir(parents=True)
+    (dist / "index.html").write_text("existing interface", encoding="utf-8")
+    (dist / fetch_spa.STAMP_NAME).write_text(json.dumps(stamp), encoding="utf-8")
+
+    assert fetch_spa.main(["--root", str(checkout), "--check"]) == 1
+    assert message in capsys.readouterr().err
+
+
+def test_check_accepts_a_matching_checksum_verified_stamp(checkout, release, capsys):
+    release()
+    assert _install(checkout, release) == 0
+    capsys.readouterr()
+
+    assert fetch_spa.main(["--root", str(checkout), "--check"]) == 0
+    assert "SPA 2.0.0 is installed" in capsys.readouterr().out
+
+
+def test_normal_install_does_not_trust_a_version_only_stamp(checkout, release, capsys):
+    dist = checkout / "frontend" / "dist"
+    dist.mkdir(parents=True)
+    (dist / "index.html").write_text("old interface", encoding="utf-8")
+    (dist / fetch_spa.STAMP_NAME).write_text(
+        json.dumps({"version": "2.0.0"}), encoding="utf-8"
+    )
+
+    assert _install(checkout, release) == 2
+    captured = capsys.readouterr()
+    assert "No release asset was found" in captured.err
+    assert "already installed" not in captured.out
+
+
 def test_a_local_archive_still_has_to_prove_itself(tmp_path, checkout, release, capsys):
     archive = release()
     orphan = tmp_path / "downloads" / archive.name

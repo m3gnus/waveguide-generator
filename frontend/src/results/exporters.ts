@@ -144,16 +144,25 @@ async function responseError(response: Response): Promise<Error> {
   return new Error(detail);
 }
 
-async function postGeometry(context: ExportContext, kind: 'step' | 'stl' | 'profiles', filename: string, profileKind?: 'profiles' | 'slices'): Promise<string> {
+interface GeometryDownload {
+  blob: Blob;
+  filename: string;
+}
+
+async function fetchGeometry(context: ExportContext, kind: 'step' | 'stl' | 'profiles', filename: string, profileKind?: 'profiles' | 'slices'): Promise<GeometryDownload> {
   if (!context.design) throw new Error('This export requires a saved design snapshot.');
   const fetcher = context.fetcher ?? fetch;
   const baseName = exportBaseName(context.preferences);
   const query = kind === 'profiles' ? `?kind=${profileKind ?? 'profiles'}` : '';
   const response = await fetcher(`/api/export/${kind}${query}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ design: serializeDesign(context.design), designRevision: context.designRevision ?? 0, baseName }) });
   if (!response.ok) throw await responseError(response);
-  const output = filenameFromResponse(response, filename);
-  (context.saveBlob ?? downloadBlob)(await response.blob(), output);
-  return output;
+  return { blob: await response.blob(), filename: filenameFromResponse(response, filename) };
+}
+
+async function postGeometry(context: ExportContext, kind: 'step' | 'stl' | 'profiles', filename: string, profileKind?: 'profiles' | 'slices'): Promise<string> {
+  const output = await fetchGeometry(context, kind, filename, profileKind);
+  (context.saveBlob ?? downloadBlob)(output.blob, output.filename);
+  return output.filename;
 }
 
 function requireResult(context: ExportContext): ResultPayload {
@@ -246,7 +255,18 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
   }
   if (format === 'step') return [await postGeometry(context, 'step', `${baseName}.step`)];
   if (format === 'stl') return [await postGeometry(context, 'stl', `${baseName}.stl`)];
-  if (format === 'fusion_csv') return [await postGeometry(context, 'profiles', `${baseName}_profiles.csv`, 'profiles'), await postGeometry(context, 'profiles', `${baseName}_slices.csv`, 'slices')];
+  if (format === 'fusion_csv') {
+    // Fetch both halves before triggering either browser download. Otherwise a
+    // failed slices request leaves an untracked profiles file that is duplicated
+    // when the format is retried in a later app session.
+    const outputs = await Promise.all([
+      fetchGeometry(context, 'profiles', `${baseName}_profiles.csv`, 'profiles'),
+      fetchGeometry(context, 'profiles', `${baseName}_slices.csv`, 'slices'),
+    ]);
+    const saveBlob = context.saveBlob ?? downloadBlob;
+    outputs.forEach((output) => saveBlob(output.blob, output.filename));
+    return outputs.map((output) => output.filename);
+  }
   if (format === 'png') return chartPng(context);
   const result = requireResult(context);
   const builders: Record<Exclude<ExportFormat, 'mwg_config' | 'step' | 'stl' | 'fusion_csv' | 'png'>, [string, string, string]> = {

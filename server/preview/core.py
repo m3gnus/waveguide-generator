@@ -425,12 +425,28 @@ class PreviewProtocol:
         preview_builder: Callable[[Mapping[str, Any], Any], Any] | None = None,
         preview_service: PreviewComputeService | None = None,
     ) -> None:
-        if heartbeat_seconds <= 0:
-            raise ValueError("heartbeat_seconds must be positive")
-        if max_frame_bytes <= 0:
-            raise ValueError("max_frame_bytes must be positive")
-        self.epoch = next(_EPOCHS) if epoch is None else epoch
-        self.heartbeat_seconds = heartbeat_seconds
+        if (
+            isinstance(heartbeat_seconds, bool)
+            or not isinstance(heartbeat_seconds, (int, float))
+            or not math.isfinite(heartbeat_seconds)
+            or heartbeat_seconds <= 0
+        ):
+            raise ValueError("heartbeat_seconds must be a finite positive number")
+        if (
+            isinstance(max_frame_bytes, bool)
+            or not isinstance(max_frame_bytes, int)
+            or max_frame_bytes <= 0
+        ):
+            raise ValueError("max_frame_bytes must be a positive integer")
+        resolved_epoch = next(_EPOCHS) if epoch is None else epoch
+        if (
+            isinstance(resolved_epoch, bool)
+            or not isinstance(resolved_epoch, int)
+            or resolved_epoch < 1
+        ):
+            raise ValueError("epoch must be a positive integer")
+        self.epoch = resolved_epoch
+        self.heartbeat_seconds = float(heartbeat_seconds)
         self.max_frame_bytes = max_frame_bytes
         self._preview_builder = preview_builder
         self._preview_builder_namespace = (
@@ -535,7 +551,13 @@ class PreviewProtocol:
                     await self._close(CLOSE_TOO_LARGE)
                     return False
                 value = json.loads(wire)
-        except (TypeError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        except (
+            TypeError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+            RecursionError,
+            ValueError,
+        ) as exc:
             await self._error(None, None, "validation", fields={"message": str(exc)})
             return True
         if len(wire) > self.max_frame_bytes:
@@ -584,7 +606,7 @@ class PreviewProtocol:
                 try:
                     migrated, _applications = apply_migrations(parsed.design)
                     design = DesignConfig.model_validate(migrated)
-                except (ValidationError, ValueError) as exc:
+                except (ValidationError, RecursionError, ValueError) as exc:
                     fields = (
                         _validation_fields(exc, prefix="design")
                         if isinstance(exc, ValidationError)

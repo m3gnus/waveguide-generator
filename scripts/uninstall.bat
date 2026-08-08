@@ -16,6 +16,7 @@ set "REMOVE_DATA="
 set "ASSUME_YES="
 set "DATA_DIR="
 set "REMOVED_ANY="
+set "REMOVE_FAILED="
 
 :parse_args
 if "%~1"=="" goto args_done
@@ -55,11 +56,15 @@ set "WG_ROOT=%CD%"
 
 if not defined REMOVE_DATA goto data_dir_done
 call :resolve_data_dir
-if defined DATA_DIR goto data_dir_done
+if defined DATA_DIR goto check_data_dir_exists
+if defined DATA_DIR_UNSAFE goto unsafe_data_dir
 echo WARNING: could not ask v2 where its data directory is -- no usable Python.
 echo          Remove it by hand. Unless WG2_DATA_DIR overrides it, it is:
 echo            %APPDATA%\WaveguideGenerator2
 echo.
+goto data_dir_done
+:check_data_dir_exists
+if not exist "%DATA_DIR%\" set "DATA_DIR="
 :data_dir_done
 
 set "HAS_TARGETS="
@@ -91,6 +96,7 @@ if exist "frontend\dist\" call :remove_tree "%WG_ROOT%\frontend\dist"
 if exist "frontend\.wg2-spa-staging\" call :remove_tree "%WG_ROOT%\frontend\.wg2-spa-staging"
 if exist "frontend\.wg2-dist-previous\" call :remove_tree "%WG_ROOT%\frontend\.wg2-dist-previous"
 if defined DATA_DIR call :remove_tree "%DATA_DIR%"
+if defined REMOVE_FAILED goto removal_incomplete
 echo.
 echo Done. Reinstall any time with: scripts\install-and-update.bat
 exit /b 0
@@ -114,6 +120,7 @@ exit /b 0
 echo   WARNING: could not remove %~1
 echo            Close anything using it -- an editor, a terminal sitting in it,
 echo            a running server, or an antivirus scan -- and try again.
+set "REMOVE_FAILED=1"
 exit /b 0
 
 :resolve_data_dir
@@ -128,24 +135,51 @@ rem below starts with a bare command name; the repository-local interpreter is
 rem reached by a relative path, which cannot contain a space.
 if exist ".venv\Scripts\python.exe" call :ask_venv_python
 if defined DATA_DIR exit /b 0
+if defined DATA_DIR_UNSAFE exit /b 0
 where py >nul 2>&1
 if not errorlevel 1 call :ask_py_launcher
 if defined DATA_DIR exit /b 0
+if defined DATA_DIR_UNSAFE exit /b 0
 where python >nul 2>&1
 if not errorlevel 1 call :ask_path_python
 exit /b 0
 
 :ask_venv_python
 for /f "delims=" %%d in ('.venv\Scripts\python.exe -c "import sys; sys.path.insert(0, sys.argv[1]); from server.platform.paths import resolve_data_dir; print(resolve_data_dir())" "%WG_ROOT%" 2^>nul') do if not defined DATA_DIR set "DATA_DIR=%%d"
+if not defined DATA_DIR exit /b 0
+".venv\Scripts\python.exe" "%WG_ROOT%\scripts\validate_uninstall_target.py" --repo-root "%WG_ROOT%" "%DATA_DIR%" >nul
+if errorlevel 1 call :reject_data_dir
 exit /b 0
 
 :ask_py_launcher
 for /f "delims=" %%d in ('py -3.13 -c "import sys; sys.path.insert(0, sys.argv[1]); from server.platform.paths import resolve_data_dir; print(resolve_data_dir())" "%WG_ROOT%" 2^>nul') do if not defined DATA_DIR set "DATA_DIR=%%d"
+if not defined DATA_DIR exit /b 0
+py -3.13 "%WG_ROOT%\scripts\validate_uninstall_target.py" --repo-root "%WG_ROOT%" "%DATA_DIR%" >nul
+if errorlevel 1 call :reject_data_dir
 exit /b 0
 
 :ask_path_python
 for /f "delims=" %%d in ('python -c "import sys; sys.path.insert(0, sys.argv[1]); from server.platform.paths import resolve_data_dir; print(resolve_data_dir())" "%WG_ROOT%" 2^>nul') do if not defined DATA_DIR set "DATA_DIR=%%d"
+if not defined DATA_DIR exit /b 0
+python "%WG_ROOT%\scripts\validate_uninstall_target.py" --repo-root "%WG_ROOT%" "%DATA_DIR%" >nul
+if errorlevel 1 call :reject_data_dir
 exit /b 0
+
+:reject_data_dir
+set "DATA_DIR="
+set "DATA_DIR_UNSAFE=1"
+exit /b 0
+
+:unsafe_data_dir
+echo ERROR: No files were removed. Set WG2_DATA_DIR to the application's actual
+echo        data folder, then run the uninstaller again.
+exit /b 1
+
+:removal_incomplete
+echo.
+echo ERROR: Uninstall was incomplete. One or more targets listed above remain.
+echo        Close anything using them and run this uninstaller again.
+exit /b 1
 
 :bad_directory
 echo ERROR: Could not enter the project folder.
