@@ -19,7 +19,7 @@ from server import app as app_module
 from server.engines.dryrun import DryRunEngine
 from server.engines.registry import EngineInfo
 from server.mesh.gmsh_worker import shutdown_gmsh_worker
-from server.platform import instance, logging_setup
+from server.platform import console, instance, logging_setup
 from server.platform.instance import (
     InstanceAlreadyRunning,
     InstanceInfo,
@@ -34,6 +34,66 @@ from server.platform.signal_rearm import (
     unregister_signal_rearm,
 )
 from server.protocol.frame import DEFAULT_MAX_FRAME_BYTES
+
+
+def test_console_close_handler_waits_for_shutdown_completion() -> None:
+    shutdown_requested = threading.Event()
+    shutdown_complete = threading.Event()
+    result: list[bool] = []
+    handler = console._make_close_handler(
+        shutdown_requested.set,
+        shutdown_complete,
+        timeout_seconds=2.0,
+    )
+
+    worker = threading.Thread(
+        target=lambda: result.append(handler(console.CTRL_CLOSE_EVENT)),
+        daemon=True,
+    )
+    worker.start()
+
+    assert shutdown_requested.wait(1.0)
+    assert worker.is_alive()
+    shutdown_complete.set()
+    worker.join(1.0)
+
+    assert not worker.is_alive()
+    assert result == [True]
+
+
+def test_console_close_handler_returns_and_logs_after_timeout(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    shutdown_requested = threading.Event()
+    timeout_seconds = 0.02
+    handler = console._make_close_handler(
+        shutdown_requested.set,
+        threading.Event(),
+        timeout_seconds=timeout_seconds,
+    )
+    result: list[bool] = []
+    worker = threading.Thread(
+        target=lambda: result.append(handler(console.CTRL_SHUTDOWN_EVENT)),
+        daemon=True,
+    )
+
+    with caplog.at_level(logging.WARNING, logger="wg2.console"):
+        worker.start()
+        worker.join(1.0)
+
+    assert not worker.is_alive(), "the handler exceeded its injected timeout"
+    assert result == [True]
+    assert shutdown_requested.is_set()
+    assert "graceful shutdown window exceeded" in caplog.text
+
+
+@pytest.mark.parametrize("event", [console.CTRL_C_EVENT, console.CTRL_BREAK_EVENT])
+def test_console_close_handler_leaves_interrupt_events_unhandled(event: int) -> None:
+    def unexpected_shutdown() -> None:
+        raise AssertionError("Ctrl+C and Ctrl+Break belong to the signal handlers")
+
+    handler = console._make_close_handler(unexpected_shutdown, threading.Event())
+    assert handler(event) is False
 
 
 def test_advisory_lock_rejects_partially_written_live_owner(tmp_path: Path) -> None:
@@ -202,6 +262,7 @@ def test_launcher_aligns_websocket_transport_limits_with_frame_protocol(
     app_kwargs: dict[str, Any] = {}
     listener_closed = False
     lock_released = False
+    console_shutdown_complete: threading.Event | None = None
 
     class FakeListener:
         def close(self) -> None:
@@ -231,6 +292,13 @@ def test_launcher_aligns_websocket_transport_limits_with_frame_protocol(
         app_kwargs.update(kwargs)
         return object()
 
+    def capture_console_handler(
+        _request_shutdown: Any, shutdown_complete: threading.Event
+    ) -> None:
+        nonlocal console_shutdown_complete
+        assert not shutdown_complete.is_set()
+        console_shutdown_complete = shutdown_complete
+
     class FakeServer:
         def __init__(self, _config: Any) -> None:
             self.should_exit = False
@@ -248,7 +316,7 @@ def test_launcher_aligns_websocket_transport_limits_with_frame_protocol(
     monkeypatch.setattr(serve, "create_app", create_application)
     monkeypatch.setattr(serve.uvicorn, "Config", capture_config)
     monkeypatch.setattr(serve.uvicorn, "Server", FakeServer)
-    monkeypatch.setattr(serve, "harden_console", lambda _callback: None)
+    monkeypatch.setattr(serve, "harden_console", capture_console_handler)
 
     assert serve.main(["--no-browser"]) == 0
     assert config_kwargs["ws_max_size"] == DEFAULT_MAX_FRAME_BYTES
@@ -256,6 +324,8 @@ def test_launcher_aligns_websocket_transport_limits_with_frame_protocol(
     assert app_kwargs["solver_warmup"] is False
     assert listener_closed is True
     assert lock_released is True
+    assert console_shutdown_complete is not None
+    assert console_shutdown_complete.is_set()
 
 
 def test_registered_native_signal_rearm_callbacks_are_removable() -> None:
