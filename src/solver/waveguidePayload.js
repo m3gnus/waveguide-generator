@@ -15,7 +15,14 @@ function toNumberOrExpr(value, fallback) {
     return expr !== undefined ? expr : fallback;
   }
   const numeric = Number(value);
-  return Number.isFinite(numeric) ? numeric : fallback;
+  if (Number.isFinite(numeric)) return numeric;
+  // A non-numeric string is an azimuth expression, which the mesher evaluates
+  // per phi. Both prepared representations reach here: the backend-mesh params
+  // keep the raw text, while prepareGeometryParams compiles to a function with
+  // _rawExpr. Falling back on either one silently substitutes a default for
+  // the user's formula.
+  if (typeof value === 'string' && value.trim() !== '') return value.trim();
+  return fallback;
 }
 
 function toFiniteNumber(value, fallback) {
@@ -118,32 +125,41 @@ export function buildWaveguidePayload(preparedParams, mshVersion = '2.2') {
     rot: toNumberOrExpr(preparedParams.rot, 0),
 
     // Circular arc
-    circ_arc_term_angle: toFiniteNumber(preparedParams.circArcTermAngle, 1),
-    circ_arc_radius: toFiniteNumber(preparedParams.circArcRadius, 0),
+    // Every field below that FORMULA_FIELD_ALLOWLIST marks as formula-capable
+    // must go through toNumberOrExpr/toExprString, never toFiniteNumber: a
+    // prepared expression is a compiled function, so Number(fn) is NaN and the
+    // fallback would silently replace the user's formula (and String(fn) would
+    // ship the closure source to the mesher). The payload is the only crossing
+    // between the JS viewport and the Python mesher, so a value dropped here
+    // makes the solved mesh disagree with what is on screen.
+    circ_arc_term_angle: toNumberOrExpr(preparedParams.circArcTermAngle, 1),
+    circ_arc_radius: toNumberOrExpr(preparedParams.circArcRadius, 0),
 
     // Guiding curve
     gcurve_type: toFiniteNumber(preparedParams.gcurveType, 0),
-    gcurve_dist: toFiniteNumber(preparedParams.gcurveDist, 0.5),
-    gcurve_width: toFiniteNumber(preparedParams.gcurveWidth, 0),
-    gcurve_aspect_ratio: toFiniteNumber(preparedParams.gcurveAspectRatio, 1),
-    gcurve_se_n: toFiniteNumber(preparedParams.gcurveSeN, 3),
-    gcurve_sf: preparedParams.gcurveSf != null ? String(preparedParams.gcurveSf) : undefined,
-    gcurve_sf_a: preparedParams.gcurveSfA != null ? String(preparedParams.gcurveSfA) : undefined,
-    gcurve_sf_b: preparedParams.gcurveSfB != null ? String(preparedParams.gcurveSfB) : undefined,
-    gcurve_sf_m1: preparedParams.gcurveSfM1 != null ? String(preparedParams.gcurveSfM1) : undefined,
-    gcurve_sf_m2: preparedParams.gcurveSfM2 != null ? String(preparedParams.gcurveSfM2) : undefined,
-    gcurve_sf_n1: preparedParams.gcurveSfN1 != null ? String(preparedParams.gcurveSfN1) : undefined,
-    gcurve_sf_n2: preparedParams.gcurveSfN2 != null ? String(preparedParams.gcurveSfN2) : undefined,
-    gcurve_sf_n3: preparedParams.gcurveSfN3 != null ? String(preparedParams.gcurveSfN3) : undefined,
-    gcurve_rot: toFiniteNumber(preparedParams.gcurveRot, 0),
+    // Unset means "at the mouth" (1.0) in both engines; see the JS default in
+    // profiles/osse.js and hornlab_mesher.profile_morph.
+    gcurve_dist: toNumberOrExpr(preparedParams.gcurveDist, 1),
+    gcurve_width: toNumberOrExpr(preparedParams.gcurveWidth, 0),
+    gcurve_aspect_ratio: toNumberOrExpr(preparedParams.gcurveAspectRatio, 1),
+    gcurve_se_n: toNumberOrExpr(preparedParams.gcurveSeN, 3),
+    gcurve_sf: toExprString(preparedParams.gcurveSf),
+    gcurve_sf_a: toExprString(preparedParams.gcurveSfA),
+    gcurve_sf_b: toExprString(preparedParams.gcurveSfB),
+    gcurve_sf_m1: toExprString(preparedParams.gcurveSfM1),
+    gcurve_sf_m2: toExprString(preparedParams.gcurveSfM2),
+    gcurve_sf_n1: toExprString(preparedParams.gcurveSfN1),
+    gcurve_sf_n2: toExprString(preparedParams.gcurveSfN2),
+    gcurve_sf_n3: toExprString(preparedParams.gcurveSfN3),
+    gcurve_rot: toNumberOrExpr(preparedParams.gcurveRot, 0),
 
     // Morph
     morph_target: toFiniteNumber(preparedParams.morphTarget, 0),
-    morph_width: toFiniteNumber(preparedParams.morphWidth, 0),
-    morph_height: toFiniteNumber(preparedParams.morphHeight, 0),
-    morph_corner: toFiniteNumber(preparedParams.morphCorner, 0),
-    morph_rate: toFiniteNumber(preparedParams.morphRate, 3.0),
-    morph_fixed: toFiniteNumber(preparedParams.morphFixed, 0),
+    morph_width: toNumberOrExpr(preparedParams.morphWidth, 0),
+    morph_height: toNumberOrExpr(preparedParams.morphHeight, 0),
+    morph_corner: toNumberOrExpr(preparedParams.morphCorner, 0),
+    morph_rate: toNumberOrExpr(preparedParams.morphRate, 3.0),
+    morph_fixed: toNumberOrExpr(preparedParams.morphFixed, 0),
     morph_allow_shrinkage: toFiniteNumber(preparedParams.morphAllowShrinkage, 0),
 
     // Geometry grid

@@ -482,14 +482,19 @@ class WaveguideParamsRequest(BaseModel):
     slot_length: Union[float, str] = 0.0
     rot: Union[float, str] = 0.0
 
-    circ_arc_term_angle: float = 1.0
-    circ_arc_radius: float = 0.0
+    # Union[float, str] on every field the UI offers a formula editor for
+    # (FORMULA_FIELD_ALLOWLIST in src/config/schema.js): the mesher evaluates
+    # these per azimuth, so narrowing one to float here silently discards the
+    # user's expression on the way in.
+    circ_arc_term_angle: Union[float, str] = 1.0
+    circ_arc_radius: Union[float, str] = 0.0
 
     gcurve_type: int = 0
-    gcurve_dist: float = 0.5
-    gcurve_width: float = 0.0
-    gcurve_aspect_ratio: float = 1.0
-    gcurve_se_n: float = 3.0
+    # Unset is "at the mouth" in both engines, not mid-length.
+    gcurve_dist: Union[float, str] = 1.0
+    gcurve_width: Union[float, str] = 0.0
+    gcurve_aspect_ratio: Union[float, str] = 1.0
+    gcurve_se_n: Union[float, str] = 3.0
     gcurve_sf: Optional[str] = None
     gcurve_sf_a: Optional[str] = None
     gcurve_sf_b: Optional[str] = None
@@ -498,14 +503,14 @@ class WaveguideParamsRequest(BaseModel):
     gcurve_sf_n1: Optional[str] = None
     gcurve_sf_n2: Optional[str] = None
     gcurve_sf_n3: Optional[str] = None
-    gcurve_rot: float = 0.0
+    gcurve_rot: Union[float, str] = 0.0
 
     morph_target: int = 0
-    morph_width: float = 0.0
-    morph_height: float = 0.0
-    morph_corner: float = 0.0
-    morph_rate: float = 3.0
-    morph_fixed: float = 0.0
+    morph_width: Union[float, str] = 0.0
+    morph_height: Union[float, str] = 0.0
+    morph_corner: Union[float, str] = 0.0
+    morph_rate: Union[float, str] = 3.0
+    morph_fixed: Union[float, str] = 0.0
     morph_allow_shrinkage: int = 0
 
     n_angular: int = 100
