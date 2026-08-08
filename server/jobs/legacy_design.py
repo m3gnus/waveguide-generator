@@ -166,11 +166,20 @@ def resolve_job_design(
     """Resolve one job's design, memoised on the stored bytes.
 
     Conversion runs the ATH writer, the text parser and full model validation:
-    about 2 ms per design here, which the job list and every fresh WebSocket
+    about 2 ms per *legacy* design, which the job list and every fresh WebSocket
     snapshot would otherwise pay for every row, every time, on the event loop.
-    The stored design never changes for a finished job, so the cache key is the
-    stored material itself rather than the job id -- a rerun that rewrites the
-    column simply misses.
+    Measured over the 31-job reference import, one snapshot costs 69 ms cold and
+    3.4 ms warm. A natively solved job never pays it at all -- it is recognised
+    structurally -- so the cold cost scales with imported jobs, not with history.
+
+    The cache key is the stored material rather than the job id, because the
+    stored design does not change for a finished job and a rerun that rewrites
+    the column should simply miss.
+
+    The returned ``snapshot`` is **shared** with every other caller holding the
+    same bytes. Every consumer today serialises it -- through a FastAPI response
+    model, or straight to JSON on the jobs socket -- and none mutates it; a
+    caller that wants to edit one must copy it first.
     """
 
     if snapshot is None and config is None:
