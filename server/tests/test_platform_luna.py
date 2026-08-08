@@ -28,6 +28,11 @@ from server.platform.instance import (
 )
 from server.platform.origin import local_origin
 from server.platform.paths import ensure_data_layout
+from server.platform.signal_rearm import (
+    rearm_registered_signals,
+    register_signal_rearm,
+    unregister_signal_rearm,
+)
 
 
 def test_advisory_lock_rejects_partially_written_live_owner(tmp_path: Path) -> None:
@@ -152,6 +157,29 @@ def test_launcher_checks_lock_conflict_before_port_binding(
     monkeypatch.setattr(serve, "reserve_port", reserve)
     assert serve.main(["--no-browser"]) == 2
     assert bound is False
+
+
+def test_launcher_stops_log_listener_on_early_port_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Port validation happens after logging starts and must still drain it."""
+
+    monkeypatch.setenv("WG2_PORT", "not-a-port")
+
+    assert serve.main(["--no-browser", "--data-dir", str(tmp_path)]) == 1
+    assert logging_setup._listener is None
+
+
+def test_registered_native_signal_rearm_callbacks_are_removable() -> None:
+    calls: list[str] = []
+    token = register_signal_rearm(lambda: calls.append("rearmed"))
+    try:
+        rearm_registered_signals()
+    finally:
+        unregister_signal_rearm(token)
+    rearm_registered_signals()
+
+    assert calls == ["rearmed"]
 
 
 def test_port_reservation_retries_bind_failures_without_real_sockets(

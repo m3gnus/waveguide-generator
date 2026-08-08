@@ -1,4 +1,4 @@
-"""Pay the solver's one-off per-process start-up cost at boot, not at Solve.
+"""Pay the selected solver's one-off per-process start-up cost at boot, not at Solve.
 
 ``docs/WINDOWS-VALIDATION.md`` check 12 measured the problem this exists to
 fix. The first bempp solve after every server start spends a long time inside
@@ -27,7 +27,9 @@ potential-operator evaluation            ~0.5 s
 
 Running one real end-to-end solve is therefore the warmup: it is the only
 thing that touches every one of those paths in the same order a user's solve
-will.
+will. The engine must match AUTO resolution. Apple Silicon normally resolves
+to Metal; warming the fallback BEMPP engine there wastes several seconds and
+does not remove Metal's smaller first-solve cost.
 
 Deliberately a plain daemon thread rather than ``asyncio.to_thread``. The
 default executor's threads are joined during interpreter shutdown, so a
@@ -110,36 +112,74 @@ def _log_handlers() -> tuple[logging.Handler, ...]:
     return tuple(dict.fromkeys(handlers))
 
 
+def _warm_metal() -> None:
+    """Run the same native Metal formulation used by a real application solve."""
+
+    from hornlab_metal_bem import ObservationConfig, native_config, solve
+
+    from .formulation import DEFAULT_BEM_FORMULATION, DEFAULT_COMPLEX_K_SHIFT
+
+    config = native_config(
+        freq_min_hz=WARMUP_FREQUENCY_HZ,
+        freq_max_hz=WARMUP_FREQUENCY_HZ,
+        freq_count=1,
+        observation=ObservationConfig(),
+        formulation=DEFAULT_BEM_FORMULATION,
+        complex_k_shift=DEFAULT_COMPLEX_K_SHIFT,
+    )
+    solve(str(WARMUP_MESH), config)
+
+
+def _warm_bempp(status: dict[str, object]) -> None:
+    """Compile and exercise the BEMPP fallback selected on non-Metal hosts."""
+
+    backend = status.get("assembly_backend") or "opencl"
+    from hornlab_bempp_bem import ObservationConfig, SolveConfig, solve
+
+    config = SolveConfig(
+        freq_min_hz=WARMUP_FREQUENCY_HZ,
+        freq_max_hz=WARMUP_FREQUENCY_HZ,
+        freq_count=1,
+        observation=ObservationConfig(),
+        assembly_backend=backend,
+        opencl_device="cpu",
+        precision="single",
+        # Never spawn. A worker process would re-pay every cost this
+        # warmup exists to pay once, and would do it while the user is
+        # trying to use the application.
+        workers=1,
+    )
+    solve(str(WARMUP_MESH), config)
+
+
 def _run_warmup() -> None:
     began = time.monotonic()
     handlers = _log_handlers()
     for handler in handlers:
         handler.addFilter(_quiet_filter)
     try:
-        from server.solver import bempp as bempp_adapter
+        # Match EngineRegistry.resolve_auto_engine's priority without probing
+        # every optional stack up front. In particular, do not import or
+        # initialize BEMPP when Metal is the engine the first user solve takes.
+        from server.solver import metal as metal_adapter
 
-        status = bempp_adapter.bempp_status()
-        if not status.get("available"):
-            log.info("Solver warmup skipped: %s", status.get("reason"))
-            return
-        backend = status.get("assembly_backend") or "opencl"
+        metal_status = metal_adapter.metal_status()
+        if metal_status.get("available"):
+            engine = "Metal"
+            _warm_metal()
+        else:
+            from server.solver import bempp as bempp_adapter
 
-        from hornlab_bempp_bem import ObservationConfig, SolveConfig, solve
-
-        config = SolveConfig(
-            freq_min_hz=WARMUP_FREQUENCY_HZ,
-            freq_max_hz=WARMUP_FREQUENCY_HZ,
-            freq_count=1,
-            observation=ObservationConfig(),
-            assembly_backend=backend,
-            opencl_device="cpu",
-            precision="single",
-            # Never spawn. A worker process would re-pay every cost this
-            # warmup exists to pay once, and would do it while the user is
-            # trying to use the application.
-            workers=1,
-        )
-        solve(str(WARMUP_MESH), config)
+            bempp_status = bempp_adapter.bempp_status()
+            if not bempp_status.get("available"):
+                log.info(
+                    "Solver warmup skipped: Metal: %s; BEMPP: %s",
+                    metal_status.get("reason"),
+                    bempp_status.get("reason"),
+                )
+                return
+            engine = "BEMPP"
+            _warm_bempp(bempp_status)
     except Exception as exc:  # noqa: BLE001 - a warmup is an optimisation
         # Whatever failed here will fail again at the real call site, where the
         # message reaches the user attached to their job. The same policy as
@@ -150,8 +190,9 @@ def _run_warmup() -> None:
         for handler in handlers:
             handler.removeFilter(_quiet_filter)
     log.info(
-        "Solver warmup finished in %.1f s; the first solve no longer pays for kernel "
-        "compilation",
+        "%s solver warmup finished in %.1f s; the first solve no longer pays its "
+        "one-off initialization cost",
+        engine,
         time.monotonic() - began,
     )
 

@@ -46,6 +46,17 @@ def json_safe_native_value(value: Any) -> Any:
     if isinstance(value, np.generic):
         return json_safe_native_value(value.item())
     if isinstance(value, np.ndarray):
+        if value.dtype.kind in "biu":
+            return value.tolist()
+        if value.dtype.kind == "f":
+            if value.ndim == 0:
+                return json_safe_native_value(value.item())
+            finite = np.isfinite(value)
+            if bool(np.all(finite)):
+                return value.tolist()
+            output = value.astype(object)
+            output[~finite] = None
+            return output.tolist()
         return json_safe_native_value(value.tolist())
     if isinstance(value, dict):
         return {str(key): json_safe_native_value(item) for key, item in value.items()}
@@ -269,27 +280,27 @@ def directivity(result: Any) -> dict[str, list[list[list[float | None]]]]:
         return {}
     if angles.ndim != 1 or values.ndim != 3:
         return {}
-    finite_angle_indices = [
-        index for index, angle in enumerate(angles) if math.isfinite(float(angle))
-    ]
+    finite_angle_indices = np.flatnonzero(np.isfinite(angles))
+    finite_angle_indices = finite_angle_indices[finite_angle_indices < values.shape[2]]
+    angle_values = angles[finite_angle_indices]
+    point_count = int(finite_angle_indices.size)
     output: dict[str, list[list[list[float | None]]]] = {}
     for plane_index, plane_name in enumerate(result.observation_planes):
         if plane_index >= values.shape[1]:
             break
-        plane_rows: list[list[list[float | None]]] = []
-        for frequency_index in range(frequency_count):
-            row: list[list[float | None]] = []
-            for angle_index in finite_angle_indices:
-                if angle_index >= values.shape[2]:
-                    continue
-                level = (
-                    _finite(values[frequency_index, plane_index, angle_index])
-                    if frequency_index < values.shape[0]
-                    else None
-                )
-                row.append([float(angles[angle_index]), level])
-            plane_rows.append(row)
-        output[str(plane_name)] = plane_rows
+        points = np.empty((frequency_count, point_count, 2), dtype=object)
+        points[:, :, 0] = angle_values[None, :]
+        points[:, :, 1] = None
+        usable_frequency_count = min(frequency_count, values.shape[0])
+        if usable_frequency_count and point_count:
+            levels = values[
+                :usable_frequency_count, plane_index, finite_angle_indices
+            ].astype(object)
+            levels[~np.isfinite(values[:usable_frequency_count, plane_index])[
+                :, finite_angle_indices
+            ]] = None
+            points[:usable_frequency_count, :, 1] = levels
+        output[str(plane_name)] = points.tolist()
     return output
 
 

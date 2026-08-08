@@ -68,7 +68,16 @@ else
   PYTHON="$REPO_DIR/.venv/bin/python"
 fi
 
-if [[ -z "$PYTHON" ]] || ! "$PYTHON" -c "import fastapi, uvicorn" >/dev/null 2>&1; then
+if [[ -z "$PYTHON" ]]; then
+  fail "No Python environment was selected."
+fi
+
+# The repository environment was already validated by bootstrap.py, whose
+# probe ends by importing these packages. Only an explicit override bypasses
+# that validation and still needs the standalone import check.
+if [[ -n "${WG2_PYTHON:-}" ]] && \
+   ! "$PYTHON" -c "import fastapi, uvicorn" >/dev/null 2>&1
+then
   fail "The selected Python environment cannot import FastAPI and Uvicorn."
 fi
 
