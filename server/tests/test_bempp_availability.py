@@ -95,6 +95,7 @@ def test_solving_refuses_when_the_backend_cannot_run(monkeypatch):
 
     class _Context:
         solver_mode = "full_3d"
+        frequencies_hz = None
 
         def validate(self):
             return None

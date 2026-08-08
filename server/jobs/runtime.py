@@ -39,6 +39,17 @@ def _now_iso() -> str:
     return datetime.now().isoformat()
 
 
+def _sweep_description(request: SolveRequest) -> str:
+    """Describe the sweep for verbose logs without dumping 401 numbers."""
+
+    explicit = request.options.frequencies_hz
+    if explicit is None:
+        return f"spacing={request.options.frequency_spacing}"
+    head = ", ".join(f"{value:g}" for value in explicit[:6])
+    suffix = ", …" if len(explicit) > 6 else ""
+    return f"explicit list of {len(explicit)} points [{head}{suffix}]"
+
+
 class JobNotFoundError(LookupError):
     """Requested job is absent from persistence."""
 
@@ -526,7 +537,8 @@ class JobRuntime:
                 await self._append_log(
                     job_id,
                     "Verbose solve options: "
-                    f"engine={request.options.engine}, spacing={request.options.frequency_spacing}, "
+                    f"engine={request.options.engine}, "
+                    f"sweep={_sweep_description(request)}, "
                     f"mesh_validation={request.options.mesh_validation_mode}, "
                     f"polar={request.options.polar_config.model_dump(mode='json')}",
                 )
@@ -564,6 +576,7 @@ class JobRuntime:
                 frequency_end_hz=end,
                 num_frequencies=count,
                 frequency_spacing=request.options.frequency_spacing,
+                frequencies_hz=request.options.frequencies_hz,
                 polar_config=request.options.polar_config.model_dump(mode="json"),
                 mesh_validation_mode=request.options.mesh_validation_mode,
                 verbose=request.options.verbose,
@@ -674,7 +687,7 @@ class JobRuntime:
             await self._append_log(
                 job_id,
                 "Verbose solve options: "
-                f"spacing={request.options.frequency_spacing}, "
+                f"sweep={_sweep_description(request)}, "
                 f"mesh_validation={request.options.mesh_validation_mode}, "
                 f"polar={request.options.polar_config.model_dump(mode='json')}",
             )
@@ -1047,6 +1060,11 @@ class JobRuntime:
             "formula_type": request.design.formula,
             "frequency_range": [start, end],
             "num_frequencies": count,
+            "frequency_source": (
+                "explicit_list"
+                if request.options.frequencies_hz is not None
+                else "generated_grid"
+            ),
             "engine": request.options.engine,
             "design_revision": request.design_revision,
             "polar_grid": request.options.polar_config.resolved_grid(),
@@ -1086,12 +1104,21 @@ class JobRuntime:
 
     @staticmethod
     def _frequency_options(request: SolveRequest) -> tuple[float, float, int]:
+        """Summarize the sweep as (start, end, count).
+
+        An explicit list is summarized by its own endpoints and length, so job
+        listings and config summaries describe the sweep that actually runs.
+        """
+
         simulation = request.design.root.simulation
 
         def numeric(expr: Any, default: float) -> float:
             value = getattr(expr, "value", None) if expr is not None else None
             return float(value) if value is not None else default
 
+        explicit = request.options.frequencies_hz
+        if explicit is not None:
+            return float(explicit[0]), float(explicit[-1]), len(explicit)
         if request.options.frequency_range is not None:
             start, end = request.options.frequency_range
         else:

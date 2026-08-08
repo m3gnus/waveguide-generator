@@ -568,7 +568,14 @@ def build_solver_response(
             "impedance_drive": "unit_acceleration",
             "source_motion": context.source_motion,
             "quadrants": context.quadrants,
-            "frequency_spacing": context.frequency_spacing,
+            # "explicit" rather than log/linear: reporting a spacing the solve
+            # never used would misdescribe the sweep to every downstream reader.
+            "frequency_spacing": (
+                "explicit" if context.frequencies_hz is not None else context.frequency_spacing
+            ),
+            "frequency_source": (
+                "explicit_list" if context.frequencies_hz is not None else "generated_grid"
+            ),
             "verbose": context.verbose,
         }
     )

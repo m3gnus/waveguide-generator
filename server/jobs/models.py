@@ -102,6 +102,10 @@ class SolveOptions(JobModel):
     frequency_range: list[float] | None = None
     num_frequencies: int | None = Field(default=None, ge=1, le=401)
     frequency_spacing: Literal["log", "linear"] = "log"
+    # Explicit sweep points, solved verbatim instead of a generated grid. The
+    # BEM cost per point is flat (same-size matrix at every frequency), so this
+    # is about *where* the points land, not about spending fewer of them.
+    frequencies_hz: list[float] | None = None
     verbose: bool = False
     mesh_validation_mode: Literal["warn", "strict", "off"] = "warn"
     polar_config: PolarConfig = Field(default_factory=PolarConfig)
@@ -141,6 +145,46 @@ class SolveOptions(JobModel):
             raise ValueError("frequency_range values must be finite")
         if start <= 0 or end <= start:
             raise ValueError("frequency_range must be positive and increasing")
+        return self
+
+    @model_validator(mode="after")
+    def validate_explicit_frequencies(self) -> "SolveOptions":
+        if self.frequencies_hz is None:
+            return self
+        # Refuse rather than silently pick a winner: a caller that sends both a
+        # list and a grid has two different sweeps in mind, and quietly dropping
+        # one is exactly the class of silent no-op this codebase keeps paying for.
+        conflicts = [
+            name
+            for name, value in (
+                ("frequency_range", self.frequency_range),
+                ("num_frequencies", self.num_frequencies),
+            )
+            if value is not None
+        ]
+        if conflicts:
+            raise ValueError(
+                "frequencies_hz replaces the generated grid and cannot be combined "
+                f"with {' or '.join(conflicts)}"
+            )
+        if not self.frequencies_hz:
+            raise ValueError("frequencies_hz must contain at least one frequency")
+        if len(self.frequencies_hz) > 401:
+            raise ValueError("frequencies_hz must contain at most 401 frequencies")
+        if not all(math.isfinite(value) for value in self.frequencies_hz):
+            raise ValueError("frequencies_hz values must be finite")
+        if any(value <= 0 for value in self.frequencies_hz):
+            raise ValueError("frequencies_hz values must be positive")
+        # Ascending order is a result-contract requirement, not solver taste: the
+        # frequency axis is emitted verbatim and every chart and exporter reads it
+        # as monotonic. Sorting silently would hide a mistyped list.
+        if any(
+            later <= earlier
+            for earlier, later in zip(self.frequencies_hz, self.frequencies_hz[1:])
+        ):
+            raise ValueError(
+                "frequencies_hz must be strictly ascending with no duplicates"
+            )
         return self
 
 

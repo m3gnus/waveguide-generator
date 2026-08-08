@@ -1,6 +1,9 @@
 import { useCapabilities } from '../jobs/useCapabilities';
 import {
+  MAX_FREQUENCY_POINTS,
+  parseFrequencyList,
   useSolveOptionsStore,
+  type FrequencyMode,
   type FrequencySpacing,
   type MeshValidationMode,
   type ObservationOrigin,
@@ -13,6 +16,31 @@ export const solverModeLabels = {
   full_3d: 'Full 3D',
   circsym: 'Axisymmetric (force)',
 } as const;
+
+/**
+ * Sweep-point source: a generated grid, or the exact frequencies to solve.
+ *
+ * The note about runtime is deliberate. Every point costs the same in this BEM
+ * (same-size matrix at every frequency), so a list is a tool for placing detail
+ * where it matters -- not a way to make a sweep cheaper by thinning the top end.
+ */
+export function FrequencySweepControls() {
+  const store = useSolveOptionsStore();
+  const { frequencies, error } = parseFrequencyList(store.frequencyListText);
+  return <>
+    <div className="select-row"><label htmlFor="frequency-mode">Sweep points</label><select id="frequency-mode" value={store.frequencyMode} onChange={(event) => store.setFrequencyMode(event.target.value as FrequencyMode)}><option value="range">Generated grid</option><option value="list">Explicit list</option></select></div>
+    {store.frequencyMode === 'range'
+      ? <div className="select-row"><label htmlFor="frequency-spacing">Sweep spacing</label><select id="frequency-spacing" value={store.frequencySpacing} onChange={(event) => store.setFrequencySpacing(event.target.value as FrequencySpacing)}><option value="log">Logarithmic</option><option value="linear">Linear</option></select></div>
+      : <div className="point-paste">
+          <textarea id="frequency-list" aria-label="Solver frequencies in Hz" rows={4} value={store.frequencyListText} onChange={(event) => store.setFrequencyListText(event.target.value)} placeholder={'500, 630, 800, 1000\n1250 1600 2000'} />
+          <div className="paste-meta">{frequencies
+            ? <>Solving <b>{frequencies.length}</b> points · <b>{frequencies[0]}</b> to <b>{frequencies[frequencies.length - 1]}</b> Hz</>
+            : <>Ascending Hz, separated by commas, spaces, or newlines · up to {MAX_FREQUENCY_POINTS}</>}</div>
+          {error && <div className="field-error" role="alert">{error}</div>}
+          <p className="section-note">These frequencies replace the range and count from the design, and sweep spacing no longer applies. Solve time scales with how many points you list, not where they sit — every frequency costs about the same.</p>
+        </div>}
+  </>;
+}
 
 export function SolveOptionsControls() {
   const store = useSolveOptionsStore();
@@ -32,7 +60,7 @@ export function SolveOptionsControls() {
       : 'Selected backend capability: Full 3D.'}</p>
     <p className="section-note">Solver mode labels: {solverModeLabels.auto}, {solverModeLabels.full_3d}, {solverModeLabels.circsym}.</p>
     <div className="select-row"><label htmlFor="mesh-validation-mode">Mesh validation policy</label><select id="mesh-validation-mode" value={store.meshValidationMode} onChange={(event) => store.setMeshValidationMode(event.target.value as MeshValidationMode)}><option value="warn">Warn</option><option value="strict">Strict</option><option value="off">Off</option></select></div>
-    <div className="select-row"><label htmlFor="frequency-spacing">Sweep spacing</label><select id="frequency-spacing" value={store.frequencySpacing} onChange={(event) => store.setFrequencySpacing(event.target.value as FrequencySpacing)}><option value="log">Logarithmic</option><option value="linear">Linear</option></select></div>
+    <FrequencySweepControls />
     <label className="toggle-row" htmlFor="solve-verbose"><span>Verbose backend logging</span><input id="solve-verbose" type="checkbox" checked={store.verbose} onChange={(event) => store.setVerbose(event.target.checked)} /></label>
     {error && <div className="field-error" role="alert">Capabilities unavailable: {error}</div>}
   </>;

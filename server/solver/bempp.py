@@ -36,11 +36,13 @@ from .result_mapping import (
 
 try:
     from hornlab_bempp_bem import BIEFormulation, ObservationConfig, SolveConfig, solve as bempp_solve
+    from hornlab_bempp_bem import solve_frequencies as bempp_solve_frequencies
 except (ImportError, OSError):
     BIEFormulation = None  # type: ignore[assignment]
     ObservationConfig = None  # type: ignore[assignment]
     SolveConfig = None  # type: ignore[assignment]
     bempp_solve = None  # type: ignore[assignment]
+    bempp_solve_frequencies = None  # type: ignore[assignment]
 
 
 class BemppUnavailable(RuntimeError):
@@ -59,6 +61,7 @@ def _version() -> str | None:
 
 def _load_api() -> bool:
     global BIEFormulation, ObservationConfig, SolveConfig, bempp_solve
+    global bempp_solve_frequencies
     if ObservationConfig is not None and SolveConfig is not None and bempp_solve is not None:
         return True
     try:
@@ -67,6 +70,9 @@ def _load_api() -> bool:
         ObservationConfig = getattr(package, "ObservationConfig")
         SolveConfig = getattr(package, "SolveConfig")
         bempp_solve = getattr(package, "solve")
+        # Optional: an older pin without it stays usable for generated grids and
+        # only refuses explicit lists, at the adapter guard below.
+        bempp_solve_frequencies = getattr(package, "solve_frequencies", None)
     except (ImportError, OSError, AttributeError):
         return False
     return True
@@ -178,6 +184,10 @@ def solve_bempp_from_msh_text(
     status = bempp_status()
     if not status["available"]:
         raise BemppUnavailable(status["reason"])
+    if context.frequencies_hz is not None and bempp_solve_frequencies is None:
+        raise BemppUnavailable(
+            "Installed hornlab-bempp-bem does not support explicit frequency lists."
+        )
     started = time.time()
     if stage_callback:
         stage_callback("setup", 0.0, "Configuring BEMPP BEM solve")
@@ -243,7 +253,12 @@ def solve_bempp_from_msh_text(
         ) as handle:
             path = Path(handle.name)
             handle.write(msh_text)
-        result = bempp_solve(str(path), config)
+        if context.frequencies_hz is None:
+            result = bempp_solve(str(path), config)
+        else:
+            result = bempp_solve_frequencies(
+                str(path), list(context.frequencies_hz), config
+            )
     finally:
         if path is not None:
             try:

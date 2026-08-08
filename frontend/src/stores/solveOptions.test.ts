@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { polarConfigFromUi, resetSolveOptionsStore, useSolveOptionsStore } from './solveOptions';
+import {
+  MAX_FREQUENCY_POINTS,
+  parseFrequencyList,
+  polarConfigFromUi,
+  resetSolveOptionsStore,
+  useSolveOptionsStore,
+} from './solveOptions';
 
 describe('solve and directivity options', () => {
   beforeEach(() => { localStorage.clear(); resetSolveOptionsStore(); });
@@ -38,5 +44,59 @@ describe('solve and directivity options', () => {
     useSolveOptionsStore.getState().toggleAxis('vertical');
     useSolveOptionsStore.getState().toggleAxis('diagonal');
     expect(useSolveOptionsStore.getState().polar.enabledAxes).toEqual(['diagonal']);
+  });
+});
+
+describe('explicit frequency lists', () => {
+  beforeEach(() => { localStorage.clear(); resetSolveOptionsStore(); });
+
+  it('accepts commas, spaces, and newlines as separators', () => {
+    expect(parseFrequencyList('500, 630 800\n1000').frequencies).toEqual([500, 630, 800, 1000]);
+    expect(parseFrequencyList(' 1234.5 ').frequencies).toEqual([1234.5]);
+  });
+
+  it('rejects rather than repairs unusable lists', () => {
+    for (const [text, fragment] of [
+      ['', 'at least one'],
+      ['   ', 'at least one'],
+      ['500, abc', 'not a number'],
+      ['0, 500', 'above 0 Hz'],
+      ['-100', 'above 0 Hz'],
+      ['1000, 500', 'must ascend'],
+      ['500, 500', 'must ascend'],
+    ] as const) {
+      const parsed = parseFrequencyList(text);
+      expect(parsed.frequencies, `expected "${text}" to be rejected`).toBeNull();
+      expect(parsed.error).toContain(fragment);
+    }
+    expect(parseFrequencyList(Array.from({ length: MAX_FREQUENCY_POINTS + 1 }, (_, index) => index + 1).join(' ')).error)
+      .toContain(`At most ${MAX_FREQUENCY_POINTS}`);
+  });
+
+  it('omits frequencies_hz entirely while the generated grid is selected', () => {
+    useSolveOptionsStore.getState().setFrequencyListText('500 1000');
+    expect('frequencies_hz' in useSolveOptionsStore.getState().options()).toBe(false);
+  });
+
+  it('sends the parsed list once list mode is selected', () => {
+    useSolveOptionsStore.getState().setFrequencyMode('list');
+    useSolveOptionsStore.getState().setFrequencyListText('500, 1000, 2000');
+    expect(useSolveOptionsStore.getState().options().frequencies_hz).toEqual([500, 1000, 2000]);
+  });
+
+  it('throws instead of silently falling back to the generated grid', () => {
+    useSolveOptionsStore.getState().setFrequencyMode('list');
+    useSolveOptionsStore.getState().setFrequencyListText('2000, 1000');
+    expect(() => useSolveOptionsStore.getState().options()).toThrow(/not usable/);
+  });
+
+  it('persists the sweep source and the typed list', () => {
+    useSolveOptionsStore.getState().setFrequencyMode('list');
+    useSolveOptionsStore.getState().setFrequencyListText('500 1000');
+    const stored = JSON.parse(localStorage.getItem('waveguide-v2-solve-options') ?? '{}') as {
+      state?: { frequencyMode?: string; frequencyListText?: string };
+    };
+    expect(stored.state?.frequencyMode).toBe('list');
+    expect(stored.state?.frequencyListText).toBe('500 1000');
   });
 });

@@ -260,3 +260,119 @@ def test_circsym_adapter_uses_meridian_cancellation_stages_and_coupled_ib(monkey
     ]
     assert response["metadata"]["solver_mode"] == "circsym"
     assert response["metadata"]["infinite_baffle"]["backend"] == "circsym_coupled"
+
+
+def _explicit_context(frequencies: tuple[float, ...]) -> SolverContext:
+    context = _context()
+    context.frequencies_hz = frequencies
+    context.frequency_range = (frequencies[0], frequencies[-1])
+    context.num_frequencies = len(frequencies)
+    context.validate()
+    return context
+
+
+def _result_at(frequencies: tuple[float, ...]) -> SimpleNamespace:
+    count = len(frequencies)
+    return SimpleNamespace(
+        frequencies_hz=np.asarray(frequencies),
+        observation_angles_deg=np.asarray([0.0, 90.0, 180.0]),
+        observation_planes=["horizontal", "vertical"],
+        pressure_complex=np.ones((count, 2, 3), dtype=np.complex128) * 20e-6,
+        directivity_db=np.asarray([[[0.0, -6.0, -20.0], [0.0, -6.0, -20.0]]] * count),
+        impedance=np.asarray([1j] * count),
+        timings={"solve": 0.01},
+        solver_log=[],
+        native_diagnostics=[],
+    )
+
+
+@pytest.mark.parametrize("frequencies", [(500.0, 812.3, 1000.0), (1234.5,)])
+def test_metal_adapter_solves_an_explicit_list_verbatim(monkeypatch, frequencies) -> None:
+    seen: dict[str, object] = {}
+
+    def solve_frequencies(path, freqs, config):
+        seen["freqs"] = list(freqs)
+        return _result_at(frequencies)
+
+    monkeypatch.setattr(metal, "native_config", lambda **kwargs: _Config(**kwargs))
+    monkeypatch.setattr(
+        metal, "native_solve", lambda path, config: pytest.fail("grid path must not run")
+    )
+    monkeypatch.setattr(metal, "native_solve_frequencies", solve_frequencies)
+    monkeypatch.setattr(metal, "metal_status", lambda: {"available": True, "reason": "mock"})
+    monkeypatch.setattr(metal, "ObservationConfig", lambda **kwargs: SimpleNamespace(**kwargs))
+
+    response = metal.solve_metal_from_msh_text("msh", _explicit_context(frequencies))
+    assert seen["freqs"] == list(frequencies)
+    assert response["frequencies"] == list(frequencies)
+    assert response["metadata"]["frequency_spacing"] == "explicit"
+    assert response["metadata"]["frequency_source"] == "explicit_list"
+
+
+def test_metal_adapter_refuses_an_explicit_list_the_pin_cannot_solve(monkeypatch) -> None:
+    monkeypatch.setattr(metal, "native_config", lambda **kwargs: _Config(**kwargs))
+    monkeypatch.setattr(metal, "native_solve", lambda path, config: _result())
+    monkeypatch.setattr(metal, "native_solve_frequencies", None)
+    monkeypatch.setattr(metal, "metal_status", lambda: {"available": True, "reason": "mock"})
+    with pytest.raises(metal.MetalUnavailable, match="explicit frequency lists"):
+        metal.solve_metal_from_msh_text("msh", _explicit_context((500.0, 1000.0)))
+
+
+def test_bempp_adapter_solves_an_explicit_list_verbatim(monkeypatch) -> None:
+    frequencies = (500.0, 812.3, 1000.0)
+    seen: dict[str, object] = {}
+    monkeypatch.setattr(bempp, "SolveConfig", lambda **kwargs: _Config(**kwargs))
+    monkeypatch.setattr(
+        bempp, "bempp_solve", lambda path, config: pytest.fail("grid path must not run")
+    )
+
+    def solve_frequencies(path, freqs, config):
+        seen["freqs"] = list(freqs)
+        return _result_at(frequencies)
+
+    monkeypatch.setattr(bempp, "bempp_solve_frequencies", solve_frequencies)
+    monkeypatch.setattr(bempp, "BIEFormulation", SimpleNamespace(COMPLEX_K="complex_k"))
+    monkeypatch.setattr(bempp, "ObservationConfig", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(
+        bempp,
+        "bempp_status",
+        lambda: {"available": True, "reason": "mock CPU", "assembly_backend": "numba"},
+    )
+    response = bempp.solve_bempp_from_msh_text("msh", _explicit_context(frequencies))
+    assert seen["freqs"] == list(frequencies)
+    assert response["metadata"]["frequency_source"] == "explicit_list"
+
+
+def test_circsym_adapter_solves_an_explicit_list_verbatim(monkeypatch) -> None:
+    frequencies = (500.0, 812.3, 1000.0)
+    seen: dict[str, object] = {}
+
+    class MeridianBuild:
+        baffle_z = 0.06
+        metadata = {"segment_count": 8}
+
+        @staticmethod
+        def as_metal_meridian(cls):
+            return "native-meridian"
+
+    def solve_circsym_frequencies(meridian, freqs, config):
+        seen["freqs"] = list(freqs)
+        return _result_at(frequencies)
+
+    monkeypatch.setattr(circsym, "build_meridian", lambda config: MeridianBuild())
+    monkeypatch.setattr(circsym, "circsym_rejection_reasons", lambda config: [])
+    monkeypatch.setattr(circsym, "MeridianMesh", object)
+    monkeypatch.setattr(circsym, "ObservationConfig", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(circsym, "native_config", lambda **kwargs: _Config(**kwargs))
+    monkeypatch.setattr(
+        circsym, "solve_circsym", lambda meridian, config: pytest.fail("grid path must not run")
+    )
+    monkeypatch.setattr(circsym, "solve_circsym_frequencies", solve_circsym_frequencies)
+    monkeypatch.setattr(circsym, "circsym_status", lambda: {"available": True, "reason": "mock"})
+    monkeypatch.setattr(circsym, "metal_status", lambda: {"available": True, "reason": "mock"})
+
+    context = _explicit_context(frequencies)
+    context.solver_mode = "circsym"
+    response = circsym.solve_circsym_design(context)
+    assert seen["freqs"] == list(frequencies)
+    assert response["metadata"]["frequency_source"] == "explicit_list"

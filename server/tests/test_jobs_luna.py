@@ -480,3 +480,34 @@ def test_jobs_solver_path_keeps_digit_list_1234_not_bitmask_15() -> None:
     config = _solver_mesher_config(_request().design)
     assert config["mesh"]["quadrants"] == 1234
     assert config["mesh"]["quadrants"] != 15
+
+
+@pytest.mark.parametrize(
+    "frequencies, match",
+    [
+        ([], "at least one"),
+        ([500.0, 500.0], "strictly ascending"),
+        ([1000.0, 500.0], "strictly ascending"),
+        ([0.0, 500.0], "positive"),
+        ([-1.0], "positive"),
+        ([float("nan")], "finite"),
+        ([float("inf")], "finite"),
+        ([float(index) for index in range(1, 403)], "at most 401"),
+    ],
+)
+def test_explicit_frequencies_reject_unusable_lists(frequencies, match: str) -> None:
+    with pytest.raises(ValidationError, match=match):
+        SolveOptions(frequencies_hz=frequencies)
+
+
+@pytest.mark.parametrize(
+    "extra", [{"num_frequencies": 8}, {"frequency_range": [200.0, 20_000.0]}]
+)
+def test_explicit_frequencies_refuse_to_coexist_with_a_generated_grid(extra) -> None:
+    with pytest.raises(ValidationError, match="cannot be combined"):
+        SolveOptions(frequencies_hz=[500.0, 1000.0], **extra)
+
+
+def test_explicit_frequencies_accept_a_single_ascending_sweep() -> None:
+    assert SolveOptions(frequencies_hz=[812.3]).frequencies_hz == [812.3]
+    assert SolveOptions().frequencies_hz is None

@@ -34,12 +34,14 @@ from .result_mapping import (
 
 try:
     from hornlab_metal_bem import ObservationConfig, native_config, solve as native_solve
+    from hornlab_metal_bem import solve_frequencies as native_solve_frequencies
     from hornlab_metal_bem.backends import discover_metal_backend
     from hornlab_metal_bem.metal.native import discover_native_runtime
 except (ImportError, OSError):  # clean capability absence or native loader failure
     ObservationConfig = None  # type: ignore[assignment]
     native_config = None  # type: ignore[assignment]
     native_solve = None  # type: ignore[assignment]
+    native_solve_frequencies = None  # type: ignore[assignment]
     discover_metal_backend = None  # type: ignore[assignment]
     discover_native_runtime = None  # type: ignore[assignment]
 
@@ -204,6 +206,10 @@ def solve_metal_from_msh_text(
     status = metal_status()
     if not status["available"]:
         raise MetalUnavailable(status["reason"])
+    if context.frequencies_hz is not None and native_solve_frequencies is None:
+        raise MetalUnavailable(
+            "Installed hornlab-metal-bem does not support explicit frequency lists."
+        )
     started = time.time()
     if stage_callback:
         stage_callback("setup", 0.0, "Configuring Metal BEM solve")
@@ -261,7 +267,14 @@ def solve_metal_from_msh_text(
         ) as handle:
             path = Path(handle.name)
             handle.write(msh_text)
-        result = native_solve(str(path), config)
+        if context.frequencies_hz is None:
+            result = native_solve(str(path), config)
+        else:
+            # solve_frequencies bypasses the generated grid entirely; freq_min/
+            # freq_max/freq_count on the config stay as list-derived summaries.
+            result = native_solve_frequencies(
+                str(path), list(context.frequencies_hz), config
+            )
     finally:
         if path is not None:
             try:

@@ -36,11 +36,13 @@ except (ImportError, OSError):
 
 try:
     from hornlab_metal_bem import MeridianMesh, ObservationConfig, native_config, solve_circsym
+    from hornlab_metal_bem import solve_circsym_frequencies
 except (ImportError, OSError):
     MeridianMesh = None  # type: ignore[assignment]
     ObservationConfig = None  # type: ignore[assignment]
     native_config = None  # type: ignore[assignment]
     solve_circsym = None  # type: ignore[assignment]
+    solve_circsym_frequencies = None  # type: ignore[assignment]
 
 
 class CircSymUnavailable(RuntimeError):
@@ -97,6 +99,10 @@ def solve_circsym_design(
     status = circsym_status()
     if not status["available"]:
         raise CircSymUnavailable(status["reason"])
+    if context.frequencies_hz is not None and solve_circsym_frequencies is None:
+        raise CircSymUnavailable(
+            "Installed hornlab-metal-bem does not support explicit CircSym frequency lists."
+        )
     if cancellation_callback:
         cancellation_callback()
     started = time.time()
@@ -166,7 +172,12 @@ def solve_circsym_design(
         if "complex_k_shift" in message:
             raise CircSymUnavailable("Installed Metal helper lacks the required complex-k shift option.") from exc
         raise
-    result = solve_circsym(meridian, config)
+    if context.frequencies_hz is None:
+        result = solve_circsym(meridian, config)
+    else:
+        result = solve_circsym_frequencies(
+            meridian, list(context.frequencies_hz), config
+        )
     if cancellation_callback:
         cancellation_callback()
     if stage_callback:

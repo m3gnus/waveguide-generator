@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from server.jobs.models import PolarConfig
 from server.solver.beam_shape import beam_shape_summary
@@ -41,6 +41,26 @@ def _frequency_axis(start: float, stop: float, count: int, spacing: str) -> list
     return [round(start * ratio**index, 6) for index in range(count)]
 
 
+def _explicit_frequency_axis(frequencies_hz: Sequence[float]) -> list[float]:
+    """Validate a caller-supplied sweep with the same strictness as the grid path."""
+
+    try:
+        values = [float(value) for value in frequencies_hz]
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ValueError("dry-run explicit frequencies must be finite numbers") from exc
+    if not values:
+        raise ValueError("dry-run explicit frequencies must not be empty")
+    if len(values) > 401:
+        raise ValueError("dry-run explicit frequencies must number at most 401")
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError("dry-run explicit frequencies must be finite")
+    if any(value <= 0.0 for value in values):
+        raise ValueError("dry-run explicit frequencies must be positive")
+    if any(later <= earlier for earlier, later in zip(values, values[1:])):
+        raise ValueError("dry-run explicit frequencies must be strictly ascending")
+    return [round(value, 6) for value in values]
+
+
 class DryRunEngine:
     """Build canned-but-plausible results that vary stably with the design."""
 
@@ -74,6 +94,7 @@ class DryRunEngine:
         frequency_end_hz: float,
         num_frequencies: int,
         frequency_spacing: str,
+        frequencies_hz: Sequence[float] | None = None,
         polar_config: Mapping[str, Any] | None = None,
         mesh_validation_mode: str = "warn",
         verbose: bool = False,
@@ -85,9 +106,12 @@ class DryRunEngine:
         """
 
         digest, seed = _canonical_seed(design)
-        frequencies = _frequency_axis(
-            frequency_start_hz, frequency_end_hz, num_frequencies, frequency_spacing
-        )
+        if frequencies_hz is None:
+            frequencies = _frequency_axis(
+                frequency_start_hz, frequency_end_hz, num_frequencies, frequency_spacing
+            )
+        else:
+            frequencies = _explicit_frequency_axis(frequencies_hz)
         polar = PolarConfig.model_validate(polar_config or {}).model_dump(mode="json")
         angle_start, angle_end, angle_count = polar["angle_range"]
         angles = [
@@ -165,7 +189,12 @@ class DryRunEngine:
             "partial_success": False,
             "impedance_units": "Z/(rho*c)",
             "impedance_quantity": "specific_acoustic_impedance",
-            "frequency_spacing": frequency_spacing,
+            "frequency_spacing": (
+                "explicit" if frequencies_hz is not None else frequency_spacing
+            ),
+            "frequency_source": (
+                "explicit_list" if frequencies_hz is not None else "generated_grid"
+            ),
             "mesh_validation": {
                 "mode": mesh_validation_mode,
                 "valid": True,

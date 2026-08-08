@@ -560,7 +560,7 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
       {definitions.map((definition) => <div key={definition.title}>
         {renderRegistrySection(definition)}
         {!searching && definition.title === 'Frequency Sweep' && <Section title="Directivity Map" description="Polar planes and angular sampling used for directivity exports and plots." summary="11 controls" forceOpen={false}><DirectivityMapControls /></Section>}
-        {!searching && definition.title === 'Source Definition' && <Section title="Solve options" description="Backend engine, validation, frequency spacing, and diagnostic output controls." summary="4 options" forceOpen={false}><SolveOptionsControls /></Section>}
+        {!searching && definition.title === 'Source Definition' && <Section title="Solve options" description="Backend engine, validation, which frequencies get solved, and diagnostic output controls." summary="5 options" forceOpen={false}><SolveOptionsControls /></Section>}
       </div>)}
       {searching && [...fieldsBySection.values()].every((fields) => fields.length === 0) && <div className="parameter-empty">No parameter labels or keys match “{query}”.</div>}
     </div>

@@ -286,3 +286,46 @@ def test_solve_creation_atomically_persists_snapshot_revision_label_and_polar_gr
         await runtime.shutdown()
 
     asyncio.run(scenario())
+
+
+def test_explicit_frequencies_run_verbatim_and_are_summarized_as_such(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The whole job path, end to end: request -> summary -> solved axis."""
+
+    monkeypatch.setenv("WG2_ENABLE_DRYRUN", "1")
+    sweep = [500.0, 812.3, 1000.0, 3150.0]
+
+    async def scenario() -> None:
+        runtime = JobRuntime(JobStore(tmp_path / "jobs.db"))
+        job_id = await runtime.submit(
+            SolveRequest.model_validate(
+                {
+                    "design": {
+                        "formula": "OSSE",
+                        "L": 120,
+                        "a": 45,
+                        # Deliberately different from the sweep: the list wins.
+                        "simulation": {"f1": 250, "f2": 8000, "num_frequencies": 5},
+                    },
+                    "options": {
+                        "engine": "dryrun",
+                        "stage_delay_ms": 0,
+                        "frequencies_hz": sweep,
+                    },
+                }
+            )
+        )
+        await runtime.wait_idle()
+        results = await runtime.get_results(job_id)
+        assert results["frequencies"] == sweep
+        assert len(results["spl_on_axis"]["spl"]) == len(sweep)
+        assert results["metadata"]["frequency_spacing"] == "explicit"
+        assert results["metadata"]["frequency_source"] == "explicit_list"
+        summary = (await runtime.get_job(job_id))["config_summary"]
+        assert summary["frequency_range"] == [sweep[0], sweep[-1]]
+        assert summary["num_frequencies"] == len(sweep)
+        assert summary["frequency_source"] == "explicit_list"
+        await runtime.shutdown()
+
+    asyncio.run(scenario())

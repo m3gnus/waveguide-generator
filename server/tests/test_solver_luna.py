@@ -304,3 +304,55 @@ def test_log_domain_spl_and_di_stay_finite_for_huge_finite_inputs() -> None:
     )
     assert di["horizontal"][0] is not None
     assert np.isfinite(di["horizontal"][0])
+
+
+def test_solver_context_derives_its_summary_from_an_explicit_list() -> None:
+    from server.jobs.models import SolveRequest
+
+    request = SolveRequest.model_validate(
+        {
+            "design": {"formula": "OSSE", "simulation": {"f1": 200, "f2": 20000}},
+            "options": {"frequencies_hz": [500.0, 812.3, 1000.0]},
+        }
+    )
+    context = SolverContext.from_request(request, solver_mode="full_3d")
+    assert context.frequencies_hz == (500.0, 812.3, 1000.0)
+    # The design's own 200-20000 Hz range must not leak into the summary.
+    assert context.frequency_range == (500.0, 1000.0)
+    assert context.num_frequencies == 3
+
+
+def test_solver_context_allows_a_single_explicit_point_but_not_a_collapsed_grid() -> None:
+    single = SolverContext(
+        design=DesignConfig.model_validate({"formula": "OSSE"}),
+        frequency_range=(812.3, 812.3),
+        num_frequencies=1,
+        frequencies_hz=(812.3,),
+    )
+    assert single.num_frequencies == 1
+    with pytest.raises(ValueError, match="increasing"):
+        SolverContext(
+            design=DesignConfig.model_validate({"formula": "OSSE"}),
+            frequency_range=(812.3, 812.3),
+            num_frequencies=1,
+        )
+
+
+def test_solver_context_rejects_a_summary_that_drifts_from_its_explicit_list() -> None:
+    context = SolverContext(
+        design=DesignConfig.model_validate({"formula": "OSSE"}),
+        frequency_range=(500.0, 1000.0),
+        num_frequencies=2,
+        frequencies_hz=(500.0, 1000.0),
+    )
+    context.num_frequencies = 3
+    with pytest.raises(ValueError, match="must match the explicit frequency list"):
+        context.validate()
+    context.num_frequencies = 2
+    context.frequency_range = (500.0, 2000.0)
+    with pytest.raises(ValueError, match="must match the explicit frequency list"):
+        context.validate()
+    context.frequency_range = (500.0, 1000.0)
+    context.frequencies_hz = (1000.0, 500.0)
+    with pytest.raises(ValueError, match="strictly ascending"):
+        context.validate()
