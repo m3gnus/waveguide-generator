@@ -207,12 +207,13 @@ def main(argv: list[str] | None = None) -> int:
             port=port,
             log_config=None,
             # Every websocket message is deflated on the event loop unless this
-            # is off. The preview socket carries 170-335 kB geometry frames of
-            # float32 at up to 30 Hz while a control is being dragged, which is
-            # both poorly compressible and the most latency-sensitive traffic
-            # in the application -- 2-6 ms of compression per frame, spent on
-            # the one thread that also has to answer every request. On loopback
-            # the bytes were never the constraint.
+            # is off. The preview socket carries 0.23-0.64 MB coarse geometry
+            # frames at up to 30 Hz while a control is being dragged, plus
+            # 1.06-3.05 MB fine frames after input goes idle. On an M1 Max,
+            # websockets 17 took a 23 ms median to deflate the largest seed
+            # coarse frame -- most of the 33 ms drag cadence, on the one thread
+            # that also answers every request. Loopback bandwidth was not the
+            # constraint.
             ws_per_message_deflate=False,
             # Keep transport framing aligned with the limit advertised and
             # enforced by the application protocol. The protocol receive loop
