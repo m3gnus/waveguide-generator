@@ -193,6 +193,28 @@ class DesignSnapshot(JobModel):
     design: DesignConfig
 
 
+class DesignAvailability(JobModel):
+    """Whether a job's stored design can be reopened, and if not, why not.
+
+    Jobs imported from v1 are the reason this exists. Most of them are
+    recovered into v2's own snapshot shape and are indistinguishable from a
+    natively solved job; the rest must say what is wrong in words the user can
+    act on, because "Rerun is greyed out" is not a diagnosis.
+    """
+
+    reopenable: bool = True
+    source: Literal[
+        "v2-snapshot", "v1-design-state", "v1-mesher-payload", "none"
+    ] = "v2-snapshot"
+    reason_code: Literal[
+        "ok", "recovered", "freeform_legacy_design", "no_stored_design", "unreadable_design"
+    ] = "ok"
+    #: Why this job cannot be reopened. Set exactly when ``reopenable`` is false.
+    reason: str | None = None
+    #: A fidelity caveat about a design that *was* recovered.
+    note: str | None = None
+
+
 class SolveRequest(JobModel):
     design: DesignConfig
     options: SolveOptions = Field(default_factory=SolveOptions)
@@ -253,6 +275,7 @@ class JobItem(JobModel):
     cancellation_requested: bool
     mesh_stats: dict[str, Any] | None = None
     script_snapshot: dict[str, Any] | None = None
+    design_availability: DesignAvailability = Field(default_factory=DesignAvailability)
     design_revision: int
     polar_grid: dict[str, Any]
     rating: int | None = None
@@ -334,6 +357,7 @@ class JobMetadataPatch(JobModel):
 __all__ = [
     "ClearFailedResponse",
     "DeleteResponse",
+    "DesignAvailability",
     "DesignSnapshot",
     "JobItem",
     "JobListResponse",

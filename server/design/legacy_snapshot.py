@@ -449,21 +449,64 @@ def snapshot_to_ath_text(params: Mapping[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _snapshot_params(snapshot: Mapping[str, Any]) -> Mapping[str, Any]:
+#: Which of the two parameter bags in a v1 snapshot a design was read from.
+#: ``design-state`` is v1's own authority; ``prepared-params`` is its derived
+#: mesher input and loses every formula-valued field.
+LegacyParamsSource = str
+
+
+def _state_snapshot_params(snapshot: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """Return v1's authoritative design state, with its family folded back in.
+
+    v1 stores the design twice per job. ``script.stateSnapshot`` is the editor
+    state at submit time; ``script.params`` is the *prepared* bag it derived to
+    feed the mesher. v1's own rule, at ``src/modules/simulation/jobs.js:7-22``,
+    is that the state snapshot is authoritative and "``script.params`` (prepared
+    mesher params) is a derived form and is not equivalent either" -- and
+    ``applySimulationJobScriptState`` (``src/modules/simulation/state.js:27-51``)
+    restores from it in preference, exactly as this does.
+
+    The difference is not cosmetic. Preparing the bag evaluates and then drops
+    formula-valued fields, so on this machine's 22 snapshot-carrying v1 jobs the
+    prepared bag has *no* ``R``, ``a`` or ``k`` at all on 16 of them: reading it
+    yields an R-OSSE design with no radius. The family is the other half of the
+    trap -- ``stateSnapshot.params`` carries no ``type`` key, so handing it over
+    unmerged silently reads a FREEFORM design through the OSSE branch. v1 guards
+    the same way by requiring ``stateSnapshot.type`` to be a string.
+    """
+
+    state = snapshot.get("stateSnapshot")
+    if not isinstance(state, Mapping):
+        return None
+    params = state.get("params")
+    family = state.get("type")
+    if not isinstance(params, Mapping) or not isinstance(family, str) or not family:
+        return None
+    return {**params, "type": family}
+
+
+def resolve_legacy_params(
+    snapshot: Mapping[str, Any],
+) -> tuple[Mapping[str, Any], LegacyParamsSource]:
+    """Pick the design bag v1 itself would have reopened, and say which it is."""
+
     if not isinstance(snapshot, Mapping):
         raise LegacySnapshotError("legacy snapshot must be a mapping")
+    state_params = _state_snapshot_params(snapshot)
+    if state_params is not None:
+        return state_params, "design-state"
     if "params" not in snapshot:
-        return snapshot
+        return snapshot, "params-bag"
     params = snapshot["params"]
     if not isinstance(params, Mapping):
         raise LegacySnapshotError("legacy snapshot params must be a mapping")
-    return params
+    return params, "prepared-params"
 
 
 def snapshot_to_design(snapshot: Mapping[str, Any]) -> ParsedDesign:
     """Convert a whole v1 snapshot or params bag into a validated design."""
 
-    params = _snapshot_params(snapshot)
+    params, _ = resolve_legacy_params(snapshot)
     try:
         return parse(snapshot_to_ath_text(params))
     except LegacySnapshotError:
@@ -472,4 +515,9 @@ def snapshot_to_design(snapshot: Mapping[str, Any]) -> ParsedDesign:
         raise LegacySnapshotError(f"could not parse legacy snapshot: {exc}") from exc
 
 
-__all__ = ["LegacySnapshotError", "snapshot_to_ath_text", "snapshot_to_design"]
+__all__ = [
+    "LegacySnapshotError",
+    "resolve_legacy_params",
+    "snapshot_to_ath_text",
+    "snapshot_to_design",
+]
