@@ -4,7 +4,7 @@ import type { ExprNumber } from '../stores/design';
 interface NumberFieldProps {
   label: string;
   symbol?: string;
-  value: number;
+  value?: number;
   unit?: string;
   min?: number;
   max?: number;
@@ -16,6 +16,8 @@ interface NumberFieldProps {
   invalidMessage?: string;
   validate?: (value: number) => string | undefined;
   onCommit: (value: number) => void;
+  optional?: boolean;
+  onClear?: () => void;
   expression?: ExprNumber;
   allowExpression?: boolean;
   onCommitExpression?: (value: ExprNumber) => void;
@@ -38,6 +40,8 @@ export function NumberField({
   invalidMessage,
   validate,
   onCommit,
+  optional = false,
+  onClear,
   expression,
   allowExpression = false,
   onCommitExpression,
@@ -45,7 +49,7 @@ export function NumberField({
   onEndDrag,
 }: NumberFieldProps) {
   const id = useId();
-  const displayed = expression?.raw ?? value.toFixed(precision);
+  const displayed = expression?.raw ?? (value === undefined ? '' : value.toFixed(precision));
   const [draft, setDraft] = useState(displayed);
   const [editing, setEditing] = useState(false);
   const [dragDelta, setDragDelta] = useState<number | null>(null);
@@ -71,7 +75,8 @@ export function NumberField({
   const showEvaluatedExpression = holdsExpression && expression?.value != null;
   const draftMessage = draft.trim() && Number.isFinite(parsed) ? validate?.(parsed) : undefined;
   const isExpression = allowExpression && draft.trim() !== '' && !Number.isFinite(parsed);
-  const invalid = draft.trim() === '' || (!isExpression && (!Number.isFinite(parsed) || parsed < min || parsed > max || Boolean(draftMessage)));
+  const empty = draft.trim() === '';
+  const invalid = (empty && !optional) || (!empty && !isExpression && (!Number.isFinite(parsed) || parsed < min || parsed > max || Boolean(draftMessage)));
 
   useEffect(() => {
     if (!editing && !drag.current) setDraft(displayed);
@@ -84,8 +89,14 @@ export function NumberField({
       setDraft(displayed);
       return;
     }
+    if (draft === displayed) return;
     if (invalid) {
       setDraft(displayed);
+      return;
+    }
+    if (empty) {
+      setDraft('');
+      onClear?.();
       return;
     }
     if (isExpression) {
@@ -115,6 +126,7 @@ export function NumberField({
     // Scrubbing commits a plain number, which would silently overwrite the
     // formula this field holds. Expressions are edited by typing only.
     if (holdsExpression) return;
+    if (value === undefined) return;
     if (event.button !== 0) return;
     event.preventDefault();
     drag.current = { x: event.clientX, value };
@@ -193,6 +205,7 @@ export function NumberField({
           inputMode={holdsExpression ? 'text' : 'decimal'}
           spellCheck={false}
           disabled={disabled}
+          placeholder={optional ? 'Unset' : undefined}
           title={holdsExpression ? draft : undefined}
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
@@ -202,7 +215,7 @@ export function NumberField({
         />
         {unit && !holdsExpression && <span className="unit">{unit}</span>}
         {/* The scrub track reads as a value within a range, which a formula has not got. */}
-        {!holdsExpression && <i className="number-track" style={{ '--fill': `${Math.max(5, Math.min(100, ((value - min) / (max - min)) * 100 || 50))}%` } as React.CSSProperties} />}
+        {!holdsExpression && value !== undefined && <i className="number-track" style={{ '--fill': `${Math.max(5, Math.min(100, ((value - min) / (max - min)) * 100 || 50))}%` } as React.CSSProperties} />}
       </div>
       {(draftMessage ?? invalidMessage) && <span id={`${id}-error`} className="sr-only">{draftMessage ?? invalidMessage}</span>}
     </div>

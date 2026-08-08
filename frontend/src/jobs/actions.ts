@@ -1,4 +1,4 @@
-import { serializeDesign, type DesignDocument } from '../stores/design';
+import { serializeSolveDesign, type DesignDocument } from '../stores/design';
 import { useSolveOptionsStore, type SolveOptions } from '../stores/solveOptions';
 
 export interface EngineCapability {
@@ -21,7 +21,7 @@ export interface SymmetryResolution {
 }
 
 export function toSolveDesign(design: DesignDocument): Record<string, unknown> {
-  return serializeDesign(design);
+  return serializeSolveDesign(design);
 }
 
 export function formatApiDetail(value: unknown): string | null {
