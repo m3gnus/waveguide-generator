@@ -40,6 +40,46 @@ _SAFE_FUNCTIONS = {
     "sqrt": math.sqrt,
     "tan": math.tan,
 }
+# These functions were accepted by the v1 UI but are not supported by the
+# pinned geometry engine. If this allowlist is ever widened, beware that v1
+# maps ``log`` to base-10 Math.log10 and ``ln`` to natural-log Math.log. Python's
+# ``math.log`` is natural log, so mapping v1's ``log`` to it would silently
+# compute the wrong geometry, which is worse than rejecting the expression.
+_V1_ONLY_FUNCTIONS = frozenset(
+    {
+        "acosh",
+        "asinh",
+        "atanh",
+        "cbrt",
+        "ceil",
+        "copysign",
+        "cosh",
+        "deg",
+        "exp",
+        "exp2",
+        "expm1",
+        "fabs",
+        "fdim",
+        "floor",
+        "fma",
+        "fmax",
+        "fmin",
+        "fmod",
+        "hypot",
+        "ln",
+        "log",
+        "log1p",
+        "log2",
+        "log10",
+        "rad",
+        "remainder",
+        "round",
+        "sign",
+        "sinh",
+        "tanh",
+        "trunc",
+    }
+)
 _SAFE_CONSTANTS = {"pi": math.pi, "e": math.e}
 _MAX_CONSTANT_EXPRESSION_CHARS = 16 * 1024
 _MAX_CONSTANT_EXPRESSION_NODES = 256
@@ -137,7 +177,17 @@ def _validate_execution_node(node: ast.AST) -> None:
             or node.keywords
         ):
             name = node.func.id if isinstance(node.func, ast.Name) else "indirect call"
-            raise ValueError(f"unknown expression function {name!r}")
+            supported = ", ".join(sorted(_SAFE_FUNCTIONS))
+            message = (
+                f"unknown expression function {name!r}; the geometry engine supports "
+                f"a fixed set of functions: {supported}"
+            )
+            if name in _V1_ONLY_FUNCTIONS:
+                message += (
+                    f"; {name!r} was accepted by the v1 UI but is not supported by "
+                    "the v2 geometry engine; this is a v1-to-v2 compatibility limit"
+                )
+            raise ValueError(message)
         for argument in node.args:
             _validate_execution_node(argument)
     else:

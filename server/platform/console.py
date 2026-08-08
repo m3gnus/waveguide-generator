@@ -14,9 +14,10 @@ gets:
 2. **Closing the window.** Windows delivers that as ``CTRL_CLOSE_EVENT``, which
    CPython does not surface as a signal, so ``launch/serve.py``'s SIGINT /
    SIGTERM / SIGBREAK handlers never see it and the process dies abruptly.
-   ``SetConsoleCtrlHandler`` is the only way to observe it. Windows then grants
-   a short grace period before killing the process, which is enough for
-   Uvicorn to release the instance lock and flush the logs.
+   ``SetConsoleCtrlHandler`` is the only way to observe it. Windows' grace
+   period is the time spent inside that callback: once it returns, Windows may
+   terminate the process. The callback therefore waits, within a conservative
+   deadline, while Uvicorn stops and the launcher's cleanup finishes.
 
 Every function here is best-effort. A server started without a console -- from
 ``pythonw``, a service wrapper, CI -- has no console handle to configure, and
@@ -32,6 +33,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import threading
 from collections.abc import Callable
 
 
@@ -40,9 +42,12 @@ log = logging.getLogger("wg2.console")
 STD_INPUT_HANDLE = -10
 ENABLE_QUICK_EDIT_MODE = 0x0040
 ENABLE_EXTENDED_FLAGS = 0x0080
+CTRL_C_EVENT = 0
+CTRL_BREAK_EVENT = 1
 CTRL_CLOSE_EVENT = 2
 CTRL_LOGOFF_EVENT = 5
 CTRL_SHUTDOWN_EVENT = 6
+CLOSE_HANDLER_TIMEOUT_SECONDS = 4.0
 _INVALID_HANDLE_VALUE = -1
 
 #: The registered console-control callback. ctypes callbacks are only kept
@@ -93,12 +98,49 @@ def disable_quick_edit() -> bool:
     return True
 
 
-def install_close_handler(request_shutdown: Callable[[], None]) -> bool:
+def _make_close_handler(
+    request_shutdown: Callable[[], None],
+    shutdown_complete: threading.Event,
+    *,
+    timeout_seconds: float = CLOSE_HANDLER_TIMEOUT_SECONDS,
+) -> Callable[[int], bool]:
+    """Build the callback independently of Win32 registration for direct tests."""
+
+    def _handler(event: int) -> bool:
+        if event not in (CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT):
+            # Ctrl+C and Ctrl+Break already have signal handlers; claiming them
+            # here would take them away from those.
+            return False
+        log.info("Console close requested; shutting down")
+        try:
+            request_shutdown()
+        except Exception:  # noqa: BLE001 - we are already on the way out
+            return True
+        if not shutdown_complete.wait(timeout_seconds):
+            log.warning(
+                "Windows console graceful shutdown window exceeded %.1f seconds; "
+                "returning control to Windows",
+                timeout_seconds,
+            )
+        # The Win32 grace period is time spent inside this callback. Returning
+        # TRUE says the event is handled and lets Windows terminate the process,
+        # so wait above until cleanup finishes or our safe budget expires.
+        return True
+
+    return _handler
+
+
+def install_close_handler(
+    request_shutdown: Callable[[], None],
+    shutdown_complete: threading.Event,
+) -> bool:
     """Turn closing the console window into a graceful shutdown request.
 
     ``request_shutdown`` is invoked from a Windows-owned thread, so it must be
     thread-safe and must return promptly. Setting Uvicorn's ``should_exit`` is
-    both; anything more involved belongs on the event loop.
+    both; anything more involved belongs on the event loop. The launcher thread
+    must set ``shutdown_complete`` after Uvicorn has stopped and launcher
+    cleanup has finished so the Windows callback can return.
     """
 
     global _ctrl_handler_ref
@@ -111,21 +153,7 @@ def install_close_handler(request_shutdown: Callable[[], None]) -> bool:
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
         handler_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.DWORD)
 
-        def _handler(event: int) -> bool:
-            if event not in (CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT):
-                # Ctrl+C and Ctrl+Break already have signal handlers; claiming
-                # them here would take them away from those.
-                return False
-            log.info("Console close requested; shutting down")
-            try:
-                request_shutdown()
-            except Exception:  # noqa: BLE001 - we are already on the way out
-                return True
-            # Returning TRUE says the event is handled, which is what buys the
-            # process its grace period instead of an immediate termination.
-            return True
-
-        callback = handler_type(_handler)
+        callback = handler_type(_make_close_handler(request_shutdown, shutdown_complete))
         kernel32.SetConsoleCtrlHandler.argtypes = [handler_type, wintypes.BOOL]
         kernel32.SetConsoleCtrlHandler.restype = wintypes.BOOL
         if not kernel32.SetConsoleCtrlHandler(callback, True):
@@ -137,11 +165,14 @@ def install_close_handler(request_shutdown: Callable[[], None]) -> bool:
     return True
 
 
-def harden_console(request_shutdown: Callable[[], None]) -> None:
+def harden_console(
+    request_shutdown: Callable[[], None],
+    shutdown_complete: threading.Event,
+) -> None:
     """Apply every console fix that this platform and session supports."""
 
     disable_quick_edit()
-    install_close_handler(request_shutdown)
+    install_close_handler(request_shutdown, shutdown_complete)
 
 
 __all__ = [

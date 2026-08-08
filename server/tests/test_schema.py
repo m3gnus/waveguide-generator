@@ -107,6 +107,52 @@ def test_expr_rejects_functions_the_pinned_mesher_cannot_execute(raw: str) -> No
         Expr.model_validate(raw)
 
 
+def test_expr_v1_only_function_error_explains_compatibility_limit() -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        Expr.model_validate("exp(1)")
+
+    message = str(exc_info.value)
+    assert "unknown expression function 'exp'" in message
+    assert "the geometry engine supports a fixed set of functions" in message
+    assert "abs, acos, asin, atan, atan2, cos, max, min, pow, sin, sqrt, tan" in message
+    assert "accepted by the v1 UI" in message
+    assert "v1-to-v2 compatibility limit" in message
+
+
+def test_expr_unknown_function_error_does_not_claim_v1_compatibility() -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        Expr.model_validate("sqrtt(9)")
+
+    message = str(exc_info.value)
+    assert "unknown expression function 'sqrtt'" in message
+    assert "the geometry engine supports a fixed set of functions" in message
+    assert "abs, acos, asin, atan, atan2, cos, max, min, pow, sin, sqrt, tan" in message
+    assert "v1-to-v2 compatibility limit" not in message
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("abs(-2)", 2.0),
+        ("acos(1)", 0.0),
+        ("asin(0)", 0.0),
+        ("atan(1)", 0.7853981633974483),
+        ("atan2(1, 1)", 0.7853981633974483),
+        ("cos(0)", 1.0),
+        ("max(1, 2)", 2.0),
+        ("min(1, 2)", 1.0),
+        ("pow(2, 3)", 8.0),
+        ("sin(pi / 2)", 1.0),
+        ("sqrt(9)", 3.0),
+        ("tan(0)", 0.0),
+    ],
+)
+def test_expr_all_mesher_supported_functions_still_evaluate(
+    raw: str, expected: float
+) -> None:
+    assert Expr.model_validate(raw).value == pytest.approx(expected)
+
+
 def test_expr_supports_mesher_atan2_and_e_constant() -> None:
     expression = Expr.model_validate("atan2(1, 1) + e")
     assert expression.value == pytest.approx(3.5036799919)

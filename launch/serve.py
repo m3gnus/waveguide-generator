@@ -195,6 +195,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     stop_browser = threading.Event()
+    shutdown_complete = threading.Event()
     try:
         app = create_app(
             data_dir=paths.root,
@@ -237,7 +238,10 @@ def main(argv: list[str] | None = None) -> int:
         # the handlers we need for the outer cleanup path.
         server.capture_signals = lambda: _capture_shutdown_signals(server)  # type: ignore[method-assign]
         # Windows-only, and a no-op anywhere else or without a console.
-        harden_console(lambda: setattr(server, "should_exit", True))
+        harden_console(
+            lambda: setattr(server, "should_exit", True),
+            shutdown_complete,
+        )
 
         if open_browser:
             threading.Thread(
@@ -263,13 +267,16 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
     finally:
-        stop_browser.set()
-        if listener is not None:
-            listener.close()
-        if lock is not None:
-            lock.release()
-        logging.getLogger("wg2.launch").info("Shutdown complete; instance lock released")
-        flush_logs()
+        try:
+            stop_browser.set()
+            if listener is not None:
+                listener.close()
+            if lock is not None:
+                lock.release()
+            logging.getLogger("wg2.launch").info("Shutdown complete; instance lock released")
+            flush_logs()
+        finally:
+            shutdown_complete.set()
 
 
 if __name__ == "__main__":
