@@ -1,7 +1,7 @@
 import { Box3, Vector3 } from 'three';
 import { describe, expect, it, vi } from 'vitest';
 import { calculateCameraFit } from './cameraMath';
-import { axisColorsFromTokens, cameraFitKey, canRenderWebGL, canvasNeedsRemeasure, gizmoAxisDirection, installContextLossFallback, pickGizmoAxis, scheduleAppliedTask, shouldShowAxisGizmo, type GizmoAxis } from './ViewportCanvas';
+import { axisColorsFromTokens, cameraFitDisposition, cameraFitKey, canRenderWebGL, canvasNeedsRemeasure, gizmoAxisDirection, installContextLossFallback, pickGizmoAxis, scheduleAppliedTask, shouldShowAxisGizmo, type GizmoAxis } from './ViewportCanvas';
 
 class FakeScheduler {
   private readonly tasks = new Set<() => void>();
@@ -119,6 +119,31 @@ describe('viewport renderer guards', () => {
     expect(shouldShowAxisGizmo(601, 240)).toBe(false);
     expect(shouldShowAxisGizmo(601, 241)).toBe(true);
     expect(shouldShowAxisGizmo(646, 269)).toBe(true);
+  });
+});
+
+describe('cameraFitDisposition', () => {
+  const view = '0:perspective:1.6:0.72,0.52,0.72';
+  const otherView = '1:perspective:1.6:0,0,1';
+
+  it('applies the first fit, then settles', () => {
+    expect(cameraFitDisposition({ fit: null, view: null }, { fit: 'a', view }, false)).toBe('apply');
+    expect(cameraFitDisposition({ fit: 'a', view }, { fit: 'a', view }, false)).toBe('settled');
+  });
+
+  it('re-frames a model whose bounds moved while the camera is still the application\'s', () => {
+    expect(cameraFitDisposition({ fit: 'a', view }, { fit: 'b', view }, false)).toBe('apply');
+  });
+
+  // Every preview frame during a drag changes the bounds, and the fit is
+  // computed from the last requested direction -- so applying it would snap an
+  // orbited camera back to the preset several times a second.
+  it('leaves a camera the user has moved alone when only the bounds changed', () => {
+    expect(cameraFitDisposition({ fit: 'a', view }, { fit: 'b', view }, true)).toBe('record');
+  });
+
+  it('takes the camera back when the user asks for a view', () => {
+    expect(cameraFitDisposition({ fit: 'a', view }, { fit: 'b', view: otherView }, true)).toBe('apply');
   });
 });
 
