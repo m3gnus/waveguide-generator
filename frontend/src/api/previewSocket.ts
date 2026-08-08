@@ -81,6 +81,8 @@ export class PreviewSocketManager {
   private heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
   private heartbeatMs = 30_000;
   private maxFrameBytes: number | undefined;
+  /** Revision of the last discontinuous edit; older frames answer a design that no longer exists. */
+  private barrierRevision = 0;
   private stopped = true;
   private readonly listeners = new Set<() => void>();
   private unsubscribeRevision: (() => void) | null = null;
@@ -206,6 +208,28 @@ export class PreviewSocketManager {
     }
   }
 
+  /**
+   * Accept geometry that is behind the live design, but never behind an undo.
+   *
+   * The original rule rendered a frame only when its `designRevision` still
+   * equalled the store's. That is unreachable during any continuous gesture:
+   * the design store commits a revision per `pointermove` — about 104 a second
+   * measured in a real browser — while building even a coarse preview takes
+   * 96 ms here and 192 ms on the Windows reference machine. The revision has
+   * therefore always moved on by the time geometry comes back, so *every*
+   * frame was discarded and the viewport only ever updated in the gaps between
+   * gestures. Reproduced end to end against the real mesher: a 2.2 s drag
+   * produced 21 valid coarse frames and the client accepted 0 of them.
+   *
+   * A frame that lags the design by a few revisions is exactly what the stale
+   * badge exists to describe, and showing it is what makes a drag look live.
+   * The one case where a late frame is not merely old but *wrong* is a
+   * discontinuous jump — undo, redo, load, family switch — where the design in
+   * flight is not an earlier point on the same gesture. Those all announce
+   * themselves with `immediate`, so their revision becomes a barrier and
+   * anything older is still refused, which is the property WS-PROTOCOL §4
+   * case 2 was written for.
+   */
   private onFrame(buffer: ArrayBuffer): void {
     let frame: DecodedFrame;
     try {
@@ -216,21 +240,30 @@ export class PreviewSocketManager {
     }
     const { header } = frame;
     const revision = useDesignStore.getState().designRevision;
-    if (header.epoch !== this.snapshot.epoch || header.designRevision !== revision) {
+    const frameRevision = header.designRevision ?? -1;
+    if (
+      header.epoch !== this.snapshot.epoch
+      || frameRevision < this.barrierRevision
+      || frameRevision < (this.snapshot.displayedRevision ?? 0)
+    ) {
       this.update({ stale: true });
       return;
     }
+    // An error belongs to the revision that produced it. A frame older than
+    // that revision does not answer it, so it must not clear the message.
+    const clearsError = this.snapshot.errorRevision === null
+      || frameRevision >= this.snapshot.errorRevision;
     this.update({
       frame,
-      displayedRevision: revision,
-      lastValidRevision: revision,
-      stale: false,
-      error: null,
-      errorRevision: null,
+      displayedRevision: frameRevision,
+      lastValidRevision: frameRevision,
+      stale: frameRevision !== revision,
+      ...(clearsError ? { error: null, errorRevision: null } : {}),
     });
   }
 
   private onRevision(event: RevisionEvent): void {
+    if (event.immediate) this.barrierRevision = event.revision;
     this.update({ stale: event.revision !== this.snapshot.displayedRevision });
     if (event.immediate) {
       this.cancelPreviewTimers();

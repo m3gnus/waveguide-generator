@@ -23,6 +23,18 @@ function fixture(): ArrayBuffer {
   return buffer;
 }
 
+/** The same fixture with a different two-digit revision patched into its header. */
+function fixtureAtRevision(revision: number): ArrayBuffer {
+  const buffer = fixture();
+  const headerLength = new DataView(buffer).getUint32(4, true);
+  const header = new Uint8Array(buffer, 8, headerLength);
+  const text = new TextDecoder().decode(header);
+  const replaced = text.replace('"designRevision":57', `"designRevision":${revision}`);
+  if (replaced.length !== text.length) throw new Error('revision must stay two digits');
+  header.set(new TextEncoder().encode(replaced));
+  return buffer;
+}
+
 describe('preview socket state machine', () => {
   beforeEach(() => { vi.useFakeTimers(); resetDesignStore(); });
   afterEach(() => vi.useRealTimers());
@@ -41,20 +53,78 @@ describe('preview socket state machine', () => {
     manager.stop();
   });
 
-  it('drops stale-revision frames and accepts current epoch/current revision only', () => {
+  it('drops frames from a stale epoch', () => {
+    const socket = new MockSocket();
+    const manager = new PreviewSocketManager(() => socket, 'ws://test/ws/preview');
+    useDesignStore.setState({ designRevision: 57 });
+    manager.start();
+    socket.message(JSON.stringify({ v: 1, kind: 'hello', epoch: 9, heartbeatSec: 15 }));
+    // The fixture belongs to epoch 3: a frame from a pre-reconnect socket.
+    socket.message(fixture());
+    expect(manager.getSnapshot().frame).toBeNull();
+    expect(manager.getSnapshot().stale).toBe(true);
+    manager.stop();
+  });
+
+  // The rule this replaces rendered a frame only while its revision still
+  // equalled the store's, which no gesture can satisfy: the store commits a
+  // revision per pointermove while the server needs 96-192 ms to build even a
+  // coarse preview. Measured against the real mesher, a 2.2 s drag produced 21
+  // valid coarse frames and the client accepted none of them.
+  it('renders a frame that lags the live design, and says it is stale', () => {
     const socket = new MockSocket();
     const manager = new PreviewSocketManager(() => socket, 'ws://test/ws/preview');
     useDesignStore.setState({ designRevision: 57 });
     manager.start();
     socket.message(JSON.stringify({ v: 1, kind: 'hello', epoch: 3, heartbeatSec: 15 }));
-    useDesignStore.setState({ designRevision: 58 });
+    useDesignStore.setState({ designRevision: 71 });
     socket.message(fixture());
-    expect(manager.getSnapshot().frame).toBeNull();
+    expect(manager.getSnapshot().frame).not.toBeNull();
+    expect(manager.getSnapshot().displayedRevision).toBe(57);
     expect(manager.getSnapshot().stale).toBe(true);
+    manager.stop();
+  });
+
+  it('reports a frame that caught up with the design as current', () => {
+    const socket = new MockSocket();
+    const manager = new PreviewSocketManager(() => socket, 'ws://test/ws/preview');
     useDesignStore.setState({ designRevision: 57 });
+    manager.start();
+    socket.message(JSON.stringify({ v: 1, kind: 'hello', epoch: 3, heartbeatSec: 15 }));
     socket.message(fixture());
     expect(manager.getSnapshot().displayedRevision).toBe(57);
     expect(manager.getSnapshot().stale).toBe(false);
+    manager.stop();
+  });
+
+  it('never renders geometry that an undo has already superseded', () => {
+    const socket = new MockSocket();
+    const manager = new PreviewSocketManager(() => socket, 'ws://test/ws/preview');
+    useDesignStore.setState({ designRevision: 57 });
+    manager.start();
+    socket.message(JSON.stringify({ v: 1, kind: 'hello', epoch: 3, heartbeatSec: 15 }));
+    // An in-flight request for revision 57 is answered after the user undoes.
+    // Unlike a drag, the design that comes back is not an earlier point on the
+    // same gesture -- it is the state the user just rejected.
+    useDesignStore.getState().updateField('a', 46);
+    useDesignStore.getState().undo();
+    socket.message(fixture());
+    expect(manager.getSnapshot().frame).toBeNull();
+    expect(manager.getSnapshot().stale).toBe(true);
+    manager.stop();
+  });
+
+  it('does not go backwards when an older frame arrives after a newer one', () => {
+    const socket = new MockSocket();
+    const manager = new PreviewSocketManager(() => socket, 'ws://test/ws/preview');
+    useDesignStore.setState({ designRevision: 57 });
+    manager.start();
+    socket.message(JSON.stringify({ v: 1, kind: 'hello', epoch: 3, heartbeatSec: 15 }));
+    socket.message(fixture());
+    const displayed = manager.getSnapshot().frame;
+    socket.message(fixtureAtRevision(56));
+    expect(manager.getSnapshot().frame).toBe(displayed);
+    expect(manager.getSnapshot().displayedRevision).toBe(57);
     manager.stop();
   });
 
