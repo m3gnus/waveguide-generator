@@ -460,6 +460,22 @@ depend on has never been produced.
    it did find, and falls back to numba honestly. AUTO picks Metal on macOS, so
    this only ever bit an explicit BEMPP selection.
 
+   **The `pyopencl` pin stays unconditional; this was decided, not overlooked.**
+   The probe fix leaves it dead weight on Apple Silicon rather than a bug, and a
+   `platform_machine` marker was considered and rejected. `uvloop` carries a
+   marker because it *cannot* be installed on Windows; pyopencl installs on
+   macOS arm64 from a prebuilt `cp313-macosx_11_0_arm64` wheel with no build
+   step, and is merely unusable for assembly — a runtime fact, which
+   `_opencl_status()` already reports correctly. Marking it would also mean
+   marking `pytools`, `siphash24`, and `platformdirs`, which nothing else
+   requires, because `scripts/bootstrap.py` demands an exact version for every
+   unmarked lock entry. Keeping it also lets the probe distinguish a missing
+   package from an installed runtime/device failure, and report the device
+   inventory when the platform permits enumeration; uninstalling it reduces
+   all of those cases to a `ModuleNotFoundError` that reads like a broken
+   install. `sys_platform != "darwin"` would be wrong in any case: Intel Macs
+   do expose a CPU OpenCL device.
+
 ---
 
 ## 4. What is explicitly *not* in P6
