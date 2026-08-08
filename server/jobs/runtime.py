@@ -723,6 +723,12 @@ class JobRuntime:
             nonlocal artifact_persisted
             if mesh_stats:
                 self.store.update_job(job_id, mesh_stats_json=json.dumps(mesh_stats))
+                # A mesh diagnosis that only reaches mesh_stats is a diagnosis
+                # nobody reads. These used to be fatal -- an over-budget mesh
+                # ended the solve -- so now that the solve continues, the log
+                # is where the reason for a slow one has to appear.
+                for warning in mesh_stats.get("warnings") or []:
+                    await self._append_log(job_id, str(warning))
             try:
                 await asyncio.to_thread(self.store.store_mesh_artifact, job_id, msh_text)
             except Exception as exc:

@@ -565,17 +565,33 @@ export function ResultsPanel() {
   }, [ids.join('|')]);
 
   const primary = selection.primary ? loaded[selection.primary] : undefined;
+  // The last result that was actually on screen. Following the latest solve
+  // swaps `selection.primary` to a job whose results are still being fetched,
+  // and rendering the placeholder in that gap unmounted every chart in the
+  // dock and rebuilt it a moment later -- the largest blink of the lot, and the
+  // one that lands exactly when a solve finishes. Holding the outgoing result
+  // means the charts stay up and are replaced in one repaint.
+  const held = useRef<ResultPayload | undefined>(undefined);
+  if (primary) held.current = primary;
+  else if (!selection.primary) held.current = undefined;
+  const shown = primary ?? held.current;
   // Keyed on the labels themselves rather than on `jobs`. The jobs array gets a
   // new identity on every progress event of a running solve, and all this needs
   // from it is a display name that changes only when someone renames a job.
   // NUL-joined because labels contain spaces, and nothing a user can type
   // produces a NUL, so the key encodes the list unambiguously.
   const labels = ids.map((id) => labelFor(id, jobs)).join('\u0000');
-  const named = useMemo(
+  const liveNamed = useMemo(
     () => ids.flatMap((id, index) => loaded[id] ? [{ id, label: labels.split('\u0000')[index], result: loaded[id] }] : []),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `labels` is the stable projection of `jobs` this needs
     [ids, labels, loaded],
   );
+  // Held across the same fetch gap as `shown`, so the overlay series do not
+  // empty and refill for one frame while the incoming result is on the wire.
+  const heldNamed = useRef<NamedResult[]>(NO_NAMED_RESULTS);
+  if (liveNamed.length) heldNamed.current = liveNamed;
+  else if (!selection.primary) heldNamed.current = NO_NAMED_RESULTS;
+  const named = liveNamed.length ? liveNamed : heldNamed.current;
   const available = useMemo(() => jobs.filter((job) => job.status === 'complete' && job.has_results && !ids.includes(job.id)), [ids, jobs]);
   const exportSelected = async () => {
     if (!primary) return;
@@ -616,8 +632,8 @@ export function ResultsPanel() {
     </div>
     {preferencesOpen && <ResultsPreferencesSurface popover onClose={() => setPreferencesOpen(false)}/>}
     {(error || exportStatus) && <div className={error ? 'job-error' : ''} role="status" style={{ margin: 7, color: error ? undefined : 'var(--fg2)', fontSize: 9 }}>{error ?? exportStatus}</div>}
-    {!primary
+    {!shown
       ? <div className="coming-soon"><b>LOADING RESULTS</b><span>Fetching selected job data…</span></div>
-      : <ResultsChartGrid chartTypes={preferences.chartTypes} result={primary} named={named} tokens={tokens}/>}
+      : <ResultsChartGrid chartTypes={preferences.chartTypes} result={shown} named={named} tokens={tokens}/>}
   </div>;
 }

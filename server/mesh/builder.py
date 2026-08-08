@@ -258,7 +258,14 @@ def _build_sync(
     _check_cancel(cancel_cb)
     with tempfile.TemporaryDirectory(prefix="wg2-solver-mesh-") as temp_dir:
         mesh_path = Path(temp_dir) / "waveguide.msh"
-        result = build_from_config(config, mesh_path)
+        # The triangle budget is advice here, not a gate.  The mesher refuses to
+        # return a mesh over ``mesh.max_triangles`` -- both on its pre-mesh
+        # estimate and on the finished count -- which turns a solve that would
+        # have taken a while into a solve that did not happen, and leaves the
+        # user to guess which of several mm resolutions to coarsen.  v2 would
+        # rather hand back the mesh and say it is big: the budget is reported
+        # as a warning below, alongside the count it was measured against.
+        result = build_from_config(config, mesh_path, allow_large_mesh=True)
         _check_cancel(cancel_cb)
         msh_text = mesh_path.read_text(encoding="utf-8", errors="replace")
         parsed = meshio.read(mesh_path)
@@ -346,12 +353,28 @@ def _build_sync(
                 f"{max_edge_mm:.6g} mm > {max_edge_guard_mm:.6g} mm"
             )
     full_domain_count = int(round(triangle_count * domain_multiplier))
+    # Prefer the design's own budget over the built-in threshold so the warning
+    # names the number the user set. They coincide by default: mesh.max_triangles
+    # defaults to the same 18,000 full-domain equivalent.
+    budget_full_domain = int(
+        metadata.get("meshTriangleLimit") or LARGE_MESH_WARNING_FULL_DOMAIN_TRIANGLES
+    )
     warnings: list[str] = []
-    if full_domain_count > LARGE_MESH_WARNING_FULL_DOMAIN_TRIANGLES:
+    if full_domain_count > budget_full_domain:
+        effective_budget = max(1, int(round(budget_full_domain / domain_multiplier)))
+        dominant = metadata.get("meshTriangleDominantRegion")
+        dominant_mm = metadata.get("meshTriangleDominantTargetMm")
+        advice = (
+            f" The heaviest region is the {dominant} at {float(dominant_mm):.3g} mm."
+            if dominant and isinstance(dominant_mm, (int, float))
+            else ""
+        )
         warnings.append(
             "Large solve mesh: "
-            f"{triangle_count:,} triangles ({full_domain_count:,} full-domain equivalent). "
+            f"{triangle_count:,} triangles against a budget of {effective_budget:,} "
+            f"({full_domain_count:,} vs {budget_full_domain:,} full-domain equivalent). "
             "The solve may take significantly longer and use more memory."
+            f"{advice} Coarsen that mm resolution or raise mesh.max_triangles."
         )
     if not integrity["valid"]:
         warnings.append(
@@ -396,7 +419,7 @@ def _build_sync(
         "full_domain_triangle_count": full_domain_count,
         "max_edge_mm": max_edge_mm,
         "max_edge_guard_mm": max_edge_guard_mm,
-        "soft_warning_full_domain_triangle_limit": LARGE_MESH_WARNING_FULL_DOMAIN_TRIANGLES,
+        "soft_warning_full_domain_triangle_limit": budget_full_domain,
         "warnings": warnings,
         "integrity": integrity,
     }
