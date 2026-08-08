@@ -180,6 +180,18 @@ def test_a_freeform_v1_job_is_refused_by_name_not_by_silence(name: str) -> None:
     assert resolution.snapshot is None
 
 
+@pytest.mark.parametrize("family", ["ICW", "LOOKUP"])
+def test_an_unsupported_v1_family_surfaces_an_actionable_refusal(family: str) -> None:
+    resolution = resolve_job_design({"params": {"type": family}}, None)
+    assert resolution.reopenable is False
+    assert resolution.reason_code == "unreadable_design"
+    assert resolution.snapshot is None
+    assert resolution.reason is not None
+    assert family in resolution.reason
+    assert "must be re-entered" in resolution.reason
+    assert "cannot be reopened or rerun" in resolution.reason
+
+
 def test_a_row_with_neither_a_design_nor_a_payload_says_so() -> None:
     resolution = resolve_job_design(None, {"options": {}})
     assert resolution.reopenable is False

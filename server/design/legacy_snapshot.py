@@ -14,6 +14,7 @@ class LegacySnapshotError(ValueError):
 
 
 _UNDEFINED = object()
+_SUPPORTED_SNAPSHOT_FAMILIES = frozenset({"OSSE", "R-OSSE"})
 
 
 def _defined(params: Mapping[str, Any], key: str) -> bool:
@@ -425,9 +426,16 @@ def snapshot_to_ath_text(params: Mapping[str, Any]) -> str:
 
     if not isinstance(params, Mapping):
         raise LegacySnapshotError("legacy snapshot params must be a mapping")
-    if params.get("type") == "FREEFORM":
+    family = params.get("type")
+    if not isinstance(family, str) or family not in _SUPPORTED_SNAPSHOT_FAMILIES:
+        if not isinstance(family, str) or not family:
+            raise LegacySnapshotError(
+                "legacy snapshot has no supported design family; the design "
+                "cannot be recovered faithfully and must be re-entered"
+            )
         raise LegacySnapshotError(
-            "FREEFORM legacy snapshots are not supported; the design must be re-entered."
+            f"{family} legacy snapshots are not supported; the design cannot "
+            "be recovered faithfully and must be re-entered"
         )
 
     lines = ["; Parameter config"]

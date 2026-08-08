@@ -364,7 +364,13 @@ _FREEFORM_BLOCKS = frozenset(
     }
 )
 _FREEFORM_PROFILE_ITEMS = frozenset(
-    {"MouthRadius", "MouthAngle", "ThroatTangentScale", "MouthTangentScale"}
+    {
+        "MouthRadius",
+        "MouthAngle",
+        "ThroatAngle",
+        "ThroatTangentScale",
+        "MouthTangentScale",
+    }
 )
 _FREEFORM_STATION_SHAPES = frozenset(
     {"circle", "ellipse", "superellipse", "rounded_rectangle"}
@@ -447,7 +453,9 @@ def _freeform_payload(flat: Mapping[str, str], blocks: Mapping[str, _RawBlock]) 
         points.append({"t": 1, "r": info.items["MouthRadius"]})
         result = {
             "points": points,
-            "throat_angle_deg": flat.get("Freeform.ThroatAngle"),
+            "throat_angle_deg": info.items.get(
+                "ThroatAngle", flat.get("Freeform.ThroatAngle")
+            ),
             "mouth_angle_deg": info.items.get("MouthAngle"),
         }
         if "ThroatTangentScale" in info.items:
@@ -658,6 +666,7 @@ def _serialize_freeform(lines: list[str], config: FreeformConfig) -> None:
             f"Freeform.{axis}",
             [
                 ("MouthRadius", profile.points[-1].r if profile.points else None),
+                ("ThroatAngle", profile.throat_angle_deg),
                 ("MouthAngle", profile.mouth_angle_deg),
             ],
         )
