@@ -56,6 +56,40 @@ Frontend: `cd frontend && npm ci && npm test && npm run build`
 Real solves are never run in hosted CI; Metal and bempp parity run on owned
 qualification hardware, and their archived reports back the release gates.
 
+## Releasing
+
+v2 versions are plain `MAJOR.MINOR.PATCH`, starting at **2.0.0**. v1 is a
+separate line at 1.x, so the two never collide.
+
+The version lives in `shared/version.json` — `/health` and the FastAPI metadata
+read it at runtime, and Vite injects it into the SPA as `__WG2_VERSION__` at
+build time. npm keeps two further copies, in `frontend/package.json` and
+`frontend/package-lock.json`, so move all of them with one command rather than
+by hand:
+
+```bash
+python scripts/bump_version.py patch
+```
+
+`major` and `minor` do the obvious thing, `--set X.Y.Z` sets an exact version,
+and `--check` proves every copy agrees. CI runs `--check` on every push; so does
+`server/tests/test_version_consistency.py`.
+
+Then commit, and tag:
+
+```bash
+git tag v2.0.1 && git push origin v2.0.1
+```
+
+The tag fires `.github/workflows/release.yml`, which **refuses to build when the
+tag disagrees with `shared/version.json`** — a build that misreports itself is
+worse than a failed release. It then attaches the prebuilt SPA as
+`waveguide-generator-v2-spa-<version>.tar.gz` with a `.sha256` beside it, so
+installing v2 needs no Node runtime.
+
+Pre-release and build-metadata suffixes are deliberately unsupported: the tag is
+built as `v` + this string, and the installer and update check compare it.
+
 ## License
 
 AGPL-3.0-or-later. See [LICENSE](LICENSE). The pinned HornLab solver, mesher,

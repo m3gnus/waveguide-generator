@@ -62,6 +62,11 @@ jobs:
       # manifest claims.
       - name: Pinned requirements match pins.json
         run: python scripts/gen_requirements.py --check
+      # shared/version.json is what /health and the SPA report, but npm keeps
+      # its own copies. A drifted lockfile still releases -- it just ships a
+      # build that misreports itself to npm ls and to any SBOM built from it.
+      - name: Declared versions agree
+        run: python scripts/bump_version.py --check
       - name: Lint
         run: |
           python -m pip install --upgrade pip
