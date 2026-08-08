@@ -636,8 +636,10 @@ def _block(
         tuple[str, Expr | tuple[Expr, Expr, Expr, Expr] | str | None]
     ],
     rows: list[str] | None = None,
+    *,
+    emit_empty: bool = False,
 ) -> None:
-    if not any(value is not None for _, value in items) and not rows:
+    if not emit_empty and not any(value is not None for _, value in items) and not rows:
         return
     lines.append(f"{name} = {{")
     for key, value in items:
@@ -728,6 +730,7 @@ def _serialize_canonical(design: DesignConfig, comments: list[str] | None = None
             lines,
             "R-OSSE",
             [(key, getattr(config, key)) for key in ("R", "a", "a0", "b", "k", "m", "q", "r", "r0", "tmax")],
+            emit_empty=True,
         )
     elif isinstance(config, ICWConfig):
         _block(
@@ -753,8 +756,10 @@ def _serialize_canonical(design: DesignConfig, comments: list[str] | None = None
                     "curl",
                 )
             ],
+            emit_empty=True,
         )
     elif isinstance(config, OSSEConfig):
+        _block(lines, "OSSE", [], emit_empty=True)
         _line(lines, "Throat.Profile", config.throat_profile)
         _line(lines, "Throat.Ext.Angle", config.throat_ext_angle)
         _line(lines, "Throat.Ext.Length", config.throat_ext_length)

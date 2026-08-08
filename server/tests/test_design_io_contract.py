@@ -52,6 +52,22 @@ def test_save_bare_design_json_uses_cfg_and_v1_header() -> None:
     assert "Waveguide Generator v2 design-format: 2" in result["text"]
 
 
+@pytest.mark.parametrize(
+    "design",
+    [
+        {"formula": "OSSE", "throat_profile": 1},
+        {"formula": "R-OSSE"},
+        {"formula": "ICW"},
+    ],
+    ids=("OSSE", "R-OSSE", "ICW"),
+)
+def test_save_sparse_design_can_be_opened_again(design: dict[str, object]) -> None:
+    saved = asyncio.run(save_design({"design": design, "filename": "sparse.cfg"}))
+    reopened = asyncio.run(open_design(saved["text"]))
+
+    assert reopened["design"]["formula"] == design["formula"]
+
+
 def test_import_report_is_dry_run_and_invalid_text_has_parse_detail() -> None:
     source = "OSSE = {\nL = 120\na = 45\n}\n"
     first = asyncio.run(import_report(source))
