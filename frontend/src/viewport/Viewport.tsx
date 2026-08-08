@@ -81,8 +81,12 @@ export function Viewport() {
   const [refreshRequestedAt, setRefreshRequestedAt] = useState<number | null>(null);
   const [stalled, setStalled] = useState(false);
   const meshInput = useRef<HTMLInputElement>(null);
+  const importedMeshActive = useRef(false);
+  importedMeshActive.current = importedMesh !== null;
   const setCamera = (preset: CameraPreset) => setCameraRequest((current) => ({ preset, nonce: current.nonce + 1 }));
-  const setCameraDirection = (direction: CameraDirection) => setCameraRequest((current) => ({ direction, nonce: current.nonce + 1 }));
+  const setCameraDirection = useCallback((direction: CameraDirection) => {
+    setCameraRequest((current) => ({ direction, nonce: current.nonce + 1 }));
+  }, []);
   const zoom = (direction: ZoomRequest['direction']) => setZoomRequest((current) => ({ direction, nonce: current.nonce + 1 }));
   const toggleProjection = () => setCameraProjection((current) => current === 'perspective' ? 'orthographic' : 'perspective');
   const reportClientFrame = useCallback((milliseconds: number) => setClientFrameMs(milliseconds), []);
@@ -137,6 +141,12 @@ export function Viewport() {
   };
 
   useEffect(() => subscribeRevision((event) => {
+    // Immediate revisions are discontinuous jumps, not intermediate points in a
+    // drag. Give their next frame a fresh automatic fit even if the preview is
+    // currently disconnected. Imported geometry owns its camera until cleared.
+    if (event.immediate && !importedMeshActive.current) {
+      setCameraRequest((current) => ({ ...current, nonce: current.nonce + 1 }));
+    }
     const epoch = currentEpoch.current;
     if (epoch === null) return;
     if (fineRequestTimer.current) clearTimeout(fineRequestTimer.current);
@@ -222,7 +232,7 @@ export function Viewport() {
         aria-label={`Rebuild the preview. ${staleReason(preferences.liveUpdate, preview.connection, preview.error)}`}
         onClick={refresh}
       ><Icon name="reset"/>{preferences.liveUpdate ? 'Refresh' : 'Resume'}</button>}
-      <span>server <b>{selected?.header.evalMs?.toFixed(1) ?? '—'}</b> + client <b>{formatClientLatency(clientFrameMs)}</b> ms</span>
+      <span>server <b>{selected?.header.evalMs?.toFixed(1) ?? '—'}</b> ms · request→paint <b>{formatClientLatency(clientFrameMs)}</b> ms</span>
     </div>
 
     {!activeScene && <div className="viewport-empty" role="status" aria-live="polite">
