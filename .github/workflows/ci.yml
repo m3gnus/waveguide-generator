@@ -90,8 +90,8 @@ jobs:
           node-version: "20"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      # `server.app` mounts frontend/dist as StaticFiles at import, and dist is
-      # gitignored, so a clean checkout cannot even collect the server tests
+      # `create_app()` mounts frontend/dist as StaticFiles, and dist is
+      # gitignored, so app-constructing server tests fail in a clean checkout
       # until the SPA exists. Releases hand users a prebuilt archive instead;
       # CI has Node, so it builds one.
       - name: Build the SPA the server mounts

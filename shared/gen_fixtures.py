@@ -82,6 +82,19 @@ def minimal_preview() -> bytes:
     )
 
 
+def incomplete_preview() -> bytes:
+    def mark_incomplete(header: dict[str, Any], _payload: bytearray) -> None:
+        header["lod"] = "coarse"
+        header["fidelity"].update(
+            maxChordErrorMmAchieved=None,
+            chordMeasurementComplete=False,
+            unmeasuredChordIntervals=5,
+            vertexCapLimited=True,
+        )
+
+    return alter(minimal_preview(), mark_incomplete)
+
+
 def grid(radius0: float, radius1: float, z0: float, z1: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     rings, segments = 3, 8
     positions: list[list[float]] = []
@@ -179,7 +192,7 @@ def manifest_good(file: str, description: str, frame: bytes) -> dict[str, Any]:
     header, _ = split_frame(frame)
     shapes = {item["name"]: item["shape"] for item in header["sections"]}
     checks: list[dict[str, Any]] = []
-    if file == "good/minimal-preview.bin":
+    if file in {"good/minimal-preview.bin", "good/incomplete-preview.bin"}:
         checks = [{"section": "positions", "index": 3, "value": 10.0}, {"section": "normals", "index": 2, "value": 1.0}]
     elif file == "good/multi-surface-preview.bin":
         checks = [{"section": "hornPositions", "index": 0, "value": 8.0}, {"section": "outerPositions", "index": 0, "value": 10.0}]
@@ -203,6 +216,11 @@ def main() -> None:
     BAD.mkdir(parents=True, exist_ok=True)
     good_frames = [
         ("good/minimal-preview.bin", "Minimal single planar rendered surface", minimal_preview()),
+        (
+            "good/incomplete-preview.bin",
+            "Incomplete chord measurement with an explicit null achieved error",
+            incomplete_preview(),
+        ),
         ("good/multi-surface-preview.bin", "Horn-like inner and outer grids with normals and fidelity metadata", multi_preview()),
         ("good/curve.bin", "Frequency-response curve frame", curve_frame()),
         ("good/result-chunk.bin", "Balloon result chunk", result_chunk_frame()),
@@ -263,7 +281,15 @@ def main() -> None:
     add("positions-nonfinite", "A rendered position is NaN", alter(base, patch_float("positions", 0, float("nan"))))
     add("normals-nonfinite", "A rendered normal is infinite", alter(base, patch_float("normals", 0, float("inf"))))
     add("normals-nonunit", "A rendered normal has zero length", alter(base, patch_float("normals", 2, 0.0)))
-    add("fidelity-invalid", "Required achieved fidelity metadata is absent", alter(base, lambda h, p: h["fidelity"].pop("maxChordErrorMmAchieved")))
+    incomplete = good_frames[1][2]
+    add(
+        "fidelity-invalid",
+        "Incomplete chord measurement omits its required null achieved error",
+        alter(
+            incomplete,
+            lambda h, p: h["fidelity"].pop("maxChordErrorMmAchieved"),
+        ),
+    )
 
     def missed_unreported(h: dict[str, Any], p: bytearray) -> None:
         h["fidelity"]["maxChordErrorMmAchieved"] = 0.2

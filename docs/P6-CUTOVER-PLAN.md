@@ -266,7 +266,8 @@ pushed and when someone runs the installer on a Windows box.
 
 `.github/workflows/ci.yml` now runs on every push and PR: frontend (vitest +
 `tsc --noEmit` + build), shared frame codec (`node --test`), generated-file drift
-(`gen_requirements.py --check`), ruff, and the server suite on ubuntu + macos.
+(`gen_requirements.py --check`), ruff, and the server suite on ubuntu + macos +
+windows.
 `ruff.toml` pins the rule set so a ruff release cannot turn the gate red on its
 own.
 
@@ -278,9 +279,9 @@ Remaining:
   `--branch windows-support` both return nothing. Everything below is therefore
   unproven, not merely unwatched.
 - **Watch the first runs.** The server job installs the four pinned HornLab
-  modules from Git on hosted runners; that path has never executed in CI. Expect
-  to iterate on it once.
-- **Windows job** — P6.4 is now far enough along to add one.
+  modules from Git and builds the SPA on hosted Linux, macOS, and Windows
+  runners; none of those v2 matrix legs has executed in CI. Expect to iterate on
+  them once.
 - **Linux smoke** — bootstrap + serve + `/health`, no solve.
 - **Qualification runners** (R2-P1.3): the nightly constellation run already
   exists. Extend it to publish per-run archived evidence (preflight report,
@@ -321,10 +322,10 @@ GPU — the VM exposes no display adapter, so every frame goes through WARP or
 SwiftShader. Correctness is established; frame rates and the hardware
 ANGLE/D3D11 path are not.
 
-**Still open:** no Windows CI job; solve accuracy never compared against macOS
-(more interesting now that the assembly backend changed, and it belongs to the
-qualification runner); the VC++ and no-OpenCL failure branches are covered by
-faked failures rather than a genuinely clean box.
+**Still open:** solve accuracy was never compared against macOS (more interesting
+now that the assembly backend changed, and it belongs to the qualification
+runner); the VC++ and no-OpenCL failure branches are covered by faked failures
+rather than a genuinely clean box.
 
 ### P6.5 — Beta
 

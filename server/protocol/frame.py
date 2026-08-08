@@ -204,7 +204,11 @@ def _validate_fidelity(header: Header) -> None:
     if complete:
         if not _is_finite_number(achieved_chord) or achieved_chord < 0 or unmeasured != 0:
             _fail("fidelity-invalid", "maxChordErrorMmAchieved")
-    elif achieved_chord is not None or unmeasured < 1:
+    elif (
+        "maxChordErrorMmAchieved" not in fidelity
+        or achieved_chord is not None
+        or unmeasured < 1
+    ):
         _fail("fidelity-invalid", "maxChordErrorMmAchieved")
     for field in int_fields:
         value = fidelity.get(field)

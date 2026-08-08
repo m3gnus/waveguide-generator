@@ -251,17 +251,18 @@ so that installing an OpenCL runtime takes effect without a restart.
 
 ### 4.3 Parallel sweeps are available, and never silent
 
-The pinned wrapper has a spawn-based parallel sweep behind `SolveConfig.workers`
-that v2 was pinning to 1. It now passes the engine's own auto mode, which is
-self-limiting: it splits only when each worker would get at least 40
-frequencies, because a spawned worker re-imports bempp-cl and re-JITs its
-kernels first. Short sweeps therefore stay in one warm process, where they are
-dramatically faster.
+The pinned wrapper has a spawn-based parallel sweep behind `SolveConfig.workers`,
+but v2 runs in one process by default so Stop remains prompt. Setting
+`WG2_SOLVE_WORKERS=0` opts into the engine's auto mode, which splits only when
+each worker would get at least 40 frequencies because a spawned worker
+re-imports bempp-cl and re-JITs its kernels first. Any positive integer forces
+that worker count; `1` is the explicit form of the default.
 
 The caveat is real and is therefore announced in the solve log and the job
 metadata before the solve starts, rather than discovered by pressing Stop:
 **Stop cannot cancel a frequency already running in a sibling worker process.**
-`WG2_SOLVE_WORKERS=1` restores single-process behaviour.
+The measurements that settled the serial default are in
+`docs/P6-CUTOVER-PLAN.md` §3, decision 6.
 
 ### 4.4 Symmetry resolution is memoized
 

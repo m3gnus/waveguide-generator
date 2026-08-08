@@ -66,6 +66,21 @@ Encoders MUST: emit sections in header order, 8-byte aligned, exact lengths; nev
 - TypeScript: `frontend/src/api/frame.ts` — `decodeFrame(buf: ArrayBuffer): {header, sections: Record<string, TypedArray>}` returning typed-array **views** (no copies); encode only needed in tests.
 - Shared fixtures: `shared/frame-fixtures/*.bin` + expected JSON, round-tripped by both languages in CI; plus a malformed-frame corpus (each validation rule above violated once) that both decoders must reject.
 
-## Performance notes (spike-measured ✓)
+## Performance notes (pinned-mesher measurement, 2026-08-08)
 
-Decode cost at fine-LOD sizes (170–335 KB): ~0.1 ms in browser. Alignment + views make GPU upload allocation-free when sizes are unchanged. Fine OSSE frame ≈ 174 KB at 96×48 — at 30 Hz worst case ≈ 5 MB/s localhost, negligible.
+The old numbers here came from the superseded `WGF0` spike. Measured through the
+shipped `DesignConfig` → `design_to_mesher_config` →
+`build_preview_geometry` → `encode_preview_geometry` path, the four current
+frontend family defaults across bare, freestanding, enclosure, and
+infinite-baffle modes produced **0.23–0.64 MB coarse frames** and **1.06–3.05 MB
+fine frames** (decimal MB). In this run, the current OSSE and R-OSSE
+freestanding defaults encoded to 2,610,920 and 3,051,472 bytes at fine LOD
+respectively.
+
+`shared/js/frame.mjs` now performs the v1.1 per-vertex position-finiteness and
+normal-finiteness/unit-length scans. On Node 24.13 / V8 13.6 on an Apple M1 Max,
+20 consecutive decodes of the 3.05 MB R-OSSE frame took a 2.04 ms median
+(1.95–7.17 ms observed; 1.92 ms median after ten warm-up decodes), rather than the
+spike's ~0.1 ms. During a drag the client requests only coarse LOD at the 33 ms
+cadence; that is about **7–19 MB/s** at the measured sizes. Fine LOD is requested
+once the input has been idle for 140 ms, not at 30 Hz.

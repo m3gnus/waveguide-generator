@@ -35,6 +35,38 @@
       "byteExactReencode": true
     },
     {
+      "file": "good/incomplete-preview.bin",
+      "description": "Incomplete chord measurement with an explicit null achieved error",
+      "outcome": "ok",
+      "kind": "preview",
+      "sectionShapes": {
+        "positions": [
+          3,
+          3
+        ],
+        "indices": [
+          3
+        ],
+        "normals": [
+          3,
+          3
+        ]
+      },
+      "spotChecks": [
+        {
+          "section": "positions",
+          "index": 3,
+          "value": 10.0
+        },
+        {
+          "section": "normals",
+          "index": 2,
+          "value": 1.0
+        }
+      ],
+      "byteExactReencode": true
+    },
+    {
       "file": "good/multi-surface-preview.bin",
       "description": "Horn-like inner and outer grids with normals and fidelity metadata",
       "outcome": "ok",
@@ -297,7 +329,7 @@
     },
     {
       "file": "malformed/fidelity-invalid.bin",
-      "description": "Required achieved fidelity metadata is absent",
+      "description": "Incomplete chord measurement omits its required null achieved error",
       "outcome": "fidelity-invalid"
     },
     {
