@@ -8,6 +8,7 @@ Gmsh artifact and that artifact is parsed back for solver statistics/tags.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import importlib.metadata
 import json
@@ -15,9 +16,8 @@ import math
 import tempfile
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import meshio
 import numpy as np
 
 from server.design.schema import DesignConfig, Expr
@@ -27,6 +27,10 @@ from server.solver.quadrants import FULL_DOMAIN_QUADRANTS, normalise_quadrants
 from .cache import SolverMeshArtifactCache, SolverMeshCacheInfo
 from .gmsh_worker import run_on_gmsh_worker
 from .integrity import mesh_integrity_report, mesh_semantic_orientation_report
+
+
+if TYPE_CHECKING:  # pragma: no cover - meshio is imported where it is used
+    import meshio
 
 
 CANONICAL_SURFACE_TAGS = {1, 2, 3, 4, 12}
@@ -145,7 +149,11 @@ def _symmetry_plane_axes(config: Mapping[str, Any]) -> tuple[int, ...]:
     return {1: (0, 1), 12: (1,), 14: (0,), FULL_DOMAIN_QUADRANTS: ()}[quadrants]
 
 
+@functools.lru_cache(maxsize=None)
 def _distribution_version(name: str) -> str:
+    # Uncached this walked sys.path looking for *.dist-info twice per mesh
+    # build -- including on a cache hit, because it feeds the cache key itself.
+    # An installed version cannot change inside a running process.
     try:
         return importlib.metadata.version(name)
     except importlib.metadata.PackageNotFoundError:
@@ -196,7 +204,7 @@ def solver_mesh_cache_info() -> SolverMeshCacheInfo:
     return _solver_mesh_cache.info()
 
 
-def _triangles_and_tags(mesh: meshio.Mesh) -> tuple[np.ndarray, np.ndarray]:
+def _triangles_and_tags(mesh: "meshio.Mesh") -> tuple[np.ndarray, np.ndarray]:
     """Flatten Gmsh triangle blocks exactly as v1 ``mesher_adapter.py:427-441``."""
 
     triangles: list[np.ndarray] = []
@@ -240,6 +248,9 @@ def _build_sync(
         raise RuntimeError(
             "hornlab-waveguide-mesher is not installed; install the pinned server requirements"
         ) from exc
+    # Deferred with the mesher for the same reason: meshio drags in its CLI and
+    # rich, and only a real build ever needs to parse an artifact.
+    import meshio
 
     design = DesignConfig.model_validate(design_dump)
     _check_cancel(cancel_cb)

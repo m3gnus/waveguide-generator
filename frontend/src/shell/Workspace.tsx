@@ -307,10 +307,38 @@ export function Workspace({ resetKey }: { resetKey: number }) {
       });
       observer.observe(host.current);
     }
-    const subscription = dockview.api.onDidLayoutChange(() => {
-      if (dockview.api.totalPanels) localStorage.setItem(LAYOUT_KEY, JSON.stringify(dockview.api.toJSON()));
-    });
+    // onDidLayoutChange coalesces only to a microtask, so dragging a splitter
+    // fires it once per pointermove -- 60-120 Hz on a high-poll mouse. Each
+    // firing walked the whole layout tree, stringified it and wrote it to
+    // localStorage synchronously, while dockview was relaying out and the
+    // WebGL canvas was being resized. Persisting the layout is not urgent;
+    // the trailing timer defers it until the drag stops, and the flush paths
+    // below guarantee it still lands. Same shape as stores/autosave.ts.
+    let persistTimer: ReturnType<typeof setTimeout> | null = null;
+    const persistNow = () => {
+      if (persistTimer !== null) {
+        clearTimeout(persistTimer);
+        persistTimer = null;
+      }
+      if (!apiRef.current || !dockview.api.totalPanels) return;
+      localStorage.setItem(LAYOUT_KEY, JSON.stringify(dockview.api.toJSON()));
+    };
+    const schedulePersist = () => {
+      if (persistTimer !== null) clearTimeout(persistTimer);
+      persistTimer = setTimeout(persistNow, 300);
+    };
+    const flushOnHide = () => {
+      if (document.visibilityState === 'hidden') persistNow();
+    };
+    const subscription = dockview.api.onDidLayoutChange(schedulePersist);
+    window.addEventListener('beforeunload', persistNow);
+    document.addEventListener('visibilitychange', flushOnHide);
     return () => {
+      window.removeEventListener('beforeunload', persistNow);
+      document.removeEventListener('visibilitychange', flushOnHide);
+      // Before dispose, while the layout is still readable: a pending drag
+      // must not be lost by unmounting.
+      persistNow();
       observer?.disconnect();
       subscription.dispose();
       apiRef.current = null;

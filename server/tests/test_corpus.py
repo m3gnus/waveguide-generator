@@ -28,8 +28,16 @@ requires_corpus = pytest.mark.skipif(
     not CORPUS, reason="the v1 checkout is not beside this one"
 )
 
+# The inventory counts include output/, which is the user's own solve history
+# rather than anything the v1 repository carries. A plain v1 clone supplies the
+# ATH fixtures and no snapshots, which satisfied `not CORPUS` and then failed on
+# the snapshot count -- so this one test needs the snapshots specifically.
+requires_snapshot_corpus = pytest.mark.skipif(
+    not SNAPSHOTS, reason="the v1 checkout beside this one has no output/ history"
+)
 
-@requires_corpus
+
+@requires_snapshot_corpus
 def test_corpus_inventory_is_complete() -> None:
     assert len(SNAPSHOTS) == 191
     assert len(ATH_FIXTURES) == 3

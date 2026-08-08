@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, FastAPI, HTTPException, Query, WebSocket
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, Response
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from server.jobs.events import CLOSE_ORIGIN_REJECTED, JobsProtocol
@@ -98,10 +98,18 @@ def create_jobs_router(runtime: JobRuntime) -> APIRouter:
         except JobNotFoundError as exc:
             raise HTTPException(status_code=404, detail="Job not found") from exc
 
-    @router.get("/api/results/{job_id}")
-    async def job_results(job_id: str) -> dict[str, Any]:
+    @router.get("/api/results/{job_id}", response_model=None)
+    async def job_results(job_id: str) -> Response:
+        # Returned as a pre-encoded body on purpose. A dict return value makes
+        # FastAPI validate the response against the annotation and then
+        # re-serialise it, which for a multi-megabyte sweep is two extra full
+        # walks of the data on the event loop before json.dumps does a third.
+        # The database already holds exactly the bytes the client wants.
         try:
-            return await runtime.get_results(job_id)
+            return Response(
+                content=await runtime.get_results_text(job_id),
+                media_type="application/json",
+            )
         except JobNotFoundError as exc:
             raise HTTPException(status_code=404, detail="Job not found") from exc
         except JobConflictError as exc:

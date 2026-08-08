@@ -22,7 +22,14 @@ import time
 log = logging.getLogger("wg2.warmup")
 
 #: How long shutdown waits for a warmup to finish before giving up on it.
-DRAIN_TIMEOUT_SECONDS = 5.0
+#:
+#: A warmup is an optimisation, so quitting must never wait on one for long.
+#: One second still covers both real warmups comfortably in the normal case
+#: (39 ms for the mesher import, 260 ms for the engine probe, and 500-950 ms
+#: for the probe when it has to import Metal and BEMPP cold), while capping
+#: what a "start it, quit immediately" run can cost at roughly a second
+#: instead of five.
+DRAIN_TIMEOUT_SECONDS = 1.0
 
 
 class BackgroundWarmup:

@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import gzip
 import json
+import logging
 from pathlib import Path
 import threading
 import time
@@ -193,6 +194,156 @@ def test_create_app_registers_every_prewarm(tmp_path: Path) -> None:
     shutdown = {handler.__name__ for handler in application.router.on_shutdown}
     assert {"prewarm_gmsh_worker", "prewarm_mesher", "prewarm"} <= startup
     assert {"shutdown_mesher_prewarm", "shutdown_prewarm"} <= shutdown
+
+
+def test_the_solver_warmup_is_opt_in(tmp_path: Path) -> None:
+    """Tests build dozens of apps; none of them may compile BEM kernels.
+
+    The warmup takes ~26 s of CPU on the development machine, so it belongs
+    only to the process that is serving a real user.
+    """
+
+    default_startup = {
+        handler.__name__ for handler in create_app(data_dir=tmp_path).router.on_startup
+    }
+    assert "prewarm_solver" not in default_startup
+
+    warmed = create_app(data_dir=tmp_path, solver_warmup=True)
+    assert "prewarm_solver" in {handler.__name__ for handler in warmed.router.on_startup}
+
+
+def test_the_solver_warmup_handler_never_blocks_startup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Startup runs before the listen socket exists, so this must only schedule."""
+
+    from server.solver import warmup as solver_warmup
+
+    started = 0
+
+    def fake_start() -> None:
+        nonlocal started
+        started += 1
+
+    monkeypatch.setattr(solver_warmup, "start_solver_warmup", fake_start)
+    from server.app import prewarm_solver
+
+    asyncio.run(prewarm_solver())
+    assert started == 1
+
+
+def test_the_solver_warmup_can_be_switched_off() -> None:
+    from server.solver import warmup as solver_warmup
+
+    import os
+
+    previous = os.environ.get("WG2_SOLVER_WARMUP")
+    os.environ["WG2_SOLVER_WARMUP"] = "0"
+    try:
+        assert solver_warmup.start_solver_warmup() is None
+    finally:
+        if previous is None:
+            os.environ.pop("WG2_SOLVER_WARMUP", None)
+        else:
+            os.environ["WG2_SOLVER_WARMUP"] = previous
+
+
+def test_solver_warmup_follows_auto_engine_priority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Metal host must not spend seconds warming an unused BEMPP fallback."""
+
+    from server.solver import metal, warmup
+
+    calls: list[str] = []
+    monkeypatch.setattr(metal, "metal_status", lambda: {"available": True})
+    monkeypatch.setattr(warmup, "_warm_metal", lambda: calls.append("metal"))
+    monkeypatch.setattr(
+        warmup,
+        "_warm_bempp",
+        lambda _status: calls.append("bempp"),
+    )
+
+    warmup._run_warmup()
+
+    assert calls == ["metal"]
+
+
+def test_solver_warmup_falls_back_to_bempp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from server.solver import bempp, metal, warmup
+
+    calls: list[tuple[str, object]] = []
+    status = {"available": True, "assembly_backend": "numba"}
+    monkeypatch.setattr(metal, "metal_status", lambda: {"available": False})
+    monkeypatch.setattr(bempp, "bempp_status", lambda: status)
+    monkeypatch.setattr(warmup, "_warm_metal", lambda: calls.append(("metal", None)))
+    monkeypatch.setattr(warmup, "_warm_bempp", lambda value: calls.append(("bempp", value)))
+
+    warmup._run_warmup()
+
+    assert calls == [("bempp", status)]
+
+
+def test_solver_warmup_skips_when_no_physical_engine_is_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from server.solver import bempp, metal, warmup
+
+    calls: list[str] = []
+    monkeypatch.setattr(metal, "metal_status", lambda: {"available": False, "reason": "no Metal"})
+    monkeypatch.setattr(bempp, "bempp_status", lambda: {"available": False, "reason": "no BEMPP"})
+    monkeypatch.setattr(warmup, "_warm_metal", lambda: calls.append("metal"))
+    monkeypatch.setattr(warmup, "_warm_bempp", lambda _status: calls.append("bempp"))
+
+    warmup._run_warmup()
+
+    assert calls == []
+
+
+def test_warmup_solver_chatter_is_filtered_but_our_own_line_survives() -> None:
+    """A hundred lines of assembler timings must not land in the user's log.
+
+    Filtering on the thread rather than on the library keeps a real solve's
+    diagnostics intact even if one happens to overlap the warmup.
+    """
+
+    from server.solver.warmup import WARMUP_THREAD_NAME, _QuietWarmupFilter
+
+    quiet = _QuietWarmupFilter()
+
+    def record(name: str, thread: str) -> logging.LogRecord:
+        made = logging.LogRecord(name, logging.INFO, __file__, 1, "m", None, None)
+        made.threadName = thread
+        return made
+
+    assert not quiet.filter(record("bempp", WARMUP_THREAD_NAME))
+    assert not quiet.filter(record("hornlab_bempp_bem.bie", WARMUP_THREAD_NAME))
+    assert quiet.filter(record("wg2.solver.warmup", WARMUP_THREAD_NAME))
+    # A real solve logs from a different thread and is never touched.
+    assert quiet.filter(record("bempp", "asyncio_0"))
+
+
+def test_hashed_assets_are_immutable_and_the_document_is_not(tmp_path: Path) -> None:
+    """The SPA re-downloads three multi-hundred-kB chunks without this.
+
+    Vite content-hashes everything under /assets/, so a changed build is a
+    changed URL; index.html is the one name that never changes and must never
+    be cached, or the app pins itself to a build that may be gone.
+    """
+
+    client = HeaderClient(create_app(data_dir=tmp_path))
+    _status, headers, _body = client.get("/")
+    assert headers.get("cache-control") == "no-cache"
+
+    assets = Path(__file__).resolve().parents[2] / "frontend" / "dist" / "assets"
+    entry = next((item for item in assets.glob("*.js")), None)
+    if entry is None:  # pragma: no cover - only when the SPA is not built
+        pytest.skip("frontend/dist/assets is not built")
+    status, headers, _body = client.get(f"/assets/{entry.name}")
+    assert status == 200
+    assert headers.get("cache-control") == "public, max-age=31536000, immutable"
 
 
 def test_import_mesher_modules_reports_only_what_imported() -> None:

@@ -54,6 +54,52 @@ describe('jobs websocket state machine', () => {
     manager.stop();
   });
 
+  it('does not notify subscribers when an event changes nothing', () => {
+    // Four components subscribe to this store, and one of them rebuilds every
+    // open ECharts option. A repeated progress value used to re-render all of
+    // them, several times a second, for the whole duration of a solve.
+    const socket = new MockSocket();
+    const manager = new JobsSocketManager(() => socket, vi.fn(), 'ws://test/ws/jobs');
+    manager.start();
+    socket.message({ v: 1, kind: 'hello', epoch: 4, heartbeatSec: 15 });
+    socket.message({ v: 1, kind: 'snapshot', epoch: 4, cursor: 10, jobs: [job({ status: 'running', progress: .5 })] });
+
+    let notifications = 0;
+    manager.subscribe(() => { notifications += 1; });
+    const before = manager.getSnapshot();
+
+    socket.message({ v: 1, kind: 'event', epoch: 4, cursor: 11, jobId: 'job-1', type: 'progress', payload: { progress: .5 } });
+    expect(notifications).toBe(0);
+    // The cursor still advances -- it just does not wake anybody on its own.
+    expect(manager.getSnapshot().cursor).toBe(11);
+    expect(manager.getSnapshot().jobs[0]).toBe(before.jobs[0]);
+
+    // A real change still propagates, with fresh identities.
+    socket.message({ v: 1, kind: 'event', epoch: 4, cursor: 12, jobId: 'job-1', type: 'progress', payload: { progress: .75 } });
+    expect(notifications).toBe(1);
+    expect(manager.getSnapshot().jobs[0].progress).toBe(.75);
+    expect(manager.getSnapshot().jobs[0]).not.toBe(before.jobs[0]);
+    manager.stop();
+  });
+
+  it('keeps list order stable across patches, since created_at cannot change', () => {
+    const socket = new MockSocket();
+    const manager = new JobsSocketManager(() => socket, vi.fn(), 'ws://test/ws/jobs');
+    manager.start();
+    socket.message({ v: 1, kind: 'hello', epoch: 4, heartbeatSec: 15 });
+    socket.message({
+      v: 1, kind: 'snapshot', epoch: 4, cursor: 10,
+      jobs: [
+        job({ id: 'newer', created_at: '2026-08-03T12:00:00Z' }),
+        job({ id: 'older', created_at: '2026-08-03T10:00:00Z' }),
+      ],
+    });
+    expect(manager.getSnapshot().jobs.map((item) => item.id)).toEqual(['newer', 'older']);
+    socket.message({ v: 1, kind: 'event', epoch: 4, cursor: 11, jobId: 'older', type: 'progress', payload: { progress: .9 } });
+    expect(manager.getSnapshot().jobs.map((item) => item.id)).toEqual(['newer', 'older']);
+    manager.stop();
+  });
+
   it('splits multiline log chunks into bounded individual tail lines', () => {
     const socket = new MockSocket();
     const manager = new JobsSocketManager(() => socket, vi.fn(), 'ws://test/ws/jobs');

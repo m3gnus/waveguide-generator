@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import fcntl
 import logging
 from logging.handlers import RotatingFileHandler
 import os
@@ -29,18 +28,46 @@ from server.platform.instance import (
 )
 from server.platform.origin import local_origin
 from server.platform.paths import ensure_data_layout
+from server.platform.signal_rearm import (
+    rearm_registered_signals,
+    register_signal_rearm,
+    unregister_signal_rearm,
+)
 
 
 def test_advisory_lock_rejects_partially_written_live_owner(tmp_path: Path) -> None:
+    # Lock the file the way another instance would, but write no metadata, so
+    # the conflict is decided by the lock alone rather than by what it contains.
     path = tmp_path / "server.pid"
-    descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
-    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    descriptor = os.open(path, instance.LOCK_OPEN_FLAGS, 0o600)
+    instance.lock_exclusive(descriptor)
     try:
         with pytest.raises(InstanceAlreadyRunning):
             InstanceLock(tmp_path).acquire(3100)
     finally:
-        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        instance.unlock(descriptor)
         os.close(descriptor)
+
+
+def test_pid_liveness_probe_answers_without_killing() -> None:
+    """The probe must report on a process, never terminate it.
+
+    os.kill(pid, 0) is a liveness check on POSIX but resolves to
+    TerminateProcess on Windows, so the survival assertion matters as much as
+    the answer does.
+    """
+
+    child = subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.read()"], stdin=subprocess.PIPE)
+    try:
+        assert instance._pid_is_running(child.pid) is True
+        assert child.poll() is None
+    finally:
+        child.kill()
+        child.wait()
+
+    assert instance._pid_is_running(child.pid) is False
+    assert instance._pid_is_running(os.getpid()) is True
+    assert instance._pid_is_running(0) is False
 
 
 def test_lock_filesystem_oserror_is_wrapped(tmp_path: Path) -> None:
@@ -67,15 +94,26 @@ def test_runtime_file_handler_rotates_during_logging(
     monkeypatch.setattr(logging_setup, "MAX_LOG_BYTES", 256)
     paths = ensure_data_layout(tmp_path)
     logger = logging_setup.setup_logging(paths)
+    # The writing handlers moved behind a QueueListener so that formatting and
+    # disk I/O leave the calling thread -- which for every request and job
+    # event is the event loop. They are still exactly one rotating file
+    # handler, they are just no longer attached to the root logger.
     file_handlers = [
         handler
-        for handler in logging.getLogger().handlers
+        for handler in logging_setup.log_sinks()
         if isinstance(handler, RotatingFileHandler)
     ]
     assert len(file_handlers) == 1
+    assert not any(
+        isinstance(handler, RotatingFileHandler)
+        for handler in logging.getLogger().handlers
+    )
     logger.warning("x" * 220)
     logger.warning("y" * 220)
-    file_handlers[0].flush()
+    # Delivery is asynchronous now, so rotation cannot be asserted until the
+    # queue has drained. Stopping the listener is the drain, and it is what the
+    # server itself does on the way out.
+    logging_setup.flush_logs()
     assert (paths.logs / "server.log.1").exists()
 
 
@@ -119,6 +157,29 @@ def test_launcher_checks_lock_conflict_before_port_binding(
     monkeypatch.setattr(serve, "reserve_port", reserve)
     assert serve.main(["--no-browser"]) == 2
     assert bound is False
+
+
+def test_launcher_stops_log_listener_on_early_port_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Port validation happens after logging starts and must still drain it."""
+
+    monkeypatch.setenv("WG2_PORT", "not-a-port")
+
+    assert serve.main(["--no-browser", "--data-dir", str(tmp_path)]) == 1
+    assert logging_setup._listener is None
+
+
+def test_registered_native_signal_rearm_callbacks_are_removable() -> None:
+    calls: list[str] = []
+    token = register_signal_rearm(lambda: calls.append("rearmed"))
+    try:
+        rearm_registered_signals()
+    finally:
+        unregister_signal_rearm(token)
+    rearm_registered_signals()
+
+    assert calls == ["rearmed"]
 
 
 def test_port_reservation_retries_bind_failures_without_real_sockets(

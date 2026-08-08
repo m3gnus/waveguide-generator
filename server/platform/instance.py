@@ -4,13 +4,32 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import errno
-import fcntl
 import json
 import logging
 import os
 from pathlib import Path
 import socket
+import sys
+import threading
 from typing import Mapping
+
+if sys.platform == "win32":
+    import ctypes
+    from ctypes import wintypes
+    import msvcrt
+
+    _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    # Without prototypes ctypes assumes every argument and the return value is a
+    # C int. A HANDLE is pointer-sized, so the returned handle would be
+    # truncated on 64-bit Windows and then closed by its truncated value.
+    _kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    _kernel32.OpenProcess.restype = wintypes.HANDLE
+    _kernel32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+    _kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+    _kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    _kernel32.CloseHandle.restype = wintypes.BOOL
+else:
+    import fcntl
 
 
 DEFAULT_PORT = 3100
@@ -18,7 +37,52 @@ PORT_ENV = "WG2_PORT"
 PORT_SCAN_COUNT = 9
 LOCK_FILENAME = "server.pid"
 
+# Windows descriptors are text mode unless asked otherwise, which would turn the
+# metadata's trailing newline into CRLF. The lock file reads back byte-for-byte
+# on every platform instead.
+LOCK_OPEN_FLAGS = os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0)
+
+# Windows byte-range locks are mandatory and start at the current file position,
+# so the locked byte sits past anything the metadata will ever occupy. Locking
+# offset 0 measurably breaks both directions: the owner is denied the truncate
+# in update_port, and every other process is denied the read that names the
+# running instance, so the conflict message loses its pid and port. POSIX flock
+# takes the whole file and ignores the offset.
+LOCK_BYTE_OFFSET = 1 << 30
+
+# Win32 constants for the liveness probe below.
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+ERROR_ACCESS_DENIED = 5
+STILL_ACTIVE = 259
+
 log = logging.getLogger("wg2.instance")
+
+
+def lock_exclusive(descriptor: int) -> None:
+    """Take the instance lock without blocking; BlockingIOError means held."""
+
+    if sys.platform == "win32":
+        os.lseek(descriptor, LOCK_BYTE_OFFSET, os.SEEK_SET)
+        try:
+            msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+        except OSError as exc:
+            # A contended range is reported as EACCES. Anything else is a real
+            # filesystem fault and belongs in the caller's hard-error path.
+            if exc.errno != errno.EACCES:
+                raise
+            raise BlockingIOError(exc.errno, exc.strerror or "instance lock held") from None
+    else:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def unlock(descriptor: int) -> None:
+    """Release a lock taken by :func:`lock_exclusive`."""
+
+    if sys.platform == "win32":
+        os.lseek(descriptor, LOCK_BYTE_OFFSET, os.SEEK_SET)
+        msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+    else:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,9 +119,28 @@ class InstanceAlreadyRunning(InstanceLockError):
 LockConflict = InstanceAlreadyRunning
 
 
+def _windows_pid_is_running(pid: int) -> bool:
+    # os.kill(pid, 0) is not a liveness probe on Windows: it resolves to
+    # TerminateProcess, so the check kills the process it is asked about.
+    # Opening a query handle answers the same question without that side effect.
+    handle = _kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        # A live process we are not allowed to open still counts as running.
+        return ctypes.get_last_error() == ERROR_ACCESS_DENIED
+    try:
+        exit_code = wintypes.DWORD()
+        if not _kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+            return True
+        return exit_code.value == STILL_ACTIVE
+    finally:
+        _kernel32.CloseHandle(handle)
+
+
 def _pid_is_running(pid: int) -> bool:
     if pid <= 0:
         return False
+    if sys.platform == "win32":
+        return _windows_pid_is_running(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -91,24 +174,33 @@ class InstanceLock:
         self._owned = False
         self._pid = os.getpid()
         self._descriptor: int | None = None
+        # One descriptor with one shared file position is now seeked by locking,
+        # unlocking and every metadata rewrite, so concurrent callers could
+        # interleave a seek with another's truncate and write a malformed lock.
+        # Reentrant because acquire() calls update_port() and release().
+        self._guard = threading.RLock()
 
     @property
     def owned(self) -> bool:
         return self._owned
 
     def acquire(self, port: int) -> InstanceInfo:
+        with self._guard:
+            return self._acquire(port)
+
+    def _acquire(self, port: int) -> InstanceInfo:
         if self._owned:
             return self.update_port(port)
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            descriptor = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o600)
+            descriptor = os.open(self.path, LOCK_OPEN_FLAGS, 0o600)
         except OSError as exc:
             raise InstanceLockError(
                 f"Could not open instance lock {self.path}: {exc}. Check that the data "
                 "directory is writable, then start again."
             ) from exc
         try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            lock_exclusive(descriptor)
         except BlockingIOError:
             os.close(descriptor)
             try:
@@ -131,31 +223,38 @@ class InstanceLock:
     def update_port(self, port: int) -> InstanceInfo:
         """Rewrite metadata while retaining the same locked descriptor."""
 
-        if not self._owned or self._descriptor is None:
-            raise InstanceLockError("Cannot update instance metadata before acquiring the lock")
-        info = InstanceInfo(pid=self._pid, port=requested_port(port, environ={}))
-        payload = (json.dumps({"pid": info.pid, "port": info.port}, sort_keys=True) + "\n").encode()
-        try:
-            os.lseek(self._descriptor, 0, os.SEEK_SET)
-            os.ftruncate(self._descriptor, 0)
-            os.write(self._descriptor, payload)
-            os.fsync(self._descriptor)
-        except OSError as exc:
-            raise InstanceLockError(f"Could not write instance lock metadata {self.path}: {exc}") from exc
-        return info
+        with self._guard:
+            descriptor = self._descriptor
+            if not self._owned or descriptor is None:
+                raise InstanceLockError("Cannot update instance metadata before acquiring the lock")
+            info = InstanceInfo(pid=self._pid, port=requested_port(port, environ={}))
+            payload = (
+                json.dumps({"pid": info.pid, "port": info.port}, sort_keys=True) + "\n"
+            ).encode()
+            try:
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                os.ftruncate(descriptor, 0)
+                os.write(descriptor, payload)
+                os.fsync(descriptor)
+            except OSError as exc:
+                raise InstanceLockError(
+                    f"Could not write instance lock metadata {self.path}: {exc}"
+                ) from exc
+            return info
 
     def release(self) -> None:
-        if not self._owned:
-            return
-        descriptor, self._descriptor = self._descriptor, None
-        if descriptor is not None:
-            try:
-                fcntl.flock(descriptor, fcntl.LOCK_UN)
-            except OSError:
-                log.exception("Could not unlock instance file %s", self.path)
-            finally:
-                os.close(descriptor)
-        self._owned = False
+        with self._guard:
+            if not self._owned:
+                return
+            descriptor, self._descriptor = self._descriptor, None
+            if descriptor is not None:
+                try:
+                    unlock(descriptor)
+                except OSError:
+                    log.exception("Could not unlock instance file %s", self.path)
+                finally:
+                    os.close(descriptor)
+            self._owned = False
 
     def __enter__(self) -> "InstanceLock":
         if not self._owned:
