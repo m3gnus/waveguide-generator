@@ -191,8 +191,8 @@ class DependencyRuntimeTest(unittest.TestCase):
                 "gmsh_python",
             },
         )
-        self.assertIn("d6ac479", SUPPORTED_DEPENDENCY_MATRIX["hornlab_waveguide_mesher"]["range"])
-        self.assertIn("c89086e", SUPPORTED_DEPENDENCY_MATRIX["hornlab_metal_bem"]["range"])
+        self.assertIn("8a8f383", SUPPORTED_DEPENDENCY_MATRIX["hornlab_waveguide_mesher"]["range"])
+        self.assertIn("4bcf889", SUPPORTED_DEPENDENCY_MATRIX["hornlab_metal_bem"]["range"])
         self.assertIn("c6f4077", SUPPORTED_DEPENDENCY_MATRIX["hornlab_bempp_bem"]["range"])
         self.assertEqual(
             SUPPORTED_DEPENDENCY_MATRIX["hornlab_bempp_bem"]["required_for"],

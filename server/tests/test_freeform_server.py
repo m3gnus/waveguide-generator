@@ -402,12 +402,19 @@ class FreeformAdapterTest(unittest.TestCase):
             waveguide_payload_to_mesher_config({"formula_type": "FREEFORM"})
 
     def test_explicit_circsym_requires_degenerate_circular_freeform(self):
+        # A wall is what makes the meridian a closed body of revolution. The
+        # fixture is bare, and the mesher now refuses bare shells for CircSym
+        # before it ever looks at azimuth -- so without this the test would
+        # pass on a reason it is not about. Thin, because a thicker wall trips
+        # the outward-curvature guard at this 12.7 mm throat first.
         unequal = _freeform_payload()
+        unequal["wall_thickness"] = 1.5
         with self.assertRaisesRegex(ValueError, "inner profile varies with azimuth"):
             validate_circsym_axisymmetric(unequal)
 
         shared = [[0.0, 12.7], [60.0, 70.0], [120.0, 120.0]]
         circular = _freeform_payload()
+        circular["wall_thickness"] = 1.5
         circular["profile_h"]["points"] = shared
         circular["profile_v"] = {
             **circular["profile_h"],
