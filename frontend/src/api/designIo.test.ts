@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hydrateDesignDocument } from './designIo';
+import { downloadGeometryExport, hydrateDesignDocument } from './designIo';
 import { serializeDesign } from '../stores/design';
 
 describe('design hydration', () => {
@@ -47,5 +47,40 @@ describe('design hydration', () => {
     expect(design.a).toBe(25);
     expect(design._expressions).toMatchObject({ R: { value: 280, raw: '140 * 2' }, a: { value: null, raw: 'coverage(p)' } });
     expect(serializeDesign(design)).toMatchObject({ R: { value: 280, raw: '140 * 2' }, a: { value: null, raw: 'coverage(p)' } });
+  });
+});
+
+describe('geometry export requests', () => {
+  function recordingFetcher(): { urls: string[]; fetcher: typeof fetch } {
+    const urls: string[] = [];
+    const fetcher = (async (url: string) => {
+      urls.push(String(url));
+      return new Response(new Blob(['ISO-10303-21;']), {
+        status: 200,
+        headers: { 'Content-Type': 'model/step' },
+      });
+    }) as unknown as typeof fetch;
+    return { urls, fetcher };
+  }
+
+  const design = hydrateDesignDocument({ formula: 'OSSE', L: 120, a: 45 });
+
+  it('asks for the manufacturable solid by default', async () => {
+    const { urls, fetcher } = recordingFetcher();
+    await downloadGeometryExport('step', design, 3, 'horn', undefined, undefined, fetcher);
+    expect(urls).toEqual(['/api/export/step?body=solid']);
+  });
+
+  it('asks for the inner surface when that body is chosen', async () => {
+    const { urls, fetcher } = recordingFetcher();
+    await downloadGeometryExport('step', design, 3, 'horn', undefined, 'surface', fetcher);
+    expect(urls).toEqual(['/api/export/step?body=surface']);
+  });
+
+  it('leaves the other geometry exports unqueried', async () => {
+    const { urls, fetcher } = recordingFetcher();
+    await downloadGeometryExport('stl', design, 3, 'horn', undefined, undefined, fetcher);
+    await downloadGeometryExport('profiles', design, 3, 'horn', 'slices', undefined, fetcher);
+    expect(urls).toEqual(['/api/export/stl', '/api/export/profiles?kind=slices']);
   });
 });

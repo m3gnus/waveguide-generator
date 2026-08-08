@@ -23,6 +23,25 @@ A third pass on 2026-08-05 closed the remaining crash-recovery item:
 
 - **N002 — autosave.** Versioned local draft recovery restores the design, filename, dirty/saved state, and monotonic revision before React mounts; edits are debounced and visibility/unload transitions flush synchronously (`frontend/src/stores/autosave.ts`, `frontend/src/stores/autosave.test.ts`). No v1 contract existed.
 
+A fourth pass on 2026-08-07 changed what STEP means, and closed the CAD test both
+STEP rows had been owed since Phase 1:
+
+- **F004 / A013 — STEP body.** v1 exported the acoustic inner surface only: an
+  open, degree-1 ruled shell with no wall thickness, no enclosure, and no caps,
+  which CAD had to thicken and cap by hand. v2 keeps that as `?body=surface` but
+  **defaults to `?body=solid`**, a closed B-rep solid sewn from the mesher's own
+  OCC model with the driver membrane cut away so the bore runs through
+  (`hornlab_mesher/cad.py`, `server/exports/core.py:build_step_solid`). This is a
+  deliberate divergence, not a parity gap — the v1 body is still one query
+  parameter away.
+- **The "CAD topology fixture" / "CAD golden test" both rows listed as Required
+  is now real.** Every prior STEP test monkeypatched the builder, so nothing
+  exercised gmsh; `hornlab-waveguide-mesher/tests/test_cad_step.py` runs the real
+  kernel and asserts a single `MANIFOLD_SOLID_BREP`, millimetre units, an open
+  throat, no loose surfaces, and a round-trip re-import. The axis-mapping and
+  face-orientation questions in `EXPORT-CONTRACTS.md` remain open for the
+  surface body.
+
 Still genuinely open, unchanged by the build:
 
 - **V013 / Q006 — generic section-curve overlays.** No owning v1 contract was ever located. Do not claim parity.

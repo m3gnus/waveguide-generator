@@ -7,6 +7,7 @@ import {
   openDesignText,
   saveDesignDocument,
   type ImportReport,
+  type StepBody,
 } from '../api/designIo';
 import { useDesignStore } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
@@ -106,9 +107,9 @@ export function DesignFileMenu() {
     });
   }
 
-  async function exportOne(kind: 'step' | 'stl') {
+  async function exportOne(kind: 'step' | 'stl', stepBody: StepBody = 'solid') {
     await act(async () => {
-      await downloadGeometryExport(kind, design, revision, filenameStem(filename));
+      await downloadGeometryExport(kind, design, revision, filenameStem(filename), undefined, stepBody);
       setMessage(`Exported ${kind.toUpperCase()} from revision ${revision}`);
     });
   }
@@ -138,7 +139,8 @@ export function DesignFileMenu() {
       <div className="design-menu-divider"/>
       <button role="menuitem" aria-expanded={exportsOpen} className="design-menu-item" disabled={busy} onClick={() => setExportsOpen((value) => !value)}><span>Export</span><span>{exportsOpen ? '⌄' : '›'}</span></button>
       {exportsOpen && <div role="menu" aria-label="Export design" className="design-menu-nested">
-        <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void exportOne('step')}><span>STEP</span><span>.step</span></button>
+        <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void exportOne('step')} title="Closed solid with walls and enclosure — imports straight into Fusion 360 or Onshape"><span>STEP solid</span><span>.step</span></button>
+        <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void exportOne('step', 'surface')} title="Inner acoustic surface only, for thickening or lofting yourself"><span>STEP inner surface</span><span>.step</span></button>
         <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void exportOne('stl')}><span>STL</span><span>.stl</span></button>
         <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void exportProfiles()}><span>Profiles CSV</span><span>2 files</span></button>
       </div>}

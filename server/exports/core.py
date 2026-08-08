@@ -225,6 +225,48 @@ async def build_step(design: DesignConfig) -> str:
     return await run_on_gmsh_worker(_build_step_sync, design.model_dump(mode="json"))
 
 
+def _build_step_solid_sync(design_dump: dict[str, Any]) -> str:
+    design = DesignConfig.model_validate(design_dump)
+    try:
+        from hornlab_mesher.cad import write_step_from_config
+    except ImportError as exc:
+        raise RuntimeError(
+            "the installed hornlab-waveguide-mesher has no CAD export; "
+            "install the pinned server requirements"
+        ) from exc
+
+    # The solver's own config, so the exported part is the geometry that was
+    # solved rather than a second derivation of it. write_step_from_config
+    # reopens a reduced domain to all four quadrants: a solve may run on a
+    # quarter model, but a part cannot be a quarter of itself.
+    config = _solver_mesher_config(design)
+    with tempfile.NamedTemporaryFile(
+        prefix="waveguide-solid-", suffix=".step", delete=False
+    ) as handle:
+        step_path = Path(handle.name)
+    try:
+        write_step_from_config(config, step_path)
+        text = step_path.read_text(encoding="utf-8", errors="replace")
+    finally:
+        step_path.unlink(missing_ok=True)
+    _assert_step(text)
+    return text
+
+
+async def build_step_solid(design: DesignConfig) -> str:
+    """Build the manufacturable solid: wall thickness, enclosure, open throat.
+
+    Unlike the inner-surface export this needs no Thicken or cap step in CAD --
+    it imports into Fusion 360 or Onshape as a closed B-rep solid in
+    millimetres. Designs with no wall thickness have no material to enclose, so
+    the mesher falls back to a surface body for those.
+    """
+
+    return await run_on_gmsh_worker(
+        _build_step_solid_sync, design.model_dump(mode="json")
+    )
+
+
 def binary_stl(
     vertices_m: list[float] | np.ndarray,
     indices: list[int] | np.ndarray,

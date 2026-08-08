@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import struct
 
 import numpy as np
@@ -23,6 +24,63 @@ def _design(**mesh: int) -> DesignConfig:
             "mesh": mesh,
         }
     )
+
+
+def _post_asgi(path: str, payload: dict) -> tuple[int, bytes]:
+    """POST JSON through the real ASGI app so FastAPI resolves query defaults."""
+
+    from fastapi import FastAPI
+
+    app = FastAPI()
+    app.include_router(api.router)
+    target, _, query = path.partition("?")
+    body = json.dumps(payload, default=str).encode()
+
+    async def call() -> tuple[int, bytes]:
+        messages: list[dict] = []
+        delivered = False
+
+        async def receive() -> dict:
+            nonlocal delivered
+            if not delivered:
+                delivered = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            return {"type": "http.disconnect"}
+
+        async def send(message: dict) -> None:
+            messages.append(message)
+
+        await app(
+            {
+                "type": "http",
+                "asgi": {"version": "3.0"},
+                "http_version": "1.1",
+                "method": "POST",
+                "scheme": "http",
+                "path": target,
+                "raw_path": target.encode(),
+                "query_string": query.encode(),
+                "root_path": "",
+                "headers": [
+                    (b"host", b"testserver"),
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(body)).encode()),
+                ],
+                "client": ("testclient", 123),
+                "server": ("testserver", 80),
+            },
+            receive,
+            send,
+        )
+        status = next(
+            int(m["status"]) for m in messages if m["type"] == "http.response.start"
+        )
+        chunks = b"".join(
+            m.get("body", b"") for m in messages if m["type"] == "http.response.body"
+        )
+        return status, chunks
+
+    return asyncio.run(call())
 
 
 def _request() -> ExportRequest:
@@ -80,19 +138,70 @@ def test_profile_csv_axes_units_rows_and_closed_slices() -> None:
     assert rows[3] == rows[1]
 
 
+_STEP_STUB = "ISO-10303-21;\nADVANCED_FACE\nB_SPLINE_SURFACE\nEND-ISO-10303-21;\n"
+
+
 def test_step_route_returns_geometry_filename_content_type_and_revision(monkeypatch) -> None:
-    content = "ISO-10303-21;\nADVANCED_FACE\nB_SPLINE_SURFACE\nEND-ISO-10303-21;\n"
-
     async def fake_build(_design):
-        return content
+        return _STEP_STUB
 
-    monkeypatch.setattr(api, "build_step", fake_build)
-    response = asyncio.run(api.export_step(_request()))
-    assert response.body.decode() == content
+    monkeypatch.setattr(api, "build_step_solid", fake_build)
+    response = asyncio.run(api.export_step(_request(), body="solid"))
+    assert response.body.decode() == _STEP_STUB
     assert response.media_type == "model/step"
     assert response.headers["x-design-revision"] == "57"
     assert response.headers["content-disposition"] == 'attachment; filename="demo_horn.step"'
     assert "ADVANCED_FACE" in response.body.decode()
+
+
+def test_step_route_body_selects_the_solid_or_the_inner_surface(monkeypatch) -> None:
+    called: list[str] = []
+
+    async def fake_solid(_design):
+        called.append("solid")
+        return _STEP_STUB
+
+    async def fake_surface(_design):
+        called.append("surface")
+        return _STEP_STUB
+
+    monkeypatch.setattr(api, "build_step_solid", fake_solid)
+    monkeypatch.setattr(api, "build_step", fake_surface)
+    asyncio.run(api.export_step(_request(), body="solid"))
+    asyncio.run(api.export_step(_request(), body="surface"))
+    assert called == ["solid", "surface"]
+
+
+def test_step_route_defaults_to_the_solid_over_http(monkeypatch) -> None:
+    """A request with no ?body= must reach the solid builder.
+
+    Calling ``export_step`` directly leaves ``body`` as the unresolved Query
+    default, which compares equal to nothing and quietly takes the surface
+    branch -- so the default has to be checked through the ASGI app.
+    """
+
+    called: list[str] = []
+
+    async def fake_solid(_design):
+        called.append("solid")
+        return _STEP_STUB
+
+    async def fake_surface(_design):
+        called.append("surface")
+        return _STEP_STUB
+
+    monkeypatch.setattr(api, "build_step_solid", fake_solid)
+    monkeypatch.setattr(api, "build_step", fake_surface)
+
+    status, payload = _post_asgi("/api/export/step", _request().model_dump(by_alias=True))
+    assert status == 200, payload
+    assert called == ["solid"]
+
+    status, payload = _post_asgi(
+        "/api/export/step?body=surface", _request().model_dump(by_alias=True)
+    )
+    assert status == 200, payload
+    assert called == ["solid", "surface"]
 
 
 def test_stl_and_each_profile_route_echo_revision_and_contract_filenames(monkeypatch) -> None:

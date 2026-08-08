@@ -265,15 +265,20 @@ export function downloadText(text: string, filename: string, type = 'text/plain;
   downloadBlob(new Blob([text], { type }), filename);
 }
 
+export type StepBody = 'solid' | 'surface';
+
 export async function downloadGeometryExport(
   kind: 'step' | 'stl' | 'profiles',
   design: DesignDocument,
   designRevision: number,
   baseName: string,
   profileKind?: 'profiles' | 'slices',
+  stepBody: StepBody = 'solid',
   fetcher: typeof fetch = fetch,
 ): Promise<void> {
-  const query = kind === 'profiles' ? `?kind=${profileKind ?? 'profiles'}` : '';
+  const query = kind === 'profiles'
+    ? `?kind=${profileKind ?? 'profiles'}`
+    : kind === 'step' ? `?body=${stepBody}` : '';
   const response = await fetcher(`/api/export/${kind}${query}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

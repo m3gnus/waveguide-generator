@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from server.design.schema import DesignConfig
 
-from .core import build_profiles, build_step, build_stl
+from .core import build_profiles, build_step, build_step_solid, build_stl
 
 
 class ExportRequest(BaseModel):
@@ -54,9 +54,18 @@ def _export_error(exc: Exception) -> HTTPException:
 
 
 @router.post("/step")
-async def export_step(request: ExportRequest) -> Response:
+async def export_step(
+    request: ExportRequest,
+    body: Literal["solid", "surface"] = Query(default="solid"),
+) -> Response:
+    """Export STEP. ``solid`` is the manufacturable part; ``surface`` the bore."""
+
     try:
-        content = await build_step(request.design)
+        content = await (
+            build_step_solid(request.design)
+            if body == "solid"
+            else build_step(request.design)
+        )
     except Exception as exc:
         raise _export_error(exc) from exc
     return Response(

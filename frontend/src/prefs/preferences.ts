@@ -18,7 +18,7 @@ export type ChartType = typeof CHART_TYPES[number]['id'];
 
 export const EXPORT_FORMATS = [
   { id: 'mwg_config', label: 'Parameter Config (.txt)' },
-  { id: 'step', label: 'Waveguide STEP' },
+  { id: 'step', label: 'Waveguide STEP (solid)' },
   { id: 'png', label: 'Chart Images (PNG)' },
   { id: 'csv', label: 'Frequency Data CSV' },
   { id: 'json', label: 'Full Results JSON' },
