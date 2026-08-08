@@ -207,15 +207,46 @@ def test_rollback_restores_the_workspace(v1_root: Path, tmp_path: Path):
     assert not (data_dir / "workspace" / "project-a").exists()
 
 
-def test_reports_that_no_migrated_job_can_be_reopened(v1_root: Path, tmp_path: Path):
-    """Both causes must be stated: absent snapshots and v1-shaped ones."""
+def test_reports_which_migrated_jobs_can_be_reopened_and_which_cannot(
+    v1_root: Path, tmp_path: Path
+):
+    """The design half of the migration is the half that is not a byte copy.
+
+    The report used to state that *no* imported job could be reopened. That was
+    true of the reader, not of the data: v1 stores the design twice, and both
+    copies survive the copy. The evidence now has to be the measured verdict,
+    per job, produced by the same code the server runs.
+    """
 
     report = migrate_v1.migrate(v1_root, tmp_path / "v2data", dry_run=True)
 
     assert report.jobs_without_design == 1
+    assert report.designs == {"recovered_from_design_state": 2, "no_stored_design": 1}
+    assert sum(report.designs.values()) == report.source["simulation_jobs"]
+    assert report.unrecoverable_job_ids == ["v1-job-2"]
     warning = " ".join(report.warnings)
-    assert "no design snapshot at all" in warning
-    assert "v1's parameter shape" in warning
+    assert "1 of 3 imported jobs cannot be reopened" in warning
+    assert "no stored design" in warning
+    # The jobs that *can* be reopened must never be described as losses.
+    assert "recovered from design state" not in warning
+    # The report is the G6 artifact, so it has to survive JSON.
+    assert json.loads(json.dumps(report.as_dict()))["designs"] == report.designs
+
+
+def test_a_freeform_v1_job_is_reported_as_needing_re_entry(v1_root: Path, tmp_path: Path):
+    database = v1_root / "server" / "data" / "simulations.db"
+    with closing(sqlite3.connect(database)) as conn:
+        conn.execute(
+            "UPDATE simulation_jobs SET script_snapshot_json = ? WHERE id = ?",
+            ('{"params": {"type": "FREEFORM"}}', "v1-job-0"),
+        )
+        conn.commit()
+
+    report = migrate_v1.migrate(v1_root, tmp_path / "v2data", dry_run=True)
+
+    assert report.designs["freeform_legacy_design"] == 1
+    assert "v1-job-0" in report.unrecoverable_job_ids
+    assert "freeform legacy design" in " ".join(report.warnings)
 
 
 def test_missing_v1_database_is_a_clean_error(tmp_path: Path):
