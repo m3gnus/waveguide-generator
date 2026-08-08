@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { getDefaults } from '../src/config/defaults.js';
+import { FORMULA_FIELD_ALLOWLIST } from '../src/config/schema.js';
+import { parseExpression } from '../src/geometry/expression.js';
 import { buildWaveguidePayload } from '../src/solver/waveguidePayload.js';
 import { prepareBackendMeshSimulationParams } from '../src/modules/design/index.js';
 import { prepareGeometryParams } from '../src/geometry/params.js';
@@ -443,4 +445,93 @@ test('buildWaveguidePayload stringifies enclosure resolution lists', () => {
 
   assert.equal(payload.enc_front_resolution, '7,8,9,10');
   assert.equal(payload.enc_back_resolution, '11,12,13,14');
+});
+
+// The payload is the only crossing between the JS viewport and the Python
+// mesher. Every field the UI offers a formula editor for has to survive it, or
+// the solved mesh silently disagrees with what is on screen. This guards the
+// whole allowlist rather than named fields, so a newly formula-enabled
+// parameter cannot be added with the wrong converter and go unnoticed.
+// Two prepared representations reach the payload: the backend-mesh params keep
+// the raw expression text, while prepareGeometryParams compiles it to a
+// function carrying _rawExpr. Both have to survive.
+for (const [label, asExpression] of [
+  ['raw expression text', (expr) => expr],
+  ['compiled expression function', (expr) => parseExpression(expr)],
+]) {
+  test(`buildWaveguidePayload carries every formula-capable field through to the mesher (${label})`, () => {
+    const EXPR = '7 + 3*cos(p)';
+    const formulaKeys = [...new Set(Object.values(FORMULA_FIELD_ALLOWLIST).flat())];
+    assert.ok(formulaKeys.length >= 38, 'expected the full formula allowlist');
+
+    const build = (overrides) =>
+      buildWaveguidePayload(
+        prepareBackendMeshSimulationParams({
+          type: 'OSSE',
+          gcurveType: 1,
+          morphTarget: 1,
+          throatProfile: 3,
+          ...overrides,
+        }),
+        '2.2'
+      );
+
+    // Assert the expression lands in the field's OWN payload key, not merely
+    // somewhere in the payload: a converter that wrote the value to the wrong
+    // key would otherwise pass. Payload keys are the snake_case of the design
+    // key, except single-token names (R, a0, tmax) which are passed verbatim.
+    const payloadKeyFor = (key) =>
+      /[A-Z]/.test(key.slice(1)) ? key.replace(/([A-Z])/g, (m) => `_${m.toLowerCase()}`) : key;
+
+    const baseline = build({});
+    const dropped = [];
+    for (const key of formulaKeys) {
+      const payload = build({ [key]: asExpression(EXPR) });
+      const target = payloadKeyFor(key);
+      assert.ok(target in payload, `no payload key ${target} for design field ${key}`);
+      if (String(payload[target]) !== EXPR) {
+        dropped.push(`${key} -> ${target}=${JSON.stringify(payload[target])}`);
+        continue;
+      }
+      // And nothing else moved.
+      const collateral = Object.keys(payload).filter(
+        (name) => name !== target && JSON.stringify(payload[name]) !== JSON.stringify(baseline[name])
+      );
+      assert.deepEqual(collateral, [], `${key} also changed ${collateral.join(', ')}`);
+    }
+
+    assert.deepEqual(dropped, [], `formula fields flattened by the payload: ${dropped.join(', ')}`);
+  });
+}
+
+test('buildWaveguidePayload never ships a compiled expression closure as text', () => {
+  const payload = buildWaveguidePayload(
+    prepareBackendMeshSimulationParams({
+      type: 'OSSE',
+      gcurveType: 2,
+      gcurveSfA: '1 + 0.2*cos(p)',
+      gcurveSfN1: '2 + sin(p)',
+    }),
+    '2.2'
+  );
+
+  // String(fn) on a prepared expression yields JavaScript source, which the
+  // mesher's expression parser rejects outright.
+  assert.equal(payload.gcurve_sf_a, '1 + 0.2*cos(p)');
+  assert.equal(payload.gcurve_sf_n1, '2 + sin(p)');
+  for (const value of Object.values(payload)) {
+    if (typeof value === 'string') assert.ok(!value.includes('=>'), `closure source in payload: ${value}`);
+  }
+});
+
+test('buildWaveguidePayload defaults an unset guiding-curve distance to the mouth', () => {
+  const payload = buildWaveguidePayload(
+    prepareBackendMeshSimulationParams({ type: 'OSSE', gcurveType: 1, gcurveWidth: 300 }),
+    '2.2'
+  );
+
+  // Both engines treat an absent GCurve.Dist as 1.0 (the mouth); a payload
+  // default of 0.5 would enforce the guiding curve at mid-length instead and
+  // put the solved mouth at roughly twice the requested width.
+  assert.equal(payload.gcurve_dist, 1);
 });
