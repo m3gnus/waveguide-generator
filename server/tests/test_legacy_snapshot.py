@@ -11,6 +11,7 @@ import pytest
 
 from server.design.legacy_snapshot import (
     LegacySnapshotError,
+    resolve_legacy_params,
     snapshot_to_ath_text,
     snapshot_to_design,
 )
@@ -556,6 +557,22 @@ def test_every_real_non_freeform_snapshot_validates() -> None:
         assert isinstance(snapshot_to_design(snapshot), ParsedDesign)
 
 
+def _assert_field_matches(parsed: ParsedDesign, name: str, expected: Any) -> None:
+    """Compare one field against the bag, in whichever form the bag holds it.
+
+    Formula-valued fields have no scalar to compare, so they are checked as
+    text -- which is the stronger assertion of the two, because it is exactly
+    the material the prepared-parameter bag threw away.
+    """
+
+    field = getattr(parsed.design.root, name)
+    assert field is not None, name
+    if isinstance(expected, str) and not expected.strip().replace(".", "", 1).isdigit():
+        assert field.raw == expected, name
+    else:
+        assert field.value == pytest.approx(float(expected)), name
+
+
 @pytest.mark.skipif(not DB_PATH.exists(), reason="v1 simulation database is not available")
 def test_real_family_values_are_preserved() -> None:
     snapshots = _db_snapshots()
@@ -564,13 +581,38 @@ def test_real_family_values_are_preserved() -> None:
         for formula in ("OSSE", "R-OSSE")
     }
     for formula, snapshot in by_type.items():
-        params = snapshot["params"]
+        # The bag v1 itself would have reopened, not its derived mesher copy:
+        # that copy has no R, a or k at all on most of this corpus.
+        params, source = resolve_legacy_params(snapshot)
+        assert source == "design-state"
         parsed = snapshot_to_design(snapshot)
-        assert _expr_value(parsed, "r0") == pytest.approx(params["r0"])
-        assert _expr_value(parsed, "a0") == pytest.approx(params["a0"])
-        assert _expr_value(parsed, "q") == pytest.approx(params["q"])
-        length_key = "L" if formula == "OSSE" else "R"
-        assert _expr_value(parsed, length_key) == pytest.approx(params[length_key])
+        for name in ("r0", "a0", "q", "a", "L" if formula == "OSSE" else "R"):
+            _assert_field_matches(parsed, name, params[name])
+
+
+@pytest.mark.skipif(not DB_PATH.exists(), reason="v1 simulation database is not available")
+def test_no_real_formula_field_is_lost_on_the_way_back_in() -> None:
+    """Every expression the live corpus stores has to survive the round trip.
+
+    Reading v1's prepared bag instead of its design state dropped these
+    silently: the job still opened, and drew a different waveguide.
+    """
+
+    checked = 0
+    for snapshot in _db_snapshots():
+        params, _ = resolve_legacy_params(snapshot)
+        if params.get("type") == "FREEFORM":
+            continue
+        parsed = snapshot_to_design(snapshot)
+        for name in ("L", "R", "a", "a0", "k", "q", "s", "n", "m", "b", "r"):
+            raw = params.get(name)
+            if not isinstance(raw, str) or raw.strip().replace(".", "", 1).isdigit():
+                continue
+            field = getattr(parsed.design.root, name, None)
+            assert field is not None, f"{name} was dropped"
+            assert field.raw == raw
+            checked += 1
+    assert checked, "the corpus lost every formula-valued field it used to hold"
 
 
 @pytest.mark.skipif(not DB_PATH.exists(), reason="v1 simulation database is not available")

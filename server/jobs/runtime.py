@@ -22,6 +22,7 @@ import uuid
 
 from server.design.schema import Expr
 from server.engines.registry import EngineRegistry, create_engine as get_engine
+from server.jobs.legacy_design import resolve_job_design
 from server.jobs.models import SolveRequest
 from server.jobs.store import ALLOWED_STATUSES, JobStore
 from server.solver.symmetry import resolve_symmetry, validate_symmetry_mode
@@ -1150,6 +1151,10 @@ class JobRuntime:
     @staticmethod
     def _serialize_job(row: Mapping[str, Any], *, detailed: bool = False) -> dict[str, Any]:
         metadata = row.get("task_metadata") if isinstance(row.get("task_metadata"), dict) else {}
+        # An imported v1 job reaches the client already translated, so reopen,
+        # rerun, compare and export need no legacy branch; one that cannot be
+        # translated keeps its original bytes and carries the reason instead.
+        design = resolve_job_design(row.get("script_snapshot"), row.get("config_json"))
         item = {
             "id": row.get("id"),
             "status": row.get("status"),
@@ -1167,7 +1172,10 @@ class JobRuntime:
             "error_message": row.get("error_message"),
             "cancellation_requested": bool(row.get("cancellation_requested")),
             "mesh_stats": row.get("mesh_stats"),
-            "script_snapshot": row.get("script_snapshot"),
+            "script_snapshot": design.snapshot
+            if design.snapshot is not None
+            else row.get("script_snapshot"),
+            "design_availability": design.as_availability(),
             "design_revision": int(metadata.get("design_revision") or 0),
             "polar_grid": metadata.get("polar_grid") or {},
             "rating": metadata.get("rating"),
