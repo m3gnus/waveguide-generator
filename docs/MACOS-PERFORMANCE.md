@@ -293,3 +293,100 @@ chord 0.60 mm + normal step 14° + silhouette 32 + 3,000 vertices: **252 ms →
 moves it (252 → 218 ms for a quarter of the triangles), which is the tell: the
 cost is the adaptive refinement search, not the output. Vectorising the profile
 evaluation in the mesher is the change that would matter.
+
+## 8. The mesher-side vectorisation — 2026-08-08
+
+§7 named the change that would matter. This section records it, measured on the
+same host. All of it is in `hornlab-waveguide-mesher`, not in this repository:
+four commits on top of `8a8f383`, which is both that repository's published
+`main` and the mesher pin in `server/requirements-pins.txt`. **None of it
+reaches v2 until the mesher is pushed and the pin bumped.**
+
+### What was scalar
+
+A preview build spent about 90% of its time in the profile formulas. Every grid
+node re-resolved the entire parameter set for a single point: eleven
+`eval_param` lookups, two tangents and the `_rosse_length` solve, none of which
+vary along the axial parameter. Four separate per-element loops sat on top of
+that — the polar-to-Cartesian conversion, the index buffer, the source cap, and
+a `build_point_grid` that spelled its vertices as a flat Python list of 591,360
+floats that every consumer immediately parsed back into the array they came
+from. FREEFORM had its own: `np.fromiter` over a generator calling the scalar
+rounded-rectangle radius once per azimuth.
+
+The four commits resolve parameters once per azimuth and evaluate whole
+meridians and rings as arrays. `eval_param` calls on a coarse seed build go from
+1.71 million to about 6,000. The scalar entry points are unchanged and remain
+the public single-point API, which is what lets the tests use them as
+differential oracles.
+
+### Measured, best of five builds per case
+
+| design | coarse before | after | | fine before | after | |
+|---|---:|---:|---:|---:|---:|---:|
+| seed R-OSSE | 181.7 ms | **29.0 ms** | 6.3x | 1264.8 ms | **126.8 ms** | 10.0x |
+| R-OSSE, per-azimuth ATH formulas | 200.1 ms | **28.9 ms** | 6.9x | 1388.7 ms | **128.4 ms** | 10.8x |
+| OSSE | 83.4 ms | **23.9 ms** | 3.5x | 510.4 ms | **83.4 ms** | 6.1x |
+| ICW, flat baffle | 48.8 ms | **17.8 ms** | 2.7x | 212.3 ms | **63.7 ms** | 3.3x |
+| FREEFORM, rounded rectangle | 68.1 ms | **34.4 ms** | 2.0x | 327.7 ms | **135.8 ms** | 2.4x |
+| FREEFORM, circular | 51.9 ms | **20.7 ms** | 2.5x | 259.4 ms | **83.9 ms** | 3.1x |
+| LOOKUP | 39.6 ms | **16.1 ms** | 2.5x | 200.3 ms | **67.4 ms** | 3.0x |
+
+Vertex and triangle counts are unchanged in every row. §7 recorded 255 ms and
+1.85 s for the seed design from an earlier session; re-measuring the same pin in
+the same session as the "after" gives 181.7 ms and 1264.8 ms, so the ratios above
+are the honest ones and §7's absolute numbers were the noisier reading.
+
+For the seed design the server can now generate about 34 coarse frames per
+second where it generated about 5.5, and a fine preview stops being a pause.
+That is the geometry build rate alone, not the displayed frame rate — §1 and §2
+cover the client-side work that also sits between a build and a rendered frame,
+and §1's end-to-end figures were taken against the unvectorised pin.
+
+### How it was verified
+
+Differentially against the pinned implementation, per `RESULT-CONTRACTS.md`, not
+only against the existing tests. Fourteen designs — R-OSSE plain, boxed with
+both edge types, morphed to a rectangle, throat-extended, quadrant-reduced and
+with per-azimuth ATH expressions; OSSE plain, with a guiding curve and with
+per-azimuth expressions; ICW; two FREEFORM families; LOOKUP — each built at both
+LODs with and without curvature, and every position, index, normal, curvature
+and metadata array compared.
+
+**1,692 of 1,716 arrays are byte-for-byte identical.** The 24 that move are all
+one case, the R-OSSE with per-azimuth ATH expressions, and they move by at most
+1.13e-12 mm. That is the one place a squaring is involved: NumPy squares by
+multiplication, which is correctly rounded, while CPython's `x ** 2` goes
+through the platform `pow`, which on macOS is occasionally one ulp wide of it.
+
+The mesher suite is 1,097 passed, 0 skipped, run through `./run-ath-parity.sh
+--full` so the ATH reference parity suite actually executes — plain `pytest
+tests/` skips it silently and proves nothing. This repository's `server/tests`
+is 1,039 passed, 2 skipped against the mesher checkout, including the
+byte-for-byte frame comparison in `test_preview_ws_frame.py`.
+
+### What is the wall now
+
+Not the profile formulas. Instrumented per function on a coarse seed build,
+share of a 36.7 ms instrumented wall:
+
+| | ms/build | calls | share |
+|---|---:|---:|---:|
+| `adaptive_grid_indices` | 12.43 | 1 | 33.9% |
+| — of which `_axis_interval_error` | 11.05 | 272 | 30.1% |
+| `_triangle_orientation_analysis` | 6.37 | 10 | 17.4% |
+| `_raw_radial_grid` | 5.63 | 1 | 15.3% |
+| `analytic_grid_normals` | 3.70 | 3 | 10.1% |
+| `_outer_offset_shell` | 2.44 | 1 | 6.7% |
+| `resample_grid_vectors` + `_bilinear_coarse_points` | 2.50 | 2 | 6.8% |
+
+The refinement search is now the single largest cost, as §7 predicted it would
+be once the formulas were cheap — but it is its own per-interval NumPy dispatch
+that is expensive, not the profile evaluation underneath it. Available and not
+done: `_axis_interval_error` takes three separate reductions over its deviation
+array and computes a full `np.linalg.norm` where an argmax over squared
+distances would do; `resample_grid_vectors` and `_bilinear_coarse_points` are
+still nested Python loops over every output node; `_triangle_orientation_analysis`
+runs twice per surface, once to choose the winding and once to check it. At fine
+LOD the ranking differs — `analytic_grid_normals` costs 33.6 ms and its
+`_phi_derivative` allocates several full-grid copies through `np.roll`.
