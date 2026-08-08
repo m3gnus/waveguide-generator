@@ -352,8 +352,33 @@ export class PreviewSocketManager {
     else this.reconnectTimer = null;
   }
 
+  /**
+   * Publish a new snapshot, but only when the snapshot actually changed.
+   *
+   * Every subscriber reads this through `useSyncExternalStore`, which compares
+   * by identity, so a fresh object is a re-render of the whole viewport subtree
+   * -- Viewport, the Canvas, the Scene and every SurfaceMesh in it. `onRevision`
+   * runs on every committed design mutation, which during a drag is one per
+   * pointermove, and all it does is set `stale`. `stale` goes true on the first
+   * revision of a gesture and stays true, so all but the first of those were
+   * new objects carrying identical values: dozens of full reconciliations a
+   * second, on the machine least able to afford them.
+   *
+   * Frames are exempt from the comparison on purpose -- a decoded frame is a
+   * new object every time by definition, and `Object.is` on it is both correct
+   * and cheap.
+   */
   private update(patch: Partial<PreviewSnapshot>): void {
-    this.snapshot = { ...this.snapshot, ...patch };
+    const current = this.snapshot;
+    let changed = false;
+    for (const key of Object.keys(patch) as Array<keyof PreviewSnapshot>) {
+      if (!Object.is(current[key], patch[key])) {
+        changed = true;
+        break;
+      }
+    }
+    if (!changed) return;
+    this.snapshot = { ...current, ...patch };
     this.listeners.forEach((listener) => listener());
   }
 }

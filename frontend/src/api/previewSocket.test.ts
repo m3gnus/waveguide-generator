@@ -204,6 +204,30 @@ describe('preview socket state machine', () => {
     manager.stop();
   });
 
+  // Every subscriber reads the snapshot through useSyncExternalStore, which
+  // compares by identity, so one notification is one re-render of the whole
+  // viewport subtree. A drag commits a revision per pointermove and each one
+  // only ever sets `stale`, which goes true on the first and stays true.
+  it('notifies once for a drag, not once per pointermove', () => {
+    const socket = new MockSocket();
+    const manager = new PreviewSocketManager(() => socket, 'ws://test/ws/preview');
+    useDesignStore.setState({ designRevision: 57 });
+    manager.start();
+    socket.message(JSON.stringify({ v: 1, kind: 'hello', epoch: 3, heartbeatSec: 15 }));
+    socket.message(fixture());
+    expect(manager.getSnapshot().stale).toBe(false);
+
+    let notifications = 0;
+    const unsubscribe = manager.subscribe(() => { notifications += 1; });
+    for (let move = 0; move < 60; move += 1) useDesignStore.getState().updateField('a', 40 + move);
+    unsubscribe();
+
+    expect(useDesignStore.getState().designRevision).toBe(117);
+    expect(notifications).toBe(1);
+    expect(manager.getSnapshot().stale).toBe(true);
+    manager.stop();
+  });
+
   it('refresh on a stopped socket restarts it rather than sending into the void', () => {
     const sockets: MockSocket[] = [];
     const manager = new PreviewSocketManager(() => { const socket = new MockSocket(); sockets.push(socket); return socket; }, 'ws://test/ws/preview');
