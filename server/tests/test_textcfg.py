@@ -168,6 +168,40 @@ Option = alpha
     assert parsed.extra_blocks["Freeform.FutureBlock"].entries == ["row one", "Option = alpha"]
 
 
+def test_freeform_per_axis_throat_angles_round_trip_exactly() -> None:
+    source = FREEFORM_SOURCE.replace(
+        "MouthRadius = 50\n",
+        "MouthRadius = 50\nThroatAngle = 12.5\n",
+    ).replace(
+        "MouthRadius = 40\n",
+        "MouthRadius = 40\nThroatAngle = 27.25\n",
+    )
+    first = parse(source).design
+    emitted = serialize(first)
+
+    assert "Freeform.ThroatAngle = 12.5\n" in emitted
+    assert "Freeform.H = {\nMouthRadius = 50\nThroatAngle = 12.5\n}" in emitted
+    assert "Freeform.V = {\nMouthRadius = 40\nThroatAngle = 27.25\n}" in emitted
+
+    reopened = parse(emitted).design.root
+    assert reopened.profile_h.throat_angle_deg is not None  # type: ignore[union-attr]
+    assert reopened.profile_v.throat_angle_deg is not None  # type: ignore[union-attr]
+    assert reopened.profile_h.throat_angle_deg.text() == "12.5"  # type: ignore[union-attr]
+    assert reopened.profile_v.throat_angle_deg.text() == "27.25"  # type: ignore[union-attr]
+
+
+def test_legacy_top_level_freeform_throat_angle_applies_to_both_axes() -> None:
+    source = FREEFORM_SOURCE.replace(
+        "Freeform.ThroatRadius = 10\n",
+        "Freeform.ThroatRadius = 10\nFreeform.ThroatAngle = 18.75\n",
+    )
+    design = parse(source).design.root
+    assert design.profile_h.throat_angle_deg is not None  # type: ignore[union-attr]
+    assert design.profile_v.throat_angle_deg is not None  # type: ignore[union-attr]
+    assert design.profile_h.throat_angle_deg.text() == "18.75"  # type: ignore[union-attr]
+    assert design.profile_v.throat_angle_deg.text() == "18.75"  # type: ignore[union-attr]
+
+
 def test_legacy_freeform_controls_load_and_rewrite_without_removed_keys() -> None:
     source = """; Parameter config
 Freeform.Length = 100

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from pathlib import Path
@@ -27,6 +28,7 @@ DB_PATH = (
     / "data"
     / "simulations.db"
 )
+SUPPORTED_SNAPSHOT_FAMILIES = frozenset({"OSSE", "R-OSSE"})
 
 
 # These are reduced parameter bags copied from real rows 250917asro, horn_design,
@@ -276,6 +278,27 @@ def test_inline_real_snapshots_validate_and_omit_timestamp() -> None:
         assert text.startswith("; Parameter config\n")
         assert "; Generated:" not in text
         assert isinstance(snapshot_to_design(snapshot), ParsedDesign)
+
+
+@pytest.mark.parametrize(
+    ("snapshot", "expected_sha256"),
+    [
+        (
+            INLINE_OSSE,
+            "062a24da5b1f559c54fbb29eef15bcde4d6db2646a1509064e10d62ee412435c",
+        ),
+        (
+            INLINE_ROSSE,
+            "1ebb6d3c1eb60a0c4055e10c4379fb0c3a67e9dabecbddbf313a941084044c48",
+        ),
+    ],
+    ids=("OSSE", "R-OSSE"),
+)
+def test_supported_families_keep_their_exact_ath_output(
+    snapshot: dict[str, Any], expected_sha256: str
+) -> None:
+    text = snapshot_to_ath_text(snapshot["params"])
+    assert hashlib.sha256(text.encode()).hexdigest() == expected_sha256
 
 
 def test_inline_real_family_values_and_passthrough_order() -> None:
@@ -548,25 +571,55 @@ def test_freeform_legacy_snapshot_requires_reentry() -> None:
         snapshot_to_design(INLINE_FREEFORM)
 
 
+@pytest.mark.parametrize("family", ["ICW", "LOOKUP"])
+def test_unsupported_legacy_family_is_refused_by_name(family: str) -> None:
+    params = dict(INLINE_OSSE["params"], type=family)
+    with pytest.raises(LegacySnapshotError) as caught:
+        snapshot_to_ath_text(params)
+    message = str(caught.value)
+    assert family in message
+    assert "cannot be recovered faithfully" in message
+    assert "must be re-entered" in message
+
+
+@pytest.mark.parametrize("family", [None, "FUTURE"], ids=("missing", "unknown"))
+def test_missing_or_unknown_legacy_family_is_not_assumed_to_be_osse(
+    family: str | None,
+) -> None:
+    params = dict(INLINE_OSSE["params"])
+    if family is None:
+        params.pop("type")
+    else:
+        params["type"] = family
+    with pytest.raises(LegacySnapshotError, match="must be re-entered"):
+        snapshot_to_ath_text(params)
+
+
 @pytest.mark.skipif(not DB_PATH.exists(), reason="v1 simulation database is not available")
-def test_every_real_non_freeform_snapshot_validates() -> None:
-    """Every snapshot in the live database converts -- however many there are.
+def test_every_real_snapshot_is_converted_or_refused_by_family() -> None:
+    """Every snapshot converts faithfully or is refused before ATH is written.
 
     This database is Magnus's working solve history, so it grows and shrinks as
     he runs and deletes jobs. Asserting a fixed count made the suite fail the
     first time one was deleted, which says nothing about the converter. What
-    matters is that none of them fail; the inline fixtures carry the fixed
-    expectations.
+    matters is that supported families convert and every other family fails by
+    name; the inline fixtures carry the fixed expectations.
     """
 
-    snapshots = [
-        snapshot for snapshot in _db_snapshots() if snapshot["params"].get("type") != "FREEFORM"
-    ]
-    assert snapshots, "the v1 database exists but holds no convertible snapshots"
+    snapshots = _db_snapshots()
+    assert snapshots, "the v1 database exists but holds no snapshots"
     families = {snapshot["params"].get("type") for snapshot in snapshots}
     assert {"OSSE", "R-OSSE"} <= families, f"corpus lost a family: {families}"
     for snapshot in snapshots:
-        assert isinstance(snapshot_to_design(snapshot), ParsedDesign)
+        family = snapshot["params"].get("type")
+        if family in SUPPORTED_SNAPSHOT_FAMILIES:
+            assert isinstance(snapshot_to_design(snapshot), ParsedDesign)
+            continue
+        with pytest.raises(LegacySnapshotError) as caught:
+            snapshot_to_design(snapshot)
+        if family:
+            assert str(family) in str(caught.value)
+        assert "must be re-entered" in str(caught.value)
 
 
 def _assert_field_matches(parsed: ParsedDesign, name: str, expected: Any) -> None:
@@ -613,7 +666,7 @@ def test_no_real_formula_field_is_lost_on_the_way_back_in() -> None:
     checked = 0
     for snapshot in _db_snapshots():
         params, _ = resolve_legacy_params(snapshot)
-        if params.get("type") == "FREEFORM":
+        if params.get("type") not in SUPPORTED_SNAPSHOT_FAMILIES:
             continue
         parsed = snapshot_to_design(snapshot)
         for name in ("L", "R", "a", "a0", "k", "q", "s", "n", "m", "b", "r"):
@@ -630,7 +683,10 @@ def test_no_real_formula_field_is_lost_on_the_way_back_in() -> None:
 @pytest.mark.skipif(not DB_PATH.exists(), reason="v1 simulation database is not available")
 def test_real_enclosures_are_preserved() -> None:
     snapshots = [
-        snapshot for snapshot in _db_snapshots() if snapshot["params"].get("encDepth", 0) > 0
+        snapshot
+        for snapshot in _db_snapshots()
+        if snapshot["params"].get("type") in SUPPORTED_SNAPSHOT_FAMILIES
+        and snapshot["params"].get("encDepth", 0) > 0
     ]
     assert snapshots, "no enclosure snapshots left in the live database to check"
     for snapshot in snapshots:
