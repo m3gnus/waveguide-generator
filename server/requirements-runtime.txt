@@ -10,10 +10,20 @@ numpy==2.4.6
 # must not rest on matplotlib and pytest happening to require it.
 packaging==26.3
 pillow==12.2.0
-# The bempp solve path assembles through OpenCL, which is hornlab-bempp-bem's
-# own default and what it calls its production backend. pyopencl imports without
-# a runtime present, so a host with no ICD reports the engine unavailable rather
-# than failing at solve time.
+# bempp-cl assembles on an OpenCL *CPU* device, which is hornlab-bempp-bem's own
+# default and what it calls its production backend. That holds on Windows and
+# Linux. It does not hold on Apple Silicon, whose ICD exposes the GPU and no CPU
+# device, so BEMPP assembles on the numba fallback there whether or not this is
+# installed (measured 2026-08-08; docs/P6-CUTOVER-PLAN.md section 3, item 7).
+# The pin stays unconditional anyway. It costs a few MB of prebuilt wheels, and
+# keeping it is what lets the capability probe distinguish an installed
+# runtime/device failure from a missing package and report the device inventory
+# when the platform permits enumeration, rather than raise a bare import error
+# that reads like a broken install. Intel Macs do have a CPU device, so
+# excluding darwin would be wrong, and pyopencl's three transitive locks would
+# need the same marker.
+# Note that no ICD is not the same as no engine: bempp stays available on numba,
+# carrying the warning that says so. Unavailable means neither backend can run.
 pyopencl==2026.1.2
 pydantic==2.13.4
 python-multipart==0.0.32
