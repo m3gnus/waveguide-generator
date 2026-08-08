@@ -23,6 +23,25 @@ export function generateMWGConfigContent(params) {
     return String(value);
   };
 
+  // `r0` is formula-capable (FORMULA_FIELD_ALLOWLIST in src/config/schema.js), so it
+  // can reach this writer as raw expression text such as "6.35*2" or "10 + 2*p".
+  // `${value * 2}` flattened that to NaN, which used to ship silently in the .mwg.
+  // Double it as an expression instead, using the same `2*(<raw>)` spelling the v2
+  // serializer emits (server/design/textcfg.py). Plain numbers stay on the
+  // historical numeric path so their output is byte-identical, and the legacy junk
+  // shapes below keep spelling NaN rather than becoming unparseable expressions.
+  const isThroatFormula = (value) =>
+    typeof value === 'string' &&
+    !value.includes('\n') &&
+    value.trim() !== '' &&
+    value.trim() !== 'NaN' &&
+    value.trim() !== 'undefined';
+
+  const formatThroatDiameter = (value) => {
+    if (Number.isNaN(Number(value)) && isThroatFormula(value)) return `2*(${value})`;
+    return value * 2;
+  };
+
   const isNonZero = (value) => {
     if (value === undefined || value === null) return false;
     if (typeof value === 'boolean') return value;
@@ -132,7 +151,7 @@ export function generateMWGConfigContent(params) {
     content += `Term.q = ${params.q}\n`;
     content += `Term.s = ${params.s}\n`;
     content += `Throat.Angle = ${params.a0}\n`;
-    content += `Throat.Diameter = ${params.r0 * 2}\n`;
+    content += `Throat.Diameter = ${formatThroatDiameter(params.r0)}\n`;
     if (params.throatProfile === undefined) content += `Throat.Profile = 1\n`;
     content += `OS.k = ${params.k}\n`;
     if (params.h !== undefined && params.h !== 0) content += `OS.h = ${params.h}\n`;

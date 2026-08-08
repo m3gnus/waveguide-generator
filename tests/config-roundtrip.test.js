@@ -114,6 +114,171 @@ test('mixed OSSE flat and internal keys normalize independently', () => {
   assert.equal(parsed.params.h, '0.2');
 });
 
+test('numeric throat radii still export the historical doubled literal', () => {
+  // Byte-for-byte guard on the pre-formula behavior: every one of these used to
+  // be written as `${params.r0 * 2}` and must keep that exact spelling.
+  for (const [r0, expected] of [
+    [12.7, '25.4'],
+    ['12.7', '25.4'],
+    [0, '0'],
+    ['6.35', '12.7'],
+    [12.699882, '25.399764'],
+    [null, '0'],
+    [undefined, 'NaN'],
+    ['NaN', 'NaN'],
+    ['undefined', 'NaN'],
+  ]) {
+    const content = generateMWGConfigContent({ ...getDefaults('OSSE'), type: 'OSSE', r0 });
+    assert.match(
+      content,
+      new RegExp(`^Throat\\.Diameter = ${expected.replace('.', '\\.')}$`, 'm'),
+      String(r0)
+    );
+  }
+});
+
+test('a formula throat radius exports as a doubling expression, not NaN', () => {
+  for (const r0 of ['6.35*2', '10 + 2*p', '12.7 - 2*sin(p)^2']) {
+    const content = generateMWGConfigContent({ ...getDefaults('OSSE'), type: 'OSSE', r0 });
+    assert.equal(content.includes('Throat.Diameter = NaN'), false, r0);
+    assert.ok(content.includes(`Throat.Diameter = 2*(${r0})\n`), r0);
+  }
+});
+
+test('a formula Throat.Diameter imports as a halved throat radius expression', () => {
+  const importR0 = (diameter) =>
+    MWGConfigParser.parse(
+      [
+        'Coverage.Angle = 45',
+        'Length = 120',
+        'Term.n = 4',
+        'Term.q = 1',
+        'Term.s = 0.6',
+        'Throat.Angle = 15.5',
+        `Throat.Diameter = ${diameter}`,
+        'OS.k = 7',
+      ].join('\n')
+    ).params.r0;
+
+  // The writer's own spelling unwraps back to the exact radius expression.
+  assert.equal(importR0('2*(10 + 2*p)'), '10 + 2*p');
+  // A hand-written expression is halved as text. It must never be taken at face
+  // value (that would be a silent 2x error) and must never be truncated to the
+  // number a prefix parse happens to find at its head.
+  assert.equal(importR0('25.4*cos(p)'), '(25.4*cos(p)) / 2');
+  assert.equal(importR0('50 - 10*sin(p)^2'), '(50 - 10*sin(p)^2) / 2');
+  // Plain numbers keep the plain halved spelling.
+  assert.equal(importR0('25.4'), '12.7');
+});
+
+test('a hand-written 2*(...) Throat.Diameter is only unwrapped when the parens balance', () => {
+  const importR0 = (diameter) =>
+    MWGConfigParser.parse(
+      [
+        'Coverage.Angle = 45',
+        'Length = 120',
+        'Term.n = 4',
+        'Term.q = 1',
+        'Term.s = 0.6',
+        'Throat.Angle = 15.5',
+        `Throat.Diameter = ${diameter}`,
+        'OS.k = 7',
+      ].join('\n')
+    ).params.r0;
+
+  // A greedy unwrap stopped at the last ')' and produced the unbalanced
+  // fragment 'a)*(b'. These are products, not the writer's doubling spelling.
+  assert.equal(importR0('2*(a)*(b)'), '(2*(a)*(b)) / 2');
+  assert.equal(importR0('2*(p)*(1 + k)'), '(2*(p)*(1 + k)) / 2');
+  // Nested parens that really are one group still unwrap.
+  assert.equal(importR0('2*((a+b))'), '(a+b)');
+  assert.equal(importR0('2*(a*(b+c))'), 'a*(b+c)');
+  // Trailing text after the matching paren disqualifies the unwrap.
+  assert.equal(importR0('2*(a) + 3'), '(2*(a) + 3) / 2');
+  // An unterminated group is not the generated spelling either.
+  assert.equal(importR0('2*(a'), '(2*(a) / 2');
+  // ...and the halved text is itself a fixed point through export/import.
+  const halved = importR0('2*(a)*(b)');
+  const exported = generateMWGConfigContent({
+    ...getDefaults('OSSE'),
+    type: 'OSSE',
+    r0: halved,
+  });
+  assert.ok(exported.includes(`Throat.Diameter = 2*(${halved})\n`), halved);
+  assert.equal(MWGConfigParser.parse(exported).params.r0, halved);
+});
+
+// `${null}` is the string "null"; only a missing property spells "undefined".
+// The v2 port reproduces this exactly (server/design/legacy_snapshot.py
+// _js_string), so this list is the contract the two writers share.
+test('a JSON null parameter is written as null, and only an absent one as undefined', () => {
+  const osse = { ...getDefaults('OSSE'), type: 'OSSE' };
+  const rosse = { ...getDefaults('R-OSSE'), type: 'R-OSSE' };
+  const enclosure = { ...osse, encDepth: 500 };
+  for (const [base, param, key] of [
+    [osse, 'a', 'Coverage.Angle'],
+    [osse, 'L', 'Length'],
+    [osse, 'n', 'Term.n'],
+    [osse, 'q', 'Term.q'],
+    [osse, 's', 'Term.s'],
+    [osse, 'a0', 'Throat.Angle'],
+    [osse, 'k', 'OS.k'],
+    [osse, 'angularSegments', 'Mesh.AngularSegments'],
+    [osse, 'lengthSegments', 'Mesh.LengthSegments'],
+    [rosse, 'R', 'R'],
+    [rosse, 'a', 'a'],
+    [rosse, 'a0', 'a0'],
+    [rosse, 'b', 'b'],
+    [rosse, 'k', 'k'],
+    [rosse, 'm', 'm'],
+    [rosse, 'q', 'q'],
+    [rosse, 'r', 'r'],
+    [rosse, 'r0', 'r0'],
+    [rosse, 'tmax', 'tmax'],
+    [enclosure, 'encEdge', 'EdgeRadius'],
+    [enclosure, 'encEdgeType', 'EdgeType'],
+  ]) {
+    const content = generateMWGConfigContent({ ...base, [param]: null });
+    assert.ok(content.includes(`\n${key} = null\n`), `${param} should write ${key} = null`);
+    assert.equal(content.includes(`\n${key} = undefined\n`), false, param);
+  }
+
+  const { angularSegments: _dropped, ...withoutAngular } = osse;
+  assert.ok(
+    generateMWGConfigContent(withoutAngular).includes('\nMesh.AngularSegments = undefined\n')
+  );
+});
+
+test('a null passthrough block line joins as empty text, but a null item is null', () => {
+  const content = generateMWGConfigContent({
+    ...getDefaults('OSSE'),
+    type: 'OSSE',
+    _blocks: {
+      Report: { _lines: ['report row', null, 'second row'], _items: { PolarData: null } },
+    },
+  });
+  assert.ok(content.includes('\nreport row\n\nsecond row\n'), content);
+  assert.ok(content.includes('\nPolarData = null\n'), content);
+});
+
+test('a formula throat radius survives an export/import round trip', () => {
+  for (const r0 of ['6.35*2', '10 + 2*p']) {
+    const exported = generateMWGConfigContent({ ...getDefaults('OSSE'), type: 'OSSE', r0 });
+    const reparsed = MWGConfigParser.parse(exported);
+    assert.equal(reparsed.type, 'OSSE');
+    assert.equal(reparsed.params.r0, r0);
+
+    // A second lap is a fixed point, so repeated save/open does not grow the text.
+    const reexported = generateMWGConfigContent({
+      ...getDefaults('OSSE'),
+      ...reparsed.params,
+      type: 'OSSE',
+    });
+    assert.ok(reexported.includes(`Throat.Diameter = 2*(${r0})\n`), r0);
+    assert.equal(MWGConfigParser.parse(reexported).params.r0, r0);
+  }
+});
+
 test('zmap sampling survives an export/import round trip', () => {
   const source = [
     'Coverage.Angle = 45',

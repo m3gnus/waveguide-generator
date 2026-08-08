@@ -208,6 +208,40 @@ function parseFreeformStations(block) {
   });
 }
 
+const GENERATED_DOUBLING = /^\s*2\s*\*\s*\(/;
+
+/**
+ * Undo the exporter's `2*(<raw>)` throat spelling, matching parentheses properly.
+ *
+ * A greedy `^2\s*\*\s*\(([\s\S]*)\)$` stops at the *last* closing paren, so a
+ * hand-written `Throat.Diameter = 2*(a)*(b)` unwrapped to the unbalanced
+ * fragment `a)*(b`. Only the writer's own spelling — where the paren matching
+ * the opening one is the final character — may be unwrapped; anything else has
+ * to fall through to the general `(<value>) / 2` path. Mirrors v2's
+ * `_unwrap_generated_doubling` (server/design/textcfg.py).
+ *
+ * @param {string} text - The raw `Throat.Diameter` value.
+ * @returns {string|null} The doubled inner expression, or null when it is not
+ *   the generated spelling.
+ */
+function unwrapGeneratedDoubling(text) {
+  const opening = GENERATED_DOUBLING.exec(text);
+  if (!opening) return null;
+  const start = opening[0].length;
+  let depth = 1;
+  for (let index = start; index < text.length; index += 1) {
+    const character = text[index];
+    if (character === '(') depth += 1;
+    else if (character === ')') {
+      depth -= 1;
+      if (depth === 0) {
+        return text.slice(index + 1).trim() === '' ? text.slice(start, index) : null;
+      }
+    }
+  }
+  return null;
+}
+
 function consumeFreeformSection(result) {
   const p = result.params;
   for (const key of Object.keys(p)) {
@@ -365,9 +399,21 @@ export class MWGConfigParser {
 
       assignLegacyValue('a', 'Coverage.Angle');
       assignLegacyValue('a0', 'Throat.Angle');
+      // Throat.Diameter is a diameter; r0 is a radius. Halving it with parseFloat
+      // silently mangled formula throats: "25.4*cos(p)" parsed as 25.4 and became
+      // the constant 12.7, and anything parseFloat could not read at all was
+      // assigned unhalved, i.e. wrong by 2x. Mirror v2's
+      // _numeric_or_expression_divide_by_two (server/design/textcfg.py): unwrap the
+      // 2*(<raw>) spelling the writer emits, halve a whole-string number, and
+      // otherwise halve the expression as text.
       assignLegacyValue('r0', 'Throat.Diameter', (value) => {
-        const radius = parseFloat(value) / 2;
-        return Number.isFinite(radius) ? String(radius) : value;
+        const text = String(value);
+        const generated = unwrapGeneratedDoubling(text);
+        if (generated !== null) return generated;
+        const trimmed = text.trim();
+        const diameter = trimmed === '' ? Number.NaN : Number(trimmed);
+        if (Number.isNaN(diameter)) return `(${value}) / 2`;
+        return Number.isFinite(diameter) ? String(diameter / 2) : value;
       });
       assignLegacyValue('L', 'Length');
       assignLegacyValue('s', 'Term.s');
