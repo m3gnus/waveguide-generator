@@ -144,6 +144,7 @@ class _FakeDevice:
     def __init__(self, name, kind):
         self.name = name
         self.kind = kind
+        self.type = kind
 
 
 class _FakePlatform:
@@ -208,6 +209,12 @@ def test_a_cpu_device_on_any_platform_is_accepted(monkeypatch):
         "Intel(R) OpenCL", [_FakeDevice("Intel(R) Core(TM) i7", "cpu-devices")]
     )
     monkeypatch.setitem(sys.modules, "pyopencl", _fake_pyopencl([gpu_only, with_cpu]))
+    monkeypatch.setattr(
+        bempp,
+        "_bempp_default_cpu_device",
+        lambda: with_cpu.get_devices(device_type="cpu-devices")[0],
+        raising=False,
+    )
 
     usable, reason = bempp._opencl_status()
 
@@ -227,13 +234,37 @@ def test_the_probe_asks_for_the_device_the_solve_asks_for(monkeypatch):
             recorded.append(device_type)
             return super().get_devices(device_type)
 
-    platform_entry = _Recording(
-        "Intel(R) OpenCL", [_FakeDevice("Intel(R) Core(TM) i7", "cpu-devices")]
-    )
+    cpu = _FakeDevice("Intel(R) Core(TM) i7", "cpu-devices")
+    platform_entry = _Recording("Intel(R) OpenCL", [cpu])
     monkeypatch.setitem(sys.modules, "pyopencl", _fake_pyopencl([platform_entry]))
+    monkeypatch.setattr(
+        bempp,
+        "_bempp_default_cpu_device",
+        lambda: cpu,
+        raising=False,
+    )
 
     assert bempp._opencl_status()[0] is True
     assert recorded == ["cpu-devices"]
+
+
+def test_probe_rejects_the_non_cpu_device_bempp_cl_would_really_select(monkeypatch):
+    cpu = _FakeDevice("Validated CPU", "cpu-devices")
+    gpu = _FakeDevice("Unvalidated GPU", "gpu-devices")
+    mixed = _FakePlatform("Mixed CPU/GPU ICD", [cpu, gpu])
+    monkeypatch.setitem(sys.modules, "pyopencl", _fake_pyopencl([mixed]))
+    monkeypatch.setattr(
+        bempp,
+        "_bempp_default_cpu_device",
+        lambda: gpu,
+        raising=False,
+    )
+
+    usable, reason = bempp._opencl_status()
+
+    assert usable is False
+    assert "Unvalidated GPU" in reason
+    assert "not a cpu device" in reason
 
 
 def test_available_requires_the_engine_not_just_its_wrapper(monkeypatch):

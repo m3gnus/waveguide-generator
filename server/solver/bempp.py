@@ -142,11 +142,14 @@ def _sweep_will_split(workers: int, num_frequencies: int) -> bool:
     process after all.
     """
 
-    if workers == 1:
-        return False
-    if workers > 1:
-        return True
-    return num_frequencies >= 2 * _ENGINE_MIN_FREQUENCIES_PER_WORKER
+    if workers != 0:
+        return workers > 1
+    try:
+        package = importlib.import_module("hornlab_bempp_bem")
+        resolve_worker_count = getattr(package, "_resolve_worker_count")
+    except (ImportError, OSError, AttributeError):
+        return num_frequencies >= 2 * _ENGINE_MIN_FREQUENCIES_PER_WORKER
+    return resolve_worker_count(0, num_frequencies) > 1
 
 
 def _load_api() -> bool:
@@ -225,6 +228,14 @@ def _describe(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {str(exc).splitlines()[0][:200]}"
 
 
+def _bempp_default_cpu_device() -> Any:
+    """Return the concrete device bempp-cl will use for ``opencl_device='cpu'``."""
+
+    from bempp_cl.core.opencl_kernels import default_cpu_device
+
+    return default_cpu_device()
+
+
 def _opencl_status() -> tuple[bool, str]:
     """Is there a device to assemble on, not merely a pyopencl import?
 
@@ -259,9 +270,30 @@ def _opencl_status() -> tuple[bool, str]:
         except Exception:  # noqa: BLE001 - DEVICE_NOT_FOUND, and broken ICDs, are both "no"
             devices = []
         if devices:
+            try:
+                selected = _bempp_default_cpu_device()
+            except BaseException as exc:  # noqa: BLE001 - native loaders raise broad failures
+                return False, (
+                    "bempp-cl cannot initialize its default OpenCL cpu device "
+                    f"({_describe(exc)}). {_OPENCL_GUIDANCE}"
+                )
+            selected_type = getattr(selected, "type", None)
+            try:
+                selected_is_wanted = bool(int(selected_type) & int(wanted))
+            except (TypeError, ValueError):
+                selected_is_wanted = selected_type == wanted
+            selected_name = str(getattr(selected, "name", "unknown device")).strip()
+            selected_platform = str(
+                getattr(getattr(selected, "platform", None), "name", platform_entry.name)
+            ).strip()
+            if not selected_is_wanted:
+                return False, (
+                    f"bempp-cl selected OpenCL device {selected_name} ({selected_platform}), "
+                    f"which is not a {OPENCL_DEVICE_TYPE} device. {_OPENCL_GUIDANCE}"
+                )
             return True, (
-                f"bempp-cl assembles on OpenCL device {devices[0].name.strip()} "
-                f"({platform_entry.name.strip()})"
+                f"bempp-cl assembles on OpenCL device {selected_name} "
+                f"({selected_platform})"
             )
         try:
             seen.extend(device.name.strip() for device in platform_entry.get_devices())
@@ -514,7 +546,7 @@ def solve_bempp_from_msh_text(
         config.require_closed_mesh = (
             context.mesh_validation_mode == "strict" and _closed_mode(context)
         )
-    workers = _resolved_workers()
+    workers = 1 if context.frequencies_hz is not None else _resolved_workers()
     if hasattr(config, "workers"):
         config.workers = workers
         if _sweep_will_split(workers, context.num_frequencies):

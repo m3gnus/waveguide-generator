@@ -660,6 +660,7 @@ def build_solver_response(
         "observation_origin": str(config.observation.origin),
     }
     patterns = directivity(result)
+    plane_di = calculate_di_from_polar_patterns(patterns)
     _renormalize_directivity(
         patterns, float(context.polar_config.get("norm_angle", 10.0))
     )
@@ -746,7 +747,7 @@ def build_solver_response(
         },
         "di": {
             "frequencies": frequency_values,
-            "di": calculate_di_from_polar_patterns(patterns),
+            "di": plane_di,
         },
         "metadata": metadata,
     }

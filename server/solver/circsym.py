@@ -49,6 +49,23 @@ class CircSymUnavailable(RuntimeError):
     """The mesher meridian capability or Metal CircSym runtime is absent."""
 
 
+def circsym_observation_rejection_reason(context: SolverContext) -> str | None:
+    """Return why the requested observation grid needs a full-3D mesh, if any."""
+
+    if ObservationConfig is None:
+        return None
+    try:
+        observation_config(
+            context,
+            ObservationConfig,
+            CircSymUnavailable,
+            "hornlab-metal-bem",
+        )
+    except CircSymUnavailable:
+        return "a non-45-degree diagonal plane requires the full-3D mesh"
+    return None
+
+
 def _validated_aperture_tag(metadata: Any, sim_type: int) -> int | None:
     raw = (metadata if isinstance(metadata, dict) else {}).get("apertureTag")
     if sim_type == 1 and raw is None:
@@ -103,6 +120,9 @@ def solve_circsym_design(
         raise CircSymUnavailable(
             "Installed hornlab-metal-bem does not support explicit CircSym frequency lists."
         )
+    observation_rejection = circsym_observation_rejection_reason(context)
+    if observation_rejection is not None:
+        raise CircSymUnavailable(observation_rejection)
     if cancellation_callback:
         cancellation_callback()
     started = time.time()
@@ -247,4 +267,10 @@ class CircSymEngine:
         return EngineRunResult(results=results)
 
 
-__all__ = ["CircSymEngine", "CircSymUnavailable", "circsym_status", "solve_circsym_design"]
+__all__ = [
+    "CircSymEngine",
+    "CircSymUnavailable",
+    "circsym_observation_rejection_reason",
+    "circsym_status",
+    "solve_circsym_design",
+]

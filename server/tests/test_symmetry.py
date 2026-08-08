@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+import threading
 
 import pytest
 
@@ -95,6 +96,14 @@ def test_vertical_offset_keeps_both_planes() -> None:
     assert resolution.reasons == {"xz": [], "yz": []}
 
 
+def test_symmetry_contract_documents_vertical_offset_as_rigid_placement() -> None:
+    contract = (Path(__file__).parents[2] / "docs" / "SYMMETRY-CONTRACT.md").read_text()
+
+    assert "any non-zero or non-scalar value rejects xz" not in contract
+    assert "Only a non-finite or non-scalar value rejects xz" in contract
+    assert "follows the same finite-scalar rule" in contract
+
+
 def test_asymmetric_enclosure_spacing_kills_matching_plane() -> None:
     resolution = resolve_symmetry(
         _rosse(
@@ -179,7 +188,7 @@ def test_auto_override_is_visible_without_rewriting_snapshot(tmp_path: Path) -> 
     assert request.design.root.mesh.quadrants.value == 14
 
 
-def _metal_request(mode: str = "auto") -> SolveRequest:
+def _metal_request(mode: str = "auto", *, diagonal_angle: float = 45.0) -> SolveRequest:
     return SolveRequest.model_validate(
         {
             "design": {
@@ -195,7 +204,10 @@ def _metal_request(mode: str = "auto") -> SolveRequest:
                     "num_frequencies": 2,
                 },
             },
-            "options": {"engine": "metal"},
+            "options": {
+                "engine": "metal",
+                "polar_config": {"inclination": diagonal_angle},
+            },
         }
     )
 
@@ -223,6 +235,104 @@ def test_metal_eligible_auto_uses_meridian_path_and_records_it(monkeypatch) -> N
         assert outcome.results["metadata"]["axisymmetric_eligibility_reasons"] == []
 
     asyncio.run(scenario())
+
+
+def test_metal_auto_sends_a_custom_diagonal_to_the_full_3d_path(monkeypatch) -> None:
+    from server.solver import circsym, metal
+
+    class ObservationWithoutNativeInclination:
+        def __init__(
+            self,
+            *,
+            planes,
+            distance_m,
+            angle_min_deg,
+            angle_max_deg,
+            angle_count,
+            origin,
+            custom_points=None,
+        ):
+            del (
+                planes,
+                distance_m,
+                angle_min_deg,
+                angle_max_deg,
+                angle_count,
+                origin,
+                custom_points,
+            )
+
+    class ForbiddenCircSym:
+        async def run(self, *_args, **_kwargs):
+            pytest.fail("a custom diagonal cannot enter the mesh-free CircSym path")
+
+    async def fake_mesh(*_args, **_kwargs):
+        return {
+            "msh_text": "mesh",
+            "stats": {"triangle_count": 1},
+            "metadata": {},
+        }
+
+    monkeypatch.setattr(circsym, "circsym_rejection_reasons", lambda _config: [])
+    monkeypatch.setattr(
+        circsym,
+        "circsym_status",
+        lambda: {"available": True, "reason": "ready", "version": "1"},
+    )
+    monkeypatch.setattr(circsym, "ObservationConfig", ObservationWithoutNativeInclination)
+    monkeypatch.setattr(circsym, "CircSymEngine", ForbiddenCircSym)
+    monkeypatch.setattr(metal, "build_solver_mesh", fake_mesh)
+    monkeypatch.setattr(
+        metal,
+        "solve_metal_from_msh_text",
+        lambda *_args, **_kwargs: {"metadata": {"solver_backend": "metal"}},
+    )
+
+    async def scenario() -> None:
+        outcome = await MetalEngine().run(
+            _metal_request(diagonal_angle=35.0),
+            cancel_cb=lambda: None,
+            stage_cb=lambda *_args: None,
+        )
+        metadata = outcome.results["metadata"]
+        assert metadata["solve_path"] == "full-3d"
+        assert metadata["axisymmetric_eligibility_reasons"] == [
+            "a non-45-degree diagonal plane requires the full-3D mesh"
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_metal_circsym_eligibility_probe_runs_off_the_event_loop(monkeypatch) -> None:
+    from server.solver import circsym
+
+    event_loop_thread = threading.get_ident()
+    probe_threads: list[int] = []
+
+    def probe(_config):
+        probe_threads.append(threading.get_ident())
+        return []
+
+    class FakeCircSym:
+        async def run(self, request, **_kwargs):
+            return EngineRunResult(results={"metadata": {"solver_backend": "metal"}})
+
+    monkeypatch.setattr(circsym, "circsym_rejection_reasons", probe)
+    monkeypatch.setattr(
+        circsym,
+        "circsym_status",
+        lambda: {"available": True, "reason": "ready", "version": "1"},
+    )
+    monkeypatch.setattr(circsym, "CircSymEngine", FakeCircSym)
+
+    async def scenario() -> None:
+        await MetalEngine().run(
+            _metal_request(), cancel_cb=lambda: None, stage_cb=lambda *_args: None
+        )
+
+    asyncio.run(scenario())
+    assert len(probe_threads) == 1
+    assert probe_threads[0] != event_loop_thread
 
 
 def test_metal_ineligible_auto_uses_full_3d_and_records_reasons(monkeypatch) -> None:

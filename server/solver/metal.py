@@ -361,6 +361,41 @@ def solve_metal_from_msh_text(
     )
 
 
+def _circsym_eligibility_reasons(request: SolveRequest) -> list[str]:
+    """Run the mesher/native CircSym probes together, away from the event loop."""
+
+    from . import circsym as circsym_adapter
+
+    reasons: list[str] = []
+    if circsym_adapter.circsym_rejection_reasons is None:
+        reasons.append("installed mesher does not expose axisymmetric-meridian eligibility")
+    else:
+        try:
+            reasons.extend(
+                str(reason)
+                for reason in circsym_adapter.circsym_rejection_reasons(
+                    _solver_mesher_config(request.design)
+                )
+            )
+        except Exception as exc:
+            reasons.append(f"axisymmetric-meridian eligibility check failed: {exc}")
+
+    try:
+        context = SolverContext.from_request(request, solver_mode="circsym")
+        observation_rejection = circsym_adapter.circsym_observation_rejection_reason(
+            context
+        )
+        if observation_rejection is not None:
+            reasons.append(observation_rejection)
+    except Exception as exc:
+        reasons.append(f"axisymmetric observation eligibility check failed: {exc}")
+
+    status = circsym_adapter.circsym_status()
+    if not status["available"] and not reasons:
+        reasons.append(str(status["reason"]))
+    return reasons
+
+
 class MetalEngine:
     name = "metal"
 
@@ -378,27 +413,10 @@ class MetalEngine:
 
         eligibility_reasons: list[str] = []
         if mode != "full_3d":
+            eligibility_reasons = await asyncio.to_thread(
+                _circsym_eligibility_reasons, request
+            )
             from . import circsym as circsym_adapter
-
-            if circsym_adapter.circsym_rejection_reasons is None:
-                eligibility_reasons.append(
-                    "installed mesher does not expose axisymmetric-meridian eligibility"
-                )
-            else:
-                try:
-                    eligibility_reasons.extend(
-                        str(reason)
-                        for reason in circsym_adapter.circsym_rejection_reasons(
-                            _solver_mesher_config(request.design)
-                        )
-                    )
-                except Exception as exc:
-                    eligibility_reasons.append(
-                        f"axisymmetric-meridian eligibility check failed: {exc}"
-                    )
-            status = circsym_adapter.circsym_status()
-            if not status["available"] and not eligibility_reasons:
-                eligibility_reasons.append(str(status["reason"]))
 
             if mode == "circsym" and eligibility_reasons:
                 raise ValueError(
