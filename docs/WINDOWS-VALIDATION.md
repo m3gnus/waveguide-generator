@@ -9,7 +9,7 @@ Against P6.4's five items, and deliberately not claiming more than was done:
 | 1. Bootstrap and serve | **done** |
 | 2. gmsh worker thread | **done** — meshed on the worker for every solve here, no Windows-specific failure |
 | 3. bempp/OpenCL solve *through the qualification runner* | **partial** — a real bempp solve completed from the UI on the **OpenCL** backend (§2.2, check 6); it has not been run through the qualification runner |
-| 4. Installer, and the parent-path-with-spaces case | **partial** — the spaces case is done and a *launcher* exists; the installer does not |
+| 4. Installer, and the parent-path-with-spaces case | **partial**, but for a different reason than when this was written — the spaces case is done, and the installer was built on 2026-08-08, after this run. What is missing is that `install.bat` has never been executed on Windows, so the spaces case is proven for bootstrap and the launcher only (§5, item 1) |
 | 5. Upgrade-over-v1 and rollback E2E | **done for the tool** — see check 11; not done against a real v1 install, which does not exist on this machine |
 
 Everything below was measured on the machine described in §1. Where a check
@@ -625,17 +625,37 @@ instead of asserting a POSIX mechanism.
 
 Ordered by how much it matters.
 
-1. ~~**No installer.**~~ **Built 2026-08-08**, after this report was written.
-   `scripts/install.sh` + `install-wg2.command`, `scripts/install.bat` +
+1. **The installer exists; nobody has ever run its Windows half.** It was built
+   on 2026-08-08, after this report: `scripts/install.sh` +
+   `install-wg2.command`, `scripts/install.bat` +
    `scripts/install-and-update.bat`, `scripts/uninstall.{sh,bat}`,
    `scripts/fetch_spa.py` (download, checksum-verify and install the release
    SPA) and `scripts/check_backends.py`, with v1's two contract suites ported
    to `server/tests/test_installer_contract.py` and
-   `test_installer_env_contract.py`. See `docs/P6-CUTOVER-PLAN.md` §P6.2 for
-   what is proven by execution versus written-but-unexecuted — **all three
-   batch files are in the second category**, having been written on macOS, and
-   no release artifact has ever been fetched over HTTPS because no `v*` tag
-   exists yet.
+   `test_installer_env_contract.py`, 44 tests. That closes the gap this item
+   used to describe, but it does not make the Windows path verified: the three
+   batch files were written on macOS against v1's, are checked only statically,
+   and **have never been executed by anyone**. A Windows run would be the first
+   execution of, among others:
+   - the exit-10 relaunch — `install.bat` returning 10 after a fast-forward
+     rather than calling the installer it has just overwritten, and
+     `install-and-update.bat` re-copying to `%TEMP%` and re-running it once,
+     refusing a second round;
+   - the Microsoft Store `python.exe` alias skip, which recognises the alias by
+     substring-replacing `\WindowsApps\` out of the candidate path;
+   - the VC++ redistributable check — `vcruntime140.dll`, `vcruntime140_1.dll`
+     and `msvcp140.dll` under `%SystemRoot%\System32`, which on this machine
+     were already present (§2);
+   - the PowerShell `Tee-Object` transcript, used because a plain cmd pipe takes
+     its `ERRORLEVEL` from the right-hand side and would destroy the exit code
+     the relaunch depends on;
+   - `set /p` in `uninstall.bat`, which requires the user to type `remove`.
+
+   Nor has any release artifact been fetched over HTTPS, on any platform: no
+   `v*` tag exists and `release.yml` has never fired, so the whole download is
+   exercised against `file://` fixtures shaped like a release.
+   `docs/P6-CUTOVER-PLAN.md` §P6.2 has the full table of what is proven by
+   execution versus written-but-unexecuted.
 2. **Stop is prompt, not immediate.** Check 12. The first solve after a start
    still has a ~17 s window with no cancellation checkpoint in it. Fixing it
    properly needs either a boot-time backend warmup or process-isolated solves.
