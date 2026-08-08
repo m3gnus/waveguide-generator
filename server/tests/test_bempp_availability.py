@@ -140,6 +140,102 @@ def test_missing_opencl_runtime_explains_how_to_get_one(monkeypatch):
     assert "Khronos" in reason or "OpenCL runtime" in reason
 
 
+class _FakeDevice:
+    def __init__(self, name, kind):
+        self.name = name
+        self.kind = kind
+
+
+class _FakePlatform:
+    """One ICD, answering ``get_devices`` the way pyopencl does."""
+
+    def __init__(self, name, devices):
+        self.name = name
+        self._devices = devices
+
+    def get_devices(self, device_type=None):
+        if device_type is None:
+            return list(self._devices)
+        found = [d for d in self._devices if d.kind == device_type]
+        if not found:
+            # pyopencl surfaces the driver's own DEVICE_NOT_FOUND as an error.
+            raise RuntimeError("clGetDeviceIDs failed: DEVICE_NOT_FOUND")
+        return found
+
+
+def _fake_pyopencl(platforms):
+    class _DeviceType:
+        CPU = "cpu-devices"
+        GPU = "gpu-devices"
+
+    class _Module:
+        device_type = _DeviceType
+
+        @staticmethod
+        def get_platforms():
+            return platforms
+
+    return _Module
+
+
+def test_a_gpu_only_runtime_is_not_a_usable_opencl_backend(monkeypatch):
+    """Apple Silicon: the ICD is real, the device the solve needs is not.
+
+    ``solve_bempp_from_msh_text`` always asks bempp-cl for an OpenCL *cpu*
+    device, and bempp-cl's dense assembly has no GPU-only path. A probe that
+    accepted any device reported READY on an M1 Max and then failed inside
+    every solve with "OpenCL cpu device could not be initialized" -- exactly
+    the class of lie this module exists to prevent.
+    """
+
+    gpu_only = _FakePlatform("Apple", [_FakeDevice("Apple M1 Max", "gpu-devices")])
+    monkeypatch.setitem(sys.modules, "pyopencl", _fake_pyopencl([gpu_only]))
+
+    usable, reason = bempp._opencl_status()
+
+    assert usable is False
+    assert "cpu" in reason
+    # Name what was found, or the report reads as "no OpenCL at all", which is
+    # a different problem with a different remedy.
+    assert "Apple M1 Max" in reason
+
+
+def test_a_cpu_device_on_any_platform_is_accepted(monkeypatch):
+    """The GPU-only case must not become a blanket refusal."""
+
+    gpu_only = _FakePlatform("Apple", [_FakeDevice("Apple M1 Max", "gpu-devices")])
+    with_cpu = _FakePlatform(
+        "Intel(R) OpenCL", [_FakeDevice("Intel(R) Core(TM) i7", "cpu-devices")]
+    )
+    monkeypatch.setitem(sys.modules, "pyopencl", _fake_pyopencl([gpu_only, with_cpu]))
+
+    usable, reason = bempp._opencl_status()
+
+    assert usable is True
+    assert "Intel(R) Core(TM) i7" in reason
+
+
+def test_the_probe_asks_for_the_device_the_solve_asks_for(monkeypatch):
+    """One constant, so the two can never drift apart again."""
+
+    assert bempp.OPENCL_DEVICE_TYPE == "cpu"
+
+    recorded = []
+
+    class _Recording(_FakePlatform):
+        def get_devices(self, device_type=None):
+            recorded.append(device_type)
+            return super().get_devices(device_type)
+
+    platform_entry = _Recording(
+        "Intel(R) OpenCL", [_FakeDevice("Intel(R) Core(TM) i7", "cpu-devices")]
+    )
+    monkeypatch.setitem(sys.modules, "pyopencl", _fake_pyopencl([platform_entry]))
+
+    assert bempp._opencl_status()[0] is True
+    assert recorded == ["cpu-devices"]
+
+
 def test_available_requires_the_engine_not_just_its_wrapper(monkeypatch):
     """numba loading proves nothing about bempp-cl, which is imported lazily.
 
