@@ -2,7 +2,7 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { readFileSync } from 'node:fs';
-import { lazyChunkPreloader } from './vite.config.plugins';
+import { lazyChunkPreloader } from './vite.config.plugins.ts';
 
 const productVersion = (JSON.parse(readFileSync(new URL('../shared/version.json', import.meta.url), 'utf8')) as { version: string }).version;
 

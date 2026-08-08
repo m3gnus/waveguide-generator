@@ -20,19 +20,24 @@ export function SurfaceMesh({ surface, mode, visible, sectionCut, materials, sch
     () => mode === 'curvature' && surface.curvature ? curvatureColors(surface.curvature) : null,
     [mode, surface.curvature],
   );
-  // Keyed on the typed arrays, not on `surface`. Every decoded preview frame
-  // builds fresh SceneSurface objects, so keying on the object meant this memo
-  // never hit and the boundary extraction -- a per-vertex string key, a Map
-  // over 3N edges, and an O(normals) feature test per edge -- re-ran at up to
-  // 30 Hz during a drag. The arrays are the stable-by-content identity: new
-  // geometry always means new buffers.
+  // Keyed on the typed arrays rather than on `surface`, which is a fresh object
+  // per decoded frame. Be clear about what that buys and what it does not: the
+  // WebSocket decoder allocates new typed arrays for every frame too, so a
+  // frame carrying new geometry always misses this memo and always pays for the
+  // extraction. What it avoids is re-extracting when the component re-renders
+  // for some *other* reason -- a mode toggle, an enclosure toggle, a parent
+  // render -- while the geometry has not moved.
+  //
+  // A hidden surface is skipped outright. Nothing draws its lines, and on a box
+  // design with the enclosure switched off that is a fifth of the triangles in
+  // the scene extracted for nobody.
   const boundary = useMemo(() => {
-    if (mode !== 'edges') return null;
+    if (mode !== 'edges' || !visible) return null;
     const geometry = new BufferGeometry();
     geometry.setAttribute('position', new BufferAttribute(surfaceBoundaryPositions(surface), 3));
     return geometry;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- positions/indices identify the surface's geometry
-  }, [mode, surface.positions, surface.indices, surface.normals]);
+  }, [mode, visible, surface.positions, surface.indices, surface.normals]);
   const material = materials.surfaces[surface.materialClass];
   const edgeFallback = mode === 'edges' && Math.floor(surface.indices.length / 3) > MAX_EDGE_TRIANGLES;
   const edgeFillMaterial = useMemo(() => {
