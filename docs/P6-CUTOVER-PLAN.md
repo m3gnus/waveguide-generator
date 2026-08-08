@@ -204,32 +204,61 @@ The requirements this satisfies:
 **Gate evidence:** migration report with pre/post counts and hashes, a rollback
 test in CI, and one full round trip on a real 109 MB database.
 
-### P6.2 — Installers and the distribution decision
+### P6.2 — Installers and the distribution decision — **built; the Windows half is unexecuted**
 
-*Size: L. The biggest remaining piece.*
+*Size: L. Was the biggest remaining piece.*
 
-§0.3 is settled and the release pipeline exists, so the installer's job is now
-well defined: get the repo at a tag, download and verify that tag's SPA archive,
-create the Python environment, and launch.
+§0.3 is settled and the release pipeline exists, so the installer's job was well
+defined: get the repo at a tag, download and verify that tag's SPA archive,
+create the Python environment, and launch. What shipped:
 
-v1's installer is 365 lines of shell + 471 of batch + `check_venv.py`, backed by
-two contract test suites (`tests/installer-contract.test.js`,
-`installer-env-contract.test.js`, ~300 lines). That is the bar, and it encodes
-years of platform gotchas. v2's installer should be **smaller** — no Node, no
-`npm ci` — but must keep the same behaviors:
+| File | Role |
+|---|---|
+| `scripts/install.sh` | macOS / Linux installer and updater |
+| `install-wg2.command` | Finder double-click entry; keeps a transcript, then starts the launcher |
+| `scripts/install.bat` | Windows installer; never run in place, see below |
+| `scripts/install-and-update.bat` | Windows entry point; stages to `%TEMP%`, logs, handles the exit-10 relaunch |
+| `scripts/uninstall.sh` / `.bat` | documented uninstall, `--data` to include job history |
+| `scripts/fetch_spa.py` | download, **verify**, and install the release SPA |
+| `scripts/check_backends.py` | does a solve actually work on this host |
 
-- Git self-update via fast-forward-only pull, with a clear message when the
-  branch has no upstream or the tree is dirty.
-- Prerequisite detection with actionable errors and version floors (Python 3.13;
-  Git; VC++ redistributable on Windows; Xcode CLT for the Metal helper on macOS).
-- Idempotent environment creation — `scripts/bootstrap.py` already does the
-  Python half and is reusable as-is.
-- **Installation under a parent path containing spaces** (R1-P1-7). The repo dir
-  has no spaces, users' parent folders do; v1 has active bugs from exactly this.
-- Port selection, first-run browser open, and a documented uninstall.
+v1's installer is 365 lines of shell + 471 of batch + `check_venv.py`. v2's is
+smaller per platform because there is no Node half and no `npm ci`, and the
+environment is `scripts/bootstrap.py`'s job, reused as-is.
 
-Port the two installer contract suites to v2 alongside the scripts. They are the
-only automated coverage that catches installer regressions.
+Against the requirements, and how far each is actually proven:
+
+| Requirement | State |
+|---|---|
+| Get the repo at a tag | `--tag vX.Y.Z`; fetches, refuses a dirty tree, reports the resulting detached HEAD on later runs. **Exercised** against a local remote. |
+| Download and verify the SPA | `fetch_spa.py`; checksum parsed from the published `.sha256`, digest compared, **extraction refused on mismatch** and on any member that is not a plain file under `dist/`. **Exercised** against `file://` fixtures, 16 tests. |
+| Git self-update, ff-only | No-upstream, dirty-tree, detached-HEAD and diverged all reported separately. **Exercised**: real fast-forward plus restart through the pulled copy. |
+| Prerequisites with floors | CPython 3.13 exactly, Git 2.20+, VC++ on Windows, Xcode CLT on Apple Silicon. Every error names the command that fixes it. |
+| Idempotent environment | Delegated to `bootstrap.py`. Re-running a complete install takes ~1.5 s and contacts no index. |
+| Parent path with spaces (R1-P1-7) | Installed and served for real from `…/Hornlab - Workspace (test)/waveguide-generator-v2`, and from a clone whose own directory name contains a space. Enforced by a quote-state scanner in the contract suite. |
+| Port selection and browser open | Left to `launch/serve.py`; the installer ends by invoking the launcher rather than restating either. |
+| Documented uninstall | `scripts/uninstall.*`, in the README, refuses to delete non-interactively without `--yes`. |
+| Contract suites ported | `server/tests/test_installer_contract.py` and `test_installer_env_contract.py`, 42 tests. |
+
+**What is not proven, and cannot be from here:**
+
+1. **`install.bat`, `install-and-update.bat` and `uninstall.bat` have never been
+   executed.** They were written on macOS against v1's batch files and are only
+   checked statically. Everything Windows-specific in them is inherited from a
+   failure v1 actually had — the byte-offset self-rewrite, `%VAR%` expanded at
+   block-parse time, Store `python.exe` aliases, `ERRORLEVEL` destroyed by a
+   cmd pipe — but inheriting a fix is not the same as watching it work.
+2. **No release artifact has ever been downloaded over HTTPS**, because no `v*`
+   tag exists and `release.yml` has never fired. The fetch, checksum parse,
+   verification and extraction are all exercised against `file://` fixtures
+   shaped exactly like a release; TLS and GitHub's redirect to the asset CDN
+   are not.
+3. The missing-release case is therefore the one every developer clone hits
+   today. It is deliberately not fatal when `frontend/dist` already exists: the
+   local build is kept and the install continues, with the reason printed.
+
+Both are the same gate as everything else here — they close when a tag is
+pushed and when someone runs the installer on a Windows box.
 
 ### P6.3 — CI and qualification runners
 
@@ -329,10 +358,10 @@ Cutover happens when every row is true and its evidence is linked.
 
 | # | Requirement | Source | Status |
 |---|---|---|---|
-| 1 | Fresh-machine install on macOS | G6 | Blocked on P6.2 |
-| 2 | Fresh-machine install on Windows | G6 | Blocked on P6.2 (P6.4 no longer blocks it) |
+| 1 | Fresh-machine install on macOS | G6 | **Installer built and run end to end** — fresh clone under a parent path with spaces, SPA verified, `/health` served; awaiting a real release tag and a machine that is not this one |
+| 2 | Fresh-machine install on Windows | G6 | Installer **written but never executed** (§P6.2) — needs a Windows box |
 | 3 | Linux smoke | G6 | Blocked on P6.3 |
-| 4 | Upgrade-over-v1 E2E, both OSes | G6 | Migration done; Windows done against a *constructed* v1 install; blocked on P6.2 |
+| 4 | Upgrade-over-v1 E2E, both OSes | G6 | Migration done; Windows done against a *constructed* v1 install; the installer that row also needed now exists, macOS-verified only |
 | 5 | Rollback E2E, both OSes | G6 / R1-P0-6 | **Done on macOS** (scripted) **and on Windows** (constructed install) |
 | 6 | Migration pre/post counts + artifact hashes | R1-P0-6 | **Done** — `--report` emits it |
 | 7 | Two-week beta against a defined matrix | G6 | Blocked on P6.5 |
