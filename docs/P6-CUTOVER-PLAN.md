@@ -207,31 +207,59 @@ own.
 
 Remaining:
 
+- **CI has still never run on v2.** Verified 2026-08-08: the repository has 14
+  workflow runs, *all* of them on `main` — that is v1's workflow, and it has
+  failed every time since February 2026. `gh run list --branch v2` and
+  `--branch windows-support` both return nothing. Everything below is therefore
+  unproven, not merely unwatched.
 - **Watch the first runs.** The server job installs the four pinned HornLab
   modules from Git on hosted runners; that path has never executed in CI. Expect
   to iterate on it once.
-- **Windows job** — after P6.4 establishes what works there at all.
+- **Windows job** — P6.4 is now far enough along to add one.
 - **Linux smoke** — bootstrap + serve + `/health`, no solve.
 - **Qualification runners** (R2-P1.3): the nightly constellation run already
   exists. Extend it to publish per-run archived evidence (preflight report,
   payloads, result artifacts) at a stable location that G6 can link to. Hosted CI
   must never run real solvers; that separation is deliberate.
 
-### P6.4 — Windows
+### P6.4 — Windows — **mostly done**
 
-*Size: L. Entirely unstarted.*
+*Size: L. Was "entirely unstarted"; the spike ran on `windows-support` and merged
+into `main` on 2026-08-08.* Findings in `docs/WINDOWS-VALIDATION.md` (twelve
+checks) and `docs/WINDOWS-PERFORMANCE.md`; the Apple Silicon re-measurement that
+followed is in `docs/MACOS-PERFORMANCE.md`.
 
-Nothing about v2 has run on Windows. The order that avoids wasted work:
+1. **Bootstrap and serve — done.** A hard blocker was found first: the locked
+   dependency set demanded `uvloop`, which does not exist on Windows, so
+   bootstrap failed on *every* Windows machine. The lock now describes a
+   platform.
+2. **gmsh worker thread — done.** The Windows risk did not materialise; the real
+   defect was on macOS, where gmsh silently replaced the process SIGTERM
+   disposition and the server died bypassing shutdown. Handlers are now re-armed
+   after each native boundary.
+3. **bempp/OpenCL — done from the interface, not through the qualification
+   runner.** v2 was pinning `assembly_backend="numba"` and overriding the
+   engine's own production choice; OpenCL is now resolved with a stated warning
+   on fallback rather than a silent one. It cut the uncancellable first-solve
+   window from 53.8 s to 17.5 s.
+4. **Installer — not started.** This shipped a *launcher* (`launch-wg2.bat`),
+   not an installer. See P6.2; it is the largest gap left in the whole phase.
+5. **Upgrade-over-v1 and rollback E2E — done against a *constructed* v1
+   install,** because that machine has no real v1 history. It surfaced two
+   defects worth knowing: a `sqlite3` connection leak (`with sqlite3.connect(…)`
+   commits but never closes — invisible on POSIX, `WinError 32` on Windows) in
+   both `scripts/migrate_v1.py` and its tests, and a rollback that took no
+   safety copy of what it was about to overwrite. Both fixed.
 
-1. Bootstrap and serve — Python 3.13 venv, locked deps, pinned modules, uvicorn.
-2. gmsh worker thread. The plan flags this as a known Windows risk area
-   (`interruptible=False`, single-worker identity).
-3. bempp/OpenCL solve path on the Windows box, through the qualification runner.
-4. Installer (`install.bat` equivalent) and the parent-path-with-spaces case.
-5. Upgrade-over-v1 and rollback E2E.
+**Cannot be closed on that machine:** the viewport has never rendered on a real
+GPU — the VM exposes no display adapter, so every frame goes through WARP or
+SwiftShader. Correctness is established; frame rates and the hardware
+ANGLE/D3D11 path are not.
 
-Treat items 1–3 as a spike with a written findings doc before committing to the
-installer.
+**Still open:** no Windows CI job; solve accuracy never compared against macOS
+(more interesting now that the assembly backend changed, and it belongs to the
+qualification runner); the VC++ and no-OpenCL failure branches are covered by
+faked failures rather than a genuinely clean box.
 
 ### P6.5 — Beta
 
@@ -266,21 +294,29 @@ Cutover happens when every row is true and its evidence is linked.
 | # | Requirement | Source | Status |
 |---|---|---|---|
 | 1 | Fresh-machine install on macOS | G6 | Blocked on P6.2 |
-| 2 | Fresh-machine install on Windows | G6 | Blocked on P6.2, P6.4 |
+| 2 | Fresh-machine install on Windows | G6 | Blocked on P6.2 (P6.4 no longer blocks it) |
 | 3 | Linux smoke | G6 | Blocked on P6.3 |
-| 4 | Upgrade-over-v1 E2E, both OSes | G6 | Migration done; blocked on P6.2 |
-| 5 | Rollback E2E, both OSes | G6 / R1-P0-6 | **Done on macOS** (scripted); Windows pending |
+| 4 | Upgrade-over-v1 E2E, both OSes | G6 | Migration done; Windows done against a *constructed* v1 install; blocked on P6.2 |
+| 5 | Rollback E2E, both OSes | G6 / R1-P0-6 | **Done on macOS** (scripted) **and on Windows** (constructed install) |
 | 6 | Migration pre/post counts + artifact hashes | R1-P0-6 | **Done** — `--report` emits it |
 | 7 | Two-week beta against a defined matrix | G6 | Blocked on P6.5 |
 | 8 | Traceability-table sweep — every row tested, deferrals have written workarounds | §3, G6 | Table exists; sweep not run |
 | 9 | Qualification-runner evidence linked from the gate | R2-P1.3 | Runner exists; publishing not wired |
 | 10 | Imported jobs degrade gracefully (no reopen/rerun) | §0.2, new | Not started |
 
+Two things gate the gate itself, and neither is a row above: **CI has never run
+on v2** (P6.3), so the whole suite-and-drift half of the evidence is untested on
+a hosted runner; and **`release.yml` has never fired** — the repository has only
+`v1.0.0` and `v1.1.0` tags — so the prebuilt-SPA distribution that rows 1 and 2
+depend on has never been produced.
+
 ---
 
 ## 3. Open decisions
 
-1. **Distribution (§0.3)** — A, B, or C. Blocks P6.2. Recommend A.
+1. ~~**Distribution (§0.3)** — A, B, or C.~~ **Settled: option A**, a GitHub
+   Release artifact; `.github/workflows/release.yml` implements it. It has never
+   fired, because no `v*` tag exists yet.
 2. ~~**Migrating into a non-empty v2 database** — merge or refuse?~~ **Settled:
    merge by job id.** Refusing was never viable — this machine already has 12 v2
    jobs alongside 35 v1 jobs, so refusing would force discarding one side. An
@@ -294,6 +330,13 @@ Cutover happens when every row is true and its evidence is linked.
    `textcfg.parse` path so the 26 snapshot-carrying jobs can be reopened, or
    ship with rerun disabled for all imported jobs? Not a cutover blocker either
    way.
+6. **Parallel BEMPP sweeps, and what they cost Stop.** The Windows pass enabled
+   the engine's own `auto` worker mode, which splits sweeps of 80+ frequencies
+   across processes. Stop then cannot cancel a frequency already running in a
+   sibling worker. The trade is announced in the solve log and job metadata
+   before the solve starts, and `WG2_SOLVE_WORKERS=1` restores serial behaviour,
+   but shipping it *on* by default is a judgement about which surprise is worse.
+   Reverting the default is one line.
 
 ---
 
