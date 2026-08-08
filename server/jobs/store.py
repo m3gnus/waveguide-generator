@@ -232,6 +232,33 @@ class JobStore:
             event = self._append_event(conn, job_id, event_type, payload) if changed else None
             return changed, event
 
+    def start_job(
+        self,
+        job_id: str,
+        fields: Mapping[str, Any],
+        payload: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        """Atomically transition a job from queued to running."""
+
+        values = dict(fields)
+        unsupported = sorted(set(values) - ALLOWED_JOB_UPDATE_FIELDS)
+        if unsupported:
+            raise ValueError(f"Unsupported job update field(s): {', '.join(unsupported)}")
+        if values.get("status") != "running":
+            raise ValueError("A started job must transition to status 'running'")
+        values["updated_at"] = _now_iso()
+        assignments = [f"{key} = ?" for key in values]
+        params = [self._db_value(key, value) for key, value in values.items()]
+        with self._lock, self._transaction() as conn:
+            changed = conn.execute(
+                f"""UPDATE simulation_jobs SET {', '.join(assignments)}
+                    WHERE id = ? AND status = 'queued'""",
+                [*params, job_id],
+            ).rowcount
+            if changed <= 0:
+                return None
+            return self._append_event(conn, job_id, "started", payload)
+
     def persist_runtime_update(
         self,
         job_id: str,

@@ -285,11 +285,23 @@ def requested_port(
     return port
 
 
+def _configure_port_bind(sock: socket.socket) -> None:
+    """Apply the platform's fail-on-busy policy before binding a server port."""
+
+    if sys.platform == "win32":
+        # Winsock's SO_REUSEADDR permits another same-user listener to bind the
+        # same address and port. Servers need the inverse policy so the fallback
+        # scan observes an occupied candidate instead of sharing it.
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+    elif os.name == "posix" and sys.platform != "cygwin":
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+
 def port_is_available(port: int, host: str = "127.0.0.1") -> bool:
     """Probe whether a local TCP port can currently be bound."""
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        _configure_port_bind(probe)
         try:
             probe.bind((host, port))
         except OSError:
@@ -336,7 +348,7 @@ def reserve_port(
     for candidate in range(preferred, last + 1):
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
-            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            _configure_port_bind(listener)
             listener.bind((host, candidate))
         except OSError:
             listener.close()

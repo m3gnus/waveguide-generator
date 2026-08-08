@@ -33,7 +33,7 @@ async def _request(
     async def send(message: dict[str, Any]) -> None:
         sent.append(message)
 
-    headers = [(b"host", b"testserver")]
+    headers = [(b"host", b"127.0.0.1:3100")]
     if body is not None:
         headers.append((b"content-type", b"application/json"))
     await app(
