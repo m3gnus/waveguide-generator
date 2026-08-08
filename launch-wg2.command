@@ -26,10 +26,10 @@ if [[ ! -f "frontend/dist/index.html" ]]; then
   # developer path rather than the only one.
   fail "The built interface is missing.
 
-Download waveguide-generator-v2-spa-<version>.tar.gz from the release:
-  https://github.com/m3gnus/waveguide-generator/releases
-and extract it so that frontend/dist/index.html exists:
-  tar -xzf waveguide-generator-v2-spa-<version>.tar.gz -C frontend
+Run the installer, which downloads it from the release and verifies it against
+the published checksum before extracting anything:
+  bash scripts/install.sh
+or double-click install-wg2.command.
 
 If you are working on the interface itself, build it instead:
   cd frontend && npm install && npm run build"

@@ -14,6 +14,50 @@ Design and contract documents live in [docs/](docs/); the traceability table
 mapping every v1 behavior to its v2 owner is
 [docs/TRACEABILITY-TABLE.md](docs/TRACEABILITY-TABLE.md).
 
+## Install
+
+Clone the repository — do not download a ZIP, because the installer updates
+itself with Git and the four pinned HornLab modules are installed from Git too.
+Then run the installer for your platform:
+
+| | |
+|---|---|
+| macOS | double-click `install-wg2.command`, or `bash scripts/install.sh` |
+| Windows | double-click `scripts\install-and-update.bat` |
+| Linux | `bash scripts/install.sh` |
+
+It fast-forwards the checkout, downloads that version's prebuilt interface from
+the GitHub release and **refuses to extract it unless it matches the published
+SHA-256**, creates `.venv` with CPython 3.13 and the locked dependency set,
+checks that a solve can actually run, and starts the app. Running it again is
+cheap: an unchanged install re-verifies in about a second and contacts no index.
+
+Prerequisites, all reported with the command that installs them: CPython 3.13
+(exactly — the dependency set is locked against one series), Git 2.20+, the
+Microsoft Visual C++ Redistributable on Windows, and the Xcode Command Line
+Tools on Apple Silicon for the Metal solver.
+
+Useful flags: `--tag vX.Y.Z` installs a specific release, `--skip-spa` leaves
+`frontend/dist` alone while you are working on the interface, `--no-launch`
+stops before starting the app, and `--force` rebuilds the environment.
+
+To check the solve backends at any time without a full install:
+
+```
+.venv/bin/python scripts/check_backends.py
+```
+
+### Uninstall
+
+```
+bash scripts/uninstall.sh            # macOS/Linux: .venv and frontend/dist
+bash scripts/uninstall.sh --data     # also designs, job history, meshes, logs
+scripts\uninstall.bat                # Windows, same options
+```
+
+Neither touches the checkout itself, nor anything belonging to v1 — delete the
+folder yourself when you are done with it.
+
 ## Launch
 
 On macOS, double-click `launch-wg2.command` in Finder. Keep the Terminal window
