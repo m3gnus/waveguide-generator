@@ -58,6 +58,11 @@ export function incrementJobVersion(): void {
   preferencesStore.update({ jobVersion: Math.min(999_999, current + 1) });
 }
 
+/** Read naming at submission time, including a commit from the same key event. */
+export function currentJobLabel(): string {
+  return jobBaseName(preferencesStore.getSnapshot());
+}
+
 const jobsConnection = () => jobsSocket.getSnapshot().connection;
 
 export function JobsCoordinator({ children }: { children: ReactNode }) {
@@ -90,7 +95,7 @@ export function JobsCoordinator({ children }: { children: ReactNode }) {
         nextDesign,
         useSolveOptionsStore.getState().options(),
         fetch,
-        { label: jobBaseName(preferences), designRevision: nextRevision },
+        { label: currentJobLabel(), designRevision: nextRevision },
       );
       incrementJobVersion();
       await jobsSocket.refresh();
