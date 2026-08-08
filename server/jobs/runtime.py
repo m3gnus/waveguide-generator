@@ -81,7 +81,7 @@ class _CancelledAtCheckpoint(RuntimeError):
 
 @dataclass
 class _PendingRuntimeUpdate:
-    """Latest visible state and complete logs waiting for one durable flush."""
+    """Latest visible state, buffered logs, and the pinned in-flight prefix."""
 
     persisted_stage: str | None
     last_persisted_at: float
@@ -92,6 +92,7 @@ class _PendingRuntimeUpdate:
     log_lines: list[str] = field(default_factory=list)
     timer_task: asyncio.Task[Any] | None = None
     expected_log_size: int | None = None
+    pinned_log_lines: tuple[str, ...] | None = None
     closed: bool = False
 
     @property
@@ -631,7 +632,14 @@ class JobRuntime:
             self._check_cancelled(job_id)
             await self._append_log(job_id, "Dry-run result persistence ready")
 
-            await self._flush_runtime_update(job_id, forget=True)
+            try:
+                await self._flush_runtime_update(job_id, forget=True)
+            except Exception as exc:
+                logger.warning(
+                    "Final runtime log flush failed for completed job %s: %s",
+                    job_id,
+                    exc,
+                )
 
             completed_at = _now_iso()
             try:
@@ -803,7 +811,14 @@ class JobRuntime:
                 self.store.update_job(job_id, has_mesh_artifact=False)
 
         self._check_cancelled(job_id)
-        await self._flush_runtime_update(job_id, forget=True)
+        try:
+            await self._flush_runtime_update(job_id, forget=True)
+        except Exception as exc:
+            logger.warning(
+                "Final runtime log flush failed for completed job %s: %s",
+                job_id,
+                exc,
+            )
         completed_at = _now_iso()
         try:
             event = await asyncio.to_thread(
@@ -967,60 +982,84 @@ class JobRuntime:
         if timer is not None and timer is not asyncio.current_task() and not timer.done():
             timer.cancel()
         state.timer_task = None
-        if state.closed or not state.pending:
-            return
-
-        fields: dict[str, Any] = {}
-        stage_payload: dict[str, Any] | None = None
-        if state.stage is not None:
-            fields = {
-                "stage": state.stage,
-                "stage_message": state.message or "",
-                "progress": state.progress if state.progress is not None else 0.0,
-            }
-            stage_payload = {
-                "stage": state.stage,
-                "message": state.message or "",
-                "progress": state.progress if state.progress is not None else 0.0,
-            }
-        log_lines = tuple(state.log_lines)
-        if log_lines and state.expected_log_size is None:
-            state.expected_log_size = await asyncio.to_thread(
-                self.store.job_log_size, job_id
-            )
-        changed, events = await asyncio.to_thread(
-            self.store.persist_runtime_update,
-            job_id,
-            fields,
-            stage_payload=stage_payload,
-            log_lines=log_lines,
-            expected_log_size=state.expected_log_size,
-            max_log_lines=MAX_LOG_LINES,
-            max_log_chars=MAX_LOG_CHARS,
-            max_log_event_chars=MAX_LOG_EVENT_CHARS,
-        )
-        if changed:
+        while not state.closed and state.pending:
+            fields: dict[str, Any] = {}
+            stage_payload: dict[str, Any] | None = None
             if state.stage is not None:
-                state.persisted_stage = state.stage
-            for event in events:
-                self.events.publish(event)
-        state.stage = None
-        state.progress = None
-        state.message = None
-        state.log_lines.clear()
-        state.expected_log_size = None
-        state.last_persisted_at = time.monotonic()
+                fields = {
+                    "stage": state.stage,
+                    "stage_message": state.message or "",
+                    "progress": (
+                        state.progress if state.progress is not None else 0.0
+                    ),
+                }
+                stage_payload = {
+                    "stage": state.stage,
+                    "message": state.message or "",
+                    "progress": (
+                        state.progress if state.progress is not None else 0.0
+                    ),
+                }
+
+            if state.log_lines and state.pinned_log_lines is None:
+                # Keep this exact prefix across failures and cancellation. A
+                # later callback may extend log_lines before the retry, but it
+                # must not change the bytes checked at expected_log_size.
+                state.pinned_log_lines = tuple(state.log_lines)
+            log_lines = state.pinned_log_lines or ()
+            if log_lines and state.expected_log_size is None:
+                state.expected_log_size = await asyncio.to_thread(
+                    self.store.job_log_size, job_id
+                )
+
+            changed, events = await asyncio.to_thread(
+                self.store.persist_runtime_update,
+                job_id,
+                fields,
+                stage_payload=stage_payload,
+                log_lines=log_lines,
+                expected_log_size=state.expected_log_size,
+                max_log_lines=MAX_LOG_LINES,
+                max_log_chars=MAX_LOG_CHARS,
+                max_log_event_chars=MAX_LOG_EVENT_CHARS,
+            )
+            if changed:
+                if state.stage is not None:
+                    state.persisted_stage = state.stage
+                for event in events:
+                    self.events.publish(event)
+
+            state.stage = None
+            state.progress = None
+            state.message = None
+            if log_lines:
+                if tuple(state.log_lines[: len(log_lines)]) != log_lines:
+                    raise RuntimeError("Pinned runtime log batch is no longer a prefix")
+                del state.log_lines[: len(log_lines)]
+            state.pinned_log_lines = None
+            state.expected_log_size = None
+            state.last_persisted_at = time.monotonic()
 
     async def _flush_runtime_update(self, job_id: str, *, forget: bool = False) -> None:
         state = self._pending_updates.get(job_id)
         if state is None:
             return
-        async with state.lock:
-            await self._flush_runtime_update_locked(job_id, state)
+        try:
+            async with state.lock:
+                await self._flush_runtime_update_locked(job_id, state)
+        finally:
             if forget:
                 state.closed = True
-        if forget and self._pending_updates.get(job_id) is state:
-            self._pending_updates.pop(job_id, None)
+                timer = state.timer_task
+                if (
+                    timer is not None
+                    and timer is not asyncio.current_task()
+                    and not timer.done()
+                ):
+                    timer.cancel()
+                state.timer_task = None
+                if self._pending_updates.get(job_id) is state:
+                    self._pending_updates.pop(job_id, None)
 
     async def _flush_all_runtime_updates(self, *, forget: bool = False) -> None:
         for job_id in tuple(self._pending_updates):
@@ -1028,7 +1067,6 @@ class JobRuntime:
 
     async def _fail_job(self, job_id: str, message: str) -> None:
         try:
-            await self._flush_runtime_update(job_id, forget=True)
             event = self._transition(
                 job_id,
                 {
@@ -1043,8 +1081,13 @@ class JobRuntime:
             )
         except Exception:
             logger.exception("Could not persist failure state for job %s", job_id)
-            return
-        self.events.publish(event)
+        else:
+            self.events.publish(event)
+
+        try:
+            await self._flush_runtime_update(job_id, forget=True)
+        except Exception:
+            logger.exception("Could not persist final logs for failed job %s", job_id)
 
     def _check_cancelled(self, job_id: str) -> None:
         # Deliberately synchronous: the solver thread calls this from inside a

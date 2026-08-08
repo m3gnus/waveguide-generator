@@ -252,9 +252,11 @@ class JobStore:
         the event cursor consistent with the durable job row.
 
         The log file is appended and fsynced before its metadata/event becomes
-        visible. ``expected_log_size`` makes that append idempotent: if SQLite
-        commit fails after the append, retry recognizes the exact durable batch
-        instead of writing it twice. A mismatched file suffix fails closed.
+        visible. The caller keeps the batch paired with ``expected_log_size``
+        unchanged until it observes success, so a retry can recognize those
+        exact bytes on disk without appending them twice. An unexpected file
+        size or suffix emits a warning and rebases the append at the current
+        end of file instead of permanently blocking runtime persistence.
 
         Log event ``lines`` is the authoritative line-preserving delta. The
         single-line ``chunk`` remains for older clients and names the newest
@@ -273,14 +275,19 @@ class JobStore:
                    FROM simulation_jobs WHERE id = ?""",
                 (job_id,),
             ).fetchone()
-            if (
-                row is None
-                or row["status"] not in {"queued", "running"}
-            ):
+            if row is None:
                 return False, []
 
+            active = row["status"] in {"queued", "running"}
             cancellation_requested = bool(row["cancellation_requested"])
-            if cancellation_requested:
+            if not active:
+                # A terminal transition owns the durable row and event cursor.
+                # A failure handler may still be draining its lower-priority
+                # file tail, but stale stage fields must not follow the
+                # terminal event or rewrite terminal metadata.
+                values = {}
+                stage_payload = None
+            elif cancellation_requested:
                 # A cancellation stage already owns the visible state. Logs
                 # that raced with the request are still durable, but stale
                 # progress must not restore the prior solve stage.
@@ -303,20 +310,43 @@ class JobStore:
                 expected = (
                     int(expected_log_size) if expected_log_size is not None else actual
                 )
-                if actual < expected:
-                    raise OSError(
-                        f"Job log shrank from expected offset {expected} to {actual}"
-                    )
                 already_appended = False
-                if actual > expected:
-                    with path.open("rb") as handle:
-                        handle.seek(expected)
-                        suffix = handle.read()
-                    if suffix != batch:
-                        raise OSError(
-                            "Job log changed outside the buffered runtime writer"
-                        )
-                    already_appended = True
+                mismatch = actual < expected
+                if not mismatch and actual > expected:
+                    try:
+                        with path.open("rb") as handle:
+                            handle.seek(expected)
+                            suffix = handle.read()
+                    except FileNotFoundError:
+                        actual = 0
+                        mismatch = True
+                    else:
+                        if suffix == batch:
+                            already_appended = True
+                        else:
+                            mismatch = True
+                if mismatch:
+                    logger.warning(
+                        "Job log integrity mismatch for job %s: expected batch "
+                        "at offset %d, observed size %d; resynchronizing at "
+                        "current EOF",
+                        job_id,
+                        expected,
+                        actual,
+                    )
+                    try:
+                        resynced_offset = path.stat().st_size
+                    except FileNotFoundError:
+                        resynced_offset = 0
+                    already_appended = False
+                    if resynced_offset >= len(batch):
+                        try:
+                            with path.open("rb") as handle:
+                                handle.seek(resynced_offset - len(batch))
+                                already_appended = handle.read() == batch
+                        except FileNotFoundError:
+                            resynced_offset = 0
+                            already_appended = False
                 if not already_appended:
                     try:
                         with path.open("ab") as handle:
@@ -330,6 +360,9 @@ class JobStore:
                     except FileNotFoundError:
                         self._job_logs_dir_ready = False
                         raise
+
+                if not active:
+                    return False, []
 
                 metadata = json.loads(row["task_metadata_json"] or "{}")
                 tail = [str(line) for line in metadata.get("log_tail") or []]
