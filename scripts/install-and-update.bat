@@ -38,8 +38,12 @@ if not exist "%WG_ROOT%\scripts\install.bat" goto missing_installer
 
 rem Keep a transcript. Double-clicking a .bat gives a console that closes on
 rem exit, so without this the failure a user needs to report is simply gone.
-set "WG_LOG_DIR=%APPDATA%\WaveguideGenerator2\logs"
-if not defined APPDATA set "WG_LOG_DIR=%TEMP%"
+rem Default first, then improve on it. An undefined %APPDATA% expands to itself
+rem in a batch file rather than to nothing, so building the good path first and
+rem correcting it afterwards would depend on the order of two lines to avoid
+rem creating a directory literally named "%APPDATA%".
+set "WG_LOG_DIR=%TEMP%"
+if defined APPDATA set "WG_LOG_DIR=%APPDATA%\WaveguideGenerator2\logs"
 if not exist "%WG_LOG_DIR%" mkdir "%WG_LOG_DIR%" >nul 2>&1
 if not exist "%WG_LOG_DIR%" set "WG_LOG_DIR=%TEMP%"
 set "WG_LOG=%WG_LOG_DIR%\install.log"
@@ -70,7 +74,15 @@ rem log file for as long as it stays up. Start it here instead, unpiped.
 echo.
 echo Starting Waveguide Generator v2...
 call "%WG_ROOT%\launch-wg2.bat"
-exit /b %ERRORLEVEL%
+set "RESULT=%ERRORLEVEL%"
+if "%RESULT%"=="0" exit /b 0
+rem Exit 2 is the documented "another instance already owns the lock" answer,
+rem not a failure: serve.py has already opened the browser on the running one.
+if "%RESULT%"=="2" exit /b 2
+rem Anything else goes through :finish so the window stays open long enough to
+rem read. launch-wg2.bat's own pause tests whether cmd's command line names
+rem *itself*, which it does not when it is reached through this script.
+goto finish
 
 :failed
 echo ===============================================================

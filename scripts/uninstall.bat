@@ -120,21 +120,31 @@ exit /b 0
 rem Ask v2 itself rather than restating the rule here. The answer depends on the
 rem platform and on WG2_DATA_DIR, and a second copy of that logic would drift
 rem from server\platform\paths.py the first time either moved.
-if exist ".venv\Scripts\python.exe" call :ask_python ".venv\Scripts\python.exe"
+rem
+rem Three near-identical subroutines rather than one taking the interpreter as an
+rem argument, because a `for /f ('...')` command string that BEGINS with a quote
+rem hits cmd's quote-stripping rule for `cmd /c` and can be mangled. Every form
+rem below starts with a bare command name; the repository-local interpreter is
+rem reached by a relative path, which cannot contain a space.
+if exist ".venv\Scripts\python.exe" call :ask_venv_python
 if defined DATA_DIR exit /b 0
 where py >nul 2>&1
-if not errorlevel 1 call :ask_python_launcher
+if not errorlevel 1 call :ask_py_launcher
 if defined DATA_DIR exit /b 0
 where python >nul 2>&1
-if not errorlevel 1 call :ask_python "python"
+if not errorlevel 1 call :ask_path_python
 exit /b 0
 
-:ask_python
-for /f "delims=" %%d in ('"%~1" -c "import sys; sys.path.insert(0, sys.argv[1]); from server.platform.paths import resolve_data_dir; print(resolve_data_dir())" "%WG_ROOT%" 2^>nul') do if not defined DATA_DIR set "DATA_DIR=%%d"
+:ask_venv_python
+for /f "delims=" %%d in ('.venv\Scripts\python.exe -c "import sys; sys.path.insert(0, sys.argv[1]); from server.platform.paths import resolve_data_dir; print(resolve_data_dir())" "%WG_ROOT%" 2^>nul') do if not defined DATA_DIR set "DATA_DIR=%%d"
 exit /b 0
 
-:ask_python_launcher
+:ask_py_launcher
 for /f "delims=" %%d in ('py -3.13 -c "import sys; sys.path.insert(0, sys.argv[1]); from server.platform.paths import resolve_data_dir; print(resolve_data_dir())" "%WG_ROOT%" 2^>nul') do if not defined DATA_DIR set "DATA_DIR=%%d"
+exit /b 0
+
+:ask_path_python
+for /f "delims=" %%d in ('python -c "import sys; sys.path.insert(0, sys.argv[1]); from server.platform.paths import resolve_data_dir; print(resolve_data_dir())" "%WG_ROOT%" 2^>nul') do if not defined DATA_DIR set "DATA_DIR=%%d"
 exit /b 0
 
 :bad_directory
