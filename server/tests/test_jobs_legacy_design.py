@@ -284,8 +284,9 @@ def _live_rows() -> list[dict[str, Any]]:
 def test_every_job_in_the_live_v1_database_is_recovered_or_explained() -> None:
     """The release claim, checked against the whole corpus rather than a sample.
 
-    Deliberately not a count: this is Magnus's working history and it grows and
-    shrinks as he runs and deletes jobs. What has to hold is that no row lands
+    Deliberately not a count: this is a live working history that grows and
+    shrinks as jobs are run and deleted, and pinning a number made the suite
+    fail the first time one was removed. What has to hold is that no row lands
     in a third state -- silently unopenable, with nothing to tell the user.
     """
 
