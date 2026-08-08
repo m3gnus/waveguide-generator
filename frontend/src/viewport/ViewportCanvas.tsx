@@ -62,6 +62,33 @@ export function cameraFitKey(bounds: FrameScene['bounds'], nonce: number, projec
   return `${nonce}:${projection}:${aspect}:${bounds.min.toArray().join(',')}:${bounds.max.toArray().join(',')}`;
 }
 
+/**
+ * What to do with a camera fit whose inputs have changed.
+ *
+ * The fit key contains the model bounds, so every new preview frame asks for a
+ * refit. That is what auto-frames geometry as it appears, and it is right while
+ * the camera is still the one the application chose. It is wrong once the user
+ * has orbited: the fit is computed from the last *requested* direction, so
+ * re-applying it throws their view away and snaps back to the preset. That used
+ * to happen about once per pause, because frames only ever landed between
+ * gestures; now that a drag delivers frames continuously it would happen
+ * several times a second.
+ *
+ * `settled` means the key is already applied. `record` means the model moved
+ * under a camera the user has taken over, so remember the key and leave the
+ * camera alone. `apply` means the view itself changed — a preset, a gizmo axis,
+ * a projection or aspect change — which always wins the camera back.
+ */
+export function cameraFitDisposition(
+  applied: { fit: string | null; view: string | null },
+  next: { fit: string; view: string },
+  cameraIsUsers: boolean,
+): 'settled' | 'record' | 'apply' {
+  if (applied.fit === next.fit) return 'settled';
+  if (applied.view === next.view && cameraIsUsers) return 'record';
+  return 'apply';
+}
+
 export function installContextLossFallback(canvas: HTMLCanvasElement, onFailure: (message: string) => void): void {
   canvas.addEventListener('webglcontextlost', (event) => {
     event.preventDefault();
@@ -230,8 +257,14 @@ function CameraRig({ bounds, request, zoomRequest, projection, preferences, sche
     ? viewDirection([directionX, directionY, directionZ])
     : presetDirection(requestedPreset), [directionX, directionY, directionZ, requestedPreset]);
   const appliedRequest = useRef<string | null>(null);
+  const appliedView = useRef<string | null>(null);
   const appliedZoom = useRef(zoomRequest.nonce);
+  // Whether the camera currently belongs to the user rather than to the last
+  // automatic fit. OrbitControls raises `start` only for real input, and the
+  // zoom buttons set it themselves.
+  const cameraIsUsers = useRef(false);
   const fitKey = cameraFitKey(bounds, request.nonce, projection, aspect);
+  const viewKey = `${request.nonce}:${projection}:${aspect}:${direction.toArray().join(',')}`;
   const fitRequestKey = `${fitKey}:${direction.toArray().join(',')}`;
   const fit = useMemo(
     () => calculateCameraFit(bounds, direction, projection, aspect),
@@ -245,7 +278,18 @@ function CameraRig({ bounds, request, zoomRequest, projection, preferences, sche
   }, [camera, get, set]);
 
   useLayoutEffect(() => {
-    if (appliedRequest.current === fitRequestKey) return;
+    const disposition = cameraFitDisposition(
+      { fit: appliedRequest.current, view: appliedView.current },
+      { fit: fitRequestKey, view: viewKey },
+      cameraIsUsers.current,
+    );
+    if (disposition === 'settled') return;
+    if (disposition === 'record') {
+      appliedRequest.current = fitRequestKey;
+      return;
+    }
+    appliedView.current = viewKey;
+    cameraIsUsers.current = false;
     camera.position.copy(fit.position);
     camera.up.copy(cameraUp(direction));
     camera.lookAt(fit.center);
@@ -265,11 +309,14 @@ function CameraRig({ bounds, request, zoomRequest, projection, preferences, sche
     controls.current?.update();
     appliedRequest.current = fitRequestKey;
     scheduler.schedule();
-  }, [aspect, camera, direction, fit, fitRequestKey, scheduler]);
+  }, [aspect, camera, direction, fit, fitRequestKey, scheduler, viewKey]);
 
+  // Re-centring the orbit target belongs to the same decision: a pan the user
+  // made is theirs to keep, and the layout effect above has already recorded
+  // whether this fit was applied.
   useEffect(() => {
     const instance = controls.current;
-    if (!instance) return;
+    if (!instance || cameraIsUsers.current) return;
     instance.target.copy(fit.center);
     instance.update();
     scheduler.schedule();
@@ -277,6 +324,7 @@ function CameraRig({ bounds, request, zoomRequest, projection, preferences, sche
 
   useLayoutEffect(() => {
     if (appliedZoom.current === zoomRequest.nonce) return;
+    cameraIsUsers.current = true;
     const target = controls.current?.target ?? center;
     if (camera instanceof OrthographicCamera) {
       camera.zoom = zoomedOrthographicValue(camera.zoom, zoomRequest.direction);
@@ -332,6 +380,9 @@ function CameraRig({ bounds, request, zoomRequest, projection, preferences, sche
     enableDamping={preferences.dampingEnabled}
     dampingFactor={preferences.dampingFactor}
     zoomToCursor
+    // `start` fires for real input only -- pointer down, wheel, touch -- not for
+    // the programmatic `update()` calls the fit and the rebracket make.
+    onStart={() => { cameraIsUsers.current = true; }}
     onChange={() => { rebracket(); scheduler.schedule(); }}
   />;
 }
