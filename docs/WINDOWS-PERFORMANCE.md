@@ -384,9 +384,15 @@ dispose — the shape `stores/autosave.ts` already used.
    EChartRenderer chunk (616 kB) still only begin downloading after the 708 kB
    entry has parsed and mounted. A `modulepreload` hint injected at build time
    would overlap them. Not done.
+   **Done 2026-08-08** — see `MACOS-PERFORMANCE.md` "Viewport frame rate" §5.
+   The Viewport chunk went from starting at 100 ms to starting at 11 ms.
 4. **Dead dockview theme CSS.** About 123 kB of the 176 kB stylesheet is
    dockview's, of which roughly ten built-in colour themes are unused — the app
    themes `.dv-*` itself. Not stripped.
+   **Measured and rejected 2026-08-08** — one of the ten *is* reachable
+   (dockview's default `abyss`); the other nine are 64.6 kB raw, 3.5 kB gzipped,
+   and unmeasurably cheap to parse. See `MACOS-PERFORMANCE.md` §6 for why doing
+   it safely would mean fighting Vite's content hashing.
 5. **`JobsPanel` re-render cascade.** Every design revision still re-renders the
    jobs list through a context-identity chain, and each card re-hydrates a full
    design document in its render body. Real, and untouched.
@@ -394,6 +400,10 @@ dispose — the shape `stores/autosave.ts` already used.
    `BaseHTTPMiddleware`, which wraps every request in an anyio task group and
    pumps the response body through memory object streams. Pure ASGI middleware
    would avoid that for the multi-megabyte results body.
+   **Measured and rejected 2026-08-08.** The premise is wrong: the overhead is
+   0.7–2.2 ms *per request regardless of body size* — a 4 MiB response costs the
+   same as a small JSON one — and on the streamed `/assets/` chunks it was not
+   measurable next to gzip. A whole session makes about twenty HTTP requests.
 7. **Process-isolated solves.** Explicitly deferred by the cutover plan, and
    still the only thing that would make Stop immediate rather than prompt.
 
