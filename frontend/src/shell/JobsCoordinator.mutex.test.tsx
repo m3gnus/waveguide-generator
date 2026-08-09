@@ -48,7 +48,8 @@ function publishJobs(jobs: JobItem[]): void {
 
 function failedJob(): JobItem {
   return {
-    id: 'failed-job', label: 'failed_run', status: 'error', progress: 1,
+    id: 'failed-job', run_number: 1, parent_job_id: null,
+    label: 'failed_run', status: 'error', progress: 1,
     stage: 'solve', stage_message: null, created_at: '2026-08-08T00:00:00Z',
     queued_at: '2026-08-08T00:00:00Z', started_at: '2026-08-08T00:00:00Z',
     completed_at: '2026-08-08T00:00:01Z', config_summary: {}, has_results: false,

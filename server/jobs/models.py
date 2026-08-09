@@ -219,6 +219,7 @@ class SolveRequest(JobModel):
     design: DesignConfig
     options: SolveOptions = Field(default_factory=SolveOptions)
     label: str | None = None
+    parent_job_id: str | None = None
     design_revision: int = Field(default=0, ge=0)
     design_snapshot: DesignSnapshot | None = None
 
@@ -312,6 +313,8 @@ JobStatusName = Literal["queued", "running", "complete", "error", "cancelled"]
 
 class JobItem(JobModel):
     id: str
+    run_number: int
+    parent_job_id: str | None
     status: JobStatusName
     progress: float
     stage: str | None = None

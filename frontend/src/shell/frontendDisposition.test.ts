@@ -9,7 +9,8 @@ import { canLoadDesign, meshWarnings, selectJob } from './JobsPanel';
 
 function selectableJob(id: string, label: string, scriptSnapshot: JobItem['script_snapshot']): JobItem {
   return {
-    id, label, script_snapshot: scriptSnapshot, status: 'complete', progress: 1,
+    id, run_number: 1, parent_job_id: null,
+    label, script_snapshot: scriptSnapshot, status: 'complete', progress: 1,
     stage: null, stage_message: null, created_at: '2026-08-08T00:00:00Z',
     queued_at: '2026-08-08T00:00:00Z', started_at: null,
     completed_at: '2026-08-08T00:00:01Z', config_summary: {}, has_results: true,

@@ -24,7 +24,8 @@ vi.mock('../jobs/useCapabilities', () => ({
 
 function job(id: string, label: string): JobItem {
   return {
-    id, label, status: 'complete', progress: 1, stage: null,
+    id, run_number: 1, parent_job_id: null,
+    label, status: 'complete', progress: 1, stage: null,
     stage_message: null, created_at: '2026-08-08T00:00:00Z',
     queued_at: '2026-08-08T00:00:00Z', started_at: null,
     completed_at: '2026-08-08T00:00:01Z', config_summary: {},

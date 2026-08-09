@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 import json
 import logging
 from pathlib import Path
 import sqlite3
+import threading
 
 import pytest
 
@@ -64,8 +66,153 @@ def test_v1_schema_columns_are_exact_and_live_under_wg2_data_dir(tmp_path: Path)
         }
         version = conn.execute("PRAGMA user_version").fetchone()[0]
     assert columns == EXPECTED_JOB_COLUMNS
-    assert {"simulation_jobs", "simulation_results", "simulation_artifacts"} <= tables
+    assert {
+        "simulation_jobs",
+        "simulation_results",
+        "simulation_artifacts",
+        "job_identity",
+    } <= tables
     assert version == 4
+
+
+def test_created_jobs_get_consecutive_run_numbers(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    store.create_job(_job("first"))
+    store.create_job(_job("second"))
+
+    assert store.get_job_row("first")["run_number"] == 1
+    assert store.get_job_row("second")["run_number"] == 2
+
+
+def test_run_numbers_are_not_reused_after_deleting_the_newest_job(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    for job_id in ("one", "two", "three"):
+        store.create_job(_job(job_id))
+
+    deleted, _event = store.delete_job_with_event("three")
+    assert deleted is True
+    store.create_job(_job("four"))
+
+    assert store.get_job_row("four")["run_number"] == 4
+
+
+def test_pruning_keeps_identity_and_lineage_tombstones(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    child = _job("child", "complete", created_at="2000-01-01T00:00:00")
+    child["parent_job_id"] = "parent"
+    child["completed_at"] = "2000-01-01T00:00:00"
+    store.create_job(child)
+
+    assert store.prune_terminal_jobs() == 1
+    assert store.get_job_row("child") is None
+    identity = store._connect().execute(
+        "SELECT run_number, parent_job_id FROM job_identity WHERE job_id = ?",
+        ("child",),
+    ).fetchone()
+    assert tuple(identity) == (1, "parent")
+
+
+def test_identity_backfill_is_deterministic_and_idempotent(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    seeded = [
+        ("late", "2026-01-02T00:00:00"),
+        ("tie-b", "2026-01-01T00:00:00"),
+        ("early", "2025-12-31T00:00:00"),
+        ("tie-a", "2026-01-01T00:00:00"),
+    ]
+    with store._transaction() as conn:
+        for job_id, created_at in seeded:
+            job = _job(job_id, created_at=created_at)
+            conn.execute(
+                """INSERT INTO simulation_jobs
+                   (id, status, created_at, updated_at, queued_at, progress,
+                    stage, stage_message, cancellation_requested, config_json,
+                    config_summary_json, has_results, has_mesh_artifact,
+                    task_metadata_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    job["id"], job["status"], job["created_at"], job["updated_at"],
+                    job["queued_at"], job["progress"], job["stage"],
+                    job["stage_message"], 0, json.dumps(job["config_json"]),
+                    json.dumps(job["config_summary_json"]), 0, 0, "{}",
+                ),
+            )
+
+    store.backfill_job_identity()
+    first = [
+        tuple(row)
+        for row in store._connect().execute(
+            "SELECT job_id, run_number FROM job_identity ORDER BY run_number"
+        )
+    ]
+    store.backfill_job_identity()
+    second = [
+        tuple(row)
+        for row in store._connect().execute(
+            "SELECT job_id, run_number FROM job_identity ORDER BY run_number"
+        )
+    ]
+
+    assert first == second == [
+        ("early", 1),
+        ("tie-a", 2),
+        ("tie-b", 3),
+        ("late", 4),
+    ]
+
+
+def test_failed_create_rolls_back_its_identity_allocation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+
+    def fail_event(*_args: object, **_kwargs: object) -> None:
+        raise sqlite3.OperationalError("injected event failure")
+
+    monkeypatch.setattr(store, "_append_event", fail_event)
+    with pytest.raises(sqlite3.OperationalError, match="injected event failure"):
+        store.create_job(_job("rolled-back"), initial_event=("queued", {}))
+
+    conn = store._connect()
+    assert conn.execute("SELECT COUNT(*) FROM simulation_jobs").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM job_identity").fetchone()[0] == 0
+
+
+def test_concurrent_allocations_are_unique_and_gapless(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    workers = 8
+    barrier = threading.Barrier(workers)
+
+    def create(index: int) -> None:
+        barrier.wait()
+        store.create_job(_job(f"concurrent-{index}"))
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        list(pool.map(create, range(workers)))
+
+    numbers = sorted(row["run_number"] for row in store.list_jobs(limit=workers)[0])
+    assert numbers == list(range(1, workers + 1))
+
+
+def test_run_number_stabilizes_list_pagination_and_snapshots(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    created_at = "2026-01-01T00:00:00"
+    for job_id in ("one", "two", "three"):
+        store.create_job(_job(job_id, created_at=created_at))
+
+    page, total = store.list_jobs(limit=2, offset=1)
+    snapshot, _cursor = store.snapshot_jobs()
+
+    assert total == 3
+    assert [row["run_number"] for row in page] == [2, 1]
+    assert [row["run_number"] for row in snapshot] == [3, 2, 1]
 
 
 def test_the_database_runs_in_wal_mode_with_a_busy_timeout(tmp_path: Path) -> None:

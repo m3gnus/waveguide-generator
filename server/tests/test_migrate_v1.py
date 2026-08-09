@@ -131,6 +131,15 @@ def test_migrates_jobs_results_artifacts_and_workspace(v1_root: Path, tmp_path: 
     assert report.hash_checked == 6
     assert report.workspace_copied == 1
     assert (data_dir / "workspace" / "project-a" / "waveguide.project.v1.json").is_file()
+    with closing(sqlite3.connect(data_dir / "db" / "simulations.db")) as conn:
+        identities = conn.execute(
+            "SELECT job_id, run_number FROM job_identity ORDER BY run_number"
+        ).fetchall()
+    assert identities == [
+        ("v1-job-0", 1),
+        ("v1-job-1", 2),
+        ("v1-job-2", 3),
+    ]
 
 
 def test_dry_run_writes_nothing(v1_root: Path, tmp_path: Path):

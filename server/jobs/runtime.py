@@ -266,6 +266,7 @@ class JobRuntime:
         event = self.store.create_job(
             {
                 "id": job_id,
+                "parent_job_id": request.parent_job_id,
                 "status": "queued",
                 "created_at": now,
                 "updated_at": now,
@@ -1244,6 +1245,8 @@ class JobRuntime:
         design = resolve_job_design(row.get("script_snapshot"), row.get("config_json"))
         item = {
             "id": row.get("id"),
+            "run_number": row.get("run_number"),
+            "parent_job_id": row.get("parent_job_id"),
             "status": row.get("status"),
             "progress": float(row.get("progress", 0.0)),
             "stage": row.get("stage"),

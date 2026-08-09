@@ -4,7 +4,7 @@ import { preferencesStore } from '../prefs/preferences';
 import type { ExportFormat, Preferences } from '../prefs/preferences';
 import { JobAutomation } from './automation';
 
-const job: JobItem = { id: 'abcdef123', status: 'complete', progress: 1, stage: null, stage_message: null, created_at: '2026-08-04T10:00:00Z', queued_at: '2026-08-04T10:00:00Z', started_at: null, completed_at: '2026-08-04T10:01:00Z', config_summary: {}, has_results: true, has_mesh_artifact: true, label: null, error_message: null, cancellation_requested: false, mesh_stats: null, script_snapshot: null, design_revision: 0, polar_grid: {}, rating: null, exported_files: [], auto_export_completed_at: null, auto_export_formats: {}, raw_results_file: null, mesh_artifact_file: null, log_tail: [] };
+const job: JobItem = { id: 'abcdef123', run_number: 1, parent_job_id: null, status: 'complete', progress: 1, stage: null, stage_message: null, created_at: '2026-08-04T10:00:00Z', queued_at: '2026-08-04T10:00:00Z', started_at: null, completed_at: '2026-08-04T10:01:00Z', config_summary: {}, has_results: true, has_mesh_artifact: true, label: null, error_message: null, cancellation_requested: false, mesh_stats: null, script_snapshot: null, design_revision: 0, polar_grid: {}, rating: null, exported_files: [], auto_export_completed_at: null, auto_export_formats: {}, raw_results_file: null, mesh_artifact_file: null, log_tail: [] };
 
 describe('job completion automation', () => {
   it('downloads and exports each eligible job once and records completion', async () => {
