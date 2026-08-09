@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
+import subprocess
 
 import pytest
 
@@ -121,8 +122,22 @@ def test_every_installer_file_exists_and_is_executable_where_that_matters():
     ):
         assert path.is_file(), f"{path.name} is missing"
     # Finder will not run a .command that is not executable, and the failure is
-    # a permission dialog rather than anything that names the cause.
-    assert SHELL_ENTRY_POINT.stat().st_mode & 0o111, "install-wg2.command must be executable"
+    # a permission dialog rather than anything that names the cause. Ask git for
+    # the mode rather than the filesystem: Windows has no POSIX execute bit, so
+    # a checkout there always reports 0o666 and a filesystem check fails for a
+    # file that is committed correctly. What has to be right is the mode git
+    # records, because that is what a macOS clone gets.
+    mode = subprocess.run(
+        ["git", "ls-files", "--stage", "--", SHELL_ENTRY_POINT.name],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split(maxsplit=1)[0]
+    assert mode == "100755", (
+        f"install-wg2.command is committed as {mode}, not 100755; "
+        "Finder will refuse to run it"
+    )
 
 
 # ---------------------------------------------------------------------------
