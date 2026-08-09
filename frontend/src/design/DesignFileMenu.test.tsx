@@ -28,7 +28,7 @@ beforeEach(() => {
   root = createRoot(container);
   vi.stubGlobal('fetch', vi.fn(async (url: string) => {
     requested.push(String(url));
-    return new Response(new Blob(['ISO-10303-21;']), {
+    return new Response('ISO-10303-21;', {
       status: 200,
       headers: { 'Content-Type': 'model/step' },
     });

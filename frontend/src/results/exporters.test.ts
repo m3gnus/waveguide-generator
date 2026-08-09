@@ -39,7 +39,7 @@ describe('result exporters', () => {
     const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input) => {
       const path = String(input);
       if (path === '/api/design/save') return new Response(JSON.stringify({ text: 'cfg', suggestedFilename: 'horn_1.txt' }), { status: 200 });
-      return new Response(new Blob(['geometry']), { status: 200, headers: { 'Content-Disposition': `attachment; filename="file.${path.endsWith('step') ? 'step' : 'stl'}"` } });
+      return new Response('geometry', { status: 200, headers: { 'Content-Disposition': `attachment; filename="file.${path.endsWith('step') ? 'step' : 'stl'}"` } });
     });
     const context = { preferences: preferencesStore.getSnapshot(), design: designForFamily('OSSE'), designRevision: 4, fetcher, saveText: vi.fn(), saveBlob: vi.fn() };
     await runExportFormat('mwg_config', context);
@@ -52,7 +52,7 @@ describe('result exporters', () => {
     const failedFetcher = vi.fn<typeof fetch>().mockImplementation(async (input) => {
       const path = String(input);
       if (path.endsWith('kind=slices')) return new Response('slices failed', { status: 500 });
-      return new Response(new Blob(['profiles']), { status: 200 });
+      return new Response('profiles', { status: 200 });
     });
     const context = { preferences: preferencesStore.getSnapshot(), design: designForFamily('OSSE'), fetcher: failedFetcher, saveBlob };
 
@@ -61,7 +61,7 @@ describe('result exporters', () => {
 
     const successfulFetcher = vi.fn<typeof fetch>().mockImplementation(async (input) => {
       const kind = String(input).endsWith('kind=slices') ? 'slices' : 'profiles';
-      return new Response(new Blob([kind]), { status: 200, headers: { 'Content-Disposition': `attachment; filename="horn_1_${kind}.csv"` } });
+      return new Response(kind, { status: 200, headers: { 'Content-Disposition': `attachment; filename="horn_1_${kind}.csv"` } });
     });
     const files = await runExportFormat('fusion_csv', { ...context, fetcher: successfulFetcher });
     expect(files).toEqual(['horn_1_profiles.csv', 'horn_1_slices.csv']);

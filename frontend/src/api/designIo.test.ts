@@ -55,7 +55,7 @@ describe('geometry export requests', () => {
     const urls: string[] = [];
     const fetcher = (async (url: string) => {
       urls.push(String(url));
-      return new Response(new Blob(['ISO-10303-21;']), {
+      return new Response('ISO-10303-21;', {
         status: 200,
         headers: { 'Content-Type': 'model/step' },
       });

@@ -99,6 +99,13 @@ jobs:
         run: |
           npm ci
           npm run build
+      # gmsh links its OCC kernel against libGLU, which the hosted Ubuntu image
+      # does not carry. Without it `import gmsh` raises and every test that
+      # builds a mesh fails on Linux alone -- which is invisible until this
+      # workflow actually runs, as it had never done before 2026-08-09.
+      - name: Install the system libraries gmsh links against
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libglu1-mesa
       - name: Install locked dependencies
         run: |
           python -m pip install --upgrade pip
