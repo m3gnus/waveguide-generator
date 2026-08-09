@@ -4,6 +4,7 @@ import asyncio
 from datetime import datetime
 from pathlib import Path
 import sqlite3
+import threading
 from typing import Any
 
 import pytest
@@ -207,6 +208,125 @@ def test_runtime_log_retry_pins_batch_when_buffer_grows(
         await runtime.shutdown()
 
     asyncio.run(scenario())
+
+
+def test_metadata_patch_preserves_a_runtime_log_committed_after_its_stale_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The old whole-blob writer deterministically lost ``during-patch`` here."""
+
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    record = _running_job("metadata-race")
+    record["task_metadata"] = {
+        "log_tail": ["before"],
+        "exported_files": ["a.step"],
+    }
+    store.create_job(record)
+    runtime = JobRuntime(store)
+    runtime._started = True
+
+    stale_read_finished = threading.Event()
+    runtime_log_committed = threading.Event()
+    original_require_job = runtime._require_job
+    failures: list[BaseException] = []
+
+    def pause_after_stale_read(job_id: str) -> dict[str, Any]:
+        row = original_require_job(job_id)
+        stale_read_finished.set()
+        if not runtime_log_committed.wait(timeout=2.0):
+            raise AssertionError("runtime log update did not commit")
+        return row
+
+    monkeypatch.setattr(runtime, "_require_job", pause_after_stale_read)
+
+    def patch_metadata() -> None:
+        try:
+            asyncio.run(
+                runtime.patch_metadata(
+                    "metadata-race",
+                    {
+                        "label": "Reference",
+                        "script_snapshot": {"version": 1},
+                        "rating": 5,
+                        "exported_files": ["b.step"],
+                    },
+                )
+            )
+        except BaseException as exc:  # surfaced below on the pytest thread
+            failures.append(exc)
+
+    patch_thread = threading.Thread(target=patch_metadata, name="metadata-patch")
+    patch_thread.start()
+    assert stale_read_finished.wait(timeout=2.0)
+    try:
+        changed, events = store.persist_runtime_update(
+            "metadata-race",
+            {},
+            log_lines=("during-patch",),
+            expected_log_size=0,
+        )
+        assert changed is True
+        assert [event["type"] for event in events] == ["log"]
+    finally:
+        runtime_log_committed.set()
+
+    patch_thread.join(timeout=2.0)
+    assert not patch_thread.is_alive()
+    assert failures == []
+
+    row = store.get_job_row("metadata-race")
+    assert row["label"] == "Reference"
+    assert row["script_snapshot"] == {"version": 1}
+    assert row["task_metadata"]["rating"] == 5
+    assert row["task_metadata"]["exported_files"] == ["a.step", "b.step"]
+    assert row["task_metadata"]["log_tail"] == ["before", "during-patch"]
+    metadata_event = store.replay_events(0)[-1]
+    assert metadata_event["type"] == "metadata"
+    assert metadata_event["payload"] == {
+        "changed": {
+            "label": "Reference",
+            "script_snapshot": {"version": 1},
+            "rating": 5,
+            "exported_files": ["a.step", "b.step"],
+        }
+    }
+    store.close()
+
+
+def test_execution_metadata_mutation_preserves_other_metadata_and_missing_is_silent(
+    tmp_path: Path,
+) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    record = _running_job("execution-metadata")
+    record["task_metadata"] = {
+        "rating": 4,
+        "log_tail": ["existing"],
+    }
+    store.create_job(record)
+    runtime = JobRuntime(store)
+
+    runtime._record_execution_metadata(
+        "execution-metadata",
+        {
+            "solve_path": "axisymmetric-meridian",
+            "axisymmetric_eligibility_reasons": ["eligible"],
+            "solve_wall_time_seconds": 1.25,
+        },
+    )
+    runtime._record_execution_metadata("missing", {})
+
+    metadata = store.get_job_row("execution-metadata")["task_metadata"]
+    assert metadata == {
+        "rating": 4,
+        "log_tail": ["existing"],
+        "solve_path": "axisymmetric-meridian",
+        "axisymmetric_eligibility_reasons": ["eligible"],
+        "solve_wall_time_seconds": 1.25,
+    }
+    assert store.current_event_cursor() == 0
+    store.close()
 
 
 def test_failure_transition_survives_log_flush_error(

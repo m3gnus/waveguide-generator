@@ -15,7 +15,7 @@ from pathlib import Path
 import re
 import sqlite3
 import threading
-from typing import Any, Iterator, Mapping, Sequence
+from typing import Any, Callable, Iterator, Mapping, Sequence
 
 from server.platform.paths import data_paths
 
@@ -40,6 +40,58 @@ ALLOWED_JOB_UPDATE_FIELDS = frozenset(
         "task_metadata_json",
     }
 )
+
+
+MetadataMergeStrategy = Callable[[Any, Any], Any]
+
+
+def _ordered_string_set_union(stored: Any, requested: Any) -> list[str]:
+    if stored is None:
+        stored_values: list[str] = []
+    elif isinstance(stored, list) and all(isinstance(value, str) for value in stored):
+        stored_values = stored
+    else:
+        raise ValueError("Stored exported_files metadata must be a list of strings")
+    if requested is None:
+        requested_values: list[str] = []
+    elif isinstance(requested, list) and all(
+        isinstance(value, str) for value in requested
+    ):
+        requested_values = requested
+    else:
+        raise ValueError("exported_files metadata must be a list of strings")
+
+    merged: list[str] = []
+    seen: set[str] = set()
+    for value in (*stored_values, *requested_values):
+        if value not in seen:
+            seen.add(value)
+            merged.append(value)
+    return merged
+
+
+def _shallow_dict_merge(stored: Any, requested: Any) -> dict[str, Any]:
+    if stored is None:
+        stored_values: Mapping[str, Any] = {}
+    elif isinstance(stored, Mapping):
+        stored_values = stored
+    else:
+        raise ValueError("Stored auto_export_formats metadata must be an object")
+    if requested is None:
+        requested_values: Mapping[str, Any] = {}
+    elif isinstance(requested, Mapping):
+        requested_values = requested
+    else:
+        raise ValueError("auto_export_formats metadata must be an object")
+    return {**stored_values, **requested_values}
+
+
+# Metadata merge behavior is keyed explicitly rather than inferred from values.
+# New collection-valued fields (for example tags) can opt in with one entry.
+METADATA_MERGE_POLICIES: Mapping[str, MetadataMergeStrategy] = {
+    "exported_files": _ordered_string_set_union,
+    "auto_export_formats": _shallow_dict_merge,
+}
 logger = logging.getLogger(__name__)
 _SAFE_LOG_NAME = re.compile(r"[^A-Za-z0-9._-]+")
 _SCHEMA_STATEMENTS = (
@@ -231,6 +283,74 @@ class JobStore:
             changed = self._update_job(conn, job_id, fields)
             event = self._append_event(conn, job_id, event_type, payload) if changed else None
             return changed, event
+
+    def mutate_job_metadata(
+        self,
+        job_id: str,
+        changes: Mapping[str, Any],
+        *,
+        column_fields: Mapping[str, Any] | None = None,
+        event_type: str | None = None,
+        payload: Mapping[str, Any] | None = None,
+    ) -> tuple[bool, dict[str, Any] | None]:
+        """Merge metadata and related columns in one locked transaction.
+
+        Collection-valued metadata uses the explicit module-level policies;
+        every other key is a last-write-wins replacement. When a metadata
+        event carries the conventional ``changed`` object, policy-merged keys
+        report the value that was actually stored rather than the stale value
+        requested by the caller.
+        """
+
+        metadata_changes = dict(changes)
+        values = dict(column_fields or {})
+        if "task_metadata_json" in values:
+            raise ValueError("task_metadata_json must be changed through metadata changes")
+
+        with self._lock, self._transaction() as conn:
+            row = conn.execute(
+                "SELECT task_metadata_json FROM simulation_jobs WHERE id = ?",
+                (job_id,),
+            ).fetchone()
+            if row is None:
+                return False, None
+
+            decoded = json.loads(row["task_metadata_json"] or "{}")
+            if not isinstance(decoded, Mapping):
+                raise ValueError("Stored task metadata must be a JSON object")
+            metadata = dict(decoded)
+            stored_changes: dict[str, Any] = {}
+            for key, requested in metadata_changes.items():
+                strategy = METADATA_MERGE_POLICIES.get(key)
+                stored_value = (
+                    strategy(metadata.get(key), requested)
+                    if strategy is not None
+                    else requested
+                )
+                metadata[key] = stored_value
+                stored_changes[key] = stored_value
+
+            if metadata_changes:
+                values["task_metadata_json"] = json.dumps(metadata)
+            if not values:
+                return False, None
+
+            changed = self._update_job(conn, job_id, values)
+            if not changed:
+                return False, None
+
+            event: dict[str, Any] | None = None
+            if event_type is not None:
+                event_payload = dict(payload or {})
+                requested_event_changes = event_payload.get("changed")
+                if isinstance(requested_event_changes, Mapping):
+                    actual_event_changes = dict(requested_event_changes)
+                    for key in METADATA_MERGE_POLICIES:
+                        if key in stored_changes:
+                            actual_event_changes[key] = stored_changes[key]
+                    event_payload["changed"] = actual_event_changes
+                event = self._append_event(conn, job_id, event_type, event_payload)
+            return True, event
 
     def start_job(
         self,

@@ -77,6 +77,7 @@ export function JobsCoordinator({ children }: { children: ReactNode }) {
   const { engines: capabilities, error: capabilityError } = useCapabilities();
   const [actionError, setActionError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const submissionInFlight = useRef(false);
 
   useEffect(() => { jobsSocket.start(); return () => jobsSocket.stop(); }, []);
 
@@ -87,10 +88,12 @@ export function JobsCoordinator({ children }: { children: ReactNode }) {
   const capability = capabilities.find((engine) => engine.name.toLowerCase() === effectiveEngine.toLowerCase()) ?? null;
 
   const run = useCallback(async (nextDesign: DesignDocument, nextRevision = revision) => {
-    if (!capability?.available) throw new Error(capability?.reason ?? capabilityError ?? `${selectedEngine} engine is unavailable`);
-    setSubmitting(true);
-    setActionError(null);
+    if (submissionInFlight.current) return;
+    submissionInFlight.current = true;
     try {
+      if (!capability?.available) throw new Error(capability?.reason ?? capabilityError ?? `${selectedEngine} engine is unavailable`);
+      setSubmitting(true);
+      setActionError(null);
       await submitDesign(
         nextDesign,
         useSolveOptionsStore.getState().options(),
@@ -100,6 +103,7 @@ export function JobsCoordinator({ children }: { children: ReactNode }) {
       incrementJobVersion();
       await jobsSocket.refresh();
     } finally {
+      submissionInFlight.current = false;
       setSubmitting(false);
     }
   }, [capability, capabilityError, preferences, revision, selectedEngine]);
