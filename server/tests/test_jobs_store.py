@@ -238,6 +238,128 @@ def test_store_round_trips_jobs_results_artifacts_and_metadata(tmp_path: Path) -
     assert store.get_mesh_artifact("roundtrip").startswith("$MeshFormat")
 
 
+def test_exported_files_metadata_is_an_ordered_set_union(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    record = _job("exports")
+    record["task_metadata"] = {"exported_files": ["a.step"]}
+    store.create_job(record)
+
+    changed, event = store.mutate_job_metadata(
+        "exports", {"exported_files": ["b.step"]}
+    )
+    assert changed is True
+    assert event is None
+    assert store.get_job_row("exports")["task_metadata"]["exported_files"] == [
+        "a.step",
+        "b.step",
+    ]
+
+    store.mutate_job_metadata("exports", {"exported_files": ["a.step"]})
+    store.mutate_job_metadata("exports", {"exported_files": None})
+    assert store.get_job_row("exports")["task_metadata"]["exported_files"] == [
+        "a.step",
+        "b.step",
+    ]
+
+
+def test_auto_export_formats_metadata_is_a_shallow_dict_merge(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    record = _job("formats")
+    record["task_metadata"] = {
+        "auto_export_formats": {"step": {"file": "a.step", "status": "done"}}
+    }
+    store.create_job(record)
+
+    store.mutate_job_metadata(
+        "formats",
+        {"auto_export_formats": {"stl": {"file": "a.stl", "status": "done"}}},
+    )
+    store.mutate_job_metadata("formats", {"auto_export_formats": None})
+
+    assert store.get_job_row("formats")["task_metadata"]["auto_export_formats"] == {
+        "step": {"file": "a.step", "status": "done"},
+        "stl": {"file": "a.stl", "status": "done"},
+    }
+
+
+def test_non_collection_metadata_keys_keep_replacement_semantics(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    record = _job("replacement")
+    record["task_metadata"] = {
+        "rating": 2,
+        "mesh_artifact_file": "old.msh",
+    }
+    store.create_job(record)
+
+    store.mutate_job_metadata(
+        "replacement",
+        {"rating": 5, "mesh_artifact_file": "new.msh"},
+    )
+
+    metadata = store.get_job_row("replacement")["task_metadata"]
+    assert metadata["rating"] == 5
+    assert metadata["mesh_artifact_file"] == "new.msh"
+
+
+def test_metadata_mutation_returns_cleanly_when_job_is_missing(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+
+    changed, event = store.mutate_job_metadata(
+        "missing",
+        {"rating": 5},
+        column_fields={"label": "Reference"},
+        event_type="metadata",
+        payload={"changed": {"rating": 5, "label": "Reference"}},
+    )
+
+    assert changed is False
+    assert event is None
+    assert store.current_event_cursor() == 0
+    assert store.list_jobs()[1] == 0
+
+
+def test_metadata_event_reports_the_value_stored_after_a_policy_merge(
+    tmp_path: Path,
+) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    record = _job("event")
+    record["task_metadata"] = {"exported_files": ["a.step"]}
+    store.create_job(record)
+
+    changed, event = store.mutate_job_metadata(
+        "event",
+        {"exported_files": ["b.step"], "rating": 4},
+        column_fields={"label": "Reference"},
+        event_type="metadata",
+        payload={
+            "changed": {
+                "exported_files": ["b.step"],
+                "rating": 4,
+                "label": "Reference",
+            }
+        },
+    )
+
+    assert changed is True
+    assert event is not None
+    assert event["payload"] == {
+        "changed": {
+            "exported_files": ["a.step", "b.step"],
+            "rating": 4,
+            "label": "Reference",
+        }
+    }
+    row = store.get_job_row("event")
+    assert row["label"] == "Reference"
+    assert row["task_metadata"]["exported_files"] == ["a.step", "b.step"]
+    assert store.replay_events(0) == [event]
+
+
 def test_coalesced_runtime_checkpoint_updates_state_log_tail_and_events(
     tmp_path: Path,
 ) -> None:

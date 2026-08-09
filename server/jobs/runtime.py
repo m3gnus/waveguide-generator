@@ -404,25 +404,24 @@ class JobRuntime:
 
     async def patch_metadata(self, job_id: str, fields: Mapping[str, Any]) -> None:
         await self.start()
-        row = self._require_job(job_id)
+        self._require_job(job_id)
         changed = dict(fields)
-        db_fields: dict[str, Any] = {}
+        column_fields: dict[str, Any] = {}
         if "label" in changed:
-            db_fields["label"] = changed.pop("label")
+            column_fields["label"] = changed.pop("label")
         if "script_snapshot" in changed:
             value = changed.pop("script_snapshot")
-            db_fields["script_snapshot_json"] = json.dumps(value) if value is not None else None
-        metadata = dict(row.get("task_metadata") or {})
-        metadata.update(changed)
-        if changed:
-            db_fields["task_metadata_json"] = json.dumps(metadata)
-        if not db_fields:
+            column_fields["script_snapshot_json"] = (
+                json.dumps(value) if value is not None else None
+            )
+        if not changed and not column_fields:
             return
-        changed_ok, event = self.store.update_job_with_event(
+        changed_ok, event = self.store.mutate_job_metadata(
             job_id,
-            db_fields,
-            "metadata",
-            {"changed": dict(fields)},
+            changed,
+            column_fields=column_fields,
+            event_type="metadata",
+            payload={"changed": dict(fields)},
         )
         if not changed_ok or event is None:
             raise JobNotFoundError(job_id)
@@ -1191,18 +1190,18 @@ class JobRuntime:
     def _record_execution_metadata(
         self, job_id: str, result_metadata: Mapping[str, Any]
     ) -> None:
-        row = self.store.get_job_row(job_id)
-        if row is None:
-            return
-        metadata = dict(row.get("task_metadata") or {})
-        metadata["solve_path"] = result_metadata.get("solve_path", "full-3d")
-        metadata["axisymmetric_eligibility_reasons"] = list(
-            result_metadata.get("axisymmetric_eligibility_reasons") or []
+        self.store.mutate_job_metadata(
+            job_id,
+            {
+                "solve_path": result_metadata.get("solve_path", "full-3d"),
+                "axisymmetric_eligibility_reasons": list(
+                    result_metadata.get("axisymmetric_eligibility_reasons") or []
+                ),
+                "solve_wall_time_seconds": float(
+                    result_metadata.get("solve_wall_time_seconds") or 0.0
+                ),
+            },
         )
-        metadata["solve_wall_time_seconds"] = float(
-            result_metadata.get("solve_wall_time_seconds") or 0.0
-        )
-        self.store.update_job(job_id, task_metadata_json=json.dumps(metadata))
 
     @staticmethod
     def _frequency_options(request: SolveRequest) -> tuple[float, float, int]:
