@@ -52,7 +52,7 @@ function failedJob(): JobItem {
     label: 'failed_run', status: 'error', progress: 1,
     stage: 'solve', stage_message: null, created_at: '2026-08-08T00:00:00Z',
     queued_at: '2026-08-08T00:00:00Z', started_at: '2026-08-08T00:00:00Z',
-    completed_at: '2026-08-08T00:00:01Z', config_summary: {}, has_results: false,
+    completed_at: '2026-08-08T00:00:01Z', config_summary: {}, solve_options: {} as JobItem['solve_options'], has_results: false,
     has_mesh_artifact: false, error_message: 'solver failed', cancellation_requested: false,
     mesh_stats: null,
     script_snapshot: {

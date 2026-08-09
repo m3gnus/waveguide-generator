@@ -234,6 +234,7 @@ def test_post_job_retention_runs_for_each_completed_work_item(
         store.create_job(_record("one", "queued"))
         store.create_job(_record("expired", "complete"))
         store.update_job("expired", completed_at="2000-01-01T00:00:00")
+        store.store_results("expired", {"frequencies": [1000.0]})
         runtime = JobRuntime(store)
         runtime._started = True
         runtime._queue.append("one")
@@ -255,9 +256,12 @@ def test_post_job_retention_runs_for_each_completed_work_item(
         await runtime._drain_scheduler()
         assert calls == 1
         event = subscriber.get_nowait()
-        assert event["type"] == "deleted"
+        assert event["type"] == "metadata"
         assert event["jobId"] == "expired"
-        assert event["payload"] == {"reason": "retention"}
+        assert event["payload"] == {
+            "changed": {"has_results": False},
+            "reason": "retention",
+        }
 
     asyncio.run(scenario())
 
