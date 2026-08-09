@@ -73,7 +73,8 @@ describe('frontend result and status labels', () => {
     expect(meshWarnings({ mesh_stats: { warnings: 'not an array' } })).toEqual([]);
   });
 
-  it('loads a selected run design and names the next run past full history', () => {
+  it('loads a selected run design without changing the next run name', () => {
+    preferencesStore.update({ outputName: 'keep-me', jobVersion: 7 });
     const solved = designForFamily('OSSE');
     solved.L = 321;
     const selected = selectableJob(
@@ -90,7 +91,7 @@ describe('frontend result and status labels', () => {
 
     expect(useDesignStore.getState().design.L).toBe(321);
     expect(preferencesStore.getSnapshot()).toMatchObject({
-      outputName: 'horn', jobVersion: 15,
+      outputName: 'keep-me', jobVersion: 7,
     });
   });
 

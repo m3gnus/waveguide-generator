@@ -309,16 +309,24 @@ export function usePreferences(): Preferences {
   return useSyncExternalStore(preferencesStore.subscribe, preferencesStore.getSnapshot, preferencesStore.getSnapshot);
 }
 
-function jobName(job: JobItem): string {
-  return job.label || `${String(job.config_summary.formula_type ?? 'design')}_${job.id.slice(0, 8)}`;
+export type RunDisplayVariant = 'full' | 'short';
+
+/** The one user-facing identity for a run, shared by lists, charts, and search. */
+export function runDisplayName(job: Pick<JobItem, 'id' | 'run_number' | 'label'>, variant: RunDisplayVariant = 'full'): string {
+  const title = job.label || `osse-${job.id.slice(0, 6)}`;
+  return variant === 'short' ? title : `#${job.run_number} · ${title}`;
 }
+
+const naturalNameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 
 export function applyJobPreferences(jobs: JobItem[], sort: JobSort, minimumRating: number): JobItem[] {
   const filtered = jobs.filter((job) => (job.rating ?? 0) >= minimumRating);
   return [...filtered].sort((a, b) => {
-    if (sort === 'rating_desc') return (b.rating ?? 0) - (a.rating ?? 0) || Date.parse(b.created_at) - Date.parse(a.created_at);
-    if (sort === 'name_asc') return jobName(a).localeCompare(jobName(b));
-    if (sort === 'created_desc') return Date.parse(b.created_at) - Date.parse(a.created_at);
-    return Date.parse(b.completed_at ?? b.created_at) - Date.parse(a.completed_at ?? a.created_at);
+    let order = 0;
+    if (sort === 'rating_desc') order = (b.rating ?? 0) - (a.rating ?? 0) || Date.parse(b.created_at) - Date.parse(a.created_at);
+    else if (sort === 'name_asc') order = naturalNameCollator.compare(runDisplayName(a, 'short'), runDisplayName(b, 'short'));
+    else if (sort === 'created_desc') order = Date.parse(b.created_at) - Date.parse(a.created_at);
+    else order = Date.parse(b.completed_at ?? b.created_at) - Date.parse(a.completed_at ?? a.created_at);
+    return order || a.run_number - b.run_number;
   });
 }
