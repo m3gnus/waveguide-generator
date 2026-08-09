@@ -91,6 +91,8 @@ def test_openapi_documents_complete_jobs_surface(tmp_path: Path) -> None:
         "application/json"
     ]["schema"]
     assert "$ref" in solve_schema
+    job_properties = schema["components"]["schemas"]["JobItem"]["properties"]
+    assert {"run_number", "parent_job_id"} <= set(job_properties)
 
 
 def test_dryrun_http_lifecycle_metadata_results_and_delete(
@@ -100,14 +102,19 @@ def test_dryrun_http_lifecycle_metadata_results_and_delete(
 
     async def scenario() -> None:
         app = create_app(data_dir=tmp_path)
-        status, raw = await _request(app, "POST", "/api/solve", body=_solve_body())
+        solve_body = _solve_body()
+        solve_body["parent_job_id"] = "parent-job"
+        status, raw = await _request(app, "POST", "/api/solve", body=solve_body)
         assert status == 200
         job_id = json.loads(raw)["job_id"]
         await app.state.jobs_runtime.wait_idle()
 
         status, raw = await _request(app, "GET", f"/api/status/{job_id}")
         assert status == 200
-        assert json.loads(raw)["status"] == "complete"
+        detail = json.loads(raw)
+        assert detail["status"] == "complete"
+        assert detail["run_number"] == 1
+        assert detail["parent_job_id"] == "parent-job"
         status, raw = await _request(app, "GET", f"/api/results/{job_id}")
         assert status == 200
         assert len(json.loads(raw)["frequencies"]) == 4
@@ -121,6 +128,8 @@ def test_dryrun_http_lifecycle_metadata_results_and_delete(
         status, raw = await _request(app, "GET", "/api/jobs", query="limit=10&offset=0")
         item = json.loads(raw)["items"][0]
         assert item["label"] == "Reference" and item["rating"] == 5
+        assert item["run_number"] == 1
+        assert item["parent_job_id"] == "parent-job"
         status, raw = await _request(app, "DELETE", f"/api/jobs/{job_id}")
         assert status == 200 and json.loads(raw)["deleted"] is True
         await app.state.jobs_runtime.shutdown()

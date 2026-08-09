@@ -56,7 +56,9 @@ def test_protocol_sends_hello_then_snapshot_and_live_persisted_event(tmp_path: P
     async def scenario() -> None:
         store = JobStore(tmp_path / "jobs.db")
         store.initialize()
-        store.create_job(_job("one"), initial_event=("queued", {}))
+        record = _job("one")
+        record["parent_job_id"] = "parent"
+        store.create_job(record, initial_event=("queued", {}))
         runtime = JobRuntime(store)
         runtime._started = True  # isolate protocol behavior from scheduler recovery
         transport = FakeTransport()
@@ -65,7 +67,10 @@ def test_protocol_sends_hello_then_snapshot_and_live_persisted_event(tmp_path: P
         await _wait_until(lambda: len(transport.json) >= 2)
         assert [message["kind"] for message in transport.json[:2]] == ["hello", "snapshot"]
         assert transport.json[1]["cursor"] == 1
-        assert transport.json[1]["jobs"][0]["id"] == "one"
+        item = transport.json[1]["jobs"][0]
+        assert item["id"] == "one"
+        assert item["run_number"] == 1
+        assert item["parent_job_id"] == "parent"
 
         _, event = store.update_job_with_event(
             "one", {"progress": 0.5}, "progress", {"progress": 0.5}

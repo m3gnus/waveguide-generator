@@ -22,6 +22,8 @@ export interface AutoExportFormatStatus {
 
 export interface JobItem {
   id: string;
+  run_number: number;
+  parent_job_id: string | null;
   status: JobStatus;
   progress: number;
   stage: string | null;
