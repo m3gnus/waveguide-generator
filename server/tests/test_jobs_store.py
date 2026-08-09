@@ -105,9 +105,15 @@ def test_pruning_keeps_identity_and_lineage_tombstones(tmp_path: Path) -> None:
     child["parent_job_id"] = "parent"
     child["completed_at"] = "2000-01-01T00:00:00"
     store.create_job(child)
+    store.store_results("child", {"frequencies": [1000.0]})
 
     assert store.prune_terminal_jobs() == 1
-    assert store.get_job_row("child") is None
+    row = store.get_job_row("child")
+    assert row is not None
+    assert row["run_number"] == 1
+    assert row["parent_job_id"] == "parent"
+    assert row["has_results"] is False
+    assert store.get_results("child") is None
     identity = store._connect().execute(
         "SELECT run_number, parent_job_id FROM job_identity WHERE job_id = ?",
         ("child",),
@@ -724,7 +730,7 @@ def test_event_ids_are_persisted_monotonic_and_resume_or_snapshot(tmp_path: Path
     assert reopened.current_event_cursor() == 5
 
 
-def test_live_retention_prune_persists_a_deleted_event_for_every_removed_job(
+def test_live_retention_prune_persists_an_availability_event_for_every_pruned_result(
     tmp_path: Path,
 ) -> None:
     store = JobStore(tmp_path / "jobs.db")
@@ -734,6 +740,7 @@ def test_live_retention_prune_persists_a_deleted_event_for_every_removed_job(
         store.update_job(
             job_id, status="complete", completed_at="2000-01-01T00:00:00"
         )
+        store.store_results(job_id, {"frequencies": [1000.0]})
 
     removed, events = store.prune_terminal_jobs_with_events(
         retention_days=30, max_terminal_jobs=1000
@@ -741,10 +748,106 @@ def test_live_retention_prune_persists_a_deleted_event_for_every_removed_job(
 
     assert set(removed) == {"oldest", "newest"}
     assert [event["jobId"] for event in events] == removed
-    assert [event["type"] for event in events] == ["deleted", "deleted"]
-    assert all(event["payload"] == {"reason": "retention"} for event in events)
-    assert store.list_jobs()[1] == 0
+    assert [event["type"] for event in events] == ["metadata", "metadata"]
+    assert all(
+        event["payload"]
+        == {"changed": {"has_results": False}, "reason": "retention"}
+        for event in events
+    )
+    assert store.list_jobs()[1] == 2
+    assert all(not store.get_job_row(job_id)["has_results"] for job_id in removed)
     assert [event["jobId"] for event in store.replay_events(2)] == removed
+
+
+def test_terminal_mesh_is_pruned_after_download_or_grace_but_rated_mesh_is_exempt(
+    tmp_path: Path,
+) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+
+    now = datetime.now().isoformat()
+    cases = (
+        ("downloaded", 0, now, "downloaded.msh"),
+        ("expired", 0, "2000-01-01T00:00:00", None),
+        ("rated", 3, "2000-01-01T00:00:00", "rated.msh"),
+    )
+    run_numbers: dict[str, int] = {}
+    for job_id, rating, completed_at, mesh_file in cases:
+        record = _job(job_id, "running", created_at=completed_at)
+        record["task_metadata"] = {"rating": rating}
+        store.create_job(record)
+        store.store_mesh_artifact(job_id, f"mesh-{job_id}")
+        store.store_results(job_id, {"job": job_id})
+        store.update_job(
+            job_id,
+            status="complete",
+            completed_at=completed_at,
+        )
+        if mesh_file is not None:
+            store.mutate_job_metadata(job_id, {"mesh_artifact_file": mesh_file})
+        row = store.get_job_row(job_id)
+        run_numbers[job_id] = row["run_number"]
+        assert row["has_mesh_artifact"] is True
+        assert store.get_mesh_artifact(job_id) == f"mesh-{job_id}"
+
+    assert (
+        store.prune_terminal_jobs(
+            retention_days=99999,
+            max_terminal_jobs=1000,
+            mesh_grace_minutes=1,
+        )
+        == 2
+    )
+
+    for job_id in ("downloaded", "expired"):
+        row = store.get_job_row(job_id)
+        assert row["has_mesh_artifact"] is False
+        assert store.get_mesh_artifact(job_id) is None
+        assert row["run_number"] == run_numbers[job_id]
+        assert row["has_results"] is True
+    assert store.get_job_row("rated")["has_mesh_artifact"] is True
+    assert store.get_mesh_artifact("rated") == "mesh-rated"
+    assert store.get_job_row("rated")["run_number"] == run_numbers["rated"]
+    assert store.get_results("rated") == {"job": "rated"}
+    assert store.get_job_row("rated")["has_results"] is True
+
+
+def test_result_count_pruning_keeps_job_rows_and_run_numbers(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    for job_id, completed_at in (
+        ("older", "2026-08-08T00:00:00"),
+        ("newer", "2026-08-09T00:00:00"),
+    ):
+        record = _job(job_id, "complete", created_at=completed_at)
+        record["completed_at"] = completed_at
+        store.create_job(record)
+        store.store_results(job_id, {"job": job_id})
+
+    assert store.prune_terminal_jobs(retention_days=30, max_terminal_jobs=1) == 1
+    assert store.get_results("older") is None
+    assert store.get_results("newer") == {"job": "newer"}
+    assert store.get_job_row("older")["run_number"] == 1
+    assert store.get_job_row("newer")["run_number"] == 2
+    assert store.list_jobs()[1] == 2
+
+
+def test_rating_after_terminal_transition_exempts_mesh_from_retention(
+    tmp_path: Path,
+) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    store.create_job(_job("late-rating", "running"))
+    store.store_mesh_artifact("late-rating", "mesh")
+    store.update_job("late-rating", status="complete")
+
+    changed, _event = store.mutate_job_metadata("late-rating", {"rating": 5})
+    store.prune_terminal_jobs(mesh_grace_minutes=0)
+
+    assert changed is True
+    assert store.get_job_row("late-rating")["task_metadata"]["rating"] == 5
+    assert store.get_job_row("late-rating")["has_mesh_artifact"] is True
+    assert store.get_mesh_artifact("late-rating") == "mesh"
 
 
 def test_snapshot_cursor_and_rows_are_from_one_store_view(tmp_path: Path) -> None:

@@ -21,6 +21,7 @@ from server.platform.paths import data_paths
 
 
 ALLOWED_STATUSES = frozenset({"queued", "running", "complete", "error", "cancelled"})
+MESH_ARTIFACT_GRACE_MINUTES = 60
 ALLOWED_JOB_UPDATE_FIELDS = frozenset(
     {
         "status",
@@ -881,29 +882,45 @@ class JobStore:
             ).fetchall()
             return [self._row_to_job(row) for row in queued], failed_events
 
-    def prune_terminal_jobs(self, retention_days: int = 30, max_terminal_jobs: int = 1000) -> int:
-        """Apply v1's age/count retention policy (``server/db.py:316-347``)."""
+    def prune_terminal_jobs(
+        self,
+        retention_days: int = 30,
+        max_terminal_jobs: int = 1000,
+        *,
+        mesh_grace_minutes: int = MESH_ARTIFACT_GRACE_MINUTES,
+    ) -> int:
+        """Prune result payloads by age/count while retaining every job record.
+
+        This deliberately breaks v1 parity: records are the durable run index,
+        while only the heavier result tier remains subject to retention.
+        """
 
         removed_ids, _events = self._prune_terminal_jobs(
             retention_days=retention_days,
             max_terminal_jobs=max_terminal_jobs,
+            mesh_grace_minutes=mesh_grace_minutes,
             emit_events=False,
         )
         return len(removed_ids)
 
     def prune_terminal_jobs_with_events(
-        self, retention_days: int = 30, max_terminal_jobs: int = 1000
+        self,
+        retention_days: int = 30,
+        max_terminal_jobs: int = 1000,
+        *,
+        mesh_grace_minutes: int = MESH_ARTIFACT_GRACE_MINUTES,
     ) -> tuple[list[str], list[dict[str, Any]]]:
-        """Prune rows and retain matching WS deletion events atomically.
+        """Prune results and retain matching WS availability events atomically.
 
         Startup uses :meth:`prune_terminal_jobs` before clients can subscribe.
-        Runtime pruning, however, must publish every removed id so an already
+        Runtime pruning, however, must publish every affected id so an already
         connected client can converge from events alone.
         """
 
         return self._prune_terminal_jobs(
             retention_days=retention_days,
             max_terminal_jobs=max_terminal_jobs,
+            mesh_grace_minutes=mesh_grace_minutes,
             emit_events=True,
         )
 
@@ -912,70 +929,109 @@ class JobStore:
         *,
         retention_days: int,
         max_terminal_jobs: int,
+        mesh_grace_minutes: int,
         emit_events: bool,
     ) -> tuple[list[str], list[dict[str, Any]]]:
         """Shared retention transaction for silent startup and live pruning."""
 
         cutoff = (datetime.now() - timedelta(days=int(retention_days))).isoformat()
+        mesh_cutoff = (
+            datetime.now() - timedelta(minutes=int(mesh_grace_minutes))
+        ).isoformat()
         removed_ids: list[str] = []
         events: list[dict[str, Any]] = []
         with self._lock, self._transaction() as conn:
             aged = conn.execute(
                 """SELECT id FROM simulation_jobs
                    WHERE status IN ('complete', 'error', 'cancelled')
+                     AND has_results = 1
+                     AND COALESCE(CAST(json_extract(task_metadata_json, '$.rating') AS INTEGER), 0) <= 0
                      AND COALESCE(completed_at, updated_at, created_at) < ?""",
                 (cutoff,),
             ).fetchall()
             removed_ids.extend(str(row["id"]) for row in aged)
-            cur = conn.execute(
-                """
-                DELETE FROM simulation_jobs
-                WHERE status IN ('complete', 'error', 'cancelled')
-                  AND COALESCE(completed_at, updated_at, created_at) < ?
-                """,
-                (cutoff,),
-            )
-            deleted = int(cur.rowcount or 0)
             # Ask SQLite for the overflow rather than materialising every
-            # terminal row and slicing in Python. This runs after *every* job,
-            # and at the 1000-row cap that was a thousand rows fetched to
-            # discover, almost always, that nothing needs removing.
+            # retained result and slicing in Python. Rated payloads do not
+            # count toward the cap because they are exempt from retention.
             overflow = [
                 row["id"]
                 for row in conn.execute(
                     """
                     SELECT id FROM simulation_jobs
                     WHERE status IN ('complete', 'error', 'cancelled')
+                      AND has_results = 1
+                      AND COALESCE(CAST(json_extract(task_metadata_json, '$.rating') AS INTEGER), 0) <= 0
+                      AND COALESCE(completed_at, updated_at, created_at) >= ?
                     ORDER BY COALESCE(completed_at, updated_at, created_at) DESC
                     LIMIT -1 OFFSET ?
                     """,
-                    (int(max_terminal_jobs),),
+                    (cutoff, int(max_terminal_jobs)),
                 ).fetchall()
             ]
-            if overflow:
-                removed_ids.extend(str(value) for value in overflow)
-                placeholders = ",".join("?" for _ in overflow)
-                cur = conn.execute(
-                    f"DELETE FROM simulation_jobs WHERE id IN ({placeholders})", overflow
-                )
-                deleted += int(cur.rowcount or 0)
-            # ``job_events`` deliberately has no foreign key to the retained
-            # row. Append after the deletes but inside the same transaction so
-            # observers cannot see a missing job without its terminal event.
+            removed_ids.extend(str(value) for value in overflow)
             removed_ids = list(dict.fromkeys(removed_ids))
-            if emit_events:
+            mesh_rows = conn.execute(
+                """SELECT id FROM simulation_jobs
+                   WHERE status IN ('complete', 'error', 'cancelled')
+                     AND has_mesh_artifact = 1
+                     AND COALESCE(CAST(json_extract(task_metadata_json, '$.rating') AS INTEGER), 0) <= 0
+                     AND (
+                       json_extract(task_metadata_json, '$.mesh_artifact_file') IS NOT NULL
+                       OR COALESCE(completed_at, updated_at, created_at) < ?
+                     )""",
+                (mesh_cutoff,),
+            ).fetchall()
+            mesh_ids = [str(row["id"]) for row in mesh_rows]
+            deleted_results = 0
+            if removed_ids:
+                placeholders = ",".join("?" for _ in removed_ids)
+                cur = conn.execute(
+                    f"DELETE FROM simulation_results WHERE job_id IN ({placeholders})",
+                    removed_ids,
+                )
+                deleted_results = int(cur.rowcount or 0)
+                conn.execute(
+                    f"UPDATE simulation_jobs SET has_results = 0 WHERE id IN ({placeholders})",
+                    removed_ids,
+                )
+            if mesh_ids:
+                placeholders = ",".join("?" for _ in mesh_ids)
+                conn.execute(
+                    f"DELETE FROM simulation_artifacts WHERE job_id IN ({placeholders})",
+                    mesh_ids,
+                )
+                conn.execute(
+                    f"UPDATE simulation_jobs SET has_mesh_artifact = 0 WHERE id IN ({placeholders})",
+                    mesh_ids,
+                )
+            affected_ids = list(dict.fromkeys([*removed_ids, *mesh_ids]))
+            if emit_events and affected_ids:
                 events = [
-                    self._append_event(conn, job_id, "deleted", {"reason": "retention"})
-                    for job_id in removed_ids
+                    self._append_event(
+                        conn,
+                        job_id,
+                        "metadata",
+                        {
+                            "changed": {
+                                **({"has_results": False} if job_id in removed_ids else {}),
+                                **(
+                                    {"has_mesh_artifact": False}
+                                    if job_id in mesh_ids
+                                    else {}
+                                ),
+                            },
+                            "reason": "retention",
+                        },
+                    )
+                    for job_id in affected_ids
                 ]
-        self._delete_job_logs(removed_ids)
-        if deleted != len(removed_ids):  # pragma: no cover - SQLite rowcount invariant
+        if deleted_results != len(removed_ids):  # pragma: no cover - SQLite rowcount invariant
             logger.warning(
-                "Retention selected %d job ids but SQLite reported %d deletions",
+                "Retention selected %d result ids but SQLite reported %d deletions",
                 len(removed_ids),
-                deleted,
+                deleted_results,
             )
-        return removed_ids, events
+        return affected_ids, events
 
     def append_event(
         self, job_id: str, event_type: str, payload: Mapping[str, Any]

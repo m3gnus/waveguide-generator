@@ -324,6 +324,7 @@ class JobItem(JobModel):
     started_at: str | None = None
     completed_at: str | None = None
     config_summary: dict[str, Any]
+    solve_options: SolveOptions
     has_results: bool
     has_mesh_artifact: bool
     label: str | None = None

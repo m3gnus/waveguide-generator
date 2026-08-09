@@ -79,6 +79,7 @@ def test_openapi_documents_complete_jobs_surface(tmp_path: Path) -> None:
     assert {
         "/api/solve",
         "/api/stop/{job_id}",
+        "/api/jobs/{job_id}/retry",
         "/api/status/{job_id}",
         "/api/results/{job_id}",
         "/api/mesh-artifact/{job_id}",
@@ -92,7 +93,7 @@ def test_openapi_documents_complete_jobs_surface(tmp_path: Path) -> None:
     ]["schema"]
     assert "$ref" in solve_schema
     job_properties = schema["components"]["schemas"]["JobItem"]["properties"]
-    assert {"run_number", "parent_job_id"} <= set(job_properties)
+    assert {"run_number", "parent_job_id", "solve_options"} <= set(job_properties)
 
 
 def test_dryrun_http_lifecycle_metadata_results_and_delete(
@@ -115,9 +116,18 @@ def test_dryrun_http_lifecycle_metadata_results_and_delete(
         assert detail["status"] == "complete"
         assert detail["run_number"] == 1
         assert detail["parent_job_id"] == "parent-job"
+        assert detail["solve_options"]["engine"] == "dryrun"
+        assert detail["solve_options"]["stage_delay_ms"] == 1
+        assert detail["has_mesh_artifact"] is True
         status, raw = await _request(app, "GET", f"/api/results/{job_id}")
         assert status == 200
         assert len(json.loads(raw)["frequencies"]) == 4
+        status, raw = await _request(app, "GET", f"/api/mesh-artifact/{job_id}")
+        assert status == 200
+        assert raw.startswith(b"$MeshFormat")
+        status, raw = await _request(app, "GET", "/api/mesh-artifact/unknown-job")
+        assert status == 404
+        assert json.loads(raw)["detail"] == "Job not found"
         status, raw = await _request(
             app,
             "PATCH",

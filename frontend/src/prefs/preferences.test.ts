@@ -3,7 +3,7 @@ import type { JobItem } from '../api/jobsSocket';
 import { applyJobPreferences, CHART_TYPES, EXPORT_FORMATS, exportBaseName, jobBaseName, loadPreferences, MAP_REFERENCES, nextFileJobNaming, nextJobNaming, nextVersionFor, parseJobName, preferencesStore, readPreferences, STORAGE_VERSION } from './preferences';
 
 function job(id: string, rating: number | null, created: string, completed = created): JobItem {
-  return { id, run_number: 1, parent_job_id: null, rating, created_at: created, completed_at: completed, label: id, status: 'complete', progress: 1, stage: null, stage_message: null, queued_at: created, started_at: created, config_summary: {}, has_results: true, has_mesh_artifact: false, error_message: null, cancellation_requested: false, mesh_stats: null, script_snapshot: null, design_revision: 0, polar_grid: {}, exported_files: [], auto_export_completed_at: null, auto_export_formats: {}, raw_results_file: null, mesh_artifact_file: null, log_tail: [] };
+  return { id, run_number: 1, parent_job_id: null, rating, created_at: created, completed_at: completed, label: id, status: 'complete', progress: 1, stage: null, stage_message: null, queued_at: created, started_at: created, config_summary: {}, solve_options: {} as JobItem['solve_options'], has_results: true, has_mesh_artifact: false, error_message: null, cancellation_requested: false, mesh_stats: null, script_snapshot: null, design_revision: 0, polar_grid: {}, exported_files: [], auto_export_completed_at: null, auto_export_formats: {}, raw_results_file: null, mesh_artifact_file: null, log_tail: [] };
 }
 
 describe('client preferences', () => {
