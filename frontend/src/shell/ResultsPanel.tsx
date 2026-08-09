@@ -9,7 +9,7 @@ import { beamShapeSeries, directivityGrid, directivityIndexSeries, impedanceSeri
 import { BalloonRenderer, ChartStub, ForwardBeamRenderer } from '../results/balloon';
 import { runExportBundle } from '../results/exporters';
 import type { ResultPayload } from '../results/types';
-import { CHART_TYPES, MAX_RESULT_PANELS, RESULT_PANEL_COUNTS, preferencesStore, usePreferences, type ChartType } from '../prefs/preferences';
+import { CHART_TYPES, MAX_RESULT_PANELS, RESULT_PANEL_COUNTS, preferencesStore, runDisplayName, usePreferences, type ChartType } from '../prefs/preferences';
 import { ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
 import { hydrateJobDesign } from '../jobs/jobDesign';
 import { Icon } from './icons';
@@ -29,7 +29,7 @@ export function splSubtitle(result: JobResults | undefined): string {
 
 function labelFor(id: string, jobs: ReturnType<typeof jobsSocket.getSnapshot>['jobs']): string {
   const job = jobs.find((item) => item.id === id);
-  return job?.label || `${String(job?.config_summary.formula_type ?? 'job').toLowerCase()} ${id.slice(0, 6)}`;
+  return job ? runDisplayName(job) : `osse-${id.slice(0, 6)}`;
 }
 
 /** Geometry/config exports for a result must use the design that produced it. */

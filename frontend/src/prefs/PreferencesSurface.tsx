@@ -60,11 +60,14 @@ export function ResultsPreferencesSurface({ expanded = false, popover = false, o
 
 function JobsPreferencesContent() {
   const preferences = usePreferences();
+  const [nameDraft, setNameDraft] = useState(preferences.outputName);
+  useEffect(() => { setNameDraft(preferences.outputName); }, [preferences.outputName]);
+  const commitName = () => preferencesStore.update({ outputName: nameDraft });
   return <section className="preferences-section">
     <h3 className="preferences-section-title">Jobs</h3>
     <p className="preferences-section-copy">Naming, ordering, and visibility defaults for solve history.</p>
     <div className="job-naming-preferences">
-      <label className="ui-field">Design name<input aria-label="Job design name" value={preferences.outputName} onChange={(event) => preferencesStore.update({ outputName: event.target.value })}/></label>
+      <label className="ui-field">Design name<input aria-label="Job design name" value={nameDraft} onChange={(event) => setNameDraft(event.target.value)} onBlur={commitName} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}/></label>
       <label className="ui-field">Next version<input aria-label="Next job version" type="number" min={1} max={999999} value={preferences.jobVersion} onChange={(event) => preferencesStore.update({ jobVersion: Number(event.target.value) })}/></label>
       <label className="ui-check"><input aria-label="Prefix job name with date" type="checkbox" checked={preferences.datePrefix} onChange={(event) => preferencesStore.update({ datePrefix: event.target.checked })}/>Prefix job name with date</label>
       <span className="job-name-preview">next · <b>{jobBaseName(preferences)}</b></span>

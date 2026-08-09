@@ -1,17 +1,13 @@
-import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { compareSelection } from '../api/results';
 import { DesignAvailabilityNotice, RerunButton } from '../jobs/DesignAvailability';
 import { canLoadJobDesign, hydrateJobDesign, replaceWithJobDesign } from '../jobs/jobDesign';
 import { type DesignDocument } from '../stores/design';
-import { applyJobPreferences, jobBaseName, nextJobNaming, nextVersionFor, preferencesStore, usePreferences } from '../prefs/preferences';
+import { applyJobPreferences, jobBaseName, nextVersionFor, preferencesStore, runDisplayName, usePreferences } from '../prefs/preferences';
 import { JobsPreferencesSurface } from '../prefs/PreferencesSurface';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { Icon } from './icons';
-
-function name(job: JobItem): string {
-  return job.label || `${String(job.config_summary.formula_type ?? 'design').toLowerCase()}_${job.id.slice(0, 8)}`;
-}
 
 function clock(iso: string | null): string {
   if (!iso) return '—';
@@ -68,11 +64,6 @@ export function selectJob(job: JobItem): void {
   // Undoable: browsing runs must not be able to discard the working design.
   if (!canLoadDesign(job)) return;
   replaceWithJobDesign(job, { keepHistory: true });
-  // Reopening a config puts its design on screen, so the next solve is a new
-  // take on *that* design and should be named for it -- at the next free
-  // number, so it never lands back on top of the run it came from.
-  const naming = nextJobNaming(job.label, jobsSocket.getSnapshot().jobs.map((item) => item.label));
-  if (naming) preferencesStore.update(naming);
 }
 
 function JobCard({ job, now, selected, run, onError, onRemove }: {
@@ -87,6 +78,49 @@ function JobCard({ job, now, selected, run, onError, onRemove }: {
   const failed = job.status === 'error';
   const snapshot = hydrateJobDesign(job);
   const rating = job.rating ?? 0;
+  const [editing, setEditing] = useState(false);
+  const [titleDraft, setTitleDraft] = useState(job.label ?? '');
+  const [displayLabel, setDisplayLabel] = useState(job.label);
+  const [renameError, setRenameError] = useState<string | null>(null);
+  const cancelRename = useRef(false);
+  useEffect(() => {
+    setDisplayLabel(job.label);
+    if (!editing) setTitleDraft(job.label ?? '');
+  }, [job.label]);
+  const commitRename = async () => {
+    if (cancelRename.current) {
+      cancelRename.current = false;
+      return;
+    }
+    const label = titleDraft.trim() ? titleDraft : null;
+    if (label === job.label) {
+      setEditing(false);
+      return;
+    }
+    try {
+      await jobsSocket.patchMetadata(job.id, { label });
+      setDisplayLabel(label);
+      setEditing(false);
+      setRenameError(null);
+    } catch (error) {
+      setTitleDraft(job.label ?? '');
+      setEditing(false);
+      setRenameError(`Could not rename run: ${String(error)}`);
+    }
+  };
+  // autoFocus alone only places the caret, and it lands after the existing
+  // title, so the first character typed appends to the old name rather than
+  // replacing it. Selecting has to happen once the node exists: React focuses
+  // an autoFocus input during commit, ahead of the delegated onFocus handler,
+  // so an onFocus prop never runs for that first focus.
+  const titleInput = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    if (!editing) return;
+    const node = titleInput.current;
+    if (!node) return;
+    node.focus();
+    node.select();
+  }, [editing]);
   // Only ever this job's own design. Falling back to whatever was on screen
   // ran a *different* waveguide under this job's name and looked like it
   // worked; RerunButton refuses instead, and says why.
@@ -98,20 +132,35 @@ function JobCard({ job, now, selected, run, onError, onRemove }: {
   // diagnostic; only finished runs collapse down to their name.
   const expanded = selected || running || failed;
   const selectable = !running && (job.has_results || canLoadDesign(job));
-  const heading = <>
-    <i/>
-    <b>{name(job)}{expanded && <em> · {job.id.slice(0, 6)}</em>}</b>
-    {/* Stars are a label here, shown only once a run has actually been rated. */}
-    {!expanded && rating > 0 && <span className="job-stars" aria-label={`Rated ${rating} of 5`}>{'★'.repeat(rating)}</span>}
-    <time>{running ? duration(secondsBetween(job.started_at ?? job.queued_at, null, now)) : clock(job.completed_at ?? job.created_at)}</time>
-  </>;
+  const displayName = runDisplayName({ ...job, label: displayLabel });
   return <article className={`job-card ${running ? 'running' : failed ? 'failed' : 'complete'}${selected ? ' selected' : ''}${expanded ? '' : ' collapsed'}`} aria-current={selected ? 'true' : undefined}>
     <header>
       {selectable
-        ? <button className="job-select" aria-pressed={selected} title={selected ? 'Showing this run' : 'Show this run in the viewport and charts'} onClick={() => selectJob(job)}>{heading}</button>
-        : <span className="job-select" title={job.error_message ?? job.status}>{heading}</span>}
-      {!running && <button className="job-remove" aria-label={`Remove ${name(job)}`} title="Remove this job" onClick={() => onRemove(job)}><Icon name="close"/></button>}
+        ? <button className={`job-select${editing ? ' editing' : ''}`} aria-label={`Select ${displayName}`} aria-pressed={selected} title={selected ? 'Showing this run' : job.has_results ? 'Show this run in the viewport and charts' : 'Show this run design in the viewport'} onClick={() => selectJob(job)}><i/>{!editing && <b className="job-title">{displayName}</b>}</button>
+        : <span className={`job-select${editing ? ' editing' : ''}`} title={job.error_message ?? job.status}><i/>{!editing && <b className="job-title">{displayName}</b>}</span>}
+      {editing ? <input
+        className="job-title-input"
+        aria-label={`Title for run #${job.run_number}`}
+        ref={titleInput}
+        value={titleDraft}
+        onChange={(event) => setTitleDraft(event.target.value)}
+        onBlur={() => void commitRename()}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') event.currentTarget.blur();
+          if (event.key === 'Escape') {
+            cancelRename.current = true;
+            setTitleDraft(job.label ?? '');
+            setEditing(false);
+          }
+        }}
+      /> : null}
+      {!running && !editing && <button className="job-rename" aria-label={`Rename ${displayName}`} title="Rename run" onClick={() => { setRenameError(null); setEditing(true); }}>✎</button>}
+      {rating > 0 && <span className="job-stars" aria-label={`Kept, rated ${rating} of 5`} title="Kept: rated runs are never cleaned up">{'★'.repeat(rating)}</span>}
+      <time>{running ? duration(secondsBetween(job.started_at ?? job.queued_at, null, now)) : clock(job.completed_at ?? job.created_at)}</time>
+      {!running && <button className="job-remove" aria-label={`Remove ${displayName}`} title="Remove this job" onClick={() => onRemove(job)}><Icon name="close"/></button>}
     </header>
+    {renameError && <div className="job-error job-rename-error" role="alert">{renameError}</div>}
+    {!running && !failed && !job.has_results && <div className="job-retention-note">Results were cleaned up to save space.</div>}
     {running ? <>
       <p>{metrics(job, now)}</p>
       <div className="job-stage"><span>{job.stage_message ?? job.stage ?? 'waiting…'}</span><b>{Math.round(job.progress * 100)}%</b></div>
@@ -150,6 +199,8 @@ function JobCard({ job, now, selected, run, onError, onRemove }: {
  */
 function RunNameField({ jobs }: { jobs: readonly JobItem[] }) {
   const preferences = usePreferences();
+  const [draft, setDraft] = useState(preferences.outputName);
+  useEffect(() => { setDraft(preferences.outputName); }, [preferences.outputName]);
   // Keyed on the joined labels: the jobs array is replaced on every progress
   // event, and only a name appearing or disappearing can change the answer.
   const key = jobs.map((job) => job.label ?? '').join('\u0000');
@@ -173,11 +224,11 @@ function RunNameField({ jobs }: { jobs: readonly JobItem[] }) {
   return <div className="run-name-field">
     <label className="ui-field">Run name<input
       aria-label="Run name"
-      value={preferences.outputName}
+      value={draft}
       placeholder="horn"
-      onChange={(event) => preferencesStore.update({ outputName: event.target.value })}
+      onChange={(event) => setDraft(event.target.value)}
       onBlur={(event) => commit(event.target.value)}
-      onKeyDown={(event) => { if (event.key === 'Enter') { commit(event.currentTarget.value); event.currentTarget.blur(); } }}
+      onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
     /></label>
     <span className="run-name-preview" title="The name the next solve is stored under">next · <b>{jobBaseName(preferences)}</b></span>
   </div>;
@@ -190,26 +241,39 @@ export function JobsPanel() {
   const preferences = usePreferences();
   const [now, setNow] = useState(Date.now());
   const [preferencesOpen, setPreferencesOpen] = useState(false);
+  const [query, setQuery] = useState('');
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1_000);
     return () => clearInterval(timer);
   }, []);
 
-  const visibleJobs = useMemo(() => applyJobPreferences(snapshot.jobs, preferences.jobSort, preferences.minRating), [snapshot.jobs, preferences.jobSort, preferences.minRating]);
+  const preferenceJobs = useMemo(() => applyJobPreferences(snapshot.jobs, preferences.jobSort, preferences.minRating), [snapshot.jobs, preferences.jobSort, preferences.minRating]);
+  const visibleJobs = useMemo(() => {
+    const wanted = query.trim().toLocaleLowerCase();
+    if (!wanted) return preferenceJobs;
+    const numberQuery = wanted.replace(/^#/, '');
+    return preferenceJobs.filter((job) => {
+      const formula = String(job.config_summary.formula_type ?? '').toLocaleLowerCase();
+      const title = runDisplayName(job).toLocaleLowerCase();
+      const runNumberMatches = /^#?\d+$/.test(wanted) && String(job.run_number).includes(numberQuery);
+      return title.includes(wanted) || runNumberMatches || formula.includes(wanted);
+    });
+  }, [preferenceJobs, query]);
   const failedCount = visibleJobs.filter((job) => job.status === 'error').length;
   const remove = (job: JobItem) => {
-    if (!window.confirm(`Remove “${name(job)}” and its saved results?`)) return;
+    if (!window.confirm(`Remove “${runDisplayName(job)}” and its saved results?`)) return;
     void jobsSocket.deleteJob(job.id).catch((error) => coordinator.reportError(String(error)));
   };
 
   return <div className="jobs-panel panel-scroll">
-    <div className="panel-meta"><span className="pill">{visibleJobs.filter((job) => job.status === 'running' || job.status === 'queued').length} active</span><span>{snapshot.connection} · {visibleJobs.length}/{snapshot.jobs.length} shown</span><span className="spacer"/>{failedCount > 0 && <button className="panel-text-action panel-text-action--danger" onClick={() => void jobsSocket.clearFailed().catch((error) => coordinator.reportError(String(error)))}>Clear failed</button>}<button className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Job preferences" aria-expanded={preferencesOpen} title="Job preferences" onClick={() => setPreferencesOpen((value) => !value)}><Icon name="settings"/></button></div>
+    <div className="panel-meta"><span className="pill">{visibleJobs.filter((job) => job.status === 'running' || job.status === 'queued').length} active</span><span>{snapshot.connection} · {visibleJobs.length}/{snapshot.jobs.length} shown</span><span className="spacer"/>{failedCount > 0 && <button className="panel-text-action panel-text-action--danger" onClick={() => void jobsSocket.clearFailed().catch((error) => coordinator.reportError(String(error)))}>Clear failed</button>}<button className={`jobs-kept-toggle${preferences.minRating > 0 ? ' on' : ''}`} aria-label="Show kept runs only" aria-pressed={preferences.minRating > 0} title="Show kept runs only" onClick={() => preferencesStore.update({ minRating: preferences.minRating > 0 ? 0 : 1 })}>★</button><button className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Job preferences" aria-expanded={preferencesOpen} title="Job preferences" onClick={() => setPreferencesOpen((value) => !value)}><Icon name="settings"/></button></div>
     {preferencesOpen && <JobsPreferencesSurface popover onClose={() => setPreferencesOpen(false)}/>}
     <RunNameField jobs={snapshot.jobs}/>
+    <label className="jobs-filter"><Icon name="search"/><input aria-label="Filter runs" placeholder="Filter runs" value={query} onChange={(event) => setQuery(event.target.value)}/></label>
     {(coordinator.actionError || snapshot.error) && <div className="job-error" role="alert" style={{ margin: 7 }}>{coordinator.actionError ?? snapshot.error}</div>}
     {snapshot.jobs.length === 0 && snapshot.connection === 'connected' && <div className="coming-soon"><b>NO JOBS YET</b><span>Use Solve to run the current design.</span></div>}
-    {snapshot.jobs.length > 0 && visibleJobs.length === 0 && <div className="coming-soon"><b>NO MATCHING JOBS</b><span>Lower the minimum rating filter to show more jobs.</span></div>}
+    {snapshot.jobs.length > 0 && visibleJobs.length === 0 && <div className="coming-soon"><b>NO MATCHING JOBS</b><span>{query.trim() && preferences.minRating > 0 ? 'Clear the search or turn off the ★ filter.' : query.trim() ? 'Clear the search to show runs.' : 'Turn off the ★ filter or lower the minimum rating.'}</span></div>}
     {visibleJobs.map((job) => <JobCard key={job.id} job={job} now={now} selected={job.id === selection.primary} run={coordinator.run} onError={coordinator.reportError} onRemove={remove}/>)}
   </div>;
 }
