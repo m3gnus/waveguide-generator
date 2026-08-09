@@ -40,4 +40,37 @@ describe('SettingsDialog', () => {
     expect(host.querySelector('[role="dialog"]')).toBeNull();
     expect(document.activeElement).toBe(opener);
   });
+
+  it('shows the selected workspace and exposes open and select actions', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path === '/api/workspace/path') {
+        return new Response(JSON.stringify({ path: '/data/workspace' }), { status: 200 });
+      }
+      if (path === '/api/workspace/open' && init?.method === 'POST') {
+        return new Response(JSON.stringify({ status: 'opened', path: '/data/workspace' }), { status: 200 });
+      }
+      if (path === '/api/workspace/select' && init?.method === 'POST') {
+        return new Response(JSON.stringify({ selected: true, path: '/chosen/workspace' }), { status: 200 });
+      }
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('#open-settings')!.click();
+    });
+
+    const section = host.querySelector<HTMLElement>('[aria-labelledby="settings-workspace-title"]')!;
+    expect(section).not.toBeNull();
+    expect(section.textContent).toContain('/data/workspace');
+
+    const buttons = [...section.querySelectorAll<HTMLButtonElement>('button')];
+    await act(async () => buttons.find((button) => button.textContent === 'Open folder')!.click());
+    await act(async () => buttons.find((button) => button.textContent === 'Select folder…')!.click());
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/workspace/open', { method: 'POST' });
+    expect(fetchMock).toHaveBeenCalledWith('/api/workspace/select', { method: 'POST' });
+    expect(section.textContent).toContain('/chosen/workspace');
+  });
 });

@@ -1,4 +1,4 @@
-import { useEffect, useRef, type RefObject } from 'react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
 import { JobsPreferencesSurface, ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
 import { Icon } from './icons';
 
@@ -27,6 +27,51 @@ export function trapDialogFocus(dialog: RefObject<HTMLElement | null>, event: Ke
     event.preventDefault();
     first.focus();
   }
+}
+
+async function workspacePath(endpoint: '/path' | '/open' | '/select', method?: 'POST'): Promise<string> {
+  const response = await fetch(`/api/workspace${endpoint}`, method ? { method } : undefined);
+  if (!response.ok) throw new Error(`Workspace request failed (${response.status})`);
+  const payload = await response.json() as { path?: unknown };
+  if (typeof payload.path !== 'string' || !payload.path) throw new Error('Workspace response has no path');
+  return payload.path;
+}
+
+function WorkspaceSettings() {
+  const [path, setPath] = useState<string>();
+  const [busy, setBusy] = useState<'open' | 'select'>();
+  const [error, setError] = useState<string>();
+
+  useEffect(() => {
+    let active = true;
+    void workspacePath('/path').then(
+      (value) => { if (active) setPath(value); },
+      (reason: unknown) => { if (active) setError(String(reason)); },
+    );
+    return () => { active = false; };
+  }, []);
+
+  const run = async (action: 'open' | 'select') => {
+    setBusy(action);
+    setError(undefined);
+    try {
+      setPath(await workspacePath(action === 'open' ? '/open' : '/select', 'POST'));
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setBusy(undefined);
+    }
+  };
+
+  return <section className="settings-theme workspace-settings" aria-labelledby="settings-workspace-title" aria-busy={busy !== undefined}>
+    <h3 id="settings-workspace-title">Workspace</h3>
+    <p className="workspace-settings-path" title={path}>{path ?? (error ? 'Unavailable' : 'Loading…')}</p>
+    <div className="settings-theme-options">
+      <button disabled={!path || busy !== undefined} onClick={() => void run('open')}>Open folder</button>
+      <button disabled={busy !== undefined} onClick={() => void run('select')}>Select folder…</button>
+    </div>
+    {error && <p className="workspace-settings-error" role="status">{error}</p>}
+  </section>;
 }
 
 export function SettingsDialog({ open, theme, onThemeChange, onClose }: {
@@ -69,6 +114,7 @@ export function SettingsDialog({ open, theme, onThemeChange, onClose }: {
             <button className={theme === 'light' ? 'on' : ''} aria-pressed={theme === 'light'} onClick={() => onThemeChange('light')}><Icon name="sun"/>Light</button>
           </div>
         </section>
+        <WorkspaceSettings/>
         <ResultsPreferencesSurface expanded/>
         <JobsPreferencesSurface expanded/>
         <p className="viewer-preferences-note">Viewer preferences remain available in the Viewport panel.</p>
