@@ -648,6 +648,7 @@ SHELL_PATH_VARIABLES = (
     "VENV_PYTHON",
     "SPA_ARCHIVE",
     "DATA_DIR",
+    "LEGACY_DATA_DIR",
     "LOG",
     "LOG_DIR",
     "REPO_DIR",

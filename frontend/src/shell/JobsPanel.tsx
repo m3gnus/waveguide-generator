@@ -140,7 +140,7 @@ function JobCard({ job, now, selected, run, onError, onRemove, onOpenExportSetti
       <Rating job={job} onError={onError}/>
       {/* Selecting the run already loaded its design and results, so the only
           action left is running it again -- unless this job came from v1
-          without a design v2 can read, in which case rerunning it would
+          without a design Waveguide Generator can read, in which case rerunning it would
           silently run whatever is on screen instead, under its name. */}
       <DesignAvailabilityNotice job={job}/>
       <footer><RerunButton job={job} onRerun={retry}/>{canExportRun(job) && <RunExportControl job={job} onOpenExportSettings={onOpenExportSettings}/>}<button onClick={() => window.open(`/api/jobs/${encodeURIComponent(job.id)}/log`, '_blank')}>Log</button></footer>

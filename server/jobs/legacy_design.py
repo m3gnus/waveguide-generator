@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 FREEFORM_REASON = (
     "This job's FREEFORM design was stored in the v1 format, which cannot be "
-    "translated into a v2 design. Re-enter its profiles to run it again."
+    "translated into the current design format. Re-enter its profiles to run it again."
 )
 MISSING_REASON = (
     "This job predates design snapshots in v1, and no design was stored with "

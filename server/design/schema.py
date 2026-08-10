@@ -185,7 +185,8 @@ def _validate_execution_node(node: ast.AST) -> None:
             if name in _V1_ONLY_FUNCTIONS:
                 message += (
                     f"; {name!r} was accepted by the v1 UI but is not supported by "
-                    "the v2 geometry engine; this is a v1-to-v2 compatibility limit"
+                    "the current geometry engine; this is an original-to-current "
+                    "compatibility limit"
                 )
             raise ValueError(message)
         for argument in node.args:

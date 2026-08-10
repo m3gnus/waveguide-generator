@@ -33,11 +33,7 @@ from server.platform.instance import (  # noqa: E402
     reserve_port,
 )
 from server.platform.logging_setup import flush_logs, setup_logging  # noqa: E402
-from server.platform.paths import (  # noqa: E402
-    ensure_data_layout,
-    log_data_dir_migration,
-    migrate_legacy_data_dir,
-)
+from server.platform.paths import ensure_data_layout  # noqa: E402
 from server.platform.signal_rearm import (  # noqa: E402
     register_signal_rearm,
     unregister_signal_rearm,
@@ -63,7 +59,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, help="preferred local port (default: 3100)")
     parser.add_argument("--no-browser", action="store_true", help="do not open a browser")
-    parser.add_argument("--data-dir", type=Path, help="override the v2 application data directory")
+    parser.add_argument(
+        "--data-dir", type=Path, help="override the application data directory"
+    )
     parser.add_argument("--status-control", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--parent-pid", type=int, help=argparse.SUPPRESS)
     return parser
@@ -171,10 +169,8 @@ def main(argv: list[str] | None = None) -> int:
     lock: InstanceLock | None = None
     listener: socket.socket | None = None
     try:
-        migration = migrate_legacy_data_dir(emit_log=False)
-        paths = ensure_data_layout(migrate_legacy=False)
+        paths = ensure_data_layout()
         setup_logging(paths)
-        log_data_dir_migration(migration)
         preferred_port = requested_port(args.port)
     except (OSError, RuntimeError, ValueError) as exc:
         print(f"Waveguide Generator could not start: {exc}", file=sys.stderr)

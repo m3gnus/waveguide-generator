@@ -193,7 +193,7 @@ rem ---------------------------------------------------------------------------
 :bad_directory
 echo.
 echo ERROR: launch-wg.bat must remain in launchers\windows in the
-echo        waveguide-generator v2 folder.
+echo        Waveguide Generator folder.
 echo        Current folder: %CD%
 call :pause_when_double_clicked
 exit /b 1
@@ -229,7 +229,7 @@ exit /b 0
 
 :bootstrap_failed
 echo.
-echo ERROR: The v2 Python environment could not be prepared.
+echo ERROR: The Waveguide Generator Python environment could not be prepared.
 echo        Review the installation errors above, then run:
 echo          py -3.13 scripts\bootstrap.py
 call :pause_when_double_clicked
@@ -257,7 +257,7 @@ exit /b 1
 
 :unusable_override
 echo        That interpreter is pinned by WG2_PYTHON. Either unset WG2_PYTHON to
-echo        use the repository environment, or install the v2 requirements into
+echo        use the repository environment, or install the application requirements into
 echo        that interpreter.
 call :pause_when_double_clicked
 exit /b 1

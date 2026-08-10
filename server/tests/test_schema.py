@@ -116,7 +116,7 @@ def test_expr_v1_only_function_error_explains_compatibility_limit() -> None:
     assert "the geometry engine supports a fixed set of functions" in message
     assert "abs, acos, asin, atan, atan2, cos, max, min, pow, sin, sqrt, tan" in message
     assert "accepted by the v1 UI" in message
-    assert "v1-to-v2 compatibility limit" in message
+    assert "original-to-current compatibility limit" in message
 
 
 def test_expr_unknown_function_error_does_not_claim_v1_compatibility() -> None:
@@ -127,7 +127,7 @@ def test_expr_unknown_function_error_does_not_claim_v1_compatibility() -> None:
     assert "unknown expression function 'sqrtt'" in message
     assert "the geometry engine supports a fixed set of functions" in message
     assert "abs, acos, asin, atan, atan2, cos, max, min, pow, sin, sqrt, tan" in message
-    assert "v1-to-v2 compatibility limit" not in message
+    assert "original-to-current compatibility limit" not in message
 
 
 @pytest.mark.parametrize(

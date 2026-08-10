@@ -164,7 +164,7 @@ if [[ -z "$BOOTSTRAP_PYTHON" ]]; then
         detail="Found $DETECTED_PYTHON (Python $DETECTED_PYTHON_VERSION), which is the wrong series."
     fi
     fail "CPython $PYTHON_SERIES is required. $detail
-       v2 locks its dependency set against one interpreter series on purpose,
+       Waveguide Generator locks its dependency set against one interpreter series on purpose,
        so a near miss is rejected rather than half-installed.
        macOS:  brew install python@$PYTHON_SERIES
        Debian: sudo apt install python$PYTHON_SERIES python$PYTHON_SERIES-venv
@@ -295,7 +295,7 @@ else
             "${spa_check_args[@]}"; then
             fail "The prebuilt interface could not be installed, and the existing
        frontend/dist is not a checksum-verified copy of the requested version.
-       v2 will not start with a stale or unverified interface. See the reasons above.
+       Waveguide Generator will not start with a stale or unverified interface. See the reasons above.
 
        If you are working on the interface itself, build it locally:
          cd frontend && npm ci && npm run build

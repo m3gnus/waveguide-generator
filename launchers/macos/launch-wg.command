@@ -49,7 +49,7 @@ else
     fi
     echo "Preparing the Waveguide Generator Python environment..."
     if ! "$BOOTSTRAP_PYTHON" scripts/bootstrap.py; then
-      fail "The v2 Python environment could not be prepared. Review the installation errors above."
+      fail "The Waveguide Generator Python environment could not be prepared. Review the installation errors above."
     fi
   fi
   PYTHON="$REPO_DIR/.venv/bin/python"

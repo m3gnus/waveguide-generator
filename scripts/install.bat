@@ -452,7 +452,7 @@ exit /b 1
 :no_python
 echo.
 echo ERROR: CPython 3.13 is required and was not found.
-echo        v2 locks its dependency set against one interpreter series on
+echo        Waveguide Generator locks its dependency set against one interpreter series on
 echo        purpose, so a near miss is rejected rather than half-installed.
 echo        Install it from https://www.python.org/downloads/windows/ and tick
 echo        "Add python.exe to PATH", then open a NEW Command Prompt and run
@@ -475,7 +475,7 @@ exit /b 0
 echo.
 echo ERROR: The prebuilt interface could not be installed, and the existing
 echo        frontend\dist is not a checksum-verified copy of the requested version.
-echo        v2 will not start with a stale or unverified interface. See above.
+echo        Waveguide Generator will not start with a stale or unverified interface. See above.
 echo.
 echo        If you are working on the interface itself, build it locally:
 echo          cd frontend ^&^& npm ci ^&^& npm run build

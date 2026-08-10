@@ -121,7 +121,7 @@ def log_data_dir_migration(result: DataDirectoryMigration) -> None:
     """Record a migration decision after logging has been configured."""
 
     if result.state == "moved":
-        log.info("Moved legacy data directory from %s to %s", result.old, result.new)
+        log.warning("Moved legacy data directory from %s to %s", result.old, result.new)
     elif result.state == "both_exist":
         log.warning(
             "Both the legacy data directory %s and current data directory %s exist; "
