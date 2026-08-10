@@ -141,16 +141,34 @@
   --border-strong: var(--hair-hi);
   --focus-ring: rgba(var(--acc-rgb), .72);
   --focus-halo: rgba(var(--acc-rgb), .18);
+  /* Control widths. Two, and only two: a value box sized to the widest real
+     reading ('140.00 mm'), and a wide box for the things that genuinely need
+     it -- a select whose option names are the point, a text field, an ATH
+     formula. Anything picking its own number is how 'Sweep start' ended up
+     86px in one section of the rail and 132px in the next. */
+  --field-w: 86px;
+  --field-w-wide: 132px;
   --control-h: 32px;
   --control-h-sm: 28px;
   --r: 6px;
   --r2: 5px;
   --r3: 4px;
-  --space-1: 3px;
-  --space-2: 6px;
-  --space-3: 8px;
-  --space-4: 12px;
-  --space-5: 16px;
+  /* Spacing. A 4px grid with a 2px half-step, and nothing between the steps.
+     The scale used to be 3/6/8/12/16 in this file and 4, 5, 7, 9, 10, 11, 13,
+     14, 15, 17, 18 and 20 in the stylesheets -- 244 declarations off the scale
+     they were supposed to be on, which is why the interface read as almost
+     aligned rather than aligned. Every one of those was snapped to the nearest
+     step here; none moved more than 2px except one 36 to 32. */
+     Named for their value, not their rank: an ordinal scale is what let a
+     later pass insert a step and silently move every call site that used the
+     ones above it. --space-8 is 8px and can only ever be 8px. */
+  --space-2: 2px;
+  --space-4: 4px;
+  --space-6: 6px;
+  --space-8: 8px;
+  --space-12: 12px;
+  --space-16: 16px;
+  --space-24: 24px;
   /* Type scale. Four ranks, and 11px is the floor: no functional text in the
      interface is set smaller, because the readouts a user is here to read must
      not be smaller than the labels around them, and this audience often works
@@ -312,7 +330,7 @@
   --radius-control: var(--r2);
   --font-sans: var(--ui);
   --font-mono: var(--mono);
-  --spacing-ui-1: var(--space-1);
-  --spacing-ui-2: var(--space-2);
-  --spacing-ui-3: var(--space-3);
+  --spacing-ui-1: var(--space-4);
+  --spacing-ui-2: var(--space-6);
+  --spacing-ui-3: var(--space-8);
 }
