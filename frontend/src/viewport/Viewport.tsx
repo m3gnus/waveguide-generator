@@ -253,10 +253,15 @@ export function Viewport() {
       <span><i />{preview.connection === 'reconnecting' ? 'Reconnecting to preview engine' : 'Preview connection interrupted'}</span>
       <b>Last valid geometry retained</b>
     </div>}
-    {activeScene && geometryWarnings.length > 0 && <div className={`viewport-warning-banner${showPreviewError ? ' below-error' : ''}`} role="status">
-      <span><i />{geometryWarnings[0]}</span>
-      {geometryWarnings.length > 1 && <b>+{geometryWarnings.length - 1} more</b>}
-    </div>}
+    {activeScene && geometryWarnings.length > 0 && <details className="viewport-warning" role="status">
+      <summary aria-label={`${geometryWarnings.length} geometry warning${geometryWarnings.length === 1 ? '' : 's'}`}>
+        <i />{geometryWarnings.length} warning{geometryWarnings.length === 1 ? '' : 's'}
+      </summary>
+      <div className="viewport-warning-details">
+        <b>Geometry warning{geometryWarnings.length === 1 ? '' : 's'}</b>
+        <ul>{geometryWarnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
+      </div>
+    </details>}
     {activeScene && hasSurfaces && !webgl && !renderFailure && <div className="viewport-empty"><b>WebGL unavailable</b><span>The geometry is valid, but this environment cannot create a WebGL2 context.</span></div>}
     {activeScene && !hasSurfaces && <div className="viewport-empty" role="status"><b>No geometry surfaces</b><span>The scene is valid but contains no renderable surfaces.</span></div>}
     {activeScene && renderFailure && <div className="viewport-empty" role="status"><b>WebGL renderer stopped</b><span>{renderFailure}. Reopen the viewport after checking graphics acceleration.</span></div>}
