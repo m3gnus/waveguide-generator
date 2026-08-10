@@ -7,6 +7,7 @@ import { useSolveOptionsStore, type SymmetryMode } from '../stores/solveOptions'
 import { DirectivityMapControls, SolveOptionsControls } from './SolveOptionsSections';
 import { EditablePointTable, EditableStationTable } from './FreeformEditors';
 import { NumberField } from './NumberField';
+import { HelpTipRow } from './HelpTip';
 import { Icon } from '../shell/icons';
 import {
   PARAMETER_REGISTRY,
@@ -177,8 +178,8 @@ function TextField({ field, value, disabled, onCommit }: {
 }) {
   const [draft, setDraft] = useState(value);
   useEffect(() => setDraft(value), [value]);
-  return <div className={`field-row param-text-row${disabled ? ' field-disabled' : ''}`} title={disabled ? field.disabledReason : field.description}>
-    <label className="field-label" htmlFor={`parameter-${field.id}`}>{field.label}</label>
+  return <HelpTipRow className={`field-row param-text-row${disabled ? ' field-disabled' : ''}`} text={field.description}>
+    <label className="field-label" htmlFor={`parameter-${field.id}`} title={disabled ? field.disabledReason : undefined}>{field.label}</label>
     <input
       id={`parameter-${field.id}`}
       value={draft}
@@ -188,7 +189,7 @@ function TextField({ field, value, disabled, onCommit }: {
       onBlur={() => { if (draft !== value) onCommit(draft); }}
       onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
     />
-  </div>;
+  </HelpTipRow>;
 }
 
 function passthroughStatus(field: ParameterDefinition, design: DesignDocument): string {
@@ -240,7 +241,7 @@ function FieldControl({ field, design }: { field: ParameterDefinition; design: D
   };
 
   if (field.kind === 'indicator') {
-    return <div className="passthrough-row"><span>{field.label}</span><b>{passthroughStatus(field, design)}</b></div>;
+    return <HelpTipRow className="passthrough-row" text={field.description}><span>{field.label}</span><b>{passthroughStatus(field, design)}</b></HelpTipRow>;
   }
   if (field.kind === 'table') {
     if (field.id === 'freeform.crossSections') return <EditableStationTable field={field} stations={Array.isArray(value) ? value : []} />;
@@ -252,15 +253,15 @@ function FieldControl({ field, design }: { field: ParameterDefinition; design: D
     </div>;
   }
   if (field.kind === 'select' || field.kind === 'toggle') {
-    return <div className={`select-row${disabled ? ' field-disabled' : ''}`} title={disabledReason ?? field.description}>
-      <label htmlFor={`parameter-${field.id}`}>{field.label}</label>
+    return <HelpTipRow className={`select-row${disabled ? ' field-disabled' : ''}`} text={field.description}>
+      <label htmlFor={`parameter-${field.id}`} title={disabledReason}>{field.label}</label>
       <select id={`parameter-${field.id}`} value={String(value ?? '')} disabled={disabled} onChange={(event) => {
         const option = field.options?.find((item) => String(item.value) === event.target.value);
         commit(option?.value ?? event.target.value);
       }}>
         {(field.options ?? []).map((option) => <option key={String(option.value)} value={String(option.value)}>{option.label}</option>)}
       </select>
-    </div>;
+    </HelpTipRow>;
   }
   if (field.kind === 'text') return <TextField field={field} value={String(value ?? '')} disabled={disabled} onCommit={commit} />;
   const error = validationMessage(field, design);
@@ -269,6 +270,7 @@ function FieldControl({ field, design }: { field: ParameterDefinition; design: D
     <NumberField
       label={field.label}
       symbol={field.symbol}
+      description={field.description}
       value={typeof value === 'number' ? value : optional ? undefined : 0}
       expression={field.path ? design._expressions?.[field.path] : undefined}
       allowExpression={fieldAcceptsExpression(field)}

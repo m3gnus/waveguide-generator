@@ -1,9 +1,11 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
 import type { ExprNumber } from '../stores/design';
+import { useHelpTip } from './HelpTip';
 
 interface NumberFieldProps {
   label: string;
   symbol?: string;
+  description?: string;
   value?: number;
   unit?: string;
   min?: number;
@@ -28,6 +30,7 @@ interface NumberFieldProps {
 export function NumberField({
   label,
   symbol,
+  description,
   value,
   unit,
   min = -Infinity,
@@ -49,6 +52,8 @@ export function NumberField({
   onEndDrag,
 }: NumberFieldProps) {
   const id = useId();
+  const titled = symbol ? `${label} (${symbol})` : label;
+  const help = useHelpTip({ title: titled, text: description, hint: 'Drag the label sideways to adjust.' });
   const displayed = expression?.raw ?? (value === undefined ? '' : value.toFixed(precision));
   const [draft, setDraft] = useState(displayed);
   const [editing, setEditing] = useState(false);
@@ -181,16 +186,19 @@ export function NumberField({
       <label
         htmlFor={id}
         className="field-label"
-        // Long parameter names ellipsize against the value control, so the
-        // tooltip always carries the full label as well as the drag hint.
-        title={holdsExpression ? `${label} — formula field, edit the expression below` : `${label} — drag horizontally to adjust`}
-        onPointerDown={onLabelPointerDown}
+        // The hover tip carries the full name and symbol as its heading, so a
+        // label ellipsized against the value control is still readable. The
+        // native `title` is only the fallback for a field with no description,
+        // because a native tooltip would otherwise pop up over the hover tip.
+        title={description ? undefined : `${titled} — drag horizontally to adjust`}
+        {...help.triggerProps}
+        onPointerDown={(event) => { help.triggerProps.onPointerDown?.(); onLabelPointerDown(event); }}
         onPointerMove={onLabelPointerMove}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
         onLostPointerCapture={endDrag}
       >
-        {label}{symbol && <span className="field-symbol">{symbol}</span>}
+        <span className="field-name">{label}</span>{symbol && <span className="field-symbol">({symbol})</span>}{help.tip}
       </label>
       {holdsExpression && <span className="expr-badge" aria-hidden="true">fx</span>}
       {showEvaluatedExpression && <span className="expr-value" title="Evaluated expression value">= {Number(expression!.value!.toPrecision(8))}{unit}</span>}

@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useDesignStore, type CrossSectionStation, type DesignValue, type FreeformPoint } from '../stores/design';
 import type { ParameterDefinition } from './parameterRegistry';
+import { HelpTipHeading } from './HelpTip';
 
 export interface ParsedPointPaste {
   points: FreeformPoint[];
@@ -141,7 +142,7 @@ export function EditablePointTable({ field, points }: { field: ParameterDefiniti
     updateValue(path, [...points.slice(0, gapIndex + 1), { t, r }, ...points.slice(gapIndex + 1)]);
   };
   return <div className="editable-parameter-table" aria-label={field.label}>
-    <div className="readonly-table-head"><b>{field.label}</b><span>{interior.length} / 62 interior</span></div>
+    <div className="readonly-table-head"><HelpTipHeading title={field.label} text={field.description}>{field.label}</HelpTipHeading><span>{interior.length} / 62 interior</span></div>
     <table><thead><tr><th>z mm</th><th>r mm</th><th>angle</th><th /></tr></thead>
       <tbody>{interior.map((point, index) => <tr key={`${index}-${point.t}-${length}`}>
         <td><input aria-label={`${plane} point ${index + 1} z`} type="number" min={1} max={length - 1} step={.1} defaultValue={Math.round(point.t * length * 10_000) / 10_000} onBlur={(event) => update(index, 'z', event.target.value)} /></td>
@@ -172,7 +173,7 @@ export function EditableStationTable({ field, stations }: { field: ParameterDefi
     updateValue('cross_sections', [...stations, station].sort((a, b) => a.t - b.t));
   };
   return <div className="editable-parameter-table" aria-label={field.label}>
-    <div className="readonly-table-head"><b>{field.label}</b><span>{stations.length} / 32 stations</span></div>
+    <div className="readonly-table-head"><HelpTipHeading title={field.label} text={field.description}>{field.label}</HelpTipHeading><span>{stations.length} / 32 stations</span></div>
     <table><thead><tr><th>t</th><th>shape</th><th>n / radius</th><th /></tr></thead><tbody>
       {stations.map((station, index) => <tr key={`${index}-${station.t}`}>
         <td><input aria-label={`Station ${index + 1} position`} type="number" min={0} max={1} step={.01} disabled={index === 0 || index === stations.length - 1} defaultValue={station.t} onBlur={(event) => update(index, { t: Number(event.target.value) })} /></td>
