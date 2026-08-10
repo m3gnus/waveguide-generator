@@ -1,10 +1,13 @@
 import type { JobItem } from '../api/jobsSocket';
 import { jobsSocket } from '../api/jobsSocket';
+import { downloadBlob, downloadText } from '../api/designIo';
 import { fetchJobResults } from '../api/results';
 import { ActionMenu, type ActionMenuItem } from '../design/ActionMenu';
-import { preferencesStore, usePreferences, type ExportFormat } from '../prefs/preferences';
+import { exportBaseName, preferencesStore, usePreferences, type ExportFormat } from '../prefs/preferences';
+import { buildCanonicalDirectivityRequest } from '../results/CanonicalPlot';
 import { resultExportSnapshot } from '../results/exportContext';
 import { runExportBundle, runExportFormat, type ExportContext } from '../results/exporters';
+import { buildOnAxisFrd, buildPolarFrdSet } from '../results/frd';
 import type { ResultPayload } from '../results/types';
 import { EMPTY_RUN_EXPORT_STATE, useRunExportStore, type RunExportOutcome } from '../stores/runExports';
 import { jobRerunState } from './jobDesign';
@@ -16,7 +19,8 @@ export interface RunExportControlProps {
 }
 
 interface CatalogItem {
-  format: ExportFormat;
+  id: ExportFormat | 'on_axis_frd' | 'polar_frd';
+  format?: ExportFormat;
   label: string;
   trailing: string;
   group: string;
@@ -24,23 +28,25 @@ interface CatalogItem {
   needsDesign: boolean;
 }
 
-// FRD and archives extend this catalog once their exporters exist. Keeping the
-// catalog constrained to today's dispatcher prevents the menu promising files
-// the export layer cannot create yet.
 const FORMAT_CATALOG: CatalogItem[] = [
-  { format: 'png', label: 'Charts', trailing: '.png', group: 'Results', needsResult: true, needsDesign: false },
-  { format: 'csv', label: 'Frequency data', trailing: '.csv', group: 'Results', needsResult: true, needsDesign: false },
-  { format: 'json', label: 'Full results', trailing: '.json', group: 'Results', needsResult: true, needsDesign: false },
-  { format: 'step', label: 'STEP solid', trailing: '.step', group: 'Geometry & design', needsResult: false, needsDesign: true },
-  { format: 'mwg_config', label: 'Parameter config', trailing: '.txt', group: 'Geometry & design', needsResult: false, needsDesign: true },
-  { format: 'impedance_csv', label: 'Impedance', trailing: '.csv', group: 'Advanced', needsResult: true, needsDesign: false },
-  { format: 'polar_csv', label: 'Polar directivity', trailing: '.csv', group: 'Advanced', needsResult: true, needsDesign: false },
-  { format: 'txt', label: 'Summary report', trailing: '.txt', group: 'Advanced', needsResult: true, needsDesign: false },
-  { format: 'stl', label: 'STL mesh', trailing: '.stl', group: 'Advanced', needsResult: false, needsDesign: true },
-  { format: 'fusion_csv', label: 'Fusion curves', trailing: '.csv', group: 'Advanced', needsResult: false, needsDesign: true },
+  { id: 'png', format: 'png', label: 'Charts', trailing: '.png', group: 'Results', needsResult: true, needsDesign: false },
+  { id: 'on_axis_frd', label: 'On-axis response', trailing: '.frd', group: 'Results', needsResult: true, needsDesign: false },
+  { id: 'polar_frd', label: 'Polar set (VituixCAD)', trailing: '.frd', group: 'Results', needsResult: true, needsDesign: false },
+  { id: 'csv', format: 'csv', label: 'Frequency data', trailing: '.csv', group: 'Results', needsResult: true, needsDesign: false },
+  { id: 'json', format: 'json', label: 'Full results', trailing: '.json', group: 'Results', needsResult: true, needsDesign: false },
+  { id: 'step', format: 'step', label: 'STEP solid', trailing: '.step', group: 'Geometry & design', needsResult: false, needsDesign: true },
+  { id: 'mwg_config', format: 'mwg_config', label: 'Parameter config', trailing: '.txt', group: 'Geometry & design', needsResult: false, needsDesign: true },
+  { id: 'impedance_csv', format: 'impedance_csv', label: 'Impedance', trailing: '.csv', group: 'Advanced', needsResult: true, needsDesign: false },
+  { id: 'polar_csv', format: 'polar_csv', label: 'Polar directivity', trailing: '.csv', group: 'Advanced', needsResult: true, needsDesign: false },
+  { id: 'txt', format: 'txt', label: 'Summary report', trailing: '.txt', group: 'Advanced', needsResult: true, needsDesign: false },
+  { id: 'stl', format: 'stl', label: 'STL mesh', trailing: '.stl', group: 'Advanced', needsResult: false, needsDesign: true },
+  { id: 'fusion_csv', format: 'fusion_csv', label: 'Fusion curves', trailing: '.csv', group: 'Advanced', needsResult: false, needsDesign: true },
 ];
 
-const CATALOG_BY_FORMAT = new Map(FORMAT_CATALOG.map((item) => [item.format, item]));
+const CATALOG_BY_FORMAT = new Map(
+  FORMAT_CATALOG.filter((item): item is CatalogItem & { format: ExportFormat } => item.format !== undefined)
+    .map((item) => [item.format, item]),
+);
 
 export function canExportRun(job: Pick<JobItem, 'status' | 'has_results'>): boolean {
   return job.status === 'complete' && job.has_results;
@@ -57,6 +63,21 @@ function needsResults(formats: readonly ExportFormat[]): boolean {
 
 function jobName(job: JobItem): string {
   return job.label?.trim() || `${String(job.config_summary.formula_type ?? 'design').toLowerCase()}_${job.id.slice(0, 8)}`;
+}
+
+async function responseError(response: Response): Promise<Error> {
+  let detail = `${response.status} ${response.statusText}`.trim();
+  try {
+    const body = await response.json() as { detail?: string };
+    if (body.detail) detail = body.detail;
+  } catch { /* retain the HTTP status */ }
+  return new Error(detail || 'Export request failed.');
+}
+
+function pngBlob(dataUri: string): Blob {
+  const encoded = dataUri.includes(',') ? dataUri.slice(dataUri.indexOf(',') + 1) : dataUri;
+  const bytes = Uint8Array.from(atob(encoded), (character) => character.charCodeAt(0));
+  return new Blob([bytes], { type: 'image/png' });
 }
 
 export function RunExportControl({ job, compact = false, onOpenExportSettings }: RunExportControlProps) {
@@ -88,6 +109,74 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
     return { notice: `${formatLabel(format)} exported · ${files.length} file${files.length === 1 ? '' : 's'}` };
   });
 
+  // Temporary seam: fold this FRD action into the shared export dispatcher once
+  // results/exporters.ts and the preference format contract are free to change.
+  const exportOnAxisFrd = () => execute(job.id, [], async (): Promise<RunExportOutcome> => {
+    const context = await buildContext([]);
+    const result = await fetchJobResults(job.id) as ResultPayload;
+    const filename = `${exportBaseName(context.preferences)}.frd`;
+    downloadText(buildOnAxisFrd(result, context.preferences), filename);
+    await recordFiles([filename]);
+    return { notice: `On-axis response (.frd) exported · 1 file` };
+  });
+
+  // Temporary seam: fold this VituixCAD set action into the shared export
+  // dispatcher once results/exporters.ts and the preference format contract are free.
+  const exportPolarFrd = () => execute(job.id, [], async (): Promise<RunExportOutcome> => {
+    const context = await buildContext([]);
+    const result = await fetchJobResults(job.id) as ResultPayload;
+    const files = buildPolarFrdSet(result, context.preferences);
+    if (!files.length) throw new Error('This run has no directivity data for a polar FRD set.');
+
+    const pathResponse = await fetch('/api/workspace/path');
+    if (!pathResponse.ok) throw await responseError(pathResponse);
+    let workspace = await pathResponse.json() as { selected?: boolean; path?: string };
+    if (!workspace.selected) {
+      const selectResponse = await fetch('/api/workspace/select', { method: 'POST' });
+      if (!selectResponse.ok) throw await responseError(selectResponse);
+      workspace = await selectResponse.json() as { selected?: boolean; path?: string };
+      if (!workspace.selected) {
+        throw new Error('Workspace selection was cancelled. No files were written.');
+      }
+    }
+
+    const writeResponse = await fetch('/api/workspace/write-export', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        subdirectory: exportBaseName(context.preferences),
+        members: files.map(({ filename, text }) => ({ relative_path: filename, text })),
+      }),
+    });
+    if (!writeResponse.ok) throw await responseError(writeResponse);
+    const written = await writeResponse.json() as { directory: string; files: string[] };
+    await recordFiles(written.files);
+    return { notice: `${written.files.length} polar FRD files written to ${written.directory}` };
+  });
+
+  // Temporary seam: the shared PNG dispatcher currently renders only the line
+  // charts. Fold this second canonical request into it once exporters.ts is free.
+  const exportCharts = () => execute(job.id, ['png'], async (): Promise<RunExportOutcome> => {
+    const context = await buildContext(['png']);
+    const result = context.result!;
+    const directivityRequest = buildCanonicalDirectivityRequest(result, context.preferences);
+    const directivityResponse = await fetch(directivityRequest.endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(directivityRequest.payload),
+    });
+    if (!directivityResponse.ok) throw await responseError(directivityResponse);
+    const directivityBody = await directivityResponse.json() as { image?: string };
+    if (!directivityBody.image) throw new Error('HornLab plots returned no directivity image.');
+
+    const chartFiles = await runExportFormat('png', context);
+    const directivityFilename = `${exportBaseName(context.preferences)}_directivity_map.png`;
+    downloadBlob(pngBlob(directivityBody.image), directivityFilename);
+    const files = [...chartFiles, directivityFilename];
+    await recordFiles(files);
+    return { notice: `Charts (.png) exported · ${files.length} files` };
+  });
+
   const exportPreferred = () => {
     const formats = [...preferences.exportFormats];
     return execute(job.id, formats, async (): Promise<RunExportOutcome> => {
@@ -106,18 +195,27 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
 
   const items: ActionMenuItem[] = [
     ...FORMAT_CATALOG.map((item): ActionMenuItem => {
-      const unavailable = item.needsDesign && !designState.enabled;
+      const noDirectivity = item.id === 'polar_frd' && Object.keys(job.polar_grid ?? {}).length === 0;
+      const unavailable = (item.needsDesign && !designState.enabled) || noDirectivity;
+      const disabledReason = noDirectivity
+        ? 'This run has no directivity data for a polar FRD set.'
+        : designState.reason ?? 'This run has no recoverable design.';
       return {
-        id: item.format,
+        id: item.id,
         label: item.label,
         trailing: item.trailing,
         group: item.group,
         disabled: operation.busy || unavailable,
-        disabledReason: unavailable ? designState.reason ?? 'This run has no recoverable design.' : undefined,
-        busy: operation.busyFormats.includes(item.format),
+        disabledReason: unavailable ? disabledReason : undefined,
+        busy: item.format ? operation.busyFormats.includes(item.format) : operation.busy,
         busyLabel: `Preparing ${item.label}…`,
-        error: operation.lastErrorFormats.includes(item.format) ? operation.lastError ?? undefined : undefined,
-        onSelect: async () => { await exportOne(item.format); },
+        error: item.format && operation.lastErrorFormats.includes(item.format) ? operation.lastError ?? undefined : undefined,
+        onSelect: async () => {
+          if (item.id === 'on_axis_frd') await exportOnAxisFrd();
+          else if (item.id === 'polar_frd') await exportPolarFrd();
+          else if (item.id === 'png') await exportCharts();
+          else if (item.format) await exportOne(item.format);
+        },
       };
     }),
     {

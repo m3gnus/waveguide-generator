@@ -13,6 +13,14 @@ const mocks = vi.hoisted(() => ({
   fetchJobResults: vi.fn(),
   runExportFormat: vi.fn(),
   runExportBundle: vi.fn(),
+  downloadText: vi.fn(),
+  downloadBlob: vi.fn(),
+}));
+
+vi.mock('../api/designIo', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../api/designIo')>(),
+  downloadText: mocks.downloadText,
+  downloadBlob: mocks.downloadBlob,
 }));
 
 vi.mock('../api/results', async (importOriginal) => ({
@@ -44,6 +52,21 @@ function completeJob(overrides: Partial<JobItem> = {}): JobItem {
     auto_export_formats: {}, raw_results_file: 'result.json', mesh_artifact_file: null, log_tail: [],
     ...overrides,
   };
+}
+
+function directivityResult() {
+  return {
+    frequencies: [1000],
+    spl_on_axis: { frequencies: [1000], spl: [90], phase_degrees: [5] },
+    directivity: {
+      horizontal: [[[-30, -6], [0, 0], [30, -6]]],
+      vertical: [[[-20, -5], [0, 0], [20, -5]]],
+    },
+  };
+}
+
+async function settle() {
+  for (let index = 0; index < 8; index += 1) await Promise.resolve();
 }
 
 function menuItem(label: string): HTMLButtonElement {
@@ -121,6 +144,134 @@ describe('RunExportControl', () => {
     expect(context.designRevision).toBe(42);
     expect(context.preferences.outputName).toBe('stored_horn_v07');
     expect(patchMetadata).toHaveBeenCalledWith(job.id, { exported_files: ['earlier.csv', 'stored_horn_v07_1.csv'] });
+  });
+
+  it('downloads exactly one on-axis FRD file', async () => {
+    mocks.fetchJobResults.mockResolvedValue(directivityResult());
+    render();
+    openMenu();
+    await act(async () => { menuItem('On-axis response').click(); await settle(); });
+
+    expect(mocks.fetchJobResults).toHaveBeenCalledOnce();
+    expect(mocks.downloadText).toHaveBeenCalledOnce();
+    expect(mocks.downloadText.mock.calls[0][1]).toBe('stored_horn_v07_1.frd');
+    expect(patchMetadata).toHaveBeenCalledWith('job-export-1', {
+      exported_files: ['earlier.csv', 'stored_horn_v07_1.frd'],
+    });
+  });
+
+  it('posts the complete polar set to the workspace and reports its count', async () => {
+    mocks.fetchJobResults.mockResolvedValue(directivityResult());
+    const fetchMock = vi.mocked(globalThis.fetch);
+    fetchMock.mockImplementation(async (input) => {
+      const path = String(input);
+      if (path === '/api/workspace/path') {
+        return new Response(JSON.stringify({ selected: true, path: '/chosen' }), { status: 200 });
+      }
+      if (path === '/api/workspace/write-export') {
+        return new Response(JSON.stringify({
+          directory: '/chosen/stored_horn_v07_1',
+          files: Array.from({ length: 6 }, (_, index) => `/chosen/stored_horn_v07_1/${index}.frd`),
+        }), { status: 200 });
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    render(completeJob({ polar_grid: { angle_step: 5 } }));
+    openMenu();
+    await act(async () => { menuItem('Polar set (VituixCAD)').click(); await settle(); });
+
+    const writeCall = fetchMock.mock.calls.find(([input]) => String(input) === '/api/workspace/write-export');
+    expect(writeCall).toBeDefined();
+    const body = JSON.parse(String(writeCall![1]?.body));
+    expect(body.subdirectory).toBe('stored_horn_v07_1');
+    expect(body.members).toHaveLength(6);
+    expect(body.members.map((member: { relative_path: string }) => member.relative_path)).toEqual([
+      'hor/stored_horn_v07_1 -30.frd', 'hor/stored_horn_v07_1 0.frd', 'hor/stored_horn_v07_1 30.frd',
+      'ver/stored_horn_v07_1 -20.frd', 'ver/stored_horn_v07_1 0.frd', 'ver/stored_horn_v07_1 20.frd',
+    ]);
+    expect(document.querySelector('[role="status"]')?.textContent).toContain('6 polar FRD files written');
+    expect(document.querySelector('[role="status"]')?.textContent).toContain('/chosen/stored_horn_v07_1');
+  });
+
+  it('asks for a workspace selection and writes nothing when it is cancelled', async () => {
+    mocks.fetchJobResults.mockResolvedValue(directivityResult());
+    const fetchMock = vi.mocked(globalThis.fetch);
+    fetchMock.mockImplementation(async (input) => {
+      const path = String(input);
+      if (path === '/api/workspace/path') {
+        return new Response(JSON.stringify({ selected: false, path: '/default' }), { status: 200 });
+      }
+      if (path === '/api/workspace/select') {
+        return new Response(JSON.stringify({ selected: false, path: '/default' }), { status: 200 });
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    render(completeJob({ polar_grid: { angle_step: 5 } }));
+    openMenu();
+    await act(async () => { menuItem('Polar set (VituixCAD)').click(); await settle(); });
+
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
+      '/api/workspace/path', '/api/workspace/select',
+    ]);
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('cancelled');
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('No files were written');
+    expect(patchMetadata).not.toHaveBeenCalled();
+  });
+
+  it('disables the polar set with a reason when the run has no directivity data', () => {
+    render(completeJob({ polar_grid: {} }));
+    openMenu();
+
+    const item = menuItem('Polar set (VituixCAD)');
+    expect(item.getAttribute('aria-disabled')).toBe('true');
+    expect(item.textContent).toContain('no directivity data');
+  });
+
+  it('calls both canonical render endpoints for Charts', async () => {
+    mocks.fetchJobResults.mockResolvedValue(directivityResult());
+    const fetchMock = vi.mocked(globalThis.fetch);
+    fetchMock.mockImplementation(async (input) => {
+      const path = String(input);
+      if (path === '/api/render-directivity') {
+        return new Response(JSON.stringify({ image: 'data:image/png;base64,Ag==' }), { status: 200 });
+      }
+      if (path === '/api/render-charts') {
+        return new Response(JSON.stringify({ charts: { frequency_response: 'data:image/png;base64,AQ==' } }), { status: 200 });
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    mocks.runExportFormat.mockImplementationOnce(async () => {
+      await fetch('/api/render-charts', { method: 'POST' });
+      return ['stored_horn_v07_1_frequency_response.png'];
+    });
+    render();
+    openMenu();
+    await act(async () => { menuItem('Charts').click(); await settle(); });
+
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
+      '/api/render-directivity', '/api/render-charts',
+    ]);
+    expect(mocks.downloadBlob).toHaveBeenCalledOnce();
+    expect(mocks.downloadBlob.mock.calls[0][1]).toBe('stored_horn_v07_1_directivity_map.png');
+    expect(document.querySelector('[role="status"]')?.textContent).toContain('2 files');
+  });
+
+  it('surfaces polar write failures without claiming success', async () => {
+    mocks.fetchJobResults.mockResolvedValue(directivityResult());
+    vi.mocked(globalThis.fetch).mockImplementation(async (input) => {
+      const path = String(input);
+      if (path === '/api/workspace/path') {
+        return new Response(JSON.stringify({ selected: true, path: '/chosen' }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ detail: 'disk is full' }), { status: 507 });
+    });
+    render(completeJob({ polar_grid: { angle_step: 5 } }));
+    openMenu();
+    await act(async () => { menuItem('Polar set (VituixCAD)').click(); await settle(); });
+
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('disk is full');
+    expect(document.body.textContent).not.toContain('polar FRD files written');
+    expect(patchMetadata).not.toHaveBeenCalled();
   });
 
   it('opens the menu instead of exporting when preferred formats are empty', () => {
