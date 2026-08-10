@@ -84,6 +84,12 @@ describe('ParamPanel inventory UX', () => {
     expect(host.textContent).not.toContain('complete design inventory');
   });
 
+  it('omits field-count labels while retaining informative summaries', () => {
+    const summaries = [...host.querySelectorAll<HTMLElement>('.section-summary')].map((element) => element.textContent);
+    expect(summaries).toContain(useDesignStore.getState().design.formula);
+    expect(summaries).not.toContain(expect.stringMatching(/^\d+ (?:fields?|controls|options)$/));
+  });
+
   it('reveals and focuses a parameter routed from the command palette', async () => {
     act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
     await act(async () => {

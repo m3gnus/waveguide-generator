@@ -24,7 +24,7 @@ import './paramPanel.css';
 
 interface SectionProps {
   title: string;
-  summary: string;
+  summary?: string;
   description?: string;
   children: ReactNode;
   forceOpen: boolean;
@@ -88,7 +88,7 @@ function Section({ title, summary, description, children, forceOpen }: SectionPr
     <section className={`param-section${shownOpen ? '' : ' closed'}`} data-section={title}>
       <button className="section-head" onClick={toggle} aria-expanded={shownOpen}>
         <span className="chevron">⌄</span><span className="section-name">{title}</span><span className="spacer" />
-        <span className="section-summary">{summary}</span>
+        {summary && <span className="section-summary">{summary}</span>}
       </button>
       {shownOpen && <div className="section-body">
         {description && helpVisible && <p className="section-description">{description}</p>}
@@ -510,7 +510,6 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
       key={definition.title}
       title={definition.title}
       description={definition.description}
-      summary={`${fields.length} ${fields.length === 1 ? 'field' : 'fields'}`}
       forceOpen={searching}
     >
       {definition.title === 'Wall & Enclosure' && <WallEnclosureModeControl design={design} />}
@@ -572,8 +571,8 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
       {!searching && tab === 'geometry' && modelTypeSection}
       {definitions.map((definition) => <div key={definition.title}>
         {renderRegistrySection(definition)}
-        {!searching && definition.title === 'Frequency Sweep' && <Section title="Directivity Map" description="Polar planes and angular sampling used for directivity exports and plots." summary="11 controls" forceOpen={false}><DirectivityMapControls /></Section>}
-        {!searching && definition.title === 'Source Definition' && <Section title="Solve options" description="Backend engine, validation, which frequencies get solved, and diagnostic output controls." summary="5 options" forceOpen={false}><SolveOptionsControls /></Section>}
+        {!searching && definition.title === 'Frequency Sweep' && <Section title="Directivity Map" description="Polar planes and angular sampling used for directivity exports and plots." forceOpen={false}><DirectivityMapControls /></Section>}
+        {!searching && definition.title === 'Source Definition' && <Section title="Solve options" description="Backend engine, validation, which frequencies get solved, and diagnostic output controls." forceOpen={false}><SolveOptionsControls /></Section>}
       </div>)}
       {searching && [...fieldsBySection.values()].every((fields) => fields.length === 0) && <div className="parameter-empty">No parameter labels or keys match “{query}”.</div>}
     </div>
