@@ -71,7 +71,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install ruff
-          ruff check server scripts shared
+          ruff check server scripts shared launch launchers
 
   server:
     name: Server (${{ matrix.os }})
@@ -90,6 +90,9 @@ jobs:
           node-version: "20"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
+      - name: Committed macOS launcher icon is reproducible
+        if: runner.os == 'macOS'
+        run: python launchers/macos/generate_icon.py --check
       # `create_app()` mounts frontend/dist as StaticFiles, and dist is
       # gitignored, so app-constructing server tests fail in a clean checkout
       # until the SPA exists. Releases hand users a prebuilt archive instead;

@@ -1,6 +1,7 @@
 @echo off
 rem Double-click in Explorer, or run from a command prompt, to start Waveguide
-rem Generator v2. This is the Windows counterpart of launch-wg2.command.
+rem Generator v2. This is the Windows counterpart of
+rem launchers\macos\launch-wg2.command. Pass --no-gui for terminal-only mode.
 rem
 rem Unlike v1's install.bat this script never pulls over itself, so it does not
 rem need install-and-update.bat's copy-to-TEMP dance: cmd.exe tracks its position
@@ -14,13 +15,13 @@ rem evaluated at execution time, and every value that would otherwise want it is
 rem read on a later line or inside a subroutine.
 setlocal EnableExtensions DisableDelayedExpansion
 
-set "REPO_DIR=%~dp0"
-if "%REPO_DIR:~-1%"=="\" set "REPO_DIR=%REPO_DIR:~0,-1%"
+set "REPO_DIR=%~dp0..\.."
+for %%i in ("%REPO_DIR%") do set "REPO_DIR=%%~fi"
 cd /d "%REPO_DIR%" || goto :bad_directory
 
 if not exist "launch\serve.py" goto :bad_directory
 if not exist "server\" goto :bad_directory
-if not exist "frontend\dist\index.html" goto :missing_interface
+if not exist "launchers\statusapp\__main__.py" goto :bad_directory
 
 rem WG2_PYTHON can explicitly select another interpreter. Otherwise the launcher
 rem creates and validates the repository-local v2 environment.
@@ -62,10 +63,19 @@ call :python_can_serve
 if errorlevel 1 goto :unusable_environment
 
 :start_server
-echo Starting Waveguide Generator v2...
+call :gui_mode_requested %*
+if errorlevel 1 goto :start_terminal
+call :select_pythonw
+echo Starting the Waveguide Generator v2 status window...
+start "" "%PYTHONW%" -m launchers.statusapp %*
+if errorlevel 1 goto :statusapp_failed
+exit /b 0
+
+:start_terminal
+echo Starting Waveguide Generator v2 in terminal mode...
 echo Close this window or press Control-C to stop it.
 echo.
-"%PYTHON%" launch\serve.py %*
+"%PYTHON%" -m launchers.statusapp %*
 set "RESULT=%ERRORLEVEL%"
 if "%RESULT%"=="0" exit /b 0
 rem Exit 2 is the documented "another instance already owns the lock" answer,
@@ -93,6 +103,17 @@ exit /b %ERRORLEVEL%
 :python_can_serve
 "%PYTHON%" -c "import fastapi, uvicorn" >nul 2>&1
 exit /b %ERRORLEVEL%
+
+:select_pythonw
+set "PYTHONW=%PYTHON%"
+for %%i in ("%PYTHON%") do if exist "%%~dpiPythonw.exe" set "PYTHONW=%%~dpiPythonw.exe"
+exit /b 0
+
+:gui_mode_requested
+if "%~1"=="" exit /b 0
+if /I "%~1"=="--no-gui" exit /b 1
+shift
+goto :gui_mode_requested
 
 :is_regular_file
 rem `if exist "path\"` reports a plain file as a directory on current Windows,
@@ -171,24 +192,9 @@ rem ---------------------------------------------------------------------------
 
 :bad_directory
 echo.
-echo ERROR: launch-wg2.bat must remain in the waveguide-generator v2 folder.
+echo ERROR: launch-wg2.bat must remain in launchers\windows in the
+echo        waveguide-generator v2 folder.
 echo        Current folder: %CD%
-call :pause_when_double_clicked
-exit /b 1
-
-:missing_interface
-rem Running v2 is not supposed to require Node. Releases ship the built SPA as
-rem an attached archive, so point at the installer that fetches and verifies it
-rem and leave the local build as the developer path rather than the only one.
-echo.
-echo ERROR: The built interface is missing.
-echo.
-echo Run the installer, which downloads it from the release and verifies it
-echo against the published checksum before extracting anything:
-echo   scripts\install-and-update.bat
-echo.
-echo If you are working on the interface itself, build it instead:
-echo   cd frontend ^&^& npm ci ^&^& npm run build
 call :pause_when_double_clicked
 exit /b 1
 
@@ -226,6 +232,14 @@ echo.
 echo ERROR: The v2 Python environment could not be prepared.
 echo        Review the installation errors above, then run:
 echo          py -3.13 scripts\bootstrap.py
+call :pause_when_double_clicked
+exit /b 1
+
+:statusapp_failed
+echo.
+echo ERROR: The status window could not be started.
+echo        Run with --no-gui to see terminal diagnostics, or reinstall with:
+echo          installers\windows\install-and-update.bat
 call :pause_when_double_clicked
 exit /b 1
 

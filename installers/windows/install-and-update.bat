@@ -20,7 +20,7 @@ rem under "C:\My ! Projects (2)" neither loses characters nor closes a block
 rem early. See the header of install.bat.
 setlocal EnableExtensions DisableDelayedExpansion
 
-set "WG_ROOT=%~dp0.."
+set "WG_ROOT=%~dp0..\.."
 for %%i in ("%WG_ROOT%") do set "WG_ROOT=%%~fi"
 set "WG_ARGS=%*"
 
@@ -73,14 +73,14 @@ rem transcript pipeline below, where its output would be teed into a growing
 rem log file for as long as it stays up. Start it here instead, unpiped.
 echo.
 echo Starting Waveguide Generator v2...
-call "%WG_ROOT%\launch-wg2.bat"
+call "%WG_ROOT%\launchers\windows\launch-wg2.bat"
 set "RESULT=%ERRORLEVEL%"
 if "%RESULT%"=="0" exit /b 0
 rem Exit 2 is the documented "another instance already owns the lock" answer,
 rem not a failure: serve.py has already opened the browser on the running one.
 if "%RESULT%"=="2" exit /b 2
 rem Anything else goes through :finish so the window stays open long enough to
-rem read. launch-wg2.bat's own pause tests whether cmd's command line names
+rem read. launchers\windows\launch-wg2.bat's own pause tests whether cmd's command line names
 rem *itself*, which it does not when it is reached through this script.
 goto finish
 
@@ -101,7 +101,7 @@ if not errorlevel 1 pause
 exit /b %RESULT%
 
 :missing_installer
-echo ERROR: Could not find scripts\install.bat next to this script.
+echo ERROR: Could not find scripts\install.bat in the project checkout.
 echo        Expected project folder: %WG_ROOT%
 exit /b 1
 

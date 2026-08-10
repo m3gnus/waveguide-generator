@@ -20,21 +20,25 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-import uvicorn
+import uvicorn  # noqa: E402 - the checkout root must be importable first
 
-from server.app import VERSION, create_app
-from server.platform.console import harden_console
-from server.platform.instance import (
+from server.app import VERSION, create_app  # noqa: E402
+from server.platform.console import harden_console  # noqa: E402
+from server.platform.instance import (  # noqa: E402
     InstanceAlreadyRunning,
     InstanceLock,
     InstanceLockError,
+    pid_is_running,
     requested_port,
     reserve_port,
 )
-from server.platform.logging_setup import flush_logs, setup_logging
-from server.platform.paths import ensure_data_layout
-from server.platform.signal_rearm import register_signal_rearm, unregister_signal_rearm
-from server.protocol.frame import DEFAULT_MAX_FRAME_BYTES
+from server.platform.logging_setup import flush_logs, setup_logging  # noqa: E402
+from server.platform.paths import ensure_data_layout  # noqa: E402
+from server.platform.signal_rearm import (  # noqa: E402
+    register_signal_rearm,
+    unregister_signal_rearm,
+)
+from server.protocol.frame import DEFAULT_MAX_FRAME_BYTES  # noqa: E402
 
 
 HOST = "127.0.0.1"
@@ -56,6 +60,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--port", type=int, help="preferred local port (default: 3100)")
     parser.add_argument("--no-browser", action="store_true", help="do not open a browser")
     parser.add_argument("--data-dir", type=Path, help="override the v2 application data directory")
+    parser.add_argument("--status-control", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument("--parent-pid", type=int, help=argparse.SUPPRESS)
     return parser
 
 
@@ -76,6 +82,24 @@ def _open_browser_when_ready(port: int, stop: threading.Event) -> None:
             "opened. Check the errors above and %s.",
             url,
         )
+
+
+def _watch_statusapp(
+    server: uvicorn.Server,
+    control_path: Path,
+    parent_pid: int | None,
+    stop: threading.Event,
+) -> None:
+    """Gracefully stop when the owning status window closes or disappears."""
+
+    while not stop.wait(0.15):
+        requested = control_path.is_file()
+        parent_gone = parent_pid is not None and not pid_is_running(parent_pid)
+        if requested or parent_gone:
+            reason = "status window requested quit" if requested else "status window exited"
+            logging.getLogger("wg2.launch").info("Stopping because the %s", reason)
+            server.should_exit = True
+            return
 
 
 def _shutdown_signals() -> tuple[int, ...]:
@@ -195,6 +219,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     stop_browser = threading.Event()
+    stop_status_watch = threading.Event()
     shutdown_complete = threading.Event()
     try:
         app = create_app(
@@ -244,6 +269,14 @@ def main(argv: list[str] | None = None) -> int:
             shutdown_complete,
         )
 
+        if args.status_control is not None:
+            threading.Thread(
+                target=_watch_statusapp,
+                args=(server, args.status_control, args.parent_pid, stop_status_watch),
+                name="wg2-status-control",
+                daemon=True,
+            ).start()
+
         if open_browser:
             threading.Thread(
                 target=_open_browser_when_ready,
@@ -270,6 +303,7 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         try:
             stop_browser.set()
+            stop_status_watch.set()
             if listener is not None:
                 listener.close()
             if lock is not None:

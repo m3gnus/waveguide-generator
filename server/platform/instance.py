@@ -152,6 +152,12 @@ def _pid_is_running(pid: int) -> bool:
     return True
 
 
+def pid_is_running(pid: int) -> bool:
+    """Return whether ``pid`` is live without the destructive Windows os.kill trap."""
+
+    return _pid_is_running(pid)
+
+
 def read_lock_info(path: Path) -> InstanceInfo | None:
     """Read lock metadata; malformed lock files are treated as stale."""
 

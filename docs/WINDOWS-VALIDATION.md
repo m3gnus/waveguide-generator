@@ -551,12 +551,12 @@ and pytest, which is a dependency of theirs to change, not a promise to us.
 lock cannot trip the CI drift gate. `pins.json` and the pinned SHAs are
 untouched.
 
-### 4.3 `launch-wg2.bat` — new, the Windows counterpart of `launch-wg2.command`
+### 4.3 `launchers/windows/launch-wg2.bat` — Windows launcher
 
-Same shape as the macOS launcher: verify the folder, verify `frontend/dist`,
-honour `WG2_PYTHON`, otherwise validate `.venv` with `bootstrap.py --check` and
-bootstrap if needed, confirm FastAPI and Uvicorn import, then exec
-`launch/serve.py` with all arguments forwarded.
+Same environment shape as the macOS launcher: verify the folder, honour
+`WG2_PYTHON`, otherwise validate `.venv` with `bootstrap.py --check` and bootstrap
+if needed, then start `launchers/statusapp/`. The status app reports a missing
+`frontend/dist`, and `--no-gui` retains direct terminal server behavior.
 
 Three of v1's four documented traps applied and were carried over:
 
@@ -571,8 +571,9 @@ Three of v1's four documented traps applied and were carried over:
   location.
 
 The fourth does not apply: this launcher never pulls over itself, so it needs no
-copy-to-`%TEMP%` staging. `%~dp0` is genuinely the repository here, which is
-why `cd /d "%REPO_DIR%"` is safe. A v2 *installer* that self-updates would need
+copy-to-`%TEMP%` staging. After the public-entry reorganization, `%~dp0` is the
+launcher folder and the script resolves the repository explicitly via `..\..`.
+A v2 *installer* that self-updates still needs
 v1's `install-and-update.bat` dance, and that is P6.2, not this change.
 
 Four further Windows-specific defects were found by review after the first
@@ -601,14 +602,14 @@ draft, each reproduced before being fixed:
 
 It also pauses only when double-clicked, using v1's `CMDCMDLINE` test. That test
 inherits v1's blind spot, observed here: it matches the script's own filename,
-so an explicit `cmd /c "…\launch-wg2.bat"` looks like a double-click and pauses
+so an explicit `cmd /c "…\launchers\windows\launch-wg2.bat"` looks like a double-click and pauses
 on the failure path. Rather than diverge from the reference implementation's
 heuristic, scripted callers get an explicit opt-out: **set `WG2_NO_PAUSE=1`**
 and the launcher never pauses.
 
 ### 4.5 `.gitattributes` — batch files check out CRLF
 
-`launch-wg2.bat` is stored with LF and would otherwise take its line endings
+`launchers/windows/launch-wg2.bat` would otherwise take its line endings
 from the cloning user's `core.autocrlf`, so a clone with it disabled hands
 cmd.exe an LF-only batch file. That mostly works and then does not, around
 labels and `goto`. The attribute is scoped to `*.bat`, so nothing else in the
@@ -629,9 +630,9 @@ instead of asserting a POSIX mechanism.
 Ordered by how much it matters.
 
 1. **The installer exists; nobody has ever run its Windows half.** It was built
-   on 2026-08-08, after this report: `scripts/install.sh` +
-   `install-wg2.command`, `scripts/install.bat` +
-   `scripts/install-and-update.bat`, `scripts/uninstall.{sh,bat}`,
+   on 2026-08-08, after this report; its public entries now live under
+   `installers/{macos,linux,windows}/`, while the shared machinery remains
+   `scripts/install.{sh,bat}` and `scripts/uninstall.{sh,bat}`,
    `scripts/fetch_spa.py` (download, checksum-verify and install the release
    SPA) and `scripts/check_backends.py`, with v1's two contract suites ported
    to `server/tests/test_installer_contract.py` and

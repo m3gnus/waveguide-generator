@@ -242,6 +242,9 @@ def test_bootstrap_force_reinstalls_git_pins_after_manifest_change(tmp_path, mon
     commands: list[list[str]] = []
 
     monkeypatch.setattr(bootstrap, "_require_supported_python", lambda: None)
+    # This test owns dependency-command semantics, not lock placement. Keep its
+    # mutations inside tmp_path even when the checkout's .git is read-only.
+    monkeypatch.setattr(bootstrap, "_bootstrap_lock", lambda _environment: nullcontext())
     monkeypatch.setattr(bootstrap, "_validate", lambda *_args: next(validations))
     monkeypatch.setattr(bootstrap, "_write_stamp", lambda *_args: None)
     monkeypatch.setattr(

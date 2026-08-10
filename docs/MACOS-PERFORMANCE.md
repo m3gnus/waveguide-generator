@@ -113,7 +113,8 @@ being a GPU-only problem.
 
 - Two consecutive `bootstrap.py --check` runs took 49 and 46 ms. The stamp
   recorded 53 distributions, proving the POSIX site-packages fast path engaged.
-- The duplicate FastAPI/Uvicorn import probe in `launch-wg2.command` took 246,
+- The duplicate FastAPI/Uvicorn import probe in
+  `launchers/macos/launch-wg2.command` took 246,
   240, 241, 235, and 237 ms. It is now retained only for an explicit
   `WG2_PYTHON` override, because the repository interpreter has already passed
   the bootstrap probe.

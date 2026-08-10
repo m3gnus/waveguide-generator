@@ -31,14 +31,36 @@ ROOT = Path(__file__).resolve().parents[2]
 
 SHELL_INSTALLER = ROOT / "scripts" / "install.sh"
 BATCH_INSTALLER = ROOT / "scripts" / "install.bat"
-BATCH_ENTRY_POINT = ROOT / "scripts" / "install-and-update.bat"
-SHELL_ENTRY_POINT = ROOT / "install-wg2.command"
+BATCH_ENTRY_POINT = ROOT / "installers" / "windows" / "install-and-update.bat"
+SHELL_ENTRY_POINT = ROOT / "installers" / "macos" / "install-wg2.command"
 SHELL_UNINSTALLER = ROOT / "scripts" / "uninstall.sh"
 BATCH_UNINSTALLER = ROOT / "scripts" / "uninstall.bat"
-LAUNCHER_COMMAND = ROOT / "launch-wg2.command"
-LAUNCHER_BATCH = ROOT / "launch-wg2.bat"
+PUBLIC_SHELL_UNINSTALLERS = (
+    ROOT / "installers" / "macos" / "uninstall.sh",
+    ROOT / "installers" / "linux" / "uninstall.sh",
+)
+PUBLIC_BATCH_UNINSTALLER = ROOT / "installers" / "windows" / "uninstall.bat"
+LINUX_INSTALL_ENTRY = ROOT / "installers" / "linux" / "install.sh"
+LAUNCHER_COMMAND = ROOT / "launchers" / "macos" / "launch-wg2.command"
+LAUNCHER_BATCH = ROOT / "launchers" / "windows" / "launch-wg2.bat"
+LAUNCHER_LINUX = ROOT / "launchers" / "linux" / "launch-wg2.sh"
+MACOS_APP_EXECUTABLE = (
+    ROOT
+    / "launchers"
+    / "macos"
+    / "Waveguide Generator.app"
+    / "Contents"
+    / "MacOS"
+    / "Waveguide Generator"
+)
 
-ALL_BATCH_FILES = (BATCH_INSTALLER, BATCH_ENTRY_POINT, BATCH_UNINSTALLER, LAUNCHER_BATCH)
+ALL_BATCH_FILES = (
+    BATCH_INSTALLER,
+    BATCH_ENTRY_POINT,
+    BATCH_UNINSTALLER,
+    PUBLIC_BATCH_UNINSTALLER,
+    LAUNCHER_BATCH,
+)
 BOTH_INSTALLERS = (SHELL_INSTALLER, BATCH_INSTALLER)
 
 VENV_REFERENCE = re.compile(r"\.venv(?:\b|[/\\])", re.IGNORECASE)
@@ -119,6 +141,13 @@ def test_every_installer_file_exists_and_is_executable_where_that_matters():
         SHELL_ENTRY_POINT,
         SHELL_UNINSTALLER,
         BATCH_UNINSTALLER,
+        LINUX_INSTALL_ENTRY,
+        *PUBLIC_SHELL_UNINSTALLERS,
+        PUBLIC_BATCH_UNINSTALLER,
+        LAUNCHER_COMMAND,
+        LAUNCHER_BATCH,
+        LAUNCHER_LINUX,
+        MACOS_APP_EXECUTABLE,
     ):
         assert path.is_file(), f"{path.name} is missing"
     # Finder will not run a .command that is not executable, and the failure is
@@ -127,17 +156,45 @@ def test_every_installer_file_exists_and_is_executable_where_that_matters():
     # a checkout there always reports 0o666 and a filesystem check fails for a
     # file that is committed correctly. What has to be right is the mode git
     # records, because that is what a macOS clone gets.
-    mode = subprocess.run(
-        ["git", "ls-files", "--stage", "--", SHELL_ENTRY_POINT.name],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.split(maxsplit=1)[0]
-    assert mode == "100755", (
-        f"install-wg2.command is committed as {mode}, not 100755; "
-        "Finder will refuse to run it"
-    )
+    for path in (
+        SHELL_ENTRY_POINT,
+        LINUX_INSTALL_ENTRY,
+        *PUBLIC_SHELL_UNINSTALLERS,
+        LAUNCHER_COMMAND,
+        LAUNCHER_LINUX,
+        MACOS_APP_EXECUTABLE,
+    ):
+        staged = subprocess.run(
+            ["git", "ls-files", "--stage", "--", str(path.relative_to(ROOT))],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        mode = staged.split(maxsplit=1)[0] if staged else f"{path.stat().st_mode & 0o777:o}"
+        expected = "100755" if staged else "755"
+        assert mode == expected, (
+            f"{path.relative_to(ROOT)} has mode {mode}, not {expected}; "
+            "the OS will refuse to run it"
+        )
+
+
+def test_reorganized_entries_have_no_root_or_scripts_duplicates():
+    for old_path in (
+        "install-wg2.command",
+        "launch-wg2.command",
+        "launch-wg2.bat",
+        "scripts/install-and-update.bat",
+    ):
+        assert not (ROOT / old_path).exists(), f"obsolete public entry remains: {old_path}"
+
+
+def test_public_entries_resolve_the_repository_two_levels_up():
+    for path in (SHELL_ENTRY_POINT, LINUX_INSTALL_ENTRY, *PUBLIC_SHELL_UNINSTALLERS):
+        assert "/../.." in read(path), f"{path} no longer resolves the reorganized root"
+    for path in (BATCH_ENTRY_POINT, PUBLIC_BATCH_UNINSTALLER, LAUNCHER_BATCH):
+        assert "..\\.." in read(path), f"{path} no longer resolves the reorganized root"
+    assert "/../../../../.." in read(MACOS_APP_EXECUTABLE)
 
 
 # ---------------------------------------------------------------------------
@@ -451,8 +508,11 @@ def test_the_entry_points_keep_the_installers_exit_status_through_the_transcript
 
 
 def test_the_entry_points_start_the_launcher_rather_than_reimplementing_it():
-    assert "launch-wg2.command" in read(SHELL_ENTRY_POINT)
-    assert re.search(r'call "%WG_ROOT%\\launch-wg2\.bat"', read(BATCH_ENTRY_POINT)), (
+    assert "launchers/macos/launch-wg2.command" in read(SHELL_ENTRY_POINT)
+    assert re.search(
+        r'call "%WG_ROOT%\\launchers\\windows\\launch-wg2\.bat"',
+        read(BATCH_ENTRY_POINT),
+    ), (
         "without `call`, control transfers to the launcher permanently and the "
         "exit-code reporting below it never runs"
     )
@@ -582,8 +642,21 @@ def test_batch_files_that_disable_delayed_expansion_never_use_it():
                 )
 
 
-SHELL_PATH_VARIABLES = ("ROOT", "BOOTSTRAP_PYTHON", "VENV_PYTHON", "SPA_ARCHIVE",
-                        "DATA_DIR", "LOG", "LOG_DIR", "REPO_DIR", "target", "interpreter")
+SHELL_PATH_VARIABLES = (
+    "ROOT",
+    "BOOTSTRAP_PYTHON",
+    "VENV_PYTHON",
+    "SPA_ARCHIVE",
+    "DATA_DIR",
+    "LOG",
+    "LOG_DIR",
+    "REPO_DIR",
+    "LAUNCHER",
+    "HERE",
+    "PYTHON",
+    "target",
+    "interpreter",
+)
 
 
 def _blank_heredocs(source: str) -> str:
@@ -645,7 +718,18 @@ def unquoted_only(source: str) -> str:
 
 
 @pytest.mark.parametrize(
-    "path", [SHELL_INSTALLER, SHELL_UNINSTALLER, SHELL_ENTRY_POINT], ids=lambda p: p.name
+    "path",
+    [
+        SHELL_INSTALLER,
+        SHELL_UNINSTALLER,
+        SHELL_ENTRY_POINT,
+        LINUX_INSTALL_ENTRY,
+        *PUBLIC_SHELL_UNINSTALLERS,
+        LAUNCHER_COMMAND,
+        LAUNCHER_LINUX,
+        MACOS_APP_EXECUTABLE,
+    ],
+    ids=lambda p: str(p.relative_to(ROOT)),
 )
 def test_shell_scripts_never_use_a_path_variable_unquoted(path):
     """R1-P1-7, checked rather than intended.
@@ -739,6 +823,10 @@ def test_the_installers_finish_by_starting_the_launcher():
 def test_the_launchers_point_at_the_installer_now_that_one_exists():
     # Before P6.2 these told the user to download and extract a tarball by hand,
     # which is exactly the unverified extraction the installer refuses to do.
-    for path in (LAUNCHER_COMMAND, LAUNCHER_BATCH):
-        source = read(path)
-        assert "install" in source.lower(), f"{path.name} must name the installer"
+    source = read(ROOT / "launchers" / "statusapp" / "controller.py")
+    for installer in (
+        "installers/macos/install-wg2.command",
+        r"installers\windows\install-and-update.bat",
+        "installers/linux/install.sh",
+    ):
+        assert installer in source

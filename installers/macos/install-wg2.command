@@ -1,20 +1,21 @@
 #!/bin/bash
 # Double-click in Finder to install or update Waveguide Generator v2.
 #
-# The counterpart of launch-wg2.command, and the counterpart of Windows'
-# scripts\install-and-update.bat. All it does is find the real installer, keep a
+# The counterpart of launchers/macos/launch-wg2.command, and the counterpart of
+# Windows' installers\windows\install-and-update.bat. All it does is find the
+# real installer, keep a
 # transcript, and hold the window open long enough to read a failure -- a
 # double-clicked script's window closes the instant it exits, which is precisely
 # when the message mattered.
 
 set -u
 
-REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_DIR" || exit 1
 
 if [[ ! -f "scripts/install.sh" ]]; then
     echo
-    echo "ERROR: install-wg2.command must remain in the waveguide-generator-v2 folder."
+    echo "ERROR: install-wg2.command must remain in installers/macos in the Waveguide Generator v2 checkout."
     echo "       Current folder: $REPO_DIR"
     echo
     read -r -p "Press Return to close..." _unused
@@ -53,7 +54,7 @@ if [[ "$RESULT" -eq 0 ]]; then
     fi
     echo
     echo "Starting Waveguide Generator v2..."
-    exec "$REPO_DIR/launch-wg2.command"
+    exec "$REPO_DIR/launchers/macos/launch-wg2.command"
 fi
 
 echo "==============================================================="

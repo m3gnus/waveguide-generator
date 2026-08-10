@@ -3,8 +3,8 @@
 ``shared/version.json`` is the runtime source -- ``server/app.py`` serves it
 from ``/health`` and ``frontend/vite.config.ts`` injects it as
 ``__WG2_VERSION__`` -- but npm keeps two more copies in ``package.json`` and
-``package-lock.json``. They had drifted to three different values (2.4.1, 2.4.1
-and 1.0.0) before anyone looked, and nothing failed, because the release
+``package-lock.json``; the macOS app bundle now carries two copies as well. The
+npm copies had drifted to three different values before anyone looked, because the release
 workflow only compares the tag against ``shared/version.json``.
 """
 

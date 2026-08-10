@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import plistlib
 import re
 import sys
 from pathlib import Path
@@ -35,6 +36,14 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 VERSION_FILE = REPO_ROOT / "shared" / "version.json"
 PACKAGE_JSON = REPO_ROOT / "frontend" / "package.json"
 PACKAGE_LOCK = REPO_ROOT / "frontend" / "package-lock.json"
+APP_PLIST = (
+    REPO_ROOT
+    / "launchers"
+    / "macos"
+    / "Waveguide Generator.app"
+    / "Contents"
+    / "Info.plist"
+)
 
 SEMVER = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 
@@ -73,11 +82,17 @@ def declared_versions() -> dict[str, str]:
 
     lock = _read_json(PACKAGE_LOCK)
     root_package = lock.get("packages", {}).get("", {})
+    try:
+        app = plistlib.loads(APP_PLIST.read_bytes())
+    except (OSError, plistlib.InvalidFileException) as exc:
+        raise VersionError(f"{APP_PLIST.relative_to(REPO_ROOT)}: {exc}") from exc
     return {
         "shared/version.json": _read_json(VERSION_FILE).get("version"),
         "frontend/package.json": _read_json(PACKAGE_JSON).get("version"),
         "frontend/package-lock.json": lock.get("version"),
         'frontend/package-lock.json packages[""]': root_package.get("version"),
+        "macOS app CFBundleShortVersionString": app.get("CFBundleShortVersionString"),
+        "macOS app CFBundleVersion": app.get("CFBundleVersion"),
     }
 
 
@@ -94,6 +109,9 @@ def check() -> list[str]:
 
 
 VERSION_KEY = re.compile(r'("version"\s*:\s*)"[^"]*"')
+PLIST_VERSION = re.compile(
+    r"(<key>CFBundle(?:ShortVersionString|Version)</key>\s*<string>)[^<]*(</string>)"
+)
 
 
 def _replace_version(path: Path, new: str, *, occurrences: int) -> None:
@@ -116,6 +134,16 @@ def _replace_version(path: Path, new: str, *, occurrences: int) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def _replace_plist_version(new: str) -> None:
+    text = APP_PLIST.read_text(encoding="utf-8")
+    text, count = PLIST_VERSION.subn(rf"\g<1>{new}\g<2>", text)
+    if count != 2:
+        raise VersionError(
+            f"{APP_PLIST.relative_to(REPO_ROOT)}: expected 2 bundle versions, found {count}"
+        )
+    APP_PLIST.write_text(text, encoding="utf-8")
+
+
 def write(new: str) -> None:
     parse(new, where="--set")
     _replace_version(VERSION_FILE, new, occurrences=1)
@@ -123,6 +151,7 @@ def write(new: str) -> None:
     # The lockfile carries it twice before any dependency's own version: once at
     # the root, which humans read, and once in packages[""], which npm reads.
     _replace_version(PACKAGE_LOCK, new, occurrences=2)
+    _replace_plist_version(new)
 
 
 def next_version(part: str) -> str:

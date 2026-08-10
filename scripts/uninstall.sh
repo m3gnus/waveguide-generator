@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Waveguide Generator v2 -- uninstaller for macOS and Linux.
 #
-#   bash scripts/uninstall.sh          remove the environment and the interface
-#   bash scripts/uninstall.sh --data   also remove saved designs and job history
+# Public entries live in installers/macos and installers/linux. This shared
+# implementation is kept here so both platforms enforce the same contract.
 #
 # It never deletes the checkout, and it never deletes anything belonging to v1.
 # v2 was built to install beside v1 with its own data directory; an uninstaller
@@ -118,4 +118,8 @@ for target in "${TARGETS[@]}"; do
 done
 
 say ""
-say "Done. Reinstall any time with: bash scripts/install.sh"
+if [[ "$(uname -s)" == "Darwin" ]]; then
+    say "Done. Reinstall any time with: installers/macos/install-wg2.command"
+else
+    say "Done. Reinstall any time with: bash installers/linux/install.sh"
+fi

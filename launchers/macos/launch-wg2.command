@@ -1,9 +1,10 @@
 #!/bin/bash
-# Double-click in Finder, or run from Terminal, to start Waveguide Generator v2.
+# Double-click in Finder, or run from Terminal, to open the Waveguide Generator
+# v2 status window. Pass --no-gui for the original terminal-only launcher.
 
 set -u
 
-REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_DIR" || exit 1
 
 fail() {
@@ -16,23 +17,9 @@ fail() {
   exit 1
 }
 
-if [[ ! -f "launch/serve.py" ]] || [[ ! -d "server" ]]; then
-  fail "launch-wg2.command must remain in the waveguide-generator-v2 folder."
-fi
-
-if [[ ! -f "frontend/dist/index.html" ]]; then
-  # Running v2 is not supposed to require Node. Releases ship the built SPA as
-  # an attached archive, so point there first and leave the local build as the
-  # developer path rather than the only one.
-  fail "The built interface is missing.
-
-Run the installer, which downloads it from the release and verifies it against
-the published checksum before extracting anything:
-  bash scripts/install.sh
-or double-click install-wg2.command.
-
-If you are working on the interface itself, build it instead:
-  cd frontend && npm ci && npm run build"
+if [[ ! -f "launch/serve.py" ]] || [[ ! -d "server" ]] || \
+   [[ ! -f "launchers/statusapp/__main__.py" ]]; then
+  fail "launch-wg2.command must remain in launchers/macos in the Waveguide Generator v2 checkout."
 fi
 
 # WG2_PYTHON can explicitly select another interpreter. Otherwise the launcher
@@ -81,8 +68,8 @@ then
   fail "The selected Python environment cannot import FastAPI and Uvicorn."
 fi
 
-echo "Starting Waveguide Generator v2..."
-echo "Close this window or press Control-C to stop it."
+echo "Starting the Waveguide Generator v2 status window..."
+echo "Quit the status window to stop the server."
 echo
 
-exec "$PYTHON" launch/serve.py "$@"
+exec "$PYTHON" -m launchers.statusapp "$@"
