@@ -43,6 +43,7 @@ export interface Preferences {
   chartTypes: ChartType[];
   chartTheme: string;
   exportFormats: ExportFormat[];
+  autoExportFormats: ExportFormat[];
   autoExportOnComplete: boolean;
   autoDownloadMesh: boolean;
   outputName: string;
@@ -62,7 +63,8 @@ const defaults: Preferences = {
   // defaulting to them left two of six panels permanently showing their stub.
   chartTypes: ['frequency_response', 'directivity_map_h', 'directivity_map_v', 'directivity_index', 'impedance', 'summary'],
   chartTheme: 'hornlab',
-  exportFormats: [],
+  exportFormats: ['csv', 'png'],
+  autoExportFormats: [],
   autoExportOnComplete: false,
   autoDownloadMesh: false,
   outputName: 'horn',
@@ -91,7 +93,12 @@ export function normalize(raw: Partial<Preferences> = {}): Preferences {
   const charts = Array.isArray(raw.chartTypes)
     ? raw.chartTypes.filter((id): id is ChartType => chartIds.has(id)).slice(0, MAX_RESULT_PANELS)
     : [...defaults.chartTypes];
-  const formats = Array.isArray(raw.exportFormats) ? [...new Set(raw.exportFormats.filter((id): id is ExportFormat => exportIds.has(id)))] : [];
+  const formats = Array.isArray(raw.exportFormats)
+    ? [...new Set(raw.exportFormats.filter((id): id is ExportFormat => exportIds.has(id)))]
+    : [...defaults.exportFormats];
+  const autoFormats = Array.isArray(raw.autoExportFormats)
+    ? [...new Set(raw.autoExportFormats.filter((id): id is ExportFormat => exportIds.has(id)))]
+    : [...defaults.autoExportFormats];
   const mapReference = MAP_REFERENCES.includes(Number(raw.mapReference) as MapReference) ? Number(raw.mapReference) as MapReference : defaults.mapReference;
   return {
     ...defaults,
@@ -100,6 +107,7 @@ export function normalize(raw: Partial<Preferences> = {}): Preferences {
     chartTypes: charts,
     chartTheme: String(raw.chartTheme || defaults.chartTheme),
     exportFormats: formats,
+    autoExportFormats: autoFormats,
     autoExportOnComplete: raw.autoExportOnComplete === true,
     autoDownloadMesh: raw.autoDownloadMesh === true,
     outputName: normalizeOutputName(raw.outputName),
@@ -111,7 +119,7 @@ export function normalize(raw: Partial<Preferences> = {}): Preferences {
   };
 }
 
-export const STORAGE_VERSION = 5;
+export const STORAGE_VERSION = 6;
 
 function migrateV1ToV2(preferences: Partial<Preferences>): Partial<Preferences> {
   const { chartTypes: _replaced, ...carried } = preferences;
@@ -135,6 +143,19 @@ function migrateV4ToV5(preferences: Partial<Preferences>): Partial<Preferences> 
   // New profiles adopt the default, but migration must not overwrite an
   // explicit preference that an existing profile already stored.
   return preferences;
+}
+
+function migrateV5ToV6(preferences: Partial<Preferences>): Partial<Preferences> {
+  // Inspect the raw object before normalize runs: an own [] means the user
+  // deliberately selected no formats, while an absent key should adopt the
+  // new manual default. Spreading preserves that distinction.
+  if (!Object.prototype.hasOwnProperty.call(preferences, 'exportFormats')) return preferences;
+  return {
+    ...preferences,
+    autoExportFormats: preferences.autoExportOnComplete === true
+      ? preferences.exportFormats
+      : [],
+  };
 }
 
 /**
@@ -218,7 +239,8 @@ export function nextVersionFor(name: string, existingLabels: readonly (string | 
  * Migrations are intentionally sequential. v1→v2 replaced two unusable seeded
  * panels while preserving unrelated settings; v2→v3 makes the chart list's
  * stored length authoritative; v3→v4 adds independent job-version naming;
- * v4→v5 puts the date prefix on by default. Each stored version runs every
+ * v4→v5 puts the date prefix on by default; v5→v6 separates manual and
+ * automatic export selections. Each stored version runs every
  * step from its own onwards -- v3 used to run only its first step, so a v3
  * profile would have skipped v4→v5 entirely.
  */
@@ -227,6 +249,7 @@ const MIGRATIONS: Record<number, (preferences: Partial<Preferences>) => Partial<
   2: migrateV2ToV3,
   3: migrateV3ToV4,
   4: migrateV4ToV5,
+  5: migrateV5ToV6,
 };
 
 export function readPreferences(raw: string | null): { value: Preferences; migrated: boolean } {
@@ -301,7 +324,20 @@ class PreferenceStore {
       : [...this.value.exportFormats, format];
     this.update({ exportFormats });
   }
-  resetForTests(): void { this.value = { ...defaults, chartTypes: [...defaults.chartTypes], exportFormats: [] }; }
+  toggleAutoExportFormat(format: ExportFormat): void {
+    const autoExportFormats = this.value.autoExportFormats.includes(format)
+      ? this.value.autoExportFormats.filter((item) => item !== format)
+      : [...this.value.autoExportFormats, format];
+    this.update({ autoExportFormats });
+  }
+  resetForTests(): void {
+    this.value = {
+      ...defaults,
+      chartTypes: [...defaults.chartTypes],
+      exportFormats: [...defaults.exportFormats],
+      autoExportFormats: [...defaults.autoExportFormats],
+    };
+  }
 }
 
 export const preferencesStore = new PreferenceStore();

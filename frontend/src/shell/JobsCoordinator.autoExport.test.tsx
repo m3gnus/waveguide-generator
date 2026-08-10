@@ -56,7 +56,8 @@ describe('completed-job auto-export naming', () => {
     preferencesStore.resetForTests();
     preferencesStore.update({
       autoExportOnComplete: true,
-      exportFormats: ['csv'],
+      exportFormats: ['png'],
+      autoExportFormats: ['csv'],
       outputName: 'horn',
       counter: 7,
     });
