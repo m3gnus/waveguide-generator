@@ -1114,6 +1114,29 @@ the memory rule "never hold results and mesh together" conflicted with the propo
 atomic snapshot (now flagged as an open design problem, §6.4); ASCII transliteration
 made `filename*` pointless; the keep list's item count was wrong.
 
+### Measured: what polar phase actually costs
+
+Implemented 2026-08-10. Measured on a **real Metal solve** (the default backend),
+24 frequencies × 3 planes × 37 angles:
+
+| | Metal (measured) | BEMPP (measured) |
+|---|---|---|
+| Phase block | 75,683 B | 75,700 B |
+| Base payload | 316,535 B | 100,773 B |
+| Increase | **23.9%** | 75% |
+
+The phase block is set by `frequencies × planes × angles` and is effectively
+backend-independent. The percentage is not: BEMPP's much smaller base payload
+made the same 76 kB look like a 75% increase. **Quote the absolute figure.**
+
+Scaling: ~1.26 MB on a 400-frequency sweep, and retention holds 1000 terminal
+runs — so the ceiling is on the order of a gigabyte if every retained run is a
+full sweep. Phase is stored unconditionally by owner decision; revisit here if
+that ceiling becomes a problem.
+
+An earlier commit message (`a61f34e`) quotes the BEMPP-derived "near enough to
+double" figure. That is wrong for the default backend; this table supersedes it.
+
 ### Revision 2 — 2026-08-10, owner direction
 
 Four changes from Magnus, and what each turned out to require:
