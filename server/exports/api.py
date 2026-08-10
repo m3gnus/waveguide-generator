@@ -61,11 +61,11 @@ async def export_step(
     """Export STEP. ``solid`` is the manufacturable part; ``surface`` the bore."""
 
     try:
-        content = await (
-            build_step_solid(request.design)
-            if body == "solid"
-            else build_step(request.design)
-        )
+        if body == "solid":
+            solid = await build_step_solid(request.design)
+            content = solid.step_text
+        else:
+            content = await build_step(request.design)
     except Exception as exc:
         raise _export_error(exc) from exc
     return Response(

@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import copy
+from dataclasses import dataclass
 import math
 from pathlib import Path
 import struct
 import tempfile
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
 
 import numpy as np
 
@@ -16,8 +17,19 @@ from server.mesh.builder import _solver_mesher_config, _triangles_and_tags
 from server.mesh.gmsh_worker import run_on_gmsh_worker
 from server.preview.translate import design_to_mesher_config
 
+if TYPE_CHECKING:
+    from hornlab_mesher.cad import CadInfo
+
 
 MAX_EXPORT_SEGMENT_INPUT = 1_000_000.0
+
+
+@dataclass(frozen=True)
+class StepSolidResult:
+    """A solid STEP document and the mesher's description of its CAD body."""
+
+    step_text: str
+    cad_info: CadInfo
 
 
 def _number(value: Expr | None, fallback: float) -> float:
@@ -219,7 +231,7 @@ async def build_step(design: DesignConfig) -> str:
     return await run_on_gmsh_worker(_build_step_sync, design.model_dump(mode="json"))
 
 
-def _build_step_solid_sync(design_dump: dict[str, Any]) -> str:
+def _build_step_solid_sync(design_dump: dict[str, Any]) -> StepSolidResult:
     design = DesignConfig.model_validate(design_dump)
     try:
         from hornlab_mesher.cad import write_step_from_config
@@ -239,15 +251,15 @@ def _build_step_solid_sync(design_dump: dict[str, Any]) -> str:
     ) as handle:
         step_path = Path(handle.name)
     try:
-        write_step_from_config(config, step_path)
+        _, cad_info = write_step_from_config(config, step_path)
         text = step_path.read_text(encoding="utf-8", errors="replace")
     finally:
         step_path.unlink(missing_ok=True)
     _assert_step(text)
-    return text
+    return StepSolidResult(step_text=text, cad_info=cad_info)
 
 
-async def build_step_solid(design: DesignConfig) -> str:
+async def build_step_solid(design: DesignConfig) -> StepSolidResult:
     """Build the manufacturable solid: wall thickness, enclosure, open throat.
 
     Unlike the inner-surface export this needs no Thicken or cap step in CAD --
@@ -416,9 +428,11 @@ def build_profiles(design: DesignConfig, kind: str) -> str:
 
 
 __all__ = [
+    "StepSolidResult",
     "binary_stl",
     "build_profiles",
     "build_step",
+    "build_step_solid",
     "build_stl",
     "profile_csv",
     "smooth_segments",
