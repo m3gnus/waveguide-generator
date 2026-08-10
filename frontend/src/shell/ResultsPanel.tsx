@@ -1,19 +1,22 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import type { EChartsOption } from 'echarts';
 import { jobsSocket } from '../api/jobsSocket';
 import { compareSelection, fetchJobResults, type JobResults } from '../api/results';
 import { EChart, useChartTokens, type ChartTokens } from '../results/EChart';
 import { beamShapeSeries, directivityGrid, directivityIndexSeries, impedanceSeries, splSeries, type NamedResult } from '../results/mappers';
-import { BalloonRenderer, ChartStub, ForwardBeamRenderer } from '../results/balloon';
+import { BalloonRenderer, ChartStub, ForwardBeamRenderer, hasBalloonData, type ChartStubAction } from '../results/balloon';
 import { runExportBundle } from '../results/exporters';
 import { resultExportSnapshot } from '../results/exportContext';
 export { resultExportSnapshot } from '../results/exportContext';
 import type { ResultPayload } from '../results/types';
+import { hydrateJobDesign } from '../jobs/jobDesign';
 import { CHART_TYPES, MAX_RESULT_PANELS, RESULT_PANEL_COUNTS, preferencesStore, usePreferences, type ChartType } from '../prefs/preferences';
 import { ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
 import { Icon } from './icons';
+import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { trapDialogFocus } from './SettingsDialog';
+import { useSolveOptionsStore } from '../stores/solveOptions';
 
 function frequency(value: number | undefined): string {
   if (!value) return '—';
@@ -398,7 +401,28 @@ function Summary({ result }: { result: ResultPayload }) {
 
 const NO_NAMED_RESULTS: NamedResult[] = [];
 
-function ResultChart({ chartType, result, named, tokens, density }: { chartType: ChartType; result: ResultPayload; named: NamedResult[]; tokens: ChartTokens; density: ChartDensity }) {
+export function beamShapeMissingReason(result: ResultPayload): { reason: string; canEnable: boolean } {
+  if (hasBalloonData(result)) return {
+    reason: 'Spherical balloon data is available, but this result has no valid −6 dB contour fit.',
+    canEnable: false,
+  };
+  const sampling = result.metadata?.balloon_sampling;
+  const status = sampling && typeof sampling === 'object' ? String((sampling as Record<string, unknown>).status ?? '') : '';
+  if (status === 'backend_unsupported') return {
+    reason: 'Forward Beam Shape needs spherical sampling, but this solver backend did not configure a sphere grid.',
+    canEnable: false,
+  };
+  if (status === 'missing_result') return {
+    reason: 'Spherical sampling was enabled, but this solve returned no balloon data for the −6 dB contour fit.',
+    canEnable: false,
+  };
+  return {
+    reason: 'Forward Beam Shape needs 3D balloon sampling and a valid −6 dB contour fit.',
+    canEnable: true,
+  };
+}
+
+function ResultChart({ chartType, result, named, tokens, density, beamShapeAction }: { chartType: ChartType; result: ResultPayload; named: NamedResult[]; tokens: ChartTokens; density: ChartDensity; beamShapeAction?: ChartStubAction }) {
   const preferences = usePreferences();
   // Only the frequency-response overlay reads the cross-job list. Keeping it in
   // the dependency array for every other chart meant a heatmap -- the most
@@ -421,12 +445,16 @@ function ResultChart({ chartType, result, named, tokens, density }: { chartType:
       const series = directivityIndexSeries(result, preferences.smoothing);
       return series.length ? <EChart option={lineOption(series, tokens, 'DI [dB]', density)} label="Interactive HornLab directivity index by frequency"/> : <ChartStub reason="Directivity Index needs the optional di result block."/>;
     }
-    if (chartType === 'beam_shape') return result.beam_shape?.frequencies?.length ? <EChart option={lineOption(beamShapeSeries(result), tokens, 'Beam width [°]', density)} label="Interactive HornLab horizontal and vertical forward beam width"/> : <ChartStub reason="Forward Beam Shape needs spherical balloon sampling and a valid −6 dB contour fit."/>;
+    if (chartType === 'beam_shape') {
+      if (result.beam_shape?.frequencies?.length) return <EChart option={lineOption(beamShapeSeries(result), tokens, 'Beam width [°]', density)} label="Interactive HornLab horizontal and vertical forward beam width"/>;
+      const missing = beamShapeMissingReason(result);
+      return <ChartStub reason={missing.reason} action={missing.canEnable ? beamShapeAction : undefined}/>;
+    }
     if (chartType === 'beam_map') return <ForwardBeamRenderer result={result}/>;
     if (chartType === 'balloon') return <BalloonRenderer result={result}/>;
     if (chartType === 'impedance') return result.impedance?.frequencies?.length ? <EChart option={impedanceOption(result, tokens, preferences.smoothing, density)} label="Interactive HornLab normalized acoustic impedance by frequency"/> : <ChartStub reason="Acoustic Impedance needs the optional impedance result block."/>;
     return <Summary result={result}/>;
-  }, [chartType, density, overlays, preferences.mapReference, preferences.smoothing, result, tokens]);
+  }, [beamShapeAction, chartType, density, overlays, preferences.mapReference, preferences.smoothing, result, tokens]);
 }
 
 export interface CardMetrics {
@@ -457,7 +485,7 @@ export function useCardMetrics(target: React.RefObject<HTMLElement | null>): Car
   return metrics;
 }
 
-function ChartCard({ index, chartType, result, named, tokens }: { index: number; chartType: ChartType; result: ResultPayload; named: NamedResult[]; tokens: ChartTokens }) {
+function ChartCard({ index, chartType, result, named, tokens, beamShapeAction }: { index: number; chartType: ChartType; result: ResultPayload; named: NamedResult[]; tokens: ChartTokens; beamShapeAction?: ChartStubAction }) {
   const [expanded, setExpanded] = useState(false);
   const detail = useRef<HTMLElement>(null);
   const card = useRef<HTMLElement>(null);
@@ -487,7 +515,7 @@ function ChartCard({ index, chartType, result, named, tokens }: { index: number;
   return <>
     <section ref={card} className={`result-card result-${index}`} data-density={density}>
       <div className="chart-placeholder" title="Hover for values · double-click for detail" onDoubleClick={() => setExpanded(true)}>
-        <ResultChart chartType={chartType} result={result} named={named} tokens={tokens} density={density}/>
+        <ResultChart chartType={chartType} result={result} named={named} tokens={tokens} density={density} beamShapeAction={beamShapeAction}/>
       </div>
       {/* Chrome floats over the plot rather than reserving a row of its own:
           a fixed header costs a quarter of a six-panel card's height. */}
@@ -507,7 +535,7 @@ function ChartCard({ index, chartType, result, named, tokens }: { index: number;
     {expanded && createPortal(<div className="result-detail-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setExpanded(false); }}>
       <section ref={detail} className="result-detail" role="dialog" aria-modal="true" aria-label={`${chartLabel(chartType)} detail`}>
         <header><div><b>{chartLabel(chartType)}</b>{subtitle && <span>{subtitle}</span>}</div><small>Hover to inspect · Ctrl/scroll to zoom lines</small><button aria-label="Close detail view" onClick={() => setExpanded(false)}><Icon name="close"/></button></header>
-        <div className="result-detail-chart"><ResultChart chartType={chartType} result={result} named={named} tokens={tokens} density="full"/></div>
+        <div className="result-detail-chart"><ResultChart chartType={chartType} result={result} named={named} tokens={tokens} density="full" beamShapeAction={beamShapeAction}/></div>
       </section>
     </div>, document.body)}
   </>;
@@ -517,17 +545,18 @@ export function resultLayoutClass(count: number): string {
   return `result-layout-${Math.max(0, Math.min(MAX_RESULT_PANELS, Math.floor(count)))}`;
 }
 
-export function ResultsChartGrid({ chartTypes, result, named, tokens }: {
+export function ResultsChartGrid({ chartTypes, result, named, tokens, beamShapeAction }: {
   chartTypes: ChartType[];
   result: ResultPayload;
   named: NamedResult[];
   tokens: ChartTokens;
+  beamShapeAction?: ChartStubAction;
 }) {
   if (!chartTypes.length) {
     return <div className="result-grid-empty" role="status"><b>NO CHARTS OPEN</b><span>Add a chart to rebuild the results workspace.</span><button onClick={() => preferencesStore.addChart()}>+ Add chart</button></div>;
   }
   return <div className={`result-grid ${resultLayoutClass(chartTypes.length)}`} data-chart-count={chartTypes.length}>
-    {chartTypes.map((chartType, index) => <ChartCard key={`${index}-${chartType}`} index={index} chartType={chartType} result={result} named={named} tokens={tokens}/>) }
+    {chartTypes.map((chartType, index) => <ChartCard key={`${index}-${chartType}`} index={index} chartType={chartType} result={result} named={named} tokens={tokens} beamShapeAction={beamShapeAction}/>) }
   </div>;
 }
 
@@ -545,6 +574,7 @@ interface ResultFetchError {
 
 export function ResultsPanel() {
   const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
+  const coordinator = useSyncExternalStore(jobsCoordinatorBridge.subscribe, jobsCoordinatorBridge.getSnapshot, jobsCoordinatorBridge.getSnapshot);
   const selection = useSyncExternalStore(compareSelection.subscribe, compareSelection.getSnapshot, compareSelection.getSnapshot);
   const preferences = usePreferences();
   const tokens = useChartTokens();
@@ -554,6 +584,7 @@ export function ResultsPanel() {
   const [exportStatus, setExportStatus] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
+  const [beamRerunSubmitting, setBeamRerunSubmitting] = useState(false);
 
   // Jobs arrive newest-first, so the first finished one is the latest solve.
   const latest = useMemo(() => jobs.find((job) => job.status === 'complete' && job.has_results) ?? null, [jobs]);
@@ -620,6 +651,31 @@ export function ResultsPanel() {
   const error = fetchError?.key === selectionKey ? fetchError.message : null;
   const showingPrevious = Boolean(selection.primary && display && display.key !== selectionKey && !error);
   const available = useMemo(() => jobs.filter((job) => job.status === 'complete' && job.has_results && !ids.includes(job.id)), [ids, jobs]);
+  const selectedJob = useMemo(() => jobs.find((job) => job.id === display?.primaryId) ?? null, [display?.primaryId, jobs]);
+  const selectedJobCanRerun = useMemo(() => Boolean(selectedJob && hydrateJobDesign(selectedJob)), [selectedJob]);
+  const enableBalloonAndRerun = useCallback(() => {
+    if (!selectedJob) return;
+    const design = hydrateJobDesign(selectedJob);
+    if (!design) {
+      coordinator.reportError('This result has no readable design snapshot, so it cannot be rerun.');
+      return;
+    }
+    useSolveOptionsStore.getState().updatePolar({ sphericalSampling: true });
+    // The new solve is a separate job. Follow the latest result so this card
+    // replaces the old empty state as soon as that job completes, even when
+    // the source result had been pinned for comparison.
+    compareSelection.followLatest(selectedJob.id);
+    setBeamRerunSubmitting(true);
+    void coordinator.run(design, selectedJob.design_revision)
+      .catch((reason) => coordinator.reportError(reason instanceof Error ? reason.message : String(reason)))
+      .finally(() => setBeamRerunSubmitting(false));
+  }, [coordinator, selectedJob]);
+  const beamShapeAction = useMemo<ChartStubAction | undefined>(() => selectedJobCanRerun ? {
+    label: 'Enable & rerun',
+    onClick: enableBalloonAndRerun,
+    disabled: beamRerunSubmitting,
+    busy: beamRerunSubmitting,
+  } : undefined, [beamRerunSubmitting, enableBalloonAndRerun, selectedJobCanRerun]);
   const exportSelected = async () => {
     if (!primary) return;
     setExporting(true); setExportStatus(null);
@@ -665,6 +721,6 @@ export function ResultsPanel() {
     {showingPrevious && <div className="job-warning" role="status" style={{ margin: 7 }}>Showing previous results while fetching the selected run…</div>}
     {!shown
       ? <div className="coming-soon"><b>{error ? 'RESULTS UNAVAILABLE' : 'LOADING RESULTS'}</b><span>{error ? 'The selected run could not be loaded.' : 'Fetching selected job data…'}</span></div>
-      : <ResultsChartGrid chartTypes={preferences.chartTypes} result={shown} named={named} tokens={tokens}/>}
+      : <ResultsChartGrid chartTypes={preferences.chartTypes} result={shown} named={named} tokens={tokens} beamShapeAction={beamShapeAction}/>}
   </div>;
 }

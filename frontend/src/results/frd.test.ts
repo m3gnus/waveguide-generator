@@ -30,6 +30,20 @@ function preferences(smoothing: SmoothingMode = 'none') {
   return { smoothing, outputName: 'test_horn', counter: 7 };
 }
 
+function withPolarPhase(result: ResultPayload = fixture): ResultPayload {
+  return {
+    ...result,
+    directivity_phase: {
+      horizontal: frequencies.map((_, index) => [
+        [-30, -100 + index], [0, -80 + index], [30, -60 + index],
+      ]),
+      vertical: frequencies.map((_, index) => [
+        [-15, -50 + index], [0, -30 + index], [15, -10 + index],
+      ]),
+    },
+  };
+}
+
 function dataRows(text: string): string[][] {
   return text.trim().split('\n')
     .filter((line) => line.length > 0 && !line.startsWith('*'))
@@ -81,6 +95,65 @@ describe('FRD builders', () => {
       expect(dataRows(text).every((row) => row.length === 2)).toBe(true);
       expect(dataRows(text)).toHaveLength(frequencies.length);
     });
+  });
+
+  it('writes three-column polar files without a magnitude-only header when phase is present', () => {
+    const files = buildPolarFrdSet(withPolarPhase(), preferences());
+
+    expect(files).toHaveLength(6);
+    files.forEach(({ text }) => {
+      expect(text).not.toContain('magnitude-only');
+      expect(text).toContain('Freq(Hz)\tSPL(dB)\tPhase(degrees)');
+      expect(dataRows(text)).toHaveLength(frequencies.length);
+      expect(dataRows(text).every((row) => row.length === 3)).toBe(true);
+    });
+  });
+
+  it('removes the common time-of-flight and wraps corrected polar phase to (-180, 180]', () => {
+    const result: ResultPayload = {
+      frequencies: [1],
+      directivity: { horizontal: [[[0, 0]]] },
+      directivity_phase: { horizontal: [[[0, -100]]] },
+      metadata: {
+        observation: { effective_distance_m: 1, sound_speed_m_per_s: 4 },
+      },
+    };
+    const text = buildPolarFrdSet(result, preferences())[0].text;
+
+    // -100 - 360 * 1 Hz * 1 m / 4 m/s = -190 deg, wrapped to +170 deg.
+    expect(dataRows(text)).toEqual([['1.000000', '0.0000', '170.0000']]);
+    expect(text).toContain('d=1 m, c=4 m/s');
+  });
+
+  it.each([
+    ['distance', { sound_speed_m_per_s: 4 }],
+    ['speed of sound', { effective_distance_m: 1 }],
+  ])('emits raw polar phase and an honest header when %s metadata is missing', (_missing, observation) => {
+    const result: ResultPayload = {
+      frequencies: [1],
+      directivity: { horizontal: [[[0, 0]]] },
+      directivity_phase: { horizontal: [[[0, -100]]] },
+      metadata: { observation },
+    };
+    const text = buildPolarFrdSet(result, preferences())[0].text;
+
+    expect(dataRows(text)).toEqual([['1.000000', '0.0000', '-100.0000']]);
+    expect(text).toContain('Common time-of-flight not removed');
+    expect(text).toContain('raw phase emitted');
+  });
+
+  it('uses the same propagation correction for on-axis phase', () => {
+    const result: ResultPayload = {
+      frequencies: [1],
+      spl_on_axis: { frequencies: [1], spl: [90], phase_degrees: [-100] },
+      metadata: {
+        observation: { effective_distance_m: 1, sound_speed_m_per_s: 4 },
+      },
+    };
+
+    expect(dataRows(buildOnAxisFrd(result, preferences()))).toEqual([
+      ['1.000000', '90.0000', '170.0000'],
+    ]);
   });
 
   it('names polar files the way the Fusion addin already does for VituixCAD', () => {
