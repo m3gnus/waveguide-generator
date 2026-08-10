@@ -199,7 +199,7 @@ export function DesignFileMenu() {
         className="cadlink-badge"
         aria-label={`CAD link: ${CLASSIFICATION_DISPLAY[classification].label}`}
         title={CLASSIFICATION_DISPLAY[classification].detail}
-        style={{ color: 'var(--fg3)', fontSize: 9, fontWeight: 500, letterSpacing: '.02em' }}
+        style={{ color: 'var(--fg3)', fontSize: 'var(--text-micro)', fontWeight: 500, letterSpacing: '.02em' }}
       >{CLASSIFICATION_DISPLAY[classification].label}</small>}
       {revision !== savedRevision && <i className="unsaved-dot" aria-label="Unsaved changes"/>}
       <span className="chev">⌄</span>

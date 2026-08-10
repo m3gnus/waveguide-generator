@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import type { EChartsOption } from 'echarts';
 import { jobsSocket } from '../api/jobsSocket';
@@ -50,7 +50,7 @@ export function chartDensity(width: number, height: number): ChartDensity {
   return 'compact';
 }
 
-const LABEL_FONT: Record<ChartDensity, number> = { compact: 9, regular: 10, full: 11 };
+const LABEL_FONT: Record<ChartDensity, number> = { compact: 10, regular: 11, full: 12 };
 /** `top` is the band reserved for the floating title chip and the legend. */
 const LINE_GRID: Record<ChartDensity, { left: number; right: number; top: number; bottom: number }> = {
   compact: { left: 30, right: 8, top: 16, bottom: 17 },
@@ -97,15 +97,15 @@ export function lineOption(series: EChartsOption['series'], tokens: ChartTokens,
     backgroundColor: tokens.background,
     color: tokens.series,
     textStyle: { color: tokens.foreground, fontFamily: 'Inter, system-ui, sans-serif' },
-    tooltip: { trigger: 'axis', confine: true, backgroundColor: tokens.background, borderColor: tokens.spine ?? tokens.grid, textStyle: { color: tokens.foreground, fontSize: 10 }, axisPointer: { type: 'cross', lineStyle: { color: tokens.muted } } },
+    tooltip: { trigger: 'axis', confine: true, backgroundColor: tokens.background, borderColor: tokens.spine ?? tokens.grid, textStyle: { color: tokens.foreground, fontSize: 11 }, axisPointer: { type: 'cross', lineStyle: { color: tokens.muted } } },
     // Compact legends truncate rather than crowd the title chip, and scroll in
     // a single row rather than wrapping down over the plot on a narrow card.
     // The tooltip and the detail view still name every series in full.
     legend: {
-      ...(density === 'compact' ? { type: 'scroll' as const, width: '46%', pageIconSize: 7, pageIconColor: tokens.muted, pageIconInactiveColor: tokens.grid, pageTextStyle: { color: tokens.muted, fontSize: 8 } } : {}),
+      ...(density === 'compact' ? { type: 'scroll' as const, width: '46%', pageIconSize: 9, pageIconColor: tokens.muted, pageIconInactiveColor: tokens.grid, pageTextStyle: { color: tokens.muted, fontSize: 10 } } : {}),
       top: density === 'full' ? 2 : 1,
       right: density === 'full' ? 8 : LEGEND_INSET,
-      textStyle: { color: tokens.muted, fontSize: density === 'compact' ? 8 : 9, ...(density === 'compact' ? { width: 32, overflow: 'truncate' as const } : {}) },
+      textStyle: { color: tokens.muted, fontSize: density === 'compact' ? 10 : 11, ...(density === 'compact' ? { width: 32, overflow: 'truncate' as const } : {}) },
       itemWidth: density === 'compact' ? 10 : 14,
       itemHeight: 2,
       itemGap: density === 'compact' ? 6 : 10,
@@ -113,10 +113,10 @@ export function lineOption(series: EChartsOption['series'], tokens: ChartTokens,
     grid: { ...inset, containLabel: false },
     // The tick labels already read as frequencies; the caption only earns its
     // 20px on a chart big enough to spare them.
-    xAxis: { type: 'log', logBase: 10, min: bounds?.[0], max: bounds?.[1], ...(density === 'full' ? { name: 'Frequency [Hz]', nameLocation: 'middle' as const, nameGap: 24, nameTextStyle: { color: tokens.muted, fontSize: 10 } } : {}), minorTick: { show: true }, ...axes(tokens, density) },
+    xAxis: { type: 'log', logBase: 10, min: bounds?.[0], max: bounds?.[1], ...(density === 'full' ? { name: 'Frequency [Hz]', nameLocation: 'middle' as const, nameGap: 24, nameTextStyle: { color: tokens.muted, fontSize: 11 } } : {}), minorTick: { show: true }, ...axes(tokens, density) },
     // In-grid cards carry the unit in their title chip, which occupies exactly
     // the top-left corner an axis name would be drawn into.
-    yAxis: { type: 'value', ...(density === 'full' ? { name: yName, nameGap: 10, nameTextStyle: { color: tokens.muted, fontSize: 10, align: 'left' as const } } : {}), ...axes(tokens, density) },
+    yAxis: { type: 'value', ...(density === 'full' ? { name: yName, nameGap: 10, nameTextStyle: { color: tokens.muted, fontSize: 11, align: 'left' as const } } : {}), ...axes(tokens, density) },
     dataZoom: [{ type: 'inside', xAxisIndex: 0, filterMode: 'none', zoomOnMouseWheel: 'ctrl', moveOnMouseWheel: true }],
     series,
   };
@@ -328,14 +328,14 @@ export function heatmapOption(result: ResultPayload, tokens: ChartTokens, plane:
     animationDuration: 180,
     backgroundColor: tokens.background,
     textStyle: { color: tokens.foreground, fontFamily: 'Inter, system-ui, sans-serif' },
-    tooltip: { trigger: 'item', confine: true, backgroundColor: tokens.background, borderColor: tokens.spine ?? tokens.grid, textStyle: { color: tokens.foreground, fontSize: 10 }, formatter: (params) => {
+    tooltip: { trigger: 'item', confine: true, backgroundColor: tokens.background, borderColor: tokens.spine ?? tokens.grid, textStyle: { color: tokens.foreground, fontSize: 11 }, formatter: (params) => {
       const [, , , level, frequencyValue, angleValue] = (Array.isArray(params) ? params[0] : params).value as number[];
       return `${heatmapFrequencyLabel(frequencyValue)}Hz · ${Number(angleValue.toFixed(2))}° · ${level.toFixed(1)} dB`;
     } },
     grid: inset,
-    xAxis: { type: 'category', data: grid.frequencies.map((frequency) => heatmapFrequencyLabel(frequency)), ...(density === 'full' ? { name: 'Frequency [Hz]', nameLocation: 'middle' as const, nameGap: 22, nameTextStyle: { color: tokens.muted, fontSize: 10 } } : {}), ...categoryAxis, axisLabel: { ...categoryAxis.axisLabel, interval: Math.max(0, grid.factor * 2 - 1) } },
-    yAxis: { type: 'category', data: grid.angles.map((angle) => String(Number(angle.toFixed(2)))), ...(density === 'full' ? { name: 'Angle [°]', nameGap: 10, nameTextStyle: { color: tokens.muted, fontSize: 10, align: 'left' as const } } : {}), ...categoryAxis, axisLabel: { ...categoryAxis.axisLabel, interval: Math.max(0, grid.factor * 2 - 1) } },
-    visualMap: { min: floor, max: 0, dimension: 2, seriesIndex: 0, right: 2, top: 'middle', itemWidth: density === 'compact' ? 6 : 8, itemHeight: MAP_RAMP[density], text: ['0', `${floor}`], textStyle: { color: tokens.muted, fontSize: density === 'compact' ? 7 : 8 }, inRange: { color: tokens.colormap } },
+    xAxis: { type: 'category', data: grid.frequencies.map((frequency) => heatmapFrequencyLabel(frequency)), ...(density === 'full' ? { name: 'Frequency [Hz]', nameLocation: 'middle' as const, nameGap: 22, nameTextStyle: { color: tokens.muted, fontSize: 11 } } : {}), ...categoryAxis, axisLabel: { ...categoryAxis.axisLabel, interval: Math.max(0, grid.factor * 2 - 1) } },
+    yAxis: { type: 'category', data: grid.angles.map((angle) => String(Number(angle.toFixed(2)))), ...(density === 'full' ? { name: 'Angle [°]', nameGap: 10, nameTextStyle: { color: tokens.muted, fontSize: 11, align: 'left' as const } } : {}), ...categoryAxis, axisLabel: { ...categoryAxis.axisLabel, interval: Math.max(0, grid.factor * 2 - 1) } },
+    visualMap: { min: floor, max: 0, dimension: 2, seriesIndex: 0, right: 2, top: 'middle', itemWidth: density === 'compact' ? 6 : 8, itemHeight: MAP_RAMP[density], text: ['0', `${floor}`], textStyle: { color: tokens.muted, fontSize: density === 'compact' ? 9 : 10 }, inRange: { color: tokens.colormap } },
     // Cartesian heatmaps do not chunk safely in ECharts: progressive mode can
     // stop after the first angle band and leave the rest of the map blank.
     series: [{ type: 'heatmap', progressive: 0, z: 1, data: cells, emphasis: { itemStyle: { borderColor: tokens.accent, borderWidth: 1.2, shadowBlur: 7, shadowColor: tokens.accent } } }, ...contourSeries] as EChartsOption['series'],
@@ -470,15 +470,23 @@ export interface CardMetrics {
  */
 export function useCardMetrics(target: React.RefObject<HTMLElement | null>): CardMetrics {
   const [metrics, setMetrics] = useState<CardMetrics>({ density: 'regular', wide: true });
-  useEffect(() => {
+  // Measured in a layout effect, before the browser paints, because the seed
+  // state above is a guess: on a six-up grid every card is compact and narrow,
+  // so waiting for the ResizeObserver's first callback painted one frame of
+  // full-length titles ("Directivity index") and regular-density axes on cards
+  // that cannot hold them, which read as a flicker on every mount.
+  useLayoutEffect(() => {
     const element = target.current;
-    if (!element || typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver(([entry]) => {
-      const { width, height } = entry.contentRect;
+    if (!element) return;
+    const apply = (width: number, height: number) => {
       if (!width || !height) return;
       const next: CardMetrics = { density: chartDensity(width, height), wide: width >= 300 };
       setMetrics((previous) => previous.density === next.density && previous.wide === next.wide ? previous : next);
-    });
+    };
+    const { width, height } = element.getBoundingClientRect();
+    apply(width, height);
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(([entry]) => apply(entry.contentRect.width, entry.contentRect.height));
     observer.observe(element);
     return () => observer.disconnect();
   }, [target]);
@@ -584,6 +592,7 @@ export function ResultsPanel() {
   const [exportStatus, setExportStatus] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
+  const preferencesAnchor = useRef<HTMLButtonElement | null>(null);
   const [beamRerunSubmitting, setBeamRerunSubmitting] = useState(false);
 
   // Jobs arrive newest-first, so the first finished one is the latest solve.
@@ -692,8 +701,8 @@ export function ResultsPanel() {
   };
 
   if (!selection.primary && !jobs.some((job) => job.has_results)) return <div className="results-panel panel-scroll">
-    <div className="results-toolbar"><span className="spacer"/><button className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Results preferences" aria-expanded={preferencesOpen} title="Results & export preferences" onClick={() => setPreferencesOpen((value) => !value)}><Icon name="settings"/></button></div>
-    {preferencesOpen && <ResultsPreferencesSurface popover onClose={() => setPreferencesOpen(false)}/>}<div className="coming-soon" role="status"><b>NO RESULTS</b><span>Run a solve to populate result charts.</span></div>
+    <div className="results-toolbar"><span className="spacer"/><button ref={preferencesAnchor} className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Results preferences" aria-expanded={preferencesOpen} title="Results & export preferences" onClick={() => setPreferencesOpen((value) => !value)}><Icon name="settings"/></button></div>
+    {preferencesOpen && <ResultsPreferencesSurface popover anchorRef={preferencesAnchor} onClose={() => setPreferencesOpen(false)}/>}<div className="empty-state" role="status"><b>No results yet</b><span>Solve the current design, or select a finished run in the Jobs rail, to fill these charts.</span></div>
   </div>;
 
   return <div
@@ -714,13 +723,13 @@ export function ResultsPanel() {
       <label className="result-count-control" title="Number of chart panels">Charts<select aria-label="Results panel count" value={RESULT_PANEL_COUNTS.includes(preferences.chartTypes.length as never) ? preferences.chartTypes.length : ''} onChange={(event) => preferencesStore.setChartCount(Number(event.target.value))}><option value="" disabled>{preferences.chartTypes.length}</option>{RESULT_PANEL_COUNTS.map((count) => <option key={count} value={count}>{count}</option>)}</select></label>
       <button className="toolbar-icon" disabled={preferences.chartTypes.length >= MAX_RESULT_PANELS} aria-label="Add chart" title="Add chart panel" onClick={() => preferencesStore.addChart()}><Icon name="plus"/></button>
       <button disabled={exporting || !primary || !preferences.exportFormats.length} title="Export the current result using the formats enabled in Results preferences" onClick={() => void exportSelected()}>{exporting ? 'Exporting…' : `Export (${preferences.exportFormats.length})`}</button>
-      <button className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Results preferences" aria-expanded={preferencesOpen} title="Results & export preferences" onClick={() => setPreferencesOpen((value) => !value)}><Icon name="settings"/></button>
+      <button ref={preferencesAnchor} className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Results preferences" aria-expanded={preferencesOpen} title="Results & export preferences" onClick={() => setPreferencesOpen((value) => !value)}><Icon name="settings"/></button>
     </div>
-    {preferencesOpen && <ResultsPreferencesSurface popover onClose={() => setPreferencesOpen(false)}/>}
-    {(error || exportStatus) && <div className={error ? 'job-error' : ''} role="status" style={{ margin: 7, color: error ? undefined : 'var(--fg2)', fontSize: 9 }}>{error ?? exportStatus}{error && <button type="button" onClick={() => { setFetchError(null); setFetchAttempt((value) => value + 1); }}>Retry</button>}</div>}
+    {preferencesOpen && <ResultsPreferencesSurface popover anchorRef={preferencesAnchor} onClose={() => setPreferencesOpen(false)}/>}
+    {(error || exportStatus) && <div className={error ? 'job-error' : ''} role="status" style={{ margin: 7, color: error ? undefined : 'var(--fg2)', fontSize: 'var(--text-micro)' }}>{error ?? exportStatus}{error && <button type="button" onClick={() => { setFetchError(null); setFetchAttempt((value) => value + 1); }}>Retry</button>}</div>}
     {showingPrevious && <div className="job-warning" role="status" style={{ margin: 7 }}>Showing previous results while fetching the selected run…</div>}
     {!shown
-      ? <div className="coming-soon"><b>{error ? 'RESULTS UNAVAILABLE' : 'LOADING RESULTS'}</b><span>{error ? 'The selected run could not be loaded.' : 'Fetching selected job data…'}</span></div>
+      ? <div className="empty-state" role="status"><b>{error ? 'Results unavailable' : 'Loading results'}</b><span>{error ? 'Retry above, or select another run in the Jobs rail.' : 'Fetching the selected run…'}</span></div>
       : <ResultsChartGrid chartTypes={preferences.chartTypes} result={shown} named={named} tokens={tokens} beamShapeAction={beamShapeAction}/>}
   </div>;
 }

@@ -1,7 +1,19 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type RefObject } from 'react';
 import { EXPORT_FORMATS, MAP_REFERENCES, RESULT_PANEL_COUNTS, jobBaseName, preferencesStore, usePreferences, type JobSort, type MapReference } from './preferences';
 import { SMOOTHING_MODES, type SmoothingMode } from '../results/smoothing';
 import { Icon } from '../shell/icons';
+import { AnchoredPanel } from './AnchoredPanel';
+
+interface PreferencesSurfaceProps {
+  expanded?: boolean;
+  popover?: boolean;
+  onClose?: () => void;
+  /** The gear button the panel hangs off. */
+  anchorRef?: RefObject<HTMLElement | null>;
+}
+
+/** Without an anchor the panel still opens, pinned to the top-left corner. */
+const NO_ANCHOR: RefObject<HTMLElement | null> = { current: null };
 
 function useThemes(): string[] {
   const [themes, setThemes] = useState(['hornlab']);
@@ -57,13 +69,13 @@ function ResultsPreferencesContent() {
   </section>;
 }
 
-export function ResultsPreferencesSurface({ expanded = false, popover = false, onClose }: { expanded?: boolean; popover?: boolean; onClose?: () => void }) {
-  if (popover) return <section className="panel-preferences-popover results-preferences-popover" aria-label="Results and export preferences">
+export function ResultsPreferencesSurface({ expanded = false, popover = false, onClose, anchorRef }: PreferencesSurfaceProps) {
+  if (popover) return <AnchoredPanel anchorRef={anchorRef ?? NO_ANCHOR} onClose={onClose} className="results-preferences-popover" label="Results and export preferences">
     <header><b>Results & export preferences</b><button type="button" aria-label="Close results preferences" onClick={onClose}><Icon name="close"/></button></header>
     <div className="panel-preferences-scroll"><ResultsPreferencesContent/></div>
-  </section>;
+  </AnchoredPanel>;
   return <details open={expanded || undefined} className="preferences-surface">
-    <summary style={{ color: 'var(--fg2)', cursor: 'pointer', fontSize: 10 }}>Results & export preferences</summary>
+    <summary style={{ color: 'var(--fg2)', cursor: 'pointer', fontSize: 'var(--text-micro)' }}>Results & export preferences</summary>
     <ResultsPreferencesContent/>
   </details>;
 }
@@ -86,13 +98,13 @@ function JobsPreferencesContent() {
   </section>;
 }
 
-export function JobsPreferencesSurface({ expanded = false, popover = false, onClose }: { expanded?: boolean; popover?: boolean; onClose?: () => void }) {
-  if (popover) return <section className="panel-preferences-popover jobs-preferences-popover" aria-label="Job preferences">
+export function JobsPreferencesSurface({ expanded = false, popover = false, onClose, anchorRef }: PreferencesSurfaceProps) {
+  if (popover) return <AnchoredPanel anchorRef={anchorRef ?? NO_ANCHOR} onClose={onClose} className="jobs-preferences-popover" label="Job preferences">
     <header><b>Job preferences</b><button type="button" aria-label="Close job preferences" onClick={onClose}><Icon name="close"/></button></header>
     <div className="panel-preferences-scroll"><JobsPreferencesContent/></div>
-  </section>;
+  </AnchoredPanel>;
   return <details open={expanded || undefined} className="preferences-surface">
-    <summary style={{ color: 'var(--fg2)', cursor: 'pointer', fontSize: 10 }}>Job preferences</summary>
+    <summary style={{ color: 'var(--fg2)', cursor: 'pointer', fontSize: 'var(--text-micro)' }}>Job preferences</summary>
     <JobsPreferencesContent/>
   </details>;
 }

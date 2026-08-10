@@ -94,7 +94,7 @@ describe('atomic results display transitions', () => {
     expect(host.textContent).toContain('Showing previous results');
 
     await act(async () => { pending.get('broken')!(response([], false)); });
-    expect(host.textContent).toContain('RESULTS UNAVAILABLE');
+    expect(host.textContent).toContain('Results unavailable');
     expect(host.textContent).toContain('result vanished');
     expect(host.querySelector('.results-panel')?.hasAttribute('data-result-primary')).toBe(false);
     expect(host.querySelector('.result-grid')).toBeNull();
@@ -102,9 +102,9 @@ describe('atomic results display transitions', () => {
     // The old failure is keyed to `broken`; it must not flash under a new
     // selection during the render before that selection's effect clears it.
     act(() => compareSelection.setPrimary('new'));
-    expect(host.textContent).not.toContain('RESULTS UNAVAILABLE');
+    expect(host.textContent).not.toContain('Results unavailable');
     expect(host.textContent).not.toContain('result vanished');
-    expect(host.textContent).toContain('LOADING RESULTS');
+    expect(host.textContent).toContain('Loading results');
     // Settle the module-level request dedupe before the next test.
     await act(async () => { pending.get('new')!(response([200])); });
   });
@@ -114,7 +114,7 @@ describe('atomic results display transitions', () => {
     await act(async () => { root.render(<ResultsPanel/>); });
     await act(async () => { pending.get('broken')!(response([], false)); });
 
-    expect(host.textContent).toContain('RESULTS UNAVAILABLE');
+    expect(host.textContent).toContain('Results unavailable');
     const retry = [...host.querySelectorAll('button')].find((button) => button.textContent === 'Retry');
     expect(retry).toBeDefined();
 
@@ -123,7 +123,7 @@ describe('atomic results display transitions', () => {
     await act(async () => { pending.get('broken')!(response([315])); });
 
     expect(compareSelection.getSnapshot()).toMatchObject({ primary: 'broken', following: false });
-    expect(host.textContent).not.toContain('RESULTS UNAVAILABLE');
+    expect(host.textContent).not.toContain('Results unavailable');
     expect(host.querySelector('.results-panel')?.getAttribute('data-result-primary')).toBe('broken');
   });
 
@@ -133,7 +133,7 @@ describe('atomic results display transitions', () => {
     await act(async () => { root.render(<ResultsPanel/>); });
     await act(async () => { pending.get('broken')!(response([], false)); });
 
-    expect(host.textContent).toContain('RESULTS UNAVAILABLE');
+    expect(host.textContent).toContain('Results unavailable');
     const retry = [...host.querySelectorAll('button')].find((button) => button.textContent === 'Retry');
     expect(retry).toBeDefined();
 
@@ -142,7 +142,7 @@ describe('atomic results display transitions', () => {
     await act(async () => { pending.get('broken')!(response([400])); });
 
     expect(compareSelection.getSnapshot()).toMatchObject({ primary: 'broken', following: true });
-    expect(host.textContent).not.toContain('RESULTS UNAVAILABLE');
+    expect(host.textContent).not.toContain('Results unavailable');
     expect(host.querySelector('.results-panel')?.getAttribute('data-result-primary')).toBe('broken');
   });
 

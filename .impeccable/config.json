@@ -1,0 +1,23 @@
+{
+  "detector": {
+    "designSystem": { "enabled": true },
+    "ignoreRules": [
+      {
+        "rule": "ai-color-palette",
+        "reason": "Cyan-on-dark is this product's incumbent identity, not a default reached for. It is recorded as a brand commitment in PRODUCT.md and specified in DESIGN.md as The Indicator Rule: the accent is legal on exactly four things (primary action, current selection, value being edited, live state). It measures 10.15-11.73:1 against every surface in the dark theme, and the light theme replaces it with a warm-paper palette rather than inverting. Re-examine this waiver if the accent ever starts appearing on decoration."
+      },
+      {
+        "rule": "dark-glow",
+        "reason": "The three flagged glows are 5-6px status lamps -- preview live, connection state, unsaved changes -- where a soft halo is the literal referent, and DESIGN.md documents the state-badge family that owns them. The one glow that WAS decoration, a 16px saturated bloom under the Solve button, was removed rather than waived."
+      },
+      {
+        "rule": "wide-tracking",
+        "reason": "Flagged on .result-title, which is uppercase monospace. Tracking is correct for uppercase and the value was still brought down from .07em to .03em in the same pass."
+      },
+      {
+        "rule": "text-occlusion",
+        "reason": "Verified false positive. The detector compares bounding rects without honoring scroll clipping; the jobs rail is overflow:auto with clientHeight 626 against scrollHeight 1189, so the reported cards are below the fold rather than overlapping the status rail. Confirmed in the live DOM."
+      }
+    ]
+  }
+}

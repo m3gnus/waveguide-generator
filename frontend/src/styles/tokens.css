@@ -54,7 +54,10 @@
   --solve-kbd: rgba(0, 0, 0, .16);
   --solve-kbd-bd: rgba(0, 0, 0, .2);
   --solve-kbd-fg: #0a3540;
-  --solve-sh: 0 1px 0 rgba(255, 255, 255, .4) inset, 0 5px 16px -8px rgba(var(--acc-rgb), .6);
+  /* Lift, not neon. The button keeps a real drop shadow with an offset and a
+     tint of its own hue; the 16px saturated bloom it used to cast is the
+     generic glowing-CTA tell and is not what a machined control does. */
+  --solve-sh: 0 1px 0 rgba(255, 255, 255, .34) inset, 0 4px 10px -6px rgba(0, 0, 0, .7), 0 2px 8px -6px rgba(var(--acc-rgb), .32);
   --track: rgba(255, 255, 255, .045);
   --track-fill: linear-gradient(90deg, rgba(var(--acc-rgb), .42), rgba(var(--acc-rgb), .85));
   --thumb: #dff6fb;
@@ -143,10 +146,16 @@
   --space-3: 8px;
   --space-4: 12px;
   --space-5: 16px;
-  --type-1: 10px;
-  --type-2: 11px;
-  --type-3: 12px;
-  --type-4: 13px;
+  /* Type scale. Four ranks, and 11px is the floor: no functional text in the
+     interface is set smaller, because the readouts a user is here to read must
+     not be smaller than the labels around them, and this audience often works
+     on a non-Retina external monitor. Below 12px the ranks separate by family
+     and case — mono and uppercase tracking — rather than by fractional pixels,
+     which never read as hierarchy anyway. */
+  --text-micro: 11px;  /* units, timings, run meta, uppercase micro-labels, table cells */
+  --text-base: 12px;   /* the workhorse: parameter names, values, controls, menu items */
+  --text-title: 13px;  /* the design under edit, dialog subheads */
+  --text-head: 15px;   /* dialog headings */
   --ui: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, "DejaVu Sans Mono", Consolas, monospace;
 }
@@ -156,7 +165,11 @@
   --acc-rgb: 0, 105, 165;
   --blue-rgb: 56, 93, 184;
   --violet-rgb: 124, 52, 167;
-  --amber-rgb: 180, 98, 32;
+  /* Amber is a state color -- the unsaved dot, the STALE preview badge,
+     geometry warnings -- so it is text a user must not miss. At 180,98,32 it
+     measured 4.08:1 on the canvas and 3.66:1 on the status rail, below AA.
+     152,80,21 holds 5.50:1 and 4.93:1 on the same two grounds. */
+  --amber-rgb: 152, 80, 21;
   --green-rgb: 39, 117, 57;
   --red-rgb: 168, 54, 48;
   --acc-2: #007eb7;
@@ -196,12 +209,17 @@
   --cmd-bd-h: #bdb5a7;
   --kbd-bg: rgba(30, 34, 48, .05);
   --kbd-bd: #cfc8bc;
-  --solve-grad: linear-gradient(180deg, #0a86cb, #00639e);
+  /* The primary action of the application, so its label carries the strictest
+     contrast requirement in the interface -- and a gradient is only as legible
+     as its lightest stop. White on #0a86cb was 3.97:1; #0b6fa8 holds 5.45:1.
+     The shortcut hint sits on a darkened ground rather than a lightened one for
+     the same reason: white over rgba(255,255,255,.18) composited to 3.09:1. */
+  --solve-grad: linear-gradient(180deg, #0b6fa8, #00537f);
   --solve-fg: #fff;
-  --solve-kbd: rgba(255, 255, 255, .18);
-  --solve-kbd-bd: rgba(255, 255, 255, .28);
-  --solve-kbd-fg: #dcefff;
-  --solve-sh: 0 1px 0 rgba(255, 255, 255, .28) inset, 0 5px 14px -8px rgba(var(--acc-rgb), .7);
+  --solve-kbd: rgba(0, 0, 0, .2);
+  --solve-kbd-bd: rgba(0, 0, 0, .26);
+  --solve-kbd-fg: #fff;
+  --solve-sh: 0 1px 0 rgba(255, 255, 255, .24) inset, 0 4px 10px -6px rgba(84, 70, 44, .5), 0 2px 8px -6px rgba(var(--acc-rgb), .3);
   --track: rgba(30, 34, 48, .10);
   --track-fill: linear-gradient(90deg, rgba(var(--acc-rgb), .45), rgba(var(--acc-rgb), .9));
   --thumb: #fff;

@@ -1,4 +1,5 @@
 import type { ConnectionState } from '../api/previewSocket';
+import type { DecodedFrame } from '../api/frame';
 import type { DesignDocument } from '../stores/design';
 
 export interface PreviewBadge {
@@ -83,4 +84,29 @@ export function viewportSubtitle(design: DesignDocument): string {
   return [design.formula, mouthClause(design), symmetryClause(design.quadrants)]
     .filter((clause): clause is string => clause !== null)
     .join(' · ');
+}
+
+/**
+ * Vertex and triangle totals for the frame currently on screen.
+ *
+ * Read from the length of the decoded typed arrays rather than by walking them,
+ * so this stays O(1) per surface and is safe to call on every frame while a
+ * parameter is being scrubbed.
+ *
+ * The status rail used to state "preview mesh metrics unavailable" as a literal,
+ * unconditional string. The metrics were never unavailable -- the frame the
+ * viewport is drawing carries them -- so the rail was reporting a fact about
+ * itself rather than about the geometry.
+ */
+export function previewMeshMetrics(frame: DecodedFrame | null): { vertices: number; triangles: number } | null {
+  const surfaces = frame?.header.surfaces;
+  if (!frame || !surfaces?.length) return null;
+  let vertices = 0;
+  let triangles = 0;
+  for (const surface of surfaces) {
+    vertices += (frame.sections[surface.positions]?.length ?? 0) / 3;
+    triangles += (frame.sections[surface.indices]?.length ?? 0) / 3;
+  }
+  if (!vertices && !triangles) return null;
+  return { vertices: Math.floor(vertices), triangles: Math.floor(triangles) };
 }

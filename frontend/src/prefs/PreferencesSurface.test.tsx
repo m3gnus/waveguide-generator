@@ -52,15 +52,35 @@ describe('preferences surfaces', () => {
     expect(host.querySelector<HTMLSelectElement>('[aria-label="Minimum rating filter"]')?.options).toHaveLength(6);
   });
 
+  // The gear popovers portal to <body>, so they are queried from the document
+  // rather than from the render host. See AnchoredPanel for why.
   it('renders both preference groups as closeable gear popovers', async () => {
     const close = vi.fn();
     await act(async () => { root.render(<ResultsPreferencesSurface popover onClose={close}/>); await Promise.resolve(); });
-    expect(host.querySelector('[aria-label="Results and export preferences"]')).not.toBeNull();
-    act(() => host.querySelector<HTMLButtonElement>('[aria-label="Close results preferences"]')!.click());
+    expect(document.body.querySelector('[aria-label="Results and export preferences"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="Results and export preferences"]')).toBeNull();
+    act(() => document.body.querySelector<HTMLButtonElement>('[aria-label="Close results preferences"]')!.click());
     expect(close).toHaveBeenCalledOnce();
     act(() => root.render(<JobsPreferencesSurface popover onClose={close}/>));
-    expect(host.querySelector('[aria-label="Job preferences"]')).not.toBeNull();
-    act(() => host.querySelector<HTMLButtonElement>('[aria-label="Close job preferences"]')!.click());
+    expect(document.body.querySelector('[aria-label="Job preferences"]')).not.toBeNull();
+    act(() => document.body.querySelector<HTMLButtonElement>('[aria-label="Close job preferences"]')!.click());
     expect(close).toHaveBeenCalledTimes(2);
+  });
+
+  it('closes a gear popover on Escape and on a press outside it', async () => {
+    const close = vi.fn();
+    await act(async () => { root.render(<ResultsPreferencesSurface popover onClose={close}/>); await Promise.resolve(); });
+    act(() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+    expect(close).toHaveBeenCalledOnce();
+    act(() => { document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); });
+    expect(close).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a press inside the popover from closing it', async () => {
+    const close = vi.fn();
+    await act(async () => { root.render(<ResultsPreferencesSurface popover onClose={close}/>); await Promise.resolve(); });
+    const panel = document.body.querySelector('[aria-label="Results and export preferences"]')!;
+    act(() => { panel.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); });
+    expect(close).not.toHaveBeenCalled();
   });
 });
