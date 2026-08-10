@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { compareSelection } from '../api/results';
 import { DesignAvailabilityNotice, RerunButton } from '../jobs/DesignAvailability';
@@ -156,7 +156,7 @@ function JobCard({ job, now, selected, run, onError, onRemove, onOpenExportSetti
  * the history read `horn_v09 … horn_v14`. The name belongs next to the runs it
  * names, showing the label it will actually store.
  */
-function RunNameField({ jobs }: { jobs: readonly JobItem[] }) {
+function RunNameField({ jobs, preferencesTrigger }: { jobs: readonly JobItem[]; preferencesTrigger?: ReactNode }) {
   const preferences = usePreferences();
   // Keyed on the joined labels: the jobs array is replaced on every progress
   // event, and only a name appearing or disappearing can change the answer.
@@ -187,6 +187,7 @@ function RunNameField({ jobs }: { jobs: readonly JobItem[] }) {
       onBlur={(event) => commit(event.target.value)}
       onKeyDown={(event) => { if (event.key === 'Enter') { commit(event.currentTarget.value); event.currentTarget.blur(); } }}
     /></label>
+    {preferencesTrigger}
     <span className="run-name-preview" title="The name the next solve is stored under">next · <b>{jobBaseName(preferences)}</b></span>
   </div>;
 }
@@ -208,16 +209,33 @@ export function JobsPanel() {
 
   const visibleJobs = useMemo(() => applyJobPreferences(snapshot.jobs, preferences.jobSort, preferences.minRating), [snapshot.jobs, preferences.jobSort, preferences.minRating]);
   const failedCount = visibleJobs.filter((job) => job.status === 'error').length;
+  const activeCount = visibleJobs.filter((job) => job.status === 'running' || job.status === 'queued').length;
+  const hiddenByFilter = snapshot.jobs.length - visibleJobs.length;
+  const notConnected = snapshot.connection !== 'connected';
   const remove = (job: JobItem) => {
     if (!window.confirm(`Remove “${name(job)}” and its saved results?`)) return;
     void jobsSocket.deleteJob(job.id).catch((error) => coordinator.reportError(String(error)));
   };
 
   return <div className="jobs-panel panel-scroll">
-    <div className="panel-meta"><span className="pill">{visibleJobs.filter((job) => job.status === 'running' || job.status === 'queued').length} active</span><span>{snapshot.connection} · {visibleJobs.length}/{snapshot.jobs.length} shown</span><span className="spacer"/>{failedCount > 0 && <button className="panel-text-action panel-text-action--danger" onClick={() => void jobsSocket.clearFailed().catch((error) => coordinator.reportError(String(error)))}>Clear failed</button>}<button ref={preferencesAnchor} className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Job preferences" aria-expanded={preferencesOpen} title="Job preferences" onClick={() => { setExportPreferencesOpen(false); setPreferencesOpen((value) => !value); }}><Icon name="settings"/></button></div>
+    {/* Only when there is something to report. This rail used to carry a
+        permanent "0 active · connected · 31/31 shown" strip: a zero, a state
+        that is almost always "connected", and a ratio that is almost always
+        n/n — three readouts telling the user nothing, in the densest column of
+        the application. What is left is conditional and every part of it is
+        news: runs in flight, the jobs socket when it is NOT connected, the
+        count only while the rating filter is actually hiding runs, and Clear
+        failed only when there is something to clear. */}
+    {(notConnected || hiddenByFilter > 0 || activeCount > 0 || failedCount > 0) && <div className="panel-meta">
+      {activeCount > 0 && <span className="pill accent">{activeCount} running</span>}
+      {notConnected && <span className="panel-meta-warn">jobs {snapshot.connection}</span>}
+      {hiddenByFilter > 0 && <span title="Lower the minimum rating in Job preferences to show these.">{hiddenByFilter} hidden by filter</span>}
+      <span className="spacer"/>
+      {failedCount > 0 && <button className="panel-text-action panel-text-action--danger" onClick={() => void jobsSocket.clearFailed().catch((error) => coordinator.reportError(String(error)))}>Clear failed</button>}
+    </div>}
     {preferencesOpen && <JobsPreferencesSurface popover anchorRef={preferencesAnchor} onClose={() => setPreferencesOpen(false)}/>}
     {exportPreferencesOpen && <ResultsPreferencesSurface popover anchorRef={preferencesAnchor} onClose={() => setExportPreferencesOpen(false)}/>}
-    <RunNameField jobs={snapshot.jobs}/>
+    <RunNameField jobs={snapshot.jobs} preferencesTrigger={<button ref={preferencesAnchor} className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Job preferences" aria-expanded={preferencesOpen} title="Job preferences" onClick={() => { setExportPreferencesOpen(false); setPreferencesOpen((value) => !value); }}><Icon name="settings"/></button>}/>
     {(coordinator.actionError || snapshot.error) && <div className="job-error" role="alert" style={{ margin: 7 }}>{coordinator.actionError ?? snapshot.error}</div>}
     {snapshot.jobs.length === 0 && snapshot.connection === 'connected' && <div className="empty-state"><b>No runs yet</b><span>Solve the current design to start one. Every run is kept here with its results, so you can compare and re-run it later.</span></div>}
     {snapshot.jobs.length > 0 && visibleJobs.length === 0 && <div className="empty-state"><b>No runs match the filter</b><span>Lower the minimum rating in Job preferences to show more.</span></div>}

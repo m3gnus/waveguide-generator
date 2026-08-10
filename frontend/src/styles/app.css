@@ -163,7 +163,8 @@ kbd { padding: 1.5px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 
 /* A toolbar, not a row of content: it holds the panel's counts and its gear
    button, so it stays put while the list under it scrolls. The parameter rail's
    own search bar is sticky for the same reason. */
-.panel-meta { position: sticky; top: 0; z-index: 6; display: flex; align-items: center; gap: 7px; height: 27px; padding: 0 9px; border-bottom: 1px solid var(--hair-soft); background: var(--surface-panel); color: var(--fg3); font: var(--text-micro) var(--mono); }
+.panel-meta { display: flex; align-items: center; gap: 7px; min-height: 27px; padding: 0 9px; border-bottom: 1px solid var(--hair-soft); background: var(--surface-panel); color: var(--fg3); font: var(--text-micro) var(--mono); }
+.panel-meta-warn { color: var(--amber); }
 .pill { padding: 2px 5px; border: 1px solid var(--hair); border-radius: 3px; background: var(--ov2); color: var(--fg2); font: var(--text-micro) var(--mono); letter-spacing: .04em; }
 .pill.accent { border-color: rgba(var(--acc-rgb), .28); background: rgba(var(--acc-rgb), .1); color: var(--acc); }
 .panel-text-action { min-height: 26px; padding-inline: 7px; border-radius: var(--r3); background: transparent; color: var(--fg2); font-size: var(--text-micro); }
@@ -500,7 +501,13 @@ kbd { padding: 1.5px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 
    tinted ground already says "warning", and the 2px side rule is the same
    device the run cards use for run state, where it actually carries meaning. */
 .job-warning { margin: 3px 0; padding: 5px 7px; border: 1px solid rgba(var(--amber-rgb), .38); border-radius: var(--r3); background: rgba(var(--amber-rgb), .09); color: var(--fg2); font-size: var(--text-micro); line-height: 1.4; }
-.run-name-field { display: grid; grid-template-columns: minmax(0, 1fr); gap: 3px; padding: 4px 7px 7px; border-bottom: 1px solid var(--hair); }
+/* The rail's toolbar, now that the counts strip above it is conditional: it
+   holds the run name and the gear, so it is what has to stay put while the
+   list scrolls — the gear is the anchor its preferences panel is positioned
+   against, and an anchor that scrolls away takes the panel with it. */
+.run-name-field { position: sticky; top: 0; z-index: 6; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 3px 7px; padding: 4px 7px 7px; border-bottom: 1px solid var(--hair); background: var(--surface-panel); }
+.run-name-field > .run-name-preview { grid-column: 1 / -1; }
+.run-name-field > .panel-preferences-trigger { margin-bottom: 2px; }
 .run-name-field .ui-field { margin: 0; }
 .run-name-preview { overflow: hidden; color: var(--fg4); font: var(--text-micro) var(--mono); text-overflow: ellipsis; white-space: nowrap; }
 .run-name-preview b { color: var(--acc); font-weight: 500; }
