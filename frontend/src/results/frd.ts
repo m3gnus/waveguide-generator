@@ -16,11 +16,12 @@ const COMMENT = '*';
 // locale, so tab is the one separator both tools read for certain.
 const DELIMITER = '\t';
 
-// Per column, matching what REW emits. Frequency needs the extra digits: a log
+// Per column, matching both REW's own export and the Fusion addin's proven
+// VituixCAD writer (freq .6f, spl .4f, phase .4f). Frequency needs the digits: a log
 // sweep puts neighbouring low-frequency points well inside 0.001 Hz of each
 // other, and rounding them to three places would collide two rows into one.
 const FREQUENCY_PRECISION = 6;
-const LEVEL_PRECISION = 3;
+const LEVEL_PRECISION = 4;
 const PHASE_PRECISION = 4;
 const VALUE_PRECISION = LEVEL_PRECISION;
 
@@ -128,33 +129,22 @@ function valuesAtAngle(
   });
 }
 
-function vacsCoordinate(plane: PolarPlane, signedAngle: number): { phi: number; theta: number } {
-  // A negative angle is the opposite meridian, not a negative one: phi is a
-  // rotation about the forward axis and stays in [0,360). Vertical negative is
-  // therefore 270, not -90 -- which would also spell a four-character Phi field
-  // and break the fixed-width three-digit [mmm] the filename pattern expects.
-  const positivePhi = plane === 'horizontal' ? 0 : 90;
-  const negativePhi = plane === 'horizontal' ? 180 : 270;
-  return {
-    phi: signedAngle < 0 ? negativePhi : positivePhi,
-    theta: Math.abs(signedAngle),
-  };
+// The convention the Fusion addin already uses successfully with VituixCAD --
+// see hornlab-fusion-addin scripts/solve_fusion_wg_metal.py, _write_frd and
+// _VITUIXCAD_PLANE_DIRS. Plane subfolders exist so the last token of the
+// filename is the angle, which is what VituixCAD's measurement parser keys on.
+//
+// This is NOT the `Phi[mmm]Theta[ppp]` spelling: that is VituixCAD's VACS
+// balloon preset for full-sphere data, a different importer.
+const PLANE_DIRS: Record<PolarPlane, string> = { horizontal: 'hor', vertical: 'ver' };
+
+/** `%g`-style: 30, -30, 7.5 -- no padding, no forced decimals. */
+function angleLabel(angle: number): string {
+  return String(Number(angle.toFixed(4)));
 }
 
-function vacsDegrees(value: number): string {
-  const rounded = Math.round(value);
-  const sign = rounded < 0 ? '-' : '';
-  return `${sign}${String(Math.abs(rounded)).padStart(3, '0')}`;
-}
-
-/**
- * VituixCAD's VACS 3D preset parses `NAME Phi[mmm]Theta[ppp].frd`.
- * Keeping the complete convention here makes a future switch to Generic 2D
- * naming (or a corrected spherical mapping) a one-function change.
- */
 function polarFilename(baseName: string, plane: PolarPlane, angle: number): string {
-  const { phi, theta } = vacsCoordinate(plane, angle);
-  return `${baseName} Phi${vacsDegrees(phi)}Theta${vacsDegrees(theta)}.frd`;
+  return `${PLANE_DIRS[plane]}/${baseName} ${angleLabel(angle)}.frd`;
 }
 
 /** Build one honest, magnitude-only FRD file for every measured plane/angle. */

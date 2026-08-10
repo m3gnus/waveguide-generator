@@ -83,14 +83,14 @@ describe('FRD builders', () => {
     });
   });
 
-  it('uses the VACS spherical filename convention for both signed planes', () => {
+  it('names polar files the way the Fusion addin already does for VituixCAD', () => {
     expect(buildPolarFrdSet(fixture, preferences()).map(({ filename }) => filename)).toEqual([
-      'test_horn_7 Phi180Theta030.frd',
-      'test_horn_7 Phi000Theta000.frd',
-      'test_horn_7 Phi000Theta030.frd',
-      'test_horn_7 Phi270Theta015.frd',
-      'test_horn_7 Phi090Theta000.frd',
-      'test_horn_7 Phi090Theta015.frd',
+      'hor/test_horn_7 -30.frd',
+      'hor/test_horn_7 0.frd',
+      'hor/test_horn_7 30.frd',
+      'ver/test_horn_7 -15.frd',
+      'ver/test_horn_7 0.frd',
+      'ver/test_horn_7 15.frd',
     ]);
   });
 
@@ -106,7 +106,7 @@ describe('FRD builders', () => {
     };
 
     const text = buildOnAxisFrd(decimalFixture, preferences());
-    expect(text).toContain('100.500000\t90.250\t-12.7500');
+    expect(text).toContain('100.500000\t90.2500\t-12.7500');
     expect(text).not.toContain('100,500');
     expect(text).not.toMatch(/\d[eE][+-]?\d/);
     expect(localeSpy).not.toHaveBeenCalled();
@@ -137,10 +137,10 @@ describe('FRD builders', () => {
     };
 
     expect(dataRows(buildOnAxisFrd(incomplete, preferences()))).toEqual([
-      ['100.000000', '90.000', '-10.0000'],
+      ['100.000000', '90.0000', '-10.0000'],
     ]);
     expect(dataRows(buildPolarFrdSet(incomplete, preferences())[0].text)).toEqual([
-      ['100.000000', '0.000'],
+      ['100.000000', '0.0000'],
     ]);
   });
 });
