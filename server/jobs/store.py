@@ -181,7 +181,7 @@ class JobStore:
 
     @classmethod
     def for_data_dir(cls, data_dir: str | Path, **kwargs: Any) -> "JobStore":
-        """Place the DB in WG2's namespaced ``db/`` directory."""
+        """Place the DB in WG's namespaced ``db/`` directory."""
 
         paths = data_paths(data_dir)
         return cls(

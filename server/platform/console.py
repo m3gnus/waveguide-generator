@@ -37,7 +37,7 @@ import threading
 from collections.abc import Callable
 
 
-log = logging.getLogger("wg2.console")
+log = logging.getLogger("wg.console")
 
 STD_INPUT_HANDLE = -10
 ENABLE_QUICK_EDIT_MODE = 0x0040

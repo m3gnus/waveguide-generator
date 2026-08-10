@@ -19,7 +19,7 @@ import logging
 import time
 
 
-log = logging.getLogger("wg2.warmup")
+log = logging.getLogger("wg.warmup")
 
 #: How long shutdown waits for a warmup to finish before giving up on it.
 #:

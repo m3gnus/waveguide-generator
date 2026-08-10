@@ -1,7 +1,7 @@
 #!/bin/bash
-# Double-click in Finder to install or update Waveguide Generator v2.
+# Double-click in Finder to install or update Waveguide Generator.
 #
-# The counterpart of launchers/macos/launch-wg2.command, and the counterpart of
+# The counterpart of launchers/macos/launch-wg.command, and the counterpart of
 # Windows' installers\windows\install-and-update.bat. All it does is find the
 # real installer, keep a
 # transcript, and hold the window open long enough to read a failure -- a
@@ -15,7 +15,7 @@ cd "$REPO_DIR" || exit 1
 
 if [[ ! -f "scripts/install.sh" ]]; then
     echo
-    echo "ERROR: install-wg2.command must remain in installers/macos in the Waveguide Generator v2 checkout."
+    echo "ERROR: install-wg.command must remain in installers/macos in the Waveguide Generator checkout."
     echo "       Current folder: $REPO_DIR"
     echo
     read -r -p "Press Return to close..." _unused
@@ -33,7 +33,13 @@ for argument in "$@"; do
     fi
 done
 
-LOG_DIR="$HOME/Library/Application Support/WaveguideGenerator2/logs"
+DATA_DIR="$HOME/Library/Application Support/WaveguideGenerator"
+LEGACY_DATA_DIR="$HOME/Library/Application Support/WaveguideGenerator2"
+if [[ -d "$LEGACY_DATA_DIR" ]] && [[ ! -e "$DATA_DIR" ]]; then
+    LOG_DIR="$LEGACY_DATA_DIR/logs"
+else
+    LOG_DIR="$DATA_DIR/logs"
+fi
 mkdir -p "$LOG_DIR" 2>/dev/null || LOG_DIR="${TMPDIR:-/tmp}"
 LOG="$LOG_DIR/install.log"
 
@@ -53,8 +59,8 @@ if [[ "$RESULT" -eq 0 ]]; then
         exit 0
     fi
     echo
-    echo "Starting Waveguide Generator v2..."
-    exec "$REPO_DIR/launchers/macos/launch-wg2.command"
+    echo "Starting Waveguide Generator..."
+    exec "$REPO_DIR/launchers/macos/launch-wg.command"
 fi
 
 echo "==============================================================="

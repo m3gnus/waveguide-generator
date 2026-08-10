@@ -316,7 +316,7 @@ def test_warmup_solver_chatter_is_filtered_but_our_own_line_survives() -> None:
 
     assert not quiet.filter(record("bempp", WARMUP_THREAD_NAME))
     assert not quiet.filter(record("hornlab_bempp_bem.bie", WARMUP_THREAD_NAME))
-    assert quiet.filter(record("wg2.solver.warmup", WARMUP_THREAD_NAME))
+    assert quiet.filter(record("wg.solver.warmup", WARMUP_THREAD_NAME))
     # A real solve logs from a different thread and is never touched.
     assert quiet.filter(record("bempp", "asyncio_0"))
 

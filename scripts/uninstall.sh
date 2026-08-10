@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Waveguide Generator v2 -- uninstaller for macOS and Linux.
+# Waveguide Generator -- uninstaller for macOS and Linux.
 #
 # Public entries live in installers/macos and installers/linux. This shared
 # implementation is kept here so both platforms enforce the same contract.
@@ -18,7 +18,7 @@ ASSUME_YES=0
 
 usage() {
     cat <<'USAGE'
-Waveguide Generator v2 uninstaller.
+Waveguide Generator uninstaller.
 
   --data   also remove the application data directory: saved designs, job
            history, meshes and logs. This cannot be undone.
@@ -43,7 +43,7 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 
-# Ask v2 itself where its data lives rather than restating the rule here. The
+# Ask the application itself where its data lives rather than restating the rule here. The
 # answer depends on the platform and on WG2_DATA_DIR, and a second copy of that
 # logic would drift from server/platform/paths.py the first time either moved.
 resolve_data_dir() {
@@ -79,16 +79,16 @@ if [[ "$REMOVE_DATA" -eq 1 ]]; then
         if [[ "$resolve_result" -eq 2 ]]; then
             exit 1
         fi
-        say "WARNING: could not ask v2 where its data directory is -- no usable Python."
+        say "WARNING: could not ask the application where its data directory is -- no usable Python."
         say "         Remove it by hand. Unless WG2_DATA_DIR overrides it, it is:"
-        say "           macOS:  ~/Library/Application Support/WaveguideGenerator2"
-        say "           Linux:  \${XDG_DATA_HOME:-~/.local/share}/WaveguideGenerator2"
+        say "           macOS:  ~/Library/Application Support/WaveguideGenerator"
+        say "           Linux:  \${XDG_DATA_HOME:-~/.local/share}/WaveguideGenerator"
         say ""
     fi
 fi
 
 if [[ "${#TARGETS[@]}" -eq 0 ]]; then
-    say "Nothing to remove: Waveguide Generator v2 is not installed in $ROOT."
+    say "Nothing to remove: Waveguide Generator is not installed in $ROOT."
     exit 0
 fi
 
@@ -119,7 +119,7 @@ done
 
 say ""
 if [[ "$(uname -s)" == "Darwin" ]]; then
-    say "Done. Reinstall any time with: installers/macos/install-wg2.command"
+    say "Done. Reinstall any time with: installers/macos/install-wg.command"
 else
     say "Done. Reinstall any time with: bash installers/linux/install.sh"
 fi

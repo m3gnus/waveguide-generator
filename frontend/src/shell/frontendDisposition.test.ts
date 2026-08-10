@@ -38,9 +38,9 @@ describe('frontend result and status labels', () => {
   it('derives the solve range and count from the design', () => {
     const design = designForFamily('OSSE');
     design.simulation = { ...design.simulation, f1: 250, f2: 18_000, num_frequencies: 81 };
-    expect(solveSummary(design)).toBe('250 Hz – 18 kHz · 81 f · smoothing none');
+    expect(solveSummary(design)).toBe('next solve 250 Hz – 18 kHz · 81 f · smoothing none');
     expect(solveSummary(design, { frequencyMode: 'list', frequencyListText: '500, 1000 4000', smoothing: '1/6' }))
-      .toBe('500 Hz – 4 kHz · 3 f · smoothing 1/6');
+      .toBe('next solve 500 Hz – 4 kHz · 3 f · smoothing 1/6');
     expect(solveSummary(design, { frequencyMode: 'list', frequencyListText: 'invalid' }))
       .toBe('invalid frequency list · smoothing none');
   });

@@ -31,5 +31,5 @@ def test_rejects_every_checkout_ancestor(tmp_path: Path) -> None:
 
 def test_accepts_a_narrow_sibling_data_directory(tmp_path: Path) -> None:
     repo = tmp_path / "workspace" / "waveguide-generator-v2"
-    target = tmp_path / "application-data" / "WaveguideGenerator2"
+    target = tmp_path / "application-data" / "WaveguideGenerator"
     assert validate(target, repo, home=tmp_path / "home") == target.absolute()

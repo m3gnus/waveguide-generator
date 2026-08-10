@@ -106,10 +106,11 @@ describe('Viewport preview errors', () => {
     expect(refreshCalls).toHaveLength(1);
   });
 
-  it('presents server evaluation and request-to-paint as overlapping timings', () => {
+  it('presents geometry evaluation and on-screen time as overlapping timings', () => {
     const timing = [...host.querySelectorAll<HTMLElement>('.viewport-live > span')]
-      .find((element) => element.textContent?.startsWith('server '));
-    expect(timing?.textContent).toBe('server 1388.0 ms · request→paint — ms');
+      .find((element) => element.textContent?.startsWith('geometry '));
+    // 'request→paint' was developer telemetry sitting in a user-facing readout.
+    expect(timing?.textContent).toBe('geometry 1388.0 ms · on screen —');
     expect(timing?.textContent).not.toContain('+ client');
   });
 });

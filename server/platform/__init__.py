@@ -1,5 +1,5 @@
-"""Operating-system integration for Waveguide Generator v2."""
+"""Operating-system integration for Waveguide Generator."""
 
-from .paths import DataPaths, ensure_data_layout, resolve_data_dir
+from .paths import DataPaths, ensure_data_layout, migrate_legacy_data_dir, resolve_data_dir
 
-__all__ = ["DataPaths", "ensure_data_layout", "resolve_data_dir"]
+__all__ = ["DataPaths", "ensure_data_layout", "migrate_legacy_data_dir", "resolve_data_dir"]

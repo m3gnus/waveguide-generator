@@ -1,5 +1,5 @@
 ---
-name: Waveguide Generator v2
+name: Waveguide Generator
 description: A dark instrument console for parametric acoustic waveguide design and BEM simulation.
 colors:
   accent-cyan: "rgb(87, 216, 236)"
@@ -106,7 +106,7 @@ components:
     typography: "{typography.label}"
 ---
 
-# Design System: Waveguide Generator v2
+# Design System: Waveguide Generator
 
 ## Overview
 

@@ -1,4 +1,4 @@
-# Waveguide Generator v2
+# Waveguide Generator
 
 Interactive 3D design and BEM simulation for acoustic waveguides — a
 from-scratch rebuild of the Waveguide Generator application on a TypeScript/React
@@ -22,7 +22,7 @@ Then run the installer for your platform:
 
 | | |
 |---|---|
-| macOS | double-click `installers/macos/install-wg2.command` |
+| macOS | double-click `installers/macos/install-wg.command` |
 | Windows | double-click `installers\windows\install-and-update.bat` |
 | Linux | `bash installers/linux/install.sh` |
 
@@ -68,8 +68,8 @@ or close the window to stop the complete server process tree.
 | | |
 |---|---|
 | macOS | open `launchers/macos/Waveguide Generator.app` |
-| Windows | double-click `launchers\windows\launch-wg2.bat` |
-| Linux | `./launchers/linux/launch-wg2.sh` |
+| Windows | double-click `launchers\windows\launch-wg.bat` |
+| Linux | `./launchers/linux/launch-wg.sh` |
 
 The macOS app is deliberately unsigned. The first time, Control-click (or
 right-click) **Waveguide Generator.app**, choose **Open**, then confirm **Open**.
@@ -84,9 +84,9 @@ v1 environment.
 For the original plain-terminal behavior, append `--no-gui`:
 
 ```
-./launchers/macos/launch-wg2.command --no-gui
-./launchers/linux/launch-wg2.sh --no-gui
-launchers\windows\launch-wg2.bat --no-gui
+./launchers/macos/launch-wg.command --no-gui
+./launchers/linux/launch-wg.sh --no-gui
+launchers\windows\launch-wg.bat --no-gui
 ```
 
 The launcher uses the first available port from 3100 through 3109. Advanced

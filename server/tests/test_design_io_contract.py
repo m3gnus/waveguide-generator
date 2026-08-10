@@ -49,7 +49,7 @@ def test_save_bare_design_json_uses_cfg_and_v1_header() -> None:
     result = asyncio.run(save_design(design))
     assert result["suggestedFilename"] == "waveguide.cfg"
     assert result["text"].startswith("; Parameter config\n")
-    assert "Waveguide Generator v2 design-format: 2" in result["text"]
+    assert "Waveguide Generator design-format: 2" in result["text"]
 
 
 @pytest.mark.parametrize(

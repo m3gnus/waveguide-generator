@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Waveguide Generator v2 -- installer / updater for macOS and Linux.
+# Waveguide Generator -- installer / updater for macOS and Linux.
 #
 # Public entries:
-#   installers/macos/install-wg2.command
+#   installers/macos/install-wg.command
 #   bash installers/linux/install.sh
 #
 # Smaller than v1's installer by design: v2 needs no Node runtime and no
@@ -45,7 +45,7 @@ METAL_SUMMARY=""
 
 usage() {
     cat <<'USAGE'
-Waveguide Generator v2 installer.
+Waveguide Generator installer.
 
   --tag vX.Y.Z        check the repository out at a release tag first
   --version X.Y.Z     install the SPA for this version (default: shared/version.json)
@@ -85,7 +85,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 say "==============================================================="
-say " Waveguide Generator v2 -- install / update"
+say " Waveguide Generator -- install / update"
 say "==============================================================="
 
 # ── The folder has to be the project ──────────────────────────────────────────
@@ -94,8 +94,8 @@ MISSING=0
 for required in \
     launch/serve.py \
     launchers/statusapp/__main__.py \
-    launchers/macos/launch-wg2.command \
-    launchers/linux/launch-wg2.sh \
+    launchers/macos/launch-wg.command \
+    launchers/linux/launch-wg.sh \
     scripts/bootstrap.py \
     scripts/fetch_spa.py \
     shared/version.json \
@@ -108,7 +108,7 @@ do
     fi
 done
 if [[ "$MISSING" -ne 0 ]]; then
-    fail "This does not look like a complete Waveguide Generator v2 checkout.
+    fail "This does not look like a complete Waveguide Generator checkout.
        Current folder: $ROOT
 
        Clone it rather than downloading a ZIP -- the installer updates itself
@@ -342,14 +342,14 @@ say "  $SPA_SUMMARY"
 [[ -n "$METAL_SUMMARY" ]] && say "  $METAL_SUMMARY"
 say ""
 if [[ "$(uname -s)" == "Darwin" ]]; then
-    LAUNCHER="$ROOT/launchers/macos/launch-wg2.command"
+    LAUNCHER="$ROOT/launchers/macos/launch-wg.command"
     say "Start it any time with launchers/macos/Waveguide Generator.app, or:"
-    say "  ./launchers/macos/launch-wg2.command"
+    say "  ./launchers/macos/launch-wg.command"
     say "Remove it again with installers/macos/uninstall.sh."
 else
-    LAUNCHER="$ROOT/launchers/linux/launch-wg2.sh"
+    LAUNCHER="$ROOT/launchers/linux/launch-wg.sh"
     say "Start it any time with:"
-    say "  ./launchers/linux/launch-wg2.sh"
+    say "  ./launchers/linux/launch-wg.sh"
     say "Remove it again with installers/linux/uninstall.sh."
 fi
 say "It picks the first free port from 3100 to 3109 and shows the local URL."
@@ -360,5 +360,5 @@ if [[ "$LAUNCH" -eq 0 ]]; then
     exit 0
 fi
 
-say "Starting Waveguide Generator v2..."
+say "Starting Waveguide Generator..."
 exec "$LAUNCHER"

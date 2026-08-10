@@ -17,16 +17,16 @@ VENV_PYTHON="$REPO_DIR/.venv/bin/python"
 
 fail() {
     message="$1"
-    printf '\nWaveguide Generator v2: %s\n' "$message" >&2
+    printf '\nWaveguide Generator: %s\n' "$message" >&2
     if command -v osascript >/dev/null 2>&1; then
         MESSAGE="$message" osascript -e \
-          'display alert "Waveguide Generator v2 could not start" message (system attribute "MESSAGE") as critical'
+          'display alert "Waveguide Generator could not start" message (system attribute "MESSAGE") as critical'
     fi
     exit 1
 }
 
 if [[ ! -f "$REPO_DIR/launchers/statusapp/__main__.py" ]]; then
-    fail "The app must stay in launchers/macos inside the Waveguide Generator v2 checkout."
+    fail "The app must stay in launchers/macos inside the Waveguide Generator checkout."
 fi
 
 if [[ ! -x "$VENV_PYTHON" ]]; then
@@ -41,10 +41,10 @@ if [[ ! -x "$VENV_PYTHON" ]]; then
         fi
     done
     if [[ -z "$BOOTSTRAP_PYTHON" ]]; then
-        fail "The repository environment is missing, and CPython 3.13 was not found as python3. Install Python 3.13 or run installers/macos/install-wg2.command."
+        fail "The repository environment is missing, and CPython 3.13 was not found as python3. Install Python 3.13 or run installers/macos/install-wg.command."
     fi
     if ! "$BOOTSTRAP_PYTHON" "$REPO_DIR/scripts/bootstrap.py"; then
-        fail "The repository environment was missing and python3 could not prepare it. Run installers/macos/install-wg2.command for full diagnostics."
+        fail "The repository environment was missing and python3 could not prepare it. Run installers/macos/install-wg.command for full diagnostics."
     fi
 fi
 

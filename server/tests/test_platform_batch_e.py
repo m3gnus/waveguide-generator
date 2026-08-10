@@ -9,18 +9,23 @@ import pytest
 from server.platform import instance
 from server.platform.instance import InstanceAlreadyRunning, InstanceLock
 from server.platform.logging_setup import MAX_LOG_BYTES, setup_logging
-from server.platform.paths import data_paths, ensure_data_layout, resolve_data_dir
+from server.platform.paths import (
+    data_paths,
+    ensure_data_layout,
+    migrate_legacy_data_dir,
+    resolve_data_dir,
+)
 
 
 def test_data_dir_macos_layout(tmp_path: Path) -> None:
     root = resolve_data_dir(system="Darwin", environ={}, home=tmp_path)
-    assert root == tmp_path / "Library" / "Application Support" / "WaveguideGenerator2"
+    assert root == tmp_path / "Library" / "Application Support" / "WaveguideGenerator"
 
 
 def test_data_dir_windows_layout(tmp_path: Path) -> None:
     appdata = tmp_path / "Roaming"
     assert resolve_data_dir(system="Windows", environ={"APPDATA": str(appdata)}) == (
-        appdata / "WaveguideGenerator2"
+        appdata / "WaveguideGenerator"
     )
 
 
@@ -29,8 +34,61 @@ def test_data_dir_linux_layout(tmp_path: Path, xdg: str | None) -> None:
     environ = {} if xdg is None else {"XDG_DATA_HOME": str(tmp_path / xdg)}
     expected_parent = tmp_path / ".local" / "share" if xdg is None else tmp_path / xdg
     assert resolve_data_dir(system="Linux", environ=environ, home=tmp_path) == (
-        expected_parent / "WaveguideGenerator2"
+        expected_parent / "WaveguideGenerator"
     )
+
+
+def test_old_only_data_directory_is_moved_once(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    parent = tmp_path / "Library" / "Application Support"
+    old = parent / "WaveguideGenerator2"
+    new = parent / "WaveguideGenerator"
+    old.mkdir(parents=True)
+    (old / "marker").write_text("legacy", encoding="utf-8")
+
+    with caplog.at_level(logging.INFO, logger="wg.paths"):
+        result = migrate_legacy_data_dir(system="Darwin", environ={}, home=tmp_path)
+
+    assert result.state == "moved"
+    assert not old.exists()
+    assert (new / "marker").read_text(encoding="utf-8") == "legacy"
+    assert f"Moved legacy data directory from {old} to {new}" in caplog.text
+
+
+def test_new_only_data_directory_is_untouched(tmp_path: Path) -> None:
+    parent = tmp_path / "Library" / "Application Support"
+    new = parent / "WaveguideGenerator"
+    new.mkdir(parents=True)
+    marker = new / "marker"
+    marker.write_text("current", encoding="utf-8")
+
+    result = migrate_legacy_data_dir(system="Darwin", environ={}, home=tmp_path)
+
+    assert result.state == "unchanged"
+    assert marker.read_text(encoding="utf-8") == "current"
+    assert not (parent / "WaveguideGenerator2").exists()
+
+
+def test_both_data_directories_warn_and_current_directory_wins(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    parent = tmp_path / "Library" / "Application Support"
+    old = parent / "WaveguideGenerator2"
+    new = parent / "WaveguideGenerator"
+    old.mkdir(parents=True)
+    new.mkdir()
+    (old / "marker").write_text("legacy", encoding="utf-8")
+    (new / "marker").write_text("current", encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING, logger="wg.paths"):
+        result = migrate_legacy_data_dir(system="Darwin", environ={}, home=tmp_path)
+
+    assert result.state == "both_exist"
+    assert result.new == new
+    assert (old / "marker").read_text(encoding="utf-8") == "legacy"
+    assert (new / "marker").read_text(encoding="utf-8") == "current"
+    assert "using the current directory" in caplog.text
 
 
 def test_data_dir_override_and_subdirectories(tmp_path: Path) -> None:

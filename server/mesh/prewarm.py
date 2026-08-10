@@ -17,7 +17,7 @@ import logging
 from server.platform.warmup import BackgroundWarmup
 
 
-log = logging.getLogger("wg2.mesh")
+log = logging.getLogger("wg.mesh")
 
 #: Modules on the first-interaction path: symmetry resolution
 #: (``server/solver/symmetry.py``), live preview (``server/preview/core.py``),

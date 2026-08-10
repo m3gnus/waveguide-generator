@@ -32,13 +32,13 @@ class StatusView:
         self._next_poll_at = 0.0
         self._updates: queue.SimpleQueue[tuple[str, StatusSnapshot]] = queue.SimpleQueue()
 
-        root.title("Waveguide Generator v2")
+        root.title("Waveguide Generator")
         root.resizable(False, False)
         root.protocol("WM_DELETE_WINDOW", self.close)
 
         frame = ttk.Frame(root, padding=18)
         frame.grid(sticky="nsew")
-        ttk.Label(frame, text="Waveguide Generator v2", font=("TkDefaultFont", 15, "bold")).grid(
+        ttk.Label(frame, text="Waveguide Generator", font=("TkDefaultFont", 15, "bold")).grid(
             row=0, column=0, columnspan=3, sticky="w", pady=(0, 12)
         )
 

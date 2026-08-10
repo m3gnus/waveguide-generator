@@ -1,1 +1,1 @@
-"""User-facing Waveguide Generator v2 launchers."""
+"""User-facing Waveguide Generator launchers."""

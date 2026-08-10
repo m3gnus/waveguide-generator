@@ -79,7 +79,7 @@ def test_console_close_handler_returns_and_logs_after_timeout(
         daemon=True,
     )
 
-    with caplog.at_level(logging.WARNING, logger="wg2.console"):
+    with caplog.at_level(logging.WARNING, logger="wg.console"):
         worker.start()
         worker.join(1.0)
 

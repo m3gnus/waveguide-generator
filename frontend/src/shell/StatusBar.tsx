@@ -19,15 +19,25 @@ interface SolveSummaryOptions {
   smoothing: Preferences['smoothing'];
 }
 
+/**
+ * The sweep the NEXT solve will use.
+ *
+ * Named, because the Summary card reports the sweep the run currently on screen
+ * already used, and the two are routinely different — the rail read
+ * `400 Hz – 16 kHz · 20 f` while the card read `50 Hz – 20.0 kHz · 40 f`, with
+ * nothing on either saying which was which.
+ */
 export function solveSummary(design: DesignDocument, options: Partial<SolveSummaryOptions> = {}): string {
   const frequencyMode = options.frequencyMode ?? 'range';
-  let frequencies = `${compactFrequency(design.simulation.f1)} – ${compactFrequency(design.simulation.f2)} · ${design.simulation.num_frequencies} f`;
+  let frequencies = `next solve ${compactFrequency(design.simulation.f1)} – ${compactFrequency(design.simulation.f2)} · ${design.simulation.num_frequencies} f`;
   if (frequencyMode === 'list') {
     const parsed = parseFrequencyList(options.frequencyListText ?? '');
     if (parsed.frequencies) {
       const first = compactFrequency(parsed.frequencies[0]);
       const last = compactFrequency(parsed.frequencies.at(-1)!);
-      frequencies = `${first}${parsed.frequencies.length > 1 ? ` – ${last}` : ''} · ${parsed.frequencies.length} f`;
+      frequencies = `next solve ${first}${parsed.frequencies.length > 1 ? ` – ${last}` : ''} · ${parsed.frequencies.length} f`;
+      // A broken list is a fault, not a plan: it does not get the "next solve"
+      // framing, because there is no next solve until it is fixed.
     } else frequencies = 'invalid frequency list';
   }
   return `${frequencies} · smoothing ${options.smoothing ?? 'none'}`;

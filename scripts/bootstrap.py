@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create and validate Waveguide Generator v2's repository-local environment."""
+"""Create and validate Waveguide Generator's repository-local environment."""
 
 from __future__ import annotations
 
@@ -415,7 +415,7 @@ def _bootstrap_locked(environment: Path, *, force: bool = False) -> None:
     fingerprint = _fingerprint()
     valid, reason = _validate(environment, fingerprint)
     if valid and not force:
-        print(f"Waveguide Generator v2 environment is already ready: {environment}")
+        print(f"Waveguide Generator environment is already ready: {environment}")
         return
 
     python = _venv_python(environment)
@@ -470,7 +470,7 @@ def _bootstrap_locked(environment: Path, *, force: bool = False) -> None:
     if not valid:
         (environment / STAMP_NAME).unlink(missing_ok=True)
         raise RuntimeError(f"The environment was installed but validation failed: {reason}.")
-    print(f"Waveguide Generator v2 environment is ready: {environment}")
+    print(f"Waveguide Generator environment is ready: {environment}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -490,14 +490,14 @@ def main(argv: list[str] | None = None) -> int:
             with _bootstrap_lock(environment):
                 valid, reason = _validate(environment, fingerprint)
             if valid:
-                print(f"Waveguide Generator v2 environment is ready: {environment}")
+                print(f"Waveguide Generator environment is ready: {environment}")
                 return 0
-            print(f"Waveguide Generator v2 environment needs bootstrap: {reason}", file=sys.stderr)
+            print(f"Waveguide Generator environment needs bootstrap: {reason}", file=sys.stderr)
             return 1
         bootstrap(environment, force=args.force)
         return 0
     except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
-        print(f"Could not bootstrap Waveguide Generator v2: {exc}", file=sys.stderr)
+        print(f"Could not bootstrap Waveguide Generator: {exc}", file=sys.stderr)
         return 2
 
 

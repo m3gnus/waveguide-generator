@@ -51,7 +51,7 @@ def main(argv: list[str] | None = None) -> int:
         safe = validate(args.target, args.repo_root)
     except (OSError, UnsafeTarget) as exc:
         print(
-            f"ERROR: Refusing to delete configured WG2 data directory {args.target}: {exc}.",
+            f"ERROR: Refusing to delete configured Waveguide Generator data directory {args.target}: {exc}.",
             file=sys.stderr,
         )
         return 2

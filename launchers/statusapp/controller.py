@@ -65,7 +65,7 @@ PortSelector = Callable[[int, str, int], int]
 
 
 def _http_get(url: str, timeout: float) -> tuple[int, bytes]:
-    request = Request(url, headers={"User-Agent": "WaveguideGenerator2-StatusApp"})
+    request = Request(url, headers={"User-Agent": "WaveguideGenerator-StatusApp"})
     with urlopen(request, timeout=timeout) as response:
         return int(response.status), response.read(4096)
 
@@ -86,7 +86,7 @@ def _probe_failure(exc: BaseException) -> str:
 
 def _installer_hint() -> str:
     if sys.platform == "darwin":
-        return "installers/macos/install-wg2.command"
+        return "installers/macos/install-wg.command"
     if os.name == "nt":
         return r"installers\windows\install-and-update.bat"
     return "installers/linux/install.sh"
@@ -182,7 +182,7 @@ def _windows_job_for(process: subprocess.Popen[str]) -> object | None:
 
 
 class StatusController:
-    """Start, observe, and stop exactly one local WG2 server process tree.
+    """Start, observe, and stop exactly one local WG server process tree.
 
     The class deliberately has no tkinter dependency. ``start()``, ``poll()``,
     and ``stop()`` are safe to call from view worker threads; ``close()`` is an
