@@ -618,7 +618,7 @@ select:disabled,
 textarea:disabled { opacity: .48; }
 
 .app-shell { grid-template-rows: 48px minmax(0, 1fr) 28px; }
-.topbar { gap: var(--space-8); padding-inline: var(--space-12); }
+.topbar { gap: var(--space-8); padding-inline: var(--space-12); background: var(--surface-panel); box-shadow: none; }
 .brand { gap: var(--space-8); }
 .brand-mark { width: 24px; height: 24px; }
 .brand-name { font-size: var(--text-base); letter-spacing: .13em; }
@@ -626,22 +626,22 @@ textarea:disabled { opacity: .48; }
 .file-chip,
 .command-affordance,
 .solve-button { height: var(--control-h); border-radius: var(--r2); }
-.file-chip { padding-inline: 8px; }
-.button-group { gap: 2px; padding: 2px; border-radius: var(--r); }
+.file-chip { padding-inline: 8px; background: var(--surface-raised); }
+.button-group { gap: 2px; padding: 2px; border-radius: var(--r); background: transparent; }
 .icon-button { width: var(--control-h); height: var(--control-h); }
-.theme-toggle { height: var(--control-h); align-items: center; padding: 2px; border-radius: var(--r); }
+.theme-toggle { height: var(--control-h); align-items: center; padding: 2px; border-radius: var(--r); background: var(--surface-raised); }
 .theme-toggle button { width: 26px; height: 24px; }
-.command-affordance { border-radius: var(--r); }
-.solve-button { padding-inline: 12px 8px; font-size: var(--text-base); }
+.command-affordance { border-radius: var(--r); background: var(--surface-raised); }
+.solve-button { padding-inline: 12px 8px; background: var(--acc); box-shadow: var(--solve-sh); font-size: var(--text-base); }
 .revision-chip { font-size: var(--text-micro); }
 
-.workspace { padding: var(--space-8); }
-.dockview-host .dv-grid-view { gap: var(--space-8); }
+.workspace { padding: 0; background: var(--border-default); }
+.dockview-host .dv-grid-view { gap: 1px; }
 .dockview-host .dv-groupview {
-  border-color: var(--border-default);
-  border-radius: var(--r);
+  border: 0;
+  border-radius: 0;
   background: var(--surface-panel);
-  box-shadow: 0 1px 0 var(--edge-hi) inset, 0 10px 28px -24px #000;
+  box-shadow: none;
 }
 /* Single source of truth for the dock's tab row. An earlier pass overlaid a
    floating tab chip on the single-view groups and this block was added on top
@@ -650,9 +650,9 @@ textarea:disabled { opacity: .48; }
    The overlay rules are gone; these no longer have to shout. */
 .dockview-host .dv-tabs-and-actions-container {
   width: 100%;
-  height: 31px !important;
+  height: 34px !important;
   border-bottom: 1px solid var(--border-subtle);
-  background: var(--ov1);
+  background: var(--surface-panel);
 }
 /* Single-purpose frames gain the whole title-row height. Multi-tab groups keep
    their tabs because those are navigation in compact and medium layouts. */
@@ -663,15 +663,16 @@ textarea:disabled { opacity: .48; }
 }
 .dockview-host .dv-tabs-container {
   align-items: center;
-  height: 31px !important;
-  padding: 2px 4px;
-  gap: 4px;
+  height: 34px !important;
+  padding: 2px 8px 0;
+  gap: 2px;
 }
 .dockview-host .dv-tab {
-  height: 24px;
-  padding: 0 8px;
-  border: 1px solid transparent;
-  border-radius: var(--r3);
+  height: 31px;
+  padding: 0 10px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
   background: transparent;
   /* No `color` here on purpose: the four --dv-*-tab-color variables above own
      the resting states, and a declaration at this specificity would be dead. */
@@ -685,11 +686,11 @@ textarea:disabled { opacity: .48; }
    :not(.dv-active-tab) qualifier buys here: pointing at an inactive tab now
    brightens its label, which a blanket colour override below it used to
    swallow. The active tab is already at full strength and needs no hover. */
-.dockview-host .dv-tabs-container > .dv-tab:not(.dv-active-tab):hover { border-color: var(--border-subtle); background: var(--ov2); color: var(--fg1); }
+.dockview-host .dv-tabs-container > .dv-tab:not(.dv-active-tab):hover { border-bottom-color: var(--border-strong); background: var(--ov1); color: var(--fg1); }
 .dockview-host .dv-tab.dv-active-tab {
-  border-color: var(--border-default);
-  background: var(--surface-raised);
-  box-shadow: 0 1px 0 var(--edge-hi) inset;
+  border-bottom-color: var(--acc);
+  background: transparent;
+  box-shadow: none;
 }
 .dock-panel-results .results-toolbar,
 .dock-panel-jobs .panel-meta { padding-left: 10px; }
@@ -712,34 +713,36 @@ textarea:disabled { opacity: .48; }
 .panel-preferences-popover > header button { width: var(--control-h-sm); height: var(--control-h-sm); }
 .panel-preferences-scroll { padding: 8px 12px 12px; }
 
-.section-head { height: 28px; padding-inline: 8px 8px; }
-.section-name { font-size: var(--text-base); letter-spacing: .1em; }
+.section-head { height: 32px; padding-inline: 8px 8px; background: var(--ov1); }
+.section-name { font-size: var(--text-micro); letter-spacing: .1em; }
 .section-summary { font-size: var(--text-micro); }
-.section-body { padding: 4px 8px 12px; }
+.section-body { padding: 2px 8px 10px; }
 .select-row { min-height: 30px; height: auto; margin-bottom: 2px; }
 .select-row label,
 .quadrant-title,
 .field-label { font-size: var(--text-base); }
 .select-row select,
-.static-select { height: var(--control-h-sm); font-size: var(--text-base); }
+.static-select { height: var(--control-h-sm); border: 0; border-bottom: 1px solid var(--border-default); border-radius: 2px; background: var(--surface-raised); box-shadow: none; font-size: var(--text-base); }
 .field-row { min-height: 30px; }
 /* Sized to the widest realistic reading ("140.00 mm") rather than rounded up,
    which hands the difference back to the parameter labels beside it. */
-.number-control { height: 26px; width: var(--field-w); padding-inline: 6px; background: var(--ov2); }
+.number-control { height: 26px; width: var(--field-w); padding-inline: 6px; border: 0; border-bottom: 1px solid var(--border-default); border-radius: 2px; background: var(--surface-raised); box-shadow: none; }
 .number-control input { font-size: var(--text-base); }
 .unit { font-size: var(--text-micro); }
 .section-description { font-size: var(--text-base); line-height: 1.45; }
 
-.viewport-title { top: 10px; left: 12px; gap: 8px; }
+.viewport-title { top: 0; left: 12px; height: 38px; align-items: center; gap: 8px; }
 .viewport-title b { font-size: var(--text-title); }
 .viewport-title span,
 .viewport-live { font-size: var(--text-micro); }
-.viewport-live { top: 10px; }
-.viewport-tools { bottom: 12px; border-radius: var(--r); }
+.viewport-live { top: 0; right: 12px; height: 38px; }
+.viewport-tools { bottom: 12px; border-radius: var(--r); background: var(--surface-raised); box-shadow: var(--float-sh); backdrop-filter: none; }
 .viewport-tools button { border-radius: var(--r3); }
 
 .results-toolbar { min-height: 28px; gap: var(--space-6); padding-inline: 8px; font-size: var(--text-micro); }
-.results-toolbar button { height: 21px; min-height: 0; padding-inline: 8px; border-style: solid; border-radius: 999px; }
+.results-toolbar button { height: 22px; min-height: 0; padding-inline: 8px; border-color: transparent; border-bottom-color: var(--border-default); border-radius: 2px; background: transparent; }
+.results-toolbar button:hover:not(:disabled) { border-bottom-color: var(--border-strong); background: var(--ov1); }
+.results-toolbar button.on { border-bottom-color: currentColor; }
 .results-toolbar .toolbar-icon,
 .results-toolbar .panel-preferences-trigger { width: 21px; height: 21px; padding: 0; border-radius: var(--r3); }
 .result-chip,
@@ -759,7 +762,7 @@ textarea:disabled { opacity: .48; }
 .panel-preferences-popover > header button svg { width: 14px; height: 14px; }
 .chart-placeholder { background: var(--surface-panel); }
 
-.job-card { margin: 8px 8px 0; padding: 8px 12px 8px 12px; border-radius: var(--r); background: var(--ov2); }
+.job-card { margin: 8px 8px 0; padding: 8px 12px 8px 12px; border-radius: var(--r2); background: var(--surface-raised); }
 .job-card header b { font-size: var(--text-base); }
 .job-card header time,
 .job-card > p { font-size: var(--text-micro); }
@@ -776,7 +779,7 @@ textarea:disabled { opacity: .48; }
 .job-card.collapsed { margin-block: 1px 0; padding-block: 4px; }
 .job-remove { width: 24px; height: 24px; }
 
-.statusbar { padding-inline: 12px; font-size: var(--text-micro); }
+.statusbar { padding-inline: 12px; background: var(--surface-panel); font-size: var(--text-micro); }
 
 .settings-dialog { width: min(760px, calc(100vw - 36px)); border-radius: var(--r); }
 .settings-dialog > header { align-items: center; min-height: 64px; padding: 12px 16px; }
