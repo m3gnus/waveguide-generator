@@ -8,11 +8,15 @@ import numpy as np
 import pytest
 
 from server.design.schema import DesignConfig
+from server.solver.acoustics import solver_sound_speed_m_per_s
 from server.solver.context import SolverContext
 from server.solver.result_mapping import (
     REFERENCE_RHO_C,
     build_solver_response,
 )
+
+
+SOUND_SPEED_M_PER_S = solver_sound_speed_m_per_s("hornlab_metal_bem")
 
 
 def _context(*, spherical: bool = False) -> SolverContext:
@@ -88,12 +92,24 @@ def test_golden_units_phase_nulls_impedance_di_and_partial_warning() -> None:
                 ]
             }
         },
+        sound_speed_m_per_s=SOUND_SPEED_M_PER_S,
     )
     assert response["frequencies"] == [100.0, 200.0]
     assert response["spl_on_axis"]["spl"][0] == pytest.approx(0.0)
     assert response["spl_on_axis"]["spl"][1] is None
     assert response["spl_on_axis"]["phase_degrees"] == [0.0, None]
     assert response["directivity"]["horizontal"][1][0][1] is None
+    assert set(response["directivity_phase"]) == set(response["directivity"])
+    for plane in response["directivity"]:
+        assert len(response["directivity_phase"][plane]) == len(
+            response["directivity"][plane]
+        )
+        assert [point[0] for point in response["directivity_phase"][plane][0]] == [
+            point[0] for point in response["directivity"][plane][0]
+        ]
+    assert response["directivity_phase"]["horizontal"][0][1][1] == pytest.approx(0.0)
+    assert response["directivity_phase"]["horizontal"][1][0][1] is None
+    assert response["directivity_phase"]["horizontal"][1][1][1] == pytest.approx(90.0)
     assert response["impedance"]["real"] == pytest.approx([1.0, 2.0])
     assert response["impedance"]["imaginary"] == pytest.approx([2.0, -0.5])
     assert response["metadata"]["partial_success"] is True
@@ -101,6 +117,10 @@ def test_golden_units_phase_nulls_impedance_di_and_partial_warning() -> None:
     assert response["metadata"]["phase_quantity"] == "raw_wrapped_pressure_phase"
     assert response["metadata"]["impedance_drive"] == "unit_acceleration"
     assert response["metadata"]["balloon_sampling"]["status"] == "disabled"
+    assert response["metadata"]["directivity"]["effective_distance_m"] == 2.0
+    assert response["metadata"]["directivity"]["sound_speed_m_per_s"] == pytest.approx(
+        SOUND_SPEED_M_PER_S
+    )
 
 
 def test_plane_di_keeps_the_native_on_axis_reference_when_display_norm_changes() -> None:
@@ -110,7 +130,8 @@ def test_plane_di_keeps_the_native_on_axis_reference_when_display_norm_changes()
     levels = -6.0 * np.square(angles / 30.0)
     result = _native_result()
     result.observation_angles_deg = angles
-    result.pressure_complex = np.ones((2, 2, angles.size), dtype=np.complex128) * 20.0e-6
+    raw_phase = np.broadcast_to(angles, (2, 2, angles.size))
+    result.pressure_complex = 20.0e-6 * np.exp(1j * np.deg2rad(raw_phase))
     result.directivity_db = np.tile(levels, (2, 2, 1))
 
     on_axis_context = _context()
@@ -124,6 +145,7 @@ def test_plane_di_keeps_the_native_on_axis_reference_when_display_norm_changes()
         context=on_axis_context,
         start_time=0.0,
         metadata={},
+        sound_speed_m_per_s=SOUND_SPEED_M_PER_S,
     )
     ten_degree = build_solver_response(
         result=result,
@@ -131,11 +153,18 @@ def test_plane_di_keeps_the_native_on_axis_reference_when_display_norm_changes()
         context=ten_degree_context,
         start_time=0.0,
         metadata={},
+        sound_speed_m_per_s=SOUND_SPEED_M_PER_S,
     )
 
     assert on_axis["directivity"]["horizontal"][0][10][1] == pytest.approx(-2.0 / 3.0)
     assert ten_degree["directivity"]["horizontal"][0][10][1] == pytest.approx(0.0)
     assert on_axis["di"]["di"] == ten_degree["di"]["di"]
+    # Normalization mutates only dB rows. Raw wrapped phase is byte-for-byte
+    # identical for two different display normalization angles.
+    assert on_axis["directivity_phase"] == ten_degree["directivity_phase"]
+    assert ten_degree["directivity_phase"]["horizontal"][0][10][1] == pytest.approx(
+        np.angle(result.pressure_complex[0, 0, 10], deg=True)
+    )
     assert ten_degree["di"]["di"]["horizontal"] == pytest.approx(
         [13.18860501875189, 13.18860501875189]
     )
@@ -159,6 +188,7 @@ def test_balloon_four_state_and_pole_normalization(
         context=_context(spherical=requested),
         start_time=0.0,
         metadata={},
+        sound_speed_m_per_s=SOUND_SPEED_M_PER_S,
     )
     assert response["metadata"]["balloon_sampling"]["status"] == status
     assert ("balloon" in response) is with_sphere
@@ -166,6 +196,45 @@ def test_balloon_four_state_and_pole_normalization(
         assert response["balloon"]["spl_norm_db"][0][0] == [0.0, 0.0, 0.0]
         assert response["balloon"]["spl_norm_db"][0][1] == pytest.approx([-6.02] * 3)
         assert response["balloon"]["hemisphere"] is True
+
+
+def test_directivity_phase_nulls_zero_and_nonfinite_amplitudes() -> None:
+    result = _native_result()
+    result.pressure_complex[0, 0] = np.asarray(
+        [0.0 + 0.0j, complex(np.nan, 1.0), complex(np.inf, 0.0)]
+    )
+
+    response = build_solver_response(
+        result=result,
+        config=_config(),
+        context=_context(),
+        start_time=0.0,
+        metadata={},
+        sound_speed_m_per_s=SOUND_SPEED_M_PER_S,
+    )
+
+    assert [point[1] for point in response["directivity_phase"]["horizontal"][0]] == [
+        None,
+        None,
+        None,
+    ]
+
+
+def test_missing_pressure_complex_emits_empty_phase_block_without_exception() -> None:
+    result = _native_result()
+    del result.pressure_complex
+
+    response = build_solver_response(
+        result=result,
+        config=_config(),
+        context=_context(),
+        start_time=0.0,
+        metadata={},
+        sound_speed_m_per_s=SOUND_SPEED_M_PER_S,
+    )
+
+    assert response["directivity_phase"] == {}
+    assert response["spl_on_axis"]["phase_degrees"] == [None, None]
 
 
 def _cabinet_msh(*, back_z: float) -> str:

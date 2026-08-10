@@ -8,6 +8,7 @@ import math
 from typing import Any, Mapping, Sequence
 
 from server.jobs.models import PolarConfig
+from server.solver.acoustics import solver_sound_speed_m_per_s
 from server.solver.beam_shape import beam_shape_summary
 from server.solver.contract import build_directivity_metadata
 
@@ -177,6 +178,7 @@ class DryRunEngine:
         observation = {
             "requested_distance_m": float(polar["distance"]),
             "effective_distance_m": float(polar["distance"]),
+            "sound_speed_m_per_s": solver_sound_speed_m_per_s("hornlab_metal_bem"),
         }
         metadata: dict[str, Any] = {
             "engine": "dryrun",
@@ -206,6 +208,7 @@ class DryRunEngine:
         response: dict[str, Any] = {
             "frequencies": frequencies,
             "directivity": patterns,
+            "directivity_phase": {},
             "spl_on_axis": {
                 "frequencies": frequencies,
                 "spl": spl,

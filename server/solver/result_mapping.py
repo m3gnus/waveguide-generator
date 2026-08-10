@@ -444,6 +444,52 @@ def directivity(result: Any) -> dict[str, list[list[list[float | None]]]]:
     return output
 
 
+def _wrapped_phase_degrees(value: complex) -> float | None:
+    """Map one pressure sample using the result contract's phase convention."""
+
+    amplitude = _finite(np.abs(value))
+    if amplitude is None or amplitude <= 0.0:
+        return None
+    phase = float(np.angle(value, deg=True))
+    return phase if math.isfinite(phase) else None
+
+
+def directivity_phase(result: Any) -> dict[str, list[list[list[float | None]]]]:
+    """Map raw wrapped pressure phase in the same shape as ``directivity``."""
+
+    pressure_source = getattr(result, "pressure_complex", None)
+    if pressure_source is None:
+        return {}
+    try:
+        angles = np.asarray(result.observation_angles_deg, dtype=float)
+        pressure = np.asarray(pressure_source, dtype=np.complex128)
+        frequency_count = len(np.asarray(result.frequencies_hz).reshape(-1))
+        planes = list(result.observation_planes)
+    except (AttributeError, TypeError, ValueError):
+        return {}
+    if angles.ndim != 1 or pressure.ndim != 3:
+        return {}
+    finite_angle_indices = np.flatnonzero(np.isfinite(angles))
+    finite_angle_indices = finite_angle_indices[finite_angle_indices < pressure.shape[2]]
+    angle_values = angles[finite_angle_indices]
+    point_count = int(finite_angle_indices.size)
+    output: dict[str, list[list[list[float | None]]]] = {}
+    for plane_index, plane_name in enumerate(planes):
+        if plane_index >= pressure.shape[1]:
+            break
+        points = np.empty((frequency_count, point_count, 2), dtype=object)
+        points[:, :, 0] = angle_values[None, :]
+        points[:, :, 1] = None
+        usable_frequency_count = min(frequency_count, pressure.shape[0])
+        for frequency_index in range(usable_frequency_count):
+            for point_index, angle_index in enumerate(finite_angle_indices):
+                points[frequency_index, point_index, 1] = _wrapped_phase_degrees(
+                    pressure[frequency_index, plane_index, angle_index]
+                )
+        output[str(plane_name)] = points.tolist()
+    return output
+
+
 def _renormalize_directivity(
     patterns: dict[str, list[list[list[float | None]]]], norm_angle: float
 ) -> None:
@@ -472,8 +518,14 @@ def _renormalize_directivity(
 
 
 def _on_axis_pressure(result: Any) -> np.ndarray | None:
-    angles = np.asarray(result.observation_angles_deg, dtype=float)
-    pressure = np.asarray(result.pressure_complex, dtype=np.complex128)
+    pressure_source = getattr(result, "pressure_complex", None)
+    if pressure_source is None:
+        return None
+    try:
+        angles = np.asarray(result.observation_angles_deg, dtype=float)
+        pressure = np.asarray(pressure_source, dtype=np.complex128)
+    except (AttributeError, TypeError, ValueError):
+        return None
     if angles.ndim != 1 or angles.size == 0 or pressure.ndim != 3 or pressure.shape[1] == 0:
         return None
     usable = np.flatnonzero(np.isfinite(angles))
@@ -512,8 +564,7 @@ def phase_on_axis(result: Any) -> list[float | None]:
         return [None] * count
     output: list[float | None] = []
     for value in values:
-        amplitude = _finite(np.abs(value))
-        output.append(float(np.angle(value, deg=True)) if amplitude is not None and amplitude > 0 else None)
+        output.append(_wrapped_phase_degrees(value))
     count = len(np.asarray(result.frequencies_hz).reshape(-1))
     return (output + [None] * count)[:count]
 
@@ -645,6 +696,7 @@ def build_solver_response(
     context: SolverContext,
     start_time: float,
     metadata: dict[str, Any],
+    sound_speed_m_per_s: float,
 ) -> dict[str, Any]:
     """Build the common JSON shape; dry-run remains a strict subset of it."""
 
@@ -658,9 +710,13 @@ def build_solver_response(
         "effective_distance_m": float(config.observation.distance_m),
         "adjusted": False,
         "observation_origin": str(config.observation.origin),
+        "sound_speed_m_per_s": float(sound_speed_m_per_s),
     }
     patterns = directivity(result)
+    phase_patterns = directivity_phase(result)
     plane_di = calculate_di_from_polar_patterns(patterns)
+    # This is strictly a level/display normalization. Raw wrapped phase is an
+    # independent payload and must never pass through this mutating function.
     _renormalize_directivity(
         patterns, float(context.polar_config.get("norm_angle", 10.0))
     )
@@ -735,6 +791,7 @@ def build_solver_response(
     response: dict[str, Any] = {
         "frequencies": frequency_values,
         "directivity": patterns,
+        "directivity_phase": phase_patterns,
         "spl_on_axis": {
             "frequencies": frequency_values,
             "spl": spl_on_axis(result),
@@ -795,6 +852,7 @@ __all__ = [
     "REFERENCE_RHO_C",
     "build_solver_response",
     "directivity",
+    "directivity_phase",
     "json_safe_native_value",
     "native_symmetry_plane",
     "observation_config",
