@@ -11,7 +11,7 @@ import json
 import math
 import re
 from dataclasses import dataclass, field
-from typing import Any, Literal, Mapping
+from typing import TYPE_CHECKING, Any, Literal, Mapping
 
 from pydantic import ValidationError
 
@@ -25,6 +25,9 @@ from .schema import (
     OSSEConfig,
     ROSSEConfig,
 )
+
+if TYPE_CHECKING:
+    from server.cadlink.identity import CadLink
 
 
 _BLOCK_START = re.compile(r"^([\w.:-]+)\s*=\s*\{$")
@@ -56,6 +59,7 @@ class ParsedDesign:
     migrations: list[MigrationApplication] = field(default_factory=list)
     comments: list[str] = field(default_factory=list)
     raw_values: dict[str, str] = field(default_factory=dict)
+    cadlink: CadLink | None = None
     source_text: str | None = None
     _initial_fingerprint: str = ""
 
@@ -528,6 +532,7 @@ def _build_payload(flat_source: Mapping[str, str], blocks: Mapping[str, _RawBloc
     flat = dict(flat_source)
     formula = _formula(flat, blocks)
     consumed_blocks = _legacy_sections(flat, blocks)
+    consumed_blocks.add("CadLink")
     consumed_keys: set[str] = set()
     if formula == "FREEFORM":
         payload = _freeform_payload(flat, blocks)
@@ -587,6 +592,21 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
     if not isinstance(text, str):
         raise TypeError("text must be a string")
     flat, blocks, comments, raw_values = _lex(text)
+    from server.cadlink.identity import CadLink
+
+    cadlink: CadLink | None = None
+    if raw_cadlink := blocks.get("CadLink"):
+        try:
+            cadlink = CadLink.from_block(
+                ConfigBlock(
+                    items=raw_cadlink.items,
+                    lines=raw_cadlink.lines,
+                    comments=raw_cadlink.comments,
+                    entries=raw_cadlink.entries,
+                )
+            )
+        except (TypeError, ValueError, ValidationError) as exc:
+            raise TextConfigError(f"invalid CadLink block: {exc}") from exc
     payload = _build_payload(flat, blocks)
     applications: list[MigrationApplication] = []
     if migrate:
@@ -604,6 +624,7 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
         migrations=applications,
         comments=comments,
         raw_values=raw_values,
+        cadlink=cadlink,
         source_text=text,
     )
 
@@ -715,12 +736,18 @@ def _serialize_enclosure(lines: list[str], config: Any) -> None:
     )
 
 
-def _serialize_canonical(design: DesignConfig, comments: list[str] | None = None) -> str:
+def _serialize_canonical(
+    design: DesignConfig,
+    comments: list[str] | None = None,
+    cadlink: CadLink | None = None,
+) -> str:
     config = design.root
     lines = ["; Parameter config", "; Waveguide Generator v2 design-format: 2"]
     for comment in comments or []:
         if comment not in lines and "Generated:" not in comment:
             lines.append(comment)
+    if cadlink is not None:
+        lines.extend(cadlink.block_lines())
     _line(lines, "Scale", config.scale)
 
     if isinstance(config, FreeformConfig):
@@ -871,7 +898,9 @@ def _serialize_canonical(design: DesignConfig, comments: list[str] | None = None
     return "\n".join(lines) + "\n"
 
 
-def serialize(design: ParsedDesign | DesignConfig) -> str:
+def serialize(
+    design: ParsedDesign | DesignConfig, *, cadlink: CadLink | None = None
+) -> str:
     """Serialize in stable v1 writer order, returning exact bytes when pristine."""
 
     if isinstance(design, ParsedDesign):
@@ -881,12 +910,17 @@ def serialize(design: ParsedDesign | DesignConfig) -> str:
                 item.name == "004_freeform_solved_tangent_contract"
                 for item in design.migrations
             )
+            and (cadlink is None or cadlink == design.cadlink)
             and _semantic_fingerprint(design.design) == design._initial_fingerprint
         ):
             return design.source_text
-        return _serialize_canonical(design.design, design.comments)
+        return _serialize_canonical(
+            design.design,
+            design.comments,
+            design.cadlink if cadlink is None else cadlink,
+        )
     if isinstance(design, DesignConfig):
-        return _serialize_canonical(design)
+        return _serialize_canonical(design, cadlink=cadlink)
     raise TypeError("serialize expects ParsedDesign or DesignConfig")
 
 
