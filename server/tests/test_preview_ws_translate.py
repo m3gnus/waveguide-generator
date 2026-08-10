@@ -351,6 +351,7 @@ def test_tritonia_reference_import_translates_to_mesher_config() -> None:
         "horn.outer",
         "mouth_rim",
         "source_cap",
+        "wall.rear_return",
         "wall.rear_cap",
     ]
     assert config["morph"] == {
