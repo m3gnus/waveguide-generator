@@ -9,8 +9,20 @@ export interface PolarFrdFile {
 }
 
 const COMMENT = '*';
+
+// REW writes its own .frd with a comma delimiter, but its documented *accepted*
+// separators are tab, space and semicolon, and VituixCAD's are the same three.
+// Comma is not on either accept list and is ambiguous under a comma-decimal
+// locale, so tab is the one separator both tools read for certain.
 const DELIMITER = '\t';
-const VALUE_PRECISION = 3;
+
+// Per column, matching what REW emits. Frequency needs the extra digits: a log
+// sweep puts neighbouring low-frequency points well inside 0.001 Hz of each
+// other, and rounding them to three places would collide two rows into one.
+const FREQUENCY_PRECISION = 6;
+const LEVEL_PRECISION = 3;
+const PHASE_PRECISION = 4;
+const VALUE_PRECISION = LEVEL_PRECISION;
 
 type PolarPlane = 'horizontal' | 'vertical';
 
@@ -18,17 +30,17 @@ function finite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
-function fixed(value: number): string {
-  const formatted = value.toFixed(VALUE_PRECISION);
+function fixed(value: number, precision = VALUE_PRECISION): string {
+  const formatted = value.toFixed(precision);
   if (!/[eE]/.test(formatted)) return formatted;
 
   // Number#toFixed delegates to exponential notation at |value| >= 1e21.
   // FRD readers expect ordinary decimals, so expand that rare case explicitly.
-  const [coefficient, exponentText] = value.toExponential(VALUE_PRECISION).split('e');
+  const [coefficient, exponentText] = value.toExponential(precision).split('e');
   const sign = coefficient.startsWith('-') ? '-' : '';
   const digits = coefficient.replace('-', '').replace('.', '');
   const exponent = Number(exponentText);
-  return `${sign}${digits}${'0'.repeat(Math.max(0, exponent - VALUE_PRECISION))}.${'0'.repeat(VALUE_PRECISION)}`;
+  return `${sign}${digits}${'0'.repeat(Math.max(0, exponent - precision))}.${'0'.repeat(precision)}`;
 }
 
 function onAxisFrequencies(result: ResultPayload): number[] {
@@ -48,6 +60,13 @@ function patternDb(value: unknown): number | null {
       : null;
   }
   return finite(value) ? value : null;
+}
+
+// REW states the smoothing it applied in its own header. These files are
+// smoothed too, so they have to say so -- an unlabelled smoothed curve read as
+// raw is a quietly wrong measurement.
+function smoothingNote(smoothing: Preferences['smoothing']): string {
+  return `Smoothing: ${smoothing === 'none' ? 'none' : smoothing}`;
 }
 
 function fileText(header: string[], rows: string[]): string {
@@ -76,12 +95,17 @@ export function buildOnAxisFrd(
     const magnitude = spl[index];
     const phaseDegrees = phase[index];
     if (!finite(frequency) || !finite(magnitude) || !finite(phaseDegrees)) return;
-    rows.push([fixed(frequency), fixed(magnitude), fixed(phaseDegrees)].join(DELIMITER));
+    rows.push([
+      fixed(frequency, FREQUENCY_PRECISION),
+      fixed(magnitude, LEVEL_PRECISION),
+      fixed(phaseDegrees, PHASE_PRECISION),
+    ].join(DELIMITER));
   });
 
   return fileText([
     'HornLab on-axis frequency response',
-    ['Frequency (Hz)', 'SPL (dB)', 'Phase (degrees)'].join(DELIMITER),
+    smoothingNote(preferences.smoothing),
+    ['Freq(Hz)', 'SPL(dB)', 'Phase(degrees)'].join(DELIMITER),
   ], rows);
 }
 
@@ -156,13 +180,18 @@ export function buildPolarFrdSet(
       frequencies.forEach((frequency, index) => {
         const magnitude = magnitudes[index];
         if (!finite(frequency) || !finite(magnitude)) return;
-        rows.push([fixed(frequency), fixed(magnitude)].join(DELIMITER));
+        rows.push([
+          fixed(frequency, FREQUENCY_PRECISION),
+          fixed(magnitude, LEVEL_PRECISION),
+        ].join(DELIMITER));
       });
       files.push({
         filename: polarFilename(baseName, plane, angle),
         text: fileText([
           'HornLab polar frequency response — magnitude-only; phase is not available and is intentionally omitted',
-          ['Frequency (Hz)', 'SPL (dB)'].join(DELIMITER),
+          `Plane: ${plane}, angle ${angle} deg`,
+          smoothingNote(preferences.smoothing),
+          ['Freq(Hz)', 'SPL(dB)'].join(DELIMITER),
         ], rows),
       });
     });
