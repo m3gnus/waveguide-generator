@@ -1,4 +1,5 @@
 import { useCapabilities } from '../jobs/useCapabilities';
+import { HelpTipRow, useHelpTip } from './HelpTip';
 import {
   MAX_FREQUENCY_POINTS,
   parseFrequencyList,
@@ -28,9 +29,9 @@ export function FrequencySweepControls() {
   const store = useSolveOptionsStore();
   const { frequencies, error } = parseFrequencyList(store.frequencyListText);
   return <>
-    <div className="select-row"><label htmlFor="frequency-mode">Sweep points</label><select id="frequency-mode" value={store.frequencyMode} onChange={(event) => store.setFrequencyMode(event.target.value as FrequencyMode)}><option value="range">Generated grid</option><option value="list">Explicit list</option></select></div>
+    <HelpTipRow className="select-row" text="Where the solved frequencies come from. Generated grid spreads them between the design's sweep start and end; Explicit list solves exactly the frequencies you type, ignoring the design's range and count."><label htmlFor="frequency-mode">Sweep points</label><select id="frequency-mode" value={store.frequencyMode} onChange={(event) => store.setFrequencyMode(event.target.value as FrequencyMode)}><option value="range">Generated grid</option><option value="list">Explicit list</option></select></HelpTipRow>
     {store.frequencyMode === 'range'
-      ? <div className="select-row"><label htmlFor="frequency-spacing">Sweep spacing</label><select id="frequency-spacing" value={store.frequencySpacing} onChange={(event) => store.setFrequencySpacing(event.target.value as FrequencySpacing)}><option value="log">Logarithmic</option><option value="linear">Linear</option></select></div>
+      ? <HelpTipRow className="select-row" text="How the generated frequencies are spread across the range. Logarithmic gives even spacing per octave, which matches how the response is read; Linear spends most of the points on the top octave."><label htmlFor="frequency-spacing">Sweep spacing</label><select id="frequency-spacing" value={store.frequencySpacing} onChange={(event) => store.setFrequencySpacing(event.target.value as FrequencySpacing)}><option value="log">Logarithmic</option><option value="linear">Linear</option></select></HelpTipRow>
       : <div className="point-paste">
           <textarea id="frequency-list" aria-label="Solver frequencies in Hz" rows={4} value={store.frequencyListText} onChange={(event) => store.setFrequencyListText(event.target.value)} placeholder={'500, 630, 800, 1000\n1250 1600 2000'} />
           <div className="paste-meta">{frequencies
@@ -51,25 +52,44 @@ export function SolveOptionsControls() {
     : backendEngines.find((engine) => engine.name.toLowerCase() === store.engine);
   const fastPaths = selectedEngine?.fast_paths ?? [];
   return <>
-    <div className="select-row"><label htmlFor="solve-engine">Solver backend</label><select id="solve-engine" value={store.engine} onChange={(event) => store.setEngine(event.target.value)}>
+    <HelpTipRow className="select-row" text="Which BEM engine runs the solve. AUTO takes the first backend that is actually available on this machine. All backends solve the same problem; they differ in speed and in which fast paths they support."><label htmlFor="solve-engine">Solver backend</label><select id="solve-engine" value={store.engine} onChange={(event) => store.setEngine(event.target.value)}>
       <option value="auto">AUTO — first available</option>
       {backendEngines.map((engine) => <option key={engine.name} value={engine.name.toLowerCase()} disabled={!engine.available}>{engine.name}{engine.available ? engine.version ? ` · ${engine.version}` : '' : ` · unavailable${engine.reason ? `: ${engine.reason}` : ''}`}</option>)}
-    </select></div>
+    </select></HelpTipRow>
     <p className="section-note">{selectedEngine?.name.toLowerCase() === 'metal' && fastPaths.includes('axisymmetric-meridian')
       ? 'Metal capability: automatic axisymmetric meridian fast path when the geometry is eligible.'
       : 'Selected backend capability: Full 3D.'}</p>
     <p className="section-note">Solver mode labels: {solverModeLabels.auto}, {solverModeLabels.full_3d}, {solverModeLabels.circsym}.</p>
-    <div className="select-row"><label htmlFor="mesh-validation-mode">Mesh validation policy</label><select id="mesh-validation-mode" value={store.meshValidationMode} onChange={(event) => store.setMeshValidationMode(event.target.value as MeshValidationMode)}><option value="warn">Warn</option><option value="strict">Strict</option><option value="off">Off</option></select></div>
+    <HelpTipRow className="select-row" text="What happens when the solver mesh fails its topology check. Warn solves anyway and reports the problem; Strict refuses to solve a mesh that is not watertight; Off hides the warning entirely. Results from an invalid mesh cannot be trusted, so leave this on Warn unless you know why."><label htmlFor="mesh-validation-mode">Mesh validation policy</label><select id="mesh-validation-mode" value={store.meshValidationMode} onChange={(event) => store.setMeshValidationMode(event.target.value as MeshValidationMode)}><option value="warn">Warn</option><option value="strict">Strict</option><option value="off">Off</option></select></HelpTipRow>
     <FrequencySweepControls />
-    <label className="toggle-row" htmlFor="solve-verbose"><span>Verbose backend logging</span><input id="solve-verbose" type="checkbox" checked={store.verbose} onChange={(event) => store.setVerbose(event.target.checked)} /></label>
+    <ToggleRow id="solve-verbose" label="Verbose backend logging" help="Records the backend's own per-frequency diagnostics in the job log. Useful when a solve fails or looks wrong; it makes logs much longer." checked={store.verbose} onChange={store.setVerbose} />
     {error && <div className="field-error" role="alert">Capabilities unavailable: {error}</div>}
   </>;
 }
 
-function PolarNumber({ id, label, value, unit, min, max, step = 1, disabled, update }: {
-  id: string; label: string; value: number; unit: string; min?: number; max?: number; step?: number; disabled?: boolean; update: (value: number) => void;
+/**
+ * Checkbox row that carries its own hover help.
+ *
+ * The tip attaches to the existing `.toggle-row` label rather than wrapping it,
+ * because `.section-body` is a container-query grid whose rules select direct
+ * children — an extra div would become the grid item and drop the row's layout.
+ */
+function ToggleRow({ id, label, help, checked, onChange }: {
+  id: string; label: string; help: string; checked: boolean; onChange: (checked: boolean) => void;
 }) {
-  return <div className={`field-row polar-number${disabled ? ' field-disabled' : ''}`}><label className="field-label" htmlFor={id}>{label}</label><div className="number-control"><input id={id} type="number" value={value} min={min} max={max} step={step} disabled={disabled} onChange={(event) => update(Number(event.target.value))} /><span className="unit">{unit}</span></div></div>;
+  const tip = useHelpTip({ title: label, text: help });
+  return <label className="toggle-row" htmlFor={id} {...tip.triggerProps}>
+    <span>{label}</span>
+    <input id={id} type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />
+    {tip.tip}
+  </label>;
+}
+
+function PolarNumber({ id, label, help, value, unit, min, max, step = 1, disabled, update }: {
+  id: string; label: string; help: string; value: number; unit: string; min?: number; max?: number; step?: number; disabled?: boolean; update: (value: number) => void;
+}) {
+  const tip = useHelpTip({ title: label, text: help });
+  return <div className={`field-row polar-number${disabled ? ' field-disabled' : ''}`}><label className="field-label" htmlFor={id} {...tip.triggerProps}>{label}{tip.tip}</label><div className="number-control"><input id={id} type="number" value={value} min={min} max={max} step={step} disabled={disabled} onChange={(event) => update(Number(event.target.value))} /><span className="unit">{unit}</span></div></div>;
 }
 
 export function DirectivityMapControls() {
@@ -79,16 +99,17 @@ export function DirectivityMapControls() {
   const numeric = (key: keyof Pick<PolarUiState, 'angleStart' | 'angleEnd' | 'angleStep' | 'distance' | 'normAngle' | 'diagonalAngle'>) => (value: number) => {
     if (Number.isFinite(value)) update({ [key]: value });
   };
+  const axisHelp = useHelpTip({ title: 'Directivity planes', text: 'Which planes through the horn axis are measured. Horizontal and vertical are the usual pair; diagonal catches what a non-round mouth does between them.' });
   return <>
-    <PolarNumber id="polar-angle-start" label="Sweep start" value={polar.angleStart} unit="°" step={1} update={numeric('angleStart')} />
-    <PolarNumber id="polar-angle-end" label="Sweep end" value={polar.angleEnd} unit="°" step={1} update={numeric('angleEnd')} />
-    <PolarNumber id="polar-angle-step" label="Angular step" value={polar.angleStep} unit="°" min={1} step={1} update={numeric('angleStep')} />
-    <PolarNumber id="polar-distance" label="Measurement distance" value={polar.distance} unit="m" min={.1} step={.1} update={numeric('distance')} />
-    <PolarNumber id="polar-norm-angle" label="Normalization angle" value={polar.normAngle} unit="°" step={1} update={numeric('normAngle')} />
-    <div className="axis-toggles" role="group" aria-label="Directivity planes">{(['horizontal', 'vertical', 'diagonal'] as PolarAxis[]).map((axis) => <label key={axis}><input type="checkbox" checked={polar.enabledAxes.includes(axis)} onChange={() => toggleAxis(axis)} /> {axis}</label>)}</div>
-    <PolarNumber id="polar-diagonal-angle" label="Diagonal plane angle" value={polar.diagonalAngle} unit="°" step={1} disabled={!polar.enabledAxes.includes('diagonal')} update={numeric('diagonalAngle')} />
-    <div className="select-row"><label htmlFor="polar-observation-origin">Measurement origin</label><select id="polar-observation-origin" value={polar.observationOrigin} onChange={(event) => update({ observationOrigin: event.target.value as ObservationOrigin })}><option value="mouth">Mouth</option><option value="throat">Throat</option></select></div>
-    <label className="toggle-row" htmlFor="polar-spherical-sampling"><span>3D balloon sampling</span><input id="polar-spherical-sampling" type="checkbox" checked={polar.sphericalSampling} onChange={(event) => update({ sphericalSampling: event.target.checked })} /></label>
+    <PolarNumber id="polar-angle-start" label="Sweep start" help="First off-axis angle measured in each directivity plane. 0° is on-axis; negative angles cover the other side." value={polar.angleStart} unit="°" step={1} update={numeric('angleStart')} />
+    <PolarNumber id="polar-angle-end" label="Sweep end" help="Last off-axis angle measured in each directivity plane. 90° reaches the baffle plane." value={polar.angleEnd} unit="°" step={1} update={numeric('angleEnd')} />
+    <PolarNumber id="polar-angle-step" label="Angular step" help="Spacing between measured angles. Finer steps give smoother directivity maps and cost almost nothing, because the field is evaluated after the solve rather than solved again." value={polar.angleStep} unit="°" min={1} step={1} update={numeric('angleStep')} />
+    <PolarNumber id="polar-distance" label="Measurement distance" help="How far from the horn the virtual microphone sits. Keep it well beyond the mouth so the result is a far-field pattern." value={polar.distance} unit="m" min={.1} step={.1} update={numeric('distance')} />
+    <PolarNumber id="polar-norm-angle" label="Normalization angle" help="The angle held at 0 dB in normalized directivity plots. Every polar curve is shifted so this angle reads flat; it changes only the display, never the solve." value={polar.normAngle} unit="°" step={1} update={numeric('normAngle')} />
+    <div className="axis-toggles" role="group" aria-label="Directivity planes" {...axisHelp.triggerProps}>{(['horizontal', 'vertical', 'diagonal'] as PolarAxis[]).map((axis) => <label key={axis}><input type="checkbox" checked={polar.enabledAxes.includes(axis)} onChange={() => toggleAxis(axis)} /> {axis}</label>)}{axisHelp.tip}</div>
+    <PolarNumber id="polar-diagonal-angle" label="Diagonal plane angle" help="Where the diagonal plane sits, measured from the horizontal. 45° is the corner of a square mouth. Only used when the diagonal plane is enabled." value={polar.diagonalAngle} unit="°" step={1} disabled={!polar.enabledAxes.includes('diagonal')} update={numeric('diagonalAngle')} />
+    <HelpTipRow className="select-row" text="The point the measurement angles pivot around. Mouth rotates about the mouth centre, which is what a measured polar set matches; Throat pivots at the driver instead."><label htmlFor="polar-observation-origin">Measurement origin</label><select id="polar-observation-origin" value={polar.observationOrigin} onChange={(event) => update({ observationOrigin: event.target.value as ObservationOrigin })}><option value="mouth">Mouth</option><option value="throat">Throat</option></select></HelpTipRow>
+    <ToggleRow id="polar-spherical-sampling" label="3D balloon sampling" help="Samples the whole sphere around the horn instead of just the selected planes, which is what the 3D balloon view needs. Costs extra field evaluations and is not supported by every backend." checked={polar.sphericalSampling} onChange={(sphericalSampling) => update({ sphericalSampling })} />
     <p className="section-note">When enabled, the solve request asks the backend to sample a spherical balloon; availability depends on the selected engine.</p>
   </>;
 }

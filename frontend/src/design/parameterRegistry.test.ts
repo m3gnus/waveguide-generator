@@ -6,6 +6,7 @@ import {
   TRACEABILITY_PARAMETER_INVENTORY,
   EXPRESSION_PARAMETER_IDS,
   fieldIsVisible,
+  fieldMatchesQuery,
   traceEntryIsRegistered,
 } from './parameterRegistry';
 
@@ -137,6 +138,37 @@ describe('complete parameter registry', () => {
     }
     expect(fieldIsVisible(PARAMETER_REGISTRY.find((item) => item.id === 'enclosure.space_l')!, osse)).toBe(false);
     expect(fieldIsVisible(PARAMETER_REGISTRY.find((item) => item.id === 'mesh.wall_thickness')!, osse)).toBe(false);
+  });
+
+  it('labels every OSSE and R-OSSE profile scalar with its ATH formula symbol', () => {
+    // An ATH user reads the formula, not our prose, so each profile scalar has
+    // to carry the letter the formula uses -- which is exactly its legacy key.
+    for (const family of ['R-OSSE', 'OSSE'] as const) {
+      const scalars = PARAMETER_REGISTRY
+        .filter((item) => item.section === 'Profile Dimensions' && item.families?.includes(family) && item.id !== 'common.scale');
+      expect(scalars.map((item) => item.symbol)).toEqual(TRACEABILITY_KEYS[family].filter((key) => key !== 'scale'));
+      expect(scalars.every((item) => item.symbol === item.legacyKey), family).toBe(true);
+    }
+  });
+
+  // Every row in the panel is hover-documented. A parameter with no description
+  // renders a bare label the user has no way to interpret, so this is a gate
+  // rather than a nice-to-have.
+  it('gives every parameter hover help that says more than its own label', () => {
+    const undocumented = PARAMETER_REGISTRY.filter((item) => !item.description?.trim());
+    expect(undocumented.map((item) => item.id)).toEqual([]);
+
+    // "Superformula a parameter" under a label reading "Superformula a" is the
+    // failure mode worth catching: text that only restates the label.
+    const hollow = PARAMETER_REGISTRY.filter((item) => {
+      const description = item.description!.toLocaleLowerCase().replace(/[^a-z0-9 ]/g, '');
+      return description.replace(item.label.toLocaleLowerCase(), '').trim().split(/\s+/).length < 5;
+    });
+    expect(hollow.map((item) => item.id)).toEqual([]);
+  });
+
+  it('finds a profile scalar by its ATH symbol alone', () => {
+    expect(PARAMETER_REGISTRY.filter((item) => fieldMatchesQuery(item, 'tmax')).map((item) => item.id)).toEqual(['rosse.tmax']);
   });
 
   it('documents ATH\'s omitted wall-thickness default', () => {
