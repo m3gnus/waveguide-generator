@@ -7,7 +7,9 @@ import {
   createDefaultLayout,
   createResizeLayoutHandler,
   isTrustworthySize,
+  layoutMode,
   nextLayoutAction,
+  restoreDisposition,
   ReactPanelRenderer,
   LEGACY_LAYOUT_KEY,
   seedSize,
@@ -332,5 +334,36 @@ describe('Workspace', () => {
     expect(columns.map((column) => column.size)).toEqual([300, width - 620, 320]);
     expect(center.map((row) => row.size)).toEqual([height - resultsHeight, resultsHeight]);
     expect(layout.grid.width).toBe(width);
+  });
+});
+
+describe('restoring a saved layout into a different window', () => {
+  it('classifies widths into the three responsive arrangements', () => {
+    expect(layoutMode(640)).toBe('compact');
+    expect(layoutMode(799)).toBe('compact');
+    expect(layoutMode(800)).toBe('medium');
+    expect(layoutMode(1099)).toBe('medium');
+    expect(layoutMode(1100)).toBe('wide');
+    expect(layoutMode(2560)).toBe('wide');
+  });
+
+  it('restores a layout saved for the same arrangement', () => {
+    expect(restoreDisposition('wide', 1600)).toBe('restore');
+    expect(restoreDisposition('compact', 700)).toBe('restore');
+  });
+
+  it('rebuilds when the saved arrangement does not match the window', () => {
+    // The reported bug: narrowing the window once persisted the compact
+    // single-group layout, and every later session reopened it full-width.
+    expect(restoreDisposition('compact', 1600)).toBe('rebuild');
+    expect(restoreDisposition('wide', 700)).toBe('rebuild');
+    expect(restoreDisposition('medium', 1600)).toBe('rebuild');
+  });
+
+  it('restores a layout saved before the mode was recorded', () => {
+    // Existing installs have no mode key; discarding their arrangement on
+    // first upgrade would be a worse bug than the one being fixed.
+    expect(restoreDisposition(null, 1600)).toBe('restore');
+    expect(restoreDisposition(null, 700)).toBe('restore');
   });
 });

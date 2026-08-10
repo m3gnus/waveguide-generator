@@ -74,4 +74,15 @@ describe('CommandPalette', () => {
     });
     expect(activate).toHaveBeenCalledWith('simulation');
   });
+
+  it('names a parameter symbol once when it doubles as the legacy config key', () => {
+    const entries = buildParameterPaletteEntries();
+    const doubled = entries.filter((entry) => {
+      const parts = entry.detail?.split(' · ') ?? [];
+      return parts.length > 1 && new Set(parts).size !== parts.length;
+    });
+    expect(doubled).toEqual([]);
+    // R is the canonical case: symbol and legacy key are both "R".
+    expect(entries.find((entry) => entry.label === 'Mouth radius')?.detail).toBe('R');
+  });
 });

@@ -1,7 +1,7 @@
 import { Box3, PerspectiveCamera, Vector3 } from 'three';
 import { describe, expect, it, vi } from 'vitest';
 import { calculateCameraFit, clippingRange } from './cameraMath';
-import { axisColorsFromTokens, cameraFitDisposition, cameraFitKey, canRenderWebGL, canvasNeedsRemeasure, gizmoAxisDirection, installContextLossFallback, pickGizmoAxis, rebracketCamera, scheduleAppliedTask, shouldShowAxisGizmo, type GizmoAxis } from './ViewportCanvas';
+import { axisColorsFromTokens, cameraFitDisposition, cameraFitKey, canRenderWebGL, canvasNeedsRemeasure, gizmoAxisDirection, installContextLossFallback, observeCanvasVisibility, pickGizmoAxis, rebracketCamera, scheduleAppliedTask, shouldShowAxisGizmo, type GizmoAxis } from './ViewportCanvas';
 
 class FakeScheduler {
   private readonly tasks = new Set<() => void>();
@@ -207,5 +207,65 @@ describe('canvasNeedsRemeasure', () => {
   it('does not fire before the container itself has been laid out', () => {
     expect(canvasNeedsRemeasure(box(0, 0), box(300, 150))).toBe(false);
     expect(canvasNeedsRemeasure(box(764, 432), null)).toBe(false);
+  });
+});
+
+describe('repaint when the canvas is shown again', () => {
+  /**
+   * frameloop="demand" over a context without preserveDrawingBuffer means the
+   * drawing buffer is gone once the browser has composited it, and demand
+   * rendering has no reason to draw another. Any period where the canvas is not
+   * composited -- an inactive dock tab, a backgrounded window -- therefore ends
+   * on an empty canvas unless something asks for a frame.
+   */
+  function withIntersectionObserver(run: (trigger: (isIntersecting: boolean) => void) => void): void {
+    const originalObserver = globalThis.IntersectionObserver;
+    let callback: ((entries: Array<{ isIntersecting: boolean }>) => void) | null = null;
+    const disconnect = vi.fn();
+    class FakeObserver {
+      constructor(handler: (entries: Array<{ isIntersecting: boolean }>) => void) { callback = handler; }
+      observe() { /* the element is irrelevant to the fake */ }
+      disconnect = disconnect;
+    }
+    (globalThis as { IntersectionObserver?: unknown }).IntersectionObserver = FakeObserver as never;
+    try {
+      run((isIntersecting) => callback?.([{ isIntersecting }]));
+    } finally {
+      (globalThis as { IntersectionObserver?: unknown }).IntersectionObserver = originalObserver;
+    }
+  }
+
+  it('asks for a frame when the canvas comes back into view, and not while it is hidden', () => {
+    withIntersectionObserver((trigger) => {
+      const onShown = vi.fn();
+      const stop = observeCanvasVisibility(document.createElement('canvas'), onShown);
+      trigger(false);
+      expect(onShown).not.toHaveBeenCalled();
+      trigger(true);
+      expect(onShown).toHaveBeenCalledOnce();
+      stop();
+    });
+  });
+
+  it('asks for a frame when the document becomes visible again', () => {
+    withIntersectionObserver(() => {
+      const onShown = vi.fn();
+      const stop = observeCanvasVisibility(document.createElement('canvas'), onShown);
+      const hidden = vi.spyOn(document, 'hidden', 'get');
+
+      hidden.mockReturnValue(true);
+      document.dispatchEvent(new Event('visibilitychange'));
+      expect(onShown).not.toHaveBeenCalled();
+
+      hidden.mockReturnValue(false);
+      document.dispatchEvent(new Event('visibilitychange'));
+      expect(onShown).toHaveBeenCalledOnce();
+
+      // Cleanup has to detach the document listener, not just the observer.
+      stop();
+      document.dispatchEvent(new Event('visibilitychange'));
+      expect(onShown).toHaveBeenCalledOnce();
+      hidden.mockRestore();
+    });
   });
 });

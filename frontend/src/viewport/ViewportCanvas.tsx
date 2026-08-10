@@ -555,6 +555,45 @@ function PaintObserver({ marker, startedAt, onClientFrame }: {
   return null;
 }
 
+/**
+ * Repaints when the canvas comes back into view.
+ *
+ * The renderer is `frameloop="demand"` over a WebGL context without
+ * `preserveDrawingBuffer`, so the drawing buffer is discarded once the browser
+ * has composited it. That is the right trade for a viewport that only changes
+ * when the design does -- but it means any period where the canvas is not being
+ * composited ends with an empty canvas, and demand rendering has, by
+ * definition, no reason to draw another frame.
+ *
+ * The dock hides an inactive panel, so this bites whenever the viewport shares
+ * a tab group: below 800px every panel collapses into one, and switching to the
+ * VIEWPORT tab showed an empty black rectangle until the user happened to drag
+ * in it. useCanvasRemeasure does not cover this, because on the way back the
+ * canvas is already the right size -- nothing needs remeasuring, only redrawing.
+ */
+export function observeCanvasVisibility(canvas: Element, onShown: () => void): () => void {
+  const cleanups: Array<() => void> = [];
+  if (typeof IntersectionObserver !== 'undefined') {
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) onShown();
+    });
+    observer.observe(canvas);
+    cleanups.push(() => observer.disconnect());
+  }
+  if (typeof document !== 'undefined') {
+    // Tab-away discards the buffer for the same reason a hidden panel does.
+    const onVisibility = () => { if (!document.hidden) onShown(); };
+    document.addEventListener('visibilitychange', onVisibility);
+    cleanups.push(() => document.removeEventListener('visibilitychange', onVisibility));
+  }
+  return () => cleanups.forEach((cleanup) => cleanup());
+}
+
+function useRepaintWhenShown(scheduler: DemandRenderScheduler): void {
+  const gl = useThree((state) => state.gl);
+  useEffect(() => observeCanvasVisibility(gl.domElement, () => scheduler.schedule()), [gl, scheduler]);
+}
+
 function Scene({ scene, sceneMarker, mode, showEnclosure, sectionCut, cameraRequest, zoomRequest, cameraProjection, preferences, frameStartedAt, onClientFrame, theme, onCameraDirection }: Omit<ViewportCanvasProps, 'onRenderFailure'>) {
   const invalidate = useThree((state) => state.invalidate);
   const scheduler = useMemo(() => new DemandRenderScheduler(invalidate), [invalidate]);
@@ -567,6 +606,7 @@ function Scene({ scene, sceneMarker, mode, showEnclosure, sectionCut, cameraRequ
 
   useEffect(() => installViewportTestHook(scheduler), [scheduler]);
   useEffect(() => () => scheduler.dispose(), [scheduler]);
+  useRepaintWhenShown(scheduler);
   useEffect(() => {
     scheduler.schedule();
   }, [mode, scheduler, sectionCut, showEnclosure]);
