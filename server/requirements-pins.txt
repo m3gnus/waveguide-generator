@@ -2,4 +2,4 @@
 git+https://github.com/m3gnus/hornlab-bempp-bem.git@c6f40771f9d7c49ef0a6e2ae02744cacf5c53315#egg=hornlab-bempp-bem
 git+https://github.com/m3gnus/hornlab-metal-bem.git@4bcf889cf8f1740b0a4b8de734624cd434f7dcbe#egg=hornlab-metal-bem
 git+https://github.com/m3gnus/hornlab-plots.git@52cb9c41f1efc67e038c16347088bd0eefee76af#egg=hornlab-plots
-git+https://github.com/m3gnus/hornlab-waveguide-mesher.git@8a8f3837da20416d3865b1a5bb1f65906a232764#egg=hornlab-waveguide-mesher
+git+https://github.com/m3gnus/hornlab-waveguide-mesher.git@80dff47a918fbbf699933359c8c9dde228bc7a55#egg=hornlab-waveguide-mesher
