@@ -6,6 +6,8 @@ from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 from pathlib import Path
+import threading
+import time
 import sqlite3
 
 from server.cadlink.identity import SaveIdentity
@@ -174,3 +176,78 @@ def test_export_builder_receives_allocated_identity_and_is_skipped_on_retry(tmp_
     assert calls[0]["sequence"] == 1
     assert original["geometry_hash"] == "sha256:geometry"
     assert original["artifact_sha256"] == "sha256:artifact"
+
+
+def test_concurrent_export_builders_are_serialized_with_gapless_parent_linkage(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "cadlink.db"
+    seed = CadLinkStore(db_path)
+    saved = _save(seed)
+    design_id = saved["identity"].design_id  # type: ignore[union-attr]
+    seed.close()
+
+    def allocate(index: int):
+        store = CadLinkStore(db_path)
+        try:
+            return store.allocate_export(
+                design_id=design_id,
+                idempotency_key=f"concurrent-{index}",
+                export_builder=lambda facts: (
+                    time.sleep(0.02)
+                    or {
+                        "manifest_json": json.dumps(facts),
+                        "geometry_hash": f"sha256:geometry-{index}",
+                        "artifact_sha256": f"sha256:artifact-{index}",
+                    }
+                ),
+            )
+        finally:
+            store.close()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        rows = list(pool.map(allocate, range(2)))
+
+    ordered = sorted(rows, key=lambda row: row["sequence"])
+    assert [row["sequence"] for row in ordered] == [1, 2]
+    assert ordered[0]["parent_export_id"] is None
+    assert ordered[1]["parent_export_id"] == ordered[0]["export_id"]
+
+
+def test_concurrent_same_key_runs_exactly_one_export_builder(tmp_path: Path) -> None:
+    db_path = tmp_path / "cadlink.db"
+    seed = CadLinkStore(db_path)
+    saved = _save(seed)
+    design_id = saved["identity"].design_id  # type: ignore[union-attr]
+    seed.close()
+    calls = 0
+    calls_lock = threading.Lock()
+
+    def allocate(_index: int):
+        store = CadLinkStore(db_path)
+
+        def build(facts):
+            nonlocal calls
+            with calls_lock:
+                calls += 1
+            time.sleep(0.03)
+            return {
+                "manifest_json": json.dumps(facts),
+                "geometry_hash": "sha256:geometry",
+                "artifact_sha256": "sha256:artifact",
+            }
+
+        try:
+            return store.allocate_export(
+                design_id=design_id,
+                idempotency_key="same-key",
+                export_builder=build,
+            )
+        finally:
+            store.close()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        rows = list(pool.map(allocate, range(2)))
+
+    assert rows[0] == rows[1]
+    assert calls == 1

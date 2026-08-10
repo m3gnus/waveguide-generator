@@ -142,6 +142,9 @@ class WorkspaceState:
     def selected_path(self) -> Path | None:
         if not self._loaded:
             self._load()
+        if self._selected is not None and not self._selected.is_dir():
+            logger.warning("Selected workspace path is unavailable: %s", self._selected)
+            self._selected = None
         return self._selected
 
     def _load(self) -> None:
@@ -182,7 +185,8 @@ def create_workspace_router(state: WorkspaceState) -> APIRouter:
 
     @router.get("/path")
     async def workspace_path() -> dict[str, Any]:
-        return {"path": str(state.path()), "selected": state.selected_path() is not None}
+        selected = state.selected_path()
+        return {"path": str(selected or state.path()), "selected": selected is not None}
 
     @router.post("/select")
     async def workspace_select() -> dict[str, Any]:
