@@ -7,16 +7,33 @@ import {
   openDesignText,
   saveDesignDocument,
   type ImportReport,
+  type CadLinkOpenState,
   type StepBody,
 } from '../api/designIo';
-import { useDesignStore } from '../stores/design';
-import { useDocumentStore } from '../stores/document';
+import { resetDesignStore, useDesignStore } from '../stores/design';
+import { resetDocumentStore, useDocumentStore, type CadLinkClassification, type DesignIdentity } from '../stores/document';
 import { jobsSocket } from '../api/jobsSocket';
 import { nextFileJobNaming, preferencesStore } from '../prefs/preferences';
 import { Icon } from '../shell/icons';
 import { filenameStem } from '../viewport/presentation';
 
 const ACCEPT = '.cfg,.txt,.mwg,text/plain';
+
+const CLASSIFICATION_DISPLAY: Record<CadLinkClassification, { label: string; detail: string }> = {
+  current: { label: 'current', detail: 'Current: this file matches the latest saved version in this machine’s CAD-link registry.' },
+  stale_copy: { label: 'stale copy', detail: 'Stale copy: this is an older saved version. Saving will preserve both versions by creating a fork.' },
+  externally_edited: { label: 'edited elsewhere', detail: 'Edited elsewhere: the design text changed outside this Waveguide Generator session.' },
+  foreign: { label: 'foreign', detail: 'Foreign: this identity is not yet known to this machine’s CAD-link registry.' },
+  missing: { label: 'unlinked', detail: 'Unlinked: this file has no CAD-link identity yet. Its first save will create one.' },
+};
+
+function editableIdentity(identity: DesignIdentity | null | undefined): DesignIdentity | null {
+  return identity ? {
+    designId: identity.designId,
+    lineageId: identity.lineageId,
+    baseEditVersion: identity.baseEditVersion,
+  } : null;
+}
 
 function reportText(report: ImportReport): string {
   const migrations = report.migrationsApplied.length
@@ -53,9 +70,14 @@ export function DesignFileMenu() {
   const savedRevision = useDocumentStore((state) => state.savedRevision);
   const setFilename = useDocumentStore((state) => state.setFilename);
   const markSaved = useDocumentStore((state) => state.markSaved);
+  const identity = useDocumentStore((state) => state.identity);
+  const classification = useDocumentStore((state) => state.classification);
+  const setCadLink = useDocumentStore((state) => state.setCadLink);
+  const adoptSavedIdentity = useDocumentStore((state) => state.adoptSavedIdentity);
   const [open, setOpen] = useState(false);
   const [exportsOpen, setExportsOpen] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [adoptionCandidate, setAdoptionCandidate] = useState<CadLinkOpenState['adoptionCandidate']>(null);
   const [busy, setBusy] = useState(false);
   const openInput = useRef<HTMLInputElement>(null);
   const reportInput = useRef<HTMLInputElement>(null);
@@ -72,6 +94,7 @@ export function DesignFileMenu() {
   async function act(operation: () => Promise<void>) {
     setBusy(true);
     setMessage(null);
+    setAdoptionCandidate(null);
     try { await operation(); } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
@@ -93,24 +116,46 @@ export function DesignFileMenu() {
       const opened = await openDesignText(text);
       replaceDesign(hydrateDesignDocument(opened.design));
       setFilename(`${filenameStem(file.name)}.cfg`);
+      setCadLink(editableIdentity(opened.cadlink?.identity), opened.cadlink?.classification ?? 'missing');
       preferencesStore.update(nextFileJobNaming(
         file.name,
         jobsSocket.getSnapshot().jobs.map((job) => job.label),
       ));
       markSaved(useDesignStore.getState().designRevision);
       setMessage(reportText(opened));
+      if (opened.cadlink?.classification === 'missing') setAdoptionCandidate(opened.cadlink.adoptionCandidate);
     });
   }
 
   async function save() {
     await act(async () => {
       const savingRevision = revision;
-      const response = await saveDesignDocument(design, filename);
+      const savedName = filenameStem(filename);
+      const response = await saveDesignDocument(design, filename, identity);
       downloadText(response.text, filename || response.suggestedFilename);
       setFilename(response.suggestedFilename);
+      adoptSavedIdentity(response.identity);
       markSaved(savingRevision);
-      setMessage(`Saved ${response.suggestedFilename}`);
+      setMessage(response.forked
+        ? `Saved as a new fork of ${savedName}`
+        : `Saved ${response.suggestedFilename}`);
     });
+  }
+
+  function newDesign() {
+    if (revision !== savedRevision && !window.confirm('Discard unsaved changes and create a new design?')) return;
+    resetDesignStore();
+    resetDocumentStore();
+    setMessage('New design');
+    setAdoptionCandidate(null);
+    setOpen(false);
+  }
+
+  function adoptCandidate() {
+    if (!adoptionCandidate) return;
+    setCadLink(editableIdentity(adoptionCandidate), 'current');
+    setMessage(`Re-adopted CAD link for ${adoptionCandidate.filename}`);
+    setAdoptionCandidate(null);
   }
 
   async function exportOne(kind: 'step' | 'stl', stepBody: StepBody = 'solid') {
@@ -131,14 +176,21 @@ export function DesignFileMenu() {
   }
 
   return <div ref={root} className="design-file-menu">
-    <button className="file-chip" title="Design file menu" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
+    <button className="file-chip" title={classification ? CLASSIFICATION_DISPLAY[classification].detail : 'Design file menu'} onClick={() => setOpen((value) => !value)} aria-expanded={open}>
       <Icon name="folder"/><span>{filenameStem(filename)}<em>.cfg</em></span>
+      {classification && <small
+        className="cadlink-badge"
+        aria-label={`CAD link: ${CLASSIFICATION_DISPLAY[classification].label}`}
+        title={CLASSIFICATION_DISPLAY[classification].detail}
+        style={{ color: 'var(--fg3)', fontSize: 9, fontWeight: 500, letterSpacing: '.02em' }}
+      >{CLASSIFICATION_DISPLAY[classification].label}</small>}
       {revision !== savedRevision && <i className="unsaved-dot" aria-label="Unsaved changes"/>}
       <span className="chev">⌄</span>
     </button>
     <input ref={openInput} hidden tabIndex={-1} type="file" accept={ACCEPT} onChange={(event) => void readSelected(event.currentTarget, false)}/>
     <input ref={reportInput} hidden tabIndex={-1} type="file" accept={ACCEPT} onChange={(event) => void readSelected(event.currentTarget, true)}/>
     {open && <div role="menu" aria-label="Design file menu" className="design-menu-popover">
+      <button role="menuitem" className="design-menu-item" disabled={busy} onClick={newDesign}><span>New</span><kbd>cfg</kbd></button>
       <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => openInput.current?.click()}><span>Open…</span><kbd>cfg</kbd></button>
       <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void save()}><span>Save</span><kbd>cfg</kbd></button>
       <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => reportInput.current?.click()}><span>Import report…</span><span>›</span></button>
@@ -151,6 +203,13 @@ export function DesignFileMenu() {
         <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void exportProfiles()}><span>Profiles CSV</span><span>2 files</span></button>
       </div>}
     </div>}
-    {message && <div role="status" className="design-menu-status" onClick={() => setMessage(null)}>{message}</div>}
+    {(message || adoptionCandidate) && <div role="status" className="design-menu-status" onClick={() => { setMessage(null); setAdoptionCandidate(null); }}>
+      {message}
+      {adoptionCandidate && <button
+        type="button"
+        onClick={(event) => { event.stopPropagation(); adoptCandidate(); }}
+        style={{ marginLeft: 10, padding: '3px 6px', border: '1px solid var(--hair)', borderRadius: 4, background: 'var(--ctl-grad)' }}
+      >Re-adopt CAD link</button>}
+    </div>}
   </div>;
 }

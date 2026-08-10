@@ -6,6 +6,7 @@ import {
   type DesignFamily,
   type ExprNumber,
 } from '../stores/design';
+import type { CadLinkClassification, DesignIdentity } from '../stores/document';
 
 export interface MigrationApplication {
   name: string;
@@ -23,13 +24,31 @@ export interface ImportReport {
   };
 }
 
-export interface OpenDesignResponse extends ImportReport {
+export interface CadLinkOpenState {
+  identity: (DesignIdentity & {
+    editVersion: number;
+    savedAt: string;
+    savedDesignHash: string;
+    schema: number;
+  }) | null;
+  classification: CadLinkClassification;
+  adoptionCandidate: (DesignIdentity & { filename: string }) | null;
+}
+
+export interface InspectDesignResponse extends ImportReport {
+  cadlink: CadLinkOpenState;
+}
+
+export interface OpenDesignResponse extends InspectDesignResponse {
   design: Record<string, unknown>;
 }
 
 export interface SaveDesignResponse {
   text: string;
   suggestedFilename: string;
+  identity: DesignIdentity;
+  forked: boolean;
+  from: { designId: string; editVersion: number; exportId: string | null } | null;
 }
 
 async function errorMessage(response: Response): Promise<string> {
@@ -55,19 +74,20 @@ export function openDesignText(text: string, fetcher: typeof fetch = fetch): Pro
   return postText('/api/design/open', text, fetcher);
 }
 
-export function inspectDesignText(text: string, fetcher: typeof fetch = fetch): Promise<ImportReport> {
+export function inspectDesignText(text: string, fetcher: typeof fetch = fetch): Promise<InspectDesignResponse> {
   return postText('/api/design/import-report', text, fetcher);
 }
 
 export async function saveDesignDocument(
   design: DesignDocument,
   filename: string,
+  identity: DesignIdentity | null = null,
   fetcher: typeof fetch = fetch,
 ): Promise<SaveDesignResponse> {
   const response = await fetcher('/api/design/save', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ design: serializeDesign(design), filename }),
+    body: JSON.stringify({ design: serializeDesign(design), filename, identity }),
   });
   if (!response.ok) throw new Error(await errorMessage(response));
   return response.json() as Promise<SaveDesignResponse>;

@@ -81,10 +81,20 @@ describe('design file export menu', () => {
   });
 
   it('names the next run from a successfully opened standalone config', async () => {
+    const identity = {
+      designId: 'wgd_01K00000000000000000000000',
+      lineageId: 'wgl_01K00000000000000000000000',
+      baseEditVersion: 3,
+      editVersion: 3,
+      savedAt: '2026-08-10T10:00:00Z',
+      savedDesignHash: 'sha256:0123456789abcdef',
+      schema: 1,
+    };
     vi.mocked(fetch).mockImplementationOnce(async () => new Response(JSON.stringify({
       dialect: 'ath', migrationsApplied: [],
       passthrough: { keysPreserved: [], blocksPreserved: [], keyCount: 0, blockCount: 0 },
       design: useDesignStore.getState().design,
+      cadlink: { identity, classification: 'stale_copy', adoptionCandidate: null },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
     vi.spyOn(jobsSocket, 'getSnapshot').mockReturnValue({
       connection: 'connected', epoch: 1, cursor: 1, error: null,
@@ -104,6 +114,75 @@ describe('design file export menu', () => {
 
     expect(preferencesStore.getSnapshot()).toMatchObject({ outputName: 'horn', jobVersion: 15 });
     expect(useDocumentStore.getState().filename).toBe('260701_horn_v13.cfg');
+    expect(useDocumentStore.getState()).toMatchObject({ identity: {
+      designId: identity.designId,
+      lineageId: identity.lineageId,
+      baseEditVersion: 3,
+    }, classification: 'stale_copy' });
+    expect(container.querySelector('.cadlink-badge')?.textContent).toBe('stale copy');
+    expect(container.querySelector('.cadlink-badge')?.getAttribute('title')).toContain('Saving will preserve both versions');
+  });
+
+  it('adopts an auto-fork identity and reports it with the existing non-blocking toast', async () => {
+    const original = {
+      designId: 'wgd_01K00000000000000000000000',
+      lineageId: 'wgl_01K00000000000000000000000',
+      baseEditVersion: 3,
+    };
+    const fork = { ...original, designId: 'wgd_01K00000000000000000000001', baseEditVersion: 1 };
+    useDocumentStore.getState().setFilename('copied-horn.cfg');
+    useDocumentStore.getState().setCadLink(original, 'stale_copy');
+    vi.mocked(fetch).mockImplementationOnce(async () => new Response(JSON.stringify({
+      text: 'CadLink = {\n}\n',
+      suggestedFilename: 'copied-horn.cfg',
+      identity: fork,
+      forked: true,
+      from: { designId: original.designId, editVersion: 3, exportId: null },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+    act(() => root.render(<DesignFileMenu/>));
+    act(() => container.querySelector<HTMLButtonElement>('button.file-chip')!.click());
+    const save = [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+      .find((button) => button.textContent?.startsWith('Save'))!;
+    await act(async () => { save.click(); });
+
+    const request = vi.mocked(fetch).mock.calls[0];
+    expect(JSON.parse(String(request[1]?.body))).toMatchObject({ identity: original, filename: 'copied-horn.cfg' });
+    expect(useDocumentStore.getState()).toMatchObject({ identity: fork, classification: 'current' });
+    expect(container.querySelector('[role="status"]')?.textContent).toBe('Saved as a new fork of copied-horn');
+  });
+
+  it('offers hash-based identity re-adoption without blocking open', async () => {
+    const candidate = {
+      designId: 'wgd_01K00000000000000000000000',
+      lineageId: 'wgl_01K00000000000000000000000',
+      baseEditVersion: 6,
+      filename: 'registered.cfg',
+    };
+    vi.mocked(fetch).mockImplementationOnce(async () => new Response(JSON.stringify({
+      dialect: 'mwg', migrationsApplied: [],
+      passthrough: { keysPreserved: [], blocksPreserved: [], keyCount: 0, blockCount: 0 },
+      design: useDesignStore.getState().design,
+      cadlink: { identity: null, classification: 'missing', adoptionCandidate: candidate },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+    act(() => root.render(<DesignFileMenu/>));
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+    Object.defineProperty(input, 'files', {
+      configurable: true,
+      value: [{ name: 'untagged.cfg', text: async () => 'Length = 120' }],
+    });
+    await act(async () => { input.dispatchEvent(new Event('change', { bubbles: true })); });
+
+    expect(useDocumentStore.getState()).toMatchObject({ identity: null, classification: 'missing' });
+    const adopt = container.querySelector<HTMLButtonElement>('[role="status"] button')!;
+    expect(adopt.textContent).toBe('Re-adopt CAD link');
+    act(() => adopt.click());
+    expect(useDocumentStore.getState()).toMatchObject({ identity: {
+      designId: candidate.designId,
+      lineageId: candidate.lineageId,
+      baseEditVersion: candidate.baseEditVersion,
+    }, classification: 'current' });
   });
 
   it('does not change run naming when opening a config fails', async () => {
@@ -123,5 +202,22 @@ describe('design file export menu', () => {
 
     expect(preferencesStore.getSnapshot()).toMatchObject({ outputName: 'keep-me', jobVersion: 7 });
     expect(useDocumentStore.getState().filename).not.toBe('should_not_replace_v99.cfg');
+  });
+
+  it('starts New without carrying the previous file identity', () => {
+    useDocumentStore.getState().setFilename('old.cfg');
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_01K00000000000000000000000',
+      lineageId: 'wgl_01K00000000000000000000000',
+      baseEditVersion: 5,
+    }, 'current');
+    act(() => root.render(<DesignFileMenu/>));
+    act(() => container.querySelector<HTMLButtonElement>('button.file-chip')!.click());
+    const create = [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+      .find((button) => button.textContent?.startsWith('New'))!;
+    act(() => create.click());
+    expect(useDocumentStore.getState()).toMatchObject({
+      filename: 'tritonia_mk2.cfg', identity: null, classification: null,
+    });
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { downloadGeometryExport, hydrateDesignDocument } from './designIo';
+import { downloadGeometryExport, hydrateDesignDocument, saveDesignDocument } from './designIo';
 import { serializeDesign } from '../stores/design';
 
 describe('design hydration', () => {
@@ -82,5 +82,25 @@ describe('geometry export requests', () => {
     await downloadGeometryExport('stl', design, 3, 'horn', undefined, undefined, fetcher);
     await downloadGeometryExport('profiles', design, 3, 'horn', 'slices', undefined, fetcher);
     expect(urls).toEqual(['/api/export/stl', '/api/export/profiles?kind=slices']);
+  });
+});
+
+describe('design save requests', () => {
+  it('sends the document identity as the server CAS token', async () => {
+    const identity = {
+      designId: 'wgd_01K00000000000000000000000',
+      lineageId: 'wgl_01K00000000000000000000000',
+      baseEditVersion: 8,
+    };
+    let payload: Record<string, unknown> = {};
+    const fetcher = (async (_url: string, init?: RequestInit) => {
+      payload = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({
+        text: 'saved', suggestedFilename: 'horn.cfg', identity: { ...identity, baseEditVersion: 9 }, forked: false, from: null,
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as typeof fetch;
+
+    await saveDesignDocument(hydrateDesignDocument({ formula: 'OSSE' }), 'horn.cfg', identity, fetcher);
+    expect(payload).toMatchObject({ filename: 'horn.cfg', identity });
   });
 });
