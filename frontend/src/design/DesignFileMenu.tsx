@@ -16,7 +16,7 @@ import { resetDocumentStore, useDocumentStore, type CadLinkClassification, type 
 import { jobsSocket } from '../api/jobsSocket';
 import { nextFileJobNaming, preferencesStore } from '../prefs/preferences';
 import { Icon } from '../shell/icons';
-import { filenameStem } from '../viewport/presentation';
+import { documentDisplayName, filenameStem } from '../viewport/presentation';
 
 const ACCEPT = '.cfg,.txt,.mwg,text/plain';
 
@@ -194,7 +194,7 @@ export function DesignFileMenu() {
 
   return <div ref={root} className="design-file-menu">
     <button className="file-chip" title={classification ? CLASSIFICATION_DISPLAY[classification].detail : 'Design file menu'} onClick={() => setOpen((value) => !value)} aria-expanded={open}>
-      <Icon name="folder"/><span>{filenameStem(filename)}<em>.cfg</em></span>
+      <Icon name="folder"/><span>{documentDisplayName(filename) ? <>{documentDisplayName(filename)}<em>.cfg</em></> : <em>Untitled</em>}</span>
       {classification && <small
         className="cadlink-badge"
         aria-label={`CAD link: ${CLASSIFICATION_DISPLAY[classification].label}`}

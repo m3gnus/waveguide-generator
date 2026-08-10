@@ -282,8 +282,12 @@ describe('design file export menu', () => {
     const create = [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
       .find((button) => button.textContent?.startsWith('New'))!;
     act(() => create.click());
+    // A new design is untitled. This used to assert the filename came back as
+    // a specific .cfg, which is the bug written down: New produced a document
+    // named after someone's test fixture, and the tab, the file chip and the
+    // viewport title all repeated it.
     expect(useDocumentStore.getState()).toMatchObject({
-      filename: 'tritonia_mk2.cfg', identity: null, classification: null,
+      filename: '', identity: null, classification: null,
     });
   });
 });
