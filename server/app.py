@@ -146,6 +146,20 @@ def create_app(
     # The mesher imports lazily at every call site, so without this the first
     # control a user touches pays for the whole import graph.
     application.router.add_event_handler("startup", prewarm_mesher)
+
+    def _keep_sigpipe_ignored() -> None:
+        # gmsh's C++ runtime installs its own signal handlers during the
+        # prewarm above, and on Linux that can leave SIGPIPE at the default
+        # action -- after which a client disconnecting mid-response kills the
+        # whole server instead of raising BrokenPipeError. Restore Python's
+        # startup state once the native stack is loaded.
+        import os as _os
+        import signal as _signal
+
+        if _os.name == "posix":
+            _signal.signal(_signal.SIGPIPE, _signal.SIG_IGN)
+
+    application.router.add_event_handler("startup", _keep_sigpipe_ignored)
     # Likewise the engine probe: it is the page load's slowest request, and
     # leaving it lazy made it contend with the first symmetry resolution.
     application.router.add_event_handler("startup", engine_registry.prewarm)
