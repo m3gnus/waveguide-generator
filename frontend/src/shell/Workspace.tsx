@@ -16,6 +16,8 @@ import { ViewportPanel } from './ViewportPanel';
 
 export const LEGACY_LAYOUT_KEY = 'wg2.dockview.layout.v1';
 export const LAYOUT_KEY = 'wg2.dockview.layout.v3';
+/** Which responsive arrangement LAYOUT_KEY was saved for. See restoreDisposition. */
+export const LAYOUT_MODE_KEY = 'wg2.dockview.mode.v3';
 
 const components = {
   geometry: () => <ParamPanel tab="geometry" />,
@@ -75,6 +77,32 @@ const JOBS_WIDTH = 320;
 const RESULTS_HEIGHT = 340;
 const COMPACT_BREAKPOINT = 800;
 const MEDIUM_BREAKPOINT = 1100;
+
+export type LayoutMode = 'compact' | 'medium' | 'wide';
+
+/** The responsive arrangement a dock of this width gets. */
+export function layoutMode(width: number): LayoutMode {
+  return width < COMPACT_BREAKPOINT ? 'compact' : width < MEDIUM_BREAKPOINT ? 'medium' : 'wide';
+}
+
+/**
+ * Whether a saved layout can be restored into the window that is opening now.
+ *
+ * The dock rebuilds itself when a live resize crosses a breakpoint, but that
+ * only covers a window being dragged. Nothing covered the layout being *saved*
+ * in one arrangement and *restored* in another: narrow the window once and the
+ * compact single-group arrangement is persisted, and every later session
+ * reopened it on a full-width monitor -- five panels stacked into one tab strip
+ * with no indication why, and no way back except finding Reset layout.
+ *
+ * A layout saved before this key existed has no recorded mode. That is treated
+ * as restorable, because the alternative is silently discarding the arrangement
+ * of every existing install on first upgrade.
+ */
+export function restoreDisposition(savedMode: string | null, width: number): 'restore' | 'rebuild' {
+  if (!savedMode) return 'restore';
+  return savedMode === layoutMode(width) ? 'restore' : 'rebuild';
+}
 const FALLBACK_WIDTH = 1440;
 const FALLBACK_HEIGHT = 900;
 /** Top bar plus status bar, excluded when guessing the dock size from the window. */
@@ -228,8 +256,7 @@ export function nextLayoutAction(
   const [width, height] = current;
   if (!width || !height) return 'none';
   if (width === laidOut[0] && height === laidOut[1]) return 'none';
-  const mode = (value: number) => value < COMPACT_BREAKPOINT ? 'compact' : value < MEDIUM_BREAKPOINT ? 'medium' : 'wide';
-  if (mode(width) !== mode(laidOut[0])) return 'rebuild';
+  if (layoutMode(width) !== layoutMode(laidOut[0])) return 'rebuild';
   return 'layout';
 }
 
@@ -281,8 +308,9 @@ export function Workspace({ resetKey }: { resetKey: number }) {
     const initialSize = measureHost(host.current, dockview.api);
     const initialLayoutSize = seedSize(initialSize);
     const stored = localStorage.getItem(LAYOUT_KEY);
+    const storedMode = localStorage.getItem(LAYOUT_MODE_KEY);
     let restored = false;
-    if (stored) {
+    if (stored && restoreDisposition(storedMode, initialLayoutSize[0]) === 'restore') {
       try {
         dockview.api.fromJSON(JSON.parse(stored) as ReturnType<DockviewApi['toJSON']>);
         // Restored layouts see the same transient 10x100 mount measurement as
@@ -291,6 +319,7 @@ export function Workspace({ resetKey }: { resetKey: number }) {
         restored = true;
       } catch {
         localStorage.removeItem(LAYOUT_KEY);
+        localStorage.removeItem(LAYOUT_MODE_KEY);
       }
     }
     if (!restored && !coldStartSeeded.current) {
@@ -322,6 +351,9 @@ export function Workspace({ resetKey }: { resetKey: number }) {
       }
       if (!apiRef.current || !dockview.api.totalPanels) return;
       localStorage.setItem(LAYOUT_KEY, JSON.stringify(dockview.api.toJSON()));
+      // Recorded with the layout so the next session can tell whether this
+      // arrangement was built for the window it is about to open in.
+      localStorage.setItem(LAYOUT_MODE_KEY, layoutMode(measureHost(host.current, dockview.api)[0] || initialLayoutSize[0]));
     };
     const schedulePersist = () => {
       if (persistTimer !== null) clearTimeout(persistTimer);

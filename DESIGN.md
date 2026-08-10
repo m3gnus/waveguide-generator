@@ -38,7 +38,7 @@ typography:
     fontFeature: "tnum 1"
   label:
     fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
-    fontSize: "10px"
+    fontSize: "11px"
     fontWeight: 660
     letterSpacing: "0.1em"
   readout:
@@ -48,7 +48,7 @@ typography:
     fontFeature: "tnum 1"
   micro:
     fontFamily: "ui-monospace, SFMono-Regular, 'SF Mono', Menlo, 'DejaVu Sans Mono', Consolas, monospace"
-    fontSize: "10px"
+    fontSize: "11px"
     fontWeight: 400
     letterSpacing: "0.04em"
 rounded:
@@ -122,7 +122,7 @@ cyan accent behaves like a backlit indicator on real measurement hardware:
 sparse, cool, and always attached to something the system actually knows.
 
 Density is the aesthetic, not a compromise against it. A 32px control height,
-a 10–13px type range, and 3/6/8/12/16px spacing steps let ~119 parameters and
+an 11–13px type range, and 3/6/8/12/16px spacing steps let ~119 parameters and
 ~28 runs coexist on one screen without the user scrolling to compare. What
 keeps that dense grid legible is not whitespace but rank: uppercase tracked
 micro-labels for section names, monospace tabular figures for every value, a
@@ -140,7 +140,7 @@ second first-class design, not a courtesy.
 - One cool accent used as an indicator, never as decoration
 - Monospace tabular numerals for every value the system computes
 - Uppercase tracked micro-labels as the only "heading" idiom
-- Dense by design: 32px controls, 10–13px type, 3–16px spacing
+- Dense by design: 32px controls, 11–13px type, 3–16px spacing
 - Two complete themes, dark ink and warm paper
 
 ## Colors
@@ -183,6 +183,13 @@ The signal set. Each of these means one thing and is never used for emphasis.
   theme's ground, deliberately warm so a bright room reads as paper under a
   lamp rather than as a blown-out screen.
 
+The frontmatter carries the dark theme's values, which are the system's
+canonical ones. The light theme re-derives each signal hue against paper rather
+than reusing it: amber is `#985015` there, not the dark theme's `#f2b544`, which
+measured 4.08:1 on the canvas and 3.66:1 on the status rail and so failed AA on
+exactly the text — unsaved, stale, warning — that must not be missed. A signal
+hue is a contrast obligation before it is a colour.
+
 ### Named Rules
 **The Indicator Rule.** Cyan is an indicator, not a brand color. It is legal on
 exactly four things: the primary action, the current selection, a value being
@@ -210,15 +217,16 @@ micro-labels. The body sets `font-variant-numeric: tabular-nums` globally, so
 even proportional text keeps its digits in columns.
 
 ### Hierarchy
-- **Title** (600, 13px, 1.35): the viewport's design name, dialog headings, and
-  the one or two places the interface names the thing being worked on.
+- **Title** (600, 13px, 1.35): the viewport's design name and the one or two
+  places the interface names the thing being worked on. Dialog headings take the
+  one step above it (18px), the only type in the application with room to lead.
 - **Body** (400, 12px, 1.35): parameter names, menu items, and all prose. The
   practical ceiling for prose in this UI is about 60ch inside a popover.
 - **Readout** (400, 12px mono, tabular): every number the system computes or the
   user types — field values, timings, element counts, frequencies.
-- **Label** (660, 10px, 0.1em tracking, uppercase): section names, panel tabs,
+- **Label** (660, 11px, 0.1em tracking, uppercase): section names, panel tabs,
   state badges, and table headers. This is the system's only heading idiom.
-- **Micro** (400, 10px mono, 0.04em): units, timestamps, run metadata, status
+- **Micro** (400, 11px mono, 0.04em): units, timestamps, run metadata, status
   bar, and anything the user reads only when they go looking for it.
 
 ### Named Rules
@@ -230,8 +238,12 @@ sit in a column.
 symbol never truncates and the prose name does. Users scan for `(a0)`, not for
 "Throat coverage angle."
 
-**The Four-Step Rule.** The type scale is 10 / 11 / 12 / 13px and nothing else.
-A new size is a request to reconsider the hierarchy, not to add a step.
+**The Eleven-Pixel Floor.** The type scale is 11 / 12 / 13 / 18px and nothing
+else, and 11px is a floor, not a starting point: no functional text in the
+interface is set smaller, whatever its role. Ranks below 13px separate by family
+and case -- mono, uppercase, tracking -- rather than by fractional pixels, which
+never read as hierarchy anyway. A new size is a request to reconsider the
+hierarchy, not to add a step.
 
 ## Layout
 
@@ -310,8 +322,9 @@ and as the quadrant picker's crosshair.
 - **Shape:** 5px radius (`{rounded.control}`), 32px tall in the top rail, 26–28px
   in panels, 21px in the results toolbar.
 - **Solve (primary):** the only filled button in the application — a cyan
-  gradient with a dark cyan-black label, an inset top highlight and a colored
-  drop shadow. There is exactly one on screen and it is the only place the user
+  gradient with a dark cyan-black label, an inset top highlight and a mostly
+  neutral drop shadow carrying a trace of its own hue (a saturated bloom here is
+  the generic glowing-CTA tell, not what a machined control does). There is exactly one on screen and it is the only place the user
   spends compute.
 - **Icon:** transparent at rest, `--ov3` wash and full-strength ink on hover, a
   32px square hit area for a 15px glyph.
@@ -372,7 +385,7 @@ must copy rather than reinvent.
 
 ### Do:
 - **Do** put every computed number in the monospace readout style with tabular
-  figures, at 10px for meta and 12px for values.
+  figures, at 11px for meta and 12px for values.
 - **Do** separate with a 1px hairline and one tonal step. Reach for
   `--hair-soft` inside a panel and `--hair` at its boundary.
 - **Do** give every state a word or a glyph in addition to its hue, following
@@ -383,8 +396,8 @@ must copy rather than reinvent.
   the warm paper theme is warm — a neutral gray in light mode is a bug.
 - **Do** use a container query when the element lives in a rail the user can
   resize.
-- **Do** keep the type scale at 10 / 11 / 12 / 13px and the spacing scale at
-  3 / 6 / 8 / 12 / 16px.
+- **Do** keep the type scale at 11 / 12 / 13 / 18px and the spacing scale at
+  3 / 6 / 8 / 12 / 16px, and never set functional text below 11px.
 
 ### Don't:
 - **Don't** nest a card inside a card, or wrap a group of fields in a box. The

@@ -145,31 +145,20 @@ kbd { padding: 1.5px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 
 .workspace { min-width: 0; min-height: 0; overflow: hidden; padding: 7px; }
 .dockview-host { width: 100%; height: 100%; overflow: hidden; }
 .dock-panel-content { width: 100%; height: 100%; min-width: 0; min-height: 0; }
-.dockview-host.dv-dockview, .dockview-host .dv-dockview { --dv-group-view-background-color: transparent; --dv-tabs-and-actions-container-background-color: transparent; --dv-activegroup-visiblepanel-tab-background-color: var(--ov3); --dv-activegroup-hiddenpanel-tab-background-color: transparent; --dv-inactivegroup-visiblepanel-tab-background-color: var(--ov2); --dv-inactivegroup-hiddenpanel-tab-background-color: transparent; --dv-tab-divider-color: var(--hair-soft); --dv-separator-border: transparent; --dv-paneview-active-outline-color: var(--acc); --dv-drag-over-background-color: rgba(var(--acc-rgb), .10); --dv-drag-over-border-color: var(--acc); --dv-tabs-container-scrollbar-color: var(--scroll); --dv-icon-hover-background-color: var(--ov3); --dv-floating-box-shadow: var(--float-sh); --dv-overlay-z-index: 999; }
+/* Dockview is themed through its own custom properties rather than by
+   out-specifying it. Its tab rules are five classes deep
+   (`.dv-groupview.dv-active-group > … > .dv-tab.dv-active-tab`), so a plain
+   `.dockview-host .dv-tab { color }` loses to them and the label falls back to
+   the library's default white — invisible on the light theme's paper. The four
+   *-tab-color variables are the supported way in, and they cover all four
+   resting states without a single !important. */
+.dockview-host.dv-dockview, .dockview-host .dv-dockview { --dv-group-view-background-color: transparent; --dv-tabs-and-actions-container-background-color: transparent; --dv-activegroup-visiblepanel-tab-background-color: var(--ov3); --dv-activegroup-hiddenpanel-tab-background-color: transparent; --dv-inactivegroup-visiblepanel-tab-background-color: var(--ov2); --dv-inactivegroup-hiddenpanel-tab-background-color: transparent; --dv-activegroup-visiblepanel-tab-color: var(--fg); --dv-activegroup-hiddenpanel-tab-color: var(--fg3); --dv-inactivegroup-visiblepanel-tab-color: var(--fg1); --dv-inactivegroup-hiddenpanel-tab-color: var(--fg3); --dv-tab-divider-color: var(--hair-soft); --dv-separator-border: transparent; --dv-paneview-active-outline-color: var(--acc); --dv-drag-over-background-color: rgba(var(--acc-rgb), .10); --dv-drag-over-border-color: var(--acc); --dv-tabs-container-scrollbar-color: var(--scroll); --dv-icon-hover-background-color: var(--ov3); --dv-floating-box-shadow: var(--float-sh); --dv-overlay-z-index: 999; }
 .dockview-host .dv-grid-view { gap: 7px; }
 .dockview-host .dv-sash-container > .dv-sash { background: transparent; }
 .dockview-host .dv-groupview { position: relative; overflow: hidden; border: 1px solid var(--hair); border-radius: var(--r); background: var(--card-grad); box-shadow: var(--card-sh), 0 1px 0 var(--edge-hi) inset; }
-.dockview-host .dv-tabs-and-actions-container { height: 24px !important; border-bottom: 0; background: transparent; }
-.dockview-host .dv-tabs-container { align-items: center; height: 24px !important; padding: 2px 4px; gap: 3px; }
-.dockview-host .dv-tab { height: 20px; padding: 0 8px; border: 1px solid var(--hair); border-radius: 5px; background: var(--ov1); color: var(--fg3); font-size: var(--text-micro); font-weight: 660; letter-spacing: .1em; text-transform: uppercase; }
-.dockview-host .dv-tab:hover { border-color: var(--hair-hi); color: var(--fg1); }
-.dockview-host .dv-tab.dv-active-tab { border-color: var(--hair-hi); background: var(--ov3); color: var(--fg1); box-shadow: 0 1px 0 var(--edge-hi) inset; }
 .dockview-host .dv-tab .dv-default-tab-content { padding: 0; }
 .dockview-host .dv-tab .dv-default-tab-action { display: none; }
 .dockview-host .dv-content-container { background: transparent; }
-/* Viewport, Results, and Jobs are single-view groups. Their tab is a compact
-   overlaid panel label, so a 20px word no longer reserves an entire row. */
-.dockview-host .dv-groupview:has(.dock-panel-viewport) .dv-tabs-and-actions-container,
-.dockview-host .dv-groupview:has(.dock-panel-results) .dv-tabs-and-actions-container,
-.dockview-host .dv-groupview:has(.dock-panel-jobs) .dv-tabs-and-actions-container { position: absolute; top: 4px; left: 4px; z-index: 20; width: auto; height: 20px !important; border: 0; }
-.dockview-host .dv-groupview:has(.dock-panel-viewport) .dv-tabs-container,
-.dockview-host .dv-groupview:has(.dock-panel-results) .dv-tabs-container,
-.dockview-host .dv-groupview:has(.dock-panel-jobs) .dv-tabs-container { height: 20px !important; padding: 0; }
-.dockview-host .dv-groupview:has(.dock-panel-viewport) .dv-tab,
-.dockview-host .dv-groupview:has(.dock-panel-results) .dv-tab,
-.dockview-host .dv-groupview:has(.dock-panel-jobs) .dv-tab { height: 20px; background: color-mix(in srgb, var(--float-bg) 84%, transparent); backdrop-filter: blur(9px); }
-.dock-panel-results .results-toolbar { padding-left: 76px; }
-.dock-panel-jobs .panel-meta { padding-left: 61px; }
 .panel-scroll { width: 100%; height: 100%; overflow: auto; }
 /* A toolbar, not a row of content: it holds the panel's counts and its gear
    button, so it stays put while the list under it scrolls. The parameter rail's
@@ -620,11 +609,15 @@ textarea:disabled { opacity: .48; }
   background: var(--surface-panel);
   box-shadow: 0 1px 0 var(--edge-hi) inset, 0 10px 28px -24px #000;
 }
+/* Single source of truth for the dock's tab row. An earlier pass overlaid a
+   floating tab chip on the single-view groups and this block was added on top
+   of it, so every declaration here needed !important to beat rules that were
+   dead in the layout they targeted and actively wrong in the collapsed one.
+   The overlay rules are gone; these no longer have to shout. */
 .dockview-host .dv-tabs-and-actions-container {
-  position: static !important;
-  width: 100% !important;
+  width: 100%;
   height: 31px !important;
-  border-bottom: 1px solid var(--border-subtle) !important;
+  border-bottom: 1px solid var(--border-subtle);
   background: var(--ov1);
 }
 /* Single-purpose frames gain the whole title-row height. Multi-tab groups keep
@@ -635,32 +628,35 @@ textarea:disabled { opacity: .48; }
   display: none !important;
 }
 .dockview-host .dv-tabs-container {
+  align-items: center;
   height: 31px !important;
-  padding: 3px 5px !important;
+  padding: 3px 5px;
   gap: 4px;
 }
-.dockview-host .dv-tab,
-.dockview-host .dv-groupview:has(.dock-panel-viewport) .dv-tab,
-.dockview-host .dv-groupview:has(.dock-panel-results) .dv-tab,
-.dockview-host .dv-groupview:has(.dock-panel-jobs) .dv-tab {
+.dockview-host .dv-tab {
   height: 24px;
-  padding-inline: 9px;
+  padding: 0 9px;
   border: 1px solid transparent;
   border-radius: var(--r3);
   background: transparent;
-  color: var(--fg3);
+  /* No `color` here on purpose: the four --dv-*-tab-color variables above own
+     the resting states, and a declaration at this specificity would be dead. */
   font-size: var(--text-micro);
+  font-weight: 660;
   letter-spacing: .1em;
+  text-transform: uppercase;
   backdrop-filter: none;
 }
-.dockview-host .dv-tab:hover { border-color: var(--border-subtle); background: var(--ov2); }
+/* Hover has to out-specify dockview's resting rules, which is what the
+   :not(.dv-active-tab) qualifier buys here: pointing at an inactive tab now
+   brightens its label, which a blanket colour override below it used to
+   swallow. The active tab is already at full strength and needs no hover. */
+.dockview-host .dv-tabs-container > .dv-tab:not(.dv-active-tab):hover { border-color: var(--border-subtle); background: var(--ov2); color: var(--fg1); }
 .dockview-host .dv-tab.dv-active-tab {
   border-color: var(--border-default);
-  background: var(--surface-raised) !important;
-  color: var(--fg) !important;
+  background: var(--surface-raised);
   box-shadow: 0 1px 0 var(--edge-hi) inset;
 }
-.dockview-host .dv-tab:not(.dv-active-tab) { color: var(--fg3) !important; }
 .dock-panel-results .results-toolbar,
 .dock-panel-jobs .panel-meta { padding-left: 10px; }
 
@@ -772,6 +768,10 @@ textarea:disabled { opacity: .48; }
 .ui-check input { width: 15px; height: 15px; accent-color: var(--acc); }
 .preferences-checks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 12px; margin-top: 10px; }
 .preferences-formats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px 12px; margin: 12px 0 0; padding: 12px; border: 1px solid var(--border-subtle); border-radius: var(--r); }
+/* The fieldset's own explanation is prose about the whole group, not the first
+   item in it. As a plain grid child it took one third of the width and set
+   itself three lines deep beside two empty columns. */
+.preferences-formats > .preferences-section-copy { grid-column: 1 / -1; margin: 0 0 6px; }
 .preferences-formats legend { padding-inline: 5px; color: var(--fg3); font-size: var(--text-micro); text-transform: uppercase; letter-spacing: .08em; }
 .job-naming-preferences { display: grid; grid-template-columns: minmax(0, 1fr) 120px; gap: 10px; margin-bottom: 16px; padding: 0; }
 /* The date-prefix toggle is one sentence, not a field: on its own row it reads

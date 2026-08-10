@@ -37,7 +37,10 @@ export function buildParameterPaletteEntries(family?: DesignFamily): PaletteEntr
       id: `parameter-${field.id}`,
       kind: 'Parameters',
       label: field.label,
-      detail: [field.symbol, field.legacyKey].filter(Boolean).join(' · '),
+      // The ATH symbol and the legacy config key are usually the same string
+      // (R, a, a0, k, m, b, r, q), and joining them unconditionally printed
+      // every one of those parameters as "R · R".
+      detail: [...new Set([field.symbol, field.legacyKey].filter(Boolean))].join(' · '),
       keywords: [field.id, field.path, field.symbol, field.legacyKey].filter(Boolean).join(' '),
       matches: (query) => fieldMatchesQuery(field, query) || Boolean(field.symbol?.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())),
       run: () => revealParameterFromPalette(field.id, tab, field.label),
