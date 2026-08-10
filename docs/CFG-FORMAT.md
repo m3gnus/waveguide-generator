@@ -1,6 +1,6 @@
 # Waveguide Generator text configuration format
 
-This document formalizes the ATH-style format used by Waveguide Generator v1 and v2. The conventional suffix is `.cfg` or `.txt`; legacy `.mwg` files use the same grammar and remain readable.
+This document formalizes the ATH-style format used by the original and current Waveguide Generator applications. The conventional suffix is `.cfg` or `.txt`; legacy `.mwg` files use the same grammar and remain readable.
 
 ## Dialects and encoding
 
@@ -59,7 +59,7 @@ The root schema is discriminated by `formula`:
 
 - `OSSE`: accepted as an `OSSE = { ... }` ATH block or the writer's flat keys (`Coverage.Angle`, `Length`, `Term.*`, `Throat.*`, `OS.*`).
 - `R-OSSE`: `R-OSSE = { ... }` with `R`, `a`, `a0`, `b`, `k`, `m`, `q`, `r`, `r0`, and optional `tmax`.
-- `ICW`: `ICW = { ... }` with profile size, coverage/hold, rollback depth/curl, coefficient, angle, and termination fields. This is the v2 extension for the ICW fields already accepted by the solver adapter.
+- `ICW`: `ICW = { ... }` with profile size, coverage/hold, rollback depth/curl, coefficient, angle, and termination fields. This format-2 extension covers the ICW fields already accepted by the solver adapter.
 - `FREEFORM`: the flat keys and blocks below.
 
 The optional common sections cover throat extension, morphing, mesh segmentation and solver sizing, Z-map sampling, quadrant selection, enclosure, source shape/radius/curvature/velocity convention, output flags, frequency sweep, simulation mode, and maximum-size guards.

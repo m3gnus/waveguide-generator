@@ -38,7 +38,7 @@ else
       fail "CPython 3.13 is required. Install it, then run 'python3.13 scripts/bootstrap.py'."
     printf '%s\n' "Preparing the Waveguide Generator Python environment..."
     "$BOOTSTRAP_PYTHON" scripts/bootstrap.py || \
-      fail "The v2 Python environment could not be prepared. Review the installation errors above."
+      fail "The Waveguide Generator Python environment could not be prepared. Review the installation errors above."
   fi
   PYTHON="$REPO_DIR/.venv/bin/python"
 fi

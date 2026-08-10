@@ -23,7 +23,7 @@ export type JobDesignFields = Pick<JobItem, 'script_snapshot'> & {
 };
 
 const UNAVAILABLE_FALLBACK =
-  'This job has no design that v2 can read back, so it cannot be reopened or rerun.';
+  'This job has no design that Waveguide Generator can read back, so it cannot be reopened or rerun.';
 
 export function jobDesignWire(job: Pick<JobItem, 'script_snapshot'>): Record<string, unknown> | null {
   const snapshot = job.script_snapshot;

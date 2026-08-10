@@ -385,7 +385,8 @@ def _require_supported_python() -> None:
         expected = ".".join(map(str, PYTHON_SERIES))
         actual = ".".join(map(str, current))
         raise RuntimeError(
-            f"CPython {expected} is required to bootstrap v2 (running {actual}). "
+            f"CPython {expected} is required to bootstrap Waveguide Generator "
+            f"(running {actual}). "
             f"Run this script with python{expected}."
         )
 
