@@ -182,7 +182,7 @@ kbd { padding: 1.5px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 
    rather than absolute and sized by its own form rather than by whichever rail
    hosts the gear button. Sitting inside the rail, it was clipped to the rail's
    width and scrolled away with the run list. */
-.panel-preferences-popover { position: fixed; z-index: 1300; display: flex; flex-direction: column; width: min(560px, calc(100vw - 16px)); max-height: min(560px, calc(100vh - 16px)); overflow: hidden; border: 1px solid var(--glass-bd); border-radius: 10px; background: var(--glass-bg); box-shadow: var(--glass-sh), 0 18px 50px rgba(0,0,0,.28); color: var(--fg2); backdrop-filter: blur(18px) saturate(1.25); }
+.panel-preferences-popover { position: fixed; z-index: 1300; display: flex; flex-direction: column; width: min(560px, calc(100vw - 16px)); max-height: min(560px, calc(100vh - 16px)); overflow: hidden; border: 1px solid var(--glass-bd); border-radius: 10px; background: var(--glass-bg); box-shadow: var(--glass-sh); color: var(--fg2); backdrop-filter: blur(18px) saturate(1.25); }
 .panel-preferences-popover:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; box-shadow: var(--glass-sh), 0 0 0 4px var(--focus-halo); }
 .jobs-preferences-popover { width: min(380px, calc(100vw - 16px)); }
 .panel-preferences-popover > header { display: flex; align-items: center; justify-content: space-between; padding: 9px 10px 7px; border-bottom: 1px solid var(--hair); }
@@ -343,7 +343,7 @@ kbd { padding: 1.5px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 
 .viewport-tool-group { display: flex; flex: none; gap: var(--tool-gap); min-width: 0; }
 .viewport-tools button { display: grid; place-items: center; width: var(--tool-size); height: var(--tool-size); flex: none; border-radius: 6px; background: transparent; color: var(--fg2); }
 .viewport-tools button:hover { background: var(--ov3); color: var(--fg); }
-.viewport-tools button.on { background: rgba(var(--acc-rgb), .11); color: var(--acc); }
+.viewport-tools button.on { background: rgba(var(--acc-rgb), .11); color: var(--acc-text); }
 .viewport-tools svg { width: calc(var(--tool-size) * .48); height: calc(var(--tool-size) * .48); }
 .viewport-tools .wg2-text-glyph { font-size: var(--text-micro); letter-spacing: 0; }
 .viewport-tools .viewport-tool-text { width: auto; min-width: calc(var(--tool-size) * 1.14); padding: 0 clamp(4px, .55cqw, 8px); font-size: var(--text-micro); }

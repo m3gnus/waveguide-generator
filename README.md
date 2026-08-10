@@ -3,15 +3,11 @@
 Interactive 3D design and BEM simulation for acoustic waveguides — a
 from-scratch rebuild of the Waveguide Generator application on a TypeScript/React
 frontend and a FastAPI backend, with the mesher as the single geometry authority.
+This is the second-generation rewrite, historically called v2, and replaces the
+original application.
 
-**Status: beta, not yet the default.** v1 remains the supported release and lives
-on the `v1` branch of this repository. v2 runs beside it on port 3100 with its
-own data directory, so both can be installed at once. Cutover — installers, the
-v1→v2 jobs-database migration, Windows qualification, and the beta matrix — is
-tracked in [docs/P6-CUTOVER-PLAN.md](docs/P6-CUTOVER-PLAN.md).
-
-Design and contract documents live in [docs/](docs/); the traceability table
-mapping every v1 behavior to its v2 owner is
+Design and contract documents live in [docs/](docs/); the historical traceability
+table mapping original-application behavior to its current owner is
 [docs/TRACEABILITY-TABLE.md](docs/TRACEABILITY-TABLE.md).
 
 ## Install
@@ -56,8 +52,8 @@ installers\windows\uninstall.bat            # Windows: same options
 # Add --data to also remove designs, job history, meshes, and logs.
 ```
 
-Neither touches the checkout itself, nor anything belonging to v1 — delete the
-folder yourself when you are done with it.
+Neither touches the checkout itself — delete the folder yourself when you are
+done with it.
 
 ## Launch
 
@@ -78,8 +74,7 @@ After that, normal double-clicks work. If macOS still blocks it, open
 
 The repository root intentionally has no duplicate install or launch scripts;
 use the platform folders above. On first launch the entry creates `.venv` with
-CPython 3.13 and installs the locked dependencies. It does not use or modify the
-v1 environment.
+CPython 3.13 and installs the locked dependencies.
 
 For the original plain-terminal behavior, append `--no-gui`:
 
@@ -121,8 +116,8 @@ qualification hardware, and their archived reports back the release gates.
 
 ## Releasing
 
-v2 versions are plain `MAJOR.MINOR.PATCH`, starting at **2.0.0**. v1 is a
-separate line at 1.x, so the two never collide.
+Versions are plain `MAJOR.MINOR.PATCH`, starting at **2.0.0**. The original
+application remains on the separate 1.x line, so the two never collide.
 
 The version lives in `shared/version.json` — `/health` and the FastAPI metadata
 read it at runtime, and Vite injects it into the SPA as `__WG2_VERSION__` at
@@ -148,7 +143,7 @@ The tag fires `.github/workflows/release.yml`, which **refuses to build when the
 tag disagrees with `shared/version.json`** — a build that misreports itself is
 worse than a failed release. It then attaches the prebuilt SPA as
 `waveguide-generator-v2-spa-<version>.tar.gz` with a `.sha256` beside it, so
-installing v2 needs no Node runtime.
+installing Waveguide Generator needs no Node runtime.
 
 Pre-release and build-metadata suffixes are deliberately unsupported: the tag is
 built as `v` + this string, and the installer and update check compare it.

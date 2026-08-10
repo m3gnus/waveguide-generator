@@ -13,6 +13,11 @@
   --green: rgb(var(--green-rgb));
   --red: rgb(var(--red-rgb));
   --acc-2: #2ea4bd;
+  /* The accent at text weight on its own tinted ground. In dark the accent is
+     already light enough; in light it has to go darker than the accent proper,
+     because an .on control tints its background with the same hue and eats the
+     difference -- the 3/4 view toggle measured 4.45:1 that way. */
+  --acc-text: var(--acc);
   --acc-deep: #0d2f38;
   --bg: #080a0f;
   --bg-grad: radial-gradient(1400px 700px at 52% -14%, #131a26 0%, #0a0d13 52%, #080a0f 100%);
@@ -173,6 +178,7 @@
   --green-rgb: 39, 117, 57;
   --red-rgb: 168, 54, 48;
   --acc-2: #007eb7;
+  --acc-text: #004f7d;
   --acc-deep: #e2f1fb;
   --bg: #faf4ec;
   --bg-grad: radial-gradient(1400px 720px at 52% -14%, #fffdf8 0%, #f8f2e9 50%, #f1eade 100%);

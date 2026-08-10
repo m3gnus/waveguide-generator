@@ -89,10 +89,8 @@ jobs:
             ${{ env.artifact }}.tar.gz.sha256
           fail_on_unmatched_files: true
           body: |
-            Waveguide Generator v${{ env.version }} — beta.
+            Waveguide Generator v${{ env.version }}.
 
             `${{ env.artifact }}.tar.gz` is the prebuilt SPA. The installer
             downloads it so that running Waveguide Generator needs no Node.js. Verify it against
             the accompanying `.sha256` before extracting over `frontend/dist`.
-
-            v1 remains the supported release on the `v1` branch.

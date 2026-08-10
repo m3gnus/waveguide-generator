@@ -9,6 +9,7 @@ import { applyJobPreferences, jobBaseName, nextJobNaming, nextVersionFor, prefer
 import { JobsPreferencesSurface, ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { Icon } from './icons';
+import { middleEllipsis } from './ResultsPanel';
 
 function name(job: JobItem): string {
   return job.label || `${String(job.config_summary.formula_type ?? 'design').toLowerCase()}_${job.id.slice(0, 8)}`;
@@ -106,7 +107,7 @@ function JobCard({ job, now, selected, run, onError, onRemove, onOpenExportSetti
         carry a word or a glyph as well. The word is the alternative; it costs
         no width because it is only ever read aloud. */}
     <i/><span className="sr-only">{statusWord}. </span>
-    <b>{name(job)}{expanded && <em> · {job.id.slice(0, 6)}</em>}</b>
+    <b title={name(job)}>{middleEllipsis(name(job), 22)}{expanded && <em> · {job.id.slice(0, 6)}</em>}</b>
     {/* Stars are a label here, shown only once a run has actually been rated. */}
     {!expanded && rating > 0 && <span className="job-stars" aria-label={`Rated ${rating} of 5`}>{'★'.repeat(rating)}</span>}
     <time>{running ? duration(secondsBetween(job.started_at ?? job.queued_at, null, now)) : clock(job.completed_at ?? job.created_at)}</time>
