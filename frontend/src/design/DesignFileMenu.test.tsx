@@ -80,6 +80,34 @@ describe('design file export menu', () => {
     expect(requested).toEqual(['/api/export/step?body=surface']);
   });
 
+  it('sends a saved design to CAD and reports its sequence and destination', async () => {
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_01K00000000000000000000000',
+      lineageId: 'wgl_01K00000000000000000000000',
+      baseEditVersion: 3,
+    }, 'current');
+    vi.mocked(fetch).mockImplementation(async (url: string | URL | Request) => {
+      const path = String(url);
+      requested.push(path);
+      if (path === '/api/workspace/path') {
+        return new Response(JSON.stringify({ selected: true, path: '/cad-library' }));
+      }
+      return new Response(JSON.stringify({
+        bundlePath: '/cad-library/wglink/tritonia_mk2.wglink', bundleId: 'wgb_1',
+        exportId: 'wge_1', sequence: 7, designHash: 'sha256:d',
+        geometryHash: 'sha256:g', artifactSha256: 'sha256:a',
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    });
+
+    const item = itemNamed('Send to CAD');
+    await act(async () => { item.click(); });
+
+    expect(requested).toEqual(['/api/workspace/path', '/api/export/wglink']);
+    expect(container.querySelector('[role="status"]')?.textContent).toContain(
+      'Sent to CAD · sequence 7 · /cad-library/wglink/tritonia_mk2.wglink',
+    );
+  });
+
   it('names the next run from a successfully opened standalone config', async () => {
     const identity = {
       designId: 'wgd_01K00000000000000000000000',

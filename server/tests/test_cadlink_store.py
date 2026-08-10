@@ -125,6 +125,7 @@ def test_export_sequences_are_atomic_and_idempotent_across_store_instances(
     assert retry == original
     assert retry_store.get_export(original["export_id"]) == original
     assert retry_store.get_export(original["bundle_id"]) == original
+    assert retry_store.find_export_by_idempotency_key("retry-key") == original
     assert retry_store.find_export_by_artifact("sha256:first") == original
     assert original["snapshot_text"] == saved["text"]
 
@@ -140,3 +141,36 @@ def test_export_sequences_are_atomic_and_idempotent_across_store_instances(
     assert manifest["bundleId"] == built["bundle_id"]
     assert manifest["sequence"] == built["sequence"]
     retry_store.close()
+
+
+def test_export_builder_receives_allocated_identity_and_is_skipped_on_retry(tmp_path: Path) -> None:
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    saved = _save(store)
+    design_id = saved["identity"].design_id  # type: ignore[union-attr]
+    calls: list[dict[str, object]] = []
+
+    def build(facts):
+        calls.append(dict(facts))
+        return {
+            "manifest_json": json.dumps(facts, sort_keys=True),
+            "geometry_hash": "sha256:geometry",
+            "artifact_sha256": "sha256:artifact",
+        }
+
+    original = store.allocate_export(
+        design_id=design_id,
+        idempotency_key="built-at-allocation",
+        export_builder=build,
+    )
+    retry = store.allocate_export(
+        design_id=design_id,
+        idempotency_key="built-at-allocation",
+        export_builder=lambda _facts: (_ for _ in ()).throw(AssertionError("rebuilt")),
+    )
+
+    assert retry == original
+    assert len(calls) == 1
+    assert calls[0]["exportId"] == original["export_id"]
+    assert calls[0]["sequence"] == 1
+    assert original["geometry_hash"] == "sha256:geometry"
+    assert original["artifact_sha256"] == "sha256:artifact"

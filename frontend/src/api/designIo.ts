@@ -51,6 +51,16 @@ export interface SaveDesignResponse {
   from: { designId: string; editVersion: number; exportId: string | null } | null;
 }
 
+export interface WgLinkExportResponse {
+  bundlePath: string;
+  bundleId: string;
+  exportId: string;
+  sequence: number;
+  designHash: string;
+  geometryHash: string;
+  artifactSha256: string;
+}
+
 async function errorMessage(response: Response): Promise<string> {
   try {
     const body = await response.json() as { detail?: string | { message?: string } };
@@ -91,6 +101,44 @@ export async function saveDesignDocument(
   });
   if (!response.ok) throw new Error(await errorMessage(response));
   return response.json() as Promise<SaveDesignResponse>;
+}
+
+export async function sendDesignToCad(
+  design: DesignDocument,
+  designRevision: number,
+  baseName: string,
+  identity: DesignIdentity | null,
+  fetcher: typeof fetch = fetch,
+  idempotencyKey: string = globalThis.crypto?.randomUUID?.()
+    ?? `wglink-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+): Promise<WgLinkExportResponse> {
+  if (!identity) throw new Error('Save the design before sending it to CAD.');
+
+  const pathResponse = await fetcher('/api/workspace/path');
+  if (!pathResponse.ok) throw new Error(await errorMessage(pathResponse));
+  let workspace = await pathResponse.json() as { selected?: boolean; path?: string };
+  if (!workspace.selected) {
+    const selectResponse = await fetcher('/api/workspace/select', { method: 'POST' });
+    if (!selectResponse.ok) throw new Error(await errorMessage(selectResponse));
+    workspace = await selectResponse.json() as { selected?: boolean; path?: string };
+    if (!workspace.selected) throw new Error('Send to CAD cancelled: choose a workspace folder first.');
+  }
+
+  const response = await fetcher('/api/export/wglink', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Idempotency-Key': idempotencyKey,
+    },
+    body: JSON.stringify({
+      design: serializeDesign(design),
+      designRevision,
+      baseName,
+      identity,
+    }),
+  });
+  if (!response.ok) throw new Error(await errorMessage(response));
+  return response.json() as Promise<WgLinkExportResponse>;
 }
 
 function unwrapExpressions(value: unknown, path = '', expressions: Record<string, ExprNumber> = {}, absent: string[] = []): unknown {

@@ -6,6 +6,7 @@ import {
   inspectDesignText,
   openDesignText,
   saveDesignDocument,
+  sendDesignToCad,
   type ImportReport,
   type CadLinkOpenState,
   type StepBody,
@@ -175,6 +176,18 @@ export function DesignFileMenu() {
     });
   }
 
+  async function sendToCad() {
+    await act(async () => {
+      const result = await sendDesignToCad(
+        design,
+        revision,
+        filenameStem(filename),
+        identity,
+      );
+      setMessage(`Sent to CAD · sequence ${result.sequence} · ${result.bundlePath}`);
+    });
+  }
+
   return <div ref={root} className="design-file-menu">
     <button className="file-chip" title={classification ? CLASSIFICATION_DISPLAY[classification].detail : 'Design file menu'} onClick={() => setOpen((value) => !value)} aria-expanded={open}>
       <Icon name="folder"/><span>{filenameStem(filename)}<em>.cfg</em></span>
@@ -197,6 +210,7 @@ export function DesignFileMenu() {
       <div className="design-menu-divider"/>
       <button role="menuitem" aria-expanded={exportsOpen} className="design-menu-item" disabled={busy} onClick={() => setExportsOpen((value) => !value)}><span>Export</span><span>{exportsOpen ? '⌄' : '›'}</span></button>
       {exportsOpen && <div role="menu" aria-label="Export design" className="design-menu-nested">
+        <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void sendToCad()} title="Write an identity-bearing .wglink bundle to the selected workspace"><span>Send to CAD</span><span>.wglink</span></button>
         <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void exportOne('step')} title="Closed solid with walls and enclosure — imports straight into Fusion 360 or Onshape"><span>STEP solid</span><span>.step</span></button>
         <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void exportOne('step', 'surface')} title="Inner acoustic surface only, for thickening or lofting yourself"><span>STEP inner surface</span><span>.step</span></button>
         <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void exportOne('stl')}><span>STL</span><span>.stl</span></button>

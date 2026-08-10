@@ -112,6 +112,11 @@ class CadLinkStore:
             (artifact_sha256,),
         )
 
+    def find_export_by_idempotency_key(self, idempotency_key: str) -> dict[str, Any] | None:
+        return self._read_one(
+            "SELECT * FROM exports WHERE idempotency_key = ?", (idempotency_key,)
+        )
+
     def save(
         self,
         *,
@@ -220,11 +225,12 @@ class CadLinkStore:
         self,
         *,
         design_id: str,
-        geometry_hash: str,
-        artifact_sha256: str,
+        geometry_hash: str | None = None,
+        artifact_sha256: str | None = None,
         idempotency_key: str,
         manifest_json: str | None = None,
         manifest_builder: Callable[[Mapping[str, object]], str] | None = None,
+        export_builder: Callable[[Mapping[str, object]], Mapping[str, str]] | None = None,
         bundle_id: str | None = None,
         parent_export_id: str | None = None,
         created_at: str | None = None,
@@ -267,12 +273,28 @@ class CadLinkStore:
                 "designHash": design["design_hash"],
                 "createdAt": now,
             }
-            if (manifest_json is None) == (manifest_builder is None):
-                raise ValueError("provide exactly one of manifest_json or manifest_builder")
-            stored_manifest = (
-                manifest_builder(facts) if manifest_builder is not None else manifest_json
+            builders = sum(
+                value is not None
+                for value in (manifest_json, manifest_builder, export_builder)
             )
+            if builders != 1:
+                raise ValueError(
+                    "provide exactly one of manifest_json, manifest_builder, or export_builder"
+                )
+            if export_builder is not None:
+                products = export_builder(facts)
+                stored_manifest = products.get("manifest_json")
+                geometry_hash = products.get("geometry_hash")
+                artifact_sha256 = products.get("artifact_sha256")
+            else:
+                stored_manifest = (
+                    manifest_builder(facts)
+                    if manifest_builder is not None
+                    else manifest_json
+                )
             assert stored_manifest is not None
+            if geometry_hash is None or artifact_sha256 is None:
+                raise ValueError("geometry_hash and artifact_sha256 are required")
             conn.execute(
                 """
                 INSERT INTO exports (
