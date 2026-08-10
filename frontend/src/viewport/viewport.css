@@ -10,7 +10,7 @@
 .wg2-viewport .viewport-empty,
 .wg2-viewport .viewport-mode-empty,
 .wg2-viewport .viewport-connection-banner,
-.wg2-viewport .viewport-warning-banner,
+.wg2-viewport .viewport-warning,
 .wg2-viewport .viewport-error-banner { z-index: 3; }
 .wg2-viewport .viewport-tools { pointer-events: auto; }
 .mesh-file-input { display: none; }
@@ -65,13 +65,19 @@
 .viewport-connection-banner span > i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; box-shadow: 0 0 7px rgba(var(--amber-rgb), .55); }
 .viewport-connection-banner b { overflow: hidden; color: var(--fg2); font: 500 9px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
 .viewport-connection-banner.below-error { top: 82px; }
-/* Geometry diagnoses are full sentences with numbers in them, so this one
-   wraps instead of ellipsing like the connection banner's short status text. */
-.viewport-warning-banner { position: absolute; top: 43px; left: 50%; display: flex; align-items: flex-start; gap: 11px; max-width: min(520px, calc(100% - 24px)); padding: 6px 9px; border: 1px solid rgba(var(--amber-rgb), .25); border-radius: 7px; background: var(--glass-bg); box-shadow: var(--glass-sh); color: var(--amber); font-size: 9.5px; line-height: 1.45; transform: translateX(-50%); backdrop-filter: blur(10px); }
-.viewport-warning-banner span { display: flex; align-items: flex-start; gap: 6px; }
-.viewport-warning-banner span > i { flex: none; width: 5px; height: 5px; margin-top: 4px; border-radius: 50%; background: currentColor; box-shadow: 0 0 7px rgba(var(--amber-rgb), .55); }
-.viewport-warning-banner b { flex: none; color: var(--fg2); font: 500 9px var(--mono); }
-.viewport-warning-banner.below-error { top: 82px; }
+/* Geometry diagnoses remain available without automatically covering the
+   model, title, or controls. The compact indicator expands only on request. */
+.viewport-warning { position: absolute; top: 43px; right: 12px; left: 12px; color: var(--amber); font-size: 9.5px; line-height: 1.45; pointer-events: none; }
+.viewport-warning summary { display: flex; align-items: center; gap: 6px; width: max-content; min-height: 24px; margin-left: auto; padding: 4px 8px; border: 1px solid rgba(var(--amber-rgb), .25); border-radius: 12px; background: var(--glass-bg); box-shadow: var(--glass-sh); font: 650 9px var(--mono); letter-spacing: .04em; text-transform: uppercase; cursor: pointer; pointer-events: auto; list-style: none; backdrop-filter: blur(10px); }
+.viewport-warning summary::-webkit-details-marker { display: none; }
+.viewport-warning summary > i { flex: none; width: 5px; height: 5px; border-radius: 50%; background: currentColor; box-shadow: 0 0 7px rgba(var(--amber-rgb), .55); }
+.viewport-warning summary:hover,
+.viewport-warning summary:focus-visible { border-color: rgba(var(--amber-rgb), .5); background: rgba(var(--amber-rgb), .1); }
+.viewport-warning summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.viewport-warning-details { position: absolute; top: 30px; right: 0; width: min(520px, 100%); max-height: min(260px, calc(100vh - 120px)); overflow: auto; padding: 10px 12px; border: 1px solid rgba(var(--amber-rgb), .25); border-radius: var(--r); background: var(--surface-floating); box-shadow: var(--float-sh); color: var(--fg2); pointer-events: auto; backdrop-filter: blur(14px); }
+.viewport-warning-details > b { display: block; margin-bottom: 6px; color: var(--amber); font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
+.viewport-warning-details ul { display: grid; gap: 7px; margin: 0; padding: 0 0 0 15px; }
+.viewport-warning-details li { padding-left: 2px; }
 .viewport-error-banner { position: absolute; top: 43px; left: 50%; display: flex; align-items: center; gap: 9px; width: max-content; max-width: calc(100% - 24px); padding: 6px 7px 6px 9px; border: 1px solid rgba(var(--red-rgb), .35); border-radius: 7px; background: var(--glass-bg); box-shadow: var(--glass-sh); color: var(--red); font-size: 9.5px; transform: translateX(-50%); backdrop-filter: blur(10px); }
 .viewport-error-banner span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .viewport-error-banner button { display: grid; flex: none; place-items: center; width: 20px; height: 20px; border-radius: 5px; background: transparent; color: currentColor; font-size: 15px; line-height: 1; }

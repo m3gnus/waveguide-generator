@@ -148,31 +148,38 @@ describe('Viewport geometry warnings', () => {
     + 'so the mouth radius is 581.3 mm instead of the requested 500.0 mm; shorten the horn (Length), '
     + 'reduce the termination shape s, or widen the guiding curve';
 
-  it('surfaces a mesher geometry warning over a scene that still renders', () => {
+  it('keeps a mesher geometry warning behind a compact disclosure', () => {
     render([UNREACHABLE]);
-    const banner = host.querySelector<HTMLElement>('.viewport-warning-banner');
-    expect(banner).not.toBeNull();
-    expect(banner?.getAttribute('role')).toBe('status');
-    expect(banner?.textContent).toContain('guiding curve unreachable');
-    expect(banner?.textContent).toContain('581.3 mm instead of the requested 500.0 mm');
+    const warning = host.querySelector<HTMLDetailsElement>('.viewport-warning');
+    expect(warning).not.toBeNull();
+    expect(warning?.getAttribute('role')).toBe('status');
+    expect(warning?.open).toBe(false);
+    expect(warning?.querySelector('summary')?.textContent).toContain('1 warning');
+
+    act(() => warning?.querySelector('summary')?.click());
+    expect(warning?.open).toBe(true);
+    expect(warning?.textContent).toContain('guiding curve unreachable');
+    expect(warning?.textContent).toContain('581.3 mm instead of the requested 500.0 mm');
   });
 
-  it('counts the remaining warnings instead of stacking banners', () => {
+  it('groups all geometry warnings under one compact indicator', () => {
     render([UNREACHABLE, 'canonical azimuth reference clamped to 4096 samples']);
-    const banners = host.querySelectorAll('.viewport-warning-banner');
-    expect(banners).toHaveLength(1);
-    expect(banners[0]?.textContent).toContain('+1 more');
+    const warnings = host.querySelectorAll('.viewport-warning');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.querySelector('summary')?.textContent).toContain('2 warnings');
+    expect(warnings[0]?.querySelectorAll('li')).toHaveLength(2);
   });
 
   it('stays out of the way when the mesher reports nothing', () => {
     render(undefined);
-    expect(host.querySelector('.viewport-warning-banner')).toBeNull();
+    expect(host.querySelector('.viewport-warning')).toBeNull();
     render([]);
-    expect(host.querySelector('.viewport-warning-banner')).toBeNull();
+    expect(host.querySelector('.viewport-warning')).toBeNull();
   });
 
-  it('drops below a preview error rather than overlapping it', () => {
+  it('stays compact when a preview error is also present', () => {
     render([UNREACHABLE], { error: 'ATH expression is unsupported' });
-    expect(host.querySelector('.viewport-warning-banner')?.className).toContain('below-error');
+    expect(host.querySelector('.viewport-error-banner')).not.toBeNull();
+    expect(host.querySelector<HTMLDetailsElement>('.viewport-warning')?.open).toBe(false);
   });
 });
