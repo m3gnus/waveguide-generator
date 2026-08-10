@@ -3,7 +3,7 @@ import { jobsSocket } from '../api/jobsSocket';
 import { compareSelection } from '../api/results';
 import { DesignFileMenu } from '../design/DesignFileMenu';
 import { PARAMETER_REGISTRY, PARAMETER_SECTION_DEFINITIONS, fieldAppliesToFamily, fieldMatchesQuery, type ParameterTab } from '../design/parameterRegistry';
-import { RESULT_PANEL_COUNTS, preferencesStore } from '../prefs/preferences';
+import { RESULT_PANEL_COUNTS, preferencesStore, runDisplayName } from '../prefs/preferences';
 import { useDesignStore, type DesignFamily } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
 import { requestParameterReveal } from '../design/ParamPanel';
@@ -86,7 +86,7 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
     const jobEntries: PaletteEntry[] = jobs.map((job) => ({
       id: `job-${job.id}`,
       kind: 'Jobs',
-      label: job.label || `${String(job.config_summary.formula_type ?? 'job').toLowerCase()} ${job.id.slice(0, 6)}`,
+      label: runDisplayName(job),
       detail: job.has_results ? 'Show in Results' : `${job.status} · no results`,
       keywords: `${job.id} ${job.status}`,
       disabled: !job.has_results,

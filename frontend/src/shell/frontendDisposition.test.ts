@@ -9,10 +9,11 @@ import { canLoadDesign, meshWarnings, selectJob } from './JobsPanel';
 
 function selectableJob(id: string, label: string, scriptSnapshot: JobItem['script_snapshot']): JobItem {
   return {
-    id, label, script_snapshot: scriptSnapshot, status: 'complete', progress: 1,
+    id, run_number: 1, parent_job_id: null,
+    label, script_snapshot: scriptSnapshot, status: 'complete', progress: 1,
     stage: null, stage_message: null, created_at: '2026-08-08T00:00:00Z',
     queued_at: '2026-08-08T00:00:00Z', started_at: null,
-    completed_at: '2026-08-08T00:00:01Z', config_summary: {}, has_results: true,
+    completed_at: '2026-08-08T00:00:01Z', config_summary: {}, solve_options: {} as JobItem['solve_options'], has_results: true,
     has_mesh_artifact: false, error_message: null, cancellation_requested: false,
     mesh_stats: null, design_revision: 1, polar_grid: {}, rating: null,
     exported_files: [], auto_export_completed_at: null, auto_export_formats: {},
@@ -72,7 +73,8 @@ describe('frontend result and status labels', () => {
     expect(meshWarnings({ mesh_stats: { warnings: 'not an array' } })).toEqual([]);
   });
 
-  it('loads a selected run design and names the next run past full history', () => {
+  it('loads a selected run design without changing the next run name', () => {
+    preferencesStore.update({ outputName: 'keep-me', jobVersion: 7 });
     const solved = designForFamily('OSSE');
     solved.L = 321;
     const selected = selectableJob(
@@ -89,7 +91,7 @@ describe('frontend result and status labels', () => {
 
     expect(useDesignStore.getState().design.L).toBe(321);
     expect(preferencesStore.getSnapshot()).toMatchObject({
-      outputName: 'horn', jobVersion: 15,
+      outputName: 'keep-me', jobVersion: 7,
     });
   });
 

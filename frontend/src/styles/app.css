@@ -511,15 +511,26 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .run-name-field .ui-field { margin: 0; }
 .run-name-preview { overflow: hidden; color: var(--fg4); font: var(--text-micro) var(--mono); text-overflow: ellipsis; white-space: nowrap; }
 .run-name-preview b { color: var(--acc); font-weight: 500; }
+.jobs-filter { display: flex; align-items: center; gap: 6px; margin: 6px 6px 2px; padding: 0 5px 0 7px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--input-bg); color: var(--fg3); }
+.jobs-filter:focus-within { border-color: rgba(var(--acc-rgb), .5); box-shadow: 0 0 0 2px rgba(var(--acc-rgb), .08); }
+.jobs-filter svg { width: 12px; height: 12px; flex: none; }
+.jobs-filter input { width: 100%; min-width: 0; height: 27px; background: transparent; color: var(--fg); font-size: var(--text-micro); }
+.jobs-filter input::placeholder { color: var(--fg4); }
+.jobs-kept-toggle { display: grid; place-items: center; width: 23px; height: 23px; flex: none; border-radius: var(--r3); background: transparent; color: var(--fg4); font-size: var(--text-base); }
+.jobs-kept-toggle:hover { background: var(--ov3); color: var(--amber); }
+.jobs-kept-toggle.on { background: color-mix(in srgb, var(--amber) 13%, transparent); color: var(--amber); }
 .job-card { position: relative; margin: 6px 6px 0; padding: 8px 8px 8px 8px; border: 1px solid var(--hair); border-radius: var(--r2); background: var(--ov1); }
 .job-card::before { content: ""; position: absolute; top: 9px; bottom: 9px; left: 0; width: 2px; background: var(--fg4); }
 .job-card.running::before { background: var(--acc); }.job-card.complete::before { background: var(--green); }.job-card.failed::before { background: var(--red); }
 .job-card header { display: flex; align-items: center; gap: 6px; }
-/* The whole heading is the select target, so it fills the row. */
-.job-select { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1; padding: 0; background: transparent; color: inherit; text-align: left; }
+.job-select { display: flex; align-items: center; gap: 6px; min-width: 0; height: 22px; flex: 1; padding: 0; background: transparent; color: inherit; text-align: left; }
+.job-select.editing { width: 14px; flex: none; }
 .job-card header > .job-select > i { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--fg3); }
 .job-card.running header > .job-select > i { background: var(--acc); box-shadow: 0 0 7px rgba(var(--acc-rgb), .7); }.job-card.complete header > .job-select > i { background: var(--green); }.job-card.failed header > .job-select > i { background: var(--red); }
 .job-card header b { flex: 1; overflow: hidden; color: var(--fg); font-size: var(--text-base); font-weight: 560; text-overflow: ellipsis; white-space: nowrap; }
+.job-title-input { min-width: 0; height: 24px; flex: 1; padding: 2px 5px; border: 1px solid rgba(var(--acc-rgb), .5); border-radius: var(--r3); background: var(--input-bg); color: var(--fg); font-size: var(--text-base); }
+.job-rename { width: 20px; height: 20px; flex: none; border-radius: var(--r3); background: transparent; color: var(--fg4); font-size: var(--text-base); }
+.job-rename:hover, .job-rename:focus-visible { background: var(--ov3); color: var(--acc); }
 .job-stars { flex: none; color: var(--amber); font-size: var(--text-micro); letter-spacing: .5px; }
 .job-card header em { color: var(--fg3); font-style: normal; font-weight: 400; }
 .job-card time { color: var(--fg3); font: var(--text-micro) var(--mono); }
@@ -541,6 +552,7 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .run-export-feedback.error { border-color: rgba(var(--red-rgb), .35); color: var(--red); }
 .score { display: flex; gap: 6px; margin-top: 6px; }.score span { color: var(--amber); font-size: var(--text-micro); letter-spacing: 1px; }.score em { color: var(--fg4); font-style: normal; }.score b { color: var(--fg1); font: var(--text-micro) var(--mono); }
 .job-error { margin-top: 7px; padding: 4px 6px; border: 1px solid rgba(var(--red-rgb), .2); border-radius: 3px; background: rgba(var(--red-rgb), .07); color: var(--red); font-size: var(--text-micro); }
+.job-retention-note { margin-top: 5px; color: var(--fg3); font-size: var(--text-micro); }
 /* Unselected finished runs are a single line: name, stars if rated, time. The
    selected one keeps the full card, so the rail reads as one open run in a
    list of names rather than a stack of competing cards. */

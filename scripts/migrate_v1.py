@@ -656,6 +656,14 @@ def _migrate_with_paths(
                     if actual.get(job_id) != digest:
                         report.hash_mismatches.append(f"{table}:{job_id}")
 
+    # Schema initialization necessarily precedes the byte-for-byte table copy.
+    # Number imported jobs immediately afterward so one migration pass leaves
+    # every job with a permanent identity, in deterministic (created_at, id)
+    # order among rows that do not already have one.
+    store.backfill_job_identity()
+    store.checkpoint()
+    store.close()
+
     if include_workspace and workspace is not None:
         for entry in sorted(workspace.iterdir()):
             if entry.name.startswith("."):

@@ -8,10 +8,11 @@ import { ResultsPanel } from './ResultsPanel';
 
 function job(id: string): JobItem {
   return {
-    id, label: id, status: 'complete', progress: 1, stage: null,
+    id, run_number: 1, parent_job_id: null,
+    label: id, status: 'complete', progress: 1, stage: null,
     stage_message: null, created_at: '2026-08-08T00:00:00Z',
     queued_at: '2026-08-08T00:00:00Z', started_at: null,
-    completed_at: '2026-08-08T00:00:01Z', config_summary: {},
+    completed_at: '2026-08-08T00:00:01Z', config_summary: {}, solve_options: {} as JobItem['solve_options'],
     has_results: true, has_mesh_artifact: false, error_message: null,
     cancellation_requested: false, mesh_stats: null, script_snapshot: null,
     design_revision: 1, polar_grid: {}, rating: null, exported_files: [],

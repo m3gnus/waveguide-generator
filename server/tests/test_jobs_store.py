@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 import json
 import logging
 from pathlib import Path
 import sqlite3
+import threading
 
 import pytest
 
@@ -64,8 +66,159 @@ def test_v1_schema_columns_are_exact_and_live_under_wg2_data_dir(tmp_path: Path)
         }
         version = conn.execute("PRAGMA user_version").fetchone()[0]
     assert columns == EXPECTED_JOB_COLUMNS
-    assert {"simulation_jobs", "simulation_results", "simulation_artifacts"} <= tables
+    assert {
+        "simulation_jobs",
+        "simulation_results",
+        "simulation_artifacts",
+        "job_identity",
+    } <= tables
     assert version == 4
+
+
+def test_created_jobs_get_consecutive_run_numbers(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    store.create_job(_job("first"))
+    store.create_job(_job("second"))
+
+    assert store.get_job_row("first")["run_number"] == 1
+    assert store.get_job_row("second")["run_number"] == 2
+
+
+def test_run_numbers_are_not_reused_after_deleting_the_newest_job(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    for job_id in ("one", "two", "three"):
+        store.create_job(_job(job_id))
+
+    deleted, _event = store.delete_job_with_event("three")
+    assert deleted is True
+    store.create_job(_job("four"))
+
+    assert store.get_job_row("four")["run_number"] == 4
+
+
+def test_pruning_keeps_identity_and_lineage_tombstones(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    child = _job("child", "complete", created_at="2000-01-01T00:00:00")
+    child["parent_job_id"] = "parent"
+    child["completed_at"] = "2000-01-01T00:00:00"
+    store.create_job(child)
+    store.store_results("child", {"frequencies": [1000.0]})
+
+    assert store.prune_terminal_jobs() == 1
+    row = store.get_job_row("child")
+    assert row is not None
+    assert row["run_number"] == 1
+    assert row["parent_job_id"] == "parent"
+    assert row["has_results"] is False
+    assert store.get_results("child") is None
+    identity = store._connect().execute(
+        "SELECT run_number, parent_job_id FROM job_identity WHERE job_id = ?",
+        ("child",),
+    ).fetchone()
+    assert tuple(identity) == (1, "parent")
+
+
+def test_identity_backfill_is_deterministic_and_idempotent(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    seeded = [
+        ("late", "2026-01-02T00:00:00"),
+        ("tie-b", "2026-01-01T00:00:00"),
+        ("early", "2025-12-31T00:00:00"),
+        ("tie-a", "2026-01-01T00:00:00"),
+    ]
+    with store._transaction() as conn:
+        for job_id, created_at in seeded:
+            job = _job(job_id, created_at=created_at)
+            conn.execute(
+                """INSERT INTO simulation_jobs
+                   (id, status, created_at, updated_at, queued_at, progress,
+                    stage, stage_message, cancellation_requested, config_json,
+                    config_summary_json, has_results, has_mesh_artifact,
+                    task_metadata_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    job["id"], job["status"], job["created_at"], job["updated_at"],
+                    job["queued_at"], job["progress"], job["stage"],
+                    job["stage_message"], 0, json.dumps(job["config_json"]),
+                    json.dumps(job["config_summary_json"]), 0, 0, "{}",
+                ),
+            )
+
+    store.backfill_job_identity()
+    first = [
+        tuple(row)
+        for row in store._connect().execute(
+            "SELECT job_id, run_number FROM job_identity ORDER BY run_number"
+        )
+    ]
+    store.backfill_job_identity()
+    second = [
+        tuple(row)
+        for row in store._connect().execute(
+            "SELECT job_id, run_number FROM job_identity ORDER BY run_number"
+        )
+    ]
+
+    assert first == second == [
+        ("early", 1),
+        ("tie-a", 2),
+        ("tie-b", 3),
+        ("late", 4),
+    ]
+
+
+def test_failed_create_rolls_back_its_identity_allocation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+
+    def fail_event(*_args: object, **_kwargs: object) -> None:
+        raise sqlite3.OperationalError("injected event failure")
+
+    monkeypatch.setattr(store, "_append_event", fail_event)
+    with pytest.raises(sqlite3.OperationalError, match="injected event failure"):
+        store.create_job(_job("rolled-back"), initial_event=("queued", {}))
+
+    conn = store._connect()
+    assert conn.execute("SELECT COUNT(*) FROM simulation_jobs").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM job_identity").fetchone()[0] == 0
+
+
+def test_concurrent_allocations_are_unique_and_gapless(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    workers = 8
+    barrier = threading.Barrier(workers)
+
+    def create(index: int) -> None:
+        barrier.wait()
+        store.create_job(_job(f"concurrent-{index}"))
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        list(pool.map(create, range(workers)))
+
+    numbers = sorted(row["run_number"] for row in store.list_jobs(limit=workers)[0])
+    assert numbers == list(range(1, workers + 1))
+
+
+def test_run_number_stabilizes_list_pagination_and_snapshots(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    created_at = "2026-01-01T00:00:00"
+    for job_id in ("one", "two", "three"):
+        store.create_job(_job(job_id, created_at=created_at))
+
+    page, total = store.list_jobs(limit=2, offset=1)
+    snapshot, _cursor = store.snapshot_jobs()
+
+    assert total == 3
+    assert [row["run_number"] for row in page] == [2, 1]
+    assert [row["run_number"] for row in snapshot] == [3, 2, 1]
 
 
 def test_the_database_runs_in_wal_mode_with_a_busy_timeout(tmp_path: Path) -> None:
@@ -577,7 +730,7 @@ def test_event_ids_are_persisted_monotonic_and_resume_or_snapshot(tmp_path: Path
     assert reopened.current_event_cursor() == 5
 
 
-def test_live_retention_prune_persists_a_deleted_event_for_every_removed_job(
+def test_live_retention_prune_persists_an_availability_event_for_every_pruned_result(
     tmp_path: Path,
 ) -> None:
     store = JobStore(tmp_path / "jobs.db")
@@ -587,6 +740,7 @@ def test_live_retention_prune_persists_a_deleted_event_for_every_removed_job(
         store.update_job(
             job_id, status="complete", completed_at="2000-01-01T00:00:00"
         )
+        store.store_results(job_id, {"frequencies": [1000.0]})
 
     removed, events = store.prune_terminal_jobs_with_events(
         retention_days=30, max_terminal_jobs=1000
@@ -594,10 +748,106 @@ def test_live_retention_prune_persists_a_deleted_event_for_every_removed_job(
 
     assert set(removed) == {"oldest", "newest"}
     assert [event["jobId"] for event in events] == removed
-    assert [event["type"] for event in events] == ["deleted", "deleted"]
-    assert all(event["payload"] == {"reason": "retention"} for event in events)
-    assert store.list_jobs()[1] == 0
+    assert [event["type"] for event in events] == ["metadata", "metadata"]
+    assert all(
+        event["payload"]
+        == {"changed": {"has_results": False}, "reason": "retention"}
+        for event in events
+    )
+    assert store.list_jobs()[1] == 2
+    assert all(not store.get_job_row(job_id)["has_results"] for job_id in removed)
     assert [event["jobId"] for event in store.replay_events(2)] == removed
+
+
+def test_terminal_mesh_is_pruned_after_download_or_grace_but_rated_mesh_is_exempt(
+    tmp_path: Path,
+) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+
+    now = datetime.now().isoformat()
+    cases = (
+        ("downloaded", 0, now, "downloaded.msh"),
+        ("expired", 0, "2000-01-01T00:00:00", None),
+        ("rated", 3, "2000-01-01T00:00:00", "rated.msh"),
+    )
+    run_numbers: dict[str, int] = {}
+    for job_id, rating, completed_at, mesh_file in cases:
+        record = _job(job_id, "running", created_at=completed_at)
+        record["task_metadata"] = {"rating": rating}
+        store.create_job(record)
+        store.store_mesh_artifact(job_id, f"mesh-{job_id}")
+        store.store_results(job_id, {"job": job_id})
+        store.update_job(
+            job_id,
+            status="complete",
+            completed_at=completed_at,
+        )
+        if mesh_file is not None:
+            store.mutate_job_metadata(job_id, {"mesh_artifact_file": mesh_file})
+        row = store.get_job_row(job_id)
+        run_numbers[job_id] = row["run_number"]
+        assert row["has_mesh_artifact"] is True
+        assert store.get_mesh_artifact(job_id) == f"mesh-{job_id}"
+
+    assert (
+        store.prune_terminal_jobs(
+            retention_days=99999,
+            max_terminal_jobs=1000,
+            mesh_grace_minutes=1,
+        )
+        == 2
+    )
+
+    for job_id in ("downloaded", "expired"):
+        row = store.get_job_row(job_id)
+        assert row["has_mesh_artifact"] is False
+        assert store.get_mesh_artifact(job_id) is None
+        assert row["run_number"] == run_numbers[job_id]
+        assert row["has_results"] is True
+    assert store.get_job_row("rated")["has_mesh_artifact"] is True
+    assert store.get_mesh_artifact("rated") == "mesh-rated"
+    assert store.get_job_row("rated")["run_number"] == run_numbers["rated"]
+    assert store.get_results("rated") == {"job": "rated"}
+    assert store.get_job_row("rated")["has_results"] is True
+
+
+def test_result_count_pruning_keeps_job_rows_and_run_numbers(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    for job_id, completed_at in (
+        ("older", "2026-08-08T00:00:00"),
+        ("newer", "2026-08-09T00:00:00"),
+    ):
+        record = _job(job_id, "complete", created_at=completed_at)
+        record["completed_at"] = completed_at
+        store.create_job(record)
+        store.store_results(job_id, {"job": job_id})
+
+    assert store.prune_terminal_jobs(retention_days=30, max_terminal_jobs=1) == 1
+    assert store.get_results("older") is None
+    assert store.get_results("newer") == {"job": "newer"}
+    assert store.get_job_row("older")["run_number"] == 1
+    assert store.get_job_row("newer")["run_number"] == 2
+    assert store.list_jobs()[1] == 2
+
+
+def test_rating_after_terminal_transition_exempts_mesh_from_retention(
+    tmp_path: Path,
+) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    store.create_job(_job("late-rating", "running"))
+    store.store_mesh_artifact("late-rating", "mesh")
+    store.update_job("late-rating", status="complete")
+
+    changed, _event = store.mutate_job_metadata("late-rating", {"rating": 5})
+    store.prune_terminal_jobs(mesh_grace_minutes=0)
+
+    assert changed is True
+    assert store.get_job_row("late-rating")["task_metadata"]["rating"] == 5
+    assert store.get_job_row("late-rating")["has_mesh_artifact"] is True
+    assert store.get_mesh_artifact("late-rating") == "mesh"
 
 
 def test_snapshot_cursor_and_rows_are_from_one_store_view(tmp_path: Path) -> None:

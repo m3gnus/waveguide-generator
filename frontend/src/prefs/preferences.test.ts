@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { JobItem } from '../api/jobsSocket';
-import { applyJobPreferences, CHART_TYPES, EXPORT_FORMATS, exportBaseName, jobBaseName, loadPreferences, MAP_REFERENCES, nextFileJobNaming, nextJobNaming, nextVersionFor, parseJobName, preferencesStore, readPreferences, STORAGE_VERSION } from './preferences';
+import { applyJobPreferences, CHART_TYPES, EXPORT_FORMATS, exportBaseName, jobBaseName, loadPreferences, MAP_REFERENCES, nextFileJobNaming, nextJobNaming, nextVersionFor, parseJobName, preferencesStore, readPreferences, runDisplayName, STORAGE_VERSION } from './preferences';
 
 function job(id: string, rating: number | null, created: string, completed = created): JobItem {
-  return { id, rating, created_at: created, completed_at: completed, label: id, status: 'complete', progress: 1, stage: null, stage_message: null, queued_at: created, started_at: created, config_summary: {}, has_results: true, has_mesh_artifact: false, error_message: null, cancellation_requested: false, mesh_stats: null, script_snapshot: null, design_revision: 0, polar_grid: {}, exported_files: [], auto_export_completed_at: null, auto_export_formats: {}, raw_results_file: null, mesh_artifact_file: null, log_tail: [] };
+  return { id, run_number: 1, parent_job_id: null, rating, created_at: created, completed_at: completed, label: id, status: 'complete', progress: 1, stage: null, stage_message: null, queued_at: created, started_at: created, config_summary: {}, solve_options: {} as JobItem['solve_options'], has_results: true, has_mesh_artifact: false, error_message: null, cancellation_requested: false, mesh_stats: null, script_snapshot: null, design_revision: 0, polar_grid: {}, exported_files: [], auto_export_completed_at: null, auto_export_formats: {}, raw_results_file: null, mesh_artifact_file: null, log_tail: [] };
 }
 
 describe('client preferences', () => {
@@ -171,5 +171,19 @@ describe('client preferences', () => {
     const jobs = [job('beta', 2, '2026-01-01T00:00:00Z'), job('alpha', 5, '2026-01-02T00:00:00Z')];
     expect(applyJobPreferences(jobs, 'rating_desc', 3).map(({ id }) => id)).toEqual(['alpha']);
     expect(applyJobPreferences(jobs, 'name_asc', 0).map(({ id }) => id)).toEqual(['alpha', 'beta']);
+  });
+  it('sorts displayed names case-insensitively and naturally with run-number ties', () => {
+    const jobs = [
+      { ...job('a', 0, '2026-01-01T00:00:00Z'), run_number: 12, label: 'run10' },
+      { ...job('b', 0, '2026-01-01T00:00:00Z'), run_number: 9, label: 'RUN9' },
+      { ...job('c', 0, '2026-01-01T00:00:00Z'), run_number: 4, label: 'same' },
+      { ...job('d', 0, '2026-01-01T00:00:00Z'), run_number: 2, label: 'Same' },
+    ];
+    expect(applyJobPreferences(jobs, 'name_asc', 0).map(({ id }) => id)).toEqual(['b', 'a', 'd', 'c']);
+  });
+  it('uses the same untitled fallback in full and short run identities', () => {
+    const untitled = { ...job('1a2b3c4d', 0, '2026-01-01T00:00:00Z'), run_number: 123, label: null };
+    expect(runDisplayName(untitled)).toBe('#123 · osse-1a2b3c');
+    expect(runDisplayName(untitled, 'short')).toBe('osse-1a2b3c');
   });
 });

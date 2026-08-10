@@ -23,7 +23,7 @@ import uuid
 from server.design.schema import Expr
 from server.engines.registry import EngineRegistry, create_engine as get_engine
 from server.jobs.legacy_design import resolve_job_design
-from server.jobs.models import SolveRequest
+from server.jobs.models import SolveOptions, SolveRequest
 from server.jobs.store import ALLOWED_STATUSES, JobStore
 from server.solver.symmetry import resolve_symmetry, validate_symmetry_mode
 
@@ -61,6 +61,10 @@ class JobConflictError(RuntimeError):
 
 class JobResourceUnavailableError(RuntimeError):
     """Requested job result or artifact is not persisted."""
+
+
+class JobMeshDiscardedError(JobResourceUnavailableError):
+    """A terminal unrated job no longer retains an instantly available mesh."""
 
 
 class EngineUnavailableError(RuntimeError):
@@ -175,11 +179,11 @@ class JobRuntime:
                 return
             self._shutting_down = False
             await asyncio.to_thread(self.store.initialize)
-            await asyncio.to_thread(
-                self.store.prune_terminal_jobs, retention_days=30, max_terminal_jobs=1000
-            )
             queued, recovery_events = await asyncio.to_thread(
                 self.store.recover_on_startup, "Server restarted during execution"
+            )
+            await asyncio.to_thread(
+                self.store.prune_terminal_jobs, retention_days=30, max_terminal_jobs=1000
             )
             self._queue.extend(row["id"] for row in queued)
             self._started = True
@@ -266,6 +270,7 @@ class JobRuntime:
         event = self.store.create_job(
             {
                 "id": job_id,
+                "parent_job_id": request.parent_job_id,
                 "status": "queued",
                 "created_at": now,
                 "updated_at": now,
@@ -349,6 +354,15 @@ class JobRuntime:
             "status": "cancelling",
         }
 
+    async def retry(self, job_id: str) -> str:
+        """Submit a faithful replay from the target's persisted request config."""
+
+        await self.start()
+        row = self._require_job(job_id)
+        request = SolveRequest.model_validate(row["config_json"]).model_copy(deep=True)
+        request.parent_job_id = job_id
+        return await self.submit(request)
+
     async def get_job(self, job_id: str) -> dict[str, Any]:
         await self.start()
 
@@ -388,12 +402,21 @@ class JobRuntime:
 
     async def get_mesh_artifact(self, job_id: str) -> str:
         await self.start()
-        self._require_job(job_id)
+        row = self._require_job(job_id)
         # Real MSH artifacts are multi-megabyte text blobs. Reading one through
         # SQLite on the event loop stalls both WS channels for the full copy.
         artifact = await asyncio.to_thread(self.store.get_mesh_artifact, job_id)
         if not artifact:
-            raise JobResourceUnavailableError("No mesh artifact available for this job")
+            metadata = row.get("task_metadata")
+            rating = metadata.get("rating") if isinstance(metadata, Mapping) else None
+            if row["status"] in {"complete", "error", "cancelled"} and not rating:
+                raise JobMeshDiscardedError(
+                    "Mesh artifact was not retained for this unrated run; "
+                    "any generated mesh was discarded by retention after download "
+                    "or the grace window, and "
+                    "regeneration is not available yet"
+                )
+            raise JobResourceUnavailableError("No mesh artifact is available for this job")
         return artifact
 
     async def get_log(self, job_id: str) -> str:
@@ -1238,12 +1261,20 @@ class JobRuntime:
     @staticmethod
     def _serialize_job(row: Mapping[str, Any], *, detailed: bool = False) -> dict[str, Any]:
         metadata = row.get("task_metadata") if isinstance(row.get("task_metadata"), dict) else {}
+        stored_options = (row.get("config_json") or {}).get("options") or {}
+        current_options = {
+            key: value
+            for key, value in stored_options.items()
+            if key in SolveOptions.model_fields
+        }
         # An imported v1 job reaches the client already translated, so reopen,
         # rerun, compare and export need no legacy branch; one that cannot be
         # translated keeps its original bytes and carries the reason instead.
         design = resolve_job_design(row.get("script_snapshot"), row.get("config_json"))
         item = {
             "id": row.get("id"),
+            "run_number": row.get("run_number"),
+            "parent_job_id": row.get("parent_job_id"),
             "status": row.get("status"),
             "progress": float(row.get("progress", 0.0)),
             "stage": row.get("stage"),
@@ -1253,6 +1284,9 @@ class JobRuntime:
             "started_at": row.get("started_at"),
             "completed_at": row.get("completed_at"),
             "config_summary": row.get("config_summary_json") or {},
+            "solve_options": SolveOptions.model_validate(current_options).model_dump(
+                mode="json"
+            ),
             "has_results": bool(row.get("has_results")),
             "has_mesh_artifact": bool(row.get("has_mesh_artifact")),
             "label": row.get("label"),
@@ -1289,6 +1323,7 @@ __all__ = [
     "EngineUnavailableError",
     "EventBroker",
     "JobConflictError",
+    "JobMeshDiscardedError",
     "JobNotFoundError",
     "JobResourceUnavailableError",
     "JobRuntime",

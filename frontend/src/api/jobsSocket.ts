@@ -22,6 +22,8 @@ export interface AutoExportFormatStatus {
 
 export interface JobItem {
   id: string;
+  run_number: number;
+  parent_job_id: string | null;
   status: JobStatus;
   progress: number;
   stage: string | null;
@@ -31,6 +33,18 @@ export interface JobItem {
   started_at: string | null;
   completed_at: string | null;
   config_summary: Record<string, unknown>;
+  solve_options: {
+    engine: string;
+    symmetry: string;
+    frequency_range: number[] | null;
+    num_frequencies: number | null;
+    frequency_spacing: 'log' | 'linear';
+    frequencies_hz: number[] | null;
+    verbose: boolean;
+    mesh_validation_mode: 'warn' | 'strict' | 'off';
+    polar_config: Record<string, unknown>;
+    stage_delay_ms: number;
+  };
   has_results: boolean;
   has_mesh_artifact: boolean;
   label: string | null;
