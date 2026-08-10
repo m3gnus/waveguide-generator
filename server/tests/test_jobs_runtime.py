@@ -81,6 +81,82 @@ def test_fifo_order_and_strong_scheduler_reference(tmp_path: Path, monkeypatch) 
     asyncio.run(scenario())
 
 
+def test_completed_unrated_job_keeps_mesh_available_during_grace_window(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("WG2_ENABLE_DRYRUN", "1")
+
+    async def scenario() -> None:
+        runtime = JobRuntime(JobStore(tmp_path / "jobs.db"))
+        job_id = await runtime.submit(_request(delay_ms=0))
+        await runtime.wait_idle()
+
+        job = await runtime.get_job(job_id)
+        assert job["status"] == "complete"
+        assert job["has_mesh_artifact"] is True
+        assert job["has_results"] is True
+        assert runtime.store.get_mesh_artifact(job_id).startswith("$MeshFormat")
+        assert runtime.store.get_results(job_id) is not None
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_retry_replays_stored_options_and_parent_after_results_are_pruned(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("WG2_ENABLE_DRYRUN", "1")
+
+    async def scenario() -> None:
+        runtime = JobRuntime(JobStore(tmp_path / "jobs.db"))
+        request = SolveRequest.model_validate(
+            {
+                "design": {
+                    "formula": "OSSE",
+                    "L": 137,
+                    "a": 41,
+                    "simulation": {"f1": 250, "f2": 8000, "num_frequencies": 5},
+                },
+                "options": {
+                    "engine": "dryrun",
+                    "frequency_range": [333.0, 1777.0],
+                    "num_frequencies": 7,
+                    "frequency_spacing": "linear",
+                    "verbose": True,
+                    "mesh_validation_mode": "off",
+                    "stage_delay_ms": 0,
+                },
+                "label": "Faithful source",
+                "design_revision": 9,
+            }
+        )
+        source_id = await runtime.submit(request)
+        await runtime.wait_idle()
+        source = runtime.store.get_job_row(source_id)
+        stored_options = source["config_json"]["options"]
+        runtime.store.update_job(
+            source_id, completed_at="2000-01-01T00:00:00"
+        )
+        assert runtime.store.prune_terminal_jobs() == 1
+        assert runtime.store.get_results(source_id) is None
+        assert runtime.store.get_job_row(source_id) is not None
+
+        retry_id = await runtime.retry(source_id)
+        await runtime.wait_idle()
+        replay = runtime.store.get_job_row(retry_id)
+
+        assert replay["config_json"]["options"] == stored_options
+        assert replay["config_json"]["design"] == source["config_json"]["design"]
+        assert replay["parent_job_id"] == source_id
+        assert replay["config_json"]["parent_job_id"] == source_id
+        assert replay["run_number"] == source["run_number"] + 1
+        serialized_source = await runtime.get_job(source_id)
+        assert serialized_source["solve_options"] == stored_options
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("stage", ["mesh", "assemble", "solve", "postprocess"])
 def test_cancellation_is_acknowledged_at_every_stage(
     stage: str, tmp_path: Path, monkeypatch

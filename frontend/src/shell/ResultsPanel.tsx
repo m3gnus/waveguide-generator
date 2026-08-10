@@ -11,7 +11,7 @@ import { resultExportSnapshot } from '../results/exportContext';
 export { resultExportSnapshot } from '../results/exportContext';
 import type { ResultPayload } from '../results/types';
 import { hydrateJobDesign } from '../jobs/jobDesign';
-import { CHART_TYPES, MAX_RESULT_PANELS, RESULT_PANEL_COUNTS, preferencesStore, usePreferences, type ChartType } from '../prefs/preferences';
+import { CHART_TYPES, MAX_RESULT_PANELS, RESULT_PANEL_COUNTS, preferencesStore, runDisplayName, usePreferences, type ChartType } from '../prefs/preferences';
 import { ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
 import { Icon } from './icons';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
@@ -32,7 +32,7 @@ export function splSubtitle(result: JobResults | undefined): string {
 
 function labelFor(id: string, jobs: ReturnType<typeof jobsSocket.getSnapshot>['jobs']): string {
   const job = jobs.find((item) => item.id === id);
-  return job?.label || `${String(job?.config_summary.formula_type ?? 'job').toLowerCase()} ${id.slice(0, 6)}`;
+  return job ? runDisplayName(job) : `osse-${id.slice(0, 6)}`;
 }
 
 /**

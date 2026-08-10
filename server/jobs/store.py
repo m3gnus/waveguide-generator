@@ -21,6 +21,7 @@ from server.platform.paths import data_paths
 
 
 ALLOWED_STATUSES = frozenset({"queued", "running", "complete", "error", "cancelled"})
+MESH_ARTIFACT_GRACE_MINUTES = 60
 ALLOWED_JOB_UPDATE_FIELDS = frozenset(
     {
         "status",
@@ -134,6 +135,14 @@ _SCHEMA_STATEMENTS = (
     # were scanning the table and building a temporary sort every time.
     """CREATE INDEX IF NOT EXISTS idx_simulation_jobs_created
       ON simulation_jobs(created_at DESC)""",
+    """CREATE TABLE IF NOT EXISTS job_identity (
+      run_number INTEGER PRIMARY KEY AUTOINCREMENT,
+      job_id TEXT NOT NULL UNIQUE,
+      parent_job_id TEXT NULL
+    )""",
+    # The UNIQUE constraint above creates SQLite's lookup index for every
+    # simulation_jobs.id -> job_identity.job_id join; another index would only
+    # duplicate it.
     """CREATE TABLE IF NOT EXISTS job_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       created_at TEXT NOT NULL,
@@ -191,7 +200,7 @@ class JobStore:
         )
 
     def initialize(self) -> None:
-        """Create the exact v1 migration-target tables plus v2 job events."""
+        """Create the v1 migration targets plus additive v2 tables and identities."""
 
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._lock, self._transaction() as conn:
@@ -207,8 +216,20 @@ class JobStore:
                 conn.execute("ALTER TABLE simulation_jobs ADD COLUMN script_snapshot_json TEXT")
             if "task_metadata_json" not in columns:
                 conn.execute("ALTER TABLE simulation_jobs ADD COLUMN task_metadata_json TEXT")
+            self._backfill_job_identity(conn)
             # Keep the v1 schema marker. job_events is an additive v2 transport table.
             conn.execute("PRAGMA user_version = 4")
+
+    def backfill_job_identity(self) -> None:
+        """Assign identities to unnumbered jobs deterministically and idempotently.
+
+        Ordering by ``(created_at, id)`` is deterministic, not true chronology:
+        existing timestamps are naive local strings and can be ambiguous across
+        a daylight-saving transition.
+        """
+
+        with self._lock, self._transaction() as conn:
+            self._backfill_job_identity(conn)
 
     def create_job(
         self,
@@ -257,6 +278,10 @@ class JobStore:
                     else None,
                     json.dumps(job.get("task_metadata") or {}),
                 ),
+            )
+            conn.execute(
+                "INSERT INTO job_identity (job_id, parent_job_id) VALUES (?, ?)",
+                (job["id"], job.get("parent_job_id")),
             )
             if initial_event is None:
                 return None
@@ -590,7 +615,14 @@ class JobStore:
 
     def get_job_row(self, job_id: str) -> dict[str, Any] | None:
         with self._lock, self._connection() as conn:
-            row = conn.execute("SELECT * FROM simulation_jobs WHERE id = ?", (job_id,)).fetchone()
+            row = conn.execute(
+                """SELECT simulation_jobs.*, job_identity.run_number,
+                          job_identity.parent_job_id
+                   FROM simulation_jobs
+                   JOIN job_identity ON job_identity.job_id = simulation_jobs.id
+                   WHERE simulation_jobs.id = ?""",
+                (job_id,),
+            ).fetchone()
             return self._row_to_job(row) if row else None
 
     def list_jobs(
@@ -608,16 +640,30 @@ class JobStore:
             if invalid:
                 raise ValueError(f"Unsupported status: {invalid[0]}")
             placeholders = ",".join("?" for _ in statuses)
-            where = f"WHERE status IN ({placeholders})"
+            where = f"WHERE simulation_jobs.status IN ({placeholders})"
             args.extend(statuses)
         with self._lock, self._connection() as conn:
+            # The join mirrors the row query below. Counting without it would
+            # let a job with no identity row inflate the total while never
+            # appearing in a page, which reads as a pagination bug.
             total = int(
-                conn.execute(f"SELECT COUNT(*) AS c FROM simulation_jobs {where}", args).fetchone()["c"]
+                conn.execute(
+                    f"""SELECT COUNT(*) AS c
+                        FROM simulation_jobs
+                        JOIN job_identity ON job_identity.job_id = simulation_jobs.id
+                        {where}""",
+                    args,
+                ).fetchone()["c"]
             )
             rows = conn.execute(
                 f"""
-                SELECT * FROM simulation_jobs {where}
-                ORDER BY created_at DESC LIMIT ? OFFSET ?
+                SELECT simulation_jobs.*, job_identity.run_number,
+                       job_identity.parent_job_id
+                FROM simulation_jobs
+                JOIN job_identity ON job_identity.job_id = simulation_jobs.id
+                {where}
+                ORDER BY simulation_jobs.created_at DESC, job_identity.run_number DESC
+                LIMIT ? OFFSET ?
                 """,
                 [*args, int(limit), int(offset)],
             ).fetchall()
@@ -635,7 +681,11 @@ class JobStore:
             try:
                 cursor = self._event_cursor(conn)
                 rows = conn.execute(
-                    "SELECT * FROM simulation_jobs ORDER BY created_at DESC"
+                    """SELECT simulation_jobs.*, job_identity.run_number,
+                              job_identity.parent_job_id
+                       FROM simulation_jobs
+                       JOIN job_identity ON job_identity.job_id = simulation_jobs.id
+                       ORDER BY simulation_jobs.created_at DESC, job_identity.run_number DESC"""
                 ).fetchall()
             finally:
                 conn.rollback()
@@ -823,33 +873,54 @@ class JobStore:
                     )
                 )
             queued = conn.execute(
-                "SELECT * FROM simulation_jobs WHERE status = 'queued' ORDER BY created_at ASC"
+                """SELECT simulation_jobs.*, job_identity.run_number,
+                          job_identity.parent_job_id
+                   FROM simulation_jobs
+                   JOIN job_identity ON job_identity.job_id = simulation_jobs.id
+                   WHERE simulation_jobs.status = 'queued'
+                   ORDER BY simulation_jobs.created_at ASC, job_identity.run_number ASC"""
             ).fetchall()
             return [self._row_to_job(row) for row in queued], failed_events
 
-    def prune_terminal_jobs(self, retention_days: int = 30, max_terminal_jobs: int = 1000) -> int:
-        """Apply v1's age/count retention policy (``server/db.py:316-347``)."""
+    def prune_terminal_jobs(
+        self,
+        retention_days: int = 30,
+        max_terminal_jobs: int = 1000,
+        *,
+        mesh_grace_minutes: int = MESH_ARTIFACT_GRACE_MINUTES,
+    ) -> int:
+        """Prune result payloads by age/count while retaining every job record.
+
+        This deliberately breaks v1 parity: records are the durable run index,
+        while only the heavier result tier remains subject to retention.
+        """
 
         removed_ids, _events = self._prune_terminal_jobs(
             retention_days=retention_days,
             max_terminal_jobs=max_terminal_jobs,
+            mesh_grace_minutes=mesh_grace_minutes,
             emit_events=False,
         )
         return len(removed_ids)
 
     def prune_terminal_jobs_with_events(
-        self, retention_days: int = 30, max_terminal_jobs: int = 1000
+        self,
+        retention_days: int = 30,
+        max_terminal_jobs: int = 1000,
+        *,
+        mesh_grace_minutes: int = MESH_ARTIFACT_GRACE_MINUTES,
     ) -> tuple[list[str], list[dict[str, Any]]]:
-        """Prune rows and retain matching WS deletion events atomically.
+        """Prune results and retain matching WS availability events atomically.
 
         Startup uses :meth:`prune_terminal_jobs` before clients can subscribe.
-        Runtime pruning, however, must publish every removed id so an already
+        Runtime pruning, however, must publish every affected id so an already
         connected client can converge from events alone.
         """
 
         return self._prune_terminal_jobs(
             retention_days=retention_days,
             max_terminal_jobs=max_terminal_jobs,
+            mesh_grace_minutes=mesh_grace_minutes,
             emit_events=True,
         )
 
@@ -858,70 +929,109 @@ class JobStore:
         *,
         retention_days: int,
         max_terminal_jobs: int,
+        mesh_grace_minutes: int,
         emit_events: bool,
     ) -> tuple[list[str], list[dict[str, Any]]]:
         """Shared retention transaction for silent startup and live pruning."""
 
         cutoff = (datetime.now() - timedelta(days=int(retention_days))).isoformat()
+        mesh_cutoff = (
+            datetime.now() - timedelta(minutes=int(mesh_grace_minutes))
+        ).isoformat()
         removed_ids: list[str] = []
         events: list[dict[str, Any]] = []
         with self._lock, self._transaction() as conn:
             aged = conn.execute(
                 """SELECT id FROM simulation_jobs
                    WHERE status IN ('complete', 'error', 'cancelled')
+                     AND has_results = 1
+                     AND COALESCE(CAST(json_extract(task_metadata_json, '$.rating') AS INTEGER), 0) <= 0
                      AND COALESCE(completed_at, updated_at, created_at) < ?""",
                 (cutoff,),
             ).fetchall()
             removed_ids.extend(str(row["id"]) for row in aged)
-            cur = conn.execute(
-                """
-                DELETE FROM simulation_jobs
-                WHERE status IN ('complete', 'error', 'cancelled')
-                  AND COALESCE(completed_at, updated_at, created_at) < ?
-                """,
-                (cutoff,),
-            )
-            deleted = int(cur.rowcount or 0)
             # Ask SQLite for the overflow rather than materialising every
-            # terminal row and slicing in Python. This runs after *every* job,
-            # and at the 1000-row cap that was a thousand rows fetched to
-            # discover, almost always, that nothing needs removing.
+            # retained result and slicing in Python. Rated payloads do not
+            # count toward the cap because they are exempt from retention.
             overflow = [
                 row["id"]
                 for row in conn.execute(
                     """
                     SELECT id FROM simulation_jobs
                     WHERE status IN ('complete', 'error', 'cancelled')
+                      AND has_results = 1
+                      AND COALESCE(CAST(json_extract(task_metadata_json, '$.rating') AS INTEGER), 0) <= 0
+                      AND COALESCE(completed_at, updated_at, created_at) >= ?
                     ORDER BY COALESCE(completed_at, updated_at, created_at) DESC
                     LIMIT -1 OFFSET ?
                     """,
-                    (int(max_terminal_jobs),),
+                    (cutoff, int(max_terminal_jobs)),
                 ).fetchall()
             ]
-            if overflow:
-                removed_ids.extend(str(value) for value in overflow)
-                placeholders = ",".join("?" for _ in overflow)
-                cur = conn.execute(
-                    f"DELETE FROM simulation_jobs WHERE id IN ({placeholders})", overflow
-                )
-                deleted += int(cur.rowcount or 0)
-            # ``job_events`` deliberately has no foreign key to the retained
-            # row. Append after the deletes but inside the same transaction so
-            # observers cannot see a missing job without its terminal event.
+            removed_ids.extend(str(value) for value in overflow)
             removed_ids = list(dict.fromkeys(removed_ids))
-            if emit_events:
+            mesh_rows = conn.execute(
+                """SELECT id FROM simulation_jobs
+                   WHERE status IN ('complete', 'error', 'cancelled')
+                     AND has_mesh_artifact = 1
+                     AND COALESCE(CAST(json_extract(task_metadata_json, '$.rating') AS INTEGER), 0) <= 0
+                     AND (
+                       json_extract(task_metadata_json, '$.mesh_artifact_file') IS NOT NULL
+                       OR COALESCE(completed_at, updated_at, created_at) < ?
+                     )""",
+                (mesh_cutoff,),
+            ).fetchall()
+            mesh_ids = [str(row["id"]) for row in mesh_rows]
+            deleted_results = 0
+            if removed_ids:
+                placeholders = ",".join("?" for _ in removed_ids)
+                cur = conn.execute(
+                    f"DELETE FROM simulation_results WHERE job_id IN ({placeholders})",
+                    removed_ids,
+                )
+                deleted_results = int(cur.rowcount or 0)
+                conn.execute(
+                    f"UPDATE simulation_jobs SET has_results = 0 WHERE id IN ({placeholders})",
+                    removed_ids,
+                )
+            if mesh_ids:
+                placeholders = ",".join("?" for _ in mesh_ids)
+                conn.execute(
+                    f"DELETE FROM simulation_artifacts WHERE job_id IN ({placeholders})",
+                    mesh_ids,
+                )
+                conn.execute(
+                    f"UPDATE simulation_jobs SET has_mesh_artifact = 0 WHERE id IN ({placeholders})",
+                    mesh_ids,
+                )
+            affected_ids = list(dict.fromkeys([*removed_ids, *mesh_ids]))
+            if emit_events and affected_ids:
                 events = [
-                    self._append_event(conn, job_id, "deleted", {"reason": "retention"})
-                    for job_id in removed_ids
+                    self._append_event(
+                        conn,
+                        job_id,
+                        "metadata",
+                        {
+                            "changed": {
+                                **({"has_results": False} if job_id in removed_ids else {}),
+                                **(
+                                    {"has_mesh_artifact": False}
+                                    if job_id in mesh_ids
+                                    else {}
+                                ),
+                            },
+                            "reason": "retention",
+                        },
+                    )
+                    for job_id in affected_ids
                 ]
-        self._delete_job_logs(removed_ids)
-        if deleted != len(removed_ids):  # pragma: no cover - SQLite rowcount invariant
+        if deleted_results != len(removed_ids):  # pragma: no cover - SQLite rowcount invariant
             logger.warning(
-                "Retention selected %d job ids but SQLite reported %d deletions",
+                "Retention selected %d result ids but SQLite reported %d deletions",
                 len(removed_ids),
-                deleted,
+                deleted_results,
             )
-        return removed_ids, events
+        return affected_ids, events
 
     def append_event(
         self, job_id: str, event_type: str, payload: Mapping[str, Any]
@@ -1152,12 +1262,25 @@ class JobStore:
             raise
 
     @staticmethod
+    def _backfill_job_identity(conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """INSERT OR IGNORE INTO job_identity (job_id, parent_job_id)
+               SELECT simulation_jobs.id, NULL
+               FROM simulation_jobs
+               LEFT JOIN job_identity ON job_identity.job_id = simulation_jobs.id
+               WHERE job_identity.job_id IS NULL
+               ORDER BY simulation_jobs.created_at ASC, simulation_jobs.id ASC"""
+        )
+
+    @staticmethod
     def _row_to_job(row: sqlite3.Row) -> dict[str, Any]:
         """Decode rows exactly as v1 ``server/db.py:364-395``."""
 
         columns = set(row.keys())
         result: dict[str, Any] = {
             "id": row["id"],
+            "run_number": int(row["run_number"]),
+            "parent_job_id": row["parent_job_id"],
             "status": row["status"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],

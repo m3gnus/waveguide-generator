@@ -38,6 +38,8 @@ def _row(name: str) -> dict[str, Any]:
 
     fixture = BY_NAME[name]
     row = dict(fixture)
+    row["run_number"] = 1
+    row["parent_job_id"] = None
     row["config_json"] = json.loads(fixture["config_json"] or "{}")
     row["config_summary_json"] = json.loads(fixture["config_summary_json"] or "{}")
     row["script_snapshot"] = (

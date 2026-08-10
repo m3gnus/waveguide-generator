@@ -44,10 +44,11 @@ function deferred<T>() {
 function completeJob(overrides: Partial<JobItem> = {}): JobItem {
   const design = designForFamily('OSSE');
   return {
-    id: 'job-export-1', status: 'complete', progress: 1, stage: 'complete', stage_message: null,
+    id: 'job-export-1', run_number: 1, parent_job_id: null,
+    status: 'complete', progress: 1, stage: 'complete', stage_message: null,
     created_at: '2026-08-10T10:00:00Z', queued_at: '2026-08-10T10:00:00Z',
     started_at: '2026-08-10T10:00:01Z', completed_at: '2026-08-10T10:01:00Z',
-    config_summary: { formula_type: 'OSSE' }, has_results: true, has_mesh_artifact: true,
+    config_summary: { formula_type: 'OSSE' }, solve_options: {} as JobItem['solve_options'], has_results: true, has_mesh_artifact: true,
     label: 'stored_horn_v07', error_message: null, cancellation_requested: false, mesh_stats: null,
     script_snapshot: { version: 1, design: serializeDesign(design) }, design_revision: 42,
     polar_grid: {}, rating: null, exported_files: ['earlier.csv'], auto_export_completed_at: null,
@@ -145,10 +146,10 @@ describe('RunExportControl', () => {
 
   it('shows export immediately on every exportable collapsed run and keeps it separate from selection', () => {
     preferencesStore.update({ exportFormats: [] });
-    const exportableOne = completeJob({ id: 'exportable-one', label: 'exportable_one' });
-    const exportableTwo = completeJob({ id: 'exportable-two', label: 'exportable_two' });
-    const running = completeJob({ id: 'running-one', label: 'running_one', status: 'running' });
-    const failed = completeJob({ id: 'failed-one', label: 'failed_one', status: 'error' });
+    const exportableOne = completeJob({ id: 'exportable-one', run_number: 1, label: 'exportable_one' });
+    const exportableTwo = completeJob({ id: 'exportable-two', run_number: 2, label: 'exportable_two' });
+    const running = completeJob({ id: 'running-one', run_number: 3, label: 'running_one', status: 'running' });
+    const failed = completeJob({ id: 'failed-one', run_number: 4, label: 'failed_one', status: 'error' });
     publishJobs([exportableOne, exportableTwo, running, failed]);
     const selectSpy = vi.spyOn(compareSelection, 'setPrimary');
 
@@ -159,7 +160,7 @@ describe('RunExportControl', () => {
     expect(collapsed.every((card) => card.querySelector('.run-export-control.compact'))).toBe(true);
     expect(host.querySelectorAll('.run-export-control')).toHaveLength(2);
 
-    const secondCard = collapsed.find((card) => card.textContent?.includes('exportable_two'))!;
+    const secondCard = collapsed.find((card) => card.querySelector('[aria-label="Select #2 · exportable_two"]'))!;
     act(() => { secondCard.querySelector<HTMLButtonElement>('.action-menu-primary')!.click(); });
 
     expect(selectSpy).not.toHaveBeenCalled();

@@ -16,9 +16,10 @@ class MockSocket implements JobsWebSocketLike {
 
 function job(overrides: Partial<JobItem> = {}): JobItem {
   return {
-    id: 'job-1', status: 'queued', progress: 0, stage: 'queued', stage_message: 'Queued',
+    id: 'job-1', run_number: 1, parent_job_id: null,
+    status: 'queued', progress: 0, stage: 'queued', stage_message: 'Queued',
     created_at: '2026-08-03T10:00:00Z', queued_at: '2026-08-03T10:00:00Z', started_at: null, completed_at: null,
-    config_summary: { formula_type: 'OSSE', engine: 'dryrun' }, has_results: false, has_mesh_artifact: false,
+    config_summary: { formula_type: 'OSSE', engine: 'dryrun' }, solve_options: {} as JobItem['solve_options'], has_results: false, has_mesh_artifact: false,
     label: null, error_message: null, cancellation_requested: false, mesh_stats: null, script_snapshot: null,
     design_revision: 0, polar_grid: {}, rating: null, exported_files: [], auto_export_completed_at: null,
     auto_export_formats: {}, raw_results_file: null, mesh_artifact_file: null, log_tail: [],

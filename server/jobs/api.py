@@ -25,6 +25,7 @@ from server.jobs.models import (
 from server.jobs.runtime import (
     EngineUnavailableError,
     JobConflictError,
+    JobMeshDiscardedError,
     JobNotFoundError,
     JobResourceUnavailableError,
     JobRuntime,
@@ -91,6 +92,17 @@ def create_jobs_router(runtime: JobRuntime) -> APIRouter:
         except JobConflictError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    @router.post("/api/jobs/{job_id}/retry", response_model=SolveAccepted)
+    async def retry_job(job_id: str) -> SolveAccepted:
+        try:
+            return SolveAccepted(job_id=await runtime.retry(job_id))
+        except JobNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Job not found") from exc
+        except (UnknownEngineError, SymmetryValidationError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except EngineUnavailableError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
     @router.get("/api/status/{job_id}", response_model=JobStatusResponse)
     async def job_status(job_id: str) -> JobStatusResponse:
         try:
@@ -123,6 +135,8 @@ def create_jobs_router(runtime: JobRuntime) -> APIRouter:
             content = await runtime.get_mesh_artifact(job_id)
         except JobNotFoundError as exc:
             raise HTTPException(status_code=404, detail="Job not found") from exc
+        except JobMeshDiscardedError as exc:
+            raise HTTPException(status_code=410, detail=str(exc)) from exc
         except JobResourceUnavailableError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return PlainTextResponse(content=content, media_type="text/plain")
