@@ -198,6 +198,45 @@ def test_replace_bundle_uses_atomic_exchange_when_live_bundle_exists(
     assert not staged.exists()
 
 
+def test_exchange_directories_windows_fallback_swaps_and_restores(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    """The non-POSIX path must have the same postcondition as the swap.
+
+    CI's first windows-latest run died on ctypes.CDLL(None) -- the POSIX libc
+    handle -- inside this function. The fallback swaps via an aside rename and
+    leaves the OLD bundle at ``first`` for the caller to remove, and restores
+    the live bundle if the second rename fails.
+    """
+    monkeypatch.setattr(api.os, "name", "nt")
+    first = tmp_path / "staged.wglink"
+    second = tmp_path / "live.wglink"
+    first.mkdir()
+    second.mkdir()
+    (first / "value").write_text("new")
+    (second / "value").write_text("old")
+
+    api._exchange_directories(first, second)
+    assert (second / "value").read_text() == "new"
+    assert (first / "value").read_text() == "old"
+
+    # Failure between the renames restores the live bundle.
+    real_rename = api.os.rename
+    calls = {"n": 0}
+
+    def failing_rename(src, dst):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise OSError("simulated failure installing the staged bundle")
+        real_rename(src, dst)
+
+    monkeypatch.setattr(api.os, "rename", failing_rename)
+    with pytest.raises(OSError, match="simulated failure"):
+        api._exchange_directories(first, second)
+    assert (second / "value").read_text() == "new"
+    assert first.exists()
+
+
 def test_bundle_name_rejects_casefold_and_sanitized_unicode_collisions(
     tmp_path: Path,
 ) -> None:

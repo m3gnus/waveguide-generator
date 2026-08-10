@@ -117,7 +117,27 @@ def _app_version() -> str:
 
 
 def _exchange_directories(first: Path, second: Path) -> None:
-    """Atomically exchange two directory entries without a reader-visible gap."""
+    """Exchange two directory entries, atomically where the OS can.
+
+    POSIX systems swap without a reader-visible gap (renamex_np on macOS,
+    renameat2 elsewhere). Windows has no directory-exchange syscall reachable
+    from Python, so it falls back to a three-rename swap with the same
+    postcondition -- the old bundle ends up at ``first`` for the caller to
+    remove -- and a sub-millisecond window in which the destination name does
+    not exist. ``ctypes.CDLL(None)`` is the POSIX handle to libc and raises on
+    Windows, which is why the platform check comes first.
+    """
+
+    if os.name != "posix":
+        aside = second.with_name(second.name + f".swap-{os.getpid()}")
+        os.rename(second, aside)
+        try:
+            os.rename(first, second)
+        except OSError:
+            os.rename(aside, second)  # restore the live bundle before failing
+            raise
+        os.rename(aside, first)
+        return
 
     libc = ctypes.CDLL(None, use_errno=True)
     encoded_first = os.fsencode(first)
