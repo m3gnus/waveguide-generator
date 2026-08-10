@@ -120,12 +120,12 @@ designs build a preview, and the from-scratch reproduction at 5.0/5.5/6.0 mm no
 longer fails.** Which of the mesher changes between those pins closed it was not
 chased down.
 
-### 0.3 The Node-free install goal is not yet true
+### 0.3 The Node-free install goal is now true
 
 Plan goal 6 says end users no longer need a Node runtime, because releases ship a
-prebuilt SPA. Today `frontend/dist/` is in `.gitignore` and `launch-wg2.command`
-hard-fails with *"The built frontend is missing"* when it is absent. As it
-stands, installing v2 from a clone requires Node and a build.
+prebuilt SPA. `frontend/dist/` is in `.gitignore`; the status launcher now shows
+an explicit red frontend lamp when it is absent and points at the verified
+installer/fetch path. Installing v2 from a clone does not require Node.
 
 **Settled (Magnus, 2026-08-05): option A — a GitHub Release artifact.** CI builds
 the SPA once and attaches it to the tag; the installer downloads it. This matches
@@ -142,8 +142,8 @@ it refuses to build when the tag disagrees with `shared/version.json`, packages
 and attaches both to the release. Packaging was rehearsed locally — a 658 KB
 archive containing `dist/index.html`.
 
-`launch-wg2.command` now points at the release when the interface is missing,
-and keeps the npm build as the developer path rather than the only one.
+`launchers/statusapp/` now points at the platform installers when the interface
+is missing, and keeps the npm build as the developer path rather than the only one.
 
 ---
 
@@ -214,11 +214,11 @@ create the Python environment, and launch. What shipped:
 
 | File | Role |
 |---|---|
-| `scripts/install.sh` | macOS / Linux installer and updater |
-| `install-wg2.command` | Finder double-click entry; keeps a transcript, then starts the launcher |
-| `scripts/install.bat` | Windows installer; never run in place, see below |
-| `scripts/install-and-update.bat` | Windows entry point; stages to `%TEMP%`, logs, handles the exit-10 relaunch |
-| `scripts/uninstall.sh` / `.bat` | documented uninstall, `--data` to include job history |
+| `scripts/install.sh` | shared macOS / Linux installer machinery |
+| `installers/macos/install-wg2.command` / `installers/linux/install.sh` | public POSIX entries |
+| `scripts/install.bat` | Windows installer machinery; never run in place, see below |
+| `installers/windows/install-and-update.bat` | Windows entry; stages to `%TEMP%`, logs, handles the exit-10 relaunch |
+| `installers/{macos,linux,windows}/uninstall.*` | public uninstall entries; shared machinery stays in `scripts/` |
 | `scripts/fetch_spa.py` | download, **verify**, and install the release SPA |
 | `scripts/check_backends.py` | does a solve actually work on this host |
 
@@ -236,13 +236,14 @@ Against the requirements, and how far each is actually proven:
 | Prerequisites with floors | CPython 3.13 exactly, Git 2.20+, VC++ on Windows, Xcode CLT on Apple Silicon. Every error names the command that fixes it. |
 | Idempotent environment | Delegated to `bootstrap.py`. Re-running a complete install takes ~1.5 s and contacts no index. |
 | Parent path with spaces (R1-P1-7) | Installed and served for real from `…/Hornlab - Workspace (test)/waveguide-generator-v2`, and from a clone whose own directory name contains a space. Enforced by a quote-state scanner in the contract suite. |
-| Port selection and browser open | Left to `launch/serve.py`; the installer ends by invoking the launcher rather than restating either. |
-| Documented uninstall | `scripts/uninstall.*`, in the README, refuses to delete non-interactively without `--yes`. |
+| Port selection and browser open | Port selection stays aligned with `launch/serve.py`; the status app exposes the URL and browser button. |
+| Documented uninstall | `installers/*/uninstall.*`, in the README, refuses to delete non-interactively without `--yes`. |
 | Contract suites ported | `server/tests/test_installer_contract.py` and `test_installer_env_contract.py`, 42 tests. |
 
 **What is not proven, and cannot be from here:**
 
-1. **`install.bat`, `install-and-update.bat` and `uninstall.bat` have never been
+1. **`scripts/install.bat`, `installers/windows/install-and-update.bat` and
+   `installers/windows/uninstall.bat` have never been
    executed.** They were written on macOS against v1's batch files and are only
    checked statically. Everything Windows-specific in them is inherited from a
    failure v1 actually had — the byte-offset self-rewrite, `%VAR%` expanded at
@@ -308,7 +309,8 @@ followed is in `docs/MACOS-PERFORMANCE.md`.
    engine's own production choice; OpenCL is now resolved with a stated warning
    on fallback rather than a silent one. It cut the uncancellable first-solve
    window from 53.8 s to 17.5 s.
-4. **Installer — not started.** This shipped a *launcher* (`launch-wg2.bat`),
+4. **Installer — not started.** This shipped a *launcher*
+   (`launchers/windows/launch-wg2.bat`),
    not an installer. See P6.2; it is the largest gap left in the whole phase.
 5. **Upgrade-over-v1 and rollback E2E — done against a *constructed* v1
    install,** because that machine has no real v1 history. It surfaced two

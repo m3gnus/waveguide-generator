@@ -1,8 +1,8 @@
 @echo off
 rem Waveguide Generator v2 -- uninstaller for Windows.
 rem
-rem   scripts\uninstall.bat          remove the environment and the interface
-rem   scripts\uninstall.bat --data   also remove saved designs and job history
+rem Public entry: installers\windows\uninstall.bat. This implementation stays
+rem in scripts so its deletion contract remains separate from the thin entry.
 rem
 rem It never deletes the checkout, and it never touches anything belonging to
 rem v1. v2 was built to install beside v1 with its own data directory; an
@@ -98,7 +98,7 @@ if exist "frontend\.wg2-dist-previous\" call :remove_tree "%WG_ROOT%\frontend\.w
 if defined DATA_DIR call :remove_tree "%DATA_DIR%"
 if defined REMOVE_FAILED goto removal_incomplete
 echo.
-echo Done. Reinstall any time with: scripts\install-and-update.bat
+echo Done. Reinstall any time with: installers\windows\install-and-update.bat
 exit /b 0
 
 :nothing_to_remove

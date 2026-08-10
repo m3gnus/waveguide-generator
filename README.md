@@ -22,9 +22,9 @@ Then run the installer for your platform:
 
 | | |
 |---|---|
-| macOS | double-click `install-wg2.command`, or `bash scripts/install.sh` |
-| Windows | double-click `scripts\install-and-update.bat` |
-| Linux | `bash scripts/install.sh` |
+| macOS | double-click `installers/macos/install-wg2.command` |
+| Windows | double-click `installers\windows\install-and-update.bat` |
+| Linux | `bash installers/linux/install.sh` |
 
 It fast-forwards the checkout, downloads that version's prebuilt interface from
 the GitHub release and **refuses to extract it unless it matches the published
@@ -50,9 +50,10 @@ To check the solve backends at any time without a full install:
 ### Uninstall
 
 ```
-bash scripts/uninstall.sh            # macOS/Linux: .venv and frontend/dist
-bash scripts/uninstall.sh --data     # also designs, job history, meshes, logs
-scripts\uninstall.bat                # Windows, same options
+bash installers/macos/uninstall.sh         # macOS: .venv and frontend/dist
+bash installers/linux/uninstall.sh         # Linux: same options
+installers\windows\uninstall.bat            # Windows: same options
+# Add --data to also remove designs, job history, meshes, and logs.
 ```
 
 Neither touches the checkout itself, nor anything belonging to v1 — delete the
@@ -60,21 +61,39 @@ folder yourself when you are done with it.
 
 ## Launch
 
-On macOS, double-click `launch-wg2.command` in Finder. Keep the Terminal window
-open while using WG v2; closing it stops the local server. On first launch it
-creates `.venv` with CPython 3.13 and installs the locked v2 dependencies. It
-does not use or modify the v1 environment. Direct packages, transitive versions,
-and Hornlab module commit SHAs are locked in separate requirement manifests.
+The launchers open a compact status window with separate backend and frontend
+lamps, the local URL, an **Open in browser** button, and a **Quit** button. Quit
+or close the window to stop the complete server process tree.
 
-The same launcher works from Terminal:
+| | |
+|---|---|
+| macOS | open `launchers/macos/Waveguide Generator.app` |
+| Windows | double-click `launchers\windows\launch-wg2.bat` |
+| Linux | `./launchers/linux/launch-wg2.sh` |
+
+The macOS app is deliberately unsigned. The first time, Control-click (or
+right-click) **Waveguide Generator.app**, choose **Open**, then confirm **Open**.
+After that, normal double-clicks work. If macOS still blocks it, open
+**System Settings → Privacy & Security** and choose **Open Anyway** for the app.
+
+The repository root intentionally has no duplicate install or launch scripts;
+use the platform folders above. On first launch the entry creates `.venv` with
+CPython 3.13 and installs the locked dependencies. It does not use or modify the
+v1 environment.
+
+For the original plain-terminal behavior, append `--no-gui`:
 
 ```
-./launch-wg2.command
+./launchers/macos/launch-wg2.command --no-gui
+./launchers/linux/launch-wg2.sh --no-gui
+launchers\windows\launch-wg2.bat --no-gui
 ```
 
-It opens WG v2 in the default browser and uses the first available port from
-3100 through 3109. Advanced flags such as `--port`, `--no-browser`, and
-`--data-dir` can be appended when launching from Terminal.
+The launcher uses the first available port from 3100 through 3109. Advanced
+server flags such as `--port`, `--no-browser`, and `--data-dir` can be appended.
+The committed app icon is reproducible with
+`python launchers/macos/generate_icon.py` on macOS; the generator uses only the
+standard library and validates the resulting ICNS container with `iconutil`.
 
 ## Run the server directly (dev)
 
@@ -107,9 +126,9 @@ separate line at 1.x, so the two never collide.
 
 The version lives in `shared/version.json` — `/health` and the FastAPI metadata
 read it at runtime, and Vite injects it into the SPA as `__WG2_VERSION__` at
-build time. npm keeps two further copies, in `frontend/package.json` and
-`frontend/package-lock.json`, so move all of them with one command rather than
-by hand:
+build time. npm keeps two further copies in `frontend/package.json` and
+`frontend/package-lock.json`, and the macOS app has two bundle-version keys, so
+move all of them with one command rather than by hand:
 
 ```bash
 python scripts/bump_version.py patch

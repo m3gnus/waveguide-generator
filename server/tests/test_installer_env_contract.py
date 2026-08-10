@@ -12,7 +12,7 @@ clean-machine Windows failure:
     every dependency MISSING, and aborted a fully working install with exit 1.
 
 v2 has no backend-python.js and no marker file, but it has the same shape of
-hazard and a larger blast radius: `launch-wg2.bat` and `launch-wg2.command`
+hazard and a larger blast radius: the launchers under `launchers/<platform>/`
 honour **WG2_PYTHON** ahead of the repository environment, and the installer
 now *ends by invoking the launcher*. An installer that stored its chosen
 bootstrap interpreter in WG2_PYTHON would therefore hand the launcher a system
@@ -32,13 +32,13 @@ import re
 
 ROOT = Path(__file__).resolve().parents[2]
 
-LAUNCHER_BATCH = ROOT / "launch-wg2.bat"
-LAUNCHER_COMMAND = ROOT / "launch-wg2.command"
+LAUNCHER_BATCH = ROOT / "launchers" / "windows" / "launch-wg2.bat"
+LAUNCHER_COMMAND = ROOT / "launchers" / "macos" / "launch-wg2.command"
 INSTALLERS = (
     ROOT / "scripts" / "install.sh",
     ROOT / "scripts" / "install.bat",
-    ROOT / "scripts" / "install-and-update.bat",
-    ROOT / "install-wg2.command",
+    ROOT / "installers" / "windows" / "install-and-update.bat",
+    ROOT / "installers" / "macos" / "install-wg2.command",
 )
 
 #: Environment variables that redirect which interpreter ends up serving.

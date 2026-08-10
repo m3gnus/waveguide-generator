@@ -1,0 +1,43 @@
+#!/bin/bash
+# Minimal unsigned app-bundle entry for a repository checkout.
+
+set -u
+
+REPO_DIR="$(cd "$(dirname "$0")/../../../../.." && pwd)"
+VENV_PYTHON="$REPO_DIR/.venv/bin/python"
+
+fail() {
+    message="$1"
+    printf '\nWaveguide Generator v2: %s\n' "$message" >&2
+    if command -v osascript >/dev/null 2>&1; then
+        MESSAGE="$message" osascript -e \
+          'display alert "Waveguide Generator v2 could not start" message (system attribute "MESSAGE") as critical'
+    fi
+    exit 1
+}
+
+if [[ ! -f "$REPO_DIR/launchers/statusapp/__main__.py" ]]; then
+    fail "The app must stay in launchers/macos inside the Waveguide Generator v2 checkout."
+fi
+
+if [[ ! -x "$VENV_PYTHON" ]]; then
+    BOOTSTRAP_PYTHON=""
+    for candidate in python3.13 python3
+    do
+        if command -v "$candidate" >/dev/null 2>&1 && \
+           "$candidate" -c 'import sys; raise SystemExit(sys.version_info[:2] != (3, 13))' >/dev/null 2>&1
+        then
+            BOOTSTRAP_PYTHON="$(command -v "$candidate")"
+            break
+        fi
+    done
+    if [[ -z "$BOOTSTRAP_PYTHON" ]]; then
+        fail "The repository environment is missing, and CPython 3.13 was not found as python3. Install Python 3.13 or run installers/macos/install-wg2.command."
+    fi
+    if ! "$BOOTSTRAP_PYTHON" "$REPO_DIR/scripts/bootstrap.py"; then
+        fail "The repository environment was missing and python3 could not prepare it. Run installers/macos/install-wg2.command for full diagnostics."
+    fi
+fi
+
+cd "$REPO_DIR" || fail "Could not enter the repository folder: $REPO_DIR"
+exec "$VENV_PYTHON" -m launchers.statusapp "$@"

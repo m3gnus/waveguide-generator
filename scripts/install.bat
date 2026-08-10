@@ -1,7 +1,7 @@
 @echo off
 rem Waveguide Generator v2 -- installer / updater for Windows.
 rem
-rem Run scripts\install-and-update.bat, not this file. This one performs
+rem Run installers\windows\install-and-update.bat, not this file. This one performs
 rem `git pull`, which can rewrite it while cmd.exe is still executing it, and
 rem cmd tracks its position in a batch file by byte offset: a script that
 rem updates itself resumes at a meaningless offset and runs fragments of
@@ -103,7 +103,7 @@ echo   --force             rebuild the environment and reinstall the SPA
 echo   --no-launch         finish without starting the application
 echo   --help              this message
 echo.
-echo Uninstall with: scripts\uninstall.bat
+echo Uninstall with: installers\windows\uninstall.bat
 exit /b 0
 
 :args_done
@@ -124,7 +124,7 @@ echo ===============================================================
 echo.
 echo Verifying the project folder...
 set "ROOT_INVALID="
-for %%f in (launch\serve.py launch-wg2.bat scripts\bootstrap.py scripts\fetch_spa.py shared\version.json server\requirements-lock.txt server\requirements-pins.txt) do if not exist "%%f" call :report_missing "%%f"
+for %%f in (launch\serve.py launchers\statusapp\__main__.py launchers\windows\launch-wg2.bat scripts\bootstrap.py scripts\fetch_spa.py shared\version.json server\requirements-lock.txt server\requirements-pins.txt) do if not exist "%%f" call :report_missing "%%f"
 if defined ROOT_INVALID goto bad_project_folder
 echo   Looks good: %WG_ROOT%
 
@@ -207,16 +207,16 @@ echo ===============================================================
 echo   %SPA_SUMMARY%
 if defined VCREDIST_SUMMARY echo   %VCREDIST_SUMMARY%
 echo.
-echo Start it any time by double-clicking launch-wg2.bat.
-echo It picks the first free port from 3100 to 3109 and opens a browser there.
+echo Start it any time with launchers\windows\launch-wg2.bat.
+echo It picks the first free port from 3100 to 3109 and shows the local URL.
 echo.
 echo Remove it again with:
-echo   scripts\uninstall.bat            ^(environment and interface^)
-echo   scripts\uninstall.bat --data     ^(also saved designs and job history^)
+echo   installers\windows\uninstall.bat            ^(environment and interface^)
+echo   installers\windows\uninstall.bat --data     ^(also saved designs and job history^)
 echo.
 if not defined LAUNCH goto finished_without_launch
 echo Starting Waveguide Generator v2...
-call "%WG_ROOT%\launch-wg2.bat"
+call "%WG_ROOT%\launchers\windows\launch-wg2.bat"
 exit /b %ERRORLEVEL%
 
 :finished_without_launch

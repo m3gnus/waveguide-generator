@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Waveguide Generator v2 -- installer / updater for macOS and Linux.
 #
-#   bash scripts/install.sh            install or update, then launch
-#   bash scripts/install.sh --help     every option
+# Public entries:
+#   installers/macos/install-wg2.command
+#   bash installers/linux/install.sh
 #
 # Smaller than v1's installer by design: v2 needs no Node runtime and no
 # `npm ci`, because the interface ships prebuilt on the release. What is left is
@@ -55,7 +56,7 @@ Waveguide Generator v2 installer.
   --no-launch         finish without starting the application
   --help              this message
 
-Uninstall with: bash scripts/uninstall.sh
+Uninstall with installers/macos/uninstall.sh or installers/linux/uninstall.sh.
 USAGE
 }
 
@@ -92,7 +93,9 @@ step "Verifying the project folder..."
 MISSING=0
 for required in \
     launch/serve.py \
-    launch-wg2.command \
+    launchers/statusapp/__main__.py \
+    launchers/macos/launch-wg2.command \
+    launchers/linux/launch-wg2.sh \
     scripts/bootstrap.py \
     scripts/fetch_spa.py \
     shared/version.json \
@@ -338,13 +341,18 @@ say "==============================================================="
 say "  $SPA_SUMMARY"
 [[ -n "$METAL_SUMMARY" ]] && say "  $METAL_SUMMARY"
 say ""
-say "Start it any time by double-clicking launch-wg2.command, or:"
-say "  ./launch-wg2.command"
-say "It picks the first free port from 3100 to 3109 and opens a browser there."
-say ""
-say "Remove it again with:"
-say "  bash scripts/uninstall.sh          # environment and interface"
-say "  bash scripts/uninstall.sh --data   # also the saved designs and job history"
+if [[ "$(uname -s)" == "Darwin" ]]; then
+    LAUNCHER="$ROOT/launchers/macos/launch-wg2.command"
+    say "Start it any time with launchers/macos/Waveguide Generator.app, or:"
+    say "  ./launchers/macos/launch-wg2.command"
+    say "Remove it again with installers/macos/uninstall.sh."
+else
+    LAUNCHER="$ROOT/launchers/linux/launch-wg2.sh"
+    say "Start it any time with:"
+    say "  ./launchers/linux/launch-wg2.sh"
+    say "Remove it again with installers/linux/uninstall.sh."
+fi
+say "It picks the first free port from 3100 to 3109 and shows the local URL."
 say ""
 
 if [[ "$LAUNCH" -eq 0 ]]; then
@@ -353,4 +361,4 @@ if [[ "$LAUNCH" -eq 0 ]]; then
 fi
 
 say "Starting Waveguide Generator v2..."
-exec "$ROOT/launch-wg2.command"
+exec "$LAUNCHER"
