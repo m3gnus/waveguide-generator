@@ -1,0 +1,6 @@
+/* Completed collapsed rows keep this compact control visible beside Remove.
+   The selected row continues to use the roomier footer split control. */
+.job-card.collapsed .run-export-control.compact {
+  opacity: 1;
+  pointer-events: auto;
+}

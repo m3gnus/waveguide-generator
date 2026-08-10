@@ -74,6 +74,46 @@ function fileText(header: string[], rows: string[]): string {
   return `${header.map((line) => `${COMMENT} ${line}`).concat(rows).join('\n')}\n`;
 }
 
+interface PropagationReference {
+  distanceM: number;
+  speedOfSoundMps: number;
+}
+
+function propagationReference(result: ResultPayload): PropagationReference | null {
+  const metadata = result.metadata?.observation;
+  if (!metadata || typeof metadata !== 'object') return null;
+  const distanceM = metadata.effective_distance_m ?? metadata.requested_distance_m;
+  const speedOfSoundMps = metadata.sound_speed_m_per_s;
+  return finite(distanceM) && finite(speedOfSoundMps) && distanceM >= 0 && speedOfSoundMps > 0
+    ? { distanceM, speedOfSoundMps }
+    : null;
+}
+
+/** Wrap degrees to (-180, 180], deliberately mapping -180 to +180. */
+function wrapPhaseDegrees(value: number): number {
+  const positive = ((value % 360) + 360) % 360;
+  return positive > 180 ? positive - 360 : positive;
+}
+
+function exportPhaseDegrees(
+  phaseDegrees: number,
+  frequency: number,
+  reference: PropagationReference | null,
+): number {
+  if (!reference) return phaseDegrees;
+  // Mirrors the Fusion addin's VituixCAD export. Reconcile these two
+  // implementations when the addin and web exporter share a contract module.
+  return wrapPhaseDegrees(
+    phaseDegrees - (360 * frequency * reference.distanceM) / reference.speedOfSoundMps,
+  );
+}
+
+function propagationNote(reference: PropagationReference | null): string {
+  return reference
+    ? `Common time-of-flight removed: phase_deg - 360 * f * d / c; d=${reference.distanceM} m, c=${reference.speedOfSoundMps} m/s`
+    : 'Common time-of-flight not removed: directivity distance and/or speed-of-sound metadata is unavailable; raw phase emitted';
+}
+
 /**
  * Build a three-column FRD response. Only complete finite triples are emitted:
  * a blank phase field can be interpreted differently by readers, while dropping
@@ -90,6 +130,9 @@ export function buildOnAxisFrd(
     preferences.smoothing,
   );
   const phase = result.spl_on_axis?.phase_degrees ?? [];
+  // spl_on_axis is selected from the same directivity pressure field (first
+  // plane, nearest zero-degree sample), so it has the same propagation reference.
+  const reference = propagationReference(result);
   const rows: string[] = [];
 
   frequencies.forEach((frequency, index) => {
@@ -99,13 +142,14 @@ export function buildOnAxisFrd(
     rows.push([
       fixed(frequency, FREQUENCY_PRECISION),
       fixed(magnitude, LEVEL_PRECISION),
-      fixed(phaseDegrees, PHASE_PRECISION),
+      fixed(exportPhaseDegrees(phaseDegrees, frequency, reference), PHASE_PRECISION),
     ].join(DELIMITER));
   });
 
   return fileText([
     'HornLab on-axis frequency response',
     smoothingNote(preferences.smoothing),
+    propagationNote(reference),
     ['Freq(Hz)', 'SPL(dB)', 'Phase(degrees)'].join(DELIMITER),
   ], rows);
 }
@@ -129,6 +173,24 @@ function valuesAtAngle(
   });
 }
 
+function phaseValuesAtAngle(
+  patterns: NonNullable<ResultPayload['directivity_phase']>[PolarPlane],
+  angle: number,
+  frequencyCount: number,
+): SmoothingValue[] {
+  return Array.from({ length: frequencyCount }, (_, frequencyIndex) => {
+    const sample = patterns?.[frequencyIndex]?.find(([sampleAngle]) => sampleAngle === angle);
+    return sample?.[1] ?? null;
+  });
+}
+
+function hasAngle(
+  patterns: NonNullable<ResultPayload['directivity_phase']>[PolarPlane],
+  angle: number,
+): boolean {
+  return patterns?.some((pattern) => pattern.some(([sampleAngle]) => sampleAngle === angle)) === true;
+}
+
 // The convention the Fusion addin already uses successfully with VituixCAD --
 // see hornlab-fusion-addin scripts/solve_fusion_wg_metal.py, _write_frd and
 // _VITUIXCAD_PLANE_DIRS. Plane subfolders exist so the last token of the
@@ -147,7 +209,7 @@ function polarFilename(baseName: string, plane: PolarPlane, angle: number): stri
   return `${PLANE_DIRS[plane]}/${baseName} ${angleLabel(angle)}.frd`;
 }
 
-/** Build one honest, magnitude-only FRD file for every measured plane/angle. */
+/** Build one FRD file for every measured plane/angle, retaining legacy two-column output. */
 export function buildPolarFrdSet(
   result: ResultPayload,
   preferences: Pick<Preferences, 'smoothing' | 'outputName' | 'counter'>,
@@ -156,32 +218,50 @@ export function buildPolarFrdSet(
 
   const frequencies = result.frequencies;
   const baseName = exportBaseName(preferences);
+  const reference = propagationReference(result);
   const files: PolarFrdFile[] = [];
 
   (['horizontal', 'vertical'] as const).forEach((plane) => {
     const patterns = result.directivity?.[plane];
+    const phasePatterns = result.directivity_phase?.[plane];
     measuredAngles(patterns).forEach((angle) => {
+      const includesPhase = hasAngle(phasePatterns, angle);
       const magnitudes = applySmoothing(
         frequencies,
         valuesAtAngle(patterns, angle, frequencies.length),
         preferences.smoothing,
       );
+      const phases = includesPhase
+        ? phaseValuesAtAngle(phasePatterns, angle, frequencies.length)
+        : [];
       const rows: string[] = [];
       frequencies.forEach((frequency, index) => {
         const magnitude = magnitudes[index];
         if (!finite(frequency) || !finite(magnitude)) return;
-        rows.push([
+        const columns = [
           fixed(frequency, FREQUENCY_PRECISION),
           fixed(magnitude, LEVEL_PRECISION),
-        ].join(DELIMITER));
+        ];
+        if (includesPhase) {
+          const phaseDegrees = phases[index];
+          if (!finite(phaseDegrees)) return;
+          columns.push(fixed(exportPhaseDegrees(phaseDegrees, frequency, reference), PHASE_PRECISION));
+        }
+        rows.push(columns.join(DELIMITER));
       });
+      const phaseHeader = includesPhase
+        ? [propagationNote(reference), ['Freq(Hz)', 'SPL(dB)', 'Phase(degrees)'].join(DELIMITER)]
+        : [
+          'HornLab polar frequency response — magnitude-only; phase is not available and is intentionally omitted',
+          ['Freq(Hz)', 'SPL(dB)'].join(DELIMITER),
+        ];
       files.push({
         filename: polarFilename(baseName, plane, angle),
         text: fileText([
-          'HornLab polar frequency response — magnitude-only; phase is not available and is intentionally omitted',
+          ...(includesPhase ? ['HornLab polar frequency response'] : []),
           `Plane: ${plane}, angle ${angle} deg`,
           smoothingNote(preferences.smoothing),
-          ['Freq(Hz)', 'SPL(dB)'].join(DELIMITER),
+          ...phaseHeader,
         ], rows),
       });
     });
