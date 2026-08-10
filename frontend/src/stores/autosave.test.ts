@@ -25,6 +25,35 @@ describe('design autosave', () => {
     expect(useDesignStore.temporal.getState().pastStates).toEqual([]);
   });
 
+  it('round-trips identity without advancing its persisted edit version', () => {
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_01K00000000000000000000000',
+      lineageId: 'wgl_01K00000000000000000000000',
+      baseEditVersion: 7,
+    }, 'stale_copy');
+    useDesignStore.getState().updateField('R', 181);
+    expect(writeAutosave()).toBe(true);
+
+    const record = JSON.parse(localStorage.getItem(AUTOSAVE_KEY)!);
+    expect(record.identity.baseEditVersion).toBe(7);
+    resetDocumentStore();
+    expect(restoreAutosave()).toBe(true);
+    expect(useDocumentStore.getState()).toMatchObject({
+      identity: { baseEditVersion: 7 },
+      classification: 'stale_copy',
+    });
+  });
+
+  it('restores a version-1 draft written before identity was added as unlinked', () => {
+    expect(writeAutosave()).toBe(true);
+    const legacy = JSON.parse(localStorage.getItem(AUTOSAVE_KEY)!);
+    delete legacy.identity;
+    delete legacy.classification;
+    localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(legacy));
+    expect(restoreAutosave()).toBe(true);
+    expect(useDocumentStore.getState()).toMatchObject({ identity: null, classification: null });
+  });
+
   it('rejects and removes a corrupt draft without replacing the current design', () => {
     localStorage.setItem(AUTOSAVE_KEY, JSON.stringify({ version: 1, design: { formula: 'BROKEN' } }));
     expect(restoreAutosave()).toBe(false);

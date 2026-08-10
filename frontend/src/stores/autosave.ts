@@ -1,5 +1,9 @@
 import { useDesignStore, type DesignDocument } from './design';
-import { useDocumentStore } from './document';
+import {
+  useDocumentStore,
+  type CadLinkClassification,
+  type DesignIdentity,
+} from './document';
 
 export const AUTOSAVE_KEY = 'wg2.autosave.v1';
 export const AUTOSAVE_DELAY_MS = 750;
@@ -10,6 +14,8 @@ interface AutosaveRecord {
   filename: string;
   designRevision: number;
   savedRevision: number | null;
+  identity?: DesignIdentity | null;
+  classification?: CadLinkClassification | null;
   design: DesignDocument;
 }
 
@@ -32,16 +38,36 @@ function isRecord(value: unknown): value is AutosaveRecord {
     && typeof design?.source === 'object';
 }
 
+function isIdentity(value: unknown): value is DesignIdentity {
+  if (!value || typeof value !== 'object') return false;
+  const identity = value as Record<string, unknown>;
+  return typeof identity.designId === 'string'
+    && typeof identity.lineageId === 'string'
+    && Number.isInteger(identity.baseEditVersion)
+    && Number(identity.baseEditVersion) > 0;
+}
+
+function isClassification(value: unknown): value is CadLinkClassification {
+  return ['current', 'stale_copy', 'externally_edited', 'foreign', 'missing'].includes(String(value));
+}
+
+function hasValidCadLink(record: AutosaveRecord): boolean {
+  return (record.identity === undefined || record.identity === null || isIdentity(record.identity))
+    && (record.classification === undefined || record.classification === null || isClassification(record.classification));
+}
+
 export function writeAutosave(storage: Storage | null = defaultStorage()): boolean {
   if (!storage) return false;
   const { design, designRevision } = useDesignStore.getState();
-  const { filename, savedRevision } = useDocumentStore.getState();
+  const { filename, savedRevision, identity, classification } = useDocumentStore.getState();
   const record: AutosaveRecord = {
     version: 1,
     savedAt: new Date().toISOString(),
     filename,
     designRevision,
     savedRevision,
+    identity: identity ? { ...identity } : null,
+    classification,
     design: structuredClone(design),
   };
   try {
@@ -62,7 +88,7 @@ export function restoreAutosave(storage: Storage | null = defaultStorage()): boo
   if (!raw) return false;
   try {
     const record: unknown = JSON.parse(raw);
-    if (!isRecord(record)) throw new Error('Invalid autosave record');
+    if (!isRecord(record) || !hasValidCadLink(record)) throw new Error('Invalid autosave record');
     useDesignStore.temporal.getState().pause();
     useDesignStore.setState({
       design: structuredClone(record.design),
@@ -74,6 +100,8 @@ export function restoreAutosave(storage: Storage | null = defaultStorage()): boo
     useDocumentStore.getState().restoreDocumentState({
       filename: record.filename,
       savedRevision: record.savedRevision,
+      identity: record.identity ? { ...record.identity } : null,
+      classification: record.classification ?? null,
     });
     return true;
   } catch {
@@ -107,7 +135,10 @@ export function startAutosave(
     if (state.designRevision !== previous.designRevision) schedule();
   });
   const unsubscribeDocument = useDocumentStore.subscribe((state, previous) => {
-    if (state.filename !== previous.filename || state.savedRevision !== previous.savedRevision) schedule();
+    if (state.filename !== previous.filename
+      || state.savedRevision !== previous.savedRevision
+      || state.identity !== previous.identity
+      || state.classification !== previous.classification) schedule();
   });
   const beforeUnload = () => { flush(); };
   const visibilityChange = () => { if (documentTarget?.visibilityState === 'hidden') flush(); };
