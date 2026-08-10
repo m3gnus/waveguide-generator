@@ -80,6 +80,7 @@ export function DesignFileMenu() {
   const [message, setMessage] = useState<string | null>(null);
   const [adoptionCandidate, setAdoptionCandidate] = useState<CadLinkOpenState['adoptionCandidate']>(null);
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
   const openInput = useRef<HTMLInputElement>(null);
   const reportInput = useRef<HTMLInputElement>(null);
   const root = useRef<HTMLDivElement>(null);
@@ -93,12 +94,15 @@ export function DesignFileMenu() {
   }, []);
 
   async function act(operation: () => Promise<void>) {
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBusy(true);
     setMessage(null);
     setAdoptionCandidate(null);
     try { await operation(); } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
+      busyRef.current = false;
       setBusy(false);
       setOpen(false);
     }

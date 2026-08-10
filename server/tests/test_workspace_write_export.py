@@ -15,6 +15,11 @@ def endpoint(state: workspace_api.WorkspaceState):
     return next(route.endpoint for route in router.routes if route.path == "/api/workspace/write-export")
 
 
+def path_endpoint(state: workspace_api.WorkspaceState):
+    router = workspace_api.create_workspace_router(state)
+    return next(route.endpoint for route in router.routes if route.path == "/api/workspace/path")
+
+
 def request(subdirectory: str, members: list[tuple[str, str]]):
     return workspace_api.WriteExportRequest(
         subdirectory=subdirectory,
@@ -51,6 +56,17 @@ def test_write_export_requires_selected_workspace(tmp_path: Path) -> None:
     with pytest.raises(HTTPException, match="No workspace folder") as caught:
         call(state, request("horn_1", [("a.frd", "one")]))
     assert caught.value.status_code == 409
+
+
+def test_deleted_workspace_selection_is_stale_and_is_not_recreated(tmp_path: Path) -> None:
+    state, workspace = selected_state(tmp_path)
+    workspace.rmdir()
+
+    response = asyncio.run(path_endpoint(state)())
+
+    assert response["selected"] is False
+    assert response["path"] != str(workspace)
+    assert not workspace.exists()
 
 
 @pytest.mark.parametrize("path", ["../escape.frd", "hor/../../escape.frd"])

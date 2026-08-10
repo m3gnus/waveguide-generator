@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -129,3 +130,155 @@ def test_wglink_export_requires_a_saved_current_design(tmp_path: Path) -> None:
     with pytest.raises(HTTPException, match="unsaved changes") as unsaved:
         api._export_wglink_sync(_request(saved, changed), store, workspace, "changed")
     assert unsaved.value.status_code == 409
+
+
+def test_wglink_export_conflict_instructions_cover_stale_and_unknown_identity(
+    tmp_path: Path,
+) -> None:
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    saved = _saved(store, _design())
+    original_identity = saved["identity"]
+    store.save(
+        requested=SaveIdentity.model_validate({
+            "designId": original_identity.design_id,
+            "lineageId": original_identity.lineage_id,
+            "baseEditVersion": original_identity.edit_version,
+        }),
+        design_hash=design_hash(_design()),
+        filename="demo-horn.cfg",
+        snapshot_builder=lambda identity: serialize(_design(), cadlink=identity),
+    )
+
+    stale = _request(saved)
+    stale.identity = SaveIdentity.model_validate({
+        "designId": saved["identity"].design_id,
+        "lineageId": saved["identity"].lineage_id,
+        "baseEditVersion": saved["identity"].edit_version,
+    })
+    with pytest.raises(HTTPException, match="Save again before sending it to CAD") as caught:
+        api._export_wglink_sync(stale, store, workspace, "stale")
+    assert caught.value.status_code == 409
+
+    unknown = _request(saved)
+    unknown.identity = SaveIdentity.model_validate({
+        "designId": "wgd_01K00000000000000000000099",
+        "lineageId": saved["identity"].lineage_id,
+        "baseEditVersion": saved["identity"].edit_version,
+    })
+    with pytest.raises(HTTPException, match="Save the design before sending it to CAD") as caught:
+        api._export_wglink_sync(unknown, store, workspace, "unknown")
+    assert caught.value.status_code == 409
+
+
+def test_replace_bundle_uses_atomic_exchange_when_live_bundle_exists(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    staged = tmp_path / "staged.wglink"
+    destination = tmp_path / "live.wglink"
+    staged.mkdir()
+    destination.mkdir()
+    (staged / "value").write_text("new")
+    (destination / "value").write_text("old")
+    exchanged: list[tuple[Path, Path]] = []
+    real_exchange = api._exchange_directories
+
+    def observed_exchange(first: Path, second: Path) -> None:
+        assert first.is_dir()
+        assert second.is_dir()
+        exchanged.append((first, second))
+        real_exchange(first, second)
+
+    monkeypatch.setattr(api, "_exchange_directories", observed_exchange)
+    api._replace_bundle(staged, destination)
+
+    assert exchanged == [(staged, destination)]
+    assert (destination / "value").read_text() == "new"
+    assert not staged.exists()
+
+
+def test_bundle_name_rejects_casefold_and_sanitized_unicode_collisions(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "wglink"
+    root.mkdir()
+    existing = root / "Horn.wglink"
+    existing.mkdir()
+    (existing / "wglink.json").write_text(json.dumps({"design": {"id": "wgd_other"}}))
+
+    with pytest.raises(ValueError, match="portable name"):
+        api._bundle_destination(root, "horn", "wgd_requested")
+
+    existing.rename(root / "waveguide.wglink")
+    assert api._base_name("\N{ANGSTROM SIGN}") == "waveguide"
+    assert api._base_name("\N{COLLISION SYMBOL}") == "waveguide"
+    with pytest.raises(ValueError, match="another design"):
+        api._bundle_destination(root, api._base_name("\N{COLLISION SYMBOL}"), "wgd_requested")
+
+
+def test_bundle_base_name_cannot_escape_workspace(tmp_path: Path) -> None:
+    root = tmp_path / "workspace" / "wglink"
+    root.mkdir(parents=True)
+    name = api._base_name("../../outside.cfg")
+    destination = api._bundle_destination(root, name, "wgd_requested")
+
+    assert name == "outside"
+    assert destination == root / "outside.wglink"
+    assert root in destination.parents
+
+
+def test_concurrent_designs_cannot_claim_the_same_bundle_name(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    first_saved = _saved(store, _design())
+    second_saved = _saved(store, _design())
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    def fake_write(_geometry, output_path, *, identity, **_kwargs):
+        target = Path(output_path)
+        target.mkdir()
+        step_hash = "sha256:" + "b" * 64
+        manifest = {
+            "design": dict(identity.design or {}),
+            "files": {"waveguide.step": {"sha256": step_hash}},
+        }
+        (target / "waveguide.step").write_text("STEP")
+        manifest_path = target / "wglink.json"
+        manifest_path.write_text(json.dumps(manifest))
+        return SimpleNamespace(
+            path=target, manifest_path=manifest_path, manifest=manifest
+        )
+
+    monkeypatch.setattr("hornlab_mesher.write_wglink", fake_write)
+
+    def export(args):
+        saved, key = args
+        try:
+            return api._export_wglink_sync(_request(saved), store, workspace, key)
+        except HTTPException as exc:
+            return exc
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(export, [(first_saved, "first"), (second_saved, "second")]))
+
+    successes = [result for result in results if isinstance(result, dict)]
+    conflicts = [result for result in results if isinstance(result, HTTPException)]
+    assert len(successes) == 1
+    assert len(conflicts) == 1
+    assert conflicts[0].status_code == 409
+    assert "another design" in str(conflicts[0].detail)
+
+
+def test_wglink_export_rejects_a_stale_workspace_path(tmp_path: Path) -> None:
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    saved = _saved(store, _design())
+    workspace = tmp_path / "removed-workspace"
+
+    with pytest.raises(HTTPException, match="workspace folder is unavailable") as caught:
+        api._export_wglink_sync(_request(saved), store, workspace, "stale-workspace")
+
+    assert caught.value.status_code == 409
+    assert not workspace.exists()

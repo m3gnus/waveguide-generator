@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import ctypes
 from dataclasses import asdict, is_dataclass
 from enum import Enum
 import hashlib
@@ -24,7 +25,7 @@ from server.cadlink.store import CadLinkStore
 from server.design.schema import DesignConfig
 from server.mesh.gmsh_worker import run_on_gmsh_worker
 from server.preview.translate import design_to_mesher_config
-from server.workspace.api import WorkspaceState, _path_segments
+from server.workspace.api import WorkspaceState, _path_segments, _portable_path_key
 
 from .core import build_profiles, build_step, build_step_solid, build_stl
 
@@ -115,27 +116,85 @@ def _app_version() -> str:
     return str(json.loads(version_path.read_text(encoding="utf-8"))["version"])
 
 
-def _replace_bundle(staged: Path, destination: Path, temporary_root: Path) -> None:
-    """Publish a complete bundle while retaining the previous live bundle on failure."""
+def _exchange_directories(first: Path, second: Path) -> None:
+    """Atomically exchange two directory entries without a reader-visible gap."""
 
-    backup = temporary_root / "previous.wglink"
-    moved_previous = False
-    try:
-        if destination.exists() or destination.is_symlink():
-            if destination.is_symlink() or not destination.is_dir():
-                raise ValueError(f"CAD-link destination is not a bundle directory: {destination}")
-            os.replace(destination, backup)
-            moved_previous = True
+    libc = ctypes.CDLL(None, use_errno=True)
+    encoded_first = os.fsencode(first)
+    encoded_second = os.fsencode(second)
+    if hasattr(libc, "renamex_np"):
+        renamex_np = libc.renamex_np
+        renamex_np.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+        renamex_np.restype = ctypes.c_int
+        result = renamex_np(encoded_first, encoded_second, 0x00000002)  # RENAME_SWAP
+    elif hasattr(libc, "renameat2"):
+        renameat2 = libc.renameat2
+        renameat2.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
+        renameat2.restype = ctypes.c_int
+        result = renameat2(-100, encoded_first, -100, encoded_second, 0x00000002)
+    else:
+        raise OSError("atomic directory exchange is unavailable on this platform")
+    if result != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error), str(first), str(second))
+
+
+def _replace_bundle(staged: Path, destination: Path) -> None:
+    """Publish a complete bundle atomically for readers of the live path."""
+
+    if not destination.exists() and not destination.is_symlink():
         os.replace(staged, destination)
-    except Exception:
-        if moved_previous and backup.exists() and not destination.exists():
-            os.replace(backup, destination)
-        raise
-    if moved_previous:
-        shutil.rmtree(backup)
+        return
+    if destination.is_symlink() or not destination.is_dir():
+        raise ValueError(f"CAD-link destination is not a bundle directory: {destination}")
+    _exchange_directories(staged, destination)
+    shutil.rmtree(staged, ignore_errors=True)
+
+
+def _bundle_destination(
+    wglink_root: Path, design_name: str, design_id: str
+) -> Path:
+    """Resolve one portable bundle name without overwriting another design."""
+
+    requested = f"{design_name}.wglink"
+    requested_key = _portable_path_key([requested])
+    for existing in wglink_root.iterdir():
+        if _portable_path_key([existing.name]) != requested_key:
+            continue
+        if existing.name != requested:
+            raise ValueError(
+                f"CAD-link bundle name collides with an existing portable name: {existing.name}"
+            )
+        if existing.is_symlink() or not existing.is_dir():
+            raise ValueError(
+                f"CAD-link bundle name conflicts with an existing workspace entry: {existing.name}"
+            )
+        try:
+            manifest = json.loads((existing / "wglink.json").read_text(encoding="utf-8"))
+            existing_design_id = str((manifest.get("design") or {}).get("id") or "")
+        except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            raise ValueError(
+                f"CAD-link bundle name conflicts with an unreadable existing bundle: {existing.name}"
+            ) from exc
+        if existing_design_id != design_id:
+            raise ValueError(
+                f"CAD-link bundle name is already used by another design: {existing.name}"
+            )
+        return existing
+    return wglink_root / requested
 
 
 class _ExportIdentityConflict(Exception):
+    pass
+
+
+class _BundleNameConflict(Exception):
     pass
 
 
@@ -167,6 +226,11 @@ def _export_wglink_sync(
     from hornlab_mesher.config_builder import resolve_geometry
 
     workspace_root = workspace_root.resolve()
+    if not workspace_root.is_dir():
+        raise HTTPException(
+            status_code=409,
+            detail="The selected workspace folder is unavailable. Choose a workspace folder first.",
+        )
     wglink_root = (workspace_root / "wglink").resolve()
     if workspace_root != wglink_root and workspace_root not in wglink_root.parents:
         raise HTTPException(status_code=422, detail="CAD-link destination resolves outside the selected workspace")
@@ -199,8 +263,14 @@ def _export_wglink_sync(
         _path_segments(f"{design_name}.wglink", "CAD-link bundle name")
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    wglink_root.mkdir(parents=True, exist_ok=True)
-    destination = wglink_root / f"{design_name}.wglink"
+    try:
+        wglink_root.mkdir(exist_ok=True)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="The selected workspace folder is unavailable. Choose a workspace folder first.",
+        ) from exc
+
 
     def build(facts: Mapping[str, object]) -> Mapping[str, str]:
         if (
@@ -211,6 +281,12 @@ def _export_wglink_sync(
                 "The saved design changed while the CAD export was starting. "
                 "Save again before sending it to CAD."
             )
+        try:
+            destination = _bundle_destination(
+                wglink_root, design_name, request.identity.design_id
+            )
+        except ValueError as exc:
+            raise _BundleNameConflict(str(exc)) from exc
         temporary_root = Path(tempfile.mkdtemp(prefix=".wg2-wglink-", dir=wglink_root))
         staged = temporary_root / "bundle.wglink"
         identity = WgLinkIdentity(
@@ -249,7 +325,7 @@ def _export_wglink_sync(
             )
             manifest_json = product.manifest_path.read_text(encoding="utf-8")
             artifact_sha256 = str(product.manifest["files"]["waveguide.step"]["sha256"])
-            _replace_bundle(staged, destination, temporary_root)
+            _replace_bundle(staged, destination)
             return {
                 "manifest_json": manifest_json,
                 "geometry_hash": geometry_hash,
@@ -265,6 +341,8 @@ def _export_wglink_sync(
             export_builder=build,
         )
     except _ExportIdentityConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except _BundleNameConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except HTTPException:
         raise
