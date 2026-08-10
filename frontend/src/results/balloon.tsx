@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type { ResultPayload } from './types';
 
 const RANGE_DB = 30;
@@ -27,6 +27,8 @@ function colorForDb(value: number): string {
   return COLORS[Math.round(position)];
 }
 
+const InteractiveBalloon = lazy(() => import('./Balloon3D'));
+
 function sizeCanvas(canvas: HTMLCanvasElement): CanvasRenderingContext2D | null {
   const rect = canvas.getBoundingClientRect();
   const width = Math.max(120, Math.round(rect.width || canvas.clientWidth || 300));
@@ -38,38 +40,6 @@ function sizeCanvas(canvas: HTMLCanvasElement): CanvasRenderingContext2D | null 
   try { context = canvas.getContext('2d'); } catch { return null; }
   context?.scale(ratio, ratio);
   return context;
-}
-
-function drawBalloon(canvas: HTMLCanvasElement, result: ResultPayload, frequencyIndex: number): void {
-  const balloon = result.balloon;
-  if (!balloon) return;
-  const context = sizeCanvas(canvas);
-  if (!context) return;
-  const width = canvas.width / Math.min(globalThis.devicePixelRatio || 1, 2);
-  const height = canvas.height / Math.min(globalThis.devicePixelRatio || 1, 2);
-  context.clearRect(0, 0, width, height);
-  const points: Array<{ x: number; y: number; depth: number; db: number }> = [];
-  const grid = balloon.spl_norm_db[frequencyIndex] ?? [];
-  balloon.theta_deg.forEach((thetaValue, thetaIndex) => {
-    const theta = thetaValue * Math.PI / 180;
-    balloon.phi_deg.forEach((phiValue, phiIndex) => {
-      const phi = phiValue * Math.PI / 180;
-      const db = Number(grid[thetaIndex]?.[phiIndex] ?? -RANGE_DB);
-      const radius = Math.max(.03, Math.min(1, 1 + db / RANGE_DB));
-      const x = radius * Math.sin(theta) * Math.cos(phi);
-      const y = radius * Math.sin(theta) * Math.sin(phi);
-      const z = radius * Math.cos(theta);
-      points.push({ x: width / 2 + (x + z * .22) * height * .36, y: height / 2 - (y - z * .14) * height * .36, depth: z, db });
-    });
-  });
-  points.sort((a, b) => a.depth - b.depth).forEach((point) => {
-    context.fillStyle = colorForDb(point.db);
-    context.globalAlpha = .35 + .65 * ((point.depth + 1) / 2);
-    context.beginPath(); context.arc(point.x, point.y, Math.max(1.5, height / 95), 0, Math.PI * 2); context.fill();
-  });
-  context.globalAlpha = 1;
-  context.strokeStyle = 'rgba(220,80,70,.65)'; context.beginPath(); context.moveTo(width * .12, height / 2); context.lineTo(width * .88, height / 2); context.stroke();
-  context.strokeStyle = 'rgba(75,140,225,.65)'; context.beginPath(); context.moveTo(width / 2, height * .12); context.lineTo(width / 2, height * .88); context.stroke();
 }
 
 function wrappedPhiInterval(phiDegrees: number[], queryDegrees: number) {
@@ -137,8 +107,9 @@ function FrequencyCanvas({ result, kind }: { result: ResultPayload; kind: 'ballo
   const beam = result.beam_shape;
   useEffect(() => setIndex(closestFrequencyIndex(frequencies)), [result.balloon]);
   useEffect(() => {
+    if (kind === 'balloon') return;
     if (!canvas.current) return;
-    const draw = () => canvas.current && (kind === 'balloon' ? drawBalloon(canvas.current, result, index) : drawForwardMap(canvas.current, result, index));
+    const draw = () => canvas.current && drawForwardMap(canvas.current, result, index);
     draw();
     const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(draw);
     observer?.observe(canvas.current);
@@ -158,7 +129,9 @@ function FrequencyCanvas({ result, kind }: { result: ResultPayload; kind: 'ballo
   // The scrubber floats over the render rather than taking a row from it, so a
   // short card spends all of its height on the plot.
   return <div className="frequency-canvas">
-    <canvas ref={canvas} role="img" aria-label={kind === 'balloon' ? '3D directivity balloon' : 'Front-facing directivity map'}/>
+    {kind === 'balloon'
+      ? <Suspense fallback={<div className="balloon-3d-loading" role="status">Loading 3D view…</div>}><InteractiveBalloon result={result} frequencyIndex={index}/></Suspense>
+      : <canvas ref={canvas} role="img" aria-label="Front-facing directivity map"/>}
     <label className="frequency-scrub"><input aria-label={kind === 'balloon' ? 'Balloon frequency' : 'Forward beam frequency'} type="range" min={0} max={Math.max(0, frequencies.length - 1)} value={index} onChange={(event) => setIndex(Number(event.target.value))}/><span>{readout}</span></label>
   </div>;
 }
@@ -171,6 +144,22 @@ export function ForwardBeamRenderer({ result }: { result: ResultPayload }) {
   return hasBalloonData(result) ? <FrequencyCanvas result={result} kind="beam"/> : <ChartStub reason={balloonMissingReason(result, 'Forward Beam Map')}/>;
 }
 
-export function ChartStub({ reason }: { reason: string }) {
-  return <div role="status" style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', padding: 16, color: 'var(--fg3)', fontSize: 10, textAlign: 'center' }}>{reason}</div>;
+export interface ChartStubAction {
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  busy?: boolean;
+}
+
+export function ChartStub({ reason, action }: { reason: string; action?: ChartStubAction }) {
+  return <div className="chart-stub" role="status">
+    <span>{reason}</span>
+    {action && <button
+      type="button"
+      disabled={action.disabled}
+      aria-busy={action.busy}
+      onClick={(event) => { event.stopPropagation(); action.onClick(); }}
+      onDoubleClick={(event) => event.stopPropagation()}
+    >{action.busy ? 'Starting solve…' : action.label}</button>}
+  </div>;
 }
