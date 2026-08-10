@@ -1,0 +1,176 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-10T15:30:00Z",
+  "title": "Design System: Waveguide Generator v2",
+  "extensions": {
+    "colorMeta": {
+      "accent-cyan": {
+        "role": "primary",
+        "displayName": "Instrument Cyan",
+        "canonical": "rgb(87, 216, 236)",
+        "tonalRamp": ["#04171b", "#08303a", "#0d4a58", "#136477", "#1a8096", "#2ea4bd", "#57d8ec", "#a9ecf6"]
+      },
+      "signal-green": {
+        "role": "secondary",
+        "displayName": "Live Green",
+        "canonical": "rgb(90, 212, 141)",
+        "tonalRamp": ["#04170d", "#082e1a", "#0d4628", "#125e37", "#1a7847", "#2f9c62", "#5ad48d", "#a8ebc4"]
+      },
+      "signal-amber": {
+        "role": "secondary",
+        "displayName": "Stale Amber",
+        "canonical": "rgb(242, 181, 68)",
+        "tonalRamp": ["#1a1204", "#332408", "#4d370d", "#674a12", "#82601a", "#b8862a", "#f2b544", "#f9dda6"]
+      },
+      "signal-red": {
+        "role": "secondary",
+        "displayName": "Fault Red",
+        "canonical": "rgb(255, 111, 96)",
+        "tonalRamp": ["#1d0806", "#38100c", "#541813", "#70211a", "#8d2b22", "#c04338", "#ff6f60", "#ffb7af"]
+      },
+      "signal-blue": {
+        "role": "tertiary",
+        "displayName": "Series Blue",
+        "canonical": "rgb(111, 157, 255)",
+        "tonalRamp": ["#060b1c", "#0c1636", "#132251", "#1a2e6d", "#233c8a", "#3d5cbb", "#6f9dff", "#b6cdff"]
+      },
+      "signal-violet": {
+        "role": "tertiary",
+        "displayName": "Series Violet",
+        "canonical": "rgb(185, 139, 246)",
+        "tonalRamp": ["#120a1e", "#231339", "#351d55", "#472772", "#5a338f", "#8055c0", "#b98bf6", "#dcc4fb"]
+      },
+      "canvas-void": {
+        "role": "neutral",
+        "displayName": "Canvas Void",
+        "canonical": "#080a0f",
+        "tonalRamp": ["#080a0f", "#0d1219", "#151c26", "#1b222e", "#28313f", "#8995a7", "#a4b1c4", "#e9eef6"]
+      },
+      "paper-canvas": {
+        "role": "neutral",
+        "displayName": "Warm Paper",
+        "canonical": "#faf4ec",
+        "tonalRamp": ["#0e111b", "#3c3830", "#696966", "#a49c8f", "#cac3b9", "#e9e3d9", "#faf4ec", "#fffdf8"]
+      }
+    },
+    "typographyMeta": {
+      "title": { "displayName": "Title", "purpose": "The design under edit, dialog headings. Never more than two on screen." },
+      "body": { "displayName": "Body", "purpose": "Parameter names, menu items, prose. ~60ch ceiling inside a popover." },
+      "label": { "displayName": "Label", "purpose": "Uppercase tracked micro-label. The system's only heading idiom." },
+      "readout": { "displayName": "Readout", "purpose": "Every computed or typed number. Monospace, tabular." },
+      "micro": { "displayName": "Micro", "purpose": "Units, timings, run metadata, status rail." }
+    },
+    "shadows": [
+      { "name": "card", "value": "0 12px 34px -22px #000", "purpose": "Panels and dock groups. Separates without lifting." },
+      { "name": "float", "value": "0 14px 34px -18px #000", "purpose": "Menus, popovers, dialogs — anything that occludes." },
+      { "name": "tip", "value": "0 14px 30px -16px #000", "purpose": "Tooltips and the scrub readout." },
+      { "name": "glass", "value": "0 14px 34px -18px #000, 0 1px 0 rgba(255,255,255,.05) inset", "purpose": "Viewport toolbar and empty-state card; always paired with backdrop-filter." },
+      { "name": "edge-highlight", "value": "0 1px 0 rgba(255,255,255,.028) inset", "purpose": "The 1px inset top highlight that makes the cabinet read as milled." },
+      { "name": "viewport-vignette", "value": "0 0 130px -30px rgba(0,0,0,.9) inset", "purpose": "Atmosphere, not structure. Only on the 3D scene." }
+    ],
+    "motion": [
+      { "name": "state", "value": "120ms", "purpose": "Hover and control state changes. The default and usually the only duration." },
+      { "name": "disclosure", "value": "160ms", "purpose": "Section chevron rotation and other reveal transforms." },
+      { "name": "ease-standard", "value": "cubic-bezier(0.4, 0, 0.2, 1)", "purpose": "Every transition. No bounce, no elastic — motion is confirmation." }
+    ],
+    "breakpoints": [
+      { "name": "narrow-window", "value": "1100px" },
+      { "name": "tight-window", "value": "980px" },
+      { "name": "minimum-window", "value": "800px" },
+      { "name": "param-rail-two-column", "value": "430px (container query on .param-panel)" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Solve Button",
+      "kind": "button",
+      "refersTo": "button-solve",
+      "description": "The only filled button in the application. One per screen; it is where compute is spent.",
+      "html": "<button class=\"ds-solve\"><svg viewBox=\"0 0 24 24\" fill=\"currentColor\" width=\"11\" height=\"11\"><path d=\"M8 5v14l11-7z\"/></svg>Solve<kbd class=\"ds-solve-kbd\">⌘⏎</kbd></button>",
+      "css": ".ds-solve { display: flex; align-items: center; gap: 7px; height: 32px; padding: 0 9px 0 12px; border: 0; border-radius: 5px; background: linear-gradient(180deg, #7ce6f6, #3cc0d8); box-shadow: 0 1px 0 rgba(255,255,255,.4) inset, 0 5px 16px -8px rgba(87,216,236,.6); color: #03222a; font: 600 12px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; cursor: pointer; } .ds-solve:hover { filter: brightness(1.06); } .ds-solve:focus-visible { outline: 2px solid rgba(87,216,236,.72); outline-offset: 2px; box-shadow: 0 0 0 4px rgba(87,216,236,.18); } .ds-solve:disabled { filter: saturate(.55); opacity: .5; cursor: default; } .ds-solve-kbd { padding: 1.5px 4px; border: 1px solid rgba(0,0,0,.2); border-bottom-width: 2px; border-radius: 4px; background: rgba(0,0,0,.16); color: #0a3540; font: 9.5px/1 ui-monospace, Menlo, monospace; }"
+    },
+    {
+      "name": "Number Control",
+      "kind": "input",
+      "refersTo": "input-number",
+      "description": "The signature input: a monospace readout with a unit and a fill track showing where the value sits in its range. Its label is a horizontal scrub handle.",
+      "html": "<div class=\"ds-field\"><span class=\"ds-field-label\">Mouth radius <em>(R)</em></span><div class=\"ds-number\"><input value=\"140.00\" /><span class=\"ds-unit\">mm</span><span class=\"ds-track\"></span></div></div>",
+      "css": ".ds-field { display: flex; align-items: center; gap: 8px; min-height: 30px; } .ds-field-label { flex: 1; min-width: 0; overflow: hidden; color: #a4b1c4; font: 12px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; text-overflow: ellipsis; white-space: nowrap; cursor: ew-resize; user-select: none; } .ds-field-label em { color: #929eb0; font: italic 10px ui-monospace, Menlo, monospace; } .ds-number { position: relative; display: flex; align-items: baseline; justify-content: flex-end; gap: 3px; width: 86px; height: 26px; padding: 0 7px; border: 1px solid transparent; border-radius: 4px; background: rgba(255,255,255,.045); transition: 120ms cubic-bezier(0.4,0,0.2,1); } .ds-number:hover { border-color: #28313f; background: rgba(255,255,255,.06); } .ds-number:focus-within { border-color: rgba(87,216,236,.5); background: rgba(87,216,236,.09); box-shadow: 0 0 0 3px rgba(87,216,236,.1); } .ds-number input { width: 100%; min-width: 0; padding: 0; border: 0; outline: 0; background: transparent; color: #e9eef6; text-align: right; font: 12px ui-monospace, Menlo, monospace; font-variant-numeric: tabular-nums; } .ds-number:focus-within input { color: #57d8ec; } .ds-unit { color: #929eb0; font-size: 10px; } .ds-track { position: absolute; right: 5px; bottom: 2px; left: 5px; height: 1px; border-radius: 1px; background: rgba(255,255,255,.045); } .ds-track::after { content: ''; position: absolute; inset: 0 auto 0 0; width: 62%; border-radius: 1px; background: linear-gradient(90deg, rgba(87,216,236,.42), rgba(87,216,236,.85)); }"
+    },
+    {
+      "name": "State Badge",
+      "kind": "chip",
+      "refersTo": "badge-state",
+      "description": "The application's most important claim: whether what you are looking at is current. One geometry, one hue per state, always a dot plus a word.",
+      "html": "<span class=\"ds-badge ds-badge-live\"><i></i>LIVE</span> <span class=\"ds-badge ds-badge-stale\"><i></i>STALE</span> <span class=\"ds-badge ds-badge-error\"><i></i>ERROR</span>",
+      "css": ".ds-badge { display: inline-flex; align-items: center; gap: 5px; padding: 3px 7px 3px 6px; border-radius: 999px; font: 680 10px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; letter-spacing: .14em; } .ds-badge i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; } .ds-badge-live { border: 1px solid rgba(90,212,141,.32); background: rgba(90,212,141,.12); color: #5ad48d; } .ds-badge-stale { border: 1px solid rgba(242,181,68,.32); background: rgba(242,181,68,.12); color: #f2b544; } .ds-badge-error { border: 1px solid rgba(255,111,96,.38); background: rgba(255,111,96,.13); color: #ff6f60; }"
+    },
+    {
+      "name": "Run Card",
+      "kind": "card",
+      "refersTo": "card-run",
+      "description": "The one true card in the system. A 2px left rule carries run state; unselected finished runs collapse to a single line.",
+      "html": "<article class=\"ds-run ds-run-complete ds-run-selected\"><header><i></i><b>250917asro68_v01</b><time>15:15</time></header><p>1.7 s · 1,262 el · 40 f · metal</p><div class=\"ds-run-stars\">★★★★★</div></article>",
+      "css": ".ds-run { position: relative; margin: 9px 0 0; padding: 10px 11px 10px 13px; border: 1px solid #1b222e; border-radius: 6px; background: rgba(255,255,255,.045); } .ds-run::before { content: ''; position: absolute; top: 9px; bottom: 9px; left: 0; width: 2px; background: #8995a7; } .ds-run-complete::before { background: #5ad48d; } .ds-run-selected { border-color: rgba(87,216,236,.34); background: rgba(87,216,236,.05); } .ds-run-selected::before { background: #57d8ec; } .ds-run header { display: flex; align-items: center; gap: 6px; } .ds-run header i { width: 6px; height: 6px; flex: none; border-radius: 50%; background: #5ad48d; } .ds-run header b { flex: 1; overflow: hidden; color: #e9eef6; font: 560 12px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; text-overflow: ellipsis; white-space: nowrap; } .ds-run time { color: #929eb0; font: 10px ui-monospace, Menlo, monospace; } .ds-run p { margin: 4px 0 0; color: #929eb0; font: 10px ui-monospace, Menlo, monospace; } .ds-run-stars { margin-top: 4px; color: #f2b544; font-size: 9px; letter-spacing: .5px; }"
+    },
+    {
+      "name": "Section Header",
+      "kind": "nav",
+      "refersTo": "typography.label",
+      "description": "The uppercase tracked micro-label that groups a set of parameters. The system's only heading idiom, and the reason no field group needs a box.",
+      "html": "<button class=\"ds-section\"><span class=\"ds-section-chevron\">›</span><span class=\"ds-section-name\">PROFILE DIMENSIONS</span><span class=\"ds-section-spacer\"></span><span class=\"ds-section-summary\">R-OSSE</span></button>",
+      "css": ".ds-section { display: flex; align-items: center; gap: 6px; width: 100%; height: 28px; padding: 0 10px 0 9px; border: 0; background: transparent; color: #a4b1c4; cursor: pointer; } .ds-section:hover { background: rgba(255,255,255,.028); color: #e9eef6; } .ds-section-chevron { width: 11px; font-size: 13px; transform: rotate(90deg); transition: transform 160ms cubic-bezier(0.4,0,0.2,1); } .ds-section-name { font: 660 11px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; letter-spacing: .1em; } .ds-section-spacer { flex: 1; } .ds-section-summary { color: #8995a7; font: 10px ui-monospace, Menlo, monospace; }"
+    },
+    {
+      "name": "Panel Tab",
+      "kind": "nav",
+      "refersTo": "card-panel",
+      "description": "The dock's tab. Single-purpose groups hide their tab row entirely, because a tab that changes nothing is chrome.",
+      "html": "<div class=\"ds-tabs\"><button class=\"ds-tab ds-tab-active\">GEOMETRY</button><button class=\"ds-tab\">SIMULATION</button></div>",
+      "css": ".ds-tabs { display: flex; align-items: center; gap: 4px; height: 31px; padding: 3px 5px; border-bottom: 1px solid #151b25; background: rgba(255,255,255,.028); } .ds-tab { height: 24px; padding-inline: 9px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: #929eb0; font: 660 10px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; letter-spacing: .1em; cursor: pointer; } .ds-tab:hover { border-color: #151b25; background: rgba(255,255,255,.045); } .ds-tab-active { border-color: #1b222e; background: #151c26; color: #e9eef6; box-shadow: 0 1px 0 rgba(255,255,255,.028) inset; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Anechoic Console",
+    "overview": "This is a dark room with an instrument in it. The application is a single window that never navigates — a console the user sits in front of for hours, watching a shape and a set of curves respond to numbers they turn. The chrome is a matte, near-black cabinet made of hairlines and tonal steps, and everything that carries information — the 3D model, the plots, the numerals — is the only thing allowed to be bright. The cyan accent behaves like a backlit indicator on real measurement hardware: sparse, cool, and always attached to something the system actually knows.\n\nDensity is the aesthetic, not a compromise against it. A 32px control height, a 10–13px type range, and 3/6/8/12/16px spacing steps let ~119 parameters and ~28 runs coexist on one screen without the user scrolling to compare. What keeps that dense grid legible is not whitespace but rank: uppercase tracked micro-labels for section names, monospace tabular figures for every value, a prose name that ellipsizes while its ATH formula symbol never does, and a hairline that separates rather than a card that encloses.\n\nThe light theme is not an inversion. It is a warm paper palette with the same instrument grammar, for users working in a bright room; it is a second first-class design, not a courtesy.",
+    "keyCharacteristics": [
+      "Near-black cabinet, hairline structure, no nested cards",
+      "One cool accent used as an indicator, never as decoration",
+      "Monospace tabular numerals for every value the system computes",
+      "Uppercase tracked micro-labels as the only \"heading\" idiom",
+      "Dense by design: 32px controls, 10–13px type, 3–16px spacing",
+      "Two complete themes, dark ink and warm paper"
+    ],
+    "rules": [
+      { "name": "The Indicator Rule", "body": "Cyan is an indicator, not a brand color. It is legal on exactly four things: the primary action, the current selection, a value being edited, and something the system reports as live. If an element is cyan and the user cannot name which of those four it is, it is wrong.", "section": "colors" },
+      { "name": "The Signal Rule", "body": "Green, amber, and red are reserved for state the backend actually reports. They may never be recruited for emphasis, category, or decoration, and no state may be signalled by hue alone — every colored state also carries a word, a glyph, or a position.", "section": "colors" },
+      { "name": "The Tinted Neutral Rule", "body": "No pure black, no pure gray. Every neutral carries the cool blue-slate tint in dark and the warm paper tint in light, so the two themes are two rooms rather than one image and its negative.", "section": "colors" },
+      { "name": "The Tabular Rule", "body": "Any glyph that is part of a measured value is monospace and tabular. A number in the UI font is a bug wherever two of them might ever sit in a column.", "section": "typography" },
+      { "name": "The Symbol-Holds Rule", "body": "Where a parameter carries an ATH formula symbol, the symbol never truncates and the prose name does. Users scan for (a0), not for \"Throat coverage angle.\"", "section": "typography" },
+      { "name": "The Four-Step Rule", "body": "The type scale is 10 / 11 / 12 / 13px and nothing else. A new size is a request to reconsider the hierarchy, not to add a step.", "section": "typography" },
+      { "name": "The Own-Width Rule", "body": "A panel the user can resize responds to a container query, not a media query. The window's width is not evidence about a rail the user just dragged.", "section": "layout" },
+      { "name": "The Density Rule", "body": "A change that fits fewer parameter rows or fewer runs on screen must buy that space with a specific legibility gain, named at the time. Padding is not a reason.", "section": "layout" },
+      { "name": "The Flat Cabinet Rule", "body": "If it is bolted down, it is flat. Shadow is reserved for surfaces that genuinely occlude what is behind them, and every one of them also blurs its backdrop.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do put every computed number in the monospace readout style with tabular figures, at 10px for meta and 12px for values.",
+      "Do separate with a 1px hairline and one tonal step. Reach for --hair-soft inside a panel and --hair at its boundary.",
+      "Do give every state a word or a glyph in addition to its hue, following the state badge row's dot-plus-label pattern.",
+      "Do define every new color as a --*-rgb triple in tokens.css and use rgba(var(--x-rgb), α) for tints, so both themes get the tint for free.",
+      "Do ship every new surface in both themes in the same change, and check the warm paper theme is warm — a neutral gray in light mode is a bug.",
+      "Do use a container query when the element lives in a rail the user can resize.",
+      "Do keep the type scale at 10 / 11 / 12 / 13px and the spacing scale at 3 / 6 / 8 / 12 / 16px."
+    ],
+    "donts": [
+      "Don't nest a card inside a card, or wrap a group of fields in a box. The hairline and the section label are the grouping.",
+      "Don't add a second filled button. Solve is the only one.",
+      "Don't use cyan for anything that is not the primary action, the selection, an edit in progress, or a live state.",
+      "Don't use pure #000, pure #fff, or an untinted gray anywhere.",
+      "Don't put a shadow on a surface that does not float, and don't float one without a backdrop blur.",
+      "Don't animate with bounce or elastic easing, and don't animate anything that is not a state change the user caused; motion here is confirmation, not personality.",
+      "Don't override the global focus ring per component.",
+      "Don't buy whitespace with visible rows. See The Density Rule.",
+      "Don't invent a mobile layout. Narrow means a small window on a desktop."
+    ]
+  }
+}
