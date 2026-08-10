@@ -12,7 +12,7 @@ import type { CameraDirection } from './cameraMath';
 import { ClientLatencyClock, formatClientLatency } from './clientLatency';
 import { selectPreferredFrame } from './lodPolicy';
 import { parseMSH } from './mshParser';
-import { filenameStem, previewBadge, previewErrorMessage, staleReason, viewportSubtitle } from './presentation';
+import { documentDisplayName, previewBadge, previewErrorMessage, staleReason, viewportSubtitle } from './presentation';
 import type { CameraPreset, DisplayMode, ViewportTheme } from './types';
 import { canRenderWebGL, type CameraRequest, type ZoomRequest, ViewportCanvas } from './ViewportCanvas';
 import './viewport.css';
@@ -216,7 +216,7 @@ export function Viewport() {
     />}
 
     <div className="viewport-title">
-      <b>{importedMesh?.name ?? filenameStem(filename)}</b>
+      <b>{importedMesh?.name ?? documentDisplayName(filename) ?? 'Untitled design'}</b>
       <span>{importedMesh
         ? `${importedMesh.triangleCount.toLocaleString()} triangles · ${importedMesh.physicalGroupCount} physical group${importedMesh.physicalGroupCount === 1 ? '' : 's'}`
         : viewportSubtitle(design)}</span>

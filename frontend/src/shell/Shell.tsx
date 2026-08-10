@@ -5,9 +5,11 @@ import { StatusBar } from './StatusBar';
 import { TopBar } from './TopBar';
 import { Workspace } from './Workspace';
 import { JobsCoordinator } from './JobsCoordinator';
+import { useDocumentTitle } from './useDocumentTitle';
 
 export function Shell() {
   const [resetKey, setResetKey] = useState(0);
+  useDocumentTitle();
   useEffect(() => {
     let active = true;
     const applyLiveUpdateGate = () => queueMicrotask(() => {

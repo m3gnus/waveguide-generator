@@ -21,7 +21,13 @@ export interface DocumentState {
 }
 
 export const useDocumentStore = create<DocumentState>((set) => ({
-  filename: 'tritonia_mk2.cfg',
+  // Untitled, and clean. The name used to be a specific .cfg -- someone's test
+  // fixture -- so a fresh window claimed that document was open when what was
+  // on screen was the built-in default design. The saved revision still matches
+  // the design store's initial revision, because an untouched default is not
+  // unsaved work: making it null instead would light the unsaved dot, and arm
+  // the discard-changes prompt, on an app nobody has typed in yet.
+  filename: '',
   savedRevision: 1,
   identity: null,
   classification: null,
@@ -39,7 +45,7 @@ export const useDocumentStore = create<DocumentState>((set) => ({
 
 export function resetDocumentStore(): void {
   useDocumentStore.setState({
-    filename: 'tritonia_mk2.cfg',
+    filename: '',
     savedRevision: 1,
     identity: null,
     classification: null,
