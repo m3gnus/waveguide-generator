@@ -115,6 +115,7 @@ describe('FRD builders', () => {
       directivity: { horizontal: [[[0, 0]]] },
       directivity_phase: { horizontal: [[[0, -100]]] },
       metadata: {
+        phase_time_convention: 'exp(+ikr)',
         observation: { effective_distance_m: 1, sound_speed_m_per_s: 4 },
       },
     };
@@ -147,6 +148,7 @@ describe('FRD builders', () => {
       frequencies: [1],
       spl_on_axis: { frequencies: [1], spl: [90], phase_degrees: [-100] },
       metadata: {
+        phase_time_convention: 'exp(+ikr)',
         observation: { effective_distance_m: 1, sound_speed_m_per_s: 4 },
       },
     };
@@ -154,6 +156,36 @@ describe('FRD builders', () => {
     expect(dataRows(buildOnAxisFrd(result, preferences()))).toEqual([
       ['1.000000', '90.0000', '170.0000'],
     ]);
+  });
+
+  it('adds propagation phase for the explicit exp(-ikr) convention', () => {
+    const result: ResultPayload = {
+      frequencies: [1],
+      directivity: { horizontal: [[[0, 0]]] },
+      directivity_phase: { horizontal: [[[0, -100]]] },
+      metadata: {
+        phase_time_convention: 'exp(-ikr)',
+        observation: { effective_distance_m: 1, sound_speed_m_per_s: 4 },
+      },
+    };
+
+    expect(dataRows(buildPolarFrdSet(result, preferences())[0].text)).toEqual([
+      ['1.000000', '0.0000', '-10.0000'],
+    ]);
+  });
+
+  it('does not invent a correction sign when phase convention metadata is missing', () => {
+    const result: ResultPayload = {
+      frequencies: [1],
+      spl_on_axis: { frequencies: [1], spl: [90], phase_degrees: [-100] },
+      metadata: {
+        observation: { effective_distance_m: 1, sound_speed_m_per_s: 4 },
+      },
+    };
+    const text = buildOnAxisFrd(result, preferences());
+
+    expect(dataRows(text)).toEqual([['1.000000', '90.0000', '-100.0000']]);
+    expect(text).toContain('phase convention metadata is unavailable');
   });
 
   it('names polar files the way the Fusion addin already does for VituixCAD', () => {

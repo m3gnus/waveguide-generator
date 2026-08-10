@@ -101,3 +101,33 @@ def test_invalid_member_count_is_rejected_without_writing(tmp_path: Path) -> Non
     with pytest.raises(ValidationError):
         request("horn_1", [])
     assert list(workspace.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "members",
+    [
+        [
+            ("hor/\N{LATIN SMALL LETTER E WITH ACUTE}.frd", "first"),
+            ("hor/e\N{COMBINING ACUTE ACCENT}.frd", "second"),
+        ],
+        [("hor/Angle.frd", "first"), ("hor/angle.frd", "second")],
+    ],
+)
+def test_write_export_rejects_portably_equivalent_member_paths(
+    tmp_path: Path, members: list[tuple[str, str]]
+) -> None:
+    state, workspace = selected_state(tmp_path)
+
+    with pytest.raises(HTTPException, match="duplicates another member path"):
+        call(state, request("horn_1", members))
+
+    assert list(workspace.iterdir()) == []
+
+
+def test_write_export_rejects_oversize_path_segment_before_writing(tmp_path: Path) -> None:
+    state, workspace = selected_state(tmp_path)
+
+    with pytest.raises(HTTPException, match="255-byte"):
+        call(state, request(f"parent/{'x' * 256}", [("a.frd", "bad")]))
+
+    assert list(workspace.iterdir()) == []

@@ -52,13 +52,21 @@ def _path_segments(raw: str, label: str) -> list[str]:
     if any(segment in ("", ".", "..") for segment in segments):
         raise ValueError(f"{label} contains an empty, '.' or '..' path segment")
     for segment in segments:
+        if len(segment.encode("utf-8")) > 255:
+            raise ValueError(f"{label} contains a path segment exceeding the 255-byte limit")
         if segment.endswith((".", " ")):
             raise ValueError(f"{label} contains a segment ending in a dot or space")
         if any(unicodedata.category(character) == "Cc" for character in segment):
             raise ValueError(f"{label} contains a control character")
-        if _WINDOWS_DEVICE_NAME.fullmatch(segment):
+        if _WINDOWS_DEVICE_NAME.fullmatch(unicodedata.normalize("NFKC", segment)):
             raise ValueError(f"{label} contains reserved Windows device name {segment!r}")
     return segments
+
+
+def _portable_path_key(segments: list[str]) -> tuple[str, ...]:
+    """Key names the same way case-insensitive, Unicode-normalizing filesystems do."""
+
+    return tuple(unicodedata.normalize("NFKC", segment).casefold() for segment in segments)
 
 
 def _strictly_inside(path: Path, root: Path, label: str) -> None:
@@ -221,6 +229,7 @@ def create_workspace_router(state: WorkspaceState) -> APIRouter:
             prepared: list[tuple[list[str], bytes, Path]] = []
             total_bytes = 0
             seen: set[Path] = set()
+            portable_seen: set[tuple[str, ...]] = set()
             for index, member in enumerate(request.members):
                 label = f"members[{index}].relative_path"
                 segments = _path_segments(member.relative_path, label)
@@ -228,9 +237,11 @@ def create_workspace_router(state: WorkspaceState) -> APIRouter:
                 _strictly_inside(destination, workspace_root, label)
                 if destination == export_directory or export_directory not in destination.parents:
                     raise ValueError(f"{label} resolves outside the export subdirectory")
-                if destination in seen:
+                portable_key = _portable_path_key(segments)
+                if destination in seen or portable_key in portable_seen:
                     raise ValueError(f"{label} duplicates another member path")
                 seen.add(destination)
+                portable_seen.add(portable_key)
                 encoded = member.text.encode("utf-8")
                 total_bytes += len(encoded)
                 if total_bytes > MAX_EXPORT_BYTES:
@@ -249,7 +260,7 @@ def create_workspace_router(state: WorkspaceState) -> APIRouter:
 
         export_directory.parent.mkdir(parents=True, exist_ok=True)
         staging_directory = Path(
-            tempfile.mkdtemp(prefix=f".{export_directory.name}.staging-", dir=export_directory.parent)
+            tempfile.mkdtemp(prefix=".wg2-export-staging-", dir=export_directory.parent)
         )
         try:
             for segments, encoded, _destination in prepared:

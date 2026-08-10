@@ -77,6 +77,25 @@ function fileText(header: string[], rows: string[]): string {
 interface PropagationReference {
   distanceM: number;
   speedOfSoundMps: number;
+  spatialSign: 1 | -1;
+}
+
+const POSITIVE_SPATIAL_CONVENTIONS = new Set([
+  'exp(+ikr)', 'e(+ikr)', '+ikr', 'positive', 'positive-spatial', 'metal',
+  'hornlab-metal', 'metal-bem', 'hornlab-metal-bem', 'bempp', 'bempp-cl',
+  'bemppcl', 'hornlab-bempp-bem', 'bempp-cl-numba', 'bempp-cl-opencl',
+]);
+const NEGATIVE_SPATIAL_CONVENTIONS = new Set([
+  'exp(-ikr)', 'e(-ikr)', '-ikr', 'negative', 'negative-spatial', 'legacy',
+  'auto', 'default',
+]);
+
+function phaseSpatialSign(result: ResultPayload): 1 | -1 | null {
+  const raw = String(result.metadata?.phase_time_convention ?? '')
+    .trim().toLowerCase().replaceAll('_', '-').replaceAll(' ', '');
+  if (POSITIVE_SPATIAL_CONVENTIONS.has(raw)) return 1;
+  if (NEGATIVE_SPATIAL_CONVENTIONS.has(raw)) return -1;
+  return null;
 }
 
 function propagationReference(result: ResultPayload): PropagationReference | null {
@@ -84,8 +103,9 @@ function propagationReference(result: ResultPayload): PropagationReference | nul
   if (!metadata || typeof metadata !== 'object') return null;
   const distanceM = metadata.effective_distance_m ?? metadata.requested_distance_m;
   const speedOfSoundMps = metadata.sound_speed_m_per_s;
-  return finite(distanceM) && finite(speedOfSoundMps) && distanceM >= 0 && speedOfSoundMps > 0
-    ? { distanceM, speedOfSoundMps }
+  const spatialSign = phaseSpatialSign(result);
+  return finite(distanceM) && finite(speedOfSoundMps) && distanceM >= 0 && speedOfSoundMps > 0 && spatialSign !== null
+    ? { distanceM, speedOfSoundMps, spatialSign }
     : null;
 }
 
@@ -104,13 +124,20 @@ function exportPhaseDegrees(
   // Mirrors the Fusion addin's VituixCAD export. Reconcile these two
   // implementations when the addin and web exporter share a contract module.
   return wrapPhaseDegrees(
-    phaseDegrees - (360 * frequency * reference.distanceM) / reference.speedOfSoundMps,
+    phaseDegrees - reference.spatialSign * (360 * frequency * reference.distanceM) / reference.speedOfSoundMps,
   );
 }
 
-function propagationNote(reference: PropagationReference | null): string {
-  return reference
-    ? `Common time-of-flight removed: phase_deg - 360 * f * d / c; d=${reference.distanceM} m, c=${reference.speedOfSoundMps} m/s`
+function propagationNote(reference: PropagationReference | null, result: ResultPayload): string {
+  if (reference) {
+    const operator = reference.spatialSign === 1 ? '-' : '+';
+    return `Common time-of-flight removed: phase_deg ${operator} 360 * f * d / c; d=${reference.distanceM} m, c=${reference.speedOfSoundMps} m/s`;
+  }
+  const metadata = result.metadata?.observation;
+  const distanceM = metadata?.effective_distance_m ?? metadata?.requested_distance_m;
+  const speedOfSoundMps = metadata?.sound_speed_m_per_s;
+  return finite(distanceM) && finite(speedOfSoundMps) && distanceM >= 0 && speedOfSoundMps > 0
+    ? 'Common time-of-flight not removed: phase convention metadata is unavailable or unsupported; raw phase emitted'
     : 'Common time-of-flight not removed: directivity distance and/or speed-of-sound metadata is unavailable; raw phase emitted';
 }
 
@@ -149,7 +176,7 @@ export function buildOnAxisFrd(
   return fileText([
     'HornLab on-axis frequency response',
     smoothingNote(preferences.smoothing),
-    propagationNote(reference),
+    propagationNote(reference, result),
     ['Freq(Hz)', 'SPL(dB)', 'Phase(degrees)'].join(DELIMITER),
   ], rows);
 }
@@ -250,7 +277,7 @@ export function buildPolarFrdSet(
         rows.push(columns.join(DELIMITER));
       });
       const phaseHeader = includesPhase
-        ? [propagationNote(reference), ['Freq(Hz)', 'SPL(dB)', 'Phase(degrees)'].join(DELIMITER)]
+        ? [propagationNote(reference, result), ['Freq(Hz)', 'SPL(dB)', 'Phase(degrees)'].join(DELIMITER)]
         : [
           'HornLab polar frequency response — magnitude-only; phase is not available and is intentionally omitted',
           ['Freq(Hz)', 'SPL(dB)'].join(DELIMITER),

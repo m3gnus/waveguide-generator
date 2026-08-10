@@ -195,6 +195,12 @@ def classify_open(
         return "missing"
     if head is None:
         return "foreign"
+    # The registry can tell us which version is the head, while the truncated
+    # hash carried by the file tells us whether these bytes are still the ones
+    # that version saved. Check self-integrity first: an edited old copy is not
+    # merely stale, and presenting it that way hides the external edit.
+    if truncated_design_hash(computed_hash) != identity.saved_design_hash:
+        return "externally_edited"
     head_version = int(head["edit_version"])
     if identity.edit_version < head_version:
         return "stale_copy"
