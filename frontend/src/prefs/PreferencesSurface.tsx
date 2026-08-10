@@ -43,7 +43,17 @@ function ResultsPreferencesContent() {
       <label className="ui-check"><input type="checkbox" checked={preferences.autoExportOnComplete} onChange={(event) => preferencesStore.update({ autoExportOnComplete: event.target.checked })}/>Auto-export completed jobs</label>
       <label className="ui-check"><input type="checkbox" checked={preferences.autoDownloadMesh} onChange={(event) => preferencesStore.update({ autoDownloadMesh: event.target.checked })}/>Auto-download solve mesh</label>
     </div>
-    <fieldset className="preferences-formats"><legend>Export formats</legend>{EXPORT_FORMATS.map(({ id, label }) => <label key={id} className="ui-check"><input type="checkbox" aria-label={label} checked={preferences.exportFormats.includes(id)} onChange={() => preferencesStore.toggleFormat(id)}/>{label}</label>)}</fieldset>
+    <fieldset className="preferences-formats">
+      <legend>Preferred manual export formats</legend>
+      <p className="preferences-section-copy">Used by the Results toolbar Export button and each run’s primary Export action.</p>
+      {EXPORT_FORMATS.map(({ id, label }) => <label key={id} className="ui-check"><input type="checkbox" aria-label={`Manual export: ${label}`} checked={preferences.exportFormats.includes(id)} onChange={() => preferencesStore.toggleFormat(id)}/>{label}</label>)}
+    </fieldset>
+    <fieldset className="preferences-formats">
+      <legend>Automatic export formats</legend>
+      <p className="preferences-section-copy">Written only when “Auto-export completed jobs” is enabled.</p>
+      {preferences.autoExportOnComplete && !preferences.autoExportFormats.length && <p className="job-warning" role="alert">Choose at least one automatic format. Auto-export is enabled but will not write any files.</p>}
+      {EXPORT_FORMATS.map(({ id, label }) => <label key={id} className="ui-check"><input type="checkbox" aria-label={`Automatic export: ${label}`} checked={preferences.autoExportFormats.includes(id)} onChange={() => preferencesStore.toggleAutoExportFormat(id)}/>{label}</label>)}
+    </fieldset>
   </section>;
 }
 

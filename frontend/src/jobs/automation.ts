@@ -15,6 +15,7 @@ export interface AutomationDependencies {
 export class JobAutomation {
   private readonly meshStarted = new Set<string>();
   private readonly exportStarted = new Set<string>();
+  private emptyAutoExportWarningShown = false;
 
   async process(jobs: JobItem[], preferences: Preferences, dependencies: AutomationDependencies): Promise<void> {
     const tasks: Promise<void>[] = [];
@@ -41,9 +42,17 @@ export class JobAutomation {
         }
       })());
     });
-    if (preferences.autoExportOnComplete && preferences.exportFormats.length) jobs.filter((job) => job.status === 'complete' && job.has_results && !job.auto_export_completed_at).forEach((job) => {
+    if (preferences.autoExportOnComplete && !preferences.autoExportFormats.length) {
+      if (!this.emptyAutoExportWarningShown) {
+        dependencies.reportError('Auto-export is enabled, but no automatic export formats are selected. Choose at least one format in Results & export preferences.');
+        this.emptyAutoExportWarningShown = true;
+      }
+    } else {
+      this.emptyAutoExportWarningShown = false;
+    }
+    if (preferences.autoExportOnComplete && preferences.autoExportFormats.length) jobs.filter((job) => job.status === 'complete' && job.has_results && !job.auto_export_completed_at).forEach((job) => {
       if (this.exportStarted.has(job.id)) return;
-      const pendingFormats = preferences.exportFormats.filter((format) => job.auto_export_formats[format]?.status !== 'complete');
+      const pendingFormats = preferences.autoExportFormats.filter((format) => job.auto_export_formats[format]?.status !== 'complete');
       if (!pendingFormats.length) return;
       this.exportStarted.add(job.id);
       tasks.push(dependencies.exportCompleted(job, pendingFormats).then(async (result) => {
@@ -56,7 +65,7 @@ export class JobAutomation {
             ? { status: 'failed', attempted_at: attemptedAt, reason }
             : { status: 'complete', attempted_at: attemptedAt };
         });
-        const allSelectedComplete = preferences.exportFormats.every((format) => formatStatus[format]?.status === 'complete');
+        const allSelectedComplete = preferences.autoExportFormats.every((format) => formatStatus[format]?.status === 'complete');
         await dependencies.markExported(job, result.files, formatStatus, allSelectedComplete ? attemptedAt : null);
         if (result.files.length) dependencies.incrementCounter();
         if (result.failures.length) dependencies.reportError(`Auto-export for ${job.id.slice(0, 6)} completed with ${result.failures.length} failure${result.failures.length === 1 ? '' : 's'}: ${result.failures.map(({ format, reason }) => `${format} (${reason})`).join(', ')}`);

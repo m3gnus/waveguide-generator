@@ -21,9 +21,25 @@ describe('preferences surfaces', () => {
     expect(host.querySelector<HTMLSelectElement>('[aria-label="Map reference"]')?.options).toHaveLength(4);
     expect(host.querySelector<HTMLSelectElement>('[aria-label="Results layout count"]')?.options).toHaveLength(5);
     expect(host.querySelector('[aria-label="Export counter"]')).not.toBeNull();
-    expect(host.querySelectorAll('fieldset input[type="checkbox"]')).toHaveLength(11);
+    expect(host.querySelectorAll('[aria-label^="Manual export:"]')).toHaveLength(11);
+    expect(host.querySelectorAll('[aria-label^="Automatic export:"]')).toHaveLength(11);
+    expect(host.textContent).toContain('Preferred manual export formats');
+    expect(host.textContent).toContain('Automatic export formats');
     expect(host.textContent).toContain('Auto-export completed jobs');
     expect(host.textContent).toContain('Auto-download solve mesh');
+  });
+
+  it('edits manual and automatic formats independently and warns about an empty enabled auto list', async () => {
+    await act(async () => { root.render(<ResultsPreferencesSurface/>); await Promise.resolve(); });
+    const autoToggle = [...host.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
+      .find((input) => input.parentElement?.textContent?.includes('Auto-export completed jobs'))!;
+    act(() => autoToggle.click());
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('will not write any files');
+
+    act(() => host.querySelector<HTMLInputElement>('[aria-label="Automatic export: Frequency Data CSV"]')!.click());
+    expect(preferencesStore.getSnapshot().autoExportFormats).toEqual(['csv']);
+    expect(preferencesStore.getSnapshot().exportFormats).toEqual(['csv', 'png']);
+    expect(host.querySelector('[role="alert"]')).toBeNull();
   });
 
   it('renders job naming, version, date-prefix, sort, and rating-filter controls', () => {

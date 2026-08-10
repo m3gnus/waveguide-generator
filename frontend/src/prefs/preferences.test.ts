@@ -12,12 +12,63 @@ describe('client preferences', () => {
     expect(EXPORT_FORMATS).toHaveLength(11);
     expect(CHART_TYPES).toHaveLength(10);
     expect(MAP_REFERENCES).toEqual([-3, -6, -9, -12]);
+    preferencesStore.update({ exportFormats: [] });
     preferencesStore.toggleFormat('csv');
     preferencesStore.toggleFormat('stl');
     preferencesStore.update({ outputName: ' horn / alpha ', counter: 2_000_000 });
     expect(preferencesStore.getSnapshot().exportFormats).toEqual(['csv', 'stl']);
     expect(exportBaseName(preferencesStore.getSnapshot())).toBe('horn_alpha_999999');
     expect(JSON.parse(localStorage.getItem('waveguide-v2-g3-preferences') ?? '{}').version).toBe(STORAGE_VERSION);
+  });
+  it('uses useful manual defaults without opting into automatic file writing', () => {
+    expect(loadPreferences(null)).toMatchObject({
+      exportFormats: ['csv', 'png'],
+      autoExportFormats: [],
+      autoExportOnComplete: false,
+    });
+  });
+  it('copies a pre-split selection to both lists when auto-export was enabled', () => {
+    const stored = JSON.stringify({ version: 5, preferences: {
+      exportFormats: ['csv', 'json'], autoExportOnComplete: true,
+    } });
+    expect(loadPreferences(stored)).toMatchObject({
+      exportFormats: ['csv', 'json'],
+      autoExportFormats: ['csv', 'json'],
+    });
+  });
+  it('keeps a pre-split selection manual-only when auto-export was disabled', () => {
+    const stored = JSON.stringify({ version: 5, preferences: {
+      exportFormats: ['json'], autoExportOnComplete: false,
+    } });
+    expect(loadPreferences(stored)).toMatchObject({
+      exportFormats: ['json'],
+      autoExportFormats: [],
+    });
+  });
+  it('preserves an explicitly empty pre-split selection instead of applying the new default', () => {
+    const stored = JSON.stringify({ version: 5, preferences: {
+      exportFormats: [], autoExportOnComplete: true,
+    } });
+    expect(loadPreferences(stored)).toMatchObject({ exportFormats: [], autoExportFormats: [] });
+  });
+  it('applies the new manual default only when the pre-split key was absent', () => {
+    const stored = JSON.stringify({ version: 5, preferences: { autoExportOnComplete: false } });
+    expect(loadPreferences(stored)).toMatchObject({ exportFormats: ['csv', 'png'], autoExportFormats: [] });
+  });
+  it('makes the split-format migration idempotent after the v6 rewrite', () => {
+    const v5 = JSON.stringify({ version: 5, preferences: {
+      exportFormats: ['csv', 'json'], autoExportOnComplete: true,
+    } });
+    const first = readPreferences(v5);
+    const second = readPreferences(JSON.stringify({ version: STORAGE_VERSION, preferences: first.value }));
+    expect(first.migrated).toBe(true);
+    expect(second.migrated).toBe(false);
+    expect(second.value).toEqual(first.value);
+  });
+  it('falls back safely for corrupt stored data', () => {
+    expect(() => loadPreferences('{not json')).not.toThrow();
+    expect(loadPreferences('{not json')).toMatchObject({ exportFormats: ['csv', 'png'], autoExportFormats: [] });
+    expect(() => loadPreferences(JSON.stringify({ version: STORAGE_VERSION, preferences: null }))).not.toThrow();
   });
   it('builds a friendly versioned job name with an optional local-date prefix', () => {
     const now = new Date(2026, 7, 5, 12, 0, 0);
@@ -113,6 +164,8 @@ describe('client preferences', () => {
     const second = readPreferences(rewritten);
     expect(second.migrated).toBe(false);
     expect(second.value.chartTypes).toEqual(first.value.chartTypes);
+    expect(second.value.exportFormats).toEqual(first.value.exportFormats);
+    expect(second.value.autoExportFormats).toEqual(first.value.autoExportFormats);
   });
   it('filters by minimum rating and applies each persisted sort', () => {
     const jobs = [job('beta', 2, '2026-01-01T00:00:00Z'), job('alpha', 5, '2026-01-02T00:00:00Z')];
