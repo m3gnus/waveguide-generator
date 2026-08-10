@@ -1,8 +1,60 @@
-node_modules/
-.venv/
-__pycache__/
-*.pyc
-.pytest_cache/
+# Operating-system and editor state
 .DS_Store
-spike/results/*.tmp
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Local agent and design-tool state
+.agent/
+.agents/
+.claude/
+.codex/
+.opencode/
+.impeccable/
+
+# Local environment and secrets (keep documented examples)
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Python environments, caches, tests, and packaging
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+*.egg-info/
+build/
+dist/
+
+# Node dependencies, caches, tests, and builds
+node_modules/
 frontend/dist/
+.vite/
+*.tsbuildinfo
+.eslintcache
+coverage/
+playwright-report/
+test-results/
+
+# Machine-local application and run data
+/.waveguide/
+/output/
+/runs/
+*.log
+*.sqlite
+*.sqlite3
+*.db
+
+# Disposable spike output; curated JSON/Markdown results remain tracked.
+spike/results/*.tmp
