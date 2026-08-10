@@ -1,13 +1,15 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { JobItem } from '../api/jobsSocket';
+import type { JobItem, JobsSnapshot } from '../api/jobsSocket';
 import { jobsSocket } from '../api/jobsSocket';
+import { compareSelection } from '../api/results';
 import { preferencesStore } from '../prefs/preferences';
 import { hydrateJobDesign } from './jobDesign';
 import { designForFamily, serializeDesign } from '../stores/design';
 import { useRunExportStore } from '../stores/runExports';
 import { RunExportControl } from './RunExportControl';
+import { JobsPanel } from '../shell/JobsPanel';
 
 const mocks = vi.hoisted(() => ({
   fetchJobResults: vi.fn(),
@@ -65,6 +67,15 @@ function directivityResult() {
   };
 }
 
+function publishJobs(jobs: JobItem[]): void {
+  const manager = jobsSocket as unknown as {
+    snapshot: JobsSnapshot;
+    listeners: Set<() => void>;
+  };
+  manager.snapshot = { connection: 'connected', epoch: 1, cursor: 1, jobs, error: null };
+  manager.listeners.forEach((listener) => listener());
+}
+
 async function settle() {
   for (let index = 0; index < 8; index += 1) await Promise.resolve();
 }
@@ -84,6 +95,8 @@ describe('RunExportControl', () => {
   beforeEach(() => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     preferencesStore.resetForTests();
+    compareSelection.clear();
+    publishJobs([]);
     useRunExportStore.getState().resetForTests();
     mocks.fetchJobResults.mockResolvedValue({ frequencies: [1000], spl_on_axis: { spl: [90] } });
     mocks.runExportFormat.mockResolvedValue(['stored_horn_v07_1.csv']);
@@ -98,6 +111,8 @@ describe('RunExportControl', () => {
   afterEach(() => {
     act(() => root.unmount());
     host.remove();
+    compareSelection.clear();
+    publishJobs([]);
     document.querySelectorAll('.action-menu-popover, .design-menu-status').forEach((element) => element.remove());
     useRunExportStore.getState().resetForTests();
     vi.useRealTimers();
@@ -126,6 +141,30 @@ describe('RunExportControl', () => {
     expect(document.querySelector('[role="menu"]')).not.toBeNull();
     expect(mocks.fetchJobResults).not.toHaveBeenCalled();
     expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it('shows export immediately on every exportable collapsed run and keeps it separate from selection', () => {
+    preferencesStore.update({ exportFormats: [] });
+    const exportableOne = completeJob({ id: 'exportable-one', label: 'exportable_one' });
+    const exportableTwo = completeJob({ id: 'exportable-two', label: 'exportable_two' });
+    const running = completeJob({ id: 'running-one', label: 'running_one', status: 'running' });
+    const failed = completeJob({ id: 'failed-one', label: 'failed_one', status: 'error' });
+    publishJobs([exportableOne, exportableTwo, running, failed]);
+    const selectSpy = vi.spyOn(compareSelection, 'setPrimary');
+
+    act(() => { root.render(<JobsPanel/>); });
+
+    const collapsed = [...host.querySelectorAll<HTMLElement>('.job-card.collapsed')];
+    expect(collapsed).toHaveLength(2);
+    expect(collapsed.every((card) => card.querySelector('.run-export-control.compact'))).toBe(true);
+    expect(host.querySelectorAll('.run-export-control')).toHaveLength(2);
+
+    const secondCard = collapsed.find((card) => card.textContent?.includes('exportable_two'))!;
+    act(() => { secondCard.querySelector<HTMLButtonElement>('.action-menu-primary')!.click(); });
+
+    expect(selectSpy).not.toHaveBeenCalled();
+    expect(compareSelection.getSnapshot().primary).toBeNull();
+    expect(document.querySelector('[role="menu"]')).not.toBeNull();
   });
 
   it('fetches results once for a result item and exports with the job design snapshot', async () => {
