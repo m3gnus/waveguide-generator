@@ -106,7 +106,7 @@ describe('FRD builders', () => {
     };
 
     const text = buildOnAxisFrd(decimalFixture, preferences());
-    expect(text).toContain('100.500\t90.250\t-12.750');
+    expect(text).toContain('100.500000\t90.250\t-12.7500');
     expect(text).not.toContain('100,500');
     expect(text).not.toMatch(/\d[eE][+-]?\d/);
     expect(localeSpy).not.toHaveBeenCalled();
@@ -137,10 +137,10 @@ describe('FRD builders', () => {
     };
 
     expect(dataRows(buildOnAxisFrd(incomplete, preferences()))).toEqual([
-      ['100.000', '90.000', '-10.000'],
+      ['100.000000', '90.000', '-10.0000'],
     ]);
     expect(dataRows(buildPolarFrdSet(incomplete, preferences())[0].text)).toEqual([
-      ['100.000', '0.000'],
+      ['100.000000', '0.000'],
     ]);
   });
 });
