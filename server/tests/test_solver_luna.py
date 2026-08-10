@@ -16,6 +16,7 @@ import pytest
 from server.design.schema import DesignConfig
 from server.jobs.models import SolveRequest
 from server.solver import bempp, circsym, metal
+from server.solver.acoustics import solver_sound_speed_m_per_s
 from server.solver.beam_shape import beam_shape_summary
 from server.solver.context import SolverContext
 from server.solver.directivity_index import calculate_di_from_polar_patterns
@@ -25,6 +26,9 @@ from server.solver.result_mapping import (
     directivity,
     spl_on_axis,
 )
+
+
+SOUND_SPEED_M_PER_S = solver_sound_speed_m_per_s("hornlab_metal_bem")
 
 
 def _context(*, solver_mode: str = "full_3d", sim_type: int = 2) -> SolverContext:
@@ -240,6 +244,7 @@ def test_result_arrays_align_to_frequency_axis_with_nulls_and_failures() -> None
         ),
         start_time=0.0,
         metadata={},
+        sound_speed_m_per_s=SOUND_SPEED_M_PER_S,
     )
     assert len(response["spl_on_axis"]["spl"]) == 3
     assert response["spl_on_axis"]["spl"][-1] is None
@@ -269,7 +274,12 @@ def test_malformed_spherical_grid_is_not_published(malformation: str) -> None:
     config = _config()
     config.observation.sphere_grid = (2, 3)
     response = build_solver_response(
-        result=result, config=config, context=context, start_time=0.0, metadata={}
+        result=result,
+        config=config,
+        context=context,
+        start_time=0.0,
+        metadata={},
+        sound_speed_m_per_s=SOUND_SPEED_M_PER_S,
     )
     assert "balloon" not in response
     assert response["metadata"]["balloon_sampling"]["status"] == "missing_result"

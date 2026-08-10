@@ -19,6 +19,7 @@ from typing import Any
 from server.jobs.models import SolveRequest
 from server.mesh.builder import _solver_mesher_config, build_solver_mesh
 
+from .acoustics import solver_sound_speed_m_per_s
 from .base import ArtifactCallback, CancelCallback, EngineRunResult, StageCallback
 from .context import SolverContext
 from .formulation import DEFAULT_BEM_FORMULATION, DEFAULT_COMPLEX_K_SHIFT
@@ -358,6 +359,7 @@ def solve_metal_from_msh_text(
         context=context,
         start_time=started,
         metadata=metadata,
+        sound_speed_m_per_s=solver_sound_speed_m_per_s("hornlab_metal_bem"),
     )
 
 

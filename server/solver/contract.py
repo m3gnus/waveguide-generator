@@ -72,6 +72,7 @@ def build_directivity_metadata(polar_config: Any, observation: Any) -> dict[str,
         "observation_origin": origin,
         "requested_distance_m": info.get("requested_distance_m"),
         "effective_distance_m": info.get("effective_distance_m"),
+        "sound_speed_m_per_s": info.get("sound_speed_m_per_s"),
     }
 
 

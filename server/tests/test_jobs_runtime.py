@@ -536,8 +536,11 @@ def test_dryrun_results_are_deterministic_and_plausibly_shaped(
         assert len(first["spl_on_axis"]["spl"]) == 7
         assert len(first["directivity"]["horizontal"]) == 7
         assert len(first["directivity"]["vertical"][0]) == 37
+        assert first["directivity_phase"] == {}
         assert len(first["impedance"]["real"]) == 7
         assert first["metadata"]["synthetic"] is True
+        assert first["metadata"]["directivity"]["effective_distance_m"] == 2.0
+        assert first["metadata"]["directivity"]["sound_speed_m_per_s"] == 343.0
         await runtime.shutdown()
 
     asyncio.run(scenario())
