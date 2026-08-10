@@ -9,12 +9,14 @@ from typing import Any
 from fastapi import APIRouter, Body, FastAPI, HTTPException
 from pydantic import ValidationError
 
+from server.cadlink.identity import SaveIdentity, classify_open, design_hash
+from server.cadlink.store import CadLinkStore
 from server.design.schema import DesignConfig
 from server.design.textcfg import ParsedDesign, TextConfigError, parse, serialize
 
 
-router = APIRouter(prefix="/api/design", tags=["design-io"])
 _SAFE_STEM = re.compile(r"[^A-Za-z0-9._-]+")
+_DIRECT_STORE = CadLinkStore(":memory:")
 
 
 def _suggested_filename(value: object = None) -> str:
@@ -52,42 +54,136 @@ def _parse_text(text: str) -> ParsedDesign:
         raise HTTPException(status_code=422, detail=_parse_detail(exc)) from exc
 
 
-@router.post("/save")
-async def save_design(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
-    """Serialize a typed design to v1-readable text with a canonical .cfg name."""
-
-    design_payload: object = payload.get("design", payload)
-    filename = payload.get("filename") if "design" in payload else None
-    try:
-        design = DesignConfig.model_validate(design_payload)
-    except ValidationError as exc:
-        raise HTTPException(status_code=422, detail=exc.errors(include_url=False)) from exc
+def _open_cadlink(parsed: ParsedDesign, store: CadLinkStore) -> dict[str, Any]:
+    computed_hash = design_hash(parsed.design)
+    head = store.get_design(parsed.cadlink.design_id) if parsed.cadlink else None
+    classification = classify_open(parsed.cadlink, computed_hash, head)
+    candidate = store.find_design_by_hash(computed_hash) if parsed.cadlink is None else None
+    identity = parsed.cadlink.api_dict() if parsed.cadlink else None
+    if identity is not None:
+        identity["baseEditVersion"] = parsed.cadlink.edit_version
     return {
-        "text": serialize(design),
-        "suggestedFilename": _suggested_filename(filename),
+        "identity": identity,
+        "classification": classification,
+        "adoptionCandidate": (
+            {
+                "designId": candidate["design_id"],
+                "lineageId": candidate["lineage_id"],
+                "baseEditVersion": candidate["edit_version"],
+                "filename": candidate["filename"],
+            }
+            if candidate is not None
+            else None
+        ),
     }
 
 
-@router.post("/open")
-async def open_design(text: str = Body(..., media_type="text/plain")) -> dict[str, Any]:
-    """Parse and migrate .cfg/.txt/legacy .mwg content into API JSON."""
+async def save_design(
+    payload: dict[str, Any], *, store: CadLinkStore | None = None
+) -> dict[str, Any]:
+    """Serialize and atomically commit a typed design identity."""
+
+    registry = store or _DIRECT_STORE
+    design_payload: object = payload.get("design", payload)
+    filename = payload.get("filename") if "design" in payload else None
+    suggested_filename = _suggested_filename(filename)
+    try:
+        design = DesignConfig.model_validate(design_payload)
+        requested = (
+            SaveIdentity.model_validate(payload["identity"])
+            if "design" in payload and payload.get("identity") is not None
+            else None
+        )
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors(include_url=False)) from exc
+    hashed = design_hash(design)
+    try:
+        committed = registry.save(
+            requested=requested,
+            design_hash=hashed,
+            filename=suggested_filename,
+            snapshot_builder=lambda identity: serialize(design, cadlink=identity),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    identity = committed["identity"]
+    response_identity = {
+        "designId": identity.design_id,
+        "lineageId": identity.lineage_id,
+        "baseEditVersion": identity.edit_version,
+    }
+    return {
+        "text": committed["text"],
+        "suggestedFilename": suggested_filename,
+        "identity": response_identity,
+        "forked": committed["forked"],
+        "from": committed["from"],
+    }
+
+
+async def open_design(
+    text: str, *, store: CadLinkStore | None = None
+) -> dict[str, Any]:
+    """Parse and classify .cfg/.txt/legacy .mwg content without mutation."""
 
     parsed = _parse_text(text)
     return {
         "design": parsed.semantic_data(),
         **_report(parsed),
+        "cadlink": _open_cadlink(parsed, store or _DIRECT_STORE),
     }
 
 
-@router.post("/import-report")
-async def import_report(text: str = Body(..., media_type="text/plain")) -> dict[str, Any]:
+async def import_report(
+    text: str, *, store: CadLinkStore | None = None
+) -> dict[str, Any]:
     """Classify a document without mutating any client or server design state."""
 
-    return _report(_parse_text(text))
+    parsed = _parse_text(text)
+    return {
+        **_report(parsed),
+        "cadlink": _open_cadlink(parsed, store or _DIRECT_STORE),
+    }
 
 
-def mount_design_io(application: FastAPI) -> None:
-    application.include_router(router)
+def create_design_io_router(store: CadLinkStore) -> APIRouter:
+    router = APIRouter(prefix="/api/design", tags=["design-io"])
+
+    @router.post("/save")
+    async def save_endpoint(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        return await save_design(payload, store=store)
+
+    @router.post("/open")
+    async def open_endpoint(
+        text: str = Body(..., media_type="text/plain"),
+    ) -> dict[str, Any]:
+        return await open_design(text, store=store)
+
+    @router.post("/import-report")
+    async def import_report_endpoint(
+        text: str = Body(..., media_type="text/plain"),
+    ) -> dict[str, Any]:
+        return await import_report(text, store=store)
+
+    return router
 
 
-__all__ = ["mount_design_io", "router"]
+router = create_design_io_router(_DIRECT_STORE)
+
+
+def mount_design_io(application: FastAPI) -> CadLinkStore:
+    registry = CadLinkStore.for_data_dir(Path(application.state.data_dir))
+    application.state.cadlink_store = registry
+    application.include_router(create_design_io_router(registry))
+    application.router.add_event_handler("shutdown", registry.close)
+    return registry
+
+
+__all__ = [
+    "create_design_io_router",
+    "import_report",
+    "mount_design_io",
+    "open_design",
+    "router",
+    "save_design",
+]
