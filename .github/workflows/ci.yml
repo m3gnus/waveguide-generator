@@ -116,4 +116,6 @@ jobs:
           pip install --no-deps -r server/requirements-pins.txt
           pip install -r server/requirements-dev.txt
       - name: Server tests
-        run: python -m pytest server/tests scripts/tests -q
+        # Temporarily verbose: ubuntu-latest dies with SIGPIPE (exit 141) mid-suite
+        # with no test named; -v makes the killed run print its last test.
+        run: python -m pytest server/tests scripts/tests -v
