@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { downloadGeometryExport, hydrateDesignDocument, saveDesignDocument } from './designIo';
+import { downloadGeometryExport, hydrateDesignDocument, saveDesignDocument, sendDesignToCad } from './designIo';
 import { serializeDesign } from '../stores/design';
 
 describe('design hydration', () => {
@@ -102,5 +102,47 @@ describe('design save requests', () => {
 
     await saveDesignDocument(hydrateDesignDocument({ formula: 'OSSE' }), 'horn.cfg', identity, fetcher);
     expect(payload).toMatchObject({ filename: 'horn.cfg', identity });
+  });
+});
+
+describe('Send to CAD requests', () => {
+  const identity = {
+    designId: 'wgd_01K00000000000000000000000',
+    lineageId: 'wgl_01K00000000000000000000000',
+    baseEditVersion: 8,
+  };
+
+  it('selects a workspace when needed and sends identity with one idempotency key', async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const fetcher = (async (url: string, init?: RequestInit) => {
+      calls.push({ url: String(url), init });
+      if (url === '/api/workspace/path') return new Response(JSON.stringify({ selected: false, path: '/default' }));
+      if (url === '/api/workspace/select') return new Response(JSON.stringify({ selected: true, path: '/cad' }));
+      return new Response(JSON.stringify({
+        bundlePath: '/cad/wglink/horn.wglink', bundleId: 'wgb_1', exportId: 'wge_1', sequence: 4,
+        designHash: 'sha256:design', geometryHash: 'sha256:geometry', artifactSha256: 'sha256:step',
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as typeof fetch;
+
+    const result = await sendDesignToCad(
+      hydrateDesignDocument({ formula: 'OSSE' }), 12, 'horn', identity, fetcher, 'attempt-1',
+    );
+
+    expect(calls.map(({ url }) => url)).toEqual([
+      '/api/workspace/path', '/api/workspace/select', '/api/export/wglink',
+    ]);
+    expect(calls[1].init).toEqual({ method: 'POST' });
+    expect(new Headers(calls[2].init?.headers).get('Idempotency-Key')).toBe('attempt-1');
+    expect(JSON.parse(String(calls[2].init?.body))).toMatchObject({
+      designRevision: 12, baseName: 'horn', identity,
+    });
+    expect(result).toMatchObject({ sequence: 4, bundlePath: '/cad/wglink/horn.wglink' });
+  });
+
+  it('requires a saved identity before opening the workspace picker', async () => {
+    const fetcher = (() => { throw new Error('should not fetch'); }) as unknown as typeof fetch;
+    await expect(sendDesignToCad(
+      hydrateDesignDocument({ formula: 'OSSE' }), 1, 'horn', null, fetcher,
+    )).rejects.toThrow('Save the design before sending it to CAD');
   });
 });
