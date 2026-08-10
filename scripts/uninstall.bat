@@ -1,5 +1,5 @@
 @echo off
-rem Waveguide Generator v2 -- uninstaller for Windows.
+rem Waveguide Generator -- uninstaller for Windows.
 rem
 rem Public entry: installers\windows\uninstall.bat. This implementation stays
 rem in scripts so its deletion contract remains separate from the thin entry.
@@ -37,7 +37,7 @@ shift
 goto parse_args
 
 :show_usage
-echo Waveguide Generator v2 uninstaller.
+echo Waveguide Generator uninstaller.
 echo.
 echo   --data   also remove the application data directory: saved designs, job
 echo            history, meshes and logs. This cannot be undone.
@@ -58,9 +58,9 @@ if not defined REMOVE_DATA goto data_dir_done
 call :resolve_data_dir
 if defined DATA_DIR goto check_data_dir_exists
 if defined DATA_DIR_UNSAFE goto unsafe_data_dir
-echo WARNING: could not ask v2 where its data directory is -- no usable Python.
+echo WARNING: could not ask the application where its data directory is -- no usable Python.
 echo          Remove it by hand. Unless WG2_DATA_DIR overrides it, it is:
-echo            %APPDATA%\WaveguideGenerator2
+echo            %APPDATA%\WaveguideGenerator
 echo.
 goto data_dir_done
 :check_data_dir_exists
@@ -102,7 +102,7 @@ echo Done. Reinstall any time with: installers\windows\install-and-update.bat
 exit /b 0
 
 :nothing_to_remove
-echo Nothing to remove: Waveguide Generator v2 is not installed in "%WG_ROOT%".
+echo Nothing to remove: Waveguide Generator is not installed in "%WG_ROOT%".
 exit /b 0
 
 :aborted
@@ -124,7 +124,7 @@ set "REMOVE_FAILED=1"
 exit /b 0
 
 :resolve_data_dir
-rem Ask v2 itself rather than restating the rule here. The answer depends on the
+rem Ask the application itself rather than restating the rule here. The answer depends on the
 rem platform and on WG2_DATA_DIR, and a second copy of that logic would drift
 rem from server\platform\paths.py the first time either moved.
 rem

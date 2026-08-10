@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Start the local Waveguide Generator v2 application server."""
+"""Start the local Waveguide Generator application server."""
 
 from __future__ import annotations
 
@@ -33,7 +33,11 @@ from server.platform.instance import (  # noqa: E402
     reserve_port,
 )
 from server.platform.logging_setup import flush_logs, setup_logging  # noqa: E402
-from server.platform.paths import ensure_data_layout  # noqa: E402
+from server.platform.paths import (  # noqa: E402
+    ensure_data_layout,
+    log_data_dir_migration,
+    migrate_legacy_data_dir,
+)
 from server.platform.signal_rearm import (  # noqa: E402
     register_signal_rearm,
     unregister_signal_rearm,
@@ -72,12 +76,12 @@ def _open_browser_when_ready(port: int, stop: threading.Event) -> None:
         try:
             with socket.create_connection((HOST, port), timeout=0.25):
                 webbrowser.open(url)
-                logging.getLogger("wg2.launch").info("Opened browser at %s", url)
+                logging.getLogger("wg.launch").info("Opened browser at %s", url)
                 return
         except OSError:
             stop.wait(0.1)
     if not stop.is_set():
-        logging.getLogger("wg2.launch").warning(
+        logging.getLogger("wg.launch").warning(
             "The server did not become ready within 30 seconds, so the browser was not "
             "opened. Check the errors above and %s.",
             url,
@@ -97,7 +101,7 @@ def _watch_statusapp(
         parent_gone = parent_pid is not None and not pid_is_running(parent_pid)
         if requested or parent_gone:
             reason = "status window requested quit" if requested else "status window exited"
-            logging.getLogger("wg2.launch").info("Stopping because the %s", reason)
+            logging.getLogger("wg.launch").info("Stopping because the %s", reason)
             server.should_exit = True
             return
 
@@ -121,12 +125,12 @@ def _shutdown_signals() -> tuple[int, ...]:
 
 @contextmanager
 def _capture_shutdown_signals(server: uvicorn.Server):
-    """Install WG2's handlers after Uvicorn has created its event loop.
+    """Install WG's handlers after Uvicorn has created its event loop.
 
     Uvicorn 0.49 enters ``Server.capture_signals`` inside the loop runner and
     re-raises every captured signal after restoring the prior handler. On
     uvloop, SIGTERM's prior handler is the platform default by then, so the
-    re-raise terminates the process before WG2's outer ``finally`` can release
+    re-raise terminates the process before WG's outer ``finally`` can release
     its lock and stop logging. Owning the capture context keeps graceful exit
     semantics and lets ``main`` finish all application cleanup.
     """
@@ -134,7 +138,7 @@ def _capture_shutdown_signals(server: uvicorn.Server):
     previous: dict[int, object] = {}
 
     def request_shutdown(signum: int, _frame: object) -> None:
-        logging.getLogger("wg2.launch").info(
+        logging.getLogger("wg.launch").info(
             "Received %s; finishing active requests and shutting down",
             signal.Signals(signum).name,
         )
@@ -167,11 +171,13 @@ def main(argv: list[str] | None = None) -> int:
     lock: InstanceLock | None = None
     listener: socket.socket | None = None
     try:
-        paths = ensure_data_layout()
+        migration = migrate_legacy_data_dir(emit_log=False)
+        paths = ensure_data_layout(migrate_legacy=False)
         setup_logging(paths)
+        log_data_dir_migration(migration)
         preferred_port = requested_port(args.port)
     except (OSError, RuntimeError, ValueError) as exc:
-        print(f"Waveguide Generator v2 could not start: {exc}", file=sys.stderr)
+        print(f"Waveguide Generator could not start: {exc}", file=sys.stderr)
         # setup_logging runs before requested_port so this path can already own
         # a QueueListener (for example, when WG2_PORT is invalid). Treat early
         # configuration failures like every later exit and drain it explicitly.
@@ -203,7 +209,7 @@ def main(argv: list[str] | None = None) -> int:
         flush_logs()
         return 2
     except InstanceLockError as exc:
-        print(f"Waveguide Generator v2 could not start: {exc}", file=sys.stderr)
+        print(f"Waveguide Generator could not start: {exc}", file=sys.stderr)
         flush_logs()
         return 1
 
@@ -213,7 +219,7 @@ def main(argv: list[str] | None = None) -> int:
         listener, port = reserve_port(preferred_port, host=HOST)
         lock.update_port(port)
     except (OSError, InstanceLockError) as exc:
-        print(f"Waveguide Generator v2 could not start: {exc}", file=sys.stderr)
+        print(f"Waveguide Generator could not start: {exc}", file=sys.stderr)
         lock.release()
         flush_logs()
         return 1
@@ -285,7 +291,7 @@ def main(argv: list[str] | None = None) -> int:
                 daemon=True,
             ).start()
 
-        logging.getLogger("wg2.launch").info(
+        logging.getLogger("wg.launch").info(
             "Starting Waveguide Generator v%s at http://%s:%d/ (pid %d)",
             VERSION,
             HOST,
@@ -295,7 +301,7 @@ def main(argv: list[str] | None = None) -> int:
         server.run(sockets=[listener])
         return 0
     except Exception:
-        logging.getLogger("wg2.launch").exception(
+        logging.getLogger("wg.launch").exception(
             "The server stopped unexpectedly. Review the traceback and logs/server.log, "
             "then start again."
         )
@@ -308,7 +314,7 @@ def main(argv: list[str] | None = None) -> int:
                 listener.close()
             if lock is not None:
                 lock.release()
-            logging.getLogger("wg2.launch").info("Shutdown complete; instance lock released")
+            logging.getLogger("wg.launch").info("Shutdown complete; instance lock released")
             flush_logs()
         finally:
             shutdown_complete.set()

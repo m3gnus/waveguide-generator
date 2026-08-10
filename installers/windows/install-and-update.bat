@@ -1,5 +1,5 @@
 @echo off
-rem Waveguide Generator v2 -- the Windows entry point. Double-click this file.
+rem Waveguide Generator -- the Windows entry point. Double-click this file.
 rem
 rem The implementation lives in install.bat, which is NOT executed in place.
 rem It performs `git pull`, which can rewrite install.bat while cmd.exe is still
@@ -43,7 +43,8 @@ rem in a batch file rather than to nothing, so building the good path first and
 rem correcting it afterwards would depend on the order of two lines to avoid
 rem creating a directory literally named "%APPDATA%".
 set "WG_LOG_DIR=%TEMP%"
-if defined APPDATA set "WG_LOG_DIR=%APPDATA%\WaveguideGenerator2\logs"
+if defined APPDATA set "WG_LOG_DIR=%APPDATA%\WaveguideGenerator\logs"
+if defined APPDATA if exist "%APPDATA%\WaveguideGenerator2\" if not exist "%APPDATA%\WaveguideGenerator\" set "WG_LOG_DIR=%APPDATA%\WaveguideGenerator2\logs"
 if not exist "%WG_LOG_DIR%" mkdir "%WG_LOG_DIR%" >nul 2>&1
 if not exist "%WG_LOG_DIR%" set "WG_LOG_DIR=%TEMP%"
 set "WG_LOG=%WG_LOG_DIR%\install.log"
@@ -72,15 +73,15 @@ rem install.bat was told --no-launch so that the server does not run inside the
 rem transcript pipeline below, where its output would be teed into a growing
 rem log file for as long as it stays up. Start it here instead, unpiped.
 echo.
-echo Starting Waveguide Generator v2...
-call "%WG_ROOT%\launchers\windows\launch-wg2.bat"
+echo Starting Waveguide Generator...
+call "%WG_ROOT%\launchers\windows\launch-wg.bat"
 set "RESULT=%ERRORLEVEL%"
 if "%RESULT%"=="0" exit /b 0
 rem Exit 2 is the documented "another instance already owns the lock" answer,
 rem not a failure: serve.py has already opened the browser on the running one.
 if "%RESULT%"=="2" exit /b 2
 rem Anything else goes through :finish so the window stays open long enough to
-rem read. launchers\windows\launch-wg2.bat's own pause tests whether cmd's command line names
+rem read. launchers\windows\launch-wg.bat's own pause tests whether cmd's command line names
 rem *itself*, which it does not when it is reached through this script.
 goto finish
 

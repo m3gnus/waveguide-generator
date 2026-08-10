@@ -62,7 +62,7 @@ def setup_logging(
     *,
     level: int = logging.INFO,
 ) -> logging.Logger:
-    """Configure the process root logger and return the WG2 logger."""
+    """Configure the process root logger and return the WG logger."""
 
     paths = data if isinstance(data, DataPaths) else ensure_data_layout(data)
     log_path = paths.logs / LOG_FILENAME
@@ -114,7 +114,7 @@ def setup_logging(
     queue_handler._wg2_handler = True  # type: ignore[attr-defined]
     root.addHandler(queue_handler)
 
-    logger = logging.getLogger("wg2")
+    logger = logging.getLogger("wg")
     logger.info("Logging to %s", log_path)
     return logger
 

@@ -742,7 +742,7 @@ def _serialize_canonical(
     cadlink: CadLink | None = None,
 ) -> str:
     config = design.root
-    lines = ["; Parameter config", "; Waveguide Generator v2 design-format: 2"]
+    lines = ["; Parameter config", "; Waveguide Generator design-format: 2"]
     for comment in comments or []:
         if comment not in lines and "Generated:" not in comment:
             lines.append(comment)

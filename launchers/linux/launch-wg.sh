@@ -13,7 +13,7 @@ fail() {
 
 if [[ ! -f "launch/serve.py" ]] || [[ ! -d "server" ]] || \
    [[ ! -f "launchers/statusapp/__main__.py" ]]; then
-  fail "launch-wg2.sh must remain in launchers/linux in the Waveguide Generator v2 checkout."
+  fail "launch-wg.sh must remain in launchers/linux in the Waveguide Generator checkout."
 fi
 
 PYTHON=""
@@ -36,7 +36,7 @@ else
     done
     [[ -n "$BOOTSTRAP_PYTHON" ]] || \
       fail "CPython 3.13 is required. Install it, then run 'python3.13 scripts/bootstrap.py'."
-    printf '%s\n' "Preparing the Waveguide Generator v2 Python environment..."
+    printf '%s\n' "Preparing the Waveguide Generator Python environment..."
     "$BOOTSTRAP_PYTHON" scripts/bootstrap.py || \
       fail "The v2 Python environment could not be prepared. Review the installation errors above."
   fi

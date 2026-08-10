@@ -1,4 +1,4 @@
-# Fully resolved CPython 3.13 dependency constraints for Waveguide Generator v2.
+# Fully resolved CPython 3.13 dependency constraints for Waveguide Generator.
 # Direct requirements remain documented in requirements-runtime.txt and
 # requirements-dev.txt; Hornlab-owned Git revisions remain in requirements-pins.txt.
 annotated-doc==0.0.5

@@ -32,7 +32,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SHELL_INSTALLER = ROOT / "scripts" / "install.sh"
 BATCH_INSTALLER = ROOT / "scripts" / "install.bat"
 BATCH_ENTRY_POINT = ROOT / "installers" / "windows" / "install-and-update.bat"
-SHELL_ENTRY_POINT = ROOT / "installers" / "macos" / "install-wg2.command"
+SHELL_ENTRY_POINT = ROOT / "installers" / "macos" / "install-wg.command"
 SHELL_UNINSTALLER = ROOT / "scripts" / "uninstall.sh"
 BATCH_UNINSTALLER = ROOT / "scripts" / "uninstall.bat"
 PUBLIC_SHELL_UNINSTALLERS = (
@@ -41,9 +41,9 @@ PUBLIC_SHELL_UNINSTALLERS = (
 )
 PUBLIC_BATCH_UNINSTALLER = ROOT / "installers" / "windows" / "uninstall.bat"
 LINUX_INSTALL_ENTRY = ROOT / "installers" / "linux" / "install.sh"
-LAUNCHER_COMMAND = ROOT / "launchers" / "macos" / "launch-wg2.command"
-LAUNCHER_BATCH = ROOT / "launchers" / "windows" / "launch-wg2.bat"
-LAUNCHER_LINUX = ROOT / "launchers" / "linux" / "launch-wg2.sh"
+LAUNCHER_COMMAND = ROOT / "launchers" / "macos" / "launch-wg.command"
+LAUNCHER_BATCH = ROOT / "launchers" / "windows" / "launch-wg.bat"
+LAUNCHER_LINUX = ROOT / "launchers" / "linux" / "launch-wg.sh"
 MACOS_APP_EXECUTABLE = (
     ROOT
     / "launchers"
@@ -181,9 +181,9 @@ def test_every_installer_file_exists_and_is_executable_where_that_matters():
 
 def test_reorganized_entries_have_no_root_or_scripts_duplicates():
     for old_path in (
-        "install-wg2.command",
-        "launch-wg2.command",
-        "launch-wg2.bat",
+        "install-wg.command",
+        "launch-wg.command",
+        "launch-wg.bat",
         "scripts/install-and-update.bat",
     ):
         assert not (ROOT / old_path).exists(), f"obsolete public entry remains: {old_path}"
@@ -503,14 +503,14 @@ def test_the_entry_points_keep_the_installers_exit_status_through_the_transcript
     # The shell counterpart has the same hazard with `tee`: `$?` after a pipeline
     # is tee's status, not the installer's.
     source = read(SHELL_ENTRY_POINT)
-    assert "PIPESTATUS" in source, "install-wg2.command must read PIPESTATUS[0], not $?"
+    assert "PIPESTATUS" in source, "install-wg.command must read PIPESTATUS[0], not $?"
     assert "tee" in source
 
 
 def test_the_entry_points_start_the_launcher_rather_than_reimplementing_it():
-    assert "launchers/macos/launch-wg2.command" in read(SHELL_ENTRY_POINT)
+    assert "launchers/macos/launch-wg.command" in read(SHELL_ENTRY_POINT)
     assert re.search(
-        r'call "%WG_ROOT%\\launchers\\windows\\launch-wg2\.bat"',
+        r'call "%WG_ROOT%\\launchers\\windows\\launch-wg\.bat"',
         read(BATCH_ENTRY_POINT),
     ), (
         "without `call`, control transfers to the launcher permanently and the "
@@ -812,8 +812,8 @@ def test_the_uninstallers_never_remove_the_checkout_or_v1():
 
 
 def test_the_installers_finish_by_starting_the_launcher():
-    assert "launch-wg2.command" in read(SHELL_INSTALLER)
-    assert "launch-wg2.bat" in read(BATCH_INSTALLER)
+    assert "launch-wg.command" in read(SHELL_INSTALLER)
+    assert "launch-wg.bat" in read(BATCH_INSTALLER)
     # Port selection and the browser open belong to the launcher and serve.py;
     # an installer that reimplemented either would be a second answer to drift.
     for path in BOTH_INSTALLERS:
@@ -825,7 +825,7 @@ def test_the_launchers_point_at_the_installer_now_that_one_exists():
     # which is exactly the unverified extraction the installer refuses to do.
     source = read(ROOT / "launchers" / "statusapp" / "controller.py")
     for installer in (
-        "installers/macos/install-wg2.command",
+        "installers/macos/install-wg.command",
         r"installers\windows\install-and-update.bat",
         "installers/linux/install.sh",
     ):

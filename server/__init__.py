@@ -1,1 +1,1 @@
-"""Waveguide Generator v2 server package."""
+"""Waveguide Generator server package."""

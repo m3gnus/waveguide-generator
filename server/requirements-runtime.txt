@@ -1,4 +1,4 @@
-# Waveguide Generator v2 runtime, verified with CPython 3.13.
+# Waveguide Generator runtime, verified with CPython 3.13.
 # Hornlab-owned modules are locked separately in requirements-pins.txt.
 fastapi==0.136.3
 gmsh==4.15.2

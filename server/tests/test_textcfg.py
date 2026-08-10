@@ -99,7 +99,7 @@ def test_new_design_uses_v1_header_v2_discriminator_and_writer_order() -> None:
         )
     )
     text = serialize(design)
-    assert text.startswith("; Parameter config\n; Waveguide Generator v2 design-format: 2\n")
+    assert text.startswith("; Parameter config\n; Waveguide Generator design-format: 2\n")
     assert text.index("Coverage.Angle") < text.index("Length") < text.index("Term.n")
     assert parse(text).design.formula == "OSSE"
 

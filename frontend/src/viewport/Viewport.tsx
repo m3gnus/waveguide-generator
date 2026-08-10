@@ -232,7 +232,7 @@ export function Viewport() {
         aria-label={`Rebuild the preview. ${staleReason(preferences.liveUpdate, preview.connection, preview.error)}`}
         onClick={refresh}
       ><Icon name="reset"/>{preferences.liveUpdate ? 'Refresh' : 'Resume'}</button>}
-      <span>server <b>{selected?.header.evalMs?.toFixed(1) ?? '—'}</b> ms · request→paint <b>{formatClientLatency(clientFrameMs)}</b> ms</span>
+      <span>geometry <b>{selected?.header.evalMs?.toFixed(1) ?? '—'}</b> ms · on screen <b>{formatClientLatency(clientFrameMs)}</b></span>
     </div>
 
     {!activeScene && <div className="viewport-empty" role="status" aria-live="polite">

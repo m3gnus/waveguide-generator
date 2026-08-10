@@ -77,7 +77,7 @@ class DryRunEngine:
             "$Nodes\n3\n"
             f"1 0 0 0\n2 {scale:.9f} 0 0\n3 0 {scale:.9f} 0\n"
             "$EndNodes\n$Elements\n1\n1 2 2 1 1 1 2 3\n$EndElements\n"
-            f"// WG2 dryrun design sha256={digest}\n"
+            f"// Waveguide Generator dryrun design sha256={digest}\n"
         )
         stats = {
             "vertex_count": 3,

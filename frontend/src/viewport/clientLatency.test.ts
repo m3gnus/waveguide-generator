@@ -7,7 +7,7 @@ describe('client latency', () => {
     expect(formatClientLatency(12.34)).toBe('12.3');
     expect(formatClientLatency(-4)).toBe('0.0');
     expect(formatClientLatency(999)).toBe('999.0');
-    expect(formatClientLatency(1_000)).toBe('>999');
+    expect(formatClientLatency(1_000)).toBe('1.0 s');
   });
 
   it('ignores request timestamps from the socket epoch before a reconnect', () => {

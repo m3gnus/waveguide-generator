@@ -36,6 +36,38 @@ function labelFor(id: string, jobs: ReturnType<typeof jobsSocket.getSnapshot>['j
 }
 
 /**
+ * Truncate from the middle, because run names differ at the end.
+ *
+ * Names in this product are `<design>_v<NN>` and are generated from a shared
+ * base, so end-truncation removes the only part that identifies the run:
+ * comparing `260308tritonia-q_v02` against `_v03` rendered both chips as
+ * `260308trit…` and both chart legend entries as `260…`. The version suffix is
+ * the identity; it is the last thing that may be dropped, not the first.
+ */
+export function middleEllipsis(value: string, max = 20): string {
+  if (value.length <= max) return value;
+  const keepEnd = Math.max(5, Math.floor((max - 1) / 2));
+  const keepStart = Math.max(1, max - 1 - keepEnd);
+  return `${value.slice(0, keepStart)}…${value.slice(-keepEnd)}`;
+}
+
+/**
+ * Chart types that can carry more than one run at once.
+ *
+ * A heatmap, a balloon or a summary table describes exactly one run — two
+ * superimposed directivity maps mean nothing — so those are single-run
+ * surfaces by nature rather than by omission. What matters is that the card
+ * says so while a comparison is active, instead of quietly showing the primary
+ * run and letting the user believe they are looking at both.
+ *
+ * NOTE: `directivity_index` and `impedance` are line charts that *could*
+ * overlay and currently do not. Making them do so is a product decision, not a
+ * layout one — DI already plots three planes per run, so runs × planes needs an
+ * answer about what the legend means before the series are built.
+ */
+const COMPARABLE_CHARTS = new Set<ChartType>(['frequency_response']);
+
+/**
  * How much chrome a chart can afford. A card in the six-panel dock is barely
  * 100px tall: spending 20px on a legend row and 27px on a repeated
  * "Frequency [Hz]" caption leaves single digits of actual plot. Axis titles and
@@ -105,7 +137,8 @@ export function lineOption(series: EChartsOption['series'], tokens: ChartTokens,
       ...(density === 'compact' ? { type: 'scroll' as const, width: '46%', pageIconSize: 9, pageIconColor: tokens.muted, pageIconInactiveColor: tokens.grid, pageTextStyle: { color: tokens.muted, fontSize: 10 } } : {}),
       top: density === 'full' ? 2 : 1,
       right: density === 'full' ? 8 : LEGEND_INSET,
-      textStyle: { color: tokens.muted, fontSize: density === 'compact' ? 10 : 11, ...(density === 'compact' ? { width: 32, overflow: 'truncate' as const } : {}) },
+      textStyle: { color: tokens.muted, fontSize: density === 'compact' ? 10 : 11 },
+      formatter: (name: string) => middleEllipsis(name, density === 'compact' ? 12 : 22),
       itemWidth: density === 'compact' ? 10 : 14,
       itemHeight: 2,
       itemGap: density === 'compact' ? 6 : 10,
@@ -494,6 +527,10 @@ export function useCardMetrics(target: React.RefObject<HTMLElement | null>): Car
 }
 
 function ChartCard({ index, chartType, result, named, tokens, beamShapeAction }: { index: number; chartType: ChartType; result: ResultPayload; named: NamedResult[]; tokens: ChartTokens; beamShapeAction?: ChartStubAction }) {
+  // A comparison is active but this card cannot carry it. Saying so is the
+  // whole point: silently drawing the primary run looks identical to drawing
+  // both, so the user believes they are comparing when they are not.
+  const comparisonIgnored = named.length > 1 && !COMPARABLE_CHARTS.has(chartType);
   const [expanded, setExpanded] = useState(false);
   const detail = useRef<HTMLElement>(null);
   const card = useRef<HTMLElement>(null);
@@ -535,6 +572,7 @@ function ChartCard({ index, chartType, result, named, tokens, beamShapeAction }:
           <select aria-label={`Panel ${index + 1} chart type`} value={chartType} onChange={(event) => preferencesStore.setChartType(index, event.target.value as ChartType)}>{CHART_TYPES.map(({ id, label }) => <option key={id} value={id}>{label}</option>)}</select>
         </span>
         {subtitle && density !== 'compact' && <span className="result-subtitle">{subtitle}</span>}
+        {comparisonIgnored && density !== 'compact' && <span className="result-single-run" title={`This chart shows one run at a time. Showing ${named[0]?.label ?? 'the primary run'}.`}>1 of {named.length}</span>}
         <span className="result-chrome-spacer"/>
         <button className="result-card-expand" aria-label={`Expand panel ${index + 1}`} title="Open detail view" onClick={() => setExpanded(true)}><Icon name="expand"/></button>
         <button className="result-card-close" aria-label={`Close panel ${index + 1}`} title="Close chart" onClick={() => preferencesStore.closeChart(index)}><Icon name="close"/></button>
@@ -717,7 +755,16 @@ export function ResultsPanel() {
         title={selection.following ? 'Following the latest solve — charts repaint when results land. Click to pin this result.' : 'Pinned to a chosen result. Click to follow the latest solve again.'}
         onClick={() => selection.following ? compareSelection.setPrimary(selection.primary) : compareSelection.followLatest(latest?.id ?? null)}
       ><i/>{selection.following ? 'Latest' : 'Pinned'}</button>
-      {ids.map((id, index) => <button key={id} className={`result-chip ${index ? 'muted' : ''}`} onClick={() => compareSelection.remove(id)} title={`${labelFor(id, jobs)} — remove from comparison`}><i/><span>{labelFor(id, jobs)}</span> ×</button>)}
+      {ids.map((id, index) => <button key={id} className={`result-chip ${index ? 'muted' : ''}`} onClick={() => compareSelection.remove(id)} title={`${labelFor(id, jobs)} — remove from comparison`}><i/><span>{middleEllipsis(labelFor(id, jobs))}</span> ×</button>)}
+      {/* How much of the dock is actually comparing. Five of the six default
+          charts describe one run by nature, so a comparison that silently
+          applies to one card looked identical to one that applied to all six.
+          Stated once here, because per-card it collides with the compact
+          legend. */}
+      {ids.length > 1 && (() => {
+        const comparing = preferences.chartTypes.filter((chart) => COMPARABLE_CHARTS.has(chart)).length;
+        return <span className="result-single-run" title={`${comparing} of ${preferences.chartTypes.length} charts overlay every selected run. The rest describe one run at a time and show ${labelFor(ids[0], jobs)}.`}>{comparing}/{preferences.chartTypes.length} compare</span>;
+      })()}
       <select className="result-compare-add" aria-label="Add comparison result" value="" onChange={(event) => { if (event.target.value) compareSelection.toggleOverlay(event.target.value); }}><option value="">+ compare</option>{available.map((job) => <option key={job.id} value={job.id}>{labelFor(job.id, jobs)}</option>)}</select>
       <span className="spacer"/>
       <label className="result-count-control" title="Number of chart panels">Charts<select aria-label="Results panel count" value={RESULT_PANEL_COUNTS.includes(preferences.chartTypes.length as never) ? preferences.chartTypes.length : ''} onChange={(event) => preferencesStore.setChartCount(Number(event.target.value))}><option value="" disabled>{preferences.chartTypes.length}</option>{RESULT_PANEL_COUNTS.map((count) => <option key={count} value={count}>{count}</option>)}</select></label>

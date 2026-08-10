@@ -10,7 +10,7 @@ V2 serialization starts with the v1 header and adds an ignored version comment:
 
 ```cfg
 ; Parameter config
-; Waveguide Generator v2 design-format: 2
+; Waveguide Generator design-format: 2
 ```
 
 ## Lexical grammar

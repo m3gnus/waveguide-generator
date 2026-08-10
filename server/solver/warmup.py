@@ -50,7 +50,7 @@ import time
 from pathlib import Path
 
 
-log = logging.getLogger("wg2.solver.warmup")
+log = logging.getLogger("wg.solver.warmup")
 
 #: A 410-triangle watertight OSSE horn with a wall, meshed over the full
 #: domain by this repository's own mesher (the design is the one in
@@ -91,7 +91,7 @@ class _QuietWarmupFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         if record.threadName != WARMUP_THREAD_NAME:
             return True
-        return record.name.startswith("wg2.")
+        return record.name.startswith("wg.")
 
 
 _quiet_filter = _QuietWarmupFilter()

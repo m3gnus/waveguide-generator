@@ -19,7 +19,7 @@ fail() {
 
 if [[ ! -f "launch/serve.py" ]] || [[ ! -d "server" ]] || \
    [[ ! -f "launchers/statusapp/__main__.py" ]]; then
-  fail "launch-wg2.command must remain in launchers/macos in the Waveguide Generator v2 checkout."
+  fail "launch-wg.command must remain in launchers/macos in the Waveguide Generator checkout."
 fi
 
 # WG2_PYTHON can explicitly select another interpreter. Otherwise the launcher
@@ -47,7 +47,7 @@ else
     if [[ -z "$BOOTSTRAP_PYTHON" ]]; then
       fail "CPython 3.13 is required. Install it, then run 'python3.13 scripts/bootstrap.py'."
     fi
-    echo "Preparing the Waveguide Generator v2 Python environment..."
+    echo "Preparing the Waveguide Generator Python environment..."
     if ! "$BOOTSTRAP_PYTHON" scripts/bootstrap.py; then
       fail "The v2 Python environment could not be prepared. Review the installation errors above."
     fi
@@ -68,7 +68,7 @@ then
   fail "The selected Python environment cannot import FastAPI and Uvicorn."
 fi
 
-echo "Starting the Waveguide Generator v2 status window..."
+echo "Starting the Waveguide Generator status window..."
 echo "Quit the status window to stop the server."
 echo
 

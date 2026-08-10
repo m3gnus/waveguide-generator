@@ -1,4 +1,4 @@
-"""Run the WG2 status window, or the original terminal server with --no-gui."""
+"""Run the WG status window, or the original terminal server with --no-gui."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ def main(argv: list[str] | None = None) -> int:
         from .view import run
     except ImportError as exc:
         print(
-            "Waveguide Generator v2 could not open its status window because tkinter "
+            "Waveguide Generator could not open its status window because tkinter "
             f"is unavailable: {exc}\nRun again with --no-gui for terminal mode.",
             file=sys.stderr,
         )

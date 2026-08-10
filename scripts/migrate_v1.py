@@ -565,7 +565,7 @@ def _validate_rollback_source(backup_dir: Path, paths) -> Path:
     saved_workspace = source / "workspace"
     if saved_workspace.is_symlink() or not saved_workspace.is_dir():
         raise MigrationError(
-            f"Refusing rollback from {source}: it is not a Waveguide Generator v2 "
+            f"Refusing rollback from {source}: it is not a Waveguide Generator "
             "migration backup (the workspace directory is missing or unsafe)."
         )
     saved_db = source / "simulations.db"

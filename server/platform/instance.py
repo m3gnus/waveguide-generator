@@ -55,7 +55,7 @@ PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 ERROR_ACCESS_DENIED = 5
 STILL_ACTIVE = 259
 
-log = logging.getLogger("wg2.instance")
+log = logging.getLogger("wg.instance")
 
 
 def lock_exclusive(descriptor: int) -> None:
@@ -103,13 +103,13 @@ class InstanceAlreadyRunning(InstanceLockError):
         self.path = path
         if info.pid > 0 and info.port > 0:
             message = (
-                f"Waveguide Generator v2 is already running (pid {info.pid}, "
+                f"Waveguide Generator is already running (pid {info.pid}, "
                 f"port {info.port}; lock {path}). Close that instance or use it at "
                 f"http://127.0.0.1:{info.port}/."
             )
         else:
             message = (
-                f"Waveguide Generator v2 is already starting or running (lock {path}); "
+                f"Waveguide Generator is already starting or running (lock {path}); "
                 "owner metadata is not available yet."
             )
         super().__init__(message)

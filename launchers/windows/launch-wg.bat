@@ -1,7 +1,7 @@
 @echo off
 rem Double-click in Explorer, or run from a command prompt, to start Waveguide
 rem Generator v2. This is the Windows counterpart of
-rem launchers\macos\launch-wg2.command. Pass --no-gui for terminal-only mode.
+rem launchers\macos\launch-wg.command. Pass --no-gui for terminal-only mode.
 rem
 rem Unlike v1's install.bat this script never pulls over itself, so it does not
 rem need install-and-update.bat's copy-to-TEMP dance: cmd.exe tracks its position
@@ -34,7 +34,7 @@ if not errorlevel 1 goto :environment_ready
 call :find_bootstrap_python
 if errorlevel 1 goto :no_python
 
-echo Preparing the Waveguide Generator v2 Python environment...
+echo Preparing the Waveguide Generator Python environment...
 "%BOOTSTRAP_PYTHON%" scripts\bootstrap.py
 if errorlevel 1 goto :bootstrap_failed
 
@@ -66,13 +66,13 @@ if errorlevel 1 goto :unusable_environment
 call :gui_mode_requested %*
 if errorlevel 1 goto :start_terminal
 call :select_pythonw
-echo Starting the Waveguide Generator v2 status window...
+echo Starting the Waveguide Generator status window...
 start "" "%PYTHONW%" -m launchers.statusapp %*
 if errorlevel 1 goto :statusapp_failed
 exit /b 0
 
 :start_terminal
-echo Starting Waveguide Generator v2 in terminal mode...
+echo Starting Waveguide Generator in terminal mode...
 echo Close this window or press Control-C to stop it.
 echo.
 "%PYTHON%" -m launchers.statusapp %*
@@ -192,7 +192,7 @@ rem ---------------------------------------------------------------------------
 
 :bad_directory
 echo.
-echo ERROR: launch-wg2.bat must remain in launchers\windows in the
+echo ERROR: launch-wg.bat must remain in launchers\windows in the
 echo        waveguide-generator v2 folder.
 echo        Current folder: %CD%
 call :pause_when_double_clicked

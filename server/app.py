@@ -1,4 +1,4 @@
-"""FastAPI assembly for the Waveguide Generator v2 shell."""
+"""FastAPI assembly for the Waveguide Generator shell."""
 
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ VERSION = str(
     )["version"]
 )
 FRONTEND_DIST = Path(__file__).resolve().parents[1] / "frontend" / "dist"
-request_log = logging.getLogger("wg2.requests")
+request_log = logging.getLogger("wg.requests")
 _local_origin = local_origin
 
 
@@ -121,12 +121,12 @@ def create_app(
 
     started = time.monotonic()
     resolved_data_dir = resolve_data_dir(data_dir)
-    application = FastAPI(title="Waveguide Generator v2", version=VERSION)
+    application = FastAPI(title="Waveguide Generator", version=VERSION)
     application.state.started = started
     application.state.data_dir = resolved_data_dir
     engine_registry = EngineRegistry(detector=detect_engines)
     application.state.engine_registry = engine_registry
-    logging.getLogger("wg2").info("Waveguide Generator v%s application initialized", VERSION)
+    logging.getLogger("wg").info("Waveguide Generator v%s application initialized", VERSION)
     # The SPA is 2.27 MB of JavaScript and 187 kB of CSS.  Even on loopback that
     # is worth compressing: it gzips to roughly a quarter of the bytes, and the
     # same middleware covers the multi-hundred-kB results payloads.  500 bytes
@@ -189,7 +189,7 @@ def create_app(
             return JSONResponse(
                 status_code=403,
                 content={
-                    "detail": "Non-local Host rejected. Open Waveguide Generator v2 "
+                    "detail": "Non-local Host rejected. Open Waveguide Generator "
                     "from the loopback URL printed by the launcher."
                 },
             )
@@ -204,7 +204,7 @@ def create_app(
             return JSONResponse(
                 status_code=403,
                 content={
-                    "detail": "Non-local Origin rejected. Open Waveguide Generator v2 "
+                    "detail": "Non-local Origin rejected. Open Waveguide Generator "
                     "from http://127.0.0.1 or http://localhost."
                 },
             )
