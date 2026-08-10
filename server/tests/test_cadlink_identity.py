@@ -123,6 +123,26 @@ def test_open_classification_matrix_and_open_is_read_only(tmp_path: Path) -> Non
     assert store.get_design(first_identity["designId"])["edit_version"] == 2  # type: ignore[index]
 
 
+def test_stale_copy_with_externally_edited_body_is_not_misclassified(tmp_path: Path) -> None:
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    design = parse(SOURCE).semantic_data()
+    first = asyncio.run(save_design({"design": design, "filename": "stale.cfg"}, store=store))
+
+    changed = parse(first["text"]).design
+    changed.root.L = Expr(value=121)  # type: ignore[union-attr]
+    asyncio.run(
+        save_design(
+            {"design": changed.model_dump(mode="json"), "identity": first["identity"]},
+            store=store,
+        )
+    )
+
+    edited_stale = first["text"].replace("Length = 120", "Length = 122")
+    opened = asyncio.run(open_design(edited_stale, store=store))
+
+    assert opened["cadlink"]["classification"] == "externally_edited"
+
+
 def test_no_block_first_save_mints_identity_at_version_one(tmp_path: Path) -> None:
     store = CadLinkStore(tmp_path / "cadlink.db")
     result = asyncio.run(save_design({"design": parse(SOURCE).semantic_data()}, store=store))
