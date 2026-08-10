@@ -72,8 +72,26 @@ OPEN — the first theta=0, phi-index sample is used as the balloon normalizatio
 | Directivity comparison | Reference directivity and reference frequencies are sent as their own pair. | `src/ui/simulation/chartRequests.js:190-213` |
 | Polar CSV export | Iterates main SPL frequencies; if a plane has fewer pattern rows, it clamps to that plane's last pattern. Invalid dB becomes an empty field. | `src/ui/simulation/exports.js:552-588` |
 | VACS export | Chooses horizontal plane if present, otherwise the first plane. It converts dB to linear magnitude; missing dB becomes zero magnitude. | `src/ui/simulation/exports.js:186-197`; `src/ui/simulation/exports.js:590-734` |
+| Frequency CSV / summary text export | v1 zips DI and impedance against the SPL row index and emits only the SPL frequency, so a differing DI or impedance grid is silently mislabelled. **V2 does not port this** — see the union-grid join below. | `src/ui/simulation/exports.js:433-441`; `src/ui/simulation/exports.js:535-541` |
 
-OPEN — v1 comparison relies on plot-library handling of independent x arrays, but polar CSV silently repeats the last available pattern. V2 must select reject, exact-key join, tolerance join, or interpolation per quantity (`src/ui/simulation/exports.js:552-588`).
+DECIDED 2026-08-10 — **exact-key union join**, for the v2 frequency CSV and summary text
+only. Rows are the sorted union of the SPL, DI, and impedance frequency grids. A cell is
+filled only where that series carries a sample at that exact frequency; otherwise it is
+empty (CSV) or `n/a` (summary text), consistent with the missing-value rule above. No
+value is interpolated, and no sample is dropped for lying outside another series' range.
+The join is exact-key, not tolerance-based: two grids that differ by floating-point noise
+produce separate rows rather than a silently merged one. Frequency is the row key, so a
+grid that repeated a frequency — which no monotonic sweep produces — would yield one row
+carrying that grid's first sample rather than two rows. When the grids agree — every
+result the solver emits today — the union is the SPL grid and the output is byte-identical
+to the pre-decision schema, so the frozen header is extended, not broken. Implemented at
+`frontend/src/results/exporters.ts` (`joinSeries`), regression-tested in
+`frontend/src/results/exporters.test.ts`.
+
+OPEN — the same choice is still unmade for **compare overlays** and **polar CSV**. v1
+comparison relies on plot-library handling of independent x arrays, and polar CSV silently
+repeats the last available pattern; each still needs reject, exact-key join, tolerance
+join, or interpolation selected per quantity (`src/ui/simulation/exports.js:552-588`).
 
 ## Missing values, failures, warnings, and partial success
 
@@ -118,7 +136,8 @@ OPEN — “reference behavior” is code-defined but not fixture-defined. Freez
 | Format | v1 result contract | Evidence |
 |---|---|---|
 | PNG/chart request | Includes phase-distance/time convention and impedance-unit metadata so renderer can reproduce presentation semantics. | `src/ui/simulation/exports.js:333-373` |
-| Main CSV | Writes aligned result-series columns and leaves non-finite values empty. | `src/ui/simulation/exports.js:424-452` |
+| Main CSV | v1 writes positionally-zipped result-series columns and leaves non-finite values empty. **v2 replaces the zip with the union-grid join above**; the header, column order, and empty-cell rule are unchanged, and extra rows appear only when a grid actually differs. | `src/ui/simulation/exports.js:424-452`; `frontend/src/results/exporters.ts` |
+| Summary text | Same v1 zip in its DETAILED DATA table; v2 applies the same union-grid join, and its `Frequency range` / `Number of points` describe the joined rows it prints. | `src/ui/simulation/exports.js:535-541`; `frontend/src/results/exporters.ts` |
 | JSON | Serializes `lastResults` as stored and adds the selected smoothing label; it does not replace raw arrays with smoothed arrays. | `src/ui/simulation/exports.js:454-473` |
 | Polar CSV | Uses H/V/D ordering, main SPL frequency rows, and empty cells for invalid dB. | `src/ui/simulation/exports.js:552-588` |
 | Impedance CSV | Writes normalized real and imaginary series. | `src/ui/simulation/exports.js:736-755` |
@@ -130,7 +149,7 @@ OPEN — “reference behavior” is code-defined but not fixture-defined. Freez
 2. How will explicit phase metadata override legacy backend-name aliases, especially because current BEMPP metadata declares `exp(+ikr)` (`server/solver/bempp_solver.py:323-348`; `src/results/conventions.js:14-69`)?
 3. Will normalized impedance have a versioned, unambiguous complex field that removes v1's magnitude heuristic (`server/solver/charts.py:160-184`)?
 4. Which observation defaults are canonical—H/V or H/V/D, 35° or configurable diagonal, mouth or another origin—and must every result store the resolved request (`server/contracts/__init__.py:101-168`; `server/solver/result_mapping.py:98-130`)?
-5. What exact join/interpolation policy applies to compare overlays and exports when frequency or angle grids differ (`src/ui/simulation/chartRequests.js:130-213`; `src/ui/simulation/exports.js:552-588`)?
+5. What exact join/interpolation policy applies to compare overlays and exports when frequency or angle grids differ (`src/ui/simulation/chartRequests.js:130-213`; `src/ui/simulation/exports.js:552-588`)? — PARTLY DECIDED 2026-08-10: exact-key union join for the frequency CSV and summary text (see "Frequency alignment and comparison"). Compare overlays and polar CSV remain open.
 6. Which samples become `null`, which entire frequencies become unreliable, and do non-convergence/condition warnings mask data or only annotate it (`server/solver/result_mapping.py:202-249`)?
 7. Which layer must populate structured per-frequency failures, and what is the minimum schema retained in storage and export (`server/solver/contract.py:29-40`)?
 8. Does v2 preserve all ten non-none smoothing modes despite the plan's “nine” wording, where does smoothing run, and are smoothed values presentation-only (`src/ui/simulation/viewResults.js:64-84`; `src/results/smoothing.js:315-351`)?

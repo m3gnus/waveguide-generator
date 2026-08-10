@@ -109,6 +109,19 @@ The bundle's result-file schemas are specified in `RESULT-CONTRACTS.md`. This se
 | Bookkeeping | Returned file entries are stored as `formatId:fileName`; result contains exported files, failures, and selected formats. | `src/ui/simulation/exports.js:890-925` |
 | State | Geometry-derived formats resolve the job snapshot; result-derived formats use `panel.lastResults`. A selected result format without results becomes a per-format failure. | `src/ui/simulation/exports.js:72-89`; `src/ui/simulation/exports.js:881-903` |
 
+DECIDED 2026-08-10 — `csv` and `txt` join SPL, DI, and impedance onto the sorted **union**
+of their frequency grids by exact key, filling a cell only where that series has a sample
+at that frequency. The full rule and its rationale are in `RESULT-CONTRACTS.md`
+("Frequency alignment and comparison"). Two consequences for this section's format set:
+
+- `impedance_csv` was previously the **only** result export with an unambiguous frequency
+  axis, because it emits its own. That is no longer the argument keeping it in the set —
+  `csv` now carries a correct axis for all three quantities. Any future decision to drop
+  `impedance_csv` from the menu can be made on redundancy grounds alone.
+- The union is the SPL grid whenever the grids agree, so a bundle produced from today's
+  solver output is byte-identical to one produced before the decision. No consumer of the
+  frozen `csv` header needs to change.
+
 ## Naming, workspace, manifest, and automatic behavior
 
 | Contract dimension | v1 contract | Evidence |

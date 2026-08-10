@@ -2,7 +2,7 @@ import { downloadBlob, downloadText } from '../api/designIo';
 import { serializeDesign, type DesignDocument } from '../stores/design';
 import type { ExportFormat, Preferences } from '../prefs/preferences';
 import { exportBaseName } from '../prefs/preferences';
-import { applySmoothing } from './smoothing';
+import { applySmoothing, type SmoothingValue } from './smoothing';
 import { complexToDb } from './mappers';
 import type { ResultPayload } from './types';
 
@@ -56,11 +56,59 @@ function smoothedSeries(result: ResultPayload, preferences: Preferences) {
   };
 }
 
+function indexByFrequency(frequencies: number[]): Map<number, number> {
+  const positions = new Map<number, number>();
+  frequencies.forEach((frequency, position) => { if (!positions.has(frequency)) positions.set(frequency, position); });
+  return positions;
+}
+
+interface JoinedRow {
+  frequency: number;
+  spl: SmoothingValue;
+  di: SmoothingValue;
+  impedanceReal: SmoothingValue;
+  impedanceImaginary: SmoothingValue;
+}
+
+/**
+ * Join SPL, DI, and impedance onto one frequency axis.
+ *
+ * The three quantities can come back on their own grids, which is why smoothedSeries
+ * keeps them separate. Indexing them all by the SPL row position would mislabel the DI
+ * and impedance columns with nothing downstream able to detect it, so rows are the
+ * sorted union of every grid and a cell is filled only where that series has a sample
+ * at that exact frequency. A series that does not reach a frequency leaves the cell
+ * empty rather than interpolating a value the solver never produced.
+ *
+ * When the grids agree the union is the SPL grid and the output is unchanged.
+ */
+function joinSeries(series: ReturnType<typeof smoothedSeries>): JoinedRow[] {
+  const grids = [series.frequencies, series.diFrequencies, series.impedanceFrequencies];
+  const [splAt, diAt, impedanceAt] = grids.map(indexByFrequency);
+  const union: number[] = [];
+  const seen = new Set<number>();
+  grids.forEach((grid) => grid.forEach((frequency) => { if (!seen.has(frequency)) { seen.add(frequency); union.push(frequency); } }));
+  // A non-finite frequency cannot be ordered against the rest; park those at the end in
+  // the order they arrived instead of letting NaN comparisons scramble the real rows.
+  const rank = (frequency: number) => (Number.isFinite(frequency) ? 0 : 1);
+  union.sort((a, b) => rank(a) - rank(b) || (rank(a) ? 0 : a - b));
+  const sample = (values: SmoothingValue[], positions: Map<number, number>, frequency: number): SmoothingValue => {
+    const position = positions.get(frequency);
+    return position === undefined ? null : values[position] ?? null;
+  };
+  return union.map((frequency) => ({
+    frequency,
+    spl: sample(series.spl, splAt, frequency),
+    di: sample(series.di, diAt, frequency),
+    impedanceReal: sample(series.impedanceReal, impedanceAt, frequency),
+    impedanceImaginary: sample(series.impedanceImaginary, impedanceAt, frequency),
+  }));
+}
+
 export function buildFrequencyCsv(result: ResultPayload, preferences: Preferences): string {
-  const series = smoothedSeries(result, preferences);
   const rows = ['Frequency (Hz),SPL (dB),DI (dB),Impedance Real (Z/(rho*c)),Impedance Imag (Z/(rho*c))'];
-  series.frequencies.forEach((frequency, index) => rows.push([
-    frequency, csvCell(series.spl[index]), csvCell(series.di[index]), csvCell(series.impedanceReal[index]), csvCell(series.impedanceImaginary[index]),
+  joinSeries(smoothedSeries(result, preferences)).forEach((row) => rows.push([
+    row.frequency, csvCell(row.spl), csvCell(row.di), csvCell(row.impedanceReal), csvCell(row.impedanceImaginary),
   ].join(',')));
   return `${preferences.smoothing === 'none' ? '' : `# Smoothing: ${preferences.smoothing}\n`}${rows.join('\n')}\n`;
 }
@@ -80,14 +128,16 @@ export function buildSummaryText(result: ResultPayload, preferences: Preferences
   const spl = stats(series.spl);
   const di = stats(series.di);
   const impedance = stats(series.impedanceReal);
+  const rows = joinSeries(series);
+  const frequencies = rows.map((row) => row.frequency);
   const lines = ['BEM SIMULATION RESULTS', '=====================', '', `Generated: ${now.toISOString()}`, `Smoothing: ${preferences.smoothing}`];
-  lines.push(series.frequencies.length ? `Frequency range: ${Math.min(...series.frequencies).toFixed(0)} - ${Math.max(...series.frequencies).toFixed(0)} Hz` : 'Frequency range: n/a');
-  lines.push(`Number of points: ${series.frequencies.length}`, '');
+  lines.push(frequencies.length ? `Frequency range: ${Math.min(...frequencies).toFixed(0)} - ${Math.max(...frequencies).toFixed(0)} Hz` : 'Frequency range: n/a');
+  lines.push(`Number of points: ${frequencies.length}`, '');
   if (spl) lines.push('FREQUENCY RESPONSE SUMMARY', '--------------------------', `Average SPL: ${spl.average.toFixed(2)} dB`, `SPL Range: ${spl.min.toFixed(2)} to ${spl.max.toFixed(2)} dB`, `Variation: ${(spl.max - spl.min).toFixed(2)} dB`, '');
   if (di) lines.push('DIRECTIVITY INDEX SUMMARY', '-------------------------', `Average DI: ${di.average.toFixed(2)} dB`, `DI Range: ${di.min.toFixed(2)} to ${di.max.toFixed(2)} dB`, '');
   if (impedance) lines.push('IMPEDANCE SUMMARY', '-----------------', `Average Real Part Z/(rho*c): ${impedance.average.toFixed(2)}`, '');
   lines.push('DETAILED DATA', '=============', 'Freq(Hz)  SPL(dB)  DI(dB)  Z_Re/(rho*c)  Z_Im/(rho*c)');
-  series.frequencies.forEach((frequency, index) => lines.push([frequency, series.spl[index], series.di[index], series.impedanceReal[index], series.impedanceImaginary[index]].map((value) => finite(value)?.toFixed(2) ?? 'n/a').join('  ')));
+  rows.forEach((row) => lines.push([row.frequency, row.spl, row.di, row.impedanceReal, row.impedanceImaginary].map((value) => finite(value)?.toFixed(2) ?? 'n/a').join('  ')));
   return `${lines.join('\n')}\n`;
 }
 

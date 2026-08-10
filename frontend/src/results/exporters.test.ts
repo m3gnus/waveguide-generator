@@ -22,6 +22,44 @@ describe('result exporters', () => {
     expect(buildPolarCsv(result)).toContain('200,horizontal,-90,-20');
     expect(buildImpedanceCsv(result)).toContain('200,,-0.5');
   });
+  it('joins DI and impedance onto their own frequencies instead of the SPL row index', () => {
+    // DI and impedance may be solved on their own grids. Zipping them against the SPL
+    // row index would label 175 Hz DI as 100 Hz and 150 Hz impedance as 200 Hz, with
+    // nothing in the file revealing it.
+    const offGrid: ResultPayload = {
+      frequencies: [100, 200],
+      spl_on_axis: { frequencies: [100, 200], spl: [90, 91], phase_degrees: [0, 10] },
+      di: { frequencies: [100, 175], di: [3, 4] },
+      impedance: { frequencies: [150, 200, 250], real: [1, 2, 3], imaginary: [0, -0.5, -0.25] },
+    };
+    const preferences = preferencesStore.getSnapshot();
+
+    expect(buildFrequencyCsv(offGrid, preferences)).toBe([
+      'Frequency (Hz),SPL (dB),DI (dB),Impedance Real (Z/(rho*c)),Impedance Imag (Z/(rho*c))',
+      '100,90,3,,',
+      '150,,,1,0',
+      '175,,4,,',
+      '200,91,,2,-0.5',
+      '250,,,3,-0.25',
+      '',
+    ].join('\n'));
+
+    const summary = buildSummaryText(offGrid, preferences, new Date('2026-08-10T10:00:00Z'));
+    expect(summary).toContain('Frequency range: 100 - 250 Hz');
+    expect(summary).toContain('Number of points: 5');
+    expect(summary).toContain('175.00  n/a  4.00  n/a  n/a');
+    expect(summary).toContain('200.00  91.00  n/a  2.00  -0.50');
+  });
+  it('leaves the frozen CSV schema untouched when every series shares one grid', () => {
+    // The join must be a no-op for the shape the solver emits today, so an existing
+    // consumer of the frozen schema sees byte-identical output.
+    expect(buildFrequencyCsv(result, preferencesStore.getSnapshot())).toBe([
+      'Frequency (Hz),SPL (dB),DI (dB),Impedance Real (Z/(rho*c)),Impedance Imag (Z/(rho*c))',
+      '100,90,3,1,0',
+      '200,,4,,-0.5',
+      '',
+    ].join('\n'));
+  });
   it('builds only the selected client-side format', async () => {
     const toJSON = vi.fn(() => { throw new Error('unselected JSON builder ran'); });
     const saveText = vi.fn();

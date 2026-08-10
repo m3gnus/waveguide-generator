@@ -1,10 +1,10 @@
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { preferencesStore, usePreferences, type ChartType } from '../prefs/preferences';
 import type { ChartTokens } from '../results/EChart';
 import { designForFamily, serializeDesign } from '../stores/design';
-import { ResultsChartGrid, resolvedPolarStepNotice, resultExportSnapshot, resultLayoutClass } from './ResultsPanel';
+import { beamShapeMissingReason, ResultsChartGrid, resolvedPolarStepNotice, resultExportSnapshot, resultLayoutClass } from './ResultsPanel';
 
 const tokens: ChartTokens = { foreground: '#fff', muted: '#aaa', grid: '#333', gridMinor: '#222', accent: '#0ff', series: ['#0ff'], colormap: ['#000', '#fff'] };
 const result = { frequencies: [], metadata: {} };
@@ -91,5 +91,33 @@ describe('results chart layouts', () => {
     expect(document.body.querySelector('[role="dialog"]')).not.toBeNull();
     act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })));
     expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it('offers enable and rerun when beam shape is missing spherical sampling', () => {
+    const onClick = vi.fn();
+    act(() => root.render(createElement(ResultsChartGrid, {
+      chartTypes: ['beam_shape'], result, named: [], tokens,
+      beamShapeAction: { label: 'Enable & rerun', onClick },
+    })));
+    const button = host.querySelector<HTMLButtonElement>('.chart-stub button')!;
+    expect(button.textContent).toBe('Enable & rerun');
+    act(() => button.click());
+    expect(onClick).toHaveBeenCalledOnce();
+  });
+
+  it('does not offer a rerun when balloon data exists but the contour fit failed', () => {
+    const balloonResult = {
+      frequencies: [1_000], metadata: {},
+      balloon: { frequencies: [1_000], theta_deg: [0, 90], phi_deg: [0, 120, 240], spl_norm_db: [[[0, 0, 0], [-2, -2, -2]]] },
+    };
+    expect(beamShapeMissingReason(balloonResult)).toEqual({
+      reason: 'Spherical balloon data is available, but this result has no valid −6 dB contour fit.',
+      canEnable: false,
+    });
+    act(() => root.render(createElement(ResultsChartGrid, {
+      chartTypes: ['beam_shape'], result: balloonResult, named: [], tokens,
+      beamShapeAction: { label: 'Enable & rerun', onClick: vi.fn() },
+    })));
+    expect(host.querySelector('.chart-stub button')).toBeNull();
   });
 });
