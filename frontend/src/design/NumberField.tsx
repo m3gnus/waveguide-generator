@@ -2,6 +2,11 @@ import { useEffect, useId, useRef, useState, type KeyboardEvent, type PointerEve
 import type { ExprNumber } from '../stores/design';
 import { useHelpTip } from './HelpTip';
 
+/** Bounds read as limits, not as readings: trailing zeros here are noise. */
+function formatBound(value: number, precision: number): string {
+  return Number(value.toFixed(precision)).toString();
+}
+
 interface NumberFieldProps {
   label: string;
   symbol?: string;
@@ -78,10 +83,28 @@ export function NumberField({
   const rawExpression = expression?.raw?.trim() ?? '';
   const holdsExpression = Boolean(rawExpression) && !Number.isFinite(Number(rawExpression));
   const showEvaluatedExpression = holdsExpression && expression?.value != null;
-  const draftMessage = draft.trim() && Number.isFinite(parsed) ? validate?.(parsed) : undefined;
   const isExpression = allowExpression && draft.trim() !== '' && !Number.isFinite(parsed);
   const empty = draft.trim() === '';
-  const invalid = (empty && !optional) || (!empty && !isExpression && (!Number.isFinite(parsed) || parsed < min || parsed > max || Boolean(draftMessage)));
+  const outOfRange = !empty && !isExpression && Number.isFinite(parsed) && (parsed < min || parsed > max);
+  /**
+   * The bounds are the reason the field went red, so they are the message.
+   *
+   * Out-of-range input used to set `aria-invalid` and a red border and stop
+   * there: no text, no `aria-describedby`, and the allowed range stated nowhere
+   * in the interface. The user got a red box, no reason, and -- because an
+   * invalid draft is reverted on blur -- their typing silently discarded.
+   */
+  const rangeMessage = outOfRange
+    ? Number.isFinite(min) && Number.isFinite(max)
+      ? `Must be between ${formatBound(min, precision)} and ${formatBound(max, precision)}${unit ? ` ${unit}` : ''}.`
+      : Number.isFinite(min)
+        ? `Must be at least ${formatBound(min, precision)}${unit ? ` ${unit}` : ''}.`
+        : `Must be at most ${formatBound(max, precision)}${unit ? ` ${unit}` : ''}.`
+    : undefined;
+  const emptyMessage = empty && !optional ? 'This value is required.' : undefined;
+  const validationMessage = draft.trim() && Number.isFinite(parsed) ? validate?.(parsed) : undefined;
+  const draftMessage = rangeMessage ?? emptyMessage ?? validationMessage;
+  const invalid = (empty && !optional) || (!empty && !isExpression && (!Number.isFinite(parsed) || outOfRange || Boolean(validationMessage)));
 
   useEffect(() => {
     if (!editing && !drag.current) setDraft(displayed);
@@ -115,6 +138,26 @@ export function NumberField({
     if (rounded !== value) onCommit(rounded);
   };
 
+  /**
+   * Arrow keys step the value, which is what every other numeric control on
+   * every platform does and what this one did not.
+   *
+   * The fine-adjust gesture here was a horizontal drag on the label -- mouse
+   * only, no key handler -- so nudging a value by one step meant selecting the
+   * whole field and retyping it. A formula field is exempt: there is nothing to
+   * step, and stepping would overwrite the expression with a plain number.
+   */
+  const stepBy = (multiplier: number) => {
+    if (holdsExpression) return false;
+    const base = Number.isFinite(parsed) ? parsed : value;
+    if (base === undefined || !Number.isFinite(base)) return false;
+    const next = Math.min(max, Math.max(min, base + step * multiplier));
+    const rounded = Number(next.toFixed(precision));
+    setDraft(rounded.toFixed(precision));
+    if (rounded !== value) onCommit(rounded);
+    return true;
+  };
+
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'Enter') {
       event.currentTarget.blur();
@@ -123,6 +166,12 @@ export function NumberField({
       setDraft(displayed);
       setEditing(false);
       event.currentTarget.blur();
+    } else if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+      const direction = event.key === 'ArrowUp' ? 1 : -1;
+      // Shift is the coarse gesture, matching the browser's own range inputs.
+      if (stepBy(direction * (event.shiftKey ? 10 : 1))) event.preventDefault();
+    } else if (event.key === 'PageUp' || event.key === 'PageDown') {
+      if (stepBy((event.key === 'PageUp' ? 1 : -1) * 10)) event.preventDefault();
     }
   };
 
@@ -210,6 +259,16 @@ export function NumberField({
           id={id}
           aria-invalid={invalid}
           aria-describedby={(draftMessage ?? invalidMessage) ? `${id}-error` : undefined}
+          /* The fill track encodes where this value sits in its range, which is
+             information a sighted user gets and a screen-reader user did not.
+             spinbutton carries the same fact, and it is also what makes the
+             Arrow-key stepping above discoverable rather than a secret. A
+             formula field is not a spinbutton; it holds text. */
+          role={holdsExpression ? undefined : 'spinbutton'}
+          aria-valuemin={holdsExpression || !Number.isFinite(min) ? undefined : min}
+          aria-valuemax={holdsExpression || !Number.isFinite(max) ? undefined : max}
+          aria-valuenow={holdsExpression || value === undefined ? undefined : value}
+          aria-valuetext={holdsExpression || value === undefined ? undefined : `${value.toFixed(precision)}${unit ? ` ${unit}` : ''}`}
           inputMode={holdsExpression ? 'text' : 'decimal'}
           spellCheck={false}
           disabled={disabled}
@@ -225,7 +284,9 @@ export function NumberField({
         {/* The scrub track reads as a value within a range, which a formula has not got. */}
         {!holdsExpression && value !== undefined && <i className="number-track" style={{ '--fill': `${Math.max(5, Math.min(100, ((value - min) / (max - min)) * 100 || 50))}%` } as React.CSSProperties} />}
       </div>
-      {(draftMessage ?? invalidMessage) && <span id={`${id}-error`} className="sr-only">{draftMessage ?? invalidMessage}</span>}
+      {/* Visible, not screen-reader-only. The message was announced and never
+          shown, so a sighted user got a red border and no reason for it. */}
+      {(draftMessage ?? invalidMessage) && <span id={`${id}-error`} className="field-error" role="alert">{draftMessage ?? invalidMessage}</span>}
     </div>
   );
 }

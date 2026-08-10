@@ -213,4 +213,74 @@ describe('NumberField', () => {
     expect(host.querySelector('.expr-value')).toBeNull();
     expect(host.textContent).not.toContain('= 100');
   });
+  const setValue = (input: HTMLInputElement, value: string) => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, value);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+
+  describe('out-of-range input states its reason', () => {
+    it('names the allowed range visibly and to assistive tech', async () => {
+      const commit = vi.fn();
+      await act(async () => { root.render(<NumberField label="Mouth radius" symbol="R" unit="mm" value={140} min={10} max={400} precision={2} onCommit={commit}/>); });
+      const input = host.querySelector('input')!;
+      await act(async () => { setValue(input, '99999'); });
+
+      const message = host.querySelector('.field-error');
+      // The bounds ARE the message: a red border with no reason was the defect.
+      expect(message?.textContent).toBe('Must be between 10 and 400 mm.');
+      expect(input.getAttribute('aria-invalid')).toBe('true');
+      expect(input.getAttribute('aria-describedby')).toBe(message?.id);
+      expect(message?.getAttribute('role')).toBe('alert');
+      // Visible, not sr-only — that was the other half of the defect.
+      expect(message?.classList.contains('sr-only')).toBe(false);
+      expect(commit).not.toHaveBeenCalled();
+    });
+
+    it('carries its range as spinbutton semantics', async () => {
+      await act(async () => { root.render(<NumberField label="Mouth radius" unit="mm" value={140} min={10} max={400} precision={2} onCommit={vi.fn()}/>); });
+      const input = host.querySelector('input')!;
+      expect(input.getAttribute('role')).toBe('spinbutton');
+      expect(input.getAttribute('aria-valuemin')).toBe('10');
+      expect(input.getAttribute('aria-valuemax')).toBe('400');
+      expect(input.getAttribute('aria-valuenow')).toBe('140');
+      expect(input.getAttribute('aria-valuetext')).toBe('140.00 mm');
+    });
+
+    it('steps with the arrow keys and clamps at the bounds', async () => {
+      // The field is controlled, so the test has to play the parent and feed
+      // the committed value back. Without that, a step back to the original
+      // value is correctly suppressed as a no-op and the assertion ends up
+      // measuring the harness rather than the component.
+      const commit = vi.fn();
+      let current = 140;
+      const render = async () => {
+        await act(async () => {
+          root.render(<NumberField label="Bending" value={current} min={10} max={400} step={2} precision={2} onCommit={(value) => { current = value; commit(value); }}/>);
+        });
+      };
+      const press = async (key: string, init: KeyboardEventInit = {}) => {
+        const input = host.querySelector('input')!;
+        await act(async () => { input.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, ...init })); });
+        await render();
+      };
+      await render();
+
+      await press('ArrowUp');
+      expect(commit).toHaveBeenLastCalledWith(142);
+      await press('ArrowDown');
+      expect(commit).toHaveBeenLastCalledWith(140);
+      // Shift and PageUp are the coarse gesture.
+      await press('PageUp');
+      expect(commit).toHaveBeenLastCalledWith(160);
+      await press('ArrowUp', { shiftKey: true });
+      expect(commit).toHaveBeenLastCalledWith(180);
+
+      // Clamped, never past the bound.
+      current = 399;
+      await render();
+      await press('PageUp');
+      expect(commit).toHaveBeenLastCalledWith(400);
+    });
+  });
+
 });

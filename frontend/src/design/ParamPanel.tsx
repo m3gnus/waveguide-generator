@@ -86,10 +86,18 @@ function Section({ title, summary, description, children, forceOpen }: SectionPr
   };
   return (
     <section className={`param-section${shownOpen ? '' : ' closed'}`} data-section={title}>
-      <button className="section-head" onClick={toggle} aria-expanded={shownOpen}>
-        <span className="chevron">⌄</span><span className="section-name">{title}</span><span className="spacer" />
-        {summary && <span className="section-summary">{summary}</span>}
-      </button>
+      {/* A real heading wrapping the disclosure button. The rail is the primary
+          way into ~119 parameters and had no headings at all, so a screen
+          reader offered no structure to navigate by and the only way to reach a
+          parameter was to tab past every one before it. This is the standard
+          disclosure pattern: the heading carries the structure, the button
+          carries the state. */}
+      <h3 className="section-heading">
+        <button className="section-head" onClick={toggle} aria-expanded={shownOpen}>
+          <span className="chevron" aria-hidden="true">⌄</span><span className="section-name">{title}</span><span className="spacer" />
+          {summary && <span className="section-summary">{summary}</span>}
+        </button>
+      </h3>
       {shownOpen && <div className="section-body">
         {description && helpVisible && <p className="section-description">{description}</p>}
         {children}
