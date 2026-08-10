@@ -100,8 +100,12 @@ function JobCard({ job, now, selected, run, onError, onRemove, onOpenExportSetti
   // diagnostic; only finished runs collapse down to their name.
   const expanded = selected || running || failed;
   const selectable = !running && (job.has_results || canLoadDesign(job));
+  const statusWord = running ? 'Running' : failed ? 'Failed' : 'Completed';
   const heading = <>
-    <i/>
+    {/* The dot is hue-only, and DESIGN.md's Signal Rule requires every state to
+        carry a word or a glyph as well. The word is the alternative; it costs
+        no width because it is only ever read aloud. */}
+    <i/><span className="sr-only">{statusWord}. </span>
     <b>{name(job)}{expanded && <em> · {job.id.slice(0, 6)}</em>}</b>
     {/* Stars are a label here, shown only once a run has actually been rated. */}
     {!expanded && rating > 0 && <span className="job-stars" aria-label={`Rated ${rating} of 5`}>{'★'.repeat(rating)}</span>}
@@ -118,7 +122,7 @@ function JobCard({ job, now, selected, run, onError, onRemove, onOpenExportSetti
     {running ? <>
       <p>{metrics(job, now)}</p>
       <div className="job-stage"><span>{job.stage_message ?? job.stage ?? 'waiting…'}</span><b>{Math.round(job.progress * 100)}%</b></div>
-      <div className="progress"><i style={{ width: `${Math.max(0, Math.min(100, job.progress * 100))}%` }}/></div>
+      <div className="progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(job.progress * 100)} aria-valuetext={`${Math.round(job.progress * 100)}% -- ${job.stage_message ?? job.stage ?? 'waiting'}`}><i style={{ width: `${Math.max(0, Math.min(100, job.progress * 100))}%` }}/></div>
       {job.log_tail.length > 0 && <p title={job.log_tail.at(-1)}>{job.log_tail.at(-1)}</p>}
       <footer><button disabled={job.cancellation_requested} onClick={() => void jobsSocket.stopJob(job.id).catch((error) => onError(String(error)))}>{job.cancellation_requested ? 'Stopping…' : 'Stop'}</button><button onClick={() => window.open(`/api/jobs/${encodeURIComponent(job.id)}/log`, '_blank')}>Log</button></footer>
     </> : failed ? <>

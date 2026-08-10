@@ -702,7 +702,12 @@ export const ViewportCanvas = memo(function ViewportCanvas({ onRenderFailure, ..
     gl={{ antialias: true, alpha: true, stencil: true }}
     onCreated={({ gl }) => {
       gl.localClippingEnabled = true;
+      // The canvas is a tab stop because OrbitControls needs focus to take key
+      // input -- but it was an unnamed one, so a screen reader announced an
+      // empty stop with no way to know what it held or that it was operable.
       gl.domElement.tabIndex = 0;
+      gl.domElement.setAttribute('role', 'application');
+      gl.domElement.setAttribute('aria-label', 'Waveguide geometry preview. Drag to orbit, scroll to zoom; arrow keys pan while focused.');
       gl.domElement.addEventListener('pointerdown', () => gl.domElement.focus());
       installContextLossFallback(gl.domElement, onRenderFailure);
     }}

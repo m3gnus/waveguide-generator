@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
-import { jobsSocket } from '../api/jobsSocket';
+import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { fetchJobResults } from '../api/results';
 import { resolveEngine, submitDesign } from '../jobs/actions';
 import { useCapabilities, useCapabilityRefreshOnReconnect } from '../jobs/useCapabilities';
@@ -163,5 +163,52 @@ export function JobsCoordinator({ children }: { children: ReactNode }) {
       : unavailable,
   }), [capability, selectedEngine, solve, submitting, unavailable]);
 
-  return <SolveContext.Provider value={control}>{children}</SolveContext.Provider>;
+  return <SolveContext.Provider value={control}>{children}<JobAnnouncer jobs={jobs}/></SolveContext.Provider>;
+}
+
+/**
+ * The one thing in this application that announces itself.
+ *
+ * A solve takes minutes and lands asynchronously: the charts repaint, the run
+ * list grows, and the selected run changes underneath whatever the user was
+ * reading. Sighted users have the badge row, the `Latest` chip and the jobs
+ * rail to notice that with. Before this, a screen-reader user had nothing --
+ * the only aria-live regions in the document belonged to dockview.
+ *
+ * Polite, and only on transitions: it reports a run entering and leaving the
+ * running state, never the progress percentage, which would talk over the user
+ * every second for the length of the solve.
+ */
+export function jobAnnouncement(
+  previous: ReadonlyMap<string, JobItem['status']>,
+  jobs: readonly JobItem[],
+): string | null {
+  const changed = jobs.filter((job) => previous.has(job.id) && previous.get(job.id) !== job.status);
+  const started = changed.filter((job) => job.status === 'running');
+  const finished = changed.filter((job) => job.status === 'complete');
+  const failed = changed.filter((job) => job.status === 'error');
+  const label = (job: JobItem) => job.label || job.id.slice(0, 6);
+  const parts: string[] = [];
+  if (started.length) parts.push(`${started.length === 1 ? `Solve started: ${label(started[0])}` : `${started.length} solves started`}.`);
+  if (finished.length) parts.push(`${finished.length === 1 ? `Solve finished: ${label(finished[0])}` : `${finished.length} solves finished`}.`);
+  if (failed.length) parts.push(`${failed.length === 1 ? `Solve failed: ${label(failed[0])}` : `${failed.length} solves failed`}.`);
+  return parts.length ? parts.join(' ') : null;
+}
+
+function JobAnnouncer({ jobs }: { jobs: readonly JobItem[] }) {
+  const [message, setMessage] = useState('');
+  const seen = useRef<Map<string, JobItem['status']> | null>(null);
+  useEffect(() => {
+    const current = new Map(jobs.map((job) => [job.id, job.status] as const));
+    // The first snapshot is the existing history, not news. Announcing it would
+    // read the whole run list aloud on load.
+    if (seen.current === null) {
+      seen.current = current;
+      return;
+    }
+    const next = jobAnnouncement(seen.current, jobs);
+    seen.current = current;
+    if (next) setMessage(next);
+  }, [jobs]);
+  return <p className="sr-only" role="status" aria-live="polite">{message}</p>;
 }

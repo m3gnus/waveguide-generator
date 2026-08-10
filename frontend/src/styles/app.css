@@ -193,6 +193,9 @@ kbd { padding: 1.5px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 
 
 /* parameter rail */
 .param-section { border-bottom: 1px solid var(--hair-soft); }
+/* The heading is structure, not a type role: the button inside it already
+   carries the system's uppercase micro-label styling. */
+.section-heading { margin: 0; font: inherit; }
 .section-head { display: flex; align-items: center; gap: 6px; width: 100%; height: 26px; padding: 0 9px 0 7px; background: transparent; color: var(--fg2); }
 .section-head:hover { background: var(--ov1); color: var(--fg1); }
 .section-head .chevron { width: 11px; height: 11px; font-size: 13px; line-height: 7px; transition: transform .16s; }
@@ -205,7 +208,10 @@ kbd { padding: 1.5px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 
 .select-row select, .static-select { width: 132px; height: 21px; padding: 0 7px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg); font-size: var(--text-micro); }
 .select-row select { appearance: auto; }
 .static-select { display: flex; align-items: center; justify-content: space-between; }
-.field-row { position: relative; display: flex; align-items: center; gap: 8px; min-height: 23px; }
+/* Wraps so a validation message can take a line of its own beneath the row it
+   belongs to, rather than being squeezed in beside the control. */
+.field-row { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-height: 23px; }
+.field-row > .field-error { flex-basis: 100%; }
 .modified-dot { position: absolute; left: -6px; width: 3px; height: 3px; border-radius: 50%; background: var(--acc); opacity: 0; }
 .field-row.modified .modified-dot { opacity: .85; }
 .field-label { display: flex; align-items: baseline; gap: 5px; flex: 1; min-width: 0; overflow: hidden; color: var(--fg1); font-size: var(--text-base); text-overflow: ellipsis; white-space: nowrap; cursor: ew-resize; user-select: none; }
@@ -408,14 +414,27 @@ kbd { padding: 1.5px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 
 .result-title:hover { border-color: var(--hair-hi); background: color-mix(in srgb, var(--chart-bg) 76%, transparent); color: var(--fg); backdrop-filter: blur(6px); }
 .result-title > b { overflow: hidden; font-weight: inherit; text-overflow: ellipsis; }
 .result-title > em { flex: none; color: var(--fg4); font-style: normal; font-weight: 400; letter-spacing: .02em; text-transform: none; }
-.result-title > svg { width: 9px; height: 9px; flex: none; color: var(--fg4); opacity: 0; transition: opacity .12s; }
+/* The caret is permanent. Hiding it made an eight-way chart-type selector
+   undiscoverable: nothing on a card said the word "SPL" was a dropdown, and the
+   only way to find out was to hover a title that looks like a label. It is dim
+   at rest and full strength when the card is pointed at or focused. */
+.result-title > svg { width: 9px; height: 9px; flex: none; color: var(--fg4); opacity: .55; transition: opacity .12s; }
 .result-card:hover .result-title > svg, .result-title:focus-within > svg { opacity: 1; }
+/* The select is the real focus target; the ring has to be drawn on the title
+   chip, which is the thing the user can actually see. */
+.result-title:focus-within { border-color: var(--focus-ring); background: color-mix(in srgb, var(--chart-bg) 76%, transparent); color: var(--fg); outline: 2px solid var(--focus-ring); outline-offset: 1px; box-shadow: 0 0 0 4px var(--focus-halo); }
+.result-title > select:focus-visible { outline: none; box-shadow: none; }
 .result-title > select { position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; border: 0; opacity: 0; cursor: pointer; }
 .result-subtitle { overflow: hidden; flex: 0 1 auto; align-self: center; height: 15px; padding-top: 4px; color: var(--fg4); font: var(--text-micro)/1 var(--mono); text-overflow: ellipsis; white-space: nowrap; }
 /* Actions stay out of sight until the card is pointed at or focused. */
-.result-card-expand, .result-card-close { display: grid; place-items: center; width: 18px; height: 18px; flex: none; border-radius: 4px; background: color-mix(in srgb, var(--chart-bg) 72%, transparent); color: var(--chart-muted); opacity: 0; backdrop-filter: blur(6px); transition: opacity .12s; }
+/* Dim at rest rather than absent. At opacity 0 these were eighteen tab stops
+   across the six-card dock with no visible focus indicator at all -- the ring
+   was being drawn, on a fully transparent element. They also have to be
+   reachable: 18px was under any sane target size. */
+.result-card-expand, .result-card-close { display: grid; place-items: center; width: 24px; height: 24px; flex: none; border-radius: 4px; background: transparent; color: var(--chart-muted); opacity: .4; transition: opacity .12s, background-color .12s; }
 .result-card:hover .result-card-expand, .result-card:hover .result-card-close,
-.result-card:focus-within .result-card-expand, .result-card:focus-within .result-card-close { opacity: 1; }
+.result-card:focus-within .result-card-expand, .result-card:focus-within .result-card-close { opacity: 1; background: color-mix(in srgb, var(--chart-bg) 72%, transparent); backdrop-filter: blur(6px); }
+.result-card-expand:focus-visible, .result-card-close:focus-visible { opacity: 1; background: color-mix(in srgb, var(--chart-bg) 72%, transparent); }
 .result-card-expand:hover, .result-card-close:hover { background: var(--ov4); color: var(--chart-fg); }
 /* Scrolls rather than clips: six rows do not fit a six-panel card. */
 .result-summary { display: grid; align-content: start; gap: 4px 8px; grid-template-columns: repeat(auto-fit, minmax(84px, 1fr)); width: 100%; height: 100%; margin: 0; overflow: hidden auto; padding: 20px 7px 7px; }
