@@ -133,6 +133,76 @@ def test_migrates_jobs_results_artifacts_and_workspace(v1_root: Path, tmp_path: 
     assert (data_dir / "workspace" / "project-a" / "waveguide.project.v1.json").is_file()
 
 
+def test_discovers_v1_database_in_same_or_sibling_checkout(tmp_path: Path) -> None:
+    v2_root = tmp_path / "renamed-v2-checkout"
+    v2_root.mkdir()
+    in_place = tmp_path / "in-place-upgrade"
+    _make_v1(in_place, tag="in-place")
+    sibling = tmp_path / "my unusually named old checkout"
+    _make_v1(sibling, tag="sibling")
+
+    assert migrate_v1.discover_v1_roots(in_place, environ={}) == [in_place, sibling]
+    assert migrate_v1.discover_v1_roots(v2_root, environ={}) == [in_place, sibling]
+
+
+def test_explicit_v1_root_is_authoritative(tmp_path: Path) -> None:
+    configured = tmp_path / "v1 elsewhere"
+    _make_v1(configured)
+    checkout = tmp_path / "v2"
+    checkout.mkdir()
+
+    assert migrate_v1.discover_v1_roots(
+        checkout, environ={migrate_v1.V1_ROOT_ENV: str(configured)}
+    ) == [configured]
+
+    with pytest.raises(migrate_v1.MigrationError, match="no compatible v1 database"):
+        migrate_v1.discover_v1_roots(
+            checkout, environ={migrate_v1.V1_ROOT_ENV: str(tmp_path / "missing")}
+        )
+
+
+def test_automatic_migration_runs_under_launcher_lock_and_only_once(
+    v1_root: Path, tmp_path: Path
+) -> None:
+    checkout = tmp_path / "v2-checkout"
+    checkout.mkdir()
+    data_dir = tmp_path / "v2data"
+    paths = ensure_data_layout(data_dir)
+    lock = InstanceLock(paths.locks)
+    lock.acquire(3100)
+    source = v1_root / migrate_v1.V1_DATABASE_RELATIVE
+    source_before = source.read_bytes()
+    try:
+        reports = migrate_v1.auto_migrate_v1(checkout, data_dir, lock, environ={})
+        backups_after_first = sorted(paths.root.joinpath("backups").iterdir())
+        repeated = migrate_v1.auto_migrate_v1(checkout, data_dir, lock, environ={})
+    finally:
+        lock.release()
+
+    assert len(reports) == 1
+    assert reports[0].imported["simulation_jobs"] == 3
+    assert reports[0].hash_checked == 6
+    assert reports[0].hash_mismatches == []
+    assert repeated == []
+    assert sorted(paths.root.joinpath("backups").iterdir()) == backups_after_first
+    assert _job_ids(paths.db / "simulations.db") == {f"v1-job-{index}" for index in range(3)}
+    assert source.read_bytes() == source_before
+
+
+def test_automatic_migration_refuses_to_run_without_launcher_lock(
+    v1_root: Path, tmp_path: Path
+) -> None:
+    checkout = tmp_path / "v2-checkout"
+    checkout.mkdir()
+    data_dir = tmp_path / "v2data"
+    paths = ensure_data_layout(data_dir)
+
+    with pytest.raises(migrate_v1.MigrationError, match="requires the v2 instance lock"):
+        migrate_v1.auto_migrate_v1(
+            checkout, data_dir, InstanceLock(paths.locks), environ={}
+        )
+
+
 def test_dry_run_writes_nothing(v1_root: Path, tmp_path: Path):
     data_dir = tmp_path / "v2data"
     report = migrate_v1.migrate(v1_root, data_dir, dry_run=True)

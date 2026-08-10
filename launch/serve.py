@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import signal
 import socket
+import sqlite3
 import sys
 import threading
 import time
@@ -39,6 +40,7 @@ from server.platform.signal_rearm import (  # noqa: E402
     unregister_signal_rearm,
 )
 from server.protocol.frame import DEFAULT_MAX_FRAME_BYTES  # noqa: E402
+from scripts.migrate_v1 import MigrationError, auto_migrate_v1  # noqa: E402
 
 
 HOST = "127.0.0.1"
@@ -206,6 +208,15 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     except InstanceLockError as exc:
         print(f"Waveguide Generator could not start: {exc}", file=sys.stderr)
+        flush_logs()
+        return 1
+
+    try:
+        auto_migrate_v1(REPO_ROOT, paths.root, lock)
+    except (MigrationError, OSError, sqlite3.Error) as exc:
+        print(f"Waveguide Generator could not migrate v1 runs: {exc}", file=sys.stderr)
+        logging.getLogger("wg.launch").exception("Automatic v1 run migration failed")
+        lock.release()
         flush_logs()
         return 1
 

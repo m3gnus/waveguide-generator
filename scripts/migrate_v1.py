@@ -27,10 +27,13 @@ from dataclasses import dataclass, field
 from datetime import datetime
 import hashlib
 import json
+import logging
+import os
 from pathlib import Path
 import shutil
 import sqlite3
 import sys
+from typing import Mapping
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -49,6 +52,10 @@ BACKUP_MANIFEST_NAME = ".wg2-migration-backup.json"
 BACKUP_INCOMPLETE_NAME = ".wg2-migration-backup.incomplete"
 BACKUP_FORMAT_VERSION = 1
 BACKUP_PRODUCER = "waveguide-generator-v2/migrate_v1.py"
+V1_ROOT_ENV = "WG1_ROOT"
+V1_DATABASE_RELATIVE = Path("server") / "data" / "simulations.db"
+
+log = logging.getLogger("wg.v1_migration")
 
 
 class MigrationError(RuntimeError):
@@ -157,7 +164,7 @@ def resolve_v1_sources(v1_root: Path) -> tuple[Path, Path | None]:
     somewhere else, which it records in ``server/data/workspace_settings.json``.
     """
 
-    database = v1_root / "server" / "data" / "simulations.db"
+    database = v1_root / V1_DATABASE_RELATIVE
     if not database.is_file():
         raise MigrationError(
             f"No v1 database at {database}. Pass --v1-root pointing at the v1 checkout."
@@ -174,6 +181,80 @@ def resolve_v1_sources(v1_root: Path) -> tuple[Path, Path | None]:
             raise MigrationError(f"Could not read {settings}: {exc}") from exc
 
     return database, workspace if workspace.is_dir() else None
+
+
+def _looks_like_v1_root(root: Path) -> bool:
+    """Recognise the persisted v1 job schema without modifying the database."""
+
+    database = root / V1_DATABASE_RELATIVE
+    if not database.is_file():
+        return False
+    try:
+        with closing(_connect(database, read_only=True)) as conn:
+            if int(conn.execute("PRAGMA user_version").fetchone()[0]) != 4:
+                return False
+            required = {
+                "simulation_jobs": {"id", "config_json"},
+                "simulation_results": {"job_id", "results_json"},
+                "simulation_artifacts": {"job_id", "msh_text"},
+            }
+            return all(
+                columns.issubset(_table_columns(conn, table))
+                for table, columns in required.items()
+            )
+    except (OSError, sqlite3.Error, TypeError, ValueError):
+        return False
+
+
+def discover_v1_roots(
+    checkout_root: Path = REPO_ROOT,
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> list[Path]:
+    """Find legacy checkouts that can contain v1 runs.
+
+    An update that changes an existing checkout from the v1 branch to v2 leaves
+    the database below ``checkout_root``. Side-by-side installs leave it in a
+    sibling checkout, whose folder name is user-controlled, so direct siblings
+    are inspected by schema rather than by one hard-coded product name.
+
+    ``WG1_ROOT`` is an escape hatch for a checkout stored elsewhere. An explicit
+    path is authoritative and an invalid one is reported instead of silently
+    falling back to a different database.
+    """
+
+    env = os.environ if environ is None else environ
+    configured = env.get(V1_ROOT_ENV)
+    if configured:
+        root = Path(configured).expanduser().absolute()
+        if not _looks_like_v1_root(root):
+            raise MigrationError(
+                f"{V1_ROOT_ENV} points at {root}, but no compatible v1 database exists at "
+                f"{root / V1_DATABASE_RELATIVE}."
+            )
+        return [root]
+
+    checkout = checkout_root.expanduser().absolute()
+    candidates = [checkout]
+    try:
+        candidates.extend(path for path in checkout.parent.iterdir() if path.is_dir())
+    except OSError as exc:
+        log.warning("Could not inspect sibling folders for a v1 database: %s", exc)
+
+    roots: list[Path] = []
+    seen_databases: set[Path] = set()
+    for candidate in candidates:
+        if not _looks_like_v1_root(candidate):
+            continue
+        try:
+            database = (candidate / V1_DATABASE_RELATIVE).resolve()
+        except OSError:
+            database = (candidate / V1_DATABASE_RELATIVE).absolute()
+        if database in seen_databases:
+            continue
+        seen_databases.add(database)
+        roots.append(candidate)
+    return roots
 
 
 def _timestamp() -> str:
@@ -322,6 +403,96 @@ def migrate(
             v1_root, database, workspace, paths,
             dry_run=False, include_workspace=include_workspace,
         )
+
+
+def _migration_needed(database: Path, target_db: Path) -> bool:
+    """Return whether this exact source snapshot lacks a completion marker."""
+
+    if not target_db.is_file():
+        return True
+    fingerprint = _fingerprint(database)
+    try:
+        with closing(_connect(target_db, read_only=True)) as conn:
+            return _marker_jobs_imported(conn, fingerprint) is None
+    except sqlite3.Error:
+        # JobStore.initialize() inside the migration is the schema authority and
+        # will produce the useful compatibility error if this is not a v2 DB.
+        return True
+
+
+def auto_migrate_v1(
+    checkout_root: Path,
+    data_dir: Path,
+    instance_lock: InstanceLock,
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> list[Report]:
+    """Migrate every discovered v1 run database during application startup.
+
+    The launcher must already own v2's process lock. Reusing that lock avoids a
+    release/reacquire race between migration and server startup while retaining
+    the manual command's guarantee that no v2 process can write concurrently.
+    Sources already marked complete are opened read-only and skipped without a
+    new backup, so the normal startup path stays cheap and does not accumulate
+    one backup per launch.
+    """
+
+    paths = ensure_data_layout(data_dir)
+    if not instance_lock.owned:
+        raise MigrationError("Automatic v1 migration requires the v2 instance lock.")
+    try:
+        lock_directory = instance_lock.path.parent.resolve()
+        expected_lock_directory = paths.locks.resolve()
+    except OSError as exc:
+        raise MigrationError(f"Could not validate the v2 instance lock: {exc}") from exc
+    if lock_directory != expected_lock_directory:
+        raise MigrationError(
+            f"Automatic v1 migration holds the lock for {lock_directory}, not "
+            f"the active data directory {expected_lock_directory}."
+        )
+
+    target_db = paths.db / "simulations.db"
+    try:
+        target_resolved = target_db.resolve()
+    except OSError:
+        target_resolved = target_db.absolute()
+
+    reports: list[Report] = []
+    for v1_root in discover_v1_roots(checkout_root, environ=environ):
+        database, workspace = resolve_v1_sources(v1_root)
+        try:
+            source_resolved = database.resolve()
+        except OSError:
+            source_resolved = database.absolute()
+        if source_resolved == target_resolved or not _migration_needed(database, target_db):
+            continue
+
+        log.warning("Found v1 run database at %s; migrating it into %s", database, target_db)
+        report = _migrate_with_paths(
+            v1_root,
+            database,
+            workspace,
+            paths,
+            dry_run=False,
+            include_workspace=True,
+        )
+        if report.hash_mismatches:
+            raise MigrationError(
+                f"Automatic v1 migration failed content verification. The pre-migration "
+                f"backup is at {report.backup_dir}; start was stopped so the failure is visible."
+            )
+        reports.append(report)
+        log.warning(
+            "v1 migration complete: %d runs imported, %d existing runs kept, "
+            "%d result/artifact hashes verified; backup: %s",
+            report.imported.get("simulation_jobs", 0),
+            len(report.skipped_existing),
+            report.hash_checked,
+            report.backup_dir,
+        )
+        for warning in report.warnings:
+            log.warning("v1 migration: %s", warning)
+    return reports
 
 
 def _migrate_with_paths(
