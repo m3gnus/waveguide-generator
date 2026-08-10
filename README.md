@@ -90,6 +90,26 @@ The committed app icon is reproducible with
 `python launchers/macos/generate_icon.py` on macOS; the generator uses only the
 standard library and validates the resulting ICNS container with `iconutil`.
 
+### Original-app run migration
+
+On launch, Waveguide Generator looks for the original application's v1 run
+database in an upgraded checkout and in sibling checkout folders. When it finds
+one, it automatically merges its runs, results, mesh artifacts, and saved
+workspace into the current data directory before the server starts. The v1
+database is opened read-only, the current data is backed up first, existing
+current-version runs win on an ID collision, and content hashes are verified
+before startup continues. A completion marker makes later launches no-ops;
+additional v1 runs are picked up if the source database changes.
+
+For a v1 checkout stored somewhere else, set `WG1_ROOT` to that checkout before
+launching. The manual dry-run, reporting, and rollback interface remains
+available:
+
+```
+.venv/bin/python scripts/migrate_v1.py --v1-root "/path/to/v1 checkout" --dry-run
+.venv/bin/python scripts/migrate_v1.py --rollback "/path/to/migration backup"
+```
+
 ## Run the server directly (dev)
 
 ```
