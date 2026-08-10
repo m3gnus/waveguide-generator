@@ -1,17 +1,17 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import type { EChartsOption } from 'echarts';
-import { jobsSocket, type JobItem } from '../api/jobsSocket';
+import { jobsSocket } from '../api/jobsSocket';
 import { compareSelection, fetchJobResults, type JobResults } from '../api/results';
-import type { DesignDocument } from '../stores/design';
 import { EChart, useChartTokens, type ChartTokens } from '../results/EChart';
 import { beamShapeSeries, directivityGrid, directivityIndexSeries, impedanceSeries, splSeries, type NamedResult } from '../results/mappers';
 import { BalloonRenderer, ChartStub, ForwardBeamRenderer } from '../results/balloon';
 import { runExportBundle } from '../results/exporters';
+import { resultExportSnapshot } from '../results/exportContext';
+export { resultExportSnapshot } from '../results/exportContext';
 import type { ResultPayload } from '../results/types';
 import { CHART_TYPES, MAX_RESULT_PANELS, RESULT_PANEL_COUNTS, preferencesStore, usePreferences, type ChartType } from '../prefs/preferences';
 import { ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
-import { hydrateJobDesign } from '../jobs/jobDesign';
 import { Icon } from './icons';
 import { trapDialogFocus } from './SettingsDialog';
 
@@ -30,16 +30,6 @@ export function splSubtitle(result: JobResults | undefined): string {
 function labelFor(id: string, jobs: ReturnType<typeof jobsSocket.getSnapshot>['jobs']): string {
   const job = jobs.find((item) => item.id === id);
   return job?.label || `${String(job?.config_summary.formula_type ?? 'job').toLowerCase()} ${id.slice(0, 6)}`;
-}
-
-/** Geometry/config exports for a result must use the design that produced it. */
-export function resultExportSnapshot(
-  job: Pick<JobItem, 'script_snapshot' | 'design_revision'> | undefined,
-): { design: DesignDocument | undefined; designRevision: number } {
-  return {
-    design: job ? hydrateJobDesign(job) ?? undefined : undefined,
-    designRevision: job?.design_revision ?? 0,
-  };
 }
 
 /**
@@ -635,7 +625,7 @@ export function ResultsPanel() {
     setExporting(true); setExportStatus(null);
     try {
       const job = jobs.find(({ id }) => id === selection.primary);
-      const result = await runExportBundle({ result: primary, ...resultExportSnapshot(job), preferences });
+      const result = await runExportBundle({ result: primary, ...resultExportSnapshot(job), preferences }, preferences.exportFormats);
       if (selection.primary && result.files.length) {
         await jobsSocket.patchMetadata(selection.primary, { exported_files: [...new Set([...(job?.exported_files ?? []), ...result.files])] });
       }
