@@ -160,7 +160,9 @@ def test_dist_missing_is_reported_with_the_platform_installer(tmp_path: Path) ->
 
     assert snapshot.frontend.state is ServiceState.ERROR
     assert "frontend/dist missing" in snapshot.frontend.reason
-    assert "installers/" in snapshot.frontend.reason
+    # The install hint renders with the OS-native separator (backslashes on
+    # Windows), so assert on the folder name alone.
+    assert "installers" in snapshot.frontend.reason
     assert controller.process is None
 
 
