@@ -1,5 +1,16 @@
 .wg2-viewport { isolation: isolate; container: viewport / inline-size; }
-.wg2-viewport::before { pointer-events: none; }
+.wg2-viewport::before {
+  content: "";
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 38px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface-panel);
+  pointer-events: none;
+}
 .wg2-viewport-canvas-host { position: absolute; inset: 0; }
 .wg2-viewport-canvas { position: absolute !important; inset: 0; width: 100% !important; height: 100% !important; }
 .wg2-viewport .viewport-title,

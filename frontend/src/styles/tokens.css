@@ -19,22 +19,22 @@
      difference -- the 3/4 view toggle measured 4.45:1 that way. */
   --acc-text: var(--acc);
   --acc-deep: #0d2f38;
-  --bg: #080a0f;
-  --bg-grad: radial-gradient(1400px 700px at 52% -14%, #131a26 0%, #0a0d13 52%, #080a0f 100%);
-  --card-grad: linear-gradient(180deg, #12171f 0%, #0e121a 46%, #0d1118 100%);
-  --topbar-grad: linear-gradient(180deg, #12161e, #0c1017);
-  --status-grad: linear-gradient(180deg, #0c1017, #090c12);
-  --raise: #161c26;
-  --hair: #1b222e;
+  --bg: #070a0e;
+  --bg-grad: var(--bg);
+  --card-grad: #0d1219;
+  --topbar-grad: #0d1219;
+  --status-grad: #0d1219;
+  --raise: #171f2a;
+  --hair: #1d2733;
   --hair-soft: #151b25;
-  --hair-hi: #28313f;
+  --hair-hi: #344150;
   --ov1: rgba(255, 255, 255, .028);
   --ov2: rgba(255, 255, 255, .045);
   --ov3: rgba(255, 255, 255, .06);
   --ov4: rgba(255, 255, 255, .075);
   --ov5: rgba(255, 255, 255, .11);
   --edge-hi: rgba(255, 255, 255, .028);
-  --card-sh: 0 12px 34px -22px #000;
+  --card-sh: none;
   --float-sh: 0 14px 34px -18px #000;
   --tip-sh: 0 14px 30px -16px #000;
   --scroll: #222a38;
@@ -45,24 +45,23 @@
   --fg2: #9ca8ba;
   --fg3: #929eb0;
   --fg4: #8995a7;
-  --ctl-grad: linear-gradient(180deg, #181e29, #131822);
-  --ctl-grad-h: linear-gradient(180deg, #1d2431, #171d27);
+  --ctl-grad: #121923;
+  --ctl-grad-h: #171f2a;
   --seg-bg: rgba(0, 0, 0, .3);
-  --seg-on: linear-gradient(180deg, #242d3c, #1c232f);
-  --seg-on-sh: 0 1px 0 rgba(255, 255, 255, .06) inset, 0 2px 6px -3px #000;
-  --cmd-grad: linear-gradient(180deg, #0c1017, #0a0e14);
+  --seg-on: #171f2a;
+  --seg-on-sh: 0 0 0 1px var(--hair-hi) inset;
+  --cmd-grad: #121923;
   --cmd-bd-h: #2f3a4b;
   --kbd-bg: rgba(255, 255, 255, .045);
   --kbd-bd: var(--hair-hi);
-  --solve-grad: linear-gradient(180deg, #7ce6f6, #3cc0d8);
+  --solve-grad: var(--acc);
   --solve-fg: #03222a;
   --solve-kbd: rgba(0, 0, 0, .16);
   --solve-kbd-bd: rgba(0, 0, 0, .2);
   --solve-kbd-fg: #0a3540;
-  /* Lift, not neon. The button keeps a real drop shadow with an offset and a
-     tint of its own hue; the 16px saturated bloom it used to cast is the
-     generic glowing-CTA tell and is not what a machined control does. */
-  --solve-sh: 0 1px 0 rgba(255, 255, 255, .34) inset, 0 4px 10px -6px rgba(0, 0, 0, .7), 0 2px 8px -6px rgba(var(--acc-rgb), .32);
+  /* The primary action is a flat illuminated control. A faint inset highlight
+     gives it a machined edge without turning the cyan indicator into a glow. */
+  --solve-sh: 0 1px 0 rgba(255, 255, 255, .2) inset;
   --track: rgba(255, 255, 255, .045);
   --track-fill: linear-gradient(90deg, rgba(var(--acc-rgb), .42), rgba(var(--acc-rgb), .85));
   --thumb: #dff6fb;
@@ -134,7 +133,7 @@
   /* Semantic UI foundation — shared by every workspace surface. */
   --surface-canvas: var(--bg);
   --surface-panel: #0d1219;
-  --surface-raised: #151c26;
+  --surface-raised: #121923;
   --surface-floating: var(--float-bg);
   --border-subtle: var(--hair-soft);
   --border-default: var(--hair);
@@ -158,7 +157,7 @@
      14, 15, 17, 18 and 20 in the stylesheets -- 244 declarations off the scale
      they were supposed to be on, which is why the interface read as almost
      aligned rather than aligned. Every one of those was snapped to the nearest
-     step here; none moved more than 2px except one 36 to 32. */
+     step here; none moved more than 2px except one 36 to 32.
      Named for their value, not their rank: an ordinal scale is what let a
      later pass insert a step and silently move every call site that used the
      ones above it. --space-8 is 8px and can only ever be 8px. */
@@ -195,60 +194,61 @@
   --amber-rgb: 152, 80, 21;
   --green-rgb: 39, 117, 57;
   --red-rgb: 168, 54, 48;
+  --acc: oklch(48% 0.16 230);
+  --green: oklch(50% 0.12 148);
+  --amber: oklch(58% 0.13 54);
+  --red: oklch(50% 0.15 27);
   --acc-2: #007eb7;
   --acc-text: #004f7d;
-  --acc-deep: #e2f1fb;
-  --bg: #faf4ec;
-  --bg-grad: radial-gradient(1400px 720px at 52% -14%, #fffdf8 0%, #f8f2e9 50%, #f1eade 100%);
-  --card-grad: linear-gradient(180deg, #fffdfa 0%, #fefbf8 50%, #fcf8f2 100%);
-  --topbar-grad: linear-gradient(180deg, #fffdfa, #f5efe4);
-  --status-grad: linear-gradient(180deg, #f5efe4, #efe8db);
-  --raise: #efe8dd;
-  --hair: #ddd7cd;
-  --hair-soft: #e9e3d9;
-  --hair-hi: #cac3b9;
+  --acc-deep: oklch(48% 0.16 230 / .1);
+  --bg: oklch(97% 0.012 78);
+  --bg-grad: var(--bg);
+  --card-grad: oklch(99% 0.005 78);
+  --topbar-grad: oklch(99% 0.005 78);
+  --status-grad: oklch(99% 0.005 78);
+  --raise: oklch(94% 0.015 78);
+  --hair: oklch(88% 0.014 78);
+  --hair-soft: oklch(92% 0.014 78);
+  --hair-hi: oklch(78% 0.014 78);
   --ov1: rgba(30, 34, 48, .035);
   --ov2: rgba(30, 34, 48, .055);
   --ov3: rgba(30, 34, 48, .07);
   --ov4: rgba(30, 34, 48, .09);
   --ov5: rgba(30, 34, 48, .13);
   --edge-hi: rgba(255, 255, 255, .85);
-  --card-sh: 0 1px 2px rgba(84, 70, 44, .05), 0 10px 26px -20px rgba(84, 70, 44, .5);
+  --card-sh: none;
   --float-sh: 0 14px 30px -14px rgba(84, 70, 44, .35);
   --tip-sh: 0 12px 26px -12px rgba(84, 70, 44, .4);
   --scroll: #d6cec1;
   --scroll-h: #bfb6a6;
   --selbg: rgba(var(--acc-rgb), .20);
-  --fg: #0e111b;
-  --fg1: #343949;
-  --fg2: #4f535d;
-  --fg3: #5e6068;
-  --fg4: #696966;
-  --ctl-grad: linear-gradient(180deg, #fffdfa, #f5efe5);
-  --ctl-grad-h: linear-gradient(180deg, #fff, #f9f4ec);
+  --fg: oklch(18% 0.02 268);
+  --fg1: oklch(28% 0.018 268);
+  --fg2: oklch(38% 0.016 268);
+  --fg3: oklch(48% 0.015 268);
+  --fg4: oklch(48% 0.015 268);
+  --ctl-grad: oklch(94% 0.015 78);
+  --ctl-grad-h: oklch(99% 0.005 78);
   --seg-bg: rgba(30, 34, 48, .055);
-  --seg-on: linear-gradient(180deg, #fff, #f6f1e8);
-  --seg-on-sh: 0 1px 0 rgba(255, 255, 255, .9) inset, 0 1px 3px rgba(84, 70, 44, .22);
-  --cmd-grad: linear-gradient(180deg, #f7f1e7, #fbf6ee);
+  --seg-on: oklch(99% 0.005 78);
+  --seg-on-sh: 0 0 0 1px var(--hair-hi) inset;
+  --cmd-grad: oklch(94% 0.015 78);
   --cmd-bd-h: #bdb5a7;
   --kbd-bg: rgba(30, 34, 48, .05);
   --kbd-bd: #cfc8bc;
-  /* The primary action of the application, so its label carries the strictest
-     contrast requirement in the interface -- and a gradient is only as legible
-     as its lightest stop. White on #0a86cb was 3.97:1; #0b6fa8 holds 5.45:1.
-     The shortcut hint sits on a darkened ground rather than a lightened one for
-     the same reason: white over rgba(255,255,255,.18) composited to 3.09:1. */
-  --solve-grad: linear-gradient(180deg, #0b6fa8, #00537f);
+  /* The primary action uses the v1 blue directly. Its shortcut hint stays on a
+     darkened ground so both labels retain their contrast on the solid control. */
+  --solve-grad: var(--acc);
   --solve-fg: #fff;
   --solve-kbd: rgba(0, 0, 0, .2);
   --solve-kbd-bd: rgba(0, 0, 0, .26);
   --solve-kbd-fg: #fff;
-  --solve-sh: 0 1px 0 rgba(255, 255, 255, .24) inset, 0 4px 10px -6px rgba(84, 70, 44, .5), 0 2px 8px -6px rgba(var(--acc-rgb), .3);
+  --solve-sh: 0 1px 0 rgba(255, 255, 255, .18) inset;
   --track: rgba(30, 34, 48, .10);
   --track-fill: linear-gradient(90deg, rgba(var(--acc-rgb), .45), rgba(var(--acc-rgb), .9));
   --thumb: #fff;
   --thumb-sh: 0 1px 3px rgba(84, 70, 44, .4);
-  --vp-grad: radial-gradient(120% 90% at 50% 34%, #fbf7ef 0%, #f2ede4 56%, #e8e1d4 100%);
+  --vp-grad: radial-gradient(120% 90% at 50% 34%, #e6e1d8 0%, #f2ede4 62%, oklch(94% 0.015 78) 100%);
   --vp-vig: 0 0 120px -34px rgba(120, 102, 70, .32) inset;
   --glass-bg: rgba(255, 253, 248, .86);
   --glass-bd: rgba(84, 70, 44, .14);
@@ -263,14 +263,14 @@
   --grid-min: #f0ebe1;
   --grid-zero: #cfc7b8;
   --plot-bd: #d8d1c4;
-  --chart-bg: #fcfaf6;
-  --chart-page: #f5f0e8;
-  --chart-fg: #171b24;
-  --chart-muted: #596473;
-  --chart-spine: #d5cec2;
+  --chart-bg: oklch(99% 0.005 78);
+  --chart-page: oklch(97% 0.012 78);
+  --chart-fg: oklch(18% 0.02 268);
+  --chart-muted: oklch(48% 0.015 268);
+  --chart-spine: oklch(88% 0.014 78);
   --surface-canvas: var(--bg);
-  --surface-panel: #fcfaf6;
-  --surface-raised: #f3eee6;
+  --surface-panel: oklch(99% 0.005 78);
+  --surface-raised: oklch(94% 0.015 78);
   --surface-floating: var(--float-bg);
   --border-subtle: var(--hair-soft);
   --border-default: var(--hair);

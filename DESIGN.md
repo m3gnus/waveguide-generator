@@ -10,19 +10,19 @@ colors:
   signal-amber: "rgb(242, 181, 68)"
   signal-green: "rgb(90, 212, 141)"
   signal-red: "rgb(255, 111, 96)"
-  canvas-void: "#080a0f"
+  canvas-void: "#070a0e"
   surface-panel: "#0d1219"
-  surface-raised: "#151c26"
+  surface-raised: "#121923"
   hair-soft: "#151b25"
-  hair: "#1b222e"
-  hair-strong: "#28313f"
+  hair: "#1d2733"
+  hair-strong: "#344150"
   ink: "#e9eef6"
   ink-secondary: "#a4b1c4"
   ink-tertiary: "#929eb0"
   ink-quaternary: "#8995a7"
-  paper-canvas: "#faf4ec"
-  paper-panel: "#fcfaf6"
-  paper-ink: "#0e111b"
+  paper-canvas: "oklch(97% 0.012 78)"
+  paper-panel: "oklch(99% 0.005 78)"
+  paper-ink: "oklch(18% 0.02 268)"
 typography:
   title:
     fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
@@ -133,9 +133,9 @@ hairline that separates rather than a card that encloses. Cards are used
 exactly once — for a run in the jobs rail — because a run is genuinely a
 discrete object. Nothing else gets a box.
 
-The light theme is not an inversion. It is a warm paper palette (`#faf4ec`)
-with the same instrument grammar, for users working in a bright room; it is a
-second first-class design, not a courtesy.
+The light theme is not an inversion. It uses the original WG v1 warm-paper
+palette (`oklch(97% 0.012 78)`) with the same instrument grammar, for users
+working in a bright room; it is a second first-class design, not a courtesy.
 
 **Key Characteristics:**
 - Near-black cabinet, hairline structure, no nested cards
@@ -172,18 +172,18 @@ The signal set. Each of these means one thing and is never used for emphasis.
   (`rgb(185, 139, 246)`): plotted comparison series and the engine badge.
 
 ### Neutral
-- **Canvas Void** (`#080a0f`): the page ground, carrying a very wide, very dim
-  radial that lifts the top-center of the window a few percent.
-- **Surface Panel** (`#0d1219`) / **Surface Raised** (`#151c26`): the two
+- **Canvas Void** (`#070a0e`): the page ground behind the edge-to-edge console.
+- **Surface Panel** (`#0d1219`) / **Surface Raised** (`#121923`): the two
   tonal steps a panel and an active tab occupy. There is no third step.
-- **Hairlines** (`#151b25` soft, `#1b222e` default, `#28313f` strong): the
+- **Hairlines** (`#151b25` soft, `#1d2733` default, `#344150` strong): the
   entire structural vocabulary. Soft divides inside a panel, default bounds a
   panel, strong marks hover and an active edge.
 - **Ink ramp** (`#e9eef6` → `#a4b1c4` → `#929eb0` → `#8995a7`): value, label,
   unit/meta, and de-emphasized meta, in that order.
-- **Warm Paper** (`#faf4ec` canvas, `#fcfaf6` panel, `#0e111b` ink): the light
-  theme's ground, deliberately warm so a bright room reads as paper under a
-  lamp rather than as a blown-out screen.
+- **Warm Paper** (`oklch(97% 0.012 78)` canvas, `oklch(99% 0.005 78)` panel,
+  `oklch(18% 0.02 268)` ink): the WG v1 light theme's ground, deliberately warm
+  so a bright room reads as paper under a lamp rather than as a blown-out
+  screen.
 
 The frontmatter carries the dark theme's values, which are the system's
 canonical ones. The light theme re-derives each signal hue against paper rather
@@ -251,8 +251,10 @@ hierarchy, not to add a step.
 
 The shell is a three-row grid — a 48px top rail, a flexible workspace, a 28px
 status rail — and the workspace is a dockview grid the user rearranges and
-resizes. Nothing is centered in a max-width container; every surface fills the
-space it is given, because the user chose that space.
+resizes. Panels meet edge-to-edge across one-pixel separators; spacing belongs
+inside the information, not around the instrument. Nothing is centered in a
+max-width container; every surface fills the space it is given, because the
+user chose that space.
 
 Spacing runs on a 4px grid with a 2px half-step — 2 / 4 / 6 / 8 / 12 / 16 / 24
 — and nothing between the steps. The tokens are named for their value
