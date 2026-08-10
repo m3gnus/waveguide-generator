@@ -4,15 +4,24 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 import struct
 
+from hornlab_mesher.cad import CadInfo
 import numpy as np
 import pytest
 
 from server.design.schema import DesignConfig
 from server.exports import api
 from server.exports.api import ExportRequest
-from server.exports.core import binary_stl, profile_csv, smooth_segments
+from server.exports import core
+from server.exports.core import (
+    StepSolidResult,
+    _build_step_solid_sync,
+    binary_stl,
+    profile_csv,
+    smooth_segments,
+)
 
 
 def _design(**mesh: int) -> DesignConfig:
@@ -141,17 +150,51 @@ def test_profile_csv_axes_units_rows_and_closed_slices() -> None:
 _STEP_STUB = "ISO-10303-21;\nADVANCED_FACE\nB_SPLINE_SURFACE\nEND-ISO-10303-21;\n"
 
 
+def _step_result(step_text: str = _STEP_STUB) -> StepSolidResult:
+    return StepSolidResult(
+        step_text=step_text,
+        cad_info=CadInfo(
+            path=Path("waveguide.step"),
+            body="solid",
+            n_faces=12,
+            volume_mm3=345.0,
+            bounding_box_mm=((-1.0, -2.0, 0.0), (1.0, 2.0, 120.0)),
+            throat_opened=True,
+        ),
+    )
+
+
 def test_step_route_returns_geometry_filename_content_type_and_revision(monkeypatch) -> None:
     async def fake_build(_design):
-        return _STEP_STUB
+        return _step_result()
 
     monkeypatch.setattr(api, "build_step_solid", fake_build)
     response = asyncio.run(api.export_step(_request(), body="solid"))
-    assert response.body.decode() == _STEP_STUB
+    assert response.body == _STEP_STUB.encode()
     assert response.media_type == "model/step"
     assert response.headers["x-design-revision"] == "57"
     assert response.headers["content-disposition"] == 'attachment; filename="demo_horn.step"'
     assert "ADVANCED_FACE" in response.body.decode()
+
+
+def test_solid_step_builder_captures_mesher_cad_info() -> None:
+    result = _build_step_solid_sync(_design().model_dump(mode="json"))
+
+    assert isinstance(result, StepSolidResult)
+    assert result.step_text.startswith("ISO-10303-21;")
+    assert result.cad_info.body in ("solid", "surface")
+    assert result.cad_info.n_faces > 0
+    assert result.cad_info.bounding_box_mm[0] != result.cad_info.bounding_box_mm[1]
+    assert result.cad_info.units == "mm"
+
+
+def test_core_all_contains_public_builders() -> None:
+    assert {
+        "build_profiles",
+        "build_step",
+        "build_step_solid",
+        "build_stl",
+    } <= set(core.__all__)
 
 
 def test_step_route_body_selects_the_solid_or_the_inner_surface(monkeypatch) -> None:
@@ -159,7 +202,7 @@ def test_step_route_body_selects_the_solid_or_the_inner_surface(monkeypatch) -> 
 
     async def fake_solid(_design):
         called.append("solid")
-        return _STEP_STUB
+        return _step_result()
 
     async def fake_surface(_design):
         called.append("surface")
@@ -184,7 +227,7 @@ def test_step_route_defaults_to_the_solid_over_http(monkeypatch) -> None:
 
     async def fake_solid(_design):
         called.append("solid")
-        return _STEP_STUB
+        return _step_result()
 
     async def fake_surface(_design):
         called.append("surface")
