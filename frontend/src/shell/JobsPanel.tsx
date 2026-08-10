@@ -3,9 +3,10 @@ import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { compareSelection } from '../api/results';
 import { DesignAvailabilityNotice, RerunButton } from '../jobs/DesignAvailability';
 import { canLoadJobDesign, hydrateJobDesign, replaceWithJobDesign } from '../jobs/jobDesign';
+import { canExportRun, RunExportControl } from '../jobs/RunExportControl';
 import { type DesignDocument } from '../stores/design';
 import { applyJobPreferences, jobBaseName, nextJobNaming, nextVersionFor, preferencesStore, usePreferences } from '../prefs/preferences';
-import { JobsPreferencesSurface } from '../prefs/PreferencesSurface';
+import { JobsPreferencesSurface, ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { Icon } from './icons';
 
@@ -75,13 +76,14 @@ export function selectJob(job: JobItem): void {
   if (naming) preferencesStore.update(naming);
 }
 
-function JobCard({ job, now, selected, run, onError, onRemove }: {
+function JobCard({ job, now, selected, run, onError, onRemove, onOpenExportSettings }: {
   job: JobItem;
   now: number;
   selected: boolean;
   run: (design: DesignDocument, designRevision?: number) => Promise<void>;
   onError: (message: string) => void;
   onRemove: (job: JobItem) => void;
+  onOpenExportSettings: () => void;
 }) {
   const running = job.status === 'running' || job.status === 'queued';
   const failed = job.status === 'error';
@@ -110,6 +112,7 @@ function JobCard({ job, now, selected, run, onError, onRemove }: {
       {selectable
         ? <button className="job-select" aria-pressed={selected} title={selected ? 'Showing this run' : 'Show this run in the viewport and charts'} onClick={() => selectJob(job)}>{heading}</button>
         : <span className="job-select" title={job.error_message ?? job.status}>{heading}</span>}
+      {!expanded && canExportRun(job) && <RunExportControl job={job} compact onOpenExportSettings={onOpenExportSettings}/>}
       {!running && <button className="job-remove" aria-label={`Remove ${name(job)}`} title="Remove this job" onClick={() => onRemove(job)}><Icon name="close"/></button>}
     </header>
     {running ? <>
@@ -135,7 +138,7 @@ function JobCard({ job, now, selected, run, onError, onRemove }: {
           without a design v2 can read, in which case rerunning it would
           silently run whatever is on screen instead, under its name. */}
       <DesignAvailabilityNotice job={job}/>
-      <footer><RerunButton job={job} onRerun={retry}/><button onClick={() => window.open(`/api/jobs/${encodeURIComponent(job.id)}/log`, '_blank')}>Log</button></footer>
+      <footer><RerunButton job={job} onRerun={retry}/>{canExportRun(job) && <RunExportControl job={job} onOpenExportSettings={onOpenExportSettings}/>}<button onClick={() => window.open(`/api/jobs/${encodeURIComponent(job.id)}/log`, '_blank')}>Log</button></footer>
     </>}
   </article>;
 }
@@ -190,6 +193,7 @@ export function JobsPanel() {
   const preferences = usePreferences();
   const [now, setNow] = useState(Date.now());
   const [preferencesOpen, setPreferencesOpen] = useState(false);
+  const [exportPreferencesOpen, setExportPreferencesOpen] = useState(false);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1_000);
@@ -204,12 +208,13 @@ export function JobsPanel() {
   };
 
   return <div className="jobs-panel panel-scroll">
-    <div className="panel-meta"><span className="pill">{visibleJobs.filter((job) => job.status === 'running' || job.status === 'queued').length} active</span><span>{snapshot.connection} · {visibleJobs.length}/{snapshot.jobs.length} shown</span><span className="spacer"/>{failedCount > 0 && <button className="panel-text-action panel-text-action--danger" onClick={() => void jobsSocket.clearFailed().catch((error) => coordinator.reportError(String(error)))}>Clear failed</button>}<button className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Job preferences" aria-expanded={preferencesOpen} title="Job preferences" onClick={() => setPreferencesOpen((value) => !value)}><Icon name="settings"/></button></div>
+    <div className="panel-meta"><span className="pill">{visibleJobs.filter((job) => job.status === 'running' || job.status === 'queued').length} active</span><span>{snapshot.connection} · {visibleJobs.length}/{snapshot.jobs.length} shown</span><span className="spacer"/>{failedCount > 0 && <button className="panel-text-action panel-text-action--danger" onClick={() => void jobsSocket.clearFailed().catch((error) => coordinator.reportError(String(error)))}>Clear failed</button>}<button className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Job preferences" aria-expanded={preferencesOpen} title="Job preferences" onClick={() => { setExportPreferencesOpen(false); setPreferencesOpen((value) => !value); }}><Icon name="settings"/></button></div>
     {preferencesOpen && <JobsPreferencesSurface popover onClose={() => setPreferencesOpen(false)}/>}
+    {exportPreferencesOpen && <ResultsPreferencesSurface popover onClose={() => setExportPreferencesOpen(false)}/>}
     <RunNameField jobs={snapshot.jobs}/>
     {(coordinator.actionError || snapshot.error) && <div className="job-error" role="alert" style={{ margin: 7 }}>{coordinator.actionError ?? snapshot.error}</div>}
     {snapshot.jobs.length === 0 && snapshot.connection === 'connected' && <div className="coming-soon"><b>NO JOBS YET</b><span>Use Solve to run the current design.</span></div>}
     {snapshot.jobs.length > 0 && visibleJobs.length === 0 && <div className="coming-soon"><b>NO MATCHING JOBS</b><span>Lower the minimum rating filter to show more jobs.</span></div>}
-    {visibleJobs.map((job) => <JobCard key={job.id} job={job} now={now} selected={job.id === selection.primary} run={coordinator.run} onError={coordinator.reportError} onRemove={remove}/>)}
+    {visibleJobs.map((job) => <JobCard key={job.id} job={job} now={now} selected={job.id === selection.primary} run={coordinator.run} onError={coordinator.reportError} onRemove={remove} onOpenExportSettings={() => { setPreferencesOpen(false); setExportPreferencesOpen(true); }}/>)}
   </div>;
 }
