@@ -57,11 +57,13 @@ rounded:
   panel: "6px"
   pill: "999px"
 spacing:
-  hair: "3px"
-  tight: "6px"
-  snug: "8px"
-  base: "12px"
-  loose: "16px"
+  "2": "2px"
+  "4": "4px"
+  "6": "6px"
+  "8": "8px"
+  "12": "12px"
+  "16": "16px"
+  "24": "24px"
 components:
   button-solve:
     backgroundColor: "{colors.accent-cyan}"
@@ -252,7 +254,19 @@ status rail — and the workspace is a dockview grid the user rearranges and
 resizes. Nothing is centered in a max-width container; every surface fills the
 space it is given, because the user chose that space.
 
-Spacing runs on a 3 / 6 / 8 / 12 / 16px scale. Panels sit in an 8px gutter with
+Spacing runs on a 4px grid with a 2px half-step — 2 / 4 / 6 / 8 / 12 / 16 / 24
+— and nothing between the steps. The tokens are named for their value
+(`--space-8` is 8px and can only ever be 8px) rather than for their rank,
+because an ordinal scale is what lets a later pass insert a step and silently
+move every call site above it. This scale is enforced, not aspirational: an
+earlier version of this file claimed 3/6/8/12/16 while the stylesheets used 4,
+5, 7, 9, 10, 11, 13, 14, 15, 17, 18 and 20 across 244 declarations, which is
+exactly why the interface read as *almost* aligned rather than aligned.
+
+Value controls come in two widths and only two: `--field-w` (86px), sized to the
+widest real reading ("140.00 mm"), and `--field-w-wide` (132px) for the things
+that genuinely need it — a select whose option names are the point, a text
+field, an ATH formula. Panels sit in an 8px gutter with
 8px gaps; a parameter row is 30px tall with a 26px control inside it; the run
 cards in the jobs rail sit 9px in from the rail edge.
 
@@ -397,7 +411,10 @@ must copy rather than reinvent.
 - **Do** use a container query when the element lives in a rail the user can
   resize.
 - **Do** keep the type scale at 11 / 12 / 13 / 18px and the spacing scale at
-  3 / 6 / 8 / 12 / 16px, and never set functional text below 11px.
+  2 / 4 / 6 / 8 / 12 / 16 / 24px, and never set functional text below 11px.
+- **Do** size every value control from `--field-w` (86px) or `--field-w-wide`
+  (132px). A control that picks its own number is how two fields both called
+  "Sweep start", one above the other in the same rail, ended up different sizes.
 
 ### Don't:
 - **Don't** nest a card inside a card, or wrap a group of fields in a box. The
