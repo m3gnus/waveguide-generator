@@ -5,17 +5,65 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from pathlib import Path
 import platform
+import re
+import shutil
 import subprocess
+import tempfile
 from typing import Any
+import unicodedata
 
 from fastapi import APIRouter, FastAPI, HTTPException
+from pydantic import BaseModel, ConfigDict, Field
 
 from server.platform.paths import data_paths
 
 
 logger = logging.getLogger(__name__)
+
+MAX_EXPORT_MEMBERS = 100
+MAX_EXPORT_BYTES = 16 * 1024 * 1024
+_WINDOWS_DEVICE_NAME = re.compile(
+    r"^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$", re.IGNORECASE
+)
+_WINDOWS_DRIVE = re.compile(r"^[A-Za-z]:")
+
+
+class ExportMember(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    relative_path: str = Field(min_length=1)
+    text: str
+
+
+class WriteExportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    subdirectory: str = Field(min_length=1)
+    members: list[ExportMember] = Field(min_length=1, max_length=MAX_EXPORT_MEMBERS)
+
+
+def _path_segments(raw: str, label: str) -> list[str]:
+    if raw.startswith(("/", "\\")) or _WINDOWS_DRIVE.match(raw):
+        raise ValueError(f"{label} must be a relative path")
+    segments = re.split(r"[\\/]", raw)
+    if any(segment in ("", ".", "..") for segment in segments):
+        raise ValueError(f"{label} contains an empty, '.' or '..' path segment")
+    for segment in segments:
+        if segment.endswith((".", " ")):
+            raise ValueError(f"{label} contains a segment ending in a dot or space")
+        if any(unicodedata.category(character) == "Cc" for character in segment):
+            raise ValueError(f"{label} contains a control character")
+        if _WINDOWS_DEVICE_NAME.fullmatch(segment):
+            raise ValueError(f"{label} contains reserved Windows device name {segment!r}")
+    return segments
+
+
+def _strictly_inside(path: Path, root: Path, label: str) -> None:
+    if path == root or root not in path.parents:
+        raise ValueError(f"{label} resolves outside the selected workspace")
 
 
 def _select_workspace_folder() -> str | None:
@@ -83,6 +131,11 @@ class WorkspaceState:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
+    def selected_path(self) -> Path | None:
+        if not self._loaded:
+            self._load()
+        return self._selected
+
     def _load(self) -> None:
         self._loaded = True
         try:
@@ -120,8 +173,8 @@ def create_workspace_router(state: WorkspaceState) -> APIRouter:
     router = APIRouter(prefix="/api/workspace", tags=["workspace"])
 
     @router.get("/path")
-    async def workspace_path() -> dict[str, str]:
-        return {"path": str(state.path())}
+    async def workspace_path() -> dict[str, Any]:
+        return {"path": str(state.path()), "selected": state.selected_path() is not None}
 
     @router.post("/select")
     async def workspace_select() -> dict[str, Any]:
@@ -150,6 +203,69 @@ def create_workspace_router(state: WorkspaceState) -> APIRouter:
             raise HTTPException(status_code=500, detail=f"Failed to open folder: {exc}") from exc
         return {"status": "opened", "path": str(path)}
 
+    @router.post("/write-export")
+    async def workspace_write_export(request: WriteExportRequest) -> dict[str, Any]:
+        selected = state.selected_path()
+        if selected is None:
+            raise HTTPException(
+                status_code=409,
+                detail="No workspace folder has been selected. Choose a workspace folder first.",
+            )
+
+        workspace_root = selected.resolve()
+        try:
+            subdirectory_segments = _path_segments(request.subdirectory, "subdirectory")
+            export_directory = workspace_root.joinpath(*subdirectory_segments).resolve()
+            _strictly_inside(export_directory, workspace_root, "subdirectory")
+
+            prepared: list[tuple[list[str], bytes, Path]] = []
+            total_bytes = 0
+            seen: set[Path] = set()
+            for index, member in enumerate(request.members):
+                label = f"members[{index}].relative_path"
+                segments = _path_segments(member.relative_path, label)
+                destination = export_directory.joinpath(*segments).resolve()
+                _strictly_inside(destination, workspace_root, label)
+                if destination == export_directory or export_directory not in destination.parents:
+                    raise ValueError(f"{label} resolves outside the export subdirectory")
+                if destination in seen:
+                    raise ValueError(f"{label} duplicates another member path")
+                seen.add(destination)
+                encoded = member.text.encode("utf-8")
+                total_bytes += len(encoded)
+                if total_bytes > MAX_EXPORT_BYTES:
+                    raise ValueError(
+                        f"Export set exceeds the {MAX_EXPORT_BYTES}-byte UTF-8 size limit"
+                    )
+                prepared.append((segments, encoded, destination))
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        if export_directory.exists() or export_directory.is_symlink():
+            raise HTTPException(
+                status_code=409,
+                detail=f"Export directory already exists: {export_directory}",
+            )
+
+        export_directory.parent.mkdir(parents=True, exist_ok=True)
+        staging_directory = Path(
+            tempfile.mkdtemp(prefix=f".{export_directory.name}.staging-", dir=export_directory.parent)
+        )
+        try:
+            for segments, encoded, _destination in prepared:
+                staged_file = staging_directory.joinpath(*segments)
+                staged_file.parent.mkdir(parents=True, exist_ok=True)
+                staged_file.write_bytes(encoded)
+            os.replace(staging_directory, export_directory)
+        except Exception as exc:
+            shutil.rmtree(staging_directory, ignore_errors=True)
+            raise HTTPException(status_code=500, detail=f"Failed to write export set: {exc}") from exc
+
+        return {
+            "directory": str(export_directory),
+            "files": [str(destination) for _segments, _encoded, destination in prepared],
+        }
+
     return router
 
 
@@ -162,6 +278,7 @@ def mount_workspace(application: FastAPI) -> WorkspaceState:
 
 __all__ = [
     "WorkspaceState",
+    "WriteExportRequest",
     "create_workspace_router",
     "mount_workspace",
 ]
