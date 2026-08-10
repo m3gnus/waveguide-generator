@@ -3,6 +3,15 @@
 
 set -u
 
+# A script has no Mach-O architecture, so LaunchServices may start this bundle
+# under Rosetta on Apple Silicon. A translated shell makes the universal
+# python pick its x86_64 slice, which then cannot load the venv's arm64
+# extension modules ("have 'arm64', need 'x86_64'"). Detect translation and
+# re-exec native before anything else runs.
+if [[ "$(sysctl -n sysctl.proc_translated 2>/dev/null)" == "1" ]]; then
+    exec arch -arm64 "$0" "$@"
+fi
+
 REPO_DIR="$(cd "$(dirname "$0")/../../../../.." && pwd)"
 VENV_PYTHON="$REPO_DIR/.venv/bin/python"
 
