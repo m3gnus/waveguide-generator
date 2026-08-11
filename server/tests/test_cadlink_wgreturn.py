@@ -1,0 +1,190 @@
+"""Strict CAD-return bundle reader contracts."""
+
+from __future__ import annotations
+
+from copy import deepcopy
+import hashlib
+import json
+from pathlib import Path
+
+import pytest
+
+from server.cadlink.wgreturn import WgReturnError, read_wgreturn
+
+
+def _manifest(step: bytes) -> dict:
+    instance = "instance-1"
+    return {
+        "wgreturn_version": "1.0",
+        "required_features": ["checksummed-files-v1", "assembly-frame-v1", "instance-records-v1"],
+        "return": {"id": "wgr_01J5A8QK3M9T2XVBH0RD7NWE6C", "created_at": "2026-08-12T09:14:03Z"},
+        "generator": {"adapter": "hornlab-fusion-addin/WGLink", "adapter_version": "1.0.0", "cad_app": "fusion360", "cad_version": "2704.1.53"},
+        "document": {"name": "Tritonia speaker", "native_id": None},
+        "coordinate_system": {"length_unit": "mm", "handedness": "right", "matrix_convention": "row-major-local-to-parent", "solver_anchor_instance_id": instance},
+        "assembly": {"file": "assembly.step", "n_bodies_expected": 1, "bbox_mm": [[-172, -427, -185.23], [172, 152, 94.77]]},
+        "files": {"assembly.step": {"sha256": "sha256:" + hashlib.sha256(step).hexdigest(), "size_bytes": len(step), "media_type": "model/step", "purpose": "exterior-assembly"}},
+        "scope": {"selection": "root", "included": [{"object_id": "speaker", "name": "speaker", "body_kind": "surface", "visible": True, "external_reference": "local", "wglink_instance_id": instance}], "skipped": [{"object_id": "construction", "kind": "construction", "severity": "info", "reason": "not geometry"}], "fem_air_volumes": [], "status": "clean"},
+        "instances": [{
+            "instance_id": instance, "design_id": "wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M", "lineage_id": "wgl_01J4Y2WZQK8Z3TFD3E7V9XKQ4M", "edit_version": 19,
+            "design_hash": "sha256:" + "1" * 64, "export_id": "wge_01J4Y2ZD000000000000000000", "export_sequence": 7,
+            "geometry_hash": "sha256:" + "2" * 64, "origin_bundle_id": "wgb_01J4Y2ZF000000000000000000", "build_mode": "enclosure", "parameter_prefix": "wg_tritonia_", "occurrence_path": "Speaker/WGLink",
+            "assembly_from_link": [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]], "chirality": "original",
+            "body_evidence": {"local_body_state": "unmodified", "baseline_fingerprint": {"is_solid": True, "volume_mm3": 12, "bbox_mm": [0, 0, 0, 1, 1, 1]}, "observed_fingerprint": {"is_solid": True, "volume_mm3": 12, "bbox_mm": [0, 0, 0, 1, 1, 1]}, "observed_at": "2026-08-12T09:14:03Z"},
+            "source_contract": {"role": "HF", "throat_z_mm": 0, "throat_plane_link": {"origin_mm": [0, 0, 0], "normal": [0, 0, 1]}, "axis_link": {"origin_mm": [0, 0, 0], "direction": [0, 0, 1]}, "throat_diameter_mm": 25.4, "expected_disc_area_mm2": 506.707},
+        }],
+        "sources": [{"id": "source-hf", "role": "HF", "instance_id": instance, "required": True, "default_drive_channel_id": "drive-hf", "patch_policy": "single-connected", "expected_connected_components": 1, "selectors": {"linked_throat": {"instance_id": instance}, "appearance_labels": ["HF"]}, "observed": {"face_count": 1, "total_area_mm2": 506.696, "per_face_area_mm2": [506.696], "bodies": ["speaker"]}, "suggested_resolution_mm": 4}],
+        "acoustics": None,
+    }
+
+
+def write_bundle(root: Path, manifest: dict | None = None, *, step: bytes = b"STEP") -> Path:
+    bundle = root / "fixture.wgreturn"
+    bundle.mkdir(parents=True)
+    (bundle / "assembly.step").write_bytes(step)
+    payload = manifest or _manifest(step)
+    (bundle / "wgreturn.json").write_text(json.dumps(payload, allow_nan=True), encoding="utf-8")
+    return bundle
+
+
+def test_worked_example_shape_and_real_member_table_validate(tmp_path: Path) -> None:
+    result = read_wgreturn(write_bundle(tmp_path))
+    assert result.manifest["sources"][0]["id"] == "source-hf"
+    assert result.artifact_sha256.startswith("sha256:")
+
+
+@pytest.mark.parametrize(
+    ("mutate", "match"),
+    [
+        (lambda value: value.update(wgreturn_version="2.0"), "unsupported major"),
+        (lambda value: value["required_features"].append("future-physics-v1"), "unknown required feature"),
+        (lambda value: value["instances"][0].update(chirality="mirrored"), "chirality"),
+        (lambda value: value.update(acoustics={"driver": "x"}), "acoustics"),
+        (lambda value: value["instances"][0]["assembly_from_link"].__setitem__(3, [0, 0, 1, 1]), "last row"),
+        (lambda value: value["scope"].update(status="degraded"), "iff"),
+        (lambda value: value["sources"][0].update(metadata={"nested": {"freshness": "current"}}), "forbidden"),
+    ],
+)
+def test_manifest_rejection_corpus(tmp_path: Path, mutate, match: str) -> None:
+    manifest = deepcopy(_manifest(b"STEP"))
+    mutate(manifest)
+    with pytest.raises(WgReturnError, match=match):
+        read_wgreturn(write_bundle(tmp_path, manifest))
+
+
+def test_member_integrity_rejects_checksum_undeclared_and_paths(tmp_path: Path) -> None:
+    manifest = _manifest(b"STEP")
+    manifest["files"]["assembly.step"]["sha256"] = "sha256:" + "0" * 64
+    with pytest.raises(WgReturnError, match="assembly.step.*checksum"):
+        read_wgreturn(write_bundle(tmp_path / "one", manifest))
+
+    bundle = write_bundle(tmp_path / "two")
+    (bundle / "extra.bin").write_bytes(b"x")
+    with pytest.raises(WgReturnError, match="undeclared.*extra.bin"):
+        read_wgreturn(bundle)
+
+    manifest = _manifest(b"STEP")
+    manifest["files"]["../assembly.step"] = manifest["files"].pop("assembly.step")
+    manifest["assembly"]["file"] = "../assembly.step"
+    with pytest.raises(WgReturnError, match="path segments"):
+        read_wgreturn(write_bundle(tmp_path / "three", manifest))
+
+
+def test_nonfinite_json_is_refused_at_its_path(tmp_path: Path) -> None:
+    manifest = _manifest(b"STEP")
+    manifest["assembly"]["bbox_mm"][0][0] = float("nan")
+    with pytest.raises(WgReturnError, match="non-finite JSON number"):
+        read_wgreturn(write_bundle(tmp_path, manifest))
+
+
+def test_reader_rejects_symlink_missing_size_and_absolute_members(tmp_path: Path) -> None:
+    symlink_bundle = write_bundle(tmp_path / "symlink")
+    (symlink_bundle / "linked.bin").symlink_to(symlink_bundle / "assembly.step")
+    with pytest.raises(WgReturnError, match="symlink"):
+        read_wgreturn(symlink_bundle)
+
+    missing_bundle = write_bundle(tmp_path / "missing")
+    (missing_bundle / "assembly.step").unlink()
+    with pytest.raises(WgReturnError, match="declared bundle member is missing"):
+        read_wgreturn(missing_bundle)
+
+    wrong_size = _manifest(b"STEP")
+    wrong_size["files"]["assembly.step"]["size_bytes"] += 1
+    with pytest.raises(WgReturnError, match="size mismatch"):
+        read_wgreturn(write_bundle(tmp_path / "size", wrong_size))
+
+    absolute = _manifest(b"STEP")
+    absolute["files"]["/assembly.step"] = absolute["files"].pop("assembly.step")
+    absolute["assembly"]["file"] = "/assembly.step"
+    with pytest.raises(WgReturnError, match="relative bundle member"):
+        read_wgreturn(write_bundle(tmp_path / "absolute", absolute))
+
+
+def test_reader_rejects_duplicate_portable_names_and_clean_degraded_scope(tmp_path: Path) -> None:
+    duplicate = _manifest(b"STEP")
+    duplicate["files"]["ASSEMBLY.STEP"] = dict(duplicate["files"]["assembly.step"])
+    with pytest.raises(WgReturnError, match="duplicate normalized member names"):
+        read_wgreturn(write_bundle(tmp_path / "duplicate", duplicate))
+
+    degraded = _manifest(b"STEP")
+    degraded["scope"]["skipped"].append(
+        {
+            "object_id": "hidden-body",
+            "kind": "hidden",
+            "severity": "degraded",
+            "reason": "hidden by user",
+        }
+    )
+    with pytest.raises(WgReturnError, match="degraded.*iff"):
+        read_wgreturn(write_bundle(tmp_path / "degraded", degraded))
+
+
+def test_reader_enforces_fem_member_feature_and_purpose_coupling(tmp_path: Path) -> None:
+    fem = b"FEM STEP"
+    manifest = _manifest(b"STEP")
+    manifest["files"]["fem/air.step"] = {
+        "sha256": "sha256:" + hashlib.sha256(fem).hexdigest(),
+        "size_bytes": len(fem),
+        "media_type": "model/step",
+        "purpose": "fem-air-volume",
+    }
+    bundle = write_bundle(tmp_path / "unreferenced", manifest)
+    (bundle / "fem").mkdir()
+    (bundle / "fem" / "air.step").write_bytes(fem)
+    with pytest.raises(WgReturnError, match="unreferenced FEM"):
+        read_wgreturn(bundle)
+
+    manifest = _manifest(b"STEP")
+    manifest["files"]["fem/air.step"] = {
+        "sha256": "sha256:" + hashlib.sha256(fem).hexdigest(),
+        "size_bytes": len(fem),
+        "media_type": "model/step",
+        "purpose": "fem-air-volume",
+    }
+    manifest["scope"]["fem_air_volumes"] = [
+        {"file": "fem/air.step", "n_solids_expected": 1}
+    ]
+    bundle = write_bundle(tmp_path / "feature", manifest)
+    (bundle / "fem").mkdir()
+    (bundle / "fem" / "air.step").write_bytes(fem)
+    with pytest.raises(WgReturnError, match="fem-air-volume-v1 is required"):
+        read_wgreturn(bundle)
+
+
+def test_reader_enforces_disc_area_and_anchor_rules(tmp_path: Path) -> None:
+    area = _manifest(b"STEP")
+    area["instances"][0]["source_contract"]["expected_disc_area_mm2"] *= 2
+    with pytest.raises(WgReturnError, match=r"pi\*throat_diameter"):
+        read_wgreturn(write_bundle(tmp_path / "area", area))
+
+    multiple = _manifest(b"STEP")
+    second = deepcopy(multiple["instances"][0])
+    second["instance_id"] = "instance-2"
+    multiple["instances"].append(second)
+    multiple["coordinate_system"]["solver_anchor_instance_id"] = None
+    with pytest.raises(WgReturnError, match="required and must name"):
+        read_wgreturn(write_bundle(tmp_path / "missing-anchor", multiple))
+
+    unknown = _manifest(b"STEP")
+    unknown["coordinate_system"]["solver_anchor_instance_id"] = "unknown"
+    with pytest.raises(WgReturnError, match="must name the sole instance"):
+        read_wgreturn(write_bundle(tmp_path / "unknown-anchor", unknown))
