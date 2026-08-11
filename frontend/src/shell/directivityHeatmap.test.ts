@@ -1,6 +1,6 @@
 import * as echarts from 'echarts';
 import { describe, expect, it } from 'vitest';
-import { chartDensity, contourPolylines, contourSegments, frequencyBounds, heatmapFrequencyLabel, heatmapOption, interpolateDirectivityGrid, lineOption } from './ResultsPanel';
+import { chartDensity, contourPolylines, contourSegments, frequencyBounds, heatmapFrequencyLabel, heatmapOption, interpolateDirectivityGrid, lineOption, smoothContourShape } from './ResultsPanel';
 import { readChartTokens, type ChartTokens } from '../results/EChart';
 import type { ResultPayload } from '../results/types';
 
@@ -88,6 +88,14 @@ describe('directivity heatmap', () => {
       [2, 1, 1, 1],
       [2, 1, 3, 0],
     ])).toEqual([[[0, 0], [1, 1], [2, 1], [3, 0]]]);
+  });
+
+  it('rounds contour paths without letting their control points overshoot the measured bounds', () => {
+    expect(smoothContourShape([[12, 8], [30, 2], [48, 14]])).toEqual({
+      points: [[12, 8], [30, 2], [48, 14]],
+      smooth: 0.5,
+      smoothConstraint: [[12, 2], [48, 14]],
+    });
   });
 
   it('pins line charts to the exact positive frequencies present in the solve', () => {

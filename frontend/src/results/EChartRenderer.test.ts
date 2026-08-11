@@ -6,10 +6,11 @@ import type { EChartsOption } from 'echarts';
 const setOption = vi.fn();
 const dispose = vi.fn();
 const resize = vi.fn();
+const init = vi.fn(() => ({ setOption, dispose, resize }));
 
 vi.mock('echarts/core', () => ({
   use: () => undefined,
-  init: () => ({ setOption, dispose, resize }),
+  init,
 }));
 vi.mock('echarts/charts', () => ({ CustomChart: {}, HeatmapChart: {}, LineChart: {} }));
 vi.mock('echarts/components', () => ({
@@ -18,7 +19,7 @@ vi.mock('echarts/components', () => ({
 }));
 vi.mock('echarts/renderers', () => ({ CanvasRenderer: {} }));
 
-const { EChartRenderer } = await import('./EChartRenderer');
+const { EChartRenderer, chartPixelRatio } = await import('./EChartRenderer');
 
 describe('interactive chart updates', () => {
   let host: HTMLDivElement;
@@ -26,7 +27,7 @@ describe('interactive chart updates', () => {
 
   beforeEach(() => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-    setOption.mockClear(); dispose.mockClear(); resize.mockClear();
+    setOption.mockClear(); dispose.mockClear(); resize.mockClear(); init.mockClear();
     globalThis.ResizeObserver ??= class { observe() {} disconnect() {} unobserve() {} } as never;
     host = document.createElement('div');
     document.body.append(host);
@@ -43,6 +44,17 @@ describe('interactive chart updates', () => {
     render({ series: [{ type: 'line', data: [[100, 2]] }] });
     expect(setOption).toHaveBeenCalledTimes(2);
     for (const [, settings] of setOption.mock.calls) expect(settings).toMatchObject({ notMerge: true });
+  });
+
+  it('uses a high-density backing canvas so thin contours stay anti-aliased', () => {
+    expect(chartPixelRatio(1)).toBe(2);
+    expect(chartPixelRatio(2.5)).toBe(2.5);
+    expect(chartPixelRatio(4)).toBe(3);
+    render({ series: [] });
+    expect(init).toHaveBeenCalledWith(expect.any(HTMLElement), undefined, expect.objectContaining({
+      renderer: 'canvas',
+      devicePixelRatio: 2,
+    }));
   });
 
   it('does not touch the chart while the option object is unchanged', () => {

@@ -23,13 +23,29 @@ echarts.use([
   CanvasRenderer,
 ]);
 
+/**
+ * Keep thin engineering traces anti-aliased on ordinary 1x displays.
+ *
+ * ECharts otherwise sizes its backing canvas at exactly one physical pixel per
+ * CSS pixel there, which makes diagonal directivity contours visibly stair-step
+ * compared with the high-DPI PNG renderer. A 2x floor is enough to remove that
+ * effect without the memory cost of letting unusually large ratios run free.
+ */
+export function chartPixelRatio(deviceRatio = globalThis.devicePixelRatio || 1): number {
+  return Math.min(3, Math.max(2, deviceRatio));
+}
+
 export function EChartRenderer({ option, label }: { option: EChartsOption; label: string }) {
   const host = useRef<HTMLDivElement>(null);
   const chart = useRef<echarts.ECharts | null>(null);
 
   useEffect(() => {
     if (!host.current) return;
-    chart.current = echarts.init(host.current, undefined, { renderer: 'canvas', useDirtyRect: true });
+    chart.current = echarts.init(host.current, undefined, {
+      renderer: 'canvas',
+      useDirtyRect: true,
+      devicePixelRatio: chartPixelRatio(),
+    });
     const observer = new ResizeObserver(() => chart.current?.resize());
     observer.observe(host.current);
     return () => {

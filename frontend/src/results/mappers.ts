@@ -100,7 +100,14 @@ export function directivityIndexSeries(result: ResultPayload, smoothing: Smoothi
   const entries = Array.isArray(raw) ? [['DI', raw] as const] : Object.entries(raw ?? {});
   return entries.map(([name, values]) => {
     const smoothed = applySmoothing(frequencies, values, smoothing);
-    return { name, type: 'line' as const, showSymbol: false, data: frequencies.map((frequency, index) => [frequency, smoothed[index] ?? null]) };
+    return {
+      name,
+      type: 'line' as const,
+      showSymbol: false,
+      smooth: 0.32,
+      smoothMonotone: 'x' as const,
+      data: frequencies.map((frequency, index) => [frequency, smoothed[index] ?? null]),
+    };
   });
 }
 
@@ -110,5 +117,12 @@ export function beamShapeSeries(result: ResultPayload) {
   return [
     { name: 'H −6 dB', values: beam?.horizontal_beamwidth_deg ?? [] },
     { name: 'V −6 dB', values: beam?.vertical_beamwidth_deg ?? [] },
-  ].map(({ name, values }) => ({ name, type: 'line' as const, showSymbol: false, data: frequencies.map((frequency, index) => [frequency, values[index] ?? null]) }));
+  ].map(({ name, values }) => ({
+    name,
+    type: 'line' as const,
+    showSymbol: false,
+    smooth: 0.32,
+    smoothMonotone: 'x' as const,
+    data: frequencies.map((frequency, index) => [frequency, values[index] ?? null]),
+  }));
 }
