@@ -165,8 +165,10 @@ describe('solve invocation mutex', () => {
   });
 
   it('guards two fast retries routed through the coordinator bridge', async () => {
-    const pending = deferred<string>();
-    mocks.submitDesign.mockReturnValue(pending.promise);
+    // A retry replays the stored run on the server rather than resubmitting the
+    // design from the browser, so the guarded call here is retryJob.
+    const pending = deferred<void>();
+    const retryJob = vi.spyOn(jobsSocket, 'retryJob').mockReturnValue(pending.promise);
     publishJobs([failedJob()]);
     await act(async () => { root.render(<JobsCoordinator><JobsPanel/></JobsCoordinator>); });
     const retry = [...host.querySelectorAll('button')]
@@ -179,9 +181,11 @@ describe('solve invocation mutex', () => {
       await Promise.resolve();
     });
 
-    expect(mocks.submitDesign).toHaveBeenCalledTimes(1);
+    expect(retryJob).toHaveBeenCalledTimes(1);
+    expect(retryJob).toHaveBeenCalledWith('failed-job');
+    expect(mocks.submitDesign).not.toHaveBeenCalled();
     await act(async () => {
-      pending.resolve('retried-job');
+      pending.resolve();
       await pending.promise;
       await Promise.resolve();
     });
