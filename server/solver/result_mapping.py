@@ -17,6 +17,7 @@ from typing import Any
 
 import numpy as np
 
+from .acoustics import reference_air_density_kg_per_m3, reference_sound_speed_m_per_s
 from .beam_shape import beam_shape_summary
 from .context import SolverContext
 from .contract import build_directivity_metadata, frequency_failure
@@ -25,7 +26,14 @@ from .quadrants import native_symmetry_plane_for_quadrants
 
 
 REFERENCE_PRESSURE_PA = 20.0e-6
-REFERENCE_RHO_C = 1.21 * 343.0
+# The pressures normalized below came out of a solve that used the native
+# package's own air density -- WG never passes one -- so a typed 1.21 divided
+# them by a rho 0.49% away from the rho that made them (~0.04 dB). Ask the
+# packages instead. Only the density is shared across backends; the sound speed
+# is taken per-engine at the call site in ``build_solver_response``, and this
+# module-level pairing is only the default for callers that arrive without one.
+REFERENCE_AIR_DENSITY_KG_PER_M3 = reference_air_density_kg_per_m3()
+REFERENCE_RHO_C = REFERENCE_AIR_DENSITY_KG_PER_M3 * reference_sound_speed_m_per_s()
 _BALLOON_FLOOR_AMPLITUDE = REFERENCE_PRESSURE_PA * 10.0 ** (-120.0 / 20.0)
 
 
@@ -569,11 +577,16 @@ def phase_on_axis(result: Any) -> list[float | None]:
     return (output + [None] * count)[:count]
 
 
-def specific_impedance_z_over_rho_c(result: Any) -> list[complex | None]:
+def specific_impedance_z_over_rho_c(
+    result: Any, *, rho_c: float = REFERENCE_RHO_C
+) -> list[complex | None]:
     """Convert unit-acceleration pressure using v=a/(-iω), then conjugate.
 
     This is the sign/drive convention from v1
-    ``server/solver/result_mapping.py:185-200``.
+    ``server/solver/result_mapping.py:185-200``.  ``rho_c`` names the medium
+    the result is reported against; it defaults to the shared reference so a
+    direct caller holding only a result still gets the packages' constants
+    rather than a typed pair.
     """
 
     frequencies = np.asarray(result.frequencies_hz, dtype=float)
@@ -583,7 +596,7 @@ def specific_impedance_z_over_rho_c(result: Any) -> list[complex | None]:
         if index >= raw_pressure.size:
             output.append(None)
             continue
-        mapped = np.conjugate(-1j * 2.0 * np.pi * frequency * raw_pressure[index]) / REFERENCE_RHO_C
+        mapped = np.conjugate(-1j * 2.0 * np.pi * frequency * raw_pressure[index]) / rho_c
         output.append(
             complex(mapped)
             if math.isfinite(float(mapped.real)) and math.isfinite(float(mapped.imag))
@@ -704,7 +717,12 @@ def build_solver_response(
     if any(value is None for value in frequencies):
         raise ValueError("native solver returned a non-finite frequency axis")
     frequency_values = [float(value) for value in frequencies if value is not None]
-    impedance = specific_impedance_z_over_rho_c(result)
+    # The engine that ran the solve is known here through the c it was given,
+    # so normalize against that c rather than against whichever package
+    # happened to be installed when this module was imported.
+    impedance = specific_impedance_z_over_rho_c(
+        result, rho_c=REFERENCE_AIR_DENSITY_KG_PER_M3 * float(sound_speed_m_per_s)
+    )
     observation = {
         "requested_distance_m": float(config.observation.distance_m),
         "effective_distance_m": float(config.observation.distance_m),
@@ -848,6 +866,7 @@ def build_solver_response(
 
 
 __all__ = [
+    "REFERENCE_AIR_DENSITY_KG_PER_M3",
     "REFERENCE_PRESSURE_PA",
     "REFERENCE_RHO_C",
     "build_solver_response",
