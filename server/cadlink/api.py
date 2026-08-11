@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
+import json
+import math
 from pathlib import Path
 import re
 from typing import Any
@@ -43,9 +46,94 @@ class CadReturnIngestRequest(BaseModel):
 router = APIRouter(prefix="/api/cadlink", tags=["cadlink"])
 
 
+def _return_listing(workspace_root: Path) -> list[dict[str, Any]]:
+    returns_root = workspace_root / "wgreturn"
+    if not returns_root.is_dir():
+        return []
+    items: list[dict[str, Any]] = []
+    for candidate in sorted(returns_root.glob("*.wgreturn"), key=lambda item: item.name.casefold()):
+        try:
+            resolved = candidate.resolve()
+            _strictly_inside(resolved, workspace_root, "bundlePath")
+            if not resolved.is_dir():
+                continue
+            modified_at = datetime.fromtimestamp(
+                candidate.stat().st_mtime, tz=timezone.utc
+            ).isoformat().replace("+00:00", "Z")
+        except (OSError, ValueError):
+            continue
+        item: dict[str, Any] = {
+            "name": candidate.name,
+            "bundlePath": f"wgreturn/{candidate.name}",
+            "modifiedAt": modified_at,
+            "readable": False,
+            "documentName": None,
+            "sourceCount": None,
+            "instanceCount": None,
+            "sources": [],
+        }
+        try:
+            manifest = json.loads((resolved / "wgreturn.json").read_text(encoding="utf-8"))
+            document = manifest.get("document")
+            sources = manifest.get("sources")
+            instances = manifest.get("instances")
+            if not isinstance(document, dict) or not isinstance(sources, list) or not isinstance(instances, list):
+                raise ValueError("manifest inventory has the wrong shape")
+            source_summaries = []
+            for source in sources:
+                if not isinstance(source, dict):
+                    raise ValueError("manifest source has the wrong shape")
+                suggested_resolution = float(source["suggested_resolution_mm"])
+                if not math.isfinite(suggested_resolution) or suggested_resolution <= 0:
+                    raise ValueError("manifest source suggestion is not finite and positive")
+                source_summaries.append(
+                    {
+                        "id": str(source["id"]),
+                        "role": str(source.get("role") or "source"),
+                        "required": bool(source.get("required", True)),
+                        "suggestedResolutionMm": suggested_resolution,
+                        "defaultDriveChannelId": str(
+                            source["default_drive_channel_id"]
+                        ),
+                    }
+                )
+            item.update(
+                {
+                    "readable": True,
+                    "documentName": str(document.get("name") or candidate.stem),
+                    "sourceCount": len(sources),
+                    "instanceCount": len(instances),
+                    "sources": source_summaries,
+                }
+            )
+        except (OSError, UnicodeError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+            item["reason"] = str(exc) or "Manifest is unreadable"
+        items.append(item)
+    return items
+
+
+@router.get("/returns")
+async def list_returns(request: Request) -> dict[str, Any]:
+    workspace: WorkspaceState = request.app.state.workspace
+    selected = workspace.selected_path()
+    if selected is None:
+        raise HTTPException(
+            status_code=409,
+            detail="No workspace folder has been selected. Choose a workspace folder first.",
+        )
+    workspace_root = selected.resolve()
+    return {"items": await asyncio.to_thread(_return_listing, workspace_root)}
+
+
 def _ingest_error(exc: Exception) -> HTTPException:
     if isinstance(exc, IngestRefusal):
-        return HTTPException(status_code=409 if exc.corruption else 422, detail=str(exc))
+        detail: str | dict[str, Any] = str(exc)
+        if exc.area_drift_sources:
+            detail = {
+                "message": str(exc),
+                "area_drift_sources": list(exc.area_drift_sources),
+            }
+        return HTTPException(status_code=409 if exc.corruption else 422, detail=detail)
     if isinstance(exc, (WgReturnError, ValueError, TypeError)):
         return HTTPException(status_code=422, detail=str(exc))
     if isinstance(exc, (ImportError, RuntimeError)):
@@ -113,6 +201,7 @@ def mount_cadlink(application: FastAPI) -> None:
 __all__ = [
     "CadReturnIngestRequest",
     "ImportedMeshRequest",
+    "list_returns",
     "mount_cadlink",
     "router",
 ]

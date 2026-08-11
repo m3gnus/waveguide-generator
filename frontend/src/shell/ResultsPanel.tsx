@@ -4,7 +4,7 @@ import type { EChartsOption } from 'echarts';
 import { jobsSocket } from '../api/jobsSocket';
 import { compareSelection, fetchJobResults, type JobResults } from '../api/results';
 import { EChart, useChartTokens, type ChartTokens } from '../results/EChart';
-import { beamShapeSeries, directivityGrid, directivityIndexSeries, impedanceSeries, splSeries, type NamedResult } from '../results/mappers';
+import { beamShapeSeries, directivityGrid, directivityIndexSeries, expandResultChannels, impedanceSeries, splSeries, type NamedResult } from '../results/mappers';
 import { BalloonRenderer, ChartStub, ForwardBeamRenderer, hasBalloonData, type ChartStubAction } from '../results/balloon';
 import { runExportBundle } from '../results/exporters';
 import { resultExportSnapshot } from '../results/exportContext';
@@ -688,6 +688,7 @@ function ChartCard({ index, chartType, result, named, tokens, beamShapeAction }:
   const polarStep = chartType.startsWith('directivity_map') ? resolvedPolarStepNotice(result) : null;
   const subtitle = chartType.startsWith('directivity_map') ? `ref ${preferencesStore.getSnapshot().mapReference} dB${polarStep ? ` · ${polarStep}` : ''}` : chartType === 'frequency_response' ? splSubtitle(result) : null;
   const unit = CHART_BADGES[chartType]?.unit;
+  const activeLabel = named.find((item) => item.result === result)?.label ?? named[0]?.label ?? 'the primary run';
   return <>
     <section ref={card} className={`result-card result-${index}`} data-density={density}>
       <div className="chart-placeholder" title="Hover for values · double-click for detail" onDoubleClick={() => setExpanded(true)}>
@@ -703,7 +704,7 @@ function ChartCard({ index, chartType, result, named, tokens, beamShapeAction }:
           <select aria-label={`Panel ${index + 1} chart type`} value={chartType} onChange={(event) => preferencesStore.setChartType(index, event.target.value as ChartType)}>{CHART_TYPES.map(({ id, label }) => <option key={id} value={id}>{label}</option>)}</select>
         </span>
         {subtitle && density !== 'compact' && <span className="result-subtitle">{subtitle}</span>}
-        {comparisonIgnored && density !== 'compact' && <span className="result-single-run" title={`This chart shows one run at a time. Showing ${named[0]?.label ?? 'the primary run'}.`}>1 of {named.length}</span>}
+        {comparisonIgnored && density !== 'compact' && <span className="result-single-run" title={`This chart shows one run at a time. Showing ${activeLabel}.`}>1 of {named.length}</span>}
         <span className="result-chrome-spacer"/>
         <button className="result-card-expand" aria-label={`Expand panel ${index + 1}`} title="Open detail view" onClick={() => setExpanded(true)}><Icon name="expand"/></button>
         <button className="result-card-close" aria-label={`Close panel ${index + 1}`} title="Close chart" onClick={() => preferencesStore.closeChart(index)}><Icon name="close"/></button>
@@ -763,6 +764,7 @@ export function ResultsPanel() {
   const [preferencesOpen, setPreferencesOpen] = useState(false);
   const preferencesAnchor = useRef<HTMLButtonElement | null>(null);
   const [beamRerunSubmitting, setBeamRerunSubmitting] = useState(false);
+  const [primaryChannel, setPrimaryChannel] = useState<string | null>(null);
 
   // Jobs arrive newest-first, so the first finished one is the latest solve.
   const latest = useMemo(() => jobs.find((job) => job.status === 'complete' && job.has_results) ?? null, [jobs]);
@@ -808,22 +810,34 @@ export function ResultsPanel() {
   }, [selection.primary, selectionKey, fetchAttempt]);
 
   const currentDisplay = display?.key === selectionKey ? display : null;
-  const primary = selection.primary && currentDisplay
+  const primaryRaw = selection.primary && currentDisplay
     ? currentDisplay.results[selection.primary]
     : undefined;
+  const primaryChannels = primaryRaw?.channels;
+  const channelIds = primaryChannels
+    ? [...(primaryRaw?.channel_order?.filter((id) => id in primaryChannels) ?? []), ...Object.keys(primaryChannels).filter((id) => !primaryRaw?.channel_order?.includes(id))]
+    : [];
+  const activeChannel = channelIds.includes(primaryChannel ?? '') ? primaryChannel : channelIds[0] ?? null;
+  const primary = activeChannel && primaryChannels ? primaryChannels[activeChannel] as ResultPayload : primaryRaw;
   // One keyed snapshot owns the primary and every overlay. During a transition
   // the complete outgoing set may remain visible, but no incoming result is
   // combined with it; the whole set swaps only after Promise.all succeeds.
-  const shown = selection.primary && display
+  const shownRaw = selection.primary && display
     ? display.results[display.primaryId]
     : undefined;
+  const shownChannels = shownRaw?.channels;
+  const shownChannelIds = shownChannels
+    ? [...(shownRaw.channel_order?.filter((id) => id in shownChannels) ?? []), ...Object.keys(shownChannels).filter((id) => !shownRaw.channel_order?.includes(id))]
+    : [];
+  const shownActiveChannel = shownChannelIds.includes(primaryChannel ?? '') ? primaryChannel : shownChannelIds[0] ?? null;
+  const shown = shownActiveChannel && shownChannels ? shownChannels[shownActiveChannel] as ResultPayload : shownRaw;
   const displayLabels = display?.ids.map((id) => labelFor(id, jobs)).join('\u0000') ?? '';
   const named = useMemo(
-    () => display?.ids.map((id, index) => ({
+    () => display?.ids.flatMap((id, index) => expandResultChannels(
       id,
-      label: displayLabels.split('\u0000')[index],
-      result: display.results[id],
-    })) ?? NO_NAMED_RESULTS,
+      displayLabels.split('\u0000')[index],
+      display.results[id],
+    )) ?? NO_NAMED_RESULTS,
     [display, displayLabels],
   );
   const error = fetchError?.key === selectionKey ? fetchError.message : null;
@@ -887,6 +901,7 @@ export function ResultsPanel() {
         onClick={() => selection.following ? compareSelection.setPrimary(selection.primary) : compareSelection.followLatest(latest?.id ?? null)}
       ><i/>{selection.following ? 'Latest' : 'Pinned'}</button>
       {ids.map((id, index) => <button key={id} className={`result-chip ${index ? 'muted' : ''}`} onClick={() => compareSelection.remove(id)} title={`${labelFor(id, jobs)} — remove from comparison`}><i/><span>{middleEllipsis(labelFor(id, jobs))}</span> ×</button>)}
+      {channelIds.map((channel) => <button key={channel} className={`result-chip result-channel-chip${activeChannel === channel ? '' : ' muted'}`} aria-pressed={activeChannel === channel} title={`Show ${channel} in single-channel detail views and exports`} onClick={() => setPrimaryChannel(channel)}><span>{channel}</span></button>)}
       {/* How much of the dock is actually comparing. Five of the six default
           charts describe one run by nature, so a comparison that silently
           applies to one card looked identical to one that applied to all six.

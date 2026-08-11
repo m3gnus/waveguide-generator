@@ -8,9 +8,9 @@ import { buildCanonicalDirectivityRequest } from '../results/CanonicalPlot';
 import { resultExportSnapshot } from '../results/exportContext';
 import { runExportBundle, runExportFormat, type ExportContext } from '../results/exporters';
 import { buildOnAxisFrd, buildPolarFrdSet } from '../results/frd';
-import type { ResultPayload } from '../results/types';
+import { resultChannelFileSuffix, resultChannels, scopeResultChannel, type ResultPayload } from '../results/types';
 import { EMPTY_RUN_EXPORT_STATE, useRunExportStore, type RunExportOutcome } from '../stores/runExports';
-import { jobRerunState } from './jobDesign';
+import { canLoadJobDesign, jobDesignAvailability, jobRerunState } from './jobDesign';
 import './RunExportControl.css';
 
 export interface RunExportControlProps {
@@ -50,7 +50,7 @@ const CATALOG_BY_FORMAT = new Map(
 );
 
 export function canExportRun(job: JobItem): boolean {
-  return job.status === 'complete' && (job.has_results || jobRerunState(job).enabled);
+  return job.status === 'complete' && (job.has_results || canLoadJobDesign(job));
 }
 
 function formatLabel(format: ExportFormat): string {
@@ -86,6 +86,8 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
   const operation = useRunExportStore((state) => state.jobs[job.id] ?? EMPTY_RUN_EXPORT_STATE);
   const execute = useRunExportStore((state) => state.execute);
   const designState = jobRerunState(job);
+  const designExportable = canLoadJobDesign(job);
+  const designAvailability = jobDesignAvailability(job);
 
   const buildContext = async (formats: readonly ExportFormat[]): Promise<ExportContext> => ({
     ...(needsResults(formats) ? { result: await fetchJobResults(job.id) as ResultPayload } : {}),
@@ -105,9 +107,14 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
   };
 
   const exportOne = (format: ExportFormat) => execute(job.id, [format], async (): Promise<RunExportOutcome> => {
-    const files = await runExportFormat(format, await buildContext([format]));
-    await recordFiles(files);
-    return { notice: `${formatLabel(format)} exported · ${files.length} file${files.length === 1 ? '' : 's'}` };
+    const result = await runExportBundle(await buildContext([format]), [format]);
+    await recordFiles(result.files);
+    const notice = `${formatLabel(format)} exported · ${result.files.length} file${result.files.length === 1 ? '' : 's'}`;
+    return result.failures.length ? {
+      notice,
+      error: `${notice} · ${result.failures.map(({ reason }) => reason).join('; ')}`,
+      errorFormats: [format],
+    } : { notice };
   });
 
   // Temporary seam: fold this FRD action into the shared export dispatcher once
@@ -115,10 +122,15 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
   const exportOnAxisFrd = () => execute(job.id, [], async (): Promise<RunExportOutcome> => {
     const context = await buildContext([]);
     const result = await fetchJobResults(job.id) as ResultPayload;
-    const filename = `${exportBaseName(context.preferences)}.frd`;
-    downloadText(buildOnAxisFrd(result, context.preferences), filename);
-    await recordFiles([filename]);
-    return { notice: `On-axis response (.frd) exported · 1 file` };
+    const channels = resultChannels(result);
+    const variants = channels.length > 1 ? channels.map(({ id }) => id) : [undefined];
+    const files = variants.map((channelId) => {
+      const filename = `${exportBaseName(context.preferences)}${resultChannelFileSuffix(result, channelId)}.frd`;
+      downloadText(buildOnAxisFrd(result, context.preferences, channelId), filename);
+      return filename;
+    });
+    await recordFiles(files);
+    return { notice: `On-axis response (.frd) exported · ${files.length} file${files.length === 1 ? '' : 's'}` };
   });
 
   // Temporary seam: fold this VituixCAD set action into the shared export
@@ -126,7 +138,9 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
   const exportPolarFrd = () => execute(job.id, [], async (): Promise<RunExportOutcome> => {
     const context = await buildContext([]);
     const result = await fetchJobResults(job.id) as ResultPayload;
-    const files = buildPolarFrdSet(result, context.preferences);
+    const channels = resultChannels(result);
+    const variants = channels.length > 1 ? channels.map(({ id }) => id) : [undefined];
+    const files = variants.flatMap((channelId) => buildPolarFrdSet(result, context.preferences, channelId));
     if (!files.length) throw new Error('This run has no directivity data for a polar FRD set.');
 
     const pathResponse = await fetch('/api/workspace/path');
@@ -160,20 +174,25 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
   const exportCharts = () => execute(job.id, ['png'], async (): Promise<RunExportOutcome> => {
     const context = await buildContext(['png']);
     const result = context.result!;
-    const directivityRequest = buildCanonicalDirectivityRequest(result, context.preferences);
-    const directivityResponse = await fetch(directivityRequest.endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(directivityRequest.payload),
-    });
-    if (!directivityResponse.ok) throw await responseError(directivityResponse);
-    const directivityBody = await directivityResponse.json() as { image?: string };
-    if (!directivityBody.image) throw new Error('HornLab plots returned no directivity image.');
+    const channels = resultChannels(result);
+    const variants = channels.length > 1 ? channels.map(({ id }) => id) : [undefined];
+    const files: string[] = [];
+    for (const channelId of variants) {
+      const directivityRequest = buildCanonicalDirectivityRequest(scopeResultChannel(result, channelId), context.preferences);
+      const directivityResponse = await fetch(directivityRequest.endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(directivityRequest.payload),
+      });
+      if (!directivityResponse.ok) throw await responseError(directivityResponse);
+      const directivityBody = await directivityResponse.json() as { image?: string };
+      if (!directivityBody.image) throw new Error('HornLab plots returned no directivity image.');
 
-    const chartFiles = await runExportFormat('png', context);
-    const directivityFilename = `${exportBaseName(context.preferences)}_directivity_map.png`;
-    downloadBlob(pngBlob(directivityBody.image), directivityFilename);
-    const files = [...chartFiles, directivityFilename];
+      files.push(...await runExportFormat('png', { ...context, channelId }));
+      const directivityFilename = `${exportBaseName(context.preferences)}${resultChannelFileSuffix(result, channelId)}_directivity_map.png`;
+      downloadBlob(pngBlob(directivityBody.image), directivityFilename);
+      files.push(directivityFilename);
+    }
     await recordFiles(files);
     return { notice: `Charts (.png) exported · ${files.length} files` };
   });
@@ -198,12 +217,12 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
     ...FORMAT_CATALOG.map((item): ActionMenuItem => {
       const noDirectivity = item.id === 'polar_frd' && Object.keys(job.polar_grid ?? {}).length === 0;
       const noResults = item.needsResult && !job.has_results;
-      const unavailable = (item.needsDesign && !designState.enabled) || noResults || noDirectivity;
+      const unavailable = (item.needsDesign && !designExportable) || noResults || noDirectivity;
       const disabledReason = noDirectivity
         ? 'This run has no directivity data for a polar FRD set.'
         : noResults
           ? 'This run\'s results were removed by retention.'
-        : designState.reason ?? 'This run has no recoverable design.';
+        : designAvailability.reason ?? designState.reason ?? 'This run has no recoverable design.';
       return {
         id: item.id,
         label: item.label,
@@ -240,7 +259,7 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
       chevronLabel={`More export options for ${jobName(job)}`}
       onPrimary={preferences.exportFormats.length && preferences.exportFormats.every((format) => {
         const item = CATALOG_BY_FORMAT.get(format);
-        return (!item?.needsResult || job.has_results) && (!item?.needsDesign || designState.enabled);
+        return (!item?.needsResult || job.has_results) && (!item?.needsDesign || designExportable);
       }) ? async () => { await exportPreferred(); } : undefined}
     />
     {operation.lastError

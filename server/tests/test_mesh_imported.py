@@ -68,8 +68,9 @@ def test_user_selector_agreement_and_drift_rules() -> None:
     assert result["surfaces"] == [4, 5]
     with pytest.raises(RoleResolutionError, match="disagree"):
         resolve_user_source(source, {"appearance_labels": [4], "shell_names": [5]}, face_areas_mm2={4: 50, 5: 50}, connected_components=2)
-    with pytest.raises(RoleResolutionError, match="area drift"):
+    with pytest.raises(RoleResolutionError, match="area drift") as drift:
         resolve_user_source(source, {"appearance_labels": [4, 5]}, face_areas_mm2={4: 51, 5: 51}, connected_components=2)
+    assert drift.value.area_drift_sources == ("lf",)
 
     resolving = resolve_user_source(
         source,

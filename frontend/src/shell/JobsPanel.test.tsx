@@ -91,6 +91,15 @@ describe('jobs panel run list', () => {
     expect(host.textContent).toContain('#124 · Blur title');
   });
 
+  it('marks imported jobs without presenting a formula name', async () => {
+    const imported = job(12, 'Returned speaker', 'cad-import');
+    imported.config_summary = { geometry_type: 'imported', ingest_id: 'wgi_example' };
+    publishJobs([imported]);
+    await act(async () => root.render(<JobsPanel/>));
+    expect(host.textContent).toContain('CAD import');
+    expect(host.textContent).not.toContain('cad-import');
+  });
+
   // Setting .value in a test replaces the whole string no matter where the
   // caret is, so the rename tests above pass either way. A real keystroke does
   // not: with the caret merely placed at the end, the first character typed

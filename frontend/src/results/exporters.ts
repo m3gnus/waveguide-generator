@@ -4,10 +4,11 @@ import type { ExportFormat, Preferences } from '../prefs/preferences';
 import { exportBaseName } from '../prefs/preferences';
 import { applySmoothing, type SmoothingValue } from './smoothing';
 import { complexToDb } from './mappers';
-import type { ResultPayload } from './types';
+import { resultChannelFileSuffix, resultChannels, scopeResultChannel, type ResultPayload } from './types';
 
 export interface ExportContext {
   result?: ResultPayload;
+  channelId?: string;
   design?: DesignDocument;
   designRevision?: number;
   preferences: Preferences;
@@ -217,7 +218,11 @@ async function postGeometry(context: ExportContext, kind: 'step' | 'stl' | 'prof
 
 function requireResult(context: ExportContext): ResultPayload {
   if (!context.result) throw new Error('This export requires completed result data.');
-  return context.result;
+  return scopeResultChannel(context.result, context.channelId);
+}
+
+function exportContextBaseName(context: ExportContext): string {
+  return `${exportBaseName(context.preferences)}${context.result ? resultChannelFileSuffix(context.result, context.channelId) : ''}`;
 }
 
 async function chartPng(context: ExportContext): Promise<string[]> {
@@ -228,7 +233,7 @@ async function chartPng(context: ExportContext): Promise<string[]> {
   const body = await response.json() as { charts?: Record<string, string> };
   const entries = Object.entries(body.charts ?? {});
   if (!entries.length) throw new Error('Chart renderer returned no images.');
-  const baseName = exportBaseName(context.preferences);
+  const baseName = exportContextBaseName(context);
   return entries.map(([chart, data]) => {
     const encoded = data.includes(',') ? data.slice(data.indexOf(',') + 1) : data;
     const bytes = Uint8Array.from(atob(encoded), (character) => character.charCodeAt(0));
@@ -291,7 +296,7 @@ export function buildChartRenderPayload(
 }
 
 export async function runExportFormat(format: ExportFormat, context: ExportContext): Promise<string[]> {
-  const baseName = exportBaseName(context.preferences);
+  const baseName = exportContextBaseName(context);
   const saveText = context.saveText ?? downloadText;
   const now = context.now ?? new Date();
   if (format === 'mwg_config') {
@@ -335,9 +340,18 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
 export async function runExportBundle(context: ExportContext, formats = context.preferences.exportFormats): Promise<ExportBundleResult> {
   const files: string[] = [];
   const failures: ExportFailure[] = [];
+  const resultFormats = new Set<ExportFormat>(['png', 'csv', 'json', 'txt', 'polar_csv', 'impedance_csv', 'vacs']);
   for (const format of formats) {
-    try { files.push(...await runExportFormat(format, context)); }
-    catch (error) { failures.push({ format, reason: error instanceof Error ? error.message : String(error) }); }
+    const channels = context.result && !context.channelId && resultFormats.has(format)
+      ? resultChannels(context.result)
+      : [];
+    const variants = channels.length > 1
+      ? channels.map(({ id }) => ({ ...context, channelId: id }))
+      : [context];
+    for (const variant of variants) {
+      try { files.push(...await runExportFormat(format, variant)); }
+      catch (error) { failures.push({ format, reason: error instanceof Error ? error.message : String(error) }); }
+    }
   }
   return { files, failures };
 }

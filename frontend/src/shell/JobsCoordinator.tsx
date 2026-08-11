@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { fetchJobResults } from '../api/results';
-import { resolveEngine, submitDesign } from '../jobs/actions';
+import { resolveEngine, submitDesign, submitImported, type ImportedSolveSubmission } from '../jobs/actions';
 import { useCapabilities, useCapabilityRefreshOnReconnect } from '../jobs/useCapabilities';
 import { JobAutomation } from '../jobs/automation';
 import { hydrateJobDesign } from '../jobs/jobDesign';
@@ -20,6 +20,7 @@ interface SolveControl {
 
 interface CoordinatorBridgeSnapshot {
   run(design: DesignDocument, designRevision?: number): Promise<void>;
+  runImported(submission: ImportedSolveSubmission): Promise<void>;
   retry(jobId: string): Promise<void>;
   reportError(message: string): void;
   actionError: string | null;
@@ -28,6 +29,7 @@ interface CoordinatorBridgeSnapshot {
 const unavailableRun = async () => { throw new Error('Solve coordinator is unavailable'); };
 let bridgeSnapshot: CoordinatorBridgeSnapshot = {
   run: unavailableRun,
+  runImported: unavailableRun,
   retry: unavailableRun,
   reportError: () => undefined,
   actionError: null,
@@ -110,6 +112,27 @@ export function JobsCoordinator({ children }: { children: ReactNode }) {
     }
   }, [capability, capabilityError, preferences, revision, selectedEngine]);
 
+  const runImported = useCallback(async (submission: ImportedSolveSubmission) => {
+    if (submissionInFlight.current) return;
+    submissionInFlight.current = true;
+    try {
+      const metal = capabilities.find((engine) => engine.name.toLowerCase() === 'metal');
+      if (!metal?.available) throw new Error(metal?.reason ?? capabilityError ?? 'Metal engine is unavailable');
+      setSubmitting(true);
+      setActionError(null);
+      await submitImported(
+        { ...submission, options: { ...submission.options, engine: 'metal', symmetry: 'auto' } },
+        fetch,
+        currentJobLabel(),
+      );
+      incrementJobVersion();
+      await jobsSocket.refresh();
+    } finally {
+      submissionInFlight.current = false;
+      setSubmitting(false);
+    }
+  }, [capabilities, capabilityError, preferences]);
+
   const retry = useCallback(async (jobId: string) => {
     if (submissionInFlight.current) return;
     submissionInFlight.current = true;
@@ -125,9 +148,9 @@ export function JobsCoordinator({ children }: { children: ReactNode }) {
 
   const reportError = useCallback((message: string) => setActionError(message), []);
   useEffect(() => {
-    publishBridge({ run, retry, reportError, actionError });
-    return () => publishBridge({ run: unavailableRun, retry: unavailableRun, reportError: () => undefined, actionError: null });
-  }, [actionError, reportError, retry, run]);
+    publishBridge({ run, runImported, retry, reportError, actionError });
+    return () => publishBridge({ run: unavailableRun, runImported: unavailableRun, retry: unavailableRun, reportError: () => undefined, actionError: null });
+  }, [actionError, reportError, retry, run, runImported]);
 
   useEffect(() => {
     void automation.process(jobs, preferences, {

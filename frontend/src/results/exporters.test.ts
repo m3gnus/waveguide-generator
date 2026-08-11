@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { designForFamily } from '../stores/design';
 import { preferencesStore } from '../prefs/preferences';
 import type { ResultPayload } from './types';
-import { buildChartRenderPayload, buildFrequencyCsv, buildFullResultsJson, buildImpedanceCsv, buildPolarCsv, buildSummaryText, runExportFormat } from './exporters';
+import { buildChartRenderPayload, buildFrequencyCsv, buildFullResultsJson, buildImpedanceCsv, buildPolarCsv, buildSummaryText, runExportBundle, runExportFormat } from './exporters';
 
 const result: ResultPayload = {
   frequencies: [100, 200],
@@ -72,6 +72,61 @@ describe('result exporters', () => {
     })).resolves.toEqual(['horn_1.csv']);
     expect(toJSON).not.toHaveBeenCalled();
     expect(saveText).toHaveBeenCalledOnce();
+  });
+  it('exports only the selected CAD drive channel and refuses an ambiguous wrapper', async () => {
+    const wrapped: ResultPayload = {
+      frequencies: [],
+      channel_order: ['drive-a', 'drive-b'],
+      channels: { 'drive-a': result, 'drive-b': { ...result, spl_on_axis: { frequencies: [100, 200], spl: [70, 71] } } },
+    };
+    await expect(runExportFormat('csv', {
+      result: wrapped,
+      preferences: preferencesStore.getSnapshot(),
+      saveText: vi.fn(),
+    })).rejects.toThrow('Choose a drive channel');
+    const saveText = vi.fn();
+    await runExportFormat('csv', {
+      result: wrapped,
+      channelId: 'drive-b',
+      preferences: preferencesStore.getSnapshot(),
+      saveText,
+    });
+    expect(saveText.mock.calls[0][0]).toContain('100,70');
+    expect(saveText.mock.calls[0][0]).not.toContain('100,90');
+  });
+  it('bundles every CAD drive channel with per-channel names and writes design formats once', async () => {
+    const wrapped: ResultPayload = {
+      frequencies: [],
+      channel_order: ['drive-hf'],
+      channels: {
+        'drive-mf': { ...result, spl_on_axis: { frequencies: [100, 200], spl: [70, 71] } },
+        'drive-hf': result,
+      },
+    };
+    const saveText = vi.fn();
+    const fetcher = vi.fn<typeof fetch>(async () => new Response('step', {
+      status: 200,
+      headers: { 'Content-Disposition': 'attachment; filename="horn_1.step"' },
+    }));
+    const bundle = await runExportBundle({
+      result: wrapped,
+      design: designForFamily('OSSE'),
+      preferences: preferencesStore.getSnapshot(),
+      saveText,
+      saveBlob: vi.fn(),
+      fetcher,
+    }, ['csv', 'step']);
+
+    expect(bundle).toEqual({
+      files: ['horn_1-drive-hf.csv', 'horn_1-drive-mf.csv', 'horn_1.step'],
+      failures: [],
+    });
+    expect(saveText.mock.calls.map(([, filename]) => filename)).toEqual([
+      'horn_1-drive-hf.csv', 'horn_1-drive-mf.csv',
+    ]);
+    expect(saveText.mock.calls[0][0]).toContain('100,90');
+    expect(saveText.mock.calls[1][0]).toContain('100,70');
+    expect(fetcher).toHaveBeenCalledOnce();
   });
   it('posts config and geometry selectors to their existing endpoints', async () => {
     const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input) => {

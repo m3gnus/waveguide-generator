@@ -18,6 +18,8 @@ export interface JobResults {
     imaginary?: NullableNumber[];
   };
   metadata?: Record<string, unknown>;
+  channels?: Record<string, JobResults>;
+  channel_order?: string[];
 }
 
 export interface CompareSelection {

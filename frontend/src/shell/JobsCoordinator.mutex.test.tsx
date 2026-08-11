@@ -10,15 +10,16 @@ import { JobsPanel } from './JobsPanel';
 
 const mocks = vi.hoisted(() => ({
   submitDesign: vi.fn(),
+  submitImported: vi.fn(),
 }));
 
 vi.mock('../jobs/actions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../jobs/actions')>();
-  return { ...actual, submitDesign: mocks.submitDesign };
+  return { ...actual, submitDesign: mocks.submitDesign, submitImported: mocks.submitImported };
 });
 vi.mock('../jobs/useCapabilities', () => ({
   useCapabilities: () => ({
-    engines: [{ name: 'dryrun', available: true, reason: null, version: null, fast_paths: [] }],
+    engines: [{ name: 'metal', available: true, reason: null, version: null, fast_paths: [] }, { name: 'dryrun', available: true, reason: null, version: null, fast_paths: [] }],
     error: null,
     isLoading: false,
   }),
@@ -134,6 +135,33 @@ describe('solve invocation mutex', () => {
     await act(async () => { await jobsCoordinatorBridge.getSnapshot().run(design); });
 
     expect(mocks.submitDesign).toHaveBeenCalledTimes(2);
+  });
+
+  it('routes imported submissions through the same invocation mutex', async () => {
+    const pending = deferred<string>();
+    mocks.submitImported.mockReturnValue(pending.promise);
+    const submission = {
+      geometry: {
+        type: 'imported' as const, ingest_id: 'wgi_example', manifest_sha256: 'sha256:m', artifact_sha256: 'sha256:a',
+        drive_channels: [{ id: 'drive', source_ids: ['source'], motion: 'normal' as const }],
+        mesh: { rigid_size_mm: 8, transition_mm: 8, source_size_mm: { source: 4 } }, acknowledged_findings: [], skipped_source_ids: [],
+      },
+      options: {
+        engine: 'metal', symmetry: 'auto' as const, mesh_validation_mode: 'warn' as const, verbose: false, frequency_spacing: 'log' as const,
+        frequency_range: [200, 20_000] as [number, number], num_frequencies: 24,
+        polar_config: { angle_range: [0, 180, 37] as [number, number, number], angle_step: 5, distance: 2, norm_angle: 5, inclination: 45, enabled_axes: ['horizontal'] as ('horizontal')[], observation_origin: 'mouth' as const, spherical_sampling: false },
+      },
+    };
+    let first!: Promise<void>;
+    await act(async () => {
+      const run = jobsCoordinatorBridge.getSnapshot().runImported;
+      first = run(submission);
+      await run(submission);
+      await jobsCoordinatorBridge.getSnapshot().run(designForFamily('OSSE'));
+    });
+    expect(mocks.submitImported).toHaveBeenCalledOnce();
+    expect(mocks.submitDesign).not.toHaveBeenCalled();
+    await act(async () => { pending.resolve('job-imported'); await first; });
   });
 
   it('guards two fast retries routed through the coordinator bridge', async () => {

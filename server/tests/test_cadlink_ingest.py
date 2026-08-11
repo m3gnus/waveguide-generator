@@ -15,7 +15,7 @@ import numpy as np
 from pydantic import ValidationError
 
 from server.app import create_app
-from server.cadlink.api import CadReturnIngestRequest, get_ingest, post_ingest
+from server.cadlink.api import CadReturnIngestRequest, get_ingest, list_returns, post_ingest
 from server.cadlink.ingest import IngestRefusal, _canonical, compute_freshness, evaluate_instance_freshness, ingest_bundle, validate_registry_echoes
 from server.mesh.imported import ImportedMeshDependencyError, polar_grid_from_symmetry
 from server.cadlink.wgreturn import WgReturnBundle
@@ -150,6 +150,109 @@ def test_endpoint_validates_workspace_and_returns_pipeline_record(monkeypatch, t
         CadReturnIngestRequest.model_validate({"bundlePath": "wgreturn/speaker.wgreturn", "mesh": {"rigidSizeMm": 20, "transitionMm": 40, "sourceSizeMm": {}}, "unexpected": True})
 
 
+def test_return_listing_reads_cheap_inventory_and_marks_bad_manifests(tmp_path: Path) -> None:
+    app = create_app(data_dir=tmp_path / "data")
+    workspace = tmp_path / "workspace"
+    good = workspace / "wgreturn" / "speaker.wgreturn"
+    bad = workspace / "wgreturn" / "broken.wgreturn"
+    good.mkdir(parents=True)
+    bad.mkdir()
+    (good / "wgreturn.json").write_text(
+        json.dumps(
+            {
+                "document": {"name": "Speaker v4"},
+                "instances": [{"instance_id": "instance-a"}],
+                "sources": [
+                    {
+                        "id": "source-hf",
+                        "role": "HF",
+                        "required": True,
+                        "suggested_resolution_mm": 3.5,
+                        "default_drive_channel_id": "drive-hf",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (bad / "wgreturn.json").write_text("{not json", encoding="utf-8")
+    app.state.workspace.select(workspace)
+
+    result = asyncio.run(list_returns(SimpleNamespace(app=app)))
+
+    assert [item["name"] for item in result["items"]] == [
+        "broken.wgreturn",
+        "speaker.wgreturn",
+    ]
+    assert result["items"][0]["readable"] is False
+    assert result["items"][0]["reason"]
+    assert result["items"][1] == {
+        "name": "speaker.wgreturn",
+        "bundlePath": "wgreturn/speaker.wgreturn",
+        "modifiedAt": result["items"][1]["modifiedAt"],
+        "readable": True,
+        "documentName": "Speaker v4",
+        "sourceCount": 1,
+        "instanceCount": 1,
+        "sources": [
+            {
+                "id": "source-hf",
+                "role": "HF",
+                "required": True,
+                "suggestedResolutionMm": 3.5,
+                "defaultDriveChannelId": "drive-hf",
+            }
+        ],
+    }
+
+
+def test_return_listing_rejects_escaping_symlinks_and_plain_files_and_explains_bad_sizes(
+    tmp_path: Path,
+) -> None:
+    app = create_app(data_dir=tmp_path / "data")
+    workspace = tmp_path / "workspace"
+    returns = workspace / "wgreturn"
+    returns.mkdir(parents=True)
+    outside = tmp_path / "outside.wgreturn"
+    outside.mkdir()
+    (returns / "escape.wgreturn").symlink_to(outside, target_is_directory=True)
+    (returns / "plain.wgreturn").write_text("not a directory", encoding="utf-8")
+    invalid = returns / "invalid-size.wgreturn"
+    invalid.mkdir()
+    (invalid / "wgreturn.json").write_text(
+        json.dumps(
+            {
+                "document": {"name": "Invalid"},
+                "instances": [],
+                "sources": [
+                    {
+                        "id": "source-hf",
+                        "role": "HF",
+                        "required": True,
+                        "suggested_resolution_mm": 0,
+                        "default_drive_channel_id": "drive-hf",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    app.state.workspace.select(workspace)
+
+    result = asyncio.run(list_returns(SimpleNamespace(app=app)))
+
+    assert [item["name"] for item in result["items"]] == ["invalid-size.wgreturn"]
+    assert result["items"][0]["readable"] is False
+    assert "positive" in result["items"][0]["reason"]
+
+
+def test_return_listing_requires_a_workspace(tmp_path: Path) -> None:
+    app = create_app(data_dir=tmp_path / "data")
+    with pytest.raises(Exception) as no_workspace:
+        asyncio.run(list_returns(SimpleNamespace(app=app)))
+    assert no_workspace.value.status_code == 409
+
+
 def test_endpoint_error_mapping_and_workspace_guards(monkeypatch, tmp_path: Path) -> None:
     app = create_app(data_dir=tmp_path / "data")
     payload = CadReturnIngestRequest.model_validate(
@@ -183,6 +286,24 @@ def test_endpoint_error_mapping_and_workspace_guards(monkeypatch, tmp_path: Path
     with pytest.raises(Exception) as conflict:
         asyncio.run(post_ingest(payload, SimpleNamespace(app=app)))
     assert conflict.value.status_code == 409
+
+    monkeypatch.setattr(
+        "server.cadlink.api.ingest_bundle",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            IngestRefusal(
+                "stage 5 role resolution",
+                "source 'source-hf' area drift exceeds 1%",
+                area_drift_sources=["source-hf"],
+            )
+        ),
+    )
+    with pytest.raises(Exception) as drift:
+        asyncio.run(post_ingest(payload, SimpleNamespace(app=app)))
+    assert drift.value.status_code == 422
+    assert drift.value.detail == {
+        "message": "stage 5 role resolution: source 'source-hf' area drift exceeds 1%",
+        "area_drift_sources": ["source-hf"],
+    }
 
     monkeypatch.setattr(
         "server.cadlink.api.ingest_bundle",

@@ -10,14 +10,15 @@ import {
 } from 'dockview';
 import { ParamPanel } from '../design/ParamPanel';
 import { AppQueryProvider } from '../queryClient';
+import { CadLinkPanel } from './CadLinkPanel';
 import { JobsPanel } from './JobsPanel';
 import { ResultsPanel } from './ResultsPanel';
 import { ViewportPanel } from './ViewportPanel';
 
 export const LEGACY_LAYOUT_KEY = 'wg2.dockview.layout.v1';
-export const LAYOUT_KEY = 'wg2.dockview.layout.v3';
+export const LAYOUT_KEY = 'wg2.dockview.layout.v4';
 /** Which responsive arrangement LAYOUT_KEY was saved for. See restoreDisposition. */
-export const LAYOUT_MODE_KEY = 'wg2.dockview.mode.v3';
+export const LAYOUT_MODE_KEY = 'wg2.dockview.mode.v4';
 
 const components = {
   geometry: () => <ParamPanel tab="geometry" />,
@@ -25,6 +26,7 @@ const components = {
   viewport: ViewportPanel,
   results: ResultsPanel,
   jobs: JobsPanel,
+  cadlink: CadLinkPanel,
 };
 
 type ComponentName = keyof typeof components;
@@ -118,6 +120,7 @@ export function createDefaultLayout(width: number, height: number): SerializedDo
     viewport: { id: 'viewport', contentComponent: 'viewport', title: 'Viewport' },
     results: { id: 'results', contentComponent: 'results', title: 'Results' },
     jobs: { id: 'jobs', contentComponent: 'jobs', title: 'Jobs' },
+    cadlink: { id: 'cadlink', contentComponent: 'cadlink', title: 'CAD Link' },
   };
 
   if (layoutWidth < COMPACT_BREAKPOINT) {
@@ -129,7 +132,7 @@ export function createDefaultLayout(width: number, height: number): SerializedDo
         root: {
           type: 'branch',
           size: layoutHeight,
-          data: [{ type: 'leaf', size: layoutWidth, data: group('workspace', ['geometry', 'simulation', 'viewport', 'results', 'jobs'], 'viewport') }],
+          data: [{ type: 'leaf', size: layoutWidth, data: group('workspace', ['geometry', 'simulation', 'viewport', 'results', 'jobs', 'cadlink'], 'viewport') }],
         },
       },
       panels,
@@ -156,7 +159,7 @@ export function createDefaultLayout(width: number, height: number): SerializedDo
               size: contentWidth,
               data: [
                 { type: 'leaf', size: layoutHeight - resultsHeight, data: group('viewport', ['viewport']) },
-                { type: 'leaf', size: resultsHeight, data: group('analysis', ['results', 'jobs'], 'results') },
+                { type: 'leaf', size: resultsHeight, data: group('analysis', ['results', 'jobs', 'cadlink'], 'results') },
               ],
             },
           ],
@@ -188,7 +191,7 @@ export function createDefaultLayout(width: number, height: number): SerializedDo
               { type: 'leaf', size: resultsHeight, data: group('results', ['results']) },
             ],
           },
-          { type: 'leaf', size: JOBS_WIDTH, data: group('jobs', ['jobs']) },
+          { type: 'leaf', size: JOBS_WIDTH, data: group('jobs', ['jobs', 'cadlink'], 'jobs') },
         ],
       },
     },

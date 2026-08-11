@@ -106,4 +106,30 @@ describe('completed-job auto-export naming', () => {
     }));
     expect(preferencesStore.getSnapshot().counter).toBe(9);
   });
+
+  it('hands the multi-channel wrapper to auto-export and persists every channel file', async () => {
+    const wrapped = {
+      frequencies: [], channel_order: ['drive-hf', 'drive-mf'],
+      channels: { 'drive-hf': { frequencies: [100] }, 'drive-mf': { frequencies: [100] } },
+    };
+    mocks.fetchJobResults.mockResolvedValue(wrapped);
+    mocks.runExportBundle.mockResolvedValue({
+      files: ['260808_horn_v03_7-drive-hf.csv', '260808_horn_v03_7-drive-mf.csv'],
+      failures: [],
+    });
+    publishJobs([job('job-three', '260808_horn_v03')]);
+
+    await act(async () => { root.render(<JobsCoordinator><span>ready</span></JobsCoordinator>); });
+    await act(async () => {
+      await vi.waitFor(() => expect(jobsSocket.patchMetadata).toHaveBeenCalledOnce());
+    });
+
+    expect(mocks.runExportBundle).toHaveBeenCalledWith(
+      expect.objectContaining({ result: wrapped }),
+      ['csv'],
+    );
+    expect(jobsSocket.patchMetadata).toHaveBeenCalledWith('job-three', expect.objectContaining({
+      exported_files: ['260808_horn_v03_7-drive-hf.csv', '260808_horn_v03_7-drive-mf.csv'],
+    }));
+  });
 });

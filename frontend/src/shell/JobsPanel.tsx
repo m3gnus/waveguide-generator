@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactN
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { compareSelection } from '../api/results';
 import { DesignAvailabilityNotice, RerunButton } from '../jobs/DesignAvailability';
-import { canLoadJobDesign, hydrateJobDesign, replaceWithJobDesign } from '../jobs/jobDesign';
+import { canLoadJobDesign, replaceWithJobDesign } from '../jobs/jobDesign';
 import { canExportRun, RunExportControl } from '../jobs/RunExportControl';
 import { applyJobPreferences, jobBaseName, nextVersionFor, preferencesStore, runDisplayName, usePreferences } from '../prefs/preferences';
 import { JobsPreferencesSurface, ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
@@ -79,7 +79,6 @@ function JobCard({ job, now, selected, retryJob, onError, onRemove, onOpenExport
   const running = job.status === 'running' || job.status === 'queued';
   const failed = job.status === 'error';
   const cancelled = job.status === 'cancelled';
-  const snapshot = hydrateJobDesign(job);
   const rating = job.rating ?? 0;
   const [editing, setEditing] = useState(false);
   const [titleDraft, setTitleDraft] = useState(job.label ?? '');
@@ -127,10 +126,7 @@ function JobCard({ job, now, selected, retryJob, onError, onRemove, onOpenExport
   // Only ever this job's own design. Falling back to whatever was on screen
   // ran a *different* waveguide under this job's name and looked like it
   // worked; RerunButton refuses instead, and says why.
-  const retry = () => {
-    if (!snapshot) return;
-    void retryJob(job.id).catch((error) => onError(String(error)));
-  };
+  const retry = () => { void retryJob(job.id).catch((error) => onError(String(error))); };
   // A run in flight or one that failed still has to show its progress or its
   // diagnostic; only finished runs collapse down to their name.
   const expanded = selected || running || failed || cancelled || editing;
@@ -143,6 +139,7 @@ function JobCard({ job, now, selected, retryJob, onError, onRemove, onOpenExport
         no width because it is only ever read aloud. */}
     <i/><span className="sr-only">{statusWord}. </span>
     {!editing && <b className="job-title" title={displayName}>{middleEllipsis(displayName, 22)}</b>}
+    {job.config_summary.geometry_type === 'imported' && <span className="pill accent" title="Solved from a CAD-return ingestion">CAD import</span>}
     {/* Stars are a label here, shown only once a run has actually been rated. */}
     {!expanded && rating > 0 && <span className="job-stars" aria-label={`Kept, rated ${rating} of 5`} title="Kept: rated runs are never cleaned up">{'★'.repeat(rating)}</span>}
   </>;
