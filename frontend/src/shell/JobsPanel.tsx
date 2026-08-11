@@ -168,7 +168,6 @@ function JobCard({ job, now, selected, retryJob, onError, onRemove, onOpenExport
         }}
       /> : null}
       {!running && !editing && <button className="job-rename" aria-label={`Rename ${displayName}`} title="Rename run" onClick={() => { setRenameError(null); setEditing(true); }}>✎</button>}
-      {!expanded && canExportRun(job) && <RunExportControl job={job} compact onOpenExportSettings={onOpenExportSettings}/>}
       <time>{running ? duration(secondsBetween(job.started_at ?? job.queued_at, null, now)) : clock(job.completed_at ?? job.created_at)}</time>
       {!running && <button className="job-remove" aria-label={`Remove ${displayName}`} title="Remove this job" onClick={() => onRemove(job)}><Icon name="close"/></button>}
     </header>
@@ -200,7 +199,7 @@ function JobCard({ job, now, selected, retryJob, onError, onRemove, onOpenExport
           without a design Waveguide Generator can read, in which case rerunning it would
           silently run whatever is on screen instead, under its name. */}
       <DesignAvailabilityNotice job={job}/>
-      <footer><RerunButton job={job} onRerun={retry}/>{canExportRun(job) && <RunExportControl job={job} onOpenExportSettings={onOpenExportSettings}/>}<button onClick={() => window.open(`/api/jobs/${encodeURIComponent(job.id)}/log`, '_blank')}>Log</button></footer>
+      <footer><RerunButton job={job} onRerun={retry}/>{selected && canExportRun(job) && <RunExportControl job={job} onOpenExportSettings={onOpenExportSettings}/>}<button onClick={() => window.open(`/api/jobs/${encodeURIComponent(job.id)}/log`, '_blank')}>Log</button></footer>
     </>}
   </article>;
 }
