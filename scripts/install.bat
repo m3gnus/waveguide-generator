@@ -357,8 +357,10 @@ exit /b 0
 
 :update_from_git
 set "CODE_UPDATED="
-if not exist ".git\" goto no_git_clone
 if defined TAG goto checkout_tag
+
+git rev-parse --is-inside-work-tree >nul 2>&1
+if errorlevel 1 goto no_git_clone
 
 git symbolic-ref --quiet HEAD >nul 2>&1
 if errorlevel 1 goto detached_head
@@ -409,6 +411,8 @@ echo          git log --oneline -5
 exit /b 1
 
 :checkout_tag
+git rev-parse --is-inside-work-tree >nul 2>&1
+if errorlevel 1 goto tag_requires_git
 for /f "delims=" %%s in ('git status --porcelain -uno') do goto tag_needs_clean_tree
 git fetch --tags --quiet
 if errorlevel 1 goto tag_fetch_failed
@@ -424,6 +428,10 @@ exit /b 0
 echo ERROR: Cannot check out %TAG%: this checkout has uncommitted changes.
 echo        Commit or stash them first:  git status
 echo        Or install without switching tags by omitting --tag.
+exit /b 1
+:tag_requires_git
+echo ERROR: Cannot install %TAG% because this folder is not a Git checkout.
+echo        Clone Waveguide Generator from GitHub, then run the installer from that clone.
 exit /b 1
 :tag_fetch_failed
 echo ERROR: Could not fetch tags from the remote.
