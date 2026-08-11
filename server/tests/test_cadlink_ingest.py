@@ -17,9 +17,14 @@ from pydantic import ValidationError
 from server.app import create_app
 from server.cadlink.api import CadReturnIngestRequest, get_ingest, post_ingest
 from server.cadlink.ingest import IngestRefusal, _canonical, compute_freshness, evaluate_instance_freshness, ingest_bundle, validate_registry_echoes
-from server.mesh.imported import ImportedMeshDependencyError
+from server.mesh.imported import ImportedMeshDependencyError, polar_grid_from_symmetry
 from server.cadlink.wgreturn import WgReturnBundle
 from server.cadlink.store import CadLinkStore
+from server.engines.registry import EngineInfo, EngineRegistry
+from server.jobs.models import SolveRequest
+from server.jobs.runtime import JobRuntime
+from server.jobs.store import JobStore
+from server.solver import metal
 
 
 def _fingerprint(volume: float = 1.0):
@@ -251,9 +256,25 @@ def test_ingestion_record_publishes_role_findings_and_numpy_metadata(
         "role_findings": [
             {"kind": "source-paint-missing", "source_id": "source-hf"}
         ],
-        "symmetry": {"cut_planes": []},
+        "symmetry": {
+            "cut_planes": [],
+            "planes": {
+                "x0": {"accepted": False},
+                "y0": {"accepted": False},
+                "z0": {"accepted": False},
+            },
+        },
         "healing": {"performed": False, "mode": "none"},
-        "polar_grid_derivation": {"axes": {}},
+        "polar_grid_derivation": polar_grid_from_symmetry(
+            {
+                "cut_planes": [],
+                "planes": {
+                    "x0": {"accepted": False},
+                    "y0": {"accepted": False},
+                    "z0": {"accepted": False},
+                },
+            }
+        ),
         "sizing_estimate": {"triangles": np.int64(1)},
         "tag_allocation": {
             "tag_namespace": "wg-import-v1",
@@ -293,7 +314,9 @@ def test_ingestion_record_publishes_role_findings_and_numpy_metadata(
     assert record["mesh"]["metadata"]["numpy_array"] == [1, 2]
 
 
-def test_occ_ingest_end_to_end_writes_tag_names_and_reuses_cache(tmp_path: Path) -> None:
+def test_occ_ingest_end_to_end_writes_tag_names_reuses_cache_and_solves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     gmsh = pytest.importorskip("gmsh")
     from hornlab_mesher.cad import write_step
     from hornlab_mesher.geometry import PointGridHornGeometry
@@ -600,3 +623,102 @@ def test_occ_ingest_end_to_end_writes_tag_names_and_reuses_cache(tmp_path: Path)
     finally:
         if bad_initialized_here and gmsh.isInitialized():
             gmsh.finalize()
+
+    monkeypatch.setattr(
+        metal, "metal_status", lambda: {"available": True, "reason": "ok"}
+    )
+    monkeypatch.setattr(
+        metal, "ObservationConfig", lambda **kwargs: SimpleNamespace(**kwargs)
+    )
+    monkeypatch.setattr(
+        metal, "native_config", lambda **kwargs: SimpleNamespace(**kwargs)
+    )
+
+    def native_result() -> SimpleNamespace:
+        return SimpleNamespace(
+            frequencies_hz=np.asarray([100.0, 200.0]),
+            observation_angles_deg=np.asarray([-180.0, 0.0, 180.0]),
+            observation_planes=["horizontal", "vertical", "diagonal"],
+            pressure_complex=np.ones((2, 3, 3), dtype=np.complex128) * 20.0e-6,
+            directivity_db=np.zeros((2, 3, 3)),
+            impedance=np.ones(2, dtype=np.complex128),
+            solver_log=[],
+            timings={},
+            native_diagnostics=[],
+        )
+
+    monkeypatch.setattr(
+        metal,
+        "native_solve_multi_source",
+        lambda _path, sources, _config, frequencies_hz=None: [
+            native_result() for _source in sources
+        ],
+    )
+    registry = EngineRegistry(
+        detector=lambda: [
+            EngineInfo(
+                name="metal",
+                available=True,
+                reason="test conformance engine",
+                version="test",
+            )
+        ],
+        factory=lambda name: metal.MetalEngine() if name == "metal" else None,
+    )
+    request = SolveRequest.model_validate(
+        {
+            "geometry": {
+                "type": "imported",
+                "ingest_id": first["ingest_id"],
+                "manifest_sha256": first["manifest_sha256"],
+                "artifact_sha256": first["artifact_sha256"],
+                "drive_channels": [
+                    {"id": "drive-mf", "source_ids": ["source-mf"]},
+                    {"id": "drive-hf-left", "source_ids": ["source-hf-left"]},
+                    {"id": "drive-hf-right", "source_ids": ["source-hf-right"]},
+                ],
+                "mesh": first["mesh_sizes"],
+                "acknowledged_findings": [
+                    f'{first["report_sha256"]}:{finding["id"]}'
+                    for finding in first["findings"]
+                    if finding.get("blocking")
+                ],
+            },
+            "options": {
+                "engine": "metal",
+                "frequencies_hz": [100.0, 200.0],
+                "polar_config": {"angle_range": [-180.0, 180.0, 5]},
+            },
+        }
+    )
+
+    async def solve_conformance_record() -> dict[str, object]:
+        runtime = JobRuntime(
+            JobStore(data_dir / "jobs-conformance.db"),
+            engine_registry=registry,
+            cadlink_store=store,
+        )
+        try:
+            job_id = await runtime.submit(request)
+            for _ in range(300):
+                row = runtime.store.get_job_row(job_id)
+                if row["status"] in {"complete", "error"}:
+                    break
+                await asyncio.sleep(0.01)
+            assert row["status"] == "complete", row.get("error_message")
+            return await runtime.get_results(job_id)
+        finally:
+            await runtime.shutdown()
+
+    results = asyncio.run(solve_conformance_record())
+    assert results["channel_order"] == [
+        "drive-mf",
+        "drive-hf-left",
+        "drive-hf-right",
+    ]
+    assert set(results["channels"]) == {
+        "drive-mf",
+        "drive-hf-left",
+        "drive-hf-right",
+    }
+    assert results["metadata"]["observation_origin_effective"] == "throat"

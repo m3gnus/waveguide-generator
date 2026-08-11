@@ -15,7 +15,12 @@ from typing import Any
 from server.cadlink.store import CadLinkStore
 from server.design.textcfg import parse
 from server.exports.geometry_identity import geometry_hash_for_design, normalize_json_value
-from server.mesh.imported import ImportedMeshDependencyError, build_imported_mesh
+from server.mesh.imported import (
+    ImportedMeshDependencyError,
+    build_imported_mesh,
+    validate_imported_sizes,
+)
+from server.mesh.artifact import mesh_text_sha256
 from server.platform.paths import data_paths
 
 from .wgreturn import WgReturnBundle, read_wgreturn
@@ -292,6 +297,7 @@ def _cache_key(
     )
 
     payload = {
+        "import_pipeline_contract": "wg-import-solve-v1",
         "artifact_sha256": bundle.artifact_sha256,
         "manifest_sha256": bundle.manifest_sha256,
         "normalisation_transform": transform,
@@ -321,6 +327,7 @@ def _cache_lookup_key(
     return hashlib.sha256(
         _canonical(
             {
+                "import_pipeline_contract": "wg-import-solve-v1",
                 "artifact_sha256": bundle.artifact_sha256,
                 "manifest_sha256": bundle.manifest_sha256,
                 "sources": manifest["sources"],
@@ -379,6 +386,9 @@ def ingest_bundle(
     except Exception as exc:
         raise IngestRefusal("stage 1 bundle validation", str(exc)) from exc
     manifest = bundle.manifest
+    normalized_mesh = validate_imported_sizes(
+        manifest["sources"], mesh, skipped_source_ids=skipped_source_ids
+    )
     scope_findings = _scope_findings(manifest)
     validate_scope_inventory(manifest)
     try:
@@ -387,7 +397,9 @@ def ingest_bundle(
         raise
     options = dict(prep_options or {})
     imports_root = data_paths(data_dir).root / "imports"
-    lookup_key = _cache_lookup_key(bundle, manifest, mesh, skipped_source_ids, options)
+    lookup_key = _cache_lookup_key(
+        bundle, manifest, normalized_mesh, skipped_source_ids, options
+    )
     index_path = imports_root / "meshes" / "index" / f"{lookup_key}.txt"
     cache_key: str | None = None
     try:
@@ -405,7 +417,7 @@ def ingest_bundle(
             built = build_imported_mesh(
                 bundle.assembly_path,
                 manifest,
-                mesh,
+                normalized_mesh,
                 skipped_source_ids=skipped_source_ids,
                 options=options,
             )
@@ -428,7 +440,7 @@ def ingest_bundle(
         cache_key = _cache_key(
             bundle,
             manifest,
-            mesh,
+            normalized_mesh,
             skipped_source_ids,
             options,
             str(built["transformed_geometry_hash"]),
@@ -470,18 +482,45 @@ def ingest_bundle(
     bundle_destination, staged_bundle, staged_bundle_root = _stage_bundle_cas(
         bundle, imports_root
     )
+    effective_skipped_source_ids = sorted(
+        set(skipped_source_ids)
+        | {
+            str(source_id)
+            for source_id, resolution in built.get("role_resolution", {}).items()
+            if resolution.get("skipped")
+        }
+    )
+    effective_mesh = {
+        **normalized_mesh,
+        "source_size_mm": {
+            source_id: size
+            for source_id, size in normalized_mesh["source_size_mm"].items()
+            if source_id not in effective_skipped_source_ids
+        },
+    }
 
     def publish(ingest_id: str, created_at: str) -> str:
         _publish_staged_bundle(bundle_destination, staged_bundle)
+        anchor_instance_id = built["normalisation"].get("anchor_instance_id")
+        anchor_instance = next(
+            (
+                instance
+                for instance in manifest["instances"]
+                if instance["instance_id"] == anchor_instance_id
+            ),
+            None,
+        )
         record: dict[str, Any] = {
             "ingest_id": ingest_id,
             "created_at": created_at,
             "return_id": manifest["return"]["id"],
+            "acoustic_domain": "free-space",
             "manifest_sha256": bundle.manifest_sha256,
             "artifact_sha256": bundle.artifact_sha256,
             "bundle_store_path": str(bundle_destination),
             "mesh_store_path": str(mesh_path),
             "mesh_cache_key": cache_key,
+            "mesh_content_sha256": mesh_text_sha256(str(built["msh_text"])),
             "mesh_cache_hit": cache_hit,
             "scope": {"status": manifest["scope"]["status"], "degraded_skip_count": len(scope_findings)},
             "evidence": {
@@ -499,6 +538,24 @@ def ingest_bundle(
             },
             "consistency": {"status": "accepted", "checked_instances": len(manifest["instances"])},
             "normalisation": built["normalisation"],
+            "anchor": (
+                {
+                    "instance_id": anchor_instance["instance_id"],
+                    "design_id": anchor_instance["design_id"],
+                    "throat_frame": built["normalisation"].get(
+                        "anchor_throat_frame"
+                    ),
+                }
+                if anchor_instance is not None
+                else {
+                    "instance_id": None,
+                    "design_id": None,
+                    "throat_frame": None,
+                }
+            ),
+            "sources": manifest["sources"],
+            "mesh_sizes": effective_mesh,
+            "skipped_source_ids": effective_skipped_source_ids,
             "role_resolution": built["role_resolution"],
             "role_findings": built.get("role_findings", []),
             "symmetry": built["symmetry"],

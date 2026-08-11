@@ -152,7 +152,7 @@ def test_retry_replays_stored_options_and_parent_after_results_are_pruned(
         replay = runtime.store.get_job_row(retry_id)
 
         assert replay["config_json"]["options"] == stored_options
-        assert replay["config_json"]["design"] == source["config_json"]["design"]
+        assert replay["config_json"]["geometry"] == source["config_json"]["geometry"]
         assert replay["parent_job_id"] == source_id
         assert replay["config_json"]["parent_job_id"] == source_id
         assert replay["run_number"] == source["run_number"] + 1

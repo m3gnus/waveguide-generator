@@ -1,0 +1,891 @@
+from __future__ import annotations
+
+import asyncio
+import json
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+import numpy as np
+import pytest
+from fastapi import FastAPI
+from pydantic import ValidationError
+
+from server.cadlink.store import CadLinkStore
+from server.jobs.models import ImportedGeometrySource, SolveRequest
+from server.jobs.api import create_jobs_router
+from server.jobs.runtime import ImportedSolveRefusal, JobRuntime, _replay_request
+from server.jobs.store import JobStore
+from server.mesh.imported import polar_grid_from_symmetry
+from server.solver import metal
+from server.solver.base import EngineRunResult
+from server.solver.imported import (
+    ImportedSymmetryUnsupportedError,
+    global_frequency_caveat,
+    mesh_text_sha256,
+)
+from server.solver.result_mapping import REFERENCE_RHO_C
+
+
+MANIFEST_SHA = "sha256:" + "1" * 64
+ARTIFACT_SHA = "sha256:" + "2" * 64
+REPORT_SHA = "sha256:" + "3" * 64
+
+
+def _geometry(ingest_id: str) -> dict[str, Any]:
+    return {
+        "type": "imported",
+        "ingest_id": ingest_id,
+        "manifest_sha256": MANIFEST_SHA,
+        "artifact_sha256": ARTIFACT_SHA,
+        "drive_channels": [
+            {"id": "left", "source_ids": ["source-a", "source-b"]},
+            {"id": "right", "source_ids": ["source-c"]},
+        ],
+        "mesh": {
+            "rigid_size_mm": 8.0,
+            "transition_mm": 20.0,
+            "source_size_mm": {
+                "source-a": 3.0,
+                "source-b": 3.0,
+                "source-c": 4.0,
+            },
+        },
+    }
+
+
+def _request(ingest_id: str, **geometry_changes: Any) -> SolveRequest:
+    geometry = _geometry(ingest_id)
+    geometry.update(geometry_changes)
+    return SolveRequest.model_validate(
+        {
+            "geometry": geometry,
+            "options": {
+                "engine": "metal",
+                "frequencies_hz": [100.0, 500.0, 1000.0],
+                "polar_config": {"angle_range": [-180.0, 180.0, 37]},
+            },
+        }
+    )
+
+
+def test_geometry_union_round_trip_and_legacy_rewrite() -> None:
+    imported = _request("wgi_" + "0" * 26)
+    assert isinstance(imported.geometry, ImportedGeometrySource)
+    assert SolveRequest.model_validate(imported.model_dump(mode="json")) == imported
+
+    legacy = SolveRequest.model_validate(
+        {"design": {"formula": "OSSE", "L": 120, "a": 40}, "design_revision": 7}
+    )
+    dumped = legacy.model_dump(mode="json")
+    assert dumped["geometry"]["type"] == "parametric"
+    assert dumped["geometry"]["design_revision"] == 7
+    assert "design" not in dumped
+
+    with pytest.raises(ValidationError, match="cannot be combined"):
+        SolveRequest.model_validate(
+            {"geometry": dumped["geometry"], "design": dumped["geometry"]["design"]}
+        )
+    with pytest.raises(ValidationError, match="extra_forbidden"):
+        SolveRequest.model_validate(
+            {
+                "geometry": {
+                    **_geometry("wgi_" + "0" * 26),
+                    "design": dumped["geometry"]["design"],
+                },
+                "options": {"frequencies_hz": [100, 200]},
+            }
+        )
+
+
+def test_legacy_top_level_parametric_wire_is_accepted_through_http_api() -> None:
+    class CapturingRuntime:
+        def __init__(self) -> None:
+            self.request: SolveRequest | None = None
+
+        async def start(self) -> None:
+            return None
+
+        async def shutdown(self) -> None:
+            return None
+
+        async def submit(self, request: SolveRequest) -> str:
+            self.request = request
+            return "job-legacy"
+
+    runtime = CapturingRuntime()
+    app = FastAPI()
+    app.include_router(create_jobs_router(runtime))  # type: ignore[arg-type]
+    payload = json.dumps(
+        {
+            "design": {"formula": "OSSE", "L": 120, "a": 40},
+            "design_revision": 4,
+            "options": {"engine": "dryrun"},
+        }
+    ).encode("utf-8")
+
+    async def post() -> tuple[int, dict[str, Any]]:
+        sent: list[dict[str, Any]] = []
+        delivered = False
+
+        async def receive() -> dict[str, Any]:
+            nonlocal delivered
+            if delivered:
+                return {"type": "http.disconnect"}
+            delivered = True
+            return {"type": "http.request", "body": payload, "more_body": False}
+
+        async def send(message: dict[str, Any]) -> None:
+            sent.append(message)
+
+        await app(
+            {
+                "type": "http",
+                "asgi": {"version": "3.0", "spec_version": "2.3"},
+                "http_version": "1.1",
+                "method": "POST",
+                "scheme": "http",
+                "path": "/api/solve",
+                "raw_path": b"/api/solve",
+                "query_string": b"",
+                "root_path": "",
+                "headers": [
+                    (b"host", b"127.0.0.1"),
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(payload)).encode("ascii")),
+                ],
+                "client": ("127.0.0.1", 12345),
+                "server": ("127.0.0.1", 80),
+            },
+            receive,
+            send,
+        )
+        start = next(item for item in sent if item["type"] == "http.response.start")
+        body = b"".join(
+            item.get("body", b"")
+            for item in sent
+            if item["type"] == "http.response.body"
+        )
+        return int(start["status"]), json.loads(body)
+
+    status, body = asyncio.run(post())
+    assert status == 200
+    assert body == {"job_id": "job-legacy"}
+    assert runtime.request is not None
+    assert runtime.request.geometry.type == "parametric"
+    assert runtime.request.design_revision == 4
+
+
+def test_solve_request_design_accessor_is_deliberate() -> None:
+    parametric = SolveRequest.model_validate(
+        {"design": {"formula": "OSSE", "L": 120, "a": 40}}
+    )
+    assert parametric.design is parametric.geometry.design
+
+    imported = _request("wgi_" + "0" * 26)
+    with pytest.raises(
+        AttributeError,
+        match="geometry type 'imported'.*request.geometry.*ImportedGeometrySource",
+    ):
+        _ = imported.design
+    assert getattr(imported, "design", None) is None
+
+
+def test_polar_derivation_maps_only_solver_observation_axes() -> None:
+    derivation = polar_grid_from_symmetry(
+        {
+            "planes": {
+                "x0": {"accepted": True},
+                "y0": {"accepted": False},
+                "z0": {"accepted": True},
+            },
+            "cut_planes": ["x0"],
+        }
+    )
+    assert set(derivation["axes"]) == {"horizontal", "vertical", "diagonal"}
+    assert derivation["axes"]["horizontal"]["minimum_deg"] == 0.0
+    assert derivation["axes"]["vertical"]["minimum_deg"] == -180.0
+    assert derivation["axes"]["diagonal"]["minimum_deg"] == -180.0
+    assert "z" not in derivation["axes"]
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        (
+            {
+                "drive_channels": [
+                    {"id": "same", "source_ids": ["source-a", "source-b"]},
+                    {"id": "same", "source_ids": ["source-c"]},
+                ]
+            },
+            "channel ids must be unique",
+        ),
+        (
+            {
+                "drive_channels": [
+                    {"id": "a", "source_ids": ["source-a", "source-b"]},
+                    {"id": "b", "source_ids": ["source-b", "source-c"]},
+                ]
+            },
+            "exactly one drive channel",
+        ),
+        (
+            {
+                "mesh": {
+                    "rigid_size_mm": 8,
+                    "transition_mm": 20,
+                    "source_size_mm": {"source-a": 3, "source-b": 3},
+                }
+            },
+            "cover exactly",
+        ),
+        (
+            {
+                "drive_channels": [
+                    {"id": "a", "source_ids": ["source-a"], "motion": "radial"}
+                ],
+                "mesh": {
+                    "rigid_size_mm": 8,
+                    "transition_mm": 20,
+                    "source_size_mm": {"source-a": 3},
+                },
+            },
+            "normal.*axial",
+        ),
+    ],
+)
+def test_imported_channel_and_mesh_validation(change: dict[str, Any], message: str) -> None:
+    geometry = _geometry("wgi_" + "0" * 26)
+    geometry.update(change)
+    with pytest.raises(ValidationError, match=message):
+        SolveRequest.model_validate(
+            {"geometry": geometry, "options": {"frequencies_hz": [100, 200]}}
+        )
+
+
+def _record(mesh_path: Path, *, findings: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    msh_text = mesh_path.read_text(encoding="utf-8")
+    symmetry = {
+        "cut_planes": ["x0"],
+        "planes": {
+            "x0": {"accepted": True},
+            "y0": {"accepted": False},
+            "z0": {"accepted": False},
+        },
+    }
+    return {
+        "manifest_sha256": MANIFEST_SHA,
+        "artifact_sha256": ARTIFACT_SHA,
+        "report_sha256": REPORT_SHA,
+        "mesh_store_path": str(mesh_path),
+        "mesh_cache_key": "4" * 64,
+        "mesh_content_sha256": mesh_text_sha256(msh_text),
+        "mesh_sizes": _geometry("wgi_" + "0" * 26)["mesh"],
+        "skipped_source_ids": [],
+        "sources": [
+            {"id": "source-a", "required": True},
+            {"id": "source-b", "required": True},
+            {"id": "source-c", "required": False},
+        ],
+        "source_tags": {"source-a": 101, "source-b": 102, "source-c": 103},
+        "tag_namespace": "wg-import-v1",
+        "tag_map": {
+            "1": {"source_id": None, "instance_id": None, "role": "rigid"},
+            "101": {"source_id": "source-a", "instance_id": "i", "role": "HF"},
+            "102": {"source_id": "source-b", "instance_id": "i", "role": "MF"},
+            "103": {"source_id": "source-c", "instance_id": None, "role": "LF"},
+        },
+        "anchor": {
+            "instance_id": "i",
+            "design_id": None,
+            "throat_frame": {
+                "axis": [0.0, 0.0, 1.0],
+                "origin_m": [0.0, 0.08, 0.0],
+                "u": [1.0, 0.0, 0.0],
+                "v": [0.0, 1.0, 0.0],
+                "mouth_center_m": [0.0, 0.08, 0.0],
+                "source_center_m": [0.0, 0.08, 0.0],
+            },
+        },
+        "symmetry": symmetry,
+        "polar_grid_derivation": polar_grid_from_symmetry(symmetry),
+        "mesh": {
+            "stats": {"triangle_count": 3},
+            "metadata": {
+                "mesh_frequency_validation": {
+                    "frequency_policy": "global_warn_source_hard",
+                    "global_max_valid_frequency_hz": 800.0,
+                    "per_source": {
+                        source_id: {"effective_max_valid_frequency_hz": 1200.0}
+                        for source_id in ("source-a", "source-b", "source-c")
+                    },
+                }
+            },
+        },
+        "evidence": {"fem_air_volumes": []},
+        "findings": findings or [],
+    }
+
+
+class _PausedRegistry:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.release = asyncio.Event()
+
+    async def get_engine(self, _name: str) -> Any:
+        self.calls += 1
+        if self.calls == 1:
+            return SimpleNamespace(name="metal")
+        await self.release.wait()
+        return None
+
+    async def unavailable_reason(self, _name: str) -> str | None:
+        return None
+
+
+class _AlwaysRegistry:
+    def __init__(self, engine: Any) -> None:
+        self.engine = engine
+
+    async def get_engine(self, _name: str) -> Any:
+        return self.engine
+
+    async def unavailable_reason(self, _name: str) -> str | None:
+        return None
+
+
+async def _runtime_fixture(
+    tmp_path: Path, record_changes: dict[str, Any] | None = None
+) -> tuple[JobRuntime, str, dict[str, Any]]:
+    mesh_path = tmp_path / "imported.msh"
+    mesh_path.write_text("$MeshFormat\n2.2 0 8\n$EndMeshFormat\n", encoding="utf-8")
+    record = _record(mesh_path)
+    record.update(record_changes or {})
+    cad_store = CadLinkStore(tmp_path / "cadlink.db")
+
+    def build(ingest_id: str, created_at: str) -> str:
+        return json.dumps({**record, "ingest_id": ingest_id, "created_at": created_at})
+
+    row = cad_store.allocate_ingest(
+        manifest_sha256=MANIFEST_SHA,
+        artifact_sha256=ARTIFACT_SHA,
+        record_builder=build,
+    )
+    runtime = JobRuntime(
+        JobStore(tmp_path / "jobs.db"),
+        engine_registry=_PausedRegistry(),  # type: ignore[arg-type]
+        cadlink_store=cad_store,
+    )
+    return runtime, str(row["ingest_id"]), record
+
+
+def test_submit_persists_ingestion_mesh_summary_caveat_and_availability(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        runtime, ingest_id, record = await _runtime_fixture(tmp_path)
+        try:
+            request = _request(ingest_id)
+            job_id = await runtime.submit(request)
+            row = runtime.store.get_job_row(job_id)
+            assert row is not None
+            assert row["config_summary_json"]["formula_type"] == "cad-import"
+            assert row["task_metadata"]["imported_geometry"]["global_frequency_caveat"][
+                "code"
+            ] == "global_mesh_frequency_limit_exceeded"
+            assert row["task_metadata"]["imported_geometry"][
+                "global_frequency_caveat"
+            ] == global_frequency_caveat(request, record)
+            assert runtime.store.get_mesh_artifact(job_id).startswith("$MeshFormat")
+            serialized = runtime._serialize_job(row)
+            assert serialized["design_availability"]["source"] == "cad-import"
+            assert serialized["design_availability"]["reopenable"] is False
+            assert _replay_request(row).model_dump(mode="json") == SolveRequest.model_validate(
+                row["config_json"]
+            ).model_dump(mode="json")
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_current_report_acknowledgement_and_imported_retry(tmp_path: Path) -> None:
+    class HoldingEngine:
+        name = "metal"
+
+        async def run(self, *_args: Any, **_kwargs: Any) -> EngineRunResult:
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+    async def scenario() -> None:
+        runtime, ingest_id, _ = await _runtime_fixture(
+            tmp_path,
+            {"findings": [{"id": "finding-a", "blocking": True}]},
+        )
+        runtime.engine_registry = _AlwaysRegistry(HoldingEngine())  # type: ignore[assignment]
+        try:
+            request = _request(
+                ingest_id,
+                acknowledged_findings=[f"{REPORT_SHA}:finding-a"],
+            )
+            source_id = await runtime.submit(request)
+            retry_id = await runtime.retry(source_id)
+            retried = runtime.store.get_job_row(retry_id)
+            assert retried["parent_job_id"] == source_id
+            assert retried["config_json"]["geometry"]["ingest_id"] == ingest_id
+            assert retried["config_json"]["geometry"]["acknowledged_findings"] == [
+                f"{REPORT_SHA}:finding-a"
+            ]
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_missing_ingestion_record_is_typed(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        runtime = JobRuntime(
+            JobStore(tmp_path / "jobs.db"),
+            engine_registry=_PausedRegistry(),  # type: ignore[arg-type]
+            cadlink_store=CadLinkStore(tmp_path / "cadlink.db"),
+        )
+        try:
+            with pytest.raises(ImportedSolveRefusal) as caught:
+                await runtime.submit(_request("wgi_" + "0" * 26))
+            assert caught.value.reason_code == "ingest_not_found"
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("required", [False, True], ids=["optional", "required"])
+def test_skipped_sources_must_be_optional(tmp_path: Path, required: bool) -> None:
+    async def scenario() -> None:
+        sources = [
+            {"id": "source-a", "required": True},
+            {"id": "source-b", "required": True},
+            {"id": "source-c", "required": required},
+        ]
+        mesh_sizes = {
+            "rigid_size_mm": 8.0,
+            "transition_mm": 20.0,
+            "source_size_mm": {"source-a": 3.0, "source-b": 3.0},
+        }
+        runtime, ingest_id, _ = await _runtime_fixture(
+            tmp_path,
+            {
+                "sources": sources,
+                "skipped_source_ids": ["source-c"],
+                "mesh_sizes": mesh_sizes,
+            },
+        )
+        geometry = _geometry(ingest_id)
+        geometry["drive_channels"] = [
+            {"id": "left", "source_ids": ["source-a", "source-b"]}
+        ]
+        geometry["mesh"] = mesh_sizes
+        geometry["skipped_source_ids"] = ["source-c"]
+        request = SolveRequest.model_validate(
+            {
+                "geometry": geometry,
+                "options": {
+                    "engine": "metal",
+                    "frequencies_hz": [100, 1000],
+                    "polar_config": {"angle_range": [-180, 180, 37]},
+                },
+            }
+        )
+        try:
+            if required:
+                with pytest.raises(ImportedSolveRefusal) as caught:
+                    await runtime.submit(request)
+                assert caught.value.reason_code == "required_source_skipped"
+            else:
+                job_id = await runtime.submit(request)
+                assert runtime.store.get_mesh_artifact(job_id) is not None
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_required_fem_volume_needs_exterior_only_override(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        runtime, ingest_id, _ = await _runtime_fixture(
+            tmp_path,
+            {"evidence": {"fem_air_volumes": [{"file": "fem/air.step"}]}},
+        )
+        try:
+            with pytest.raises(ImportedSolveRefusal) as caught:
+                await runtime.submit(_request(ingest_id))
+            assert caught.value.reason_code == "fem_required"
+            request = _request(ingest_id, exterior_only=True)
+            assert await runtime.submit(request)
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("mutate_request", "record_changes", "reason"),
+    [
+        (
+            lambda value, _record: value.geometry.__setattr__("manifest_sha256", "sha256:" + "9" * 64),
+            {},
+            "ingest_sha_mismatch",
+        ),
+        (
+            lambda value, _record: value.geometry.__setattr__(
+                "acknowledged_findings", ["sha256:" + "8" * 64 + ":finding-a"]
+            ),
+            {"findings": [{"id": "finding-a", "blocking": True}]},
+            "unacknowledged_findings",
+        ),
+        (
+            lambda value, _record: value.options.polar_config.__setattr__(
+                "angle_range", (0.0, 180.0, 37)
+            ),
+            {},
+            "polar_grid_narrowing",
+        ),
+        (
+            lambda value, _record: value.options.__setattr__(
+                "frequencies_hz", [100.0, 1300.0]
+            ),
+            {},
+            "source_frequency_limit",
+        ),
+        (
+            lambda value, _record: value.options.__setattr__("engine", "bempp"),
+            {},
+            "imported_engine_unsupported",
+        ),
+        (
+            lambda value, _record: value.options.__setattr__("engine", "circsym"),
+            {},
+            "imported_circsym_unsupported",
+        ),
+        (
+            lambda _value, _record: None,
+            {"infinite_baffle": True},
+            "imported_infinite_baffle_unsupported",
+        ),
+        (
+            lambda value, _record: value.options.polar_config.__setattr__(
+                "enabled_axes", ["horizontal"]
+            ),
+            {},
+            "polar_grid_narrowing",
+        ),
+        (
+            lambda value, _record: value.options.polar_config.__setattr__(
+                "inclination", 30.0
+            ),
+            {},
+            "imported_diagonal_inclination_unsupported",
+        ),
+        (
+            lambda value, _record: value.options.__setattr__("engine", "dryrun"),
+            {},
+            "imported_engine_unsupported",
+        ),
+        (
+            lambda value, _record: value.geometry.mesh.__setattr__(
+                "rigid_size_mm", 9.0
+            ),
+            {},
+            "mesh_sizes_mismatch",
+        ),
+        (
+            lambda value, _record: value.options.__setattr__("symmetry", "full"),
+            {},
+            "imported_symmetry_mismatch",
+        ),
+        (
+            lambda _value, _record: None,
+            {"sources": None},
+            "ingest_record_incomplete",
+        ),
+        (
+            lambda _value, _record: None,
+            {"skipped_source_ids": ["source-c"]},
+            "skipped_sources_mismatch",
+        ),
+        (
+            lambda _value, _record: None,
+            {
+                "sources": [
+                    {"id": "source-a", "required": True},
+                    {"id": "source-b", "required": True},
+                    {"id": "source-c", "required": False},
+                    {"id": "source-d", "required": True},
+                ]
+            },
+            "drive_source_coverage",
+        ),
+        (
+            lambda _value, record: Path(record["mesh_store_path"]).unlink(),
+            {},
+            "ingest_mesh_unavailable",
+        ),
+        (
+            lambda _value, record: Path(record["mesh_store_path"]).write_text(
+                "corrupt", encoding="utf-8"
+            ),
+            {},
+            "ingest_mesh_unavailable",
+        ),
+    ],
+)
+def test_imported_submit_refusals(
+    tmp_path: Path,
+    mutate_request: Any,
+    record_changes: dict[str, Any],
+    reason: str,
+) -> None:
+    async def scenario() -> None:
+        runtime, ingest_id, record = await _runtime_fixture(tmp_path, record_changes)
+        try:
+            request = _request(ingest_id)
+            mutate_request(request, record)
+            with pytest.raises(ImportedSolveRefusal) as caught:
+                await runtime.submit(request)
+            assert caught.value.reason_code == reason
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_z0_cut_refuses_at_submit_and_solver_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def submit_scenario() -> tuple[SolveRequest, dict[str, Any]]:
+        runtime, ingest_id, record = await _runtime_fixture(
+            tmp_path, {"symmetry": {"cut_planes": ["z0"]}}
+        )
+        try:
+            with pytest.raises(ImportedSolveRefusal) as caught:
+                await runtime.submit(_request(ingest_id))
+            assert caught.value.reason_code == "imported_symmetry_unsupported"
+            return _request(ingest_id), record
+        finally:
+            await runtime.shutdown()
+
+    request, record = asyncio.run(submit_scenario())
+    record["symmetry"] = {"cut_planes": ["z0"]}
+    monkeypatch.setattr(metal, "metal_status", lambda: {"available": True, "reason": "ok"})
+    with pytest.raises(ImportedSymmetryUnsupportedError, match="z0"):
+        metal.solve_imported_metal_from_msh_text("msh", request, record)
+
+
+def _native_result() -> SimpleNamespace:
+    frequencies = np.asarray([100.0, 200.0])
+    return SimpleNamespace(
+        frequencies_hz=frequencies,
+        observation_angles_deg=np.asarray([-180.0, 0.0, 180.0]),
+        observation_planes=["horizontal"],
+        pressure_complex=np.ones((2, 1, 3), dtype=np.complex128) * 20.0e-6,
+        directivity_db=np.zeros((2, 1, 3)),
+        impedance=np.ones(2, dtype=np.complex128) * (1j * REFERENCE_RHO_C),
+        solver_log=[],
+        timings={},
+        native_diagnostics=[],
+    )
+
+
+def test_multi_source_orchestration_uses_channel_bases_and_anchor_frame(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(metal, "metal_status", lambda: {"available": True, "reason": "ok"})
+    monkeypatch.setattr(
+        metal, "ObservationConfig", lambda **kwargs: SimpleNamespace(**kwargs)
+    )
+
+    def config(**kwargs: Any) -> SimpleNamespace:
+        captured["config"] = kwargs
+        return SimpleNamespace(**kwargs)
+
+    def solve_multi(
+        _mesh: str,
+        sources: list[dict[int, complex]],
+        _config: Any,
+        frequencies_hz: list[float] | None = None,
+    ) -> list[SimpleNamespace]:
+        captured["sources"] = sources
+        captured["frequencies_hz"] = frequencies_hz
+        return [_native_result() for _ in sources]
+
+    monkeypatch.setattr(metal, "native_config", config)
+    monkeypatch.setattr(metal, "native_solve_multi_source", solve_multi)
+    monkeypatch.setattr(
+        metal,
+        "build_solver_mesh",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("imported jobs must never rebuild geometry")
+        ),
+    )
+    request = _request("wgi_" + "0" * 26)
+    request.options.frequencies_hz = [100.0, 200.0]
+    request.geometry.drive_channels[1].motion = "axial"
+    mesh_path = tmp_path / "imported.msh"
+    mesh_path.write_text("msh", encoding="utf-8")
+    record = _record(mesh_path)
+
+    async def run() -> dict[str, Any]:
+        outcome = await metal.MetalEngine().run(
+            request,
+            cancel_cb=lambda: None,
+            stage_cb=lambda *_args: None,
+            imported_record=record,
+        )
+        return outcome.results
+
+    response = asyncio.run(run())
+
+    assert captured["sources"] == [
+        {101: 1.0 + 0.0j, 102: 1.0 + 0.0j},
+        {103: 1.0 + 0.0j},
+    ]
+    assert captured["config"]["frame_override"].origin.tolist() == [0.0, 0.08, 0.0]
+    assert captured["config"]["native_symmetry_plane"] == "yz"
+    assert set(captured["config"]["source_velocity_profiles"]) == {101, 102, 103}
+    assert isinstance(captured["config"]["source_velocity_profiles"][103], metal.AxialProfile)
+    assert response["channel_order"] == ["left", "right"]
+    assert set(response["channels"]) == {"left", "right"}
+    assert response["metadata"]["result_contract_version"] == 2
+    assert "impedance" not in response["channels"]["left"]
+    assert response["channels"]["left"]["metadata"]["impedance_omitted"] == (
+        "multi-source channel: per-patch impedance is not a channel impedance"
+    )
+    assert "impedance" in response["channels"]["right"]
+    assert response["metadata"]["observation_origin_effective"] == "throat"
+    assert response["metadata"]["observation_frame_basis"]["origin_m"] == [
+        0.0,
+        0.08,
+        0.0,
+    ]
+
+    allocated = {"1", "101", "102", "103"}
+
+    def assert_no_tag_keys(value: Any, path: tuple[str, ...] = ()) -> None:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                next_path = (*path, str(key))
+                if path != ("metadata", "tag_map"):
+                    assert str(key) not in allocated, next_path
+                assert_no_tag_keys(item, next_path)
+        elif isinstance(value, list):
+            for item in value:
+                assert_no_tag_keys(item, path)
+
+    assert_no_tag_keys(response)
+
+
+def test_result_caveat_uses_this_job_sweep(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(metal, "metal_status", lambda: {"available": True, "reason": "ok"})
+    monkeypatch.setattr(
+        metal, "ObservationConfig", lambda **kwargs: SimpleNamespace(**kwargs)
+    )
+    monkeypatch.setattr(
+        metal, "native_config", lambda **kwargs: SimpleNamespace(**kwargs)
+    )
+    monkeypatch.setattr(
+        metal,
+        "native_solve_multi_source",
+        lambda _mesh, sources, _config, frequencies_hz=None: [
+            _native_result() for _ in sources
+        ],
+    )
+    mesh_path = tmp_path / "imported.msh"
+    mesh_path.write_text("msh", encoding="utf-8")
+    record = _record(mesh_path)
+    record["mesh"]["metadata"]["mesh_frequency_validation"][
+        "requested_max_frequency_hz"
+    ] = 20_000.0
+
+    below = _request("wgi_" + "0" * 26)
+    below.options.frequencies_hz = [100.0, 200.0]
+    below_response = metal.solve_imported_metal_from_msh_text("msh", below, record)
+    assert below_response["metadata"]["global_frequency_caveat"] is None
+
+    above = _request("wgi_" + "0" * 26)
+    above.options.frequencies_hz = [100.0, 1000.0]
+    above_response = metal.solve_imported_metal_from_msh_text("msh", above, record)
+    assert above_response["metadata"]["global_frequency_caveat"][
+        "requested_max_frequency_hz"
+    ] == 1000.0
+
+
+def test_unlinked_frame_fallback_and_real_mixed_motion_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, Any] = {}
+    real_native_config = metal.native_config
+    monkeypatch.setattr(metal, "metal_status", lambda: {"available": True, "reason": "ok"})
+
+    def solve_multi(
+        _mesh: str,
+        sources: list[dict[int, complex]],
+        config: Any,
+        frequencies_hz: list[float] | None = None,
+    ) -> list[SimpleNamespace]:
+        captured["config"] = config
+        return [_native_result() for _ in sources]
+
+    monkeypatch.setattr(metal, "native_solve_multi_source", solve_multi)
+    assert real_native_config is not None
+    request = _request("wgi_" + "0" * 26)
+    request.options.frequencies_hz = [100.0, 200.0]
+    request.geometry.drive_channels[1].motion = "axial"
+    mesh_path = tmp_path / "imported.msh"
+    mesh_path.write_text("msh", encoding="utf-8")
+    record = _record(mesh_path)
+    record["anchor"] = {"instance_id": None, "design_id": None, "throat_frame": None}
+    record["normalisation"] = {"assembly_frame_is_solver_frame": True}
+    response = metal.solve_imported_metal_from_msh_text("msh", request, record)
+    assert captured["config"].frame_override.origin.tolist() == [0.0, 0.0, 0.0]
+    assert response["metadata"]["observation_origin_effective"] == "throat"
+
+
+def test_execution_uses_job_mesh_after_import_cache_is_deleted(tmp_path: Path) -> None:
+    class CapturingEngine:
+        name = "metal"
+
+        async def run(
+            self,
+            _request: SolveRequest,
+            *,
+            cancel_cb: Any,
+            stage_cb: Any,
+            imported_record: dict[str, Any],
+            artifact_cb: Any = None,
+        ) -> EngineRunResult:
+            assert imported_record["_execution_mesh_source"] == "job-artifact"
+            assert imported_record["_execution_msh_text"].startswith("$MeshFormat")
+            return EngineRunResult(
+                results={"channels": {"left": {}, "right": {}}, "metadata": {}},
+                msh_text=imported_record["_execution_msh_text"],
+                mesh_stats={"triangle_count": 3},
+            )
+
+    async def scenario() -> None:
+        runtime, ingest_id, record = await _runtime_fixture(tmp_path)
+        runtime.engine_registry = _AlwaysRegistry(CapturingEngine())  # type: ignore[assignment]
+        try:
+            job_id = await runtime.submit(_request(ingest_id))
+            Path(record["mesh_store_path"]).unlink()
+            for _ in range(100):
+                row = runtime.store.get_job_row(job_id)
+                if row["status"] in {"complete", "error"}:
+                    break
+                await asyncio.sleep(0.01)
+            assert row["status"] == "complete", row.get("error_message")
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())

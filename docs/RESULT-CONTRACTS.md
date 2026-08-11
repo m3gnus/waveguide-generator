@@ -2,6 +2,56 @@
 
 This is the v1 numerical and failure-state compatibility matrix. The primary mapper emits one common frequency vector plus SPL, phase, impedance, DI, directivity, metadata, optional balloon, and optional beam shape (`server/solver/result_mapping.py:295-391`). Presentation transforms are called out separately because they are not raw-result semantics (`server/solver/charts.py:187-486`).
 
+## Imported multi-source result envelope
+
+Parametric jobs retain the version-1 single-response object documented below. An
+imported CAD-return job emits a version-2 envelope whose channel values are those
+same version-1 response objects:
+
+```jsonc
+{
+  "channels": {
+    "drive-hf": { /* complete v1 SPL, phase, polar, DI and impedance response */ },
+    "drive-lf": { /* complete v1 response */ }
+  },
+  "channel_order": ["drive-hf", "drive-lf"],
+  "metadata": {
+    "result_contract_version": 2,
+    "geometry_type": "imported",
+    "ingest_id": "wgi_...",
+    "manifest_sha256": "sha256:...",
+    "artifact_sha256": "sha256:..."
+  }
+}
+```
+
+`channels` is keyed only by the request's stable `drive_channel_id` and
+`channel_order` preserves request order. A channel explicitly groups one or more
+source IDs; their physical-tag velocities are summed into that channel's one
+unit-drive basis. There is no crossover, delay, LEM, or channel summation in this
+contract. Physical integers are artifact-local and never result addresses.
+For a channel containing more than one source ID, `impedance` is omitted because
+the native value belongs to one source patch rather than to the grouped channel;
+the channel metadata carries `impedance_omitted: "multi-source channel: per-patch
+impedance is not a channel impedance"`. Single-source channels retain the normal
+v1 impedance object.
+
+The envelope metadata carries the ingestion tag namespace and total tag map,
+per-source effective mesh-frequency limits keyed by `source_id`, the conservative
+global-frequency caveat when applicable, actual symmetry cut planes, pinned polar
+derivation, ingestion hashes, and the exact report-hash acknowledgements. A solve
+using `exterior_only=true` also records the excluded FEM-volume count and reason.
+Each nested response keeps `result_contract_version: 1`; only the imported
+multi-channel envelope is version 2.
+
+Imported observation coordinates are always anchored to the ingestion record's
+throat frame. Envelope metadata therefore records
+`observation_origin_effective: "throat"` and the effective axis/u/v basis and
+centres; a request's parametric `mouth` default never implies an imported mouth
+origin. Each channel's `performance.total_time_seconds` measures the whole shared
+multi-right-hand-side batch through the point that channel was packaged, not an
+isolated per-channel solve.
+
 ## Global conventions and defaults
 
 | Dimension | v1 contract | Evidence |

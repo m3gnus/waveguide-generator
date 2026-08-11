@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import math
-from typing import Any, Literal
+import re
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -204,10 +205,15 @@ class DesignAvailability(JobModel):
 
     reopenable: bool = True
     source: Literal[
-        "v2-snapshot", "v1-design-state", "v1-mesher-payload", "none"
+        "v2-snapshot", "v1-design-state", "v1-mesher-payload", "cad-import", "none"
     ] = "v2-snapshot"
     reason_code: Literal[
-        "ok", "recovered", "freeform_legacy_design", "no_stored_design", "unreadable_design"
+        "ok",
+        "recovered",
+        "imported_geometry",
+        "freeform_legacy_design",
+        "no_stored_design",
+        "unreadable_design",
     ] = "ok"
     #: Why this job cannot be reopened. Set exactly when ``reopenable`` is false.
     reason: str | None = None
@@ -215,13 +221,203 @@ class DesignAvailability(JobModel):
     note: str | None = None
 
 
-class SolveRequest(JobModel):
+class ParametricGeometrySource(JobModel):
+    type: Literal["parametric"]
     design: DesignConfig
+    design_revision: int = Field(default=0, ge=0)
+    design_snapshot: DesignSnapshot | None = None
+
+    @model_validator(mode="after")
+    def validate_snapshot_matches_design(self) -> "ParametricGeometrySource":
+        if self.design_snapshot is None:
+            # Backward-compatible API callers still become atomic records: the
+            # server versions the already-validated canonical design wire.
+            object.__setattr__(
+                self,
+                "design_snapshot",
+                DesignSnapshot(design=self.design.model_copy(deep=True)),
+            )
+        elif self.design_snapshot.design != self.design:
+            raise ValueError("design_snapshot.design must match design")
+        return self
+
+
+class DriveChannel(JobModel):
+    id: str = Field(min_length=1)
+    source_ids: list[str] = Field(min_length=1)
+    motion: Literal["normal", "axial"] = "normal"
+
+    @field_validator("id")
+    @classmethod
+    def normalize_id(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("drive channel id must not be empty")
+        return normalized
+
+    @field_validator("source_ids")
+    @classmethod
+    def validate_source_ids(cls, value: list[str]) -> list[str]:
+        normalized = [source_id.strip() for source_id in value]
+        if any(not source_id for source_id in normalized):
+            raise ValueError("drive channel source_ids must not contain empty ids")
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("drive channel source_ids must be unique")
+        return normalized
+
+
+class ImportedMeshSizes(JobModel):
+    rigid_size_mm: float = Field(gt=0, allow_inf_nan=False)
+    transition_mm: float = Field(gt=0, allow_inf_nan=False)
+    source_size_mm: dict[str, float]
+
+    @field_validator("rigid_size_mm", "transition_mm", mode="before")
+    @classmethod
+    def reject_boolean_sizes(cls, value: Any, info: Any) -> Any:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"mesh.{info.field_name} must be a finite positive number")
+        return value
+
+    @field_validator("source_size_mm", mode="before")
+    @classmethod
+    def validate_source_sizes(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        normalized: dict[str, float] = {}
+        for source_id, raw_size in value.items():
+            if not isinstance(source_id, str):
+                raise ValueError("mesh.source_size_mm keys must be strings")
+            normalized_id = source_id.strip()
+            if not normalized_id:
+                raise ValueError("mesh.source_size_mm keys must not be empty")
+            if isinstance(raw_size, bool) or not isinstance(raw_size, (int, float)):
+                raise ValueError(
+                    f"mesh.source_size_mm[{source_id!r}] must be finite and positive"
+                )
+            size = float(raw_size)
+            if not math.isfinite(size) or size <= 0.0:
+                raise ValueError(
+                    f"mesh.source_size_mm[{source_id!r}] must be finite and positive"
+                )
+            if normalized_id in normalized:
+                raise ValueError("mesh.source_size_mm keys must be unique")
+            normalized[normalized_id] = size
+        return normalized
+
+
+_INGEST_ID = re.compile(r"^wgi_[0-9A-HJKMNP-TV-Z]{26}$")
+_SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+
+class ImportedGeometrySource(JobModel):
+    type: Literal["imported"]
+    ingest_id: str
+    manifest_sha256: str
+    artifact_sha256: str
+    drive_channels: list[DriveChannel] = Field(min_length=1)
+    mesh: ImportedMeshSizes
+    acknowledged_findings: list[str] = Field(default_factory=list)
+    skipped_source_ids: list[str] = Field(default_factory=list)
+    exterior_only: bool = False
+
+    @field_validator("ingest_id")
+    @classmethod
+    def validate_ingest_id(cls, value: str) -> str:
+        if _INGEST_ID.fullmatch(value) is None:
+            raise ValueError("ingest_id must be a wgi_ ULID")
+        return value
+
+    @field_validator("manifest_sha256", "artifact_sha256")
+    @classmethod
+    def validate_sha256(cls, value: str, info: Any) -> str:
+        if _SHA256.fullmatch(value) is None:
+            raise ValueError(f"{info.field_name} must be a sha256: digest")
+        return value
+
+    @field_validator("skipped_source_ids")
+    @classmethod
+    def validate_skipped_sources(cls, value: list[str]) -> list[str]:
+        normalized = [source_id.strip() for source_id in value]
+        if any(not source_id for source_id in normalized):
+            raise ValueError("skipped_source_ids must not contain empty ids")
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("skipped_source_ids must be unique")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_channels_and_sizes(self) -> "ImportedGeometrySource":
+        channel_ids = [channel.id for channel in self.drive_channels]
+        if len(set(channel_ids)) != len(channel_ids):
+            raise ValueError("drive channel ids must be unique")
+
+        driven: set[str] = set()
+        duplicate_sources: set[str] = set()
+        for channel in self.drive_channels:
+            for source_id in channel.source_ids:
+                if source_id in driven:
+                    duplicate_sources.add(source_id)
+                driven.add(source_id)
+        if duplicate_sources:
+            raise ValueError(
+                "every driven source must appear in exactly one drive channel; "
+                f"duplicates: {sorted(duplicate_sources)}"
+            )
+        skipped = set(self.skipped_source_ids)
+        overlap = driven & skipped
+        if overlap:
+            raise ValueError(
+                "skipped sources cannot also be driven: " + ", ".join(sorted(overlap))
+            )
+        sized = set(self.mesh.source_size_mm)
+        if sized != driven:
+            missing = sorted(driven - sized)
+            extra = sorted(sized - driven)
+            details = []
+            if missing:
+                details.append(f"missing {missing}")
+            if extra:
+                details.append(f"extra {extra}")
+            raise ValueError(
+                "mesh.source_size_mm must cover exactly every non-skipped driven source: "
+                + "; ".join(details)
+            )
+        return self
+
+
+GeometrySource = Annotated[
+    ParametricGeometrySource | ImportedGeometrySource,
+    Field(discriminator="type"),
+]
+
+
+class SolveRequest(JobModel):
+    geometry: GeometrySource
     options: SolveOptions = Field(default_factory=SolveOptions)
     label: str | None = None
     parent_job_id: str | None = None
-    design_revision: int = Field(default=0, ge=0)
-    design_snapshot: DesignSnapshot | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def rewrite_legacy_parametric_wire(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        result = dict(value)
+        legacy_fields = {
+            name: result[name]
+            for name in ("design", "design_revision", "design_snapshot")
+            if name in result
+        }
+        if "geometry" in result and legacy_fields:
+            raise ValueError(
+                "geometry cannot be combined with legacy design/design_revision/design_snapshot fields"
+            )
+        if legacy_fields:
+            if "design" not in legacy_fields:
+                raise ValueError("legacy parametric requests require design")
+            result["geometry"] = {"type": "parametric", **legacy_fields}
+            for name in legacy_fields:
+                result.pop(name, None)
+        return result
 
     @field_validator("label")
     @classmethod
@@ -235,7 +431,17 @@ class SolveRequest(JobModel):
     def validate_design_sweep_controls(self) -> "SolveRequest":
         """Reject design sweep values that would otherwise silently default."""
 
-        root = self.design.root
+        if isinstance(self.geometry, ImportedGeometrySource):
+            generated = self.options.frequency_range is not None
+            generated_count = self.options.num_frequencies is not None
+            if self.options.frequencies_hz is None and not (generated and generated_count):
+                raise ValueError(
+                    "imported geometry requires an explicit sweep: frequencies_hz or "
+                    "frequency_range together with num_frequencies"
+                )
+            return self
+
+        root = self.geometry.design.root
         simulation = root.simulation
 
         def scalar(expr: Any, default: float, field: str) -> float:
@@ -284,19 +490,32 @@ class SolveRequest(JobModel):
                 raise ValueError(f"{field} must be a scalar number")
         return self
 
-    @model_validator(mode="after")
-    def validate_snapshot_matches_design(self) -> "SolveRequest":
-        if self.design_snapshot is None:
-            # Backward-compatible API callers still become atomic records: the
-            # server versions the already-validated canonical design wire.
-            object.__setattr__(
-                self,
-                "design_snapshot",
-                DesignSnapshot(design=self.design.model_copy(deep=True)),
+    @property
+    def design(self) -> DesignConfig:
+        """Return the parametric design; imported callers must use ``geometry``."""
+
+        if not isinstance(self.geometry, ParametricGeometrySource):
+            raise AttributeError(
+                "geometry type 'imported' has no parametric design; use "
+                "request.geometry (ImportedGeometrySource)"
             )
-        elif self.design_snapshot.design != self.design:
-            raise ValueError("design_snapshot.design must match design")
-        return self
+        return self.geometry.design
+
+    @property
+    def design_revision(self) -> int:
+        return (
+            self.geometry.design_revision
+            if isinstance(self.geometry, ParametricGeometrySource)
+            else 0
+        )
+
+    @property
+    def design_snapshot(self) -> DesignSnapshot | None:
+        return (
+            self.geometry.design_snapshot
+            if isinstance(self.geometry, ParametricGeometrySource)
+            else None
+        )
 
 
 class SolveAccepted(JobModel):
@@ -418,12 +637,16 @@ __all__ = [
     "DeleteResponse",
     "DesignAvailability",
     "DesignSnapshot",
+    "DriveChannel",
+    "ImportedGeometrySource",
+    "ImportedMeshSizes",
     "JobItem",
     "JobListResponse",
     "JobMetadataPatch",
     "JobStatusResponse",
     "MetadataResponse",
     "PolarConfig",
+    "ParametricGeometrySource",
     "SolveAccepted",
     "SolveOptions",
     "SolveRequest",
