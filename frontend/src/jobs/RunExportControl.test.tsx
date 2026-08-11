@@ -194,8 +194,11 @@ describe('RunExportControl', () => {
     render(job);
     openMenu();
 
-    expect(menuItem('Frequency data').disabled).toBe(true);
-    expect(menuItem('STEP solid').disabled).toBe(false);
+    // ActionMenu marks unavailable items with aria-disabled, never the native
+    // attribute, so the reason stays focusable and announced.
+    expect(menuItem('Frequency data').getAttribute('aria-disabled')).toBe('true');
+    expect(menuItem('Frequency data').textContent).toContain('removed by retention');
+    expect(menuItem('STEP solid').getAttribute('aria-disabled')).toBeNull();
     await act(async () => { menuItem('STEP solid').click(); await settle(); });
 
     expect(mocks.fetchJobResults).not.toHaveBeenCalled();
