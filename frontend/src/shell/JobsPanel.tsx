@@ -261,6 +261,10 @@ export function JobsPanel() {
   const [exportPreferencesOpen, setExportPreferencesOpen] = useState(false);
   const preferencesAnchor = useRef<HTMLButtonElement | null>(null);
   const [query, setQuery] = useState('');
+  const lastMinimumRating = useRef(preferences.minRating > 0 ? preferences.minRating : 1);
+  useEffect(() => {
+    if (preferences.minRating > 0) lastMinimumRating.current = preferences.minRating;
+  }, [preferences.minRating]);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1_000);
@@ -279,13 +283,20 @@ export function JobsPanel() {
       return title.includes(wanted) || runNumberMatches || formula.includes(wanted);
     });
   }, [preferenceJobs, query]);
-  const failedCount = visibleJobs.filter((job) => job.status === 'error').length;
-  const activeCount = visibleJobs.filter((job) => job.status === 'running' || job.status === 'queued').length;
+  const visibleFailedCount = visibleJobs.filter((job) => job.status === 'error').length;
+  const failedCount = snapshot.jobs.filter((job) => job.status === 'error').length;
+  const activeCount = snapshot.jobs.filter((job) => job.status === 'running' || job.status === 'queued').length;
   const hiddenByFilter = snapshot.jobs.length - visibleJobs.length;
   const notConnected = snapshot.connection !== 'connected';
   const remove = (job: JobItem) => {
     if (!window.confirm(`Remove “${runDisplayName(job)}” and its saved results?`)) return;
     void jobsSocket.deleteJob(job.id).catch((error) => coordinator.reportError(String(error)));
+  };
+  const clearFailed = () => {
+    const hiddenFailed = failedCount - visibleFailedCount;
+    const hiddenCopy = hiddenFailed > 0 ? ` This includes ${hiddenFailed} failed run${hiddenFailed === 1 ? '' : 's'} hidden by the current filter.` : '';
+    if (!window.confirm(`Remove all ${failedCount} failed run${failedCount === 1 ? '' : 's'} and their saved logs/designs?${hiddenCopy}`)) return;
+    void jobsSocket.clearFailed().catch((error) => coordinator.reportError(String(error)));
   };
 
   return <div className="jobs-panel panel-scroll">
@@ -302,12 +313,12 @@ export function JobsPanel() {
       {notConnected && <span className="panel-meta-warn">jobs {snapshot.connection}</span>}
       {hiddenByFilter > 0 && <span title="Clear the search or turn off the kept-only filter to show these runs.">{hiddenByFilter} hidden by filter</span>}
       <span className="spacer"/>
-      {failedCount > 0 && <button className="panel-text-action panel-text-action--danger" onClick={() => void jobsSocket.clearFailed().catch((error) => coordinator.reportError(String(error)))}>Clear failed</button>}
+      {failedCount > 0 && <button className="panel-text-action panel-text-action--danger" onClick={clearFailed}>Clear failed</button>}
     </div>}
     {preferencesOpen && <JobsPreferencesSurface popover anchorRef={preferencesAnchor} onClose={() => setPreferencesOpen(false)}/>}
     {exportPreferencesOpen && <ResultsPreferencesSurface popover anchorRef={preferencesAnchor} onClose={() => setExportPreferencesOpen(false)}/>}
     <RunNameField jobs={snapshot.jobs} preferencesTrigger={<button ref={preferencesAnchor} className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Job preferences" aria-expanded={preferencesOpen} title="Job preferences" onClick={() => { setExportPreferencesOpen(false); setPreferencesOpen((value) => !value); }}><Icon name="settings"/></button>}/>
-    <div className="jobs-filter"><Icon name="search"/><input aria-label="Filter runs" placeholder="Filter runs" value={query} onChange={(event) => setQuery(event.target.value)}/><button className={`jobs-kept-toggle${preferences.minRating > 0 ? ' on' : ''}`} aria-label="Show kept runs only" aria-pressed={preferences.minRating > 0} title="Show kept runs only" onClick={() => preferencesStore.update({ minRating: preferences.minRating > 0 ? 0 : 1 })}>★</button></div>
+    <div className="jobs-filter"><Icon name="search"/><input aria-label="Filter runs" placeholder="Filter runs" value={query} onChange={(event) => setQuery(event.target.value)}/><button className={`jobs-kept-toggle${preferences.minRating > 0 ? ' on' : ''}`} aria-label="Show kept runs only" aria-pressed={preferences.minRating > 0} title="Show kept runs only" onClick={() => preferencesStore.update({ minRating: preferences.minRating > 0 ? 0 : lastMinimumRating.current })}>★</button></div>
     {(coordinator.actionError || snapshot.error) && <div className="job-error" role="alert" style={{ margin: 7 }}>{coordinator.actionError ?? snapshot.error}</div>}
     {snapshot.jobs.length === 0 && snapshot.connection === 'connected' && <div className="empty-state"><b>No runs yet</b><span>Solve the current design to start one. Every run is kept here with its results, so you can compare and re-run it later.</span></div>}
     {snapshot.jobs.length > 0 && visibleJobs.length === 0 && <div className="empty-state"><b>No runs match the filter</b><span>{query.trim() && preferences.minRating > 0 ? 'Clear the search or turn off the kept-only filter.' : query.trim() ? 'Clear the search to show runs.' : 'Turn off the kept-only filter to show more.'}</span></div>}

@@ -148,6 +148,39 @@ describe('jobs panel run list', () => {
     expect(host.textContent).toContain('#2 · Kept');
   });
 
+  it('restores the configured kept threshold and never hides active runs', async () => {
+    preferencesStore.update({ minRating: 4 });
+    const active = { ...job(3, 'Active'), status: 'running' as const, rating: 0 };
+    publishJobs([job(1, 'Low', 'OSSE', 2), job(2, 'High', 'OSSE', 5), active]);
+    await act(async () => root.render(<JobsPanel/>));
+    const toggle = host.querySelector<HTMLButtonElement>('[aria-label="Show kept runs only"]')!;
+
+    expect(host.textContent).toContain('#2 · High');
+    expect(host.textContent).toContain('#3 · Active');
+    expect(host.textContent).not.toContain('#1 · Low');
+    act(() => toggle.click());
+    expect(preferencesStore.getSnapshot().minRating).toBe(0);
+    act(() => toggle.click());
+    expect(preferencesStore.getSnapshot().minRating).toBe(4);
+  });
+
+  it('confirms the global failed count including failures hidden by search', async () => {
+    const visible = { ...job(1, 'Visible'), status: 'error' as const };
+    const hidden = { ...job(2, 'Hidden'), status: 'error' as const };
+    publishJobs([visible, hidden]);
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const clear = vi.spyOn(jobsSocket, 'clearFailed').mockResolvedValue(undefined);
+    await act(async () => root.render(<JobsPanel/>));
+    const filter = host.querySelector<HTMLInputElement>('[aria-label="Filter runs"]')!;
+    act(() => enter(filter, 'Visible'));
+
+    await act(async () => host.querySelector<HTMLButtonElement>('.panel-text-action--danger')!.click());
+
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('Remove all 2 failed runs'));
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('1 failed run hidden'));
+    expect(clear).toHaveBeenCalledOnce();
+  });
+
   it('presents cancelled runs separately and only shows retention copy with provenance', async () => {
     const cancelled = { ...job(3, 'Stopped'), status: 'cancelled' as const, has_results: false };
     publishJobs([cancelled]);

@@ -223,6 +223,22 @@ describe('jobs websocket state machine', () => {
     expect(manager.getSnapshot().jobs.some(({ id }) => id === 'job-200')).toBe(true);
   });
 
+  it('uses descending permanent run number when creation timestamps tie', async () => {
+    const sameTime = '2026-08-03T10:00:00Z';
+    const fetcher = vi.fn(async () => json({
+      items: [
+        job({ id: 'older', run_number: 1, created_at: sameTime }),
+        job({ id: 'newer', run_number: 2, created_at: sameTime }),
+      ],
+      total: 2,
+    }));
+    const manager = new JobsSocketManager(() => new MockSocket(), fetcher, 'ws://test/ws/jobs');
+
+    await manager.refresh();
+
+    expect(manager.getSnapshot().jobs.map(({ id }) => id)).toEqual(['newer', 'older']);
+  });
+
   it('merges concurrent WS mutations per job without letting stale REST resurrect deletions', async () => {
     let resolveList!: (response: Response) => void;
     const fetcher = vi.fn(() => new Promise<Response>((resolve) => { resolveList = resolve; }));
