@@ -54,18 +54,18 @@ export function middleEllipsis(value: string, max = 20): string {
 /**
  * Chart types that can carry more than one run at once.
  *
- * A heatmap, a balloon or a summary table describes exactly one run — two
- * superimposed directivity maps mean nothing — so those are single-run
- * surfaces by nature rather than by omission. What matters is that the card
- * says so while a comparison is active, instead of quietly showing the primary
- * run and letting the user believe they are looking at both.
- *
- * NOTE: `directivity_index` and `impedance` are line charts that *could*
- * overlay and currently do not. Making them do so is a product decision, not a
- * layout one — DI already plots three planes per run, so runs × planes needs an
- * answer about what the legend means before the series are built.
+ * Line charts overlay selected runs. Directivity heatmaps use labelled small
+ * multiples instead: superimposing two colour fields is unreadable, while a
+ * shared card keeps the maps close enough to compare.
  */
-const COMPARABLE_CHARTS = new Set<ChartType>(['frequency_response']);
+export const COMPARABLE_CHARTS = new Set<ChartType>([
+  'frequency_response',
+  'directivity_map_h',
+  'directivity_map_v',
+  'directivity_map',
+  'directivity_index',
+  'impedance',
+]);
 
 /**
  * How much chrome a chart can afford. A card in the six-panel dock is barely
@@ -426,8 +426,37 @@ export function heatmapOption(result: ResultPayload, tokens: ChartTokens, plane:
   };
 }
 
-function impedanceOption(result: ResultPayload, tokens: ChartTokens, smoothing: ReturnType<typeof usePreferences>['smoothing'], density: ChartDensity): EChartsOption {
-  return { ...lineOption(impedanceSeries(result, 'cartesian', smoothing), tokens, 'Z/ρc', density), color: [tokens.series[0], tokens.series[1]] };
+function seriesColor(tokens: ChartTokens, index: number): string {
+  return tokens.series[index % Math.max(1, tokens.series.length)] ?? tokens.accent;
+}
+
+export function directivityIndexOption(items: NamedResult[], tokens: ChartTokens, smoothing: ReturnType<typeof usePreferences>['smoothing'], density: ChartDensity): EChartsOption {
+  const groups = items.map((item) => directivityIndexSeries(item.result as ResultPayload, smoothing));
+  const oneMetricPerRun = groups.every((series) => series.length <= 1);
+  const series = groups.flatMap((runSeries, runIndex) => runSeries.map((entry, metricIndex) => {
+    const color = seriesColor(tokens, oneMetricPerRun ? runIndex : metricIndex);
+    return {
+      ...entry,
+      name: runSeries.length === 1 ? items[runIndex].label : `${items[runIndex].label} · ${entry.name}`,
+      lineStyle: { color, width: runIndex ? 1.35 : 2, type: runIndex ? 'dashed' as const : 'solid' as const },
+      itemStyle: { color },
+    };
+  }));
+  return lineOption(series, tokens, 'DI [dB]', density);
+}
+
+export function impedanceOption(items: NamedResult[], tokens: ChartTokens, smoothing: ReturnType<typeof usePreferences>['smoothing'], density: ChartDensity): EChartsOption {
+  const comparable = items.filter(({ result }) => Boolean(result.impedance?.frequencies?.length));
+  const series = comparable.flatMap((item, runIndex) => {
+    const color = seriesColor(tokens, runIndex);
+    return impedanceSeries(item.result, 'cartesian', smoothing).map((entry, componentIndex) => ({
+      ...entry,
+      name: `${item.label} · ${entry.name}`,
+      lineStyle: { color, width: componentIndex ? 1.35 : 2, type: componentIndex ? 'dashed' as const : 'solid' as const },
+      itemStyle: { color },
+    }));
+  });
+  return lineOption(series, tokens, 'Z/ρc', density);
 }
 
 function chartLabel(chartType: ChartType): string {
@@ -485,6 +514,61 @@ function Summary({ result }: { result: ResultPayload }) {
 
 const NO_NAMED_RESULTS: NamedResult[] = [];
 
+export interface DirectivityMapPanel {
+  key: string;
+  label: string;
+  plane: string;
+  result: ResultPayload;
+  hasData: boolean;
+}
+
+function orderedPlanes(items: NamedResult[]): string[] {
+  const found = new Set(items.flatMap(({ result }) => Object.entries(result.directivity ?? {})
+    .filter(([, samples]) => Boolean(samples?.length))
+    .map(([plane]) => plane)));
+  const rank = (plane: string) => plane === 'horizontal' ? 0 : plane === 'vertical' ? 1 : 2;
+  return [...found].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+}
+
+export function directivityMapPanels(items: NamedResult[], chartType: 'directivity_map_h' | 'directivity_map_v' | 'directivity_map'): DirectivityMapPanel[] {
+  const planes = chartType === 'directivity_map'
+    ? orderedPlanes(items)
+    : [chartType === 'directivity_map_v' ? 'vertical' : 'horizontal'];
+  return items.flatMap((item) => planes.map((plane) => ({
+    key: `${item.id}:${plane}`,
+    label: chartType === 'directivity_map' ? `${item.label} · ${plane}` : item.label,
+    plane,
+    result: item.result as ResultPayload,
+    hasData: Boolean((item.result.directivity as Record<string, unknown[]> | undefined)?.[plane]?.length),
+  })));
+}
+
+function DirectivityComparisonMaps({ chartType, items, tokens, mapReference, density }: {
+  chartType: 'directivity_map_h' | 'directivity_map_v' | 'directivity_map';
+  items: NamedResult[];
+  tokens: ChartTokens;
+  mapReference: number;
+  density: ChartDensity;
+}) {
+  const panels = directivityMapPanels(items, chartType);
+  if (!panels.some(({ hasData }) => hasData)) {
+    const plane = chartType === 'directivity_map_v' ? 'vertical' : chartType === 'directivity_map_h' ? 'horizontal' : null;
+    return <ChartStub reason={plane ? `Directivity Map (${plane === 'horizontal' ? 'H' : 'V'}) needs the ${plane} polar plane in the result payload.` : 'Directivity Map needs at least one polar plane in the result payload.'}/>;
+  }
+  if (panels.length === 1 && panels[0].hasData) {
+    const panel = panels[0];
+    return <EChart option={heatmapOption(panel.result, tokens, panel.plane, mapReference, density)} label={`Interactive HornLab ${panel.plane} directivity heatmap`}/>;
+  }
+  return <div className={`directivity-multiplane${items.length > 1 ? ' directivity-comparison' : ''}`} data-density={density}>
+    {panels.map((panel) => <div key={panel.key}>
+      <span title={panel.label}>{middleEllipsis(panel.label, density === 'compact' ? 18 : 28)}</span>
+      {panel.hasData
+        ? <EChart option={heatmapOption(panel.result, tokens, panel.plane, mapReference, density)} label={`Interactive ${panel.label} directivity heatmap`}/>
+        : <div className="directivity-comparison-missing">No {panel.plane} data</div>}
+    </div>)}
+  </div>;
+}
+
 export function beamShapeMissingReason(result: ResultPayload): { reason: string; canEnable: boolean } {
   if (hasBalloonData(result)) return {
     reason: 'Spherical balloon data is available, but this result has no valid −6 dB contour fit.',
@@ -508,26 +592,19 @@ export function beamShapeMissingReason(result: ResultPayload): { reason: string;
 
 function ResultChart({ chartType, result, named, tokens, density, beamShapeAction }: { chartType: ChartType; result: ResultPayload; named: NamedResult[]; tokens: ChartTokens; density: ChartDensity; beamShapeAction?: ChartStubAction }) {
   const preferences = usePreferences();
-  // Only the frequency-response overlay reads the cross-job list. Keeping it in
-  // the dependency array for every other chart meant a heatmap -- the most
-  // expensive option to build, and the one ECharts rebuilds with notMerge --
-  // was recomputed whenever any job's identity changed, which during a solve is
-  // several times a second.
-  const overlays = chartType === 'frequency_response' ? named : NO_NAMED_RESULTS;
+  // Only comparable charts read the cross-job list. Keeping it in the
+  // dependency array for every chart would rebuild expensive single-run
+  // surfaces whenever the comparison selection changes.
+  const overlays = useMemo(() => {
+    if (!COMPARABLE_CHARTS.has(chartType)) return NO_NAMED_RESULTS;
+    return named.length ? named : [{ id: 'primary', label: 'Primary', result }];
+  }, [chartType, named, result]);
   return useMemo(() => {
     if (chartType === 'frequency_response') return result.spl_on_axis?.spl?.length ? <EChart option={splOption(overlays, tokens, preferences.smoothing, density)} label="Interactive HornLab sound pressure frequency response"/> : <ChartStub reason="Frequency Response needs spl_on_axis data from a completed solve."/>;
-    if (chartType === 'directivity_map_h' || chartType === 'directivity_map_v') {
-      const plane = chartType.endsWith('_v') ? 'vertical' : 'horizontal';
-      return result.directivity?.[plane]?.length ? <EChart option={heatmapOption(result, tokens, plane, preferences.mapReference, density)} label={`Interactive HornLab ${plane} directivity heatmap`}/> : <ChartStub reason={`Directivity Map (${plane === 'horizontal' ? 'H' : 'V'}) needs the ${plane} polar plane in the result payload.`}/>;
-    }
-    if (chartType === 'directivity_map') {
-      const directivity = result.directivity as Record<string, unknown[]> | undefined;
-      const planes = Object.keys(directivity ?? {}).filter((plane) => directivity?.[plane]?.length);
-      return planes.length ? <div className="directivity-multiplane">{planes.map((plane) => <div key={plane}><span>{plane}</span><EChart option={heatmapOption(result, tokens, plane, preferences.mapReference, density)} label={`Interactive ${plane} directivity heatmap`}/></div>)}</div> : <ChartStub reason="Directivity Map needs at least one polar plane in the result payload."/>;
-    }
+    if (chartType === 'directivity_map_h' || chartType === 'directivity_map_v' || chartType === 'directivity_map') return <DirectivityComparisonMaps chartType={chartType} items={overlays} tokens={tokens} mapReference={preferences.mapReference} density={density}/>;
     if (chartType === 'directivity_index') {
-      const series = directivityIndexSeries(result, preferences.smoothing);
-      return series.length ? <EChart option={lineOption(series, tokens, 'DI [dB]', density)} label="Interactive HornLab directivity index by frequency"/> : <ChartStub reason="Directivity Index needs the optional di result block."/>;
+      const option = directivityIndexOption(overlays, tokens, preferences.smoothing, density);
+      return Array.isArray(option.series) && option.series.length ? <EChart option={option} label="Interactive HornLab directivity index by frequency"/> : <ChartStub reason="Directivity Index needs the optional di result block."/>;
     }
     if (chartType === 'beam_shape') {
       if (result.beam_shape?.frequencies?.length) return <EChart option={lineOption(beamShapeSeries(result), tokens, 'Beam width [°]', density)} label="Interactive HornLab horizontal and vertical forward beam width"/>;
@@ -536,7 +613,10 @@ function ResultChart({ chartType, result, named, tokens, density, beamShapeActio
     }
     if (chartType === 'beam_map') return <ForwardBeamRenderer result={result}/>;
     if (chartType === 'balloon') return <BalloonRenderer result={result}/>;
-    if (chartType === 'impedance') return result.impedance?.frequencies?.length ? <EChart option={impedanceOption(result, tokens, preferences.smoothing, density)} label="Interactive HornLab normalized acoustic impedance by frequency"/> : <ChartStub reason="Acoustic Impedance needs the optional impedance result block."/>;
+    if (chartType === 'impedance') {
+      const option = impedanceOption(overlays, tokens, preferences.smoothing, density);
+      return Array.isArray(option.series) && option.series.length ? <EChart option={option} label="Interactive HornLab normalized acoustic impedance by frequency"/> : <ChartStub reason="Acoustic Impedance needs the optional impedance result block."/>;
+    }
     return <Summary result={result}/>;
   }, [beamShapeAction, chartType, density, overlays, preferences.mapReference, preferences.smoothing, result, tokens]);
 }

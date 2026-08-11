@@ -3,15 +3,87 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { preferencesStore, usePreferences, type ChartType } from '../prefs/preferences';
 import type { ChartTokens } from '../results/EChart';
+import type { NamedResult } from '../results/mappers';
+import type { ResultPayload } from '../results/types';
 import { designForFamily, serializeDesign } from '../stores/design';
-import { beamShapeMissingReason, ResultsChartGrid, resolvedPolarStepNotice, resultExportSnapshot, resultLayoutClass } from './ResultsPanel';
+import { beamShapeMissingReason, COMPARABLE_CHARTS, directivityIndexOption, directivityMapPanels, impedanceOption, ResultsChartGrid, resolvedPolarStepNotice, resultExportSnapshot, resultLayoutClass } from './ResultsPanel';
 
 const tokens: ChartTokens = { foreground: '#fff', muted: '#aaa', grid: '#333', gridMinor: '#222', accent: '#0ff', series: ['#0ff'], colormap: ['#000', '#fff'] };
 const result = { frequencies: [], metadata: {} };
+function named(id: string, label: string, payload: ResultPayload): NamedResult {
+  return { id, label, result: payload };
+}
 function ResultsHarness() {
   const preferences = usePreferences();
   return createElement(ResultsChartGrid, { chartTypes: preferences.chartTypes, result, named: [], tokens });
 }
+
+describe('result comparison charts', () => {
+  const comparisonTokens: ChartTokens = { ...tokens, series: ['#0ff', '#f90', '#f55'] };
+  const primary = named('primary', 'Run A', {
+    frequencies: [500, 1_000],
+    directivity: {
+      horizontal: [[[0, 0]], [[0, 0]]],
+      vertical: [[[0, 0]], [[0, 0]]],
+    },
+    di: { frequencies: [500, 1_000], di: { horizontal: [3, 5], vertical: [2, 4] } },
+    impedance: { frequencies: [500, 1_000], real: [1, 2], imaginary: [.2, .4] },
+  });
+  const overlay = named('overlay', 'Run B', {
+    frequencies: [500, 1_000],
+    directivity: { horizontal: [[[0, 0]], [[0, 0]]] },
+    di: { frequencies: [500, 1_000], di: { horizontal: [4, 6], vertical: [3, 5] } },
+    impedance: { frequencies: [500, 1_000], real: [2, 3], imaginary: [.3, .5] },
+  });
+  const items = [primary, overlay];
+
+  it('enables comparison for SPL, every directivity map, DI, and impedance', () => {
+    expect([...COMPARABLE_CHARTS]).toEqual([
+      'frequency_response', 'directivity_map_h', 'directivity_map_v',
+      'directivity_map', 'directivity_index', 'impedance',
+    ]);
+  });
+
+  it('builds one labelled heatmap panel per run and plane, including missing-plane notices', () => {
+    expect(directivityMapPanels(items, 'directivity_map_h').map(({ label, plane, hasData }) => ({ label, plane, hasData }))).toEqual([
+      { label: 'Run A', plane: 'horizontal', hasData: true },
+      { label: 'Run B', plane: 'horizontal', hasData: true },
+    ]);
+    expect(directivityMapPanels(items, 'directivity_map').map(({ label, hasData }) => ({ label, hasData }))).toEqual([
+      { label: 'Run A · horizontal', hasData: true },
+      { label: 'Run A · vertical', hasData: true },
+      { label: 'Run B · horizontal', hasData: true },
+      { label: 'Run B · vertical', hasData: false },
+    ]);
+  });
+
+  it('overlays DI with metric colours and run-specific solid/dashed lines', () => {
+    const series = directivityIndexOption(items, comparisonTokens, 'none', 'full').series as Array<{
+      name: string; lineStyle: { color: string; type: string }; data: number[][];
+    }>;
+    expect(series.map(({ name }) => name)).toEqual([
+      'Run A · horizontal', 'Run A · vertical', 'Run B · horizontal', 'Run B · vertical',
+    ]);
+    expect(series[0].lineStyle).toMatchObject({ color: '#0ff', type: 'solid' });
+    expect(series[1].lineStyle).toMatchObject({ color: '#f90', type: 'solid' });
+    expect(series[2].lineStyle).toMatchObject({ color: '#0ff', type: 'dashed' });
+    expect(series[3].lineStyle).toMatchObject({ color: '#f90', type: 'dashed' });
+    expect(series[2].data).toEqual([[500, 4], [1_000, 6]]);
+  });
+
+  it('overlays impedance with one colour per run and solid Re/dashed Im traces', () => {
+    const series = impedanceOption(items, comparisonTokens, 'none', 'full').series as Array<{
+      name: string; lineStyle: { color: string; type: string }; data: number[][];
+    }>;
+    expect(series.map(({ name }) => name)).toEqual(['Run A · Re', 'Run A · Im', 'Run B · Re', 'Run B · Im']);
+    expect(series.map(({ lineStyle }) => lineStyle)).toEqual([
+      expect.objectContaining({ color: '#0ff', type: 'solid' }),
+      expect.objectContaining({ color: '#0ff', type: 'dashed' }),
+      expect.objectContaining({ color: '#f90', type: 'solid' }),
+      expect.objectContaining({ color: '#f90', type: 'dashed' }),
+    ]);
+  });
+});
 
 describe('Directivity Map resolved grid label', () => {
   it('shows a resolved step only when count-based sampling changed the request', () => {
