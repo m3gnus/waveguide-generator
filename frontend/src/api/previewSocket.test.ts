@@ -245,4 +245,38 @@ describe('preview socket state machine', () => {
     expect(sockets).toHaveLength(1);
     manager.stop();
   });
+
+  // Curvature sections are built on the dense canonical master and cost about
+  // a third of a fine frame; only the curvature heatmap reads them. Every
+  // request says whether the viewport is on that mode, so the other seven
+  // modes never pay for it.
+  it('asks for curvature only while the heatmap is the display mode', () => {
+    const socket = new MockSocket();
+    const manager = new PreviewSocketManager(() => socket, 'ws://test/ws/preview');
+    manager.start();
+    socket.message(JSON.stringify({ v: 1, kind: 'hello', epoch: 3, heartbeatSec: 15 }));
+    vi.advanceTimersByTime(140);
+    const requests = () => socket.sent.map((message) => JSON.parse(message));
+    expect(requests().every(({ curvature }) => curvature === false)).toBe(true);
+
+    // Switching on re-requests at once: the frame on screen has no curvature
+    // in it, and no edit is coming to trigger another build.
+    const before = socket.sent.length;
+    manager.setCurvatureWanted(true);
+    expect(socket.sent).toHaveLength(before + 1);
+    expect(requests()[before]).toMatchObject({ lod: 'fine', curvature: true });
+
+    // Re-asserting the same mode is not an edit and must not cost a build.
+    manager.setCurvatureWanted(true);
+    expect(socket.sent).toHaveLength(before + 1);
+
+    // Switching off changes nothing on screen, so it spends no request; the
+    // next frame simply stops carrying the sections.
+    manager.setCurvatureWanted(false);
+    expect(socket.sent).toHaveLength(before + 1);
+    useDesignStore.setState({ designRevision: 58 });
+    manager.refresh();
+    expect(requests()[before + 1]).toMatchObject({ lod: 'fine', curvature: false });
+    manager.stop();
+  });
 });

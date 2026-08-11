@@ -23,7 +23,7 @@ Handshake: server sends `{"v":1,"kind":"hello","epoch":N,"heartbeatSec":15,"limi
 
 | kind | fields | semantics |
 |---|---|---|
-| `preview` | `seq`, `designRevision`, `design` (full design JSON), `lod` (`coarse`\|`fine`) | Request tessellation. Full design state every time (localhost bandwidth is free; no server-side design cache to desync). |
+| `preview` | `seq`, `designRevision`, `design` (full design JSON), `lod` (`coarse`\|`fine`), `curvature` (optional bool, default `false`) | Request tessellation. Full design state every time (localhost bandwidth is free; no server-side design cache to desync). `curvature` asks for the FRAME-SPEC §5 curvature sections, which only the viewport's curvature heatmap reads; they are built on the dense canonical master and cost about a third of a fine build and an eighth of its bytes, so the other seven display modes leave it `false`. Honoured at `fine` only — coarse frames have never carried curvature — so a drag keeps one cache entry whatever the mode. |
 | `curve` | `seq`, `designRevision`, `curveId`, `points` | 2-D editor curve evaluation request (small payloads, same coalescing). |
 
 `seq` is per-connection monotonic. **`designRevision` is assigned by the client store on every committed mutation** (edit, undo, redo, load, family switch — plan §4.2); multiple seqs may share one revision (e.g. LOD refine), but a new revision always gets a new seq.

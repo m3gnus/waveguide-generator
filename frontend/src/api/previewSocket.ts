@@ -79,6 +79,8 @@ export class PreviewSocketManager {
   private coarseTimer: ReturnType<typeof setTimeout> | null = null;
   private fineTimer: ReturnType<typeof setTimeout> | null = null;
   private coarsePending = false;
+  /** Whether the viewport is on the curvature heatmap, the only mode that reads curvature sections. */
+  private curvatureWanted = false;
   private heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
   private heartbeatMs = 30_000;
   private maxFrameBytes: number | undefined;
@@ -133,6 +135,23 @@ export class PreviewSocketManager {
       return;
     }
     this.sendCurrent('fine');
+  }
+
+  /**
+   * Tell the server whether the frame needs analytic curvature sections.
+   *
+   * Building them costs about a third of a fine frame and an eighth of its
+   * bytes, and only the curvature heatmap reads them, so they are requested on
+   * demand rather than carried by every fine frame. Turning the mode on
+   * re-requests the current design at once; the viewport shows the geometry
+   * unshaded in the meantime, which is what its "inspection data is requested"
+   * placeholder already describes. Turning it off changes nothing on screen,
+   * so it costs no request — the next fine frame simply stops carrying them.
+   */
+  setCurvatureWanted(wanted: boolean): void {
+    if (this.curvatureWanted === wanted) return;
+    this.curvatureWanted = wanted;
+    if (wanted) this.refresh();
   }
 
   stop(): void {
@@ -322,6 +341,7 @@ export class PreviewSocketManager {
       designRevision,
       design: this.toApiDesign(design),
       lod,
+      curvature: this.curvatureWanted,
     }));
   }
 

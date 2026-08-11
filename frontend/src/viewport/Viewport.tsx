@@ -167,6 +167,12 @@ export function Viewport() {
     setClientFrameMs(null);
   }, [preview.epoch]);
 
+  // Curvature sections cost a third of a fine frame to build, and only this one
+  // mode reads them. Ask for them while it is on, and stop when it is not.
+  useEffect(() => {
+    previewSocket.setCurvatureWanted(mode === 'curvature');
+  }, [mode]);
+
   useEffect(() => {
     if (preview.error === null) setDismissedPreviewError(null);
   }, [preview.error]);
