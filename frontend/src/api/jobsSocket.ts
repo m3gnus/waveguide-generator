@@ -193,6 +193,15 @@ export class JobsSocketManager {
     await this.refreshJob(jobId);
   }
 
+  async retryJob(jobId: string): Promise<void> {
+    const response = await this.fetcher(
+      `/api/jobs/${encodeURIComponent(jobId)}/retry`,
+      { method: 'POST' },
+    );
+    if (!response.ok) throw await responseError(response);
+    await this.refetchJobs();
+  }
+
   async clearFailed(): Promise<void> {
     const response = await this.fetcher('/api/jobs/clear-failed', { method: 'DELETE' });
     if (!response.ok) throw await responseError(response);

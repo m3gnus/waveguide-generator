@@ -23,7 +23,7 @@ from server.jobs.legacy_design import (
     resolve_job_design,
 )
 from server.jobs.models import JobItem
-from server.jobs.runtime import JobRuntime
+from server.jobs.runtime import JobRuntime, _replay_request
 from server.design.schema import DesignConfig
 
 
@@ -260,6 +260,22 @@ def test_the_job_item_a_client_receives_carries_the_verdict(name: str, reopenabl
         # only surviving record of a design that must be re-entered by hand.
         stored = BY_NAME[name]["script_snapshot_json"]
         assert (item.script_snapshot is not None) is bool(stored)
+
+
+def test_legacy_solve_options_are_translated_for_display_and_retry() -> None:
+    row = _row("rosse-plain")
+
+    serialized = JobRuntime._serialize_job(row)
+    request = _replay_request(row)
+
+    assert serialized["solve_options"] == request.options.model_dump(mode="json")
+    assert request.design.formula == "R-OSSE"
+    assert request.options.engine == "metal"
+    assert request.options.frequency_range == [400.0, 16_000.0]
+    assert request.options.num_frequencies == 20
+    assert request.options.frequency_spacing == "log"
+    assert request.options.polar_config.norm_angle == 5.0
+    assert request.label == row["label"]
 
 
 # Sibling to this checkout, the way every other v1-corpus test locates it.

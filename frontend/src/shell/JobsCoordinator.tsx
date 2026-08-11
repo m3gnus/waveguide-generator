@@ -20,6 +20,7 @@ interface SolveControl {
 
 interface CoordinatorBridgeSnapshot {
   run(design: DesignDocument, designRevision?: number): Promise<void>;
+  retry(jobId: string): Promise<void>;
   reportError(message: string): void;
   actionError: string | null;
 }
@@ -27,6 +28,7 @@ interface CoordinatorBridgeSnapshot {
 const unavailableRun = async () => { throw new Error('Solve coordinator is unavailable'); };
 let bridgeSnapshot: CoordinatorBridgeSnapshot = {
   run: unavailableRun,
+  retry: unavailableRun,
   reportError: () => undefined,
   actionError: null,
 };
@@ -108,11 +110,24 @@ export function JobsCoordinator({ children }: { children: ReactNode }) {
     }
   }, [capability, capabilityError, preferences, revision, selectedEngine]);
 
+  const retry = useCallback(async (jobId: string) => {
+    if (submissionInFlight.current) return;
+    submissionInFlight.current = true;
+    try {
+      setSubmitting(true);
+      setActionError(null);
+      await jobsSocket.retryJob(jobId);
+    } finally {
+      submissionInFlight.current = false;
+      setSubmitting(false);
+    }
+  }, []);
+
   const reportError = useCallback((message: string) => setActionError(message), []);
   useEffect(() => {
-    publishBridge({ run, reportError, actionError });
-    return () => publishBridge({ run: unavailableRun, reportError: () => undefined, actionError: null });
-  }, [actionError, reportError, run]);
+    publishBridge({ run, retry, reportError, actionError });
+    return () => publishBridge({ run: unavailableRun, retry: unavailableRun, reportError: () => undefined, actionError: null });
+  }, [actionError, reportError, retry, run]);
 
   useEffect(() => {
     void automation.process(jobs, preferences, {
