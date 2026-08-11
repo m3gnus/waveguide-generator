@@ -29,7 +29,9 @@ const NOTICE_STYLE = {
 export function DesignAvailabilityNotice({ job }: { job: JobDesignFields }) {
   // A reason outranks a note: they never both apply, but if that ever changes
   // the blocking sentence is the one the user needs first.
-  const message = jobRerunState(job).reason ?? jobDesignAvailability(job).note;
+  const availability = jobDesignAvailability(job);
+  const message = jobRerunState(job).reason
+    ?? (availability.source === 'cad-import' ? availability.reason : availability.note);
   if (!message) return null;
   return <p role="note" className="job-design-notice" style={NOTICE_STYLE}>{message}</p>;
 }

@@ -1,7 +1,7 @@
 import type { Preferences } from '../prefs/preferences';
 import { exportBaseName } from '../prefs/preferences';
 import { applySmoothing, type SmoothingValue } from './smoothing';
-import type { ResultPayload } from './types';
+import { resultChannelFileSuffix, scopeResultChannel, type ResultPayload } from './types';
 
 export interface PolarFrdFile {
   filename: string;
@@ -149,7 +149,9 @@ function propagationNote(reference: PropagationReference | null, result: ResultP
 export function buildOnAxisFrd(
   result: ResultPayload,
   preferences: Pick<Preferences, 'smoothing'>,
+  channelId?: string,
 ): string {
+  result = scopeResultChannel(result, channelId);
   const frequencies = onAxisFrequencies(result);
   const spl = applySmoothing(
     frequencies,
@@ -240,11 +242,14 @@ function polarFilename(baseName: string, plane: PolarPlane, angle: number): stri
 export function buildPolarFrdSet(
   result: ResultPayload,
   preferences: Pick<Preferences, 'smoothing' | 'outputName' | 'counter'>,
+  channelId?: string,
 ): PolarFrdFile[] {
+  const suffix = resultChannelFileSuffix(result, channelId);
+  result = scopeResultChannel(result, channelId);
   if (!result.directivity) return [];
 
   const frequencies = result.frequencies;
-  const baseName = exportBaseName(preferences);
+  const baseName = `${exportBaseName(preferences)}${suffix}`;
   const reference = propagationReference(result);
   const files: PolarFrdFile[] = [];
 

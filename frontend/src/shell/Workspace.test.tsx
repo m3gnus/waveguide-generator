@@ -50,7 +50,7 @@ describe('Workspace', () => {
     host.remove();
   });
 
-  it('creates the five persisted dock panels without runtime errors', async () => {
+  it('creates the six persisted dock panels without runtime errors', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     await act(async () => {
       root.render(<Workspace resetKey={0}/>);
@@ -62,6 +62,7 @@ describe('Workspace', () => {
     expect(host.textContent).toContain('Viewport');
     expect(host.textContent).toContain('Results');
     expect(host.textContent).toContain('Jobs');
+    expect(host.textContent).toContain('CAD Link');
     expect(error).not.toHaveBeenCalled();
     error.mockRestore();
   });
@@ -265,6 +266,7 @@ describe('Workspace', () => {
                   "id": "jobs-group",
                   "views": [
                     "jobs",
+                    "cadlink",
                   ],
                 },
                 "size": 320,
@@ -277,6 +279,11 @@ describe('Workspace', () => {
           "width": 1440,
         },
         "panels": {
+          "cadlink": {
+            "contentComponent": "cadlink",
+            "id": "cadlink",
+            "title": "CAD Link",
+          },
           "geometry": {
             "contentComponent": "geometry",
             "id": "geometry",
@@ -313,7 +320,7 @@ describe('Workspace', () => {
     const rows = compact.grid.root.data as Array<{ data: unknown }>;
     expect(rows[0].data).toMatchObject({
       activeView: 'viewport',
-      views: ['geometry', 'simulation', 'viewport', 'results', 'jobs'],
+      views: ['geometry', 'simulation', 'viewport', 'results', 'jobs', 'cadlink'],
     });
   });
 
@@ -323,7 +330,7 @@ describe('Workspace', () => {
     const columns = medium.grid.root.data as Array<{ data: unknown; size: number }>;
     expect(columns.map((column) => column.size)).toEqual([280, 680]);
     const analysis = (columns[1].data as Array<{ data: { views: string[] } }>)[1];
-    expect(analysis.data.views).toEqual(['results', 'jobs']);
+    expect(analysis.data.views).toEqual(['results', 'jobs', 'cadlink']);
   });
 
   it.each([[1440, 900], [1280, 720]])('preserves rail sizes at %d×%d', (width, height) => {

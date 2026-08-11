@@ -41,6 +41,12 @@ class ImportedMeshError(ValueError):
 class RoleResolutionError(ImportedMeshError):
     """Source roles could not be resolved without guessing."""
 
+    def __init__(
+        self, message: str, *, area_drift_sources: Iterable[str] = ()
+    ) -> None:
+        self.area_drift_sources = tuple(str(source_id) for source_id in area_drift_sources)
+        super().__init__(message)
+
 
 class ImportedMeshDependencyError(RuntimeError):
     """The native STEP/mesh engine is not installed or importable."""
@@ -264,7 +270,8 @@ def resolve_user_source(
     if drift > AREA_REL_TOLERANCE and not allow_area_drift:
         raise RoleResolutionError(
             f"role resolution: source {source_id!r} area drift is {drift:.3%} "
-            f"({expected_area:.9g} -> {area:.9g} mm^2), exceeding 1%"
+            f"({expected_area:.9g} -> {area:.9g} mm^2), exceeding 1%",
+            area_drift_sources=[source_id],
         )
     return {
         "source_id": source_id,

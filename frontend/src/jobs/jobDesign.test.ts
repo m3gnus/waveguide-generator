@@ -100,4 +100,16 @@ describe('what a job says about its own design', () => {
     expect(legacy.reopenable).toBe(false);
     expect(legacy.reason).toContain('cannot be reopened');
   });
+
+  it('reruns an immutable CAD import without pretending it can be reopened', () => {
+    const imported = {
+      script_snapshot: null,
+      design_availability: {
+        reopenable: false, source: 'cad-import', reason_code: 'imported_geometry',
+        reason: 'This job came from CAD. The linked design is design-123.', note: null,
+      },
+    } as const;
+    expect(canLoadJobDesign(imported)).toBe(false);
+    expect(jobRerunState(imported)).toEqual({ enabled: true, reason: null });
+  });
 });

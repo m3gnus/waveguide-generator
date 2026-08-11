@@ -1,8 +1,20 @@
 import type { JobResults, NullableNumber, PolarSample } from '../api/results';
 import { applySmoothing, type SmoothingMode } from './smoothing';
-import type { ResultPayload } from './types';
+import { resultChannels, type ResultPayload } from './types';
 
 export interface NamedResult { id: string; label: string; result: JobResults }
+
+/** Expand an imported result's unit-drive bases into the same named flow as runs. */
+export function expandResultChannels(id: string, label: string, result: JobResults): NamedResult[] {
+  if (!result.channels) return [{ id, label, result }];
+  const channels = resultChannels(result as ResultPayload);
+  if (!channels.length) return [{ id, label, result }];
+  return channels.map(({ id: channel, result: channelResult }) => ({
+    id: `${id}#${channel}`,
+    label: `${label} · ${channel}`,
+    result: channelResult,
+  }));
+}
 
 function finite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);

@@ -48,6 +48,17 @@ const NO_DESIGN: JobDesignFields = {
   },
 };
 
+const CAD_IMPORT: JobDesignFields = {
+  script_snapshot: null,
+  design_availability: {
+    reopenable: false,
+    source: 'cad-import',
+    reason_code: 'imported_geometry',
+    reason: 'This immutable CAD return cannot be reopened. The ingestion anchor is registered design design-123.',
+    note: null,
+  },
+};
+
 describe('the design verdict a job card shows', () => {
   let host: HTMLDivElement;
   let root: Root;
@@ -102,6 +113,15 @@ describe('the design verdict a job card shows', () => {
   it('stays quiet about a job with nothing to explain', () => {
     render(<DesignAvailabilityNotice job={RECOVERED}/>);
     expect(notice()).toBeNull();
+  });
+
+  it('allows CAD replay while pointing at the linked design instead of reopening it', () => {
+    const onRerun = vi.fn();
+    render(<><RerunButton job={CAD_IMPORT} onRerun={onRerun}/><DesignAvailabilityNotice job={CAD_IMPORT}/></>);
+    expect(button().disabled).toBe(false);
+    expect(notice()?.textContent).toContain('design-123');
+    act(() => button().click());
+    expect(onRerun).toHaveBeenCalledOnce();
   });
 
   it('still refuses a job whose verdict the server did not send', () => {

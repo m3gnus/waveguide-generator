@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { hydrateDesignDocument } from '../api/designIo';
 import { designForFamily, serializeDesign } from '../stores/design';
 import type { SolveOptions } from '../stores/solveOptions';
-import { fetchSymmetry, formatApiDetail, getCapabilities, postSymmetry, resolveEngine, submitDesign, toSolveDesign } from './actions';
+import { fetchSymmetry, formatApiDetail, getCapabilities, postSymmetry, resolveEngine, submitDesign, submitImported, toSolveDesign } from './actions';
 
 describe('API validation errors', () => {
   it('formats structured FastAPI detail arrays with locations', async () => {
@@ -39,6 +39,29 @@ describe('solve submission', () => {
     expect(body?.options).toEqual(options);
     expect(body).toMatchObject({ label: 'atomic', design_revision: 19, design_snapshot: { version: 1 } });
     expect((body?.design_snapshot as { design: unknown }).design).toEqual(body?.design);
+  });
+
+  it('submits the imported geometry union without a parametric design sibling', async () => {
+    let body: Record<string, unknown> | undefined;
+    const fetcher = async (_input: RequestInfo | URL, init?: RequestInit) => {
+      body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(JSON.stringify({ job_id: 'job-imported' }), { status: 200 });
+    };
+    await submitImported({
+      geometry: {
+        type: 'imported', ingest_id: 'wgi_example', manifest_sha256: 'sha256:m', artifact_sha256: 'sha256:a',
+        drive_channels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }],
+        mesh: { rigid_size_mm: 8, transition_mm: 8, source_size_mm: { 'source-hf': 4 } },
+        acknowledged_findings: ['sha256:r:finding-a'], skipped_source_ids: [],
+      },
+      options: {
+        engine: 'metal', symmetry: 'auto', mesh_validation_mode: 'warn', verbose: false, frequency_spacing: 'log',
+        frequency_range: [200, 20_000], num_frequencies: 24,
+        polar_config: { angle_range: [0, 180, 37], angle_step: 5, distance: 2, norm_angle: 5, inclination: 45, enabled_axes: ['horizontal'], observation_origin: 'mouth', spherical_sampling: false },
+      },
+    }, fetcher as typeof fetch, 'cad-run');
+    expect(body).toMatchObject({ geometry: { type: 'imported', ingest_id: 'wgi_example' }, label: 'cad-run' });
+    expect(body).not.toHaveProperty('design');
   });
 
   it('submits the sweep displayed for an imported design whose sweep controls were absent', async () => {

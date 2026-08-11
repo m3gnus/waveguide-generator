@@ -176,9 +176,9 @@ describe('RunExportControl', () => {
 
     expect(mocks.fetchJobResults).toHaveBeenCalledOnce();
     expect(mocks.fetchJobResults).toHaveBeenCalledWith(job.id);
-    expect(mocks.runExportFormat).toHaveBeenCalledOnce();
-    const [format, context] = mocks.runExportFormat.mock.calls[0];
-    expect(format).toBe('csv');
+    expect(mocks.runExportBundle).toHaveBeenCalledOnce();
+    const [context, formats] = mocks.runExportBundle.mock.calls[0];
+    expect(formats).toEqual(['csv']);
     expect(context.result).toEqual(await mocks.fetchJobResults.mock.results[0].value);
     expect(context.design).toEqual(hydrateJobDesign(job));
     expect(context.designRevision).toBe(42);
@@ -199,10 +199,32 @@ describe('RunExportControl', () => {
     await act(async () => { menuItem('STEP solid').click(); await settle(); });
 
     expect(mocks.fetchJobResults).not.toHaveBeenCalled();
-    expect(mocks.runExportFormat).toHaveBeenCalledWith(
-      'step',
+    expect(mocks.runExportBundle).toHaveBeenCalledWith(
       expect.objectContaining({ design: hydrateJobDesign(job), designRevision: 42 }),
+      ['step'],
     );
+  });
+
+  it('passes a multi-channel result to the bundle writer from a rail action', async () => {
+    const wrapped = {
+      frequencies: [], channel_order: ['drive-hf', 'drive-mf'],
+      channels: { 'drive-hf': directivityResult(), 'drive-mf': directivityResult() },
+    };
+    mocks.fetchJobResults.mockResolvedValue(wrapped);
+    mocks.runExportBundle.mockResolvedValue({
+      files: ['stored_horn_v07_1-drive-hf.csv', 'stored_horn_v07_1-drive-mf.csv'], failures: [],
+    });
+    render();
+    openMenu();
+    await act(async () => { menuItem('Frequency data').click(); await settle(); });
+
+    expect(mocks.runExportBundle).toHaveBeenCalledWith(
+      expect.objectContaining({ result: wrapped }),
+      ['csv'],
+    );
+    expect(patchMetadata).toHaveBeenCalledWith('job-export-1', {
+      exported_files: ['earlier.csv', 'stored_horn_v07_1-drive-hf.csv', 'stored_horn_v07_1-drive-mf.csv'],
+    });
   });
 
   it('downloads exactly one on-axis FRD file', async () => {
@@ -217,6 +239,20 @@ describe('RunExportControl', () => {
     expect(patchMetadata).toHaveBeenCalledWith('job-export-1', {
       exported_files: ['earlier.csv', 'stored_horn_v07_1.frd'],
     });
+  });
+
+  it('downloads one on-axis FRD per drive channel', async () => {
+    mocks.fetchJobResults.mockResolvedValue({
+      frequencies: [], channel_order: ['drive-hf', 'drive-mf'],
+      channels: { 'drive-hf': directivityResult(), 'drive-mf': directivityResult() },
+    });
+    render();
+    openMenu();
+    await act(async () => { menuItem('On-axis response').click(); await settle(); });
+
+    expect(mocks.downloadText.mock.calls.map(([, filename]) => filename)).toEqual([
+      'stored_horn_v07_1-drive-hf.frd', 'stored_horn_v07_1-drive-mf.frd',
+    ]);
   });
 
   it('posts the complete polar set to the workspace and reports its count', async () => {
@@ -385,8 +421,8 @@ describe('RunExportControl', () => {
   });
 
   it('keeps an in-flight export in the store after the control unmounts', async () => {
-    const pending = deferred<string[]>();
-    mocks.runExportFormat.mockReturnValue(pending.promise);
+    const pending = deferred<{ files: string[]; failures: [] }>();
+    mocks.runExportBundle.mockReturnValue(pending.promise);
     const job = completeJob();
     render(job);
     openMenu();
@@ -396,7 +432,7 @@ describe('RunExportControl', () => {
     act(() => root.unmount());
     expect(useRunExportStore.getState().jobs[job.id]).toMatchObject({ busy: true, busyFormats: ['csv'] });
 
-    await act(async () => { pending.resolve(['after-unmount.csv']); await pending.promise; await Promise.resolve(); });
+    await act(async () => { pending.resolve({ files: ['after-unmount.csv'], failures: [] }); await pending.promise; await Promise.resolve(); });
     expect(useRunExportStore.getState().jobs[job.id]).toMatchObject({ busy: false, busyFormats: [] });
     expect(patchMetadata).toHaveBeenCalledWith(job.id, { exported_files: ['earlier.csv', 'after-unmount.csv'] });
     root = createRoot(host);

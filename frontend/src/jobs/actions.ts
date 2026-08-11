@@ -11,6 +11,21 @@ export interface EngineCapability {
 
 export interface Capabilities { engines: EngineCapability[] }
 export interface SolveSubmissionMetadata { label: string; designRevision: number }
+export interface ImportedGeometrySubmission {
+  type: 'imported';
+  ingest_id: string;
+  manifest_sha256: string;
+  artifact_sha256: string;
+  drive_channels: Array<{ id: string; source_ids: string[]; motion: 'normal' | 'axial' }>;
+  mesh: { rigid_size_mm: number; transition_mm: number; source_size_mm: Record<string, number> };
+  acknowledged_findings: string[];
+  skipped_source_ids: string[];
+  exterior_only?: boolean;
+}
+export interface ImportedSolveSubmission {
+  geometry: ImportedGeometrySubmission;
+  options: SolveOptions & { frequency_range?: [number, number]; num_frequencies?: number };
+}
 export interface SymmetryResolution {
   quadrants: 1 | 12 | 14 | 1234;
   xz: boolean;
@@ -123,6 +138,20 @@ export async function submitDesign(
       design_revision: metadata.designRevision,
       design_snapshot: { version: 1, design: wire },
     }),
+  });
+  if (!response.ok) throw new Error(await detail(response));
+  return ((await response.json()) as { job_id: string }).job_id;
+}
+
+export async function submitImported(
+  submission: ImportedSolveSubmission,
+  fetcher: typeof fetch = fetch,
+  label = 'cad-import',
+): Promise<string> {
+  const response = await fetcher('/api/solve', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...submission, label }),
   });
   if (!response.ok) throw new Error(await detail(response));
   return ((await response.json()) as { job_id: string }).job_id;

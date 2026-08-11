@@ -17,6 +17,7 @@ from server.design.textcfg import parse
 from server.exports.geometry_identity import geometry_hash_for_design, normalize_json_value
 from server.mesh.imported import (
     ImportedMeshDependencyError,
+    RoleResolutionError,
     build_imported_mesh,
     validate_imported_sizes,
 )
@@ -29,9 +30,17 @@ from .wgreturn import WgReturnBundle, read_wgreturn
 class IngestRefusal(ValueError):
     """A stage-labelled validation or consistency refusal."""
 
-    def __init__(self, stage: str, message: str, *, corruption: bool = False) -> None:
+    def __init__(
+        self,
+        stage: str,
+        message: str,
+        *,
+        corruption: bool = False,
+        area_drift_sources: list[str] | tuple[str, ...] = (),
+    ) -> None:
         self.stage = stage
         self.corruption = corruption
+        self.area_drift_sources = tuple(area_drift_sources)
         super().__init__(f"{stage}: {message}")
 
 
@@ -436,7 +445,15 @@ def ingest_bundle(
                 if marker in message:
                     stage = labelled
                     break
-            raise IngestRefusal(stage, message) from exc
+            raise IngestRefusal(
+                stage,
+                message,
+                area_drift_sources=(
+                    exc.area_drift_sources
+                    if isinstance(exc, RoleResolutionError)
+                    else ()
+                ),
+            ) from exc
         cache_key = _cache_key(
             bundle,
             manifest,
@@ -522,7 +539,12 @@ def ingest_bundle(
             "mesh_cache_key": cache_key,
             "mesh_content_sha256": mesh_text_sha256(str(built["msh_text"])),
             "mesh_cache_hit": cache_hit,
-            "scope": {"status": manifest["scope"]["status"], "degraded_skip_count": len(scope_findings)},
+            "scope": {
+                "status": manifest["scope"]["status"],
+                "degraded_skip_count": len(scope_findings),
+                "included": manifest["scope"]["included"],
+                "skipped": manifest["scope"]["skipped"],
+            },
             "evidence": {
                 "instances": [
                     {

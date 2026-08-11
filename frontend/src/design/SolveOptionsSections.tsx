@@ -25,20 +25,29 @@ export const solverModeLabels = {
  * (same-size matrix at every frequency), so a list is a tool for placing detail
  * where it matters -- not a way to make a sweep cheaper by thinning the top end.
  */
-export function FrequencySweepControls() {
+export function FrequencySweepControls({ idPrefix, context }: { idPrefix: string; context: 'design' | 'imported' }) {
   const store = useSolveOptionsStore();
   const { frequencies, error } = parseFrequencyList(store.frequencyListText);
+  const modeId = `${idPrefix}-frequency-mode`;
+  const spacingId = `${idPrefix}-frequency-spacing`;
+  const listId = `${idPrefix}-frequency-list`;
+  const modeHelp = context === 'design'
+    ? "Where the solved frequencies come from. Generated grid spreads them between the design's sweep start and end; Explicit list solves exactly the frequencies you type, ignoring the design's range and count."
+    : "Where the solved frequencies come from. Generated grid uses the imported solve range below; Explicit list solves exactly the frequencies you type, ignoring that range and count.";
+  const listHelp = context === 'design'
+    ? 'These frequencies replace the range and count from the design, and sweep spacing no longer applies.'
+    : 'These frequencies replace the imported solve range and count, and sweep spacing no longer applies.';
   return <>
-    <HelpTipRow className="select-row" text="Where the solved frequencies come from. Generated grid spreads them between the design's sweep start and end; Explicit list solves exactly the frequencies you type, ignoring the design's range and count."><label htmlFor="frequency-mode">Sweep points</label><select id="frequency-mode" value={store.frequencyMode} onChange={(event) => store.setFrequencyMode(event.target.value as FrequencyMode)}><option value="range">Generated grid</option><option value="list">Explicit list</option></select></HelpTipRow>
+    <HelpTipRow className="select-row" text={modeHelp}><label htmlFor={modeId}>Sweep points</label><select id={modeId} value={store.frequencyMode} onChange={(event) => store.setFrequencyMode(event.target.value as FrequencyMode)}><option value="range">Generated grid</option><option value="list">Explicit list</option></select></HelpTipRow>
     {store.frequencyMode === 'range'
-      ? <HelpTipRow className="select-row" text="How the generated frequencies are spread across the range. Logarithmic gives even spacing per octave, which matches how the response is read; Linear spends most of the points on the top octave."><label htmlFor="frequency-spacing">Sweep spacing</label><select id="frequency-spacing" value={store.frequencySpacing} onChange={(event) => store.setFrequencySpacing(event.target.value as FrequencySpacing)}><option value="log">Logarithmic</option><option value="linear">Linear</option></select></HelpTipRow>
+      ? <HelpTipRow className="select-row" text="How the generated frequencies are spread across the range. Logarithmic gives even spacing per octave, which matches how the response is read; Linear spends most of the points on the top octave."><label htmlFor={spacingId}>Sweep spacing</label><select id={spacingId} value={store.frequencySpacing} onChange={(event) => store.setFrequencySpacing(event.target.value as FrequencySpacing)}><option value="log">Logarithmic</option><option value="linear">Linear</option></select></HelpTipRow>
       : <div className="point-paste">
-          <textarea id="frequency-list" aria-label="Solver frequencies in Hz" rows={4} value={store.frequencyListText} onChange={(event) => store.setFrequencyListText(event.target.value)} placeholder={'500, 630, 800, 1000\n1250 1600 2000'} />
+          <textarea id={listId} aria-label="Solver frequencies in Hz" rows={4} value={store.frequencyListText} onChange={(event) => store.setFrequencyListText(event.target.value)} placeholder={'500, 630, 800, 1000\n1250 1600 2000'} />
           <div className="paste-meta">{frequencies
             ? <>Solving <b>{frequencies.length}</b> points · <b>{frequencies[0]}</b> to <b>{frequencies[frequencies.length - 1]}</b> Hz</>
             : <>Ascending Hz, separated by commas, spaces, or newlines · up to {MAX_FREQUENCY_POINTS}</>}</div>
           {error && <div className="field-error" role="alert">{error}</div>}
-          <p className="section-note">These frequencies replace the range and count from the design, and sweep spacing no longer applies. Solve time scales with how many points you list, not where they sit — every frequency costs about the same.</p>
+          <p className="section-note">{listHelp} Solve time scales with how many points you list, not where they sit — every frequency costs about the same.</p>
         </div>}
   </>;
 }
@@ -61,7 +70,7 @@ export function SolveOptionsControls() {
       : 'Selected backend capability: Full 3D.'}</p>
     <p className="section-note">Solver mode labels: {solverModeLabels.auto}, {solverModeLabels.full_3d}, {solverModeLabels.circsym}.</p>
     <HelpTipRow className="select-row" text="What happens when the solver mesh fails its topology check. Warn solves anyway and reports the problem; Strict refuses to solve a mesh that is not watertight; Off hides the warning entirely. Results from an invalid mesh cannot be trusted, so leave this on Warn unless you know why."><label htmlFor="mesh-validation-mode">Mesh validation policy</label><select id="mesh-validation-mode" value={store.meshValidationMode} onChange={(event) => store.setMeshValidationMode(event.target.value as MeshValidationMode)}><option value="warn">Warn</option><option value="strict">Strict</option><option value="off">Off</option></select></HelpTipRow>
-    <FrequencySweepControls />
+    <FrequencySweepControls idPrefix="design-solve" context="design" />
     <ToggleRow id="solve-verbose" label="Verbose backend logging" help="Records the backend's own per-frequency diagnostics in the job log. Useful when a solve fails or looks wrong; it makes logs much longer." checked={store.verbose} onChange={store.setVerbose} />
     {error && <div className="field-error" role="alert">Capabilities unavailable: {error}</div>}
   </>;
@@ -74,7 +83,7 @@ export function SolveOptionsControls() {
  * because `.section-body` is a container-query grid whose rules select direct
  * children — an extra div would become the grid item and drop the row's layout.
  */
-function ToggleRow({ id, label, help, checked, onChange }: {
+export function ToggleRow({ id, label, help, checked, onChange }: {
   id: string; label: string; help: string; checked: boolean; onChange: (checked: boolean) => void;
 }) {
   const tip = useHelpTip({ title: label, text: help });

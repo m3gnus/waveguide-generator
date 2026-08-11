@@ -1,0 +1,48 @@
+import { describe, expect, it, vi } from 'vitest';
+import { CadLinkApiError, getIngest, ingestReturn, listReturns } from './cadlink';
+
+describe('CAD-link client', () => {
+  it('uses the server aliases for listing, ingestion, and record lookup', async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return new Response(JSON.stringify({ items: [] }), { status: 200 });
+      if (path.endsWith('/ingest')) return new Response(JSON.stringify({ ingest_id: 'wgi_test' }), { status: 200 });
+      return new Response(JSON.stringify({ ingest_id: 'wgi_test' }), { status: 200 });
+    });
+    await listReturns(fetcher as typeof fetch);
+    await ingestReturn({
+      bundlePath: 'wgreturn/a.wgreturn',
+      mesh: { rigidSizeMm: 10, transitionMm: 12, sourceSizeMm: { source: 4 } },
+      skippedSourceIds: [],
+      areaDriftOverrides: [],
+    }, fetcher as typeof fetch);
+    await getIngest('wgi_test', fetcher as typeof fetch);
+    expect(fetcher.mock.calls.map(([path]) => String(path))).toEqual([
+      '/api/cadlink/returns', '/api/cadlink/ingest', '/api/cadlink/ingest/wgi_test',
+    ]);
+    expect(JSON.parse(String(fetcher.mock.calls[1][1]?.body))).toMatchObject({
+      bundlePath: 'wgreturn/a.wgreturn',
+      mesh: { rigidSizeMm: 10, sourceSizeMm: { source: 4 } },
+    });
+  });
+
+  it('unwraps string and object error details', async () => {
+    const stringError = vi.fn(async () => new Response(JSON.stringify({ detail: 'Choose a workspace.' }), { status: 409, statusText: 'Conflict' })) as typeof fetch;
+    await expect(listReturns(stringError)).rejects.toThrow('Choose a workspace.');
+    const objectError = vi.fn(async () => new Response(JSON.stringify({ detail: { message: 'Bad return manifest' } }), { status: 422 })) as typeof fetch;
+    await expect(getIngest('bad', objectError)).rejects.toThrow('Bad return manifest');
+  });
+
+  it('retains structured area-drift source ids on a refusal', async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      detail: { message: 'Area drift requires an override.', area_drift_sources: ['source-hf'] },
+    }), { status: 422 })) as typeof fetch;
+    const error = await ingestReturn({
+      bundlePath: 'wgreturn/a.wgreturn',
+      mesh: { rigidSizeMm: 10, transitionMm: 12, sourceSizeMm: { 'source-hf': 4 } },
+      skippedSourceIds: [], areaDriftOverrides: [],
+    }, fetcher).catch((reason: unknown) => reason);
+    expect(error).toBeInstanceOf(CadLinkApiError);
+    expect((error as CadLinkApiError).areaDriftSources).toEqual(['source-hf']);
+  });
+});

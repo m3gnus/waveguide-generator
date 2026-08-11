@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CompareStore, fetchJobResults, ResultsLruCache, resultsCache, type JobResults } from '../api/results';
-import { beamShapeSeries, complexToDb, directivityGrid, directivityIndexSeries, impedanceSeries, polarSeries, splSeries } from './mappers';
+import { beamShapeSeries, complexToDb, directivityGrid, directivityIndexSeries, expandResultChannels, impedanceSeries, polarSeries, splSeries } from './mappers';
 
 function result(offset = 0): JobResults {
   return {
@@ -127,6 +127,33 @@ describe('results LRU', () => {
 });
 
 describe('chart data mappers', () => {
+  it('expands imported drive channels into named comparable results', () => {
+    const payload: JobResults = {
+      frequencies: [],
+      channel_order: ['drive-hf', 'drive-mf'],
+      channels: { 'drive-mf': result(2), 'drive-hf': result(1) },
+    };
+    const expanded = expandResultChannels('job-12', 'Run 12', payload);
+    expect(expanded.map(({ id, label }) => ({ id, label }))).toEqual([
+      { id: 'job-12#drive-hf', label: 'Run 12 · drive-hf' },
+      { id: 'job-12#drive-mf', label: 'Run 12 · drive-mf' },
+    ]);
+    expect(expandResultChannels('job-13', 'Run 13', result())[0].result).toBeDefined();
+  });
+
+  it('appends unordered channels and preserves an empty-channel wrapper', () => {
+    const payload: JobResults = {
+      frequencies: [],
+      channel_order: ['drive-hf'],
+      channels: { 'drive-mf': result(2), 'drive-hf': result(1) },
+    };
+    expect(expandResultChannels('job', 'Run', payload).map(({ id }) => id)).toEqual([
+      'job#drive-hf', 'job#drive-mf',
+    ]);
+    const empty: JobResults = { frequencies: [123], channels: {} };
+    expect(expandResultChannels('empty', 'Empty', empty)).toEqual([{ id: 'empty', label: 'Empty', result: empty }]);
+  });
+
   it('maps independent frequency arrays into named SPL overlay series', () => {
     const series = splSeries([{ id: 'a', label: 'Primary', result: result() }, { id: 'b', label: 'Overlay', result: result(3) }]);
     expect(series.map((item) => item.name)).toEqual(['Primary', 'Overlay']);

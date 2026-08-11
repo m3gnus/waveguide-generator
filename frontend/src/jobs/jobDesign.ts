@@ -5,8 +5,8 @@ import { useDesignStore, type DesignDocument } from '../stores/design';
 /** The server's verdict on a job's stored design. See server/jobs/legacy_design.py. */
 export interface DesignAvailability {
   reopenable: boolean;
-  source: 'v2-snapshot' | 'v1-design-state' | 'v1-mesher-payload' | 'none';
-  reason_code: 'ok' | 'recovered' | 'freeform_legacy_design' | 'no_stored_design' | 'unreadable_design';
+  source: 'v2-snapshot' | 'v1-design-state' | 'v1-mesher-payload' | 'cad-import' | 'none';
+  reason_code: 'ok' | 'recovered' | 'imported_geometry' | 'freeform_legacy_design' | 'no_stored_design' | 'unreadable_design';
   /** Why this job cannot be reopened. Present exactly when `reopenable` is false. */
   reason: string | null;
   /** A fidelity caveat about a design that *was* recovered. */
@@ -92,6 +92,9 @@ const CLIENT_UNREADABLE =
  */
 export function jobRerunState(job: JobDesignFields): { enabled: boolean; reason: string | null } {
   const availability = jobDesignAvailability(job);
+  // Imported jobs replay their immutable stored SolveRequest. They are not
+  // reopenable as editor designs, but rerun does not need design hydration.
+  if (availability.source === 'cad-import') return { enabled: true, reason: null };
   if (!availability.reopenable) return { enabled: false, reason: availability.reason };
   if (hydrateJobDesign(job) === null) return { enabled: false, reason: CLIENT_UNREADABLE };
   return { enabled: true, reason: null };
@@ -99,5 +102,5 @@ export function jobRerunState(job: JobDesignFields): { enabled: boolean; reason:
 
 /** True when this job's design can be put back on screen. */
 export function canLoadJobDesign(job: JobDesignFields): boolean {
-  return jobRerunState(job).enabled;
+  return jobDesignAvailability(job).reopenable && hydrateJobDesign(job) !== null;
 }

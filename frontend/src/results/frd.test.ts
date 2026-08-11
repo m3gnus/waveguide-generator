@@ -51,6 +51,17 @@ function dataRows(text: string): string[][] {
 }
 
 describe('FRD builders', () => {
+  it('accepts a channel scope without combining the flat wrapper', () => {
+    const wrapped: ResultPayload = {
+      frequencies: [],
+      channels: { first: fixture, second: { ...fixture, spl_on_axis: { frequencies, spl: [70, 71, 72, 73, 74], phase_degrees: [0, 0, 0, 0, 0] } } },
+      channel_order: ['first', 'second'],
+    };
+    expect(() => buildOnAxisFrd(wrapped, preferences())).toThrow('Choose a drive channel');
+    const rows = dataRows(buildOnAxisFrd(wrapped, preferences(), 'second'));
+    expect(rows.map((row) => Number(row[1]))).toEqual([70, 71, 72, 73, 74]);
+  });
+
   it('writes on-axis frequency, smoothed SPL, and the real varying phase', () => {
     const text = buildOnAxisFrd(fixture, preferences());
     const rows = dataRows(text);

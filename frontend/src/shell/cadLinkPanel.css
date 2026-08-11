@@ -1,0 +1,34 @@
+.cadlink-panel { padding: 7px; color: var(--fg1); font: var(--text-base)/1.45 var(--ui); }
+.cadlink-toolbar, .cad-section > header, .cad-solve-bar { display: flex; align-items: center; gap: 7px; }
+.cadlink-toolbar { min-height: 28px; border-bottom: 1px solid var(--hair); padding-bottom: 6px; }
+.cadlink-toolbar button, .cad-section button { display: inline-flex; align-items: center; gap: 4px; }
+.cad-alert, .cad-status-strip { margin: 7px 0; padding: 6px 7px; border: 1px solid var(--red); background: color-mix(in srgb, var(--red) 8%, transparent); }
+.cad-status-strip { border-color: var(--hair); background: var(--ov1); color: var(--fg2); }
+.cad-bundle-list { display: grid; gap: 4px; margin: 7px 0; }
+.cad-bundle-list > button { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1px 8px; width: 100%; padding: 7px; text-align: left; border: 1px solid var(--hair); background: var(--surface-panel); }
+.cad-bundle-list > button.selected { border-color: var(--acc); background: var(--ov1); }
+.cad-bundle-list b { overflow: hidden; text-overflow: ellipsis; }
+.cad-bundle-list span, .cad-bundle-list time, .cad-section p, .cad-detail { color: var(--fg3); font-size: var(--text-micro); }
+.cad-bundle-list time { grid-column: 2; grid-row: 1 / span 2; align-self: center; }
+.cad-section { margin-top: 7px; padding: 7px; border: 1px solid var(--hair); background: var(--surface-panel); }
+.cad-section.degraded, .cad-scope.degraded { border-left: 3px solid var(--amber); }
+.cad-section > header { min-height: 24px; }
+.cad-section h3 { margin: 0; font-size: var(--text-base); text-transform: uppercase; letter-spacing: .06em; }
+.cad-section header > button { margin-left: auto; }
+.cad-status { margin-left: auto; color: var(--fg3); font-size: var(--text-micro); text-transform: uppercase; }
+.cad-verdict { display: grid; grid-template-columns: minmax(90px, auto) 1fr; gap: 3px 8px; margin: 4px 0; padding: 5px; border-left: 2px solid var(--amber); background: var(--ov1); }
+.cad-verdict.ok { border-color: var(--green); }
+.cad-verdict small { grid-column: 2; color: var(--fg3); }
+.cad-row, .cad-channel-row, .cad-channel-summary { display: grid; grid-template-columns: minmax(90px, 1fr) auto; align-items: center; gap: 6px; padding: 4px 0; border-top: 1px solid var(--hair); }
+.cad-row small { grid-column: 1 / -1; color: var(--fg3); }
+.ok-text { color: var(--green); }.warn-text { color: var(--amber); }
+.cad-source { margin-top: 6px; padding-top: 5px; border-top: 1px solid var(--hair); }
+.cad-source.skipped { opacity: .66; }
+.cad-findings label { display: flex; gap: 7px; padding: 6px 0; border-top: 1px solid var(--hair); }
+.cad-findings label.blocking b::after { content: ' · blocking'; color: var(--amber); font-weight: 500; }
+.cad-findings label span { display: grid; }.cad-findings small { color: var(--fg3); }
+.cad-channel-summary { margin-left: 12px; color: var(--fg2); font-size: var(--text-micro); }
+.cad-sweep-grid { display: grid; gap: 4px; }
+.cad-solve-bar { position: sticky; bottom: 0; margin: 8px -7px -7px; padding: 8px; border-top: 1px solid var(--hair); background: color-mix(in srgb, var(--surface-panel) 94%, transparent); backdrop-filter: blur(8px); }
+.cad-solve-bar div { flex: 1; color: var(--fg2); font-size: var(--text-micro); }
+.cadlink-panel .empty-state { min-height: 120px; }

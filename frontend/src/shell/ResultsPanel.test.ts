@@ -165,6 +165,18 @@ describe('results chart layouts', () => {
     expect(document.body.querySelector('[role="dialog"]')).toBeNull();
   });
 
+  it('names the active channel in a non-comparable chart badge', () => {
+    const first = { frequencies: [500] };
+    const active = { frequencies: [1_000] };
+    act(() => root.render(createElement(ResultsChartGrid, {
+      chartTypes: ['summary'],
+      result: active,
+      named: [named('job#hf', 'Run · drive-hf', first), named('job#mf', 'Run · drive-mf', active)],
+      tokens,
+    })));
+    expect(host.querySelector('.result-single-run')?.getAttribute('title')).toContain('Showing Run · drive-mf.');
+  });
+
   it('offers enable and rerun when beam shape is missing spherical sampling', () => {
     const onClick = vi.fn();
     act(() => root.render(createElement(ResultsChartGrid, {

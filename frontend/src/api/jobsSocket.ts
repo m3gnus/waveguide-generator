@@ -63,6 +63,17 @@ export interface JobItem {
   results_discarded_at?: string | null;
   mesh_discarded_at?: string | null;
   log_tail: string[];
+  design_availability?: {
+    reopenable: boolean;
+    source: 'v2-snapshot' | 'v1-design-state' | 'v1-mesher-payload' | 'cad-import' | 'none';
+    reason_code: 'ok' | 'recovered' | 'imported_geometry' | 'freeform_legacy_design' | 'no_stored_design' | 'unreadable_design';
+    reason: string | null;
+    note: string | null;
+  } | null;
+  symmetry?: Record<string, unknown>;
+  solve_path?: 'full-3d' | 'axisymmetric-meridian' | null;
+  axisymmetric_eligibility_reasons?: string[];
+  solve_wall_time_seconds?: number | null;
 }
 
 export interface JobsSnapshot {
