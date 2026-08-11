@@ -28,7 +28,7 @@ from server.platform.instance import (
     InstanceLock,
     InstanceLockError,
 )
-from server.platform.origin import local_origin
+from server.platform.origin import local_origin, websocket_request_allowed
 from server.platform.paths import ensure_data_layout
 from server.platform.signal_rearm import (
     rearm_registered_signals,
@@ -518,6 +518,27 @@ def test_capability_probe_runs_off_thread_and_is_cached(
 def test_local_origin_rejects_invalid_ports(origin: str) -> None:
     assert local_origin(origin) is False
     assert local_origin("http://localhost:3100") is True
+
+
+def test_websocket_origin_must_match_the_bound_host_and_port() -> None:
+    assert websocket_request_allowed(
+        origin="http://127.0.0.1:3100", host="127.0.0.1:3100",
+        scheme="ws", bound_port=3100,
+    )
+    assert websocket_request_allowed(
+        origin=None, host="127.0.0.1:3100", scheme="ws", bound_port=3100,
+    )
+    assert not websocket_request_allowed(
+        origin="http://127.0.0.1:5173", host="127.0.0.1:3100",
+        scheme="ws", bound_port=3100,
+    )
+    assert not websocket_request_allowed(
+        origin="http://localhost:3100", host="127.0.0.1:3100",
+        scheme="ws", bound_port=3100,
+    )
+    assert not websocket_request_allowed(
+        origin=None, host="127.0.0.1:5173", scheme="ws", bound_port=3100,
+    )
 
 
 def test_app_shutdown_stops_jobs_before_gmsh_worker(tmp_path: Path) -> None:

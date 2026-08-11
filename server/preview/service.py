@@ -8,15 +8,13 @@ from typing import Any, Mapping
 from fastapi import APIRouter, FastAPI, WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 
-from server.platform.origin import local_origin
+from server.platform.origin import websocket_request_allowed
 from server.preview.core import (
     CLOSE_ORIGIN_REJECTED,
     PreviewComputeService,
     PreviewProtocol,
 )
 
-
-_local_origin = local_origin
 
 
 class _FastAPITransport:
@@ -53,7 +51,14 @@ def create_preview_router(service: PreviewComputeService) -> APIRouter:
         """Serve WS-PROTOCOL v1 preview and curve requests."""
 
         origin = websocket.headers.get("origin")
-        if origin is not None and not _local_origin(origin):
+        server = websocket.scope.get("server")
+        bound_port = server[1] if isinstance(server, (list, tuple)) and len(server) > 1 else None
+        if not websocket_request_allowed(
+            origin=origin,
+            host=websocket.headers.get("host"),
+            scheme=websocket.scope.get("scheme", "ws"),
+            bound_port=bound_port,
+        ):
             await websocket.close(code=CLOSE_ORIGIN_REJECTED)
             return
         await websocket.accept()

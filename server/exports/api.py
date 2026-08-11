@@ -218,15 +218,38 @@ class _BundleNameConflict(Exception):
     pass
 
 
-def _wglink_response(
-    row: Mapping[str, object], wglink_root: Path, fallback_name: str
-) -> dict[str, Any]:
-    manifest = json.loads(str(row["manifest_json"]))
-    stored_name = _base_name(
-        str((manifest.get("design") or {}).get("name") or fallback_name)
-    )
+def _wglink_response(row: Mapping[str, object]) -> dict[str, Any]:
+    stored_path = row.get("bundle_path")
+    if not stored_path:
+        raise HTTPException(
+            status_code=409,
+            detail="This older CAD export has no stored destination. Send it to CAD again.",
+        )
+    bundle_path = Path(str(stored_path))
+    try:
+        manifest = json.loads((bundle_path / "wglink.json").read_text(encoding="utf-8"))
+        manifest_bundle_id = str((manifest.get("bundle") or {}).get("id") or "")
+        manifest_export_id = str((manifest.get("export") or {}).get("id") or "")
+        artifact_hash = str(
+            ((manifest.get("files") or {}).get("waveguide.step") or {}).get("sha256") or ""
+        )
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="The original CAD-link bundle is no longer available. Export it again.",
+        ) from exc
+    if (
+        manifest_bundle_id != str(row["bundle_id"])
+        or manifest_export_id != str(row["export_id"])
+        or artifact_hash != str(row["artifact_sha256"])
+        or not (bundle_path / "waveguide.step").is_file()
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="The original CAD-link bundle was replaced or changed. Export it again.",
+        )
     return {
-        "bundlePath": str(wglink_root / f"{stored_name}.wglink"),
+        "bundlePath": str(bundle_path),
         "bundleId": row["bundle_id"],
         "exportId": row["export_id"],
         "sequence": row["sequence"],
@@ -261,7 +284,7 @@ def _export_wglink_sync(
         )
     retry = store.find_export_by_idempotency_key(idempotency_key)
     if retry is not None:
-        return _wglink_response(retry, wglink_root, request.base_name)
+        return _wglink_response(retry)
     head = store.get_design(request.identity.design_id)
     save_first = "Save the design before sending it to CAD."
     if head is None:
@@ -350,6 +373,7 @@ def _export_wglink_sync(
                 "manifest_json": manifest_json,
                 "geometry_hash": geometry_hash,
                 "artifact_sha256": artifact_sha256,
+                "bundle_path": str(destination),
             }
         finally:
             shutil.rmtree(temporary_root, ignore_errors=True)
@@ -369,7 +393,7 @@ def _export_wglink_sync(
     except Exception as exc:
         raise _export_error(exc) from exc
 
-    return _wglink_response(row, wglink_root, design_name)
+    return _wglink_response(row)
 
 
 @router.post("/step")

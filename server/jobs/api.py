@@ -34,10 +34,8 @@ from server.jobs.runtime import (
 )
 from server.jobs.store import JobStore
 from server.engines.registry import EngineRegistry
-from server.platform.origin import local_origin
+from server.platform.origin import websocket_request_allowed
 
-
-_local_origin = local_origin
 
 
 class _FastAPIJobsTransport:
@@ -198,7 +196,14 @@ def create_jobs_router(runtime: JobRuntime) -> APIRouter:
     @router.websocket("/ws/jobs")
     async def jobs_websocket(websocket: WebSocket) -> None:
         origin = websocket.headers.get("origin")
-        if origin is not None and not _local_origin(origin):
+        server = websocket.scope.get("server")
+        bound_port = server[1] if isinstance(server, (list, tuple)) and len(server) > 1 else None
+        if not websocket_request_allowed(
+            origin=origin,
+            host=websocket.headers.get("host"),
+            scheme=websocket.scope.get("scheme", "ws"),
+            bound_port=bound_port,
+        ):
             await websocket.close(code=CLOSE_ORIGIN_REJECTED)
             return
         await websocket.accept()
