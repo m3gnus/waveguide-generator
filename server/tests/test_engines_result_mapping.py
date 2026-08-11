@@ -198,6 +198,21 @@ def test_balloon_four_state_and_pole_normalization(
         assert response["balloon"]["hemisphere"] is True
 
 
+def test_impedance_normalizes_by_the_sound_speed_the_engine_solved_with() -> None:
+    """A backend's own c reaches the normalization, not the module default."""
+
+    response = build_solver_response(
+        result=_native_result(),
+        config=_config(),
+        context=_context(),
+        start_time=0.0,
+        metadata={},
+        sound_speed_m_per_s=2.0 * SOUND_SPEED_M_PER_S,
+    )
+    assert response["impedance"]["real"] == pytest.approx([0.5, 1.0])
+    assert response["impedance"]["imaginary"] == pytest.approx([1.0, -0.25])
+
+
 def test_directivity_phase_nulls_zero_and_nonfinite_amplitudes() -> None:
     result = _native_result()
     result.pressure_complex[0, 0] = np.asarray(

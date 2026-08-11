@@ -7,7 +7,7 @@ This is the v1 numerical and failure-state compatibility matrix. The primary map
 | Dimension | v1 contract | Evidence |
 |---|---|---|
 | Acoustic pressure reference | Absolute SPL uses `p_ref = 20e-6 Pa`. | `server/solver/result_mapping.py:20-24` |
-| Characteristic impedance | Normalized impedance uses `rho*c = 1.21*343`. | `server/solver/result_mapping.py:20-24` |
+| Characteristic impedance | v1 normalized impedance by a typed `rho*c = 1.21*343`. **v2 takes both from the native packages instead**: rho is the `AIR_DENSITY` the solve actually ran with (1.2041, since WG never passes a density), and c is the `SPEED_OF_SOUND` of the engine that produced the result. Reported values are therefore 0.49% larger than v1's. | `server/solver/result_mapping.py:20-24`; `server/solver/acoustics.py` |
 | Time/spatial convention | Metal results declare spatial `exp(+ikr)`, consistent with temporal `e^{-iωt}`. The legacy alias resolver also knows a BEMPP-style `exp(-ikr)` convention. | `server/solver/metal_solver.py:371-395`; `server/contracts/__init__.py:39-72` |
 | Observation defaults | Polar config defaults to 2 m, mouth origin, H/V/D planes, diagonal inclination 45°, spherical sampling off, 37 theta samples, and 72 phi samples. | `server/contracts/__init__.py:101-168` |
 | Mapper fallback | If observation config is absent, the mapper falls back to mouth origin, 2 m, H/V arcs, and 37 angles from 0° through 180°. The backend may degrade a spherical request to arcs-only capability. | `server/solver/result_mapping.py:98-130` |
