@@ -356,13 +356,13 @@ export function runDisplayName(job: Pick<JobItem, 'id' | 'run_number' | 'label'>
 const naturalNameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 
 export function applyJobPreferences(jobs: JobItem[], sort: JobSort, minimumRating: number): JobItem[] {
-  const filtered = jobs.filter((job) => (job.rating ?? 0) >= minimumRating);
+  const filtered = jobs.filter((job) => job.status === 'queued' || job.status === 'running' || (job.rating ?? 0) >= minimumRating);
   return [...filtered].sort((a, b) => {
     let order = 0;
     if (sort === 'rating_desc') order = (b.rating ?? 0) - (a.rating ?? 0) || Date.parse(b.created_at) - Date.parse(a.created_at);
     else if (sort === 'name_asc') order = naturalNameCollator.compare(runDisplayName(a, 'short'), runDisplayName(b, 'short'));
     else if (sort === 'created_desc') order = Date.parse(b.created_at) - Date.parse(a.created_at);
     else order = Date.parse(b.completed_at ?? b.created_at) - Date.parse(a.completed_at ?? a.created_at);
-    return order || a.run_number - b.run_number;
+    return order || (sort === 'name_asc' ? a.run_number - b.run_number : b.run_number - a.run_number);
   });
 }

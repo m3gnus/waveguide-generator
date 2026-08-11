@@ -172,6 +172,16 @@ describe('client preferences', () => {
     expect(applyJobPreferences(jobs, 'rating_desc', 3).map(({ id }) => id)).toEqual(['alpha']);
     expect(applyJobPreferences(jobs, 'name_asc', 0).map(({ id }) => id)).toEqual(['alpha', 'beta']);
   });
+  it('keeps active runs visible through rating filters and uses descending run ties', () => {
+    const timestamp = '2026-01-01T00:00:00Z';
+    const jobs = [
+      { ...job('old', 0, timestamp), run_number: 1 },
+      { ...job('new', 0, timestamp), run_number: 2 },
+      { ...job('active', 0, timestamp), run_number: 3, status: 'running' as const },
+    ];
+    expect(applyJobPreferences(jobs, 'created_desc', 5).map(({ id }) => id)).toEqual(['active']);
+    expect(applyJobPreferences(jobs.slice(0, 2), 'created_desc', 0).map(({ id }) => id)).toEqual(['new', 'old']);
+  });
   it('sorts displayed names case-insensitively and naturally with run-number ties', () => {
     const jobs = [
       { ...job('a', 0, '2026-01-01T00:00:00Z'), run_number: 12, label: 'run10' },

@@ -537,7 +537,7 @@ export class JobsSocketManager {
     // rather than twice per comparison, which matters at the 200-job page size.
     return jobs
       .map((job) => ({ job, at: Date.parse(job.created_at) }))
-      .sort((a, b) => b.at - a.at)
+      .sort((a, b) => b.at - a.at || b.job.run_number - a.job.run_number)
       .map((entry) => entry.job);
   }
 
