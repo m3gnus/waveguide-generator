@@ -269,7 +269,7 @@ export function Viewport() {
       <b>Curvature heatmap unavailable</b><span>This frame has no analytic curvature section. Neutral geometry remains visible while inspection data is requested.</span>
     </div>}
     {activeScene && mode === 'edges' && edgeModeUnavailable && <div className="viewport-mode-empty">
-      <b>Edge inspection unavailable</b><span>This frame exceeds the 250,000-triangle edge limit. Filled geometry remains visible while edge extraction is skipped.</span>
+      <b>Edge inspection unavailable</b><span>This frame exceeds the {MAX_EDGE_TRIANGLES.toLocaleString()}-triangle edge limit. Filled geometry remains visible while edge extraction is skipped.</span>
     </div>}
     {importError && activeScene && <div className="mesh-import-error" role="alert">Import failed: {importError}</div>}
 

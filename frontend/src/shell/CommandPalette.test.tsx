@@ -75,6 +75,24 @@ describe('CommandPalette', () => {
     expect(activate).toHaveBeenCalledWith('simulation');
   });
 
+  it('hints the modifier the host platform actually has', () => {
+    const platform = (value: string) => Object.defineProperty(navigator, 'platform', { value, configurable: true });
+    const original = navigator.platform;
+    try {
+      platform('Win32');
+      act(() => root.render(<CommandPalette entries={entries}/>));
+      act(() => host.querySelector<HTMLButtonElement>('.command-affordance')!.click());
+      expect([...host.querySelectorAll('kbd')].map((key) => key.textContent)).toContain('Ctrl+K');
+      expect(host.textContent).not.toContain('⌘');
+
+      platform('MacIntel');
+      act(() => root.render(<CommandPalette entries={entries}/>));
+      expect([...host.querySelectorAll('kbd')].map((key) => key.textContent)).toContain('⌘K');
+    } finally {
+      platform(original);
+    }
+  });
+
   it('names a parameter symbol once when it doubles as the legacy config key', () => {
     const entries = buildParameterPaletteEntries();
     const doubled = entries.filter((entry) => {

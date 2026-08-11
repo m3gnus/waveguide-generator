@@ -6,6 +6,7 @@ import { useDesignStore, type DesignDocument, type DesignFamily, type DesignValu
 import { useSolveOptionsStore, type SymmetryMode } from '../stores/solveOptions';
 import { DirectivityMapControls, SolveOptionsControls } from './SolveOptionsSections';
 import { EditablePointTable, EditableStationTable } from './FreeformEditors';
+import { lambdaSixthHint } from './lambdaLimit';
 import { NumberField } from './NumberField';
 import { HelpTipRow } from './HelpTip';
 import { Icon } from '../shell/icons';
@@ -229,6 +230,28 @@ function prospectiveValidation(field: ParameterDefinition, design: DesignDocumen
   return undefined;
 }
 
+/**
+ * How fine the mouth mesh has to be for the sweep this design will actually run.
+ *
+ * Both halves of this used to be the literal 20 kHz sweep -- the label said
+ * "λ/6 at 20 kHz ≈ 2.86 mm" and the amber warning fired above 2.86 mm -- while
+ * the top of the sweep is the user's to set. The default 400 Hz – 16 kHz design
+ * therefore had 3.2 mm flagged as too coarse when its real limit is 3.57 mm,
+ * and the stated number belonged to somebody else's design.
+ *
+ * Its own component so the solve-options subscription re-renders one hint rather
+ * than every field in the rail.
+ */
+function MouthResolutionHint({ design, value }: { design: DesignDocument; value: unknown }) {
+  const frequencyMode = useSolveOptionsStore((state) => state.frequencyMode);
+  const frequencyListText = useSolveOptionsStore((state) => state.frequencyListText);
+  const hint = lambdaSixthHint(design, { frequencyMode, frequencyListText });
+  if (!hint) return null;
+  return <div className={`lambda-hint${Number(value) > hint.limitMm ? ' warning' : ''}`}>
+    λ/6 at {hint.frequencyLabel} ≈ {hint.limitMm} mm
+  </div>;
+}
+
 function FieldControl({ field, design }: { field: ParameterDefinition; design: DesignDocument }) {
   const updateValue = useDesignStore((state) => state.updateValue);
   const updateValues = useDesignStore((state) => state.updateValues);
@@ -299,7 +322,7 @@ function FieldControl({ field, design }: { field: ParameterDefinition; design: D
       onEndDrag={endDrag}
     />
     {error && <div className="field-error">△ {error}</div>}
-    {field.id === 'mesh.mouth_resolution' && <div className={`lambda-hint${Number(value) > 2.86 ? ' warning' : ''}`}>λ/6 at 20 kHz ≈ 2.86 mm</div>}
+    {field.id === 'mesh.mouth_resolution' && <MouthResolutionHint design={design} value={value} />}
     {disabledReason && <div className="disabled-reason">{disabledReason}</div>}
   </>;
 }

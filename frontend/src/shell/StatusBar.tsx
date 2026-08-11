@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import { previewSocket } from '../api/previewSocket';
+import { compactFrequency } from '../design/lambdaLimit';
 import { resolveEngine, type EngineCapability } from '../jobs/actions';
 import { useCapabilities } from '../jobs/useCapabilities';
 import { usePreferences, type Preferences } from '../prefs/preferences';
@@ -8,10 +9,6 @@ import { useDocumentStore } from '../stores/document';
 import { parseFrequencyList, useSolveOptionsStore, type FrequencyMode } from '../stores/solveOptions';
 import { previewErrorMessage, previewMeshMetrics } from '../viewport/presentation';
 import { Icon } from './icons';
-
-function compactFrequency(value: number): string {
-  return value >= 1_000 ? `${Number((value / 1_000).toPrecision(3))} kHz` : `${value} Hz`;
-}
 
 interface SolveSummaryOptions {
   frequencyMode: FrequencyMode;

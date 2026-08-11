@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
+import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { ParamPanel, domainName, parameterRevealRequest, requestParameterReveal, resolveOuterBodyMode, symmetrySummary } from './ParamPanel';
 
 /**
@@ -42,6 +43,7 @@ describe('ParamPanel inventory UX', () => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     localStorage.clear();
     resetDesignStore();
+    resetSolveOptionsStore();
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     host = document.createElement('div');
     document.body.append(host);
@@ -209,6 +211,33 @@ describe('ParamPanel inventory UX', () => {
     expect(host.textContent).not.toContain('Spline overshoot');
     expect(host.querySelector('input[aria-label$=" strength"]')).toBeNull();
     expect(host.querySelector<HTMLSelectElement>('select[aria-label="Station 1 shape"]')?.value).toBe('ellipse');
+  });
+
+  it('states the λ/6 mesh limit for the sweep this design will actually solve', () => {
+    act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
+    const hint = () => host.querySelector<HTMLElement>('[data-parameter-id="mesh.mouth_resolution"] .lambda-hint');
+    expect(hint()?.textContent).toBe('λ/6 at 16 kHz ≈ 3.57 mm');
+
+    // 3.2 mm resolves the seed design's 16 kHz sweep end; the hint used to flag
+    // it amber against a 20 kHz limit this design never asked for.
+    act(() => useDesignStore.getState().updateValue('mesh.mouth_resolution', 3.2));
+    expect(hint()?.classList.contains('warning')).toBe(false);
+
+    act(() => useDesignStore.getState().updateValue('simulation.f2', 20_000));
+    expect(hint()?.textContent).toBe('λ/6 at 20 kHz ≈ 2.86 mm');
+    expect(hint()?.classList.contains('warning')).toBe(true);
+
+    // An explicit list replaces the design's range, so the mesh has to answer to
+    // the list instead.
+    act(() => {
+      useSolveOptionsStore.getState().setFrequencyMode('list');
+      useSolveOptionsStore.getState().setFrequencyListText('500, 1000, 8000');
+    });
+    expect(hint()?.textContent).toBe('λ/6 at 8 kHz ≈ 7.15 mm');
+    expect(hint()?.classList.contains('warning')).toBe(false);
+
+    act(() => useSolveOptionsStore.getState().setFrequencyListText('8000, 500'));
+    expect(hint()).toBeNull();
   });
 
   it('changes FREEFORM length without moving or dropping normalized anchors', () => {

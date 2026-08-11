@@ -10,6 +10,7 @@ import { requestParameterReveal } from '../design/ParamPanel';
 import { BrandMark, Icon } from './icons';
 import { useSolveControl } from './JobsCoordinator';
 import { CommandPalette, type PaletteEntry } from './CommandPalette';
+import { commandShortcutLabel } from './platformKeys';
 import { SettingsDialog, type Theme } from './SettingsDialog';
 import { workspaceNavigation } from './Workspace';
 
@@ -117,7 +118,7 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
       <button className="icon-button" disabled={!canRedo} onClick={redo} title="Redo"><Icon name="redo"/></button>
     </div>
     <CommandPalette entries={paletteEntries}/>
-    <button className="solve-button" disabled={solve.disabled} title={solve.title} aria-busy={solve.submitting} onClick={solve.solve}><Icon name="play"/>Solve<kbd>⌘↵</kbd></button>
+    <button className="solve-button" disabled={solve.disabled} title={solve.title} aria-busy={solve.submitting} onClick={solve.solve}><Icon name="play"/>Solve<kbd>{commandShortcutLabel('↵')}</kbd></button>
     <i className="v-separator" />
     <div className="theme-toggle" aria-label="Color theme">
       <button className={theme === 'dark' ? 'on' : ''} onClick={() => setTheme('dark')} aria-label="Dark theme" aria-pressed={theme === 'dark'}><Icon name="moon"/></button>
