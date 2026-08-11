@@ -138,6 +138,15 @@ call :find_bootstrap_python
 if errorlevel 1 goto no_python
 echo   Python: %BOOTSTRAP_PYTHON%
 
+if defined WG_UPDATE_LOCK_HELD goto update_lock_ready
+if defined LAUNCH goto run_guard_with_launch
+"%BOOTSTRAP_PYTHON%" "%WG_ROOT%\scripts\run_update_guard.py" -- "%COMSPEC%" /d /c call "%~f0" %*
+exit /b %ERRORLEVEL%
+:run_guard_with_launch
+"%BOOTSTRAP_PYTHON%" "%WG_ROOT%\scripts\run_update_guard.py" --launch "%WG_ROOT%\launchers\windows\launch-wg.bat" -- "%COMSPEC%" /d /c call "%~f0" %*
+exit /b %ERRORLEVEL%
+:update_lock_ready
+
 echo.
 echo Checking for code updates...
 if defined AFTER_PULL goto after_pull_notice
@@ -215,9 +224,14 @@ echo   installers\windows\uninstall.bat            ^(environment and interface^)
 echo   installers\windows\uninstall.bat --data     ^(also saved designs and job history^)
 echo.
 if not defined LAUNCH goto finished_without_launch
+if defined WG_UPDATE_LOCK_HELD goto guarded_install_complete
 echo Starting Waveguide Generator...
 call "%WG_ROOT%\launchers\windows\launch-wg.bat"
 exit /b %ERRORLEVEL%
+
+:guarded_install_complete
+echo Update complete; releasing the update lock before launch.
+exit /b 0
 
 :finished_without_launch
 echo Not starting it ^(--no-launch^).

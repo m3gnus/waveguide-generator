@@ -227,6 +227,25 @@ def test_startup_recovery_fails_running_orphan_and_requeues_fifo(
     asyncio.run(scenario())
 
 
+def test_second_runtime_cannot_recover_jobs_owned_by_live_runtime(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        database = tmp_path / "jobs.db"
+        first = JobRuntime(JobStore(database))
+        second = JobRuntime(JobStore(database))
+        await first.start()
+        try:
+            with pytest.raises(JobConflictError, match="already owns"):
+                await second.start()
+        finally:
+            await first.shutdown()
+        await second.start()
+        await second.shutdown()
+
+    asyncio.run(scenario())
+
+
 def test_result_db_write_failure_transitions_to_error(
     tmp_path: Path, monkeypatch
 ) -> None:
