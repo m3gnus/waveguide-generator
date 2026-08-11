@@ -151,6 +151,16 @@ describe('directivity heatmap', () => {
     expect((full.yAxis as { name?: string }).name).toBe('dB');
   });
 
+  it('puts the full-size heatmap angle title in the bottom-left corner', () => {
+    const full = heatmapOption(payload(12, 13), tokens, 'horizontal', -6, 'full');
+    expect(full.yAxis).toMatchObject({
+      name: 'Angle [°]',
+      nameLocation: 'start',
+      nameTextStyle: { align: 'right', verticalAlign: 'top' },
+    });
+    expect((heatmapOption(payload(12, 13), tokens, 'horizontal', -6, 'regular').yAxis as { name?: string }).name).toBeUndefined();
+  });
+
   it('uses a light HornLab-compatible chart surface with the light app theme', () => {
     document.documentElement.dataset.theme = 'light';
     expect(readChartTokens()).toMatchObject({ background: '#FFFDF8', foreground: '#1A1A1A', accent: '#1F5FBF' });
