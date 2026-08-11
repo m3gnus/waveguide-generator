@@ -236,6 +236,24 @@ def test_both_installers_enforce_the_same_git_version_floor():
     )
 
 
+def test_explicit_tag_requires_a_real_git_checkout_before_it_can_succeed():
+    """A requested release must never degrade to a successful no-op."""
+
+    shell = read(SHELL_INSTALLER)
+    shell_tag = shell.index('if [[ -n "$TAG" ]]')
+    shell_normal_skip = shell.index('say "  Skipped: this folder is not a Git clone')
+    assert shell_tag < shell_normal_skip
+    assert "Cannot install $TAG because this folder is not a Git checkout" in shell
+    assert "git rev-parse --is-inside-work-tree" in shell
+
+    batch = batch_code(read(BATCH_INSTALLER))
+    batch_tag = batch.index(":checkout_tag")
+    batch_tag_failure = batch.index(":tag_requires_git")
+    assert batch_tag < batch_tag_failure
+    assert "Cannot install %TAG% because this folder is not a Git checkout" in batch
+    assert batch.count("git rev-parse --is-inside-work-tree") >= 2
+
+
 def test_the_windows_installer_checks_the_visual_cpp_runtime():
     # v1 shipped an installer that reported "Bempp ready" on a box with no
     # redistributable, and every solve then died on "Numba could not be

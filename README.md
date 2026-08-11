@@ -90,6 +90,21 @@ The committed app icon is reproducible with
 `python launchers/macos/generate_icon.py` on macOS; the generator uses only the
 standard library and validates the resulting ICNS container with `iconutil`.
 
+### Application updates
+
+The version in the top-left corner checks GitHub's latest published full
+release after the interface opens. When a newer, complete release is available
+it turns amber and says **update available**; click it for the exact local
+installer command and release details. The same action is available from the
+command palette as **Application update**.
+
+WG caches successful checks, retries incomplete releases quickly, and keeps the
+last known result when the network is unavailable. It also inspects the local
+checkout without changing it: modified, development, detached, and non-Git
+installs are explained instead of being handed a command that would silently do
+the wrong thing. Close Waveguide Generator before running a copied update
+command so the installer can acquire the application data lock.
+
 ### Original-app run migration
 
 On launch, Waveguide Generator looks for the original application's v1 run

@@ -27,6 +27,7 @@ from server.platform.paths import resolve_data_dir
 from server.preview.service import mount_preview
 from server.solver.symmetry import resolve_symmetry
 from server.workspace import mount_workspace
+from server.updates import mount_updates
 
 
 VERSION = str(
@@ -244,6 +245,12 @@ def create_app(
     mount_jobs(application, engine_registry)
     mount_workspace(application)
     mount_charts(application)
+    mount_updates(
+        application,
+        running_version=VERSION,
+        data_dir=resolved_data_dir,
+        repo_root=Path(__file__).resolve().parents[1],
+    )
     # Job tasks stop first; only then may their shared gmsh owner be finalized.
     application.router.add_event_handler("shutdown", shutdown_mesher_prewarm)
     application.router.add_event_handler("shutdown", engine_registry.shutdown_prewarm)

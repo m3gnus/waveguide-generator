@@ -216,12 +216,11 @@ update_from_git() {
         say "  Code already updated; continuing with the updated installer."
         return 0
     fi
-    if [[ ! -d "$ROOT/.git" ]]; then
-        say "  Skipped: this folder is not a Git clone, so there is nothing to update."
-        return 0
-    fi
-
     if [[ -n "$TAG" ]]; then
+        if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+            fail "Cannot install $TAG because this folder is not a Git checkout.
+       Clone Waveguide Generator from GitHub, then run the installer from that clone."
+        fi
         if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
             fail "Cannot check out $TAG: this checkout has uncommitted changes.
        Commit or stash them first:  git status
@@ -237,6 +236,13 @@ update_from_git() {
         say "  Restarting with the installer from $TAG."
         exec bash "$ROOT/scripts/install.sh" --after-pull \
             "${ORIGINAL_ARGS[@]+"${ORIGINAL_ARGS[@]}"}"
+    fi
+
+    # Ask Git rather than looking for a .git directory: linked worktrees carry
+    # a .git *file* and are still fully updateable checkouts.
+    if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        say "  Skipped: this folder is not a Git clone, so there is nothing to update."
+        return 0
     fi
 
     if ! git symbolic-ref --quiet HEAD >/dev/null; then

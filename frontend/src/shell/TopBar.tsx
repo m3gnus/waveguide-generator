@@ -13,6 +13,7 @@ import { CommandPalette, type PaletteEntry } from './CommandPalette';
 import { commandShortcutLabel } from './platformKeys';
 import { SettingsDialog, type Theme } from './SettingsDialog';
 import { workspaceNavigation } from './Workspace';
+import { UpdateButton, UpdateDialog, useUpdateStatus } from './UpdateControl';
 
 const THEME_KEY = 'wg2.theme';
 
@@ -57,6 +58,8 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
   const family = useDesignStore((state) => state.design.formula);
   const [theme, setTheme] = useState<Theme>(initialTheme);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [updateOpen, setUpdateOpen] = useState(false);
+  const update = useUpdateStatus();
   const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
   const temporal = useDesignStore.temporal.getState();
   const canUndo = temporal.pastStates.length > 0 || Boolean(useDesignStore.getState().dragSnapshot);
@@ -104,13 +107,14 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
       { id: 'dark-theme', kind: 'Commands', label: 'Dark theme', run: () => setTheme('dark') },
       { id: 'light-theme', kind: 'Commands', label: 'Light theme', run: () => setTheme('light') },
       { id: 'settings', kind: 'Commands', label: 'Settings', run: () => setSettingsOpen(true) },
+      { id: 'application-update', kind: 'Commands', label: update.data?.availability === 'available' ? `Update WG to ${update.data.release?.version ?? 'latest'}` : 'Application update', detail: update.data?.availability === 'available' ? 'Update available' : `Version ${__WG2_VERSION__}`, keywords: 'version release upgrade', run: () => setUpdateOpen(true) },
       ...RESULT_PANEL_COUNTS.map((count) => ({ id: `results-${count}`, kind: 'Commands' as const, label: `Results: ${count} chart${count === 1 ? '' : 's'}`, keywords: `panel count layout`, run: () => preferencesStore.setChartCount(count) })),
     ];
     return [...parameters, ...jobEntries, ...commands];
-  }, [canRedo, canUndo, family, jobs, onResetLayout, redo, solve, undo]);
+  }, [canRedo, canUndo, family, jobs, onResetLayout, redo, solve, undo, update.data?.availability, update.data?.release?.version]);
 
   return <header className="topbar">
-    <div className="brand"><BrandMark/><div><span className="brand-name">WAVEGUIDE GENERATOR</span><span className="brand-version">{__WG2_VERSION__} · local</span></div></div>
+    <div className="brand"><BrandMark/><div><span className="brand-name">WAVEGUIDE GENERATOR</span><UpdateButton snapshot={update} open={updateOpen} onOpen={() => setUpdateOpen(true)}/></div></div>
     <i className="v-separator" />
     <DesignFileMenu />
     <div className="button-group">
@@ -128,5 +132,6 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
     <button className="icon-button" onClick={onResetLayout} title="Reset layout" aria-label="Reset layout"><Icon name="layout"/></button>
     <span className="revision-chip" title="Design revision">r{revision}</span>
     <SettingsDialog open={settingsOpen} theme={theme} onThemeChange={setTheme} onClose={closeSettings}/>
+    <UpdateDialog open={updateOpen} snapshot={update} onRefresh={update.refresh} onClose={() => setUpdateOpen(false)}/>
   </header>;
 }
