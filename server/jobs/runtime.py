@@ -16,6 +16,7 @@ import inspect
 import json
 import logging
 import math
+import os
 import time
 from typing import Any, Mapping
 import uuid
@@ -25,6 +26,7 @@ from server.engines.registry import EngineRegistry, create_engine as get_engine
 from server.jobs.legacy_design import resolve_job_design
 from server.jobs.models import SolveOptions, SolveRequest
 from server.jobs.store import ALLOWED_STATUSES, JobStore
+from server.platform.instance import LOCK_OPEN_FLAGS, lock_exclusive, unlock
 from server.solver.symmetry import resolve_symmetry, validate_symmetry_mode
 
 
@@ -81,6 +83,40 @@ class SymmetryValidationError(ValueError):
 
 class _CancelledAtCheckpoint(RuntimeError):
     pass
+
+
+class _RuntimeOwnershipLock:
+    """Exclude a second scheduler from recovering or executing the same DB."""
+
+    def __init__(self, store: JobStore) -> None:
+        self.path = store.db_path.with_suffix(store.db_path.suffix + ".runtime.lock")
+        self._descriptor: int | None = None
+
+    def acquire(self) -> None:
+        if self._descriptor is not None:
+            return
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(self.path, LOCK_OPEN_FLAGS, 0o600)
+        try:
+            lock_exclusive(descriptor)
+        except BlockingIOError:
+            os.close(descriptor)
+            raise JobConflictError(
+                "Another job runtime already owns this Waveguide Generator database"
+            ) from None
+        except BaseException:
+            os.close(descriptor)
+            raise
+        self._descriptor = descriptor
+
+    def release(self) -> None:
+        descriptor, self._descriptor = self._descriptor, None
+        if descriptor is None:
+            return
+        try:
+            unlock(descriptor)
+        finally:
+            os.close(descriptor)
 
 
 @dataclass
@@ -158,6 +194,7 @@ class JobRuntime:
         self._started = False
         self._shutting_down = False
         self._start_lock = asyncio.Lock()
+        self._ownership = _RuntimeOwnershipLock(store)
 
     @property
     def background_tasks(self) -> frozenset[asyncio.Task[Any]]:
@@ -178,13 +215,20 @@ class JobRuntime:
             if self._started:
                 return
             self._shutting_down = False
-            await asyncio.to_thread(self.store.initialize)
-            queued, recovery_events = await asyncio.to_thread(
-                self.store.recover_on_startup, "Server restarted during execution"
-            )
-            await asyncio.to_thread(
-                self.store.prune_terminal_jobs, retention_days=30, max_terminal_jobs=1000
-            )
+            await asyncio.to_thread(self._ownership.acquire)
+            try:
+                await asyncio.to_thread(self.store.initialize)
+                queued, recovery_events = await asyncio.to_thread(
+                    self.store.recover_on_startup, "Server restarted during execution"
+                )
+                await asyncio.to_thread(
+                    self.store.prune_terminal_jobs,
+                    retention_days=30,
+                    max_terminal_jobs=1000,
+                )
+            except BaseException:
+                await asyncio.to_thread(self._ownership.release)
+                raise
             self._queue.extend(row["id"] for row in queued)
             self._started = True
             for event in recovery_events:
@@ -210,6 +254,7 @@ class JobRuntime:
         # temporary directory be removed, nor the migration tool replace the
         # database, while a handle is still open on it.
         await asyncio.to_thread(self.store.close)
+        await asyncio.to_thread(self._ownership.release)
         self._started = False
 
     async def submit(self, request: SolveRequest) -> str:

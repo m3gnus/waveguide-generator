@@ -172,6 +172,23 @@ if [[ -z "$BOOTSTRAP_PYTHON" ]]; then
 fi
 say "  Python: $BOOTSTRAP_PYTHON ($BOOTSTRAP_PYTHON_VERSION)"
 
+# Hold the same data-directory lock as the server across every mutable update
+# step. The guarded child suppresses its own final launch; the wrapper releases
+# the lock first and then starts the application.
+if [[ "${WG_UPDATE_LOCK_HELD:-0}" != "1" ]]; then
+    guard_args=()
+    if [[ "$LAUNCH" -eq 1 ]]; then
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            guard_args+=(--launch "$ROOT/launchers/macos/launch-wg.command")
+        else
+            guard_args+=(--launch "$ROOT/launchers/linux/launch-wg.sh")
+        fi
+    fi
+    exec "$BOOTSTRAP_PYTHON" "$ROOT/scripts/run_update_guard.py" \
+        "${guard_args[@]+"${guard_args[@]}"}" -- bash "$ROOT/scripts/install.sh" \
+        "${ORIGINAL_ARGS[@]+"${ORIGINAL_ARGS[@]}"}"
+fi
+
 # macOS: the Metal solve path is a Swift package the pinned module builds on
 # first use, which needs the Command Line Tools. Missing tools are not fatal --
 # bempp is the cross-platform fallback and does run -- but the machine then
@@ -357,6 +374,11 @@ say ""
 
 if [[ "$LAUNCH" -eq 0 ]]; then
     say "Not starting it (--no-launch)."
+    exit 0
+fi
+
+if [[ "${WG_UPDATE_LOCK_HELD:-0}" == "1" ]]; then
+    say "Update complete; releasing the update lock before launch."
     exit 0
 fi
 
