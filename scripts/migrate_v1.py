@@ -134,16 +134,22 @@ def _row_keys(conn: sqlite3.Connection, table: str) -> set[str]:
         return set()
 
 
-def _marker_jobs_imported(conn: sqlite3.Connection, fingerprint: str) -> int | None:
-    """Return the completed migration's job count, if this source is marked."""
+def _marker_state(conn: sqlite3.Connection, fingerprint: str) -> tuple[int, bool] | None:
+    """Return the database count and workspace phase for a migrated source."""
 
     if not _table_columns(conn, MARKER_TABLE):
         return None
     row = conn.execute(
-        f"SELECT jobs_imported FROM {MARKER_TABLE} WHERE source_fingerprint = ?",
+        f"SELECT jobs_imported, workspace_completed FROM {MARKER_TABLE} "
+        "WHERE source_fingerprint = ?",
         (fingerprint,),
     ).fetchone()
-    return None if row is None else int(row[0])
+    return None if row is None else (int(row[0]), bool(row[1]))
+
+
+def _marker_jobs_imported(conn: sqlite3.Connection, fingerprint: str) -> int | None:
+    state = _marker_state(conn, fingerprint)
+    return None if state is None else state[0]
 
 
 def _acquire_mutation_lock(paths) -> InstanceLock:
@@ -171,16 +177,22 @@ def resolve_v1_sources(v1_root: Path) -> tuple[Path, Path | None]:
         )
 
     workspace = v1_root / "output"
+    configured_workspace = False
     settings = v1_root / "server" / "data" / "workspace_settings.json"
     if settings.is_file():
         try:
             configured = json.loads(settings.read_text(encoding="utf-8")).get("path")
             if configured:
                 workspace = Path(configured).expanduser()
+                configured_workspace = True
         except (OSError, ValueError, AttributeError) as exc:
             raise MigrationError(f"Could not read {settings}: {exc}") from exc
 
-    return database, workspace if workspace.is_dir() else None
+    # Preserve an unavailable configured path so automatic migration can keep
+    # the workspace phase incomplete and retry after a removable/network drive
+    # returns. An absent default output directory simply means v1 had no
+    # workspace to migrate.
+    return database, workspace if configured_workspace or workspace.is_dir() else None
 
 
 def _looks_like_v1_root(root: Path) -> bool:
@@ -235,11 +247,11 @@ def discover_v1_roots(
         return [root]
 
     checkout = checkout_root.expanduser().absolute()
+    # A v2 database deliberately retains v1's three core tables and schema
+    # version, so sibling schema scanning cannot prove provenance. Only an
+    # in-place upgrade is automatic; side-by-side installs must opt in through
+    # WG1_ROOT (or the explicit CLI argument).
     candidates = [checkout]
-    try:
-        candidates.extend(path for path in checkout.parent.iterdir() if path.is_dir())
-    except OSError as exc:
-        log.warning("Could not inspect sibling folders for a v1 database: %s", exc)
 
     roots: list[Path] = []
     seen_databases: set[Path] = set()
@@ -332,18 +344,41 @@ def _ensure_marker(conn: sqlite3.Connection) -> None:
         f"""CREATE TABLE IF NOT EXISTS {MARKER_TABLE} (
               source_fingerprint TEXT PRIMARY KEY,
               migrated_at TEXT NOT NULL,
-              jobs_imported INTEGER NOT NULL
+              jobs_imported INTEGER NOT NULL,
+              workspace_completed INTEGER NOT NULL DEFAULT 0
             )"""
     )
+    columns = set(_table_columns(conn, MARKER_TABLE))
+    if "workspace_completed" not in columns:
+        conn.execute(
+            f"ALTER TABLE {MARKER_TABLE} ADD COLUMN workspace_completed "
+            "INTEGER NOT NULL DEFAULT 0"
+        )
 
 
 def _fingerprint(database: Path) -> str:
-    """Identify a source database by size and its job ids, not by path."""
+    """Hash the logical rows that migration copies, independent of DB layout."""
 
+    digest = hashlib.sha256()
     with closing(_connect(database, read_only=True)) as conn:
-        ids = [row[0] for row in conn.execute("SELECT id FROM simulation_jobs ORDER BY id")]
-    digest = hashlib.sha256("\n".join(ids).encode("utf-8")).hexdigest()
-    return f"{database.stat().st_size}:{digest[:32]}"
+        for table in JOB_TABLES:
+            columns = _table_columns(conn, table)
+            digest.update(json.dumps([table, columns], separators=(",", ":")).encode())
+            key = "id" if table == "simulation_jobs" else "job_id"
+            for row in conn.execute(f"SELECT * FROM {table} ORDER BY {key}"):
+                values = []
+                for value in row:
+                    if isinstance(value, bytes):
+                        values.append({"sha256": hashlib.sha256(value).hexdigest()})
+                    else:
+                        values.append(value)
+                digest.update(
+                    json.dumps(values, ensure_ascii=False, separators=(",", ":"), default=str).encode(
+                        "utf-8"
+                    )
+                )
+                digest.update(b"\n")
+    return f"logical-v2:{digest.hexdigest()}"
 
 
 def _row_hashes(conn: sqlite3.Connection, table: str, column: str) -> dict[str, str]:
@@ -405,7 +440,9 @@ def migrate(
         )
 
 
-def _migration_needed(database: Path, target_db: Path) -> bool:
+def _migration_needed(
+    database: Path, target_db: Path, *, workspace_required: bool = False
+) -> bool:
     """Return whether this exact source snapshot lacks a completion marker."""
 
     if not target_db.is_file():
@@ -413,7 +450,8 @@ def _migration_needed(database: Path, target_db: Path) -> bool:
     fingerprint = _fingerprint(database)
     try:
         with closing(_connect(target_db, read_only=True)) as conn:
-            return _marker_jobs_imported(conn, fingerprint) is None
+            state = _marker_state(conn, fingerprint)
+            return state is None or (workspace_required and not state[1])
     except sqlite3.Error:
         # JobStore.initialize() inside the migration is the schema authority and
         # will produce the useful compatibility error if this is not a v2 DB.
@@ -464,7 +502,9 @@ def auto_migrate_v1(
             source_resolved = database.resolve()
         except OSError:
             source_resolved = database.absolute()
-        if source_resolved == target_resolved or not _migration_needed(database, target_db):
+        if source_resolved == target_resolved or not _migration_needed(
+            database, target_db, workspace_required=workspace is not None
+        ):
             continue
 
         log.warning("Found v1 run database at %s; migrating it into %s", database, target_db)
@@ -611,6 +651,12 @@ def _migrate_with_paths(
             # DETACH in a finally block would run too early and could replace the
             # exception that caused the rollback.
             imported = {}
+            accepted_ids = sorted(source_ids - existing_keys["simulation_jobs"])
+            conn.execute("CREATE TEMP TABLE wg_import_job_ids (id TEXT PRIMARY KEY)")
+            conn.executemany(
+                "INSERT INTO wg_import_job_ids (id) VALUES (?)",
+                ((job_id,) for job_id in accepted_ids),
+            )
             for table in JOB_TABLES:
                 target_columns = _table_columns(conn, table)
                 source_columns = [
@@ -627,14 +673,30 @@ def _migrate_with_paths(
                 before = int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
                 # OR IGNORE is what makes a re-run idempotent at row level even
                 # if the marker table is lost.
+                source_key = "id" if table == "simulation_jobs" else "job_id"
                 conn.execute(
-                    f"INSERT OR IGNORE INTO {table} ({columns}) SELECT {columns} FROM v1.{table}"
+                    f"INSERT INTO {table} ({columns}) SELECT {columns} FROM v1.{table} "
+                    f"WHERE {source_key} IN (SELECT id FROM wg_import_job_ids)"
                 )
                 after = int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
                 imported[table] = after - before
+            imported_at = datetime.now().isoformat(timespec="seconds")
+            for job_id in accepted_ids:
+                row = conn.execute(
+                    "SELECT task_metadata_json FROM simulation_jobs WHERE id = ?", (job_id,)
+                ).fetchone()
+                metadata = json.loads(row[0]) if row and row[0] else {}
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                metadata["imported_at"] = imported_at
+                conn.execute(
+                    "UPDATE simulation_jobs SET task_metadata_json = ? WHERE id = ?",
+                    (json.dumps(metadata, separators=(",", ":")), job_id),
+                )
             conn.execute(
-                f"INSERT INTO {MARKER_TABLE} (source_fingerprint, migrated_at, jobs_imported) "
-                "VALUES (?, ?, ?)",
+                f"INSERT INTO {MARKER_TABLE} "
+                "(source_fingerprint, migrated_at, jobs_imported, workspace_completed) "
+                "VALUES (?, ?, ?, 0)",
                 (fingerprint, datetime.now().isoformat(timespec="seconds"),
                  imported["simulation_jobs"]),
             )
@@ -664,7 +726,9 @@ def _migrate_with_paths(
     store.checkpoint()
     store.close()
 
-    if include_workspace and workspace is not None:
+    workspace_complete = not include_workspace or workspace is None
+    if include_workspace and workspace is not None and workspace.is_dir():
+        workspace_complete = True
         for entry in sorted(workspace.iterdir()):
             if entry.name.startswith("."):
                 continue
@@ -679,7 +743,20 @@ def _migrate_with_paths(
                     shutil.copy2(entry, destination)
                 report.workspace_copied += 1
             except OSError as exc:
+                workspace_complete = False
                 report.warnings.append(f"Could not copy workspace entry {entry.name}: {exc}")
+    elif include_workspace and workspace is not None:
+        workspace_complete = False
+        report.warnings.append(f"Legacy workspace is currently unavailable at {workspace}")
+
+    if include_workspace and workspace_complete:
+        with closing(_connect(target_db)) as conn, conn:
+            _ensure_marker(conn)
+            conn.execute(
+                f"UPDATE {MARKER_TABLE} SET workspace_completed = 1 "
+                "WHERE source_fingerprint = ?",
+                (_fingerprint(database),),
+            )
 
     return report
 

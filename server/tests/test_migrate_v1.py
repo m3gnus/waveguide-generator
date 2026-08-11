@@ -142,7 +142,9 @@ def test_migrates_jobs_results_artifacts_and_workspace(v1_root: Path, tmp_path: 
     ]
 
 
-def test_discovers_v1_database_in_same_or_sibling_checkout(tmp_path: Path) -> None:
+def test_automatic_discovery_is_in_place_only_and_siblings_require_opt_in(
+    tmp_path: Path,
+) -> None:
     v2_root = tmp_path / "renamed-v2-checkout"
     v2_root.mkdir()
     in_place = tmp_path / "in-place-upgrade"
@@ -150,8 +152,11 @@ def test_discovers_v1_database_in_same_or_sibling_checkout(tmp_path: Path) -> No
     sibling = tmp_path / "my unusually named old checkout"
     _make_v1(sibling, tag="sibling")
 
-    assert migrate_v1.discover_v1_roots(in_place, environ={}) == [in_place, sibling]
-    assert migrate_v1.discover_v1_roots(v2_root, environ={}) == [in_place, sibling]
+    assert migrate_v1.discover_v1_roots(in_place, environ={}) == [in_place]
+    assert migrate_v1.discover_v1_roots(v2_root, environ={}) == []
+    assert migrate_v1.discover_v1_roots(
+        v2_root, environ={migrate_v1.V1_ROOT_ENV: str(sibling)}
+    ) == [sibling]
 
 
 def test_explicit_v1_root_is_authoritative(tmp_path: Path) -> None:
@@ -182,9 +187,14 @@ def test_automatic_migration_runs_under_launcher_lock_and_only_once(
     source = v1_root / migrate_v1.V1_DATABASE_RELATIVE
     source_before = source.read_bytes()
     try:
-        reports = migrate_v1.auto_migrate_v1(checkout, data_dir, lock, environ={})
+        environment = {migrate_v1.V1_ROOT_ENV: str(v1_root)}
+        reports = migrate_v1.auto_migrate_v1(
+            checkout, data_dir, lock, environ=environment
+        )
         backups_after_first = sorted(paths.root.joinpath("backups").iterdir())
-        repeated = migrate_v1.auto_migrate_v1(checkout, data_dir, lock, environ={})
+        repeated = migrate_v1.auto_migrate_v1(
+            checkout, data_dir, lock, environ=environment
+        )
     finally:
         lock.release()
 
@@ -321,6 +331,112 @@ def test_rerunning_imports_nothing_twice(v1_root: Path, tmp_path: Path):
 
     assert second_report.imported["simulation_jobs"] == 0
     assert _job_ids(data_dir / "db" / "simulations.db") == first
+
+
+def test_fingerprint_changes_when_same_length_job_content_changes(
+    v1_root: Path,
+) -> None:
+    database = v1_root / migrate_v1.V1_DATABASE_RELATIVE
+    before = migrate_v1._fingerprint(database)
+    with closing(sqlite3.connect(database)) as conn, conn:
+        conn.execute(
+            "UPDATE simulation_jobs SET config_json = ? WHERE id = ?",
+            ('{"sim_type": 3}', "v1-job-0"),
+        )
+    assert migrate_v1._fingerprint(database) != before
+
+
+def test_colliding_parent_id_never_imports_foreign_result_or_artifact(
+    tmp_path: Path,
+) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first_db = _make_v1(first, jobs=1, tag="same")
+    second_db = _make_v1(second, jobs=1, tag="same")
+    with closing(sqlite3.connect(first_db)) as conn, conn:
+        conn.execute("DELETE FROM simulation_results WHERE job_id = 'same-job-0'")
+        conn.execute("DELETE FROM simulation_artifacts WHERE job_id = 'same-job-0'")
+        conn.execute(
+            "UPDATE simulation_jobs SET status = 'error', has_results = 0, "
+            "has_mesh_artifact = 0, config_json = '{\"source\":\"first\"}' "
+            "WHERE id = 'same-job-0'"
+        )
+    with closing(sqlite3.connect(second_db)) as conn, conn:
+        conn.execute(
+            "UPDATE simulation_jobs SET config_json = '{\"source\":\"second\"}' "
+            "WHERE id = 'same-job-0'"
+        )
+
+    data_dir = tmp_path / "v2data"
+    migrate_v1.migrate(first, data_dir)
+    report = migrate_v1.migrate(second, data_dir)
+
+    with closing(sqlite3.connect(data_dir / "db" / "simulations.db")) as conn:
+        job = conn.execute(
+            "SELECT status, config_json FROM simulation_jobs WHERE id = 'same-job-0'"
+        ).fetchone()
+        result = conn.execute(
+            "SELECT 1 FROM simulation_results WHERE job_id = 'same-job-0'"
+        ).fetchone()
+        artifact = conn.execute(
+            "SELECT 1 FROM simulation_artifacts WHERE job_id = 'same-job-0'"
+        ).fetchone()
+    assert job == ("error", '{"source":"first"}')
+    assert result is None
+    assert artifact is None
+    assert report.imported == dict.fromkeys(migrate_v1.JOB_TABLES, 0)
+
+
+def test_import_timestamp_gives_historical_payloads_a_retention_grace(
+    v1_root: Path, tmp_path: Path
+) -> None:
+    from server.jobs.store import JobStore
+
+    data_dir = tmp_path / "v2data"
+    migrate_v1.migrate(v1_root, data_dir)
+    store = JobStore.for_data_dir(data_dir)
+    store.initialize()
+    try:
+        assert store.prune_terminal_jobs(retention_days=30) == 0
+        assert store.get_results("v1-job-0") is not None
+        assert store.get_mesh_artifact("v1-job-0") is not None
+    finally:
+        store.close()
+
+
+def test_automatic_migration_retries_unavailable_configured_workspace(
+    v1_root: Path, tmp_path: Path
+) -> None:
+    configured = tmp_path / "offline-workspace"
+    settings = v1_root / "server" / "data" / "workspace_settings.json"
+    settings.write_text(json.dumps({"path": str(configured)}), encoding="utf-8")
+    checkout = tmp_path / "v2"
+    checkout.mkdir()
+    data_dir = tmp_path / "v2data"
+    paths = ensure_data_layout(data_dir)
+    environment = {migrate_v1.V1_ROOT_ENV: str(v1_root)}
+    lock = InstanceLock(paths.locks)
+    lock.acquire(3100)
+    try:
+        first = migrate_v1.auto_migrate_v1(
+            checkout, data_dir, lock, environ=environment
+        )
+        configured.mkdir()
+        (configured / "recovered.wg").write_text("ok", encoding="utf-8")
+        second = migrate_v1.auto_migrate_v1(
+            checkout, data_dir, lock, environ=environment
+        )
+        third = migrate_v1.auto_migrate_v1(
+            checkout, data_dir, lock, environ=environment
+        )
+    finally:
+        lock.release()
+
+    assert len(first) == len(second) == 1
+    assert "unavailable" in " ".join(first[0].warnings)
+    assert second[0].imported == dict.fromkeys(migrate_v1.JOB_TABLES, 0)
+    assert (paths.workspace / "recovered.wg").read_text(encoding="utf-8") == "ok"
+    assert third == []
 
 
 def test_rerun_can_copy_workspace_omitted_by_first_run(v1_root: Path, tmp_path: Path):

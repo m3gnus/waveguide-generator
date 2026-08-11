@@ -946,7 +946,10 @@ class JobStore:
                    WHERE status IN ('complete', 'error', 'cancelled')
                      AND has_results = 1
                      AND COALESCE(CAST(json_extract(task_metadata_json, '$.rating') AS INTEGER), 0) <= 0
-                     AND COALESCE(completed_at, updated_at, created_at) < ?""",
+                     AND COALESCE(
+                       json_extract(task_metadata_json, '$.imported_at'),
+                       completed_at, updated_at, created_at
+                     ) < ?""",
                 (cutoff,),
             ).fetchall()
             removed_ids.extend(str(row["id"]) for row in aged)
@@ -961,8 +964,14 @@ class JobStore:
                     WHERE status IN ('complete', 'error', 'cancelled')
                       AND has_results = 1
                       AND COALESCE(CAST(json_extract(task_metadata_json, '$.rating') AS INTEGER), 0) <= 0
-                      AND COALESCE(completed_at, updated_at, created_at) >= ?
-                    ORDER BY COALESCE(completed_at, updated_at, created_at) DESC
+                      AND COALESCE(
+                        json_extract(task_metadata_json, '$.imported_at'),
+                        completed_at, updated_at, created_at
+                      ) >= ?
+                    ORDER BY COALESCE(
+                      json_extract(task_metadata_json, '$.imported_at'),
+                      completed_at, updated_at, created_at
+                    ) DESC
                     LIMIT -1 OFFSET ?
                     """,
                     (cutoff, int(max_terminal_jobs)),
@@ -977,7 +986,10 @@ class JobStore:
                      AND COALESCE(CAST(json_extract(task_metadata_json, '$.rating') AS INTEGER), 0) <= 0
                      AND (
                        json_extract(task_metadata_json, '$.mesh_artifact_file') IS NOT NULL
-                       OR COALESCE(completed_at, updated_at, created_at) < ?
+                       OR COALESCE(
+                         json_extract(task_metadata_json, '$.imported_at'),
+                         completed_at, updated_at, created_at
+                       ) < ?
                      )""",
                 (mesh_cutoff,),
             ).fetchall()
