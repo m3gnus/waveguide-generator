@@ -22,7 +22,16 @@ const record: CadReturnIngestRecord = {
   freshness: { verdict: 'per-instance', instances: [{ instance_id: 'instance-a', verdict: 'design_changed' }] },
   findings: [{ id: 'finding-a', kind: 'freshness', blocking: true, verdict: 'design_changed' }],
   symmetry: { planes: { x0: { accepted: true }, y0: { accepted: false } }, cut_planes: ['x0'] }, healing: { performed: false, mode: 'none' },
-  sizing_estimate: { triangles: 1200 }, polar_grid_derivation: { horizontal: 'one-sided' }, tag_map: {},
+  sizing_estimate: { triangles: 1200 },
+  polar_grid_derivation: {
+    axes: {
+      horizontal: { plane: 'x0', symmetry_accepted: true, minimum_deg: 0, maximum_deg: 180, may_widen_not_narrow: true },
+      vertical: { plane: 'y0', symmetry_accepted: false, minimum_deg: -180, maximum_deg: 180, may_widen_not_narrow: true },
+      diagonal: { plane: 'x0+y0', symmetry_accepted: false, minimum_deg: -180, maximum_deg: 180, may_widen_not_narrow: true },
+    },
+    cut_planes: ['x0'],
+  },
+  tag_map: {},
 };
 
 describe('CadLinkPanel', () => {
@@ -88,6 +97,23 @@ describe('CadLinkPanel', () => {
 
   it('refuses to build an imported submission without an ingestion record', () => {
     expect(() => buildImportedSubmission(useCadReturnStore.getState())).toThrow('Ingest a CAD return');
+  });
+
+  it('widens the polar request to the derivation instead of submitting a narrowing grid', () => {
+    useCadReturnStore.getState().selectBundle(listing.items[0]);
+    useCadReturnStore.getState().applyIngest(record);
+    const submission = buildImportedSubmission(useCadReturnStore.getState());
+    const polar = submission.options.polar_config as {
+      angle_range: [number, number, number];
+      enabled_axes: string[];
+    };
+    // The record pins vertical and diagonal (rejected mirror planes): the
+    // default 0..180/37 grid must widen to a full circle at the same 5° step,
+    // with every pinned axis enabled.
+    expect(polar.angle_range[0]).toBe(-180);
+    expect(polar.angle_range[1]).toBe(180);
+    expect(polar.angle_range[2]).toBe(73);
+    expect(polar.enabled_axes).toEqual(expect.arrayContaining(['vertical', 'diagonal']));
   });
 
   it('size change → re-ingest → solve submits the new report acknowledgement wire', async () => {
