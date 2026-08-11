@@ -51,6 +51,7 @@ vi.mock('../api/previewSocket', () => ({
     subscribe: () => () => undefined,
     getSnapshot: () => previewSnapshot,
     refresh: () => refreshCalls.push(1),
+    setCurvatureWanted: vi.fn(),
   },
 }));
 

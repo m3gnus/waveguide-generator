@@ -57,8 +57,9 @@ def _request(
     revision: int | None = None,
     lod: str = "coarse",
     design: Mapping[str, Any] | None = None,
+    curvature: bool | None = None,
 ) -> dict[str, Any]:
-    return {
+    message = {
         "v": 1,
         "kind": "preview",
         "epoch": epoch,
@@ -67,6 +68,11 @@ def _request(
         "design": dict(design or {"formula": "OSSE", "L": 120, "a": 45}),
         "lod": lod,
     }
+    # Omitted entirely by default, which is what a client that predates the
+    # flag sends and what every non-curvature display mode sends.
+    if curvature is not None:
+        message["curvature"] = curvature
+    return message
 
 
 async def _wait_until(predicate, timeout: float = 2.0) -> None:
@@ -198,6 +204,52 @@ def test_protocol_reuses_injected_builder_for_identical_geometry_requests() -> N
 
         assert builds == 1
         assert [decode(frame)[0]["seq"] for frame in transport.binary] == [1, 2]
+
+    asyncio.run(scenario())
+
+
+def test_only_a_viewport_on_the_curvature_heatmap_pays_for_curvature() -> None:
+    """Analytic curvature is opt-in per request, not a property of fine LOD.
+
+    It is evaluated on the dense canonical master and then decimated to the
+    grid the frame carries -- 84 ms of a 256 ms fine freestanding R-OSSE build
+    and 432 KiB of its 3.07 MiB frame -- and seven of the eight display modes
+    never read a curvature section. Reverting either half of this (the request
+    flag or its arrival at ``preview_options``) puts that cost back on every
+    fine frame, and one of these assertions fails.
+    """
+
+    async def scenario() -> None:
+        asked: list[bool] = []
+
+        def builder(_config: Mapping[str, Any], options: Any):
+            asked.append(bool(options.include_curvature))
+            return _small_geometry()
+
+        transport = FakeTransport()
+        protocol = PreviewProtocol(epoch=5, preview_builder=builder)
+        task = asyncio.create_task(protocol.run(transport))
+        await _wait_until(lambda: bool(transport.json))
+        # A fine frame for a viewport in any other mode, and for a client that
+        # does not know the flag exists.
+        await transport.incoming.put(_request(5, 1, lod="fine", curvature=False))
+        await _wait_until(lambda: len(transport.binary) == 1)
+        await transport.incoming.put(_request(5, 2, lod="fine"))
+        await _wait_until(lambda: len(transport.binary) == 2)
+        # Switching to the heatmap must not be answered from the cached frame
+        # that has no curvature in it.
+        await transport.incoming.put(_request(5, 3, lod="fine", curvature=True))
+        await _wait_until(lambda: len(transport.binary) == 3)
+        # Coarse never carries curvature, so asking for it while dragging must
+        # not split the interactive cache into two entries.
+        await transport.incoming.put(_request(5, 4, lod="coarse", curvature=True))
+        await _wait_until(lambda: len(transport.binary) == 4)
+        await transport.incoming.put(_request(5, 5, lod="coarse", curvature=False))
+        await _wait_until(lambda: len(transport.binary) == 5)
+        await transport.incoming.put(None)
+        await task
+
+        assert asked == [False, True, False]
 
     asyncio.run(scenario())
 

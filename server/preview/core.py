@@ -140,6 +140,11 @@ class _PreviewMessage(_Message):
     kind: Literal["preview"]
     design: dict[str, Any]
     lod: Literal["coarse", "fine"]
+    #: Whether the viewport is showing the curvature heatmap. Absent from a
+    #: client that predates the flag, which then never asks for the sections --
+    #: the same answer as any client sitting in one of the other seven display
+    #: modes, and the one the viewport already renders a placeholder for.
+    curvature: bool = False
 
 
 class _CurveMessage(_Message):
@@ -168,6 +173,7 @@ class _Request:
         design: DesignConfig | None = None,
         curve_id: str | None = None,
         points: list[list[float]] | None = None,
+        curvature: bool = False,
     ) -> None:
         self.kind = kind
         self.seq = seq
@@ -176,9 +182,10 @@ class _Request:
         self.design = design
         self.curve_id = curve_id
         self.points = points
+        self.curvature = curvature
 
 
-def preview_options(lod: Literal["coarse", "fine"]):
+def preview_options(lod: Literal["coarse", "fine"], *, curvature: bool = True):
     """Map protocol LOD names onto the mesher's stable preview presets.
 
     The preview is error-bounded, not segment-driven: ``build_preview_geometry``
@@ -195,6 +202,13 @@ def preview_options(lod: Literal["coarse", "fine"]):
     solve-mesh field silently move the viewport off the LOD contract that
     ``lod`` is supposed to pin. The WS test named
     ``..._size_the_export_mesh_and_not_the_preview`` fails if this changes.
+
+    ``curvature`` is the viewport's answer to "am I showing the curvature
+    heatmap". Analytic curvature is evaluated on the dense canonical master --
+    two full passes over a 385x512 grid on a fine freestanding R-OSSE -- and
+    then decimated to the ~97x256 the frame actually carries, which costs 84 ms
+    of a 256 ms build and 432 KiB of a 3.07 MiB frame. Seven of the eight
+    display modes never read a curvature section, so only the eighth pays.
     """
 
     from hornlab_mesher.preview.api import PreviewOptionsV1
@@ -206,7 +220,7 @@ def preview_options(lod: Literal["coarse", "fine"]):
         include_enclosure=True,
         include_source_cap=True,
         include_rear_cap=True,
-        include_curvature=lod == "fine",
+        include_curvature=lod == "fine" and curvature,
     )
 
 
@@ -659,6 +673,7 @@ class PreviewProtocol:
                     design_revision=parsed.design_revision,
                     lod=parsed.lod,
                     design=design,
+                    curvature=parsed.curvature,
                 )
             elif kind == "curve":
                 parsed_curve = _CurveMessage.model_validate(value)
@@ -784,6 +799,11 @@ class PreviewProtocol:
                 # path but have an unambiguous per-protocol namespace.
                 "builder": self._preview_builder_namespace,
                 "lod": request.lod,
+                # Two frames for the same design differ in whether they carry
+                # curvature sections, so they cannot share a cache entry. Only
+                # fine frames ever have them, so coarse keeps one entry either
+                # way and a drag never splits its cache.
+                "curvature": request.curvature and request.lod == "fine",
                 "config": _cache_relevant_config(config),
             },
             allow_nan=False,
@@ -792,7 +812,9 @@ class PreviewProtocol:
         )
         geometry = self._preview_service.get_or_build(
             cache_key,
-            lambda: builder(config, preview_options(request.lod)),
+            lambda: builder(
+                config, preview_options(request.lod, curvature=request.curvature)
+            ),
             size_of=_geometry_nbytes,
         )
         elapsed = (time.perf_counter() - began) * 1000.0
