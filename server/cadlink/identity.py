@@ -29,7 +29,7 @@ def _encode_ulid(value: int) -> str:
     return "".join(chars)
 
 
-def mint_id(prefix: Literal["wgd_", "wgl_", "wge_", "wgb_"]) -> str:
+def mint_id(prefix: Literal["wgd_", "wgl_", "wge_", "wgb_", "wgi_"]) -> str:
     """Mint a prefixed, time-sortable ULID without an external dependency."""
 
     timestamp_ms = int(time.time() * 1000) & ((1 << 48) - 1)

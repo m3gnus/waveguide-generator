@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from server.engines.registry import EngineRegistry, detect_engines
 from server.design.schema import DesignConfig
 from server.charts import mount_charts
+from server.cadlink import mount_cadlink
 from server.design_io import mount_design_io
 from server.exports import mount_exports
 from server.jobs import mount_jobs
@@ -244,6 +245,7 @@ def create_app(
     mount_exports(application)
     mount_jobs(application, engine_registry)
     mount_workspace(application)
+    mount_cadlink(application)
     mount_charts(application)
     mount_updates(
         application,

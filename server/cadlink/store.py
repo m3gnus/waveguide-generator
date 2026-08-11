@@ -58,6 +58,17 @@ _SCHEMA = (
     )
     """,
     "CREATE INDEX IF NOT EXISTS exports_by_artifact ON exports(artifact_sha256)",
+    """
+    CREATE TABLE IF NOT EXISTS ingests (
+      ingest_id TEXT PRIMARY KEY,
+      manifest_sha256 TEXT NOT NULL,
+      artifact_sha256 TEXT NOT NULL,
+      record_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ingests_by_manifest ON ingests(manifest_sha256)",
+    "CREATE INDEX IF NOT EXISTS ingests_by_artifact ON ingests(artifact_sha256)",
 )
 
 
@@ -83,7 +94,7 @@ class CadLinkStore:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._lock, self._transaction() as conn:
             version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-            if version not in {0, 1, 2}:
+            if version not in {0, 1, 2, 3}:
                 raise RuntimeError(f"unsupported cadlink.db schema version {version}")
             for statement in _SCHEMA:
                 conn.execute(statement)
@@ -92,7 +103,7 @@ class CadLinkStore:
             }
             if "bundle_path" not in export_columns:
                 conn.execute("ALTER TABLE exports ADD COLUMN bundle_path TEXT")
-            conn.execute("PRAGMA user_version = 2")
+            conn.execute("PRAGMA user_version = 3")
         self._initialized = True
 
     def get_design(self, design_id: str) -> dict[str, Any] | None:
@@ -122,6 +133,45 @@ class CadLinkStore:
         return self._read_one(
             "SELECT * FROM exports WHERE idempotency_key = ?", (idempotency_key,)
         )
+
+    def get_ingest(self, ingest_id: str) -> dict[str, Any] | None:
+        return self._read_one(
+            "SELECT * FROM ingests WHERE ingest_id = ?", (ingest_id,)
+        )
+
+    def allocate_ingest(
+        self,
+        *,
+        manifest_sha256: str,
+        artifact_sha256: str,
+        record_builder: Callable[[str, str], str],
+        created_at: str | None = None,
+    ) -> dict[str, Any]:
+        """Atomically publish ingestion artifacts and their immutable record."""
+
+        self.initialize()
+        now = created_at or utc_now()
+        ingest_id = mint_id("wgi_")
+        with self._lock, self._transaction() as conn:
+            record_json = record_builder(ingest_id, now)
+            conn.execute(
+                """
+                INSERT INTO ingests (
+                  ingest_id, manifest_sha256, artifact_sha256, record_json, created_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    ingest_id,
+                    manifest_sha256,
+                    artifact_sha256,
+                    record_json,
+                    now,
+                ),
+            )
+            row = conn.execute(
+                "SELECT * FROM ingests WHERE ingest_id = ?", (ingest_id,)
+            ).fetchone()
+        return self._row(row) or {}
 
     def save(
         self,

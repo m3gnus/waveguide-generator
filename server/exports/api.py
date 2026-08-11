@@ -4,10 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import ctypes
-from dataclasses import asdict, is_dataclass
-from enum import Enum
-import hashlib
-from importlib.metadata import PackageNotFoundError, version
 import json
 import os
 from pathlib import Path
@@ -28,6 +24,8 @@ from server.preview.translate import design_to_mesher_config
 from server.workspace.api import WorkspaceState, _path_segments, _portable_path_key
 
 from .core import build_profiles, build_step, build_step_solid, build_stl
+from .geometry_identity import geometry_hash as _geometry_hash
+from .geometry_identity import mesher_version as _mesher_version
 
 
 class ExportRequest(BaseModel):
@@ -69,46 +67,6 @@ def _export_error(exc: Exception) -> HTTPException:
     if isinstance(exc, (ImportError, RuntimeError)):
         return HTTPException(status_code=503, detail=str(exc))
     return HTTPException(status_code=500, detail=f"Export failed: {exc}")
-
-
-def _hash_value(value: Any) -> Any:
-    """Turn resolved mesher geometry into stable JSON-compatible hash input."""
-
-    if is_dataclass(value):
-        return _hash_value(asdict(value))
-    if isinstance(value, Enum):
-        return value.value
-    if isinstance(value, Mapping):
-        return {str(key): _hash_value(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_hash_value(item) for item in value]
-    if hasattr(value, "tolist"):
-        return _hash_value(value.tolist())
-    return value
-
-
-def _geometry_hash(geometry: object, mesher_version: str) -> str:
-    canonical = json.dumps(
-        {
-            "datum_schema": 1,
-            "domain": "full",
-            "geometry": _hash_value(geometry),
-            "mesher_version": mesher_version,
-            "open_throat": True,
-        },
-        allow_nan=False,
-        ensure_ascii=True,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-    return "sha256:" + hashlib.sha256(canonical).hexdigest()
-
-
-def _mesher_version() -> str:
-    try:
-        return version("hornlab-waveguide-mesher")
-    except PackageNotFoundError:
-        return "unknown"
 
 
 def _app_version() -> str:
