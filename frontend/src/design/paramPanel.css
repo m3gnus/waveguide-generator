@@ -26,7 +26,7 @@
    them, and the whole formula is visible instead of its last twelve characters. */
 .field-row.expression-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 2px 6px; align-items: center; padding: 2px 0 4px; }
 .field-row.expression-row .field-label { grid-column: 1; cursor: default; }
-.field-row.expression-row .expr-badge { grid-column: 2; padding: 0 4px; border: 1px solid rgba(var(--acc-rgb), .3); border-radius: 3px; color: var(--acc); font: var(--text-micro) var(--mono); font-style: italic; letter-spacing: .04em; }
+.field-row.expression-row .expr-badge { grid-column: 2; padding: 0 4px; border: 1px solid rgba(var(--acc-rgb), .3); border-radius: var(--r3); color: var(--acc); font: var(--text-micro) var(--mono); font-style: italic; letter-spacing: .04em; }
 .field-row.expression-row .expr-value { grid-column: 3; justify-self: end; white-space: nowrap; }
 .field-row.expression-row .number-control { grid-column: 1 / -1; width: 100%; height: 24px; padding: 0 6px; }
 /* A single-line input cannot wrap, so the formula is set a little smaller and
@@ -66,8 +66,8 @@
 .editable-parameter-table th { padding: 2px 2px; color: var(--fg4); font: var(--text-micro) var(--mono); text-align: left; text-transform: uppercase; }
 .editable-parameter-table td { padding: 2px; border-top: 1px solid var(--hair-soft); color: var(--fg3); font: var(--text-micro) var(--mono); }
 .editable-parameter-table th:last-child, .editable-parameter-table td:last-child { width: 20px; }
-.editable-parameter-table input, .editable-parameter-table select { width: 100%; min-width: 0; height: 20px; padding: 0 2px; border: 1px solid var(--hair); border-radius: 2px; background: var(--ctl-grad); color: var(--fg); font: var(--text-micro) var(--mono); }
-.editable-parameter-table td button { width: 18px; height: 18px; border: 0; border-radius: 2px; background: var(--ov3); color: var(--red); }
+.editable-parameter-table input, .editable-parameter-table select { width: 100%; min-width: 0; height: 20px; padding: 0 2px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg); font: var(--text-micro) var(--mono); }
+.editable-parameter-table td button { width: 18px; height: 18px; border: 0; border-radius: var(--r3); background: var(--ov3); color: var(--red); }
 .point-paste { margin-top: 4px; padding: 4px; border-top: 1px solid var(--hair-soft); }
 .point-paste textarea { box-sizing: border-box; width: 100%; resize: vertical; padding: 4px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov2); color: var(--fg); font: var(--text-micro) var(--mono); }
 .point-paste label { display: block; margin: 2px 0; color: var(--fg2); font-size: var(--text-micro); }
@@ -75,8 +75,8 @@
 /* Shared dense-control scale. Keep the rail compact without dropping below a
    readable engineering UI baseline. */
 .parameter-search { gap: 6px; padding: 8px 8px; }
-.parameter-search input { height: var(--control-h); padding-inline: 8px; border-radius: var(--r3); font-size: var(--text-base); }
-.parameter-search button { width: var(--control-h); border-radius: var(--r3); }
+.parameter-search input { height: var(--field-h); padding-inline: 8px; border-radius: var(--r3); font-size: var(--text-base); }
+.parameter-search button { width: var(--field-h); height: var(--field-h); border-radius: var(--r3); }
 .section-description { margin: 4px 0 8px; font-size: var(--text-base); line-height: 1.45; }
 .disabled-reason,
 .lambda-hint,
@@ -107,10 +107,10 @@
 .point-paste textarea { padding: 8px; border-radius: var(--r3); font-size: var(--text-base); line-height: 1.45; }
 .point-paste label { font-size: var(--text-base); }
 
-.parameter-help-toggle { flex: none; width: var(--control-h); border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov2); color: var(--fg3); }
+.parameter-help-toggle { flex: none; width: var(--field-h); height: var(--field-h); border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov2); color: var(--fg3); }
 .parameter-help-toggle svg { width: 15px; height: 15px; }
 .parameter-help-toggle:hover { border-color: var(--hair-hi); color: var(--fg1); }
-.parameter-help-toggle.on { border-color: rgba(var(--acc-rgb), .38); background: rgba(var(--acc-rgb), .1); color: var(--acc); }
+.parameter-help-toggle.on { border-color: var(--inv-bg); background: var(--inv-bg); color: var(--inv-fg); }
 
 /* The rail is resizable, so its field layout answers to its own width rather
    than the window's: dragged past ~430px it pairs fields into two columns and
