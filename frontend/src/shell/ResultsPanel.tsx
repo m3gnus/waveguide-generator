@@ -173,9 +173,11 @@ export interface InterpolatedDirectivityGrid {
 }
 
 const MAX_INTERPOLATED_CELLS = 50_000;
+/** Contours are cheap vector paths and can use the same dense grid as PNG export. */
+const MAX_CONTOUR_CELLS = 180_000;
 
 /** Bilinear interpolation in log-frequency/index space for a smooth live map. */
-export function interpolateDirectivityGrid(result: ResultPayload, plane: string, requestedFactor = 4): InterpolatedDirectivityGrid {
+export function interpolateDirectivityGrid(result: ResultPayload, plane: string, requestedFactor = 4, maxCells = MAX_INTERPOLATED_CELLS): InterpolatedDirectivityGrid {
   const source = directivityGrid(result, plane);
   if (!source.frequencies.length || !source.angles.length) return { frequencies: [], angles: [], values: [], factor: 1 };
   const sourceValues = Array.from({ length: source.angles.length }, () => Array<number | null>(source.frequencies.length).fill(null));
@@ -188,7 +190,7 @@ export function interpolateDirectivityGrid(result: ResultPayload, plane: string,
   });
   let factor = Math.max(1, Math.floor(requestedFactor));
   const cellCount = (candidate: number) => ((source.frequencies.length - 1) * candidate + 1) * ((source.angles.length - 1) * candidate + 1);
-  while (factor > 1 && cellCount(factor) > MAX_INTERPOLATED_CELLS) factor -= 1;
+  while (factor > 1 && cellCount(factor) > maxCells) factor -= 1;
   const columns = (source.frequencies.length - 1) * factor + 1;
   const rows = (source.angles.length - 1) * factor + 1;
   const interpolateAxis = (values: number[], position: number, logarithmic = false) => {
@@ -276,6 +278,26 @@ export function smoothContourShape(points: number[][]) {
   };
 }
 
+interface PlotRect { x: number; y: number; width: number; height: number }
+
+/**
+ * Project a dense contour vertex directly into the plot rectangle.
+ *
+ * Passing a fractional index through `api.coord` on a category axis rounds it
+ * to an ordinal category first. That snapped every vertex to a heatmap cell
+ * centre and turned even dense contours back into staircases. The samples are
+ * uniformly spaced in log-frequency and angle, so their continuous pixel
+ * position is unambiguous and does not need the ordinal scale at all.
+ */
+export function contourPointToPixels(point: ContourPoint, grid: InterpolatedDirectivityGrid, rect: PlotRect): ContourPoint {
+  const columns = grid.frequencies.length;
+  const rows = grid.angles.length;
+  return [
+    rect.x + (point[0] + 0.5) * rect.width / Math.max(1, columns),
+    rect.y + rect.height - (point[1] + 0.5) * rect.height / Math.max(1, rows),
+  ];
+}
+
 /** Join marching-squares fragments into continuous paths so contour lines can
  * be rounded and anti-aliased as curves rather than drawn as tiny segments. */
 export function contourPolylines(segments: ContourSegment[]): ContourPoint[][] {
@@ -358,21 +380,27 @@ export function contourPolylines(segments: ContourSegment[]): ContourPoint[][] {
  */
 export function heatmapOption(result: ResultPayload, tokens: ChartTokens, plane: string, mapReference: number, density: ChartDensity = 'regular'): EChartsOption {
   const grid = interpolateDirectivityGrid(result, plane);
+  // The exported renderer contours a canonical 500 x 361 interpolation. Keep
+  // the interactive cells capped for responsiveness, but derive the visible
+  // engineering reference lines from a comparably dense grid. With a typical
+  // 60 x 37 result this resolves to 532 x 325 instead of 237 x 145.
+  const contourGrid = interpolateDirectivityGrid(result, plane, 12, MAX_CONTOUR_CELLS);
   const floor = mapReference * 5;
   const inset = MAP_GRID[density];
   const cells = grid.values.flatMap((rowValues, row) => rowValues.flatMap((level, column) => level === null ? [] : [[column, row, Math.max(floor, Math.min(0, level)), level, grid.frequencies[column], grid.angles[row]]]));
   const categoryAxis = { ...axes(tokens, density), axisTick: { alignWithLabel: true }, axisLabel: { ...axes(tokens, density).axisLabel, hideOverlap: true } };
   const contourLevels = [...new Set([-3, -6, -12, mapReference])].filter((level) => level >= floor).sort((a, b) => b - a);
   const contourSeries = contourLevels.flatMap((level, contourIndex) => {
-    const polylines = contourPolylines(contourSegments(grid.values, level)).filter((points) => points.length > 1);
+    const polylines = contourPolylines(contourSegments(contourGrid.values, level)).filter((points) => points.length > 1);
     if (!polylines.length) return [];
     const labelIndex = polylines.reduce((best, points, index) => points.length > polylines[best].length ? index : best, 0);
     const color = contourIndex === 0 ? tokens.foreground : contourIndex === 1 ? tokens.accent : tokens.series[Math.min(contourIndex, tokens.series.length - 1)] ?? tokens.muted;
     return [{
       name: `${level} dB contour`, type: 'custom', coordinateSystem: 'cartesian2d', silent: true, z: 6, clip: true,
       data: polylines.map((_points, index) => [index, index === labelIndex ? 1 : 0]),
-      renderItem: (_params: unknown, api: { value: (index: number) => unknown; coord: (value: number[]) => number[] }) => {
-        const points = polylines[Number(api.value(0))].map((point) => api.coord(point));
+      renderItem: (params: { coordSys?: PlotRect }, api: { value: (index: number) => unknown }) => {
+        if (!params.coordSys) return null;
+        const points = polylines[Number(api.value(0))].map((point) => contourPointToPixels(point, contourGrid, params.coordSys!));
         const middle = points[Math.floor(points.length / 2)];
         const children: Array<Record<string, unknown>> = [{ type: 'polyline', shape: smoothContourShape(points), style: { fill: null, stroke: color, lineWidth: level === mapReference ? 1.6 : 1.05, opacity: .92, lineCap: 'round', lineJoin: 'round', lineDash: level <= -12 ? [4, 3] : undefined } }];
         if (Number(api.value(1))) children.push({ type: 'text', style: { x: middle[0] + 3, y: middle[1] - 3, text: `${level} dB`, fill: color, font: '8px ui-monospace, monospace', backgroundColor: tokens.background, padding: [1, 2], borderRadius: 2 } });
