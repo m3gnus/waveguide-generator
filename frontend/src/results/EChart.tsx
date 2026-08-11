@@ -39,30 +39,40 @@ export interface ChartTokens {
 }
 
 export function readChartTokens(): ChartTokens {
-  // These values mirror hornlab_plots.style.HORNLAB_THEME. Keeping the live
-  // charts on the same role palette gives them the canonical look without
-  // replacing their responsive, inspectable canvas with a rendered PNG.
+  // These values mirror hornlab_plots.style.EMBER_THEME and SEPIA_THEME, the
+  // way they previously mirrored HORNLAB_THEME. Keeping the live charts on the
+  // same role palette as the export gives them the canonical look without
+  // replacing their responsive, inspectable canvas with a rendered PNG -- so
+  // these must move together with DEFAULT_CHART_THEME in server/charts/api.py.
+  //
+  // muted is the tick/label role, which both themes set equal to their text
+  // colour; mirrored as-is rather than dimmed, because the export does the
+  // same and parity is the point of this table.
+  //
+  // The colormaps are the themes' own heatmap_cmap sampled at ten stops:
+  // inferno for ember, magma for sepia. Both are perceptually uniform and
+  // monotonic in lightness, unlike the custom ramp they replace.
   const light = typeof document !== 'undefined' && document.documentElement.dataset.theme === 'light';
   return light ? {
-    background: '#FFFDF8',
-    foreground: '#1A1A1A',
-    muted: '#5A6470',
-    spine: '#CFC8BC',
-    grid: 'rgba(30,34,48,.16)',
-    gridMinor: 'rgba(30,34,48,.07)',
-    accent: '#1F5FBF',
-    series: ['#1F5FBF', '#D32222', '#2E8B3D', '#E07B10', '#8E3B7E', '#5A5A5A'],
-    colormap: ['#FFFFFF', '#C8DCF0', '#7BA7D7', '#3A6FC0', '#3AA6C0', '#3EC06A', '#9ED23A', '#E6E63A', '#F0A030', '#E11414'],
+    background: '#FBF1DA',
+    foreground: '#586E75',
+    muted: '#586E75',
+    spine: '#586E75',
+    grid: '#93A1A1',
+    gridMinor: 'rgba(147, 161, 161, .5)',
+    accent: '#CB4B16',
+    series: ['#268BD2', '#CB4B16', '#859900', '#6C71C4', '#B58900', '#2AA198'],
+    colormap: ['#000004', '#180f3d', '#440f76', '#721f81', '#9e2f7f', '#cd4071', '#f1605d', '#fd9668', '#feca8d', '#fcfdbf'],
   } : {
-    background: '#0F1927',
-    foreground: '#C8D8EC',
-    muted: '#6A90B8',
-    spine: '#1E3050',
-    grid: 'rgba(255,255,255,.22)',
-    gridMinor: 'rgba(255,255,255,.08)',
-    accent: '#4FC3F7',
-    series: ['#4FC3F7', '#E8A83A', '#EF5350', '#66BB6A', '#AB47BC', '#78909C'],
-    colormap: ['#050C18', '#0A1E36', '#0E3058', '#1A4A7A', '#2D6090', '#4D78A8', '#3A3A7A', '#5A3090', '#7A2060', '#A83040', '#C84428'],
+    background: '#221C19',
+    foreground: '#E8DDD3',
+    muted: '#E8DDD3',
+    spine: '#E8DDD3',
+    grid: '#4A403A',
+    gridMinor: 'rgba(74, 64, 58, .5)',
+    accent: '#D98324',
+    series: ['#3B6EA5', '#D98324', '#5FB49C', '#C77DFF', '#E8C547', '#E5657A'],
+    colormap: ['#000004', '#1b0c41', '#4a0c6b', '#781c6d', '#a52c60', '#cf4446', '#ed6925', '#fb9b06', '#f7d13d', '#fcffa4'],
   };
 }
 

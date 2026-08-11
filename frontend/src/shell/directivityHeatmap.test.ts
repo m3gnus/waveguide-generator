@@ -163,9 +163,9 @@ describe('directivity heatmap', () => {
 
   it('uses a light HornLab-compatible chart surface with the light app theme', () => {
     document.documentElement.dataset.theme = 'light';
-    expect(readChartTokens()).toMatchObject({ background: '#FFFDF8', foreground: '#1A1A1A', accent: '#1F5FBF' });
+    expect(readChartTokens()).toMatchObject({ background: '#FBF1DA', foreground: '#586E75', accent: '#CB4B16' });
     document.documentElement.dataset.theme = 'dark';
-    expect(readChartTokens()).toMatchObject({ background: '#0F1927', foreground: '#C8D8EC', accent: '#4FC3F7' });
+    expect(readChartTokens()).toMatchObject({ background: '#221C19', foreground: '#E8DDD3', accent: '#D98324' });
     delete document.documentElement.dataset.theme;
   });
 });

@@ -17,7 +17,9 @@ from fastapi import APIRouter, FastAPI, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
-DEFAULT_CHART_THEME = "hornlab"
+# Matches the live chart palette in frontend/src/results/EChart.tsx; the two
+# are a pair and must move together.
+DEFAULT_CHART_THEME = "ember"
 THEME_LABELS = {
     "classic": "Classic",
     "hornlab": "Arctic Night",

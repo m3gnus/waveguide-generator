@@ -425,8 +425,8 @@ def test_chart_routes_expose_ten_themes_and_use_hornlab_plots(monkeypatch) -> No
     async def scenario() -> None:
         listed = await charts_api.themes()
         assert len(listed["themes"]) == 10
-        assert listed["default"] == "hornlab"
-        assert charts_api.ChartsRenderRequest().theme == "hornlab"
+        assert listed["default"] == "ember"
+        assert charts_api.ChartsRenderRequest().theme == "ember"
         preview = await charts_api.theme_preview("ember")
         assert preview == {
             "theme": "ember",
