@@ -7,7 +7,11 @@ import { UpdateButton, UpdateDialog, updatePresentation } from './UpdateControl'
 function status(overrides: Partial<UpdateStatus> = {}): UpdateStatus {
   return {
     schemaVersion: 1,
-    runningVersion: '2.0.0',
+    // The control reads a mismatch between this and the build's own version as
+    // "the tab is stale, reload" and stops presenting the release at all, so a
+    // literal here quietly rewrites what every case below is testing the next
+    // time the product version moves.
+    runningVersion: __WG2_VERSION__,
     availability: 'available',
     freshness: 'fresh',
     cached: false,
