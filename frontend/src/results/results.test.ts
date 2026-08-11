@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CompareStore, fetchJobResults, ResultsLruCache, resultsCache, type JobResults } from '../api/results';
-import { complexToDb, directivityGrid, impedanceSeries, polarSeries, splSeries } from './mappers';
+import { beamShapeSeries, complexToDb, directivityGrid, directivityIndexSeries, impedanceSeries, polarSeries, splSeries } from './mappers';
 
 function result(offset = 0): JobResults {
   return {
@@ -149,5 +149,24 @@ describe('chart data mappers', () => {
     expect(cartesian[1].data[1]).toEqual([1_000, 1]);
     expect(magnitude[0].data).toEqual([[200, 1], [1_000, 1]]);
     expect(magnitude[1].data[1][1]).toBeCloseTo(90);
+  });
+
+  it('renders directivity-derived line series as monotone curves without changing their samples', () => {
+    const payload = {
+      frequencies: [200, 1_000, 5_000],
+      di: { frequencies: [200, 1_000, 5_000], di: { horizontal: [2, 7, 9] } },
+      beam_shape: {
+        frequencies: [200, 1_000, 5_000],
+        horizontal_beamwidth_deg: [120, 90, 60],
+        vertical_beamwidth_deg: [100, 70, 45],
+      },
+    } as JobResults;
+    const [di] = directivityIndexSeries(payload);
+    const beam = beamShapeSeries(payload);
+
+    expect(di).toMatchObject({ smooth: 0.32, smoothMonotone: 'x', data: [[200, 2], [1_000, 7], [5_000, 9]] });
+    expect(beam).toEqual(expect.arrayContaining([
+      expect.objectContaining({ smooth: 0.32, smoothMonotone: 'x', data: [[200, 120], [1_000, 90], [5_000, 60]] }),
+    ]));
   });
 });

@@ -253,6 +253,29 @@ export function contourSegments(values: Array<Array<number | null>>, level: numb
 
 type ContourPoint = [number, number];
 
+/**
+ * Shape settings for the live contour overlay.
+ *
+ * The PNG renderer benefits from a large, high-DPI Matplotlib canvas. On the
+ * much smaller live chart the same marching-squares vertices need a stronger
+ * cardinal curve to avoid reading as a chain of little elbows. Constraining
+ * its control points to the path bounds prevents the curve from overshooting a
+ * physically measured contour at the ends or around a tight turn.
+ */
+export function smoothContourShape(points: number[][]) {
+  const bounds = points.reduce(([minX, minY, maxX, maxY], [x, y]) => [
+    Math.min(minX, x), Math.min(minY, y), Math.max(maxX, x), Math.max(maxY, y),
+  ], [Infinity, Infinity, -Infinity, -Infinity]);
+  return {
+    points,
+    smooth: 0.5,
+    smoothConstraint: [
+      [bounds[0], bounds[1]],
+      [bounds[2], bounds[3]],
+    ],
+  };
+}
+
 /** Join marching-squares fragments into continuous paths so contour lines can
  * be rounded and anti-aliased as curves rather than drawn as tiny segments. */
 export function contourPolylines(segments: ContourSegment[]): ContourPoint[][] {
@@ -351,7 +374,7 @@ export function heatmapOption(result: ResultPayload, tokens: ChartTokens, plane:
       renderItem: (_params: unknown, api: { value: (index: number) => unknown; coord: (value: number[]) => number[] }) => {
         const points = polylines[Number(api.value(0))].map((point) => api.coord(point));
         const middle = points[Math.floor(points.length / 2)];
-        const children: Array<Record<string, unknown>> = [{ type: 'polyline', shape: { points, smooth: .22 }, style: { fill: null, stroke: color, lineWidth: level === mapReference ? 1.6 : 1.05, opacity: .92, lineCap: 'round', lineJoin: 'round', lineDash: level <= -12 ? [4, 3] : undefined } }];
+        const children: Array<Record<string, unknown>> = [{ type: 'polyline', shape: smoothContourShape(points), style: { fill: null, stroke: color, lineWidth: level === mapReference ? 1.6 : 1.05, opacity: .92, lineCap: 'round', lineJoin: 'round', lineDash: level <= -12 ? [4, 3] : undefined } }];
         if (Number(api.value(1))) children.push({ type: 'text', style: { x: middle[0] + 3, y: middle[1] - 3, text: `${level} dB`, fill: color, font: '8px ui-monospace, monospace', backgroundColor: tokens.background, padding: [1, 2], borderRadius: 2 } });
         return { type: 'group', children };
       },
