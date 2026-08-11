@@ -210,6 +210,39 @@ def preview_options(lod: Literal["coarse", "fine"]):
     )
 
 
+#: Mesh fields the preview builder overwrites before it samples anything.
+#: ``hornlab_mesher.preview.api._lod_config`` assigns ``angular_segments`` and
+#: ``length_segments`` from the LOD preset and drops the camel-case aliases the
+#: translation emits, which is the same fact ``preview_options`` documents at
+#: length: these size the exported and solved mesh, never the viewport.
+_PREVIEW_OVERWRITTEN_MESH_FIELDS = frozenset(
+    {"angular_segments", "angularSegments", "length_segments", "lengthSegments"}
+)
+
+
+def _cache_relevant_config(config: Mapping[str, Any]) -> Any:
+    """Drop config the builder discards, so it cannot invalidate the cache.
+
+    Two designs that differ only in "Surface sampling" produce byte-identical
+    frames, and those controls sit next to the solve settings a user adjusts
+    while looking at the viewport. Keying on them charged a full rebuild --
+    tens to hundreds of milliseconds -- for a change the preview never sees.
+    """
+
+    mesh = config.get("mesh")
+    if not isinstance(mesh, Mapping):
+        return config
+    if not _PREVIEW_OVERWRITTEN_MESH_FIELDS.intersection(mesh):
+        return config
+    relevant = dict(config)
+    relevant["mesh"] = {
+        name: value
+        for name, value in mesh.items()
+        if name not in _PREVIEW_OVERWRITTEN_MESH_FIELDS
+    }
+    return relevant
+
+
 def _geometry_nbytes(geometry: Any) -> int:
     total = 0
     for surface in geometry.surfaces:
@@ -414,7 +447,7 @@ def _validation_fields(error: ValidationError, *, prefix: str | None = None) -> 
 
 
 class PreviewProtocol:
-    """One-connection state machine with one worker and one latest-wins slot."""
+    """One-connection state machine, latest-wins per lane (see ``_lane``)."""
 
     def __init__(
         self,
@@ -457,8 +490,8 @@ class PreviewProtocol:
         self._preview_service = preview_service or PreviewComputeService()
         self._owns_preview_service = preview_service is None
         self._transport: PreviewTransport | None = None
-        self._worker: asyncio.Task[None] | None = None
-        self._pending: _Request | None = None
+        self._workers: dict[str, asyncio.Task[None]] = {}
+        self._pending: dict[str, _Request] = {}
         self._send_lock = asyncio.Lock()
         self._closed = False
         self._background_failure = asyncio.Event()
@@ -524,12 +557,13 @@ class PreviewProtocol:
             self._closed = True
             heartbeat.cancel()
             background_failure.cancel()
-            if self._worker is not None:
-                self._worker.cancel()
+            workers = tuple(self._workers.values())
+            for worker in workers:
+                worker.cancel()
             await asyncio.gather(
                 heartbeat,
                 background_failure,
-                *(task for task in (self._worker,) if task is not None),
+                *workers,
                 return_exceptions=True,
             )
             if self._owns_preview_service:
@@ -647,16 +681,37 @@ class PreviewProtocol:
         await self._enqueue(request)
         return True
 
-    async def _enqueue(self, request: _Request) -> None:
-        if self._worker is None:
-            self._worker = asyncio.create_task(self._work(request))
-            self._worker.add_done_callback(self._supervise)
-            return
-        if self._pending is not None:
-            await self._send_json({"kind": "dropped", "seq": self._pending.seq})
-        self._pending = request
+    @staticmethod
+    def _lane(request: _Request) -> str:
+        """Name the queue a request waits in: interactive, or refinement.
 
-    async def _work(self, request: _Request) -> None:
+        Latest-wins with a single queue means the *kinds* of request supersede
+        each other, and they must not. A fine refinement is requested 140 ms
+        after the last edit and takes several times as long as a coarse frame,
+        so a user who resumes dragging used to wait out the whole of it before
+        the first frame of the new gesture could even start -- the one moment
+        in the session where latency is most visible. Held apart, the drag
+        keeps its own cadence and the refinement finishes underneath it.
+
+        Curve echoes are pure re-encoding and never block anything; they share
+        the interactive lane because that is where their sender is.
+        """
+
+        return "fine" if request.lod == "fine" else "coarse"
+
+    async def _enqueue(self, request: _Request) -> None:
+        lane = self._lane(request)
+        if lane not in self._workers:
+            worker = asyncio.create_task(self._work(lane, request))
+            self._workers[lane] = worker
+            worker.add_done_callback(self._supervise)
+            return
+        superseded = self._pending.get(lane)
+        if superseded is not None:
+            await self._send_json({"kind": "dropped", "seq": superseded.seq})
+        self._pending[lane] = request
+
+    async def _work(self, lane: str, request: _Request) -> None:
         current: _Request | None = request
         while current is not None and not self._closed:
             try:
@@ -696,9 +751,8 @@ class PreviewProtocol:
                     # Transport failures must escape the compute-error handlers
                     # so task supervision can terminate a blocked receive().
                     await self._send_bytes(frame)
-            current = self._pending
-            self._pending = None
-        self._worker = None
+            current = self._pending.pop(lane, None)
+        self._workers.pop(lane, None)
 
     def _compute_frame(self, request: _Request) -> bytes:
         began = time.perf_counter()
@@ -730,7 +784,7 @@ class PreviewProtocol:
                 # path but have an unambiguous per-protocol namespace.
                 "builder": self._preview_builder_namespace,
                 "lod": request.lod,
-                "config": config,
+                "config": _cache_relevant_config(config),
             },
             allow_nan=False,
             separators=(",", ":"),

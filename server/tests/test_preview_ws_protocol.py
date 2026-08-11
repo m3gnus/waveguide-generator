@@ -20,6 +20,7 @@ from server.preview.core import (
     CLOSE_UNSUPPORTED_VERSION,
     PreviewComputeService,
     PreviewProtocol,
+    _cache_relevant_config,
     preview_options,
 )
 from server.protocol.frame import FrameError, decode
@@ -228,6 +229,88 @@ def test_one_pending_slot_is_latest_wins_and_reports_replacement() -> None:
 
         dropped = [item for item in transport.json if item.get("kind") == "dropped"]
         assert dropped == [{"v": 1, "epoch": 8, "kind": "dropped", "seq": 2}]
+        assert [decode(frame)[0]["seq"] for frame in transport.binary] == [1, 3]
+
+    asyncio.run(scenario())
+
+
+def test_a_resumed_drag_does_not_wait_for_the_fine_refinement_it_interrupted() -> None:
+    """A coarse frame must not be stuck behind a fine build that outlives it.
+
+    The client asks for fine detail 140 ms after the last edit, and fine costs
+    several times what coarse does, so resuming a drag lands squarely inside
+    one. With a single queue the new gesture's first frame could not start
+    until the refinement finished; here the coarse frame comes back while the
+    fine builder is still blocked.
+    """
+
+    async def scenario() -> None:
+        fine_started = threading.Event()
+        release_fine = threading.Event()
+
+        def builder(_config: Mapping[str, Any], options: Any):
+            if getattr(options, "lod", "coarse") == "fine":
+                fine_started.set()
+                assert release_fine.wait(5)
+            return _small_geometry()
+
+        transport = FakeTransport()
+        protocol = PreviewProtocol(epoch=65, preview_builder=builder)
+        task = asyncio.create_task(protocol.run(transport))
+        await _wait_until(lambda: bool(transport.json))
+        await transport.incoming.put(_request(65, 1, revision=1, lod="fine"))
+        assert await asyncio.to_thread(fine_started.wait, 2)
+        await transport.incoming.put(_request(65, 2, revision=2, lod="coarse"))
+
+        # The coarse frame arrives with the fine builder still held.
+        await _wait_until(lambda: len(transport.binary) == 1)
+        assert decode(transport.binary[0])[0]["lod"] == "coarse"
+        assert not release_fine.is_set()
+
+        release_fine.set()
+        await _wait_until(lambda: len(transport.binary) == 2)
+        assert decode(transport.binary[1])[0]["lod"] == "fine"
+        # Neither lane superseded the other, so nothing was reported dropped.
+        assert [item for item in transport.json if item.get("kind") == "dropped"] == []
+        await transport.incoming.put(None)
+        await task
+
+    asyncio.run(scenario())
+
+
+def test_each_lane_keeps_its_own_latest_wins_slot() -> None:
+    """Holding the lanes apart must not widen the queue inside either one."""
+
+    async def scenario() -> None:
+        started = threading.Event()
+        release = threading.Event()
+
+        def builder(config: Mapping[str, Any], _options: Any):
+            if float(config["profile"]["L"]) == 100:
+                started.set()
+                assert release.wait(5)
+            return _small_geometry()
+
+        transport = FakeTransport()
+        protocol = PreviewProtocol(epoch=66, preview_builder=builder)
+        task = asyncio.create_task(protocol.run(transport))
+        await _wait_until(lambda: bool(transport.json))
+        await transport.incoming.put(
+            _request(66, 1, lod="coarse", design={"formula": "OSSE", "L": 100})
+        )
+        assert await asyncio.to_thread(started.wait, 2)
+        for seq, length in ((2, 110), (3, 120)):
+            await transport.incoming.put(
+                _request(66, seq, lod="coarse", design={"formula": "OSSE", "L": length})
+            )
+        await _wait_until(lambda: any(item.get("kind") == "dropped" for item in transport.json))
+        release.set()
+        await _wait_until(lambda: len(transport.binary) == 2)
+        await transport.incoming.put(None)
+        await task
+
+        dropped = [item for item in transport.json if item.get("kind") == "dropped"]
+        assert dropped == [{"v": 1, "epoch": 66, "kind": "dropped", "seq": 2}]
         assert [decode(frame)[0]["seq"] for frame in transport.binary] == [1, 3]
 
     asyncio.run(scenario())
@@ -757,3 +840,59 @@ def test_angular_segments_size_the_export_mesh_and_not_the_preview() -> None:
     ]
     assert translated[0]["mesh"]["angularSegments"] == 40
     assert translated[1]["mesh"]["angularSegments"] == 400
+
+
+def test_export_only_sampling_fields_do_not_invalidate_the_preview_cache() -> None:
+    """The other half of the contract above: identical output, one build.
+
+    The sampling controls sit beside the solve settings, so a user adjusting
+    them is usually looking straight at the viewport. Keying the geometry cache
+    on a field the builder overwrites charged a full rebuild for a frame that
+    was already going to come out byte-identical.
+    """
+
+    async def scenario() -> int:
+        builds = 0
+
+        def builder(_config: Mapping[str, Any], _options: Any):
+            nonlocal builds
+            builds += 1
+            return _small_geometry()
+
+        transport = FakeTransport()
+        protocol = PreviewProtocol(epoch=64, preview_builder=builder)
+        task = asyncio.create_task(protocol.run(transport))
+        await _wait_until(lambda: bool(transport.json))
+        for index, angular in enumerate((40, 400, 40)):
+            await transport.incoming.put(
+                _request(64, index + 1, revision=index + 1, design=_osse_design(angular))
+            )
+            await _wait_until(lambda: len(transport.binary) == index + 1)
+        await transport.incoming.put(None)
+        await task
+        return builds
+
+    assert asyncio.run(scenario()) == 1
+
+
+def test_preview_relevant_config_keeps_every_field_the_builder_reads() -> None:
+    """Guard the exclusion list against growing into something load-bearing."""
+
+    config = {
+        "formula": "OSSE",
+        "profile": {"a": 45.0},
+        "mesh": {
+            "angularSegments": 40.0,
+            "lengthSegments": 20.0,
+            "angular_segments": 40,
+            "length_segments": 20,
+            "wallThickness": 3.0,
+            "quadrants": 1234,
+        },
+    }
+    relevant = _cache_relevant_config(config)
+    assert relevant["mesh"] == {"wallThickness": 3.0, "quadrants": 1234}
+    assert relevant["profile"] == {"a": 45.0}
+    # Never mutate the config handed to the builder.
+    assert config["mesh"]["angularSegments"] == 40.0
+    assert _cache_relevant_config({"formula": "OSSE"}) == {"formula": "OSSE"}
