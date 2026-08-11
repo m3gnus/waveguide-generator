@@ -11,7 +11,13 @@ import pytest
 
 from server.engines.dryrun import DryRunEngine
 from server.jobs.models import SolveRequest
-from server.jobs.runtime import JobConflictError, JobNotFoundError, JobRuntime
+from server.jobs.runtime import (
+    JobConflictError,
+    JobMeshDiscardedError,
+    JobNotFoundError,
+    JobResourceUnavailableError,
+    JobRuntime,
+)
 from server.jobs.store import JobStore
 
 
@@ -175,6 +181,10 @@ def test_cancellation_is_acknowledged_at_every_stage(
         assert row["stage"] == "cancelled"
         assert row["cancellation_requested"] is False
         assert runtime.store.get_results(job_id) is None
+        if runtime.store.get_mesh_artifact(job_id) is None:
+            with pytest.raises(JobResourceUnavailableError) as missing:
+                await runtime.get_mesh_artifact(job_id)
+            assert not isinstance(missing.value, JobMeshDiscardedError)
         await runtime.shutdown()
 
     asyncio.run(scenario())
