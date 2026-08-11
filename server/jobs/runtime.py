@@ -53,6 +53,71 @@ def _sweep_description(request: SolveRequest) -> str:
     return f"explicit list of {len(explicit)} points [{head}{suffix}]"
 
 
+def _stored_solve_options(config: Mapping[str, Any]) -> SolveOptions:
+    """Read native v2 options or translate the solve fields persisted by v1."""
+
+    nested = config.get("options")
+    nested_options = nested if isinstance(nested, Mapping) else {}
+    if isinstance(config.get("design"), Mapping):
+        current = {
+            key: value
+            for key, value in nested_options.items()
+            if key in SolveOptions.model_fields
+        }
+        return SolveOptions.model_validate(current)
+
+    legacy: dict[str, Any] = {}
+    for key in (
+        "frequency_range",
+        "num_frequencies",
+        "frequency_spacing",
+        "frequencies_hz",
+        "verbose",
+        "mesh_validation_mode",
+        "polar_config",
+    ):
+        value = config.get(key)
+        if value is not None:
+            legacy[key] = value
+    backend = str(config.get("solver_backend") or config.get("device_mode") or "auto")
+    normalized_backend = backend.strip().lower()
+    if "metal" in normalized_backend:
+        legacy["engine"] = "metal"
+    elif "bem" in normalized_backend:
+        legacy["engine"] = "bempp"
+    elif "dry" in normalized_backend:
+        legacy["engine"] = "dryrun"
+    else:
+        legacy["engine"] = "auto"
+    return SolveOptions.model_validate(legacy)
+
+
+def _replay_request(row: Mapping[str, Any]) -> SolveRequest:
+    """Build the faithful request represented by a native or imported row."""
+
+    config = row.get("config_json")
+    config = config if isinstance(config, Mapping) else {}
+    if isinstance(config.get("design"), Mapping):
+        return SolveRequest.model_validate(config).model_copy(deep=True)
+
+    resolution = resolve_job_design(row.get("script_snapshot"), config)
+    if not resolution.reopenable or resolution.snapshot is None:
+        raise JobConflictError(
+            resolution.reason or "This run has no stored design and cannot be retried"
+        )
+    metadata = row.get("task_metadata")
+    metadata = metadata if isinstance(metadata, Mapping) else {}
+    return SolveRequest.model_validate(
+        {
+            "design": resolution.snapshot["design"],
+            "design_snapshot": resolution.snapshot,
+            "options": _stored_solve_options(config).model_dump(mode="json"),
+            "label": row.get("label"),
+            "design_revision": int(metadata.get("design_revision") or 0),
+        }
+    )
+
+
 class JobNotFoundError(LookupError):
     """Requested job is absent from persistence."""
 
@@ -404,7 +469,7 @@ class JobRuntime:
 
         await self.start()
         row = self._require_job(job_id)
-        request = SolveRequest.model_validate(row["config_json"]).model_copy(deep=True)
+        request = _replay_request(row)
         request.parent_job_id = job_id
         return await self.submit(request)
 
@@ -1306,12 +1371,7 @@ class JobRuntime:
     @staticmethod
     def _serialize_job(row: Mapping[str, Any], *, detailed: bool = False) -> dict[str, Any]:
         metadata = row.get("task_metadata") if isinstance(row.get("task_metadata"), dict) else {}
-        stored_options = (row.get("config_json") or {}).get("options") or {}
-        current_options = {
-            key: value
-            for key, value in stored_options.items()
-            if key in SolveOptions.model_fields
-        }
+        stored_config = row.get("config_json") or {}
         # An imported v1 job reaches the client already translated, so reopen,
         # rerun, compare and export need no legacy branch; one that cannot be
         # translated keeps its original bytes and carries the reason instead.
@@ -1329,9 +1389,7 @@ class JobRuntime:
             "started_at": row.get("started_at"),
             "completed_at": row.get("completed_at"),
             "config_summary": row.get("config_summary_json") or {},
-            "solve_options": SolveOptions.model_validate(current_options).model_dump(
-                mode="json"
-            ),
+            "solve_options": _stored_solve_options(stored_config).model_dump(mode="json"),
             "has_results": bool(row.get("has_results")),
             "has_mesh_artifact": bool(row.get("has_mesh_artifact")),
             "label": row.get("label"),

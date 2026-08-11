@@ -4,7 +4,6 @@ import { compareSelection } from '../api/results';
 import { DesignAvailabilityNotice, RerunButton } from '../jobs/DesignAvailability';
 import { canLoadJobDesign, hydrateJobDesign, replaceWithJobDesign } from '../jobs/jobDesign';
 import { canExportRun, RunExportControl } from '../jobs/RunExportControl';
-import { type DesignDocument } from '../stores/design';
 import { applyJobPreferences, jobBaseName, nextVersionFor, preferencesStore, runDisplayName, usePreferences } from '../prefs/preferences';
 import { JobsPreferencesSurface, ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
@@ -68,11 +67,11 @@ export function selectJob(job: JobItem): void {
   replaceWithJobDesign(job, { keepHistory: true });
 }
 
-function JobCard({ job, now, selected, run, onError, onRemove, onOpenExportSettings }: {
+function JobCard({ job, now, selected, retryJob, onError, onRemove, onOpenExportSettings }: {
   job: JobItem;
   now: number;
   selected: boolean;
-  run: (design: DesignDocument, designRevision?: number) => Promise<void>;
+  retryJob: (jobId: string) => Promise<void>;
   onError: (message: string) => void;
   onRemove: (job: JobItem) => void;
   onOpenExportSettings: () => void;
@@ -129,7 +128,7 @@ function JobCard({ job, now, selected, run, onError, onRemove, onOpenExportSetti
   // worked; RerunButton refuses instead, and says why.
   const retry = () => {
     if (!snapshot) return;
-    void run(snapshot, job.design_revision).catch((error) => onError(String(error)));
+    void retryJob(job.id).catch((error) => onError(String(error)));
   };
   // A run in flight or one that failed still has to show its progress or its
   // diagnostic; only finished runs collapse down to their name.
@@ -308,6 +307,6 @@ export function JobsPanel() {
     {(coordinator.actionError || snapshot.error) && <div className="job-error" role="alert" style={{ margin: 7 }}>{coordinator.actionError ?? snapshot.error}</div>}
     {snapshot.jobs.length === 0 && snapshot.connection === 'connected' && <div className="empty-state"><b>No runs yet</b><span>Solve the current design to start one. Every run is kept here with its results, so you can compare and re-run it later.</span></div>}
     {snapshot.jobs.length > 0 && visibleJobs.length === 0 && <div className="empty-state"><b>No runs match the filter</b><span>{query.trim() && preferences.minRating > 0 ? 'Clear the search or turn off the kept-only filter.' : query.trim() ? 'Clear the search to show runs.' : 'Turn off the kept-only filter to show more.'}</span></div>}
-    {visibleJobs.map((job) => <JobCard key={job.id} job={job} now={now} selected={job.id === selection.primary} run={coordinator.run} onError={coordinator.reportError} onRemove={remove} onOpenExportSettings={() => { setPreferencesOpen(false); setExportPreferencesOpen(true); }}/>)}
+    {visibleJobs.map((job) => <JobCard key={job.id} job={job} now={now} selected={job.id === selection.primary} retryJob={coordinator.retry} onError={coordinator.reportError} onRemove={remove} onOpenExportSettings={() => { setPreferencesOpen(false); setExportPreferencesOpen(true); }}/>)}
   </div>;
 }
