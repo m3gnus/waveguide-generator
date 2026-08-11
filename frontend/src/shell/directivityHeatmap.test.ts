@@ -1,6 +1,6 @@
 import * as echarts from 'echarts';
 import { describe, expect, it } from 'vitest';
-import { chartDensity, contourPolylines, contourSegments, frequencyBounds, heatmapFrequencyLabel, heatmapOption, interpolateDirectivityGrid, lineOption, smoothContourShape } from './ResultsPanel';
+import { chartDensity, contourPointToPixels, contourPolylines, contourSegments, frequencyBounds, heatmapFrequencyLabel, heatmapOption, interpolateDirectivityGrid, lineOption, smoothContourShape } from './ResultsPanel';
 import { readChartTokens, type ChartTokens } from '../results/EChart';
 import type { ResultPayload } from '../results/types';
 
@@ -96,6 +96,32 @@ describe('directivity heatmap', () => {
       smooth: 0.5,
       smoothConstraint: [[12, 2], [48, 14]],
     });
+  });
+
+  it('projects dense contours continuously instead of snapping them to category centres', () => {
+    const contour = interpolateDirectivityGrid(payload(60, 37), 'horizontal', 12, 180_000);
+    expect(contour.frequencies).toHaveLength(532);
+    expect(contour.angles).toHaveLength(325);
+    expect(contourPointToPixels([0, 0], contour, { x: 10, y: 20, width: 532, height: 325 })).toEqual([10.5, 344.5]);
+    expect(contourPointToPixels([531, 324], contour, { x: 10, y: 20, width: 532, height: 325 })).toEqual([541.5, 20.5]);
+    expect(contourPointToPixels([100.25, 200.75], contour, { x: 10, y: 20, width: 532, height: 325 })[0]).toBe(110.75);
+  });
+
+  it('renders contour paths without routing fractional vertices through the ordinal axis', () => {
+    const option = heatmapOption(payload(12, 13), tokens, 'horizontal', -6) as { series: Array<Record<string, unknown>> };
+    const contour = option.series.find((series) => series.name === '-6 dB contour') as {
+      data: number[][];
+      renderItem: (params: unknown, api: { value: (index: number) => unknown }) => { children: Array<{ shape: { points: number[][] } }> };
+    };
+    const datum = contour.data[0];
+    // There is deliberately no `api.coord` here. Supplying it would hide the
+    // category-axis snapping regression this test protects against.
+    const group = contour.renderItem(
+      { coordSys: { x: 10, y: 20, width: 400, height: 200 } },
+      { value: (index) => datum[index] },
+    );
+    expect(group.children[0].shape.points.length).toBeGreaterThan(2);
+    expect(group.children[0].shape.points.some(([x, y]) => !Number.isInteger(x) || !Number.isInteger(y))).toBe(true);
   });
 
   it('pins line charts to the exact positive frequencies present in the solve', () => {
