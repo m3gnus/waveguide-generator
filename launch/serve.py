@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+import json
 import logging
 import os
 from pathlib import Path
@@ -44,6 +45,17 @@ from scripts.migrate_v1 import MigrationError, auto_migrate_v1  # noqa: E402
 
 
 HOST = "127.0.0.1"
+
+
+def _publish_status_ready(control_path: Path | None, port: int) -> None:
+    """Atomically tell the status owner which socket was actually reserved."""
+
+    if control_path is None:
+        return
+    ready_path = control_path.with_name("ready.json")
+    temporary = ready_path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps({"host": HOST, "port": port}) + "\n", encoding="utf-8")
+    temporary.replace(ready_path)
 
 
 def _solver_warmup_enabled() -> bool:
@@ -225,6 +237,7 @@ def main(argv: list[str] | None = None) -> int:
         # is the retry loop, eliminating the probe-then-bind TOCTOU window.
         listener, port = reserve_port(preferred_port, host=HOST)
         lock.update_port(port)
+        _publish_status_ready(args.status_control, port)
     except (OSError, InstanceLockError) as exc:
         print(f"Waveguide Generator could not start: {exc}", file=sys.stderr)
         lock.release()

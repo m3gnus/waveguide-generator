@@ -76,6 +76,11 @@ def test_wglink_export_writes_identity_hashes_and_retries_without_rebuilding(
     monkeypatch.setattr("hornlab_mesher.write_wglink", fake_write)
     first = api._export_wglink_sync(_request(saved), store, workspace, "attempt-1")
     retry = api._export_wglink_sync(_request(saved), store, workspace, "attempt-1")
+    other_workspace = tmp_path / "other-workspace"
+    other_workspace.mkdir()
+    retry_from_other_workspace = api._export_wglink_sync(
+        _request(saved), store, other_workspace, "attempt-1"
+    )
     second = api._export_wglink_sync(_request(saved), store, workspace, "attempt-2")
     original_identity = saved["identity"]
     store.save(
@@ -88,11 +93,11 @@ def test_wglink_export_writes_identity_hashes_and_retries_without_rebuilding(
         filename="demo-horn.cfg",
         snapshot_builder=lambda identity: serialize(design, cadlink=identity),
     )
-    retry_after_save = api._export_wglink_sync(
-        _request(saved), store, workspace, "attempt-1"
-    )
+    with pytest.raises(HTTPException, match="replaced or changed") as stale_retry:
+        api._export_wglink_sync(_request(saved), store, workspace, "attempt-1")
 
-    assert retry == retry_after_save == first
+    assert stale_retry.value.status_code == 409
+    assert retry == retry_from_other_workspace == first
     assert len(writes) == 2
     assert first["sequence"] == 1
     assert second["sequence"] == 2
@@ -281,7 +286,9 @@ def test_concurrent_designs_cannot_claim_the_same_bundle_name(
         target.mkdir()
         step_hash = "sha256:" + "b" * 64
         manifest = {
+            "bundle": dict(identity.bundle or {}),
             "design": dict(identity.design or {}),
+            "export": dict(identity.export or {}),
             "files": {"waveguide.step": {"sha256": step_hash}},
         }
         (target / "waveguide.step").write_text("STEP")

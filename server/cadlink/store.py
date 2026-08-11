@@ -52,6 +52,7 @@ _SCHEMA = (
       manifest_json TEXT NOT NULL,
       snapshot_text TEXT NOT NULL,
       idempotency_key TEXT NOT NULL UNIQUE,
+      bundle_path TEXT,
       created_at TEXT NOT NULL,
       UNIQUE (design_id, sequence)
     )
@@ -82,11 +83,16 @@ class CadLinkStore:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._lock, self._transaction() as conn:
             version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-            if version not in {0, 1}:
+            if version not in {0, 1, 2}:
                 raise RuntimeError(f"unsupported cadlink.db schema version {version}")
             for statement in _SCHEMA:
                 conn.execute(statement)
-            conn.execute("PRAGMA user_version = 1")
+            export_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(exports)")
+            }
+            if "bundle_path" not in export_columns:
+                conn.execute("ALTER TABLE exports ADD COLUMN bundle_path TEXT")
+            conn.execute("PRAGMA user_version = 2")
         self._initialized = True
 
     def get_design(self, design_id: str) -> dict[str, Any] | None:
@@ -227,6 +233,7 @@ class CadLinkStore:
         design_id: str,
         geometry_hash: str | None = None,
         artifact_sha256: str | None = None,
+        bundle_path: str | None = None,
         idempotency_key: str,
         manifest_json: str | None = None,
         manifest_builder: Callable[[Mapping[str, object]], str] | None = None,
@@ -286,6 +293,7 @@ class CadLinkStore:
                 stored_manifest = products.get("manifest_json")
                 geometry_hash = products.get("geometry_hash")
                 artifact_sha256 = products.get("artifact_sha256")
+                bundle_path = products.get("bundle_path")
             else:
                 stored_manifest = (
                     manifest_builder(facts)
@@ -300,8 +308,9 @@ class CadLinkStore:
                 INSERT INTO exports (
                   export_id, bundle_id, design_id, sequence, parent_export_id,
                   edit_version, design_hash, geometry_hash, artifact_sha256,
-                  manifest_json, snapshot_text, idempotency_key, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  manifest_json, snapshot_text, idempotency_key, created_at,
+                  bundle_path
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     export_id,
@@ -317,6 +326,7 @@ class CadLinkStore:
                     design["snapshot_text"],
                     idempotency_key,
                     now,
+                    bundle_path,
                 ),
             )
             row = conn.execute(

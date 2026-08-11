@@ -220,6 +220,7 @@ class StatusController:
         self._output_thread: threading.Thread | None = None
         self._temporary_directory: tempfile.TemporaryDirectory[str] | None = None
         self._control_path: Path | None = None
+        self._ready_path: Path | None = None
         self._windows_job: object | None = None
         self._registered_atexit = False
         self._port: int | None = None
@@ -328,6 +329,7 @@ class StatusController:
 
             self._temporary_directory = tempfile.TemporaryDirectory(prefix="wg2-statusapp-")
             self._control_path = Path(self._temporary_directory.name) / "stop"
+            self._ready_path = Path(self._temporary_directory.name) / "ready.json"
             self._port = port
             url = f"http://{HOST}:{port}/"
             environment = dict(self.environ)
@@ -403,6 +405,21 @@ class StatusController:
                 return match.group()
         return None
 
+    def _ready_url(self) -> str | None:
+        ready_path = self._ready_path
+        if ready_path is None:
+            return None
+        try:
+            payload = json.loads(ready_path.read_text(encoding="utf-8"))
+            host = str(payload["host"])
+            port = int(payload["port"])
+        except (FileNotFoundError, OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+            return None
+        if host != HOST or not 1 <= port <= 65535:
+            return None
+        self._port = port
+        return f"http://{HOST}:{port}/"
+
     def poll(self) -> StatusSnapshot:
         """Poll the process, the real backend health route, and the served SPA."""
 
@@ -410,6 +427,15 @@ class StatusController:
             process = self._process
             if process is None:
                 return self._snapshot
+            ready_url = self._ready_url()
+            if ready_url is not None and ready_url != self._snapshot.url:
+                self._snapshot = StatusSnapshot(
+                    backend=self._snapshot.backend,
+                    frontend=self._snapshot.frontend,
+                    url=ready_url,
+                    pid=self._snapshot.pid,
+                    exit_code=self._snapshot.exit_code,
+                )
             return_code = process.poll()
             observing_existing = False
             if return_code is not None:
@@ -498,6 +524,7 @@ class StatusController:
         temporary_directory = self._temporary_directory
         self._temporary_directory = None
         self._control_path = None
+        self._ready_path = None
         if temporary_directory is not None:
             temporary_directory.cleanup()
 

@@ -8,7 +8,6 @@ import json
 import logging
 from pathlib import Path
 import time
-from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.gzip import GZipMiddleware
@@ -23,7 +22,7 @@ from server.exports import mount_exports
 from server.jobs import mount_jobs
 from server.mesh.gmsh_worker import prewarm_gmsh_worker, shutdown_gmsh_worker
 from server.mesh.prewarm import prewarm_mesher, shutdown_mesher_prewarm
-from server.platform.origin import local_origin
+from server.platform.origin import local_origin, local_request_host
 from server.platform.paths import resolve_data_dir
 from server.preview.service import mount_preview
 from server.solver.symmetry import resolve_symmetry
@@ -40,36 +39,6 @@ VERSION = str(
 FRONTEND_DIST = Path(__file__).resolve().parents[1] / "frontend" / "dist"
 request_log = logging.getLogger("wg.requests")
 _local_origin = local_origin
-
-
-def _local_request_host(
-    host_header: str | None, *, scheme: str, bound_port: object
-) -> bool:
-    """Accept a loopback Host authority only for the socket that received it."""
-
-    if not host_header:
-        return False
-    try:
-        parsed = urlsplit(f"//{host_header}")
-        expected_port = int(bound_port)
-        effective_port = parsed.port
-    except (TypeError, ValueError):
-        return False
-    if (
-        not parsed.netloc
-        or parsed.path
-        or parsed.query
-        or parsed.fragment
-        or parsed.username is not None
-        or parsed.password is not None
-        or not 1 <= expected_port <= 65535
-    ):
-        return False
-    if effective_port is None:
-        effective_port = 443 if scheme in {"https", "wss"} else 80
-    return effective_port == expected_port and _local_origin(
-        f"{'https' if scheme in {'https', 'wss'} else 'http'}://{host_header}"
-    )
 
 
 async def prewarm_solver() -> None:
@@ -175,7 +144,7 @@ def create_app(
             else None
         )
         host = request.headers.get("host")
-        if not _local_request_host(
+        if not local_request_host(
             host,
             scheme=request.url.scheme,
             bound_port=bound_port,

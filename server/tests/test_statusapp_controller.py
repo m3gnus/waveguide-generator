@@ -29,6 +29,7 @@ parser.add_argument("--status-control", type=Path, required=True)
 parser.add_argument("--parent-pid")
 parser.add_argument("--pid-file", type=Path)
 parser.add_argument("--child-pid-file", type=Path)
+parser.add_argument("--ready-port", type=int)
 parser.add_argument("--no-browser", action="store_true")
 args, _unknown = parser.parse_known_args()
 
@@ -46,6 +47,12 @@ while True:
     time.sleep(0.03)
 """
     subprocess.Popen((sys.executable, "-c", child_code, str(args.child_pid_file)))
+
+if args.ready_port:
+    args.status_control.with_name("ready.json").write_text(
+        '{"host":"127.0.0.1","port":%d}\n' % args.ready_port,
+        encoding="utf-8",
+    )
 
 print("fake server ready", flush=True)
 while not args.status_control.is_file():
@@ -123,6 +130,36 @@ def test_start_poll_quit_lifecycle_checks_health_and_spa_probes(tmp_path: Path) 
     stopped = controller.close()
     assert stopped.backend.state is ServiceState.STOPPED
     assert process.poll() is not None
+
+
+def test_child_ready_file_replaces_the_unreserved_preflight_port(tmp_path: Path) -> None:
+    probed: list[str] = []
+    actual_port = 43124
+
+    def probe(url: str, _timeout: float) -> tuple[int, bytes]:
+        probed.append(url)
+        return (
+            (200, b'{"version":"test"}')
+            if url.endswith("/health")
+            else (200, b"<html></html>")
+        )
+
+    controller = _controller(
+        tmp_path,
+        server_args=("--ready-port", str(actual_port)),
+        request_probe=probe,
+    )
+    controller.start()
+    try:
+        def ready_snapshot():
+            snapshot = controller.poll()
+            return snapshot if snapshot.url.endswith(f":{actual_port}/") else None
+
+        snapshot = _wait_for(ready_snapshot)
+        assert snapshot.url == f"http://127.0.0.1:{actual_port}/"
+        assert probed and all(f":{actual_port}/" in url for url in probed[-2:])
+    finally:
+        controller.stop()
 
 
 def test_port_in_use_is_reported_before_a_process_is_started(tmp_path: Path) -> None:

@@ -24,4 +24,60 @@ def local_origin(origin: str) -> bool:
         return False
 
 
-__all__ = ["local_origin"]
+def local_request_host(host_header: str | None, *, scheme: str, bound_port: object) -> bool:
+    """Accept a loopback Host authority only for the socket that received it."""
+
+    if not host_header:
+        return False
+    try:
+        parsed = urlsplit(f"//{host_header}")
+        expected_port = int(bound_port)
+        effective_port = parsed.port
+    except (TypeError, ValueError):
+        return False
+    if (
+        not parsed.netloc
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+        or parsed.username is not None
+        or parsed.password is not None
+        or not 1 <= expected_port <= 65535
+    ):
+        return False
+    if effective_port is None:
+        effective_port = 443 if scheme in {"https", "wss"} else 80
+    return effective_port == expected_port and local_origin(
+        f"{'https' if scheme in {'https', 'wss'} else 'http'}://{host_header}"
+    )
+
+
+def websocket_request_allowed(
+    *, origin: str | None, host: str | None, scheme: str, bound_port: object
+) -> bool:
+    """Validate WS Host and require browser Origin to match its exact authority."""
+
+    if not local_request_host(host, scheme=scheme, bound_port=bound_port):
+        return False
+    if origin is None:
+        return True
+    try:
+        origin_url = urlsplit(origin)
+        host_url = urlsplit(f"//{host}")
+        origin_port = origin_url.port
+        if origin_port is None:
+            origin_port = 443 if origin_url.scheme == "https" else 80
+        origin_host = (origin_url.hostname or "").rstrip(".").lower()
+        target_host = (host_url.hostname or "").rstrip(".").lower()
+    except ValueError:
+        return False
+    expected_origin_scheme = "https" if scheme == "wss" else "http"
+    return (
+        local_origin(origin)
+        and origin_url.scheme == expected_origin_scheme
+        and origin_host == target_host
+        and origin_port == int(bound_port)
+    )
+
+
+__all__ = ["local_origin", "local_request_host", "websocket_request_allowed"]
