@@ -148,6 +148,21 @@ describe('jobs panel run list', () => {
     expect(host.textContent).toContain('#2 · Kept');
   });
 
+  it('presents cancelled runs separately and only shows retention copy with provenance', async () => {
+    const cancelled = { ...job(3, 'Stopped'), status: 'cancelled' as const, has_results: false };
+    publishJobs([cancelled]);
+    await act(async () => root.render(<JobsPanel/>));
+
+    const card = host.querySelector('.job-card')!;
+    expect(card.classList.contains('cancelled')).toBe(true);
+    expect(card.textContent).toContain('Cancelled.');
+    expect(card.textContent).toContain('cancelled after');
+    expect(card.textContent).not.toContain('cleaned up');
+
+    act(() => publishJobs([{ ...job(4, 'Pruned'), has_results: false, results_discarded_at: '2026-08-11T00:00:00Z' }]));
+    expect(host.textContent).toContain('Results were cleaned up to save space.');
+  });
+
   it('does not rewrite next-run naming when a run is selected', () => {
     preferencesStore.update({ outputName: 'next-design', jobVersion: 17 });
     const before = preferencesStore.getSnapshot();

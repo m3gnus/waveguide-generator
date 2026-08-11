@@ -521,12 +521,12 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .jobs-kept-toggle.on { background: color-mix(in srgb, var(--amber) 13%, transparent); color: var(--amber); }
 .job-card { position: relative; margin: 6px 6px 0; padding: 8px 8px 8px 8px; border: 1px solid var(--hair); border-radius: var(--r2); background: var(--ov1); }
 .job-card::before { content: ""; position: absolute; top: 9px; bottom: 9px; left: 0; width: 2px; background: var(--fg4); }
-.job-card.running::before { background: var(--acc); }.job-card.complete::before { background: var(--green); }.job-card.failed::before { background: var(--red); }
+.job-card.running::before { background: var(--acc); }.job-card.complete::before { background: var(--green); }.job-card.failed::before { background: var(--red); }.job-card.cancelled::before { background: var(--fg4); }
 .job-card header { display: flex; align-items: center; gap: 6px; }
 .job-select { display: flex; align-items: center; gap: 6px; min-width: 0; height: 22px; flex: 1; padding: 0; background: transparent; color: inherit; text-align: left; }
 .job-select.editing { width: 14px; flex: none; }
 .job-card header > .job-select > i { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--fg3); }
-.job-card.running header > .job-select > i { background: var(--acc); box-shadow: 0 0 7px rgba(var(--acc-rgb), .7); }.job-card.complete header > .job-select > i { background: var(--green); }.job-card.failed header > .job-select > i { background: var(--red); }
+.job-card.running header > .job-select > i { background: var(--acc); box-shadow: 0 0 7px rgba(var(--acc-rgb), .7); }.job-card.complete header > .job-select > i { background: var(--green); }.job-card.failed header > .job-select > i { background: var(--red); }.job-card.cancelled header > .job-select > i { background: var(--fg4); }
 .job-card header b { flex: 1; overflow: hidden; color: var(--fg); font-size: var(--text-base); font-weight: 560; text-overflow: ellipsis; white-space: nowrap; }
 .job-title-input { min-width: 0; height: 24px; flex: 1; padding: 2px 5px; border: 1px solid rgba(var(--acc-rgb), .5); border-radius: var(--r3); background: var(--input-bg); color: var(--fg); font-size: var(--text-base); }
 .job-rename { width: 20px; height: 20px; flex: none; border-radius: var(--r3); background: transparent; color: var(--fg4); font-size: var(--text-base); }

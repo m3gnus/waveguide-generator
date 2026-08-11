@@ -518,8 +518,8 @@ class JobRuntime:
         artifact = await asyncio.to_thread(self.store.get_mesh_artifact, job_id)
         if not artifact:
             metadata = row.get("task_metadata")
-            rating = metadata.get("rating") if isinstance(metadata, Mapping) else None
-            if row["status"] in {"complete", "error", "cancelled"} and not rating:
+            metadata = metadata if isinstance(metadata, Mapping) else {}
+            if metadata.get("mesh_discarded_at"):
                 raise JobMeshDiscardedError(
                     "Mesh artifact was not retained for this unrated run; "
                     "any generated mesh was discarded by retention after download "
@@ -1408,6 +1408,8 @@ class JobRuntime:
             "auto_export_formats": metadata.get("auto_export_formats") or {},
             "raw_results_file": metadata.get("raw_results_file"),
             "mesh_artifact_file": metadata.get("mesh_artifact_file"),
+            "results_discarded_at": metadata.get("results_discarded_at"),
+            "mesh_discarded_at": metadata.get("mesh_discarded_at"),
             "log_tail": metadata.get("log_tail") or [],
             "symmetry": metadata.get("symmetry") or {},
             "solve_path": metadata.get("solve_path"),

@@ -756,6 +756,10 @@ def test_live_retention_prune_persists_an_availability_event_for_every_pruned_re
     )
     assert store.list_jobs()[1] == 2
     assert all(not store.get_job_row(job_id)["has_results"] for job_id in removed)
+    assert all(
+        store.get_job_row(job_id)["task_metadata"].get("results_discarded_at")
+        for job_id in removed
+    )
     assert [event["jobId"] for event in store.replay_events(2)] == removed
 
 
@@ -802,6 +806,7 @@ def test_terminal_mesh_is_pruned_after_download_or_grace_but_rated_mesh_is_exemp
     for job_id in ("downloaded", "expired"):
         row = store.get_job_row(job_id)
         assert row["has_mesh_artifact"] is False
+        assert row["task_metadata"].get("mesh_discarded_at")
         assert store.get_mesh_artifact(job_id) is None
         assert row["run_number"] == run_numbers[job_id]
         assert row["has_results"] is True

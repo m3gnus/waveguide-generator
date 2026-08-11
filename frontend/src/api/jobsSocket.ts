@@ -60,6 +60,8 @@ export interface JobItem {
   auto_export_formats: Record<string, AutoExportFormatStatus>;
   raw_results_file: string | null;
   mesh_artifact_file: string | null;
+  results_discarded_at?: string | null;
+  mesh_discarded_at?: string | null;
   log_tail: string[];
 }
 

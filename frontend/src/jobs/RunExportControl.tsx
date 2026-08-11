@@ -49,8 +49,8 @@ const CATALOG_BY_FORMAT = new Map(
     .map((item) => [item.format, item]),
 );
 
-export function canExportRun(job: Pick<JobItem, 'status' | 'has_results'>): boolean {
-  return job.status === 'complete' && job.has_results;
+export function canExportRun(job: JobItem): boolean {
+  return job.status === 'complete' && (job.has_results || jobRerunState(job).enabled);
 }
 
 function formatLabel(format: ExportFormat): string {
@@ -197,9 +197,12 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
   const items: ActionMenuItem[] = [
     ...FORMAT_CATALOG.map((item): ActionMenuItem => {
       const noDirectivity = item.id === 'polar_frd' && Object.keys(job.polar_grid ?? {}).length === 0;
-      const unavailable = (item.needsDesign && !designState.enabled) || noDirectivity;
+      const noResults = item.needsResult && !job.has_results;
+      const unavailable = (item.needsDesign && !designState.enabled) || noResults || noDirectivity;
       const disabledReason = noDirectivity
         ? 'This run has no directivity data for a polar FRD set.'
+        : noResults
+          ? 'This run\'s results were removed by retention.'
         : designState.reason ?? 'This run has no recoverable design.';
       return {
         id: item.id,
@@ -235,7 +238,10 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
       menuLabel={`Export ${jobName(job)}`}
       triggerLabel={compact ? 'Export' : `Export${preferences.exportFormats.length ? ` (${preferences.exportFormats.length})` : ''}`}
       chevronLabel={`More export options for ${jobName(job)}`}
-      onPrimary={preferences.exportFormats.length ? async () => { await exportPreferred(); } : undefined}
+      onPrimary={preferences.exportFormats.length && preferences.exportFormats.every((format) => {
+        const item = CATALOG_BY_FORMAT.get(format);
+        return (!item?.needsResult || job.has_results) && (!item?.needsDesign || designState.enabled);
+      }) ? async () => { await exportPreferred(); } : undefined}
     />
     {operation.lastError
       ? <div className="design-menu-status run-export-feedback error" role="alert">{operation.lastError}</div>

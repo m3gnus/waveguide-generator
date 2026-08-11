@@ -341,6 +341,8 @@ class JobItem(JobModel):
     auto_export_formats: dict[str, Any]
     raw_results_file: str | None = None
     mesh_artifact_file: str | None = None
+    results_discarded_at: str | None = None
+    mesh_discarded_at: str | None = None
     log_tail: list[str]
     symmetry: dict[str, Any] = Field(default_factory=dict)
     solve_path: Literal["full-3d", "axisymmetric-meridian"] | None = None

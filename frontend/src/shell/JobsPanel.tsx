@@ -78,6 +78,7 @@ function JobCard({ job, now, selected, retryJob, onError, onRemove, onOpenExport
 }) {
   const running = job.status === 'running' || job.status === 'queued';
   const failed = job.status === 'error';
+  const cancelled = job.status === 'cancelled';
   const snapshot = hydrateJobDesign(job);
   const rating = job.rating ?? 0;
   const [editing, setEditing] = useState(false);
@@ -132,9 +133,9 @@ function JobCard({ job, now, selected, retryJob, onError, onRemove, onOpenExport
   };
   // A run in flight or one that failed still has to show its progress or its
   // diagnostic; only finished runs collapse down to their name.
-  const expanded = selected || running || failed || editing;
+  const expanded = selected || running || failed || cancelled || editing;
   const selectable = !running && (job.has_results || canLoadDesign(job));
-  const statusWord = running ? 'Running' : failed ? 'Failed' : 'Completed';
+  const statusWord = running ? 'Running' : failed ? 'Failed' : cancelled ? 'Cancelled' : 'Completed';
   const displayName = runDisplayName({ ...job, label: displayLabel });
   const heading = <>
     {/* The dot is hue-only, and DESIGN.md's Signal Rule requires every state to
@@ -145,7 +146,7 @@ function JobCard({ job, now, selected, retryJob, onError, onRemove, onOpenExport
     {/* Stars are a label here, shown only once a run has actually been rated. */}
     {!expanded && rating > 0 && <span className="job-stars" aria-label={`Kept, rated ${rating} of 5`} title="Kept: rated runs are never cleaned up">{'★'.repeat(rating)}</span>}
   </>;
-  return <article className={`job-card ${running ? 'running' : failed ? 'failed' : 'complete'}${selected ? ' selected' : ''}${expanded ? '' : ' collapsed'}`} aria-current={selected ? 'true' : undefined}>
+  return <article className={`job-card ${running ? 'running' : failed ? 'failed' : cancelled ? 'cancelled' : 'complete'}${selected ? ' selected' : ''}${expanded ? '' : ' collapsed'}`} aria-current={selected ? 'true' : undefined}>
     <header>
       {selectable
         ? <button className={`job-select${editing ? ' editing' : ''}`} aria-label={`Select ${displayName}`} aria-pressed={selected} title={selected ? 'Showing this run' : job.has_results ? 'Show this run in the viewport and charts' : 'Show this run design in the viewport'} onClick={() => selectJob(job)}>{heading}</button>
@@ -172,7 +173,7 @@ function JobCard({ job, now, selected, retryJob, onError, onRemove, onOpenExport
       {!running && <button className="job-remove" aria-label={`Remove ${displayName}`} title="Remove this job" onClick={() => onRemove(job)}><Icon name="close"/></button>}
     </header>
     {renameError && <div className="job-error job-rename-error" role="alert">{renameError}</div>}
-    {!running && !failed && !job.has_results && <div className="job-retention-note">Results were cleaned up to save space.</div>}
+    {job.results_discarded_at && <div className="job-retention-note">Results were cleaned up to save space.</div>}
     {running ? <>
       <p>{metrics(job, now)}</p>
       <div className="job-stage"><span>{job.stage_message ?? job.stage ?? 'waiting…'}</span><b>{Math.round(job.progress * 100)}%</b></div>
@@ -184,6 +185,9 @@ function JobCard({ job, now, selected, retryJob, onError, onRemove, onOpenExport
       <div className="job-error" title={job.error_message ?? undefined}>{job.error_message ?? 'Simulation failed without a diagnostic.'}</div>
       <DesignAvailabilityNotice job={job}/>
       <footer><RerunButton job={job} onRerun={retry} label="Retry" className=""/><button onClick={() => window.open(`/api/jobs/${encodeURIComponent(job.id)}/log`, '_blank')}>Open log</button></footer>
+    </> : cancelled ? <>
+      <p>cancelled after {duration(secondsBetween(job.started_at ?? job.queued_at, job.completed_at, now))}</p>
+      <footer><RerunButton job={job} onRerun={retry}/><button onClick={() => window.open(`/api/jobs/${encodeURIComponent(job.id)}/log`, '_blank')}>Log</button></footer>
     </> : expanded && <>
       <p>{metrics(job, now)}</p>
       {/* The mesh diagnoses that used to end the solve. The run finished, so

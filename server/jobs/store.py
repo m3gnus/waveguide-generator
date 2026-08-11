@@ -995,6 +995,7 @@ class JobStore:
             ).fetchall()
             mesh_ids = [str(row["id"]) for row in mesh_rows]
             deleted_results = 0
+            discarded_at = _now_iso()
             if removed_ids:
                 placeholders = ",".join("?" for _ in removed_ids)
                 cur = conn.execute(
@@ -1003,8 +1004,11 @@ class JobStore:
                 )
                 deleted_results = int(cur.rowcount or 0)
                 conn.execute(
-                    f"UPDATE simulation_jobs SET has_results = 0 WHERE id IN ({placeholders})",
-                    removed_ids,
+                    f"UPDATE simulation_jobs SET has_results = 0, "
+                    "task_metadata_json = json_set(COALESCE(task_metadata_json, '{}'), "
+                    "'$.results_discarded_at', ?) "
+                    f"WHERE id IN ({placeholders})",
+                    [discarded_at, *removed_ids],
                 )
             if mesh_ids:
                 placeholders = ",".join("?" for _ in mesh_ids)
@@ -1013,8 +1017,11 @@ class JobStore:
                     mesh_ids,
                 )
                 conn.execute(
-                    f"UPDATE simulation_jobs SET has_mesh_artifact = 0 WHERE id IN ({placeholders})",
-                    mesh_ids,
+                    f"UPDATE simulation_jobs SET has_mesh_artifact = 0, "
+                    "task_metadata_json = json_set(COALESCE(task_metadata_json, '{}'), "
+                    "'$.mesh_discarded_at', ?) "
+                    f"WHERE id IN ({placeholders})",
+                    [discarded_at, *mesh_ids],
                 )
             affected_ids = list(dict.fromkeys([*removed_ids, *mesh_ids]))
             if emit_events and affected_ids:

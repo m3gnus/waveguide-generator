@@ -186,6 +186,25 @@ describe('RunExportControl', () => {
     expect(patchMetadata).toHaveBeenCalledWith(job.id, { exported_files: ['earlier.csv', 'stored_horn_v07_1.csv'] });
   });
 
+  it('keeps design-only exports after result retention and disables result formats', async () => {
+    const job = completeJob({
+      has_results: false,
+      results_discarded_at: '2026-08-11T00:00:00Z',
+    });
+    render(job);
+    openMenu();
+
+    expect(menuItem('Frequency data').disabled).toBe(true);
+    expect(menuItem('STEP solid').disabled).toBe(false);
+    await act(async () => { menuItem('STEP solid').click(); await settle(); });
+
+    expect(mocks.fetchJobResults).not.toHaveBeenCalled();
+    expect(mocks.runExportFormat).toHaveBeenCalledWith(
+      'step',
+      expect.objectContaining({ design: hydrateJobDesign(job), designRevision: 42 }),
+    );
+  });
+
   it('downloads exactly one on-axis FRD file', async () => {
     mocks.fetchJobResults.mockResolvedValue(directivityResult());
     render();
