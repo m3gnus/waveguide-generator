@@ -284,8 +284,17 @@ def polar_grid_from_symmetry(symmetry_report: Mapping[str, Any]) -> dict[str, An
 
     planes = symmetry_report.get("planes") or {}
     axes: dict[str, dict[str, Any]] = {}
-    for plane, axis in (("x0", "x"), ("y0", "y"), ("z0", "z")):
-        accepted = bool((planes.get(plane) or {}).get("accepted"))
+    x_accepted = bool((planes.get("x0") or {}).get("accepted"))
+    y_accepted = bool((planes.get("y0") or {}).get("accepted"))
+    # Polar one-sidedness follows the transverse mirror planes, not a fictitious
+    # front/back polar axis: horizontal <- x0, vertical <- y0, and a diagonal
+    # sweep is one-sided only when both transverse mirrors were accepted. z0 has
+    # no implication for any observation plane swept by the solver.
+    for axis, plane, accepted in (
+        ("horizontal", "x0", x_accepted),
+        ("vertical", "y0", y_accepted),
+        ("diagonal", "x0+y0", x_accepted and y_accepted),
+    ):
         axes[axis] = {
             "plane": plane,
             "symmetry_accepted": accepted,
@@ -690,9 +699,28 @@ def build_imported_mesh(
             anchor_contract = transformed_contracts.get(str(anchor_id))
             if anchor_contract is None:
                 raise ImportedMeshError("STEP import + normalisation: anchor source_contract is missing")
+            axis = np.asarray(anchor_contract["axis_direction"], dtype=float)
+            axis /= np.linalg.norm(axis)
+            reference = np.asarray([1.0, 0.0, 0.0], dtype=float)
+            if abs(float(np.dot(reference, axis))) > 0.9:
+                reference = np.asarray([0.0, 1.0, 0.0], dtype=float)
+            horizontal = reference - float(np.dot(reference, axis)) * axis
+            horizontal /= np.linalg.norm(horizontal)
+            vertical = np.cross(axis, horizontal)
+            throat_origin_m = (
+                np.asarray(anchor_contract["plane_origin_mm"], dtype=float) * 1.0e-3
+            )
             normalisation_record["anchor_manifest_throat_plane"] = {
                 "origin_mm": [float(value) for value in anchor_contract["plane_origin_mm"]],
                 "normal": [float(value) for value in anchor_contract["plane_normal"]],
+            }
+            normalisation_record["anchor_throat_frame"] = {
+                "axis": [float(value) for value in axis],
+                "origin_m": [float(value) for value in throat_origin_m],
+                "u": [float(value) for value in horizontal],
+                "v": [float(value) for value in vertical],
+                "mouth_center_m": [float(value) for value in throat_origin_m],
+                "source_center_m": [float(value) for value in throat_origin_m],
             }
 
         resolutions: dict[str, dict[str, Any]] = {}

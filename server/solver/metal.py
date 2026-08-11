@@ -14,9 +14,11 @@ import logging
 import tempfile
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
-from server.jobs.models import SolveRequest
+import numpy as np
+
+from server.jobs.models import ImportedGeometrySource, SolveRequest
 from server.mesh.builder import _solver_mesher_config, build_solver_mesh
 
 from .acoustics import solver_sound_speed_m_per_s
@@ -24,6 +26,13 @@ from .base import ArtifactCallback, CancelCallback, EngineRunResult, StageCallba
 from .context import SolverContext
 from .formulation import DEFAULT_BEM_FORMULATION, DEFAULT_COMPLEX_K_SHIFT
 from .infinite_baffle import require_full_3d_aperture_tag
+from .imported import (
+    global_frequency_caveat,
+    imported_symmetry_from_cut_planes,
+    mesh_frequency_validation,
+    read_verified_import_mesh,
+    verify_record_mesh_text,
+)
 from .result_mapping import (
     build_solver_response,
     json_safe_native_value,
@@ -36,19 +45,25 @@ from .result_mapping import (
 
 try:
     from hornlab_metal_bem import (
+        AxialProfile,
+        NormalProfile,
         ObservationConfig,
         ObservationFrame,
         native_config,
         solve as native_solve,
+        solve_multi_source as native_solve_multi_source,
     )
     from hornlab_metal_bem import solve_frequencies as native_solve_frequencies
     from hornlab_metal_bem.backends import discover_metal_backend
     from hornlab_metal_bem.metal.native import discover_native_runtime
 except (ImportError, OSError):  # clean capability absence or native loader failure
     ObservationConfig = None  # type: ignore[assignment]
+    AxialProfile = None  # type: ignore[assignment]
+    NormalProfile = None  # type: ignore[assignment]
     ObservationFrame = None  # type: ignore[assignment]
     native_config = None  # type: ignore[assignment]
     native_solve = None  # type: ignore[assignment]
+    native_solve_multi_source = None  # type: ignore[assignment]
     native_solve_frequencies = None  # type: ignore[assignment]
     discover_metal_backend = None  # type: ignore[assignment]
     discover_native_runtime = None  # type: ignore[assignment]
@@ -59,6 +74,41 @@ class MetalUnavailable(RuntimeError):
 
 
 logger = logging.getLogger(__name__)
+
+
+def _native_config_or_unavailable(kwargs: Mapping[str, Any]) -> Any:
+    """Apply one capability-error ladder to parametric and imported configs."""
+
+    assert native_config is not None
+    try:
+        return native_config(**dict(kwargs))
+    except TypeError as exc:
+        feature = str(exc)
+        if "source_velocity_profiles" in feature:
+            raise MetalUnavailable(
+                "Installed hornlab-metal-bem does not support mixed per-channel source motion."
+            ) from exc
+        if "source_motion" in feature:
+            raise MetalUnavailable(
+                "Installed hornlab-metal-bem does not support axial source motion."
+            ) from exc
+        if "aperture_tag" in feature:
+            raise MetalUnavailable(
+                "Installed hornlab-metal-bem does not support coupled infinite-baffle aperture tags."
+            ) from exc
+        if "formulation" in feature:
+            raise MetalUnavailable(
+                "Installed hornlab-metal-bem does not support the required BEM formulation option."
+            ) from exc
+        if "complex_k_shift" in feature:
+            raise MetalUnavailable(
+                "Installed hornlab-metal-bem does not support the required complex-k shift option."
+            ) from exc
+        if "frame_override" in feature:
+            raise MetalUnavailable(
+                "Installed hornlab-metal-bem does not support the required explicit observation frame."
+            ) from exc
+        raise
 
 
 def _version() -> str | None:
@@ -189,6 +239,8 @@ def _native_check_open_edges(context: SolverContext) -> bool:
         return False
     if native_symmetry_plane(context) is None:
         return True
+    if context.design is None:
+        return False
     root = context.design.root
     enclosure_value = (
         root.enclosure.depth.constant_value()
@@ -282,21 +334,7 @@ def solve_metal_from_msh_text(
         kwargs.update({"aperture_tag": aperture_tag, "mesh_validate": True})
     if context.source_motion != "normal":
         kwargs["source_motion"] = context.source_motion
-    try:
-        config = native_config(**kwargs)
-    except TypeError as exc:
-        feature = str(exc)
-        if "source_motion" in feature:
-            raise MetalUnavailable("Installed hornlab-metal-bem does not support axial source motion.") from exc
-        if "aperture_tag" in feature:
-            raise MetalUnavailable("Installed hornlab-metal-bem does not support coupled infinite-baffle aperture tags.") from exc
-        if "formulation" in feature:
-            raise MetalUnavailable("Installed hornlab-metal-bem does not support the required BEM formulation option.") from exc
-        if "complex_k_shift" in feature:
-            raise MetalUnavailable("Installed hornlab-metal-bem does not support the required complex-k shift option.") from exc
-        if "frame_override" in feature:
-            raise MetalUnavailable("Installed hornlab-metal-bem does not support the required explicit observation frame.") from exc
-        raise
+    config = _native_config_or_unavailable(kwargs)
 
     path: Path | None = None
     try:
@@ -363,6 +401,308 @@ def solve_metal_from_msh_text(
     )
 
 
+def _imported_frame(record: Mapping[str, Any], context: SolverContext) -> Any:
+    if ObservationFrame is None:
+        raise MetalUnavailable(
+            "Installed hornlab-metal-bem does not expose ObservationFrame."
+        )
+    anchor = record.get("anchor")
+    anchor = anchor if isinstance(anchor, Mapping) else {}
+    frame = anchor.get("throat_frame")
+    if not isinstance(frame, Mapping):
+        normalisation = record.get("normalisation")
+        normalisation = normalisation if isinstance(normalisation, Mapping) else {}
+        frame = normalisation.get("anchor_throat_frame")
+    if not isinstance(frame, Mapping):
+        normalisation = record.get("normalisation")
+        normalisation = normalisation if isinstance(normalisation, Mapping) else {}
+        if bool(normalisation.get("assembly_frame_is_solver_frame")):
+            frame = {
+                "axis": [0.0, 0.0, 1.0],
+                "origin_m": [0.0, 0.0, 0.0],
+                "u": [1.0, 0.0, 0.0],
+                "v": [0.0, 1.0, 0.0],
+                "mouth_center_m": [0.0, 0.0, 0.0],
+                "source_center_m": [0.0, 0.0, 0.0],
+            }
+        else:
+            raise ValueError(
+                "ingestion record has no anchor throat frame; re-ingest the CAD return"
+            )
+
+    def vector(name: str, *fallback_names: str) -> np.ndarray:
+        value = frame.get(name)
+        if value is None:
+            for fallback in fallback_names:
+                value = frame.get(fallback)
+                if value is not None:
+                    break
+        result = np.asarray(value, dtype=float)
+        if result.shape != (3,) or not np.isfinite(result).all():
+            raise ValueError(f"ingestion anchor throat frame {name!r} must be a finite 3-vector")
+        return result
+
+    axis = vector("axis", "normal")
+    axis /= np.linalg.norm(axis)
+    source_center = vector("source_center_m", "origin_m", "origin")
+    mouth_center = vector("mouth_center_m", "origin_m", "origin")
+    origin = source_center
+    return ObservationFrame(
+        axis=axis,
+        origin=origin,
+        u=vector("u", "horizontal"),
+        v=vector("v", "vertical"),
+        mouth_center=mouth_center,
+        source_center=source_center,
+    )
+
+
+def _imported_validity_metadata(record: Mapping[str, Any]) -> dict[str, Any]:
+    validation = mesh_frequency_validation(record)
+    per_source_raw = validation.get("per_source")
+    per_source_raw = per_source_raw if isinstance(per_source_raw, Mapping) else {}
+    per_source: dict[str, Any] = {}
+    for source_id, item in per_source_raw.items():
+        if not isinstance(item, Mapping):
+            continue
+        per_source[str(source_id)] = {
+            key: json_safe_native_value(value)
+            for key, value in item.items()
+            if key not in {"tag", "name"}
+        }
+    return per_source
+
+
+def solve_imported_metal_from_msh_text(
+    msh_text: str,
+    request: SolveRequest,
+    record: Mapping[str, Any],
+    *,
+    stage_callback: StageCallback | None = None,
+    cancellation_callback: CancelCallback | None = None,
+) -> dict[str, Any]:
+    """Solve every imported drive channel as a shared multi-RHS unit basis."""
+
+    geometry = request.geometry
+    if not isinstance(geometry, ImportedGeometrySource):
+        raise ValueError("imported Metal solve requires imported geometry")
+    if native_config is None or native_solve_multi_source is None:
+        raise MetalUnavailable(
+            "Installed hornlab-metal-bem does not support multi-source solves."
+        )
+    status = metal_status()
+    if not status["available"]:
+        raise MetalUnavailable(status["reason"])
+
+    symmetry = record.get("symmetry")
+    symmetry = symmetry if isinstance(symmetry, Mapping) else {}
+    cut_planes = {str(value) for value in symmetry.get("cut_planes") or []}
+    imported_symmetry = imported_symmetry_from_cut_planes(cut_planes)
+    quadrants = imported_symmetry.quadrants
+    source_tags = record.get("source_tags")
+    if not isinstance(source_tags, Mapping):
+        raise ValueError("ingestion record has no source tag map")
+    channel_order = [channel.id for channel in geometry.drive_channels]
+    channels: dict[str, Any] = {}
+    started = time.time()
+    if stage_callback:
+        stage_callback("setup", 0.0, "Configuring imported multi-source Metal BEM solve")
+
+    motions = {channel.motion for channel in geometry.drive_channels}
+    config_motion = next(iter(motions)) if len(motions) == 1 else "normal"
+    context = SolverContext.from_imported_request(
+        request, quadrants=quadrants, source_motion=config_motion
+    )
+    context.validate()
+
+    source_specs: list[dict[int, complex]] = []
+    source_profiles: dict[int, Any] = {}
+    for channel in geometry.drive_channels:
+        spec: dict[int, complex] = {}
+        for source_id in channel.source_ids:
+            if source_id not in source_tags:
+                raise ValueError(
+                    f"ingestion tag map has no active source {source_id!r}"
+                )
+            tag = int(source_tags[source_id])
+            spec[tag] = 1.0 + 0.0j
+            if len(motions) > 1:
+                profile_cls = AxialProfile if channel.motion == "axial" else NormalProfile
+                if profile_cls is None:
+                    raise MetalUnavailable(
+                        "Installed hornlab-metal-bem does not support mixed per-channel source motion."
+                    )
+                source_profiles[tag] = profile_cls()
+        source_specs.append(spec)
+
+    def progress(index: int, total: int, frequency_hz: float) -> None:
+        if cancellation_callback:
+            cancellation_callback()
+        fraction = index / max(1, total)
+        if stage_callback:
+            stage_callback(
+                "frequency_solve",
+                fraction,
+                f"Solving frequency {index + 1}/{total} for imported drive bases",
+            )
+
+    observation = _observation(context, msh_text)
+    frame_override = _imported_frame(record, context)
+    kwargs: dict[str, Any] = {
+        "freq_min_hz": context.frequency_range[0],
+        "freq_max_hz": context.frequency_range[1],
+        "freq_count": context.num_frequencies,
+        "freq_spacing": context.frequency_spacing,
+        "formulation": DEFAULT_BEM_FORMULATION,
+        "complex_k_shift": DEFAULT_COMPLEX_K_SHIFT,
+        "observation": observation,
+        "progress_callback": progress,
+        "mesh_scale": 1.0,
+        "native_symmetry_plane": native_symmetry_plane(context),
+        "native_check_open_edges": False,
+        "mesh_validate": context.mesh_validation_mode != "off",
+        "frame_override": frame_override,
+        "source_motion": config_motion,
+    }
+    if source_profiles:
+        kwargs["source_velocity_profiles"] = source_profiles
+    config = _native_config_or_unavailable(kwargs)
+
+    path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".msh", delete=False, encoding="utf-8"
+        ) as handle:
+            path = Path(handle.name)
+            handle.write(msh_text)
+
+        results = native_solve_multi_source(
+            str(path),
+            source_specs,
+            config,
+            frequencies_hz=(
+                list(context.frequencies_hz)
+                if context.frequencies_hz is not None
+                else None
+            ),
+        )
+        if len(results) != len(geometry.drive_channels):
+            raise ValueError(
+                "multi-source Metal solver returned a different number of bases than requested"
+            )
+        for channel, result in zip(geometry.drive_channels, results, strict=True):
+            channel_context = SolverContext.from_imported_request(
+                request, quadrants=quadrants, source_motion=channel.motion
+            )
+            channel_metadata = {
+                "solver_backend": "metal",
+                "solver_mode": "full_3d",
+                "geometry_type": "imported",
+                "drive_channel_id": channel.id,
+                "source_ids": list(channel.source_ids),
+                "device_interface": {"selected": "metal", "metal": status},
+                "engine": "hornlab-metal-bem",
+                "phase_time_convention": "exp(+ikr)",
+                "mesh_validation": {
+                    "mode": context.mesh_validation_mode,
+                    "backend": "hornlab-metal-bem",
+                },
+                "performance": {
+                    "total_time_seconds": time.time() - started,
+                    "native_timings": json_safe_native_value(
+                        dict(getattr(result, "timings", {}) or {})
+                    ),
+                },
+                "metal": {
+                    "solver_mode": "full_3d",
+                    "native_symmetry_plane": kwargs["native_symmetry_plane"],
+                    "native_check_open_edges": False,
+                    "formulation": kwargs["formulation"],
+                    "complex_k_shift": kwargs["complex_k_shift"],
+                    "solver_log": json_safe_native_value(
+                        response_solver_log(getattr(result, "solver_log", []))
+                    ),
+                },
+            }
+            channel_response = build_solver_response(
+                result=result,
+                config=config,
+                context=channel_context,
+                start_time=started,
+                metadata=channel_metadata,
+                sound_speed_m_per_s=solver_sound_speed_m_per_s(
+                    "hornlab_metal_bem"
+                ),
+            )
+            if len(channel.source_ids) > 1:
+                channel_response.pop("impedance", None)
+                channel_response["metadata"]["impedance_omitted"] = (
+                    "multi-source channel: per-patch impedance is not a channel impedance"
+                )
+            channels[channel.id] = channel_response
+    finally:
+        if path is not None:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as exc:
+                logger.warning("Could not remove temporary Metal mesh %s: %s", path, exc)
+    if cancellation_callback:
+        cancellation_callback()
+    if stage_callback:
+        stage_callback("finalizing", 1.0, "Packaging imported drive-channel bases")
+
+    per_source_validity = _imported_validity_metadata(record)
+    global_caveat = global_frequency_caveat(request, record)
+    fem_volumes = (
+        (record.get("evidence") or {}).get("fem_air_volumes")
+        if isinstance(record.get("evidence"), Mapping)
+        else []
+    ) or []
+    metadata = {
+        "result_contract_version": 2,
+        "geometry_type": "imported",
+        "solver_backend": "metal",
+        "solver_mode": "full_3d",
+        "solve_path": "full-3d",
+        "axisymmetric_eligibility_reasons": [
+            "imported geometry is restricted to Metal full 3-D"
+        ],
+        "ingest_id": geometry.ingest_id,
+        "manifest_sha256": geometry.manifest_sha256,
+        "artifact_sha256": geometry.artifact_sha256,
+        "tag_namespace": record.get("tag_namespace"),
+        "tag_map": json_safe_native_value(record.get("tag_map") or {}),
+        "per_source_frequency_validity": per_source_validity,
+        "global_frequency_caveat": global_caveat,
+        "symmetry_planes_used": sorted(cut_planes),
+        "polar_grid_derivation": json_safe_native_value(
+            record.get("polar_grid_derivation") or {}
+        ),
+        "observation_origin_effective": "throat",
+        "observation_frame_basis": {
+            "axis": json_safe_native_value(frame_override.axis),
+            "u": json_safe_native_value(frame_override.u),
+            "v": json_safe_native_value(frame_override.v),
+            "origin_m": json_safe_native_value(frame_override.origin),
+            "mouth_center_m": json_safe_native_value(frame_override.mouth_center),
+            "source_center_m": json_safe_native_value(frame_override.source_center),
+        },
+        "acknowledged_findings": list(geometry.acknowledged_findings),
+        "exterior_only": geometry.exterior_only,
+        "fem_exclusion": (
+            {
+                "excluded": True,
+                "declared_volume_count": len(fem_volumes),
+                "reason": "Phase 2 exterior_only override",
+            }
+            if fem_volumes and geometry.exterior_only
+            else {"excluded": False, "declared_volume_count": len(fem_volumes)}
+        ),
+        "performance": {"total_time_seconds": time.time() - started},
+    }
+    return {"channels": channels, "channel_order": channel_order, "metadata": metadata}
+
+
 def _circsym_eligibility_reasons(request: SolveRequest) -> list[str]:
     """Run the mesher/native CircSym probes together, away from the event loop."""
 
@@ -408,7 +748,42 @@ class MetalEngine:
         cancel_cb: CancelCallback,
         stage_cb: StageCallback,
         artifact_cb: ArtifactCallback | None = None,
+        imported_record: Mapping[str, Any] | None = None,
     ) -> EngineRunResult:
+        if isinstance(request.geometry, ImportedGeometrySource):
+            if imported_record is None:
+                raise ValueError("imported Metal solve requires its ingestion record")
+            execution_msh = imported_record.get("_execution_msh_text")
+            if isinstance(execution_msh, str):
+                msh_text = verify_record_mesh_text(imported_record, execution_msh)
+            else:
+                msh_text = await asyncio.to_thread(
+                    read_verified_import_mesh, imported_record
+                )
+            mesh_record = imported_record.get("mesh")
+            mesh_stats = (
+                dict(mesh_record.get("stats") or {})
+                if isinstance(mesh_record, Mapping)
+                else {}
+            )
+            if artifact_cb is not None:
+                await artifact_cb(msh_text, mesh_stats)
+            cancel_cb()
+            results = await asyncio.to_thread(
+                solve_imported_metal_from_msh_text,
+                msh_text,
+                request,
+                imported_record,
+                stage_callback=stage_cb,
+                cancellation_callback=cancel_cb,
+            )
+            results.setdefault("metadata", {})["mesh_stats"] = mesh_stats
+            return EngineRunResult(
+                results=results,
+                msh_text=msh_text,
+                mesh_stats=mesh_stats,
+            )
+
         mode = str(request.design.root.simulation.solver_mode or "auto").strip().lower()
         if mode not in {"auto", "full_3d", "circsym"}:
             raise ValueError("solver_mode must be auto, full_3d, or circsym")
@@ -472,4 +847,10 @@ class MetalEngine:
         return EngineRunResult(results=results, msh_text=mesh["msh_text"], mesh_stats=mesh["stats"])
 
 
-__all__ = ["MetalEngine", "MetalUnavailable", "metal_status", "solve_metal_from_msh_text"]
+__all__ = [
+    "MetalEngine",
+    "MetalUnavailable",
+    "metal_status",
+    "solve_imported_metal_from_msh_text",
+    "solve_metal_from_msh_text",
+]

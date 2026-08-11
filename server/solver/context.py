@@ -12,7 +12,7 @@ import math
 from typing import Any
 
 from server.design.schema import DesignConfig, Expr
-from server.jobs.models import PolarConfig, SolveRequest
+from server.jobs.models import ImportedGeometrySource, PolarConfig, SolveRequest
 
 from .quadrants import FULL_DOMAIN_QUADRANTS, normalise_quadrants
 
@@ -28,7 +28,7 @@ def _number(value: Expr | None, fallback: float) -> float:
 
 @dataclass(slots=True)
 class SolverContext:
-    design: DesignConfig
+    design: DesignConfig | None
     frequency_range: tuple[float, float]
     num_frequencies: int
     frequency_spacing: str = "log"
@@ -149,6 +149,46 @@ class SolverContext:
             sim_type=1 if simulation.sim_type == "infinite-baffle" else 2,
             source_motion=source_motion,
             polar_config=request.options.polar_config.model_dump(mode="json"),
+        )
+
+    @classmethod
+    def from_imported_request(
+        cls,
+        request: SolveRequest,
+        *,
+        quadrants: int,
+        source_motion: str,
+    ) -> "SolverContext":
+        """Build a design-free context for an immutable imported mesh."""
+
+        if not isinstance(request.geometry, ImportedGeometrySource):
+            raise ValueError("imported solver context requires imported geometry")
+        if request.options.frequencies_hz is not None:
+            explicit = tuple(float(value) for value in request.options.frequencies_hz)
+            start, end, count = explicit[0], explicit[-1], len(explicit)
+        else:
+            assert request.options.frequency_range is not None
+            assert request.options.num_frequencies is not None
+            explicit = None
+            start, end = request.options.frequency_range
+            count = request.options.num_frequencies
+        polar_config = request.options.polar_config.model_dump(mode="json")
+        # Imported observation frames are anchored at the CAD return's throat.
+        # There is no authoritative imported mouth frame in Phase 2.
+        polar_config["observation_origin"] = "throat"
+        return cls(
+            design=None,
+            frequency_range=(float(start), float(end)),
+            num_frequencies=int(count),
+            frequency_spacing=request.options.frequency_spacing,
+            frequencies_hz=explicit,
+            mesh_validation_mode=request.options.mesh_validation_mode,
+            verbose=request.options.verbose,
+            solver_mode="full_3d",
+            quadrants=int(quadrants),
+            sim_type=2,
+            source_motion=source_motion,
+            polar_config=polar_config,
         )
 
 

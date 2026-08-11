@@ -24,6 +24,7 @@ from server.jobs.models import (
 )
 from server.jobs.runtime import (
     EngineUnavailableError,
+    ImportedSolveRefusal,
     JobConflictError,
     JobMeshDiscardedError,
     JobNotFoundError,
@@ -75,7 +76,7 @@ def create_jobs_router(runtime: JobRuntime) -> APIRouter:
     async def submit_solve(body: SolveRequest) -> SolveAccepted:
         try:
             job_id = await runtime.submit(body)
-        except (UnknownEngineError, SymmetryValidationError) as exc:
+        except (UnknownEngineError, SymmetryValidationError, ImportedSolveRefusal) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except EngineUnavailableError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -96,7 +97,12 @@ def create_jobs_router(runtime: JobRuntime) -> APIRouter:
             return SolveAccepted(job_id=await runtime.retry(job_id))
         except JobNotFoundError as exc:
             raise HTTPException(status_code=404, detail="Job not found") from exc
-        except (UnknownEngineError, SymmetryValidationError, ValueError) as exc:
+        except (
+            UnknownEngineError,
+            SymmetryValidationError,
+            ImportedSolveRefusal,
+            ValueError,
+        ) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except EngineUnavailableError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -226,7 +232,9 @@ def mount_jobs(
 
     data_dir = Path(application.state.data_dir)
     runtime = JobRuntime(
-        JobStore.for_data_dir(data_dir), engine_registry=engine_registry
+        JobStore.for_data_dir(data_dir),
+        engine_registry=engine_registry,
+        cadlink_store=application.state.cadlink_store,
     )
     application.state.jobs_runtime = runtime
     application.include_router(create_jobs_router(runtime))

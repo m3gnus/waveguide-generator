@@ -236,8 +236,9 @@ class JobStore:
         job: Mapping[str, Any],
         *,
         initial_event: tuple[str, Mapping[str, Any]] | None = None,
+        mesh_artifact: str | None = None,
     ) -> dict[str, Any] | None:
-        """Insert a queued job, optionally atomically with its first event.
+        """Insert a queued job, optionally atomically with its event and mesh.
 
         The simulation-column mapping is a direct port of v1
         ``server/db.py:101-135``.
@@ -283,6 +284,11 @@ class JobStore:
                 "INSERT INTO job_identity (job_id, parent_job_id) VALUES (?, ?)",
                 (job["id"], job.get("parent_job_id")),
             )
+            if mesh_artifact is not None:
+                conn.execute(
+                    "INSERT INTO simulation_artifacts (job_id, msh_text) VALUES (?, ?)",
+                    (job["id"], mesh_artifact),
+                )
             if initial_event is None:
                 return None
             return self._append_event(conn, job["id"], *initial_event)

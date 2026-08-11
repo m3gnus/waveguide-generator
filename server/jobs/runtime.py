@@ -17,16 +17,35 @@ import json
 import logging
 import math
 import os
+from pathlib import Path
 import time
 from typing import Any, Mapping
 import uuid
 
+from server.cadlink.ingest import get_ingestion_record
+from server.cadlink.store import CadLinkStore
 from server.design.schema import Expr
+from server.design.textcfg import parse
 from server.engines.registry import EngineRegistry, create_engine as get_engine
 from server.jobs.legacy_design import resolve_job_design
-from server.jobs.models import SolveOptions, SolveRequest
+from server.jobs.models import (
+    ImportedGeometrySource,
+    ParametricGeometrySource,
+    SolveOptions,
+    SolveRequest,
+)
 from server.jobs.store import ALLOWED_STATUSES, JobStore
 from server.platform.instance import LOCK_OPEN_FLAGS, lock_exclusive, unlock
+from server.solver.imported import (
+    ImportedMeshArtifactError,
+    ImportedSymmetryUnsupportedError,
+    global_frequency_caveat,
+    imported_symmetry_from_cut_planes,
+    mesh_frequency_validation,
+    read_verified_import_mesh,
+    requested_max_frequency_hz,
+    verify_record_mesh_text,
+)
 from server.solver.symmetry import resolve_symmetry, validate_symmetry_mode
 
 
@@ -58,7 +77,8 @@ def _stored_solve_options(config: Mapping[str, Any]) -> SolveOptions:
 
     nested = config.get("options")
     nested_options = nested if isinstance(nested, Mapping) else {}
-    if isinstance(config.get("design"), Mapping):
+    geometry = config.get("geometry")
+    if isinstance(config.get("design"), Mapping) or isinstance(geometry, Mapping):
         current = {
             key: value
             for key, value in nested_options.items()
@@ -97,7 +117,9 @@ def _replay_request(row: Mapping[str, Any]) -> SolveRequest:
 
     config = row.get("config_json")
     config = config if isinstance(config, Mapping) else {}
-    if isinstance(config.get("design"), Mapping):
+    if isinstance(config.get("design"), Mapping) or isinstance(
+        config.get("geometry"), Mapping
+    ):
         return SolveRequest.model_validate(config).model_copy(deep=True)
 
     resolution = resolve_job_design(row.get("script_snapshot"), config)
@@ -144,6 +166,161 @@ class UnknownEngineError(ValueError):
 
 class SymmetryValidationError(ValueError):
     """The requested solve domain requires a mirror plane the geometry lacks."""
+
+
+class ImportedSolveRefusal(ValueError):
+    """A typed imported-geometry eligibility refusal at the runtime boundary."""
+
+    def __init__(
+        self,
+        reason_code: str,
+        message: str,
+        *,
+        details: Mapping[str, Any] | None = None,
+    ) -> None:
+        self.reason_code = reason_code
+        self.details = dict(details or {})
+        super().__init__(f"{reason_code}: {message}")
+
+
+@dataclass(frozen=True)
+class _ImportedSubmission:
+    record: dict[str, Any]
+    msh_text: str
+    mesh_stats: dict[str, Any]
+    symmetry_metadata: dict[str, Any]
+    global_frequency_caveat: dict[str, Any] | None
+    anchor_design_id: str | None
+    anchor_snapshot: dict[str, Any] | None
+
+
+def _imported_record_sources(record: Mapping[str, Any]) -> list[dict[str, Any]]:
+    sources = record.get("sources")
+    if not isinstance(sources, list) or not all(
+        isinstance(source, Mapping) for source in sources
+    ):
+        raise ImportedSolveRefusal(
+            "ingest_record_incomplete",
+            "the ingestion record has no authoritative source inventory; re-ingest the CAD return",
+        )
+    return [dict(source) for source in sources]
+
+
+def _imported_symmetry_metadata(
+    record: Mapping[str, Any], requested: str
+) -> dict[str, Any]:
+    symmetry = record.get("symmetry")
+    symmetry = symmetry if isinstance(symmetry, Mapping) else {}
+    cut_planes = [str(plane) for plane in symmetry.get("cut_planes") or []]
+    try:
+        resolved = imported_symmetry_from_cut_planes(cut_planes)
+    except ImportedSymmetryUnsupportedError as exc:
+        raise ImportedSolveRefusal(
+            "imported_symmetry_unsupported",
+            str(exc),
+            details={"cut_planes": cut_planes},
+        ) from exc
+    if requested not in {"auto", resolved.mode}:
+        raise ImportedSolveRefusal(
+            "imported_symmetry_mismatch",
+            f"requested symmetry {requested!r} does not match the ingestion artifact's "
+            f"actual cut planes {cut_planes} ({resolved.mode})",
+            details={"requested": requested, "resolved": resolved.mode, "cut_planes": cut_planes},
+        )
+    return {
+        "requested": requested,
+        "resolved": resolved.mode,
+        "resolved_quadrants": resolved.quadrants,
+        "native_symmetry_plane": resolved.native_plane,
+        "cut_planes": cut_planes,
+        "source": "cad-ingestion-cut-planes",
+    }
+
+
+def _validate_imported_polar_grid(
+    geometry: ImportedGeometrySource,
+    request: SolveRequest,
+    record: Mapping[str, Any],
+) -> None:
+    del geometry
+    derivation = record.get("polar_grid_derivation")
+    derivation = derivation if isinstance(derivation, Mapping) else {}
+    axes = derivation.get("axes")
+    if not isinstance(axes, Mapping) or set(axes) != {
+        "horizontal",
+        "vertical",
+        "diagonal",
+    }:
+        raise ImportedSolveRefusal(
+            "ingest_record_incomplete",
+            "ingestion polar derivation must contain horizontal, vertical, and diagonal axes; re-ingest the CAD return",
+        )
+    requested_start, requested_end, _count = request.options.polar_config.angle_range
+    enabled_axes = set(request.options.polar_config.enabled_axes)
+    for axis_name, raw_axis in axes.items():
+        if not isinstance(raw_axis, Mapping):
+            raise ImportedSolveRefusal(
+                "ingest_record_incomplete",
+                f"ingestion polar derivation axis {axis_name!r} is invalid; re-ingest the CAD return",
+            )
+        minimum = float(raw_axis.get("minimum_deg", -180.0))
+        maximum = float(raw_axis.get("maximum_deg", 180.0))
+        pinned = minimum <= -180.0 and maximum >= 180.0
+        if pinned and axis_name not in enabled_axes:
+            raise ImportedSolveRefusal(
+                "polar_grid_narrowing",
+                f"polar request disables pinned axis {axis_name!r}; ingestion requires it enabled over [-180, 180] degrees",
+                details={
+                    "axis": str(axis_name),
+                    "required": [minimum, maximum],
+                    "enabled_axes": sorted(enabled_axes),
+                },
+            )
+        if requested_start > minimum or requested_end < maximum:
+            raise ImportedSolveRefusal(
+                "polar_grid_narrowing",
+                f"polar request narrows pinned axis {axis_name!r}: ingestion requires "
+                f"[{minimum:g}, {maximum:g}] degrees but request gives "
+                f"[{requested_start:g}, {requested_end:g}]",
+                details={
+                    "axis": str(axis_name),
+                    "required": [minimum, maximum],
+                    "requested": [requested_start, requested_end],
+                },
+            )
+
+
+def _validate_imported_frequency(
+    request: SolveRequest,
+    record: Mapping[str, Any],
+    active_source_ids: set[str],
+) -> dict[str, Any] | None:
+    validation = mesh_frequency_validation(record)
+    requested_max = requested_max_frequency_hz(request)
+    per_source = validation.get("per_source")
+    per_source = per_source if isinstance(per_source, Mapping) else {}
+    exceeded: dict[str, float] = {}
+    for source_id in sorted(active_source_ids):
+        item = per_source.get(source_id)
+        if not isinstance(item, Mapping):
+            raise ImportedSolveRefusal(
+                "ingest_record_incomplete",
+                f"ingestion record has no frequency-validity result for active source {source_id!r}",
+            )
+        limit = float(item.get("effective_max_valid_frequency_hz", 0.0))
+        if requested_max > limit:
+            exceeded[source_id] = limit
+    if exceeded:
+        detail = ", ".join(
+            f"{source_id} (limit {limit:g} Hz)"
+            for source_id, limit in exceeded.items()
+        )
+        raise ImportedSolveRefusal(
+            "source_frequency_limit",
+            f"requested maximum {requested_max:g} Hz exceeds active source limits: {detail}",
+            details={"requested_max_frequency_hz": requested_max, "sources": exceeded},
+        )
+    return global_frequency_caveat(request, record)
 
 
 class _CancelledAtCheckpoint(RuntimeError):
@@ -243,9 +420,11 @@ class JobRuntime:
         store: JobStore,
         *,
         engine_registry: EngineRegistry | None = None,
+        cadlink_store: CadLinkStore | None = None,
         persistence_interval_seconds: float = RUNTIME_PERSIST_INTERVAL_SECONDS,
     ) -> None:
         self.store = store
+        self.cadlink_store = cadlink_store
         self.engine_registry = engine_registry or EngineRegistry(factory=get_engine)
         self.events = EventBroker()
         self._queue: deque[str] = deque()
@@ -324,29 +503,51 @@ class JobRuntime:
 
     async def submit(self, request: SolveRequest) -> str:
         await self.start()
+        imported: _ImportedSubmission | None = None
+        if isinstance(request.geometry, ImportedGeometrySource):
+            imported = await self._prepare_imported_submission(request)
         engine_name = request.options.engine
         known = {"auto", "dryrun", "metal", "bempp"}
+        if isinstance(request.geometry, ImportedGeometrySource) and engine_name == "circsym":
+            raise ImportedSolveRefusal(
+                "imported_circsym_unsupported",
+                "imported geometry supports Metal full 3-D solves only; CircSym is unavailable",
+            )
         if engine_name not in known:
             raise UnknownEngineError(f"Unknown solve engine: {engine_name}")
 
-        resolution = await asyncio.to_thread(resolve_symmetry, request.design)
-        try:
-            resolved_quadrants = validate_symmetry_mode(
-                request.options.symmetry, resolution
-            )
-        except ValueError as exc:
-            raise SymmetryValidationError(str(exc)) from exc
-        symmetry_metadata = {
-            "requested": request.options.symmetry,
-            "resolved_quadrants": resolved_quadrants,
-            "auto_resolution": resolution.as_dict(),
-            "design_quadrants": (
-                request.design.root.mesh.quadrants.text()
-                if request.design.root.mesh.quadrants is not None
-                else None
-            ),
-        }
+        if imported is not None:
+            symmetry_metadata = imported.symmetry_metadata
+            if engine_name in {"bempp", "dryrun"}:
+                raise ImportedSolveRefusal(
+                    "imported_engine_unsupported",
+                    f"imported geometry supports Metal only; engine {engine_name!r} is unavailable",
+                    details={"engine": engine_name},
+                )
+            if engine_name == "auto":
+                engine_name = "metal"
+                request = request.model_copy(deep=True)
+                request.options.engine = engine_name
+        else:
+            resolution = await asyncio.to_thread(resolve_symmetry, request.design)
+            try:
+                resolved_quadrants = validate_symmetry_mode(
+                    request.options.symmetry, resolution
+                )
+            except ValueError as exc:
+                raise SymmetryValidationError(str(exc)) from exc
+            symmetry_metadata = {
+                "requested": request.options.symmetry,
+                "resolved_quadrants": resolved_quadrants,
+                "auto_resolution": resolution.as_dict(),
+                "design_quadrants": (
+                    request.design.root.mesh.quadrants.text()
+                    if request.design.root.mesh.quadrants is not None
+                    else None
+                ),
+            }
         if engine_name == "auto":
+            assert isinstance(request.geometry, ParametricGeometrySource)
             engine_name = await self.engine_registry.resolve(
                 "auto", solver_mode=request.design.root.simulation.solver_mode
             )
@@ -376,41 +577,262 @@ class JobRuntime:
         summary = self._config_summary(request)
         summary["symmetry"] = symmetry_metadata
         polar_grid = request.options.polar_config.resolved_grid()
-        assert request.design_snapshot is not None
-        event = self.store.create_job(
-            {
-                "id": job_id,
-                "parent_job_id": request.parent_job_id,
-                "status": "queued",
-                "created_at": now,
-                "updated_at": now,
-                "queued_at": now,
-                "progress": 0.0,
-                "stage": "queued",
-                "stage_message": "Job queued",
-                "error_message": None,
-                "cancellation_requested": False,
-                "config_json": request_dump,
-                "config_summary_json": summary,
-                "has_results": False,
-                "has_mesh_artifact": False,
-                "mesh_stats": None,
-                "label": request.label,
-                "script_snapshot": request.design_snapshot.model_dump(mode="json"),
-                "task_metadata": {
-                    "log_tail": [],
-                    "design_revision": request.design_revision,
-                    "polar_grid": polar_grid,
-                    "symmetry": symmetry_metadata,
-                },
-            },
-            initial_event=("queued", {"status": "queued", "progress": 0.0}),
-        )
+        if isinstance(request.geometry, ParametricGeometrySource):
+            assert request.design_snapshot is not None
+            script_snapshot = request.design_snapshot.model_dump(mode="json")
+        else:
+            assert imported is not None
+            script_snapshot = imported.anchor_snapshot
+        task_metadata: dict[str, Any] = {
+            "log_tail": [],
+            "design_revision": request.design_revision,
+            "polar_grid": polar_grid,
+            "symmetry": symmetry_metadata,
+        }
+        if imported is not None:
+            task_metadata["imported_geometry"] = {
+                "ingest_id": request.geometry.ingest_id,
+                "anchor_design_id": imported.anchor_design_id,
+                "global_frequency_caveat": imported.global_frequency_caveat,
+            }
+        job_record = {
+            "id": job_id,
+            "parent_job_id": request.parent_job_id,
+            "status": "queued",
+            "created_at": now,
+            "updated_at": now,
+            "queued_at": now,
+            "progress": 0.0,
+            "stage": "queued",
+            "stage_message": "Job queued",
+            "error_message": None,
+            "cancellation_requested": False,
+            "config_json": request_dump,
+            "config_summary_json": summary,
+            "has_results": False,
+            "has_mesh_artifact": imported is not None,
+            "mesh_stats": imported.mesh_stats if imported is not None else None,
+            "label": request.label,
+            "script_snapshot": script_snapshot,
+            "task_metadata": task_metadata,
+        }
+        initial_event = ("queued", {"status": "queued", "progress": 0.0})
+        if imported is None:
+            event = self.store.create_job(job_record, initial_event=initial_event)
+        else:
+            event = await asyncio.to_thread(
+                self.store.create_job,
+                job_record,
+                initial_event=initial_event,
+                mesh_artifact=imported.msh_text,
+            )
         self._queue.append(job_id)
         if event is not None:
             self.events.publish(event)
         self._ensure_scheduler()
         return job_id
+
+    async def _prepare_imported_submission(
+        self, request: SolveRequest
+    ) -> _ImportedSubmission:
+        geometry = request.geometry
+        assert isinstance(geometry, ImportedGeometrySource)
+        if self.cadlink_store is None:
+            raise ImportedSolveRefusal(
+                "ingest_registry_unavailable",
+                "the CAD ingestion registry is unavailable to this job runtime",
+            )
+        record = await asyncio.to_thread(
+            get_ingestion_record, self.cadlink_store, geometry.ingest_id
+        )
+        if record is None:
+            raise ImportedSolveRefusal(
+                "ingest_not_found",
+                f"ingestion record {geometry.ingest_id!r} does not exist",
+                details={"ingest_id": geometry.ingest_id},
+            )
+        mismatches = {
+            field: {"request": getattr(geometry, field), "record": record.get(field)}
+            for field in ("manifest_sha256", "artifact_sha256")
+            if getattr(geometry, field) != record.get(field)
+        }
+        if mismatches:
+            raise ImportedSolveRefusal(
+                "ingest_sha_mismatch",
+                "request hashes do not match the immutable ingestion record",
+                details=mismatches,
+            )
+
+        sources = _imported_record_sources(record)
+        source_by_id = {str(source.get("id")): source for source in sources}
+        requested_skips = set(geometry.skipped_source_ids)
+        unknown_skips = requested_skips - set(source_by_id)
+        required_skips = sorted(
+            source_id
+            for source_id in requested_skips
+            if bool(source_by_id.get(source_id, {}).get("required"))
+        )
+        if unknown_skips:
+            raise ImportedSolveRefusal(
+                "unknown_skipped_source",
+                f"skipped_source_ids names unknown record sources {sorted(unknown_skips)}",
+            )
+        if required_skips:
+            raise ImportedSolveRefusal(
+                "required_source_skipped",
+                f"required sources cannot be skipped: {required_skips}",
+                details={"source_ids": required_skips},
+            )
+        recorded_skips = set(record.get("skipped_source_ids") or [])
+        if recorded_skips != requested_skips:
+            raise ImportedSolveRefusal(
+                "skipped_sources_mismatch",
+                "request skipped_source_ids must match the sources excluded by ingestion",
+                details={
+                    "request": sorted(requested_skips),
+                    "record": sorted(recorded_skips),
+                },
+            )
+        active_sources = set(source_by_id) - requested_skips
+        driven_sources = {
+            source_id
+            for channel in geometry.drive_channels
+            for source_id in channel.source_ids
+        }
+        if driven_sources != active_sources:
+            raise ImportedSolveRefusal(
+                "drive_source_coverage",
+                "drive channels must cover every non-skipped ingestion source exactly once",
+                details={
+                    "missing": sorted(active_sources - driven_sources),
+                    "extra": sorted(driven_sources - active_sources),
+                },
+            )
+        recorded_sizes = record.get("mesh_sizes")
+        if not isinstance(recorded_sizes, Mapping):
+            raise ImportedSolveRefusal(
+                "ingest_record_incomplete",
+                "the ingestion record has no authoritative mesh sizes; re-ingest the CAD return",
+            )
+        if geometry.mesh.model_dump(mode="json") != dict(recorded_sizes):
+            raise ImportedSolveRefusal(
+                "mesh_sizes_mismatch",
+                "request mesh sizes do not match the sizes used to create the ingestion artifact",
+            )
+
+        report_sha = str(record.get("report_sha256") or "")
+        acknowledged = set(geometry.acknowledged_findings)
+        blocking_ids = [
+            str(finding.get("id"))
+            for finding in record.get("findings") or []
+            if isinstance(finding, Mapping) and bool(finding.get("blocking"))
+        ]
+        missing_findings = [
+            finding_id
+            for finding_id in blocking_ids
+            if f"{report_sha}:{finding_id}" not in acknowledged
+        ]
+        if missing_findings:
+            raise ImportedSolveRefusal(
+                "unacknowledged_findings",
+                f"blocking ingestion findings require current report acknowledgements: {missing_findings}",
+                details={
+                    "report_sha256": report_sha,
+                    "missing_finding_ids": missing_findings,
+                },
+            )
+
+        acoustic_domain = str(
+            record.get("acoustic_domain") or record.get("sim_type") or "free-space"
+        ).strip().lower()
+        if bool(record.get("infinite_baffle")) or acoustic_domain not in {
+            "free-space",
+            "free_space",
+            "freestanding",
+        }:
+            raise ImportedSolveRefusal(
+                "imported_infinite_baffle_unsupported",
+                "imported geometry supports free-space solves only; infinite baffle is unavailable",
+            )
+        fem_volumes = (
+            (record.get("evidence") or {}).get("fem_air_volumes")
+            if isinstance(record.get("evidence"), Mapping)
+            else []
+        ) or []
+        required_fem = [
+            volume
+            for volume in fem_volumes
+            if not isinstance(volume, Mapping) or volume.get("required", True)
+        ]
+        if required_fem and not geometry.exterior_only:
+            raise ImportedSolveRefusal(
+                "fem_required",
+                "the CAD return declares required FEM air volumes; set exterior_only=true "
+                "to explicitly exclude them from this Phase 2 solve",
+            )
+
+        symmetry_metadata = _imported_symmetry_metadata(
+            record, request.options.symmetry
+        )
+        _validate_imported_polar_grid(geometry, request, record)
+        polar = request.options.polar_config
+        if "diagonal" in polar.enabled_axes and not math.isclose(
+            polar.inclination, 45.0
+        ):
+            raise ImportedSolveRefusal(
+                "imported_diagonal_inclination_unsupported",
+                "Phase 2 imported solves support diagonal observation only at the default 45-degree inclination",
+                details={"inclination": polar.inclination},
+            )
+        caveat = _validate_imported_frequency(request, record, active_sources)
+        try:
+            msh_text = await asyncio.to_thread(read_verified_import_mesh, record)
+        except ImportedMeshArtifactError as exc:
+            raise ImportedSolveRefusal(
+                "ingest_mesh_unavailable",
+                str(exc),
+            ) from exc
+        mesh_record = record.get("mesh")
+        mesh_stats = (
+            dict(mesh_record.get("stats") or {})
+            if isinstance(mesh_record, Mapping)
+            else {}
+        )
+        anchor = record.get("anchor")
+        anchor = anchor if isinstance(anchor, Mapping) else {}
+        record_anchor_design_id = (
+            str(anchor["design_id"]) if anchor.get("design_id") else None
+        )
+        anchor_design_id: str | None = None
+        anchor_snapshot: dict[str, Any] | None = None
+        if record_anchor_design_id is not None:
+            design_row = await asyncio.to_thread(
+                self.cadlink_store.get_design, record_anchor_design_id
+            )
+            if design_row is not None:
+                anchor_design_id = record_anchor_design_id
+                try:
+                    parsed = await asyncio.to_thread(
+                        parse, str(design_row["snapshot_text"])
+                    )
+                    anchor_snapshot = {
+                        "version": 1,
+                        "design": parsed.design.model_dump(mode="json"),
+                    }
+                except Exception:
+                    logger.warning(
+                        "Could not parse anchor design snapshot %s for imported job",
+                        record_anchor_design_id,
+                    )
+        return _ImportedSubmission(
+            record=dict(record),
+            msh_text=msh_text,
+            mesh_stats=mesh_stats,
+            symmetry_metadata=symmetry_metadata,
+            global_frequency_caveat=caveat,
+            anchor_design_id=anchor_design_id,
+            anchor_snapshot=anchor_snapshot,
+        )
 
     async def stop(self, job_id: str) -> dict[str, str]:
         await self.start()
@@ -670,7 +1092,48 @@ class JobRuntime:
                 symmetry_metadata.get("resolved_quadrants", 1234)
             )
             request = request.model_copy(deep=True)
-            request.design.root.mesh.quadrants = Expr(value=float(resolved_quadrants))
+            imported_record: dict[str, Any] | None = None
+            if isinstance(request.geometry, ParametricGeometrySource):
+                request.design.root.mesh.quadrants = Expr(value=float(resolved_quadrants))
+            else:
+                if self.cadlink_store is None:
+                    raise ImportedSolveRefusal(
+                        "ingest_registry_unavailable",
+                        "the CAD ingestion registry is unavailable during execution",
+                    )
+                imported_record = await asyncio.to_thread(
+                    get_ingestion_record,
+                    self.cadlink_store,
+                    request.geometry.ingest_id,
+                )
+                if imported_record is None:
+                    raise ImportedSolveRefusal(
+                        "ingest_not_found",
+                        f"ingestion record {request.geometry.ingest_id!r} disappeared before execution",
+                    )
+                job_msh_text = await asyncio.to_thread(
+                    self.store.get_mesh_artifact, job_id
+                )
+                job_artifact_present = job_msh_text is not None
+                try:
+                    if job_msh_text is not None:
+                        verify_record_mesh_text(imported_record, job_msh_text)
+                    else:
+                        job_msh_text = await asyncio.to_thread(
+                            read_verified_import_mesh, imported_record
+                        )
+                except ImportedMeshArtifactError as exc:
+                    raise ImportedSolveRefusal(
+                        "ingest_mesh_unavailable",
+                        str(exc),
+                    ) from exc
+                imported_record = {
+                    **imported_record,
+                    "_execution_msh_text": job_msh_text,
+                    "_execution_mesh_source": (
+                        "job-artifact" if job_artifact_present else "imports-cache"
+                    ),
+                }
             try:
                 engine = await self.engine_registry.get_engine(request.options.engine)
             except Exception:
@@ -709,7 +1172,11 @@ class JobRuntime:
                     return
                 self.events.publish(event)
                 await self._run_real_engine(
-                    job_id, request, engine, symmetry_metadata=symmetry_metadata
+                    job_id,
+                    request,
+                    engine,
+                    symmetry_metadata=symmetry_metadata,
+                    imported_record=imported_record,
                 )
                 return
             event = self.store.start_job(
@@ -863,6 +1330,7 @@ class JobRuntime:
         engine: Any,
         *,
         symmetry_metadata: Mapping[str, Any] | None = None,
+        imported_record: Mapping[str, Any] | None = None,
     ) -> None:
         """Run one real adapter while preserving Batch J's lifecycle seam.
 
@@ -923,6 +1391,11 @@ class JobRuntime:
             }
             if "artifact_cb" in inspect.signature(engine.run).parameters:
                 run_kwargs["artifact_cb"] = artifact_callback
+            if (
+                imported_record is not None
+                and "imported_record" in inspect.signature(engine.run).parameters
+            ):
+                run_kwargs["imported_record"] = imported_record
             solve_started = time.perf_counter()
             outcome = await engine.run(request, **run_kwargs)
         finally:
@@ -1290,8 +1763,23 @@ class JobRuntime:
     @staticmethod
     def _config_summary(request: SolveRequest) -> dict[str, Any]:
         start, end, count = JobRuntime._frequency_options(request)
+        if isinstance(request.geometry, ParametricGeometrySource):
+            return {
+                "formula_type": request.design.formula,
+                "frequency_range": [start, end],
+                "num_frequencies": count,
+                "frequency_source": (
+                    "explicit_list"
+                    if request.options.frequencies_hz is not None
+                    else "generated_grid"
+                ),
+                "engine": request.options.engine,
+                "design_revision": request.design_revision,
+                "polar_grid": request.options.polar_config.resolved_grid(),
+            }
         return {
-            "formula_type": request.design.formula,
+            "formula_type": "cad-import",
+            "geometry_type": "imported",
             "frequency_range": [start, end],
             "num_frequencies": count,
             "frequency_source": (
@@ -1300,7 +1788,11 @@ class JobRuntime:
                 else "generated_grid"
             ),
             "engine": request.options.engine,
-            "design_revision": request.design_revision,
+            "design_revision": 0,
+            "ingest_id": request.geometry.ingest_id,
+            "drive_channel_ids": [
+                channel.id for channel in request.geometry.drive_channels
+            ],
             "polar_grid": request.options.polar_config.resolved_grid(),
         }
 
@@ -1313,7 +1805,11 @@ class JobRuntime:
     ) -> dict[str, Any]:
         enriched = dict(results)
         metadata = dict(enriched.get("metadata") or {})
-        metadata["design_revision"] = request.design_revision
+        if isinstance(request.geometry, ParametricGeometrySource):
+            metadata["design_revision"] = request.design_revision
+        else:
+            metadata["geometry_type"] = "imported"
+            metadata["ingest_id"] = request.geometry.ingest_id
         metadata["polar_grid"] = request.options.polar_config.resolved_grid()
         if symmetry_metadata is not None:
             metadata["symmetry"] = dict(symmetry_metadata)
@@ -1344,7 +1840,11 @@ class JobRuntime:
         listings and config summaries describe the sweep that actually runs.
         """
 
-        simulation = request.design.root.simulation
+        simulation = (
+            request.design.root.simulation
+            if isinstance(request.geometry, ParametricGeometrySource)
+            else None
+        )
 
         def numeric(expr: Any, default: float) -> float:
             value = getattr(expr, "value", None) if expr is not None else None
@@ -1356,12 +1856,18 @@ class JobRuntime:
         if request.options.frequency_range is not None:
             start, end = request.options.frequency_range
         else:
+            if isinstance(request.geometry, ImportedGeometrySource):
+                raise ValueError("imported geometry requires an explicit frequency range")
+            assert simulation is not None
             start = numeric(simulation.f1, 200.0)
             end = numeric(simulation.f2, 20_000.0)
         if not math.isfinite(start) or not math.isfinite(end):
             raise ValueError("frequency bounds must be finite")
         count = request.options.num_frequencies
         if count is None:
+            if isinstance(request.geometry, ImportedGeometrySource):
+                raise ValueError("imported geometry requires an explicit frequency count")
+            assert simulation is not None
             count = int(round(numeric(simulation.num_frequencies, 24.0)))
         count = max(1, min(401, count))
         if start <= 0 or end <= start:
@@ -1375,7 +1881,33 @@ class JobRuntime:
         # An imported v1 job reaches the client already translated, so reopen,
         # rerun, compare and export need no legacy branch; one that cannot be
         # translated keeps its original bytes and carries the reason instead.
+        geometry = stored_config.get("geometry")
+        imported = isinstance(geometry, Mapping) and geometry.get("type") == "imported"
         design = resolve_job_design(row.get("script_snapshot"), row.get("config_json"))
+        if imported:
+            imported_metadata = metadata.get("imported_geometry")
+            imported_metadata = (
+                imported_metadata if isinstance(imported_metadata, Mapping) else {}
+            )
+            anchor_design_id = imported_metadata.get("anchor_design_id")
+            anchor_note = (
+                f" The ingestion anchor is registered design {anchor_design_id}."
+                if anchor_design_id
+                else ""
+            )
+            design_availability = {
+                "reopenable": False,
+                "source": "cad-import",
+                "reason_code": "imported_geometry",
+                "reason": (
+                    "This job was solved from an immutable CAD-return ingestion and cannot "
+                    "be reopened as a parametric design."
+                    + anchor_note
+                ),
+                "note": None,
+            }
+        else:
+            design_availability = design.as_availability()
         item = {
             "id": row.get("id"),
             "run_number": row.get("run_number"),
@@ -1399,7 +1931,7 @@ class JobRuntime:
             "script_snapshot": design.snapshot
             if design.snapshot is not None
             else row.get("script_snapshot"),
-            "design_availability": design.as_availability(),
+            "design_availability": design_availability,
             "design_revision": int(metadata.get("design_revision") or 0),
             "polar_grid": metadata.get("polar_grid") or {},
             "rating": metadata.get("rating"),
@@ -1427,6 +1959,7 @@ class JobRuntime:
 __all__ = [
     "EngineUnavailableError",
     "EventBroker",
+    "ImportedSolveRefusal",
     "JobConflictError",
     "JobMeshDiscardedError",
     "JobNotFoundError",
