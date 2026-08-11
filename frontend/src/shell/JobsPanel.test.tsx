@@ -148,6 +148,23 @@ describe('jobs panel run list', () => {
     expect(host.textContent).toContain('#2 · Kept');
   });
 
+  it('shows export controls only on the selected run', async () => {
+    const first = job(1, 'First');
+    const second = job(2, 'Second');
+    publishJobs([first, second]);
+    compareSelection.setPrimary(first.id);
+    await act(async () => root.render(<JobsPanel/>));
+
+    let exports = host.querySelectorAll<HTMLButtonElement>('button[aria-label^="More export options for"]');
+    expect(exports).toHaveLength(1);
+    expect(exports[0].ariaLabel).toBe('More export options for First');
+
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="Select #2 · Second"]')!.click());
+    exports = host.querySelectorAll<HTMLButtonElement>('button[aria-label^="More export options for"]');
+    expect(exports).toHaveLength(1);
+    expect(exports[0].ariaLabel).toBe('More export options for Second');
+  });
+
   it('restores the configured kept threshold and never hides active runs', async () => {
     preferencesStore.update({ minRating: 4 });
     const active = { ...job(3, 'Active'), status: 'running' as const, rating: 0 };
