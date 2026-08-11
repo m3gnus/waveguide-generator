@@ -161,7 +161,7 @@ def test_gzip_middleware_leaves_websockets_alone(tmp_path: Path, path: str) -> N
                 "raw_path": path.encode("ascii"),
                 "query_string": b"",
                 "root_path": "",
-                "headers": [(b"host", b"testserver")],
+                "headers": [(b"host", b"127.0.0.1:3100")],
                 "client": ("127.0.0.1", 12345),
                 "server": ("127.0.0.1", 3100),
                 "subprotocols": [],

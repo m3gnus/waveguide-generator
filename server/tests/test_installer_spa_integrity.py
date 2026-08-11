@@ -94,10 +94,14 @@ def _run_installer(
         base_url.mkdir(exist_ok=True)
         command.extend(("--spa-base-url", base_url.as_uri()))
     command.extend(args)
+    environment = os.environ.copy()
+    # SPA integrity is isolated from the update-lock wrapper here; dedicated
+    # update-guard tests exercise that process-lifetime lock.
+    environment["WG_UPDATE_LOCK_HELD"] = "1"
     return subprocess.run(
         command,
         cwd=checkout,
-        env=os.environ.copy(),
+        env=environment,
         text=True,
         capture_output=True,
         timeout=30,
