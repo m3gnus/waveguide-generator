@@ -14,6 +14,8 @@ import { CadLinkPanel } from './CadLinkPanel';
 import { JobsPanel } from './JobsPanel';
 import { ResultsPanel } from './ResultsPanel';
 import { ViewportPanel } from './ViewportPanel';
+import { bindWorkspaceNavigation, type WorkspacePanel } from './workspaceNavigation';
+export { workspaceNavigation } from './workspaceNavigation';
 
 export const LEGACY_LAYOUT_KEY = 'wg2.dockview.layout.v1';
 export const LAYOUT_KEY = 'wg2.dockview.layout.v4';
@@ -30,15 +32,6 @@ const components = {
 };
 
 type ComponentName = keyof typeof components;
-
-type WorkspacePanel = ComponentName;
-let activateWorkspacePanel = (_panel: WorkspacePanel): boolean => false;
-
-export const workspaceNavigation = {
-  activate(panel: WorkspacePanel): boolean {
-    return activateWorkspacePanel(panel);
-  },
-};
 
 export class ReactPanelRenderer implements IContentRenderer {
   readonly element = document.createElement('div');
@@ -311,12 +304,12 @@ export function Workspace({ resetKey }: { resetKey: number }) {
       keyboardNavigation: true,
     });
     apiRef.current = dockview.api;
-    activateWorkspacePanel = (panel) => {
+    const unbindNavigation = bindWorkspaceNavigation((panel: WorkspacePanel) => {
       const target = dockview.api.getPanel(panel);
       if (!target) return false;
       target.api.setActive();
       return true;
-    };
+    });
     const initialSize = measureHost(host.current, dockview.api);
     const initialLayoutSize = seedSize(initialSize);
     const stored = localStorage.getItem(LAYOUT_KEY);
@@ -386,7 +379,7 @@ export function Workspace({ resetKey }: { resetKey: number }) {
       observer?.disconnect();
       subscription.dispose();
       apiRef.current = null;
-      activateWorkspacePanel = () => false;
+      unbindNavigation();
       coldStartSeeded.current = false;
       dockview.dispose();
     };

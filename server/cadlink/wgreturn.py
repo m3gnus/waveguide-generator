@@ -119,6 +119,12 @@ def _walk(value: Any, path: str = "$") -> Iterable[tuple[str, Any]]:
     if isinstance(value, Mapping):
         for key, child in value.items():
             child_path = f"{path}.{key}"
+            # This is WG-authored config provenance echoed by Fusion. It is
+            # opaque to the CAD evidence policy and may legitimately contain
+            # keys such as "symmetry" or "tags".
+            if key == "config" and path.startswith("$.instances["):
+                yield child_path, child
+                continue
             if key in FORBIDDEN_VERDICT_KEYS:
                 _fail(child_path, "CAD-authored verdict keys are forbidden")
             yield from _walk(child, child_path)
@@ -252,6 +258,10 @@ def _validate_instance(value: Any, path: str) -> str:
         _integer(obj["edit_version"], f"{path}.edit_version", minimum=1)
     if obj.get("design_hash") is not None:
         _string(obj["design_hash"], f"{path}.design_hash")
+    if obj.get("formula") is not None:
+        _string(obj["formula"], f"{path}.formula")
+    if obj.get("config") is not None:
+        _mapping(obj["config"], f"{path}.config")
     _string(_required(obj, "export_id", path), f"{path}.export_id")
     _integer(_required(obj, "export_sequence", path), f"{path}.export_sequence", minimum=1)
     for name in ("geometry_hash", "origin_bundle_id", "occurrence_path"):

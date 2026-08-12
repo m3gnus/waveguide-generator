@@ -159,4 +159,19 @@ describe('Send to CAD requests', () => {
     expect(JSON.parse(String(calls[1].init?.body))).toMatchObject({ identity: null });
     expect(result.identity).toEqual({ ...identity, baseEditVersion: 1 });
   });
+
+  it('reports a failed Fusion handoff instead of claiming the bundle is opening', async () => {
+    const fetcher = (async (url: string) => {
+      if (url === '/api/workspace/path') return new Response(JSON.stringify({ selected: true, path: '/cad' }));
+      return new Response(JSON.stringify({
+        bundlePath: '/cad/wglink/horn.wglink', bundleId: 'wgb_1', exportId: 'wge_1', sequence: 1,
+        designHash: 'sha256:design', geometryHash: 'sha256:geometry', artifactSha256: 'sha256:step',
+        cadHandoff: 'failed', cadLaunch: false,
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as typeof fetch;
+
+    await expect(sendDesignToCad(
+      hydrateDesignDocument({ formula: 'OSSE' }), 1, 'horn', null, fetcher, 'attempt-1',
+    )).rejects.toThrow('bundle was exported, but WG could not notify Fusion');
+  });
 });

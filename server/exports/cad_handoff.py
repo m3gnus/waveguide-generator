@@ -17,10 +17,11 @@ from typing import Mapping
 
 
 HANDOFF_FILENAME = ".fusion-handoff.json"
+IPC_SUBDIRECTORY = Path("ipc") / "wglink"
 
 
 def publish_fusion_handoff(
-    workspace_root: Path, result: Mapping[str, object]
+    data_dir: Path, workspace_root: Path, result: Mapping[str, object]
 ) -> Path:
     """Atomically announce one completed bundle to the Fusion add-in."""
 
@@ -42,14 +43,17 @@ def publish_fusion_handoff(
         "bundleId": bundle_id,
         "exportId": export_id,
         "sequence": int(result.get("sequence") or 0),
+        "designId": str(((result.get("identity") or {}) if isinstance(result.get("identity"), Mapping) else {}).get("designId") or "") or None,
         "requestedAt": datetime.now(timezone.utc)
         .isoformat(timespec="seconds")
         .replace("+00:00", "Z"),
     }
 
-    marker_path = bundle_root / HANDOFF_FILENAME
+    ipc_root = data_dir.resolve() / IPC_SUBDIRECTORY
+    ipc_root.mkdir(parents=True, exist_ok=True)
+    marker_path = ipc_root / HANDOFF_FILENAME
     descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f"{HANDOFF_FILENAME}.", dir=bundle_root
+        prefix=f"{HANDOFF_FILENAME}.", dir=ipc_root
     )
     temporary_path = Path(temporary_name)
     try:

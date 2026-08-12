@@ -16,6 +16,18 @@
 /* The outbound leg leads the panel, so it carries no separating top margin. */
 .cad-send { margin-top: 0; margin-bottom: 7px; }
 .cad-send code { color: var(--fg2); font: var(--text-micro) var(--mono); }
+.cad-application { display: flex; align-items: baseline; gap: 7px; padding-bottom: 7px; border-bottom: 1px solid var(--hair); font-size: var(--text-micro); }
+.cad-application > span { color: var(--fg3); text-transform: uppercase; letter-spacing: .05em; }
+.cad-application > b { color: var(--fg1); }
+.cad-application .link-button { margin-left: auto; padding: 0; border: 0; background: transparent; color: var(--acc); font-size: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.cad-connection { display: grid; grid-template-columns: 9px minmax(0, 1fr); align-items: start; gap: 8px; padding: 10px 0 7px; }
+.cad-connection-dot { width: 8px; height: 8px; margin-top: 5px; border-radius: 50%; background: var(--fg3); box-shadow: 0 0 0 3px color-mix(in srgb, var(--fg3) 12%, transparent); }
+.cad-connection h3 { margin: 0; text-transform: none; letter-spacing: 0; }
+.cad-connection p { margin: 2px 0 0; }
+.cad-connection-current .cad-connection-dot { background: var(--green); box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 14%, transparent); }
+.cad-connection-stale .cad-connection-dot { background: var(--amber); box-shadow: 0 0 0 3px color-mix(in srgb, var(--amber) 14%, transparent); }
+.cad-primary-action { justify-content: center; width: 100%; min-height: 34px; }
+.cad-send .cad-transport-note { margin: 8px 0 0; padding-top: 7px; border-top: 1px solid var(--hair-soft); }
 .cad-section h3 { margin: 0; font-size: var(--text-base); text-transform: uppercase; letter-spacing: .06em; }
 .cad-section header > button { margin-left: auto; }
 .cad-status { margin-left: auto; color: var(--fg3); font-size: var(--text-micro); text-transform: uppercase; }

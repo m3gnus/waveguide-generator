@@ -59,6 +59,8 @@ export interface WgLinkExportResponse {
   designHash: string;
   geometryHash: string;
   artifactSha256: string;
+  cadHandoff?: 'published' | 'failed';
+  cadLaunch?: boolean;
   /** The committed identity; absent when the design has moved on since the export. */
   identity?: DesignIdentity;
 }
@@ -142,7 +144,11 @@ export async function sendDesignToCad(
     }),
   });
   if (!response.ok) throw new Error(await errorMessage(response));
-  return response.json() as Promise<WgLinkExportResponse>;
+  const result = await response.json() as WgLinkExportResponse;
+  if (result.cadHandoff === 'failed') {
+    throw new Error(`The CAD bundle was exported, but WG could not notify Fusion. Open it from ${result.bundlePath}.`);
+  }
+  return result;
 }
 
 function unwrapExpressions(value: unknown, path = '', expressions: Record<string, ExprNumber> = {}, absent: string[] = []): unknown {

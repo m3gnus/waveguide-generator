@@ -622,6 +622,8 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .settings-scroll { max-height: calc(100vh - 130px); overflow: auto; }
 .settings-theme { padding: 12px 16px; border-bottom: 1px solid var(--hair-soft); }.settings-theme h3 { margin: 0 0 6px; color: var(--fg2); font-size: var(--text-micro); font-weight: 600; text-transform: uppercase; }.settings-theme-options { display: flex; gap: 6px; }.settings-theme-options button { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg2); }.settings-theme-options button.on { border-color: rgba(var(--acc-rgb), .45); color: var(--acc); }.settings-theme-options svg { width: 13px; }
 .workspace-settings-path { overflow: hidden; margin: 0 0 8px; color: var(--fg); font-family: var(--mono); font-size: var(--text-micro); text-overflow: ellipsis; white-space: nowrap; }.workspace-settings-error { margin: 6px 0 0; color: var(--red); font-size: var(--text-micro); }
+.cad-settings .ui-field { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(200px, 1fr); align-items: center; gap: 12px; color: var(--fg2); }
+.cad-settings-note { margin: 7px 0 0; color: var(--fg3); font-size: var(--text-micro); }
 .viewer-preferences-note { margin: 0; padding: 8px 16px 12px; color: var(--fg3); font-size: var(--text-micro); }
 .update-dialog { width: min(620px, calc(100vw - 36px)); }
 .update-dialog-body { display: grid; gap: 12px; padding: 16px; color: var(--fg2); font-size: var(--text-base); }

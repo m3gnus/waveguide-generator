@@ -16,17 +16,19 @@ def _result(bundle: Path) -> dict[str, object]:
         "bundleId": "wgb_01KZV700000000000000000000",
         "exportId": "wge_01KZV700000000000000000000",
         "sequence": 4,
+        "identity": {"designId": "wgd_01KZV700000000000000000000"},
     }
 
 
 def test_publish_fusion_handoff_announces_the_completed_bundle(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
     workspace = tmp_path / "workspace"
     bundle = workspace / "wglink" / "horn.wglink"
     bundle.mkdir(parents=True)
 
-    marker = publish_fusion_handoff(workspace, _result(bundle))
+    marker = publish_fusion_handoff(data_dir, workspace, _result(bundle))
 
-    assert marker == workspace / "wglink" / HANDOFF_FILENAME
+    assert marker == data_dir / "ipc" / "wglink" / HANDOFF_FILENAME
     payload = json.loads(marker.read_text())
     assert payload == {
         "schemaVersion": 1,
@@ -35,6 +37,7 @@ def test_publish_fusion_handoff_announces_the_completed_bundle(tmp_path: Path) -
         "bundleId": "wgb_01KZV700000000000000000000",
         "exportId": "wge_01KZV700000000000000000000",
         "sequence": 4,
+        "designId": "wgd_01KZV700000000000000000000",
         "requestedAt": payload["requestedAt"],
     }
     assert payload["requestedAt"].endswith("Z")
@@ -42,14 +45,15 @@ def test_publish_fusion_handoff_announces_the_completed_bundle(tmp_path: Path) -
 
 
 def test_a_new_send_atomically_replaces_the_previous_marker(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
     workspace = tmp_path / "workspace"
     bundle = workspace / "wglink" / "horn.wglink"
     bundle.mkdir(parents=True)
     first = _result(bundle)
-    publish_fusion_handoff(workspace, first)
+    publish_fusion_handoff(data_dir, workspace, first)
 
     second = {**first, "exportId": "wge_new", "sequence": 5}
-    marker = publish_fusion_handoff(workspace, second)
+    marker = publish_fusion_handoff(data_dir, workspace, second)
 
     payload = json.loads(marker.read_text())
     assert payload["exportId"] == "wge_new"
@@ -65,5 +69,5 @@ def test_handoff_refuses_a_bundle_outside_the_selected_workspace(
     outside.mkdir()
 
     with pytest.raises(ValueError, match="outside the selected workspace"):
-        publish_fusion_handoff(workspace, _result(outside))
-    assert not (workspace / "wglink" / HANDOFF_FILENAME).exists()
+        publish_fusion_handoff(tmp_path / "data", workspace, _result(outside))
+    assert not (tmp_path / "data" / "ipc" / "wglink" / HANDOFF_FILENAME).exists()

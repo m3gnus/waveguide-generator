@@ -6,6 +6,7 @@ from copy import deepcopy
 import json
 import hashlib
 import math
+import os
 from pathlib import Path
 from types import SimpleNamespace
 import asyncio
@@ -176,20 +177,22 @@ def test_return_listing_reads_cheap_inventory_and_marks_bad_manifests(tmp_path: 
         encoding="utf-8",
     )
     (bad / "wgreturn.json").write_text("{not json", encoding="utf-8")
+    os.utime(good, (200, 200))
+    os.utime(bad, (100, 100))
     app.state.workspace.select(workspace)
 
     result = asyncio.run(list_returns(SimpleNamespace(app=app)))
 
     assert [item["name"] for item in result["items"]] == [
-        "broken.wgreturn",
         "speaker.wgreturn",
+        "broken.wgreturn",
     ]
-    assert result["items"][0]["readable"] is False
-    assert result["items"][0]["reason"]
-    assert result["items"][1] == {
+    assert result["items"][1]["readable"] is False
+    assert result["items"][1]["reason"]
+    assert result["items"][0] == {
         "name": "speaker.wgreturn",
         "bundlePath": "wgreturn/speaker.wgreturn",
-        "modifiedAt": result["items"][1]["modifiedAt"],
+        "modifiedAt": result["items"][0]["modifiedAt"],
         "readable": True,
         "documentName": "Speaker v4",
         "sourceCount": 1,

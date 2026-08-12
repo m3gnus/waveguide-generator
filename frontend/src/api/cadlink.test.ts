@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { CadLinkApiError, getIngest, ingestReturn, listReturns } from './cadlink';
+import { designForFamily } from '../stores/design';
+import { CadLinkApiError, getFusionCadStatus, getIngest, ingestReturn, listReturns } from './cadlink';
 
 describe('CAD-link client', () => {
   it('uses the server aliases for listing, ingestion, and record lookup', async () => {
@@ -34,7 +35,7 @@ describe('CAD-link client', () => {
   });
 
   it('retains structured area-drift source ids on a refusal', async () => {
-    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({
       detail: { message: 'Area drift requires an override.', area_drift_sources: ['source-hf'] },
     }), { status: 422 })) as typeof fetch;
     const error = await ingestReturn({
@@ -44,5 +45,22 @@ describe('CAD-link client', () => {
     }, fetcher).catch((reason: unknown) => reason);
     expect(error).toBeInstanceOf(CadLinkApiError);
     expect((error as CadLinkApiError).areaDriftSources).toEqual(['source-hf']);
+  });
+
+  it('sends the current config and CAD identity when checking Fusion freshness', async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({
+      cadApplication: 'fusion360', state: 'closed', running: false, updatedAt: null,
+      documentName: null, currentFormula: 'R-OSSE', fusionFormula: null, link: null,
+    }), { status: 200 }));
+    const identity = { designId: 'wgd_a', lineageId: 'wgl_a', baseEditVersion: 4 };
+
+    await getFusionCadStatus(designForFamily('R-OSSE'), identity, fetcher as typeof fetch);
+
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(fetcher.mock.calls[0][0]).toBe('/api/cadlink/fusion-status');
+    expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).toMatchObject({
+      design: { formula: 'R-OSSE' },
+      identity,
+    });
   });
 });

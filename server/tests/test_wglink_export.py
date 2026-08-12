@@ -226,6 +226,9 @@ def test_wglink_export_reuses_commit_left_by_failed_export(
     assert _design_count(store) == 1
     manifest = json.loads((Path(retried["bundlePath"]) / "wglink.json").read_text())
     assert manifest["design"]["id"] == original_identity.design_id
+    assert manifest["design"]["formula"] == "osse"
+    assert manifest["design"]["config"]["formula"] == "OSSE"
+    assert manifest["design"]["config"]["L"]["value"] == 121
 
 
 def test_wglink_idempotent_retry_omits_identity_after_head_advanced(

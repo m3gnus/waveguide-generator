@@ -73,4 +73,13 @@ describe('SettingsDialog', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/workspace/select', { method: 'POST' });
     expect(section.textContent).toContain('/chosen/workspace');
   });
+
+  it('names Fusion 360 as the CAD application and labels Onshape as coming soon', async () => {
+    await act(async () => host.querySelector<HTMLButtonElement>('#open-settings')!.click());
+    const select = host.querySelector<HTMLSelectElement>('[aria-label="CAD application"]')!;
+    expect(select.value).toBe('fusion360');
+    expect(select.options[0].textContent).toBe('Autodesk Fusion 360');
+    expect(select.options[1].textContent).toContain('coming soon');
+    expect(select.options[1].disabled).toBe(true);
+  });
 });
