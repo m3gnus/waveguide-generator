@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import { CadLinkApiError, ingestReturn, listReturns, type CadReturnBundle, type CadReturnFinding, type CadReturnIngestRecord } from '../api/cadlink';
 import { NumberField } from '../design/NumberField';
 import { FrequencySweepControls, ToggleRow } from '../design/SolveOptionsSections';
+import { sentToCadMessage, useSendToCad } from '../design/useSendToCad';
 import type { ImportedSolveSubmission } from '../jobs/actions';
 import {
   acknowledgedFindingWire,
@@ -168,6 +169,7 @@ export function CadLinkPanel() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
+  const { send: sendToCad, sending } = useSendToCad();
 
   const refresh = useCallback(async () => {
     setLoading(true); setError(null);
@@ -215,6 +217,16 @@ export function CadLinkPanel() {
     finally { setIngesting(false); }
   };
 
+  // The outbound leg. Sending refreshes the list because the bundle it writes
+  // is what CAD picks up, and a return for it lands in the same workspace.
+  const send = async () => {
+    setError(null); setStatus(null);
+    try {
+      setStatus(sentToCadMessage(await sendToCad()));
+      await refresh();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+  };
+
   const unacknowledged = unacknowledgedBlocking(state);
   const activeSources = (state.selectedBundle?.sources ?? []).filter((source) => !state.skippedSourceIds.includes(source.id));
   const channelIds = [...new Set((state.selectedBundle?.sources ?? []).map((source) => source.defaultDriveChannelId))];
@@ -244,6 +256,10 @@ export function CadLinkPanel() {
     .map((finding) => String(finding.source_id))]);
 
   return <div className="cadlink-panel panel-scroll">
+    <section className="cad-section cad-send">
+      <header><h3>Send to CAD</h3><button className="primary" disabled={sending} onClick={() => void send()}>{sending ? 'Sending…' : 'Send to CAD'}</button></header>
+      <p>Writes an identity-bearing <code>.wglink</code> bundle for the design on screen into the workspace, where WGLink inserts it in Fusion. Saving first is not required.</p>
+    </section>
     <div className="cadlink-toolbar"><b>Returned bundles</b><span className="spacer"/><button disabled={loading || ingesting} onClick={() => void refresh()}><Icon name="reset"/>{loading ? 'Loading…' : 'Refresh'}</button></div>
     {error && <div className="cad-alert" role="alert">{error}</div>}
     {state.ingestStaleReason && <div className="cad-alert" role="status">{state.ingestStaleReason} Re-ingest before solving.</div>}

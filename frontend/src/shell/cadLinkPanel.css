@@ -13,6 +13,9 @@
 .cad-section { margin-top: 7px; padding: 7px; border: 1px solid var(--hair); background: var(--surface-panel); }
 .cad-section.degraded, .cad-scope.degraded { border-left: 3px solid var(--amber); }
 .cad-section > header { min-height: 24px; }
+/* The outbound leg leads the panel, so it carries no separating top margin. */
+.cad-send { margin-top: 0; margin-bottom: 7px; }
+.cad-send code { color: var(--fg2); font: var(--text-micro) var(--mono); }
 .cad-section h3 { margin: 0; font-size: var(--text-base); text-transform: uppercase; letter-spacing: .06em; }
 .cad-section header > button { margin-left: auto; }
 .cad-status { margin-left: auto; color: var(--fg3); font-size: var(--text-micro); text-transform: uppercase; }

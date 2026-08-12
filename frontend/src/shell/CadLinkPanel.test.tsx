@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadReturnIngestRecord, CadReturnListing } from '../api/cadlink';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
+import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { buildImportedSubmission, CadLinkPanel } from './CadLinkPanel';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
@@ -39,7 +40,7 @@ describe('CadLinkPanel', () => {
   let root: Root;
   beforeEach(() => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-    resetCadReturnStore(); resetSolveOptionsStore();
+    resetCadReturnStore(); resetSolveOptionsStore(); resetDocumentStore();
     host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify(String(input).endsWith('/returns') ? listing : record), { status: 200, headers: { 'Content-Type': 'application/json' } })));
   });
@@ -200,6 +201,50 @@ describe('CadLinkPanel', () => {
     await renderAndSelect();
     await clickIngest();
     expect(host.textContent).toContain(copy);
+  });
+
+  it('sends the design on screen to CAD and refreshes the returned bundles', async () => {
+    const requested: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      requested.push(path);
+      if (path.endsWith('/returns')) return new Response(JSON.stringify(listing), { status: 200 });
+      if (path === '/api/workspace/path') return new Response(JSON.stringify({ selected: true, path: '/cad' }), { status: 200 });
+      return new Response(JSON.stringify({
+        bundlePath: '/cad/wglink/horn.wglink', bundleId: 'wgb_1', exportId: 'wge_1', sequence: 4,
+        designHash: 'sha256:d', geometryHash: 'sha256:g', artifactSha256: 'sha256:a',
+        identity: { designId: 'wgd_01K00000000000000000000000', lineageId: 'wgl_01K00000000000000000000000', baseEditVersion: 2 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
+    await act(async () => { root.render(<CadLinkPanel/>); await Promise.resolve(); await Promise.resolve(); });
+
+    const send = [...host.querySelectorAll<HTMLButtonElement>('.cad-send button')]
+      .find((button) => button.textContent === 'Send to CAD')!;
+    expect(send).toBeTruthy();
+    await act(async () => { send.click(); await Promise.resolve(); await Promise.resolve(); });
+
+    expect(requested).toContain('/api/export/wglink');
+    expect(host.textContent).toContain('Sent to CAD · sequence 4 · /cad/wglink/horn.wglink');
+    // The bundle just written is what CAD picks up, so the listing is re-read.
+    expect(requested.filter((path) => path.endsWith('/returns')).length).toBeGreaterThan(1);
+    expect(useDocumentStore.getState().identity?.baseEditVersion).toBe(2);
+  });
+
+  it('reports a refused send without clearing the panel', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return new Response(JSON.stringify(listing), { status: 200 });
+      if (path === '/api/workspace/path') return new Response(JSON.stringify({ selected: true, path: '/cad' }), { status: 200 });
+      return new Response(JSON.stringify({ detail: 'CAD-link bundle name is already used by another design: horn.wglink' }), { status: 409 });
+    }));
+    await act(async () => { root.render(<CadLinkPanel/>); await Promise.resolve(); await Promise.resolve(); });
+
+    const send = [...host.querySelectorAll<HTMLButtonElement>('.cad-send button')]
+      .find((button) => button.textContent === 'Send to CAD')!;
+    await act(async () => { send.click(); await Promise.resolve(); await Promise.resolve(); });
+
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('already used by another design');
+    expect(host.querySelector('.cad-bundle-list')).toBeTruthy();
   });
 
   it('discovers area-drift overrides from structured refusal data', async () => {
