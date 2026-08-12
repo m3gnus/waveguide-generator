@@ -22,8 +22,36 @@ export interface JobResults {
   channel_order?: string[];
 }
 
+function sortFrequencyShapedRows(result: JobResults): JobResults {
+  const record = result as JobResults & Record<string, unknown>;
+  const frequencies = record.frequencies;
+  if (Array.isArray(frequencies) && frequencies.length > 1) {
+    const order = frequencies.map((_, index) => index).sort((left, right) => Number(frequencies[left]) - Number(frequencies[right]));
+    if (order.some((value, index) => value !== index)) {
+      const count = frequencies.length;
+      record.frequencies = order.map((index) => frequencies[index]) as number[];
+      for (const blockName of ['directivity', 'directivity_phase']) {
+        const block = record[blockName];
+        if (!block || typeof block !== 'object' || Array.isArray(block)) continue;
+        Object.entries(block as Record<string, unknown>).forEach(([plane, rows]) => {
+          if (Array.isArray(rows) && rows.length === count) (block as Record<string, unknown>)[plane] = order.map((index) => rows[index]);
+        });
+      }
+      for (const blockName of ['spl_on_axis', 'impedance', 'di']) {
+        const block = record[blockName];
+        if (!block || typeof block !== 'object' || Array.isArray(block)) continue;
+        Object.entries(block as Record<string, unknown>).forEach(([key, values]) => {
+          if (Array.isArray(values) && values.length === count) (block as Record<string, unknown>)[key] = order.map((index) => values[index]);
+        });
+      }
+    }
+  }
+  Object.values(result.channels ?? {}).forEach(sortFrequencyShapedRows);
+  return result;
+}
+
 export function mergeProvisionalResults(current: JobResults | undefined, delta: JobResults): JobResults {
-  if (!current) return structuredClone(delta);
+  if (!current) return sortFrequencyShapedRows(structuredClone(delta));
   // Copy only the branches receiving a new row. Deep-cloning the accumulated
   // sweep for every frequency makes a 401-point solve quadratic in payload
   // size before ECharts even sees it.
@@ -65,7 +93,7 @@ export function mergeProvisionalResults(current: JobResults | undefined, delta: 
   }
   if (Array.isArray(delta.channel_order)) merged.channel_order = [...delta.channel_order];
   if (delta.metadata) merged.metadata = { ...(current.metadata ?? {}), ...structuredClone(delta.metadata) };
-  return merged;
+  return sortFrequencyShapedRows(merged);
 }
 
 export interface ProvisionalResultEntry {
@@ -80,52 +108,73 @@ export interface ProvisionalResultsSnapshot {
 
 export class ProvisionalResultsStore {
   private snapshot: ProvisionalResultsSnapshot = { version: 0, entries: {} };
+  private entries: Record<string, ProvisionalResultEntry> = {};
   private readonly listeners = new Set<() => void>();
+  private notifyTimer: ReturnType<typeof setTimeout> | null = null;
+
+  constructor(private readonly refreshIntervalMs = 250) {}
 
   getSnapshot = (): ProvisionalResultsSnapshot => this.snapshot;
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   };
-  get(jobId: string): ProvisionalResultEntry | undefined { return this.snapshot.entries[jobId]; }
+  get(jobId: string): ProvisionalResultEntry | undefined { return this.entries[jobId]; }
 
   /** False means a delta gap; the caller should fetch the process-local snapshot. */
   apply(jobId: string, revision: number, result: JobResults, snapshot = false): boolean {
-    const current = this.snapshot.entries[jobId];
+    const current = this.entries[jobId];
     if (!Number.isInteger(revision) || revision < 1) return true;
     if (current && revision <= current.revision) return true;
     if (!snapshot && current && revision !== current.revision + 1) return false;
     if (!snapshot && !current && revision !== 1) return false;
     this.publish({
-      ...this.snapshot.entries,
+      ...this.entries,
       [jobId]: {
         revision,
-        result: snapshot ? structuredClone(result) : mergeProvisionalResults(current?.result, result),
+        result: snapshot
+          ? sortFrequencyShapedRows(structuredClone(result))
+          : mergeProvisionalResults(current?.result, result),
       },
-    });
+    }, !current || snapshot);
     return true;
   }
 
   remove(jobId: string): void {
-    if (!this.snapshot.entries[jobId]) return;
-    const entries = { ...this.snapshot.entries };
+    if (!this.entries[jobId]) return;
+    const entries = { ...this.entries };
     delete entries[jobId];
-    this.publish(entries);
+    this.publish(entries, true);
   }
 
   prune(validJobIds: ReadonlySet<string>): void {
-    const entries = Object.fromEntries(Object.entries(this.snapshot.entries).filter(([id]) => validJobIds.has(id)));
-    if (Object.keys(entries).length === Object.keys(this.snapshot.entries).length) return;
-    this.publish(entries);
+    const entries = Object.fromEntries(Object.entries(this.entries).filter(([id]) => validJobIds.has(id)));
+    if (Object.keys(entries).length === Object.keys(this.entries).length) return;
+    this.publish(entries, true);
   }
 
   clear(): void {
-    if (!Object.keys(this.snapshot.entries).length) return;
-    this.publish({});
+    if (!Object.keys(this.entries).length) return;
+    this.publish({}, true);
   }
 
-  private publish(entries: Record<string, ProvisionalResultEntry>): void {
-    this.snapshot = { version: this.snapshot.version + 1, entries };
+  private publish(entries: Record<string, ProvisionalResultEntry>, immediate = false): void {
+    this.entries = entries;
+    if (!immediate && this.refreshIntervalMs > 0) {
+      if (this.notifyTimer === null) {
+        this.notifyTimer = setTimeout(() => {
+          this.notifyTimer = null;
+          this.snapshot = { version: this.snapshot.version + 1, entries: this.entries };
+          this.listeners.forEach((listener) => listener());
+        }, this.refreshIntervalMs);
+      }
+      return;
+    }
+    if (this.notifyTimer !== null) {
+      clearTimeout(this.notifyTimer);
+      this.notifyTimer = null;
+    }
+    this.snapshot = { version: this.snapshot.version + 1, entries: this.entries };
     this.listeners.forEach((listener) => listener());
   }
 }

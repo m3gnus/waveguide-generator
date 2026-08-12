@@ -58,6 +58,36 @@ CANCELLED_MESSAGE = "Simulation cancelled by user"
 RUNTIME_PERSIST_INTERVAL_SECONDS = 0.15
 
 
+def _sort_provisional_frequencies(result: dict[str, Any]) -> None:
+    """Keep accumulated chart rows ascending while deltas arrive out of order."""
+
+    frequencies = result.get("frequencies")
+    if isinstance(frequencies, list) and len(frequencies) > 1:
+        order = sorted(range(len(frequencies)), key=frequencies.__getitem__)
+        if order != list(range(len(frequencies))):
+            count = len(frequencies)
+            result["frequencies"] = [frequencies[index] for index in order]
+            for block_name in ("directivity", "directivity_phase"):
+                block = result.get(block_name)
+                if not isinstance(block, dict):
+                    continue
+                for plane, rows in block.items():
+                    if isinstance(rows, list) and len(rows) == count:
+                        block[plane] = [rows[index] for index in order]
+            for block_name in ("spl_on_axis", "impedance", "di"):
+                block = result.get(block_name)
+                if not isinstance(block, dict):
+                    continue
+                for key, values in block.items():
+                    if isinstance(values, list) and len(values) == count:
+                        block[key] = [values[index] for index in order]
+    channels = result.get("channels")
+    if isinstance(channels, dict):
+        for channel in channels.values():
+            if isinstance(channel, dict):
+                _sort_provisional_frequencies(channel)
+
+
 def _extend_provisional_results(
     current: dict[str, Any], delta: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -126,6 +156,7 @@ def _extend_provisional_results(
             ),
             **copy.deepcopy(dict(delta["metadata"])),
         }
+    _sort_provisional_frequencies(current)
     return current
 
 

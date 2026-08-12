@@ -30,6 +30,10 @@ from .base import (
     StageCallback,
 )
 from .context import SolverContext
+from .frequency_sweep import (
+    live_execution_frequencies,
+    sort_native_result_frequencies,
+)
 from .formulation import DEFAULT_BEM_FORMULATION, DEFAULT_COMPLEX_K_SHIFT
 from .infinite_baffle import require_full_3d_aperture_tag
 from .imported import (
@@ -375,7 +379,12 @@ def solve_metal_from_msh_text(
         ) as handle:
             path = Path(handle.name)
             handle.write(msh_text)
-        if context.frequencies_hz is None:
+        if result_callback is not None and native_solve_frequencies is not None:
+            result = native_solve_frequencies(
+                str(path), live_execution_frequencies(context).tolist(), config
+            )
+            sort_native_result_frequencies(result)
+        elif context.frequencies_hz is None:
             result = native_solve(str(path), config)
         else:
             # solve_frequencies bypasses the generated grid entirely; freq_min/
@@ -669,21 +678,25 @@ def solve_imported_metal_from_msh_text(
             path = Path(handle.name)
             handle.write(msh_text)
 
+        execution_frequencies = (
+            live_execution_frequencies(context).tolist()
+            if result_callback is not None
+            else list(context.frequencies_hz)
+            if context.frequencies_hz is not None
+            else None
+        )
         results = native_solve_multi_source(
             str(path),
             source_specs,
             config,
-            frequencies_hz=(
-                list(context.frequencies_hz)
-                if context.frequencies_hz is not None
-                else None
-            ),
+            frequencies_hz=execution_frequencies,
         )
         if len(results) != len(geometry.drive_channels):
             raise ValueError(
                 "multi-source Metal solver returned a different number of bases than requested"
             )
         for channel, result in zip(geometry.drive_channels, results, strict=True):
+            sort_native_result_frequencies(result)
             channel_context = SolverContext.from_imported_request(
                 request, quadrants=quadrants, source_motion=channel.motion
             )
