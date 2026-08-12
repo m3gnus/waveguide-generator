@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import ctypes
+import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -25,9 +27,13 @@ from server.preview.translate import design_to_mesher_config
 from server.workspace.api import WorkspaceState, _path_segments, _portable_path_key
 
 from .cad_launch import focus_cad
+from .cad_handoff import publish_fusion_handoff
 from .core import build_profiles, build_step, build_step_solid, build_stl
 from .geometry_identity import geometry_hash as _geometry_hash
 from .geometry_identity import mesher_version as _mesher_version
+
+
+logger = logging.getLogger(__name__)
 
 
 class ExportRequest(BaseModel):
@@ -140,34 +146,63 @@ def _replace_bundle(staged: Path, destination: Path) -> None:
 def _bundle_destination(
     wglink_root: Path, design_name: str, design_id: str
 ) -> Path:
-    """Resolve one portable bundle name without overwriting another design."""
+    """Resolve a stable portable name without overwriting another design.
+
+    A fresh/unsaved document has no filename, so every such document asks for
+    ``waveguide.wglink``.  Refusing the second one made Send to CAD fail before
+    it ever reached the Fusion launcher.  Keep the readable name for the first
+    owner and give later owners a deterministic design-id suffix; subsequent
+    exports of either design then keep updating their own bundle in place.
+    """
+
+    def available(filename: str) -> Path | None:
+        requested_key = _portable_path_key([filename])
+        for existing in wglink_root.iterdir():
+            if _portable_path_key([existing.name]) != requested_key:
+                continue
+            if existing.name != filename:
+                raise ValueError(
+                    "CAD-link bundle name collides with an existing portable "
+                    f"name: {existing.name}"
+                )
+            if existing.is_symlink() or not existing.is_dir():
+                raise ValueError(
+                    "CAD-link bundle name conflicts with an existing workspace "
+                    f"entry: {existing.name}"
+                )
+            try:
+                manifest = json.loads(
+                    (existing / "wglink.json").read_text(encoding="utf-8")
+                )
+                existing_design_id = str(
+                    (manifest.get("design") or {}).get("id") or ""
+                )
+            except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+                raise ValueError(
+                    "CAD-link bundle name conflicts with an unreadable existing "
+                    f"bundle: {existing.name}"
+                ) from exc
+            return existing if existing_design_id == design_id else None
+        return wglink_root / filename
 
     requested = f"{design_name}.wglink"
-    requested_key = _portable_path_key([requested])
-    for existing in wglink_root.iterdir():
-        if _portable_path_key([existing.name]) != requested_key:
-            continue
-        if existing.name != requested:
-            raise ValueError(
-                f"CAD-link bundle name collides with an existing portable name: {existing.name}"
-            )
-        if existing.is_symlink() or not existing.is_dir():
-            raise ValueError(
-                f"CAD-link bundle name conflicts with an existing workspace entry: {existing.name}"
-            )
-        try:
-            manifest = json.loads((existing / "wglink.json").read_text(encoding="utf-8"))
-            existing_design_id = str((manifest.get("design") or {}).get("id") or "")
-        except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
-            raise ValueError(
-                f"CAD-link bundle name conflicts with an unreadable existing bundle: {existing.name}"
-            ) from exc
-        if existing_design_id != design_id:
-            raise ValueError(
-                f"CAD-link bundle name is already used by another design: {existing.name}"
-            )
-        return existing
-    return wglink_root / requested
+    destination = available(requested)
+    if destination is not None:
+        return destination
+
+    # Eight hex digits are ample for the ordinary case.  Trying longer slices
+    # keeps the rule deterministic even under a deliberately constructed hash
+    # prefix collision.  Trim a maximal user stem so the filename remains a
+    # valid 255-byte portable component after adding the suffix and extension.
+    digest = hashlib.sha256(design_id.encode("utf-8")).hexdigest()
+    stem = design_name[:239].rstrip("._-") or "waveguide"
+    for length in (8, 12, 16, 32, 64):
+        candidate = f"{stem}-{digest[:length]}.wglink"
+        destination = available(candidate)
+        if destination is not None:
+            return destination
+
+    raise ValueError("Could not allocate a unique CAD-link bundle name.")
 
 
 class _ExportIdentityConflict(Exception):
@@ -513,6 +548,16 @@ async def export_wglink(
         selected.resolve(),
         idempotency_key,
     )
+    # The marker is written before Fusion is raised so a cold-started add-in
+    # can consume the exact export that caused the launch.  Like window focus,
+    # this is delivery metadata: a failure must not invalidate the completed,
+    # durable bundle.
+    try:
+        await asyncio.to_thread(publish_fusion_handoff, selected.resolve(), result)
+        result["cadHandoff"] = "published"
+    except (OSError, TypeError, ValueError) as exc:
+        logger.warning("Could not publish the Fusion handoff: %s", exc)
+        result["cadHandoff"] = "failed"
     # The bundle is already on disk and the response is already earned, so
     # raising Fusion is strictly a courtesy: it runs off the request thread and
     # its outcome only reaches the log.
