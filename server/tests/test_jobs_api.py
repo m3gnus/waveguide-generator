@@ -6,16 +6,17 @@ from pathlib import Path
 from typing import Any
 
 from server.app import create_app
+from server.jobs.models import SolveRequest
 
 
-async def _request(
+async def _request_with_headers(
     app: Any,
     method: str,
     path: str,
     *,
     body: dict[str, Any] | None = None,
     query: str = "",
-) -> tuple[int, bytes]:
+) -> tuple[int, bytes, dict[str, str]]:
     sent: list[dict[str, Any]] = []
     delivered = False
 
@@ -58,7 +59,29 @@ async def _request(
     response_body = b"".join(
         item.get("body", b"") for item in sent if item["type"] == "http.response.body"
     )
-    return start["status"], response_body
+    response_headers = {
+        name.decode("latin-1").lower(): value.decode("latin-1")
+        for name, value in start.get("headers", [])
+    }
+    return start["status"], response_body, response_headers
+
+
+async def _request(
+    app: Any,
+    method: str,
+    path: str,
+    *,
+    body: dict[str, Any] | None = None,
+    query: str = "",
+) -> tuple[int, bytes]:
+    status, response_body, _ = await _request_with_headers(
+        app,
+        method,
+        path,
+        body=body,
+        query=query,
+    )
+    return status, response_body
 
 
 def _solve_body(delay_ms: int = 1) -> dict[str, Any]:
@@ -70,6 +93,42 @@ def _solve_body(delay_ms: int = 1) -> dict[str, Any]:
             "simulation": {"f1": 300, "f2": 3000, "num_frequencies": 4},
         },
         "options": {"engine": "dryrun", "stage_delay_ms": delay_ms},
+    }
+
+
+def _complete_job(
+    job_id: str,
+    *,
+    request: SolveRequest | None = None,
+    stored_design: bool = True,
+    mesh_discarded: bool = True,
+) -> dict[str, Any]:
+    solve_request = request or SolveRequest.model_validate(_solve_body(delay_ms=0))
+    config = solve_request.model_dump(mode="json") if stored_design else {}
+    now = "2026-08-12T00:00:00"
+    return {
+        "id": job_id,
+        "status": "complete",
+        "created_at": now,
+        "updated_at": now,
+        "queued_at": now,
+        "started_at": now,
+        "completed_at": now,
+        "progress": 1.0,
+        "stage": "complete",
+        "stage_message": "Complete",
+        "config_json": config,
+        "config_summary_json": {"formula_type": "OSSE"},
+        "has_results": False,
+        "has_mesh_artifact": not mesh_discarded,
+        "script_snapshot": (
+            solve_request.design_snapshot.model_dump(mode="json")
+            if stored_design and solve_request.design_snapshot is not None
+            else None
+        ),
+        "task_metadata": (
+            {"mesh_discarded_at": now} if mesh_discarded else {}
+        ),
     }
 
 
@@ -122,9 +181,16 @@ def test_dryrun_http_lifecycle_metadata_results_and_delete(
         status, raw = await _request(app, "GET", f"/api/results/{job_id}")
         assert status == 200
         assert len(json.loads(raw)["frequencies"]) == 4
-        status, raw = await _request(app, "GET", f"/api/mesh-artifact/{job_id}")
+        stored_mesh = app.state.jobs_runtime.store.get_mesh_artifact(job_id)
+        assert stored_mesh is not None
+        status, raw, headers = await _request_with_headers(
+            app, "GET", f"/api/mesh-artifact/{job_id}"
+        )
         assert status == 200
-        assert raw.startswith(b"$MeshFormat")
+        assert raw == stored_mesh.encode("utf-8")
+        assert headers["content-type"] == "text/plain; charset=utf-8"
+        assert "x-wg2-mesh-regenerated" not in headers
+        assert "x-wg2-mesher-version" not in headers
         status, raw = await _request(app, "GET", "/api/mesh-artifact/unknown-job")
         assert status == 404
         assert json.loads(raw)["detail"] == "Job not found"
@@ -142,6 +208,85 @@ def test_dryrun_http_lifecycle_metadata_results_and_delete(
         assert item["parent_job_id"] == "parent-job"
         status, raw = await _request(app, "DELETE", f"/api/jobs/{job_id}")
         assert status == 200 and json.loads(raw)["deleted"] is True
+        await app.state.jobs_runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_discarded_mesh_is_regenerated_from_stored_design_for_each_download(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import server.jobs.runtime as jobs_runtime
+    import server.mesh.builder as mesh_builder
+
+    request = SolveRequest.model_validate(
+        {
+            **_solve_body(delay_ms=0),
+            "design": {
+                **_solve_body(delay_ms=0)["design"],
+                "mesh": {"length_segments": 17, "angular_segments": 28},
+            },
+        }
+    )
+    calls: list[tuple[float | None, float | None, bool]] = []
+    regenerated_mesh = "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n// regenerated\n"
+
+    async def fake_build_solver_mesh(design, options, *, force_rebuild=False):
+        calls.append(
+            (
+                design.root.mesh.length_segments.constant_value(),
+                design.root.mesh.angular_segments.constant_value(),
+                force_rebuild,
+            )
+        )
+        return {"msh_text": regenerated_mesh}
+
+    monkeypatch.setattr(mesh_builder, "build_solver_mesh", fake_build_solver_mesh)
+    monkeypatch.setattr(
+        jobs_runtime.importlib.metadata,
+        "version",
+        lambda package: "7.8.9" if package == "hornlab-waveguide-mesher" else "unknown",
+    )
+
+    async def scenario() -> None:
+        app = create_app(data_dir=tmp_path)
+        store = app.state.jobs_runtime.store
+        store.initialize()
+        store.create_job(_complete_job("discarded", request=request))
+
+        for _ in range(2):
+            status, raw, headers = await _request_with_headers(
+                app, "GET", "/api/mesh-artifact/discarded"
+            )
+            assert status == 200
+            assert raw == regenerated_mesh.encode("utf-8")
+            assert headers["content-type"] == "text/plain; charset=utf-8"
+            assert headers["x-wg2-mesh-regenerated"] == "1"
+            assert headers["x-wg2-mesher-version"] == "7.8.9"
+            assert store.get_mesh_artifact("discarded") is None
+
+        assert calls == [(17.0, 28.0, True), (17.0, 28.0, True)]
+        await app.state.jobs_runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_discarded_mesh_without_stored_design_remains_gone(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        app = create_app(data_dir=tmp_path)
+        store = app.state.jobs_runtime.store
+        store.initialize()
+        store.create_job(_complete_job("no-design", stored_design=False))
+
+        status, raw, headers = await _request_with_headers(
+            app, "GET", "/api/mesh-artifact/no-design"
+        )
+        assert status == 410
+        assert "no design was stored" in json.loads(raw)["detail"]
+        assert "x-wg2-mesh-regenerated" not in headers
+        assert store.get_mesh_artifact("no-design") is None
         await app.state.jobs_runtime.shutdown()
 
     asyncio.run(scenario())
