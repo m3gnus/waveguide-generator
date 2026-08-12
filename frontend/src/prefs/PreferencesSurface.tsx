@@ -1,5 +1,10 @@
 import { useEffect, useState, type RefObject } from 'react';
-import { EXPORT_FORMATS, MAP_REFERENCES, RESULT_PANEL_COUNTS, jobBaseName, preferencesStore, usePreferences, type JobSort, type MapReference } from './preferences';
+import { nextRunName, runNameFromFilename } from '../jobs/runNaming';
+import { projectSubmittedDesign, type SubmittedDesignProjection } from '../jobs/submittedProjection';
+import { useDesignStore } from '../stores/design';
+import { useDocumentStore } from '../stores/document';
+import { useSolveOptionsStore } from '../stores/solveOptions';
+import { EXPORT_FORMATS, MAP_REFERENCES, RESULT_PANEL_COUNTS, preferencesStore, usePreferences, type JobSort, type MapReference } from './preferences';
 import { SMOOTHING_MODES, type SmoothingMode } from '../results/smoothing';
 import { Icon } from '../shell/icons';
 import { AnchoredPanel } from './AnchoredPanel';
@@ -81,17 +86,27 @@ export function ResultsPreferencesSurface({ expanded = false, popover = false, o
 
 function JobsPreferencesContent() {
   const preferences = usePreferences();
-  const [nameDraft, setNameDraft] = useState(preferences.outputName);
-  useEffect(() => { setNameDraft(preferences.outputName); }, [preferences.outputName]);
-  const commitName = () => preferencesStore.update({ outputName: nameDraft });
+  const design = useDesignStore((state) => state.design);
+  const solveOptions = useSolveOptionsStore();
+  const filename = useDocumentStore((state) => state.filename);
+  let projection: SubmittedDesignProjection | null = null;
+  try { projection = projectSubmittedDesign(design, solveOptions.options()); } catch { /* invalid options cannot be submitted yet */ }
+  const displayedName = projection
+    ? nextRunName(preferences, projection, filename)
+    : (preferences.nameSourceProjection ? preferences.outputName : runNameFromFilename(filename));
+  const [nameDraft, setNameDraft] = useState(displayedName);
+  const [editing, setEditing] = useState(false);
+  useEffect(() => { if (!editing) setNameDraft(displayedName); }, [displayedName, editing]);
+  const commitName = () => {
+    preferencesStore.update({ outputName: nameDraft, nameSourceProjection: projection });
+    setEditing(false);
+  };
   return <section className="preferences-section">
     <h3 className="preferences-section-title">Jobs</h3>
     <p className="preferences-section-copy">Naming, ordering, and visibility defaults for solve history.</p>
     <div className="job-naming-preferences">
-      <label className="ui-field">Design name<input aria-label="Job design name" value={nameDraft} onChange={(event) => setNameDraft(event.target.value)} onBlur={commitName} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}/></label>
-      <label className="ui-field">Next version<input aria-label="Next job version" type="number" min={1} max={999999} value={preferences.jobVersion} onChange={(event) => preferencesStore.update({ jobVersion: Number(event.target.value) })}/></label>
-      <label className="ui-check"><input aria-label="Prefix job name with date" type="checkbox" checked={preferences.datePrefix} onChange={(event) => preferencesStore.update({ datePrefix: event.target.checked })}/>Prefix job name with date</label>
-      <span className="job-name-preview">next · <b>{jobBaseName(preferences)}</b></span>
+      <label className="ui-field">Run name<input aria-label="Job design name" value={nameDraft} onFocus={() => setEditing(true)} onChange={(event) => setNameDraft(event.target.value)} onBlur={commitName} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}/></label>
+      <span className="job-name-preview">next · <b>{displayedName}</b></span>
     </div>
     <div className="preferences-grid preferences-grid--jobs">
       <label className="ui-field">Default sort<select aria-label="Default task sort" value={preferences.jobSort} onChange={(event) => preferencesStore.update({ jobSort: event.target.value as JobSort })}><option value="completed_desc">Completed, newest</option><option value="created_desc">Created, newest</option><option value="rating_desc">Rating, highest</option><option value="name_asc">Name, A–Z</option></select></label>

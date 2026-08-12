@@ -1,32 +1,37 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { projectSubmittedDesign } from '../jobs/submittedProjection';
 import { preferencesStore } from '../prefs/preferences';
-import { currentJobLabel, incrementJobVersion, jobAnnouncement } from './JobsCoordinator';
+import { designForFamily } from '../stores/design';
+import { resetDocumentStore, useDocumentStore } from '../stores/document';
+import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
+import { currentJobLabel, jobAnnouncement } from './JobsCoordinator';
 
-describe('job version sequencing', () => {
-  beforeEach(() => preferencesStore.resetForTests());
+describe('current job naming', () => {
+  beforeEach(() => {
+    preferencesStore.resetForTests();
+    resetDocumentStore();
+    resetSolveOptionsStore();
+  });
 
-  it('increments the latest preference snapshot instead of a stale render value', () => {
-    preferencesStore.update({ jobVersion: 7 });
-    const staleRenderVersion = preferencesStore.getSnapshot().jobVersion;
-    preferencesStore.update({ jobVersion: 12 });
-
-    incrementJobVersion();
-
-    expect(staleRenderVersion).toBe(7);
-    expect(preferencesStore.getSnapshot().jobVersion).toBe(13);
+  it('uses the current document filename before a name baseline exists', () => {
+    useDocumentStore.getState().setFilename('saved winner.cfg');
+    expect(currentJobLabel()).toBe('saved winner');
   });
 
   it('uses a fresh name committed by the same keyboard-submit event', () => {
-    preferencesStore.update({ outputName: 'horn', jobVersion: 15, datePrefix: false });
+    const design = designForFamily('R-OSSE');
+    const options = useSolveOptionsStore.getState().options();
+    const projection = projectSubmittedDesign(design, options);
+    preferencesStore.update({ outputName: 'horn', nameSourceProjection: projection });
     const staleRenderPreferences = preferencesStore.getSnapshot();
 
-    // RunNameField commits its free version before Ctrl/Cmd+Enter bubbles to
-    // the coordinator's window shortcut. The submit path must read this store
+    // RunNameField commits before Ctrl/Cmd+Enter bubbles to the coordinator's
+    // window shortcut. The submit path must read this store
     // update, not the preferences captured by the previous React render.
-    preferencesStore.update({ outputName: 'fresh', jobVersion: 1 });
+    preferencesStore.update({ outputName: 'fresh', nameSourceProjection: projection });
 
-    expect(staleRenderPreferences).toMatchObject({ outputName: 'horn', jobVersion: 15 });
-    expect(currentJobLabel()).toBe('fresh_v01');
+    expect(staleRenderPreferences).toMatchObject({ outputName: 'horn' });
+    expect(currentJobLabel(design, options)).toBe('fresh');
   });
 });
 

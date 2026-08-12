@@ -195,7 +195,8 @@ describe('design file export menu', () => {
     });
     await act(async () => { input.dispatchEvent(new Event('change', { bubbles: true })); });
 
-    expect(preferencesStore.getSnapshot()).toMatchObject({ outputName: 'horn', jobVersion: 15 });
+    expect(preferencesStore.getSnapshot()).toMatchObject({ outputName: '260701_horn_v13' });
+    expect(preferencesStore.getSnapshot().nameSourceProjection).not.toBeNull();
     expect(useDocumentStore.getState().filename).toBe('260701_horn_v13.cfg');
     expect(useDocumentStore.getState()).toMatchObject({ identity: {
       designId: identity.designId,
@@ -269,7 +270,7 @@ describe('design file export menu', () => {
   });
 
   it('does not change run naming when opening a config fails', async () => {
-    preferencesStore.update({ outputName: 'keep-me', jobVersion: 7 });
+    preferencesStore.update({ outputName: 'keep-me' });
     vi.mocked(fetch).mockImplementationOnce(async () => new Response(
       JSON.stringify({ detail: 'invalid config' }),
       { status: 422, headers: { 'Content-Type': 'application/json' } },
@@ -283,7 +284,7 @@ describe('design file export menu', () => {
     });
     await act(async () => { input.dispatchEvent(new Event('change', { bubbles: true })); });
 
-    expect(preferencesStore.getSnapshot()).toMatchObject({ outputName: 'keep-me', jobVersion: 7 });
+    expect(preferencesStore.getSnapshot()).toMatchObject({ outputName: 'keep-me' });
     expect(useDocumentStore.getState().filename).not.toBe('should_not_replace_v99.cfg');
   });
 

@@ -4,8 +4,13 @@ import { compareSelection } from '../api/results';
 import { DesignAvailabilityNotice, RerunButton } from '../jobs/DesignAvailability';
 import { canLoadJobDesign, replaceWithJobDesign } from '../jobs/jobDesign';
 import { canExportRun, RunExportControl } from '../jobs/RunExportControl';
-import { applyJobPreferences, jobBaseName, nextVersionFor, preferencesStore, runDisplayName, usePreferences } from '../prefs/preferences';
+import { nextRunName, runNameFromFilename } from '../jobs/runNaming';
+import { projectSubmittedDesign, type SubmittedDesignProjection } from '../jobs/submittedProjection';
+import { applyJobPreferences, preferencesStore, runDisplayName, usePreferences } from '../prefs/preferences';
 import { JobsPreferencesSurface, ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
+import { useDesignStore } from '../stores/design';
+import { useDocumentStore } from '../stores/document';
+import { useSolveOptionsStore } from '../stores/solveOptions';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { Icon } from './icons';
 import { middleEllipsis } from './ResultsPanel';
@@ -209,41 +214,35 @@ function JobCard({ job, now, selected, retryJob, onError, onRemove, onOpenExport
  * the history read `horn_v09 … horn_v14`. The name belongs next to the runs it
  * names, showing the label it will actually store.
  */
-function RunNameField({ jobs, preferencesTrigger }: { jobs: readonly JobItem[]; preferencesTrigger?: ReactNode }) {
+function RunNameField({ preferencesTrigger }: { preferencesTrigger?: ReactNode }) {
   const preferences = usePreferences();
-  const [draft, setDraft] = useState(preferences.outputName);
-  useEffect(() => { setDraft(preferences.outputName); }, [preferences.outputName]);
-  // Keyed on the joined labels: the jobs array is replaced on every progress
-  // event, and only a name appearing or disappearing can change the answer.
-  const key = jobs.map((job) => job.label ?? '').join('\u0000');
-  const labels = useMemo(() => key.split('\u0000'), [key]);
-  // Committed on blur, not per keystroke: renumbering while a name is half
-  // typed would settle on the version free for `hor` rather than for `horn`.
-  const commit = (value: string) =>
-    preferencesStore.update({ outputName: value, jobVersion: nextVersionFor(value, labels) });
-  // A stored version can be stale against the history — a profile that has
-  // never solved starts at v01 next to a `horn_v14`, and a browser that solved
-  // elsewhere is behind. Names are not unique keys, so that would quietly
-  // produce two runs called the same thing. Compared on the parsed version
-  // rather than the whole label, because the date prefix moved and the runs
-  // named before it are still `horn_v13`. Only ever raised: a version set
-  // deliberately past the history is a choice, not a collision.
-  const free = nextVersionFor(preferences.outputName, labels);
-  useEffect(() => {
-    if (preferences.jobVersion >= free) return;
-    preferencesStore.update({ jobVersion: free });
-  }, [free, preferences.jobVersion]);
+  const design = useDesignStore((state) => state.design);
+  const solveOptions = useSolveOptionsStore();
+  const filename = useDocumentStore((state) => state.filename);
+  let projection: SubmittedDesignProjection | null = null;
+  try { projection = projectSubmittedDesign(design, solveOptions.options()); } catch { /* invalid options cannot be submitted yet */ }
+  const displayedName = projection
+    ? nextRunName(preferences, projection, filename)
+    : (preferences.nameSourceProjection ? preferences.outputName : runNameFromFilename(filename));
+  const [draft, setDraft] = useState(displayedName);
+  const [editing, setEditing] = useState(false);
+  useEffect(() => { if (!editing) setDraft(displayedName); }, [displayedName, editing]);
+  const commit = (value: string) => {
+    preferencesStore.update({ outputName: value, nameSourceProjection: projection });
+    setEditing(false);
+  };
   return <div className="run-name-field">
     <label className="ui-field">Run name<input
       aria-label="Run name"
       value={draft}
       placeholder="horn"
       onChange={(event) => setDraft(event.target.value)}
+      onFocus={() => setEditing(true)}
       onBlur={(event) => commit(event.target.value)}
       onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
     /></label>
     {preferencesTrigger}
-    <span className="run-name-preview" title="The name the next solve is stored under">next · <b>{jobBaseName(preferences)}</b></span>
+    <span className="run-name-preview" title="The name the next solve is stored under">next · <b>{displayedName}</b></span>
   </div>;
 }
 
@@ -313,7 +312,7 @@ export function JobsPanel() {
     </div>}
     {preferencesOpen && <JobsPreferencesSurface popover anchorRef={preferencesAnchor} onClose={() => setPreferencesOpen(false)}/>}
     {exportPreferencesOpen && <ResultsPreferencesSurface popover anchorRef={preferencesAnchor} onClose={() => setExportPreferencesOpen(false)}/>}
-    <RunNameField jobs={snapshot.jobs} preferencesTrigger={<button ref={preferencesAnchor} className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Job preferences" aria-expanded={preferencesOpen} title="Job preferences" onClick={() => { setExportPreferencesOpen(false); setPreferencesOpen((value) => !value); }}><Icon name="settings"/></button>}/>
+    <RunNameField preferencesTrigger={<button ref={preferencesAnchor} className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Job preferences" aria-expanded={preferencesOpen} title="Job preferences" onClick={() => { setExportPreferencesOpen(false); setPreferencesOpen((value) => !value); }}><Icon name="settings"/></button>}/>
     <div className="jobs-filter"><Icon name="search"/><input aria-label="Filter runs" placeholder="Filter runs" value={query} onChange={(event) => setQuery(event.target.value)}/><button className={`jobs-kept-toggle${preferences.minRating > 0 ? ' on' : ''}`} aria-label="Show kept runs only" aria-pressed={preferences.minRating > 0} title="Show kept runs only" onClick={() => preferencesStore.update({ minRating: preferences.minRating > 0 ? 0 : lastMinimumRating.current })}>★</button></div>
     {(coordinator.actionError || snapshot.error) && <div className="job-error" role="alert" style={{ margin: 7 }}>{coordinator.actionError ?? snapshot.error}</div>}
     {snapshot.jobs.length === 0 && snapshot.connection === 'connected' && <div className="empty-state"><b>No runs yet</b><span>Solve the current design to start one. Every run is kept here with its results, so you can compare and re-run it later.</span></div>}

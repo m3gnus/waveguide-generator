@@ -1,5 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import type { JobItem } from '../api/jobsSocket';
+import { isSubmittedDesignProjection, type SubmittedDesignProjection } from '../jobs/submittedProjection';
+import { normalizeRunName } from '../jobs/runNaming';
 import type { SmoothingMode } from '../results/smoothing';
 
 export const CHART_TYPES = [
@@ -47,9 +49,8 @@ export interface Preferences {
   autoExportOnComplete: boolean;
   autoDownloadMesh: boolean;
   outputName: string;
+  nameSourceProjection: SubmittedDesignProjection | null;
   counter: number;
-  jobVersion: number;
-  datePrefix: boolean;
   jobSort: JobSort;
   minRating: number;
 }
@@ -68,9 +69,8 @@ const defaults: Preferences = {
   autoExportOnComplete: false,
   autoDownloadMesh: false,
   outputName: 'horn',
+  nameSourceProjection: null,
   counter: 1,
-  jobVersion: 1,
-  datePrefix: true,
   jobSort: 'completed_desc',
   minRating: 0,
 };
@@ -79,11 +79,6 @@ const chartIds = new Set(CHART_TYPES.map(({ id }) => id));
 const exportIds = new Set(EXPORT_FORMATS.map(({ id }) => id));
 const smoothingIds = new Set(['none', '1/1', '1/2', '1/3', '1/6', '1/12', '1/24', '1/48', 'variable', 'psychoacoustic', 'erb']);
 const jobSortIds = new Set<JobSort>(['completed_desc', 'created_desc', 'rating_desc', 'name_asc']);
-
-export function normalizeOutputName(value: unknown): string {
-  const normalized = String(value ?? '').trim().replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^\.+|\.+$/g, '');
-  return normalized || defaults.outputName;
-}
 
 export function normalize(raw: Partial<Preferences> = {}): Preferences {
   const charts = Array.isArray(raw.chartTypes)
@@ -106,16 +101,17 @@ export function normalize(raw: Partial<Preferences> = {}): Preferences {
     autoExportFormats: autoFormats,
     autoExportOnComplete: raw.autoExportOnComplete === true,
     autoDownloadMesh: raw.autoDownloadMesh === true,
-    outputName: normalizeOutputName(raw.outputName),
+    outputName: normalizeRunName(raw.outputName),
+    nameSourceProjection: isSubmittedDesignProjection(raw.nameSourceProjection)
+      ? structuredClone(raw.nameSourceProjection)
+      : null,
     counter: Number.isFinite(Number(raw.counter)) ? Math.max(1, Math.min(999_999, Math.floor(Number(raw.counter)))) : defaults.counter,
-    jobVersion: Number.isFinite(Number(raw.jobVersion)) ? Math.max(1, Math.min(999_999, Math.floor(Number(raw.jobVersion)))) : defaults.jobVersion,
-    datePrefix: raw.datePrefix === undefined ? defaults.datePrefix : raw.datePrefix === true,
     jobSort: jobSortIds.has(raw.jobSort as JobSort) ? raw.jobSort as JobSort : defaults.jobSort,
     minRating: Number.isFinite(Number(raw.minRating)) ? Math.max(0, Math.min(5, Math.floor(Number(raw.minRating)))) : defaults.minRating,
   };
 }
 
-export const STORAGE_VERSION = 6;
+export const STORAGE_VERSION = 7;
 
 function migrateV1ToV2(preferences: Partial<Preferences>): Partial<Preferences> {
   const { chartTypes: _replaced, ...carried } = preferences;
@@ -155,83 +151,6 @@ function migrateV5ToV6(preferences: Partial<Preferences>): Partial<Preferences> 
 }
 
 /**
- * `260808_horn_v14` — YYMMDD, so a plain A–Z sort of the stored labels is also
- * a chronological one, in the runs list and in every export folder.
- */
-export function datePrefixFor(now = new Date()): string {
-  return [now.getFullYear() % 100, now.getMonth() + 1, now.getDate()]
-    .map((part) => String(part).padStart(2, '0'))
-    .join('');
-}
-
-export function jobBaseName(
-  preferences: Pick<Preferences, 'outputName' | 'jobVersion' | 'datePrefix'>,
-  now = new Date(),
-): string {
-  const prefix = preferences.datePrefix ? `${datePrefixFor(now)}_` : '';
-  const version = Math.max(1, Math.min(999_999, Math.floor(preferences.jobVersion)));
-  return `${prefix}${normalizeOutputName(preferences.outputName)}_v${String(version).padStart(2, '0')}`;
-}
-
-/**
- * Split a stored run label back into the name the user typed and its version.
- *
- * Tolerates both date prefixes this app has written (`260808_` and the earlier
- * `2026-08-08_`) and returns null for anything that is not a versioned name --
- * a hand-edited label, or one of the `osse_1a2b3c4d` fallbacks a run with no
- * label at all displays under.
- */
-export function parseJobName(label: string | null | undefined): { name: string; version: number } | null {
-  const match = /^(?:\d{6}_|\d{4}-\d{2}-\d{2}_)?(.+)_v(\d{1,6})$/.exec(String(label ?? '').trim());
-  if (!match) return null;
-  return { name: normalizeOutputName(match[1]), version: Number(match[2]) };
-}
-
-/**
- * The naming a run of `label`'s design should get: same name, next free number.
- *
- * Reopening an old config and solving it again should read as another take on
- * that design rather than as an unrelated run, so it inherits the name -- but
- * it must not collide with the run it came from, or with anything solved since,
- * so the version clears every version already used under that name.
- */
-export function nextJobNaming(
-  label: string | null | undefined,
-  existingLabels: readonly (string | null)[] = [],
-): { outputName: string; jobVersion: number } | null {
-  const parsed = parseJobName(label);
-  if (!parsed) return null;
-  return { outputName: parsed.name, jobVersion: nextVersionFor(parsed.name, existingLabels) };
-}
-
-/** Derive the next run name after successfully opening a standalone config. */
-export function nextFileJobNaming(
-  filename: string,
-  existingLabels: readonly (string | null)[] = [],
-): { outputName: string; jobVersion: number } {
-  const stem = String(filename).replace(/^.*[\\/]/, '').replace(/\.(cfg|txt|mwg)$/i, '') || 'waveguide';
-  const parsed = parseJobName(stem);
-  if (parsed) {
-    return {
-      outputName: parsed.name,
-      jobVersion: Math.max(parsed.version + 1, nextVersionFor(parsed.name, existingLabels)),
-    };
-  }
-  const outputName = normalizeOutputName(stem);
-  return { outputName, jobVersion: nextVersionFor(outputName, existingLabels) };
-}
-
-/** One past the highest version any stored run already uses under `name`. */
-export function nextVersionFor(name: string, existingLabels: readonly (string | null)[] = []): number {
-  const wanted = normalizeOutputName(name);
-  const used = existingLabels
-    .map((label) => parseJobName(label))
-    .filter((parsed): parsed is { name: string; version: number } => parsed?.name === wanted)
-    .map((parsed) => parsed.version);
-  return Math.min(999_999, Math.max(0, ...used) + 1);
-}
-
-/**
  * Migrations are intentionally sequential. v1→v2 replaced two unusable seeded
  * panels while preserving unrelated settings; v2→v3 makes the chart list's
  * stored length authoritative; v3→v4 adds independent job-version naming;
@@ -246,6 +165,7 @@ const MIGRATIONS: Record<number, (preferences: Partial<Preferences>) => Partial<
   3: migrateV3ToV4,
   4: migrateV4ToV5,
   5: migrateV5ToV6,
+  6: (preferences) => preferences,
 };
 
 export function readPreferences(raw: string | null): { value: Preferences; migrated: boolean } {

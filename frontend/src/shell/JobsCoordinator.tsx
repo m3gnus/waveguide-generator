@@ -6,11 +6,14 @@ import { useCapabilities, useCapabilityRefreshOnReconnect } from '../jobs/useCap
 import { JobAutomation } from '../jobs/automation';
 import { hydrateJobDesign } from '../jobs/jobDesign';
 import { exportStemForJob } from '../jobs/exportNaming';
-import { jobBaseName, preferencesStore, usePreferences } from '../prefs/preferences';
+import { nextRunName } from '../jobs/runNaming';
+import { projectSubmittedDesign, type SubmittedDesignProjection } from '../jobs/submittedProjection';
+import { preferencesStore, usePreferences } from '../prefs/preferences';
 import { downloadMeshArtifact, runExportBundle } from '../results/exporters';
 import type { ResultPayload } from '../results/types';
 import { useDesignStore, type DesignDocument } from '../stores/design';
-import { useSolveOptionsStore } from '../stores/solveOptions';
+import { useDocumentStore } from '../stores/document';
+import { useSolveOptionsStore, type SolveOptions } from '../stores/solveOptions';
 
 interface SolveControl {
   solve(): void;
@@ -58,14 +61,21 @@ export function useSolveControl(): SolveControl {
   return value;
 }
 
-export function incrementJobVersion(): void {
-  const current = preferencesStore.getSnapshot().jobVersion;
-  preferencesStore.update({ jobVersion: Math.min(999_999, current + 1) });
+/** Read naming at submission time, including a commit from the same key event. */
+export function currentJobLabel(
+  design = useDesignStore.getState().design,
+  options = useSolveOptionsStore.getState().options(),
+  filename = useDocumentStore.getState().filename,
+): string {
+  return nextRunName(
+    preferencesStore.getSnapshot(),
+    projectSubmittedDesign(design, options),
+    filename,
+  );
 }
 
-/** Read naming at submission time, including a commit from the same key event. */
-export function currentJobLabel(): string {
-  return jobBaseName(preferencesStore.getSnapshot());
+function acceptSubmittedName(label: string, projection: SubmittedDesignProjection): void {
+  preferencesStore.update({ outputName: label, nameSourceProjection: projection });
 }
 
 const jobsConnection = () => jobsSocket.getSnapshot().connection;
@@ -76,6 +86,7 @@ export function JobsCoordinator({ children }: { children: ReactNode }) {
   useCapabilityRefreshOnReconnect(useSyncExternalStore(jobsSocket.subscribe, jobsConnection, jobsConnection));
   const design = useDesignStore((state) => state.design);
   const revision = useDesignStore((state) => state.designRevision);
+  const filename = useDocumentStore((state) => state.filename);
   const selectedEngine = useSolveOptionsStore((state) => state.engine);
   const preferences = usePreferences();
   const automation = useRef(new JobAutomation()).current;
@@ -99,19 +110,22 @@ export function JobsCoordinator({ children }: { children: ReactNode }) {
       if (!capability?.available) throw new Error(capability?.reason ?? capabilityError ?? `${selectedEngine} engine is unavailable`);
       setSubmitting(true);
       setActionError(null);
+      const options = useSolveOptionsStore.getState().options();
+      const projection = projectSubmittedDesign(nextDesign, options);
+      const label = nextRunName(preferencesStore.getSnapshot(), projection, filename);
       await submitDesign(
         nextDesign,
-        useSolveOptionsStore.getState().options(),
+        options,
         fetch,
-        { label: currentJobLabel(), designRevision: nextRevision },
+        { label, designRevision: nextRevision },
       );
-      incrementJobVersion();
+      acceptSubmittedName(label, projection);
       await jobsSocket.refresh();
     } finally {
       submissionInFlight.current = false;
       setSubmitting(false);
     }
-  }, [capability, capabilityError, preferences, revision, selectedEngine]);
+  }, [capability, capabilityError, filename, preferences, revision, selectedEngine]);
 
   const runImported = useCallback(async (submission: ImportedSolveSubmission) => {
     if (submissionInFlight.current) return;
@@ -121,18 +135,21 @@ export function JobsCoordinator({ children }: { children: ReactNode }) {
       if (!metal?.available) throw new Error(metal?.reason ?? capabilityError ?? 'Metal engine is unavailable');
       setSubmitting(true);
       setActionError(null);
+      const options: SolveOptions = { ...submission.options, engine: 'metal', symmetry: 'auto' };
+      const projection = projectSubmittedDesign(design, options);
+      const label = nextRunName(preferencesStore.getSnapshot(), projection, filename);
       await submitImported(
-        { ...submission, options: { ...submission.options, engine: 'metal', symmetry: 'auto' } },
+        { ...submission, options },
         fetch,
-        currentJobLabel(),
+        label,
       );
-      incrementJobVersion();
+      acceptSubmittedName(label, projection);
       await jobsSocket.refresh();
     } finally {
       submissionInFlight.current = false;
       setSubmitting(false);
     }
-  }, [capabilities, capabilityError, preferences]);
+  }, [capabilities, capabilityError, design, filename, preferences]);
 
   const retry = useCallback(async (jobId: string) => {
     if (submissionInFlight.current) return;

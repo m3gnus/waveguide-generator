@@ -121,6 +121,20 @@ describe('solve invocation mutex', () => {
     await act(async () => { await jobsCoordinatorBridge.getSnapshot().run(design); });
 
     expect(mocks.submitDesign).toHaveBeenCalledTimes(2);
+    expect(mocks.submitDesign.mock.calls.map((call) => call[3].label)).toEqual(['horn', 'horn']);
+  });
+
+  it('increments the accepted name only when the submitted projection changes', async () => {
+    mocks.submitDesign.mockResolvedValue('job');
+    const design = designForFamily('OSSE');
+
+    await act(async () => { await jobsCoordinatorBridge.getSnapshot().run(design); });
+    const changed = structuredClone(design);
+    changed.simulation.f2 += 1_000;
+    await act(async () => { await jobsCoordinatorBridge.getSnapshot().run(changed); });
+    await act(async () => { await jobsCoordinatorBridge.getSnapshot().run(changed); });
+
+    expect(mocks.submitDesign.mock.calls.map((call) => call[3].label)).toEqual(['horn', 'horn2', 'horn2']);
   });
 
   it('releases the guard after a rejected submission', async () => {

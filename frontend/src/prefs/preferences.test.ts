@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { JobItem } from '../api/jobsSocket';
-import { applyJobPreferences, CHART_TYPES, EXPORT_FORMATS, jobBaseName, loadPreferences, MAP_REFERENCES, nextFileJobNaming, nextJobNaming, nextVersionFor, parseJobName, preferencesStore, readPreferences, runDisplayName, STORAGE_VERSION } from './preferences';
+import { projectSubmittedDesign } from '../jobs/submittedProjection';
+import { designForFamily } from '../stores/design';
+import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
+import { applyJobPreferences, CHART_TYPES, EXPORT_FORMATS, loadPreferences, MAP_REFERENCES, preferencesStore, readPreferences, runDisplayName, STORAGE_VERSION } from './preferences';
 
 function job(id: string, rating: number | null, created: string, completed = created): JobItem {
   return { id, run_number: 1, parent_job_id: null, rating, created_at: created, completed_at: completed, label: id, status: 'complete', progress: 1, stage: null, stage_message: null, queued_at: created, started_at: created, config_summary: {}, solve_options: {} as JobItem['solve_options'], has_results: true, has_mesh_artifact: false, error_message: null, cancellation_requested: false, mesh_stats: null, script_snapshot: null, design_revision: 0, polar_grid: {}, exported_files: [], auto_export_completed_at: null, auto_export_formats: {}, raw_results_file: null, mesh_artifact_file: null, log_tail: [] };
@@ -8,7 +11,7 @@ function job(id: string, rating: number | null, created: string, completed = cre
 
 describe('client preferences', () => {
   beforeEach(() => { localStorage.clear(); preferencesStore.resetForTests(); });
-  it('persists the eleven-format selection and clamps naming state', () => {
+  it('persists the eleven-format selection and export counter migration field', () => {
     expect(EXPORT_FORMATS).toHaveLength(11);
     expect(CHART_TYPES).toHaveLength(10);
     expect(MAP_REFERENCES).toEqual([-3, -6, -9, -12]);
@@ -17,7 +20,7 @@ describe('client preferences', () => {
     preferencesStore.toggleFormat('stl');
     preferencesStore.update({ outputName: ' horn / alpha ', counter: 2_000_000 });
     expect(preferencesStore.getSnapshot().exportFormats).toEqual(['csv', 'stl']);
-    expect(preferencesStore.getSnapshot()).toMatchObject({ outputName: 'horn_alpha', counter: 999_999 });
+    expect(preferencesStore.getSnapshot()).toMatchObject({ outputName: 'horn / alpha', counter: 999_999 });
     expect(JSON.parse(localStorage.getItem('waveguide-v2-g3-preferences') ?? '{}').version).toBe(STORAGE_VERSION);
   });
   it('uses useful manual defaults without opting into automatic file writing', () => {
@@ -70,51 +73,29 @@ describe('client preferences', () => {
     expect(loadPreferences('{not json')).toMatchObject({ exportFormats: ['csv', 'png'], autoExportFormats: [] });
     expect(() => loadPreferences(JSON.stringify({ version: STORAGE_VERSION, preferences: null }))).not.toThrow();
   });
-  it('builds a friendly versioned job name with an optional local-date prefix', () => {
-    const now = new Date(2026, 7, 5, 12, 0, 0);
-    expect(jobBaseName({ outputName: ' Tritonia mk2 ', jobVersion: 7, datePrefix: false }, now)).toBe('Tritonia_mk2_v07');
-    // YYMMDD, so sorting the stored labels by name sorts them by date too.
-    expect(jobBaseName({ outputName: 'Tritonia', jobVersion: 103, datePrefix: true }, now)).toBe('260805_Tritonia_v103');
+  it('preserves a human Unicode run name without filesystem slugging', () => {
+    preferencesStore.update({ outputName: '  Þröstur – horn  ' });
+    expect(preferencesStore.getSnapshot().outputName).toBe('Þröstur – horn');
   });
-  it('reads a stored run label back into the name and number that made it', () => {
-    expect(parseJobName('260808_horn_v14')).toEqual({ name: 'horn', version: 14 });
-    expect(parseJobName('horn_v09')).toEqual({ name: 'horn', version: 9 });
-    // The prefix format this app used before YYMMDD still parses.
-    expect(parseJobName('2026-08-05_Tritonia_mk2_v103')).toEqual({ name: 'Tritonia_mk2', version: 103 });
-    // Not a versioned name: the fallback a run with no label displays under.
-    expect(parseJobName('osse_1a2b3c4d')).toBeNull();
-    expect(parseJobName(null)).toBeNull();
+  it('persists and reloads the projection assigned to the current run name', () => {
+    resetSolveOptionsStore();
+    const projection = projectSubmittedDesign(
+      designForFamily('R-OSSE'),
+      useSolveOptionsStore.getState().options(),
+    );
+    preferencesStore.update({ outputName: 'asro68', nameSourceProjection: projection });
+    const stored = localStorage.getItem('waveguide-v2-g3-preferences');
+    expect(loadPreferences(stored)).toMatchObject({ outputName: 'asro68', nameSourceProjection: projection });
   });
-  it('numbers a reopened config past every run already stored under its name', () => {
-    const stored = ['260808_horn_v14', '260808_horn_v09', '260807_horn_v13', '260808_tritonia_v03', null];
-    expect(nextJobNaming('260807_horn_v13', stored)).toEqual({ outputName: 'horn', jobVersion: 15 });
-    expect(nextJobNaming('260808_tritonia_v03', stored)).toEqual({ outputName: 'tritonia', jobVersion: 4 });
-    // A name nothing has been solved under yet starts at 1.
-    expect(nextVersionFor('brand_new', stored)).toBe(1);
-    // Nothing to inherit from an unversioned label.
-    expect(nextJobNaming('osse_1a2b3c4d', stored)).toBeNull();
-  });
-  it('derives standalone file names and versions from old config filenames', () => {
-    const stored = ['260808_horn_v14', 'horn_v09', '260808_other_v30', null];
-    expect(nextFileJobNaming('260701_horn_v13.cfg', stored)).toEqual({ outputName: 'horn', jobVersion: 15 });
-    expect(nextFileJobNaming('2026-07-01_horn_v20.mwg', stored)).toEqual({ outputName: 'horn', jobVersion: 21 });
-    expect(nextFileJobNaming('/archive/My favorite horn.txt', stored)).toEqual({ outputName: 'My_favorite_horn', jobVersion: 1 });
-    expect(nextFileJobNaming('horn.cfg', stored)).toEqual({ outputName: 'horn', jobVersion: 15 });
-  });
-  it('preserves an explicitly disabled date prefix during v4 migration', () => {
-    const stored = JSON.stringify({ version: 4, preferences: { outputName: 'tritonia', datePrefix: false } });
+  it('migrates old version/date naming state without keeping the retired fields', () => {
+    const stored = JSON.stringify({ version: 4, preferences: {
+      outputName: 'tritonia', jobVersion: 12, datePrefix: false,
+    } });
     const migrated = loadPreferences(stored);
-    expect(migrated.datePrefix).toBe(false);
     expect(migrated.outputName).toBe('tritonia');
-  });
-  it('uses the enabled default when an old profile never stored datePrefix', () => {
-    const stored = JSON.stringify({ version: 4, preferences: { outputName: 'tritonia' } });
-    expect(loadPreferences(stored).datePrefix).toBe(true);
-  });
-  it('runs every migration step from the stored version onwards', () => {
-    // A v3 profile used to stop after v3->v4 and never reach v4->v5.
-    const stored = JSON.stringify({ version: 3, preferences: { outputName: 'tritonia', datePrefix: false } });
-    expect(loadPreferences(stored).datePrefix).toBe(false);
+    expect(migrated.nameSourceProjection).toBeNull();
+    expect(migrated).not.toHaveProperty('jobVersion');
+    expect(migrated).not.toHaveProperty('datePrefix');
   });
   it('resets only the panel selection when migrating a v1 layout', () => {
     const stored = JSON.stringify({ version: 1, preferences: {

@@ -4,6 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
 import { compareSelection } from '../api/results';
 import { preferencesStore } from '../prefs/preferences';
+import { resetDesignStore, useDesignStore } from '../stores/design';
+import { resetDocumentStore } from '../stores/document';
+import { resetSolveOptionsStore } from '../stores/solveOptions';
 import { JobsPanel, selectJob } from './JobsPanel';
 
 const designMocks = vi.hoisted(() => ({ replaceWithJobDesign: vi.fn() }));
@@ -47,6 +50,9 @@ describe('jobs panel run list', () => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     localStorage.clear();
     preferencesStore.resetForTests();
+    resetDesignStore();
+    resetDocumentStore();
+    resetSolveOptionsStore();
     compareSelection.setPrimary(null);
     host = document.createElement('div');
     document.body.append(host);
@@ -223,10 +229,23 @@ describe('jobs panel run list', () => {
   });
 
   it('does not rewrite next-run naming when a run is selected', () => {
-    preferencesStore.update({ outputName: 'next-design', jobVersion: 17 });
+    preferencesStore.update({ outputName: 'next-design' });
     const before = preferencesStore.getSnapshot();
     selectJob(job(9, '260808_old-design_v03'));
-    expect(preferencesStore.getSnapshot()).toMatchObject({ outputName: before.outputName, jobVersion: before.jobVersion });
+    expect(preferencesStore.getSnapshot()).toMatchObject({ outputName: before.outputName });
     expect(designMocks.replaceWithJobDesign).toHaveBeenCalledOnce();
+  });
+
+  it('shows a manual run-name baseline and increments it after a real design change', async () => {
+    publishJobs([]);
+    await act(async () => root.render(<JobsPanel/>));
+    const input = host.querySelector<HTMLInputElement>('[aria-label="Run name"]')!;
+    act(() => input.focus());
+    act(() => enter(input, 'winner'));
+    act(() => input.blur());
+    expect(host.querySelector('.run-name-preview')?.textContent).toContain('winner');
+
+    act(() => useDesignStore.getState().updateField('R', 141));
+    expect(host.querySelector('.run-name-preview')?.textContent).toContain('winner2');
   });
 });
