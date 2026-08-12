@@ -49,6 +49,9 @@ describe('preferences surfaces', () => {
     expect(host.querySelector('[aria-label="Prefix job name with date"]')).toBeNull();
     expect(host.querySelector<HTMLSelectElement>('[aria-label="Run-name date position"]')?.value).toBe('off');
     expect(host.querySelector<HTMLSelectElement>('[aria-label="Run-name date format"]')?.disabled).toBe(true);
+    expect(host.querySelector<HTMLSelectElement>('[aria-label="Run-name number position"]')?.value).toBe('suffix');
+    expect(host.querySelector<HTMLSelectElement>('[aria-label="Run-name number format"]')?.value).toBe('natural');
+    expect(host.querySelector('.job-run-name-field')).not.toBeNull();
     expect(host.textContent).toContain('next · horn');
     expect(host.querySelector<HTMLSelectElement>('[aria-label="Default task sort"]')?.options).toHaveLength(4);
     expect(host.querySelector<HTMLSelectElement>('[aria-label="Minimum rating filter"]')?.options).toHaveLength(6);
@@ -75,6 +78,29 @@ describe('preferences surfaces', () => {
       format.dispatchEvent(new Event('change', { bubbles: true }));
     });
     expect(host.querySelector('.job-name-preview')?.textContent).toContain('next · horn_2026-08-12');
+  });
+
+  it('configures design-change numbering independently of the date', () => {
+    act(() => root.render(<JobsPreferencesSurface/>));
+    const position = host.querySelector<HTMLSelectElement>('[aria-label="Run-name number position"]')!;
+    const format = host.querySelector<HTMLSelectElement>('[aria-label="Run-name number format"]')!;
+
+    act(() => {
+      position.value = 'off';
+      position.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(format.disabled).toBe(true);
+
+    act(() => {
+      position.value = 'suffix';
+      position.dispatchEvent(new Event('change', { bubbles: true }));
+      format.value = '3-digit';
+      format.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(preferencesStore.getSnapshot()).toMatchObject({
+      runNameNumberPosition: 'suffix',
+      runNameNumberFormat: '3-digit',
+    });
   });
 
   // The gear popovers portal to <body>, so they are queried from the document

@@ -3,10 +3,14 @@ import { submittedProjectionsEqual, type SubmittedDesignProjection } from './sub
 export interface RunNamingState {
   outputName: string;
   nameSourceProjection: SubmittedDesignProjection | null;
+  runNameNumberPosition?: RunNameNumberPosition;
+  runNameNumberFormat?: RunNameNumberFormat;
 }
 
 export type RunNameDatePosition = 'off' | 'prefix' | 'suffix';
 export type RunNameDateFormat = 'yymmdd' | 'yyyy-mm-dd';
+export type RunNameNumberPosition = 'off' | 'suffix';
+export type RunNameNumberFormat = 'natural' | '2-digit' | '3-digit';
 
 export interface RunNameDateOptions {
   runNameDatePosition: RunNameDatePosition;
@@ -23,13 +27,20 @@ export function runNameFromFilename(filename: string): string {
   return normalizeRunName(basename.replace(/\.(cfg|txt|mwg)$/i, ''));
 }
 
-/** Increment only the final digit run, retaining its width while possible. */
-export function incrementTrailingDigits(name: string): string {
+/** Increment only the final digit run, retaining or applying its minimum width. */
+export function incrementTrailingDigits(name: string, minimumWidth = 1): string {
   const normalized = normalizeRunName(name);
   const match = /^(.*?)(\d+)$/.exec(normalized);
-  if (!match) return `${normalized}2`;
-  const incremented = (BigInt(match[2]) + 1n).toString().padStart(match[2].length, '0');
+  const width = Math.max(1, Math.floor(minimumWidth));
+  if (!match) return `${normalized}${String(2).padStart(width, '0')}`;
+  const incremented = (BigInt(match[2]) + 1n).toString().padStart(Math.max(match[2].length, width), '0');
   return `${match[1]}${incremented}`;
+}
+
+function runNumberWidth(format: RunNameNumberFormat | undefined): number {
+  if (format === '2-digit') return 2;
+  if (format === '3-digit') return 3;
+  return 1;
 }
 
 /** Format a local calendar date without letting locale settings alter labels. */
@@ -65,9 +76,9 @@ export function nextRunName(
 ): string {
   if (!naming.nameSourceProjection) return runNameFromFilename(documentFilename);
   const current = normalizeRunName(naming.outputName);
-  return submittedProjectionsEqual(naming.nameSourceProjection, projection)
-    ? current
-    : incrementTrailingDigits(current);
+  if (submittedProjectionsEqual(naming.nameSourceProjection, projection)) return current;
+  if (naming.runNameNumberPosition === 'off') return current;
+  return incrementTrailingDigits(current, runNumberWidth(naming.runNameNumberFormat));
 }
 
 /** The decorated label for a submission; nextRunName itself remains core-only. */
