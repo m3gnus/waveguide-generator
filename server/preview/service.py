@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Collection
 from typing import Any, Mapping
 
 from fastapi import APIRouter, FastAPI, WebSocket, WebSocketDisconnect
@@ -43,7 +44,9 @@ class _FastAPITransport:
             await self.websocket.close(code=code)
 
 
-def create_preview_router(service: PreviewComputeService) -> APIRouter:
+def create_preview_router(
+    service: PreviewComputeService, *, extra_ws_origins: Collection[str] = ()
+) -> APIRouter:
     router = APIRouter()
 
     @router.websocket("/ws/preview")
@@ -58,6 +61,7 @@ def create_preview_router(service: PreviewComputeService) -> APIRouter:
             host=websocket.headers.get("host"),
             scheme=websocket.scope.get("scheme", "ws"),
             bound_port=bound_port,
+            extra_origins=extra_ws_origins,
         ):
             await websocket.close(code=CLOSE_ORIGIN_REJECTED)
             return
@@ -74,10 +78,14 @@ def create_preview_router(service: PreviewComputeService) -> APIRouter:
     return router
 
 
-def mount_preview(application: FastAPI) -> PreviewComputeService:
+def mount_preview(
+    application: FastAPI, *, extra_ws_origins: Collection[str] = ()
+) -> PreviewComputeService:
     service = PreviewComputeService()
     application.state.preview_service = service
-    application.include_router(create_preview_router(service))
+    application.include_router(
+        create_preview_router(service, extra_ws_origins=extra_ws_origins)
+    )
     application.router.add_event_handler("shutdown", service.shutdown)
     return service
 

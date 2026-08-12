@@ -28,7 +28,11 @@ from server.platform.instance import (
     InstanceLock,
     InstanceLockError,
 )
-from server.platform.origin import local_origin, websocket_request_allowed
+from server.platform.origin import (
+    local_origin,
+    parse_extra_websocket_origins,
+    websocket_request_allowed,
+)
 from server.platform.paths import ensure_data_layout
 from server.platform.signal_rearm import (
     rearm_registered_signals,
@@ -539,6 +543,99 @@ def test_websocket_origin_must_match_the_bound_host_and_port() -> None:
     assert not websocket_request_allowed(
         origin=None, host="127.0.0.1:5173", scheme="ws", bound_port=3100,
     )
+
+
+def test_extra_websocket_origins_allow_only_exact_listed_loopback_origins() -> None:
+    extra_origins = parse_extra_websocket_origins(
+        " http://localhost:3101,https://example.com "
+    )
+
+    assert extra_origins == frozenset({"http://localhost:3101"})
+    assert websocket_request_allowed(
+        origin="http://localhost:3101",
+        host="127.0.0.1:3100",
+        scheme="ws",
+        bound_port=3100,
+        extra_origins=extra_origins,
+    )
+    assert not websocket_request_allowed(
+        origin="http://localhost:3102",
+        host="127.0.0.1:3100",
+        scheme="ws",
+        bound_port=3100,
+        extra_origins=extra_origins,
+    )
+    assert not websocket_request_allowed(
+        origin="https://example.com",
+        host="127.0.0.1:3100",
+        scheme="ws",
+        bound_port=3100,
+        extra_origins={"https://example.com"},
+    )
+
+
+def test_unset_extra_websocket_origins_preserve_strict_behavior(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("WG2_EXTRA_WS_ORIGINS", raising=False)
+    extra_origins = parse_extra_websocket_origins(
+        os.environ.get("WG2_EXTRA_WS_ORIGINS")
+    )
+
+    assert extra_origins == frozenset()
+    assert not websocket_request_allowed(
+        origin="http://localhost:3101",
+        host="127.0.0.1:3100",
+        scheme="ws",
+        bound_port=3100,
+        extra_origins=extra_origins,
+    )
+
+
+@pytest.mark.parametrize("path", ["/ws/jobs", "/ws/preview"])
+def test_app_threads_extra_websocket_origins_to_both_routes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, path: str
+) -> None:
+    monkeypatch.setenv("WG2_EXTRA_WS_ORIGINS", "http://localhost:3101")
+    application = app_module.create_app(data_dir=tmp_path)
+    monkeypatch.setenv("WG2_EXTRA_WS_ORIGINS", "http://localhost:9999")
+    sent: list[dict[str, Any]] = []
+
+    async def connect() -> None:
+        incoming = [{"type": "websocket.connect"}]
+
+        async def receive() -> dict[str, Any]:
+            if incoming:
+                return incoming.pop()
+            return {"type": "websocket.disconnect", "code": 1000}
+
+        async def send(message: dict[str, Any]) -> None:
+            sent.append(message)
+
+        await application(
+            {
+                "type": "websocket",
+                "asgi": {"version": "3.0", "spec_version": "2.3"},
+                "http_version": "1.1",
+                "scheme": "ws",
+                "path": path,
+                "raw_path": path.encode("ascii"),
+                "query_string": b"",
+                "root_path": "",
+                "headers": [
+                    (b"host", b"127.0.0.1:3100"),
+                    (b"origin", b"http://localhost:3101"),
+                ],
+                "client": ("127.0.0.1", 12345),
+                "server": ("127.0.0.1", 3100),
+                "subprotocols": [],
+            },
+            receive,
+            send,
+        )
+
+    asyncio.run(connect())
+    assert sent[0]["type"] == "websocket.accept"
 
 
 def test_app_shutdown_stops_jobs_before_gmsh_worker(tmp_path: Path) -> None:

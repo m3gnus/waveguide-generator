@@ -6,6 +6,7 @@ import asyncio
 from dataclasses import asdict
 import json
 import logging
+import os
 from pathlib import Path
 import time
 
@@ -23,7 +24,11 @@ from server.exports import mount_exports
 from server.jobs import mount_jobs
 from server.mesh.gmsh_worker import prewarm_gmsh_worker, shutdown_gmsh_worker
 from server.mesh.prewarm import prewarm_mesher, shutdown_mesher_prewarm
-from server.platform.origin import local_origin, local_request_host
+from server.platform.origin import (
+    local_origin,
+    local_request_host,
+    parse_extra_websocket_origins,
+)
 from server.platform.paths import resolve_data_dir
 from server.preview.service import mount_preview
 from server.solver.symmetry import resolve_symmetry
@@ -95,6 +100,9 @@ def create_app(
     application = FastAPI(title="Waveguide Generator", version=VERSION)
     application.state.started = started
     application.state.data_dir = resolved_data_dir
+    extra_ws_origins = parse_extra_websocket_origins(
+        os.environ.get("WG2_EXTRA_WS_ORIGINS")
+    )
     engine_registry = EngineRegistry(detector=detect_engines)
     application.state.engine_registry = engine_registry
     logging.getLogger("wg").info("Waveguide Generator v%s application initialized", VERSION)
@@ -240,10 +248,14 @@ def create_app(
         resolution = await asyncio.to_thread(resolve_symmetry, design)
         return resolution.as_dict()
 
-    mount_preview(application)
+    mount_preview(application, extra_ws_origins=extra_ws_origins)
     mount_design_io(application)
     mount_exports(application)
-    mount_jobs(application, engine_registry)
+    mount_jobs(
+        application,
+        engine_registry,
+        extra_ws_origins=extra_ws_origins,
+    )
     mount_workspace(application)
     mount_cadlink(application)
     mount_charts(application)
