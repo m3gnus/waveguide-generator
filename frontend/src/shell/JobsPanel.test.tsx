@@ -7,7 +7,7 @@ import { preferencesStore } from '../prefs/preferences';
 import { resetDesignStore, useDesignStore } from '../stores/design';
 import { resetDocumentStore } from '../stores/document';
 import { resetSolveOptionsStore } from '../stores/solveOptions';
-import { JobsPanel, selectJob } from './JobsPanel';
+import { jobCardPropsEqual, JobsPanel, selectJob, type JobCardProps } from './JobsPanel';
 import { currentJobLabel } from './JobsCoordinator';
 
 const designMocks = vi.hoisted(() => ({ replaceWithJobDesign: vi.fn() }));
@@ -66,6 +66,26 @@ describe('jobs panel run list', () => {
     act(() => publishJobs([]));
     vi.restoreAllMocks();
     vi.clearAllMocks();
+  });
+
+  it('limits one-second clock invalidation to active run cards', () => {
+    const completed = job(1, 'Finished');
+    const stable = vi.fn();
+    const props: JobCardProps = {
+      job: completed,
+      now: 1_000,
+      selected: false,
+      retryJob: async () => undefined,
+      onError: stable,
+      onRemove: stable,
+      onOpenExportSettings: stable,
+    };
+    expect(jobCardPropsEqual(props, { ...props, now: 2_000 })).toBe(true);
+
+    const running = { ...completed, status: 'running' as const };
+    const runningProps = { ...props, job: running };
+    expect(jobCardPropsEqual(runningProps, { ...runningProps, now: 2_000 })).toBe(false);
+    expect(jobCardPropsEqual(props, { ...props, job: { ...completed } })).toBe(false);
   });
 
   it('commits rename on Enter and blur, preserves Unicode drafts, and reverts on Escape', async () => {
