@@ -151,8 +151,11 @@ qualification hardware, and their archived reports back the release gates.
 
 ## Releasing
 
-Versions are plain `MAJOR.MINOR.PATCH`, starting at **2.0.0**. The original
-application remains on the separate 1.x line, so the two never collide.
+Versions are plain `MAJOR.MINOR.PATCH`. The application is still being built,
+so it stays **pre-1.0**: the line is `0.MINOR.PATCH`, a minor for features and a
+patch for fixes, and 1.0.0 is reserved for the first release that is no longer a
+beta. The original application is a separate, retired 1.x line, and nothing
+resolves this project by version, so the two never collide.
 
 The version lives in `shared/version.json` — `/health` and the FastAPI metadata
 read it at runtime, and Vite injects it into the SPA as `__WG2_VERSION__` at
@@ -171,7 +174,7 @@ and `--check` proves every copy agrees. CI runs `--check` on every push; so does
 Then commit, and tag:
 
 ```bash
-git tag v2.0.1 && git push origin v2.0.1
+git tag v0.2.1 && git push origin v0.2.1
 ```
 
 The tag fires `.github/workflows/release.yml`, which **refuses to build when the
