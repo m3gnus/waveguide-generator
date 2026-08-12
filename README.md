@@ -6,6 +6,8 @@ frontend and a FastAPI backend, with the mesher as the single geometry authority
 This is the second-generation rewrite, historically called v2, and replaces the
 original application.
 
+![Waveguide Generator interface](docs/waveguide-generator-interface.png)
+
 Design and contract documents live in [docs/](docs/); the historical traceability
 table mapping original-application behavior to its current owner is
 [docs/TRACEABILITY-TABLE.md](docs/TRACEABILITY-TABLE.md).
