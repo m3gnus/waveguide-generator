@@ -1078,3 +1078,91 @@ def test_recombine_from_stored_bases_updates_and_adds_channels(
             ChannelCombineSpec(members=["left", "missing"], crossovers_hz=[500.0]),
             request,
         )
+
+
+def test_driver_channel_scales_fields_and_reports_electrical_impedance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(metal, "metal_status", lambda: {"available": True, "reason": "ok"})
+    monkeypatch.setattr(
+        metal, "ObservationConfig", lambda **kwargs: SimpleNamespace(**kwargs)
+    )
+    monkeypatch.setattr(metal, "native_config", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(
+        metal,
+        "native_solve_multi_source",
+        lambda _mesh, sources, _config, frequencies_hz=None: [
+            _native_result_3f() for _ in sources
+        ],
+    )
+    driver = {
+        "sd_cm2": 210.0,
+        "bl_t_m": 10.5,
+        "re_ohm": 5.3,
+        "le_mh": 0.5,
+        "mmd_g": 12.0,
+        "cms_m_per_n": 4.0e-4,
+        "rms_kg_per_s": 1.2,
+    }
+    request = _request(
+        "wgi_" + "0" * 26,
+        drive_channels=[
+            {"id": "left", "source_ids": ["source-a", "source-b"]},
+            {"id": "right", "source_ids": ["source-c"], "driver": driver},
+        ],
+    )
+    mesh_path = tmp_path / "imported.msh"
+    mesh_path.write_text("msh", encoding="utf-8")
+    record = _record(mesh_path)
+    record["sources"] = [
+        {"id": "source-a", "required": True},
+        {"id": "source-b", "required": True},
+        {
+            "id": "source-c",
+            "required": False,
+            "observed": {"total_area_mm2": 21_000.0},
+        },
+    ]
+
+    async def run() -> Any:
+        return await metal.MetalEngine().run(
+            request,
+            cancel_cb=lambda: None,
+            stage_cb=lambda *_args: None,
+            imported_record=record,
+        )
+
+    outcome = asyncio.run(run())
+    channels = outcome.results["channels"]
+
+    # The undriven multi-source channel keeps the unit-drive contract.
+    plain = channels["left"]
+    assert "impedance" not in plain
+    assert "driver" not in plain["metadata"]
+
+    driven = channels["right"]
+    metadata = driven["metadata"]
+    assert metadata["impedance_units"] == "ohms"
+    assert metadata["impedance_quantity"] == "electrical_input_impedance"
+    assert metadata["impedance_drive"] == "voltage"
+    assert metadata["drive"] == {"voltage_v": 2.83, "rg_ohm": 0.0}
+    assert metadata["driver"]["source_id"] == "source-c"
+    assert metadata["driver"]["source_area_m2"] == pytest.approx(0.021)
+    assert metadata["driver"]["spec"]["sd_cm2"] == 210.0
+    assert "electrical_impedance_ohm" not in metadata["driver"]
+    z_real = driven["impedance"]["real"]
+    assert len(z_real) == 3 and all(value > 0 for value in z_real)
+
+    # The voltage scaling moved the absolute level away from the unit basis.
+    unit_spl = plain["spl_on_axis"]["spl"]
+    driven_spl = driven["spl_on_axis"]["spl"]
+    assert all(
+        abs(a - b) > 1.0 for a, b in zip(driven_spl, unit_spl, strict=True)
+    )
+
+    # Bases carry the scaled fields, so recombination stays consistent.
+    from server.solver.combine import deserialize_channel_bases
+
+    bundle = deserialize_channel_bases(outcome.channel_bases)
+    scaled = bundle["results_by_id"]["right"].pressure_complex
+    assert not np.allclose(scaled, np.ones_like(scaled) * 20.0e-6)
