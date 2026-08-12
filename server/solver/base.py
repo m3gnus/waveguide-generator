@@ -22,6 +22,11 @@ class EngineRunResult:
     results: dict[str, Any]
     msh_text: str | None = None
     mesh_stats: dict[str, Any] | None = None
+    # Compressed NPZ of per-channel complex pressure bases (multi-channel
+    # imported solves only). Persisting these is what makes post-solve
+    # recombination possible: the JSON contract stores magnitude+phase per
+    # channel, but a new crossover needs the complex fields.
+    channel_bases: bytes | None = None
 
 
 __all__ = [

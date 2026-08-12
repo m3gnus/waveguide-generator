@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { CompareStore, fetchJobResults, mergeProvisionalResults, ProvisionalResultsStore, ResultsLruCache, resultsCache, type JobResults } from '../api/results';
+import { CompareStore, fetchJobResults, mergeProvisionalResults, ProvisionalResultsStore, recombineJobResults, ResultsLruCache, resultsCache, type JobResults } from '../api/results';
 import { beamShapeSeries, complexToDb, directivityGrid, directivityIndexSeries, expandResultChannels, impedanceSeries, polarSeries, splSeries } from './mappers';
 
 function result(offset = 0): JobResults {
@@ -242,5 +242,33 @@ describe('chart data mappers', () => {
       di: { frequencies: [200, 1_000], di: [null, null] },
     } as JobResults;
     expect(directivityIndexSeries(payload)).toEqual([]);
+  });
+});
+
+describe('recombineJobResults', () => {
+  it('posts the spec, replaces the cache entry, and surfaces server detail', async () => {
+    resultsCache.clear();
+    const updated = { channels: { combined: { frequencies: [100] } }, channel_order: ['combined'] } as unknown as JobResults;
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe('/api/results/job-9/combine');
+      expect(init?.method).toBe('POST');
+      expect(JSON.parse(String(init?.body))).toEqual({
+        id: 'combined', members: ['mf', 'hf'], crossovers_hz: [900], level_match: true, align: true,
+      });
+      return new Response(JSON.stringify(updated), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    });
+    const result = await recombineJobResults('job-9', {
+      id: 'combined', members: ['mf', 'hf'], crossovers_hz: [900], level_match: true, align: true,
+    }, fetcher as unknown as typeof fetch);
+    expect(result).toEqual(updated);
+    expect(resultsCache.get('job-9')).toEqual(updated);
+
+    const failing = vi.fn(async () => new Response(
+      JSON.stringify({ detail: 'combine crossovers_hz [5000.0] lie outside the solved band [100, 1000] Hz' }),
+      { status: 422 },
+    ));
+    await expect(recombineJobResults('job-9', { members: ['mf', 'hf'], crossovers_hz: [5000] }, failing as unknown as typeof fetch))
+      .rejects.toThrow('outside the solved band');
+    resultsCache.clear();
   });
 });
