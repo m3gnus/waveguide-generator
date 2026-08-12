@@ -31,6 +31,12 @@ def _saved(store: CadLinkStore, design: DesignConfig):
     )
 
 
+def _design_count(store: CadLinkStore) -> int:
+    row = store._read_one("SELECT COUNT(*) AS count FROM designs", ())
+    assert row is not None
+    return int(row["count"])
+
+
 def _request(
     saved, design: DesignConfig | None = None, base_name: str = "demo horn.cfg"
 ) -> api.WgLinkExportRequest:
@@ -173,6 +179,155 @@ def test_wglink_export_commits_an_unsaved_or_edited_design(
     assert edited_head["design_hash"] == design_hash(changed)
 
 
+def test_wglink_export_reuses_commit_left_by_failed_export(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    design = _design()
+    edited = DesignConfig.model_validate({"formula": "OSSE", "L": 121, "a": 45})
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    saved = _saved(store, design)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _install_fake_write(monkeypatch)
+    request = _request(saved, edited, "demo-horn.cfg")
+
+    from hornlab_mesher.config_builder import resolve_geometry as real_resolve_geometry
+
+    calls = 0
+
+    def fail_once(config):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("simulated geometry failure")
+        return real_resolve_geometry(config)
+
+    monkeypatch.setattr(
+        "hornlab_mesher.config_builder.resolve_geometry", fail_once
+    )
+
+    with pytest.raises(RuntimeError, match="simulated geometry failure"):
+        api._export_wglink_sync(request, store, workspace, "failed-attempt")
+
+    original_identity = saved["identity"]
+    head_after_failure = store.get_design(original_identity.design_id)
+    assert head_after_failure is not None
+    assert head_after_failure["edit_version"] == original_identity.edit_version + 1
+    assert head_after_failure["design_hash"] == design_hash(edited)
+    assert _design_count(store) == 1
+
+    retried = api._export_wglink_sync(request, store, workspace, "retry-attempt")
+
+    assert retried["identity"] == {
+        "designId": original_identity.design_id,
+        "lineageId": original_identity.lineage_id,
+        "baseEditVersion": head_after_failure["edit_version"],
+    }
+    assert _design_count(store) == 1
+    manifest = json.loads((Path(retried["bundlePath"]) / "wglink.json").read_text())
+    assert manifest["design"]["id"] == original_identity.design_id
+
+
+def test_wglink_idempotent_retry_omits_identity_after_head_advanced(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    design = _design()
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    saved = _saved(store, design)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _install_fake_write(monkeypatch)
+    request = _request(saved, base_name="demo-horn.cfg")
+
+    first = api._export_wglink_sync(request, store, workspace, "same-attempt")
+    original_identity = saved["identity"]
+    advanced = DesignConfig.model_validate({"formula": "OSSE", "L": 121, "a": 45})
+    store.save(
+        requested=SaveIdentity.model_validate({
+            "designId": original_identity.design_id,
+            "lineageId": original_identity.lineage_id,
+            "baseEditVersion": original_identity.edit_version,
+        }),
+        design_hash=design_hash(advanced),
+        filename="demo-horn.cfg",
+        snapshot_builder=lambda identity: serialize(advanced, cadlink=identity),
+    )
+
+    retry = api._export_wglink_sync(request, store, workspace, "same-attempt")
+
+    assert "identity" in first
+    assert "identity" not in retry
+
+
+def test_wglink_idempotent_retry_keeps_identity_while_head_is_unchanged(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    saved = _saved(store, _design())
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _install_fake_write(monkeypatch)
+    request = _request(saved, base_name="demo-horn.cfg")
+
+    first = api._export_wglink_sync(request, store, workspace, "same-attempt")
+    retry = api._export_wglink_sync(request, store, workspace, "same-attempt")
+
+    assert retry["identity"] == first["identity"]
+
+
+def test_wglink_sequential_identical_edits_reuse_the_advanced_head(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    original = _design()
+    edited = DesignConfig.model_validate({"formula": "OSSE", "L": 121, "a": 45})
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    saved = _saved(store, original)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _install_fake_write(monkeypatch)
+    stale_request = _request(saved, edited, "demo-horn.cfg")
+
+    first = api._export_wglink_sync(stale_request, store, workspace, "first-send")
+    second = api._export_wglink_sync(stale_request, store, workspace, "second-send")
+
+    original_identity = saved["identity"]
+    assert first["identity"] == second["identity"] == {
+        "designId": original_identity.design_id,
+        "lineageId": original_identity.lineage_id,
+        "baseEditVersion": original_identity.edit_version + 1,
+    }
+    assert _design_count(store) == 1
+
+
+def test_wglink_identical_content_with_renamed_design_bumps_filename(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    design = _design()
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    saved = _saved(store, design)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _install_fake_write(monkeypatch)
+
+    exported = api._export_wglink_sync(
+        _request(saved, base_name="renamed horn.cfg"),
+        store,
+        workspace,
+        "renamed-send",
+    )
+
+    original_identity = saved["identity"]
+    assert exported["identity"] == {
+        "designId": original_identity.design_id,
+        "lineageId": original_identity.lineage_id,
+        "baseEditVersion": original_identity.edit_version + 1,
+    }
+    head = store.get_design(original_identity.design_id)
+    assert head is not None
+    assert head["filename"] == "renamed_horn.cfg"
+    assert _design_count(store) == 1
+
+
 def test_wglink_export_forks_a_stale_identity_and_adopts_an_unknown_one(
     monkeypatch, tmp_path: Path,
 ) -> None:
@@ -182,15 +337,16 @@ def test_wglink_export_forks_a_stale_identity_and_adopts_an_unknown_one(
     _install_fake_write(monkeypatch)
     saved = _saved(store, _design())
     original_identity = saved["identity"]
+    advanced = DesignConfig.model_validate({"formula": "OSSE", "L": 122, "a": 45})
     store.save(
         requested=SaveIdentity.model_validate({
             "designId": original_identity.design_id,
             "lineageId": original_identity.lineage_id,
             "baseEditVersion": original_identity.edit_version,
         }),
-        design_hash=design_hash(_design()),
+        design_hash=design_hash(advanced),
         filename="demo-horn.cfg",
-        snapshot_builder=lambda identity: serialize(_design(), cadlink=identity),
+        snapshot_builder=lambda identity: serialize(advanced, cadlink=identity),
     )
 
     # The head advanced past this editor's token: the store's CAS forks rather

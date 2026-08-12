@@ -59,7 +59,7 @@ export interface WgLinkExportResponse {
   designHash: string;
   geometryHash: string;
   artifactSha256: string;
-  /** The identity the bundle was committed against; absent on an idempotent retry. */
+  /** The committed identity; absent when the design has moved on since the export. */
   identity?: DesignIdentity;
 }
 
