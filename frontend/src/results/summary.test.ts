@@ -1,0 +1,235 @@
+import { describe, expect, it } from 'vitest';
+import type { JobItem } from '../api/jobsSocket';
+import { summaryGroups, summaryText, type SummaryGroup } from './summary';
+import type { ResultPayload } from './types';
+
+function job(overrides: Partial<JobItem> = {}): JobItem {
+  return {
+    id: 'abcdef123456', run_number: 7, parent_job_id: null,
+    status: 'complete', progress: 1, stage: null, stage_message: null,
+    created_at: '2026-08-12T10:00:00', queued_at: '2026-08-12T10:00:00',
+    started_at: '2026-08-12T10:00:02', completed_at: '2026-08-12T10:00:14',
+    config_summary: {}, solve_options: {} as JobItem['solve_options'], has_results: true, has_mesh_artifact: true,
+    label: 'Reference horn', error_message: null, cancellation_requested: false, mesh_stats: null,
+    script_snapshot: null, design_revision: 0, polar_grid: {}, rating: null, exported_files: [],
+    auto_export_completed_at: null, auto_export_formats: {}, raw_results_file: null,
+    mesh_artifact_file: null, log_tail: [], solve_wall_time_seconds: 12.4,
+    ...overrides,
+  };
+}
+
+function row(groups: SummaryGroup[], groupTitle: string, label: string) {
+  return groups.find(({ title }) => title === groupTitle)?.rows.find((item) => item.label === label);
+}
+
+describe('simulation summary groups', () => {
+  it('builds ordered provenance groups for a full parametric result', () => {
+    const result: ResultPayload = {
+      frequencies: [100, 1_000, 20_000],
+      directivity: {
+        horizontal: [[[0, 0]]],
+        vertical: [[[0, 0]]],
+        diagonal: [[[0, 0]]],
+      } as ResultPayload['directivity'],
+      impedance: { frequencies: [100], real: [1], imaginary: [0] },
+      beam_shape: { di_domain: 'sphere' },
+      balloon: {
+        frequencies: [100, 1_000, 20_000],
+        theta_deg: Array.from({ length: 37 }, (_, index) => index * 5),
+        phi_deg: Array.from({ length: 72 }, (_, index) => index * 5),
+        spl_norm_db: [],
+        hemisphere: true,
+      },
+      metadata: {
+        frequency_source: 'generated_grid', frequency_spacing: 'log',
+        engine: 'hornlab-metal-bem', solve_path: 'full-3d', solve_path_reason: 'requested full solve',
+        symmetry: { requested: 'auto', resolved_quadrants: 1, auto_resolution: { symmetric_x: true, symmetric_y: true } },
+        device_interface: { selected: 'metal' }, infinite_baffle: { backend: 'full_3d_coupled' },
+        mesh_stats: {
+          triangle_count: 4_500, full_domain_triangle_count: 18_000, domain_multiplier: 4,
+          vertex_count: 2_350, max_edge_mm: 8, dimensions_m: { width: 0.4, height: 0.25, depth: 0.12 },
+          integrity: { valid: true },
+        },
+        directivity: {
+          effective_distance_m: 2, requested_distance_m: 1.5, observation_origin: 'mouth',
+          angle_range_degrees: [0, 180], angular_step_degrees: 5, requested_angular_step_degrees: 10,
+          sample_count: 37, normalization_angle_degrees: 5, diagonal_angle_degrees: 35.5,
+        },
+        impedance_units: 'Z/(rho*c)', phase_time_convention: 'exp(+ikr)',
+        mesh_validation: { mode: 'warn' }, warning_count: 0, failure_count: 0, partial_success: false,
+      },
+    };
+
+    const groups = summaryGroups({ result, job: job() });
+
+    expect(groups.map(({ title }) => title)).toEqual([
+      'Run', 'Sweep', 'Solve', 'Mesh', 'Measurement', 'Conventions',
+    ]);
+    expect(row(groups, 'Run', 'Name')?.value).toBe('#7 · Reference horn');
+    expect(row(groups, 'Run', 'Solve time')?.value).toBe('12.4 s');
+    expect(row(groups, 'Sweep', 'Range')?.value).toBe('100 Hz – 20.0 kHz');
+    expect(row(groups, 'Sweep', 'Spacing')?.value).toBe('logarithmic');
+    expect(row(groups, 'Solve', 'Path')).toEqual({ label: 'Path', value: 'full 3D', title: 'requested full solve' });
+    expect(row(groups, 'Solve', 'Symmetry')?.value).toBe('quadrant 1 · quarter domain (server resolved)');
+    expect(row(groups, 'Mesh', 'Triangles')?.value).toBe('4,500');
+    expect(row(groups, 'Mesh', 'Full domain')?.value).toBe('18,000');
+    expect(row(groups, 'Measurement', 'Distance')?.value).toBe('2.00 m from mouth (requested 1.50 m)');
+    expect(row(groups, 'Measurement', 'Sampling')?.value).toBe('5° resolved (requested 10°), 37 samples');
+    expect(row(groups, 'Measurement', 'Balloon')?.value).toBe('37 × 72 × 3 freq · hemisphere');
+    expect(row(groups, 'Conventions', 'Impedance')?.value).toBe('Z/(rho*c)');
+  });
+
+  it('handles a minimal result without placeholders or diagnostics', () => {
+    const groups = summaryGroups({ result: { frequencies: [100, 200] } });
+
+    expect(groups).toEqual([{
+      title: 'Sweep',
+      rows: [
+        { label: 'Range', value: '100 Hz – 200 Hz' },
+        { label: 'Points', value: '2' },
+      ],
+    }]);
+    expect(JSON.stringify(groups)).not.toMatch(/—|undefined|unknown/);
+  });
+
+  it('formats zero hertz as real data', () => {
+    const groups = summaryGroups({ result: { frequencies: [0, 100] } });
+    expect(row(groups, 'Sweep', 'Range')?.value).toBe('0 Hz – 100 Hz');
+  });
+
+  it('uses the CAD wrapper for import provenance and marks shared batch timing', () => {
+    const channel: ResultPayload = {
+      frequencies: [100, 200],
+      metadata: { performance: { total_time_seconds: 125 }, engine: 'hornlab-metal-bem' },
+    };
+    const manifest = 'sha256:1234567890abcdef';
+    const wrapper: ResultPayload = {
+      frequencies: [],
+      channels: { high: channel, low: { frequencies: [100, 200] } },
+      channel_order: ['high', 'low'],
+      metadata: {
+        geometry_type: 'imported', ingest_id: 'wgi_123', manifest_sha256: manifest,
+        solve_path: 'full-3d',
+        global_frequency_caveat: { message: 'The global mesh policy is conservative; active sources remain valid.' },
+        per_source_frequency_validity: { tweeter: { effective_max_valid_frequency_hz: 20_000 } },
+      },
+    };
+
+    const groups = summaryGroups({ result: channel, wrapper, channelId: 'high' });
+
+    expect(row(groups, 'Run', 'Solve time')).toEqual({
+      label: 'Solve time', value: '2m 05s',
+      title: 'Shared batch time for all 2 imported drive channels; not an isolated channel solve.',
+    });
+    expect(row(groups, 'Import', 'Channel')?.value).toBe('high · 2 channels');
+    expect(row(groups, 'Import', 'Manifest')).toEqual({ label: 'Manifest', value: manifest.slice(0, 12), title: manifest });
+    expect(row(groups, 'Import', 'Frequency validity')?.value).toContain('active sources remain valid');
+  });
+
+  it('keeps solved and symmetry-expanded triangle counts distinct', () => {
+    const result: ResultPayload = {
+      frequencies: [100],
+      metadata: { mesh_stats: { triangle_count: 3_000, domain_multiplier: 4, full_domain_triangle_count: 12_000 } },
+    };
+    const groups = summaryGroups({ result });
+
+    expect(row(groups, 'Mesh', 'Triangles')?.value).toBe('3,000');
+    expect(row(groups, 'Mesh', 'Full domain')).toEqual({
+      label: 'Full domain', value: '12,000', title: 'Symmetry-expanded equivalent of the solved mesh.',
+    });
+  });
+
+  it('lists only directivity planes with samples', () => {
+    const result = {
+      frequencies: [100],
+      directivity: { horizontal: [], vertical: [[[0, 0]]], custom: [[[0, -1]]] },
+    } as ResultPayload;
+    const groups = summaryGroups({ result });
+
+    expect(row(groups, 'Measurement', 'Planes')?.value).toBe('vertical · custom');
+  });
+
+  it('surfaces and caps warning and failure text', () => {
+    const result: ResultPayload = {
+      frequencies: [0],
+      metadata: {
+        warnings: ['warning one', 'warning two', 'warning three', 'warning four', 'warning five'],
+        warning_count: 5,
+        failures: Array.from({ length: 5 }, (_, index) => ({
+          frequency_hz: index * 100, stage: 'solve', code: `failure_${index + 1}`, detail: `detail ${index + 1}`,
+        })),
+        failure_count: 5,
+        partial_success: true,
+      },
+    };
+
+    const diagnostics = summaryGroups({ result }).find(({ title }) => title === 'Diagnostics');
+
+    expect(diagnostics?.tone).toBe('warning');
+    expect(diagnostics?.rows.filter(({ label }) => label === 'Warning').map(({ value }) => value)).toEqual([
+      'warning one', 'warning two', 'warning three', 'warning four', '+1 more',
+    ]);
+    expect(diagnostics?.rows.filter(({ label }) => label === 'Failed')).toHaveLength(5);
+    expect(diagnostics?.rows.find(({ label, value }) => label === 'Failed' && value.startsWith('0 Hz'))?.value)
+      .toBe('0 Hz · solve · failure_1: detail 1');
+    expect(diagnostics?.rows.at(-1)?.value).toBe('+1 more');
+  });
+
+  it('shows mesh builder warning text, which the solver never copies into metadata.warnings', () => {
+    const large = 'Large solve mesh: 5,488 triangles against a warning threshold of 4,500.';
+    const result: ResultPayload = {
+      frequencies: [1_000],
+      metadata: {
+        warning_count: 0,
+        mesh_validation: { mode: 'warn' },
+        mesh_stats: { warnings: [large], integrity: { valid: true } },
+      },
+    };
+
+    const diagnostics = summaryGroups({ result }).find(({ title }) => title === 'Diagnostics');
+
+    expect(diagnostics?.rows.find(({ label }) => label === 'Mesh validation')?.value).toBe('warnings · warn mode');
+    expect(diagnostics?.rows.filter(({ label }) => label === 'Warning').map(({ value }) => value)).toEqual([large]);
+  });
+
+  it('does not repeat a mesh warning the solver already reported', () => {
+    const shared = 'Large solve mesh: 5,488 triangles.';
+    const result: ResultPayload = {
+      frequencies: [1_000],
+      metadata: { warnings: [shared], warning_count: 1, mesh_stats: { warnings: [shared] } },
+    };
+
+    const diagnostics = summaryGroups({ result }).find(({ title }) => title === 'Diagnostics');
+
+    expect(diagnostics?.rows.filter(({ label }) => label === 'Warning')).toHaveLength(1);
+  });
+
+  it('uses a worded balloon status when no balloon block was returned', () => {
+    const groups = summaryGroups({
+      result: { frequencies: [100], metadata: { balloon_sampling: { status: 'missing_result' } } },
+    });
+    expect(row(groups, 'Measurement', 'Balloon')?.value).toBe('requested, none returned');
+    expect(row(groups, 'Measurement', 'Balloon')?.value).not.toBe('0');
+  });
+
+  it('retains count-only diagnostics from a partial legacy payload', () => {
+    const groups = summaryGroups({ result: { frequencies: [], metadata: { warning_count: 2, failure_count: 1 } } });
+    expect(groups.find(({ title }) => title === 'Diagnostics')).toMatchObject({
+      tone: 'warning',
+      rows: [
+        { label: 'Warning', value: '2 reported' },
+        { label: 'Failed', value: '1 reported' },
+      ],
+    });
+  });
+});
+
+describe('summary text', () => {
+  it('renders group headings and rows with one trailing newline', () => {
+    expect(summaryText([
+      { title: 'Run', rows: [{ label: 'Name', value: '#1 · Horn' }] },
+      { title: 'Sweep', rows: [{ label: 'Points', value: '3' }, { label: 'Spacing', value: 'linear' }] },
+    ])).toBe('RUN\n  Name: #1 · Horn\n\nSWEEP\n  Points: 3\n  Spacing: linear\n');
+    expect(summaryText([])).toBe('');
+  });
+});

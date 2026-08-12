@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import type { EChartsOption } from 'echarts';
-import { jobsSocket } from '../api/jobsSocket';
+import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { compareSelection, fetchJobResults, type JobResults } from '../api/results';
 import { EChart, useChartTokens, type ChartTokens } from '../results/EChart';
 import { beamShapeSeries, directivityGrid, directivityIndexSeries, expandResultChannels, impedanceSeries, splSeries, type NamedResult } from '../results/mappers';
@@ -9,6 +9,7 @@ import { BalloonRenderer, ChartStub, ForwardBeamRenderer, hasBalloonData, type C
 import { runExportBundle } from '../results/exporters';
 import { resultExportSnapshot } from '../results/exportContext';
 export { resultExportSnapshot } from '../results/exportContext';
+import { summaryGroups, summaryText, type SummaryGroup, type SummaryRow } from '../results/summary';
 import type { ResultPayload } from '../results/types';
 import { hydrateJobDesign } from '../jobs/jobDesign';
 import { exportStemForJob } from '../jobs/exportNaming';
@@ -18,11 +19,6 @@ import { Icon } from './icons';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { trapDialogFocus } from './SettingsDialog';
 import { useSolveOptionsStore } from '../stores/solveOptions';
-
-function frequency(value: number | undefined): string {
-  if (!value) return '—';
-  return value >= 1_000 ? `${(value / 1_000).toFixed(value >= 10_000 ? 1 : 2)} kHz` : `${Math.round(value)} Hz`;
-}
 
 export function splSubtitle(result: JobResults | undefined): string {
   const observation = result?.metadata?.observation;
@@ -500,17 +496,45 @@ export function resolvedPolarStepNotice(result: JobResults): string | null {
   return `${Number(resolved.toPrecision(6))}° resolved (requested ${Number(requested.toPrecision(6))}°)`;
 }
 
-function Summary({ result }: { result: ResultPayload }) {
-  const warnings = Array.isArray(result.metadata?.warnings) ? result.metadata.warnings.length : Number(result.metadata?.warning_count ?? 0);
-  const cells: Array<[string, string | number]> = [
-    ['Frequencies', result.frequencies.length],
-    ['Range', result.frequencies.length ? `${frequency(result.frequencies[0])} – ${frequency(result.frequencies.at(-1))}` : '—'],
-    ['Planes', Object.keys(result.directivity ?? {}).join(' · ') || 'none'],
-    ['Balloon', result.balloon?.spl_norm_db.length ?? 0],
-    ['Warnings', warnings],
-    ['Contract', String(result.metadata?.result_contract_version ?? 'legacy')],
-  ];
-  return <dl className="result-summary">{cells.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>;
+interface SummarySourceProps {
+  job?: JobItem | null;
+  wrapper?: ResultPayload;
+  channelId?: string | null;
+}
+
+function SummaryGroupBlock({ group }: { group: SummaryGroup }) {
+  return <section className="result-summary-group" data-tone={group.tone}>
+    <h3>{group.title}</h3>
+    <dl>{group.rows.map((row: SummaryRow) => <div className="result-summary-row" key={row.label} title={row.title}><dt>{row.label}</dt><dd>{row.value}</dd></div>)}</dl>
+  </section>;
+}
+
+function Summary({ result, wrapper, job, channelId, density }: { result: ResultPayload; density: ChartDensity } & SummarySourceProps) {
+  const groups = useMemo(() => summaryGroups({ result, wrapper, job, channelId }), [channelId, job, result, wrapper]);
+  const [copied, setCopied] = useState(false);
+  const copiedTimer = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
+  }, []);
+  const copy = useCallback(async () => {
+    try {
+      if (!navigator.clipboard?.writeText) return;
+      await navigator.clipboard.writeText(summaryText(groups));
+      setCopied(true);
+      if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
+      copiedTimer.current = window.setTimeout(() => setCopied(false), 1_600);
+    } catch {
+      // Clipboard permission is optional; the summary remains readable when it is blocked.
+    }
+  }, [groups]);
+  return <div className="result-summary" data-density={density}>
+    <div className={`result-summary-groups${groups.length ? '' : ' is-empty'}`}>
+      {groups.length
+        ? groups.map((group) => <SummaryGroupBlock group={group} key={group.title}/>)
+        : <p className="result-summary-empty" role="status">No summary details available.</p>}
+    </div>
+    {groups.length > 0 && <button className="result-summary-copy" type="button" aria-label={copied ? 'Simulation summary copied' : 'Copy simulation summary'} title="Copy summary as text" onClick={() => void copy()}><span aria-live="polite">{copied ? 'Copied' : 'Copy'}</span></button>}
+  </div>;
 }
 
 const NO_NAMED_RESULTS: NamedResult[] = [];
@@ -591,7 +615,7 @@ export function beamShapeMissingReason(result: ResultPayload): { reason: string;
   };
 }
 
-function ResultChart({ chartType, result, named, tokens, density, beamShapeAction }: { chartType: ChartType; result: ResultPayload; named: NamedResult[]; tokens: ChartTokens; density: ChartDensity; beamShapeAction?: ChartStubAction }) {
+function ResultChart({ chartType, result, named, tokens, density, beamShapeAction, wrapper, job, channelId }: { chartType: ChartType; result: ResultPayload; named: NamedResult[]; tokens: ChartTokens; density: ChartDensity; beamShapeAction?: ChartStubAction } & SummarySourceProps) {
   const preferences = usePreferences();
   // Only comparable charts read the cross-job list. Keeping it in the
   // dependency array for every chart would rebuild expensive single-run
@@ -618,8 +642,8 @@ function ResultChart({ chartType, result, named, tokens, density, beamShapeActio
       const option = impedanceOption(overlays, tokens, preferences.smoothing, density);
       return Array.isArray(option.series) && option.series.length ? <EChart option={option} label="Interactive HornLab normalized acoustic impedance by frequency"/> : <ChartStub reason="Acoustic Impedance needs the optional impedance result block."/>;
     }
-    return <Summary result={result}/>;
-  }, [beamShapeAction, chartType, density, overlays, preferences.mapReference, preferences.smoothing, result, tokens]);
+    return <Summary result={result} wrapper={wrapper} job={job} channelId={channelId} density={density}/>;
+  }, [beamShapeAction, channelId, chartType, density, job, overlays, preferences.mapReference, preferences.smoothing, result, tokens, wrapper]);
 }
 
 export interface CardMetrics {
@@ -658,7 +682,7 @@ export function useCardMetrics(target: React.RefObject<HTMLElement | null>): Car
   return metrics;
 }
 
-function ChartCard({ index, chartType, result, named, tokens, beamShapeAction }: { index: number; chartType: ChartType; result: ResultPayload; named: NamedResult[]; tokens: ChartTokens; beamShapeAction?: ChartStubAction }) {
+function ChartCard({ index, chartType, result, named, tokens, beamShapeAction, wrapper, job, channelId }: { index: number; chartType: ChartType; result: ResultPayload; named: NamedResult[]; tokens: ChartTokens; beamShapeAction?: ChartStubAction } & SummarySourceProps) {
   // A comparison is active but this card cannot carry it. Saying so is the
   // whole point: silently drawing the primary run looks identical to drawing
   // both, so the user believes they are comparing when they are not.
@@ -693,7 +717,7 @@ function ChartCard({ index, chartType, result, named, tokens, beamShapeAction }:
   return <>
     <section ref={card} className={`result-card result-${index}`} data-density={density}>
       <div className="chart-placeholder" title="Hover for values · double-click for detail" onDoubleClick={() => setExpanded(true)}>
-        <ResultChart chartType={chartType} result={result} named={named} tokens={tokens} density={density} beamShapeAction={beamShapeAction}/>
+        <ResultChart chartType={chartType} result={result} named={named} tokens={tokens} density={density} beamShapeAction={beamShapeAction} wrapper={wrapper} job={job} channelId={channelId}/>
       </div>
       {/* Chrome floats over the plot rather than reserving a row of its own:
           a fixed header costs a quarter of a six-panel card's height. */}
@@ -714,7 +738,7 @@ function ChartCard({ index, chartType, result, named, tokens, beamShapeAction }:
     {expanded && createPortal(<div className="result-detail-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setExpanded(false); }}>
       <section ref={detail} className="result-detail" role="dialog" aria-modal="true" aria-label={`${chartLabel(chartType)} detail`}>
         <header><div><b>{chartLabel(chartType)}</b>{subtitle && <span>{subtitle}</span>}</div><small>Hover to inspect · Ctrl/scroll to zoom lines</small><button aria-label="Close detail view" onClick={() => setExpanded(false)}><Icon name="close"/></button></header>
-        <div className="result-detail-chart"><ResultChart chartType={chartType} result={result} named={named} tokens={tokens} density="full" beamShapeAction={beamShapeAction}/></div>
+        <div className="result-detail-chart"><ResultChart chartType={chartType} result={result} named={named} tokens={tokens} density="full" beamShapeAction={beamShapeAction} wrapper={wrapper} job={job} channelId={channelId}/></div>
       </section>
     </div>, document.body)}
   </>;
@@ -724,18 +748,18 @@ export function resultLayoutClass(count: number): string {
   return `result-layout-${Math.max(0, Math.min(MAX_RESULT_PANELS, Math.floor(count)))}`;
 }
 
-export function ResultsChartGrid({ chartTypes, result, named, tokens, beamShapeAction }: {
+export function ResultsChartGrid({ chartTypes, result, named, tokens, beamShapeAction, wrapper, job, channelId }: {
   chartTypes: ChartType[];
   result: ResultPayload;
   named: NamedResult[];
   tokens: ChartTokens;
   beamShapeAction?: ChartStubAction;
-}) {
+} & SummarySourceProps) {
   if (!chartTypes.length) {
     return <div className="result-grid-empty" role="status"><b>NO CHARTS OPEN</b><span>Add a chart to rebuild the results workspace.</span><button onClick={() => preferencesStore.addChart()}>+ Add chart</button></div>;
   }
   return <div className={`result-grid ${resultLayoutClass(chartTypes.length)}`} data-chart-count={chartTypes.length}>
-    {chartTypes.map((chartType, index) => <ChartCard key={`${index}-${chartType}`} index={index} chartType={chartType} result={result} named={named} tokens={tokens} beamShapeAction={beamShapeAction}/>) }
+    {chartTypes.map((chartType, index) => <ChartCard key={`${index}-${chartType}`} index={index} chartType={chartType} result={result} named={named} tokens={tokens} beamShapeAction={beamShapeAction} wrapper={wrapper} job={job} channelId={channelId}/>) }
   </div>;
 }
 
@@ -924,6 +948,6 @@ export function ResultsPanel() {
     {showingPrevious && <div className="job-warning" role="status" style={{ margin: 7 }}>Showing previous results while fetching the selected run…</div>}
     {!shown
       ? <div className="empty-state" role="status"><b>{error ? 'Results unavailable' : 'Loading results'}</b><span>{error ? 'Retry above, or select another run in the Jobs rail.' : 'Fetching the selected run…'}</span></div>
-      : <ResultsChartGrid chartTypes={preferences.chartTypes} result={shown} named={named} tokens={tokens} beamShapeAction={beamShapeAction}/>}
+      : <ResultsChartGrid chartTypes={preferences.chartTypes} result={shown} named={named} tokens={tokens} beamShapeAction={beamShapeAction} wrapper={shownRaw} job={selectedJob} channelId={shownActiveChannel}/>}
   </div>;
 }

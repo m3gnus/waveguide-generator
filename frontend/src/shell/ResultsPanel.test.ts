@@ -4,9 +4,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { preferencesStore, usePreferences, type ChartType } from '../prefs/preferences';
 import type { ChartTokens } from '../results/EChart';
 import type { NamedResult } from '../results/mappers';
+import type { SummaryContext, SummaryGroup } from '../results/summary';
 import type { ResultPayload } from '../results/types';
 import { designForFamily, serializeDesign } from '../stores/design';
 import { beamShapeMissingReason, COMPARABLE_CHARTS, directivityIndexOption, directivityMapPanels, impedanceOption, ResultsChartGrid, resolvedPolarStepNotice, resultExportSnapshot, resultLayoutClass } from './ResultsPanel';
+
+const summaryMocks = vi.hoisted(() => ({
+  groups: vi.fn<(context: SummaryContext) => SummaryGroup[]>(() => []),
+  text: vi.fn<(groups: SummaryGroup[]) => string>(() => ''),
+}));
+vi.mock('../results/summary', () => ({ summaryGroups: summaryMocks.groups, summaryText: summaryMocks.text }));
 
 const tokens: ChartTokens = { foreground: '#fff', muted: '#aaa', grid: '#333', gridMinor: '#222', accent: '#0ff', series: ['#0ff'], colormap: ['#000', '#fff'] };
 const result = { frequencies: [], metadata: {} };
@@ -126,6 +133,8 @@ describe('results chart layouts', () => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     localStorage.clear();
     preferencesStore.resetForTests();
+    summaryMocks.groups.mockReset().mockReturnValue([]);
+    summaryMocks.text.mockReset().mockReturnValue('');
     host = document.createElement('div');
     document.body.append(host);
     root = createRoot(host);
@@ -137,6 +146,51 @@ describe('results chart layouts', () => {
     act(() => root.render(createElement(ResultsChartGrid, { chartTypes, result, named: [], tokens })));
     expect(host.querySelector('.result-grid')?.classList.contains(resultLayoutClass(count))).toBe(true);
     expect(host.querySelectorAll('.result-card')).toHaveLength(count);
+  });
+
+  it('renders summary groups, row titles, and a marked warning group', () => {
+    const groups: SummaryGroup[] = [
+      { title: 'Simulation', rows: [{ label: 'Engine', value: 'bempp-cl', title: 'Solver backend' }] },
+      { title: 'Warnings', tone: 'warning', rows: [{ label: 'Mesh', value: 'Element quality fell below the requested threshold.' }] },
+    ];
+    const wrapper = { frequencies: [], channels: { hf: result } } as ResultPayload;
+    summaryMocks.groups.mockReturnValue(groups);
+    act(() => root.render(createElement(ResultsChartGrid, {
+      chartTypes: ['summary'], result, named: [], tokens, wrapper, job: null, channelId: 'hf',
+    })));
+
+    expect([...host.querySelectorAll('.result-summary-group > h3')].map((heading) => heading.textContent)).toEqual(['Simulation', 'Warnings']);
+    expect([...host.querySelectorAll('.result-summary dt')].map((label) => label.textContent)).toEqual(['Engine', 'Mesh']);
+    expect([...host.querySelectorAll('.result-summary dd')].map((value) => value.textContent)).toEqual(['bempp-cl', 'Element quality fell below the requested threshold.']);
+    expect(host.querySelector('.result-summary-row')?.getAttribute('title')).toBe('Solver backend');
+    expect(host.querySelector('.result-summary-group[data-tone="warning"]')?.textContent).toContain('Warnings');
+    expect(summaryMocks.groups).toHaveBeenCalledWith({ result, wrapper, job: null, channelId: 'hf' });
+  });
+
+  it('renders a quiet summary empty state when there are no groups', () => {
+    act(() => root.render(createElement(ResultsChartGrid, { chartTypes: ['summary'], result, named: [], tokens })));
+    expect(host.querySelector('.result-summary-empty')?.textContent).toBe('No summary details available.');
+    expect(host.querySelector('.result-summary-copy')).toBeNull();
+  });
+
+  it('copies the formatted summary text and confirms success', async () => {
+    const groups: SummaryGroup[] = [{ title: 'Run', rows: [{ label: 'Name', value: 'OSSE v4' }] }];
+    const writeText = vi.fn(async () => undefined);
+    const originalClipboard = navigator.clipboard;
+    summaryMocks.groups.mockReturnValue(groups);
+    summaryMocks.text.mockReturnValue('Run\nName: OSSE v4');
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    try {
+      act(() => root.render(createElement(ResultsChartGrid, { chartTypes: ['summary'], result, named: [], tokens })));
+      const copy = host.querySelector<HTMLButtonElement>('[aria-label="Copy simulation summary"]')!;
+      await act(async () => { copy.click(); });
+      expect(summaryMocks.text).toHaveBeenCalledWith(groups);
+      expect(writeText).toHaveBeenCalledWith('Run\nName: OSSE v4');
+      expect(copy.textContent).toBe('Copied');
+      expect(copy.getAttribute('aria-label')).toBe('Simulation summary copied');
+    } finally {
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: originalClipboard });
+    }
   });
 
   it('closes one card and persists the shorter chart list', () => {
