@@ -24,6 +24,7 @@ from server.mesh.gmsh_worker import run_on_gmsh_worker
 from server.preview.translate import design_to_mesher_config
 from server.workspace.api import WorkspaceState, _path_segments, _portable_path_key
 
+from .cad_launch import focus_cad
 from .core import build_profiles, build_step, build_step_solid, build_stl
 from .geometry_identity import geometry_hash as _geometry_hash
 from .geometry_identity import mesher_version as _mesher_version
@@ -505,13 +506,18 @@ async def export_wglink(
             detail="No workspace folder has been selected. Choose a workspace folder first.",
         )
     store: CadLinkStore = request.app.state.cadlink_store
-    return await run_on_gmsh_worker(
+    result = await run_on_gmsh_worker(
         _export_wglink_sync,
         payload,
         store,
         selected.resolve(),
         idempotency_key,
     )
+    # The bundle is already on disk and the response is already earned, so
+    # raising Fusion is strictly a courtesy: it runs off the request thread and
+    # its outcome only reaches the log.
+    result["cadLaunch"] = await asyncio.to_thread(focus_cad)
+    return result
 
 
 def mount_exports(application: FastAPI) -> None:
