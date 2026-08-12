@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Collection
 from pathlib import Path
 from typing import Any
 
@@ -62,7 +63,9 @@ class _FastAPIJobsTransport:
             await self.websocket.close(code=code)
 
 
-def create_jobs_router(runtime: JobRuntime) -> APIRouter:
+def create_jobs_router(
+    runtime: JobRuntime, *, extra_ws_origins: Collection[str] = ()
+) -> APIRouter:
     """Build bound routes with v1 error mappings and response shapes.
 
     Route coverage follows v1 ``server/api/routes_simulation.py:69-297``.
@@ -209,6 +212,7 @@ def create_jobs_router(runtime: JobRuntime) -> APIRouter:
             host=websocket.headers.get("host"),
             scheme=websocket.scope.get("scheme", "ws"),
             bound_port=bound_port,
+            extra_origins=extra_ws_origins,
         ):
             await websocket.close(code=CLOSE_ORIGIN_REJECTED)
             return
@@ -226,7 +230,10 @@ def create_jobs_router(runtime: JobRuntime) -> APIRouter:
 
 
 def mount_jobs(
-    application: FastAPI, engine_registry: EngineRegistry | None = None
+    application: FastAPI,
+    engine_registry: EngineRegistry | None = None,
+    *,
+    extra_ws_origins: Collection[str] = (),
 ) -> JobRuntime:
     """Attach one data-dir-bound runtime before the frontend catch-all mount."""
 
@@ -237,7 +244,9 @@ def mount_jobs(
         cadlink_store=application.state.cadlink_store,
     )
     application.state.jobs_runtime = runtime
-    application.include_router(create_jobs_router(runtime))
+    application.include_router(
+        create_jobs_router(runtime, extra_ws_origins=extra_ws_origins)
+    )
     return runtime
 
 

@@ -14,7 +14,7 @@ export default defineConfig({
     fs: { allow: ['..'] },
     proxy: {
       '/api': 'http://127.0.0.1:3100',
-      '/ws': { target: 'ws://127.0.0.1:3100', ws: true },
+      '/ws': { target: 'ws://127.0.0.1:3100', ws: true, changeOrigin: true },
     },
   },
   test: { environment: 'jsdom' },

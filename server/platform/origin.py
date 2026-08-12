@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+from collections.abc import Collection
 from urllib.parse import urlsplit
 
 
@@ -52,14 +53,30 @@ def local_request_host(host_header: str | None, *, scheme: str, bound_port: obje
     )
 
 
+def parse_extra_websocket_origins(raw: str | None) -> frozenset[str]:
+    """Parse the opt-in WS origin list, silently dropping non-loopback entries."""
+
+    if not raw:
+        return frozenset()
+    candidates = (entry.strip() for entry in raw.split(","))
+    return frozenset(origin for origin in candidates if origin and local_origin(origin))
+
+
 def websocket_request_allowed(
-    *, origin: str | None, host: str | None, scheme: str, bound_port: object
+    *,
+    origin: str | None,
+    host: str | None,
+    scheme: str,
+    bound_port: object,
+    extra_origins: Collection[str] = (),
 ) -> bool:
-    """Validate WS Host and require browser Origin to match its exact authority."""
+    """Validate WS Host and require an exact authority or opted-in local Origin."""
 
     if not local_request_host(host, scheme=scheme, bound_port=bound_port):
         return False
     if origin is None:
+        return True
+    if origin in extra_origins and local_origin(origin):
         return True
     try:
         origin_url = urlsplit(origin)
@@ -80,4 +97,9 @@ def websocket_request_allowed(
     )
 
 
-__all__ = ["local_origin", "local_request_host", "websocket_request_allowed"]
+__all__ = [
+    "local_origin",
+    "local_request_host",
+    "parse_extra_websocket_origins",
+    "websocket_request_allowed",
+]
