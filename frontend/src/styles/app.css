@@ -453,14 +453,34 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .result-card:focus-within .result-card-expand, .result-card:focus-within .result-card-close { opacity: 1; background: color-mix(in srgb, var(--chart-bg) 72%, transparent); backdrop-filter: blur(6px); }
 .result-card-expand:focus-visible, .result-card-close:focus-visible { opacity: 1; background: color-mix(in srgb, var(--chart-bg) 72%, transparent); }
 .result-card-expand:hover, .result-card-close:hover { background: var(--ov4); color: var(--chart-fg); }
-/* Scrolls rather than clips: six rows do not fit a six-panel card. */
-.result-summary { display: grid; align-content: start; gap: 4px 8px; grid-template-columns: repeat(auto-fit, minmax(84px, 1fr)); width: 100%; height: 100%; margin: 0; overflow: hidden auto; padding: 20px 6px 6px; }
-.result-summary div { min-width: 0; padding: 2px 6px; border-left: 1px solid var(--chart-spine); }
+/* The groups scroll under a fixed copy action. Keeping the shell itself still
+   prevents that action from disappearing in a long provenance report. */
+.result-summary { position: relative; width: 100%; height: 100%; min-height: 0; margin: 0; overflow: hidden; padding: 20px 6px 6px; }
+.result-summary-groups { display: grid; align-content: start; gap: 8px; width: 100%; height: 100%; min-height: 0; overflow: hidden auto; padding: 2px 2px 27px; }
+.result-summary-groups.is-empty { place-content: center; padding-bottom: 2px; }
+.result-summary-group { min-width: 0; padding: 6px 7px; border-left: 1px solid var(--chart-spine); }
+.result-summary-group > h3 { margin: 0 0 5px; color: var(--fg2); font: 600 var(--text-micro)/1.2 var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+.result-summary-group > dl { display: grid; gap: 4px; margin: 0; }
+.result-summary-row { display: grid; grid-template-columns: minmax(72px, .65fr) minmax(0, 1fr); gap: 7px; min-width: 0; }
 .result-summary dt { color: var(--fg4); font-size: var(--text-micro); letter-spacing: .05em; text-transform: uppercase; }
 /* A summary value wraps rather than ellipsizes. Hiding the back half of
    "100 Hz – 20 kHz" or "horizontal, vertical" costs the reader the very thing
    the row exists to report, and a second line is cheap in a grid that scrolls. */
-.result-summary dd { margin: 2px 0 0; color: var(--fg); font: var(--text-micro) var(--mono); overflow-wrap: anywhere; }
+.result-summary dd { min-width: 0; margin: 0; color: var(--fg); font: var(--text-micro) var(--mono); overflow-wrap: anywhere; }
+.result-summary-group[data-tone="warning"] { border-left-color: var(--amber); background: rgba(var(--amber-rgb), .07); }
+.result-summary-group[data-tone="warning"] > h3 { color: var(--amber); }
+.result-summary-empty { margin: 0; color: var(--fg4); font: var(--text-micro) var(--mono); text-align: center; }
+.result-summary-copy { position: absolute; right: 8px; bottom: 7px; z-index: 2; min-width: 42px; padding: 2px 6px; border: 1px solid var(--hair-hi); border-radius: var(--r3); background: color-mix(in srgb, var(--chart-bg) 88%, transparent); color: var(--fg3); font: var(--text-micro) var(--mono); backdrop-filter: blur(6px); }
+.result-summary-copy:hover, .result-summary-copy:focus-visible { border-color: var(--focus-ring); color: var(--fg1); }
+.result-summary[data-density="compact"] .result-summary-groups { gap: 3px; }
+.result-summary[data-density="compact"] .result-summary-group { padding-block: 2px; }
+.result-summary[data-density="compact"] .result-summary-group > h3 { margin: 0; }
+.result-summary[data-density="compact"] .result-summary-group > dl { gap: 2px; }
+.result-summary[data-density="full"] .result-summary-groups { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 12px; padding: 8px 8px 34px; }
+.result-summary[data-density="full"] .result-summary-group { padding: 9px 10px; }
+.result-summary[data-density="full"] .result-summary-group > h3 { margin-bottom: 8px; }
+.result-summary[data-density="full"] .result-summary-group > dl { gap: 6px; }
+.result-summary[data-density="full"] .result-summary-row { grid-template-columns: minmax(110px, .75fr) minmax(0, 1fr); gap: 12px; }
 .result-grid-empty { display: grid; place-content: center; justify-items: center; flex: 1; min-height: 120px; color: var(--fg3); text-align: center; }
 .result-grid-empty b { color: var(--fg1); font: var(--text-micro) var(--mono); letter-spacing: .1em; }.result-grid-empty span { margin: 4px 0 8px; }.result-grid-empty button { padding: 4px 8px; border: 1px solid rgba(var(--acc-rgb), .35); border-radius: var(--r3); background: rgba(var(--acc-rgb), .1); color: var(--acc); }
 .chart-placeholder { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidden; background: var(--chart-bg); cursor: crosshair; }
