@@ -102,9 +102,9 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .design-menu-status {
   position: fixed;
   top: 58px;
-  right: 12px;
+  left: 50%;
   z-index: 1100;
-  max-width: 520px;
+  max-width: min(520px, calc(100vw - 24px));
   padding: 8px 12px;
   border: 1px solid var(--border-strong);
   border-radius: var(--r);
@@ -112,6 +112,8 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
   box-shadow: var(--float-sh);
   color: var(--fg2);
   font-size: var(--text-base);
+  text-align: center;
+  transform: translateX(-50%);
 }
 
 /* reusable split action menu */
