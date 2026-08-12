@@ -520,7 +520,7 @@ function CameraGizmo({ controls, center, scheduler, theme, onDirection }: {
   const axisColors = useMemo(() => typeof document === 'undefined'
     ? fallbackAxisColors
     : axisColorsFromTokens(getComputedStyle(document.documentElement)), [theme]);
-  const labelColor = theme === 'light' ? '#fffdf8' : '#080a0f';
+  const labelColor = theme === 'light' ? '#f1f2ed' : '#191817';
   if (!shouldShowAxisGizmo(width, height)) return null;
   return <GizmoHelper
     alignment="bottom-left"
@@ -613,14 +613,21 @@ function Scene({ scene, sceneMarker, mode, showEnclosure, sectionCut, cameraRequ
   useEffect(() => () => materials.all.forEach((material) => material.dispose()), [materials]);
 
   return <>
-    <hemisphereLight args={theme === 'light' ? ['#fff8e8', '#697582', 1.28] : ['#c4e2f2', '#111925', 1.52]} />
+    {/* Studio lighting, warm key and cooler fill, but both inside the palette
+        the surrounding interface uses. The fill used to be a saturated sky
+        blue, which tinted the whole model towards a hue that appears nowhere
+        else in the app and made the clay material read grey-blue rather than
+        as the warm stone its token asks for. The key/fill contrast that gives
+        the surface its form is kept -- it now comes from temperature within
+        the warm range rather than from crossing into blue. */}
+    <hemisphereLight args={theme === 'light' ? ['#fff8e8', '#6f6a60', 1.28] : ['#efe3d2', '#1b1917', 1.52]} />
     <directionalLight
-      color={theme === 'light' ? '#fff0d1' : '#f1f9ff'}
+      color={theme === 'light' ? '#fff0d1' : '#fdf6ec'}
       intensity={theme === 'light' ? 2.25 : 2.35}
       position={[size.x || 100, (size.y || 100) * 1.15, size.z || 100]}
     />
     <directionalLight
-      color={theme === 'light' ? '#79a8ce' : '#79c6ee'}
+      color={theme === 'light' ? '#b0a08c' : '#c2ae97'}
       intensity={theme === 'light' ? 0.92 : 1.05}
       position={[-(size.x || 100), (size.y || 100) * 0.2, size.z || 100]}
     />

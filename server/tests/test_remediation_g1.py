@@ -403,7 +403,7 @@ def test_workspace_routes_use_v2_data_layout(tmp_path: Path, monkeypatch) -> Non
     assert persisted.path() == (tmp_path / "selected").resolve()
 
 
-def test_chart_routes_expose_ten_themes_and_use_hornlab_plots(monkeypatch) -> None:
+def test_chart_routes_expose_every_theme_and_use_hornlab_plots(monkeypatch) -> None:
     calls: list[tuple[str, Any]] = []
 
     fake = SimpleNamespace(
@@ -424,12 +424,15 @@ def test_chart_routes_expose_ten_themes_and_use_hornlab_plots(monkeypatch) -> No
 
     async def scenario() -> None:
         listed = await charts_api.themes()
-        assert len(listed["themes"]) == 10
-        assert listed["default"] == "ember"
-        assert charts_api.ChartsRenderRequest().theme == "ember"
-        preview = await charts_api.theme_preview("ember")
+        assert len(listed["themes"]) == 12
+        # The default is the interface's own dark theme; the frontend resolves
+        # its "Match interface" setting to console or vellum before the request
+        # reaches here, so an export lands on the window's own surfaces.
+        assert listed["default"] == "console"
+        assert charts_api.ChartsRenderRequest().theme == "console"
+        preview = await charts_api.theme_preview("console")
         assert preview == {
-            "theme": "ember",
+            "theme": "console",
             "image": "data:image/png;base64,Yw==",
         }
         charts = await charts_api.render_charts(
@@ -451,7 +454,7 @@ def test_chart_routes_expose_ten_themes_and_use_hornlab_plots(monkeypatch) -> No
 
     asyncio.run(scenario())
     assert calls == [
-        ("preview", "ember"),
+        ("preview", "console"),
         ("charts", "blueprint"),
         ("directivity", "sepia"),
     ]

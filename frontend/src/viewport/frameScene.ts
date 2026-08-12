@@ -105,6 +105,17 @@ export function frameToScene(frame: DecodedFrame): FrameScene {
   };
 }
 
+/**
+ * Curvature is a signed quantity, so this is a diverging ramp: two poles and a
+ * neutral middle, never a hue at the midpoint. The poles are the interface's
+ * own accent and blue, and flat regions land on a warm grey rather than on the
+ * green that a red-to-cyan blend used to pass through -- a hue that read as a
+ * third state the data does not have.
+ */
+const CURVATURE_CONVEX: readonly [number, number, number] = [0.878, 0.404, 0.247]; // --acc
+const CURVATURE_CONCAVE: readonly [number, number, number] = [0.435, 0.616, 1.0]; // --blue
+const CURVATURE_FLAT: readonly [number, number, number] = [0.58, 0.56, 0.53];
+
 export function curvatureColors(values: Float32Array): Float32Array {
   let limit = 0;
   for (const value of values) {
@@ -114,12 +125,11 @@ export function curvatureColors(values: Float32Array): Float32Array {
   const colors = new Float32Array(values.length * 3);
   for (let index = 0; index < values.length; index += 1) {
     const normalized = Number.isFinite(values[index]) ? Math.max(-1, Math.min(1, values[index] / limit)) : 0;
-    const warm = Math.max(0, normalized);
-    const cool = Math.max(0, -normalized);
-    const center = 1 - Math.abs(normalized);
-    colors[index * 3] = 0.18 + warm * 0.82 + center * 0.42;
-    colors[index * 3 + 1] = 0.2 + center * 0.62;
-    colors[index * 3 + 2] = 0.2 + cool * 0.8 + center * 0.48;
+    const magnitude = Math.abs(normalized);
+    const pole = normalized >= 0 ? CURVATURE_CONVEX : CURVATURE_CONCAVE;
+    for (let channel = 0; channel < 3; channel += 1) {
+      colors[index * 3 + channel] = CURVATURE_FLAT[channel] * (1 - magnitude) + pole[channel] * magnitude;
+    }
   }
   return colors;
 }

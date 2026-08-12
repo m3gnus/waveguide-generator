@@ -4,7 +4,7 @@ import { projectSubmittedDesign, type SubmittedDesignProjection } from '../jobs/
 import { useDesignStore } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
 import { useSolveOptionsStore } from '../stores/solveOptions';
-import { EXPORT_FORMATS, MAP_REFERENCES, RESULT_PANEL_COUNTS, preferencesStore, usePreferences, type JobSort, type MapReference } from './preferences';
+import { EXPORT_FORMATS, MAP_REFERENCES, MATCH_INTERFACE_THEME, RESULT_PANEL_COUNTS, preferencesStore, usePreferences, type JobSort, type MapReference } from './preferences';
 import { SMOOTHING_MODES, type SmoothingMode } from '../results/smoothing';
 import { Icon } from '../shell/icons';
 import { AnchoredPanel } from './AnchoredPanel';
@@ -53,7 +53,10 @@ function ResultsPreferencesContent() {
       <ResultPanelCountControl/>
       <label className="ui-field">Smoothing<select aria-label="Smoothing" value={preferences.smoothing} onChange={(event) => preferencesStore.update({ smoothing: event.target.value as SmoothingMode })}>{SMOOTHING_MODES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
       <label className="ui-field">Map reference<select aria-label="Map reference" value={preferences.mapReference} onChange={(event) => preferencesStore.update({ mapReference: Number(event.target.value) as MapReference })}>{MAP_REFERENCES.map((value) => <option key={value} value={value}>{value} dB</option>)}</select></label>
-      <label className="ui-field">Export theme<select aria-label="Chart theme" value={preferences.chartTheme} onChange={(event) => preferencesStore.update({ chartTheme: event.target.value })}>{[...new Set([preferences.chartTheme, ...themes])].map((theme) => <option key={theme}>{theme}</option>)}</select></label>
+      {/* "Match interface" is not a server theme: it resolves to console or
+          vellum at export time so a figure leaves on the same ground as the
+          window it was taken from. The server never sees the sentinel. */}
+      <label className="ui-field">Export theme<select aria-label="Chart theme" value={preferences.chartTheme} onChange={(event) => preferencesStore.update({ chartTheme: event.target.value })}><option value={MATCH_INTERFACE_THEME}>Match interface</option>{[...new Set([preferences.chartTheme, ...themes])].filter((theme) => theme !== MATCH_INTERFACE_THEME).map((theme) => <option key={theme}>{theme}</option>)}</select></label>
     </div>
     <div className="preferences-checks">
       <label className="ui-check"><input type="checkbox" checked={preferences.autoExportOnComplete} onChange={(event) => preferencesStore.update({ autoExportOnComplete: event.target.checked })}/>Auto-export completed jobs</label>

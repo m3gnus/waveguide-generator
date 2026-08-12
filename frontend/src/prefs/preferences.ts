@@ -18,6 +18,23 @@ export const CHART_TYPES = [
 ] as const;
 export type ChartType = typeof CHART_TYPES[number]['id'];
 
+/**
+ * Export theme that tracks the interface instead of naming a theme.
+ *
+ * The stored default used to be a fixed theme name, which meant a figure
+ * exported from a Vellum window came back on a dark ground -- and, since the
+ * live charts follow the interface, that the chart on screen and the chart in
+ * the file were never the same picture. This resolves at export time, and the
+ * two application themes are the ones the interface is actually built from.
+ */
+export const MATCH_INTERFACE_THEME = 'auto';
+
+export function resolveChartTheme(chartTheme: string): string {
+  if (chartTheme !== MATCH_INTERFACE_THEME) return chartTheme;
+  const light = typeof document !== 'undefined' && document.documentElement.dataset.theme === 'light';
+  return light ? 'vellum' : 'console';
+}
+
 export const EXPORT_FORMATS = [
   { id: 'mwg_config', label: 'Parameter Config (.cfg)' },
   { id: 'step', label: 'Waveguide STEP (solid)' },
@@ -65,7 +82,7 @@ const defaults: Preferences = {
   // Forward Beam Map both need spherical sampling, which is off by default, so
   // defaulting to them left two of six panels permanently showing their stub.
   chartTypes: ['frequency_response', 'directivity_map_h', 'directivity_map_v', 'directivity_index', 'impedance', 'summary'],
-  chartTheme: 'hornlab',
+  chartTheme: MATCH_INTERFACE_THEME,
   exportFormats: ['csv', 'png'],
   autoExportFormats: [],
   autoExportOnComplete: false,
@@ -123,7 +140,7 @@ export function normalize(raw: Partial<Preferences> = {}): Preferences {
   };
 }
 
-export const STORAGE_VERSION = 8;
+export const STORAGE_VERSION = 9;
 
 function migrateV1ToV2(preferences: Partial<Preferences>): Partial<Preferences> {
   const { chartTypes: _replaced, ...carried } = preferences;
@@ -163,12 +180,25 @@ function migrateV5ToV6(preferences: Partial<Preferences>): Partial<Preferences> 
 }
 
 /**
+ * The export theme used to default to a fixed theme name, so a stored
+ * 'hornlab' cannot be told apart from a deliberate choice by its value alone
+ * -- except that it was the default, and the overwhelming majority of profiles
+ * never touched the setting. Move exactly that value onto the interface-
+ * following default and leave every other choice alone.
+ */
+function migrateV8ToV9(preferences: Partial<Preferences>): Partial<Preferences> {
+  if (preferences.chartTheme !== 'hornlab') return preferences;
+  return { ...preferences, chartTheme: MATCH_INTERFACE_THEME };
+}
+
+/**
  * Migrations are intentionally sequential. v1→v2 replaced two unusable seeded
  * panels while preserving unrelated settings; v2→v3 makes the chart list's
  * stored length authoritative; v3→v4 adds independent job-version naming;
  * v4→v5 puts the date prefix on by default; v5→v6 separates manual and
  * automatic export selections; v6→v7 adds design-tracking names; v7→v8 adds
- * opt-in date decoration outside those names. Each stored version runs every
+ * opt-in date decoration outside those names; v8→v9 moves the untouched
+ * export-theme default onto the interface. Each stored version runs every
  * step from its own onwards -- v3 used to run only its first step, so a v3
  * profile would have skipped v4→v5 entirely.
  */
@@ -180,6 +210,7 @@ const MIGRATIONS: Record<number, (preferences: Partial<Preferences>) => Partial<
   5: migrateV5ToV6,
   6: (preferences) => preferences,
   7: (preferences) => preferences,
+  8: migrateV8ToV9,
 };
 
 export function readPreferences(raw: string | null): { value: Preferences; migrated: boolean } {

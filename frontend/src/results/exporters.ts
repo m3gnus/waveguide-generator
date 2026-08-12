@@ -2,7 +2,7 @@ import { downloadBlob, downloadText } from '../api/designIo';
 import type { JobItem } from '../api/jobsSocket';
 import { exportStemForJob } from '../jobs/exportNaming';
 import { serializeDesign, type DesignDocument } from '../stores/design';
-import type { ExportFormat, Preferences } from '../prefs/preferences';
+import { resolveChartTheme, type ExportFormat, type Preferences } from '../prefs/preferences';
 import { applySmoothing, type SmoothingValue } from './smoothing';
 import { complexToDb } from './mappers';
 import { resultChannelFileSuffix, resultChannels, scopeResultChannel, type ResultPayload } from './types';
@@ -293,7 +293,7 @@ export function buildChartRenderPayload(
     directivity: result.directivity ?? {},
     beam_shape: result.beam_shape ?? null,
     reference: reference ? buildChartReferencePayload(reference, preferences) : null,
-    theme: preferences.chartTheme,
+    theme: resolveChartTheme(preferences.chartTheme),
   };
 }
 

@@ -1,8 +1,19 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { useChartTokens, type ChartTokens } from './EChart';
 import type { ResultPayload } from './types';
 
 const RANGE_DB = 30;
-const COLORS = ['#440154', '#482878', '#3e4a89', '#31688e', '#26828e', '#1f9e89', '#35b779', '#6ece58', '#b5de2b', '#fde725'];
+
+/**
+ * The balloon reads the same ramp as the directivity map, so a level means the
+ * same colour whichever way you look at it. It used to hardcode viridis, which
+ * belonged to neither theme and disagreed with every other view of the same
+ * numbers.
+ */
+function colorForDb(value: number, colormap: string[]): string {
+  const position = Math.max(0, Math.min(1, 1 + value / RANGE_DB)) * (colormap.length - 1);
+  return colormap[Math.round(position)];
+}
 
 export function hasBalloonData(result: ResultPayload): boolean {
   const balloon = result.balloon;
@@ -22,10 +33,6 @@ export function closestFrequencyIndex(frequencies: number[], target = 1_000): nu
   return frequencies.reduce((best, value, index) => Math.abs(Math.log((value || 1) / target)) < Math.abs(Math.log((frequencies[best] || 1) / target)) ? index : best, 0);
 }
 
-function colorForDb(value: number): string {
-  const position = Math.max(0, Math.min(1, 1 + value / RANGE_DB)) * (COLORS.length - 1);
-  return COLORS[Math.round(position)];
-}
 
 const InteractiveBalloon = lazy(() => import('./Balloon3D'));
 
@@ -68,7 +75,7 @@ export function sampleBalloonGrid(thetaDegrees: number[], phiDegrees: number[], 
   return low + (high - low) * thetaWeight;
 }
 
-function drawForwardMap(canvas: HTMLCanvasElement, result: ResultPayload, frequencyIndex: number): void {
+function drawForwardMap(canvas: HTMLCanvasElement, result: ResultPayload, frequencyIndex: number, tokens: ChartTokens): void {
   const balloon = result.balloon;
   if (!balloon) return;
   const context = sizeCanvas(canvas);
@@ -87,12 +94,15 @@ function drawForwardMap(canvas: HTMLCanvasElement, result: ResultPayload, freque
     const theta = radial / radius * 90;
     const phi = Math.atan2(-y, x) * 180 / Math.PI;
     const db = sampleBalloonGrid(balloon.theta_deg, balloon.phi_deg, grid, theta, phi);
-    context.fillStyle = colorForDb(Number.isFinite(db) ? db : -RANGE_DB);
+    context.fillStyle = colorForDb(Number.isFinite(db) ? db : -RANGE_DB, tokens.colormap);
     context.fillRect(centerX + x, centerY + y, step + 1, step + 1);
   }
-  context.strokeStyle = 'rgba(255,255,255,.6)'; context.lineWidth = 1;
+  // The graticule is the interface ink, not white: on Vellum a white grid
+  // over the pale end of the ramp was invisible.
+  context.strokeStyle = tokens.foreground; context.globalAlpha = .6; context.lineWidth = 1;
   [1 / 3, 2 / 3, 1].forEach((fraction) => { context.beginPath(); context.arc(centerX, centerY, radius * fraction, 0, Math.PI * 2); context.stroke(); });
   context.beginPath(); context.moveTo(centerX - radius, centerY); context.lineTo(centerX + radius, centerY); context.moveTo(centerX, centerY - radius); context.lineTo(centerX, centerY + radius); context.stroke();
+  context.globalAlpha = 1;
 }
 
 function formatFrequency(value: number | undefined): string {
@@ -104,17 +114,18 @@ function FrequencyCanvas({ result, kind }: { result: ResultPayload; kind: 'ballo
   const frequencies = result.balloon?.frequencies ?? [];
   const [index, setIndex] = useState(() => closestFrequencyIndex(frequencies));
   const canvas = useRef<HTMLCanvasElement>(null);
+  const tokens = useChartTokens();
   const beam = result.beam_shape;
   useEffect(() => setIndex(closestFrequencyIndex(frequencies)), [result.balloon]);
   useEffect(() => {
     if (kind === 'balloon') return;
     if (!canvas.current) return;
-    const draw = () => canvas.current && drawForwardMap(canvas.current, result, index);
+    const draw = () => canvas.current && drawForwardMap(canvas.current, result, index, tokens);
     draw();
     const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(draw);
     observer?.observe(canvas.current);
     return () => observer?.disconnect();
-  }, [result, index, kind]);
+  }, [result, index, kind, tokens]);
   const readout = useMemo(() => {
     const parts = [formatFrequency(frequencies[index])];
     if (kind === 'beam') {

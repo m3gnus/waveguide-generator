@@ -161,11 +161,29 @@ describe('directivity heatmap', () => {
     expect((heatmapOption(payload(12, 13), tokens, 'horizontal', -6, 'regular').yAxis as { name?: string }).name).toBeUndefined();
   });
 
-  it('uses a light HornLab-compatible chart surface with the light app theme', () => {
+  // The chart ground is the interface's panel colour in both themes: a chart
+  // surface the app uses nowhere else is what made the plots read as pasted
+  // into the window. These values mirror hornlab_plots CONSOLE_THEME and
+  // VELLUM_THEME, and the export renders on the same two.
+  it('draws on the interface panel colour in both app themes', () => {
     document.documentElement.dataset.theme = 'light';
-    expect(readChartTokens()).toMatchObject({ background: '#FBF1DA', foreground: '#586E75', accent: '#CB4B16' });
+    expect(readChartTokens()).toMatchObject({ background: '#F1F2ED', foreground: '#1D1F20', accent: '#A5391B' });
     document.documentElement.dataset.theme = 'dark';
-    expect(readChartTokens()).toMatchObject({ background: '#221C19', foreground: '#E8DDD3', accent: '#D98324' });
+    expect(readChartTokens()).toMatchObject({ background: '#211F1D', foreground: '#ECE8E0', accent: '#E0673F' });
+    delete document.documentElement.dataset.theme;
+  });
+
+  it('reads the map on each theme\'s own ramp, ending on the accent side', () => {
+    document.documentElement.dataset.theme = 'dark';
+    const console_ = readChartTokens().colormap;
+    expect(console_[0]).toBe('#050c18');
+    expect(console_.at(-1)).toBe('#c84428');
+    document.documentElement.dataset.theme = 'light';
+    const vellum = readChartTokens().colormap;
+    // Vellum's floor is the page itself, so the quietest part of the map
+    // dissolves into it instead of becoming the heaviest thing on the sheet.
+    expect(vellum[0]).toBe('#f1f2ed');
+    expect(vellum.at(-1)).toBe('#e11414');
     delete document.documentElement.dataset.theme;
   });
 });
