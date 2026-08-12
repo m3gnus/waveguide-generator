@@ -457,6 +457,28 @@ def test_non_collection_metadata_keys_keep_replacement_semantics(tmp_path: Path)
     assert metadata["mesh_artifact_file"] == "new.msh"
 
 
+def test_metadata_mutation_does_not_refresh_terminal_result_retention_age(
+    tmp_path: Path,
+) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    old = "2000-01-01T00:00:00"
+    record = _job("imported", "complete", created_at=old)
+    record["task_metadata"] = {"imported_at": old}
+    store.create_job(record)
+    store.store_results("imported", {"job": "imported"})
+
+    changed, _event = store.mutate_job_metadata(
+        "imported",
+        {"raw_results_file": "imported.json"},
+    )
+
+    assert changed is True
+    assert store.get_job_row("imported")["updated_at"] > old
+    assert store.prune_terminal_jobs(retention_days=30) == 1
+    assert store.get_results("imported") is None
+
+
 def test_metadata_mutation_returns_cleanly_when_job_is_missing(tmp_path: Path) -> None:
     store = JobStore(tmp_path / "jobs.db")
     store.initialize()
@@ -866,7 +888,7 @@ def test_terminal_mesh_is_pruned_after_download_or_grace_but_rated_mesh_is_exemp
             max_terminal_jobs=1000,
             mesh_grace_minutes=1,
         )
-        == 2
+        == 0
     )
 
     for job_id in ("downloaded", "expired"):

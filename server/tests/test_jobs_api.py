@@ -158,3 +158,42 @@ def test_dryrun_submit_is_rejected_when_guard_is_off(tmp_path: Path, monkeypatch
         await app.state.jobs_runtime.shutdown()
 
     asyncio.run(scenario())
+
+
+def test_metadata_patch_maps_malformed_stored_merge_shape_to_422(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        app = create_app(data_dir=tmp_path)
+        store = app.state.jobs_runtime.store
+        store.initialize()
+        now = "2026-08-12T00:00:00"
+        store.create_job(
+            {
+                "id": "imported",
+                "status": "complete",
+                "created_at": now,
+                "updated_at": now,
+                "queued_at": now,
+                "completed_at": now,
+                "progress": 1.0,
+                "stage": "complete",
+                "stage_message": "complete",
+                "config_json": {"design": {"formula": "OSSE", "L": 120}},
+                "config_summary_json": {"formula_type": "OSSE"},
+                "task_metadata": {"exported_files": "not-a-list"},
+            }
+        )
+
+        status, raw = await _request(
+            app,
+            "PATCH",
+            "/api/jobs/imported/metadata",
+            body={"exported_files": ["fixed.step"]},
+        )
+
+        assert status == 422
+        assert json.loads(raw) == {
+            "detail": "Stored exported_files metadata must be a list of strings"
+        }
+        await app.state.jobs_runtime.shutdown()
+
+    asyncio.run(scenario())

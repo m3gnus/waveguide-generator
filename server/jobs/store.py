@@ -901,7 +901,7 @@ class JobStore:
         while only the heavier result tier remains subject to retention.
         """
 
-        removed_ids, _events = self._prune_terminal_jobs(
+        removed_ids, _affected_ids, _events = self._prune_terminal_jobs(
             retention_days=retention_days,
             max_terminal_jobs=max_terminal_jobs,
             mesh_grace_minutes=mesh_grace_minutes,
@@ -923,12 +923,13 @@ class JobStore:
         connected client can converge from events alone.
         """
 
-        return self._prune_terminal_jobs(
+        _removed_ids, affected_ids, events = self._prune_terminal_jobs(
             retention_days=retention_days,
             max_terminal_jobs=max_terminal_jobs,
             mesh_grace_minutes=mesh_grace_minutes,
             emit_events=True,
         )
+        return affected_ids, events
 
     def _prune_terminal_jobs(
         self,
@@ -937,7 +938,7 @@ class JobStore:
         max_terminal_jobs: int,
         mesh_grace_minutes: int,
         emit_events: bool,
-    ) -> tuple[list[str], list[dict[str, Any]]]:
+    ) -> tuple[list[str], list[str], list[dict[str, Any]]]:
         """Shared retention transaction for silent startup and live pruning."""
 
         cutoff = (datetime.now() - timedelta(days=int(retention_days))).isoformat()
@@ -954,7 +955,7 @@ class JobStore:
                      AND COALESCE(CAST(json_extract(task_metadata_json, '$.rating') AS INTEGER), 0) <= 0
                      AND COALESCE(
                        json_extract(task_metadata_json, '$.imported_at'),
-                       completed_at, updated_at, created_at
+                       completed_at, created_at
                      ) < ?""",
                 (cutoff,),
             ).fetchall()
@@ -972,11 +973,11 @@ class JobStore:
                       AND COALESCE(CAST(json_extract(task_metadata_json, '$.rating') AS INTEGER), 0) <= 0
                       AND COALESCE(
                         json_extract(task_metadata_json, '$.imported_at'),
-                        completed_at, updated_at, created_at
+                        completed_at, created_at
                       ) >= ?
                     ORDER BY COALESCE(
                       json_extract(task_metadata_json, '$.imported_at'),
-                      completed_at, updated_at, created_at
+                      completed_at, created_at
                     ) DESC
                     LIMIT -1 OFFSET ?
                     """,
@@ -994,7 +995,7 @@ class JobStore:
                        json_extract(task_metadata_json, '$.mesh_artifact_file') IS NOT NULL
                        OR COALESCE(
                          json_extract(task_metadata_json, '$.imported_at'),
-                         completed_at, updated_at, created_at
+                         completed_at, created_at
                        ) < ?
                      )""",
                 (mesh_cutoff,),
@@ -1057,7 +1058,7 @@ class JobStore:
                 deleted_results,
             )
         self._delete_discarded_result_logs()
-        return affected_ids, events
+        return removed_ids, affected_ids, events
 
     def append_event(
         self, job_id: str, event_type: str, payload: Mapping[str, Any]
