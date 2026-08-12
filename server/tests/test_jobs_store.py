@@ -763,6 +763,69 @@ def test_live_retention_prune_persists_an_availability_event_for_every_pruned_re
     assert [event["jobId"] for event in store.replay_events(2)] == removed
 
 
+def test_result_age_pruning_deletes_only_logs_in_the_pruned_result_tier(
+    tmp_path: Path,
+) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    old = "2000-01-01T00:00:00"
+    cases = (
+        ("aged", "complete", 0, old, True),
+        ("running", "running", 0, old, True),
+        ("queued", "queued", 0, old, True),
+        ("rated", "complete", 4, old, True),
+        ("surviving", "complete", 0, datetime.now().isoformat(), True),
+    )
+    for job_id, status, rating, completed_at, has_results in cases:
+        record = _job(job_id, status, created_at=completed_at)
+        record["completed_at"] = completed_at if status == "complete" else None
+        record["task_metadata"] = {"rating": rating}
+        store.create_job(record)
+        if has_results:
+            store.store_results(job_id, {"job": job_id})
+        path = store._job_log_path(job_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"log-{job_id}\n", encoding="utf-8")
+
+    assert store.prune_terminal_jobs(retention_days=30, max_terminal_jobs=1000) == 1
+
+    assert not store._job_log_path("aged").exists()
+    for job_id in ("running", "queued", "rated", "surviving"):
+        assert store._job_log_path(job_id).read_text(encoding="utf-8") == f"log-{job_id}\n"
+
+
+def test_retention_cleans_previously_orphaned_logs_but_not_unrelated_files(
+    tmp_path: Path,
+) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    cases = (
+        ("already-pruned", "complete", 0),
+        ("running-pruned", "running", 0),
+        ("queued-pruned", "queued", 0),
+        ("rated-pruned", "complete", 5),
+    )
+    for job_id, status, rating in cases:
+        record = _job(job_id, status, created_at="2000-01-01T00:00:00")
+        record["task_metadata"] = {
+            "rating": rating,
+            "results_discarded_at": "2001-01-01T00:00:00",
+        }
+        store.create_job(record)
+        path = store._job_log_path(job_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"log-{job_id}\n", encoding="utf-8")
+    unrelated = store.job_logs_dir / "_not-a-job.log"
+    unrelated.write_text("leave me\n", encoding="utf-8")
+
+    assert store.prune_terminal_jobs() == 0
+
+    assert not store._job_log_path("already-pruned").exists()
+    for job_id in ("running-pruned", "queued-pruned", "rated-pruned"):
+        assert store._job_log_path(job_id).read_text(encoding="utf-8") == f"log-{job_id}\n"
+    assert unrelated.read_text(encoding="utf-8") == "leave me\n"
+
+
 def test_terminal_mesh_is_pruned_after_download_or_grace_but_rated_mesh_is_exempt(
     tmp_path: Path,
 ) -> None:
@@ -782,6 +845,9 @@ def test_terminal_mesh_is_pruned_after_download_or_grace_but_rated_mesh_is_exemp
         store.create_job(record)
         store.store_mesh_artifact(job_id, f"mesh-{job_id}")
         store.store_results(job_id, {"job": job_id})
+        log_path = store._job_log_path(job_id)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text(f"log-{job_id}\n", encoding="utf-8")
         store.update_job(
             job_id,
             status="complete",
@@ -810,11 +876,13 @@ def test_terminal_mesh_is_pruned_after_download_or_grace_but_rated_mesh_is_exemp
         assert store.get_mesh_artifact(job_id) is None
         assert row["run_number"] == run_numbers[job_id]
         assert row["has_results"] is True
+        assert store._job_log_path(job_id).read_text(encoding="utf-8") == f"log-{job_id}\n"
     assert store.get_job_row("rated")["has_mesh_artifact"] is True
     assert store.get_mesh_artifact("rated") == "mesh-rated"
     assert store.get_job_row("rated")["run_number"] == run_numbers["rated"]
     assert store.get_results("rated") == {"job": "rated"}
     assert store.get_job_row("rated")["has_results"] is True
+    assert store._job_log_path("rated").read_text(encoding="utf-8") == "log-rated\n"
 
 
 def test_result_count_pruning_keeps_job_rows_and_run_numbers(tmp_path: Path) -> None:
@@ -828,6 +896,9 @@ def test_result_count_pruning_keeps_job_rows_and_run_numbers(tmp_path: Path) -> 
         record["completed_at"] = completed_at
         store.create_job(record)
         store.store_results(job_id, {"job": job_id})
+        log_path = store._job_log_path(job_id)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text(f"log-{job_id}\n", encoding="utf-8")
 
     assert store.prune_terminal_jobs(retention_days=30, max_terminal_jobs=1) == 1
     assert store.get_results("older") is None
@@ -835,6 +906,8 @@ def test_result_count_pruning_keeps_job_rows_and_run_numbers(tmp_path: Path) -> 
     assert store.get_job_row("older")["run_number"] == 1
     assert store.get_job_row("newer")["run_number"] == 2
     assert store.list_jobs()[1] == 2
+    assert not store._job_log_path("older").exists()
+    assert store._job_log_path("newer").read_text(encoding="utf-8") == "log-newer\n"
 
 
 def test_rating_after_terminal_transition_exempts_mesh_from_retention(
