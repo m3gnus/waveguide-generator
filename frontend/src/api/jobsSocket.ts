@@ -1,4 +1,4 @@
-import { compareSelection } from './results';
+import { compareSelection, provisionalResults, type JobResults } from './results';
 
 /**
  * Reference-compares own properties. Nested values are compared by identity,
@@ -124,6 +124,16 @@ interface EventMessage {
   payload?: Record<string, unknown>;
 }
 
+interface PartialResultMessage {
+  v: 1;
+  kind: 'partialResult';
+  epoch?: number;
+  jobId: string;
+  revision: number;
+  snapshot?: boolean;
+  result: JobResults;
+}
+
 const OPEN = 1;
 const MAX_JOB_REFRESH_ATTEMPTS = 3;
 const defaultFactory: JobsWebSocketFactory = (url) => new WebSocket(url) as unknown as JobsWebSocketLike;
@@ -160,6 +170,7 @@ export class JobsSocketManager {
   private gapTargetCursor: number | null = null;
   private readonly jobGenerations = new Map<string, number>();
   private readonly jobRefreshes = new Map<string, Promise<void>>();
+  private readonly partialRefreshes = new Map<string, Promise<void>>();
   private readonly ratingMutations = new Map<string, {
     tail: Promise<void>;
     token: number;
@@ -195,6 +206,7 @@ export class JobsSocketManager {
     const socket = this.socket;
     this.socket = null;
     socket?.close();
+    provisionalResults.clear();
     this.update({ connection: 'disconnected', epoch: null });
   }
 
@@ -224,6 +236,7 @@ export class JobsSocketManager {
     const deleted = new Set(body.deleted_ids ?? []);
     deleted.forEach((jobId) => {
       this.invalidateJob(jobId);
+      provisionalResults.remove(jobId);
       this.markJobMutation(jobId);
     });
     this.update({ jobs: this.snapshot.jobs.filter((job) => !deleted.has(job.id)) });
@@ -233,6 +246,7 @@ export class JobsSocketManager {
     const response = await this.fetcher(`/api/jobs/${encodeURIComponent(jobId)}`, { method: 'DELETE' });
     if (!response.ok) throw await responseError(response);
     this.invalidateJob(jobId);
+    provisionalResults.remove(jobId);
     this.markJobMutation(jobId);
     this.update({ jobs: this.snapshot.jobs.filter((job) => job.id !== jobId) });
   }
@@ -293,7 +307,7 @@ export class JobsSocketManager {
 
   private onMessage(socket: JobsWebSocketLike, raw: unknown): void {
     if (socket !== this.socket || typeof raw !== 'string') return;
-    let message: HelloMessage | SnapshotMessage | EventMessage | { kind?: string; epoch?: number };
+    let message: HelloMessage | SnapshotMessage | EventMessage | PartialResultMessage | { kind?: string; epoch?: number };
     try {
       message = JSON.parse(raw) as typeof message;
     } catch {
@@ -319,11 +333,32 @@ export class JobsSocketManager {
     }
     if (!this.helloSeen || ('epoch' in message && message.epoch !== undefined && message.epoch !== this.snapshot.epoch)) return;
     this.armHeartbeat();
+    if (message.kind === 'partialResult') {
+      const partial = message as PartialResultMessage;
+      if (
+        typeof partial.jobId === 'string'
+        && Number.isInteger(partial.revision)
+        && partial.result
+        && typeof partial.result === 'object'
+      ) {
+        const applied = provisionalResults.apply(
+          partial.jobId,
+          partial.revision,
+          partial.result,
+          partial.snapshot === true,
+        );
+        if (!applied) void this.refreshPartialResults(partial.jobId);
+      }
+      return;
+    }
     if (message.kind === 'snapshot') {
       const incoming = message as SnapshotMessage;
       this.gapTargetCursor = null;
       new Set([...this.snapshot.jobs.map((job) => job.id), ...incoming.jobs.map((job) => job.id)])
         .forEach((jobId) => this.markJobMutation(jobId));
+      provisionalResults.prune(new Set(incoming.jobs
+        .filter((job) => job.status === 'running' || job.status === 'queued')
+        .map((job) => job.id)));
       this.update({ cursor: incoming.cursor, jobs: this.sortJobs(incoming.jobs), error: null });
       return;
     }
@@ -338,6 +373,7 @@ export class JobsSocketManager {
       this.markJobMutation(message.jobId);
       if (message.type === 'deleted') {
         this.invalidateJob(message.jobId);
+        provisionalResults.remove(message.jobId);
         this.update({
           cursor: message.cursor,
           jobs: this.snapshot.jobs.filter((job) => job.id !== message.jobId),
@@ -368,6 +404,7 @@ export class JobsSocketManager {
     this.markJobMutation(message.jobId);
     if (message.type === 'deleted') {
       this.invalidateJob(message.jobId);
+      provisionalResults.remove(message.jobId);
       this.update({
         cursor: message.cursor,
         jobs: this.snapshot.jobs.filter((job) => job.id !== message.jobId),
@@ -422,6 +459,7 @@ export class JobsSocketManager {
     if (message.type === 'completed') Object.assign(patch, { status: 'complete', progress: 1, has_results: true });
     if (message.type === 'failed') Object.assign(patch, { status: 'error', error_message: String(payload.message ?? 'Simulation failed') });
     if (message.type === 'cancelled') Object.assign(patch, { status: 'cancelled', error_message: String(payload.message ?? 'Simulation cancelled') });
+    if (message.type === 'failed' || message.type === 'cancelled') provisionalResults.remove(message.jobId);
     if (message.type === 'metadata' && payload.changed && typeof payload.changed === 'object') {
       Object.assign(patch, payload.changed as Partial<JobItem>);
     }
@@ -491,6 +529,33 @@ export class JobsSocketManager {
       if (this.jobRefreshes.get(jobId) === refresh) this.jobRefreshes.delete(jobId);
     };
     void refresh.then(clearRefresh, clearRefresh);
+    return refresh;
+  }
+
+  private refreshPartialResults(jobId: string): Promise<void> {
+    const existing = this.partialRefreshes.get(jobId);
+    if (existing) return existing;
+    const refresh = (async () => {
+      try {
+        const response = await this.fetcher(`/api/partial-results/${encodeURIComponent(jobId)}`);
+        if (response.status === 404) {
+          provisionalResults.remove(jobId);
+          return;
+        }
+        if (!response.ok) throw await responseError(response);
+        const body = await response.json() as { revision?: number; result?: JobResults };
+        if (Number.isInteger(body.revision) && body.result && typeof body.result === 'object') {
+          provisionalResults.apply(jobId, Number(body.revision), body.result, true);
+        }
+      } catch (error) {
+        this.update({ error: error instanceof Error ? error.message : String(error) });
+      }
+    })();
+    this.partialRefreshes.set(jobId, refresh);
+    const clear = () => {
+      if (this.partialRefreshes.get(jobId) === refresh) this.partialRefreshes.delete(jobId);
+    };
+    void refresh.then(clear, clear);
     return refresh;
   }
 

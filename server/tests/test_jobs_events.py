@@ -85,6 +85,55 @@ def test_protocol_sends_hello_then_snapshot_and_live_persisted_event(tmp_path: P
     asyncio.run(scenario())
 
 
+def test_protocol_sends_ephemeral_partial_snapshot_then_live_delta(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        store = JobStore(tmp_path / "jobs.db")
+        store.initialize()
+        store.create_job(_job("live"), initial_event=("queued", {}))
+        runtime = JobRuntime(store)
+        runtime._started = True
+        runtime._partial_results["live"] = {
+            "revision": 1,
+            "result": {"frequencies": [200.0]},
+        }
+        transport = FakeTransport()
+        protocol = JobsProtocol(runtime, epoch=23, heartbeat_seconds=1)
+        task = asyncio.create_task(protocol.run(transport))
+        await _wait_until(lambda: len(transport.json) >= 3)
+
+        assert [message["kind"] for message in transport.json[:3]] == [
+            "hello", "snapshot", "partialResult"
+        ]
+        assert transport.json[2] == {
+            "v": 1,
+            "kind": "partialResult",
+            "jobId": "live",
+            "revision": 1,
+            "snapshot": True,
+            "result": {"frequencies": [200.0]},
+            "epoch": 23,
+        }
+
+        runtime.events.publish(
+            {
+                "v": 1,
+                "kind": "partialResult",
+                "jobId": "live",
+                "revision": 2,
+                "snapshot": False,
+                "result": {"frequencies": [400.0]},
+            }
+        )
+        await _wait_until(lambda: len(transport.json) >= 4)
+        assert transport.json[3]["kind"] == "partialResult"
+        assert transport.json[3]["revision"] == 2
+        assert "cursor" not in transport.json[3]
+        await transport.incoming.put(None)
+        await task
+
+    asyncio.run(scenario())
+
+
 def test_protocol_builds_snapshot_off_the_event_loop(tmp_path: Path) -> None:
     async def scenario() -> None:
         store = JobStore(tmp_path / "jobs.db")

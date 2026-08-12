@@ -17,6 +17,7 @@ from server.jobs.runtime import (
     JobNotFoundError,
     JobResourceUnavailableError,
     JobRuntime,
+    merge_provisional_results,
 )
 from server.jobs.store import JobStore
 
@@ -51,6 +52,61 @@ def _running_job(job_id: str) -> dict[str, Any]:
         "config_summary_json": {"formula_type": "OSSE"},
         "task_metadata": {},
     }
+
+
+def test_provisional_result_merge_appends_frequency_blocks_and_channels() -> None:
+    first = {
+        "frequencies": [200.0],
+        "directivity": {"horizontal": [[[0.0, 0.0]]]},
+        "spl_on_axis": {"frequencies": [200.0], "spl": [90.0]},
+        "channels": {"hf": {"frequencies": [200.0]}},
+        "metadata": {"provisional": {"completed_frequency_count": 1}},
+    }
+    second = {
+        "frequencies": [400.0],
+        "directivity": {"horizontal": [[[0.0, 0.0]]]},
+        "spl_on_axis": {"frequencies": [400.0], "spl": [93.0]},
+        "channels": {"hf": {"frequencies": [400.0]}},
+        "metadata": {"provisional": {"completed_frequency_count": 2}},
+    }
+    merged = merge_provisional_results(first, second)
+    assert merged["frequencies"] == [200.0, 400.0]
+    assert len(merged["directivity"]["horizontal"]) == 2
+    assert merged["spl_on_axis"]["spl"] == [90.0, 93.0]
+    assert merged["channels"]["hf"]["frequencies"] == [200.0, 400.0]
+    assert merged["metadata"]["provisional"]["completed_frequency_count"] == 2
+    assert first["frequencies"] == [200.0]
+
+
+def test_runtime_publishes_frequency_delta_and_keeps_full_process_snapshot(
+    tmp_path: Path,
+) -> None:
+    runtime = JobRuntime(JobStore(tmp_path / "jobs.db"))
+    runtime._running.add("live")
+    queue = runtime.events.subscribe()
+
+    runtime._accept_partial_result("live", 0, {"frequencies": [200.0]})
+    runtime._accept_partial_result("live", 1, {"frequencies": [400.0]})
+
+    assert queue.get_nowait() == {
+        "v": 1,
+        "kind": "partialResult",
+        "jobId": "live",
+        "revision": 1,
+        "snapshot": False,
+        "result": {"frequencies": [200.0]},
+    }
+    assert queue.get_nowait()["revision"] == 2
+    assert runtime.partial_result_messages() == [
+        {
+            "v": 1,
+            "kind": "partialResult",
+            "jobId": "live",
+            "revision": 2,
+            "snapshot": True,
+            "result": {"frequencies": [200.0, 400.0]},
+        }
+    ]
 
 
 async def _wait_stage(store: JobStore, job_id: str, stage: str) -> None:

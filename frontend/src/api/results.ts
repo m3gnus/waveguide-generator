@@ -22,6 +22,116 @@ export interface JobResults {
   channel_order?: string[];
 }
 
+export function mergeProvisionalResults(current: JobResults | undefined, delta: JobResults): JobResults {
+  if (!current) return structuredClone(delta);
+  // Copy only the branches receiving a new row. Deep-cloning the accumulated
+  // sweep for every frequency makes a 401-point solve quadratic in payload
+  // size before ECharts even sees it.
+  const merged = { ...current } as JobResults & Record<string, unknown>;
+  const incoming = delta as JobResults & Record<string, unknown>;
+  const append = (target: Record<string, unknown>, source: Record<string, unknown>, key: string) => {
+    if (!Array.isArray(source[key])) return;
+    target[key] = [...(Array.isArray(target[key]) ? target[key] as unknown[] : []), ...structuredClone(source[key] as unknown[])];
+  };
+
+  append(merged, incoming, 'frequencies');
+  for (const blockName of ['directivity', 'directivity_phase']) {
+    const source = incoming[blockName];
+    if (!source || typeof source !== 'object' || Array.isArray(source)) continue;
+    const target = merged[blockName] && typeof merged[blockName] === 'object' && !Array.isArray(merged[blockName])
+      ? { ...merged[blockName] as Record<string, unknown> }
+      : {};
+    Object.entries(source as Record<string, unknown>).forEach(([plane, rows]) => {
+      if (!Array.isArray(rows)) return;
+      target[plane] = [...(Array.isArray(target[plane]) ? target[plane] as unknown[] : []), ...structuredClone(rows)];
+    });
+    merged[blockName] = target;
+  }
+  for (const blockName of ['spl_on_axis', 'impedance', 'di']) {
+    const source = incoming[blockName];
+    if (!source || typeof source !== 'object' || Array.isArray(source)) continue;
+    const target = merged[blockName] && typeof merged[blockName] === 'object' && !Array.isArray(merged[blockName])
+      ? { ...merged[blockName] as Record<string, unknown> }
+      : {};
+    Object.keys(source as Record<string, unknown>).forEach((key) => append(target, source as Record<string, unknown>, key));
+    merged[blockName] = target;
+  }
+  if (incoming.channels && typeof incoming.channels === 'object') {
+    const channels = { ...(merged.channels ?? {}) };
+    Object.entries(incoming.channels as Record<string, JobResults>).forEach(([id, result]) => {
+      channels[id] = mergeProvisionalResults(channels[id], result);
+    });
+    merged.channels = channels;
+  }
+  if (Array.isArray(delta.channel_order)) merged.channel_order = [...delta.channel_order];
+  if (delta.metadata) merged.metadata = { ...(current.metadata ?? {}), ...structuredClone(delta.metadata) };
+  return merged;
+}
+
+export interface ProvisionalResultEntry {
+  revision: number;
+  result: JobResults;
+}
+
+export interface ProvisionalResultsSnapshot {
+  version: number;
+  entries: Record<string, ProvisionalResultEntry>;
+}
+
+export class ProvisionalResultsStore {
+  private snapshot: ProvisionalResultsSnapshot = { version: 0, entries: {} };
+  private readonly listeners = new Set<() => void>();
+
+  getSnapshot = (): ProvisionalResultsSnapshot => this.snapshot;
+  subscribe = (listener: () => void): (() => void) => {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  };
+  get(jobId: string): ProvisionalResultEntry | undefined { return this.snapshot.entries[jobId]; }
+
+  /** False means a delta gap; the caller should fetch the process-local snapshot. */
+  apply(jobId: string, revision: number, result: JobResults, snapshot = false): boolean {
+    const current = this.snapshot.entries[jobId];
+    if (!Number.isInteger(revision) || revision < 1) return true;
+    if (current && revision <= current.revision) return true;
+    if (!snapshot && current && revision !== current.revision + 1) return false;
+    if (!snapshot && !current && revision !== 1) return false;
+    this.publish({
+      ...this.snapshot.entries,
+      [jobId]: {
+        revision,
+        result: snapshot ? structuredClone(result) : mergeProvisionalResults(current?.result, result),
+      },
+    });
+    return true;
+  }
+
+  remove(jobId: string): void {
+    if (!this.snapshot.entries[jobId]) return;
+    const entries = { ...this.snapshot.entries };
+    delete entries[jobId];
+    this.publish(entries);
+  }
+
+  prune(validJobIds: ReadonlySet<string>): void {
+    const entries = Object.fromEntries(Object.entries(this.snapshot.entries).filter(([id]) => validJobIds.has(id)));
+    if (Object.keys(entries).length === Object.keys(this.snapshot.entries).length) return;
+    this.publish(entries);
+  }
+
+  clear(): void {
+    if (!Object.keys(this.snapshot.entries).length) return;
+    this.publish({});
+  }
+
+  private publish(entries: Record<string, ProvisionalResultEntry>): void {
+    this.snapshot = { version: this.snapshot.version + 1, entries };
+    this.listeners.forEach((listener) => listener());
+  }
+}
+
+export const provisionalResults = new ProvisionalResultsStore();
+
 export interface CompareSelection {
   primary: string | null;
   overlays: string[];

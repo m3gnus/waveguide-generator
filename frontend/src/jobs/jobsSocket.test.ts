@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { JobsSocketManager, type JobItem, type JobsWebSocketLike } from '../api/jobsSocket';
-import { compareSelection } from '../api/results';
+import { compareSelection, provisionalResults } from '../api/results';
 
 class MockSocket implements JobsWebSocketLike {
   readyState = 1;
@@ -34,8 +34,34 @@ function json(body: unknown, status = 200): Response {
 async function flush(): Promise<void> { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); }
 
 describe('jobs websocket state machine', () => {
-  beforeEach(() => { vi.useFakeTimers(); compareSelection.clear(); });
-  afterEach(() => vi.useRealTimers());
+  beforeEach(() => { vi.useFakeTimers(); compareSelection.clear(); provisionalResults.clear(); });
+  afterEach(() => { provisionalResults.clear(); vi.useRealTimers(); });
+
+  it('routes live frequency deltas outside the jobs list and recovers a revision gap', async () => {
+    const socket = new MockSocket();
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      expect(String(input)).toBe('/api/partial-results/job-1');
+      return json({ revision: 3, result: { frequencies: [200, 400, 800] } });
+    });
+    const manager = new JobsSocketManager(() => socket, fetcher, 'ws://test/ws/jobs');
+    manager.start();
+    socket.message({ v: 1, kind: 'hello', epoch: 4, heartbeatSec: 15 });
+    socket.message({ v: 1, kind: 'snapshot', epoch: 4, cursor: 10, jobs: [job({ status: 'running' })] });
+    let jobNotifications = 0;
+    manager.subscribe(() => { jobNotifications += 1; });
+
+    socket.message({ v: 1, kind: 'partialResult', epoch: 4, jobId: 'job-1', revision: 1, result: { frequencies: [200] } });
+    expect(provisionalResults.get('job-1')).toMatchObject({ revision: 1, result: { frequencies: [200] } });
+    expect(jobNotifications).toBe(0);
+    expect(manager.getSnapshot().cursor).toBe(10);
+
+    socket.message({ v: 1, kind: 'partialResult', epoch: 4, jobId: 'job-1', revision: 3, result: { frequencies: [800] } });
+    await flush();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(provisionalResults.get('job-1')).toMatchObject({ revision: 3, result: { frequencies: [200, 400, 800] } });
+    expect(jobNotifications).toBe(0);
+    manager.stop();
+  });
 
   it('accepts snapshot then contiguous events and tracks live job fields', async () => {
     const socket = new MockSocket();

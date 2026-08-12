@@ -12,6 +12,7 @@ from server.solver.acoustics import solver_sound_speed_m_per_s
 from server.solver.context import SolverContext
 from server.solver.result_mapping import (
     REFERENCE_RHO_C,
+    build_provisional_frequency_response,
     build_solver_response,
 )
 
@@ -121,6 +122,69 @@ def test_golden_units_phase_nulls_impedance_di_and_partial_warning() -> None:
     assert response["metadata"]["directivity"]["sound_speed_m_per_s"] == pytest.approx(
         SOUND_SPEED_M_PER_S
     )
+
+
+def test_streamed_frequency_uses_the_canonical_result_contract() -> None:
+    frequency_hz = 100.0
+    context = _context()
+    context.polar_config["norm_angle"] = 0.0
+    raw_impedance = np.conjugate(1.0 + 2.0j) * REFERENCE_RHO_C * 1j / (
+        2.0 * np.pi * frequency_hz
+    )
+    response = build_provisional_frequency_response(
+        index=0,
+        frequency_hz=frequency_hz,
+        entry={
+            "observation_angles_deg": np.asarray([0.0, 90.0, 180.0]),
+            "observation_planes": ["horizontal", "vertical"],
+            "observation_pressure_complex": np.asarray(
+                [[20e-6, 10e-6, 2e-6], [20e-6, 10e-6, 2e-6]],
+                dtype=np.complex128,
+            ),
+            "observation_directivity_db": np.asarray(
+                [[0.0, -6.0, -20.0], [0.0, -6.0, -20.0]]
+            ),
+            "impedance": raw_impedance,
+        },
+        config=_config(),
+        context=context,
+        backend="metal",
+        sound_speed_m_per_s=SOUND_SPEED_M_PER_S,
+    )
+
+    assert response["frequencies"] == [100.0]
+    assert response["spl_on_axis"]["spl"] == pytest.approx([0.0])
+    assert response["directivity"]["horizontal"][0][1][1] == pytest.approx(-6.0)
+    assert response["impedance"]["real"] == pytest.approx([1.0])
+    assert response["impedance"]["imaginary"] == pytest.approx([2.0])
+    assert response["metadata"]["provisional"] == {
+        "completed_frequency_count": 1,
+        "expected_frequency_count": 2,
+    }
+
+
+def test_streamed_bempp_directivity_is_live_when_pressure_is_unavailable() -> None:
+    context = _context()
+    context.polar_config["norm_angle"] = 0.0
+    response = build_provisional_frequency_response(
+        index=1,
+        frequency_hz=200.0,
+        entry={
+            "observation_angles_deg": np.asarray([0.0, 90.0, 180.0]),
+            "observation_planes": ["horizontal", "vertical"],
+            "observation_spl_db": np.asarray(
+                [[0.0, -8.0, -24.0], [0.0, -7.0, -22.0]]
+            ),
+        },
+        config=_config(),
+        context=context,
+        backend="bempp",
+        sound_speed_m_per_s=SOUND_SPEED_M_PER_S,
+    )
+
+    assert response["spl_on_axis"]["spl"] == [None]
+    assert response["directivity"]["horizontal"][0][1][1] == pytest.approx(-8.0)
+    assert response["metadata"]["provisional"]["completed_frequency_count"] == 2
 
 
 def test_plane_di_keeps_the_native_on_axis_reference_when_display_norm_changes() -> None:

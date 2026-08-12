@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, use
 import { createPortal } from 'react-dom';
 import type { EChartsOption } from 'echarts';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
-import { compareSelection, fetchJobResults, type JobResults } from '../api/results';
+import { compareSelection, fetchJobResults, provisionalResults, type JobResults } from '../api/results';
 import { EChart, useChartTokens, type ChartTokens } from '../results/EChart';
 import { beamShapeSeries, directivityGrid, directivityIndexSeries, expandResultChannels, impedanceSeries, splSeries, type NamedResult } from '../results/mappers';
 import { BalloonRenderer, ChartStub, ForwardBeamRenderer, hasBalloonData, type ChartStubAction } from '../results/balloon';
@@ -768,6 +768,7 @@ interface ResultDisplaySnapshot {
   primaryId: string;
   ids: string[];
   results: Record<string, ResultPayload>;
+  provisionalIds: string[];
 }
 
 interface ResultFetchError {
@@ -777,6 +778,7 @@ interface ResultFetchError {
 
 export function ResultsPanel() {
   const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
+  const provisional = useSyncExternalStore(provisionalResults.subscribe, provisionalResults.getSnapshot, provisionalResults.getSnapshot);
   const coordinator = useSyncExternalStore(jobsCoordinatorBridge.subscribe, jobsCoordinatorBridge.getSnapshot, jobsCoordinatorBridge.getSnapshot);
   const selection = useSyncExternalStore(compareSelection.subscribe, compareSelection.getSnapshot, compareSelection.getSnapshot);
   const preferences = usePreferences();
@@ -791,8 +793,12 @@ export function ResultsPanel() {
   const [beamRerunSubmitting, setBeamRerunSubmitting] = useState(false);
   const [primaryChannel, setPrimaryChannel] = useState<string | null>(null);
 
-  // Jobs arrive newest-first, so the first finished one is the latest solve.
-  const latest = useMemo(() => jobs.find((job) => job.status === 'complete' && job.has_results) ?? null, [jobs]);
+  // Jobs arrive newest-first. A running solve becomes displayable as soon as
+  // its first frequency arrives; before that, keep the last complete result.
+  const latest = useMemo(() => jobs.find((job) => (
+    (job.status === 'complete' && job.has_results)
+    || ((job.status === 'running' || job.status === 'queued') && Boolean(provisional.entries[job.id]))
+  )) ?? null, [jobs, provisional]);
   useEffect(() => {
     // While following, every solve that finishes takes the primary slot as soon
     // as its results exist — the charts repaint without anyone selecting a job.
@@ -801,25 +807,42 @@ export function ResultsPanel() {
       return;
     }
     // A pinned result that no longer exists falls back to following again.
-    if (selection.primary && jobs.some((job) => job.id === selection.primary && job.has_results)) return;
+    if (selection.primary && jobs.some((job) => (
+      job.id === selection.primary
+      && (job.has_results || Boolean(provisional.entries[job.id]))
+    ))) return;
     compareSelection.followLatest(latest?.id ?? null);
-  }, [jobs, latest, selection.following, selection.primary]);
+  }, [jobs, latest, provisional, selection.following, selection.primary]);
 
   const ids = useMemo(() => [selection.primary, ...selection.overlays].filter((id): id is string => Boolean(id)), [selection]);
   const selectionKey = ids.join('\u0000');
+  const resultSourceKey = ids.map((id) => {
+    const job = jobs.find((item) => item.id === id);
+    const liveRevision = job && job.status !== 'complete' ? provisional.entries[id]?.revision ?? 0 : 0;
+    return `${id}:${job?.status ?? 'missing'}:${job?.has_results ? 1 : 0}:${liveRevision}`;
+  }).join('\u0000');
   useEffect(() => {
     let live = true;
     const requestedIds = selectionKey ? selectionKey.split('\u0000') : [];
     if (!requestedIds.length || !selection.primary) { setDisplay(null); setFetchError(null); return; }
     setFetchError(null);
-    void Promise.all(requestedIds.map(async (id) => [id, await fetchJobResults(id) as ResultPayload] as const))
+    void Promise.all(requestedIds.map(async (id) => {
+      const job = jobs.find((item) => item.id === id);
+      const provisionalEntry = job?.status !== 'complete' ? provisional.entries[id] : undefined;
+      if (provisionalEntry) return [id, provisionalEntry.result as ResultPayload, true] as const;
+      return [id, await fetchJobResults(id) as ResultPayload, false] as const;
+    }))
       .then((pairs) => {
         if (!live) return;
         setDisplay({
           key: selectionKey,
           primaryId: selection.primary!,
           ids: requestedIds,
-          results: Object.fromEntries(pairs),
+          results: Object.fromEntries(pairs.map(([id, result]) => [id, result])),
+          provisionalIds: pairs.filter(([, , isProvisional]) => isProvisional).map(([id]) => id),
+        });
+        pairs.forEach(([id, , isProvisional]) => {
+          if (!isProvisional) provisionalResults.remove(id);
         });
       })
       .catch((reason) => {
@@ -832,7 +855,7 @@ export function ResultsPanel() {
         });
       });
     return () => { live = false; };
-  }, [selection.primary, selectionKey, fetchAttempt]);
+  }, [selection.primary, selectionKey, resultSourceKey, fetchAttempt]);
 
   const currentDisplay = display?.key === selectionKey ? display : null;
   const primaryRaw = selection.primary && currentDisplay
@@ -869,6 +892,19 @@ export function ResultsPanel() {
   const showingPrevious = Boolean(selection.primary && display && display.key !== selectionKey && !error);
   const available = useMemo(() => jobs.filter((job) => job.status === 'complete' && job.has_results && !ids.includes(job.id)), [ids, jobs]);
   const selectedJob = useMemo(() => jobs.find((job) => job.id === display?.primaryId) ?? null, [display?.primaryId, jobs]);
+  const primaryIsProvisional = Boolean(display?.provisionalIds.includes(display.primaryId));
+  const provisionalMetadata = primaryRaw?.metadata?.provisional;
+  const provisionalRecord = provisionalMetadata && typeof provisionalMetadata === 'object'
+    ? provisionalMetadata as Record<string, unknown>
+    : {};
+  const liveCompleted = Number(provisionalRecord.completed_frequency_count)
+    || (display?.primaryId ? provisional.entries[display.primaryId]?.revision : 0)
+    || primaryRaw?.frequencies?.length
+    || 0;
+  const liveExpected = Number(provisionalRecord.expected_frequency_count)
+    || Number(selectedJob?.solve_options.num_frequencies)
+    || Number(selectedJob?.config_summary.num_frequencies)
+    || 0;
   const selectedJobCanRerun = useMemo(() => Boolean(selectedJob && hydrateJobDesign(selectedJob)), [selectedJob]);
   const enableBalloonAndRerun = useCallback(() => {
     if (!selectedJob) return;
@@ -894,7 +930,7 @@ export function ResultsPanel() {
     busy: beamRerunSubmitting,
   } : undefined, [beamRerunSubmitting, enableBalloonAndRerun, selectedJobCanRerun]);
   const exportSelected = async () => {
-    if (!primary) return;
+    if (!primary || primaryIsProvisional) return;
     setExporting(true); setExportStatus(null);
     try {
       const job = jobs.find(({ id }) => id === selection.primary);
@@ -936,11 +972,12 @@ export function ResultsPanel() {
         const comparing = preferences.chartTypes.filter((chart) => COMPARABLE_CHARTS.has(chart)).length;
         return <span className="result-single-run" title={`${comparing} of ${preferences.chartTypes.length} charts overlay every selected run. The rest describe one run at a time and show ${labelFor(ids[0], jobs)}.`}>{comparing}/{preferences.chartTypes.length} compare</span>;
       })()}
+      {primaryIsProvisional && <span className="pill accent" role="status">Live · {liveCompleted}{liveExpected ? `/${liveExpected}` : ''} frequencies</span>}
       <select className="result-compare-add" aria-label="Add comparison result" value="" onChange={(event) => { if (event.target.value) compareSelection.toggleOverlay(event.target.value); }}><option value="">+ compare</option>{available.map((job) => <option key={job.id} value={job.id}>{labelFor(job.id, jobs)}</option>)}</select>
       <span className="spacer"/>
       <label className="result-count-control" title="Number of chart panels">Charts<select aria-label="Results panel count" value={RESULT_PANEL_COUNTS.includes(preferences.chartTypes.length as never) ? preferences.chartTypes.length : ''} onChange={(event) => preferencesStore.setChartCount(Number(event.target.value))}><option value="" disabled>{preferences.chartTypes.length}</option>{RESULT_PANEL_COUNTS.map((count) => <option key={count} value={count}>{count}</option>)}</select></label>
       <button className="toolbar-icon" disabled={preferences.chartTypes.length >= MAX_RESULT_PANELS} aria-label="Add chart" title="Add chart panel" onClick={() => preferencesStore.addChart()}><Icon name="plus"/></button>
-      <button disabled={exporting || !primary || !preferences.exportFormats.length} title="Export the current result using the formats enabled in Results preferences" onClick={() => void exportSelected()}>{exporting ? 'Exporting…' : `Export (${preferences.exportFormats.length})`}</button>
+      <button disabled={exporting || !primary || primaryIsProvisional || !preferences.exportFormats.length} title={primaryIsProvisional ? 'Export is available when the solve finishes' : 'Export the current result using the formats enabled in Results preferences'} onClick={() => void exportSelected()}>{exporting ? 'Exporting…' : `Export (${preferences.exportFormats.length})`}</button>
       <button ref={preferencesAnchor} className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Results preferences" aria-expanded={preferencesOpen} title="Results & export preferences" onClick={() => setPreferencesOpen((value) => !value)}><Icon name="settings"/></button>
     </div>
     {preferencesOpen && <ResultsPreferencesSurface popover anchorRef={preferencesAnchor} onClose={() => setPreferencesOpen(false)}/>}

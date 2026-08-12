@@ -14,6 +14,7 @@ from typing import Any
 CancelCallback = Callable[[], None]
 StageCallback = Callable[[str, float, str], None]
 ArtifactCallback = Callable[[str, dict[str, Any]], Awaitable[None]]
+ResultCallback = Callable[[int, dict[str, Any]], None]
 
 
 @dataclass(slots=True)
@@ -23,4 +24,10 @@ class EngineRunResult:
     mesh_stats: dict[str, Any] | None = None
 
 
-__all__ = ["ArtifactCallback", "CancelCallback", "EngineRunResult", "StageCallback"]
+__all__ = [
+    "ArtifactCallback",
+    "CancelCallback",
+    "EngineRunResult",
+    "ResultCallback",
+    "StageCallback",
+]
