@@ -183,7 +183,7 @@ def _identity_for_export(
     """The identity an existing export was made against, for idempotent retries."""
 
     design = store.get_design(str(row["design_id"]))
-    if design is None:
+    if design is None or int(design["edit_version"]) != int(row["edit_version"]):
         return None
     return SaveIdentity(
         designId=str(row["design_id"]),
@@ -210,23 +210,45 @@ def _commit_design_for_export(
     """
 
     head = store.get_design(requested.design_id) if requested is not None else None
+    filename = f"{design_name}.cfg"
     if (
         requested is not None
         and head is not None
         and str(head["lineage_id"]) == requested.lineage_id
         and int(head["edit_version"]) == requested.base_edit_version
         and str(head["design_hash"]) == current_design_hash
+        and str(head["filename"]) == filename
     ):
         return requested
+
+    save_requested = requested
+    if (
+        requested is not None
+        and head is not None
+        and str(head["lineage_id"]) == requested.lineage_id
+        and int(head["edit_version"]) != requested.base_edit_version
+        and str(head["design_hash"]) == current_design_hash
+    ):
+        if str(head["filename"]) == filename:
+            return SaveIdentity(
+                designId=str(head["design_id"]),
+                lineageId=str(head["lineage_id"]),
+                baseEditVersion=int(head["edit_version"]),
+            )
+        save_requested = SaveIdentity(
+            designId=str(head["design_id"]),
+            lineageId=str(head["lineage_id"]),
+            baseEditVersion=int(head["edit_version"]),
+        )
 
     def snapshot(link: CadLink) -> str:
         return serialize(design, cadlink=link)
 
     try:
         committed = store.save(
-            requested=requested,
+            requested=save_requested,
             design_hash=current_design_hash,
-            filename=f"{design_name}.cfg",
+            filename=filename,
             snapshot_builder=snapshot,
         )
     except ValueError as exc:
