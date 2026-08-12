@@ -234,7 +234,10 @@ describe('jobs panel run list', () => {
     const filter = host.querySelector<HTMLInputElement>('[aria-label="Filter runs"]')!;
     act(() => enter(filter, 'Visible'));
 
-    await act(async () => host.querySelector<HTMLButtonElement>('.panel-text-action--danger')!.click());
+    const clearFailed = host.querySelector<HTMLButtonElement>('.panel-text-action--danger')!;
+    expect(clearFailed.closest('.run-name-field')).not.toBeNull();
+    expect(host.querySelector('.panel-meta .panel-text-action--danger')).toBeNull();
+    await act(async () => clearFailed.click());
 
     expect(confirm).toHaveBeenCalledWith(expect.stringContaining('Remove all 2 failed runs'));
     expect(confirm).toHaveBeenCalledWith(expect.stringContaining('1 failed run hidden'));

@@ -231,7 +231,7 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
  * the history read `horn_v09 … horn_v14`. The name belongs next to the runs it
  * names, showing the label it will actually store.
  */
-function RunNameField({ preferencesTrigger, now = new Date() }: { preferencesTrigger?: ReactNode; now?: Date }) {
+function RunNameField({ actions, now = new Date() }: { actions?: ReactNode; now?: Date }) {
   const preferences = usePreferences();
   const design = useDesignStore((state) => state.design);
   const solveOptions = useSolveOptionsStore();
@@ -259,7 +259,7 @@ function RunNameField({ preferencesTrigger, now = new Date() }: { preferencesTri
       onBlur={(event) => commit(event.target.value)}
       onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
     /></label>
-    {preferencesTrigger}
+    <div className="run-name-actions">{actions}</div>
     <span className="run-name-preview" title="The name the next solve is stored under">next · <b>{displayedLabel}</b></span>
   </div>;
 }
@@ -323,14 +323,12 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
         n/n — three readouts telling the user nothing, in the densest column of
         the application. What is left is conditional and every part of it is
         news: runs in flight, the jobs socket when it is NOT connected, the
-        count only while the rating filter is actually hiding runs, and Clear
-        failed only when there is something to clear. */}
-    {(notConnected || hiddenByFilter > 0 || activeCount > 0 || failedCount > 0) && <div className="panel-meta">
+        count only while the rating filter is actually hiding runs. Clear
+        failed lives beside the run name below, where history actions are. */}
+    {(notConnected || hiddenByFilter > 0 || activeCount > 0) && <div className="panel-meta">
       {activeCount > 0 && <span className="pill accent">{activeCount} running</span>}
       {notConnected && <span className="panel-meta-warn">jobs {snapshot.connection}</span>}
       {hiddenByFilter > 0 && <span title="Clear the search or turn off the kept-only filter to show these runs.">{hiddenByFilter} hidden by filter</span>}
-      <span className="spacer"/>
-      {failedCount > 0 && <button className="panel-text-action panel-text-action--danger" onClick={clearFailed}>Clear failed</button>}
     </div>}
     {preferencesOpen && <JobsPreferencesSurface
       popover
@@ -339,7 +337,10 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
       now={namingNow}
     />}
     {exportPreferencesOpen && <ResultsPreferencesSurface popover anchorRef={preferencesAnchor} onClose={() => setExportPreferencesOpen(false)}/>}
-    <RunNameField now={namingNow} preferencesTrigger={<button ref={preferencesAnchor} className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Job preferences" aria-expanded={preferencesOpen} title="Job preferences" onClick={() => { setExportPreferencesOpen(false); setPreferencesOpen((value) => !value); }}><Icon name="settings"/></button>}/>
+    <RunNameField now={namingNow} actions={<>
+      {failedCount > 0 && <button className="panel-text-action panel-text-action--danger" title={`Remove ${failedCount} failed run${failedCount === 1 ? '' : 's'}`} onClick={clearFailed}>Clear failed</button>}
+      <button ref={preferencesAnchor} className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Job preferences" aria-expanded={preferencesOpen} title="Job preferences" onClick={() => { setExportPreferencesOpen(false); setPreferencesOpen((value) => !value); }}><Icon name="settings"/></button>
+    </>}/>
     <div className="jobs-filter"><Icon name="search"/><input aria-label="Filter runs" placeholder="Filter runs" value={query} onChange={(event) => setQuery(event.target.value)}/><button className={`jobs-kept-toggle${preferences.minRating > 0 ? ' on' : ''}`} aria-label="Show kept runs only" aria-pressed={preferences.minRating > 0} title="Show kept runs only" onClick={() => preferencesStore.update({ minRating: preferences.minRating > 0 ? 0 : lastMinimumRating.current })}>★</button></div>
     {(coordinator.actionError || snapshot.error) && <div className="job-error" role="alert" style={{ margin: 7 }}>{coordinator.actionError ?? snapshot.error}</div>}
     {snapshot.jobs.length === 0 && snapshot.connection === 'connected' && <div className="empty-state"><b>No runs yet</b><span>Solve the current design to start one. Every run is kept here with its results, so you can compare and re-run it later.</span></div>}
