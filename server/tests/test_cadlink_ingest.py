@@ -161,7 +161,7 @@ def test_return_listing_reads_cheap_inventory_and_marks_bad_manifests(tmp_path: 
     (good / "wgreturn.json").write_text(
         json.dumps(
             {
-                "document": {"name": "Speaker v4"},
+                "document": {"name": "Speaker v4", "request_id": "request-a"},
                 "instances": [{"instance_id": "instance-a"}],
                 "sources": [
                     {
@@ -195,6 +195,7 @@ def test_return_listing_reads_cheap_inventory_and_marks_bad_manifests(tmp_path: 
         "modifiedAt": result["items"][0]["modifiedAt"],
         "readable": True,
         "documentName": "Speaker v4",
+        "requestId": "request-a",
         "sourceCount": 1,
         "instanceCount": 1,
         "sources": [

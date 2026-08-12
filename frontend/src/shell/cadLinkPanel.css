@@ -1,4 +1,18 @@
 .cadlink-panel { padding: 7px; color: var(--fg1); font: var(--text-base)/1.45 var(--ui); }
+.cad-workflow { margin-bottom: 10px; padding: 8px; border: 1px solid var(--hair); background: var(--surface-panel); }
+.cad-workflow-header { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--hair); }
+.cad-workflow-header h3, .cad-workflow-header p { margin: 0; }
+.cad-workflow-header h3 { font-size: var(--text-base); letter-spacing: .06em; }
+.cad-workflow-header p { color: var(--fg3); font-size: var(--text-micro); }
+.cad-workflow-header > button { align-self: center; }
+.cad-step { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--inv-bg); color: var(--inv-fg); font-weight: 700; }
+.cad-return-workflow > .cad-section { margin-right: -1px; margin-left: -1px; }
+.cad-direction-alert { display: grid; gap: 8px; margin-top: 8px; padding: 8px; border-left: 3px solid var(--amber); background: color-mix(in srgb, var(--amber) 8%, transparent); }
+.cad-direction-alert div { display: grid; }
+.cad-direction-alert span { color: var(--fg3); font-size: var(--text-micro); }
+.cad-direction-alert button, .cad-secondary-action { justify-content: center; width: 100%; }
+.cad-confirm-actions { display: grid; grid-template-columns: 1fr 1.7fr; gap: 6px; }
+.cad-secondary-action { margin-top: 8px; }
 .cadlink-toolbar, .cad-section > header, .cad-solve-bar { display: flex; align-items: center; gap: 7px; }
 .cadlink-toolbar { min-height: 28px; border-bottom: 1px solid var(--hair); padding-bottom: 6px; }
 .cadlink-toolbar button, .cad-section button { display: inline-flex; align-items: center; gap: 4px; }
@@ -14,7 +28,7 @@
 .cad-section.degraded, .cad-scope.degraded { border-left: 3px solid var(--amber); }
 .cad-section > header { min-height: 24px; }
 /* The outbound leg leads the panel, so it carries no separating top margin. */
-.cad-send { margin-top: 0; margin-bottom: 7px; }
+.cad-send { margin-top: 0; }
 .cad-send code { color: var(--fg2); font: var(--text-micro) var(--mono); }
 .cad-application { display: flex; align-items: baseline; gap: 7px; padding-bottom: 7px; border-bottom: 1px solid var(--hair); font-size: var(--text-micro); }
 .cad-application > span { color: var(--fg3); text-transform: uppercase; letter-spacing: .05em; }
@@ -27,6 +41,7 @@
 .cad-connection-current .cad-connection-dot { background: var(--green); box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 14%, transparent); }
 .cad-connection-stale .cad-connection-dot { background: var(--amber); box-shadow: 0 0 0 3px color-mix(in srgb, var(--amber) 14%, transparent); }
 .cad-primary-action { justify-content: center; width: 100%; min-height: 34px; }
+.cad-connection-addin-offline .cad-connection-dot { background: var(--amber); box-shadow: 0 0 0 3px color-mix(in srgb, var(--amber) 14%, transparent); }
 .cad-send .cad-transport-note { margin: 8px 0 0; padding-top: 7px; border-top: 1px solid var(--hair-soft); }
 .cad-section h3 { margin: 0; font-size: var(--text-base); text-transform: uppercase; letter-spacing: .06em; }
 .cad-section header > button { margin-left: auto; }
@@ -38,6 +53,9 @@
 .cad-row small { grid-column: 1 / -1; color: var(--fg3); }
 .ok-text { color: var(--green); }.warn-text { color: var(--amber); }
 .cad-source { margin-top: 6px; padding-top: 5px; border-top: 1px solid var(--hair); }
+.cad-sizing .field-row { grid-template-columns: minmax(115px, 1fr) var(--field-w); }
+.cad-sizing .field-label { min-width: 0; }
+.cad-sizing .field-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cad-source.skipped { opacity: .66; }
 .cad-findings label { display: flex; gap: 7px; padding: 6px 0; border-top: 1px solid var(--hair); }
 .cad-findings label.blocking b::after { content: ' · blocking'; color: var(--amber); font-weight: 500; }

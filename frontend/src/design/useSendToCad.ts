@@ -15,7 +15,10 @@ export function sentToCadMessage(result: WgLinkExportResponse): string {
  * which is what keeps the CAD-link badge honest after an unsaved design is sent.
  * Failures are raised, so each call site presents them its own way.
  */
-export function useSendToCad(): { send: () => Promise<WgLinkExportResponse>; sending: boolean } {
+export function useSendToCad(): {
+  send: (fusionTarget?: { documentId: string; returnStateHash: string | null }) => Promise<WgLinkExportResponse>;
+  sending: boolean;
+} {
   const design = useDesignStore((state) => state.design);
   const revision = useDesignStore((state) => state.designRevision);
   const filename = useDocumentStore((state) => state.filename);
@@ -23,10 +26,18 @@ export function useSendToCad(): { send: () => Promise<WgLinkExportResponse>; sen
   const setCadLink = useDocumentStore((state) => state.setCadLink);
   const [sending, setSending] = useState(false);
 
-  const send = useCallback(async () => {
+  const send = useCallback(async (fusionTarget?: { documentId: string; returnStateHash: string | null }) => {
     setSending(true);
     try {
-      const result = await sendDesignToCad(design, revision, filenameStem(filename), identity);
+      const result = await sendDesignToCad(
+        design,
+        revision,
+        filenameStem(filename),
+        identity,
+        fetch,
+        undefined,
+        fusionTarget ?? null,
+      );
       // The export committed this design state to the registry, so the CAD link
       // is current. The unsaved dot stays lit: no .cfg was written.
       if (result.identity) setCadLink(result.identity, 'current');

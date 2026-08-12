@@ -408,6 +408,7 @@ def validate_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     document = _mapping(_required(manifest, "document", "$"), "$.document")
     _string(_required(document, "name", "$.document"), "$.document.name")
     _string(document.get("native_id"), "$.document.native_id", nullable=True)
+    _string(document.get("request_id"), "$.document.request_id", nullable=True)
     coordinates = _mapping(_required(manifest, "coordinate_system", "$"), "$.coordinate_system")
     fixed = {
         "length_unit": "mm",

@@ -4,7 +4,7 @@ import { acknowledgedFindingWire, resetCadReturnStore, unacknowledgedBlocking, u
 
 const bundle: CadReturnBundle = {
   name: 'speaker.wgreturn', bundlePath: 'wgreturn/speaker.wgreturn', modifiedAt: '2026-08-11T00:00:00Z', readable: true,
-  documentName: 'Speaker', sourceCount: 2, instanceCount: 1,
+  documentName: 'Speaker', requestId: null, sourceCount: 2, instanceCount: 1,
   sources: [
     { id: 'source-mf', role: 'MF', required: true, suggestedResolutionMm: 8, defaultDriveChannelId: 'drive-mf' },
     { id: 'source-hf', role: 'HF', required: false, suggestedResolutionMm: 3, defaultDriveChannelId: 'drive-hf' },
