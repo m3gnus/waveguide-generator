@@ -236,6 +236,43 @@ describe('CadLinkPanel', () => {
     expect(() => buildImportedSubmission(useCadReturnStore.getState())).toThrow('Ingest a CAD return');
   });
 
+  it('emits the combine wire only when enabled, chained by role band order', () => {
+    useCadReturnStore.getState().selectBundle(listing.items[0]);
+    useCadReturnStore.getState().applyIngest(record);
+    useCadReturnStore.setState({
+      selectedBundle: {
+        ...listing.items[0],
+        sources: [
+          { id: 'source-hf', role: 'HF', required: true, suggestedResolutionMm: 4, defaultDriveChannelId: 'drive-hf' },
+          { id: 'source-mf', role: 'MF', required: false, suggestedResolutionMm: 8, defaultDriveChannelId: 'drive-mf' },
+        ],
+      },
+      // Listed HF-first on purpose: the chain must still run MF -> HF.
+      driveChannels: [
+        { id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' },
+        { id: 'drive-mf', source_ids: ['source-mf'], motion: 'normal' },
+      ],
+    });
+    useCadReturnStore.getState().setSweep({ frequencyStartHz: 200, frequencyEndHz: 5_000, frequencyCount: 24 });
+
+    expect(buildImportedSubmission(useCadReturnStore.getState()).geometry).not.toHaveProperty('combine');
+
+    useCadReturnStore.getState().setCombineEnabled(true);
+    // Untouched pair input: log-spaced default inside the sweep,
+    // round(sqrt(200 * 5000)) = 1000.
+    expect(buildImportedSubmission(useCadReturnStore.getState()).geometry.combine)
+      .toEqual({ members: ['drive-mf', 'drive-hf'], crossovers_hz: [1_000] });
+
+    useCadReturnStore.getState().setCombineCrossover('drive-mf\u2192drive-hf', 1_200);
+    expect(buildImportedSubmission(useCadReturnStore.getState()).geometry.combine)
+      .toEqual({ members: ['drive-mf', 'drive-hf'], crossovers_hz: [1_200] });
+
+    // A single remaining channel drops the wire even while enabled.
+    useCadReturnStore.setState({ driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }] });
+    expect(buildImportedSubmission(useCadReturnStore.getState()).geometry).not.toHaveProperty('combine');
+  });
+
+
   it('widens the polar request to the derivation instead of submitting a narrowing grid', () => {
     useCadReturnStore.getState().selectBundle(listing.items[0]);
     useCadReturnStore.getState().applyIngest(record);

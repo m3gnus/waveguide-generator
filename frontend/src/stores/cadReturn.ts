@@ -19,6 +19,8 @@ interface CadReturnState {
   areaDriftOverrides: string[];
   areaDriftSourceIds: string[];
   exteriorOnly: boolean;
+  combineEnabled: boolean;
+  combineCrossoversHz: Record<string, number>;
   frequencyStartHz: number;
   frequencyEndHz: number;
   frequencyCount: number;
@@ -39,6 +41,8 @@ interface CadReturnState {
   setAreaDriftOverride: (sourceId: string, enabled: boolean) => void;
   flagAreaDrift: (sourceId: string) => void;
   setExteriorOnly: (enabled: boolean) => void;
+  setCombineEnabled: (enabled: boolean) => void;
+  setCombineCrossover: (pairKey: string, hz: number) => void;
   setSweep: (update: Partial<Pick<CadReturnState, 'frequencyStartHz' | 'frequencyEndHz' | 'frequencyCount'>>) => void;
 }
 
@@ -126,6 +130,8 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
   ...initialFromBundle(null),
   areaDriftSourceIds: [],
   exteriorOnly: false,
+  combineEnabled: false,
+  combineCrossoversHz: {},
   frequencyStartHz: 200,
   frequencyEndHz: 20_000,
   frequencyCount: 24,
@@ -139,6 +145,8 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
     ...initialFromBundle(selectedBundle),
     areaDriftSourceIds: [],
     exteriorOnly: false,
+    combineEnabled: false,
+    combineCrossoversHz: {},
     needsIngest: true,
     ingestedBundleIdentity: null,
     ingestStaleReason: null,
@@ -227,8 +235,64 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
   })),
   flagAreaDrift: (sourceId) => set((state) => ({ areaDriftSourceIds: [...new Set([...state.areaDriftSourceIds, sourceId])] })),
   setExteriorOnly: (exteriorOnly) => set({ exteriorOnly }),
+  setCombineEnabled: (combineEnabled) => set({ combineEnabled }),
+  setCombineCrossover: (pairKey, hz) => set((state) => ({
+    combineCrossoversHz: { ...state.combineCrossoversHz, [pairKey]: hz },
+  })),
   setSweep: (update) => set(update),
 }));
+
+export interface CombinePair { key: string; lower: string; upper: string; hz: number }
+
+const ROLE_BAND_RANK: Record<string, number> = { LF: 0, MF: 1, HF: 2 };
+
+/** Chain members ordered lowest band first, from the return's source roles.
+ * Channels whose sources carry no banded role keep their listed position at
+ * the end, so an unroled return degrades to listing order rather than a
+ * guess. */
+export function combineMembers(
+  state: Pick<CadReturnState, 'driveChannels' | 'selectedBundle'>,
+): string[] {
+  const sources = state.selectedBundle?.sources ?? [];
+  return [...state.driveChannels]
+    .map((channel, index) => {
+      const ranks = channel.source_ids
+        .map((id) => ROLE_BAND_RANK[sources.find((source) => source.id === id)?.role ?? ''])
+        .filter((rank): rank is number => rank !== undefined);
+      return { id: channel.id, index, rank: ranks.length ? Math.min(...ranks) : Number.POSITIVE_INFINITY };
+    })
+    .sort((a, b) => a.rank - b.rank || a.index - b.index)
+    .map((entry) => entry.id);
+}
+
+/** Adjacent chain pairs with log-spaced default crossovers inside the
+ * current sweep, so an untouched form is submittable. */
+export function combineChain(
+  state: Pick<CadReturnState, 'driveChannels' | 'selectedBundle' | 'combineCrossoversHz' | 'frequencyStartHz' | 'frequencyEndHz'>,
+): CombinePair[] {
+  const members = combineMembers(state);
+  if (members.length < 2) return [];
+  const logStart = Math.log(Math.max(1, state.frequencyStartHz));
+  const logEnd = Math.log(Math.max(state.frequencyStartHz + 1, state.frequencyEndHz));
+  return members.slice(0, -1).map((lower, index) => {
+    const upper = members[index + 1];
+    const key = `${lower}→${upper}`;
+    const fallback = Math.round(Math.exp(logStart + ((index + 1) * (logEnd - logStart)) / members.length));
+    return { key, lower, upper, hz: state.combineCrossoversHz[key] ?? fallback };
+  });
+}
+
+export function combineWire(
+  state: Pick<CadReturnState, 'combineEnabled' | 'driveChannels' | 'selectedBundle' | 'combineCrossoversHz' | 'frequencyStartHz' | 'frequencyEndHz'>,
+): { members: string[]; crossovers_hz: number[] } | undefined {
+  if (!state.combineEnabled) return undefined;
+  const pairs = combineChain(state);
+  if (!pairs.length) return undefined;
+  return {
+    members: combineMembers(state),
+    crossovers_hz: pairs.map((pair) => pair.hz),
+  };
+}
 
 export function blockingFindings(record: CadReturnIngestRecord | null): CadReturnIngestRecord['findings'] {
   return record?.findings.filter((finding) => finding.blocking) ?? [];
@@ -251,6 +315,8 @@ export function resetCadReturnStore(): void {
     ...initialFromBundle(null),
     areaDriftSourceIds: [],
     exteriorOnly: false,
+    combineEnabled: false,
+    combineCrossoversHz: {},
     frequencyStartHz: 200,
     frequencyEndHz: 20_000,
     frequencyCount: 24,
