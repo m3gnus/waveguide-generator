@@ -213,6 +213,13 @@ describe('NumberField', () => {
     expect(host.querySelector('.expr-value')).toBeNull();
     expect(host.textContent).not.toContain('= 100');
   });
+
+  it('sizes a plain numeric imported value like any other field, not like a formula', () => {
+    act(() => root.render(<NumberField label="Termination smoothness" value={0.992} expression={{ raw: '0.992', value: 0.992 }} allowExpression onCommit={vi.fn()} />));
+    expect(host.querySelector('.number-control')!.classList.contains('expression')).toBe(false);
+    act(() => root.render(<NumberField label="Termination smoothness" value={0.992} expression={{ raw: '0.9 + 0.092*p', value: 0.992 }} allowExpression onCommit={vi.fn()} />));
+    expect(host.querySelector('.number-control')!.classList.contains('expression')).toBe(true);
+  });
   const setValue = (input: HTMLInputElement, value: string) => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, value);
     input.dispatchEvent(new Event('input', { bubbles: true }));

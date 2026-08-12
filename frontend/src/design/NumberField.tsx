@@ -251,7 +251,13 @@ export function NumberField({
       </label>
       {holdsExpression && <span className="expr-badge" aria-hidden="true">fx</span>}
       {showEvaluatedExpression && <span className="expr-value" title="Evaluated expression value">= {Number(expression!.value!.toPrecision(8))}{unit}</span>}
-      <div className={`number-control${editing ? ' editing' : ''}${invalid ? ' invalid' : ''}${expression?.raw ? ' expression' : ''}`}>
+      {/* The formula marker follows `holdsExpression`, not the mere presence of a
+          raw string. An imported design carries a raw for every field it names,
+          most of them plain numbers ("10", "0.992"), and keying the marker off
+          `expression.raw` widened those fields to formula width -- so a loaded
+          design showed a rail of boxes at two different sizes with no rule a
+          reader could see behind which was which. */}
+      <div className={`number-control${editing ? ' editing' : ''}${invalid ? ' invalid' : ''}${holdsExpression ? ' expression' : ''}`}>
         {dragDelta !== null && (
           <span className="scrub-tip">drag <b>{dragDelta >= 0 ? '+' : ''}{dragDelta.toFixed(precision)}{unit}</b></span>
         )}
