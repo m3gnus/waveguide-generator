@@ -17,7 +17,7 @@ export const CHART_TYPES = [
 export type ChartType = typeof CHART_TYPES[number]['id'];
 
 export const EXPORT_FORMATS = [
-  { id: 'mwg_config', label: 'Parameter Config (.txt)' },
+  { id: 'mwg_config', label: 'Parameter Config (.cfg)' },
   { id: 'step', label: 'Waveguide STEP (solid)' },
   { id: 'png', label: 'Chart Images (PNG)' },
   { id: 'csv', label: 'Frequency Data CSV' },
@@ -83,10 +83,6 @@ const jobSortIds = new Set<JobSort>(['completed_desc', 'created_desc', 'rating_d
 export function normalizeOutputName(value: unknown): string {
   const normalized = String(value ?? '').trim().replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^\.+|\.+$/g, '');
   return normalized || defaults.outputName;
-}
-
-export function exportBaseName(preferences: Pick<Preferences, 'outputName' | 'counter'>): string {
-  return `${normalizeOutputName(preferences.outputName)}_${Math.max(1, Math.min(999_999, Math.floor(preferences.counter)))}`;
 }
 
 export function normalize(raw: Partial<Preferences> = {}): Preferences {

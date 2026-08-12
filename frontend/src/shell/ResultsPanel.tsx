@@ -11,6 +11,7 @@ import { resultExportSnapshot } from '../results/exportContext';
 export { resultExportSnapshot } from '../results/exportContext';
 import type { ResultPayload } from '../results/types';
 import { hydrateJobDesign } from '../jobs/jobDesign';
+import { exportStemForJob } from '../jobs/exportNaming';
 import { CHART_TYPES, MAX_RESULT_PANELS, RESULT_PANEL_COUNTS, preferencesStore, runDisplayName, usePreferences, type ChartType } from '../prefs/preferences';
 import { ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
 import { Icon } from './icons';
@@ -873,11 +874,11 @@ export function ResultsPanel() {
     setExporting(true); setExportStatus(null);
     try {
       const job = jobs.find(({ id }) => id === selection.primary);
-      const result = await runExportBundle({ result: primary, ...resultExportSnapshot(job), preferences }, preferences.exportFormats);
+      if (!job) throw new Error('The selected run is no longer available for export.');
+      const result = await runExportBundle({ result: primary, ...resultExportSnapshot(job), jobStem: exportStemForJob(job), preferences }, preferences.exportFormats);
       if (selection.primary && result.files.length) {
         await jobsSocket.patchMetadata(selection.primary, { exported_files: [...new Set([...(job?.exported_files ?? []), ...result.files])] });
       }
-      if (result.files.length) preferencesStore.update({ counter: Math.min(999_999, preferences.counter + 1) });
       setExportStatus(`${result.files.length} file${result.files.length === 1 ? '' : 's'} exported${result.failures.length ? ` · ${result.failures.length} failed: ${result.failures.map(({ format, reason }) => `${format} (${reason})`).join(', ')}` : ''}`);
     } catch (reason) { setExportStatus(reason instanceof Error ? reason.message : String(reason)); }
     finally { setExporting(false); }

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { designForFamily } from '../stores/design';
 import { preferencesStore } from '../prefs/preferences';
 import type { ResultPayload } from './types';
-import { buildChartRenderPayload, buildFrequencyCsv, buildFullResultsJson, buildImpedanceCsv, buildPolarCsv, buildSummaryText, runExportBundle, runExportFormat } from './exporters';
+import { buildChartRenderPayload, buildFrequencyCsv, buildFullResultsJson, buildImpedanceCsv, buildPolarCsv, buildSummaryText, downloadMeshArtifact, runExportBundle, runExportFormat } from './exporters';
 
 const result: ResultPayload = {
   frequencies: [100, 200],
@@ -67,6 +67,7 @@ describe('result exporters', () => {
 
     await expect(runExportFormat('csv', {
       result: csvResult,
+      jobStem: 'horn_1',
       preferences: preferencesStore.getSnapshot(),
       saveText,
     })).resolves.toEqual(['horn_1.csv']);
@@ -81,6 +82,7 @@ describe('result exporters', () => {
     };
     await expect(runExportFormat('csv', {
       result: wrapped,
+      jobStem: 'horn_1',
       preferences: preferencesStore.getSnapshot(),
       saveText: vi.fn(),
     })).rejects.toThrow('Choose a drive channel');
@@ -88,6 +90,7 @@ describe('result exporters', () => {
     await runExportFormat('csv', {
       result: wrapped,
       channelId: 'drive-b',
+      jobStem: 'horn_1',
       preferences: preferencesStore.getSnapshot(),
       saveText,
     });
@@ -111,6 +114,7 @@ describe('result exporters', () => {
     const bundle = await runExportBundle({
       result: wrapped,
       design: designForFamily('OSSE'),
+      jobStem: 'horn_1',
       preferences: preferencesStore.getSnapshot(),
       saveText,
       saveBlob: vi.fn(),
@@ -131,10 +135,10 @@ describe('result exporters', () => {
   it('posts config and geometry selectors to their existing endpoints', async () => {
     const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input) => {
       const path = String(input);
-      if (path === '/api/design/save') return new Response(JSON.stringify({ text: 'cfg', suggestedFilename: 'horn_1.txt' }), { status: 200 });
+      if (path === '/api/design/save') return new Response(JSON.stringify({ text: 'cfg', suggestedFilename: 'horn_1_config.cfg' }), { status: 200 });
       return new Response('geometry', { status: 200, headers: { 'Content-Disposition': `attachment; filename="file.${path.endsWith('step') ? 'step' : 'stl'}"` } });
     });
-    const context = { preferences: preferencesStore.getSnapshot(), design: designForFamily('OSSE'), designRevision: 4, fetcher, saveText: vi.fn(), saveBlob: vi.fn() };
+    const context = { jobStem: 'horn_1', preferences: preferencesStore.getSnapshot(), design: designForFamily('OSSE'), designRevision: 4, fetcher, saveText: vi.fn(), saveBlob: vi.fn() };
     await runExportFormat('mwg_config', context);
     await runExportFormat('step', context);
     await runExportFormat('stl', context);
@@ -147,7 +151,7 @@ describe('result exporters', () => {
       if (path.endsWith('kind=slices')) return new Response('slices failed', { status: 500 });
       return new Response('profiles', { status: 200 });
     });
-    const context = { preferences: preferencesStore.getSnapshot(), design: designForFamily('OSSE'), fetcher: failedFetcher, saveBlob };
+    const context = { jobStem: 'horn_1', preferences: preferencesStore.getSnapshot(), design: designForFamily('OSSE'), fetcher: failedFetcher, saveBlob };
 
     await expect(runExportFormat('fusion_csv', context)).rejects.toThrow('500');
     expect(saveBlob).not.toHaveBeenCalled();
@@ -162,11 +166,41 @@ describe('result exporters', () => {
   });
   it('sends the selected theme to the PNG renderer endpoint', async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ charts: { spl: 'data:image/png;base64,AQ==' } }), { status: 200 }));
-    const context = { preferences: { ...preferencesStore.getSnapshot(), chartTheme: 'paper' }, result, fetcher, saveBlob: vi.fn() };
+    const context = { jobStem: 'horn_1', preferences: { ...preferencesStore.getSnapshot(), chartTheme: 'paper' }, result, fetcher, saveBlob: vi.fn() };
     expect(await runExportFormat('png', context)).toEqual(['horn_1_spl.png']);
     expect(String(fetcher.mock.calls[0][0])).toBe('/api/render-charts');
     expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body)).theme).toBe('paper');
     expect(buildChartRenderPayload({ ...result, metadata: { observation: { effective_distance_m: 1.5 }, phase_time_convention: 'e^-iwt' } }, context.preferences)).toMatchObject({ phase_reference_distance_m: 1.5, phase_time_convention: 'e^-iwt', impedance_units: 'Z/(rho*c)' });
     expect(buildChartRenderPayload(result, context.preferences, { result, label: 'reference horn' })).toMatchObject({ reference: { label: 'reference horn', frequencies: [100, 200], spl: [90, null], impedance_normalization: 'rho_c' } });
+  });
+
+  it('pins distinct config and summary suffixes, including the config fallback', async () => {
+    const saveText = vi.fn();
+    const preferences = preferencesStore.getSnapshot();
+    const configFetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ text: 'cfg' }), { status: 200 }));
+    expect(await runExportFormat('mwg_config', {
+      jobStem: '123_asro68', preferences, design: designForFamily('OSSE'), fetcher: configFetcher, saveText,
+    })).toEqual(['123_asro68_config.cfg']);
+    expect(JSON.parse(String(configFetcher.mock.calls[0][1]?.body)).filename).toBe('123_asro68_config.cfg');
+
+    expect(await runExportFormat('txt', {
+      jobStem: '123_asro68', preferences, result, saveText,
+    })).toEqual(['123_asro68_summary.txt']);
+  });
+
+  it('renames only the stored mesh download while preserving its bytes', async () => {
+    const saveBlob = vi.fn();
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response('stored mesh bytes', {
+      status: 200,
+      headers: { 'Content-Disposition': 'attachment; filename="artifact-uuid.msh"' },
+    }));
+    const filename = await downloadMeshArtifact({
+      id: 'artifact-uuid', run_number: 123, label: 'asro68', config_summary: {},
+    }, fetcher, saveBlob);
+
+    expect(fetcher).toHaveBeenCalledWith('/api/mesh-artifact/artifact-uuid');
+    expect(filename).toBe('123_asro68.msh');
+    expect(saveBlob.mock.calls[0][1]).toBe('123_asro68.msh');
+    expect(await (saveBlob.mock.calls[0][0] as Blob).text()).toBe('stored mesh bytes');
   });
 });

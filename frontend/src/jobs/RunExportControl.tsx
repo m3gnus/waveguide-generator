@@ -3,7 +3,7 @@ import { jobsSocket } from '../api/jobsSocket';
 import { downloadBlob, downloadText } from '../api/designIo';
 import { fetchJobResults } from '../api/results';
 import { ActionMenu, type ActionMenuItem } from '../design/ActionMenu';
-import { exportBaseName, preferencesStore, usePreferences, type ExportFormat } from '../prefs/preferences';
+import { usePreferences, type ExportFormat } from '../prefs/preferences';
 import { buildCanonicalDirectivityRequest } from '../results/CanonicalPlot';
 import { resultExportSnapshot } from '../results/exportContext';
 import { runExportBundle, runExportFormat, type ExportContext } from '../results/exporters';
@@ -11,6 +11,7 @@ import { buildOnAxisFrd, buildPolarFrdSet } from '../results/frd';
 import { resultChannelFileSuffix, resultChannels, scopeResultChannel, type ResultPayload } from '../results/types';
 import { EMPTY_RUN_EXPORT_STATE, useRunExportStore, type RunExportOutcome } from '../stores/runExports';
 import { canLoadJobDesign, jobDesignAvailability, jobRerunState } from './jobDesign';
+import { exportStemForJob } from './exportNaming';
 import './RunExportControl.css';
 
 export interface RunExportControlProps {
@@ -36,7 +37,7 @@ const FORMAT_CATALOG: CatalogItem[] = [
   { id: 'csv', format: 'csv', label: 'Frequency data', trailing: '.csv', group: 'Results', needsResult: true, needsDesign: false },
   { id: 'json', format: 'json', label: 'Full results', trailing: '.json', group: 'Results', needsResult: true, needsDesign: false },
   { id: 'step', format: 'step', label: 'STEP solid', trailing: '.step', group: 'Geometry & design', needsResult: false, needsDesign: true },
-  { id: 'mwg_config', format: 'mwg_config', label: 'Parameter config', trailing: '.txt', group: 'Geometry & design', needsResult: false, needsDesign: true },
+  { id: 'mwg_config', format: 'mwg_config', label: 'Parameter config', trailing: '.cfg', group: 'Geometry & design', needsResult: false, needsDesign: true },
   { id: 'impedance_csv', format: 'impedance_csv', label: 'Impedance', trailing: '.csv', group: 'Advanced', needsResult: true, needsDesign: false },
   { id: 'polar_csv', format: 'polar_csv', label: 'Polar directivity', trailing: '.csv', group: 'Advanced', needsResult: true, needsDesign: false },
   { id: 'txt', format: 'txt', label: 'Summary report', trailing: '.txt', group: 'Advanced', needsResult: true, needsDesign: false },
@@ -92,10 +93,8 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
   const buildContext = async (formats: readonly ExportFormat[]): Promise<ExportContext> => ({
     ...(needsResults(formats) ? { result: await fetchJobResults(job.id) as ResultPayload } : {}),
     ...resultExportSnapshot(job),
-    preferences: {
-      ...preferences,
-      outputName: job.label?.trim() || `${preferences.outputName}_${job.id}`,
-    },
+    jobStem: exportStemForJob(job),
+    preferences,
   });
 
   const recordFiles = async (files: string[]) => {
@@ -103,7 +102,6 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
     await jobsSocket.patchMetadata(job.id, {
       exported_files: [...new Set([...(job.exported_files ?? []), ...files])],
     });
-    preferencesStore.update({ counter: Math.min(999_999, preferencesStore.getSnapshot().counter + 1) });
   };
 
   const exportOne = (format: ExportFormat) => execute(job.id, [format], async (): Promise<RunExportOutcome> => {
@@ -125,7 +123,7 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
     const channels = resultChannels(result);
     const variants = channels.length > 1 ? channels.map(({ id }) => id) : [undefined];
     const files = variants.map((channelId) => {
-      const filename = `${exportBaseName(context.preferences)}${resultChannelFileSuffix(result, channelId)}.frd`;
+      const filename = `${context.jobStem}${resultChannelFileSuffix(result, channelId)}.frd`;
       downloadText(buildOnAxisFrd(result, context.preferences, channelId), filename);
       return filename;
     });
@@ -140,7 +138,7 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
     const result = await fetchJobResults(job.id) as ResultPayload;
     const channels = resultChannels(result);
     const variants = channels.length > 1 ? channels.map(({ id }) => id) : [undefined];
-    const files = variants.flatMap((channelId) => buildPolarFrdSet(result, context.preferences, channelId));
+    const files = variants.flatMap((channelId) => buildPolarFrdSet(result, context.preferences, context.jobStem, channelId));
     if (!files.length) throw new Error('This run has no directivity data for a polar FRD set.');
 
     const pathResponse = await fetch('/api/workspace/path');
@@ -159,7 +157,7 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        subdirectory: exportBaseName(context.preferences),
+        subdirectory: context.jobStem,
         members: files.map(({ filename, text }) => ({ relative_path: filename, text })),
       }),
     });
@@ -189,7 +187,7 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
       if (!directivityBody.image) throw new Error('HornLab plots returned no directivity image.');
 
       files.push(...await runExportFormat('png', { ...context, channelId }));
-      const directivityFilename = `${exportBaseName(context.preferences)}${resultChannelFileSuffix(result, channelId)}_directivity_map.png`;
+      const directivityFilename = `${context.jobStem}${resultChannelFileSuffix(result, channelId)}_directivity_map.png`;
       downloadBlob(pngBlob(directivityBody.image), directivityFilename);
       files.push(directivityFilename);
     }

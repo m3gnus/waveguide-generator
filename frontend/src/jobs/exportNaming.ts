@@ -1,0 +1,22 @@
+import type { JobItem } from '../api/jobsSocket';
+
+/** Convert a human job title to the portable slug used only in export paths. */
+export function exportTitleSlug(value: unknown): string {
+  const slug = String(value ?? '')
+    .trim()
+    .normalize('NFKD')
+    .replace(/\p{Mark}+/gu, '')
+    .replace(/[^A-Za-z0-9._-]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^[._-]+|[._-]+$/g, '');
+  return slug || 'design';
+}
+
+/** Stable stem shared by every export and mesh download for a stored job. */
+export function exportStemForJob(
+  job: Pick<JobItem, 'run_number' | 'label' | 'config_summary'>,
+): string {
+  const runNumber = Math.max(1, Math.floor(job.run_number));
+  const title = job.label?.trim() || job.config_summary.formula_type || 'design';
+  return `${runNumber}_${exportTitleSlug(title)}`;
+}
