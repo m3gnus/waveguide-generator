@@ -7,6 +7,20 @@ export interface CadDriveChannel {
   motion: 'normal' | 'axial';
 }
 
+export const DRIVER_FIELD_KEYS = [
+  'sd_cm2', 'bl_t_m', 're_ohm', 'le_mh', 'mmd_g', 'cms_m_per_n',
+  'rms_kg_per_s', 'xmax_mm', 'count', 'rear_volume_l',
+] as const;
+export type DriverFieldKey = typeof DRIVER_FIELD_KEYS[number];
+export const DRIVER_REQUIRED_KEYS: readonly DriverFieldKey[] = [
+  'sd_cm2', 'bl_t_m', 're_ohm', 'mmd_g', 'cms_m_per_n',
+];
+
+export interface ChannelDriverForm {
+  enabled: boolean;
+  fields: Partial<Record<DriverFieldKey, number>>;
+}
+
 interface CadReturnState {
   selectedBundle: CadReturnBundle | null;
   ingestRecord: CadReturnIngestRecord | null;
@@ -21,6 +35,9 @@ interface CadReturnState {
   exteriorOnly: boolean;
   combineEnabled: boolean;
   combineCrossoversHz: Record<string, number>;
+  combineLevelMatch: boolean | null;
+  channelDrivers: Record<string, ChannelDriverForm>;
+  driveVoltageV: number;
   frequencyStartHz: number;
   frequencyEndHz: number;
   frequencyCount: number;
@@ -43,6 +60,10 @@ interface CadReturnState {
   setExteriorOnly: (enabled: boolean) => void;
   setCombineEnabled: (enabled: boolean) => void;
   setCombineCrossover: (pairKey: string, hz: number) => void;
+  setCombineLevelMatch: (value: boolean | null) => void;
+  setChannelDriverEnabled: (channelId: string, enabled: boolean) => void;
+  setChannelDriverField: (channelId: string, field: DriverFieldKey, value: number | null) => void;
+  setDriveVoltage: (value: number) => void;
   setSweep: (update: Partial<Pick<CadReturnState, 'frequencyStartHz' | 'frequencyEndHz' | 'frequencyCount'>>) => void;
 }
 
@@ -132,6 +153,9 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
   exteriorOnly: false,
   combineEnabled: false,
   combineCrossoversHz: {},
+  combineLevelMatch: null,
+  channelDrivers: {},
+  driveVoltageV: 2.83,
   frequencyStartHz: 200,
   frequencyEndHz: 20_000,
   frequencyCount: 24,
@@ -147,6 +171,8 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
     exteriorOnly: false,
     combineEnabled: false,
     combineCrossoversHz: {},
+    combineLevelMatch: null,
+    channelDrivers: {},
     needsIngest: true,
     ingestedBundleIdentity: null,
     ingestStaleReason: null,
@@ -239,8 +265,35 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
   setCombineCrossover: (pairKey, hz) => set((state) => ({
     combineCrossoversHz: { ...state.combineCrossoversHz, [pairKey]: hz },
   })),
+  setCombineLevelMatch: (combineLevelMatch) => set({ combineLevelMatch }),
+  setChannelDriverEnabled: (channelId, enabled) => set((state) => ({
+    channelDrivers: {
+      ...state.channelDrivers,
+      [channelId]: { enabled, fields: state.channelDrivers[channelId]?.fields ?? {} },
+    },
+  })),
+  setChannelDriverField: (channelId, field, value) => set((state) => {
+    const current = state.channelDrivers[channelId] ?? { enabled: true, fields: {} };
+    const fields = { ...current.fields };
+    if (value === null || !Number.isFinite(value)) delete fields[field];
+    else fields[field] = value;
+    return { channelDrivers: { ...state.channelDrivers, [channelId]: { ...current, fields } } };
+  }),
+  setDriveVoltage: (driveVoltageV) => set({ driveVoltageV }),
   setSweep: (update) => set(update),
 }));
+
+/** The wire driver spec for one channel, or undefined while incomplete. */
+export function channelDriverWire(form: ChannelDriverForm | undefined): Record<string, number> | undefined {
+  if (!form?.enabled) return undefined;
+  if (DRIVER_REQUIRED_KEYS.some((key) => form.fields[key] === undefined)) return undefined;
+  const wire: Record<string, number> = {};
+  for (const key of DRIVER_FIELD_KEYS) {
+    const value = form.fields[key];
+    if (value !== undefined) wire[key] = value;
+  }
+  return wire;
+}
 
 export interface CombinePair { key: string; lower: string; upper: string; hz: number }
 
@@ -282,15 +335,27 @@ export function combineChain(
   });
 }
 
+/** Whether level match should default off: real voltage-driven levels exist
+ * for every member, so re-equalising them would erase the drivers' point. */
+export function combineLevelMatchDefault(
+  state: Pick<CadReturnState, 'driveChannels' | 'channelDrivers'>,
+): boolean {
+  const allDriven = state.driveChannels.length > 0 && state.driveChannels.every(
+    (channel) => channelDriverWire(state.channelDrivers[channel.id]) !== undefined,
+  );
+  return !allDriven;
+}
+
 export function combineWire(
-  state: Pick<CadReturnState, 'combineEnabled' | 'driveChannels' | 'selectedBundle' | 'combineCrossoversHz' | 'frequencyStartHz' | 'frequencyEndHz'>,
-): { members: string[]; crossovers_hz: number[] } | undefined {
+  state: Pick<CadReturnState, 'combineEnabled' | 'driveChannels' | 'selectedBundle' | 'combineCrossoversHz' | 'combineLevelMatch' | 'channelDrivers' | 'frequencyStartHz' | 'frequencyEndHz'>,
+): { members: string[]; crossovers_hz: number[]; level_match: boolean } | undefined {
   if (!state.combineEnabled) return undefined;
   const pairs = combineChain(state);
   if (!pairs.length) return undefined;
   return {
     members: combineMembers(state),
     crossovers_hz: pairs.map((pair) => pair.hz),
+    level_match: state.combineLevelMatch ?? combineLevelMatchDefault(state),
   };
 }
 
@@ -317,6 +382,9 @@ export function resetCadReturnStore(): void {
     exteriorOnly: false,
     combineEnabled: false,
     combineCrossoversHz: {},
+    combineLevelMatch: null,
+    channelDrivers: {},
+    driveVoltageV: 2.83,
     frequencyStartHz: 200,
     frequencyEndHz: 20_000,
     frequencyCount: 24,

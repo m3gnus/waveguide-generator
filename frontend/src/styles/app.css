@@ -952,3 +952,9 @@ textarea:disabled { opacity: .48; }
 .result-recombine-pair { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .result-recombine-pair input { width: 64px; height: 19px; padding: 0 4px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); color: var(--fg1); font-size: var(--text-micro); }
 .result-recombine-error { color: var(--danger, #c65b4e); white-space: nowrap; }
+
+/* Per-channel driver T/S entry in the CAD Link panel. */
+.cad-driver-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(108px, 1fr)); gap: 4px 8px; padding: 2px 6px 6px; }
+.cad-driver-field { display: flex; flex-direction: column; gap: 2px; font-size: var(--text-micro); color: var(--fg3); }
+.cad-driver-field input { height: 20px; padding: 0 4px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); color: var(--fg1); font-size: var(--text-micro); }
+.cad-driver-hint { grid-column: 1 / -1; margin: 2px 0 0; font-size: var(--text-micro); color: var(--fg3); }
