@@ -261,11 +261,11 @@ describe('CadLinkPanel', () => {
     // Untouched pair input: log-spaced default inside the sweep,
     // round(sqrt(200 * 5000)) = 1000.
     expect(buildImportedSubmission(useCadReturnStore.getState()).geometry.combine)
-      .toEqual({ members: ['drive-mf', 'drive-hf'], crossovers_hz: [1_000] });
+      .toEqual({ members: ['drive-mf', 'drive-hf'], crossovers_hz: [1_000], level_match: true });
 
     useCadReturnStore.getState().setCombineCrossover('drive-mf\u2192drive-hf', 1_200);
     expect(buildImportedSubmission(useCadReturnStore.getState()).geometry.combine)
-      .toEqual({ members: ['drive-mf', 'drive-hf'], crossovers_hz: [1_200] });
+      .toEqual({ members: ['drive-mf', 'drive-hf'], crossovers_hz: [1_200], level_match: true });
 
     // A single remaining channel drops the wire even while enabled.
     useCadReturnStore.setState({ driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }] });

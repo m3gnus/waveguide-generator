@@ -23,6 +23,7 @@ from server.mesh.builder import _solver_mesher_config, build_solver_mesh
 
 from .acoustics import solver_sound_speed_m_per_s
 from .combine import combine_drive_channels, serialize_channel_bases
+from .driver_lem import channel_drive_scaling
 from .base import (
     ArtifactCallback,
     CancelCallback,
@@ -515,6 +516,64 @@ def _imported_validity_metadata(record: Mapping[str, Any]) -> dict[str, Any]:
     return per_source
 
 
+def _record_source_area_m2(record: Mapping[str, Any], source_id: str) -> float:
+    """The source's full physical area from the ingestion record, in m²."""
+
+    for source in record.get("sources") or []:
+        if not isinstance(source, Mapping) or str(source.get("id")) != source_id:
+            continue
+        observed = source.get("observed")
+        observed = observed if isinstance(observed, Mapping) else {}
+        area_mm2 = observed.get("total_area_mm2")
+        if isinstance(area_mm2, (int, float)) and float(area_mm2) > 0.0:
+            return float(area_mm2) * 1.0e-6
+    raise ValueError(
+        f"driver coupling needs a recorded positive area for source {source_id!r}"
+    )
+
+
+def _apply_channel_driver(
+    channel: Any,
+    result: Any,
+    record: Mapping[str, Any],
+    source_tags: Mapping[str, Any],
+    *,
+    drive_voltage_v: float,
+    rg_ohm: float,
+) -> dict[str, Any]:
+    """Scale one channel's raw fields to the voltage-driven driver output."""
+
+    source_id = channel.source_ids[0]
+    area_m2 = _record_source_area_m2(record, source_id)
+    tag = int(source_tags[source_id])
+    surface_avg = getattr(result, "surface_pressure_avg", None)
+    p_avg = surface_avg.get(tag) if isinstance(surface_avg, Mapping) else None
+    if p_avg is None:
+        # Per-channel results from the multi-RHS solve report the driven
+        # tag's area-weighted average surface pressure as ``impedance``.
+        p_avg = result.impedance
+    scale_raw, payload = channel_drive_scaling(
+        np.asarray(result.frequencies_hz, dtype=np.float64).reshape(-1),
+        np.asarray(p_avg, dtype=np.complex128),
+        area_m2,
+        channel.driver,
+        drive_voltage_v=drive_voltage_v,
+        rg_ohm=rg_ohm,
+    )
+    result.pressure_complex = (
+        np.asarray(result.pressure_complex, dtype=np.complex128)
+        * scale_raw[:, None, None]
+    )
+    sphere = getattr(result, "sphere_pressure_complex", None)
+    if sphere is not None:
+        result.sphere_pressure_complex = (
+            np.asarray(sphere, dtype=np.complex128) * scale_raw[:, None]
+        )
+    payload["source_id"] = source_id
+    payload["source_area_m2"] = area_m2
+    return payload
+
+
 def _combined_channel_response(
     *,
     geometry: ImportedGeometrySource,
@@ -784,9 +843,22 @@ def solve_imported_metal_from_msh_text(
                 "multi-source Metal solver returned a different number of bases than requested"
             )
         sorted_results: dict[str, Any] = {}
+        driver_payloads: dict[str, dict[str, Any]] = {}
         for channel, result in zip(geometry.drive_channels, results, strict=True):
             sort_native_result_frequencies(result)
             sorted_results[channel.id] = result
+            if channel.driver is not None:
+                # Scale before packaging AND before the bases are serialized,
+                # so recombination sees the same voltage-driven fields the
+                # channel contract reports.
+                driver_payloads[channel.id] = _apply_channel_driver(
+                    channel,
+                    result,
+                    record,
+                    source_tags,
+                    drive_voltage_v=geometry.drive_voltage_v,
+                    rg_ohm=geometry.rg_ohm,
+                )
             channel_context = SolverContext.from_imported_request(
                 request, quadrants=quadrants, source_motion=channel.motion
             )
@@ -835,6 +907,26 @@ def solve_imported_metal_from_msh_text(
                 channel_response["metadata"]["impedance_omitted"] = (
                     "multi-source channel: per-patch impedance is not a channel impedance"
                 )
+            driver_payload = driver_payloads.get(channel.id)
+            if driver_payload is not None:
+                electrical = driver_payload.pop("electrical_impedance_ohm")
+                channel_response["impedance"] = {
+                    "frequencies": electrical["frequencies"],
+                    "real": electrical["real"],
+                    "imaginary": electrical["imaginary"],
+                }
+                channel_metadata = channel_response["metadata"]
+                channel_metadata["impedance_units"] = "ohms"
+                channel_metadata["impedance_quantity"] = "electrical_input_impedance"
+                channel_metadata["impedance_drive"] = "voltage"
+                channel_metadata["driver"] = driver_payload
+                channel_metadata["drive"] = {
+                    "voltage_v": geometry.drive_voltage_v,
+                    "rg_ohm": geometry.rg_ohm,
+                }
+                warnings = channel_metadata.setdefault("warnings", [])
+                warnings.extend(driver_payload.get("warnings") or [])
+                channel_metadata["warning_count"] = len(warnings)
             channels[channel.id] = channel_response
     finally:
         if path is not None:

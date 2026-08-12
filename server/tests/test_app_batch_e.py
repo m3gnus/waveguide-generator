@@ -154,8 +154,9 @@ def test_pins_preserve_oracle_inventory_and_render_deterministically(tmp_path: P
     oracle = json.loads(ORACLE.read_text(encoding="utf-8"))["module_pins"]
     # The oracle records the exact dependency constellation used for the
     # historical parity capture. Current release pins may advance after that
-    # evidence is frozen, but the owned module inventory must stay complete.
-    assert set(pins) == set(oracle)
+    # evidence is frozen — and new owned modules may join (hornlab-sim,
+    # Phase 3) — but no module from the capture may silently leave the pins.
+    assert set(oracle) <= set(pins)
 
     first = tmp_path / "first.txt"
     second = tmp_path / "second.txt"

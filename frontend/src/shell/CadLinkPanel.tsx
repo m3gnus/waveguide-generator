@@ -8,10 +8,16 @@ import { usePreferences, type CadApplication } from '../prefs/preferences';
 import {
   acknowledgedFindingWire,
   blockingFindings,
+  channelDriverWire,
   combineChain,
+  combineLevelMatchDefault,
   combineWire,
+  DRIVER_REQUIRED_KEYS,
   unacknowledgedBlocking,
   useCadReturnStore,
+  type CadDriveChannel,
+  type ChannelDriverForm,
+  type DriverFieldKey,
 } from '../stores/cadReturn';
 import { parseFrequencyList, useSolveOptionsStore } from '../stores/solveOptions';
 import { createImportedMeshScene } from '../viewport/importedMesh';
@@ -221,6 +227,43 @@ async function showIngestedMeshInViewport(ingestId: string, name: string): Promi
   }
 }
 
+const DRIVER_FIELD_LABELS: ReadonlyArray<{ key: DriverFieldKey; label: string; unit: string; step: number }> = [
+  { key: 'sd_cm2', label: 'Sd', unit: 'cm²', step: 5 },
+  { key: 'bl_t_m', label: 'Bl', unit: 'T·m', step: 0.5 },
+  { key: 're_ohm', label: 'Re', unit: 'Ω', step: 0.1 },
+  { key: 'le_mh', label: 'Le', unit: 'mH', step: 0.05 },
+  { key: 'mmd_g', label: 'Mmd', unit: 'g', step: 1 },
+  { key: 'cms_m_per_n', label: 'Cms', unit: 'm/N', step: 0.0001 },
+  { key: 'rms_kg_per_s', label: 'Rms', unit: 'kg/s', step: 0.1 },
+  { key: 'xmax_mm', label: 'Xmax', unit: 'mm', step: 0.5 },
+  { key: 'count', label: 'Count', unit: '', step: 1 },
+  { key: 'rear_volume_l', label: 'Rear vol', unit: 'L', step: 0.5 },
+];
+
+/** Hornresp-unit T/S entry for one drive channel. Plain inputs on purpose:
+ * an empty field means "not provided", which NumberField cannot express. */
+function DriverFields({ channel, form, onField }: {
+  channel: CadDriveChannel;
+  form: ChannelDriverForm | undefined;
+  onField: (field: DriverFieldKey, value: number | null) => void;
+}) {
+  const missing = DRIVER_REQUIRED_KEYS.filter((key) => form?.fields[key] === undefined);
+  return <div className="cad-driver-grid">
+    {DRIVER_FIELD_LABELS.map(({ key, label, unit, step }) => <label key={key} className="cad-driver-field">
+      <span>{label}{unit ? ` (${unit})` : ''}{DRIVER_REQUIRED_KEYS.includes(key) ? ' *' : ''}</span>
+      <input
+        type="number"
+        min={0}
+        step={step}
+        value={form?.fields[key] ?? ''}
+        aria-label={`${label} for ${channel.id}`}
+        onChange={(event) => onField(key, event.target.value === '' ? null : Number(event.target.value))}
+      />
+    </label>)}
+    {missing.length > 0 && <p className="cad-driver-hint">Required: {missing.map((key) => DRIVER_FIELD_LABELS.find((item) => item.key === key)?.label ?? key).join(', ')}. The channel solves as a unit-drive basis until they are set. Vas/Fs/Qms alternatives are accepted through the API.</p>}
+  </div>;
+}
+
 const POLAR_AXIS_ORDER = ['horizontal', 'vertical', 'diagonal'] as const;
 
 /** The ingestion record's derivation may be widened but never narrowed, so the
@@ -275,7 +318,13 @@ export function buildImportedSubmission(
       ingest_id: record.ingest_id,
       manifest_sha256: record.manifest_sha256,
       artifact_sha256: record.artifact_sha256,
-      drive_channels: state.driveChannels.map((channel) => ({ ...channel, source_ids: [...channel.source_ids] })),
+      drive_channels: state.driveChannels.map((channel) => {
+        const driver = channelDriverWire(state.channelDrivers[channel.id]);
+        return { ...channel, source_ids: [...channel.source_ids], ...(driver ? { driver } : {}) };
+      }),
+      ...(state.driveChannels.some((channel) => channelDriverWire(state.channelDrivers[channel.id]))
+        ? { drive_voltage_v: state.driveVoltageV }
+        : {}),
       mesh: {
         rigid_size_mm: state.rigidSizeMm,
         transition_mm: state.transitionMm,
@@ -579,10 +628,23 @@ export function CadLinkPanel() {
             const channel = state.driveChannels.find((item) => item.source_ids.includes(source.id));
             return <div className="cad-channel-row" key={source.id}><b>{source.id}</b><select aria-label={`Drive channel for ${source.id}`} value={channel?.id ?? ''} onChange={(event) => state.setSourceChannel(source.id, event.target.value)}>{channelIds.map((id) => <option value={id} key={id}>{id}</option>)}</select></div>;
           })}
-          {state.driveChannels.map((channel) => <div className="cad-channel-summary" key={channel.id}><span>{channel.id} · {channel.source_ids.join(' + ')}</span><select aria-label={`Motion for ${channel.id}`} value={channel.motion} onChange={(event) => state.setChannelMotion(channel.id, event.target.value as 'normal' | 'axial')}><option value="normal">Normal motion</option><option value="axial">Axial motion</option></select></div>)}
+          {state.driveChannels.map((channel) => {
+            const driverForm = state.channelDrivers[channel.id];
+            const driverEligible = channel.source_ids.length === 1 && channel.motion === 'normal';
+            return <div key={channel.id}>
+              <div className="cad-channel-summary"><span>{channel.id} · {channel.source_ids.join(' + ')}</span><select aria-label={`Motion for ${channel.id}`} value={channel.motion} onChange={(event) => state.setChannelMotion(channel.id, event.target.value as 'normal' | 'axial')}><option value="normal">Normal motion</option><option value="axial">Axial motion</option></select></div>
+              {driverEligible
+                ? <ToggleRow id={`cad-driver-${channel.id}`} label={`Driver T/S · ${channel.id}`} help="Voltage-driven Thiele-Small coupling. The channel's levels become absolute at the drive voltage and its impedance chart becomes the electrical input impedance in ohms." checked={driverForm?.enabled ?? false} onChange={(checked) => state.setChannelDriverEnabled(channel.id, checked)}/>
+                : null}
+              {driverEligible && driverForm?.enabled && <DriverFields channel={channel} form={driverForm} onField={(field, value) => state.setChannelDriverField(channel.id, field, value)}/>}
+            </div>;
+          })}
+          {state.driveChannels.some((channel) => state.channelDrivers[channel.id]?.enabled)
+            && <NumberField label="Drive voltage" unit="V" value={state.driveVoltageV} min={0.01} step={0.1} precision={2} description="RMS voltage applied to every driver channel (2.83 V ≈ 1 W into 8 Ω)" onCommit={state.setDriveVoltage}/>}
           {state.driveChannels.length >= 2 && <>
             <ToggleRow id="cad-combine" label="Combined output (LR4 sum)" help="Append a time-aligned LR4 crossover sum of the drive channels as one more result channel. The chain runs lowest band first, ordered by the sources' return roles (LF → MF → HF)." checked={state.combineEnabled} onChange={state.setCombineEnabled}/>
             {state.combineEnabled && combineChain(state).map((pair) => <NumberField key={pair.key} label={`${pair.lower} → ${pair.upper}`} unit="Hz" value={pair.hz} min={1} step={50} precision={0} description="Crossover between adjacent channels" onCommit={(value) => state.setCombineCrossover(pair.key, value)}/>)}
+            {state.combineEnabled && <ToggleRow id="cad-combine-level" label="Level match members" help="Equalise member band levels before summing. Defaults off when every member carries a driver model — real voltage-driven levels should not be re-equalised." checked={state.combineLevelMatch ?? combineLevelMatchDefault(state)} onChange={state.setCombineLevelMatch}/>}
           </>}
         </section>
         <section className="cad-section">

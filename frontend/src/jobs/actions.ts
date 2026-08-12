@@ -16,7 +16,12 @@ export interface ImportedGeometrySubmission {
   ingest_id: string;
   manifest_sha256: string;
   artifact_sha256: string;
-  drive_channels: Array<{ id: string; source_ids: string[]; motion: 'normal' | 'axial' }>;
+  drive_channels: Array<{
+    id: string;
+    source_ids: string[];
+    motion: 'normal' | 'axial';
+    driver?: Record<string, number>;
+  }>;
   combine?: {
     id?: string;
     members: string[];
@@ -24,6 +29,8 @@ export interface ImportedGeometrySubmission {
     level_match?: boolean;
     align?: boolean;
   };
+  drive_voltage_v?: number;
+  rg_ohm?: number;
   mesh: { rigid_size_mm: number; transition_mm: number; source_size_mm: Record<string, number> };
   acknowledged_findings: string[];
   skipped_source_ids: string[];
