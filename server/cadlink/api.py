@@ -11,10 +11,12 @@ import re
 from typing import Any
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from server.cadlink.identity import SaveIdentity, design_hash
 from server.design.schema import DesignConfig
+from server.mesh.artifact import ImportedMeshArtifactError, read_verified_import_mesh
 from server.mesh.gmsh_worker import run_on_gmsh_worker
 from server.workspace.api import WorkspaceState, _path_segments, _strictly_inside
 
@@ -338,6 +340,23 @@ async def get_ingest(ingest_id: str, request: Request) -> dict[str, Any]:
     if record is None:
         raise HTTPException(status_code=404, detail=f"Unknown ingestion record {ingest_id}")
     return record
+
+
+@router.get("/ingest/{ingest_id}/mesh", response_class=PlainTextResponse)
+async def get_ingest_mesh(ingest_id: str, request: Request) -> PlainTextResponse:
+    """Serve the ingested solve mesh so the viewport can show the CAD model."""
+
+    if _INGEST_ID.fullmatch(ingest_id) is None:
+        raise HTTPException(status_code=422, detail="ingest_id must be a wgi_ ULID")
+    store: CadLinkStore = request.app.state.cadlink_store
+    record = await asyncio.to_thread(get_ingestion_record, store, ingest_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Unknown ingestion record {ingest_id}")
+    try:
+        msh_text = await asyncio.to_thread(read_verified_import_mesh, record)
+    except ImportedMeshArtifactError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return PlainTextResponse(msh_text, media_type="text/plain; charset=utf-8")
 
 
 def mount_cadlink(application: FastAPI) -> None:

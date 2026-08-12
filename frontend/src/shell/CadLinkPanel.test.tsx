@@ -299,6 +299,8 @@ describe('CadLinkPanel', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       if (String(input).endsWith('/returns')) return json(listing);
       if (String(input).endsWith('/fusion-status')) return json(closedFusion);
+      // The advisory viewport-mesh fetch after each ingest is not an ingest.
+      if (String(input).endsWith('/mesh')) return new Response('missing', { status: 404 });
       ingestCount += 1;
       const next = {
         ...record,

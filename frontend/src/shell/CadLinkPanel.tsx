@@ -14,6 +14,9 @@ import {
   useCadReturnStore,
 } from '../stores/cadReturn';
 import { parseFrequencyList, useSolveOptionsStore } from '../stores/solveOptions';
+import { createImportedMeshScene } from '../viewport/importedMesh';
+import { importedMeshStore } from '../viewport/importedMeshStore';
+import { parseMSH } from '../viewport/mshParser';
 import { useDesignStore } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
 import { filenameStem } from '../viewport/presentation';
@@ -203,6 +206,19 @@ function RecordSummary({ record }: { record: CadReturnIngestRecord }) {
       {Object.entries(record.polar_grid_derivation).map(([key, value]) => <div className="cad-row" key={key}><b>{key.replaceAll('_', ' ')}</b><span>{compactValue(value)}</span></div>)}
     </section>
   </>;
+}
+
+/** Show the ingested solve mesh in the viewport: in CAD Link mode the model
+ * being solved is the CAD return, not the parametric preview. Advisory — a
+ * failure leaves the viewport as it was rather than blocking the ingest. */
+async function showIngestedMeshInViewport(ingestId: string, name: string): Promise<void> {
+  try {
+    const response = await fetch(`/api/cadlink/ingest/${encodeURIComponent(ingestId)}/mesh`);
+    if (!response.ok) return;
+    importedMeshStore.set(createImportedMeshScene(name, parseMSH(await response.text())));
+  } catch {
+    // The viewport keeps whatever it was showing.
+  }
 }
 
 const POLAR_AXIS_ORDER = ['horizontal', 'vertical', 'diagonal'] as const;
@@ -407,6 +423,7 @@ export function CadLinkPanel() {
       });
       current.applyIngest(record);
       setStatus(`Ingested ${record.ingest_id}. Review the verdicts before solving.`);
+      void showIngestedMeshInViewport(record.ingest_id, current.selectedBundle.documentName || current.selectedBundle.name);
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : String(reason);
       const structured = reason instanceof CadLinkApiError ? reason.areaDriftSources : [];
