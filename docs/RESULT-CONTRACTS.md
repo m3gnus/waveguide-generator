@@ -28,8 +28,19 @@ same version-1 response objects:
 `channels` is keyed only by the request's stable `drive_channel_id` and
 `channel_order` preserves request order. A channel explicitly groups one or more
 source IDs; their physical-tag velocities are summed into that channel's one
-unit-drive basis. There is no crossover, delay, LEM, or channel summation in this
-contract. Physical integers are artifact-local and never result addresses.
+unit-drive basis. Physical integers are artifact-local and never result addresses.
+
+A request may additionally carry `geometry.combine` (CAD-LINK-PHASE3.md): an LR4
+time-aligned sum of named member channels. The summed response is appended to
+`channels`/`channel_order` as one more contract-identical v1 object, computed at
+solve time from the members' complex fields (so its DI, balloon, and beam shape
+are field-accurate, not dB-domain approximations). Its metadata carries
+`derived_from_channels`, a `combine` payload (`type: "lr4_time_aligned_sum"`,
+members, crossovers, per-member `delays_ms`/`gains_db`, warnings, and the weight
+convention: weights are engineering `e^{+jωt}` objects applied to `exp(+ikr)`
+solver fields as complex conjugates), and `impedance_omitted`. The combined
+channel appears only in final results, never in provisional streams — alignment
+needs the full solved band. There is no driver LEM in this contract yet.
 For a channel containing more than one source ID, `impedance` is omitted because
 the native value belongs to one source patch rather than to the grouped channel;
 the channel metadata carries `impedance_omitted: "multi-source channel: per-patch

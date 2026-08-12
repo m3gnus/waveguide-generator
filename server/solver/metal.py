@@ -22,6 +22,7 @@ from server.jobs.models import ImportedGeometrySource, SolveRequest
 from server.mesh.builder import _solver_mesher_config, build_solver_mesh
 
 from .acoustics import solver_sound_speed_m_per_s
+from .combine import combine_drive_channels
 from .base import (
     ArtifactCallback,
     CancelCallback,
@@ -514,6 +515,93 @@ def _imported_validity_metadata(record: Mapping[str, Any]) -> dict[str, Any]:
     return per_source
 
 
+def _combined_channel_response(
+    *,
+    geometry: ImportedGeometrySource,
+    sorted_results: Mapping[str, Any],
+    request: SolveRequest,
+    quadrants: int,
+    config: Any,
+    config_motion: str,
+    started: float,
+    status: Mapping[str, Any],
+    kwargs: Mapping[str, Any],
+    per_source_validity: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Package the LR4 time-aligned sum as one more contract-shaped channel."""
+
+    spec = geometry.combine
+    assert spec is not None
+    channels_by_id = {channel.id: channel for channel in geometry.drive_channels}
+    member_validity_hz: dict[str, float] = {}
+    for member in spec.members:
+        limits = [
+            float(item["effective_max_valid_frequency_hz"])
+            for source_id in channels_by_id[member].source_ids
+            if isinstance(item := per_source_validity.get(source_id), Mapping)
+            and item.get("effective_max_valid_frequency_hz") is not None
+        ]
+        if limits:
+            member_validity_hz[member] = min(limits)
+
+    combined_result, combine_payload = combine_drive_channels(
+        sorted_results,
+        members=list(spec.members),
+        crossovers_hz=list(spec.crossovers_hz),
+        level_match=spec.level_match,
+        align=spec.align,
+        member_validity_hz=member_validity_hz,
+    )
+    source_ids = [
+        source_id
+        for member in spec.members
+        for source_id in channels_by_id[member].source_ids
+    ]
+    metadata = {
+        "solver_backend": "metal",
+        "solver_mode": "full_3d",
+        "geometry_type": "imported",
+        "drive_channel_id": spec.id,
+        "derived_from_channels": list(spec.members),
+        "source_ids": source_ids,
+        "device_interface": {"selected": "metal", "metal": dict(status)},
+        "engine": "hornlab-metal-bem",
+        "phase_time_convention": "exp(+ikr)",
+        "combine": combine_payload,
+        "mesh_validation": {
+            "mode": request.options.mesh_validation_mode,
+            "backend": "hornlab-metal-bem",
+        },
+        "performance": {"total_time_seconds": time.time() - started},
+        "metal": {
+            "solver_mode": "full_3d",
+            "native_symmetry_plane": kwargs["native_symmetry_plane"],
+            "native_check_open_edges": False,
+            "formulation": kwargs["formulation"],
+            "complex_k_shift": kwargs["complex_k_shift"],
+            "solver_log": json_safe_native_value(
+                response_solver_log(getattr(combined_result, "solver_log", []))
+            ),
+        },
+    }
+    context = SolverContext.from_imported_request(
+        request, quadrants=quadrants, source_motion=config_motion
+    )
+    response = build_solver_response(
+        result=combined_result,
+        config=config,
+        context=context,
+        start_time=started,
+        metadata=metadata,
+        sound_speed_m_per_s=solver_sound_speed_m_per_s("hornlab_metal_bem"),
+    )
+    response.pop("impedance", None)
+    response["metadata"]["impedance_omitted"] = (
+        "combined channel: member drives differ; no single impedance exists"
+    )
+    return response
+
+
 def solve_imported_metal_from_msh_text(
     msh_text: str,
     request: SolveRequest,
@@ -695,8 +783,10 @@ def solve_imported_metal_from_msh_text(
             raise ValueError(
                 "multi-source Metal solver returned a different number of bases than requested"
             )
+        sorted_results: dict[str, Any] = {}
         for channel, result in zip(geometry.drive_channels, results, strict=True):
             sort_native_result_frequencies(result)
+            sorted_results[channel.id] = result
             channel_context = SolverContext.from_imported_request(
                 request, quadrants=quadrants, source_motion=channel.motion
             )
@@ -758,6 +848,21 @@ def solve_imported_metal_from_msh_text(
         stage_callback("finalizing", 1.0, "Packaging imported drive-channel bases")
 
     per_source_validity = _imported_validity_metadata(record)
+    if geometry.combine is not None:
+        combined_response = _combined_channel_response(
+            geometry=geometry,
+            sorted_results=sorted_results,
+            request=request,
+            quadrants=quadrants,
+            config=config,
+            config_motion=config_motion,
+            started=started,
+            status=status,
+            kwargs=kwargs,
+            per_source_validity=per_source_validity,
+        )
+        channels[geometry.combine.id] = combined_response
+        channel_order.append(geometry.combine.id)
     global_caveat = global_frequency_caveat(request, record)
     fem_volumes = (
         (record.get("evidence") or {}).get("fem_air_volumes")
