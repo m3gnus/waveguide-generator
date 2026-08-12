@@ -125,6 +125,7 @@ interface EventMessage {
 }
 
 const OPEN = 1;
+const MAX_JOB_REFRESH_ATTEMPTS = 3;
 const defaultFactory: JobsWebSocketFactory = (url) => new WebSocket(url) as unknown as JobsWebSocketLike;
 const defaultFetch: JobsFetch = (input, init) => fetch(input, init);
 
@@ -158,6 +159,7 @@ export class JobsSocketManager {
   private readonly jobMutationVersions = new Map<string, number>();
   private gapTargetCursor: number | null = null;
   private readonly jobGenerations = new Map<string, number>();
+  private readonly jobRefreshes = new Map<string, Promise<void>>();
   private readonly ratingMutations = new Map<string, {
     tail: Promise<void>;
     token: number;
@@ -478,29 +480,46 @@ export class JobsSocketManager {
     }
   }
 
-  private async refreshJob(jobId: string): Promise<void> {
+  private refreshJob(jobId: string): Promise<void> {
+    const existing = this.jobRefreshes.get(jobId);
+    if (existing) return existing;
+
     const generation = this.nextJobGeneration(jobId);
-    const mutationBaseline = this.jobMutationVersions.get(jobId) ?? 0;
-    try {
-      const response = await this.fetcher(`/api/status/${encodeURIComponent(jobId)}`);
-      if (this.jobGenerations.get(jobId) !== generation
-        || (this.jobMutationVersions.get(jobId) ?? 0) > mutationBaseline) return;
-      if (response.status === 404) {
-        this.invalidateJob(jobId);
+    const refresh = this.refreshJobUntilStable(jobId, generation);
+    this.jobRefreshes.set(jobId, refresh);
+    const clearRefresh = () => {
+      if (this.jobRefreshes.get(jobId) === refresh) this.jobRefreshes.delete(jobId);
+    };
+    void refresh.then(clearRefresh, clearRefresh);
+    return refresh;
+  }
+
+  private async refreshJobUntilStable(jobId: string, generation: number): Promise<void> {
+    for (let attempt = 0; attempt < MAX_JOB_REFRESH_ATTEMPTS; attempt += 1) {
+      const mutationBaseline = this.jobMutationVersions.get(jobId) ?? 0;
+      try {
+        const response = await this.fetcher(`/api/status/${encodeURIComponent(jobId)}`);
+        if (this.jobGenerations.get(jobId) !== generation) return;
+        if ((this.jobMutationVersions.get(jobId) ?? 0) > mutationBaseline) continue;
+        if (response.status === 404) {
+          this.invalidateJob(jobId);
+          this.markJobMutation(jobId);
+          this.update({ jobs: this.snapshot.jobs.filter((job) => job.id !== jobId) });
+          return;
+        }
+        if (!response.ok) throw await responseError(response);
+        const job = await response.json() as JobItem;
+        if (this.jobGenerations.get(jobId) !== generation) return;
+        if ((this.jobMutationVersions.get(jobId) ?? 0) > mutationBaseline) continue;
         this.markJobMutation(jobId);
-        this.update({ jobs: this.snapshot.jobs.filter((job) => job.id !== jobId) });
+        const jobs = this.snapshot.jobs.filter((item) => item.id !== job.id);
+        this.update({ jobs: this.sortJobs([...jobs, job]), error: null });
+        return;
+      } catch (error) {
+        if (this.jobGenerations.get(jobId) !== generation) return;
+        this.update({ error: error instanceof Error ? error.message : String(error) });
         return;
       }
-      if (!response.ok) throw await responseError(response);
-      const job = await response.json() as JobItem;
-      if (this.jobGenerations.get(jobId) !== generation
-        || (this.jobMutationVersions.get(jobId) ?? 0) > mutationBaseline) return;
-      this.markJobMutation(jobId);
-      const jobs = this.snapshot.jobs.filter((item) => item.id !== job.id);
-      this.update({ jobs: this.sortJobs([...jobs, job]), error: null });
-    } catch (error) {
-      if (this.jobGenerations.get(jobId) !== generation) return;
-      this.update({ error: error instanceof Error ? error.message : String(error) });
     }
   }
 
