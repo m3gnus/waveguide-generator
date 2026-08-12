@@ -140,13 +140,14 @@
   --border-strong: #4a453d;
   --focus-ring: rgba(224,103,63,.85);
   --focus-halo: rgba(224,103,63,.20);
-  /* Control widths. Two, and only two: a value box sized to the widest real
-     reading ('140.00 mm'), and a wide box for the things that genuinely need
-     it -- a select whose option names are the point, a text field, an ATH
-     formula. Anything picking its own number is how 'Sweep start' ended up
-     86px in one section of the rail and 132px in the next. */
-  --field-w: 86px;
-  --field-w-wide: 132px;
+  /* One control column, not two. Every control on a parameter row -- number
+     box, select, text field -- is this wide, so the rail has a single edge
+     running down the left of its controls instead of a value box that stops
+     46px short of the select above it. The width is the select's, because a
+     select has to show option names and a number box only has to show a
+     number. Anything picking its own width is how 'Sweep start' ended up 86px
+     in one section of the rail and 132px in the next. */
+  --field-w: 132px;
   --control-h: 32px;
   --control-h-sm: 28px;
   --r: 0px;

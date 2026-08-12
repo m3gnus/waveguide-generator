@@ -216,7 +216,7 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .section-body { padding: 1px 8px 8px; }
 .select-row { display: flex; align-items: center; gap: 8px; height: 24px; margin-bottom: 2px; }
 .select-row label { flex: 1; color: var(--fg1); font-size: var(--text-base); }
-.select-row select, .static-select { width: var(--field-w-wide); height: 21px; padding: 0 6px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg); font-size: var(--text-micro); }
+.select-row select, .static-select { width: var(--field-w); height: 21px; padding: 0 6px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg); font-size: var(--text-micro); }
 .select-row select { appearance: auto; }
 .static-select { display: flex; align-items: center; justify-content: space-between; }
 /* Wraps so a validation message can take a line of its own beneath the row it
@@ -770,8 +770,7 @@ textarea:disabled { opacity: .48; }
 .select-row select,
 .static-select { height: var(--control-h-sm); border: 0; border-bottom: 1px solid var(--border-default); border-radius: var(--r3); background: var(--surface-raised); box-shadow: none; font-size: var(--text-base); }
 .field-row { min-height: 30px; }
-/* Sized to the widest realistic reading ("140.00 mm") rather than rounded up,
-   which hands the difference back to the parameter labels beside it. */
+/* Width comes from --field-w, the one control column the selects also take. */
 .number-control { height: var(--field-h); width: var(--field-w); padding-inline: 6px; border: 0; border-bottom: 1px solid var(--border-default); border-radius: var(--r3); background: var(--surface-raised); box-shadow: none; }
 .number-control input { font-size: var(--text-base); }
 .unit { font-size: var(--text-micro); }

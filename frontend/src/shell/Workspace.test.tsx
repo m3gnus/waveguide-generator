@@ -89,7 +89,7 @@ describe('Workspace', () => {
     addDefaultLayout(measured as never, sized(1200, 800));
     expect(measured.layout).toHaveBeenCalledWith(1200, 800);
     const columns = (measured.fromJSON.mock.calls[0][0] as SerializedDockview).grid.root.data as Array<{ size: number }>;
-    expect(columns.map((column) => column.size)).toEqual([300, 580, 320]);
+    expect(columns.map((column) => column.size)).toEqual([346, 534, 320]);
 
     // An unmeasurable host falls back to the window rather than a fixed guess,
     // so the pinned side panels are not scaled to someone else's screen.
@@ -102,7 +102,7 @@ describe('Workspace', () => {
     addDefaultLayout(settling as never, sized(10, 100));
     expect(settling.layout).toHaveBeenCalledWith(...windowSize);
     const settlingColumns = (settling.fromJSON.mock.calls[0][0] as SerializedDockview).grid.root.data as Array<{ size: number }>;
-    expect(settlingColumns.map((column) => column.size)).toEqual([280, windowSize[0] - 280]);
+    expect(settlingColumns.map((column) => column.size)).toEqual([326, windowSize[0] - 326]);
   });
 
   it('corrects the dock when the host reports a size the mount-time read could not', () => {
@@ -151,9 +151,9 @@ describe('Workspace', () => {
   });
 
   it('seeds an unmeasurable dock from the window, not a fixed guess', () => {
-    // The seed pins the 300px/320px side panels to whatever size it is handed,
+    // The seed pins the 346px/320px side panels to whatever size it is handed,
     // and later resizes scale the dock rather than rebuild it — so a fixed
-    // 1440x900 guess would leave a 300px panel at 533px on a 2560px monitor.
+    // 1440x900 guess would leave a 346px panel at 615px on a 2560px monitor.
     expect(seedSize([1268, 640])).toEqual([1268, 640]);
     expect(seedSize([10, 100])).toEqual([window.innerWidth, window.innerHeight - 84]);
     expect(isTrustworthySize([10, 100])).toBe(false);
@@ -229,7 +229,7 @@ describe('Workspace', () => {
                     "simulation",
                   ],
                 },
-                "size": 300,
+                "size": 346,
                 "type": "leaf",
               },
               {
@@ -257,7 +257,7 @@ describe('Workspace', () => {
                     "type": "leaf",
                   },
                 ],
-                "size": 820,
+                "size": 774,
                 "type": "branch",
               },
               {
@@ -328,7 +328,7 @@ describe('Workspace', () => {
     const medium = createDefaultLayout(960, 700);
     expect(medium.grid.root.type).toBe('branch');
     const columns = medium.grid.root.data as Array<{ data: unknown; size: number }>;
-    expect(columns.map((column) => column.size)).toEqual([280, 680]);
+    expect(columns.map((column) => column.size)).toEqual([326, 634]);
     const analysis = (columns[1].data as Array<{ data: { views: string[] } }>)[1];
     expect(analysis.data.views).toEqual(['results', 'jobs', 'cadlink']);
   });
@@ -338,7 +338,7 @@ describe('Workspace', () => {
     const columns = layout.grid.root.data as Array<{ size?: number; data: unknown }>;
     const center = columns[1].data as Array<{ size?: number }>;
     const resultsHeight = Math.min(340, Math.max(240, Math.round(height * .38)));
-    expect(columns.map((column) => column.size)).toEqual([300, width - 620, 320]);
+    expect(columns.map((column) => column.size)).toEqual([346, width - 666, 320]);
     expect(center.map((row) => row.size)).toEqual([height - resultsHeight, resultsHeight]);
     expect(layout.grid.width).toBe(width);
   });
