@@ -6,7 +6,7 @@
 .cad-status-strip { border-color: var(--hair); background: var(--ov1); color: var(--fg2); }
 .cad-bundle-list { display: grid; gap: 4px; margin: 7px 0; }
 .cad-bundle-list > button { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1px 8px; width: 100%; padding: 7px; text-align: left; border: 1px solid var(--hair); background: var(--surface-panel); }
-.cad-bundle-list > button.selected { border-color: var(--acc); background: var(--ov1); }
+.cad-bundle-list > button.selected { border-color: var(--inv-bg); background: var(--ov2); }
 .cad-bundle-list b { overflow: hidden; text-overflow: ellipsis; }
 .cad-bundle-list span, .cad-bundle-list time, .cad-section p, .cad-detail { color: var(--fg3); font-size: var(--text-micro); }
 .cad-bundle-list time { grid-column: 2; grid-row: 1 / span 2; align-self: center; }
