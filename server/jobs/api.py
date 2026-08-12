@@ -181,6 +181,8 @@ def create_jobs_router(
             await runtime.patch_metadata(job_id, fields)
         except JobNotFoundError as exc:
             raise HTTPException(status_code=404, detail="Job not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         return MetadataResponse(status="ok")
 
     @router.delete("/api/jobs/clear-failed", response_model=ClearFailedResponse)
