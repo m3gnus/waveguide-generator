@@ -18,7 +18,10 @@
 .disabled-reason, .lambda-hint { margin: -1px 0 2px; color: var(--fg4); font-size: var(--text-micro); line-height: 1.3; }
 .lambda-hint.warning { color: var(--amber); }
 .param-text-row > input { width: var(--field-w-wide); height: 21px; padding: 0 6px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg); font: var(--text-micro) var(--mono); }
-.number-control.expression { width: var(--field-w-wide); border-color: rgba(var(--acc-rgb), .25); }
+/* Tint only. A field that holds a formula is always on an `.expression-row`,
+   which gives it the full width of the rail below; a width here could only ever
+   have applied to a numeric raw, which is an ordinary field and sized like one. */
+.number-control.expression { border-color: rgba(var(--acc-rgb), .25); }
 .expr-value { color: var(--green); font: var(--text-micro) var(--mono); }
 
 /* A field holding an ATH formula gets its own full-width line: the label and
