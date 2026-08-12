@@ -81,7 +81,7 @@ describe('solve invocation mutex', () => {
     host = document.createElement('div');
     document.body.append(host);
     root = createRoot(host);
-    await act(async () => { root.render(<JobsCoordinator><span>ready</span></JobsCoordinator>); });
+    await act(async () => { root.render(<JobsCoordinator now={() => new Date(2026, 7, 12, 12)}><span>ready</span></JobsCoordinator>); });
   });
 
   afterEach(() => {
@@ -135,6 +135,20 @@ describe('solve invocation mutex', () => {
     await act(async () => { await jobsCoordinatorBridge.getSnapshot().run(changed); });
 
     expect(mocks.submitDesign.mock.calls.map((call) => call[3].label)).toEqual(['horn', 'horn2', 'horn2']);
+  });
+
+  it('increments the core while suffix dates decorate only submitted labels', async () => {
+    mocks.submitDesign.mockResolvedValue('job');
+    preferencesStore.update({ runNameDatePosition: 'suffix' });
+    const design = designForFamily('OSSE');
+
+    await act(async () => { await jobsCoordinatorBridge.getSnapshot().run(design); });
+    const changed = structuredClone(design);
+    changed.simulation.f2 += 1_000;
+    await act(async () => { await jobsCoordinatorBridge.getSnapshot().run(changed); });
+
+    expect(mocks.submitDesign.mock.calls.map((call) => call[3].label)).toEqual(['horn_260812', 'horn2_260812']);
+    expect(preferencesStore.getSnapshot().outputName).toBe('horn2');
   });
 
   it('releases the guard after a rejected submission', async () => {

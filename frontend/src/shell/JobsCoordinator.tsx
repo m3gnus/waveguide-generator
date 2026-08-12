@@ -6,7 +6,7 @@ import { useCapabilities, useCapabilityRefreshOnReconnect } from '../jobs/useCap
 import { JobAutomation } from '../jobs/automation';
 import { hydrateJobDesign } from '../jobs/jobDesign';
 import { exportStemForJob } from '../jobs/exportNaming';
-import { nextRunName } from '../jobs/runNaming';
+import { decorateRunName, nextRunName } from '../jobs/runNaming';
 import { projectSubmittedDesign, type SubmittedDesignProjection } from '../jobs/submittedProjection';
 import { preferencesStore, usePreferences } from '../prefs/preferences';
 import { downloadMeshArtifact, runExportBundle } from '../results/exporters';
@@ -66,21 +66,25 @@ export function currentJobLabel(
   design = useDesignStore.getState().design,
   options = useSolveOptionsStore.getState().options(),
   filename = useDocumentStore.getState().filename,
+  now = new Date(),
 ): string {
-  return nextRunName(
-    preferencesStore.getSnapshot(),
+  const preferences = preferencesStore.getSnapshot();
+  return decorateRunName(nextRunName(
+    preferences,
     projectSubmittedDesign(design, options),
     filename,
-  );
+  ), preferences, now);
 }
 
-function acceptSubmittedName(label: string, projection: SubmittedDesignProjection): void {
-  preferencesStore.update({ outputName: label, nameSourceProjection: projection });
+function acceptSubmittedName(coreName: string, projection: SubmittedDesignProjection): void {
+  preferencesStore.update({ outputName: coreName, nameSourceProjection: projection });
 }
 
 const jobsConnection = () => jobsSocket.getSnapshot().connection;
 
-export function JobsCoordinator({ children }: { children: ReactNode }) {
+const systemNow = () => new Date();
+
+export function JobsCoordinator({ children, now = systemNow }: { children: ReactNode; now?: () => Date }) {
   const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
   // This component owns the jobs socket, so it is where a reconnect is visible.
   useCapabilityRefreshOnReconnect(useSyncExternalStore(jobsSocket.subscribe, jobsConnection, jobsConnection));
@@ -112,20 +116,22 @@ export function JobsCoordinator({ children }: { children: ReactNode }) {
       setActionError(null);
       const options = useSolveOptionsStore.getState().options();
       const projection = projectSubmittedDesign(nextDesign, options);
-      const label = nextRunName(preferencesStore.getSnapshot(), projection, filename);
+      const naming = preferencesStore.getSnapshot();
+      const coreName = nextRunName(naming, projection, filename);
+      const label = decorateRunName(coreName, naming, now());
       await submitDesign(
         nextDesign,
         options,
         fetch,
         { label, designRevision: nextRevision },
       );
-      acceptSubmittedName(label, projection);
+      acceptSubmittedName(coreName, projection);
       await jobsSocket.refresh();
     } finally {
       submissionInFlight.current = false;
       setSubmitting(false);
     }
-  }, [capability, capabilityError, filename, preferences, revision, selectedEngine]);
+  }, [capability, capabilityError, filename, now, preferences, revision, selectedEngine]);
 
   const runImported = useCallback(async (submission: ImportedSolveSubmission) => {
     if (submissionInFlight.current) return;
@@ -137,19 +143,21 @@ export function JobsCoordinator({ children }: { children: ReactNode }) {
       setActionError(null);
       const options: SolveOptions = { ...submission.options, engine: 'metal', symmetry: 'auto' };
       const projection = projectSubmittedDesign(design, options);
-      const label = nextRunName(preferencesStore.getSnapshot(), projection, filename);
+      const naming = preferencesStore.getSnapshot();
+      const coreName = nextRunName(naming, projection, filename);
+      const label = decorateRunName(coreName, naming, now());
       await submitImported(
         { ...submission, options },
         fetch,
         label,
       );
-      acceptSubmittedName(label, projection);
+      acceptSubmittedName(coreName, projection);
       await jobsSocket.refresh();
     } finally {
       submissionInFlight.current = false;
       setSubmitting(false);
     }
-  }, [capabilities, capabilityError, design, filename, preferences]);
+  }, [capabilities, capabilityError, design, filename, now, preferences]);
 
   const retry = useCallback(async (jobId: string) => {
     if (submissionInFlight.current) return;

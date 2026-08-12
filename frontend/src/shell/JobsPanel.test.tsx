@@ -8,6 +8,7 @@ import { resetDesignStore, useDesignStore } from '../stores/design';
 import { resetDocumentStore } from '../stores/document';
 import { resetSolveOptionsStore } from '../stores/solveOptions';
 import { JobsPanel, selectJob } from './JobsPanel';
+import { currentJobLabel } from './JobsCoordinator';
 
 const designMocks = vi.hoisted(() => ({ replaceWithJobDesign: vi.fn() }));
 vi.mock('../jobs/jobDesign', () => ({
@@ -247,5 +248,16 @@ describe('jobs panel run list', () => {
 
     act(() => useDesignStore.getState().updateField('R', 141));
     expect(host.querySelector('.run-name-preview')?.textContent).toContain('winner2');
+  });
+
+  it('shows the exact dated label that submission will use while editing only the core', async () => {
+    const now = new Date(2026, 7, 12, 12);
+    preferencesStore.update({ runNameDatePosition: 'prefix' });
+    publishJobs([]);
+    await act(async () => root.render(<JobsPanel namingNow={now}/>));
+
+    expect(host.querySelector<HTMLInputElement>('[aria-label="Run name"]')?.value).toBe('horn');
+    expect(host.querySelector('.run-name-preview')?.textContent)
+      .toBe(`next · ${currentJobLabel(undefined, undefined, undefined, now)}`);
   });
 });

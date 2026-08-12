@@ -4,7 +4,7 @@ import { compareSelection } from '../api/results';
 import { DesignAvailabilityNotice, RerunButton } from '../jobs/DesignAvailability';
 import { canLoadJobDesign, replaceWithJobDesign } from '../jobs/jobDesign';
 import { canExportRun, RunExportControl } from '../jobs/RunExportControl';
-import { nextRunName, runNameFromFilename } from '../jobs/runNaming';
+import { decorateRunName, nextRunName, runNameFromFilename } from '../jobs/runNaming';
 import { projectSubmittedDesign, type SubmittedDesignProjection } from '../jobs/submittedProjection';
 import { applyJobPreferences, preferencesStore, runDisplayName, usePreferences } from '../prefs/preferences';
 import { JobsPreferencesSurface, ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
@@ -214,19 +214,20 @@ function JobCard({ job, now, selected, retryJob, onError, onRemove, onOpenExport
  * the history read `horn_v09 … horn_v14`. The name belongs next to the runs it
  * names, showing the label it will actually store.
  */
-function RunNameField({ preferencesTrigger }: { preferencesTrigger?: ReactNode }) {
+function RunNameField({ preferencesTrigger, now = new Date() }: { preferencesTrigger?: ReactNode; now?: Date }) {
   const preferences = usePreferences();
   const design = useDesignStore((state) => state.design);
   const solveOptions = useSolveOptionsStore();
   const filename = useDocumentStore((state) => state.filename);
   let projection: SubmittedDesignProjection | null = null;
   try { projection = projectSubmittedDesign(design, solveOptions.options()); } catch { /* invalid options cannot be submitted yet */ }
-  const displayedName = projection
+  const displayedCore = projection
     ? nextRunName(preferences, projection, filename)
     : (preferences.nameSourceProjection ? preferences.outputName : runNameFromFilename(filename));
-  const [draft, setDraft] = useState(displayedName);
+  const displayedLabel = decorateRunName(displayedCore, preferences, now);
+  const [draft, setDraft] = useState(displayedCore);
   const [editing, setEditing] = useState(false);
-  useEffect(() => { if (!editing) setDraft(displayedName); }, [displayedName, editing]);
+  useEffect(() => { if (!editing) setDraft(displayedCore); }, [displayedCore, editing]);
   const commit = (value: string) => {
     preferencesStore.update({ outputName: value, nameSourceProjection: projection });
     setEditing(false);
@@ -242,11 +243,11 @@ function RunNameField({ preferencesTrigger }: { preferencesTrigger?: ReactNode }
       onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
     /></label>
     {preferencesTrigger}
-    <span className="run-name-preview" title="The name the next solve is stored under">next · <b>{displayedName}</b></span>
+    <span className="run-name-preview" title="The name the next solve is stored under">next · <b>{displayedLabel}</b></span>
   </div>;
 }
 
-export function JobsPanel() {
+export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {}) {
   const snapshot = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot);
   const selection = useSyncExternalStore(compareSelection.subscribe, compareSelection.getSnapshot, compareSelection.getSnapshot);
   const coordinator = useSyncExternalStore(jobsCoordinatorBridge.subscribe, jobsCoordinatorBridge.getSnapshot, jobsCoordinatorBridge.getSnapshot);
@@ -310,9 +311,14 @@ export function JobsPanel() {
       <span className="spacer"/>
       {failedCount > 0 && <button className="panel-text-action panel-text-action--danger" onClick={clearFailed}>Clear failed</button>}
     </div>}
-    {preferencesOpen && <JobsPreferencesSurface popover anchorRef={preferencesAnchor} onClose={() => setPreferencesOpen(false)}/>}
+    {preferencesOpen && <JobsPreferencesSurface
+      popover
+      anchorRef={preferencesAnchor}
+      onClose={() => setPreferencesOpen(false)}
+      now={namingNow}
+    />}
     {exportPreferencesOpen && <ResultsPreferencesSurface popover anchorRef={preferencesAnchor} onClose={() => setExportPreferencesOpen(false)}/>}
-    <RunNameField preferencesTrigger={<button ref={preferencesAnchor} className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Job preferences" aria-expanded={preferencesOpen} title="Job preferences" onClick={() => { setExportPreferencesOpen(false); setPreferencesOpen((value) => !value); }}><Icon name="settings"/></button>}/>
+    <RunNameField now={namingNow} preferencesTrigger={<button ref={preferencesAnchor} className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Job preferences" aria-expanded={preferencesOpen} title="Job preferences" onClick={() => { setExportPreferencesOpen(false); setPreferencesOpen((value) => !value); }}><Icon name="settings"/></button>}/>
     <div className="jobs-filter"><Icon name="search"/><input aria-label="Filter runs" placeholder="Filter runs" value={query} onChange={(event) => setQuery(event.target.value)}/><button className={`jobs-kept-toggle${preferences.minRating > 0 ? ' on' : ''}`} aria-label="Show kept runs only" aria-pressed={preferences.minRating > 0} title="Show kept runs only" onClick={() => preferencesStore.update({ minRating: preferences.minRating > 0 ? 0 : lastMinimumRating.current })}>★</button></div>
     {(coordinator.actionError || snapshot.error) && <div className="job-error" role="alert" style={{ margin: 7 }}>{coordinator.actionError ?? snapshot.error}</div>}
     {snapshot.jobs.length === 0 && snapshot.connection === 'connected' && <div className="empty-state"><b>No runs yet</b><span>Solve the current design to start one. Every run is kept here with its results, so you can compare and re-run it later.</span></div>}

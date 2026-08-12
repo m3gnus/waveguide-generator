@@ -28,6 +28,21 @@ describe('client preferences', () => {
       exportFormats: ['csv', 'png'],
       autoExportFormats: [],
       autoExportOnComplete: false,
+      runNameDatePosition: 'off',
+      runNameDateFormat: 'yymmdd',
+    });
+  });
+  it('migrates v7 naming preferences to opt-in date decoration', () => {
+    const migrated = readPreferences(JSON.stringify({ version: 7, preferences: {
+      outputName: 'horn12',
+      nameSourceProjection: null,
+    } }));
+    expect(migrated.migrated).toBe(true);
+    expect(migrated.value).toMatchObject({
+      outputName: 'horn12',
+      nameSourceProjection: null,
+      runNameDatePosition: 'off',
+      runNameDateFormat: 'yymmdd',
     });
   });
   it('copies a pre-split selection to both lists when auto-export was enabled', () => {

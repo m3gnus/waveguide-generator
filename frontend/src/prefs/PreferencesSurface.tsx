@@ -1,5 +1,5 @@
 import { useEffect, useState, type RefObject } from 'react';
-import { nextRunName, runNameFromFilename } from '../jobs/runNaming';
+import { decorateRunName, nextRunName, runNameFromFilename, type RunNameDateFormat, type RunNameDatePosition } from '../jobs/runNaming';
 import { projectSubmittedDesign, type SubmittedDesignProjection } from '../jobs/submittedProjection';
 import { useDesignStore } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
@@ -84,19 +84,20 @@ export function ResultsPreferencesSurface({ expanded = false, popover = false, o
   </details>;
 }
 
-function JobsPreferencesContent() {
+function JobsPreferencesContent({ now = new Date() }: { now?: Date }) {
   const preferences = usePreferences();
   const design = useDesignStore((state) => state.design);
   const solveOptions = useSolveOptionsStore();
   const filename = useDocumentStore((state) => state.filename);
   let projection: SubmittedDesignProjection | null = null;
   try { projection = projectSubmittedDesign(design, solveOptions.options()); } catch { /* invalid options cannot be submitted yet */ }
-  const displayedName = projection
+  const displayedCore = projection
     ? nextRunName(preferences, projection, filename)
     : (preferences.nameSourceProjection ? preferences.outputName : runNameFromFilename(filename));
-  const [nameDraft, setNameDraft] = useState(displayedName);
+  const displayedLabel = decorateRunName(displayedCore, preferences, now);
+  const [nameDraft, setNameDraft] = useState(displayedCore);
   const [editing, setEditing] = useState(false);
-  useEffect(() => { if (!editing) setNameDraft(displayedName); }, [displayedName, editing]);
+  useEffect(() => { if (!editing) setNameDraft(displayedCore); }, [displayedCore, editing]);
   const commitName = () => {
     preferencesStore.update({ outputName: nameDraft, nameSourceProjection: projection });
     setEditing(false);
@@ -106,7 +107,9 @@ function JobsPreferencesContent() {
     <p className="preferences-section-copy">Naming, ordering, and visibility defaults for solve history.</p>
     <div className="job-naming-preferences">
       <label className="ui-field">Run name<input aria-label="Job design name" value={nameDraft} onFocus={() => setEditing(true)} onChange={(event) => setNameDraft(event.target.value)} onBlur={commitName} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}/></label>
-      <span className="job-name-preview">next · <b>{displayedName}</b></span>
+      <label className="ui-field">Date<select aria-label="Run-name date position" value={preferences.runNameDatePosition} onChange={(event) => preferencesStore.update({ runNameDatePosition: event.target.value as RunNameDatePosition })}><option value="off">Off</option><option value="prefix">Before name</option><option value="suffix">After name</option></select></label>
+      <label className="ui-field">Date format<select aria-label="Run-name date format" value={preferences.runNameDateFormat} disabled={preferences.runNameDatePosition === 'off'} onChange={(event) => preferencesStore.update({ runNameDateFormat: event.target.value as RunNameDateFormat })}><option value="yymmdd">YYMMDD</option><option value="yyyy-mm-dd">YYYY-MM-DD</option></select></label>
+      <span className="job-name-preview">next · <b>{displayedLabel}</b></span>
     </div>
     <div className="preferences-grid preferences-grid--jobs">
       <label className="ui-field">Default sort<select aria-label="Default task sort" value={preferences.jobSort} onChange={(event) => preferencesStore.update({ jobSort: event.target.value as JobSort })}><option value="completed_desc">Completed, newest</option><option value="created_desc">Created, newest</option><option value="rating_desc">Rating, highest</option><option value="name_asc">Name, A–Z</option></select></label>
@@ -115,13 +118,13 @@ function JobsPreferencesContent() {
   </section>;
 }
 
-export function JobsPreferencesSurface({ expanded = false, popover = false, onClose, anchorRef }: PreferencesSurfaceProps) {
+export function JobsPreferencesSurface({ expanded = false, popover = false, onClose, anchorRef, now }: PreferencesSurfaceProps & { now?: Date }) {
   if (popover) return <AnchoredPanel anchorRef={anchorRef ?? NO_ANCHOR} onClose={onClose} className="jobs-preferences-popover" label="Job preferences">
     <header><b>Job preferences</b><button type="button" aria-label="Close job preferences" onClick={onClose}><Icon name="close"/></button></header>
-    <div className="panel-preferences-scroll"><JobsPreferencesContent/></div>
+    <div className="panel-preferences-scroll"><JobsPreferencesContent now={now}/></div>
   </AnchoredPanel>;
   return <details open={expanded || undefined} className="preferences-surface">
     <summary style={{ color: 'var(--fg2)', cursor: 'pointer', fontSize: 'var(--text-micro)' }}>Job preferences</summary>
-    <JobsPreferencesContent/>
+    <JobsPreferencesContent now={now}/>
   </details>;
 }
