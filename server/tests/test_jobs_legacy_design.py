@@ -334,7 +334,11 @@ def test_every_job_in_the_live_v1_database_is_recovered_or_explained() -> None:
             # known, named cause the user can act on.
             assert verdict.reason_code in {"freeform_legacy_design", "no_stored_design"}
     sources = {verdict.source for verdict in verdicts}
-    assert {"v1-design-state", "v1-mesher-payload"} <= sources, sources
+    # Which kinds survive in the live history is up to v1's own retention --
+    # the fixtures above pin both recovery sources. Requiring both here
+    # repeated the pinned-count mistake one level up, and failed the first
+    # time v1 pruned its last payload-only row.
+    assert sources <= {"v2-snapshot", "v1-design-state", "v1-mesher-payload", "none"}, sources
 
 
 def test_a_recovered_design_meshes_end_to_end() -> None:
