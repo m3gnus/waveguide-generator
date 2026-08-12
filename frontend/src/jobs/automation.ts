@@ -7,7 +7,6 @@ export interface AutomationDependencies {
   markMeshDownloaded(job: JobItem, filename: string): Promise<void>;
   exportCompleted(job: JobItem, formats: ExportFormat[]): Promise<{ files: string[]; failures: Array<{ format: ExportFormat; reason: string }> }>;
   markExported(job: JobItem, files: string[], formats: JobItem['auto_export_formats'], completedAt: string | null): Promise<void>;
-  incrementCounter(): void;
   reportError(message: string): void;
   now?(): string;
 }
@@ -67,7 +66,6 @@ export class JobAutomation {
         });
         const allSelectedComplete = preferences.autoExportFormats.every((format) => formatStatus[format]?.status === 'complete');
         await dependencies.markExported(job, result.files, formatStatus, allSelectedComplete ? attemptedAt : null);
-        if (result.files.length) dependencies.incrementCounter();
         if (result.failures.length) dependencies.reportError(`Auto-export for ${job.id.slice(0, 6)} completed with ${result.failures.length} failure${result.failures.length === 1 ? '' : 's'}: ${result.failures.map(({ format, reason }) => `${format} (${reason})`).join(', ')}`);
       }).catch((error) => {
         // Whether export preparation or its metadata patch failed, retrying on

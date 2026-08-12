@@ -5,6 +5,7 @@ import { resolveEngine, submitDesign, submitImported, type ImportedSolveSubmissi
 import { useCapabilities, useCapabilityRefreshOnReconnect } from '../jobs/useCapabilities';
 import { JobAutomation } from '../jobs/automation';
 import { hydrateJobDesign } from '../jobs/jobDesign';
+import { exportStemForJob } from '../jobs/exportNaming';
 import { jobBaseName, preferencesStore, usePreferences } from '../prefs/preferences';
 import { downloadMeshArtifact, runExportBundle } from '../results/exporters';
 import type { ResultPayload } from '../results/types';
@@ -154,25 +155,20 @@ export function JobsCoordinator({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     void automation.process(jobs, preferences, {
-      downloadMesh: (job) => downloadMeshArtifact(job.id),
+      downloadMesh: (job) => downloadMeshArtifact(job),
       markMeshDownloaded: (job, filename) => jobsSocket.patchMetadata(job.id, { mesh_artifact_file: filename }),
       exportCompleted: async (job, formats) => runExportBundle({
         result: await fetchJobResults(job.id) as ResultPayload,
         design: hydrateJobDesign(job) ?? undefined,
         designRevision: job.design_revision,
-        // Automatic exports belong to a stored run, so name them from that run
-        // instead of sharing the current editor's export basename across jobs.
-        preferences: {
-          ...preferences,
-          outputName: job.label?.trim() || `${preferences.outputName}_${job.id}`,
-        },
+        jobStem: exportStemForJob(job),
+        preferences,
       }, formats),
       markExported: async (job, files, formats, completedAt) => jobsSocket.patchMetadata(job.id, {
         exported_files: [...new Set([...(job.exported_files ?? []), ...files])],
         auto_export_formats: formats,
         auto_export_completed_at: completedAt,
       }),
-      incrementCounter: () => preferencesStore.update({ counter: Math.min(999_999, preferencesStore.getSnapshot().counter + 1) }),
       reportError,
     });
   }, [automation, jobs, preferences, reportError]);

@@ -2,7 +2,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
-import { exportBaseName, preferencesStore } from '../prefs/preferences';
+import { preferencesStore } from '../prefs/preferences';
 import type { ExportContext } from '../results/exporters';
 import { JobsCoordinator } from './JobsCoordinator';
 
@@ -22,9 +22,9 @@ vi.mock('../jobs/useCapabilities', () => ({
   useCapabilityRefreshOnReconnect: () => undefined,
 }));
 
-function job(id: string, label: string): JobItem {
+function job(id: string, label: string, runNumber: number): JobItem {
   return {
-    id, run_number: 1, parent_job_id: null,
+    id, run_number: runNumber, parent_job_id: null,
     label, status: 'complete', progress: 1, stage: null,
     stage_message: null, created_at: '2026-08-08T00:00:00Z',
     queued_at: '2026-08-08T00:00:00Z', started_at: null,
@@ -64,15 +64,15 @@ describe('completed-job auto-export naming', () => {
     });
     mocks.fetchJobResults.mockResolvedValue({ frequencies: [100] });
     mocks.runExportBundle.mockImplementation(async (context: ExportContext) => ({
-      files: [`${exportBaseName(context.preferences)}.csv`],
+      files: [`${context.jobStem}.csv`],
       failures: [],
     }));
     vi.spyOn(jobsSocket, 'start').mockImplementation(() => undefined);
     vi.spyOn(jobsSocket, 'stop').mockImplementation(() => undefined);
     vi.spyOn(jobsSocket, 'patchMetadata').mockResolvedValue(undefined);
     publishJobs([
-      job('job-one', '260808_horn_v01'),
-      job('job-two', '260808_horn_v02'),
+      job('job-one', '260808_horn_v01', 101),
+      job('job-two', '260808_horn_v02', 102),
     ]);
     host = document.createElement('div');
     document.body.append(host);
@@ -95,16 +95,16 @@ describe('completed-job auto-export naming', () => {
     });
 
     const baseNames = mocks.runExportBundle.mock.calls.map(([context]) =>
-      exportBaseName((context as ExportContext).preferences));
-    expect(baseNames).toEqual(['260808_horn_v01_7', '260808_horn_v02_7']);
+      (context as ExportContext).jobStem);
+    expect(baseNames).toEqual(['101_260808_horn_v01', '102_260808_horn_v02']);
 
     expect(jobsSocket.patchMetadata).toHaveBeenCalledWith('job-one', expect.objectContaining({
-      exported_files: ['260808_horn_v01_7.csv'],
+      exported_files: ['101_260808_horn_v01.csv'],
     }));
     expect(jobsSocket.patchMetadata).toHaveBeenCalledWith('job-two', expect.objectContaining({
-      exported_files: ['260808_horn_v02_7.csv'],
+      exported_files: ['102_260808_horn_v02.csv'],
     }));
-    expect(preferencesStore.getSnapshot().counter).toBe(9);
+    expect(preferencesStore.getSnapshot().counter).toBe(7);
   });
 
   it('hands the multi-channel wrapper to auto-export and persists every channel file', async () => {
@@ -114,10 +114,10 @@ describe('completed-job auto-export naming', () => {
     };
     mocks.fetchJobResults.mockResolvedValue(wrapped);
     mocks.runExportBundle.mockResolvedValue({
-      files: ['260808_horn_v03_7-drive-hf.csv', '260808_horn_v03_7-drive-mf.csv'],
+      files: ['103_260808_horn_v03-drive-hf.csv', '103_260808_horn_v03-drive-mf.csv'],
       failures: [],
     });
-    publishJobs([job('job-three', '260808_horn_v03')]);
+    publishJobs([job('job-three', '260808_horn_v03', 103)]);
 
     await act(async () => { root.render(<JobsCoordinator><span>ready</span></JobsCoordinator>); });
     await act(async () => {
@@ -129,7 +129,7 @@ describe('completed-job auto-export naming', () => {
       ['csv'],
     );
     expect(jobsSocket.patchMetadata).toHaveBeenCalledWith('job-three', expect.objectContaining({
-      exported_files: ['260808_horn_v03_7-drive-hf.csv', '260808_horn_v03_7-drive-mf.csv'],
+      exported_files: ['103_260808_horn_v03-drive-hf.csv', '103_260808_horn_v03-drive-mf.csv'],
     }));
   });
 });

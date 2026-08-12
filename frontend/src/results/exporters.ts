@@ -1,7 +1,8 @@
 import { downloadBlob, downloadText } from '../api/designIo';
+import type { JobItem } from '../api/jobsSocket';
+import { exportStemForJob } from '../jobs/exportNaming';
 import { serializeDesign, type DesignDocument } from '../stores/design';
 import type { ExportFormat, Preferences } from '../prefs/preferences';
-import { exportBaseName } from '../prefs/preferences';
 import { applySmoothing, type SmoothingValue } from './smoothing';
 import { complexToDb } from './mappers';
 import { resultChannelFileSuffix, resultChannels, scopeResultChannel, type ResultPayload } from './types';
@@ -11,6 +12,7 @@ export interface ExportContext {
   channelId?: string;
   design?: DesignDocument;
   designRevision?: number;
+  jobStem: string;
   preferences: Preferences;
   fetcher?: typeof fetch;
   saveBlob?: (blob: Blob, filename: string) => void;
@@ -203,7 +205,7 @@ interface GeometryDownload {
 async function fetchGeometry(context: ExportContext, kind: 'step' | 'stl' | 'profiles', filename: string, profileKind?: 'profiles' | 'slices'): Promise<GeometryDownload> {
   if (!context.design) throw new Error('This export requires a saved design snapshot.');
   const fetcher = context.fetcher ?? fetch;
-  const baseName = exportBaseName(context.preferences);
+  const baseName = context.jobStem;
   const query = kind === 'profiles' ? `?kind=${profileKind ?? 'profiles'}` : '';
   const response = await fetcher(`/api/export/${kind}${query}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ design: serializeDesign(context.design), designRevision: context.designRevision ?? 0, baseName }) });
   if (!response.ok) throw await responseError(response);
@@ -222,7 +224,7 @@ function requireResult(context: ExportContext): ResultPayload {
 }
 
 function exportContextBaseName(context: ExportContext): string {
-  return `${exportBaseName(context.preferences)}${context.result ? resultChannelFileSuffix(context.result, context.channelId) : ''}`;
+  return `${context.jobStem}${context.result ? resultChannelFileSuffix(context.result, context.channelId) : ''}`;
 }
 
 async function chartPng(context: ExportContext): Promise<string[]> {
@@ -301,10 +303,10 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
   const now = context.now ?? new Date();
   if (format === 'mwg_config') {
     if (!context.design) throw new Error('This export requires a saved design snapshot.');
-    const response = await (context.fetcher ?? fetch)('/api/design/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ design: serializeDesign(context.design), filename: `${baseName}.txt` }) });
+    const response = await (context.fetcher ?? fetch)('/api/design/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ design: serializeDesign(context.design), filename: `${baseName}_config.cfg` }) });
     if (!response.ok) throw await responseError(response);
     const body = await response.json() as { text: string; suggestedFilename?: string };
-    const filename = body.suggestedFilename ?? `${baseName}.txt`;
+    const filename = body.suggestedFilename ?? `${baseName}_config.cfg`;
     saveText(body.text, filename);
     return [filename];
   }
@@ -327,7 +329,7 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
   const builders: Record<Exclude<ExportFormat, 'mwg_config' | 'step' | 'stl' | 'fusion_csv' | 'png'>, () => [string, string, string]> = {
     csv: () => [buildFrequencyCsv(result, context.preferences), `${baseName}.csv`, 'text/csv;charset=utf-8'],
     json: () => [buildFullResultsJson(result, context.preferences, now), `${baseName}.json`, 'application/json;charset=utf-8'],
-    txt: () => [buildSummaryText(result, context.preferences, now), `${baseName}.txt`, 'text/plain;charset=utf-8'],
+    txt: () => [buildSummaryText(result, context.preferences, now), `${baseName}_summary.txt`, 'text/plain;charset=utf-8'],
     polar_csv: () => [buildPolarCsv(result), `${baseName}_polar.csv`, 'text/csv;charset=utf-8'],
     impedance_csv: () => [buildImpedanceCsv(result), `${baseName}_impedance.csv`, 'text/csv;charset=utf-8'],
     vacs: () => [buildVacs(result, now), `${baseName}_spectrum.txt`, 'text/plain;charset=utf-8'],
@@ -356,10 +358,14 @@ export async function runExportBundle(context: ExportContext, formats = context.
   return { files, failures };
 }
 
-export async function downloadMeshArtifact(jobId: string, fetcher: typeof fetch = fetch, saveBlob: (blob: Blob, filename: string) => void = downloadBlob): Promise<string> {
-  const response = await fetcher(`/api/mesh-artifact/${encodeURIComponent(jobId)}`);
+export async function downloadMeshArtifact(
+  job: Pick<JobItem, 'id' | 'run_number' | 'label' | 'config_summary'>,
+  fetcher: typeof fetch = fetch,
+  saveBlob: (blob: Blob, filename: string) => void = downloadBlob,
+): Promise<string> {
+  const response = await fetcher(`/api/mesh-artifact/${encodeURIComponent(job.id)}`);
   if (!response.ok) throw await responseError(response);
-  const filename = filenameFromResponse(response, `simulation_mesh_${jobId}.msh`);
+  const filename = `${exportStemForJob(job)}.msh`;
   saveBlob(await response.blob(), filename);
   return filename;
 }

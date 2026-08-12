@@ -1,5 +1,4 @@
 import type { Preferences } from '../prefs/preferences';
-import { exportBaseName } from '../prefs/preferences';
 import { applySmoothing, type SmoothingValue } from './smoothing';
 import { resultChannelFileSuffix, scopeResultChannel, type ResultPayload } from './types';
 
@@ -241,7 +240,8 @@ function polarFilename(baseName: string, plane: PolarPlane, angle: number): stri
 /** Build one FRD file for every measured plane/angle, retaining legacy two-column output. */
 export function buildPolarFrdSet(
   result: ResultPayload,
-  preferences: Pick<Preferences, 'smoothing' | 'outputName' | 'counter'>,
+  preferences: Pick<Preferences, 'smoothing'>,
+  jobStem: string,
   channelId?: string,
 ): PolarFrdFile[] {
   const suffix = resultChannelFileSuffix(result, channelId);
@@ -249,7 +249,7 @@ export function buildPolarFrdSet(
   if (!result.directivity) return [];
 
   const frequencies = result.frequencies;
-  const baseName = `${exportBaseName(preferences)}${suffix}`;
+  const baseName = `${jobStem}${suffix}`;
   const reference = propagationReference(result);
   const files: PolarFrdFile[] = [];
 
