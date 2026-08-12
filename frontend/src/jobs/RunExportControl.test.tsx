@@ -144,27 +144,31 @@ describe('RunExportControl', () => {
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
-  it('shows export immediately on every exportable collapsed run and keeps it separate from selection', () => {
+  it('shows export only on the selected run and keeps export separate from selection', () => {
     preferencesStore.update({ exportFormats: [] });
     const exportableOne = completeJob({ id: 'exportable-one', run_number: 1, label: 'exportable_one' });
     const exportableTwo = completeJob({ id: 'exportable-two', run_number: 2, label: 'exportable_two' });
     const running = completeJob({ id: 'running-one', run_number: 3, label: 'running_one', status: 'running' });
     const failed = completeJob({ id: 'failed-one', run_number: 4, label: 'failed_one', status: 'error' });
     publishJobs([exportableOne, exportableTwo, running, failed]);
+    compareSelection.setPrimary(exportableOne.id);
     const selectSpy = vi.spyOn(compareSelection, 'setPrimary');
 
     act(() => { root.render(<JobsPanel/>); });
 
+    const selected = host.querySelector<HTMLElement>('.job-card.selected')!;
     const collapsed = [...host.querySelectorAll<HTMLElement>('.job-card.collapsed')];
-    expect(collapsed).toHaveLength(2);
-    expect(collapsed.every((card) => card.querySelector('.run-export-control.compact'))).toBe(true);
-    expect(host.querySelectorAll('.run-export-control')).toHaveLength(2);
+    expect(selected.querySelector('[aria-label="Select #1 · exportable_one"]')).not.toBeNull();
+    expect(selected.querySelector('.run-export-control')).not.toBeNull();
+    expect(collapsed).toHaveLength(1);
+    expect(collapsed[0].querySelector('[aria-label="Select #2 · exportable_two"]')).not.toBeNull();
+    expect(collapsed[0].querySelector('.run-export-control')).toBeNull();
+    expect(host.querySelectorAll('.run-export-control')).toHaveLength(1);
 
-    const secondCard = collapsed.find((card) => card.querySelector('[aria-label="Select #2 · exportable_two"]'))!;
-    act(() => { secondCard.querySelector<HTMLButtonElement>('.action-menu-primary')!.click(); });
+    act(() => { selected.querySelector<HTMLButtonElement>('.action-menu-primary')!.click(); });
 
     expect(selectSpy).not.toHaveBeenCalled();
-    expect(compareSelection.getSnapshot().primary).toBeNull();
+    expect(compareSelection.getSnapshot().primary).toBe(exportableOne.id);
     expect(document.querySelector('[role="menu"]')).not.toBeNull();
   });
 
