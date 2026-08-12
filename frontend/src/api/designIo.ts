@@ -59,6 +59,8 @@ export interface WgLinkExportResponse {
   designHash: string;
   geometryHash: string;
   artifactSha256: string;
+  /** The identity the bundle was committed against; absent on an idempotent retry. */
+  identity?: DesignIdentity;
 }
 
 async function errorMessage(response: Response): Promise<string> {
@@ -112,8 +114,10 @@ export async function sendDesignToCad(
   idempotencyKey: string = globalThis.crypto?.randomUUID?.()
     ?? `wglink-${Date.now()}-${Math.random().toString(16).slice(2)}`,
 ): Promise<WgLinkExportResponse> {
-  if (!identity) throw new Error('Save the design before sending it to CAD.');
-
+  // No save gate here. The server commits the design on screen into the
+  // CAD-link registry as part of the export, so an unsaved or edited design
+  // sends like any other; `identity` is the optimistic-concurrency token when
+  // there is one, not a precondition.
   const pathResponse = await fetcher('/api/workspace/path');
   if (!pathResponse.ok) throw new Error(await errorMessage(pathResponse));
   let workspace = await pathResponse.json() as { selected?: boolean; path?: string };

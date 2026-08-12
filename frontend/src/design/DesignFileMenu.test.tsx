@@ -136,14 +136,31 @@ describe('design file export menu', () => {
     expect(requested).toEqual(['/api/workspace/path', '/api/export/wglink']);
   });
 
-  it('reports the save instruction without opening a workspace when identity is missing', async () => {
+  it('sends an unsaved design and adopts the identity the server committed', async () => {
+    vi.mocked(fetch).mockImplementation(async (url: string | URL | Request) => {
+      const path = String(url);
+      requested.push(path);
+      if (path === '/api/workspace/path') {
+        return new Response(JSON.stringify({ selected: true, path: '/cad-library' }));
+      }
+      return new Response(JSON.stringify({
+        bundlePath: '/cad-library/wglink/tritonia_mk2.wglink', bundleId: 'wgb_1',
+        exportId: 'wge_1', sequence: 1, designHash: 'sha256:d',
+        geometryHash: 'sha256:g', artifactSha256: 'sha256:a',
+        identity: {
+          designId: 'wgd_01K00000000000000000000000',
+          lineageId: 'wgl_01K00000000000000000000000',
+          baseEditVersion: 1,
+        },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    });
+
     const item = itemNamed('Send to CAD');
     await act(async () => { item.click(); });
 
-    expect(requested).toEqual([]);
-    expect(container.querySelector('[role="status"]')?.textContent).toBe(
-      'Save the design before sending it to CAD.',
-    );
+    expect(requested).toEqual(['/api/workspace/path', '/api/export/wglink']);
+    expect(useDocumentStore.getState().identity?.baseEditVersion).toBe(1);
+    expect(useDocumentStore.getState().classification).toBe('current');
   });
 
   it('names the next run from a successfully opened standalone config', async () => {
