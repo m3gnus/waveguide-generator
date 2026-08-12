@@ -12,9 +12,11 @@ import {
 } from '../api/designIo';
 import { resetDesignStore, useDesignStore } from '../stores/design';
 import { resetDocumentStore, useDocumentStore, type CadLinkClassification, type DesignIdentity } from '../stores/document';
-import { jobsSocket } from '../api/jobsSocket';
-import { nextFileJobNaming, preferencesStore } from '../prefs/preferences';
+import { projectSubmittedDesign } from '../jobs/submittedProjection';
+import { runNameFromFilename } from '../jobs/runNaming';
+import { preferencesStore } from '../prefs/preferences';
 import { Icon } from '../shell/icons';
+import { useSolveOptionsStore } from '../stores/solveOptions';
 import { documentDisplayName, filenameStem } from '../viewport/presentation';
 import { sentToCadMessage, useSendToCad } from './useSendToCad';
 
@@ -120,13 +122,15 @@ export function DesignFileMenu() {
         return;
       }
       const opened = await openDesignText(text);
-      replaceDesign(hydrateDesignDocument(opened.design));
+      const openedDesign = hydrateDesignDocument(opened.design);
+      replaceDesign(openedDesign);
       setFilename(`${filenameStem(file.name)}.cfg`);
       setCadLink(editableIdentity(opened.cadlink?.identity), opened.cadlink?.classification ?? 'missing');
-      preferencesStore.update(nextFileJobNaming(
-        file.name,
-        jobsSocket.getSnapshot().jobs.map((job) => job.label),
-      ));
+      let nameSourceProjection = null;
+      try {
+        nameSourceProjection = projectSubmittedDesign(openedDesign, useSolveOptionsStore.getState().options());
+      } catch { /* invalid solve-option drafts cannot make opening a design fail */ }
+      preferencesStore.update({ outputName: runNameFromFilename(file.name), nameSourceProjection });
       markSaved(useDesignStore.getState().designRevision);
       setMessage(reportText(opened));
       if (opened.cadlink?.classification === 'missing') setAdoptionCandidate(opened.cadlink.adoptionCandidate);
@@ -152,6 +156,7 @@ export function DesignFileMenu() {
     if (revision !== savedRevision && !window.confirm('Discard unsaved changes and create a new design?')) return;
     resetDesignStore();
     resetDocumentStore();
+    preferencesStore.update({ outputName: 'horn', nameSourceProjection: null });
     setMessage('New design');
     setAdoptionCandidate(null);
     setOpen(false);

@@ -74,7 +74,7 @@ describe('frontend result and status labels', () => {
   });
 
   it('loads a selected run design without changing the next run name', () => {
-    preferencesStore.update({ outputName: 'keep-me', jobVersion: 7 });
+    preferencesStore.update({ outputName: 'keep-me' });
     const solved = designForFamily('OSSE');
     solved.L = 321;
     const selected = selectableJob(
@@ -91,12 +91,12 @@ describe('frontend result and status labels', () => {
 
     expect(useDesignStore.getState().design.L).toBe(321);
     expect(preferencesStore.getSnapshot()).toMatchObject({
-      outputName: 'keep-me', jobVersion: 7,
+      outputName: 'keep-me',
     });
   });
 
   it('leaves run naming unchanged when a selected snapshot is unreadable', () => {
-    preferencesStore.update({ outputName: 'keep-me', jobVersion: 7 });
+    preferencesStore.update({ outputName: 'keep-me' });
     const unreadable = selectableJob(
       'unreadable',
       '260808_other_v99',
@@ -108,7 +108,7 @@ describe('frontend result and status labels', () => {
 
     expect(snapshotSpy).not.toHaveBeenCalled();
     expect(preferencesStore.getSnapshot()).toMatchObject({
-      outputName: 'keep-me', jobVersion: 7,
+      outputName: 'keep-me',
     });
   });
 });

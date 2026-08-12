@@ -42,12 +42,12 @@ describe('preferences surfaces', () => {
     expect(host.querySelector('[role="alert"]')).toBeNull();
   });
 
-  it('renders job naming, version, date-prefix, sort, and rating-filter controls', () => {
+  it('renders design-tracking job naming, sort, and rating-filter controls', () => {
     act(() => root.render(<JobsPreferencesSurface/>));
     expect(host.querySelector('[aria-label="Job design name"]')).not.toBeNull();
-    expect(host.querySelector('[aria-label="Next job version"]')).not.toBeNull();
-    expect(host.querySelector('[aria-label="Prefix job name with date"]')).not.toBeNull();
-    expect(host.textContent).toContain('horn_v01');
+    expect(host.querySelector('[aria-label="Next job version"]')).toBeNull();
+    expect(host.querySelector('[aria-label="Prefix job name with date"]')).toBeNull();
+    expect(host.textContent).toContain('next · horn');
     expect(host.querySelector<HTMLSelectElement>('[aria-label="Default task sort"]')?.options).toHaveLength(4);
     expect(host.querySelector<HTMLSelectElement>('[aria-label="Minimum rating filter"]')?.options).toHaveLength(6);
   });
