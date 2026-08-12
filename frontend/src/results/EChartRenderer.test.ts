@@ -35,8 +35,8 @@ describe('interactive chart updates', () => {
   });
   afterEach(() => { act(() => root.unmount()); host.remove(); });
 
-  function render(option: EChartsOption) {
-    act(() => root.render(createElement(EChartRenderer, { option, label: 'chart' })));
+  function render(option: EChartsOption, live = false) {
+    act(() => root.render(createElement(EChartRenderer, { option, label: 'chart', live })));
   }
 
   it('redraws outright, so a retained dataZoom window cannot clip new data', () => {
@@ -66,6 +66,16 @@ describe('interactive chart updates', () => {
     render(option);
     render(option);
     expect(setOption).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not animate replacements while live snapshots are arriving', () => {
+    const option: EChartsOption = { animationDuration: 180, series: [{ type: 'line', data: [[100, 1]] }] };
+    render(option, true);
+    expect(setOption).toHaveBeenCalledWith(
+      expect.objectContaining({ animation: false, animationDuration: 0 }),
+      expect.objectContaining({ notMerge: true, lazyUpdate: true }),
+    );
+    expect(option).toMatchObject({ animationDuration: 180 });
   });
 
   it('disposes its instance when the card goes away', () => {

@@ -170,8 +170,10 @@ export interface InterpolatedDirectivityGrid {
 }
 
 const MAX_INTERPOLATED_CELLS = 50_000;
-/** Contours are cheap vector paths and can use the same dense grid as PNG export. */
+/** A settled chart can afford a contour grid close to the PNG export. */
 const MAX_CONTOUR_CELLS = 180_000;
+/** A live snapshot must finish painting before the next 250 ms publication. */
+const MAX_LIVE_INTERPOLATED_CELLS = 16_000;
 
 /** Bilinear interpolation in log-frequency/index space for a smooth live map. */
 export function interpolateDirectivityGrid(result: ResultPayload, plane: string, requestedFactor = 4, maxCells = MAX_INTERPOLATED_CELLS): InterpolatedDirectivityGrid {
@@ -375,13 +377,21 @@ export function contourPolylines(segments: ContourSegment[]): ContourPoint[][] {
  * fails silently. Index the cells against category axes instead. The frequency
  * axis still reads logarithmically because the sweep itself is log-spaced.
  */
-export function heatmapOption(result: ResultPayload, tokens: ChartTokens, plane: string, mapReference: number, density: ChartDensity = 'regular'): EChartsOption {
-  const grid = interpolateDirectivityGrid(result, plane);
+export function heatmapOption(result: ResultPayload, tokens: ChartTokens, plane: string, mapReference: number, density: ChartDensity = 'regular', live = false): EChartsOption {
+  // Boundary Lab renders a lighter surface while a solve is changing and one
+  // canonical surface when it settles. Do the same here: the live grid has at
+  // most a quarter of the usual heatmap cells and also supplies its contours,
+  // avoiding a second 180k-cell interpolation on every partial result.
+  const grid = live
+    ? interpolateDirectivityGrid(result, plane, 2, MAX_LIVE_INTERPOLATED_CELLS)
+    : interpolateDirectivityGrid(result, plane);
   // The exported renderer contours a canonical 500 x 361 interpolation. Keep
   // the interactive cells capped for responsiveness, but derive the visible
   // engineering reference lines from a comparably dense grid. With a typical
   // 60 x 37 result this resolves to 532 x 325 instead of 237 x 145.
-  const contourGrid = interpolateDirectivityGrid(result, plane, 12, MAX_CONTOUR_CELLS);
+  const contourGrid = live
+    ? grid
+    : interpolateDirectivityGrid(result, plane, 12, MAX_CONTOUR_CELLS);
   const floor = mapReference * 5;
   const inset = MAP_GRID[density];
   const cells = grid.values.flatMap((rowValues, row) => rowValues.flatMap((level, column) => level === null ? [] : [[column, row, Math.max(floor, Math.min(0, level)), level, grid.frequencies[column], grid.angles[row]]]));
@@ -406,7 +416,7 @@ export function heatmapOption(result: ResultPayload, tokens: ChartTokens, plane:
     }];
   });
   return {
-    animationDuration: 180,
+    animationDuration: live ? 0 : 180,
     backgroundColor: tokens.background,
     textStyle: { color: tokens.foreground, fontFamily: 'Inter, system-ui, sans-serif' },
     tooltip: { trigger: 'item', confine: true, backgroundColor: tokens.background, borderColor: tokens.spine ?? tokens.grid, textStyle: { color: tokens.foreground, fontSize: 11 }, formatter: (params) => {
@@ -568,12 +578,13 @@ export function directivityMapPanels(items: NamedResult[], chartType: 'directivi
   })));
 }
 
-function DirectivityComparisonMaps({ chartType, items, tokens, mapReference, density }: {
+function DirectivityComparisonMaps({ chartType, items, tokens, mapReference, density, live }: {
   chartType: 'directivity_map_h' | 'directivity_map_v' | 'directivity_map';
   items: NamedResult[];
   tokens: ChartTokens;
   mapReference: number;
   density: ChartDensity;
+  live: boolean;
 }) {
   const panels = directivityMapPanels(items, chartType);
   if (!panels.some(({ hasData }) => hasData)) {
@@ -582,13 +593,13 @@ function DirectivityComparisonMaps({ chartType, items, tokens, mapReference, den
   }
   if (panels.length === 1 && panels[0].hasData) {
     const panel = panels[0];
-    return <EChart option={heatmapOption(panel.result, tokens, panel.plane, mapReference, density)} label={`Interactive HornLab ${panel.plane} directivity heatmap`}/>;
+    return <EChart option={heatmapOption(panel.result, tokens, panel.plane, mapReference, density, live)} label={`Interactive HornLab ${panel.plane} directivity heatmap`} live={live}/>;
   }
   return <div className={`directivity-multiplane${items.length > 1 ? ' directivity-comparison' : ''}`} data-density={density}>
     {panels.map((panel) => <div key={panel.key}>
       <span title={panel.label}>{middleEllipsis(panel.label, density === 'compact' ? 18 : 28)}</span>
       {panel.hasData
-        ? <EChart option={heatmapOption(panel.result, tokens, panel.plane, mapReference, density)} label={`Interactive ${panel.label} directivity heatmap`}/>
+        ? <EChart option={heatmapOption(panel.result, tokens, panel.plane, mapReference, density, live)} label={`Interactive ${panel.label} directivity heatmap`} live={live}/>
         : <div className="directivity-comparison-missing">No {panel.plane} data</div>}
     </div>)}
   </div>;
@@ -615,7 +626,7 @@ export function beamShapeMissingReason(result: ResultPayload): { reason: string;
   };
 }
 
-function ResultChart({ chartType, result, named, tokens, density, beamShapeAction, wrapper, job, channelId }: { chartType: ChartType; result: ResultPayload; named: NamedResult[]; tokens: ChartTokens; density: ChartDensity; beamShapeAction?: ChartStubAction } & SummarySourceProps) {
+function ResultChart({ chartType, result, named, tokens, density, live, beamShapeAction, wrapper, job, channelId }: { chartType: ChartType; result: ResultPayload; named: NamedResult[]; tokens: ChartTokens; density: ChartDensity; live: boolean; beamShapeAction?: ChartStubAction } & SummarySourceProps) {
   const preferences = usePreferences();
   // Only comparable charts read the cross-job list. Keeping it in the
   // dependency array for every chart would rebuild expensive single-run
@@ -624,15 +635,19 @@ function ResultChart({ chartType, result, named, tokens, density, beamShapeActio
     if (!COMPARABLE_CHARTS.has(chartType)) return NO_NAMED_RESULTS;
     return named.length ? named : [{ id: 'primary', label: 'Primary', result }];
   }, [chartType, named, result]);
-  return useMemo(() => {
-    if (chartType === 'frequency_response') return result.spl_on_axis?.spl?.length ? <EChart option={splOption(overlays, tokens, preferences.smoothing, density)} label="Interactive HornLab sound pressure frequency response"/> : <ChartStub reason="Frequency Response needs spl_on_axis data from a completed solve."/>;
-    if (chartType === 'directivity_map_h' || chartType === 'directivity_map_v' || chartType === 'directivity_map') return <DirectivityComparisonMaps chartType={chartType} items={overlays} tokens={tokens} mapReference={preferences.mapReference} density={density}/>;
+  // Progress and log events replace the selected JobItem many times during a
+  // solve. Keep those summary-only props outside the plot memo, otherwise a
+  // new progress percentage rebuilds and repaints every EChart even when its
+  // result snapshot has not changed.
+  const plot = useMemo(() => {
+    if (chartType === 'frequency_response') return result.spl_on_axis?.spl?.length ? <EChart option={splOption(overlays, tokens, preferences.smoothing, density)} label="Interactive HornLab sound pressure frequency response" live={live}/> : <ChartStub reason="Frequency Response needs spl_on_axis data from a completed solve."/>;
+    if (chartType === 'directivity_map_h' || chartType === 'directivity_map_v' || chartType === 'directivity_map') return <DirectivityComparisonMaps chartType={chartType} items={overlays} tokens={tokens} mapReference={preferences.mapReference} density={density} live={live}/>;
     if (chartType === 'directivity_index') {
       const option = directivityIndexOption(overlays, tokens, preferences.smoothing, density);
-      return Array.isArray(option.series) && option.series.length ? <EChart option={option} label="Interactive HornLab directivity index by frequency"/> : <ChartStub reason="Directivity Index needs a spherical grid or complete horizontal and vertical polar sweeps."/>;
+      return Array.isArray(option.series) && option.series.length ? <EChart option={option} label="Interactive HornLab directivity index by frequency" live={live}/> : <ChartStub reason="Directivity Index needs a spherical grid or complete horizontal and vertical polar sweeps."/>;
     }
     if (chartType === 'beam_shape') {
-      if (result.beam_shape?.frequencies?.length) return <EChart option={lineOption(beamShapeSeries(result), tokens, 'Beam width [°]', density)} label="Interactive HornLab horizontal and vertical forward beam width"/>;
+      if (result.beam_shape?.frequencies?.length) return <EChart option={lineOption(beamShapeSeries(result), tokens, 'Beam width [°]', density)} label="Interactive HornLab horizontal and vertical forward beam width" live={live}/>;
       const missing = beamShapeMissingReason(result);
       return <ChartStub reason={missing.reason} action={missing.canEnable ? beamShapeAction : undefined}/>;
     }
@@ -640,10 +655,11 @@ function ResultChart({ chartType, result, named, tokens, density, beamShapeActio
     if (chartType === 'balloon') return <BalloonRenderer result={result}/>;
     if (chartType === 'impedance') {
       const option = impedanceOption(overlays, tokens, preferences.smoothing, density);
-      return Array.isArray(option.series) && option.series.length ? <EChart option={option} label="Interactive HornLab normalized acoustic impedance by frequency"/> : <ChartStub reason="Acoustic Impedance needs the optional impedance result block."/>;
+      return Array.isArray(option.series) && option.series.length ? <EChart option={option} label="Interactive HornLab normalized acoustic impedance by frequency" live={live}/> : <ChartStub reason="Acoustic Impedance needs the optional impedance result block."/>;
     }
-    return <Summary result={result} wrapper={wrapper} job={job} channelId={channelId} density={density}/>;
-  }, [beamShapeAction, channelId, chartType, density, job, overlays, preferences.mapReference, preferences.smoothing, result, tokens, wrapper]);
+    return null;
+  }, [beamShapeAction, chartType, density, live, overlays, preferences.mapReference, preferences.smoothing, result, tokens]);
+  return plot ?? <Summary result={result} wrapper={wrapper} job={job} channelId={channelId} density={density}/>;
 }
 
 export interface CardMetrics {
@@ -682,7 +698,7 @@ export function useCardMetrics(target: React.RefObject<HTMLElement | null>): Car
   return metrics;
 }
 
-function ChartCard({ index, chartType, result, named, tokens, beamShapeAction, wrapper, job, channelId }: { index: number; chartType: ChartType; result: ResultPayload; named: NamedResult[]; tokens: ChartTokens; beamShapeAction?: ChartStubAction } & SummarySourceProps) {
+function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAction, wrapper, job, channelId }: { index: number; chartType: ChartType; result: ResultPayload; named: NamedResult[]; tokens: ChartTokens; live: boolean; beamShapeAction?: ChartStubAction } & SummarySourceProps) {
   // A comparison is active but this card cannot carry it. Saying so is the
   // whole point: silently drawing the primary run looks identical to drawing
   // both, so the user believes they are comparing when they are not.
@@ -717,7 +733,7 @@ function ChartCard({ index, chartType, result, named, tokens, beamShapeAction, w
   return <>
     <section ref={card} className={`result-card result-${index}`} data-density={density}>
       <div className="chart-placeholder" title="Hover for values · double-click for detail" onDoubleClick={() => setExpanded(true)}>
-        <ResultChart chartType={chartType} result={result} named={named} tokens={tokens} density={density} beamShapeAction={beamShapeAction} wrapper={wrapper} job={job} channelId={channelId}/>
+        <ResultChart chartType={chartType} result={result} named={named} tokens={tokens} density={density} live={live} beamShapeAction={beamShapeAction} wrapper={wrapper} job={job} channelId={channelId}/>
       </div>
       {/* Chrome floats over the plot rather than reserving a row of its own:
           a fixed header costs a quarter of a six-panel card's height. */}
@@ -738,7 +754,7 @@ function ChartCard({ index, chartType, result, named, tokens, beamShapeAction, w
     {expanded && createPortal(<div className="result-detail-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setExpanded(false); }}>
       <section ref={detail} className="result-detail" role="dialog" aria-modal="true" aria-label={`${chartLabel(chartType)} detail`}>
         <header><div><b>{chartLabel(chartType)}</b>{subtitle && <span>{subtitle}</span>}</div><small>Hover to inspect · Ctrl/scroll to zoom lines</small><button aria-label="Close detail view" onClick={() => setExpanded(false)}><Icon name="close"/></button></header>
-        <div className="result-detail-chart"><ResultChart chartType={chartType} result={result} named={named} tokens={tokens} density="full" beamShapeAction={beamShapeAction} wrapper={wrapper} job={job} channelId={channelId}/></div>
+        <div className="result-detail-chart"><ResultChart chartType={chartType} result={result} named={named} tokens={tokens} density="full" live={live} beamShapeAction={beamShapeAction} wrapper={wrapper} job={job} channelId={channelId}/></div>
       </section>
     </div>, document.body)}
   </>;
@@ -748,18 +764,19 @@ export function resultLayoutClass(count: number): string {
   return `result-layout-${Math.max(0, Math.min(MAX_RESULT_PANELS, Math.floor(count)))}`;
 }
 
-export function ResultsChartGrid({ chartTypes, result, named, tokens, beamShapeAction, wrapper, job, channelId }: {
+export function ResultsChartGrid({ chartTypes, result, named, tokens, live = false, beamShapeAction, wrapper, job, channelId }: {
   chartTypes: ChartType[];
   result: ResultPayload;
   named: NamedResult[];
   tokens: ChartTokens;
+  live?: boolean;
   beamShapeAction?: ChartStubAction;
 } & SummarySourceProps) {
   if (!chartTypes.length) {
     return <div className="result-grid-empty" role="status"><b>NO CHARTS OPEN</b><span>Add a chart to rebuild the results workspace.</span><button onClick={() => preferencesStore.addChart()}>+ Add chart</button></div>;
   }
   return <div className={`result-grid ${resultLayoutClass(chartTypes.length)}`} data-chart-count={chartTypes.length}>
-    {chartTypes.map((chartType, index) => <ChartCard key={`${index}-${chartType}`} index={index} chartType={chartType} result={result} named={named} tokens={tokens} beamShapeAction={beamShapeAction} wrapper={wrapper} job={job} channelId={channelId}/>) }
+    {chartTypes.map((chartType, index) => <ChartCard key={`${index}-${chartType}`} index={index} chartType={chartType} result={result} named={named} tokens={tokens} live={live} beamShapeAction={beamShapeAction} wrapper={wrapper} job={job} channelId={channelId}/>) }
   </div>;
 }
 
@@ -985,6 +1002,6 @@ export function ResultsPanel() {
     {showingPrevious && <div className="job-warning" role="status" style={{ margin: 7 }}>Showing previous results while fetching the selected run…</div>}
     {!shown
       ? <div className="empty-state" role="status"><b>{error ? 'Results unavailable' : 'Loading results'}</b><span>{error ? 'Retry above, or select another run in the Jobs rail.' : 'Fetching the selected run…'}</span></div>
-      : <ResultsChartGrid chartTypes={preferences.chartTypes} result={shown} named={named} tokens={tokens} beamShapeAction={beamShapeAction} wrapper={shownRaw} job={selectedJob} channelId={shownActiveChannel}/>}
+      : <ResultsChartGrid chartTypes={preferences.chartTypes} result={shown} named={named} tokens={tokens} live={primaryIsProvisional} beamShapeAction={beamShapeAction} wrapper={shownRaw} job={selectedJob} channelId={shownActiveChannel}/>}
   </div>;
 }

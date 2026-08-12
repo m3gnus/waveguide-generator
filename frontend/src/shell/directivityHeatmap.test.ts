@@ -61,6 +61,31 @@ describe('directivity heatmap', () => {
     expect(option.yAxis.data).toHaveLength(145);
   });
 
+  it('uses a bounded live grid, then restores the full-quality completed map', () => {
+    const result = payload(60, 37);
+    const live = heatmapOption(result, tokens, 'horizontal', -6, 'regular', true) as {
+      animationDuration: number;
+      xAxis: { data: string[] };
+      yAxis: { data: string[] };
+      series: Array<{ type: string; data: unknown[] }>;
+    };
+    const complete = heatmapOption(result, tokens, 'horizontal', -6) as {
+      animationDuration: number;
+      xAxis: { data: string[] };
+      yAxis: { data: string[] };
+      series: Array<{ type: string; data: unknown[] }>;
+    };
+    const liveCells = live.series.find(({ type }) => type === 'heatmap')!.data.length;
+    const completeCells = complete.series.find(({ type }) => type === 'heatmap')!.data.length;
+
+    expect(live.animationDuration).toBe(0);
+    expect(live.xAxis.data).toHaveLength(119);
+    expect(live.yAxis.data).toHaveLength(73);
+    expect(liveCells).toBe(8_687);
+    expect(complete.animationDuration).toBe(180);
+    expect(completeCells).toBeGreaterThan(liveCells * 3);
+  });
+
   it('renders nothing but still builds a valid option for a plane with no data', () => {
     const { drawn, empty } = renderedCells(heatmapOption(payload(), tokens, 'vertical', -6));
     expect(drawn + empty).toBe(0);
