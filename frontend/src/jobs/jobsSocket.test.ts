@@ -58,7 +58,9 @@ describe('jobs websocket state machine', () => {
     socket.message({ v: 1, kind: 'partialResult', epoch: 4, jobId: 'job-1', revision: 3, result: { frequencies: [800] } });
     await flush();
     expect(fetcher).toHaveBeenCalledTimes(1);
-    expect(provisionalResults.get('job-1')).toMatchObject({ revision: 3, result: { frequencies: [200, 400, 800] } });
+    // Response.json() settles after a Node-version-dependent number of
+    // microtasks, so poll for the recovered snapshot instead of counting them.
+    await vi.waitFor(() => expect(provisionalResults.get('job-1')).toMatchObject({ revision: 3, result: { frequencies: [200, 400, 800] } }));
     expect(jobNotifications).toBe(0);
     manager.stop();
   });
