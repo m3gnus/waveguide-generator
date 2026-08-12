@@ -19,7 +19,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 # Matches the live chart palette in frontend/src/results/EChart.tsx; the two
 # are a pair and must move together.
-DEFAULT_CHART_THEME = "ember"
+#
+# The default is the interface's own dark theme, and the frontend resolves its
+# "Match interface" setting to console or vellum before it gets here, so an
+# export lands on the same surfaces as the window it was taken from.
+DEFAULT_CHART_THEME = "console"
 THEME_LABELS = {
     "classic": "Classic",
     "hornlab": "Arctic Night",
@@ -31,6 +35,8 @@ THEME_LABELS = {
     "sepia": "Sepia",
     "phosphor": "CRT Green",
     "ember": "Warm Charcoal",
+    "console": "Console (app dark)",
+    "vellum": "Vellum (app light)",
 }
 THEME_NAMES = tuple(THEME_LABELS)
 

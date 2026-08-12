@@ -21,9 +21,13 @@ const classes: SurfaceMaterialClass[] = [
   'horn-smooth', 'horn-flat', 'source-smooth', 'source-flat', 'enclosure-smooth', 'enclosure-flat',
 ];
 
+// Fallbacks only, for a document-less render; the tokens above them are what
+// actually ships. They used to be blue-greys from the pre-Console skin, which
+// meant a token lookup failure silently swapped the model to a palette the
+// interface no longer contains.
 const fallbackColors: Record<ViewportTheme, Record<'horn' | 'source' | 'enclosure', string>> = {
-  dark: { horn: '#8eafc6', source: '#cf8a5c', enclosure: '#687987' },
-  light: { horn: '#9fb5c5', source: '#bd6b3d', enclosure: '#817b70' },
+  dark: { horn: '#b8b1a6', source: '#c07a4e', enclosure: '#7a7367' },
+  light: { horn: '#9fa39b', source: '#a5674a', enclosure: '#8a8d85' },
 };
 
 function tokenColor(token: string, fallback: string): string {
@@ -71,8 +75,11 @@ function zebraMaterial(clippingPlanes: Plane[], flat: boolean): ShaderMaterial {
         #endif
         vec3 reflected = reflect(incident, shadingNormal);
         float band = smoothstep(0.38, 0.62, 0.5 + 0.5 * sin(reflected.y * 42.0));
-        vec3 darkBand = vec3(0.025, 0.035, 0.045);
-        vec3 lightBand = vec3(0.88, 0.96, 1.0);
+        // Neutral-warm bands. A blue-white highlight over a blue-black shadow
+        // read as a different material from every other mode in the viewport;
+        // zebra is a reflection-continuity check and only needs the contrast.
+        vec3 darkBand = vec3(0.036, 0.033, 0.030);
+        vec3 lightBand = vec3(1.0, 0.972, 0.925);
         gl_FragColor = vec4(mix(darkBand, lightBand, band), 1.0);
       }
     `,
@@ -144,7 +151,10 @@ function surfaceMaterial(mode: DisplayMode, materialClass: SurfaceMaterialClass,
   if (mode === 'zebra') return zebraMaterial(clippingPlanes, flatShading);
   if (mode === 'normals') return normalsMaterial(clippingPlanes, flatShading);
   if (mode === 'curvature') {
-    return new MeshStandardMaterial({ color: '#dce9ef', vertexColors: true, roughness: 0.58, flatShading, side: FrontSide, clippingPlanes });
+    // Multiplies the vertex colours from curvatureColors, so it has to be a
+    // near-neutral: the cold tint it used to carry pulled the whole curvature
+    // ramp towards blue.
+    return new MeshStandardMaterial({ color: '#f2ece2', vertexColors: true, roughness: 0.58, flatShading, side: FrontSide, clippingPlanes });
   }
   return new MeshStandardMaterial({
     color,
@@ -172,7 +182,11 @@ export function createMaterialLibrary(mode: DisplayMode, clipPlane: Plane | null
     color: tokenColor('--vp-wire-material', theme === 'light' ? '#26384a' : '#9ed4f4'),
     wireframe: true, transparent: true, opacity: theme === 'light' ? 0.42 : 0.34, side: FrontSide, clippingPlanes,
   });
-  const edge = new LineBasicMaterial({ color: '#8fe4ff', transparent: true, opacity: 0.96, clippingPlanes });
+  // Hard-boundary edges were the last cyan in the application.
+  const edge = new LineBasicMaterial({
+    color: tokenColor('--vp-edge-material', theme === 'light' ? '#a5391b' : '#e0673f'),
+    transparent: true, opacity: 0.96, clippingPlanes,
+  });
   const stencilBack = new MeshBasicMaterial({
     colorWrite: false, depthWrite: false, depthTest: false, side: BackSide, clippingPlanes,
     stencilWrite: true, stencilFunc: AlwaysStencilFunc, stencilFail: KeepStencilOp,
@@ -184,7 +198,8 @@ export function createMaterialLibrary(mode: DisplayMode, clipPlane: Plane | null
     stencilZFail: KeepStencilOp, stencilZPass: DecrementWrapStencilOp,
   });
   const cap = new MeshStandardMaterial({
-    color: '#d18a56', metalness: 0.02, roughness: 0.72, side: FrontSide,
+    color: tokenColor('--vp-cap-material', theme === 'light' ? '#a5674a' : '#c07a4e'),
+    metalness: 0.02, roughness: 0.72, side: FrontSide,
     stencilWrite: true, stencilRef: 0, stencilFunc: NotEqualStencilFunc,
     stencilFail: ReplaceStencilOp, stencilZFail: ReplaceStencilOp, stencilZPass: ReplaceStencilOp,
   });

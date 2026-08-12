@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import type { Preferences } from '../prefs/preferences';
+import { resolveChartTheme, type Preferences } from '../prefs/preferences';
 import { buildChartRenderPayload, type ChartReference } from './exporters';
 import type { ResultPayload } from './types';
 
@@ -48,7 +48,7 @@ export function buildCanonicalDirectivityRequest(
       reference_directivity: reference ? directivityFor(reference.result, plane) : null,
       reference_label: reference?.label ?? null,
       reference_level: preferences.mapReference,
-      theme: preferences.chartTheme,
+      theme: resolveChartTheme(preferences.chartTheme),
     },
   };
 }

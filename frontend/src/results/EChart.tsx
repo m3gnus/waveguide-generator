@@ -39,40 +39,48 @@ export interface ChartTokens {
 }
 
 export function readChartTokens(): ChartTokens {
-  // These values mirror hornlab_plots.style.EMBER_THEME and SEPIA_THEME, the
-  // way they previously mirrored HORNLAB_THEME. Keeping the live charts on the
-  // same role palette as the export gives them the canonical look without
-  // replacing their responsive, inspectable canvas with a rendered PNG -- so
-  // these must move together with DEFAULT_CHART_THEME in server/charts/api.py.
+  // These values mirror hornlab_plots.style.CONSOLE_THEME and VELLUM_THEME,
+  // which are the interface's own palettes rather than an independent design.
+  // Keeping the live charts on the same role palette as the export gives them
+  // the canonical look without replacing their responsive, inspectable canvas
+  // with a rendered PNG -- so these must move together with
+  // DEFAULT_CHART_THEME in server/charts/api.py and with the themes there.
+  //
+  // background is the panel colour, not a darker plot well. A chart ground the
+  // interface uses nowhere else is what made the charts read as pasted into
+  // the window instead of part of it.
   //
   // muted is the tick/label role, which both themes set equal to their text
   // colour; mirrored as-is rather than dimmed, because the export does the
   // same and parity is the point of this table.
   //
-  // The colormaps are the themes' own heatmap_cmap sampled at ten stops:
-  // inferno for ember, magma for sepia. Both are perceptually uniform and
-  // monotonic in lightness, unlike the custom ramp they replace.
+  // The colormaps are each theme's own heatmap_cmap sampled at ten stops.
+  // Console reads the map on the arctic ramp -- its blue/violet/magenta travel
+  // separates shallow gradients a single-hue warm ramp cannot. Vellum cannot
+  // use arctic, whose floor is near-black and would make the quietest part of
+  // the map the heaviest thing on a page, so it reads the Klippel ramp with
+  // its white floor re-anchored to the page colour.
   const light = typeof document !== 'undefined' && document.documentElement.dataset.theme === 'light';
   return light ? {
-    background: '#FBF1DA',
-    foreground: '#586E75',
-    muted: '#586E75',
-    spine: '#586E75',
-    grid: '#93A1A1',
-    gridMinor: 'rgba(147, 161, 161, .5)',
-    accent: '#CB4B16',
-    series: ['#268BD2', '#CB4B16', '#859900', '#6C71C4', '#B58900', '#2AA198'],
-    colormap: ['#000004', '#180f3d', '#440f76', '#721f81', '#9e2f7f', '#cd4071', '#f1605d', '#fd9668', '#feca8d', '#fcfdbf'],
+    background: '#F1F2ED',
+    foreground: '#1D1F20',
+    muted: '#1D1F20',
+    spine: '#1D1F20',
+    grid: '#CBCDC5',
+    gridMinor: 'rgba(203, 205, 197, .5)',
+    accent: '#A5391B',
+    series: ['#A5391B', '#3180C8', '#835F00', '#008F99', '#8B54B0', '#398D51'],
+    colormap: ['#f1f2ed', '#c0d7ee', '#719fd4', '#3a71c0', '#3aa3c0', '#43c167', '#94d03f', '#e6e63a', '#ef942e', '#e11414'],
   } : {
-    background: '#221C19',
-    foreground: '#E8DDD3',
-    muted: '#E8DDD3',
-    spine: '#E8DDD3',
-    grid: '#4A403A',
-    gridMinor: 'rgba(74, 64, 58, .5)',
-    accent: '#D98324',
-    series: ['#3B6EA5', '#D98324', '#5FB49C', '#C77DFF', '#E8C547', '#E5657A'],
-    colormap: ['#000004', '#1b0c41', '#4a0c6b', '#781c6d', '#a52c60', '#cf4446', '#ed6925', '#fb9b06', '#f7d13d', '#fcffa4'],
+    background: '#211F1D',
+    foreground: '#ECE8E0',
+    muted: '#ECE8E0',
+    spine: '#ECE8E0',
+    grid: '#4A453D',
+    gridMinor: 'rgba(74, 69, 61, .5)',
+    accent: '#E0673F',
+    series: ['#E0673F', '#5D9BD9', '#AD8400', '#00A6AD', '#CA90F3', '#60B374'],
+    colormap: ['#050c18', '#0a2039', '#10355f', '#205181', '#3b6a9a', '#42558e', '#4f3389', '#742369', '#a32e43', '#c84428'],
   };
 }
 

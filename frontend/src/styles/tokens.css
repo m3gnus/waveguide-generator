@@ -77,34 +77,15 @@
   --gz-ring: var(--border-strong);
   --gz-fill: var(--surface-panel);
   --scale-bd: rgba(236,232,224,.24);
-  --grid: #2f2c28;
-  --grid-min: #252220;
-  --grid-zero: #4a453d;
-  --plot-bd: var(--border-default);
-  --chart-bg: #141312;
+  /* The chart ground is the panel, so the ECharts canvas and the card it
+     sits in are one surface. A darker plot well is what made every chart
+     read as a window cut into the interface. Mirrors CONSOLE_THEME's
+     figure_bg in hornlab-plots; see readChartTokens in results/EChart.tsx. */
+  --chart-bg: var(--surface-panel);
   --chart-page: var(--surface-panel);
   --chart-fg: var(--fg);
   --chart-muted: var(--fg3);
   --chart-spine: var(--border-strong);
-  --s0: #e0673f;
-  --s1: #bd7a5f;
-  --s2: #98806f;
-  --s3: #77786f;
-  --s4: #5c7570;
-  --z-unity: #4a463d;
-  --pol-fill: rgba(224,103,63,.12);
-  --hm-c1: rgba(236,232,224,.62);
-  --hm-c2: rgba(236,232,224,.28);
-  --hm-ax: rgba(236,232,224,.16);
-  --cm0: #141312;
-  --cm1: #33231d;
-  --cm2: #552f20;
-  --cm3: #7c3a22;
-  --cm4: #a44d26;
-  --cm5: #c8763c;
-  --cm6: #e0a86f;
-  --cm7: #f2d8b0;
-  --cm-pos: 0, .142857, .285714, .428571, .571429, .714286, .857143, 1;
   --h3-glow0: rgba(120,110,96,.18);
   --h3-glow1: rgba(70,64,56,.10);
   --h3-floor: #3a3730;
@@ -130,6 +111,8 @@
   --vp-source-material: #c07a4e;
   --vp-enclosure-material: #7a7367;
   --vp-wire-material: #ece8e0;
+  --vp-edge-material: var(--acc);
+  --vp-cap-material: #c07a4e;
   /* Semantic UI foundation — shared by every workspace surface. */
   --surface-canvas: #191817;
   --surface-panel: #211f1d;
@@ -272,11 +255,7 @@
   --gz-ring: var(--border-strong);
   --gz-fill: var(--surface-panel);
   --scale-bd: rgba(29,31,32,.30);
-  --grid: #d7d9d2;
-  --grid-min: #e4e6df;
-  --grid-zero: #a5a89f;
-  --plot-bd: var(--border-default);
-  --chart-bg: #f7f8f4;
+  --chart-bg: var(--surface-panel);
   --chart-page: var(--surface-panel);
   --chart-fg: var(--fg);
   --chart-muted: var(--fg3);
@@ -290,21 +269,6 @@
   --border-strong: #a5a89f;
   --focus-ring: rgba(165,57,27,.85);
   --focus-halo: rgba(165,57,27,.18);
-  --s3: #8a9aa2;
-  --s4: #b0bcc1;
-  --z-unity: #b4b7ae;
-  --hm-c1: rgba(29,31,32,.60);
-  --hm-c2: rgba(29,31,32,.26);
-  --hm-ax: rgba(29,31,32,.18);
-  --cm0: #f7f8f4;
-  --cm1: #e6e1d6;
-  --cm2: #d2c4b0;
-  --cm3: #bda389;
-  --cm4: #a37f62;
-  --cm5: #835e44;
-  --cm6: #5d402d;
-  --cm7: #33231a;
-  --cm-pos: 0, .26, .45, .60, .72, .83, .92, 1;
   --h3-glow0: rgba(200,196,182,.16);
   --h3-glow1: rgba(220,216,204,.06);
   --h3-floor: #c5c7c0;
@@ -330,16 +294,14 @@
   --vp-source-material: #a5674a;
   --vp-enclosure-material: #8a8d85;
   --vp-wire-material: #2f3234;
+  --vp-edge-material: var(--acc);
+  --vp-cap-material: #a5674a;
 
   /* added by the Console/Vellum system */
   --surface-field: #e6e7e1;
   --border-control: #c0c3ba;
   --inv-bg: #1d1f20;
   --inv-fg: #f1f2ed;
-  --s0: #a5391b;
-  --s1: #3e4f5c;
-  --s2: #5f7480;
-  --pol-fill: rgba(165,57,27,.10);
 }
 
 @theme {

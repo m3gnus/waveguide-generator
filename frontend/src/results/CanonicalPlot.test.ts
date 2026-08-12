@@ -45,7 +45,18 @@ describe('canonical HornLab plots', () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ charts: { frequency_response: 'data:image/png;base64,AQ==' } }), { status: 200 }));
     await expect(fetchCanonicalPlot(request, fetcher)).resolves.toBe('data:image/png;base64,AQ==');
     expect(String(fetcher.mock.calls[0][0])).toBe('/api/render-charts');
-    expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).toMatchObject({ theme: 'hornlab', frequencies: [500, 1_000] });
+    expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).toMatchObject({ theme: 'console', frequencies: [500, 1_000] });
+  });
+
+  // The default export theme follows the window rather than naming a theme,
+  // so a figure taken from a light interface does not come back on a dark
+  // ground -- and the chart on screen and the chart in the file agree.
+  it('resolves the default export theme from the interface theme', () => {
+    document.documentElement.dataset.theme = 'light';
+    expect(buildCanonicalDirectivityRequest(result, preferencesStore.getSnapshot(), 'horizontal').payload.theme).toBe('vellum');
+    document.documentElement.dataset.theme = 'dark';
+    expect(buildCanonicalDirectivityRequest(result, preferencesStore.getSnapshot(), 'horizontal').payload.theme).toBe('console');
+    delete document.documentElement.dataset.theme;
   });
 
   it('deduplicates identical render requests', async () => {
