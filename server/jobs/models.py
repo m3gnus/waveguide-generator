@@ -242,10 +242,59 @@ class ParametricGeometrySource(JobModel):
         return self
 
 
+class DriverSpec(JobModel):
+    """Thiele-Small driver model for one drive channel, Hornresp units.
+
+    The wire keeps Hornresp's units (Sd cm², Le mH, Mmd/Mms g, Cms m/N,
+    Vas L, Rms kg/s, Xmax mm) exactly as the Fusion add-in documents them;
+    conversion to SI happens once, in ``server/solver/driver_lem.py``.
+    """
+
+    sd_cm2: float = Field(gt=0, allow_inf_nan=False)
+    bl_t_m: float = Field(gt=0, allow_inf_nan=False)
+    re_ohm: float = Field(gt=0, allow_inf_nan=False)
+    le_mh: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    mmd_g: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    mms_g: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    cms_m_per_n: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    vas_l: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    fs_hz: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    rms_kg_per_s: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    qms: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    xmax_mm: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    count: int = Field(default=1, ge=1, le=64)
+    rear_volume_l: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def validate_completeness(self) -> "DriverSpec":
+        if (self.mmd_g is None) == (self.mms_g is None):
+            raise ValueError("driver needs exactly one of mmd_g or mms_g")
+        if self.cms_m_per_n is None and self.vas_l is None and self.fs_hz is None:
+            raise ValueError("driver needs one of cms_m_per_n, vas_l, or fs_hz")
+        return self
+
+
 class DriveChannel(JobModel):
     id: str = Field(min_length=1)
     source_ids: list[str] = Field(min_length=1)
     motion: Literal["normal", "axial"] = "normal"
+    driver: DriverSpec | None = None
+
+    @model_validator(mode="after")
+    def validate_driver_applicability(self) -> "DriveChannel":
+        if self.driver is None:
+            return self
+        if self.motion != "normal":
+            raise ValueError(
+                "a driver model requires normal source motion; axial channels "
+                "cannot carry one yet"
+            )
+        if len(self.source_ids) != 1:
+            raise ValueError(
+                "a driver model requires a single-source channel: the radiating "
+                "area and surface pressure belong to exactly one source patch"
+            )
+        return self
 
     @field_validator("id")
     @classmethod
@@ -367,6 +416,8 @@ class ImportedGeometrySource(JobModel):
     artifact_sha256: str
     drive_channels: list[DriveChannel] = Field(min_length=1)
     combine: ChannelCombineSpec | None = None
+    drive_voltage_v: float = Field(default=2.83, gt=0, allow_inf_nan=False)
+    rg_ohm: float = Field(default=0.0, ge=0, allow_inf_nan=False)
     mesh: ImportedMeshSizes
     acknowledged_findings: list[str] = Field(default_factory=list)
     skipped_source_ids: list[str] = Field(default_factory=list)

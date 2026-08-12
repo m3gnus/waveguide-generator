@@ -821,6 +821,20 @@ class JobRuntime:
                 },
             )
         active_sources = set(source_by_id) - requested_skips
+        for channel in geometry.drive_channels:
+            if channel.driver is None:
+                continue
+            source = source_by_id.get(channel.source_ids[0], {})
+            observed = source.get("observed")
+            observed = observed if isinstance(observed, Mapping) else {}
+            area = observed.get("total_area_mm2")
+            if not isinstance(area, (int, float)) or float(area) <= 0.0:
+                raise ImportedSolveRefusal(
+                    "driver_source_area_unavailable",
+                    f"channel {channel.id!r} carries a driver model but its "
+                    "source has no recorded positive area; re-ingest the return",
+                    details={"channel_id": channel.id},
+                )
         driven_sources = {
             source_id
             for channel in geometry.drive_channels
