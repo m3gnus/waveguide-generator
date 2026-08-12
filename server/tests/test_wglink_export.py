@@ -435,7 +435,7 @@ def test_exchange_directories_windows_fallback_swaps_and_restores(
     assert first.exists()
 
 
-def test_bundle_name_rejects_casefold_and_sanitized_unicode_collisions(
+def test_bundle_name_rejects_casefold_and_disambiguates_an_owned_name(
     tmp_path: Path,
 ) -> None:
     root = tmp_path / "wglink"
@@ -450,8 +450,22 @@ def test_bundle_name_rejects_casefold_and_sanitized_unicode_collisions(
     existing.rename(root / "waveguide.wglink")
     assert api._base_name("\N{ANGSTROM SIGN}") == "waveguide"
     assert api._base_name("\N{COLLISION SYMBOL}") == "waveguide"
-    with pytest.raises(ValueError, match="another design"):
-        api._bundle_destination(root, api._base_name("\N{COLLISION SYMBOL}"), "wgd_requested")
+    destination = api._bundle_destination(
+        root, api._base_name("\N{COLLISION SYMBOL}"), "wgd_requested"
+    )
+    assert destination.parent == root
+    assert destination.name.startswith("waveguide-")
+    assert destination.name.endswith(".wglink")
+    assert destination != existing
+
+    destination.mkdir()
+    (destination / "wglink.json").write_text(
+        json.dumps({"design": {"id": "wgd_requested"}})
+    )
+    assert (
+        api._bundle_destination(root, "waveguide", "wgd_requested")
+        == destination
+    )
 
 
 def test_bundle_base_name_cannot_escape_workspace(tmp_path: Path) -> None:
@@ -504,11 +518,9 @@ def test_concurrent_designs_cannot_claim_the_same_bundle_name(
         results = list(pool.map(export, [(first_saved, "first"), (second_saved, "second")]))
 
     successes = [result for result in results if isinstance(result, dict)]
-    conflicts = [result for result in results if isinstance(result, HTTPException)]
-    assert len(successes) == 1
-    assert len(conflicts) == 1
-    assert conflicts[0].status_code == 409
-    assert "another design" in str(conflicts[0].detail)
+    assert len(successes) == 2
+    assert len({result["bundlePath"] for result in successes}) == 2
+    assert all(Path(result["bundlePath"]).is_dir() for result in successes)
 
 
 def test_wglink_export_rejects_a_stale_workspace_path(tmp_path: Path) -> None:
