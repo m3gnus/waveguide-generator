@@ -1,5 +1,5 @@
 import { useEffect, useState, type RefObject } from 'react';
-import { decorateRunName, nextRunName, runNameFromFilename, type RunNameDateFormat, type RunNameDatePosition } from '../jobs/runNaming';
+import { decorateRunName, nextRunName, runNameFromFilename, type RunNameDateFormat, type RunNameDatePosition, type RunNameNumberFormat, type RunNameNumberPosition } from '../jobs/runNaming';
 import { projectSubmittedDesign, type SubmittedDesignProjection } from '../jobs/submittedProjection';
 import { useDesignStore } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
@@ -109,7 +109,9 @@ function JobsPreferencesContent({ now = new Date() }: { now?: Date }) {
     <h3 className="preferences-section-title">Jobs</h3>
     <p className="preferences-section-copy">Naming, ordering, and visibility defaults for solve history.</p>
     <div className="job-naming-preferences">
-      <label className="ui-field">Run name<input aria-label="Job design name" value={nameDraft} onFocus={() => setEditing(true)} onChange={(event) => setNameDraft(event.target.value)} onBlur={commitName} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}/></label>
+      <label className="ui-field job-run-name-field">Run name<input aria-label="Job design name" value={nameDraft} onFocus={() => setEditing(true)} onChange={(event) => setNameDraft(event.target.value)} onBlur={commitName} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}/></label>
+      <label className="ui-field">Number<select aria-label="Run-name number position" value={preferences.runNameNumberPosition} onChange={(event) => preferencesStore.update({ runNameNumberPosition: event.target.value as RunNameNumberPosition })}><option value="off">Off</option><option value="suffix">After name</option></select></label>
+      <label className="ui-field">Number format<select aria-label="Run-name number format" value={preferences.runNameNumberFormat} disabled={preferences.runNameNumberPosition === 'off'} onChange={(event) => preferencesStore.update({ runNameNumberFormat: event.target.value as RunNameNumberFormat })}><option value="natural">1, 2, 3</option><option value="2-digit">01, 02, 03</option><option value="3-digit">001, 002, 003</option></select></label>
       <label className="ui-field">Date<select aria-label="Run-name date position" value={preferences.runNameDatePosition} onChange={(event) => preferencesStore.update({ runNameDatePosition: event.target.value as RunNameDatePosition })}><option value="off">Off</option><option value="prefix">Before name</option><option value="suffix">After name</option></select></label>
       <label className="ui-field">Date format<select aria-label="Run-name date format" value={preferences.runNameDateFormat} disabled={preferences.runNameDatePosition === 'off'} onChange={(event) => preferencesStore.update({ runNameDateFormat: event.target.value as RunNameDateFormat })}><option value="yymmdd">YYMMDD</option><option value="yyyy-mm-dd">YYYY-MM-DD</option></select></label>
       <span className="job-name-preview">next · <b>{displayedLabel}</b></span>

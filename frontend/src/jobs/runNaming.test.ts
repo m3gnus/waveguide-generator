@@ -16,6 +16,8 @@ describe('design-tracking run names', () => {
     expect(incrementTrailingDigits('asro68')).toBe('asro69');
     expect(incrementTrailingDigits('horn_007')).toBe('horn_008');
     expect(incrementTrailingDigits('horn_999')).toBe('horn_1000');
+    expect(incrementTrailingDigits('horn', 2)).toBe('horn02');
+    expect(incrementTrailingDigits('horn9', 3)).toBe('horn010');
   });
 
   it('appends 2 when no trailing digits exist', () => {
@@ -33,6 +35,20 @@ describe('design-tracking run names', () => {
     const changed = structuredClone(baseline);
     changed.design.scale = 2;
     expect(nextRunName({ outputName: 'asro68', nameSourceProjection: baseline }, changed)).toBe('asro69');
+  });
+
+  it('can turn design-change numbering off or apply a minimum width', () => {
+    const baseline = projection();
+    const changed = structuredClone(baseline);
+    changed.design.scale = 2;
+    expect(nextRunName({
+      outputName: 'horn', nameSourceProjection: baseline,
+      runNameNumberPosition: 'off', runNameNumberFormat: 'natural',
+    }, changed)).toBe('horn');
+    expect(nextRunName({
+      outputName: 'horn', nameSourceProjection: baseline,
+      runNameNumberPosition: 'suffix', runNameNumberFormat: '2-digit',
+    }, changed)).toBe('horn02');
   });
 
   it('uses a file stem, then horn for an untitled document, before a baseline exists', () => {

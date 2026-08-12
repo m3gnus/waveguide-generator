@@ -30,6 +30,8 @@ describe('client preferences', () => {
       autoExportOnComplete: false,
       runNameDatePosition: 'off',
       runNameDateFormat: 'yymmdd',
+      runNameNumberPosition: 'suffix',
+      runNameNumberFormat: 'natural',
     });
   });
   it('migrates v7 naming preferences to opt-in date decoration', () => {
@@ -43,6 +45,8 @@ describe('client preferences', () => {
       nameSourceProjection: null,
       runNameDatePosition: 'off',
       runNameDateFormat: 'yymmdd',
+      runNameNumberPosition: 'suffix',
+      runNameNumberFormat: 'natural',
     });
   });
   it('copies a pre-split selection to both lists when auto-export was enabled', () => {
