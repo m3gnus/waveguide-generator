@@ -36,9 +36,16 @@ def test_update_guard_releases_lock_before_launch(
     data_dir = tmp_path / "data"
     monkeypatch.setenv("WG2_DATA_DIR", str(data_dir))
     launched = tmp_path / "launched"
-    launcher = tmp_path / "launcher.sh"
-    launcher.write_text(f"#!/bin/sh\ntouch {launched}\n", encoding="utf-8")
-    launcher.chmod(0o755)
+    # The guard runs the launcher path directly, so it has to be something this
+    # OS can execute on its own. Windows honours neither the shebang nor the
+    # executable bit, and the launcher it ships there is not a shell script.
+    if sys.platform == "win32":
+        launcher = tmp_path / "launcher.bat"
+        launcher.write_text(f'@echo off\r\ntype nul > "{launched}"\r\n', encoding="utf-8")
+    else:
+        launcher = tmp_path / "launcher.sh"
+        launcher.write_text(f"#!/bin/sh\ntouch '{launched}'\n", encoding="utf-8")
+        launcher.chmod(0o755)
 
     original_run = subprocess.run
 
