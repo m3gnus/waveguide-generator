@@ -15,6 +15,7 @@ export interface CadReturnBundle {
   modifiedAt: string;
   readable: boolean;
   documentName: string | null;
+  requestId: string | null;
   sourceCount: number | null;
   instanceCount: number | null;
   sources: CadReturnSourceSummary[];
@@ -23,7 +24,7 @@ export interface CadReturnBundle {
 
 export interface CadReturnListing { items: CadReturnBundle[] }
 
-export type FusionCadState = 'closed' | 'no_document' | 'not_linked' | 'current' | 'stale';
+export type FusionCadState = 'closed' | 'addin_offline' | 'no_document' | 'not_linked' | 'current' | 'stale';
 
 export interface FusionCadLink {
   instanceId: string;
@@ -38,6 +39,10 @@ export interface FusionCadLink {
   parameterCount: number;
   parameterDriftCount: number;
   localBodyState: 'unmodified' | 'modified' | 'missing' | 'unknown';
+  bodyFingerprintHash: string | null;
+  documentSignatureHash: string | null;
+  documentBodyCount: number;
+  sourceStateHash: string | null;
   exportId: string | null;
   exportSequence: string | null;
 }
@@ -45,12 +50,17 @@ export interface FusionCadLink {
 export interface FusionCadStatus {
   cadApplication: 'fusion360';
   state: FusionCadState;
+  /** Fusion process detection is separate from the WGLink heartbeat. */
+  processRunning: boolean;
   running: boolean;
   updatedAt: string | null;
   documentName: string | null;
+  documentId: string | null;
   currentFormula: string;
   fusionFormula: string | null;
   link: FusionCadLink | null;
+  wgChangesAvailable: boolean;
+  fusionChangesAvailable: boolean;
 }
 
 export interface CadReturnIngestRequest {
@@ -174,12 +184,29 @@ export function listReturns(fetcher: typeof fetch = fetch): Promise<CadReturnLis
 export function getFusionCadStatus(
   design: DesignDocument,
   identity: DesignIdentity | null,
+  returnBundlePath: string | null = null,
   fetcher: typeof fetch = fetch,
 ): Promise<FusionCadStatus> {
   return jsonRequest('/api/cadlink/fusion-status', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ design: serializeDesign(design), identity }),
+    body: JSON.stringify({ design: serializeDesign(design), identity, returnBundlePath }),
+  }, fetcher);
+}
+
+export function requestFusionReturn(
+  target: {
+    designId: string;
+    documentId: string;
+    instanceId: string;
+    expectedReturnStateHash: string | null;
+  },
+  fetcher: typeof fetch = fetch,
+): Promise<{ status: 'requested'; requestId: string; documentName: string }> {
+  return jsonRequest('/api/cadlink/request-fusion-return', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(target),
   }, fetcher);
 }
 

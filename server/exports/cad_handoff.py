@@ -21,7 +21,12 @@ IPC_SUBDIRECTORY = Path("ipc") / "wglink"
 
 
 def publish_fusion_handoff(
-    data_dir: Path, workspace_root: Path, result: Mapping[str, object]
+    data_dir: Path,
+    workspace_root: Path,
+    result: Mapping[str, object],
+    *,
+    expected_document_id: str | None = None,
+    expected_return_state_hash: str | None = None,
 ) -> Path:
     """Atomically announce one completed bundle to the Fusion add-in."""
 
@@ -44,6 +49,8 @@ def publish_fusion_handoff(
         "exportId": export_id,
         "sequence": int(result.get("sequence") or 0),
         "designId": str(((result.get("identity") or {}) if isinstance(result.get("identity"), Mapping) else {}).get("designId") or "") or None,
+        "expectedDocumentId": expected_document_id,
+        "expectedReturnStateHash": expected_return_state_hash,
         "requestedAt": datetime.now(timezone.utc)
         .isoformat(timespec="seconds")
         .replace("+00:00", "Z"),

@@ -18,7 +18,8 @@ from server.design.schema import DesignConfig
 from server.mesh.gmsh_worker import run_on_gmsh_worker
 from server.workspace.api import WorkspaceState, _path_segments, _strictly_inside
 
-from .fusion_status import read_fusion_status
+from .fusion_status import fusion_process_running, read_fusion_status
+from .fusion_return import publish_return_request
 from .ingest import IngestRefusal, get_ingestion_record, ingest_bundle
 from .store import CadLinkStore
 from .wgreturn import WgReturnError
@@ -51,6 +52,18 @@ class FusionStatusRequest(BaseModel):
 
     design: DesignConfig
     identity: SaveIdentity | None = None
+    return_bundle_path: str | None = Field(default=None, alias="returnBundlePath")
+
+
+class FusionReturnRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    design_id: str = Field(alias="designId", min_length=1)
+    document_id: str = Field(alias="documentId", min_length=1)
+    instance_id: str = Field(alias="instanceId", min_length=1)
+    expected_return_state_hash: str | None = Field(
+        default=None, alias="expectedReturnStateHash"
+    )
 
 
 router = APIRouter(prefix="/api/cadlink", tags=["cadlink"])
@@ -78,6 +91,7 @@ def _return_listing(workspace_root: Path) -> list[dict[str, Any]]:
             "modifiedAt": modified_at,
             "readable": False,
             "documentName": None,
+            "requestId": None,
             "sourceCount": None,
             "instanceCount": None,
             "sources": [],
@@ -111,6 +125,11 @@ def _return_listing(workspace_root: Path) -> list[dict[str, Any]]:
                 {
                     "readable": True,
                     "documentName": str(document.get("name") or candidate.stem),
+                    "requestId": (
+                        str(document.get("request_id"))
+                        if document.get("request_id")
+                        else None
+                    ),
                     "sourceCount": len(sources),
                     "instanceCount": len(instances),
                     "sources": source_summaries,
@@ -148,13 +167,108 @@ async def fusion_status(
             status_code=409,
             detail="No workspace folder has been selected. Choose a workspace folder first.",
         )
+    workspace_root = selected.resolve()
+    returned_bundle: Path | None = None
+    if payload.return_bundle_path:
+        try:
+            selected_return = (workspace_root / payload.return_bundle_path).resolve()
+            _strictly_inside(selected_return, workspace_root, "returnBundlePath")
+            if (
+                selected_return.is_symlink()
+                or not selected_return.is_dir()
+                or selected_return.suffix != ".wgreturn"
+            ):
+                raise ValueError("Selected CAD return is unavailable.")
+            manifest = json.loads(
+                (selected_return / "wgreturn.json").read_text(encoding="utf-8")
+            )
+            instances = manifest.get("instances")
+            if payload.identity is None or (
+                isinstance(instances, list)
+                and any(
+                    isinstance(instance, dict)
+                    and instance.get("design_id") == payload.identity.design_id
+                    for instance in instances
+                )
+            ):
+                returned_bundle = selected_return
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if returned_bundle is None and payload.identity is not None:
+        for candidate in _return_listing(workspace_root):
+            if not candidate.get("readable"):
+                continue
+            candidate_path = workspace_root / str(candidate["bundlePath"])
+            try:
+                manifest = json.loads(
+                    (candidate_path / "wgreturn.json").read_text(encoding="utf-8")
+                )
+                instances = manifest.get("instances")
+            except (OSError, ValueError, TypeError):
+                continue
+            if isinstance(instances, list) and any(
+                isinstance(instance, dict)
+                and instance.get("design_id") == payload.identity.design_id
+                for instance in instances
+            ):
+                returned_bundle = candidate_path
+                break
     return await asyncio.to_thread(
         read_fusion_status,
         Path(request.app.state.data_dir),
         current_design_hash=design_hash(payload.design),
         current_formula=payload.design.root.formula,
         design_id=payload.identity.design_id if payload.identity else None,
+        process_running=await asyncio.to_thread(fusion_process_running),
+        returned_bundle=returned_bundle,
     )
+
+
+@router.post("/request-fusion-return")
+async def request_fusion_return(
+    payload: FusionReturnRequest, request: Request
+) -> dict[str, str]:
+    """Ask the connected add-in to export the active Fusion document to WG."""
+
+    status = await asyncio.to_thread(
+        read_fusion_status,
+        Path(request.app.state.data_dir),
+        current_design_hash="",
+        current_formula="",
+        design_id=payload.design_id,
+        process_running=await asyncio.to_thread(fusion_process_running),
+    )
+    session_id = str(status.get("sessionId") or "")
+    if not status.get("running") or not session_id:
+        raise HTTPException(
+            status_code=409,
+            detail="Fusion is running, but WGLink is offline. Restart WGLink in Fusion first.",
+        )
+    link = status.get("link")
+    if (
+        status.get("documentId") != payload.document_id
+        or not isinstance(link, dict)
+        or link.get("designId") != payload.design_id
+        or link.get("instanceId") != payload.instance_id
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="The active Fusion document changed. Refresh CAD Link and try again.",
+        )
+    _marker, request_id = await asyncio.to_thread(
+        publish_return_request,
+        Path(request.app.state.data_dir),
+        session_id=session_id,
+        design_id=payload.design_id,
+        document_id=payload.document_id,
+        instance_id=payload.instance_id,
+        expected_return_state_hash=payload.expected_return_state_hash,
+    )
+    return {
+        "status": "requested",
+        "requestId": request_id,
+        "documentName": str(status.get("documentName") or "Untitled"),
+    }
 
 
 def _ingest_error(exc: Exception) -> HTTPException:
