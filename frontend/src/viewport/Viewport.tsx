@@ -7,7 +7,8 @@ import { Icon } from '../shell/icons';
 import { useViewerPreferences, viewerPreferences, type CameraProjection } from '../viewerprefs/viewerPreferences';
 import { ViewerPreferencesPanel } from '../viewerprefs/ViewerPreferencesPanel';
 import { frameToScene, hasRenderableSurfaces, MAX_EDGE_TRIANGLES } from './frameScene';
-import { createImportedMeshScene, type ImportedMeshScene } from './importedMesh';
+import { createImportedMeshScene } from './importedMesh';
+import { importedMeshStore } from './importedMeshStore';
 import type { CameraDirection } from './cameraMath';
 import { ClientLatencyClock, formatClientLatency } from './clientLatency';
 import { selectPreferredFrame } from './lodPolicy';
@@ -75,7 +76,11 @@ export function Viewport() {
   const [zoomRequest, setZoomRequest] = useState<ZoomRequest>({ direction: 'in', nonce: 0 });
   const [cameraProjection, setCameraProjection] = useState<CameraProjection>(() => preferences.startupCameraMode);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
-  const [importedMesh, setImportedMesh] = useState<ImportedMeshScene | null>(null);
+  const importedMesh = useSyncExternalStore(
+    importedMeshStore.subscribe,
+    importedMeshStore.getSnapshot,
+    importedMeshStore.getSnapshot,
+  );
   const [importError, setImportError] = useState<string | null>(null);
   const [dismissedPreviewError, setDismissedPreviewError] = useState<string | null>(null);
   const [refreshRequestedAt, setRefreshRequestedAt] = useState<number | null>(null);
@@ -125,8 +130,7 @@ export function Viewport() {
     setImportError(null);
     try {
       const imported = createImportedMeshScene(file.name, parseMSH(await file.text()));
-      setImportedMesh(imported);
-      setCameraRequest((current) => ({ ...current, nonce: current.nonce + 1 }));
+      importedMeshStore.set(imported);
     } catch (error) {
       setImportError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -135,10 +139,18 @@ export function Viewport() {
   };
 
   const clearImportedMesh = () => {
-    setImportedMesh(null);
+    importedMeshStore.set(null);
     setImportError(null);
-    setCameraRequest((current) => ({ ...current, nonce: current.nonce + 1 }));
   };
+
+  // The mesh may be set from outside this component (CAD Link after an
+  // ingest), so the camera refit follows the store rather than the setters.
+  const lastImportedMesh = useRef(importedMesh);
+  useEffect(() => {
+    if (lastImportedMesh.current === importedMesh) return;
+    lastImportedMesh.current = importedMesh;
+    setCameraRequest((current) => ({ ...current, nonce: current.nonce + 1 }));
+  }, [importedMesh]);
 
   useEffect(() => subscribeRevision((event) => {
     // Immediate revisions are discontinuous jumps, not intermediate points in a
