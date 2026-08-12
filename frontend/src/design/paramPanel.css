@@ -17,7 +17,7 @@
 .select-row.field-disabled label { cursor: help; }
 .disabled-reason, .lambda-hint { margin: -1px 0 2px; color: var(--fg4); font-size: var(--text-micro); line-height: 1.3; }
 .lambda-hint.warning { color: var(--amber); }
-.param-text-row > input { width: var(--field-w-wide); height: 21px; padding: 0 6px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg); font: var(--text-micro) var(--mono); }
+.param-text-row > input { width: var(--field-w); height: 21px; padding: 0 6px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg); font: var(--text-micro) var(--mono); }
 /* Tint only. A field that holds a formula is always on an `.expression-row`,
    which gives it the full width of the rail below; a width here could only ever
    have applied to a numeric raw, which is an ordinary field and sized like one. */
@@ -54,11 +54,10 @@
 .axis-toggles { display: flex; flex-wrap: wrap; gap: 4px 8px; margin: 4px 0; padding: 6px; border: 1px solid var(--hair-soft); border-radius: var(--r3); color: var(--fg2); font-size: var(--text-micro); text-transform: capitalize; }
 .section-note, .paste-meta { margin: 4px 0; color: var(--fg4); font-size: var(--text-micro); line-height: 1.35; }
 /* No width of its own. The directivity-map angles are rendered by a different
-   component from the parameter registry's fields, and it gave them 132px while
-   every field beside them was 86px -- so "Sweep start" under Frequency Sweep and
-   "Sweep start" under Directivity Map, one above the other in the same rail,
-   were visibly different-sized boxes holding "400" and "0". The widest value
-   these hold is three digits; 86px already fits "140.00 mm". */
+   component from the parameter registry's fields, and it gave them a width of
+   their own -- so "Sweep start" under Frequency Sweep and "Sweep start" under
+   Directivity Map, one above the other in the same rail, were visibly
+   different-sized boxes holding "400" and "0". Everything takes --field-w. */
 .family-switch-choice { margin: 2px 0 6px; padding: 6px; border: 1px solid rgba(var(--acc-rgb), .3); border-radius: var(--r3); background: rgba(var(--acc-rgb), .06); }
 .family-switch-choice > b, .family-switch-choice > span { display: block; }
 .family-switch-choice > b { color: var(--fg1); font-size: var(--text-micro); }

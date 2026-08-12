@@ -74,7 +74,16 @@ export class ReactPanelRenderer implements IContentRenderer {
   }
 }
 
-const PARAMETERS_WIDTH = 300;
+/**
+ * Wide enough for a parameter name beside the control column.
+ *
+ * The rail is a label and a --field-w control on one line, so its width is the
+ * one number that decides whether "Throat radius (r0)" reads as itself or as
+ * "Throat rad...". When the number box grew to the select's width to give the
+ * rail a single control edge, this grew by the same 46px, so the labels kept
+ * the room they had.
+ */
+const PARAMETERS_WIDTH = 346;
 const JOBS_WIDTH = 320;
 const RESULTS_HEIGHT = 340;
 const COMPACT_BREAKPOINT = 800;
@@ -141,7 +150,7 @@ export function createDefaultLayout(width: number, height: number): SerializedDo
   }
 
   if (layoutWidth < MEDIUM_BREAKPOINT) {
-    const parametersWidth = 280;
+    const parametersWidth = 326;
     const contentWidth = layoutWidth - parametersWidth;
     const resultsHeight = Math.min(300, Math.max(220, Math.round(layoutHeight * .38)));
     return {
