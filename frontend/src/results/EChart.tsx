@@ -94,10 +94,10 @@ export function useChartTokens(): ChartTokens {
   return tokens;
 }
 
-export function EChart({ option, label }: { option: EChartsOption; label: string }) {
+export function EChart({ option, label, live = false }: { option: EChartsOption; label: string; live?: boolean }) {
   return <ChartErrorBoundary label={label}>
     <Suspense fallback={<div role="status" aria-label={`${label} loading`} style={{ width: '100%', height: '100%', minHeight: 0 }} />}>
-      <LazyEChartRenderer option={option} label={label}/>
+      <LazyEChartRenderer option={option} label={label} live={live}/>
     </Suspense>
   </ChartErrorBoundary>;
 }

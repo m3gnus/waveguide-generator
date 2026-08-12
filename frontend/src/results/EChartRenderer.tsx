@@ -35,7 +35,7 @@ export function chartPixelRatio(deviceRatio = globalThis.devicePixelRatio || 1):
   return Math.min(3, Math.max(2, deviceRatio));
 }
 
-export function EChartRenderer({ option, label }: { option: EChartsOption; label: string }) {
+export function EChartRenderer({ option, label, live = false }: { option: EChartsOption; label: string; live?: boolean }) {
   const host = useRef<HTMLDivElement>(null);
   const chart = useRef<echarts.ECharts | null>(null);
 
@@ -66,8 +66,13 @@ export function EChartRenderer({ option, label }: { option: EChartsOption; label
   // clipped the incoming series -- the SPL and impedance panels drew the first
   // fifth of their data stretched across the whole card.
   useEffect(() => {
-    chart.current?.setOption(option, { notMerge: true, lazyUpdate: true });
-  }, [option]);
+    // ECharts otherwise animates every wholesale replacement. During a solve
+    // another snapshot can arrive before that transition ends, leaving the
+    // main thread continuously tweening charts whose data is already stale.
+    // The completed snapshot retains the normal transition.
+    const renderedOption = live ? { ...option, animation: false, animationDuration: 0 } : option;
+    chart.current?.setOption(renderedOption, { notMerge: true, lazyUpdate: true });
+  }, [live, option]);
 
   return <div ref={host} role="img" aria-label={label} style={{ width: '100%', height: '100%', minHeight: 0 }} />;
 }
