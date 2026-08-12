@@ -112,7 +112,7 @@ Still genuinely open, unchanged by the build:
 | R009 | Partial success and per-frequency failures have dedicated diagnostic display | `src/ui/simulation/results.js:262-410` | results | P4 | partial sweep UI fixture | Required | None |
 | R010 | Balloon has disabled, requested-missing, backend-unsupported, and available states | `server/solver/result_mapping.py:357-391` | results | P1/P4 | four-state mapper/UI test | Required | None |
 | R011 | Balloon panel is 3-D and has a frequency slider | `src/ui/results/balloonPanel.js:190-203`; `src/ui/results/balloonPanel.js:286-300` | results | P4 | interaction/visual test | Required | None |
-| R012 | Beam-shape derives a superellipse, beamwidths, aspect, and spherical DI | `server/solver/beam_shape.py:88-121`; `server/solver/beam_shape.py:236-312` | results | P4 | analytic balloon fixture | Required | None |
+| R012 | Beam-shape derives a superellipse, beamwidths, aspect, and the canonical full-sphere DI | `server/solver/beam_shape.py`; `server/solver/directivity_index.py` | results | P4 | analytic balloon fixture | Required | None |
 | R013 | Compare overlays keep active and reference frequency arrays separate | `src/ui/simulation/chartRequests.js:130-213` | results | P4 | mismatched-grid comparison | Required | None |
 | R014 | Results support classic/split dock, panel count, arrangement, and remembered chart slots | `src/ui/settings/layoutSettings.js:5-46` | results | P4 | layout persistence E2E | Required | None |
 | R015 | Server renders charts/directivity via hornlab-plots-compatible themes | `server/api/routes_misc.py:139-209` | results | P4 | theme/montage golden | Required | None |

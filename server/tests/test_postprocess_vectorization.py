@@ -158,13 +158,14 @@ def _scalar_beam_shape_summary(
             )
             fields["aspect_ratio"].append(round(fit["aspect_ratio"], 3))
             valid.append(True)
-        di = beam_shape._spherical_di_db(theta, grid)
+        di = beam_shape._spherical_di_db(theta, phi, grid)
         fields["spherical_di_db"].append(None if di is None else round(di, 2))
     return {
         "frequencies": [float(value) for value in frequencies],
         **fields,
         "level_db": beam_shape.BEAM_LEVEL_DB,
-        "di_domain": "sphere",
+        "di_domain": "full_sphere",
+        "di_sampling_domain": "full_sphere",
         "valid": valid,
     }
 

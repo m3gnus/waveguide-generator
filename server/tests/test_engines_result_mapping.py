@@ -187,8 +187,8 @@ def test_streamed_bempp_directivity_is_live_when_pressure_is_unavailable() -> No
     assert response["metadata"]["provisional"]["completed_frequency_count"] == 2
 
 
-def test_plane_di_keeps_the_native_on_axis_reference_when_display_norm_changes() -> None:
-    """The polar display reference must not change the integrated plane DI."""
+def test_combined_di_keeps_the_native_on_axis_reference_when_display_norm_changes() -> None:
+    """The polar display reference must not change the integrated full DI."""
 
     angles = np.linspace(0.0, 180.0, 181)
     levels = -6.0 * np.square(angles / 30.0)
@@ -229,9 +229,13 @@ def test_plane_di_keeps_the_native_on_axis_reference_when_display_norm_changes()
     assert ten_degree["directivity_phase"]["horizontal"][0][10][1] == pytest.approx(
         np.angle(result.pressure_complex[0, 0, 10], deg=True)
     )
-    assert ten_degree["di"]["di"]["horizontal"] == pytest.approx(
-        [13.18860501875189, 13.18860501875189]
+    assert ten_degree["di"]["di"] == pytest.approx(
+        [13.186937494670495, 13.186937494670495]
     )
+    assert ten_degree["metadata"]["directivity_index"]["method"] == (
+        "horizontal_vertical_orbit_approximation"
+    )
+    assert ten_degree["metadata"]["directivity_index"]["opposing_orbit_sides"] == "mirrored"
 
 
 @pytest.mark.parametrize(
@@ -246,10 +250,15 @@ def test_plane_di_keeps_the_native_on_axis_reference_when_display_norm_changes()
 def test_balloon_four_state_and_pole_normalization(
     requested: bool, configured: bool, with_sphere: bool, status: str
 ) -> None:
+    context = _context(spherical=requested)
+    if with_sphere:
+        # The fixture is a front-hemisphere grid, which is physically complete
+        # only for an infinite-baffle solve (the rear hemisphere is silent).
+        context.sim_type = 1
     response = build_solver_response(
         result=_native_result(sphere=with_sphere),
         config=_config(sphere_grid=(2, 3) if configured else None),
-        context=_context(spherical=requested),
+        context=context,
         start_time=0.0,
         metadata={},
         sound_speed_m_per_s=SOUND_SPEED_M_PER_S,
@@ -260,6 +269,14 @@ def test_balloon_four_state_and_pole_normalization(
         assert response["balloon"]["spl_norm_db"][0][0] == [0.0, 0.0, 0.0]
         assert response["balloon"]["spl_norm_db"][0][1] == pytest.approx([-6.02] * 3)
         assert response["balloon"]["hemisphere"] is True
+        assert response["metadata"]["directivity_index"]["method"] == "spherical_grid"
+        assert response["metadata"]["directivity_index"]["opposing_orbit_sides"] == (
+            "not_applicable"
+        )
+        assert isinstance(response["di"]["di"], list)
+        assert response["di"]["di"] == pytest.approx(
+            response["beam_shape"]["spherical_di_db"], abs=0.01
+        )
 
 
 def test_impedance_normalizes_by_the_sound_speed_the_engine_solved_with() -> None:

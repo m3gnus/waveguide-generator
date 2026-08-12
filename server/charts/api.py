@@ -204,7 +204,7 @@ def _preview(theme: str) -> str:
     payload = {
         "frequencies": frequencies,
         "spl": [91.0, 94.0, 96.0, 95.0, 92.0],
-        "di": {"horizontal": [3.0, 4.0, 6.0, 9.0, 13.0]},
+        "di": [3.0, 4.0, 6.0, 9.0, 13.0],
         "di_frequencies": frequencies,
         "impedance_frequencies": frequencies,
         "impedance_real": [1.2, 1.1, 1.0, 1.05, 1.15],

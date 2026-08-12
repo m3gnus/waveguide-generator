@@ -32,6 +32,7 @@ export interface ResultPayload extends JobResults {
     frequencies?: number[];
     level_db?: number;
     di_domain?: string;
+    di_sampling_domain?: string;
     valid?: boolean[];
     shape_exponent?: NullableNumber[];
     fit_residual_percent?: NullableNumber[];
