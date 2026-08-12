@@ -1056,6 +1056,7 @@ class JobStore:
                 len(removed_ids),
                 deleted_results,
             )
+        self._delete_discarded_result_logs()
         return affected_ids, events
 
     def append_event(
@@ -1269,6 +1270,48 @@ class JobStore:
                 self._job_log_path(job_id).unlink(missing_ok=True)
             except OSError as exc:
                 logger.warning("Could not remove retained log for job %s: %s", job_id, exc)
+
+    def _delete_discarded_result_logs(self) -> None:
+        """Remove result-tier logs, including leftovers from older sweeps.
+
+        Only names which could have been produced by :meth:`_job_log_path` are
+        considered. Active, rated, and result-bearing jobs are protected, as
+        are terminal jobs whose results were never marked as discarded.
+        """
+
+        try:
+            entries = tuple(self.job_logs_dir.iterdir())
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            logger.warning("Could not scan retained job logs: %s", exc)
+            return
+
+        with self._lock, self._connection() as conn:
+            kept_rows = conn.execute(
+                """SELECT id FROM simulation_jobs
+                   WHERE status NOT IN ('complete', 'error', 'cancelled')
+                      OR COALESCE(
+                           CAST(json_extract(task_metadata_json, '$.rating') AS INTEGER), 0
+                         ) > 0
+                      OR has_results = 1
+                      OR json_extract(
+                           task_metadata_json, '$.results_discarded_at'
+                         ) IS NULL"""
+            ).fetchall()
+            kept_names = {
+                self._job_log_path(str(row["id"])).name for row in kept_rows
+            }
+
+            for path in entries:
+                if path.name in kept_names or self._job_log_path(path.stem).name != path.name:
+                    continue
+                try:
+                    path.unlink(missing_ok=True)
+                except IsADirectoryError:
+                    continue
+                except OSError as exc:
+                    logger.warning("Could not remove discarded result log %s: %s", path, exc)
 
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
