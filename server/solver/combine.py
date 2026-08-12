@@ -15,12 +15,95 @@ complex conjugate. See CAD-LINK-PHASE3.md §2.
 
 from __future__ import annotations
 
+import io
 from types import SimpleNamespace
 from typing import Any, Mapping
 
 import numpy as np
 
 _TWO_PI = 2.0 * np.pi
+
+# Serialized per-channel complex bases (persisted with a job) so a new
+# crossover can recombine in milliseconds without re-solving. The fields stay
+# in the solver's exp(+ikr) convention and the file says so.
+CHANNEL_BASES_VERSION = 1
+_BASES_PHASE_CONVENTION = "solver_exp_plus_ikr"
+
+
+def serialize_channel_bases(results_by_id: Mapping[str, Any]) -> bytes:
+    """Pack the frequency-sorted native channel results into a compressed NPZ."""
+
+    channel_ids = list(results_by_id)
+    base = results_by_id[channel_ids[0]]
+    arrays: dict[str, np.ndarray] = {
+        "version": np.asarray(CHANNEL_BASES_VERSION),
+        "phase_convention": np.asarray(_BASES_PHASE_CONVENTION),
+        "channel_ids": np.asarray(channel_ids, dtype=str),
+        "frequencies_hz": np.asarray(base.frequencies_hz, dtype=np.float64).reshape(-1),
+        "observation_angles_deg": np.asarray(base.observation_angles_deg, dtype=np.float64),
+        "observation_planes": np.asarray(list(base.observation_planes), dtype=str),
+    }
+    spheres_present = all(
+        getattr(results_by_id[name], "sphere_pressure_complex", None) is not None
+        for name in channel_ids
+    )
+    if spheres_present:
+        arrays["sphere_theta_deg"] = np.asarray(base.sphere_theta_deg, dtype=np.float64)
+        arrays["sphere_phi_deg"] = np.asarray(base.sphere_phi_deg, dtype=np.float64)
+    for name in channel_ids:
+        result = results_by_id[name]
+        arrays[f"pressure::{name}"] = np.asarray(
+            result.pressure_complex, dtype=np.complex128
+        )
+        if spheres_present:
+            arrays[f"sphere::{name}"] = np.asarray(
+                result.sphere_pressure_complex, dtype=np.complex128
+            )
+    buffer = io.BytesIO()
+    np.savez_compressed(buffer, **arrays)
+    return buffer.getvalue()
+
+
+def deserialize_channel_bases(data: bytes) -> dict[str, Any]:
+    """Rebuild the duck-typed channel results ``combine_drive_channels`` reads."""
+
+    with np.load(io.BytesIO(data)) as bundle:
+        version = int(bundle["version"])
+        if version != CHANNEL_BASES_VERSION:
+            raise ValueError(f"unsupported channel-bases version {version}")
+        convention = str(bundle["phase_convention"])
+        if convention != _BASES_PHASE_CONVENTION:
+            raise ValueError(f"unexpected channel-bases phase convention {convention!r}")
+        channel_ids = [str(name) for name in bundle["channel_ids"]]
+        frequencies = bundle["frequencies_hz"]
+        angles = bundle["observation_angles_deg"]
+        planes = [str(name) for name in bundle["observation_planes"]]
+        sphere_theta = bundle["sphere_theta_deg"] if "sphere_theta_deg" in bundle else None
+        sphere_phi = bundle["sphere_phi_deg"] if "sphere_phi_deg" in bundle else None
+        results: dict[str, Any] = {}
+        for name in channel_ids:
+            sphere_key = f"sphere::{name}"
+            results[name] = SimpleNamespace(
+                frequencies_hz=frequencies,
+                observation_angles_deg=angles,
+                observation_points=None,
+                observation_planes=planes,
+                pressure_complex=bundle[f"pressure::{name}"],
+                impedance=np.zeros(frequencies.size, dtype=np.complex128),
+                solver_log=[],
+                timings={},
+                native_diagnostics=[],
+                sphere_pressure_complex=bundle[sphere_key] if sphere_key in bundle else None,
+                sphere_points=None,
+                sphere_theta_deg=sphere_theta,
+                sphere_phi_deg=sphere_phi,
+            )
+    return {
+        "channel_ids": channel_ids,
+        "frequencies_hz": frequencies,
+        "results_by_id": results,
+        "has_balloon": sphere_theta is not None,
+    }
 
 
 def _lr4_lowpass(freqs: np.ndarray, fc_hz: float) -> np.ndarray:
