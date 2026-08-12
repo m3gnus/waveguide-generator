@@ -186,7 +186,7 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
           }
         }}
       /> : null}
-      {!running && !editing && <button className="job-rename" aria-label={`Rename ${displayName}`} title="Rename run" onClick={() => { setRenameError(null); setEditing(true); }}>✎</button>}
+      {selected && !running && !editing && <button className="job-rename" aria-label={`Rename ${displayName}`} title="Rename run" onClick={() => { setRenameError(null); setEditing(true); }}>✎</button>}
       <time>{running ? duration(secondsBetween(job.started_at ?? job.queued_at, null, now)) : clock(job.completed_at ?? job.created_at)}</time>
       {!running && <button className="job-remove" aria-label={`Remove ${displayName}`} title="Remove this job" onClick={() => onRemove(job)}><Icon name="close"/></button>}
     </header>

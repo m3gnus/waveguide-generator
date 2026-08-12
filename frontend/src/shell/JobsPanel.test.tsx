@@ -92,10 +92,12 @@ describe('jobs panel run list', () => {
     const first = job(123, 'Shared title');
     const second = job(124, 'Shared title');
     publishJobs([first, second]);
+    compareSelection.setPrimary(first.id);
     const patch = vi.spyOn(jobsSocket, 'patchMetadata').mockResolvedValue(undefined);
     await act(async () => root.render(<JobsPanel/>));
     expect(host.textContent).toContain('#123 · Shared title');
     expect(host.textContent).toContain('#124 · Shared title');
+    expect(host.querySelectorAll('.job-rename')).toHaveLength(1);
 
     act(() => host.querySelector<HTMLButtonElement>('[aria-label="Rename #123 · Shared title"]')!.click());
     let input = host.querySelector<HTMLInputElement>('[aria-label="Title for run #123"]')!;
@@ -104,6 +106,7 @@ describe('jobs panel run list', () => {
     await act(async () => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
     expect(patch).toHaveBeenLastCalledWith(first.id, { label: '  Þröstur – horn  ' });
 
+    act(() => compareSelection.setPrimary(second.id));
     act(() => host.querySelector<HTMLButtonElement>('[aria-label="Rename #124 · Shared title"]')!.click());
     input = host.querySelector<HTMLInputElement>('[aria-label="Title for run #124"]')!;
     act(() => enter(input, 'Blur title'));
@@ -132,7 +135,9 @@ describe('jobs panel run list', () => {
   // not: with the caret merely placed at the end, the first character typed
   // appends to the old title instead of replacing it.
   it('selects the existing title when rename opens, so typing replaces it', async () => {
-    publishJobs([job(42, 'horn_v12')]);
+    const selected = job(42, 'horn_v12');
+    publishJobs([selected]);
+    compareSelection.setPrimary(selected.id);
     await act(async () => root.render(<JobsPanel/>));
 
     act(() => host.querySelector<HTMLButtonElement>('[aria-label="Rename #42 · horn_v12"]')!.click());
@@ -143,7 +148,9 @@ describe('jobs panel run list', () => {
   });
 
   it('shows a failed rename and restores the server title', async () => {
-    publishJobs([job(7, 'Original')]);
+    const selected = job(7, 'Original');
+    publishJobs([selected]);
+    compareSelection.setPrimary(selected.id);
     vi.spyOn(jobsSocket, 'patchMetadata').mockRejectedValue(new Error('offline'));
     await act(async () => root.render(<JobsPanel/>));
     act(() => host.querySelector<HTMLButtonElement>('[aria-label="Rename #7 · Original"]')!.click());
