@@ -17,11 +17,18 @@ from server.jobs.models import SolveRequest
 from server.mesh.builder import _solver_mesher_config
 
 from .acoustics import solver_sound_speed_m_per_s
-from .base import ArtifactCallback, CancelCallback, EngineRunResult, StageCallback
+from .base import (
+    ArtifactCallback,
+    CancelCallback,
+    EngineRunResult,
+    ResultCallback,
+    StageCallback,
+)
 from .context import SolverContext
 from .formulation import DEFAULT_BEM_FORMULATION, DEFAULT_COMPLEX_K_SHIFT
 from .metal import metal_status
 from .result_mapping import (
+    build_provisional_frequency_response,
     build_solver_response,
     json_safe_native_value,
     observation_config,
@@ -108,6 +115,7 @@ def solve_circsym_design(
     progress_callback: Any = None,
     stage_callback: StageCallback | None = None,
     cancellation_callback: CancelCallback | None = None,
+    result_callback: ResultCallback | None = None,
 ) -> dict[str, Any]:
     """Build a pure meridian and run the Metal axisymmetric sweep."""
 
@@ -152,6 +160,21 @@ def solve_circsym_design(
     def on_frequency_result(index: int, frequency_hz: float, entry: dict[str, Any]) -> bool:
         if cancellation_callback:
             cancellation_callback()
+        if result_callback is not None:
+            result_callback(
+                index,
+                build_provisional_frequency_response(
+                    index=index,
+                    frequency_hz=frequency_hz,
+                    entry=entry,
+                    config=config,
+                    context=context,
+                    backend="metal",
+                    sound_speed_m_per_s=solver_sound_speed_m_per_s(
+                        "hornlab_metal_bem"
+                    ),
+                ),
+            )
         return True
 
     if stage_callback:
@@ -172,7 +195,7 @@ def solve_circsym_design(
     )
     if aperture_tag is not None:
         kwargs["circsym_aperture_tag"] = aperture_tag
-    if cancellation_callback is not None:
+    if cancellation_callback is not None or result_callback is not None:
         kwargs["on_frequency_result"] = on_frequency_result
     if context.source_motion != "normal":
         kwargs["source_motion"] = context.source_motion
@@ -257,6 +280,7 @@ class CircSymEngine:
         cancel_cb: CancelCallback,
         stage_cb: StageCallback,
         artifact_cb: ArtifactCallback | None = None,
+        result_cb: ResultCallback | None = None,
     ) -> EngineRunResult:
         del artifact_cb
         context = SolverContext.from_request(request, solver_mode="circsym")
@@ -265,6 +289,7 @@ class CircSymEngine:
             context,
             stage_callback=stage_cb,
             cancellation_callback=cancel_cb,
+            result_callback=result_cb,
         )
         return EngineRunResult(results=results)
 

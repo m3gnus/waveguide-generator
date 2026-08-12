@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { CompareStore, fetchJobResults, ResultsLruCache, resultsCache, type JobResults } from '../api/results';
+import { CompareStore, fetchJobResults, mergeProvisionalResults, ProvisionalResultsStore, ResultsLruCache, resultsCache, type JobResults } from '../api/results';
 import { beamShapeSeries, complexToDb, directivityGrid, directivityIndexSeries, expandResultChannels, impedanceSeries, polarSeries, splSeries } from './mappers';
 
 function result(offset = 0): JobResults {
@@ -123,6 +123,45 @@ describe('results LRU', () => {
     expect(selection.getSnapshot()).toMatchObject({ primary: 'solve-1', following: false });
     expect(notifications).toBe(1);
     stop();
+  });
+});
+
+describe('provisional frequency results', () => {
+  it('appends frequency-shaped blocks and nested drive channels', () => {
+    const first: JobResults = {
+      frequencies: [200],
+      directivity: { horizontal: [[[0, 0], [90, -12]]] },
+      spl_on_axis: { frequencies: [200], spl: [90], phase_degrees: [0] },
+      channels: { hf: { frequencies: [200], impedance: { frequencies: [200], real: [1], imaginary: [0] } } },
+      channel_order: ['hf'],
+      metadata: { provisional: { completed_frequency_count: 1 } },
+    };
+    const second: JobResults = {
+      frequencies: [400],
+      directivity: { horizontal: [[[0, 0], [90, -18]]] },
+      spl_on_axis: { frequencies: [400], spl: [93], phase_degrees: [10] },
+      channels: { hf: { frequencies: [400], impedance: { frequencies: [400], real: [2], imaginary: [.5] } } },
+      channel_order: ['hf'],
+      metadata: { provisional: { completed_frequency_count: 2 } },
+    };
+
+    const merged = mergeProvisionalResults(first, second);
+    expect(merged.frequencies).toEqual([200, 400]);
+    expect(merged.directivity?.horizontal).toHaveLength(2);
+    expect(merged.spl_on_axis?.spl).toEqual([90, 93]);
+    expect(merged.channels?.hf.frequencies).toEqual([200, 400]);
+    expect(merged.channels?.hf.impedance?.real).toEqual([1, 2]);
+    expect((merged.metadata?.provisional as { completed_frequency_count: number }).completed_frequency_count).toBe(2);
+    expect(first.frequencies).toEqual([200]);
+  });
+
+  it('detects a dropped delta and accepts a full recovery snapshot', () => {
+    const store = new ProvisionalResultsStore();
+    expect(store.apply('solve', 1, { frequencies: [200] })).toBe(true);
+    expect(store.apply('solve', 3, { frequencies: [800] })).toBe(false);
+    expect(store.get('solve')?.result.frequencies).toEqual([200]);
+    expect(store.apply('solve', 3, { frequencies: [200, 400, 800] }, true)).toBe(true);
+    expect(store.get('solve')).toMatchObject({ revision: 3, result: { frequencies: [200, 400, 800] } });
   });
 });
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Collection
+import json
 from pathlib import Path
 from typing import Any
 
@@ -135,6 +136,22 @@ def create_jobs_router(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except JobResourceUnavailableError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @router.get("/api/partial-results/{job_id}", response_model=None)
+    async def partial_job_results(job_id: str) -> Response:
+        """Process-local correctness path for a dropped live-result delta."""
+
+        try:
+            partial = await runtime.get_partial_results(job_id)
+        except JobNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Job not found") from exc
+        except JobResourceUnavailableError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return Response(
+            content=json.dumps(partial, allow_nan=False),
+            media_type="application/json",
+            headers={"Cache-Control": "no-store"},
+        )
 
     @router.get("/api/mesh-artifact/{job_id}", response_class=PlainTextResponse)
     async def mesh_artifact(job_id: str) -> PlainTextResponse:

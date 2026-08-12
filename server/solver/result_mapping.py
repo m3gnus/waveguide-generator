@@ -13,6 +13,7 @@ import inspect
 import math
 import time
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -865,11 +866,107 @@ def build_solver_response(
     return response
 
 
+def build_provisional_frequency_response(
+    *,
+    index: int,
+    frequency_hz: float,
+    entry: dict[str, Any],
+    config: Any,
+    context: SolverContext,
+    backend: str,
+    sound_speed_m_per_s: float,
+) -> dict[str, Any]:
+    """Map one streamed native callback onto the ordinary result contract.
+
+    The native packages deliberately stream their compact per-frequency log
+    entries rather than constructing a second public result type.  Converting
+    that row here keeps provisional charts on exactly the same SPL, phase,
+    impedance, directivity-normalisation, and DI conventions as the durable
+    result built when the sweep finishes.
+
+    Older BEMPP callback entries expose normalised directivity but not complex
+    pressure.  They still produce a useful live directivity map; their absolute
+    SPL and phase cells remain null until the canonical result lands.
+    """
+
+    try:
+        angles = np.asarray(entry.get("observation_angles_deg"), dtype=float)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("streamed result has invalid observation angles") from exc
+    planes = [str(value) for value in entry.get("observation_planes") or []]
+    if angles.ndim != 1 or not planes:
+        raise ValueError("streamed result is missing observation angles or planes")
+
+    directivity_source = entry.get("observation_directivity_db")
+    if directivity_source is None:
+        directivity_source = entry.get("observation_spl_db")
+    try:
+        directivity_row = np.asarray(directivity_source, dtype=float)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("streamed result has invalid directivity values") from exc
+    expected_shape = (len(planes), angles.size)
+    if directivity_row.shape != expected_shape:
+        raise ValueError(
+            "streamed directivity shape does not match its planes/angles: "
+            f"{directivity_row.shape} != {expected_shape}"
+        )
+
+    pressure_source = entry.get("observation_pressure_complex")
+    if pressure_source is None:
+        # A zero complex row maps to contract nulls for absolute SPL and phase,
+        # while retaining the streamed normalised directivity values above.
+        pressure_row = np.zeros(expected_shape, dtype=np.complex128)
+    else:
+        try:
+            pressure_row = np.asarray(pressure_source, dtype=np.complex128)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("streamed result has invalid complex pressure") from exc
+        if pressure_row.shape != expected_shape:
+            raise ValueError(
+                "streamed pressure shape does not match its planes/angles: "
+                f"{pressure_row.shape} != {expected_shape}"
+            )
+
+    raw_impedance = entry.get("impedance")
+    try:
+        impedance = complex(raw_impedance) if raw_impedance is not None else complex(math.nan)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("streamed result has invalid impedance") from exc
+
+    native_result = SimpleNamespace(
+        frequencies_hz=np.asarray([float(frequency_hz)], dtype=float),
+        observation_angles_deg=angles,
+        observation_planes=planes,
+        pressure_complex=pressure_row[None, ...],
+        directivity_db=directivity_row[None, ...],
+        impedance=np.asarray([impedance], dtype=np.complex128),
+    )
+    response = build_solver_response(
+        result=native_result,
+        config=config,
+        context=context,
+        start_time=time.time(),
+        metadata={"solver_backend": backend},
+        sound_speed_m_per_s=sound_speed_m_per_s,
+    )
+    expected = (
+        len(context.frequencies_hz)
+        if context.frequencies_hz is not None
+        else int(context.num_frequencies)
+    )
+    response["metadata"]["provisional"] = {
+        "completed_frequency_count": int(index) + 1,
+        "expected_frequency_count": expected,
+    }
+    return response
+
+
 __all__ = [
     "REFERENCE_AIR_DENSITY_KG_PER_M3",
     "REFERENCE_PRESSURE_PA",
     "REFERENCE_RHO_C",
     "build_solver_response",
+    "build_provisional_frequency_response",
     "directivity",
     "directivity_phase",
     "json_safe_native_value",

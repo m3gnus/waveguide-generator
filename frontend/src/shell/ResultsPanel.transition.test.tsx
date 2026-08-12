@@ -2,7 +2,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
-import { compareSelection, resultsCache } from '../api/results';
+import { compareSelection, provisionalResults, resultsCache } from '../api/results';
 import { preferencesStore } from '../prefs/preferences';
 import { ResultsPanel } from './ResultsPanel';
 
@@ -47,6 +47,7 @@ describe('atomic results display transitions', () => {
   beforeEach(() => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     resultsCache.clear();
+    provisionalResults.clear();
     compareSelection.clear();
     preferencesStore.resetForTests();
     preferencesStore.update({ chartTypes: ['summary'] });
@@ -69,6 +70,7 @@ describe('atomic results display transitions', () => {
     publishJobs([]);
     compareSelection.clear();
     resultsCache.clear();
+    provisionalResults.clear();
     vi.unstubAllGlobals();
   });
 
@@ -175,5 +177,43 @@ describe('atomic results display transitions', () => {
     expect(host.querySelector('.results-panel')?.getAttribute('data-result-primary')).toBe('new');
     expect(host.querySelector('.results-panel')?.getAttribute('data-result-set')).toContain('new-overlay');
     expect(host.querySelector('.results-panel')?.getAttribute('data-result-set')).not.toContain('old');
+  });
+
+  it('follows the first streamed frequency, then swaps to the canonical result', async () => {
+    publishJobs([job('old')]);
+    compareSelection.followLatest('old');
+    await act(async () => { root.render(<ResultsPanel/>); });
+    await act(async () => { pending.get('old')!(response([100])); });
+
+    const liveJob = job('live');
+    Object.assign(liveJob, {
+      status: 'running', progress: .4, has_results: false, completed_at: null,
+      solve_options: { num_frequencies: 2 } as JobItem['solve_options'],
+    });
+    await act(async () => {
+      publishJobs([liveJob, job('old')]);
+      provisionalResults.apply('live', 1, {
+        frequencies: [200],
+        metadata: { provisional: { completed_frequency_count: 1, expected_frequency_count: 2 } },
+      });
+      await Promise.resolve();
+    });
+
+    expect(compareSelection.getSnapshot()).toMatchObject({ primary: 'live', following: true });
+    expect(host.querySelector('.results-panel')?.getAttribute('data-result-primary')).toBe('live');
+    expect(host.textContent).toContain('Live · 1/2 frequencies');
+    expect(pending.has('live')).toBe(false);
+    expect([...host.querySelectorAll('button')].find((button) => button.textContent?.startsWith('Export'))?.disabled).toBe(true);
+
+    const completeLive = job('live');
+    await act(async () => {
+      publishJobs([completeLive, job('old')]);
+      await Promise.resolve();
+    });
+    expect(pending.has('live')).toBe(true);
+    await act(async () => { pending.get('live')!(response([200, 400])); });
+    expect(host.textContent).not.toContain('Live ·');
+    expect(host.querySelector('.results-panel')?.getAttribute('data-result-primary')).toBe('live');
+    expect(provisionalResults.get('live')).toBeUndefined();
   });
 });

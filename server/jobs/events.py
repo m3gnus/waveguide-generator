@@ -91,6 +91,9 @@ class JobsProtocol:
             snapshot["epoch"] = self.epoch
             await transport.send_json(snapshot)
             last_live_cursor = int(snapshot["cursor"])
+            for partial in self.runtime.partial_result_messages():
+                partial["epoch"] = self.epoch
+                await transport.send_json(partial)
 
             receive_task = asyncio.create_task(transport.receive())
             event_task = asyncio.create_task(queue.get())
@@ -117,12 +120,17 @@ class JobsProtocol:
                     receive_task = asyncio.create_task(transport.receive())
                 if event_task in done:
                     event = event_task.result()
-                    cursor = int(event["cursor"])
-                    if cursor > last_live_cursor:
+                    if event.get("kind") == "partialResult":
                         message = dict(event)
                         message["epoch"] = self.epoch
                         await transport.send_json(message)
-                        last_live_cursor = cursor
+                    else:
+                        cursor = int(event["cursor"])
+                        if cursor > last_live_cursor:
+                            message = dict(event)
+                            message["epoch"] = self.epoch
+                            await transport.send_json(message)
+                            last_live_cursor = cursor
                     event_task = asyncio.create_task(queue.get())
         finally:
             self.runtime.events.unsubscribe(queue)

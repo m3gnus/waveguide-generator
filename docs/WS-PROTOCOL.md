@@ -47,7 +47,7 @@ Handshake: server sends `{"v":1,"kind":"hello","epoch":N,"heartbeatSec":15,"limi
 
 ## 2. `/ws/jobs`
 
-Design principle (review R2-P1.1): **WS is the fast path; HTTP remains the correctness path.** Every WS event is derivable by refetching `GET /api/jobs` + `GET /api/status/{id}`.
+Design principle (review R2-P1.1): **WS is the fast path; HTTP remains the correctness path.** Durable job state is derivable by refetching `GET /api/jobs` + `GET /api/status/{id}`. In-flight frequency results are intentionally process-local; a dropped delta is repaired from `GET /api/partial-results/{id}`, while the completed result remains the sole durable artifact at `GET /api/results/{id}`.
 
 ### Server → client
 
@@ -55,6 +55,7 @@ Design principle (review R2-P1.1): **WS is the fast path; HTTP remains the corre
 |---|---|---|
 | `snapshot` | `cursor`, `jobs:[...]` | Sent on connect: full current job list + the event cursor it corresponds to. |
 | `event` | `cursor`, `jobId`, `type` (`queued`\|`started`\|`progress`\|`stage`\|`log`\|`completed`\|`failed`\|`cancelled`\|`deleted`\|`metadata`), payload | One job lifecycle event. `cursor` is a server-side monotonically increasing event id (persisted with the job store). |
+| `partialResult` | `jobId`, `revision`, `snapshot`, `result` | Ephemeral frequency result. Live messages carry one frequency-shaped delta with `snapshot:false`; connect/recovery messages carry the accumulated process-local result with `snapshot:true`. These messages have no durable event cursor. |
 
 ### Client → server
 
@@ -64,7 +65,11 @@ Design principle (review R2-P1.1): **WS is the fast path; HTTP remains the corre
 
 - `log` events carry bounded tail chunks (server truncates; full log via HTTP).
 - Client reconciliation rule: on reconnect or any cursor gap → refetch snapshot over HTTP/WS; never trust an event stream with a hole.
+- `partialResult.revision` starts at 1 and increments per completed frequency. A revision gap triggers `GET /api/partial-results/{id}` and replaces the local accumulator with that full snapshot. A server restart may remove this process-local snapshot; the client then keeps the previous completed result until the canonical completed result is available.
+- The provisional mapper uses the same SPL, phase, impedance, DI, and polar normalization contract as the final mapper. BEMPP's serial callback currently omits complex observation pressure, so its live view can update normalized directivity while absolute SPL/phase remain empty until completion. An explicitly configured multi-worker BEMPP sweep does not stream because that native path has no callback seam.
 - Multi-tab: each tab has its own socket/epoch; job mutations (stop/delete) go over HTTP; races resolve server-side and broadcast as events (last-writer wins, `deleted` is terminal).
+
+Persisting frequency chunks in SQLite was considered and deliberately left out of this change. It would require a chunk schema, transaction/replay semantics, retention and migration policy, and rules for exports of incomplete solves. The in-memory accumulator keeps the existing one-commit final-result architecture while still matching Boundary Lab's live solve feedback.
 
 ## 3. Close codes
 

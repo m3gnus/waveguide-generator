@@ -200,6 +200,52 @@ def test_metal_adapter_maps_quadrants_axial_drive_stages_and_cancellation(monkey
     assert response["metadata"]["source_motion"] == "axial"
 
 
+def test_metal_adapter_emits_each_frequency_through_the_canonical_mapper(monkeypatch) -> None:
+    captured = {}
+    streamed: list[tuple[int, dict]] = []
+
+    def config_factory(**kwargs):
+        captured.update(kwargs)
+        return _Config(**kwargs)
+
+    def solve(path, config):
+        del path
+        complete = _result()
+        entry = {
+            "observation_angles_deg": complete.observation_angles_deg,
+            "observation_planes": complete.observation_planes,
+            "observation_pressure_complex": complete.pressure_complex[0],
+            "observation_directivity_db": complete.directivity_db[0],
+            "impedance": complete.impedance[0],
+        }
+        assert config.on_frequency_result(0, 500.0, entry) is True
+        return complete
+
+    monkeypatch.setattr(metal, "native_config", config_factory)
+    monkeypatch.setattr(metal, "native_solve", solve)
+    monkeypatch.setattr(
+        metal,
+        "metal_status",
+        lambda: {"available": True, "reason": "mock helper loadable", "version": "test"},
+    )
+    monkeypatch.setattr(metal, "ObservationConfig", lambda **kwargs: SimpleNamespace(**kwargs))
+
+    metal.solve_metal_from_msh_text(
+        _cabinet_msh(),
+        _context(),
+        result_callback=lambda index, result: streamed.append((index, result)),
+    )
+
+    assert "on_frequency_result" in captured
+    assert len(streamed) == 1
+    assert streamed[0][0] == 0
+    assert streamed[0][1]["frequencies"] == [500.0]
+    assert streamed[0][1]["metadata"]["provisional"] == {
+        "completed_frequency_count": 1,
+        "expected_frequency_count": 2,
+    }
+
+
 def test_metal_infinite_baffle_requires_and_maps_aperture_tag(monkeypatch) -> None:
     captured = {}
     monkeypatch.setattr(metal, "native_config", lambda **kwargs: captured.update(kwargs) or _Config(**kwargs))

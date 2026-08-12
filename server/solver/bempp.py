@@ -24,11 +24,18 @@ from server.jobs.models import SolveRequest
 from server.mesh.builder import build_solver_mesh
 
 from .acoustics import solver_sound_speed_m_per_s
-from .base import ArtifactCallback, CancelCallback, EngineRunResult, StageCallback
+from .base import (
+    ArtifactCallback,
+    CancelCallback,
+    EngineRunResult,
+    ResultCallback,
+    StageCallback,
+)
 from .context import SolverContext
 from .formulation import DEFAULT_BEM_FORMULATION, DEFAULT_COMPLEX_K_SHIFT
 from .infinite_baffle import reject_bempp_infinite_baffle
 from .result_mapping import (
+    build_provisional_frequency_response,
     build_solver_response,
     json_safe_native_value,
     native_observation_frame,
@@ -459,6 +466,7 @@ def solve_bempp_from_msh_text(
     progress_callback: Any = None,
     stage_callback: StageCallback | None = None,
     cancellation_callback: CancelCallback | None = None,
+    result_callback: ResultCallback | None = None,
 ) -> dict[str, Any]:
     """Solve one authoritative Gmsh artifact on the guarded CPU backend."""
 
@@ -500,36 +508,65 @@ def solve_bempp_from_msh_text(
                 f"Solving frequency {index + 1}/{total} with BEMPP BEM",
             )
 
+    def on_frequency_result(
+        index: int, frequency_hz: float, entry: dict[str, Any]
+    ) -> bool:
+        if cancellation_callback:
+            cancellation_callback()
+        if result_callback is not None:
+            result_callback(
+                index,
+                build_provisional_frequency_response(
+                    index=index,
+                    frequency_hz=frequency_hz,
+                    entry=entry,
+                    config=config,
+                    context=context,
+                    backend="bempp",
+                    sound_speed_m_per_s=solver_sound_speed_m_per_s(
+                        "hornlab_bempp_bem"
+                    ),
+                ),
+            )
+        return True
+
     formulation = DEFAULT_BEM_FORMULATION
     if BIEFormulation is not None:
         formulation = getattr(BIEFormulation, "COMPLEX_K", formulation)
+    workers = 1 if context.frequencies_hz is not None else _resolved_workers()
+    config_kwargs: dict[str, Any] = {
+        "freq_min_hz": context.frequency_range[0],
+        "freq_max_hz": context.frequency_range[1],
+        "freq_count": context.num_frequencies,
+        "freq_spacing": context.frequency_spacing,
+        "formulation": formulation,
+        "complex_k_shift": DEFAULT_COMPLEX_K_SHIFT,
+        "observation": observation_config(
+            context,
+            ObservationConfig,
+            BemppUnavailable,
+            "hornlab-bempp-bem",
+            msh_text=msh_text,
+        ),
+        "frame_override": native_observation_frame(
+            context,
+            msh_text,
+            ObservationFrame,
+        ),
+        "progress_callback": progress,
+        "mesh_scale": 1.0,
+        "native_symmetry_plane": native_symmetry_plane(context),
+        "assembly_backend": backend,
+        "opencl_device": OPENCL_DEVICE_TYPE,
+        "precision": "single",
+    }
+    # The BEMPP package's parallel sweep deliberately has no callback seam.
+    # Keep an explicit multi-worker opt-in fast; the default serial/cancellable
+    # path streams provisional rows just like Metal and Boundary Lab.
+    if result_callback is not None and workers == 1:
+        config_kwargs["on_frequency_result"] = on_frequency_result
     try:
-        config = SolveConfig(
-            freq_min_hz=context.frequency_range[0],
-            freq_max_hz=context.frequency_range[1],
-            freq_count=context.num_frequencies,
-            freq_spacing=context.frequency_spacing,
-            formulation=formulation,
-            complex_k_shift=DEFAULT_COMPLEX_K_SHIFT,
-            observation=observation_config(
-                context,
-                ObservationConfig,
-                BemppUnavailable,
-                "hornlab-bempp-bem",
-                msh_text=msh_text,
-            ),
-            frame_override=native_observation_frame(
-                context,
-                msh_text,
-                ObservationFrame,
-            ),
-            progress_callback=progress,
-            mesh_scale=1.0,
-            native_symmetry_plane=native_symmetry_plane(context),
-            assembly_backend=backend,
-            opencl_device=OPENCL_DEVICE_TYPE,
-            precision="single",
-        )
+        config = SolveConfig(**config_kwargs)
     except TypeError as exc:
         message = str(exc)
         if "formulation" in message:
@@ -538,6 +575,10 @@ def solve_bempp_from_msh_text(
             raise BemppUnavailable("Installed hornlab-bempp-bem does not support the required complex-k shift option.") from exc
         if "frame_override" in message:
             raise BemppUnavailable("Installed hornlab-bempp-bem does not support the required explicit observation frame.") from exc
+        if "on_frequency_result" in message:
+            raise BemppUnavailable(
+                "Installed hornlab-bempp-bem does not support streamed frequency results."
+            ) from exc
         raise
     if context.source_motion != "normal":
         if not hasattr(config, "source_motion"):
@@ -547,7 +588,6 @@ def solve_bempp_from_msh_text(
         config.require_closed_mesh = (
             context.mesh_validation_mode == "strict" and _closed_mode(context)
         )
-    workers = 1 if context.frequencies_hz is not None else _resolved_workers()
     if hasattr(config, "workers"):
         config.workers = workers
         if _sweep_will_split(workers, context.num_frequencies):
@@ -637,6 +677,7 @@ class BemppEngine:
         cancel_cb: CancelCallback,
         stage_cb: StageCallback,
         artifact_cb: ArtifactCallback | None = None,
+        result_cb: ResultCallback | None = None,
     ) -> EngineRunResult:
         if (request.design.root.simulation.solver_mode or "").strip().lower() == "circsym":
             raise ValueError("BEMPP cannot run solver_mode='circsym'; select Metal or use full_3d")
@@ -658,6 +699,7 @@ class BemppEngine:
             mesh_metadata=mesh["metadata"],
             stage_callback=stage_cb,
             cancellation_callback=cancel_cb,
+            result_callback=result_cb,
         )
         results.setdefault("metadata", {})["mesh_stats"] = mesh["stats"]
         results.setdefault("metadata", {})["solve_path"] = "full-3d"

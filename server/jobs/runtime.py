@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+import copy
 from dataclasses import dataclass, field
 from datetime import datetime
 import importlib.metadata
@@ -55,6 +56,87 @@ MAX_LOG_CHARS = 32_000
 MAX_LOG_EVENT_CHARS = 2_000
 CANCELLED_MESSAGE = "Simulation cancelled by user"
 RUNTIME_PERSIST_INTERVAL_SECONDS = 0.15
+
+
+def _extend_provisional_results(
+    current: dict[str, Any], delta: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Extend the runtime-owned accumulator without recopying prior rows."""
+
+    def append_list(container: dict[str, Any], source: Mapping[str, Any], key: str) -> None:
+        incoming = source.get(key)
+        if not isinstance(incoming, list):
+            return
+        existing = container.get(key)
+        if isinstance(existing, list):
+            existing.extend(copy.deepcopy(incoming))
+        else:
+            container[key] = copy.deepcopy(incoming)
+
+    append_list(current, delta, "frequencies")
+    for block_name in ("directivity", "directivity_phase"):
+        incoming_block = delta.get(block_name)
+        if not isinstance(incoming_block, Mapping):
+            continue
+        block = current.get(block_name)
+        block = block if isinstance(block, dict) else {}
+        for plane, rows in incoming_block.items():
+            if not isinstance(rows, list):
+                continue
+            existing = block.get(str(plane))
+            if isinstance(existing, list):
+                existing.extend(copy.deepcopy(rows))
+            else:
+                block[str(plane)] = copy.deepcopy(rows)
+        current[block_name] = block
+
+    for block_name in ("spl_on_axis", "impedance", "di"):
+        incoming_block = delta.get(block_name)
+        if not isinstance(incoming_block, Mapping):
+            continue
+        block = current.get(block_name)
+        block = block if isinstance(block, dict) else {}
+        for key in incoming_block:
+            append_list(block, incoming_block, str(key))
+        current[block_name] = block
+
+    incoming_channels = delta.get("channels")
+    if isinstance(incoming_channels, Mapping):
+        channels = current.get("channels")
+        channels = channels if isinstance(channels, dict) else {}
+        for channel_id, channel_delta in incoming_channels.items():
+            if not isinstance(channel_delta, Mapping):
+                continue
+            existing = channels.get(str(channel_id))
+            channel = existing if isinstance(existing, dict) else {}
+            channels[str(channel_id)] = _extend_provisional_results(
+                channel, channel_delta
+            )
+        current["channels"] = channels
+
+    if isinstance(delta.get("channel_order"), list):
+        current["channel_order"] = copy.deepcopy(delta["channel_order"])
+    if isinstance(delta.get("metadata"), Mapping):
+        prior_metadata = current.get("metadata")
+        current["metadata"] = {
+            **(
+                dict(prior_metadata)
+                if isinstance(prior_metadata, Mapping)
+                else {}
+            ),
+            **copy.deepcopy(dict(delta["metadata"])),
+        }
+    return current
+
+
+def merge_provisional_results(
+    current: Mapping[str, Any] | None, delta: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Append one frequency-shaped result delta without mutating either input."""
+
+    if current is None:
+        return copy.deepcopy(dict(delta))
+    return _extend_provisional_results(copy.deepcopy(dict(current)), delta)
 
 
 def _now_iso() -> str:
@@ -392,7 +474,7 @@ class _PendingRuntimeUpdate:
 
 
 class EventBroker:
-    """Fan persisted events out to per-connection bounded queues."""
+    """Fan durable lifecycle events and ephemeral result deltas to subscribers."""
 
     def __init__(self, *, queue_size: int = 256) -> None:
         self.queue_size = max(1, queue_size)
@@ -441,6 +523,9 @@ class JobRuntime:
         self._background_tasks: set[asyncio.Task[Any]] = set()
         self._scheduler_task: asyncio.Task[Any] | None = None
         self._pending_updates: dict[str, _PendingRuntimeUpdate] = {}
+        # Live rows are process-local by design. The final result remains the
+        # sole durable/canonical artifact committed by ``complete_job``.
+        self._partial_results: dict[str, dict[str, Any]] = {}
         self._persistence_interval_seconds = max(
             0.01, float(persistence_interval_seconds)
         )
@@ -508,6 +593,7 @@ class JobRuntime:
         # database, while a handle is still open on it.
         await asyncio.to_thread(self.store.close)
         await asyncio.to_thread(self._ownership.release)
+        self._partial_results.clear()
         self._started = False
 
     async def submit(self, request: SolveRequest) -> str:
@@ -941,6 +1027,31 @@ class JobRuntime:
             raise JobResourceUnavailableError("Results not available")
         return results
 
+    async def get_partial_results(self, job_id: str) -> dict[str, Any]:
+        """Return the current process-local provisional result snapshot."""
+
+        await self.start()
+        self._require_job(job_id)
+        item = self._partial_results.get(job_id)
+        if item is None:
+            raise JobResourceUnavailableError("Partial results not available")
+        return copy.deepcopy(item)
+
+    def partial_result_messages(self) -> list[dict[str, Any]]:
+        """Full live snapshots sent once when a jobs socket connects."""
+
+        return [
+            {
+                "v": 1,
+                "kind": "partialResult",
+                "jobId": job_id,
+                "revision": int(item["revision"]),
+                "snapshot": True,
+                "result": copy.deepcopy(item["result"]),
+            }
+            for job_id, item in self._partial_results.items()
+        ]
+
     async def get_mesh_artifact_download(self, job_id: str) -> MeshArtifactDownload:
         await self.start()
         row = self._require_job(job_id)
@@ -1060,6 +1171,7 @@ class JobRuntime:
             raise JobNotFoundError(job_id)
         self._remove_from_queue(job_id)
         self._running.discard(job_id)
+        self._partial_results.pop(job_id, None)
         self.events.publish(event)
 
     async def clear_failed(self) -> list[str]:
@@ -1068,6 +1180,7 @@ class JobRuntime:
         for job_id in ids:
             self._remove_from_queue(job_id)
             self._running.discard(job_id)
+            self._partial_results.pop(job_id, None)
         for event in events:
             self.events.publish(event)
         return ids
@@ -1369,6 +1482,7 @@ class JobRuntime:
                 return
             self.events.publish(event)
         except _CancelledAtCheckpoint:
+            self._partial_results.pop(job_id, None)
             await self._flush_runtime_update(job_id, forget=True)
             event = self._transition(
                 job_id,
@@ -1432,6 +1546,16 @@ class JobRuntime:
 
             loop.call_soon_threadsafe(schedule)
 
+        def result_callback(index: int, result: dict[str, Any]) -> None:
+            # Native callbacks run in the solver worker. Provisional state and
+            # subscriber queues remain owned by the asyncio thread.
+            loop.call_soon_threadsafe(
+                self._accept_partial_result,
+                job_id,
+                int(index),
+                result,
+            )
+
         async def artifact_callback(msh_text: str, mesh_stats: dict[str, Any]) -> None:
             """Persist immediately after meshing, before native solve like v1 lines 451-493."""
 
@@ -1459,6 +1583,8 @@ class JobRuntime:
             }
             if "artifact_cb" in inspect.signature(engine.run).parameters:
                 run_kwargs["artifact_cb"] = artifact_callback
+            if "result_cb" in inspect.signature(engine.run).parameters:
+                run_kwargs["result_cb"] = result_callback
             if (
                 imported_record is not None
                 and "imported_record" in inspect.signature(engine.run).parameters
@@ -1541,6 +1667,36 @@ class JobRuntime:
             self.events.publish(event)
         else:
             self._check_cancelled(job_id)
+        self._partial_results.pop(job_id, None)
+
+    def _accept_partial_result(
+        self, job_id: str, index: int, result: Mapping[str, Any]
+    ) -> None:
+        """Merge and fan out a solver-thread frequency callback."""
+
+        if job_id not in self._running or index < 0:
+            return
+        revision = index + 1
+        previous = self._partial_results.get(job_id)
+        previous_revision = int(previous["revision"]) if previous is not None else 0
+        if revision <= previous_revision:
+            return
+        merged = (
+            _extend_provisional_results(previous["result"], result)
+            if previous is not None
+            else copy.deepcopy(dict(result))
+        )
+        self._partial_results[job_id] = {"revision": revision, "result": merged}
+        self.events.publish(
+            {
+                "v": 1,
+                "kind": "partialResult",
+                "jobId": job_id,
+                "revision": revision,
+                "snapshot": False,
+                "result": copy.deepcopy(dict(result)),
+            }
+        )
 
     async def _report_real_stage(
         self,
@@ -1756,6 +1912,7 @@ class JobRuntime:
             await self._flush_runtime_update(job_id, forget=forget)
 
     async def _fail_job(self, job_id: str, message: str) -> None:
+        self._partial_results.pop(job_id, None)
         try:
             event = self._transition(
                 job_id,
@@ -2036,4 +2193,5 @@ __all__ = [
     "MeshArtifactDownload",
     "SymmetryValidationError",
     "UnknownEngineError",
+    "merge_provisional_results",
 ]

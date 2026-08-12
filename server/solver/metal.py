@@ -22,7 +22,13 @@ from server.jobs.models import ImportedGeometrySource, SolveRequest
 from server.mesh.builder import _solver_mesher_config, build_solver_mesh
 
 from .acoustics import solver_sound_speed_m_per_s
-from .base import ArtifactCallback, CancelCallback, EngineRunResult, StageCallback
+from .base import (
+    ArtifactCallback,
+    CancelCallback,
+    EngineRunResult,
+    ResultCallback,
+    StageCallback,
+)
 from .context import SolverContext
 from .formulation import DEFAULT_BEM_FORMULATION, DEFAULT_COMPLEX_K_SHIFT
 from .infinite_baffle import require_full_3d_aperture_tag
@@ -34,6 +40,7 @@ from .imported import (
     verify_record_mesh_text,
 )
 from .result_mapping import (
+    build_provisional_frequency_response,
     build_solver_response,
     json_safe_native_value,
     native_symmetry_plane,
@@ -273,6 +280,7 @@ def solve_metal_from_msh_text(
     progress_callback: Any = None,
     stage_callback: StageCallback | None = None,
     cancellation_callback: CancelCallback | None = None,
+    result_callback: ResultCallback | None = None,
 ) -> dict[str, Any]:
     """Run native Metal from an original Gmsh 2.2 text artifact."""
 
@@ -303,6 +311,28 @@ def solve_metal_from_msh_text(
                 f"Solving frequency {index + 1}/{total} with Metal BEM",
             )
 
+    def on_frequency_result(
+        index: int, frequency_hz: float, entry: dict[str, Any]
+    ) -> bool:
+        if cancellation_callback:
+            cancellation_callback()
+        if result_callback is not None:
+            result_callback(
+                index,
+                build_provisional_frequency_response(
+                    index=index,
+                    frequency_hz=frequency_hz,
+                    entry=entry,
+                    config=config,
+                    context=context,
+                    backend="metal",
+                    sound_speed_m_per_s=solver_sound_speed_m_per_s(
+                        "hornlab_metal_bem"
+                    ),
+                ),
+            )
+        return True
+
     aperture_tag = require_full_3d_aperture_tag(context, mesh_metadata)
     frame_override = native_observation_frame(
         context,
@@ -328,6 +358,8 @@ def solve_metal_from_msh_text(
         "native_check_open_edges": _native_check_open_edges(context),
         "mesh_validate": context.mesh_validation_mode != "off",
     }
+    if result_callback is not None:
+        kwargs["on_frequency_result"] = on_frequency_result
     if frame_override is not None:
         kwargs["frame_override"] = frame_override
     if aperture_tag is not None:
@@ -480,6 +512,7 @@ def solve_imported_metal_from_msh_text(
     *,
     stage_callback: StageCallback | None = None,
     cancellation_callback: CancelCallback | None = None,
+    result_callback: ResultCallback | None = None,
 ) -> dict[str, Any]:
     """Solve every imported drive channel as a shared multi-RHS unit basis."""
 
@@ -546,6 +579,64 @@ def solve_imported_metal_from_msh_text(
                 f"Solving frequency {index + 1}/{total} for imported drive bases",
             )
 
+    def on_frequency_result(
+        index: int, frequency_hz: float, entry: dict[str, Any]
+    ) -> bool:
+        if cancellation_callback:
+            cancellation_callback()
+        if result_callback is None:
+            return True
+        source_entries = entry.get("source_results")
+        if not isinstance(source_entries, list) or len(source_entries) != len(
+            geometry.drive_channels
+        ):
+            raise ValueError(
+                "streamed imported Metal result does not match its drive channels"
+            )
+        provisional_channels: dict[str, Any] = {}
+        for channel, source_entry in zip(
+            geometry.drive_channels, source_entries, strict=True
+        ):
+            if not isinstance(source_entry, dict):
+                raise ValueError("streamed imported Metal source result is invalid")
+            channel_context = SolverContext.from_imported_request(
+                request, quadrants=quadrants, source_motion=channel.motion
+            )
+            channel_response = build_provisional_frequency_response(
+                index=index,
+                frequency_hz=frequency_hz,
+                entry=source_entry,
+                config=config,
+                context=channel_context,
+                backend="metal",
+                sound_speed_m_per_s=solver_sound_speed_m_per_s(
+                    "hornlab_metal_bem"
+                ),
+            )
+            if len(channel.source_ids) > 1:
+                channel_response.pop("impedance", None)
+            provisional_channels[channel.id] = channel_response
+        result_callback(
+            index,
+            {
+                "frequencies": [float(frequency_hz)],
+                "channels": provisional_channels,
+                "channel_order": channel_order,
+                "metadata": {
+                    "geometry_type": "imported",
+                    "provisional": {
+                        "completed_frequency_count": int(index) + 1,
+                        "expected_frequency_count": (
+                            len(context.frequencies_hz)
+                            if context.frequencies_hz is not None
+                            else int(context.num_frequencies)
+                        ),
+                    },
+                },
+            },
+        )
+        return True
+
     observation = _observation(context, msh_text)
     frame_override = _imported_frame(record, context)
     kwargs: dict[str, Any] = {
@@ -564,6 +655,8 @@ def solve_imported_metal_from_msh_text(
         "frame_override": frame_override,
         "source_motion": config_motion,
     }
+    if result_callback is not None:
+        kwargs["on_frequency_result"] = on_frequency_result
     if source_profiles:
         kwargs["source_velocity_profiles"] = source_profiles
     config = _native_config_or_unavailable(kwargs)
@@ -748,6 +841,7 @@ class MetalEngine:
         cancel_cb: CancelCallback,
         stage_cb: StageCallback,
         artifact_cb: ArtifactCallback | None = None,
+        result_cb: ResultCallback | None = None,
         imported_record: Mapping[str, Any] | None = None,
     ) -> EngineRunResult:
         if isinstance(request.geometry, ImportedGeometrySource):
@@ -776,6 +870,7 @@ class MetalEngine:
                 imported_record,
                 stage_callback=stage_cb,
                 cancellation_callback=cancel_cb,
+                result_callback=result_cb,
             )
             results.setdefault("metadata", {})["mesh_stats"] = mesh_stats
             return EngineRunResult(
@@ -806,6 +901,7 @@ class MetalEngine:
                     cancel_cb=cancel_cb,
                     stage_cb=stage_cb,
                     artifact_cb=artifact_cb,
+                    result_cb=result_cb,
                 )
                 metadata = outcome.results.setdefault("metadata", {})
                 metadata["solve_path"] = "axisymmetric-meridian"
@@ -834,6 +930,7 @@ class MetalEngine:
             mesh_metadata=mesh["metadata"],
             stage_callback=stage_cb,
             cancellation_callback=cancel_cb,
+            result_callback=result_cb,
         )
         results.setdefault("metadata", {})["mesh_stats"] = mesh["stats"]
         metadata = results.setdefault("metadata", {})
