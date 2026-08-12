@@ -115,6 +115,10 @@ export async function sendDesignToCad(
   fetcher: typeof fetch = fetch,
   idempotencyKey: string = globalThis.crypto?.randomUUID?.()
     ?? `wglink-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  fusionTarget: {
+    documentId: string;
+    returnStateHash: string | null;
+  } | null = null,
 ): Promise<WgLinkExportResponse> {
   // No save gate here. The server commits the design on screen into the
   // CAD-link registry as part of the export, so an unsaved or edited design
@@ -141,6 +145,8 @@ export async function sendDesignToCad(
       designRevision,
       baseName,
       identity,
+      expectedFusionDocumentId: fusionTarget?.documentId ?? null,
+      expectedFusionReturnStateHash: fusionTarget?.returnStateHash ?? null,
     }),
   });
   if (!response.ok) throw new Error(await errorMessage(response));

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { designForFamily } from '../stores/design';
-import { CadLinkApiError, getFusionCadStatus, getIngest, ingestReturn, listReturns } from './cadlink';
+import { CadLinkApiError, getFusionCadStatus, getIngest, ingestReturn, listReturns, requestFusionReturn } from './cadlink';
 
 describe('CAD-link client', () => {
   it('uses the server aliases for listing, ingestion, and record lookup', async () => {
@@ -49,18 +49,33 @@ describe('CAD-link client', () => {
 
   it('sends the current config and CAD identity when checking Fusion freshness', async () => {
     const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({
-      cadApplication: 'fusion360', state: 'closed', running: false, updatedAt: null,
+      cadApplication: 'fusion360', state: 'closed', processRunning: false, running: false, updatedAt: null,
       documentName: null, currentFormula: 'R-OSSE', fusionFormula: null, link: null,
     }), { status: 200 }));
     const identity = { designId: 'wgd_a', lineageId: 'wgl_a', baseEditVersion: 4 };
 
-    await getFusionCadStatus(designForFamily('R-OSSE'), identity, fetcher as typeof fetch);
+    await getFusionCadStatus(designForFamily('R-OSSE'), identity, 'wgreturn/a.wgreturn', fetcher as typeof fetch);
 
     expect(fetcher).toHaveBeenCalledOnce();
     expect(fetcher.mock.calls[0][0]).toBe('/api/cadlink/fusion-status');
     expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).toMatchObject({
       design: { formula: 'R-OSSE' },
       identity,
+      returnBundlePath: 'wgreturn/a.wgreturn',
+    });
+  });
+
+  it('targets an exact Fusion document and linked instance for a return', async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({
+      status: 'requested', requestId: 'request-a', documentName: 'Tritonia V',
+    }), { status: 200 }));
+    await requestFusionReturn({
+      designId: 'wgd_a', documentId: 'fusion:doc-a', instanceId: 'instance-a',
+      expectedReturnStateHash: 'sha256:return-state',
+    }, fetcher as typeof fetch);
+    expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).toEqual({
+      designId: 'wgd_a', documentId: 'fusion:doc-a', instanceId: 'instance-a',
+      expectedReturnStateHash: 'sha256:return-state',
     });
   });
 });

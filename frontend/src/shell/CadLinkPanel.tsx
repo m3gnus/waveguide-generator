@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { CadLinkApiError, getFusionCadStatus, ingestReturn, listReturns, type CadReturnBundle, type CadReturnFinding, type CadReturnIngestRecord, type FusionCadStatus } from '../api/cadlink';
+import { CadLinkApiError, getFusionCadStatus, ingestReturn, listReturns, requestFusionReturn, type CadReturnBundle, type CadReturnFinding, type CadReturnIngestRecord, type FusionCadStatus } from '../api/cadlink';
 import { NumberField } from '../design/NumberField';
 import { FrequencySweepControls, ToggleRow } from '../design/SolveOptionsSections';
 import { useSendToCad } from '../design/useSendToCad';
@@ -32,7 +32,7 @@ const FRESHNESS_COPY: Record<string, string> = {
 };
 
 export interface CadWorkflowView {
-  state: 'checking' | 'closed' | 'no-document' | 'not-linked' | 'current' | 'stale' | 'coming-soon';
+  state: 'checking' | 'closed' | 'addin-offline' | 'no-document' | 'not-linked' | 'current' | 'stale' | 'coming-soon';
   headline: string;
   detail: string;
   action: 'open' | 'update' | null;
@@ -69,9 +69,15 @@ export function cadWorkflowView(
   };
   if (status.state === 'closed') return {
     state: 'closed',
-    headline: 'WGLink is not connected to Fusion 360',
-    detail: 'WG will start Fusion 360 if needed, create a Design document, and insert this waveguide. If Fusion is already open, start or reload WGLink.',
+    headline: 'Fusion 360 is closed',
+    detail: 'Open this WG design in Fusion 360. WG will start Fusion and WGLink will create a Design document if needed.',
     action: 'open',
+  };
+  if (status.state === 'addin_offline') return {
+    state: 'addin-offline',
+    headline: 'Fusion 360 is open · WGLink add-in is offline',
+    detail: 'Fusion is running, but its WGLink add-in has not reported in. In Fusion, open Utilities → Scripts and Add-Ins, then stop and run WGLink.',
+    action: null,
   };
   if (status.state === 'no_document') return {
     state: 'no-document',
@@ -94,6 +100,18 @@ export function cadWorkflowView(
     detail: `Up to date. The full WG config and ${parameterCopy} are synchronized.`,
     action: null,
   };
+  if (!status.wgChangesAvailable && status.fusionChangesAvailable) return {
+    state: 'stale',
+    headline: `Fusion geometry has changed${status.documentName ? ` · ${status.documentName}` : ''}`,
+    detail: 'The parametric WG design has not changed. Bring the Fusion geometry into WG before rebuilding the Fusion waveguide from WG.',
+    action: null,
+  };
+  if (!status.wgChangesAvailable) return {
+    state: 'stale',
+    headline: `Fusion has local geometry changes${status.documentName ? ` · ${status.documentName}` : ''}`,
+    detail: 'The parametric WG design matches Fusion. The latest Fusion geometry has already been returned to WG for simulation.',
+    action: null,
+  };
   const fusionFormula = status.fusionFormula?.toLocaleUpperCase();
   const currentFormula = status.currentFormula.toLocaleUpperCase();
   const mismatch = fusionFormula && fusionFormula !== currentFormula
@@ -107,10 +125,13 @@ export function cadWorkflowView(
     : status.link?.localBodyState && status.link.localBodyState !== 'unmodified'
       ? ` The managed Fusion body is ${status.link.localBodyState}.`
       : '';
+  const conflictCopy = status.fusionChangesAvailable
+    ? ' Fusion geometry also changed; choose which direction to synchronize.'
+    : '';
   return {
     state: 'stale',
-    headline: `Fusion 360 needs an update${status.documentName ? ` · ${status.documentName}` : ''}`,
-    detail: `${mismatch}${configCopy}${localEditCopy}`,
+    headline: `${status.fusionChangesAvailable ? 'WG and Fusion both changed' : 'WG design changed'}${status.documentName ? ` · ${status.documentName}` : ''}`,
+    detail: `${mismatch}${configCopy}${localEditCopy}${conflictCopy}`,
     action: 'update',
   };
 }
@@ -262,27 +283,33 @@ export function CadLinkPanel() {
   const [loading, setLoading] = useState(true);
   const [ingesting, setIngesting] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [requestingReturn, setRequestingReturn] = useState(false);
+  const [confirmWgOverwrite, setConfirmWgOverwrite] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [fusionStatus, setFusionStatus] = useState<FusionCadStatus | null>(null);
   const seenReturnRevisions = useRef<Map<string, string> | null>(null);
   const fusionStatusRequest = useRef(0);
+  const pendingReturnRequestId = useRef<string | null>(null);
+  const pendingReturnRequestedAt = useRef<number | null>(null);
   const { send: sendToCad, sending } = useSendToCad();
 
   const refreshFusionStatus = useCallback(async () => {
     if (preferences.cadApplication !== 'fusion360') return;
     const request = ++fusionStatusRequest.current;
     try {
-      const next = await getFusionCadStatus(design, identity);
+      const next = await getFusionCadStatus(
+        design, identity, state.selectedBundle?.bundlePath ?? null,
+      );
       if (request === fusionStatusRequest.current
-        && ['closed', 'no_document', 'not_linked', 'current', 'stale'].includes(next.state)) {
+        && ['closed', 'addin_offline', 'no_document', 'not_linked', 'current', 'stale'].includes(next.state)) {
         setFusionStatus(next);
       }
     } catch {
       // Presence is advisory. Workspace and export errors are presented by the
       // actual action; a missed heartbeat must not hide CAD returns.
     }
-  }, [design, identity, preferences.cadApplication]);
+  }, [design, identity, preferences.cadApplication, state.selectedBundle?.bundlePath]);
 
   useEffect(() => {
     setFusionStatus(null);
@@ -303,8 +330,26 @@ export function CadLinkPanel() {
       setBundles(response.items);
       const previous = seenReturnRevisions.current;
       const next = new Map(response.items.map((item) => [item.bundlePath, item.modifiedAt]));
+      const requested = pendingReturnRequestId.current
+        ? response.items.find((item) => (
+            item.readable && item.requestId === pendingReturnRequestId.current
+          )) ?? null
+        : null;
+      if (
+        pendingReturnRequestId.current
+        && pendingReturnRequestedAt.current !== null
+        && Date.now() - pendingReturnRequestedAt.current > 60_000
+      ) {
+        pendingReturnRequestId.current = null;
+        pendingReturnRequestedAt.current = null;
+        setError('Fusion did not return the requested model within 60 seconds. Check Fusion for a WGLink message, then retry.');
+      }
       const arrived = options.autoOpenNew
-        ? newestReturnArrival(response.items, previous)
+        ? requested ?? (
+            pendingReturnRequestId.current
+              ? null
+              : newestReturnArrival(response.items, previous)
+          )
         : null;
       seenReturnRevisions.current = next;
       const initial = previous === null
@@ -315,6 +360,10 @@ export function CadLinkPanel() {
         useCadReturnStore.getState().selectBundle(opened);
       }
       if (arrived) {
+        if (arrived.requestId === pendingReturnRequestId.current) {
+          pendingReturnRequestId.current = null;
+          pendingReturnRequestedAt.current = null;
+        }
         setStatus(`Received ${arrived.documentName ?? arrived.name} from Fusion 360.`);
         workspaceNavigation.activate('cadlink');
       } else if (!initial) {
@@ -373,12 +422,47 @@ export function CadLinkPanel() {
     setError(null); setStatus(null);
     try {
       const action = cadWorkflowView(preferences.cadApplication, fusionStatus).action;
-      const result = await sendToCad();
+      if (action === 'update' && fusionStatus?.fusionChangesAvailable && !confirmWgOverwrite) {
+        setConfirmWgOverwrite(true);
+        return;
+      }
+      const result = await sendToCad(
+        action === 'update' && fusionStatus?.documentId
+          ? {
+              documentId: fusionStatus.documentId,
+              returnStateHash: fusionStatus.link?.documentSignatureHash ?? null,
+            }
+          : undefined,
+      );
+      setConfirmWgOverwrite(false);
       setStatus(action === 'update'
         ? `Update sent to Fusion 360 · sequence ${result.sequence}`
         : `Opening in Fusion 360 · sequence ${result.sequence}`);
       await refresh();
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+  };
+
+  const bringFromFusion = async () => {
+    setRequestingReturn(true); setError(null); setStatus(null);
+    try {
+      if (!identity?.designId || !fusionStatus?.documentId || !fusionStatus.link) {
+        throw new Error('Fusion changed documents. Refresh CAD Link and try again.');
+      }
+      const result = await requestFusionReturn({
+        designId: identity.designId,
+        documentId: fusionStatus.documentId,
+        instanceId: fusionStatus.link.instanceId,
+        expectedReturnStateHash: fusionStatus.link.documentSignatureHash,
+      });
+      pendingReturnRequestId.current = result.requestId;
+      pendingReturnRequestedAt.current = Date.now();
+      setStatus(`Requested current geometry from ${result.documentName}. Waiting for Fusion…`);
+      await refresh({ background: true, autoOpenNew: true });
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setRequestingReturn(false);
+    }
   };
 
   const unacknowledged = unacknowledgedBlocking(state);
@@ -412,26 +496,33 @@ export function CadLinkPanel() {
   const cadApplicationLabel = preferences.cadApplication === 'fusion360' ? 'Autodesk Fusion 360' : 'Onshape';
   const designName = filenameStem(filename);
   const actionLabel = workflow.action === 'update'
-    ? 'Update waveguide in Fusion 360'
+    ? 'Send WG changes to Fusion'
     : `Open ${designName === 'waveguide' ? 'waveguide' : designName} in Fusion 360`;
+  const canRequestFusionReturn = Boolean(
+    fusionStatus?.running && fusionStatus.documentName && fusionStatus.documentId
+    && fusionStatus.link && identity?.designId,
+  );
 
   return <div className="cadlink-panel panel-scroll">
-    <section className="cad-section cad-send">
-      <div className="cad-application"><span>CAD application</span><b>{cadApplicationLabel}</b><button className="link-button" onClick={() => requestSettings('cad')}>Change in Settings</button></div>
+    <section className="cad-workflow cad-send">
+      <header className="cad-workflow-header"><span className="cad-step">1</span><div><h3>WG → CAD</h3><p>Open or update this parametric WG design.</p></div><button className="link-button" onClick={() => requestSettings('cad')}>{cadApplicationLabel} · Change</button></header>
       <div className={`cad-connection cad-connection-${workflow.state}`}>
         <span className="cad-connection-dot" aria-hidden="true"/>
         <div><h3>{workflow.headline}</h3><p>{workflow.detail}</p></div>
       </div>
-      {workflow.action && <button className="primary cad-primary-action" disabled={sending} onClick={() => void send()}>{sending ? (workflow.action === 'update' ? 'Updating…' : 'Opening…') : actionLabel}</button>}
-      <p className="cad-transport-note">WGLink receives the full config, formula, expression text, and realized Fusion parameters. Saving the WG file first is not required.</p>
+      {workflow.action && !confirmWgOverwrite && <button className="primary cad-primary-action" disabled={sending} onClick={() => void send()}>{sending ? (workflow.action === 'update' ? 'Updating…' : 'Opening…') : actionLabel}</button>}
+      {confirmWgOverwrite && <div className="cad-direction-alert" role="alert"><div><b>Both WG and Fusion changed</b><span>This rebuilds only the linked waveguide from WG. Separate cabinet and mid-woofer bodies stay in Fusion, but direct edits to the linked waveguide are replaced.</span></div><div className="cad-confirm-actions"><button onClick={() => setConfirmWgOverwrite(false)}>Cancel</button><button className="primary" disabled={sending} onClick={() => void send()}>Continue: send WG changes</button></div></div>}
     </section>
-    <div className="cadlink-toolbar"><b>Returned bundles</b><span className="spacer"/><button disabled={loading || ingesting} onClick={() => void refresh()}><Icon name="reset"/>{loading ? 'Loading…' : 'Refresh'}</button></div>
+    <section className="cad-workflow cad-return-workflow">
+    <header className="cad-workflow-header"><span className="cad-step">2</span><div><h3>CAD → SIMULATION</h3><p>Bring Fusion geometry and source tags into WG.</p></div><button disabled={loading || ingesting} onClick={() => void refresh()}><Icon name="reset"/>{loading ? 'Loading…' : 'Refresh'}</button></header>
+    {fusionStatus?.fusionChangesAvailable && <div className="cad-direction-alert"><div><b>Fusion geometry has changed</b><span>The active Fusion body or source setup differs from the last design returned to WG.</span></div><button className="primary" disabled={!canRequestFusionReturn || requestingReturn} onClick={() => void bringFromFusion()}>{requestingReturn ? 'Requesting…' : 'Bring Fusion changes into WG'}</button></div>}
+    {!fusionStatus?.fusionChangesAvailable && canRequestFusionReturn && <button className="cad-secondary-action" disabled={requestingReturn} onClick={() => void bringFromFusion()}>{requestingReturn ? 'Requesting…' : 'Refresh geometry from Fusion'}</button>}
     {error && <div className="cad-alert" role="alert">{error}</div>}
     {state.ingestStaleReason && <div className="cad-alert" role="status">{state.ingestStaleReason} Re-ingest before solving.</div>}
     {status && <div className="cad-status-strip" role="status">{status}</div>}
     {!loading && error?.includes('No workspace folder') && <div className="empty-state"><b>No workspace selected</b><span>Choose a workspace folder in Settings, then refresh this panel.</span></div>}
     {!loading && !error && bundles.length === 0 && <div className="empty-state"><b>No CAD returns</b><span>Returned bundles appear under the selected workspace’s wgreturn folder.</span></div>}
-    {bundles.length > 0 && <div className="cad-bundle-list" role="list" aria-label="CAD return bundles">{bundles.map((bundle) => <button
+    {bundles.length > 0 && <div className="cad-bundle-list" role="list" aria-label="Designs returned from CAD">{bundles.map((bundle) => <button
       key={bundle.bundlePath}
       role="listitem"
       className={state.selectedBundle?.bundlePath === bundle.bundlePath ? 'selected' : ''}
@@ -442,12 +533,11 @@ export function CadLinkPanel() {
 
     {state.selectedBundle?.readable && <>
       <section className="cad-section cad-sizing">
-        <header><h3>Ingestion sizing</h3><button className="primary" disabled={ingesting} onClick={() => void ingest()}>{ingesting ? 'Ingesting…' : state.ingestRecord ? 'Re-ingest' : 'Ingest bundle'}</button></header>
-        <p>Every mesh size is explicit. Suggested source values come from the return manifest.</p>
-        <NumberField label="Rigid surface" unit="mm" value={state.rigidSizeMm} min={0.01} step={0.5} precision={2} description="Coarsest source resolution, used only as an editable suggestion." onCommit={state.setRigidSize}/>
-        <NumberField label="Transition" unit="mm" value={state.transitionMm} min={0.01} step={0.5} precision={2} onCommit={state.setTransition}/>
+        <header><div><h3>Mesh detail</h3><p>Smaller values are finer and support higher frequencies.</p></div><button className="primary" disabled={ingesting} onClick={() => void ingest()}>{ingesting ? 'Preparing…' : state.ingestRecord ? 'Rebuild mesh' : 'Prepare simulation'}</button></header>
+        <NumberField label="Cabinet & waveguide" unit="mm" value={state.rigidSizeMm} min={0.01} step={0.5} precision={2} description="Mesh size for rigid CAD surfaces." onCommit={state.setRigidSize}/>
+        <NumberField label="Size transition" unit="mm" value={state.transitionMm} min={0.01} step={0.5} precision={2} description="Maximum size transition between adjacent mesh regions." onCommit={state.setTransition}/>
         {state.selectedBundle.sources.map((source) => <div className={`cad-source ${state.skippedSourceIds.includes(source.id) ? 'skipped' : ''}`} key={source.id}>
-          <NumberField label={`${source.role} · ${source.id}`} unit="mm" value={state.sourceSizesMm[source.id] ?? source.suggestedResolutionMm} min={0.01} step={0.25} precision={2} description={`Suggested ${source.suggestedResolutionMm} mm`} disabled={state.skippedSourceIds.includes(source.id)} onCommit={(value) => state.setSourceSize(source.id, value)}/>
+          <NumberField label={`${source.role} source`} unit="mm" value={state.sourceSizesMm[source.id] ?? source.suggestedResolutionMm} min={0.01} step={0.25} precision={2} description={`${source.id} · suggested ${source.suggestedResolutionMm} mm`} disabled={state.skippedSourceIds.includes(source.id)} onCommit={(value) => state.setSourceSize(source.id, value)}/>
           {!source.required && <ToggleRow id={`skip-${source.id}`} label="Skip optional source" help="Exclude this optional source from ingestion and the solve. This creates a blocking finding." checked={state.skippedSourceIds.includes(source.id)} onChange={(checked) => state.setSkipped(source.id, checked)}/>} 
           {driftSources.has(source.id) && <ToggleRow id={`drift-${source.id}`} label="Allow recorded area drift" help="Explicitly accept the source-area mismatch and re-ingest. The override remains a finding that must be acknowledged." checked={state.areaDriftOverrides.includes(source.id)} onChange={(checked) => state.setAreaDriftOverride(source.id, checked)}/>} 
         </div>)}
@@ -483,5 +573,6 @@ export function CadLinkPanel() {
         <div className="cad-solve-bar"><div>{solveReason ?? 'All blocking findings acknowledged. Ready to submit.'}</div><button className="primary" disabled={Boolean(solveReason) || submitting || ingesting} onClick={() => void solve()}>{submitting ? 'Submitting…' : 'Solve CAD import'}</button></div>
       </>}
     </>}
+    </section>
   </div>;
 }
