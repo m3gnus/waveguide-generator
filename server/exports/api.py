@@ -16,9 +16,10 @@ from fastapi import APIRouter, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
 
-from server.cadlink.identity import SaveIdentity, design_hash
+from server.cadlink.identity import CadLink, SaveIdentity, design_hash
 from server.cadlink.store import CadLinkStore
 from server.design.schema import DesignConfig
+from server.design.textcfg import serialize
 from server.mesh.gmsh_worker import run_on_gmsh_worker
 from server.preview.translate import design_to_mesher_config
 from server.workspace.api import WorkspaceState, _path_segments, _portable_path_key
@@ -176,7 +177,71 @@ class _BundleNameConflict(Exception):
     pass
 
 
-def _wglink_response(row: Mapping[str, object]) -> dict[str, Any]:
+def _identity_for_export(
+    store: CadLinkStore, row: Mapping[str, object]
+) -> SaveIdentity | None:
+    """The identity an existing export was made against, for idempotent retries."""
+
+    design = store.get_design(str(row["design_id"]))
+    if design is None:
+        return None
+    return SaveIdentity(
+        designId=str(row["design_id"]),
+        lineageId=str(design["lineage_id"]),
+        baseEditVersion=int(row["edit_version"]),
+    )
+
+
+def _commit_design_for_export(
+    store: CadLinkStore,
+    requested: SaveIdentity | None,
+    design: DesignConfig,
+    current_design_hash: str,
+    design_name: str,
+) -> SaveIdentity:
+    """Return an identity whose registry head is exactly this design state.
+
+    Send to CAD used to refuse a design that had never been saved, or that had
+    been edited since its last save.  What a bundle needs is a recorded design
+    state to name -- and the record that matters is the registry row, whose
+    ``snapshot_text`` every export copies.  A .cfg the user has downloaded is
+    not what makes the link resolvable, so commit the design on screen and
+    export that instead of demanding the download first.
+    """
+
+    head = store.get_design(requested.design_id) if requested is not None else None
+    if (
+        requested is not None
+        and head is not None
+        and str(head["lineage_id"]) == requested.lineage_id
+        and int(head["edit_version"]) == requested.base_edit_version
+        and str(head["design_hash"]) == current_design_hash
+    ):
+        return requested
+
+    def snapshot(link: CadLink) -> str:
+        return serialize(design, cadlink=link)
+
+    try:
+        committed = store.save(
+            requested=requested,
+            design_hash=current_design_hash,
+            filename=f"{design_name}.cfg",
+            snapshot_builder=snapshot,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    link = committed["identity"]
+    return SaveIdentity(
+        designId=link.design_id,
+        lineageId=link.lineage_id,
+        baseEditVersion=link.edit_version,
+    )
+
+
+def _wglink_response(
+    row: Mapping[str, object], identity: SaveIdentity | None = None
+) -> dict[str, Any]:
     stored_path = row.get("bundle_path")
     if not stored_path:
         raise HTTPException(
@@ -206,7 +271,7 @@ def _wglink_response(row: Mapping[str, object]) -> dict[str, Any]:
             status_code=409,
             detail="The original CAD-link bundle was replaced or changed. Export it again.",
         )
-    return {
+    payload: dict[str, Any] = {
         "bundlePath": str(bundle_path),
         "bundleId": row["bundle_id"],
         "exportId": row["export_id"],
@@ -215,6 +280,13 @@ def _wglink_response(row: Mapping[str, object]) -> dict[str, Any]:
         "geometryHash": row["geometry_hash"],
         "artifactSha256": row["artifact_sha256"],
     }
+    if identity is not None:
+        payload["identity"] = {
+            "designId": identity.design_id,
+            "lineageId": identity.lineage_id,
+            "baseEditVersion": identity.base_edit_version,
+        }
+    return payload
 
 
 def _export_wglink_sync(
@@ -235,35 +307,24 @@ def _export_wglink_sync(
     wglink_root = (workspace_root / "wglink").resolve()
     if workspace_root != wglink_root and workspace_root not in wglink_root.parents:
         raise HTTPException(status_code=422, detail="CAD-link destination resolves outside the selected workspace")
-    if request.identity is None:
-        raise HTTPException(
-            status_code=409,
-            detail="This design has never been saved. Save the design before sending it to CAD.",
-        )
     retry = store.find_export_by_idempotency_key(idempotency_key)
     if retry is not None:
-        return _wglink_response(retry)
-    head = store.get_design(request.identity.design_id)
-    save_first = "Save the design before sending it to CAD."
-    if head is None:
-        raise HTTPException(status_code=409, detail=save_first)
-    if str(head["lineage_id"]) != request.identity.lineage_id:
-        raise HTTPException(status_code=409, detail="Design identity does not match the saved design. " + save_first)
-    if int(head["edit_version"]) != request.identity.base_edit_version:
-        raise HTTPException(status_code=409, detail="The saved design identity is out of date. Save again before sending it to CAD.")
-    current_design_hash = design_hash(request.design)
-    if current_design_hash != str(head["design_hash"]):
-        raise HTTPException(status_code=409, detail="The design has unsaved changes. Save it before sending it to CAD.")
+        return _wglink_response(retry, _identity_for_export(store, retry))
 
-    config = design_to_mesher_config(request.design)
-    resolved = resolve_geometry(config)
-    mesher_version = _mesher_version()
-    geometry_hash = _geometry_hash(resolved.geometry, mesher_version)
     design_name = _base_name(request.base_name)
     try:
         _path_segments(f"{design_name}.wglink", "CAD-link bundle name")
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    current_design_hash = design_hash(request.design)
+    identity = _commit_design_for_export(
+        store, request.identity, request.design, current_design_hash, design_name
+    )
+
+    config = design_to_mesher_config(request.design)
+    resolved = resolve_geometry(config)
+    mesher_version = _mesher_version()
+    geometry_hash = _geometry_hash(resolved.geometry, mesher_version)
     try:
         wglink_root.mkdir(exist_ok=True)
     except OSError as exc:
@@ -275,22 +336,22 @@ def _export_wglink_sync(
 
     def build(facts: Mapping[str, object]) -> Mapping[str, str]:
         if (
-            int(facts["editVersion"]) != request.identity.base_edit_version
+            int(facts["editVersion"]) != identity.base_edit_version
             or str(facts["designHash"]) != current_design_hash
         ):
             raise _ExportIdentityConflict(
-                "The saved design changed while the CAD export was starting. "
-                "Save again before sending it to CAD."
+                "The design changed while the CAD export was starting. "
+                "Send it to CAD again."
             )
         try:
             destination = _bundle_destination(
-                wglink_root, design_name, request.identity.design_id
+                wglink_root, design_name, identity.design_id
             )
         except ValueError as exc:
             raise _BundleNameConflict(str(exc)) from exc
         temporary_root = Path(tempfile.mkdtemp(prefix=".wg2-wglink-", dir=wglink_root))
         staged = temporary_root / "bundle.wglink"
-        identity = WgLinkIdentity(
+        bundle_identity = WgLinkIdentity(
             bundle={"id": facts["bundleId"], "created_at": facts["createdAt"]},
             generator={
                 "app": "waveguide-generator",
@@ -300,7 +361,7 @@ def _export_wglink_sync(
             },
             design={
                 "id": facts["designId"],
-                "lineage_id": request.identity.lineage_id,
+                "lineage_id": identity.lineage_id,
                 "edit_version": facts["editVersion"],
                 "design_hash": facts["designHash"],
                 "name": design_name,
@@ -320,7 +381,7 @@ def _export_wglink_sync(
             product = write_wglink(
                 resolved.geometry,
                 staged,
-                identity=identity,
+                identity=bundle_identity,
                 instance_slug=design_name,
                 open_throat=True,
             )
@@ -338,7 +399,7 @@ def _export_wglink_sync(
 
     try:
         row = store.allocate_export(
-            design_id=request.identity.design_id,
+            design_id=identity.design_id,
             idempotency_key=idempotency_key,
             export_builder=build,
         )
@@ -351,7 +412,7 @@ def _export_wglink_sync(
     except Exception as exc:
         raise _export_error(exc) from exc
 
-    return _wglink_response(row)
+    return _wglink_response(row, identity)
 
 
 @router.post("/step")

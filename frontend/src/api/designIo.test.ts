@@ -139,10 +139,24 @@ describe('Send to CAD requests', () => {
     expect(result).toMatchObject({ sequence: 4, bundlePath: '/cad/wglink/horn.wglink' });
   });
 
-  it('requires a saved identity before opening the workspace picker', async () => {
-    const fetcher = (() => { throw new Error('should not fetch'); }) as unknown as typeof fetch;
-    await expect(sendDesignToCad(
-      hydrateDesignDocument({ formula: 'OSSE' }), 1, 'horn', null, fetcher,
-    )).rejects.toThrow('Save the design before sending it to CAD');
+  it('sends a null identity rather than refusing an unsaved design', async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const fetcher = (async (url: string, init?: RequestInit) => {
+      calls.push({ url: String(url), init });
+      if (url === '/api/workspace/path') return new Response(JSON.stringify({ selected: true, path: '/cad' }));
+      return new Response(JSON.stringify({
+        bundlePath: '/cad/wglink/horn.wglink', bundleId: 'wgb_1', exportId: 'wge_1', sequence: 1,
+        designHash: 'sha256:design', geometryHash: 'sha256:geometry', artifactSha256: 'sha256:step',
+        identity: { ...identity, baseEditVersion: 1 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as typeof fetch;
+
+    const result = await sendDesignToCad(
+      hydrateDesignDocument({ formula: 'OSSE' }), 1, 'horn', null, fetcher, 'attempt-1',
+    );
+
+    expect(calls.map(({ url }) => url)).toEqual(['/api/workspace/path', '/api/export/wglink']);
+    expect(JSON.parse(String(calls[1].init?.body))).toMatchObject({ identity: null });
+    expect(result.identity).toEqual({ ...identity, baseEditVersion: 1 });
   });
 });

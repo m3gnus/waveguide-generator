@@ -31,12 +31,14 @@ def _saved(store: CadLinkStore, design: DesignConfig):
     )
 
 
-def _request(saved, design: DesignConfig | None = None) -> api.WgLinkExportRequest:
+def _request(
+    saved, design: DesignConfig | None = None, base_name: str = "demo horn.cfg"
+) -> api.WgLinkExportRequest:
     identity = saved["identity"]
     return api.WgLinkExportRequest.model_validate({
         "design": (design or _design()).model_dump(mode="json"),
         "designRevision": 3,
-        "baseName": "demo horn.cfg",
+        "baseName": base_name,
         "identity": {
             "designId": identity.design_id,
             "lineageId": identity.lineage_id,
@@ -45,14 +47,9 @@ def _request(saved, design: DesignConfig | None = None) -> api.WgLinkExportReque
     })
 
 
-def test_wglink_export_writes_identity_hashes_and_retries_without_rebuilding(
-    monkeypatch, tmp_path: Path,
-) -> None:
-    design = _design()
-    store = CadLinkStore(tmp_path / "cadlink.db")
-    saved = _saved(store, design)
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
+def _install_fake_write(monkeypatch) -> list[object]:
+    """Stub the mesher so these identity contracts cost no geometry work."""
+
     writes: list[object] = []
 
     def fake_write(geometry, output_path, *, identity, **_kwargs):
@@ -74,6 +71,19 @@ def test_wglink_export_writes_identity_hashes_and_retries_without_rebuilding(
         return SimpleNamespace(path=target, manifest_path=manifest_path, manifest=manifest)
 
     monkeypatch.setattr("hornlab_mesher.write_wglink", fake_write)
+    return writes
+
+
+def test_wglink_export_writes_identity_hashes_and_retries_without_rebuilding(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    design = _design()
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    saved = _saved(store, design)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    writes = _install_fake_write(monkeypatch)
+
     first = api._export_wglink_sync(_request(saved), store, workspace, "attempt-1")
     retry = api._export_wglink_sync(_request(saved), store, workspace, "attempt-1")
     other_workspace = tmp_path / "other-workspace"
@@ -117,32 +127,59 @@ def test_wglink_export_writes_identity_hashes_and_retries_without_rebuilding(
     }
 
 
-def test_wglink_export_requires_a_saved_current_design(tmp_path: Path) -> None:
+def test_wglink_export_commits_an_unsaved_or_edited_design(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    """Send to CAD records the design on screen rather than refusing it.
+
+    The bundle needs a registry row to name, not a .cfg the user has downloaded,
+    so a never-saved design and an edited one both export.
+    """
+
     store = CadLinkStore(tmp_path / "cadlink.db")
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    request = api.WgLinkExportRequest.model_validate({
+    _install_fake_write(monkeypatch)
+
+    never_saved = api.WgLinkExportRequest.model_validate({
         "design": _design().model_dump(mode="json"),
         "designRevision": 0,
+        "baseName": "demo horn.cfg",
         "identity": None,
     })
-    with pytest.raises(HTTPException, match="never been saved") as missing:
-        api._export_wglink_sync(request, store, workspace, "missing")
-    assert missing.value.status_code == 409
+    minted = api._export_wglink_sync(never_saved, store, workspace, "unsaved")
+    assert minted["sequence"] == 1
+    assert minted["identity"]["baseEditVersion"] == 1
+    assert minted["designHash"] == design_hash(_design())
+    head = store.get_design(minted["identity"]["designId"])
+    assert head is not None
+    assert head["design_hash"] == design_hash(_design())
+    assert head["snapshot_text"]
 
     saved = _saved(store, _design())
     changed = DesignConfig.model_validate({"formula": "OSSE", "L": 121, "a": 45})
-    with pytest.raises(HTTPException, match="unsaved changes") as unsaved:
-        api._export_wglink_sync(_request(saved, changed), store, workspace, "changed")
-    assert unsaved.value.status_code == 409
+    exported = api._export_wglink_sync(
+        _request(saved, changed, "edited horn.cfg"), store, workspace, "changed"
+    )
+    identity = saved["identity"]
+    assert exported["identity"] == {
+        "designId": identity.design_id,
+        "lineageId": identity.lineage_id,
+        "baseEditVersion": identity.edit_version + 1,
+    }
+    assert exported["designHash"] == design_hash(changed)
+    edited_head = store.get_design(identity.design_id)
+    assert edited_head is not None
+    assert edited_head["design_hash"] == design_hash(changed)
 
 
-def test_wglink_export_conflict_instructions_cover_stale_and_unknown_identity(
-    tmp_path: Path,
+def test_wglink_export_forks_a_stale_identity_and_adopts_an_unknown_one(
+    monkeypatch, tmp_path: Path,
 ) -> None:
     store = CadLinkStore(tmp_path / "cadlink.db")
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    _install_fake_write(monkeypatch)
     saved = _saved(store, _design())
     original_identity = saved["identity"]
     store.save(
@@ -156,25 +193,25 @@ def test_wglink_export_conflict_instructions_cover_stale_and_unknown_identity(
         snapshot_builder=lambda identity: serialize(_design(), cadlink=identity),
     )
 
-    stale = _request(saved)
-    stale.identity = SaveIdentity.model_validate({
-        "designId": saved["identity"].design_id,
-        "lineageId": saved["identity"].lineage_id,
-        "baseEditVersion": saved["identity"].edit_version,
-    })
-    with pytest.raises(HTTPException, match="Save again before sending it to CAD") as caught:
-        api._export_wglink_sync(stale, store, workspace, "stale")
-    assert caught.value.status_code == 409
+    # The head advanced past this editor's token: the store's CAS forks rather
+    # than overwriting someone else's work, and the export follows the fork.
+    stale = api._export_wglink_sync(_request(saved), store, workspace, "stale")
+    assert stale["identity"]["designId"] != original_identity.design_id
+    assert stale["identity"]["lineageId"] == original_identity.lineage_id
+    assert stale["identity"]["baseEditVersion"] == 1
 
-    unknown = _request(saved)
+    unknown = _request(saved, base_name="adopted horn.cfg")
     unknown.identity = SaveIdentity.model_validate({
         "designId": "wgd_01K00000000000000000000099",
-        "lineageId": saved["identity"].lineage_id,
-        "baseEditVersion": saved["identity"].edit_version,
+        "lineageId": original_identity.lineage_id,
+        "baseEditVersion": original_identity.edit_version,
     })
-    with pytest.raises(HTTPException, match="Save the design before sending it to CAD") as caught:
-        api._export_wglink_sync(unknown, store, workspace, "unknown")
-    assert caught.value.status_code == 409
+    adopted = api._export_wglink_sync(unknown, store, workspace, "unknown")
+    assert adopted["identity"] == {
+        "designId": "wgd_01K00000000000000000000099",
+        "lineageId": original_identity.lineage_id,
+        "baseEditVersion": original_identity.edit_version + 1,
+    }
 
 
 def test_replace_bundle_uses_atomic_exchange_when_live_bundle_exists(

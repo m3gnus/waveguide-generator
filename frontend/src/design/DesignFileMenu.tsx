@@ -188,6 +188,9 @@ export function DesignFileMenu() {
         filenameStem(filename),
         identity,
       );
+      // The export committed this design state to the registry, so the CAD link
+      // is current. The unsaved dot deliberately stays lit: no .cfg was written.
+      if (result.identity) setCadLink(result.identity, 'current');
       setMessage(`Sent to CAD · sequence ${result.sequence} · ${result.bundlePath}`);
     });
   }
