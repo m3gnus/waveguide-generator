@@ -12,6 +12,7 @@ import { useSolveControl } from './JobsCoordinator';
 import { CommandPalette, type PaletteEntry } from './CommandPalette';
 import { commandShortcutLabel } from './platformKeys';
 import { SettingsDialog, type Theme } from './SettingsDialog';
+import { subscribeSettingsRequests, type SettingsSection } from './settingsNavigation';
 import { workspaceNavigation } from './Workspace';
 import { UpdateButton, UpdateDialog, useUpdateStatus } from './UpdateControl';
 
@@ -58,6 +59,7 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
   const family = useDesignStore((state) => state.design.formula);
   const [theme, setTheme] = useState<Theme>(initialTheme);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>();
   const [updateOpen, setUpdateOpen] = useState(false);
   const update = useUpdateStatus();
   const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
@@ -70,7 +72,13 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
     localStorage.setItem(THEME_KEY, theme);
   }, [theme]);
 
-  const closeSettings = useCallback(() => setSettingsOpen(false), []);
+  useEffect(() => subscribeSettingsRequests((section) => {
+    setSettingsSection(section);
+    setSettingsOpen(true);
+  }), []);
+
+  const showSettings = useCallback(() => { setSettingsSection(undefined); setSettingsOpen(true); }, []);
+  const closeSettings = useCallback(() => { setSettingsOpen(false); setSettingsSection(undefined); }, []);
   const fileAction = (label: 'Open…' | 'Save') => {
     const menu = document.querySelector<HTMLButtonElement>('.file-chip');
     if (menu?.getAttribute('aria-expanded') !== 'true') menu?.click();
@@ -106,12 +114,12 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
       { id: 'reset-layout', kind: 'Commands', label: 'Reset layout', run: onResetLayout },
       { id: 'dark-theme', kind: 'Commands', label: 'Dark theme', run: () => setTheme('dark') },
       { id: 'light-theme', kind: 'Commands', label: 'Light theme', run: () => setTheme('light') },
-      { id: 'settings', kind: 'Commands', label: 'Settings', run: () => setSettingsOpen(true) },
+      { id: 'settings', kind: 'Commands', label: 'Settings', run: showSettings },
       { id: 'application-update', kind: 'Commands', label: update.data?.availability === 'available' ? `Update WG to ${update.data.release?.version ?? 'latest'}` : 'Application update', detail: update.data?.availability === 'available' ? 'Update available' : `Version ${__WG2_VERSION__}`, keywords: 'version release upgrade', run: () => setUpdateOpen(true) },
       ...RESULT_PANEL_COUNTS.map((count) => ({ id: `results-${count}`, kind: 'Commands' as const, label: `Results: ${count} chart${count === 1 ? '' : 's'}`, keywords: `panel count layout`, run: () => preferencesStore.setChartCount(count) })),
     ];
     return [...parameters, ...jobEntries, ...commands];
-  }, [canRedo, canUndo, family, jobs, onResetLayout, redo, solve, undo, update.data?.availability, update.data?.release?.version]);
+  }, [canRedo, canUndo, family, jobs, onResetLayout, redo, showSettings, solve, undo, update.data?.availability, update.data?.release?.version]);
 
   return <header className="topbar">
     <div className="brand"><BrandMark/><div><span className="brand-name">WAVEGUIDE GENERATOR</span><UpdateButton snapshot={update} open={updateOpen} onOpen={() => setUpdateOpen(true)}/></div></div>
@@ -128,10 +136,10 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
       <button className={theme === 'dark' ? 'on' : ''} onClick={() => setTheme('dark')} aria-label="Dark theme" aria-pressed={theme === 'dark'}><Icon name="moon"/></button>
       <button className={theme === 'light' ? 'on' : ''} onClick={() => setTheme('light')} aria-label="Light theme" aria-pressed={theme === 'light'}><Icon name="sun"/></button>
     </div>
-    <button className="icon-button" onClick={() => setSettingsOpen(true)} title="Settings" aria-label="Settings"><Icon name="settings"/></button>
+    <button className="icon-button" onClick={showSettings} title="Settings" aria-label="Settings"><Icon name="settings"/></button>
     <button className="icon-button" onClick={onResetLayout} title="Reset layout" aria-label="Reset layout"><Icon name="layout"/></button>
     <span className="revision-chip" title="Design revision">r{revision}</span>
-    <SettingsDialog open={settingsOpen} theme={theme} onThemeChange={setTheme} onClose={closeSettings}/>
+    <SettingsDialog open={settingsOpen} theme={theme} focusSection={settingsSection} onThemeChange={setTheme} onClose={closeSettings}/>
     <UpdateDialog open={updateOpen} snapshot={update} onRefresh={update.refresh} onClose={() => setUpdateOpen(false)}/>
   </header>;
 }

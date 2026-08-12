@@ -55,8 +55,10 @@ export const RESULT_PANEL_COUNTS = [1, 2, 3, 4, 6] as const;
 export type ResultPanelCount = typeof RESULT_PANEL_COUNTS[number];
 export const MAX_RESULT_PANELS = 6;
 export type JobSort = 'completed_desc' | 'created_desc' | 'rating_desc' | 'name_asc';
+export type CadApplication = 'fusion360' | 'onshape';
 
 export interface Preferences {
+  cadApplication: CadApplication;
   smoothing: SmoothingMode;
   mapReference: MapReference;
   chartTypes: ChartType[];
@@ -78,6 +80,7 @@ export interface Preferences {
 
 const STORAGE_KEY = 'waveguide-v2-g3-preferences';
 const defaults: Preferences = {
+  cadApplication: 'fusion360',
   smoothing: 'none',
   mapReference: -6,
   // Every default panel must populate from a default solve. 3D Balloon and
@@ -104,6 +107,7 @@ const chartIds = new Set(CHART_TYPES.map(({ id }) => id));
 const exportIds = new Set(EXPORT_FORMATS.map(({ id }) => id));
 const smoothingIds = new Set(['none', '1/1', '1/2', '1/3', '1/6', '1/12', '1/24', '1/48', 'variable', 'psychoacoustic', 'erb']);
 const jobSortIds = new Set<JobSort>(['completed_desc', 'created_desc', 'rating_desc', 'name_asc']);
+const cadApplicationIds = new Set<CadApplication>(['fusion360', 'onshape']);
 const runNameDatePositions = new Set<RunNameDatePosition>(['off', 'prefix', 'suffix']);
 const runNameDateFormats = new Set<RunNameDateFormat>(['yymmdd', 'yyyy-mm-dd']);
 const runNameNumberPositions = new Set<RunNameNumberPosition>(['off', 'suffix']);
@@ -122,6 +126,9 @@ export function normalize(raw: Partial<Preferences> = {}): Preferences {
   const mapReference = MAP_REFERENCES.includes(Number(raw.mapReference) as MapReference) ? Number(raw.mapReference) as MapReference : defaults.mapReference;
   return {
     ...defaults,
+    cadApplication: cadApplicationIds.has(raw.cadApplication as CadApplication)
+      ? raw.cadApplication as CadApplication
+      : defaults.cadApplication,
     smoothing: smoothingIds.has(String(raw.smoothing)) ? raw.smoothing as SmoothingMode : defaults.smoothing,
     mapReference,
     chartTypes: charts,
@@ -152,7 +159,7 @@ export function normalize(raw: Partial<Preferences> = {}): Preferences {
   };
 }
 
-export const STORAGE_VERSION = 10;
+export const STORAGE_VERSION = 11;
 
 function migrateV1ToV2(preferences: Partial<Preferences>): Partial<Preferences> {
   const { chartTypes: _replaced, ...carried } = preferences;
@@ -211,7 +218,8 @@ function migrateV8ToV9(preferences: Partial<Preferences>): Partial<Preferences> 
  * automatic export selections; v6→v7 adds design-tracking names; v7→v8 adds
  * opt-in date decoration outside those names; v8→v9 moves the untouched
  * export-theme default onto the interface; v9→v10 exposes the existing
- * design-change number as a configurable suffix. Each stored version runs every
+ * design-change number as a configurable suffix; v10→v11 adds the CAD
+ * application choice. Each stored version runs every
  * step from its own onwards -- v3 used to run only its first step, so a v3
  * profile would have skipped v4→v5 entirely.
  */
@@ -225,6 +233,7 @@ const MIGRATIONS: Record<number, (preferences: Partial<Preferences>) => Partial<
   7: (preferences) => preferences,
   8: migrateV8ToV9,
   9: (preferences) => preferences,
+  10: (preferences) => preferences,
 };
 
 export function readPreferences(raw: string | null): { value: Preferences; migrated: boolean } {

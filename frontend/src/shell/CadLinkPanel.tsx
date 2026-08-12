@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
-import { CadLinkApiError, ingestReturn, listReturns, type CadReturnBundle, type CadReturnFinding, type CadReturnIngestRecord } from '../api/cadlink';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { CadLinkApiError, getFusionCadStatus, ingestReturn, listReturns, type CadReturnBundle, type CadReturnFinding, type CadReturnIngestRecord, type FusionCadStatus } from '../api/cadlink';
 import { NumberField } from '../design/NumberField';
 import { FrequencySweepControls, ToggleRow } from '../design/SolveOptionsSections';
-import { sentToCadMessage, useSendToCad } from '../design/useSendToCad';
+import { useSendToCad } from '../design/useSendToCad';
 import type { ImportedSolveSubmission } from '../jobs/actions';
+import { usePreferences, type CadApplication } from '../prefs/preferences';
 import {
   acknowledgedFindingWire,
   blockingFindings,
@@ -11,8 +12,13 @@ import {
   useCadReturnStore,
 } from '../stores/cadReturn';
 import { parseFrequencyList, useSolveOptionsStore } from '../stores/solveOptions';
+import { useDesignStore } from '../stores/design';
+import { useDocumentStore } from '../stores/document';
+import { filenameStem } from '../viewport/presentation';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { Icon } from './icons';
+import { requestSettings } from './settingsNavigation';
+import { workspaceNavigation } from './workspaceNavigation';
 import './cadLinkPanel.css';
 
 const FRESHNESS_COPY: Record<string, string> = {
@@ -24,6 +30,90 @@ const FRESHNESS_COPY: Record<string, string> = {
   unknown: 'Freshness could not be established from the available evidence.',
   unlinked: 'Unlinked return — no Waveguide Generator design identity was attached in CAD.',
 };
+
+export interface CadWorkflowView {
+  state: 'checking' | 'closed' | 'no-document' | 'not-linked' | 'current' | 'stale' | 'coming-soon';
+  headline: string;
+  detail: string;
+  action: 'open' | 'update' | null;
+}
+
+export function newestReturnArrival(
+  items: CadReturnBundle[],
+  previous: Map<string, string> | null,
+  nowMs = Date.now(),
+): CadReturnBundle | null {
+  const recentThreshold = nowMs - 60_000;
+  return items.find((item) => item.readable && (
+    previous
+      ? previous.get(item.bundlePath) !== item.modifiedAt
+      : Date.parse(item.modifiedAt) >= recentThreshold
+  )) ?? null;
+}
+
+export function cadWorkflowView(
+  application: CadApplication,
+  status: FusionCadStatus | null,
+): CadWorkflowView {
+  if (application === 'onshape') return {
+    state: 'coming-soon',
+    headline: 'Onshape support is coming soon',
+    detail: 'Choose Fusion 360 in CAD settings to open or update this waveguide today.',
+    action: null,
+  };
+  if (status === null) return {
+    state: 'checking',
+    headline: 'Checking Fusion 360…',
+    detail: 'WG is looking for the WGLink add-in and its active document.',
+    action: 'open',
+  };
+  if (status.state === 'closed') return {
+    state: 'closed',
+    headline: 'WGLink is not connected to Fusion 360',
+    detail: 'WG will start Fusion 360 if needed, create a Design document, and insert this waveguide. If Fusion is already open, start or reload WGLink.',
+    action: 'open',
+  };
+  if (status.state === 'no_document') return {
+    state: 'no-document',
+    headline: 'Fusion 360 is open · no Design document',
+    detail: 'WGLink will create a Design document and insert this waveguide.',
+    action: 'open',
+  };
+  if (status.state === 'not_linked') return {
+    state: 'not-linked',
+    headline: `Fusion 360 is open${status.documentName ? ` · ${status.documentName}` : ''}`,
+    detail: 'This WG design is not linked in the active Fusion document yet.',
+    action: 'open',
+  };
+  const parameterCopy = status.link?.parameterCount
+    ? `${status.link.parameterCount} managed CAD parameters`
+    : 'the managed CAD parameters';
+  if (status.state === 'current') return {
+    state: 'current',
+    headline: `Fusion 360 is open · ${status.documentName ?? 'active document'}`,
+    detail: `Up to date. The full WG config and ${parameterCopy} are synchronized.`,
+    action: null,
+  };
+  const fusionFormula = status.fusionFormula?.toLocaleUpperCase();
+  const currentFormula = status.currentFormula.toLocaleUpperCase();
+  const mismatch = fusionFormula && fusionFormula !== currentFormula
+    ? `Fusion has ${fusionFormula}; WG is now ${currentFormula}.`
+    : 'WG parameters changed after this Fusion waveguide was built.';
+  const configCopy = status.link?.configPresent
+    ? ''
+    : ' This link also predates full WG config synchronization.';
+  const localEditCopy = status.link?.parameterDriftCount
+    ? ` ${status.link.parameterDriftCount} managed Fusion parameter${status.link.parameterDriftCount === 1 ? ' has' : 's have'} local edits.`
+    : status.link?.localBodyState && status.link.localBodyState !== 'unmodified'
+      ? ` The managed Fusion body is ${status.link.localBodyState}.`
+      : '';
+  return {
+    state: 'stale',
+    headline: `Fusion 360 needs an update${status.documentName ? ` · ${status.documentName}` : ''}`,
+    detail: `${mismatch}${configCopy}${localEditCopy}`,
+    action: 'update',
+  };
+}
 
 function compactValue(value: unknown): string {
   if (value === null || value === undefined) return '—';
@@ -162,6 +252,11 @@ export function buildImportedSubmission(
 export function CadLinkPanel() {
   const state = useCadReturnStore();
   const solveStore = useSolveOptionsStore();
+  const preferences = usePreferences();
+  const design = useDesignStore((current) => current.design);
+  const designRevision = useDesignStore((current) => current.designRevision);
+  const filename = useDocumentStore((current) => current.filename);
+  const identity = useDocumentStore((current) => current.identity);
   const coordinator = useSyncExternalStore(jobsCoordinatorBridge.subscribe, jobsCoordinatorBridge.getSnapshot, jobsCoordinatorBridge.getSnapshot);
   const [bundles, setBundles] = useState<CadReturnBundle[]>([]);
   const [loading, setLoading] = useState(true);
@@ -169,22 +264,77 @@ export function CadLinkPanel() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
+  const [fusionStatus, setFusionStatus] = useState<FusionCadStatus | null>(null);
+  const seenReturnRevisions = useRef<Map<string, string> | null>(null);
+  const fusionStatusRequest = useRef(0);
   const { send: sendToCad, sending } = useSendToCad();
 
-  const refresh = useCallback(async () => {
-    setLoading(true); setError(null);
+  const refreshFusionStatus = useCallback(async () => {
+    if (preferences.cadApplication !== 'fusion360') return;
+    const request = ++fusionStatusRequest.current;
+    try {
+      const next = await getFusionCadStatus(design, identity);
+      if (request === fusionStatusRequest.current
+        && ['closed', 'no_document', 'not_linked', 'current', 'stale'].includes(next.state)) {
+        setFusionStatus(next);
+      }
+    } catch {
+      // Presence is advisory. Workspace and export errors are presented by the
+      // actual action; a missed heartbeat must not hide CAD returns.
+    }
+  }, [design, identity, preferences.cadApplication]);
+
+  useEffect(() => {
+    setFusionStatus(null);
+    if (preferences.cadApplication !== 'fusion360') return undefined;
+    void refreshFusionStatus();
+    const timer = window.setInterval(() => { void refreshFusionStatus(); }, 2_500);
+    return () => {
+      window.clearInterval(timer);
+      fusionStatusRequest.current += 1;
+    };
+  }, [designRevision, preferences.cadApplication, refreshFusionStatus]);
+
+  const refresh = useCallback(async (options: { background?: boolean; autoOpenNew?: boolean } = {}) => {
+    const background = options.background === true;
+    if (!background) { setLoading(true); setError(null); }
     try {
       const response = await listReturns();
       setBundles(response.items);
-      const selected = useCadReturnStore.getState().selectedBundle;
-      if (selected) {
+      const previous = seenReturnRevisions.current;
+      const next = new Map(response.items.map((item) => [item.bundlePath, item.modifiedAt]));
+      const arrived = options.autoOpenNew
+        ? newestReturnArrival(response.items, previous)
+        : null;
+      seenReturnRevisions.current = next;
+      const initial = previous === null
+        ? response.items.find((item) => item.readable) ?? null
+        : null;
+      const opened = arrived ?? initial;
+      if (opened) {
+        useCadReturnStore.getState().selectBundle(opened);
+      }
+      if (arrived) {
+        setStatus(`Received ${arrived.documentName ?? arrived.name} from Fusion 360.`);
+        workspaceNavigation.activate('cadlink');
+      } else if (!initial) {
+        const selected = useCadReturnStore.getState().selectedBundle;
+        if (!selected) return;
         const current = response.items.find((bundle) => bundle.bundlePath === selected.bundlePath);
         useCadReturnStore.getState().refreshSelectedBundle(current ?? null);
       }
-    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
-    finally { setLoading(false); }
+    } catch (reason) {
+      if (!background) setError(reason instanceof Error ? reason.message : String(reason));
+    }
+    finally { if (!background) setLoading(false); }
   }, []);
-  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => {
+    void refresh({ autoOpenNew: true });
+    const timer = window.setInterval(() => {
+      void refresh({ background: true, autoOpenNew: true });
+    }, 2_500);
+    return () => window.clearInterval(timer);
+  }, [refresh]);
 
   const ingest = async () => {
     const current = useCadReturnStore.getState();
@@ -222,7 +372,11 @@ export function CadLinkPanel() {
   const send = async () => {
     setError(null); setStatus(null);
     try {
-      setStatus(sentToCadMessage(await sendToCad()));
+      const action = cadWorkflowView(preferences.cadApplication, fusionStatus).action;
+      const result = await sendToCad();
+      setStatus(action === 'update'
+        ? `Update sent to Fusion 360 · sequence ${result.sequence}`
+        : `Opening in Fusion 360 · sequence ${result.sequence}`);
       await refresh();
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
   };
@@ -254,11 +408,22 @@ export function CadLinkPanel() {
   const driftSources = new Set([...state.areaDriftSourceIds, ...(state.ingestRecord?.role_findings ?? [])
     .filter((finding) => String(finding.kind).includes('area-drift'))
     .map((finding) => String(finding.source_id))]);
+  const workflow = cadWorkflowView(preferences.cadApplication, fusionStatus);
+  const cadApplicationLabel = preferences.cadApplication === 'fusion360' ? 'Autodesk Fusion 360' : 'Onshape';
+  const designName = filenameStem(filename);
+  const actionLabel = workflow.action === 'update'
+    ? 'Update waveguide in Fusion 360'
+    : `Open ${designName === 'waveguide' ? 'waveguide' : designName} in Fusion 360`;
 
   return <div className="cadlink-panel panel-scroll">
     <section className="cad-section cad-send">
-      <header><h3>Send to CAD</h3><button className="primary" disabled={sending} onClick={() => void send()}>{sending ? 'Sending…' : 'Send to CAD'}</button></header>
-      <p>Writes an identity-bearing <code>.wglink</code> bundle for the design on screen into the workspace, where WGLink inserts it in Fusion. Saving first is not required.</p>
+      <div className="cad-application"><span>CAD application</span><b>{cadApplicationLabel}</b><button className="link-button" onClick={() => requestSettings('cad')}>Change in Settings</button></div>
+      <div className={`cad-connection cad-connection-${workflow.state}`}>
+        <span className="cad-connection-dot" aria-hidden="true"/>
+        <div><h3>{workflow.headline}</h3><p>{workflow.detail}</p></div>
+      </div>
+      {workflow.action && <button className="primary cad-primary-action" disabled={sending} onClick={() => void send()}>{sending ? (workflow.action === 'update' ? 'Updating…' : 'Opening…') : actionLabel}</button>}
+      <p className="cad-transport-note">WGLink receives the full config, formula, expression text, and realized Fusion parameters. Saving the WG file first is not required.</p>
     </section>
     <div className="cadlink-toolbar"><b>Returned bundles</b><span className="spacer"/><button disabled={loading || ingesting} onClick={() => void refresh()}><Icon name="reset"/>{loading ? 'Loading…' : 'Refresh'}</button></div>
     {error && <div className="cad-alert" role="alert">{error}</div>}

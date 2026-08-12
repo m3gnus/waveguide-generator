@@ -27,6 +27,7 @@ def _manifest(step: bytes) -> dict:
         "instances": [{
             "instance_id": instance, "design_id": "wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M", "lineage_id": "wgl_01J4Y2WZQK8Z3TFD3E7V9XKQ4M", "edit_version": 19,
             "design_hash": "sha256:" + "1" * 64, "export_id": "wge_01J4Y2ZD000000000000000000", "export_sequence": 7,
+            "formula": "osse", "config": {"root": {"formula": "OSSE"}, "dimensions": {"length": {"raw": "130", "value": 130}}, "extra_keys": {"Symmetry": "1234", "Tag": "preserved WG input"}},
             "geometry_hash": "sha256:" + "2" * 64, "origin_bundle_id": "wgb_01J4Y2ZF000000000000000000", "build_mode": "enclosure", "parameter_prefix": "wg_tritonia_", "occurrence_path": "Speaker/WGLink",
             "assembly_from_link": [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]], "chirality": "original",
             "body_evidence": {"local_body_state": "unmodified", "baseline_fingerprint": {"is_solid": True, "volume_mm3": 12, "bbox_mm": [0, 0, 0, 1, 1, 1]}, "observed_fingerprint": {"is_solid": True, "volume_mm3": 12, "bbox_mm": [0, 0, 0, 1, 1, 1]}, "observed_at": "2026-08-12T09:14:03Z"},
@@ -49,6 +50,7 @@ def write_bundle(root: Path, manifest: dict | None = None, *, step: bytes = b"ST
 def test_worked_example_shape_and_real_member_table_validate(tmp_path: Path) -> None:
     result = read_wgreturn(write_bundle(tmp_path))
     assert result.manifest["sources"][0]["id"] == "source-hf"
+    assert result.manifest["instances"][0]["config"]["dimensions"]["length"]["raw"] == "130"
     assert result.artifact_sha256.startswith("sha256:")
 
 

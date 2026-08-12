@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { JobsPreferencesSurface, ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
+import { preferencesStore, usePreferences, type CadApplication } from '../prefs/preferences';
 import { Icon } from './icons';
+import type { SettingsSection } from './settingsNavigation';
 
 export type Theme = 'dark' | 'light';
 
@@ -74,9 +76,26 @@ function WorkspaceSettings() {
   </section>;
 }
 
-export function SettingsDialog({ open, theme, onThemeChange, onClose }: {
+function CadSettings() {
+  const preferences = usePreferences();
+  return <section id="settings-cad" className="settings-theme cad-settings" aria-labelledby="settings-cad-title" tabIndex={-1}>
+    <h3 id="settings-cad-title">CAD Link</h3>
+    <label className="ui-field">CAD application<select
+      aria-label="CAD application"
+      value={preferences.cadApplication}
+      onChange={(event) => preferencesStore.update({ cadApplication: event.target.value as CadApplication })}
+    >
+      <option value="fusion360">Autodesk Fusion 360</option>
+      <option value="onshape" disabled>Onshape — coming soon</option>
+    </select></label>
+    <p className="cad-settings-note">WGLink opens and updates the active waveguide in Fusion 360. Onshape support is coming soon.</p>
+  </section>;
+}
+
+export function SettingsDialog({ open, theme, focusSection, onThemeChange, onClose }: {
   open: boolean;
   theme: Theme;
+  focusSection?: SettingsSection;
   onThemeChange: (theme: Theme) => void;
   onClose: () => void;
 }) {
@@ -85,7 +104,12 @@ export function SettingsDialog({ open, theme, onThemeChange, onClose }: {
   useEffect(() => {
     if (!open) return;
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const focus = requestAnimationFrame(() => dialog.current?.querySelector<HTMLElement>(focusableSelector)?.focus());
+    const focus = requestAnimationFrame(() => {
+      const section = focusSection ? dialog.current?.querySelector<HTMLElement>(`#settings-${focusSection}`) : null;
+      section?.scrollIntoView({ block: 'start' });
+      (section?.querySelector<HTMLElement>('select:not([disabled]), button:not([disabled])')
+        ?? dialog.current?.querySelector<HTMLElement>(focusableSelector))?.focus();
+    });
     const keydown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault();
@@ -100,7 +124,7 @@ export function SettingsDialog({ open, theme, onThemeChange, onClose }: {
       document.removeEventListener('keydown', keydown);
       previous?.focus();
     };
-  }, [onClose, open]);
+  }, [focusSection, onClose, open]);
 
   if (!open) return null;
   return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
@@ -114,6 +138,7 @@ export function SettingsDialog({ open, theme, onThemeChange, onClose }: {
             <button className={theme === 'light' ? 'on' : ''} aria-pressed={theme === 'light'} onClick={() => onThemeChange('light')}><Icon name="sun"/>Light</button>
           </div>
         </section>
+        <CadSettings/>
         <WorkspaceSettings/>
         <ResultsPreferencesSurface expanded/>
         <JobsPreferencesSurface expanded/>

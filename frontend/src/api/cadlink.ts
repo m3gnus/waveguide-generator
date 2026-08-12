@@ -1,3 +1,6 @@
+import { serializeDesign, type DesignDocument } from '../stores/design';
+import type { DesignIdentity } from '../stores/document';
+
 export interface CadReturnSourceSummary {
   id: string;
   role: string;
@@ -19,6 +22,36 @@ export interface CadReturnBundle {
 }
 
 export interface CadReturnListing { items: CadReturnBundle[] }
+
+export type FusionCadState = 'closed' | 'no_document' | 'not_linked' | 'current' | 'stale';
+
+export interface FusionCadLink {
+  instanceId: string;
+  bundlePath: string | null;
+  designId: string | null;
+  lineageId: string | null;
+  editVersion: string | null;
+  designHash: string | null;
+  designName: string | null;
+  formula: string | null;
+  configPresent: boolean;
+  parameterCount: number;
+  parameterDriftCount: number;
+  localBodyState: 'unmodified' | 'modified' | 'missing' | 'unknown';
+  exportId: string | null;
+  exportSequence: string | null;
+}
+
+export interface FusionCadStatus {
+  cadApplication: 'fusion360';
+  state: FusionCadState;
+  running: boolean;
+  updatedAt: string | null;
+  documentName: string | null;
+  currentFormula: string;
+  fusionFormula: string | null;
+  link: FusionCadLink | null;
+}
 
 export interface CadReturnIngestRequest {
   bundlePath: string;
@@ -136,6 +169,18 @@ async function jsonRequest<T>(path: string, init: RequestInit | undefined, fetch
 
 export function listReturns(fetcher: typeof fetch = fetch): Promise<CadReturnListing> {
   return jsonRequest('/api/cadlink/returns', undefined, fetcher);
+}
+
+export function getFusionCadStatus(
+  design: DesignDocument,
+  identity: DesignIdentity | null,
+  fetcher: typeof fetch = fetch,
+): Promise<FusionCadStatus> {
+  return jsonRequest('/api/cadlink/fusion-status', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ design: serializeDesign(design), identity }),
+  }, fetcher);
 }
 
 export function ingestReturn(request: CadReturnIngestRequest, fetcher: typeof fetch = fetch): Promise<CadReturnIngestRecord> {

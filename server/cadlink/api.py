@@ -13,9 +13,12 @@ from typing import Any
 from fastapi import APIRouter, FastAPI, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
+from server.cadlink.identity import SaveIdentity, design_hash
+from server.design.schema import DesignConfig
 from server.mesh.gmsh_worker import run_on_gmsh_worker
 from server.workspace.api import WorkspaceState, _path_segments, _strictly_inside
 
+from .fusion_status import read_fusion_status
 from .ingest import IngestRefusal, get_ingestion_record, ingest_bundle
 from .store import CadLinkStore
 from .wgreturn import WgReturnError
@@ -41,6 +44,13 @@ class CadReturnIngestRequest(BaseModel):
     area_drift_overrides: list[str] = Field(
         default_factory=list, alias="areaDriftOverrides"
     )
+
+
+class FusionStatusRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    design: DesignConfig
+    identity: SaveIdentity | None = None
 
 
 router = APIRouter(prefix="/api/cadlink", tags=["cadlink"])
@@ -109,7 +119,7 @@ def _return_listing(workspace_root: Path) -> list[dict[str, Any]]:
         except (OSError, UnicodeError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
             item["reason"] = str(exc) or "Manifest is unreadable"
         items.append(item)
-    return items
+    return sorted(items, key=lambda item: item["modifiedAt"], reverse=True)
 
 
 @router.get("/returns")
@@ -123,6 +133,28 @@ async def list_returns(request: Request) -> dict[str, Any]:
         )
     workspace_root = selected.resolve()
     return {"items": await asyncio.to_thread(_return_listing, workspace_root)}
+
+
+@router.post("/fusion-status")
+async def fusion_status(
+    payload: FusionStatusRequest, request: Request
+) -> dict[str, Any]:
+    """Report whether the design on screen is open and current in Fusion."""
+
+    workspace: WorkspaceState = request.app.state.workspace
+    selected = workspace.selected_path()
+    if selected is None:
+        raise HTTPException(
+            status_code=409,
+            detail="No workspace folder has been selected. Choose a workspace folder first.",
+        )
+    return await asyncio.to_thread(
+        read_fusion_status,
+        Path(request.app.state.data_dir),
+        current_design_hash=design_hash(payload.design),
+        current_formula=payload.design.root.formula,
+        design_id=payload.identity.design_id if payload.identity else None,
+    )
 
 
 def _ingest_error(exc: Exception) -> HTTPException:
@@ -200,6 +232,7 @@ def mount_cadlink(application: FastAPI) -> None:
 
 __all__ = [
     "CadReturnIngestRequest",
+    "FusionStatusRequest",
     "ImportedMeshRequest",
     "list_returns",
     "mount_cadlink",

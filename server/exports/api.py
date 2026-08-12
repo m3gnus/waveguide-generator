@@ -424,6 +424,12 @@ def _export_wglink_sync(
                 "design_hash": facts["designHash"],
                 "name": design_name,
                 "formula": request.design.root.formula.lower(),
+                # The STEP and point grid are the realized geometry; this is
+                # the exact WG config that produced them. WGLink persists the
+                # snapshot with the managed Fusion instance so future updates,
+                # audits, and round trips do not have to reverse-engineer a
+                # formula from the body or from the smaller CAD parameter set.
+                "config": request.design.model_dump(mode="json", by_alias=True),
                 "build_mode": resolved.mode,
             },
             export={
@@ -553,7 +559,12 @@ async def export_wglink(
     # this is delivery metadata: a failure must not invalidate the completed,
     # durable bundle.
     try:
-        await asyncio.to_thread(publish_fusion_handoff, selected.resolve(), result)
+        await asyncio.to_thread(
+            publish_fusion_handoff,
+            Path(request.app.state.data_dir),
+            selected.resolve(),
+            result,
+        )
         result["cadHandoff"] = "published"
     except (OSError, TypeError, ValueError) as exc:
         logger.warning("Could not publish the Fusion handoff: %s", exc)
