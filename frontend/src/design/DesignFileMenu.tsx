@@ -6,7 +6,6 @@ import {
   inspectDesignText,
   openDesignText,
   saveDesignDocument,
-  sendDesignToCad,
   type ImportReport,
   type CadLinkOpenState,
   type StepBody,
@@ -17,6 +16,7 @@ import { jobsSocket } from '../api/jobsSocket';
 import { nextFileJobNaming, preferencesStore } from '../prefs/preferences';
 import { Icon } from '../shell/icons';
 import { documentDisplayName, filenameStem } from '../viewport/presentation';
+import { sentToCadMessage, useSendToCad } from './useSendToCad';
 
 const ACCEPT = '.cfg,.txt,.mwg,text/plain';
 
@@ -75,6 +75,7 @@ export function DesignFileMenu() {
   const classification = useDocumentStore((state) => state.classification);
   const setCadLink = useDocumentStore((state) => state.setCadLink);
   const adoptSavedIdentity = useDocumentStore((state) => state.adoptSavedIdentity);
+  const { send: sendToCadBundle } = useSendToCad();
   const [open, setOpen] = useState(false);
   const [exportsOpen, setExportsOpen] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -182,16 +183,7 @@ export function DesignFileMenu() {
 
   async function sendToCad() {
     await act(async () => {
-      const result = await sendDesignToCad(
-        design,
-        revision,
-        filenameStem(filename),
-        identity,
-      );
-      // The export committed this design state to the registry, so the CAD link
-      // is current. The unsaved dot deliberately stays lit: no .cfg was written.
-      if (result.identity) setCadLink(result.identity, 'current');
-      setMessage(`Sent to CAD · sequence ${result.sequence} · ${result.bundlePath}`);
+      setMessage(sentToCadMessage(await sendToCadBundle()));
     });
   }
 
