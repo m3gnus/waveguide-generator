@@ -43,13 +43,38 @@ describe('preferences surfaces', () => {
   });
 
   it('renders design-tracking job naming, sort, and rating-filter controls', () => {
-    act(() => root.render(<JobsPreferencesSurface/>));
+    act(() => root.render(<JobsPreferencesSurface now={new Date(2026, 7, 12, 12)}/>));
     expect(host.querySelector('[aria-label="Job design name"]')).not.toBeNull();
     expect(host.querySelector('[aria-label="Next job version"]')).toBeNull();
     expect(host.querySelector('[aria-label="Prefix job name with date"]')).toBeNull();
+    expect(host.querySelector<HTMLSelectElement>('[aria-label="Run-name date position"]')?.value).toBe('off');
+    expect(host.querySelector<HTMLSelectElement>('[aria-label="Run-name date format"]')?.disabled).toBe(true);
     expect(host.textContent).toContain('next · horn');
     expect(host.querySelector<HTMLSelectElement>('[aria-label="Default task sort"]')?.options).toHaveLength(4);
     expect(host.querySelector<HTMLSelectElement>('[aria-label="Minimum rating filter"]')?.options).toHaveLength(6);
+  });
+
+  it('previews the same decorated label while keeping the editable core undated', () => {
+    const now = new Date(2026, 7, 12, 12);
+    act(() => root.render(<JobsPreferencesSurface now={now}/>));
+    const position = host.querySelector<HTMLSelectElement>('[aria-label="Run-name date position"]')!;
+    const format = host.querySelector<HTMLSelectElement>('[aria-label="Run-name date format"]')!;
+
+    act(() => {
+      position.value = 'suffix';
+      position.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
+    expect(host.querySelector<HTMLInputElement>('[aria-label="Job design name"]')?.value).toBe('horn');
+    expect(host.querySelector('.job-name-preview')?.textContent).toContain('next · horn_260812');
+    expect(preferencesStore.getSnapshot()).toMatchObject({ outputName: 'horn', runNameDatePosition: 'suffix' });
+    expect(format.disabled).toBe(false);
+
+    act(() => {
+      format.value = 'yyyy-mm-dd';
+      format.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(host.querySelector('.job-name-preview')?.textContent).toContain('next · horn_2026-08-12');
   });
 
   // The gear popovers portal to <body>, so they are queried from the document

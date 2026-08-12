@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import type { JobItem } from '../api/jobsSocket';
 import { isSubmittedDesignProjection, type SubmittedDesignProjection } from '../jobs/submittedProjection';
-import { normalizeRunName } from '../jobs/runNaming';
+import { normalizeRunName, type RunNameDateFormat, type RunNameDatePosition } from '../jobs/runNaming';
 import type { SmoothingMode } from '../results/smoothing';
 
 export const CHART_TYPES = [
@@ -50,6 +50,8 @@ export interface Preferences {
   autoDownloadMesh: boolean;
   outputName: string;
   nameSourceProjection: SubmittedDesignProjection | null;
+  runNameDatePosition: RunNameDatePosition;
+  runNameDateFormat: RunNameDateFormat;
   counter: number;
   jobSort: JobSort;
   minRating: number;
@@ -70,6 +72,8 @@ const defaults: Preferences = {
   autoDownloadMesh: false,
   outputName: 'horn',
   nameSourceProjection: null,
+  runNameDatePosition: 'off',
+  runNameDateFormat: 'yymmdd',
   counter: 1,
   jobSort: 'completed_desc',
   minRating: 0,
@@ -79,6 +83,8 @@ const chartIds = new Set(CHART_TYPES.map(({ id }) => id));
 const exportIds = new Set(EXPORT_FORMATS.map(({ id }) => id));
 const smoothingIds = new Set(['none', '1/1', '1/2', '1/3', '1/6', '1/12', '1/24', '1/48', 'variable', 'psychoacoustic', 'erb']);
 const jobSortIds = new Set<JobSort>(['completed_desc', 'created_desc', 'rating_desc', 'name_asc']);
+const runNameDatePositions = new Set<RunNameDatePosition>(['off', 'prefix', 'suffix']);
+const runNameDateFormats = new Set<RunNameDateFormat>(['yymmdd', 'yyyy-mm-dd']);
 
 export function normalize(raw: Partial<Preferences> = {}): Preferences {
   const charts = Array.isArray(raw.chartTypes)
@@ -105,13 +111,19 @@ export function normalize(raw: Partial<Preferences> = {}): Preferences {
     nameSourceProjection: isSubmittedDesignProjection(raw.nameSourceProjection)
       ? structuredClone(raw.nameSourceProjection)
       : null,
+    runNameDatePosition: runNameDatePositions.has(raw.runNameDatePosition as RunNameDatePosition)
+      ? raw.runNameDatePosition as RunNameDatePosition
+      : defaults.runNameDatePosition,
+    runNameDateFormat: runNameDateFormats.has(raw.runNameDateFormat as RunNameDateFormat)
+      ? raw.runNameDateFormat as RunNameDateFormat
+      : defaults.runNameDateFormat,
     counter: Number.isFinite(Number(raw.counter)) ? Math.max(1, Math.min(999_999, Math.floor(Number(raw.counter)))) : defaults.counter,
     jobSort: jobSortIds.has(raw.jobSort as JobSort) ? raw.jobSort as JobSort : defaults.jobSort,
     minRating: Number.isFinite(Number(raw.minRating)) ? Math.max(0, Math.min(5, Math.floor(Number(raw.minRating)))) : defaults.minRating,
   };
 }
 
-export const STORAGE_VERSION = 7;
+export const STORAGE_VERSION = 8;
 
 function migrateV1ToV2(preferences: Partial<Preferences>): Partial<Preferences> {
   const { chartTypes: _replaced, ...carried } = preferences;
@@ -155,7 +167,8 @@ function migrateV5ToV6(preferences: Partial<Preferences>): Partial<Preferences> 
  * panels while preserving unrelated settings; v2→v3 makes the chart list's
  * stored length authoritative; v3→v4 adds independent job-version naming;
  * v4→v5 puts the date prefix on by default; v5→v6 separates manual and
- * automatic export selections. Each stored version runs every
+ * automatic export selections; v6→v7 adds design-tracking names; v7→v8 adds
+ * opt-in date decoration outside those names. Each stored version runs every
  * step from its own onwards -- v3 used to run only its first step, so a v3
  * profile would have skipped v4→v5 entirely.
  */
@@ -166,6 +179,7 @@ const MIGRATIONS: Record<number, (preferences: Partial<Preferences>) => Partial<
   4: migrateV4ToV5,
   5: migrateV5ToV6,
   6: (preferences) => preferences,
+  7: (preferences) => preferences,
 };
 
 export function readPreferences(raw: string | null): { value: Preferences; migrated: boolean } {

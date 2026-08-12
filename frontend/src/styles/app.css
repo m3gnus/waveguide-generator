@@ -182,8 +182,6 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .panel-text-action--danger { color: var(--red); }
 .preferences-surface { padding: 4px 8px; border-bottom: 1px solid var(--hair-soft); color: var(--fg2); }
 .job-naming-preferences { display: flex; flex-wrap: wrap; align-items: end; gap: 6px; padding: 6px 0; }
-.job-prefix-toggle { display: flex; align-items: center; gap: 4px; height: 23px; color: var(--fg2); font-size: var(--text-micro); white-space: nowrap; }
-.job-prefix-toggle input { accent-color: var(--acc); }
 .job-name-preview { flex-basis: 100%; overflow: hidden; color: var(--fg4); font: var(--text-micro) var(--mono); text-overflow: ellipsis; white-space: nowrap; }
 .job-name-preview b { color: var(--acc); font-weight: 500; }
 .panel-preferences-trigger { display: grid; place-items: center; width: 23px; height: 23px; flex: none; padding: 0; border: 0; border-radius: var(--r3); background: transparent; color: var(--fg3); }
@@ -855,13 +853,9 @@ textarea:disabled { opacity: .48; }
    itself three lines deep beside two empty columns. */
 .preferences-formats > .preferences-section-copy { grid-column: 1 / -1; margin: 0 0 6px; }
 .preferences-formats legend { padding-inline: 4px; color: var(--fg3); font-size: var(--text-micro); text-transform: uppercase; letter-spacing: .08em; }
-.job-naming-preferences { display: grid; grid-template-columns: minmax(0, 1fr) 120px; gap: 8px; margin-bottom: 16px; padding: 0; }
-/* The date-prefix toggle is one sentence, not a field: on its own row it reads
-   in a line instead of folding into a five-word stack beside its checkbox. */
-.job-naming-preferences > .ui-check,
+.job-naming-preferences { display: grid; grid-template-columns: minmax(0, 1fr) 120px 132px; gap: 8px; margin-bottom: 16px; padding: 0; }
 .job-name-preview { grid-column: 1 / -1; }
 .job-name-preview { font-size: var(--text-micro); }
-.job-prefix-toggle { min-height: var(--control-h); font-size: var(--text-base); }
 .viewer-preferences-note { padding: 12px 16px 16px; font-size: var(--text-base); }
 
 @media (max-width: 1100px) {

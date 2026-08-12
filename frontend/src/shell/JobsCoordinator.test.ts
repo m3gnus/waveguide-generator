@@ -33,6 +33,17 @@ describe('current job naming', () => {
     expect(staleRenderPreferences).toMatchObject({ outputName: 'horn' });
     expect(currentJobLabel(design, options)).toBe('fresh');
   });
+
+  it('decorates the submitted label without changing the stored core', () => {
+    preferencesStore.update({
+      outputName: 'horn',
+      runNameDatePosition: 'prefix',
+      runNameDateFormat: 'yyyy-mm-dd',
+    });
+    expect(currentJobLabel(undefined, undefined, undefined, new Date(2026, 7, 12, 12)))
+      .toBe('2026-08-12_horn');
+    expect(preferencesStore.getSnapshot().outputName).toBe('horn');
+  });
 });
 
 describe('job lifecycle announcements', () => {

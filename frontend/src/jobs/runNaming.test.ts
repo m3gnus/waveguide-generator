@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { designForFamily } from '../stores/design';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
-import { incrementTrailingDigits, nextRunName, runNameFromFilename } from './runNaming';
+import { decorateRunName, incrementTrailingDigits, nextRunLabel, nextRunName, runNameDateFor, runNameFromFilename } from './runNaming';
 import { projectSubmittedDesign } from './submittedProjection';
 
 function projection() {
@@ -10,6 +10,8 @@ function projection() {
 }
 
 describe('design-tracking run names', () => {
+  const now = new Date(2026, 7, 12, 12);
+
   it('increments trailing digits in place and preserves padding', () => {
     expect(incrementTrailingDigits('asro68')).toBe('asro69');
     expect(incrementTrailingDigits('horn_007')).toBe('horn_008');
@@ -47,5 +49,27 @@ describe('design-tracking run names', () => {
     const changed = structuredClone(baseline);
     changed.design.scale = 1.1;
     expect(nextRunName(manual, changed)).toBe('winner2');
+  });
+
+  it('leaves labels undated by default and supports both date positions', () => {
+    expect(decorateRunName('horn', { runNameDatePosition: 'off', runNameDateFormat: 'yymmdd' }, now)).toBe('horn');
+    expect(decorateRunName('horn', { runNameDatePosition: 'prefix', runNameDateFormat: 'yymmdd' }, now)).toBe('260812_horn');
+    expect(decorateRunName('horn', { runNameDatePosition: 'suffix', runNameDateFormat: 'yymmdd' }, now)).toBe('horn_260812');
+    expect(runNameDateFor(now, 'yyyy-mm-dd')).toBe('2026-08-12');
+  });
+
+  it('increments the core before adding a date suffix', () => {
+    const baseline = projection();
+    const changed = structuredClone(baseline);
+    changed.design.scale = 2;
+    const naming = {
+      outputName: 'horn',
+      nameSourceProjection: baseline,
+      runNameDatePosition: 'suffix' as const,
+      runNameDateFormat: 'yymmdd' as const,
+    };
+
+    expect(nextRunName(naming, changed)).toBe('horn2');
+    expect(nextRunLabel(naming, changed, '', now)).toBe('horn2_260812');
   });
 });

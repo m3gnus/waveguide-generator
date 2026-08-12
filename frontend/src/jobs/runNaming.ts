@@ -5,6 +5,14 @@ export interface RunNamingState {
   nameSourceProjection: SubmittedDesignProjection | null;
 }
 
+export type RunNameDatePosition = 'off' | 'prefix' | 'suffix';
+export type RunNameDateFormat = 'yymmdd' | 'yyyy-mm-dd';
+
+export interface RunNameDateOptions {
+  runNameDatePosition: RunNameDatePosition;
+  runNameDateFormat: RunNameDateFormat;
+}
+
 export function normalizeRunName(value: unknown, fallback = 'horn'): string {
   return String(value ?? '').trim() || fallback;
 }
@@ -24,6 +32,31 @@ export function incrementTrailingDigits(name: string): string {
   return `${match[1]}${incremented}`;
 }
 
+/** Format a local calendar date without letting locale settings alter labels. */
+export function runNameDateFor(
+  now = new Date(),
+  format: RunNameDateFormat = 'yymmdd',
+): string {
+  const year = format === 'yymmdd'
+    ? String(now.getFullYear() % 100).padStart(2, '0')
+    : String(now.getFullYear()).padStart(4, '0');
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return format === 'yymmdd' ? `${year}${month}${day}` : `${year}-${month}-${day}`;
+}
+
+/** Decorate a computed core name only at the user-facing label boundary. */
+export function decorateRunName(
+  coreName: string,
+  options: RunNameDateOptions,
+  now = new Date(),
+): string {
+  const core = normalizeRunName(coreName);
+  if (options.runNameDatePosition === 'off') return core;
+  const date = runNameDateFor(now, options.runNameDateFormat);
+  return options.runNameDatePosition === 'prefix' ? `${date}_${core}` : `${core}_${date}`;
+}
+
 /** The label a submission would receive without mutating its persisted state. */
 export function nextRunName(
   naming: RunNamingState,
@@ -35,4 +68,14 @@ export function nextRunName(
   return submittedProjectionsEqual(naming.nameSourceProjection, projection)
     ? current
     : incrementTrailingDigits(current);
+}
+
+/** The decorated label for a submission; nextRunName itself remains core-only. */
+export function nextRunLabel(
+  naming: RunNamingState & RunNameDateOptions,
+  projection: SubmittedDesignProjection,
+  documentFilename = '',
+  now = new Date(),
+): string {
+  return decorateRunName(nextRunName(naming, projection, documentFilename), naming, now);
 }
