@@ -579,8 +579,8 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .job-card.collapsed:hover { border-color: var(--hair-soft); background: var(--ov1); }
 .job-card.collapsed:hover header b { color: var(--fg); }
 .job-card.collapsed:focus-within { border-color: var(--hair-soft); background: var(--ov1); }
-.job-card.selected { border-color: rgba(var(--acc-rgb), .34); background: rgba(var(--acc-rgb), .05); }
-.job-card.selected::before { background: var(--acc); }
+.job-card.selected { border-color: var(--hair-hi); background: var(--ov2); }
+.job-card.selected::before { background: var(--inv-bg); }
 .job-select:focus-visible { border-radius: var(--r3); outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .job-remove { display: grid; place-items: center; width: 18px; height: 18px; flex: none; border-radius: var(--r3); background: transparent; color: var(--fg4); font-size: 15px; line-height: 1; }
 .job-remove:hover { background: rgba(var(--red-rgb), .1); color: var(--red); }
