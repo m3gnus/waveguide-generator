@@ -2049,6 +2049,15 @@ class JobRuntime:
             "drive_channel_ids": [
                 channel.id for channel in request.geometry.drive_channels
             ],
+            "combine": (
+                {
+                    "id": request.geometry.combine.id,
+                    "members": list(request.geometry.combine.members),
+                    "crossovers_hz": list(request.geometry.combine.crossovers_hz),
+                }
+                if request.geometry.combine is not None
+                else None
+            ),
             "polar_grid": request.options.polar_config.resolved_grid(),
         }
 

@@ -12,7 +12,7 @@ from fastapi import FastAPI
 from pydantic import ValidationError
 
 from server.cadlink.store import CadLinkStore
-from server.jobs.models import ImportedGeometrySource, SolveRequest
+from server.jobs.models import ChannelCombineSpec, ImportedGeometrySource, SolveRequest
 from server.jobs.api import create_jobs_router
 from server.jobs.runtime import ImportedSolveRefusal, JobRuntime, _replay_request
 from server.jobs.store import JobStore
@@ -889,3 +889,122 @@ def test_execution_uses_job_mesh_after_import_cache_is_deleted(tmp_path: Path) -
             await runtime.shutdown()
 
     asyncio.run(scenario())
+
+
+def _native_result_3f() -> SimpleNamespace:
+    frequencies = np.asarray([100.0, 500.0, 1000.0])
+    return SimpleNamespace(
+        frequencies_hz=frequencies,
+        observation_angles_deg=np.asarray([-180.0, 0.0, 180.0]),
+        observation_planes=["horizontal"],
+        pressure_complex=np.ones((3, 1, 3), dtype=np.complex128) * 20.0e-6,
+        directivity_db=np.zeros((3, 1, 3)),
+        impedance=np.ones(3, dtype=np.complex128) * (1j * REFERENCE_RHO_C),
+        solver_log=[],
+        timings={},
+        native_diagnostics=[],
+    )
+
+
+def test_combined_channel_is_appended_with_contract_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(metal, "metal_status", lambda: {"available": True, "reason": "ok"})
+    monkeypatch.setattr(
+        metal, "ObservationConfig", lambda **kwargs: SimpleNamespace(**kwargs)
+    )
+    monkeypatch.setattr(metal, "native_config", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(
+        metal,
+        "native_solve_multi_source",
+        lambda _mesh, sources, _config, frequencies_hz=None: [
+            _native_result_3f() for _ in sources
+        ],
+    )
+    request = _request(
+        "wgi_" + "0" * 26,
+        # level_match off keeps identical unit fields an exact allpass sum,
+        # so the SPL identity below is exact rather than grid-dependent.
+        combine={
+            "members": ["left", "right"],
+            "crossovers_hz": [500.0],
+            "level_match": False,
+        },
+    )
+    mesh_path = tmp_path / "imported.msh"
+    mesh_path.write_text("msh", encoding="utf-8")
+    record = _record(mesh_path)
+
+    async def run() -> dict[str, Any]:
+        outcome = await metal.MetalEngine().run(
+            request,
+            cancel_cb=lambda: None,
+            stage_cb=lambda *_args: None,
+            imported_record=record,
+        )
+        return outcome.results
+
+    response = asyncio.run(run())
+
+    assert response["channel_order"] == ["left", "right", "combined"]
+    combined = response["channels"]["combined"]
+    assert "impedance" not in combined
+    assert combined["metadata"]["impedance_omitted"] == (
+        "combined channel: member drives differ; no single impedance exists"
+    )
+    payload = combined["metadata"]["combine"]
+    assert payload["type"] == "lr4_time_aligned_sum"
+    assert payload["members"] == ["left", "right"]
+    assert payload["crossovers_hz"] == [500.0]
+    assert combined["metadata"]["derived_from_channels"] == ["left", "right"]
+    assert combined["metadata"]["drive_channel_id"] == "combined"
+    assert combined["metadata"]["source_ids"] == ["source-a", "source-b", "source-c"]
+    assert combined["metadata"]["phase_time_convention"] == "exp(+ikr)"
+    assert combined["frequencies"] == [100.0, 500.0, 1000.0]
+    assert combined["spl_on_axis"]["spl"][0] is not None
+    assert "horizontal" in combined["directivity"]
+    # Identical unit fields through an LR4 pair sum to an allpass: the
+    # combined on-axis SPL matches the members'.
+    member_spl = response["channels"]["left"]["spl_on_axis"]["spl"]
+    assert combined["spl_on_axis"]["spl"] == pytest.approx(member_spl, abs=1e-6)
+    # The members keep their own contract untouched.
+    assert "combine" not in response["channels"]["left"]["metadata"]
+
+
+def test_combine_wire_validation_refuses_structural_defects() -> None:
+    with pytest.raises(ValidationError, match="unknown drive channels"):
+        _request(
+            "wgi_" + "0" * 26,
+            combine={"members": ["left", "missing"], "crossovers_hz": [500.0]},
+        )
+    with pytest.raises(ValidationError, match="collides with a drive channel id"):
+        _request(
+            "wgi_" + "0" * 26,
+            combine={
+                "id": "left",
+                "members": ["left", "right"],
+                "crossovers_hz": [500.0],
+            },
+        )
+    with pytest.raises(ValidationError, match="exactly one crossover"):
+        _request(
+            "wgi_" + "0" * 26,
+            combine={"members": ["left", "right"], "crossovers_hz": [300.0, 500.0]},
+        )
+    with pytest.raises(ValidationError, match="strictly ascending"):
+        ChannelCombineSpec(
+            members=["lf", "mf", "hf"], crossovers_hz=[500.0, 300.0]
+        )
+    with pytest.raises(ValidationError, match="must be unique"):
+        _request(
+            "wgi_" + "0" * 26,
+            combine={"members": ["left", "left"], "crossovers_hz": [500.0]},
+        )
+
+
+def test_combine_crossover_outside_the_solved_band_refuses() -> None:
+    with pytest.raises(ValidationError, match="outside the solved band"):
+        _request(
+            "wgi_" + "0" * 26,
+            combine={"members": ["left", "right"], "crossovers_hz": [5000.0]},
+        )

@@ -266,6 +266,57 @@ class DriveChannel(JobModel):
         return normalized
 
 
+class ChannelCombineSpec(JobModel):
+    """LR4 time-aligned sum of drive-channel bases (CAD-LINK-PHASE3.md §2).
+
+    ``members`` is the chain in band order, lowest first; ``crossovers_hz``
+    sits between adjacent members. Structural defects refuse at submission;
+    solve-time observations become metadata warnings, never silent skips.
+    """
+
+    id: str = "combined"
+    members: list[str] = Field(min_length=2)
+    crossovers_hz: list[float] = Field(min_length=1)
+    level_match: bool = True
+    align: bool = True
+
+    @field_validator("id")
+    @classmethod
+    def normalize_id(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("combine id must not be empty")
+        return normalized
+
+    @field_validator("members")
+    @classmethod
+    def validate_members(cls, value: list[str]) -> list[str]:
+        normalized = [member.strip() for member in value]
+        if any(not member for member in normalized):
+            raise ValueError("combine members must not contain empty ids")
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("combine members must be unique")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_crossovers(self) -> "ChannelCombineSpec":
+        if len(self.crossovers_hz) != len(self.members) - 1:
+            raise ValueError(
+                "combine needs exactly one crossover between each adjacent "
+                f"member pair: {len(self.members)} members require "
+                f"{len(self.members) - 1} crossovers_hz"
+            )
+        for value in self.crossovers_hz:
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError("crossovers_hz values must be finite and positive")
+        if any(
+            later <= earlier
+            for earlier, later in zip(self.crossovers_hz, self.crossovers_hz[1:])
+        ):
+            raise ValueError("crossovers_hz must be strictly ascending")
+        return self
+
+
 class ImportedMeshSizes(JobModel):
     rigid_size_mm: float = Field(gt=0, allow_inf_nan=False)
     transition_mm: float = Field(gt=0, allow_inf_nan=False)
@@ -315,6 +366,7 @@ class ImportedGeometrySource(JobModel):
     manifest_sha256: str
     artifact_sha256: str
     drive_channels: list[DriveChannel] = Field(min_length=1)
+    combine: ChannelCombineSpec | None = None
     mesh: ImportedMeshSizes
     acknowledged_findings: list[str] = Field(default_factory=list)
     skipped_source_ids: list[str] = Field(default_factory=list)
@@ -381,6 +433,17 @@ class ImportedGeometrySource(JobModel):
                 "mesh.source_size_mm must cover exactly every non-skipped driven source: "
                 + "; ".join(details)
             )
+        if self.combine is not None:
+            known = set(channel_ids)
+            unknown = [name for name in self.combine.members if name not in known]
+            if unknown:
+                raise ValueError(
+                    f"combine members name unknown drive channels: {unknown}"
+                )
+            if self.combine.id in known:
+                raise ValueError(
+                    f"combine id {self.combine.id!r} collides with a drive channel id"
+                )
         return self
 
 
@@ -418,6 +481,32 @@ class SolveRequest(JobModel):
             for name in legacy_fields:
                 result.pop(name, None)
         return result
+
+    @model_validator(mode="after")
+    def validate_combine_band(self) -> "SolveRequest":
+        # A crossover outside the solved band would make the combine module
+        # extrapolate the alignment measurement; refuse at submission per
+        # CAD-LINK-PHASE3.md §3 instead of degrading at completion.
+        geometry = self.geometry
+        if not isinstance(geometry, ImportedGeometrySource) or geometry.combine is None:
+            return self
+        if self.options.frequencies_hz is not None:
+            band = (self.options.frequencies_hz[0], self.options.frequencies_hz[-1])
+        elif self.options.frequency_range is not None:
+            band = (self.options.frequency_range[0], self.options.frequency_range[1])
+        else:
+            return self
+        outside = [
+            value
+            for value in geometry.combine.crossovers_hz
+            if value < band[0] or value > band[1]
+        ]
+        if outside:
+            raise ValueError(
+                f"combine crossovers_hz {outside} lie outside the solved band "
+                f"[{band[0]:g}, {band[1]:g}] Hz"
+            )
+        return self
 
     @field_validator("label")
     @classmethod
