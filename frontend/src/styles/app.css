@@ -542,7 +542,7 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
    against, and an anchor that scrolls away takes the panel with it. */
 .run-name-field { position: sticky; top: 0; z-index: 6; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 2px 6px; padding: 4px 6px 6px; border-bottom: 1px solid var(--hair); background: var(--surface-panel); }
 .run-name-field > .run-name-preview { grid-column: 1 / -1; }
-.run-name-field > .panel-preferences-trigger { margin-bottom: 2px; }
+.run-name-actions { display: flex; align-items: center; gap: 2px; margin-bottom: 2px; }
 .run-name-field .ui-field { margin: 0; }
 .run-name-preview { overflow: hidden; color: var(--fg4); font: var(--text-micro) var(--mono); text-overflow: ellipsis; white-space: nowrap; }
 .run-name-preview b { color: var(--acc); font-weight: 500; }
