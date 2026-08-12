@@ -2,7 +2,7 @@
 
 This is the v1 algorithm from ``server/solver/beam_shape.py:27-312``:
 144 tangent-plane rays, 181 samples, a bounded superellipse fit, H/V
-beamwidths, and independently weighted spherical DI.
+beamwidths, and the same full-sphere DI used by the main result contract.
 """
 
 from __future__ import annotations
@@ -11,6 +11,8 @@ import math
 from typing import Any
 
 import numpy as np
+
+from .directivity_index import calculate_di_from_spherical_grid
 
 
 BEAM_LEVEL_DB = -6.0
@@ -251,23 +253,20 @@ def _fit_frequency(
     }
 
 
-def _spherical_di_db(theta_grid_deg: np.ndarray, spl_grid_db: np.ndarray) -> float | None:
-    weights = np.sin(np.deg2rad(theta_grid_deg))
-    weights = np.where(np.isfinite(weights) & (weights > 0.0), weights, 0.0)
-    total = float(np.sum(weights) * spl_grid_db.shape[1])
-    if total <= 0.0 or not np.all(np.isfinite(spl_grid_db)):
-        return None
-    shift_db = float(np.max(spl_grid_db))
-    scaled_sum = float(
-        np.sum(np.power(10.0, (spl_grid_db - shift_db) / 10.0) * weights[:, None])
+def _spherical_di_db(
+    theta_grid_deg: np.ndarray,
+    phi_grid_deg: np.ndarray,
+    spl_grid_db: np.ndarray,
+    *,
+    hemisphere: bool = False,
+) -> float | None:
+    values = calculate_di_from_spherical_grid(
+        theta_grid_deg,
+        phi_grid_deg,
+        spl_grid_db[None, :, :],
+        hemisphere=hemisphere,
     )
-    if scaled_sum <= 0.0 or not math.isfinite(scaled_sum):
-        return None
-    log_mean_energy = (
-        shift_db * math.log(10.0) / 10.0 + math.log(scaled_sum) - math.log(total)
-    )
-    di = -10.0 / math.log(10.0) * log_mean_energy
-    return di if math.isfinite(di) else None
+    return values[0] if values else None
 
 
 def beam_shape_summary(
@@ -319,13 +318,14 @@ def beam_shape_summary(
             fields["vertical_beamwidth_deg"].append(round(fit["vertical_beamwidth_deg"], 2))
             fields["aspect_ratio"].append(round(fit["aspect_ratio"], 3))
             valid.append(True)
-        di = _spherical_di_db(theta, grid)
+        di = _spherical_di_db(theta, phi, grid, hemisphere=hemisphere)
         fields["spherical_di_db"].append(None if di is None else round(di, 2))
     return {
         "frequencies": [float(value) for value in frequencies],
         **fields,
         "level_db": float(level_db),
-        "di_domain": "hemisphere" if hemisphere else "sphere",
+        "di_domain": "full_sphere",
+        "di_sampling_domain": "front_hemisphere_rear_zero" if hemisphere else "full_sphere",
         "valid": valid,
     }
 

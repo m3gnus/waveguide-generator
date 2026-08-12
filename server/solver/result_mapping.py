@@ -3,7 +3,7 @@
 The numerical semantics port v1 ``server/solver/result_mapping.py:20-391``:
 20 µPa SPL, raw wrapped pressure phase, engineering-sign ``Z/(rho*c)``, one
 common frequency axis, null invalid samples, partial-success diagnostics,
-plane DI, and the balloon four-state/beam-shape contract.
+full-sphere DI, and the balloon four-state/beam-shape contract.
 """
 
 from __future__ import annotations
@@ -22,7 +22,10 @@ from .acoustics import reference_air_density_kg_per_m3, reference_sound_speed_m_
 from .beam_shape import beam_shape_summary
 from .context import SolverContext
 from .contract import build_directivity_metadata, frequency_failure
-from .directivity_index import calculate_di_from_polar_patterns
+from .directivity_index import (
+    calculate_di_from_polar_patterns,
+    calculate_di_from_spherical_grid,
+)
 from .quadrants import native_symmetry_plane_for_quadrants
 
 
@@ -733,7 +736,27 @@ def build_solver_response(
     }
     patterns = directivity(result)
     phase_patterns = directivity_phase(result)
-    plane_di = calculate_di_from_polar_patterns(patterns)
+    balloon = _balloon_grid_from_result(result)
+    spherical_di_available = balloon is not None and (
+        not bool(balloon["hemisphere"]) or context.sim_type == 1
+    )
+    if spherical_di_available:
+        assert balloon is not None
+        di_values = calculate_di_from_spherical_grid(
+            balloon["theta_deg"],
+            balloon["phi_deg"],
+            balloon["spl_norm_db"],
+            hemisphere=bool(balloon["hemisphere"]),
+        )
+        di_method = "spherical_grid"
+        di_planes: list[str] = []
+    else:
+        di_values = calculate_di_from_polar_patterns(
+            patterns,
+            hemisphere=context.sim_type == 1,
+        )
+        di_method = "horizontal_vertical_orbit_approximation"
+        di_planes = [plane for plane in ("horizontal", "vertical") if plane in patterns]
     # This is strictly a level/display normalization. Raw wrapped phase is an
     # independent payload and must never pass through this mutating function.
     _renormalize_directivity(
@@ -785,6 +808,28 @@ def build_solver_response(
         },
         observation,
     )
+    angle_start, angle_end, _angle_count = context.polar_config.get(
+        "angle_range", (0.0, 180.0, 37)
+    )
+    polar_limit = 90.0 if context.sim_type == 1 else 180.0
+    measured_both_orbit_sides = (
+        float(angle_start) <= -polar_limit and float(angle_end) >= polar_limit
+    ) or float(angle_end) - float(angle_start) >= 2.0 * polar_limit
+    orbit_side_method = (
+        "not_applicable"
+        if di_method == "spherical_grid"
+        else "measured" if measured_both_orbit_sides else "mirrored"
+    )
+    metadata["directivity_index"] = {
+        "available": any(value is not None for value in di_values),
+        "definition": "10log10(reference-axis mean-square pressure / full-sphere mean-square pressure)",
+        "method": di_method,
+        "domain": "full_sphere",
+        "power_average": "linear_mean_square_pressure",
+        "planes_used": di_planes,
+        "opposing_orbit_sides": orbit_side_method,
+        "rear_hemisphere": "zero_radiation" if context.sim_type == 1 else "sampled",
+    }
     metadata.update(
         {
             "result_contract_version": 1,
@@ -823,12 +868,11 @@ def build_solver_response(
         },
         "di": {
             "frequencies": frequency_values,
-            "di": plane_di,
+            "di": di_values,
         },
         "metadata": metadata,
     }
 
-    balloon = _balloon_grid_from_result(result)
     requested = bool(context.polar_config.get("spherical_sampling"))
     configured = getattr(config.observation, "sphere_grid", None) is not None
     metadata["balloon_sampling"] = {

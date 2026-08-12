@@ -310,10 +310,13 @@ def test_log_domain_spl_and_di_stay_finite_for_huge_finite_inputs() -> None:
     result.pressure_complex[:] = complex(1.0e308, 0.0)
     assert all(np.isfinite(spl_on_axis(result)))
     di = calculate_di_from_polar_patterns(
-        {"horizontal": [[[0.0, 1.0e308], [90.0, 1.0e308], [180.0, 1.0e308]]]}
+        {
+            "horizontal": [[[0.0, 1.0e308], [90.0, 1.0e308], [180.0, 1.0e308]]],
+            "vertical": [[[0.0, 1.0e308], [90.0, 1.0e308], [180.0, 1.0e308]]],
+        }
     )
-    assert di["horizontal"][0] is not None
-    assert np.isfinite(di["horizontal"][0])
+    assert di[0] == pytest.approx(0.0)
+    assert np.isfinite(di[0])
 
 
 def test_solver_context_derives_its_summary_from_an_explicit_list() -> None:

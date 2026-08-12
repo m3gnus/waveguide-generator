@@ -110,7 +110,7 @@ export function directivityIndexSeries(result: ResultPayload, smoothing: Smoothi
   const frequencies = result.di?.frequencies?.length ? result.di.frequencies : result.frequencies;
   const raw = result.di?.di;
   const entries = Array.isArray(raw) ? [['DI', raw] as const] : Object.entries(raw ?? {});
-  return entries.map(([name, values]) => {
+  return entries.filter(([, values]) => values.some(finite)).map(([name, values]) => {
     const smoothed = applySmoothing(frequencies, values, smoothing);
     return {
       name,

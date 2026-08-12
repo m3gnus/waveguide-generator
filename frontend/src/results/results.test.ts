@@ -220,7 +220,7 @@ describe('chart data mappers', () => {
   it('renders directivity-derived line series as monotone curves without changing their samples', () => {
     const payload = {
       frequencies: [200, 1_000, 5_000],
-      di: { frequencies: [200, 1_000, 5_000], di: { horizontal: [2, 7, 9] } },
+      di: { frequencies: [200, 1_000, 5_000], di: [2, 7, 9] },
       beam_shape: {
         frequencies: [200, 1_000, 5_000],
         horizontal_beamwidth_deg: [120, 90, 60],
@@ -234,5 +234,13 @@ describe('chart data mappers', () => {
     expect(beam).toEqual(expect.arrayContaining([
       expect.objectContaining({ smooth: 0.32, smoothMonotone: 'x', data: [[200, 120], [1_000, 90], [5_000, 60]] }),
     ]));
+  });
+
+  it('does not create a DI line when every standard DI sample is unavailable', () => {
+    const payload = {
+      frequencies: [200, 1_000],
+      di: { frequencies: [200, 1_000], di: [null, null] },
+    } as JobResults;
+    expect(directivityIndexSeries(payload)).toEqual([]);
   });
 });
