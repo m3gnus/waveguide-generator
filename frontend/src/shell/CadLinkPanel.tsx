@@ -8,6 +8,8 @@ import { usePreferences, type CadApplication } from '../prefs/preferences';
 import {
   acknowledgedFindingWire,
   blockingFindings,
+  combineChain,
+  combineWire,
   unacknowledgedBlocking,
   useCadReturnStore,
 } from '../stores/cadReturn';
@@ -250,6 +252,7 @@ export function buildImportedSubmission(
   options.engine = 'metal';
   options.symmetry = 'auto';
   widenPolarToDerivation(options, record.polar_grid_derivation);
+  const combine = combineWire(state);
   return {
     geometry: {
       type: 'imported',
@@ -265,6 +268,7 @@ export function buildImportedSubmission(
       acknowledged_findings: acknowledgedFindingWire(record, state.acknowledgedFindingIds),
       skipped_source_ids: [...state.skippedSourceIds],
       exterior_only: state.exteriorOnly,
+      ...(combine ? { combine } : {}),
     },
     options,
   };
@@ -559,6 +563,10 @@ export function CadLinkPanel() {
             return <div className="cad-channel-row" key={source.id}><b>{source.id}</b><select aria-label={`Drive channel for ${source.id}`} value={channel?.id ?? ''} onChange={(event) => state.setSourceChannel(source.id, event.target.value)}>{channelIds.map((id) => <option value={id} key={id}>{id}</option>)}</select></div>;
           })}
           {state.driveChannels.map((channel) => <div className="cad-channel-summary" key={channel.id}><span>{channel.id} · {channel.source_ids.join(' + ')}</span><select aria-label={`Motion for ${channel.id}`} value={channel.motion} onChange={(event) => state.setChannelMotion(channel.id, event.target.value as 'normal' | 'axial')}><option value="normal">Normal motion</option><option value="axial">Axial motion</option></select></div>)}
+          {state.driveChannels.length >= 2 && <>
+            <ToggleRow id="cad-combine" label="Combined output (LR4 sum)" help="Append a time-aligned LR4 crossover sum of the drive channels as one more result channel. The chain runs lowest band first, ordered by the sources' return roles (LF → MF → HF)." checked={state.combineEnabled} onChange={state.setCombineEnabled}/>
+            {state.combineEnabled && combineChain(state).map((pair) => <NumberField key={pair.key} label={`${pair.lower} → ${pair.upper}`} unit="Hz" value={pair.hz} min={1} step={50} precision={0} description="Crossover between adjacent channels" onCommit={(value) => state.setCombineCrossover(pair.key, value)}/>)}
+          </>}
         </section>
         <section className="cad-section">
           <header><h3>Explicit solve sweep</h3><span className="cad-status">Metal · full 3-D · free space</span></header>
