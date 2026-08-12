@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { compareSelection } from '../api/results';
 import { DesignAvailabilityNotice, RerunButton } from '../jobs/DesignAvailability';
@@ -72,7 +72,7 @@ export function selectJob(job: JobItem): void {
   replaceWithJobDesign(job, { keepHistory: true });
 }
 
-function JobCard({ job, now, selected, retryJob, onError, onRemove, onOpenExportSettings }: {
+export interface JobCardProps {
   job: JobItem;
   now: number;
   selected: boolean;
@@ -80,7 +80,24 @@ function JobCard({ job, now, selected, retryJob, onError, onRemove, onOpenExport
   onError: (message: string) => void;
   onRemove: (job: JobItem) => void;
   onOpenExportSettings: () => void;
-}) {
+}
+
+export function jobCardPropsEqual(previous: JobCardProps, next: JobCardProps): boolean {
+  if (
+    previous.job !== next.job
+    || previous.selected !== next.selected
+    || previous.retryJob !== next.retryJob
+    || previous.onError !== next.onError
+    || previous.onRemove !== next.onRemove
+    || previous.onOpenExportSettings !== next.onOpenExportSettings
+  ) return false;
+  const active = (status: JobItem['status']) => status === 'running' || status === 'queued';
+  // `now` only feeds the live elapsed clock. Finished cards use their stored
+  // completion timestamp, so repainting all of them every second is pure work.
+  return (!active(previous.job.status) && !active(next.job.status)) || previous.now === next.now;
+}
+
+const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, onRemove, onOpenExportSettings }: JobCardProps) {
   const running = job.status === 'running' || job.status === 'queued';
   const failed = job.status === 'error';
   const cancelled = job.status === 'cancelled';
@@ -204,7 +221,7 @@ function JobCard({ job, now, selected, retryJob, onError, onRemove, onOpenExport
       <footer><RerunButton job={job} onRerun={retry}/>{selected && canExportRun(job) && <RunExportControl job={job} onOpenExportSettings={onOpenExportSettings}/>}<button onClick={() => window.open(`/api/jobs/${encodeURIComponent(job.id)}/log`, '_blank')}>Log</button></footer>
     </>}
   </article>;
-}
+}, jobCardPropsEqual);
 
 /**
  * What the next solve will be called, and the one control that changes it.
@@ -284,10 +301,14 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
   const activeCount = snapshot.jobs.filter((job) => job.status === 'running' || job.status === 'queued').length;
   const hiddenByFilter = snapshot.jobs.length - visibleJobs.length;
   const notConnected = snapshot.connection !== 'connected';
-  const remove = (job: JobItem) => {
+  const remove = useCallback((job: JobItem) => {
     if (!window.confirm(`Remove “${runDisplayName(job)}” and its saved results?`)) return;
     void jobsSocket.deleteJob(job.id).catch((error) => coordinator.reportError(String(error)));
-  };
+  }, [coordinator.reportError]);
+  const openExportSettings = useCallback(() => {
+    setPreferencesOpen(false);
+    setExportPreferencesOpen(true);
+  }, []);
   const clearFailed = () => {
     const hiddenFailed = failedCount - visibleFailedCount;
     const hiddenCopy = hiddenFailed > 0 ? ` This includes ${hiddenFailed} failed run${hiddenFailed === 1 ? '' : 's'} hidden by the current filter.` : '';
@@ -323,6 +344,6 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
     {(coordinator.actionError || snapshot.error) && <div className="job-error" role="alert" style={{ margin: 7 }}>{coordinator.actionError ?? snapshot.error}</div>}
     {snapshot.jobs.length === 0 && snapshot.connection === 'connected' && <div className="empty-state"><b>No runs yet</b><span>Solve the current design to start one. Every run is kept here with its results, so you can compare and re-run it later.</span></div>}
     {snapshot.jobs.length > 0 && visibleJobs.length === 0 && <div className="empty-state"><b>No runs match the filter</b><span>{query.trim() && preferences.minRating > 0 ? 'Clear the search or turn off the kept-only filter.' : query.trim() ? 'Clear the search to show runs.' : 'Turn off the kept-only filter to show more.'}</span></div>}
-    {visibleJobs.map((job) => <JobCard key={job.id} job={job} now={now} selected={job.id === selection.primary} retryJob={coordinator.retry} onError={coordinator.reportError} onRemove={remove} onOpenExportSettings={() => { setPreferencesOpen(false); setExportPreferencesOpen(true); }}/>)}
+    {visibleJobs.map((job) => <JobCard key={job.id} job={job} now={now} selected={job.id === selection.primary} retryJob={coordinator.retry} onError={coordinator.reportError} onRemove={remove} onOpenExportSettings={openExportSettings}/>)}
   </div>;
 }
