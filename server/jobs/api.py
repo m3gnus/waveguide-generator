@@ -14,6 +14,7 @@ from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from server.jobs.events import CLOSE_ORIGIN_REJECTED, JobsProtocol
 from server.jobs.models import (
+    ChannelCombineSpec,
     ClearFailedResponse,
     DeleteResponse,
     JobListResponse,
@@ -24,6 +25,7 @@ from server.jobs.models import (
     SolveRequest,
     StopResponse,
 )
+from server.solver.recombine import RecombineError
 from server.jobs.runtime import (
     EngineUnavailableError,
     ImportedSolveRefusal,
@@ -136,6 +138,25 @@ def create_jobs_router(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except JobResourceUnavailableError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @router.post("/api/results/{job_id}/combine", response_model=None)
+    async def recombine_job_results(job_id: str, body: ChannelCombineSpec) -> Response:
+        """Recompute the combined channel from stored bases without re-solving."""
+
+        try:
+            updated = await runtime.recombine_results(job_id, body)
+        except JobNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Job not found") from exc
+        except JobConflictError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except JobResourceUnavailableError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except RecombineError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return Response(
+            content=json.dumps(updated, allow_nan=False),
+            media_type="application/json",
+        )
 
     @router.get("/api/partial-results/{job_id}", response_model=None)
     async def partial_job_results(job_id: str) -> Response:

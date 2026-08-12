@@ -30,6 +30,7 @@ from server.design.textcfg import parse
 from server.engines.registry import EngineRegistry, create_engine as get_engine
 from server.jobs.legacy_design import resolve_job_design
 from server.jobs.models import (
+    ChannelCombineSpec,
     ImportedGeometrySource,
     ParametricGeometrySource,
     SolveOptions,
@@ -1058,6 +1059,34 @@ class JobRuntime:
             raise JobResourceUnavailableError("Results not available")
         return results
 
+    async def recombine_results(
+        self, job_id: str, spec: ChannelCombineSpec
+    ) -> dict[str, Any]:
+        """Recompute the combined channel from stored bases and persist it."""
+
+        from server.solver.recombine import recombine_stored_results
+
+        await self.start()
+        row = self._require_job(job_id)
+        if row["status"] != "complete":
+            raise JobConflictError(f"Job not complete. Current status: {row['status']}")
+        results_text = await asyncio.to_thread(self.store.get_results_text, job_id)
+        if results_text is None:
+            raise JobResourceUnavailableError("Results not available")
+        bases = await asyncio.to_thread(self.store.get_channel_bases, job_id)
+        if bases is None:
+            raise JobResourceUnavailableError(
+                "This job has no stored channel bases; re-solve to enable "
+                "crossover changes without a new solve"
+            )
+        request = _replay_request(row)
+        results = json.loads(results_text)
+        updated = await asyncio.to_thread(
+            recombine_stored_results, results, bases, spec, request
+        )
+        await asyncio.to_thread(self.store.store_results, job_id, updated)
+        return updated
+
     async def get_partial_results(self, job_id: str) -> dict[str, Any]:
         """Return the current process-local provisional result snapshot."""
 
@@ -1656,6 +1685,18 @@ class JobRuntime:
                 # (``simulation_runner.py:451-466``).
                 logger.warning("Mesh artifact persistence failed for job %s: %s", job_id, exc)
                 self.store.update_job(job_id, has_mesh_artifact=False)
+        channel_bases = getattr(outcome, "channel_bases", None)
+        if channel_bases is not None:
+            try:
+                await asyncio.to_thread(
+                    self.store.store_channel_bases, job_id, channel_bases
+                )
+            except Exception as exc:
+                # Recombination degrades to "re-solve to change the crossover";
+                # the solve itself must not fail over an optional artifact.
+                logger.warning(
+                    "Channel-bases persistence failed for job %s: %s", job_id, exc
+                )
 
         self._check_cancelled(job_id)
         try:

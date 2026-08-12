@@ -22,7 +22,7 @@ from server.jobs.models import ImportedGeometrySource, SolveRequest
 from server.mesh.builder import _solver_mesher_config, build_solver_mesh
 
 from .acoustics import solver_sound_speed_m_per_s
-from .combine import combine_drive_channels
+from .combine import combine_drive_channels, serialize_channel_bases
 from .base import (
     ArtifactCallback,
     CancelCallback,
@@ -848,6 +848,9 @@ def solve_imported_metal_from_msh_text(
         stage_callback("finalizing", 1.0, "Packaging imported drive-channel bases")
 
     per_source_validity = _imported_validity_metadata(record)
+    channel_bases_npz = (
+        serialize_channel_bases(sorted_results) if len(sorted_results) > 1 else None
+    )
     if geometry.combine is not None:
         combined_response = _combined_channel_response(
             geometry=geometry,
@@ -911,7 +914,14 @@ def solve_imported_metal_from_msh_text(
         ),
         "performance": {"total_time_seconds": time.time() - started},
     }
-    return {"channels": channels, "channel_order": channel_order, "metadata": metadata}
+    envelope: dict[str, Any] = {
+        "channels": channels,
+        "channel_order": channel_order,
+        "metadata": metadata,
+    }
+    if channel_bases_npz is not None:
+        envelope["_channel_bases_npz"] = channel_bases_npz
+    return envelope
 
 
 def _circsym_eligibility_reasons(request: SolveRequest) -> list[str]:
@@ -991,10 +1001,12 @@ class MetalEngine:
                 result_callback=result_cb,
             )
             results.setdefault("metadata", {})["mesh_stats"] = mesh_stats
+            channel_bases = results.pop("_channel_bases_npz", None)
             return EngineRunResult(
                 results=results,
                 msh_text=msh_text,
                 mesh_stats=mesh_stats,
+                channel_bases=channel_bases,
             )
 
         mode = str(request.design.root.simulation.solver_mode or "auto").strip().lower()

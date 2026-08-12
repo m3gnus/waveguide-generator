@@ -128,6 +128,14 @@ _SCHEMA_STATEMENTS = (
       msh_text TEXT,
       FOREIGN KEY(job_id) REFERENCES simulation_jobs(id) ON DELETE CASCADE
     )""",
+    # Per-channel complex pressure bases (compressed NPZ) for multi-channel
+    # imported jobs. These are what make post-solve recombination possible;
+    # the results JSON keeps only magnitude and wrapped phase.
+    """CREATE TABLE IF NOT EXISTS simulation_channel_bases (
+      job_id TEXT PRIMARY KEY,
+      bases_npz BLOB NOT NULL,
+      FOREIGN KEY(job_id) REFERENCES simulation_jobs(id) ON DELETE CASCADE
+    )""",
     """CREATE INDEX IF NOT EXISTS idx_simulation_jobs_status_created
       ON simulation_jobs(status, created_at DESC)""",
     # The index above only serves a *filtered* list. The unfiltered list and
@@ -809,6 +817,26 @@ class JobStore:
             ).fetchone()
             return row["msh_text"] if row else None
 
+    def store_channel_bases(self, job_id: str, bases_npz: bytes) -> None:
+        with self._lock, self._transaction() as conn:
+            if not self._job_exists(conn, job_id):
+                return
+            conn.execute(
+                """
+                INSERT INTO simulation_channel_bases (job_id, bases_npz) VALUES (?, ?)
+                ON CONFLICT(job_id) DO UPDATE SET bases_npz = excluded.bases_npz
+                """,
+                (job_id, bases_npz),
+            )
+
+    def get_channel_bases(self, job_id: str) -> bytes | None:
+        with self._lock, self._connection() as conn:
+            row = conn.execute(
+                "SELECT bases_npz FROM simulation_channel_bases WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+            return bytes(row["bases_npz"]) if row else None
+
     def delete_job_with_event(self, job_id: str) -> tuple[bool, dict[str, Any] | None]:
         """Delete one row and retain a terminal deleted event."""
 
@@ -1010,6 +1038,10 @@ class JobStore:
                     removed_ids,
                 )
                 deleted_results = int(cur.rowcount or 0)
+                conn.execute(
+                    f"DELETE FROM simulation_channel_bases WHERE job_id IN ({placeholders})",
+                    removed_ids,
+                )
                 conn.execute(
                     f"UPDATE simulation_jobs SET has_results = 0, "
                     "task_metadata_json = json_set(COALESCE(task_metadata_json, '{}'), "

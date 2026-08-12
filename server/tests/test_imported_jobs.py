@@ -1008,3 +1008,73 @@ def test_combine_crossover_outside_the_solved_band_refuses() -> None:
             "wgi_" + "0" * 26,
             combine={"members": ["left", "right"], "crossovers_hz": [5000.0]},
         )
+
+
+def test_recombine_from_stored_bases_updates_and_adds_channels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from server.jobs.models import ChannelCombineSpec
+    from server.solver.recombine import RecombineError, recombine_stored_results
+
+    monkeypatch.setattr(metal, "metal_status", lambda: {"available": True, "reason": "ok"})
+    monkeypatch.setattr(
+        metal, "ObservationConfig", lambda **kwargs: SimpleNamespace(**kwargs)
+    )
+    monkeypatch.setattr(metal, "native_config", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(
+        metal,
+        "native_solve_multi_source",
+        lambda _mesh, sources, _config, frequencies_hz=None: [
+            _native_result_3f() for _ in sources
+        ],
+    )
+    # Solved WITHOUT a combine spec: bases alone must allow adding one later.
+    request = _request("wgi_" + "0" * 26)
+    mesh_path = tmp_path / "imported.msh"
+    mesh_path.write_text("msh", encoding="utf-8")
+    record = _record(mesh_path)
+
+    async def run() -> Any:
+        return await metal.MetalEngine().run(
+            request,
+            cancel_cb=lambda: None,
+            stage_cb=lambda *_args: None,
+            imported_record=record,
+        )
+
+    outcome = asyncio.run(run())
+    assert outcome.channel_bases is not None
+    assert outcome.results["channel_order"] == ["left", "right"]
+
+    spec = ChannelCombineSpec(members=["left", "right"], crossovers_hz=[500.0])
+    updated = recombine_stored_results(
+        outcome.results, outcome.channel_bases, spec, request
+    )
+    assert updated["channel_order"] == ["left", "right", "combined"]
+    payload = updated["channels"]["combined"]["metadata"]["combine"]
+    assert payload["crossovers_hz"] == [500.0]
+    assert updated["channels"]["combined"]["metadata"]["recombined"] is True
+    assert "impedance" not in updated["channels"]["combined"]
+    # The original envelope is not mutated in place.
+    assert outcome.results["channel_order"] == ["left", "right"]
+
+    # Recombining again with a different crossover replaces the channel.
+    respec = ChannelCombineSpec(members=["left", "right"], crossovers_hz=[800.0])
+    again = recombine_stored_results(updated, outcome.channel_bases, respec, request)
+    assert again["channel_order"] == ["left", "right", "combined"]
+    assert again["channels"]["combined"]["metadata"]["combine"]["crossovers_hz"] == [800.0]
+
+    with pytest.raises(RecombineError, match="outside the solved band"):
+        recombine_stored_results(
+            updated,
+            outcome.channel_bases,
+            ChannelCombineSpec(members=["left", "right"], crossovers_hz=[5000.0]),
+            request,
+        )
+    with pytest.raises(RecombineError, match="unknown drive channels"):
+        recombine_stored_results(
+            updated,
+            outcome.channel_bases,
+            ChannelCombineSpec(members=["left", "missing"], crossovers_hz=[500.0]),
+            request,
+        )

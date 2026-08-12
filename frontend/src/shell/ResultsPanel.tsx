@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent } from 'react';
 import { createPortal } from 'react-dom';
 import type { EChartsOption } from 'echarts';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
-import { compareSelection, fetchJobResults, provisionalResults, type JobResults } from '../api/results';
+import { compareSelection, fetchJobResults, provisionalResults, recombineJobResults, type JobResults } from '../api/results';
 import { EChart, useChartTokens, type ChartTokens } from '../results/EChart';
 import { beamShapeSeries, directivityGrid, directivityIndexSeries, expandResultChannels, impedanceSeries, splSeries, type NamedResult } from '../results/mappers';
 import { BalloonRenderer, ChartStub, ForwardBeamRenderer, hasBalloonData, type ChartStubAction } from '../results/balloon';
@@ -793,6 +793,86 @@ interface ResultFetchError {
   message: string;
 }
 
+interface CombineMetadata {
+  members: string[];
+  crossovers_hz: number[];
+  level_match?: { enabled?: boolean };
+  align?: boolean;
+}
+
+function combineMetadataOf(payload: ResultPayload | undefined): CombineMetadata | null {
+  const combine = (payload?.metadata as { combine?: unknown } | undefined)?.combine;
+  if (!combine || typeof combine !== 'object') return null;
+  const value = combine as CombineMetadata;
+  if (!Array.isArray(value.members) || !Array.isArray(value.crossovers_hz)) return null;
+  return value;
+}
+
+/** Crossover editor for a combined channel: recombines from the job's stored
+ * complex bases server-side, so a change repaints without a re-solve. */
+function RecombineRow({ jobId, channelId, combine, onApplied }: {
+  jobId: string;
+  channelId: string;
+  combine: CombineMetadata;
+  onApplied: (jobId: string, updated: JobResults) => void;
+}) {
+  const applied = combine.crossovers_hz.map((value) => String(value));
+  const [values, setValues] = useState<string[]>(applied);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const appliedKey = `${jobId}:${channelId}:${applied.join(',')}`;
+  const lastApplied = useRef(appliedKey);
+  if (lastApplied.current !== appliedKey) {
+    lastApplied.current = appliedKey;
+    setValues(applied);
+    setError(null);
+  }
+  const dirty = values.some((value, index) => value !== applied[index]);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    const crossovers = values.map(Number);
+    if (crossovers.some((value) => !Number.isFinite(value) || value <= 0)) {
+      setError('Crossovers must be positive frequencies.');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const updated = await recombineJobResults(jobId, {
+        id: channelId,
+        members: combine.members,
+        crossovers_hz: crossovers,
+        level_match: combine.level_match?.enabled ?? true,
+        align: combine.align ?? true,
+      });
+      onApplied(jobId, updated);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return <form className="results-toolbar result-recombine" onSubmit={(event) => void submit(event)}>
+    {combine.members.slice(0, -1).map((lower, index) => {
+      const upper = combine.members[index + 1];
+      return <label key={`${lower} ${upper}`} className="result-recombine-pair">
+        <span>{lower} → {upper}</span>
+        <input
+          type="number"
+          min={1}
+          step={10}
+          value={values[index] ?? ''}
+          aria-label={`Crossover ${lower} to ${upper} in hertz`}
+          onChange={(event) => setValues((current) => current.map((value, i) => i === index ? event.target.value : value))}
+        />
+        <span>Hz</span>
+      </label>;
+    })}
+    <button type="submit" disabled={busy || !dirty} title="Recompute the combined channel from the stored solve — no re-solve needed">{busy ? 'Recombining…' : 'Apply crossover'}</button>
+    {error && <span className="result-recombine-error" role="alert">{error}</span>}
+  </form>;
+}
+
 export function ResultsPanel() {
   const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
   const provisional = useSyncExternalStore(provisionalResults.subscribe, provisionalResults.getSnapshot, provisionalResults.getSnapshot);
@@ -896,6 +976,12 @@ export function ResultsPanel() {
     : [];
   const shownActiveChannel = shownChannelIds.includes(primaryChannel ?? '') ? primaryChannel : shownChannelIds[0] ?? null;
   const shown = shownActiveChannel && shownChannels ? shownChannels[shownActiveChannel] as ResultPayload : shownRaw;
+  const shownCombine = combineMetadataOf(shown);
+  const applyRecombined = useCallback((jobId: string, updated: JobResults) => {
+    setDisplay((current) => current && current.results[jobId]
+      ? { ...current, results: { ...current.results, [jobId]: updated as ResultPayload } }
+      : current);
+  }, []);
   const displayLabels = display?.ids.map((id) => labelFor(id, jobs)).join('\u0000') ?? '';
   const named = useMemo(
     () => display?.ids.flatMap((id, index) => expandResultChannels(
@@ -997,6 +1083,8 @@ export function ResultsPanel() {
       <button disabled={exporting || !primary || primaryIsProvisional || !preferences.exportFormats.length} title={primaryIsProvisional ? 'Export is available when the solve finishes' : 'Export the current result using the formats enabled in Results preferences'} onClick={() => void exportSelected()}>{exporting ? 'Exporting…' : `Export (${preferences.exportFormats.length})`}</button>
       <button ref={preferencesAnchor} className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Results preferences" aria-expanded={preferencesOpen} title="Results & export preferences" onClick={() => setPreferencesOpen((value) => !value)}><Icon name="settings"/></button>
     </div>
+    {shownActiveChannel && shownCombine && display && selectedJob?.status === 'complete' && !primaryIsProvisional
+      && <RecombineRow jobId={display.primaryId} channelId={shownActiveChannel} combine={shownCombine} onApplied={applyRecombined}/>}
     {preferencesOpen && <ResultsPreferencesSurface popover anchorRef={preferencesAnchor} onClose={() => setPreferencesOpen(false)}/>}
     {(error || exportStatus) && <div className={error ? 'job-error' : ''} role="status" style={{ margin: 7, color: error ? undefined : 'var(--fg2)', fontSize: 'var(--text-micro)' }}>{error ?? exportStatus}{error && <button type="button" onClick={() => { setFetchError(null); setFetchAttempt((value) => value + 1); }}>Retry</button>}</div>}
     {showingPrevious && <div className="job-warning" role="status" style={{ margin: 7 }}>Showing previous results while fetching the selected run…</div>}

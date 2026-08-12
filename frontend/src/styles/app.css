@@ -946,3 +946,9 @@ textarea:disabled { opacity: .48; }
   font-family: var(--head);
   font-weight: var(--head-weight);
 }
+
+/* Post-solve crossover editor for a combined result channel. */
+.result-recombine { border-bottom: 1px solid var(--hair-soft); text-transform: none; }
+.result-recombine-pair { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.result-recombine-pair input { width: 64px; height: 19px; padding: 0 4px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); color: var(--fg1); font-size: var(--text-micro); }
+.result-recombine-error { color: var(--danger, #c65b4e); white-space: nowrap; }
