@@ -12,6 +12,7 @@ import asyncio
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
+import importlib.metadata
 import inspect
 import json
 import logging
@@ -23,7 +24,7 @@ import uuid
 
 from server.cadlink.ingest import get_ingestion_record
 from server.cadlink.store import CadLinkStore
-from server.design.schema import Expr
+from server.design.schema import DesignConfig, Expr
 from server.design.textcfg import parse
 from server.engines.registry import EngineRegistry, create_engine as get_engine
 from server.jobs.legacy_design import resolve_job_design
@@ -153,6 +154,15 @@ class JobResourceUnavailableError(RuntimeError):
 
 class JobMeshDiscardedError(JobResourceUnavailableError):
     """A terminal unrated job no longer retains an instantly available mesh."""
+
+
+@dataclass(frozen=True)
+class MeshArtifactDownload:
+    """Mesh download body plus provenance that belongs in response headers."""
+
+    content: str
+    regenerated: bool = False
+    mesher_version: str | None = None
 
 
 class EngineUnavailableError(RuntimeError):
@@ -931,24 +941,83 @@ class JobRuntime:
             raise JobResourceUnavailableError("Results not available")
         return results
 
-    async def get_mesh_artifact(self, job_id: str) -> str:
+    async def get_mesh_artifact_download(self, job_id: str) -> MeshArtifactDownload:
         await self.start()
         row = self._require_job(job_id)
         # Real MSH artifacts are multi-megabyte text blobs. Reading one through
         # SQLite on the event loop stalls both WS channels for the full copy.
         artifact = await asyncio.to_thread(self.store.get_mesh_artifact, job_id)
-        if not artifact:
-            metadata = row.get("task_metadata")
-            metadata = metadata if isinstance(metadata, Mapping) else {}
-            if metadata.get("mesh_discarded_at"):
-                raise JobMeshDiscardedError(
-                    "Mesh artifact was not retained for this unrated run; "
-                    "any generated mesh was discarded by retention after download "
-                    "or the grace window, and "
-                    "regeneration is not available yet"
-                )
+        if artifact:
+            return MeshArtifactDownload(content=artifact)
+
+        metadata = row.get("task_metadata")
+        metadata = metadata if isinstance(metadata, Mapping) else {}
+        if not metadata.get("mesh_discarded_at"):
             raise JobResourceUnavailableError("No mesh artifact is available for this job")
-        return artifact
+
+        config = row.get("config_json")
+        config = config if isinstance(config, Mapping) else {}
+        geometry = config.get("geometry")
+        if isinstance(geometry, Mapping) and geometry.get("type") == "imported":
+            raise JobMeshDiscardedError(
+                "Mesh artifact was discarded by retention and cannot be regenerated: "
+                "this job was solved from imported geometry, so its stored parametric "
+                "anchor is not the solve mesh."
+            )
+
+        resolution = resolve_job_design(row.get("script_snapshot"), config)
+        if not resolution.reopenable or resolution.snapshot is None:
+            reason = resolution.reason or "the job has no stored design"
+            raise JobMeshDiscardedError(
+                "Mesh artifact was discarded by retention and cannot be regenerated: "
+                f"{reason}"
+            )
+
+        snapshot = resolution.snapshot
+        raw_design = snapshot.get("design", snapshot)
+        try:
+            design = DesignConfig.model_validate(raw_design)
+        except Exception as exc:
+            raise JobMeshDiscardedError(
+                "Mesh artifact was discarded by retention and cannot be regenerated: "
+                "the stored design no longer resolves in the current server "
+                f"({exc})."
+            ) from exc
+
+        try:
+            from server.mesh.builder import build_solver_mesh
+
+            # Regeneration deliberately uses the server's currently pinned mesher,
+            # which may differ from the version that produced the solve. Force a
+            # fresh build for every download and never put it back in the job store:
+            # retention would only discard it again.
+            regenerated = await build_solver_mesh(
+                design,
+                _stored_solve_options(config),
+                force_rebuild=True,
+            )
+            content = regenerated.get("msh_text")
+            if not isinstance(content, str) or not content:
+                raise RuntimeError("the current mesher returned no MSH payload")
+        except Exception as exc:
+            raise JobMeshDiscardedError(
+                "Mesh artifact was discarded by retention and cannot be regenerated: "
+                "the stored design no longer resolves with the current mesher "
+                f"({exc})."
+            ) from exc
+
+        try:
+            mesher_version = importlib.metadata.version("hornlab-waveguide-mesher")
+        except importlib.metadata.PackageNotFoundError:  # pragma: no cover - build failed first
+            mesher_version = None
+        return MeshArtifactDownload(
+            content=content,
+            regenerated=True,
+            mesher_version=mesher_version,
+        )
+
+    async def get_mesh_artifact(self, job_id: str) -> str:
+        return (await self.get_mesh_artifact_download(job_id)).content
 
     async def get_log(self, job_id: str) -> str:
         await self.start()
@@ -1964,6 +2033,7 @@ __all__ = [
     "JobNotFoundError",
     "JobResourceUnavailableError",
     "JobRuntime",
+    "MeshArtifactDownload",
     "SymmetryValidationError",
     "UnknownEngineError",
 ]

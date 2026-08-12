@@ -139,14 +139,23 @@ def create_jobs_router(
     @router.get("/api/mesh-artifact/{job_id}", response_class=PlainTextResponse)
     async def mesh_artifact(job_id: str) -> PlainTextResponse:
         try:
-            content = await runtime.get_mesh_artifact(job_id)
+            artifact = await runtime.get_mesh_artifact_download(job_id)
         except JobNotFoundError as exc:
             raise HTTPException(status_code=404, detail="Job not found") from exc
         except JobMeshDiscardedError as exc:
             raise HTTPException(status_code=410, detail=str(exc)) from exc
         except JobResourceUnavailableError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return PlainTextResponse(content=content, media_type="text/plain")
+        headers: dict[str, str] = {}
+        if artifact.regenerated:
+            headers["X-WG2-Mesh-Regenerated"] = "1"
+            if artifact.mesher_version is not None:
+                headers["X-WG2-Mesher-Version"] = artifact.mesher_version
+        return PlainTextResponse(
+            content=artifact.content,
+            media_type="text/plain",
+            headers=headers,
+        )
 
     @router.get("/api/jobs/{job_id}/log", response_class=PlainTextResponse)
     async def job_log(job_id: str) -> PlainTextResponse:
