@@ -26,7 +26,13 @@ def test_publish_fusion_handoff_announces_the_completed_bundle(tmp_path: Path) -
     bundle = workspace / "wglink" / "horn.wglink"
     bundle.mkdir(parents=True)
 
-    marker = publish_fusion_handoff(data_dir, workspace, _result(bundle))
+    marker = publish_fusion_handoff(
+        data_dir,
+        workspace,
+        _result(bundle),
+        expected_document_id="fusion:doc-a",
+        expected_return_state_hash="sha256:return-state",
+    )
 
     assert marker == data_dir / "ipc" / "wglink" / HANDOFF_FILENAME
     payload = json.loads(marker.read_text())
@@ -38,6 +44,8 @@ def test_publish_fusion_handoff_announces_the_completed_bundle(tmp_path: Path) -
         "exportId": "wge_01KZV700000000000000000000",
         "sequence": 4,
         "designId": "wgd_01KZV700000000000000000000",
+        "expectedDocumentId": "fusion:doc-a",
+        "expectedReturnStateHash": "sha256:return-state",
         "requestedAt": payload["requestedAt"],
     }
     assert payload["requestedAt"].endswith("Z")

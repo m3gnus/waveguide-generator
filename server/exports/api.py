@@ -47,6 +47,12 @@ class ExportRequest(BaseModel):
 
 class WgLinkExportRequest(ExportRequest):
     identity: SaveIdentity | None = None
+    expected_fusion_document_id: str | None = Field(
+        default=None, alias="expectedFusionDocumentId"
+    )
+    expected_fusion_return_state_hash: str | None = Field(
+        default=None, alias="expectedFusionReturnStateHash"
+    )
 
 
 router = APIRouter(prefix="/api/export", tags=["exports"])
@@ -564,6 +570,8 @@ async def export_wglink(
             Path(request.app.state.data_dir),
             selected.resolve(),
             result,
+            expected_document_id=payload.expected_fusion_document_id,
+            expected_return_state_hash=payload.expected_fusion_return_state_hash,
         )
         result["cadHandoff"] = "published"
     except (OSError, TypeError, ValueError) as exc:
