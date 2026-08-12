@@ -32,6 +32,10 @@ from .base import (
     StageCallback,
 )
 from .context import SolverContext
+from .frequency_sweep import (
+    live_execution_frequencies,
+    sort_native_result_frequencies,
+)
 from .formulation import DEFAULT_BEM_FORMULATION, DEFAULT_COMPLEX_K_SHIFT
 from .infinite_baffle import reject_bempp_infinite_baffle
 from .result_mapping import (
@@ -611,7 +615,16 @@ def solve_bempp_from_msh_text(
         ) as handle:
             path = Path(handle.name)
             handle.write(msh_text)
-        if context.frequencies_hz is None:
+        if (
+            result_callback is not None
+            and workers == 1
+            and bempp_solve_frequencies is not None
+        ):
+            result = bempp_solve_frequencies(
+                str(path), live_execution_frequencies(context).tolist(), config
+            )
+            sort_native_result_frequencies(result)
+        elif context.frequencies_hz is None:
             result = bempp_solve(str(path), config)
         else:
             result = bempp_solve_frequencies(

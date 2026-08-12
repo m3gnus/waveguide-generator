@@ -225,6 +225,11 @@ def test_metal_adapter_emits_each_frequency_through_the_canonical_mapper(monkeyp
     monkeypatch.setattr(metal, "native_solve", solve)
     monkeypatch.setattr(
         metal,
+        "native_solve_frequencies",
+        lambda path, frequencies, config: solve(path, config),
+    )
+    monkeypatch.setattr(
+        metal,
         "metal_status",
         lambda: {"available": True, "reason": "mock helper loadable", "version": "test"},
     )

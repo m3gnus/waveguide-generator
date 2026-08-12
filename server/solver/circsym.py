@@ -25,6 +25,10 @@ from .base import (
     StageCallback,
 )
 from .context import SolverContext
+from .frequency_sweep import (
+    live_execution_frequencies,
+    sort_native_result_frequencies,
+)
 from .formulation import DEFAULT_BEM_FORMULATION, DEFAULT_COMPLEX_K_SHIFT
 from .metal import metal_status
 from .result_mapping import (
@@ -216,7 +220,12 @@ def solve_circsym_design(
         if "complex_k_shift" in message:
             raise CircSymUnavailable("Installed Metal helper lacks the required complex-k shift option.") from exc
         raise
-    if context.frequencies_hz is None:
+    if result_callback is not None and solve_circsym_frequencies is not None:
+        result = solve_circsym_frequencies(
+            meridian, live_execution_frequencies(context).tolist(), config
+        )
+        sort_native_result_frequencies(result)
+    elif context.frequencies_hz is None:
         result = solve_circsym(meridian, config)
     else:
         result = solve_circsym_frequencies(

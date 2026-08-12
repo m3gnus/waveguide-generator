@@ -109,6 +109,38 @@ def test_runtime_publishes_frequency_delta_and_keeps_full_process_snapshot(
     ]
 
 
+def test_runtime_snapshot_sorts_progressive_frequency_deltas() -> None:
+    first = {
+        "frequencies": [100.0],
+        "spl_on_axis": {"frequencies": [100.0], "spl": [1.0]},
+        "directivity": {"horizontal": [[[0.0, -1.0]]]},
+    }
+    high = {
+        "frequencies": [700.0],
+        "spl_on_axis": {"frequencies": [700.0], "spl": [7.0]},
+        "directivity": {"horizontal": [[[0.0, -7.0]]]},
+    }
+    middle = {
+        "frequencies": [400.0],
+        "spl_on_axis": {"frequencies": [400.0], "spl": [4.0]},
+        "directivity": {"horizontal": [[[0.0, -4.0]]]},
+    }
+
+    merged = merge_provisional_results(first, high)
+    merged = merge_provisional_results(merged, middle)
+
+    assert merged["frequencies"] == [100.0, 400.0, 700.0]
+    assert merged["spl_on_axis"] == {
+        "frequencies": [100.0, 400.0, 700.0],
+        "spl": [1.0, 4.0, 7.0],
+    }
+    assert merged["directivity"]["horizontal"] == [
+        [[0.0, -1.0]],
+        [[0.0, -4.0]],
+        [[0.0, -7.0]],
+    ]
+
+
 async def _wait_stage(store: JobStore, job_id: str, stage: str) -> None:
     async def wait_loop() -> None:
         while True:
