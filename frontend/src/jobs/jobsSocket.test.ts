@@ -368,9 +368,11 @@ describe('jobs websocket state machine', () => {
     socket.message({ v: 1, kind: 'snapshot', epoch: 1, cursor: 1, jobs: [job()] });
     socket.message({ v: 1, kind: 'event', epoch: 1, cursor: 2, jobId: 'job-1', type: 'queued', payload: {} });
     socket.message({ v: 1, kind: 'event', epoch: 1, cursor: 3, jobId: 'job-1', type: 'completed', payload: {} });
-    resolveSecond(json(job({ status: 'complete', progress: 1, has_results: true })));
-    await flush();
+    expect(fetcher).toHaveBeenCalledTimes(1);
     resolveFirst(json(job({ status: 'running', progress: .2 })));
+    await flush();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    resolveSecond(json(job({ status: 'complete', progress: 1, has_results: true })));
     await flush();
     expect(manager.getSnapshot().jobs[0].status).toBe('complete');
 
@@ -383,6 +385,74 @@ describe('jobs websocket state machine', () => {
     await flush();
     expect(manager.getSnapshot().jobs).toEqual([]);
     expect(compareSelection.getSnapshot().primary).toBeNull();
+    manager.stop();
+  });
+
+  it('re-fetches a completed job when metadata invalidates its in-flight status response', async () => {
+    let resolveFirst!: (response: Response) => void;
+    let resolveSecond!: (response: Response) => void;
+    const fetcher = vi.fn()
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => { resolveFirst = resolve; }))
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => { resolveSecond = resolve; }));
+    const socket = new MockSocket();
+    const manager = new JobsSocketManager(() => socket, fetcher, 'ws://test/ws/jobs');
+    manager.start();
+    socket.message({ v: 1, kind: 'hello', epoch: 1, heartbeatSec: 15 });
+    socket.message({ v: 1, kind: 'snapshot', epoch: 1, cursor: 1, jobs: [job({ status: 'running' })] });
+
+    socket.message({ v: 1, kind: 'event', epoch: 1, cursor: 2, jobId: 'job-1', type: 'completed', payload: {} });
+    socket.message({
+      v: 1, kind: 'event', epoch: 1, cursor: 3, jobId: 'job-1', type: 'metadata',
+      payload: { changed: { has_mesh_artifact: false, mesh_discarded_at: '2026-08-03T10:01:01Z' } },
+    });
+    resolveFirst(json(job({
+      status: 'complete', progress: 1, has_results: true,
+      completed_at: null, mesh_stats: null, has_mesh_artifact: true,
+    })));
+    await flush();
+
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(manager.getSnapshot().jobs[0].completed_at).toBeNull();
+
+    resolveSecond(json(job({
+      status: 'complete', progress: 1, has_results: true,
+      completed_at: '2026-08-03T10:01:00Z', mesh_stats: { cells: 42 },
+      has_mesh_artifact: false, mesh_discarded_at: '2026-08-03T10:01:01Z',
+    })));
+    await flush();
+    await flush();
+
+    expect(manager.getSnapshot().jobs[0]).toMatchObject({
+      status: 'complete',
+      completed_at: '2026-08-03T10:01:00Z',
+      mesh_stats: { cells: 42 },
+      has_mesh_artifact: false,
+    });
+    manager.stop();
+  });
+
+  it('caps follow-up status fetches during a continuous mutation stream', async () => {
+    const socket = new MockSocket();
+    let cursor = 2;
+    const fetcher = vi.fn(async () => {
+      cursor += 1;
+      socket.message({
+        v: 1, kind: 'event', epoch: 1, cursor, jobId: 'job-1', type: 'metadata',
+        payload: { changed: { label: `mutation-${cursor}` } },
+      });
+      return json(job({ status: 'complete', progress: 1, completed_at: null }));
+    });
+    const manager = new JobsSocketManager(() => socket, fetcher, 'ws://test/ws/jobs');
+    manager.start();
+    socket.message({ v: 1, kind: 'hello', epoch: 1, heartbeatSec: 15 });
+    socket.message({ v: 1, kind: 'snapshot', epoch: 1, cursor: 1, jobs: [job({ status: 'running' })] });
+
+    socket.message({ v: 1, kind: 'event', epoch: 1, cursor: 2, jobId: 'job-1', type: 'completed', payload: {} });
+    await flush();
+    await flush();
+
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(manager.getSnapshot().jobs[0]).toMatchObject({ status: 'complete', completed_at: null, label: 'mutation-5' });
     manager.stop();
   });
 
