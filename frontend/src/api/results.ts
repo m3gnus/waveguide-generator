@@ -253,6 +253,39 @@ export async function fetchJobResults(jobId: string, fetcher: typeof fetch = fet
   }
 }
 
+export interface RecombineSpec {
+  id?: string;
+  members: string[];
+  crossovers_hz: number[];
+  level_match?: boolean;
+  align?: boolean;
+}
+
+/** Recompute a job's combined channel from its stored complex bases. The
+ * server persists the updated results, so the cache entry is replaced too. */
+export async function recombineJobResults(
+  jobId: string,
+  spec: RecombineSpec,
+  fetcher: typeof fetch = fetch,
+): Promise<JobResults> {
+  const response = await fetcher(`/api/results/${encodeURIComponent(jobId)}/combine`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(spec),
+  });
+  if (!response.ok) {
+    let detail = `Recombine request failed: ${response.status}`;
+    try {
+      const body = await response.json() as { detail?: string };
+      if (body.detail) detail = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail);
+    } catch { /* status is enough */ }
+    throw new Error(detail);
+  }
+  const result = await response.json() as JobResults;
+  resultsCache.set(jobId, result);
+  return result;
+}
+
 export class CompareStore {
   private value: CompareSelection = { primary: null, overlays: [], following: true };
   private readonly listeners = new Set<() => void>();

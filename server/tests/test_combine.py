@@ -200,3 +200,46 @@ def test_partial_balloon_coverage_warns_and_drops_the_balloon() -> None:
     )
     assert combined.sphere_pressure_complex is None
     assert any("balloon" in warning for warning in payload["warnings"])
+
+
+def test_channel_bases_roundtrip() -> None:
+    from server.solver.combine import (
+        deserialize_channel_bases,
+        serialize_channel_bases,
+    )
+
+    base = np.ones(_freqs().size, dtype=np.complex128) * (0.5 - 0.25j)
+    sphere = np.tile(np.conjugate(base)[:, None], (1, 2))
+    results = {
+        "low": _member(base, sphere=sphere.copy()),
+        "high": _member(base * 2.0, sphere=sphere * 2.0),
+    }
+    bundle = deserialize_channel_bases(serialize_channel_bases(results))
+    assert bundle["channel_ids"] == ["low", "high"]
+    assert bundle["has_balloon"] is True
+    assert np.array_equal(bundle["frequencies_hz"], _freqs())
+    restored = bundle["results_by_id"]
+    assert np.allclose(restored["low"].pressure_complex, results["low"].pressure_complex)
+    assert np.allclose(
+        restored["high"].sphere_pressure_complex,
+        results["high"].sphere_pressure_complex,
+    )
+    combined, payload = combine_drive_channels(
+        restored, members=["low", "high"], crossovers_hz=[1000.0]
+    )
+    assert combined.pressure_complex.shape == results["low"].pressure_complex.shape
+    assert payload["members"] == ["low", "high"]
+
+
+def test_channel_bases_without_balloon_roundtrip() -> None:
+    from server.solver.combine import (
+        deserialize_channel_bases,
+        serialize_channel_bases,
+    )
+
+    base = np.ones(_freqs().size, dtype=np.complex128)
+    bundle = deserialize_channel_bases(
+        serialize_channel_bases({"low": _member(base), "high": _member(base)})
+    )
+    assert bundle["has_balloon"] is False
+    assert bundle["results_by_id"]["low"].sphere_pressure_complex is None
