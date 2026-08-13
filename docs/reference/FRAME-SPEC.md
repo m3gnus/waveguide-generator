@@ -1,6 +1,8 @@
 # FRAME-SPEC v1.1 — binary geometry/array frames
 
-Status: Phase 1 contract (implements plan §4.3/§4.5; supersedes spike `WGF0`). v1.1 adds the fidelity/normals contract from the tessellation review (`../../wg-rebuild-reviews/tessellation-review-260803.md`).
+Status: canonical contract. Version 1.1 supersedes the `WGF0` spike and adds the
+fidelity/normals rules from the rebuild's tessellation review; the surviving review
+disposition is summarized in [the rebuild history](../history/REBUILD-2026-08.md).
 Used by: `/ws/preview` geometry frames; later by measured-large HTTP result fields (balloon chunks). `.msh` artifacts are NOT frames — they stay original streamed text files.
 
 ## Layout (little-endian throughout)

@@ -1,6 +1,6 @@
 """Optionally pay the selected solver's one-off per-process start-up cost.
 
-``docs/WINDOWS-VALIDATION.md`` check 12 measured the problem this exists to
+``docs/validation/2026-08/WINDOWS-VALIDATION.md`` check 12 measured the problem this exists to
 fix. The first bempp solve after every server start spends a long time inside
 one uninterruptible block -- 17.5 s on OpenCL and 53.8 s on numba, measured on
 the reference Windows machine -- and *no cancellation checkpoint can run

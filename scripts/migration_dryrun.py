@@ -29,7 +29,7 @@ class Result:
 
 
 def corpus() -> list[Path]:
-    """Return the exact corpus mandated by docs/BATCH-A-BRIEF.md."""
+    """Return the original rebuild corpus recorded by the dated validation report."""
 
     snapshots = sorted((V1 / "output").glob("*/script.snapshot.mwg"))
     fixtures = sorted((V1 / "tests/fixtures/ath").glob("*"))
@@ -166,4 +166,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

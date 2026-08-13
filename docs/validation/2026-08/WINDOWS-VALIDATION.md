@@ -1,5 +1,9 @@
 # Windows validation — P6.4
 
+> Historical evidence captured in August 2026. Statements such as “never” and
+> “not implemented” describe the captured revision, not the current release state.
+> See [release readiness](../../plans/RELEASE-READINESS.md) for current gates.
+
 **Status:** first native Windows run of v2, 2026-08-07.
 
 Against P6.4's five items, and deliberately not claiming more than was done:
@@ -308,7 +312,7 @@ headless mode, driven over the DevTools Protocol.
 
 | Before the drag | After a left-drag across the canvas |
 |---|---|
-| ![viewport before orbit](windows-validation/viewport-before-orbit.png) | ![viewport after orbit](windows-validation/viewport-after-orbit.png) |
+| ![viewport before orbit](images/viewport-before-orbit.png) | ![viewport after orbit](images/viewport-after-orbit.png) |
 
 The camera rotates from the three-quarter view to a near edge-on one and the
 orientation gizmo turns with it, while the rest of the interface is pixel-identical
@@ -658,8 +662,8 @@ Ordered by how much it matters.
    Nor has any release artifact been fetched over HTTPS, on any platform: no
    `v*` tag exists and `release.yml` has never fired, so the whole download is
    exercised against `file://` fixtures shaped like a release.
-   `docs/P6-CUTOVER-PLAN.md` §P6.2 has the full table of what is proven by
-   execution versus written-but-unexecuted.
+   [Release readiness](../../plans/RELEASE-READINESS.md) now separates current
+   gates from what this report proved by execution versus what was only written.
 2. **Stop is prompt, not immediate.** Check 12. The first solve after a start
    still has a ~17 s window with no cancellation checkpoint in it. An explicit
    `WG2_SOLVER_WARMUP=1` experiment can move that cost earlier, but it is not a
@@ -684,7 +688,7 @@ Ordered by how much it matters.
    matrix in `.github/workflows/ci.yml` includes `windows-latest`, but no v2
    workflow run has exercised it yet. This is another never-run path, not a job
    that remains to be implemented.
-7. ~~**`docs/TRACEABILITY-TABLE.md` is now stale.**~~ **Corrected 2026-08-08**
+7. ~~**The original traceability inventory was stale.**~~ **Corrected 2026-08-08**
    when this branch merged: P011/Q007 now says `fcntl` on POSIX, `msvcrt.locking`
    plus a Win32 liveness probe on Windows, and names the module-scope `fcntl`
    import that had made the module unloadable there.
