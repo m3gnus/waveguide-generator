@@ -27,6 +27,10 @@ class EngineRunResult:
     # recombination possible: the JSON contract stores magnitude+phase per
     # channel, but a new crossover needs the complex fields.
     channel_bases: bytes | None = None
+    # Opt-in passive-cardioid aperture radiation matrix. Kept as the original
+    # compressed NPZ so complex matrices, diagnostics, and physical face
+    # identity remain lossless and downloadable independently of result JSON.
+    radiation_impedance: bytes | None = None
 
 
 __all__ = [

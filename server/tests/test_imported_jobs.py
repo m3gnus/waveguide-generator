@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
+from io import BytesIO
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -97,6 +99,165 @@ def test_geometry_union_round_trip_and_legacy_rewrite() -> None:
         )
 
 
+def test_passive_cardioid_request_fields_are_additive_and_keep_areas_distinct() -> None:
+    request = _request(
+        "wgi_" + "0" * 26,
+        passive_cardioid_rear_volume_l=6.0,
+        passive_cardioid_port_length_mm=25.0,
+        model_port_area_m2=0.05,
+        bem_port_area_m2=0.009471859930646809,
+        port_area_source="user",
+        passive_cardioid_foam_resistance_pa_s_m3=10_000.0,
+        passive_cardioid_invert_port=True,
+        passive_cardioid_coupled=True,
+    )
+    geometry = request.geometry
+    assert isinstance(geometry, ImportedGeometrySource)
+    assert geometry.passive_cardioid_enabled is True
+    assert geometry.model_port_area_m2 == 0.05
+    assert geometry.bem_port_area_m2 == 0.009471859930646809
+    assert request.model_dump(mode="json")["geometry"]["passive_cardioid_coupled"] is True
+
+    with pytest.raises(ValidationError, match="requires model_port_area_m2 to equal"):
+        _request(
+            "wgi_" + "0" * 26,
+            passive_cardioid_rear_volume_l=6.0,
+            passive_cardioid_port_length_mm=25.0,
+            model_port_area_m2=0.05,
+            bem_port_area_m2=0.01,
+            port_area_source="bem_aperture",
+            passive_cardioid_foam_resistance_pa_s_m3=0.0,
+        )
+
+
+def test_passive_cardioid_aperture_mapping_resolves_imported_lr_names() -> None:
+    aperture_tags, port_names, mf_source_id = metal._passive_cardioid_apertures(
+        {"PORT_EXIT_L": 10, "PORT_EXIT_R": 11, "source-mf": 101},
+        {"sources": [{"id": "source-mf", "role": "MF"}]},
+    )
+
+    assert aperture_tags == {
+        "PORT_EXIT_L": [10],
+        "PORT_EXIT_R": [11],
+        "MF": [101],
+    }
+    assert port_names == ["PORT_EXIT_L", "PORT_EXIT_R"]
+    assert mf_source_id == "source-mf"
+
+
+def test_frequency_reconciliation_rejects_same_length_different_values() -> None:
+    with pytest.raises(ValueError, match="grids cannot be reconciled"):
+        metal._frequency_value_indices(
+            np.asarray([100.0, 200.0]),
+            np.asarray([100.0, 250.0]),
+            consumer_name="consumer",
+            requested_name="campaign",
+        )
+
+
+def test_passive_cardioid_campaign_reconciles_grid_and_writes_face_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    @dataclass(frozen=True)
+    class Config:
+        progress_callback: Any = None
+        on_frequency_result: Any = None
+        source_velocity_profiles: Any = None
+
+    calls: dict[str, Any] = {}
+
+    def solve_matrix(
+        _mesh: Path,
+        aperture_tags: dict[str, list[int]],
+        frequencies_hz: np.ndarray,
+        config: Config,
+    ) -> Any:
+        calls["aperture_tags"] = aperture_tags
+        calls["frequencies_hz"] = frequencies_hz.copy()
+        for index, frequency in enumerate(frequencies_hz):
+            config.progress_callback(index, len(frequencies_hz), float(frequency))
+        count = len(frequencies_hz)
+        matrix = np.zeros((count, 2, 2), dtype=np.complex128)
+        matrix[:, 0, 0] = 10.0 + 1.0j
+        matrix[:, 1, 1] = 20.0 + 2.0j
+        matrix[:, 0, 1] = matrix[:, 1, 0] = 3.0 + 0.5j
+        return metal.radiation_impedance.RadiationImpedanceResult(
+            frequencies_hz=np.asarray(frequencies_hz, dtype=np.float64),
+            aperture_names=["PORT_EXIT", "MF"],
+            aperture_area_m2={"PORT_EXIT": 0.01, "MF": 0.02},
+            impedance_matrix=matrix,
+            solver_logs=[],
+        )
+
+    monkeypatch.setattr(
+        metal.radiation_impedance, "solve_aperture_matrix", solve_matrix
+    )
+    geometry = _request(
+        "wgi_" + "0" * 26,
+        passive_cardioid_rear_volume_l=6.0,
+        passive_cardioid_port_length_mm=25.0,
+        model_port_area_m2=0.05,
+        bem_port_area_m2=0.01,
+        port_area_source="user",
+        passive_cardioid_foam_resistance_pa_s_m3=10_000.0,
+    ).geometry
+    assert isinstance(geometry, ImportedGeometrySource)
+    record = {
+        "source_tags": {"PORT_EXIT": 10, "source-mf": 101},
+        "sources": [{"id": "source-mf", "role": "MF"}],
+        "mesh": {
+            "metadata": {
+                "mesh_frequency_validation": {
+                    "per_source": {
+                        "source-mf": {"effective_max_valid_frequency_hz": 600.0}
+                    }
+                }
+            }
+        },
+    }
+    stages: list[tuple[str, float, str]] = []
+    cancellations = 0
+
+    def cancel() -> None:
+        nonlocal cancellations
+        cancellations += 1
+
+    campaign = metal._run_passive_cardioid_campaign(
+        tmp_path / "mesh.msh",
+        Config(),
+        geometry,
+        record,
+        np.asarray([100.0, 500.0, 1000.0]),
+        stage_callback=lambda *args: stages.append(args),
+        cancellation_callback=cancel,
+    )
+
+    assert calls["aperture_tags"] == {"PORT_EXIT": [10], "MF": [101]}
+    assert calls["frequencies_hz"].tolist() == [100.0, 500.0]
+    assert campaign["consumer_indices"].tolist() == [0, 1]
+    assert cancellations == 4
+    assert {stage for stage, _fraction, _message in stages} == {
+        "radiation_impedance"
+    }
+    with np.load(BytesIO(campaign["artifact"]), allow_pickle=False) as data:
+        assert set(data.files) == {
+            "frequencies_hz",
+            "aperture_names",
+            "aperture_area_m2",
+            "aperture_tag",
+            "solver_impedance_matrix",
+            "engineering_impedance_matrix",
+            "in_phase_termination_load",
+            "in_phase_aperture_names",
+            "reciprocity_max_rel",
+            "passivity_min_eig",
+            "passivity_ok",
+        }
+        assert data["aperture_names"].tolist() == ["PORT_EXIT", "MF"]
+        assert data["aperture_tag"].tolist() == [10, 101]
+        # The in-phase reduction covers the ports only; MF contributes mutual
+        # columns to the matrix but is not part of the port-only load.
+        assert data["in_phase_aperture_names"].tolist() == ["PORT_EXIT"]
 def test_legacy_top_level_parametric_wire_is_accepted_through_http_api() -> None:
     class CapturingRuntime:
         def __init__(self) -> None:
@@ -887,6 +1048,108 @@ def _native_result_3f() -> SimpleNamespace:
     )
 
 
+def test_coupled_cardioid_adds_derived_channel_and_defers_mf_driver_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    driver = {
+        "sd_cm2": 210.0,
+        "bl_t_m": 10.5,
+        "re_ohm": 5.3,
+        "le_mh": 0.5,
+        "mmd_g": 12.0,
+        "cms_m_per_n": 4.0e-4,
+        "rms_kg_per_s": 1.2,
+    }
+    request = _request(
+        "wgi_" + "0" * 26,
+        drive_channels=[
+            {"id": "mf", "source_ids": ["source-mf"], "driver": driver},
+            {"id": "port", "source_ids": ["PORT_EXIT"]},
+        ],
+        mesh={
+            "rigid_size_mm": 8.0,
+            "transition_mm": 20.0,
+            "source_size_mm": {"source-mf": 3.0, "PORT_EXIT": 3.0},
+        },
+        passive_cardioid_rear_volume_l=6.0,
+        passive_cardioid_port_length_mm=25.0,
+        model_port_area_m2=0.05,
+        bem_port_area_m2=0.01,
+        port_area_source="user",
+        passive_cardioid_foam_resistance_pa_s_m3=10_000.0,
+        passive_cardioid_invert_port=True,
+        passive_cardioid_coupled=True,
+    )
+    mesh_path = tmp_path / "imported.msh"
+    mesh_path.write_text("msh", encoding="utf-8")
+    record = _record(mesh_path)
+    record["sources"] = [
+        {
+            "id": "source-mf",
+            "role": "MF",
+            "observed": {"total_area_mm2": 21_000.0},
+        },
+        {
+            "id": "PORT_EXIT",
+            "role": "OTHER",
+            "observed": {"total_area_mm2": 10_000.0},
+        },
+    ]
+    record["source_tags"] = {"source-mf": 101, "PORT_EXIT": 10}
+    record["mesh"]["metadata"]["mesh_frequency_validation"]["per_source"] = {}
+
+    monkeypatch.setattr(metal, "metal_status", lambda: {"available": True, "reason": "ok"})
+
+    def solve_multi(
+        _mesh: str,
+        sources: list[dict[int, complex]],
+        _config: Any,
+        frequencies_hz: list[float] | None = None,
+    ) -> list[SimpleNamespace]:
+        assert sources == [{101: 1.0 + 0.0j}, {10: 1.0 + 0.0j}]
+        mf = _native_result_3f()
+        port = _native_result_3f()
+        port.pressure_complex *= 0.5
+        return [mf, port]
+
+    def solve_matrix(
+        _mesh: Path,
+        aperture_tags: dict[str, list[int]],
+        frequencies_hz: np.ndarray,
+        _config: Any,
+    ) -> Any:
+        assert aperture_tags == {"PORT_EXIT": [10], "MF": [101]}
+        matrix = np.zeros((len(frequencies_hz), 2, 2), dtype=np.complex128)
+        matrix[:, 0, 0] = 100.0 + 20.0j
+        matrix[:, 1, 1] = 120.0 + 25.0j
+        matrix[:, 0, 1] = matrix[:, 1, 0] = 10.0 + 2.0j
+        return metal.radiation_impedance.RadiationImpedanceResult(
+            frequencies_hz=np.asarray(frequencies_hz, dtype=np.float64),
+            aperture_names=["PORT_EXIT", "MF"],
+            aperture_area_m2={"PORT_EXIT": 0.01, "MF": 0.021},
+            impedance_matrix=matrix,
+            solver_logs=[],
+        )
+
+    monkeypatch.setattr(metal, "native_solve_multi_source", solve_multi)
+    monkeypatch.setattr(
+        metal.radiation_impedance, "solve_aperture_matrix", solve_matrix
+    )
+    response = metal.solve_imported_metal_from_msh_text("msh", request, record)
+
+    assert response["channel_order"] == ["mf", "port", "passive_cardioid"]
+    assert response["channels"]["mf"]["metadata"]["driver_coupling_deferred_to"] == (
+        "passive_cardioid"
+    )
+    derived = response["channels"]["passive_cardioid"]
+    assert derived["metadata"]["impedance_units"] == "ohms"
+    assert derived["metadata"]["impedance_drive"] == "voltage"
+    assert derived["metadata"]["passive_cardioid"]["port_area_source"] == "user"
+    assert len(derived["impedance"]["real"]) == 3
+    assert response["metadata"]["passive_cardioid"]["coupled"] is True
+    assert isinstance(response["_radiation_impedance_npz"], bytes)
+
+
 def test_combined_channel_is_appended_with_contract_metadata(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1125,6 +1388,7 @@ def test_driver_channel_scales_fields_and_reports_electrical_impedance(
     metadata = driven["metadata"]
     assert metadata["impedance_units"] == "ohms"
     assert metadata["impedance_quantity"] == "electrical_input_impedance"
+    assert metadata["impedance_phase_convention"] == "engineering_exp_plus_jwt"
     assert metadata["impedance_drive"] == "voltage"
     assert metadata["drive"] == {"voltage_v": 2.83, "rg_ohm": 0.0}
     assert metadata["driver"]["source_id"] == "source-c"

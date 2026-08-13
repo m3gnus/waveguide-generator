@@ -195,6 +195,26 @@ def create_jobs_router(
             headers=headers,
         )
 
+    @router.get("/api/radiation-impedance/{job_id}", response_model=None)
+    async def radiation_impedance_artifact(job_id: str) -> Response:
+        try:
+            content = await runtime.get_radiation_impedance(job_id)
+        except JobNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Job not found") from exc
+        except JobConflictError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except JobResourceUnavailableError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return Response(
+            content=content,
+            media_type="application/octet-stream",
+            headers={
+                "Content-Disposition": (
+                    'attachment; filename="port_exit_radiation_impedance_matrix.npz"'
+                )
+            },
+        )
+
     @router.get("/api/jobs/{job_id}/log", response_class=PlainTextResponse)
     async def job_log(job_id: str) -> PlainTextResponse:
         try:
