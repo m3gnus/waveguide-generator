@@ -165,13 +165,139 @@ describe('result exporters', () => {
     expect(saveBlob).toHaveBeenCalledTimes(2);
   });
   it('sends the selected theme to the PNG renderer endpoint', async () => {
-    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ charts: { spl: 'data:image/png;base64,AQ==' } }), { status: 200 }));
-    const context = { jobStem: 'horn_1', preferences: { ...preferencesStore.getSnapshot(), chartTheme: 'paper' }, result, fetcher, saveBlob: vi.fn() };
-    expect(await runExportFormat('png', context)).toEqual(['horn_1_spl.png']);
-    expect(String(fetcher.mock.calls[0][0])).toBe('/api/render-charts');
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input) => String(input) === '/api/render-directivity'
+      ? new Response(JSON.stringify({ image: 'data:image/png;base64,Ag==' }), { status: 200 })
+      : new Response(JSON.stringify({ charts: { spl: 'data:image/png;base64,AQ==' } }), { status: 200 }));
+    const saveBlob = vi.fn();
+    const context = { jobStem: 'horn_1', preferences: { ...preferencesStore.getSnapshot(), chartTheme: 'paper' }, result, fetcher, saveBlob };
+    expect(await runExportFormat('png', context)).toEqual(['horn_1_spl.png', 'horn_1_directivity_map.png']);
+    expect(fetcher.mock.calls.map(([input]) => String(input))).toEqual(['/api/render-directivity', '/api/render-charts']);
     expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body)).theme).toBe('paper');
+    expect(JSON.parse(String(fetcher.mock.calls[1][1]?.body)).theme).toBe('paper');
+    expect(saveBlob.mock.calls.map(([, filename]) => filename)).toEqual(['horn_1_spl.png', 'horn_1_directivity_map.png']);
     expect(buildChartRenderPayload({ ...result, metadata: { observation: { effective_distance_m: 1.5 }, phase_time_convention: 'e^-iwt' } }, context.preferences)).toMatchObject({ phase_reference_distance_m: 1.5, phase_time_convention: 'e^-iwt', impedance_units: 'Z/(rho*c)' });
     expect(buildChartRenderPayload(result, context.preferences, { result, label: 'reference horn' })).toMatchObject({ reference: { label: 'reference horn', frequencies: [100, 200], spl: [90, null], impedance_normalization: 'rho_c' } });
+  });
+
+  it('dispatches one on-axis FRD download per result channel', async () => {
+    const wrapped: ResultPayload = {
+      frequencies: [], channel_order: ['drive-hf', 'drive-mf'],
+      channels: { 'drive-hf': result, 'drive-mf': result },
+    };
+    const saveText = vi.fn();
+    const bundle = await runExportBundle({
+      result: wrapped, jobStem: 'horn_1', preferences: preferencesStore.getSnapshot(), saveText,
+    }, ['on_axis_frd']);
+
+    expect(bundle).toEqual({
+      files: ['horn_1-drive-hf.frd', 'horn_1-drive-mf.frd'], failures: [],
+    });
+    expect(saveText.mock.calls.map(([, filename]) => filename)).toEqual([
+      'horn_1-drive-hf.frd', 'horn_1-drive-mf.frd',
+    ]);
+  });
+
+  it('dispatches a manual polar FRD set through the selected Workspace', async () => {
+    const polar: ResultPayload = {
+      frequencies: [1000], spl_on_axis: { frequencies: [1000], spl: [90], phase_degrees: [0] },
+      directivity: {
+        horizontal: [[[-30, -6], [0, 0], [30, -6]]],
+        vertical: [[[-20, -5], [0, 0], [20, -5]]],
+      },
+    };
+    const requests: Array<{ path: string; init?: RequestInit }> = [];
+    const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+      const path = String(input);
+      requests.push({ path, init });
+      if (path === '/api/workspace/path') return new Response(JSON.stringify({ selected: true, path: '/chosen' }), { status: 200 });
+      return new Response(JSON.stringify({
+        directory: '/chosen/horn_1',
+        files: Array.from({ length: 6 }, (_, index) => `/chosen/horn_1/${index}.frd`),
+      }), { status: 200 });
+    });
+
+    const files = await runExportFormat('polar_frd', {
+      result: polar, jobStem: 'horn_1', preferences: preferencesStore.getSnapshot(), fetcher,
+    });
+
+    expect(files).toHaveLength(6);
+    expect(requests.map(({ path }) => path)).toEqual(['/api/workspace/path', '/api/workspace/write-export']);
+    const payload = JSON.parse(String(requests[1].init?.body));
+    expect(payload.subdirectory).toBe('horn_1');
+    expect(payload.members.map((member: { relative_path: string }) => member.relative_path)).toEqual([
+      'hor/horn_1 -30.frd', 'hor/horn_1 0.frd', 'hor/horn_1 30.frd',
+      'ver/horn_1 -20.frd', 'ver/horn_1 0.frd', 'ver/horn_1 20.frd',
+    ]);
+  });
+
+  it('writes all polar result channels in one manual Workspace request', async () => {
+    const channel: ResultPayload = {
+      frequencies: [1000], spl_on_axis: { frequencies: [1000], spl: [90] },
+      directivity: { horizontal: [[[0, 0]]] },
+    };
+    const wrapped: ResultPayload = {
+      frequencies: [], channel_order: ['drive-hf', 'drive-mf'],
+      channels: { 'drive-hf': channel, 'drive-mf': channel },
+    };
+    let members: Array<{ relative_path: string }> = [];
+    const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+      if (String(input) === '/api/workspace/path') return new Response(JSON.stringify({ selected: true }), { status: 200 });
+      members = (JSON.parse(String(init?.body)) as { members: Array<{ relative_path: string }> }).members;
+      return new Response(JSON.stringify({
+        directory: '/chosen/horn_1', files: members.map(({ relative_path }) => `/chosen/horn_1/${relative_path}`),
+      }), { status: 200 });
+    });
+
+    const bundle = await runExportBundle({
+      result: wrapped, jobStem: 'horn_1', preferences: preferencesStore.getSnapshot(), fetcher,
+    }, ['polar_frd']);
+
+    expect(fetcher.mock.calls.map(([input]) => String(input))).toEqual(['/api/workspace/path', '/api/workspace/write-export']);
+    expect(members.map(({ relative_path }) => relative_path)).toEqual([
+      'hor/horn_1-drive-hf 0.frd', 'hor/horn_1-drive-mf 0.frd',
+    ]);
+    expect(bundle.failures).toEqual([]);
+  });
+
+  it('preserves polar Workspace cancellation as a format failure without writing', async () => {
+    const polar: ResultPayload = {
+      frequencies: [1000], spl_on_axis: { frequencies: [1000], spl: [90] },
+      directivity: { horizontal: [[[0, 0]]] },
+    };
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ selected: false }), { status: 200 }));
+    const bundle = await runExportBundle({
+      result: polar, jobStem: 'horn_1', preferences: preferencesStore.getSnapshot(), fetcher,
+    }, ['polar_frd']);
+
+    expect(fetcher.mock.calls.map(([input]) => String(input))).toEqual(['/api/workspace/path', '/api/workspace/select']);
+    expect(bundle).toEqual({
+      files: [], failures: [{ format: 'polar_frd', reason: 'Workspace selection was cancelled. No files were written.' }],
+    });
+  });
+
+  it('stages automatic polar FRDs with their plane directories in the common Workspace write', async () => {
+    const polar: ResultPayload = {
+      frequencies: [1000], spl_on_axis: { frequencies: [1000], spl: [90] },
+      directivity: { horizontal: [[[-30, -6], [0, 0], [30, -6]]] },
+    };
+    let writePayload: { members: Array<{ relative_path: string }> } | undefined;
+    const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+      expect(String(input)).toBe('/api/workspace/write-export');
+      writePayload = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({
+        directory: '/output/horn_1',
+        files: writePayload!.members.map(({ relative_path }) => `/output/horn_1/${relative_path}`),
+      }), { status: 200 });
+    });
+
+    const bundle = await runWorkspaceExportBundle({
+      result: polar, jobStem: 'horn_1', preferences: preferencesStore.getSnapshot(), fetcher,
+    }, ['polar_frd']);
+
+    expect(bundle.failures).toEqual([]);
+    expect(writePayload?.members.map(({ relative_path }) => relative_path)).toEqual([
+      'hor/horn_1 -30.frd', 'hor/horn_1 0.frd', 'hor/horn_1 30.frd',
+    ]);
   });
 
   it('pins distinct config and summary suffixes, including the config fallback', async () => {
@@ -212,10 +338,13 @@ describe('result exporters', () => {
       if (path === '/api/render-charts') {
         return new Response(JSON.stringify({ charts: { spl: 'data:image/png;base64,AQID' } }), { status: 200 });
       }
+      if (path === '/api/render-directivity') {
+        return new Response(JSON.stringify({ image: 'data:image/png;base64,BAUG' }), { status: 200 });
+      }
       if (path === '/api/workspace/write-export') {
         return new Response(JSON.stringify({
           directory: 'C:/output/horn_1',
-          files: ['C:/output/horn_1/horn_1.csv', 'C:/output/horn_1/horn_1_spl.png'],
+          files: ['C:/output/horn_1/horn_1.csv', 'C:/output/horn_1/horn_1_spl.png', 'C:/output/horn_1/horn_1_directivity_map.png'],
         }), { status: 200 });
       }
       return new Response('not found', { status: 404 });
@@ -229,16 +358,17 @@ describe('result exporters', () => {
     }, ['csv', 'png']);
 
     expect(bundle).toEqual({
-      files: ['C:/output/horn_1/horn_1.csv', 'C:/output/horn_1/horn_1_spl.png'],
+      files: ['C:/output/horn_1/horn_1.csv', 'C:/output/horn_1/horn_1_spl.png', 'C:/output/horn_1/horn_1_directivity_map.png'],
       failures: [],
     });
     const write = requests.find(({ path }) => path === '/api/workspace/write-export')!;
     const payload = JSON.parse(String(write.init?.body));
     expect(payload).toMatchObject({ subdirectory: 'horn_1', existing: 'merge_identical' });
     expect(payload.members.map((member: { relative_path: string }) => member.relative_path)).toEqual([
-      'horn_1.csv', 'horn_1_spl.png',
+      'horn_1.csv', 'horn_1_spl.png', 'horn_1_directivity_map.png',
     ]);
     expect(payload.members[1].content_base64).toBe('AQID');
+    expect(payload.members[2].content_base64).toBe('BAUG');
   });
 
   it('auto-saves the mesh into the same per-run Workspace directory', async () => {

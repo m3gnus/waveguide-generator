@@ -13,16 +13,7 @@ import { JobsPanel } from '../shell/JobsPanel';
 
 const mocks = vi.hoisted(() => ({
   fetchJobResults: vi.fn(),
-  runExportFormat: vi.fn(),
   runExportBundle: vi.fn(),
-  downloadText: vi.fn(),
-  downloadBlob: vi.fn(),
-}));
-
-vi.mock('../api/designIo', async (importOriginal) => ({
-  ...await importOriginal<typeof import('../api/designIo')>(),
-  downloadText: mocks.downloadText,
-  downloadBlob: mocks.downloadBlob,
 }));
 
 vi.mock('../api/results', async (importOriginal) => ({
@@ -31,7 +22,6 @@ vi.mock('../api/results', async (importOriginal) => ({
 }));
 
 vi.mock('../results/exporters', () => ({
-  runExportFormat: mocks.runExportFormat,
   runExportBundle: mocks.runExportBundle,
 }));
 
@@ -100,7 +90,6 @@ describe('RunExportControl', () => {
     publishJobs([]);
     useRunExportStore.getState().resetForTests();
     mocks.fetchJobResults.mockResolvedValue({ frequencies: [1000], spl_on_axis: { spl: [90] } });
-    mocks.runExportFormat.mockResolvedValue(['1_stored_horn_v07.csv']);
     mocks.runExportBundle.mockResolvedValue({ files: ['1_stored_horn_v07.csv'], failures: [] });
     patchMetadata = vi.spyOn(jobsSocket, 'patchMetadata').mockResolvedValue(undefined);
     vi.stubGlobal('fetch', vi.fn());
@@ -252,87 +241,63 @@ describe('RunExportControl', () => {
     );
   });
 
-  it('downloads exactly one on-axis FRD file', async () => {
+  it('dispatches exactly one on-axis FRD file', async () => {
     mocks.fetchJobResults.mockResolvedValue(directivityResult());
+    mocks.runExportBundle.mockResolvedValue({ files: ['1_stored_horn_v07.frd'], failures: [] });
     render();
     openMenu();
     await act(async () => { menuItem('On-axis response').click(); await settle(); });
 
     expect(mocks.fetchJobResults).toHaveBeenCalledOnce();
-    expect(mocks.downloadText).toHaveBeenCalledOnce();
-    expect(mocks.downloadText.mock.calls[0][1]).toBe('1_stored_horn_v07.frd');
+    expect(mocks.runExportBundle).toHaveBeenCalledWith(expect.objectContaining({ result: directivityResult() }), ['on_axis_frd']);
     expect(patchMetadata).toHaveBeenCalledWith('job-export-1', {
       exported_files: ['earlier.csv', '1_stored_horn_v07.frd'],
     });
   });
 
-  it('downloads one on-axis FRD per drive channel', async () => {
-    mocks.fetchJobResults.mockResolvedValue({
+  it('dispatches one on-axis FRD per drive channel', async () => {
+    const wrapped = {
       frequencies: [], channel_order: ['drive-hf', 'drive-mf'],
       channels: { 'drive-hf': directivityResult(), 'drive-mf': directivityResult() },
+    };
+    mocks.fetchJobResults.mockResolvedValue(wrapped);
+    mocks.runExportBundle.mockResolvedValue({
+      files: ['1_stored_horn_v07-drive-hf.frd', '1_stored_horn_v07-drive-mf.frd'], failures: [],
     });
     render();
     openMenu();
     await act(async () => { menuItem('On-axis response').click(); await settle(); });
 
-    expect(mocks.downloadText.mock.calls.map(([, filename]) => filename)).toEqual([
-      '1_stored_horn_v07-drive-hf.frd', '1_stored_horn_v07-drive-mf.frd',
-    ]);
+    expect(mocks.runExportBundle).toHaveBeenCalledWith(expect.objectContaining({ result: wrapped }), ['on_axis_frd']);
+    expect(patchMetadata).toHaveBeenCalledWith('job-export-1', { exported_files: [
+      'earlier.csv', '1_stored_horn_v07-drive-hf.frd', '1_stored_horn_v07-drive-mf.frd',
+    ] });
   });
 
   it('posts the complete polar set to the workspace and reports its count', async () => {
     mocks.fetchJobResults.mockResolvedValue(directivityResult());
-    const fetchMock = vi.mocked(globalThis.fetch);
-    fetchMock.mockImplementation(async (input) => {
-      const path = String(input);
-      if (path === '/api/workspace/path') {
-        return new Response(JSON.stringify({ selected: true, path: '/chosen' }), { status: 200 });
-      }
-      if (path === '/api/workspace/write-export') {
-        return new Response(JSON.stringify({
-          directory: '/chosen/1_stored_horn_v07',
-          files: Array.from({ length: 6 }, (_, index) => `/chosen/1_stored_horn_v07/${index}.frd`),
-        }), { status: 200 });
-      }
-      throw new Error(`Unexpected request: ${path}`);
+    mocks.runExportBundle.mockResolvedValue({
+      files: Array.from({ length: 6 }, (_, index) => `/chosen/1_stored_horn_v07/${index}.frd`), failures: [],
     });
     render(completeJob({ polar_grid: { angle_step: 5 } }));
     openMenu();
     await act(async () => { menuItem('Polar set (VituixCAD)').click(); await settle(); });
 
-    const writeCall = fetchMock.mock.calls.find(([input]) => String(input) === '/api/workspace/write-export');
-    expect(writeCall).toBeDefined();
-    const body = JSON.parse(String(writeCall![1]?.body));
-    expect(body.subdirectory).toBe('1_stored_horn_v07');
-    expect(body.members).toHaveLength(6);
-    expect(body.members.map((member: { relative_path: string }) => member.relative_path)).toEqual([
-      'hor/1_stored_horn_v07 -30.frd', 'hor/1_stored_horn_v07 0.frd', 'hor/1_stored_horn_v07 30.frd',
-      'ver/1_stored_horn_v07 -20.frd', 'ver/1_stored_horn_v07 0.frd', 'ver/1_stored_horn_v07 20.frd',
-    ]);
+    expect(mocks.runExportBundle).toHaveBeenCalledWith(expect.any(Object), ['polar_frd']);
     expect(document.querySelector('[role="status"]')?.textContent).toContain('6 polar FRD files written');
     expect(document.querySelector('[role="status"]')?.textContent).toContain('/chosen/1_stored_horn_v07');
   });
 
   it('asks for a workspace selection and writes nothing when it is cancelled', async () => {
     mocks.fetchJobResults.mockResolvedValue(directivityResult());
-    const fetchMock = vi.mocked(globalThis.fetch);
-    fetchMock.mockImplementation(async (input) => {
-      const path = String(input);
-      if (path === '/api/workspace/path') {
-        return new Response(JSON.stringify({ selected: false, path: '/default' }), { status: 200 });
-      }
-      if (path === '/api/workspace/select') {
-        return new Response(JSON.stringify({ selected: false, path: '/default' }), { status: 200 });
-      }
-      throw new Error(`Unexpected request: ${path}`);
+    mocks.runExportBundle.mockResolvedValue({
+      files: [], failures: [{ format: 'polar_frd', reason: 'Workspace selection was cancelled. No files were written.' }],
     });
     render(completeJob({ polar_grid: { angle_step: 5 } }));
     openMenu();
     await act(async () => { menuItem('Polar set (VituixCAD)').click(); await settle(); });
 
-    expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
-      '/api/workspace/path', '/api/workspace/select',
-    ]);
+    expect(mocks.runExportBundle).toHaveBeenCalledWith(expect.any(Object), ['polar_frd']);
     expect(document.querySelector('[role="alert"]')?.textContent).toContain('cancelled');
     expect(document.querySelector('[role="alert"]')?.textContent).toContain('No files were written');
     expect(patchMetadata).not.toHaveBeenCalled();
@@ -347,43 +312,23 @@ describe('RunExportControl', () => {
     expect(item.textContent).toContain('no directivity data');
   });
 
-  it('calls both canonical render endpoints for Charts', async () => {
+  it('dispatches both canonical chart images as one PNG format', async () => {
     mocks.fetchJobResults.mockResolvedValue(directivityResult());
-    const fetchMock = vi.mocked(globalThis.fetch);
-    fetchMock.mockImplementation(async (input) => {
-      const path = String(input);
-      if (path === '/api/render-directivity') {
-        return new Response(JSON.stringify({ image: 'data:image/png;base64,Ag==' }), { status: 200 });
-      }
-      if (path === '/api/render-charts') {
-        return new Response(JSON.stringify({ charts: { frequency_response: 'data:image/png;base64,AQ==' } }), { status: 200 });
-      }
-      throw new Error(`Unexpected request: ${path}`);
-    });
-    mocks.runExportFormat.mockImplementationOnce(async () => {
-      await fetch('/api/render-charts', { method: 'POST' });
-      return ['1_stored_horn_v07_frequency_response.png'];
+    mocks.runExportBundle.mockResolvedValue({
+      files: ['1_stored_horn_v07_frequency_response.png', '1_stored_horn_v07_directivity_map.png'], failures: [],
     });
     render();
     openMenu();
     await act(async () => { menuItem('Charts').click(); await settle(); });
 
-    expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
-      '/api/render-directivity', '/api/render-charts',
-    ]);
-    expect(mocks.downloadBlob).toHaveBeenCalledOnce();
-    expect(mocks.downloadBlob.mock.calls[0][1]).toBe('1_stored_horn_v07_directivity_map.png');
+    expect(mocks.runExportBundle).toHaveBeenCalledWith(expect.any(Object), ['png']);
     expect(document.querySelector('[role="status"]')?.textContent).toContain('2 files');
   });
 
   it('surfaces polar write failures without claiming success', async () => {
     mocks.fetchJobResults.mockResolvedValue(directivityResult());
-    vi.mocked(globalThis.fetch).mockImplementation(async (input) => {
-      const path = String(input);
-      if (path === '/api/workspace/path') {
-        return new Response(JSON.stringify({ selected: true, path: '/chosen' }), { status: 200 });
-      }
-      return new Response(JSON.stringify({ detail: 'disk is full' }), { status: 507 });
+    mocks.runExportBundle.mockResolvedValue({
+      files: [], failures: [{ format: 'polar_frd', reason: 'disk is full' }],
     });
     render(completeJob({ polar_grid: { angle_step: 5 } }));
     openMenu();

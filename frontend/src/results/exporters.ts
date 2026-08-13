@@ -4,6 +4,7 @@ import { exportStemForJob } from '../jobs/exportNaming';
 import { serializeDesign, type DesignDocument } from '../stores/design';
 import { resolveChartTheme, type ExportFormat, type Preferences } from '../prefs/preferences';
 import { applySmoothing, type SmoothingValue } from './smoothing';
+import { buildOnAxisFrd, buildPolarFrdSet } from './frd';
 import { complexToDb } from './mappers';
 import { resultChannelFileSuffix, resultChannels, scopeResultChannel, type ResultPayload } from './types';
 import { buildVituixCadProjectFiles, buildZma, hasElectricalImpedance } from './vituixcad';
@@ -19,6 +20,7 @@ export interface ExportContext {
   saveBlob?: (blob: Blob, filename: string) => void;
   saveText?: (text: string, filename: string, type?: string) => void;
   now?: Date;
+  destination?: 'manual' | 'workspace';
 }
 
 export interface ExportFailure { format: ExportFormat; reason: string }
@@ -268,19 +270,36 @@ function exportContextBaseName(context: ExportContext): string {
 async function chartPng(context: ExportContext): Promise<string[]> {
   const result = requireResult(context);
   const fetcher = context.fetcher ?? fetch;
+  // Validate both canonical renderer responses before saving the first image.
+  // This keeps PNG a single retryable format rather than leaving half a chart
+  // set behind when the directivity renderer fails.
+  const directivityResponse = await fetcher('/api/render-directivity', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(buildDirectivityRenderPayload(result, context.preferences)),
+  });
+  if (!directivityResponse.ok) throw await responseError(directivityResponse);
+  const directivityBody = await directivityResponse.json() as { image?: string };
+  if (!directivityBody.image) throw new Error('HornLab plots returned no directivity image.');
   const response = await fetcher('/api/render-charts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(buildChartRenderPayload(result, context.preferences)) });
   if (!response.ok) throw await responseError(response);
   const body = await response.json() as { charts?: Record<string, string> };
   const entries = Object.entries(body.charts ?? {});
   if (!entries.length) throw new Error('Chart renderer returned no images.');
   const baseName = exportContextBaseName(context);
-  return entries.map(([chart, data]) => {
+  const files = entries.map(([chart, data]) => {
     const encoded = data.includes(',') ? data.slice(data.indexOf(',') + 1) : data;
     const bytes = Uint8Array.from(atob(encoded), (character) => character.charCodeAt(0));
     const filename = `${baseName}_${chart}.png`;
     (context.saveBlob ?? downloadBlob)(new Blob([bytes], { type: 'image/png' }), filename);
     return filename;
   });
+  const directivityFilename = `${baseName}_directivity_map.png`;
+  const directivityEncoded = directivityBody.image.includes(',')
+    ? directivityBody.image.slice(directivityBody.image.indexOf(',') + 1)
+    : directivityBody.image;
+  const directivityBytes = Uint8Array.from(atob(directivityEncoded), (character) => character.charCodeAt(0));
+  (context.saveBlob ?? downloadBlob)(new Blob([directivityBytes], { type: 'image/png' }), directivityFilename);
+  return [...files, directivityFilename];
 }
 
 export interface ChartReference {
@@ -335,6 +354,54 @@ export function buildChartRenderPayload(
   };
 }
 
+export function buildDirectivityRenderPayload(
+  result: ResultPayload,
+  preferences: Preferences,
+  plane?: string,
+  reference?: ChartReference,
+): Record<string, unknown> {
+  const directivityFor = (source: ResultPayload): Record<string, unknown> => {
+    if (!plane) return source.directivity ?? {};
+    const patterns = (source.directivity as Record<string, unknown> | undefined)?.[plane];
+    return patterns ? { [plane]: patterns } : {};
+  };
+  return {
+    frequencies: result.frequencies,
+    directivity: directivityFor(result),
+    reference_frequencies: reference?.result.frequencies ?? null,
+    reference_directivity: reference ? directivityFor(reference.result) : null,
+    reference_label: reference?.label ?? null,
+    reference_level: preferences.mapReference,
+    theme: resolveChartTheme(preferences.chartTheme),
+  };
+}
+
+async function writeManualPolarFrd(
+  context: ExportContext,
+  files: ReturnType<typeof buildPolarFrdSet>,
+): Promise<string[]> {
+  const fetcher = context.fetcher ?? fetch;
+  const pathResponse = await fetcher('/api/workspace/path');
+  if (!pathResponse.ok) throw await responseError(pathResponse);
+  let workspace = await pathResponse.json() as { selected?: boolean };
+  if (!workspace.selected) {
+    const selectResponse = await fetcher('/api/workspace/select', { method: 'POST' });
+    if (!selectResponse.ok) throw await responseError(selectResponse);
+    workspace = await selectResponse.json() as { selected?: boolean };
+    if (!workspace.selected) throw new Error('Workspace selection was cancelled. No files were written.');
+  }
+  const response = await fetcher('/api/workspace/write-export', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      subdirectory: context.jobStem,
+      members: files.map(({ filename, text }) => ({ relative_path: filename, text })),
+    }),
+  });
+  if (!response.ok) throw await responseError(response);
+  return ((await response.json()) as WorkspaceWriteResponse).files;
+}
+
 export async function runExportFormat(format: ExportFormat, context: ExportContext): Promise<string[]> {
   const baseName = exportContextBaseName(context);
   const saveText = context.saveText ?? downloadText;
@@ -363,6 +430,26 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
     return outputs.map((output) => output.filename);
   }
   if (format === 'png') return chartPng(context);
+  if (format === 'on_axis_frd') {
+    const result = requireResult(context);
+    const filename = `${baseName}.frd`;
+    saveText(buildOnAxisFrd(result, context.preferences), filename, 'text/plain;charset=utf-8');
+    return [filename];
+  }
+  if (format === 'polar_frd') {
+    if (!context.result) throw new Error('This export requires completed result data.');
+    const channels = resultChannels(context.result);
+    const channelIds = context.channelId
+      ? [context.channelId]
+      : channels.length > 1 ? channels.map(({ id }) => id) : [undefined];
+    const files = channelIds.flatMap((channelId) => (
+      buildPolarFrdSet(context.result!, context.preferences, context.jobStem, channelId)
+    ));
+    if (!files.length) throw new Error('This run has no directivity data for a polar FRD set.');
+    if (context.destination !== 'workspace') return writeManualPolarFrd(context, files);
+    files.forEach(({ text, filename }) => saveText(text, filename, 'text/plain;charset=utf-8'));
+    return files.map(({ filename }) => filename);
+  }
   if (format === 'vxp') {
     if (!context.result) throw new Error('This export requires completed result data.');
     // Build every member before saving the first. A malformed project must not
@@ -372,7 +459,7 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
     return files.map(({ filename }) => filename);
   }
   const result = requireResult(context);
-  const builders: Record<Exclude<ExportFormat, 'mwg_config' | 'step' | 'stl' | 'fusion_csv' | 'png' | 'vxp'>, () => [string, string, string]> = {
+  const builders: Record<Exclude<ExportFormat, 'mwg_config' | 'step' | 'stl' | 'fusion_csv' | 'png' | 'on_axis_frd' | 'polar_frd' | 'vxp'>, () => [string, string, string]> = {
     csv: () => [buildFrequencyCsv(result, context.preferences), `${baseName}.csv`, 'text/csv;charset=utf-8'],
     json: () => [buildFullResultsJson(result, context.preferences, now), `${baseName}.json`, 'application/json;charset=utf-8'],
     txt: () => [buildSummaryText(result, context.preferences, now), `${baseName}_summary.txt`, 'text/plain;charset=utf-8'],
@@ -392,7 +479,9 @@ export async function runExportBundle(context: ExportContext, formats = context.
   const emitted = new Set<string>();
   const saveBlob = context.saveBlob ?? downloadBlob;
   const saveText = context.saveText ?? downloadText;
-  const resultFormats = new Set<ExportFormat>(['png', 'csv', 'json', 'txt', 'polar_csv', 'impedance_csv', 'zma', 'vacs']);
+  // Polar FRD owns every channel as one set so its manual Workspace write stays
+  // one request. The other result formats dispatch independently per channel.
+  const resultFormats = new Set<ExportFormat>(['png', 'on_axis_frd', 'csv', 'json', 'txt', 'polar_csv', 'impedance_csv', 'zma', 'vacs']);
   for (const format of formats) {
     const allChannels = context.result && !context.channelId && resultFormats.has(format)
       ? resultChannels(context.result) : [];
@@ -442,6 +531,7 @@ export async function runWorkspaceExportBundle(
   const prepared = new Map<string, WorkspaceFile>();
   const bundle = await runExportBundle({
     ...context,
+    destination: 'workspace',
     // VXP is a self-contained bundle and can share a ZMA dependency with an
     // explicitly selected ZMA format. Stage by relative name so automatic
     // export sends one backend member instead of a duplicate-path request.
