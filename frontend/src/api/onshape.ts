@@ -1,6 +1,7 @@
 import { serializeDesign, type DesignDocument } from '../stores/design';
 import type { DesignIdentity } from '../stores/document';
 import type { WgLinkExportResponse } from './designIo';
+import type { CadReturnIngestRecord } from './cadlink';
 
 export type OnshapeState = 'not_configured' | 'not_linked' | 'current' | 'stale';
 
@@ -58,6 +59,18 @@ export interface OnshapeSendResult extends WgLinkExportResponse {
     partNames: string[];
     accountId: string;
   };
+}
+
+export interface OnshapeReturnResult {
+  translationId: string;
+  bundle: {
+    name: string;
+    bundlePath: string;
+    documentName: string | null;
+    sourceCount: number;
+    instanceCount: number;
+  };
+  ingest: CadReturnIngestRecord;
 }
 
 /** Raised when Onshape can only create world-readable documents and the user
@@ -140,4 +153,17 @@ export async function unlinkOnshapeDocument(
   });
   if (!response.ok) throw new Error(await errorMessage(response));
   return response.json() as Promise<{ unlinked: boolean }>;
+}
+
+export async function returnOnshapeToWg(
+  designId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<OnshapeReturnResult> {
+  const response = await fetcher('/api/cadlink/onshape/return', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ designId }),
+  });
+  if (!response.ok) throw new Error(await errorMessage(response));
+  return response.json() as Promise<OnshapeReturnResult>;
 }

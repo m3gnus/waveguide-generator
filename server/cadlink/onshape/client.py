@@ -25,6 +25,7 @@ import logging
 import secrets
 from typing import Any, Callable, Mapping, Protocol, Sequence
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from .credentials import OnshapeCredentials
@@ -310,6 +311,104 @@ class OnshapeClient:
             except ValueError:
                 parsed = text
         return OnshapeResponse(status=status, body=parsed, headers=response_headers)
+
+    def request_bytes(
+        self,
+        method: str,
+        path: str,
+        *,
+        body: bytes | None = None,
+        content_type: str | None = None,
+        timeout: float | None = None,
+        expected: Sequence[int] = (200,),
+        accept: str = "application/octet-stream",
+        max_redirects: int = 3,
+    ) -> OnshapeResponse:
+        """Issue a binary request and follow redirects without leaking auth.
+
+        Onshape's download endpoints may redirect to an attachment host.  The
+        API key is retained only for redirects that stay on the configured API
+        origin; an HTTPS cross-origin attachment is fetched without it.  HTTP,
+        user-info URLs, fragments, and redirect loops are refused.
+        """
+
+        if max_redirects < 0:
+            raise ValueError("max_redirects must be non-negative")
+        initial = (
+            f"{self.base_url.rstrip('/')}{path}"
+            if path.startswith("/")
+            else urllib.parse.urljoin(self.base_url.rstrip("/") + "/", path)
+        )
+        api_origin = urllib.parse.urlsplit(self.base_url)
+        current = initial
+        redirects = 0
+        while True:
+            target = urllib.parse.urlsplit(current)
+            if target.scheme != "https" or target.username or target.password or target.fragment:
+                raise OnshapeTransportError(
+                    "Onshape returned an unsafe download URL; only HTTPS URLs "
+                    "without credentials or fragments are accepted."
+                )
+            same_origin = (
+                target.scheme.casefold(), target.hostname, target.port
+            ) == (
+                api_origin.scheme.casefold(), api_origin.hostname, api_origin.port
+            )
+            headers = {"Accept": accept}
+            if same_origin:
+                headers["Authorization"] = self._authorization
+            if content_type is not None:
+                headers["Content-Type"] = content_type
+            try:
+                status, response_headers, raw = self._transport(
+                    method, current, headers, body, timeout or self._timeout
+                )
+            except OnshapeError:
+                raise
+            except Exception as exc:
+                raise OnshapeTransportError(
+                    f"Could not retrieve Onshape download ({method} {path}): {exc}."
+                ) from exc
+
+            response_headers = {str(key).lower(): str(value) for key, value in response_headers.items()}
+            remaining = response_headers.get("x-rate-limit-remaining")
+            if remaining is not None:
+                try:
+                    self.last_rate_limit_remaining = int(remaining)
+                except ValueError:
+                    self.last_rate_limit_remaining = None
+            if 300 <= status < 400:
+                if redirects >= max_redirects:
+                    raise OnshapeHttpError(
+                        status,
+                        "Onshape download exceeded the redirect limit.",
+                        method=method,
+                        path=path,
+                    )
+                location = response_headers.get("location")
+                if not location:
+                    raise OnshapeHttpError(
+                        status,
+                        "Onshape download redirected without a Location header.",
+                        method=method,
+                        path=path,
+                    )
+                current = urllib.parse.urljoin(current, location)
+                method = "GET"
+                body = None
+                content_type = None
+                redirects += 1
+                continue
+            if status not in expected:
+                text = raw.decode("utf-8", errors="replace")[:_MAX_ERROR_BODY]
+                raise OnshapeHttpError(
+                    status,
+                    _describe(status, path, text),
+                    method=method,
+                    path=path,
+                    body=text,
+                )
+            return OnshapeResponse(status=status, body=raw, headers=response_headers)
 
     def get(self, path: str, **kwargs: Any) -> OnshapeResponse:
         return self.request("GET", path, **kwargs)

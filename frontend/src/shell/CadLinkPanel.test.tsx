@@ -247,10 +247,59 @@ describe('CadLinkPanel', () => {
     expect(calls.some((path) => path.includes('/returns'))).toBe(false);
   });
 
-  it('does not offer the Fusion return workflow under Onshape', async () => {
+  it('does not offer the Fusion workspace-folder return workflow under Onshape', async () => {
     await renderOnshape(onshapeStatus());
-    expect(host.textContent).toContain('Not available for Onshape yet');
+    expect(host.textContent).toContain('No linked Onshape Part Studio');
     expect(host.querySelector('.cad-bundle-list')).toBeNull();
+  });
+
+  it('returns a linked Onshape Part Studio, selects its ingest, and shows findings', async () => {
+    useDocumentStore.setState({
+      identity: { designId: 'wgd_a', lineageId: 'wgl_a', baseEditVersion: 2 },
+    });
+    const link = {
+      designId: 'wgd_a', accountId: 'ACC', documentId: 'DID', workspaceId: 'WID',
+      documentName: 'Tritonia', documentUrl: 'https://cad.onshape.com/documents/DID/w/WID',
+      isPublic: true, partStudioElementId: 'PART', variableStudioElementId: 'VARS',
+      lastSequence: 2, updatedAt: '2026-08-13T09:00:00Z',
+    };
+    preferencesStore.update({ cadApplication: 'onshape' });
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.startsWith('/api/cadlink/onshape/connection')) return json({
+        configured: true, reachable: true, credentialsPath: '/x/onshape.env', detail: null,
+        insecureKeyFile: false, account: { id: 'ACC', name: 'Owner' },
+        plan: { name: 'Professional', group: 'Professional', publicOnly: false },
+      });
+      if (path.endsWith('/onshape/status')) return json(onshapeStatus({ state: 'current', link }));
+      if (path.endsWith('/onshape/return')) return json({
+        translationId: 'TID',
+        bundle: {
+          name: 'wgr_demo.wgreturn', bundlePath: '/data/cadlink/onshape/wgreturn/wgr_demo.wgreturn',
+          documentName: 'Tritonia', sourceCount: 1, instanceCount: 1,
+        },
+        ingest: { ...record, created_at: '2026-08-13T10:00:00Z' },
+      });
+      if (path.endsWith('/viewport-mesh') || path.endsWith('/mesh')) {
+        return new Response(meshFixture, { status: 200 });
+      }
+      return json({}, 404);
+    }));
+    await act(async () => {
+      root.render(<CadLinkTestSurface/>);
+      await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    });
+    const button = [...host.querySelectorAll<HTMLButtonElement>('button')]
+      .find((candidate) => candidate.textContent === 'Bring Onshape geometry into WG')!;
+    await act(async () => {
+      button.click();
+      await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    });
+
+    expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe(record.ingest_id);
+    expect(useCadReturnStore.getState().selectedBundle?.documentName).toBe('Tritonia');
+    expect(host.querySelector('.cad-status-strip')?.textContent).toContain('Returned and ingested Tritonia');
+    expect(host.querySelector('.cad-findings')?.textContent).toContain('freshness');
   });
 
   it('asks for confirmation before creating a world-readable document, then sends', async () => {

@@ -171,6 +171,32 @@ def test_client_refuses_to_follow_a_redirect() -> None:
         client.get("/users/sessioninfo")
 
 
+def test_binary_download_follows_cross_origin_redirect_without_authorization() -> None:
+    calls: list[tuple[str, Mapping[str, str]]] = []
+
+    def redirecting(method, url, headers, body, timeout):
+        calls.append((url, dict(headers)))
+        if len(calls) == 1:
+            return 307, {"location": "https://attachments.onshapeusercontent.com/file.step"}, b""
+        return 200, {"content-type": "application/step"}, b"ISO-10303-21;"
+
+    client = OnshapeClient(_credentials(), transport=redirecting)
+    response = client.request_bytes("GET", "/documents/d/D/externaldata/F")
+
+    assert response.body == b"ISO-10303-21;"
+    assert "Authorization" in calls[0][1]
+    assert "Authorization" not in calls[1][1]
+
+
+def test_binary_download_refuses_plaintext_redirect() -> None:
+    def redirecting(method, url, headers, body, timeout):
+        return 307, {"location": "http://attachments.example/file.step"}, b""
+
+    client = OnshapeClient(_credentials(), transport=redirecting)
+    with pytest.raises(OnshapeTransportError, match="unsafe download URL"):
+        client.request_bytes("GET", "/documents/d/D/externaldata/F")
+
+
 def test_client_maps_an_unauthorised_reply_to_actionable_text() -> None:
     transport = FakeTransport([(401, {"message": "Not authorized"})])
     client = OnshapeClient(_credentials(), transport=transport)
@@ -376,6 +402,41 @@ def test_upload_targets_the_element_endpoint_when_updating() -> None:
     adapter.upload_step("DID", "WID", b"step", filename="horn.step", blob_element_id="BLOB")
     assert transport.calls[-1]["path"] == "/blobelements/d/DID/w/WID/e/BLOB"
     assert transport.calls[-1]["headers"]["Content-Type"].startswith("multipart/form-data")
+
+
+def test_step_export_success_polls_and_downloads_exact_bytes() -> None:
+    transport = FakeTransport()
+    transport.route("POST", "/partstudios", 200, {"id": "EXPORT-TID", "requestState": "ACTIVE"})
+    transport.route(
+        "GET",
+        "/translations/EXPORT-TID",
+        200,
+        {"requestState": "DONE", "resultExternalDataIds": ["FOREIGN"]},
+    )
+    transport.route("GET", "/documents/d/DID/externaldata/FOREIGN", 200, b"ISO-10303-21;")
+    adapter = _adapter(transport)
+
+    translation_id = adapter.create_step_export("DID", "WID", "PART")
+    _result, foreign_id = adapter.await_step_export(translation_id)
+    payload = adapter.download_external_data("DID", foreign_id)
+
+    assert payload == b"ISO-10303-21;"
+    request = json.loads(transport.calls[0]["body"])
+    assert request == {"formatName": "STEP", "storeInDocument": False, "translate": True}
+
+
+def test_step_export_refuses_null_result_and_failed_translation() -> None:
+    null_transport = FakeTransport([
+        (200, {"requestState": "DONE", "resultExternalDataIds": None}),
+    ])
+    with pytest.raises(OnshapeTranslationFailed, match="exactly one"):
+        _adapter(null_transport).await_step_export("TID")
+
+    failed_transport = FakeTransport([
+        (200, {"requestState": "FAILED", "failureReason": "regeneration failed"}),
+    ])
+    with pytest.raises(OnshapeTranslationFailed, match="regeneration failed"):
+        _adapter(failed_transport).await_step_export("TID")
 
 
 # -- bundle round trip -----------------------------------------------------

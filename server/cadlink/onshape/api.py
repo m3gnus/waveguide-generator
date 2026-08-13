@@ -14,6 +14,7 @@ authenticates as and where the file lives, never the pair itself.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from pathlib import Path
 import time
@@ -23,6 +24,7 @@ from fastapi import APIRouter, FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from server.cadlink.identity import SaveIdentity, design_hash
+from server.cadlink.ingest import IngestRefusal
 from server.cadlink.store import CadLinkStore
 from server.design.schema import DesignConfig
 from server.mesh.gmsh_worker import run_on_gmsh_worker
@@ -40,6 +42,11 @@ from .credentials import (
     credentials_path,
     file_is_world_readable,
     load_credentials,
+)
+from .return_leg import (
+    OnshapeReturnError,
+    source_contract_from_export,
+    write_and_ingest_return,
 )
 
 
@@ -84,6 +91,12 @@ class OnshapeUnlinkRequest(BaseModel):
     design_id: str = Field(alias="designId", min_length=1, max_length=120)
 
 
+class OnshapeReturnRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    design_id: str = Field(alias="designId", min_length=1, max_length=120)
+
+
 def _client(request: Request) -> OnshapeClient:
     try:
         credentials = load_credentials()
@@ -106,6 +119,10 @@ def _onshape_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=502, detail=str(exc))
     if isinstance(exc, OnshapeAdapterError):
         return HTTPException(status_code=502, detail=str(exc))
+    if isinstance(exc, IngestRefusal):
+        return HTTPException(status_code=409 if exc.corruption else 422, detail=str(exc))
+    if isinstance(exc, OnshapeReturnError):
+        return HTTPException(status_code=422, detail=str(exc))
     if isinstance(exc, OnshapeError):
         return HTTPException(status_code=504, detail=str(exc))
     return exc if isinstance(exc, HTTPException) else HTTPException(
@@ -448,6 +465,92 @@ async def unlink(payload: OnshapeUnlinkRequest, request: Request) -> dict[str, A
         store.delete_onshape_link, payload.design_id, str(row.get("account_id") or "")
     )
     return {"unlinked": removed}
+
+
+@router.post("/return")
+async def return_to_wg(
+    payload: OnshapeReturnRequest, request: Request
+) -> dict[str, Any]:
+    """Export the linked Part Studio, create wgreturn 1.1, and ingest it."""
+
+    store: CadLinkStore = request.app.state.cadlink_store
+    client = _client(request)
+    try:
+        # This is an explicit user action, not status polling. Resolve the
+        # authenticated account so a key switch cannot export another link's
+        # document by accident.
+        session = await asyncio.to_thread(client.session_info)
+        account_id = str(session.get("id") or "")
+        if not account_id:
+            raise OnshapeAdapterError(
+                "Onshape did not identify the authenticated account."
+            )
+        link = await asyncio.to_thread(
+            store.get_onshape_link, payload.design_id, account_id
+        )
+        if link is None:
+            raise OnshapeAdapterError(
+                "This design is not linked to an Onshape document for the authenticated account."
+            )
+        part_studio_id = str(link.get("part_studio_element_id") or "")
+        if not part_studio_id:
+            raise OnshapeReturnError(
+                "The stored Onshape link has no Part Studio identity. Send the design to Onshape again."
+            )
+        export_id = str(link.get("last_export_id") or "")
+        export_row = await asyncio.to_thread(store.get_export, export_id) if export_id else None
+        if export_row is None:
+            raise OnshapeReturnError(
+                "The exact outbound bundle that created this Onshape link is no longer in the CAD registry. "
+                "WG will not invent its source or identity evidence; send the design to Onshape again."
+            )
+        try:
+            outbound_manifest = json.loads(str(export_row["manifest_json"]))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise OnshapeReturnError(
+                "The linked export's stored manifest is unreadable."
+            ) from exc
+        if not isinstance(outbound_manifest, dict):
+            raise OnshapeReturnError(
+                "The linked export's stored manifest is not an object."
+            )
+        # Refuse missing WG-authored source policy before creating a paid,
+        # rate-limited translation job. This check is registry-only.
+        source_contract_from_export(outbound_manifest)
+        adapter = OnshapeAdapter(client)
+        translation_id = await asyncio.to_thread(
+            adapter.create_step_export,
+            str(link["document_id"]),
+            str(link["workspace_id"]),
+            part_studio_id,
+        )
+        _translation, foreign_id = await asyncio.to_thread(
+            adapter.await_step_export, translation_id
+        )
+        step_bytes = await asyncio.to_thread(
+            adapter.download_external_data, str(link["document_id"]), foreign_id
+        )
+        bundle_path, record = await run_on_gmsh_worker(
+            write_and_ingest_return,
+            step_bytes,
+            link=link,
+            export_row=export_row,
+            store=store,
+            data_dir=Path(request.app.state.data_dir),
+        )
+    except Exception as exc:
+        raise _onshape_error(exc) from exc
+    return {
+        "translationId": translation_id,
+        "bundle": {
+            "name": bundle_path.name,
+            "bundlePath": str(bundle_path),
+            "documentName": link.get("document_name"),
+            "sourceCount": 1,
+            "instanceCount": 1,
+        },
+        "ingest": record,
+    }
 
 
 def mount_onshape(application: FastAPI) -> None:

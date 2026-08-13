@@ -355,10 +355,21 @@ export function CadLinkPanel() {
     </section>
     {onshape && <section className="cad-workflow cad-return-workflow">
       <header className="cad-workflow-header"><span className="cad-step">2</span><div><h3>CAD → SIMULATION</h3><p>Bring CAD geometry and source tags into WG.</p></div></header>
-      <div className="cad-connection cad-connection-not-configured">
-        <span className="cad-connection-dot" aria-hidden="true"/>
-        <div><h3>Not available for Onshape yet</h3><p>The return leg — exporting tagged CAD geometry back into WG for simulation — is built for Fusion 360 only. Sending a waveguide to Onshape is the leg that works today.</p></div>
-      </div>
+      {linkedDocument ? <div className="cad-return-quick-action">
+        <div><b>{linkedDocument.documentName}</b><span>Export the current linked Part Studio to STEP, verify its source evidence, and prepare it for the viewport and solver.</span></div>
+        <button className="primary" disabled={ingesting} onClick={() => { void cadCoordinator.returnFromOnshape().catch(() => undefined); }}>{ingesting ? 'Returning & preparing…' : 'Bring Onshape geometry into WG'}</button>
+      </div> : <div className="empty-state"><b>No linked Onshape Part Studio</b><span>Send this WG design to Onshape first, then return its current geometry here.</span></div>}
+      {state.ingestStaleReason && <div className="cad-alert" role="status">{state.ingestStaleReason} Return the current Onshape geometry again before solving.</div>}
+      {viewportNotice && <div className="cad-alert" role="status">{viewportNotice}</div>}
+      {state.selectedBundle?.readable && state.ingestRecord && <>
+        <RecordSummary record={state.ingestRecord}/>
+        <section className="cad-section cad-findings">
+          <header><h3>Findings</h3>{blockingFindings(state.ingestRecord).length > 1 && <button onClick={state.acknowledgeAllBlocking}>Acknowledge all {blockingFindings(state.ingestRecord).length}</button>}</header>
+          {state.ingestRecord.findings.length === 0 ? <p>No findings. This ingestion needs no acknowledgements.</p> : state.ingestRecord.findings.map((finding) => <label key={finding.id} className={finding.blocking ? 'blocking' : ''}>
+            {finding.blocking && <input type="checkbox" checked={state.acknowledgedFindingIds.includes(finding.id)} onChange={(event) => state.acknowledge(finding.id, event.target.checked)}/>}<span><b>{finding.kind.replaceAll('-', ' ')}</b><small>{findingDetail(finding)}</small></span>
+          </label>)}
+        </section>
+      </>}
     </section>}
     {!onshape && <section className="cad-workflow cad-return-workflow">
     <header className="cad-workflow-header"><span className="cad-step">2</span><div><h3>CAD → SIMULATION</h3><p>Bring Fusion geometry and source tags into WG.</p></div><button disabled={loading || ingesting} onClick={() => void cadCoordinator.refresh()}><Icon name="reset"/>{loading ? 'Loading…' : 'Refresh'}</button></header>
