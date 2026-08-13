@@ -714,6 +714,10 @@ def _radiation_matrix_npz(
             )
         ),
         in_phase_termination_load=in_phase_load,
+        # Which apertures the in-phase reduction ran over. Without it the load
+        # is an unlabelled column per port and the reduction's membership is
+        # unrecoverable from the artifact.
+        in_phase_aperture_names=np.asarray(port_names),
         reciprocity_max_rel=diagnostics.reciprocity_max_rel,
         passivity_min_eig=diagnostics.passivity_min_eig,
         passivity_ok=diagnostics.passivity_ok,

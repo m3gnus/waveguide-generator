@@ -248,12 +248,16 @@ def test_passive_cardioid_campaign_reconciles_grid_and_writes_face_identity(
             "solver_impedance_matrix",
             "engineering_impedance_matrix",
             "in_phase_termination_load",
+            "in_phase_aperture_names",
             "reciprocity_max_rel",
             "passivity_min_eig",
             "passivity_ok",
         }
         assert data["aperture_names"].tolist() == ["PORT_EXIT", "MF"]
         assert data["aperture_tag"].tolist() == [10, 101]
+        # The in-phase reduction covers the ports only; MF contributes mutual
+        # columns to the matrix but is not part of the port-only load.
+        assert data["in_phase_aperture_names"].tolist() == ["PORT_EXIT"]
 def test_legacy_top_level_parametric_wire_is_accepted_through_http_api() -> None:
     class CapturingRuntime:
         def __init__(self) -> None:
