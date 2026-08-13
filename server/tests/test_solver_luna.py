@@ -19,7 +19,7 @@ from server.solver import bempp, circsym, metal
 from server.solver.acoustics import solver_sound_speed_m_per_s
 from server.solver.beam_shape import beam_shape_summary
 from server.solver.context import SolverContext
-from server.solver.directivity_index import calculate_di_from_polar_patterns
+from server.solver.directivity_index import calculate_di_from_spherical_grid
 from server.solver.result_mapping import (
     REFERENCE_RHO_C,
     build_solver_response,
@@ -309,11 +309,10 @@ def test_log_domain_spl_and_di_stay_finite_for_huge_finite_inputs() -> None:
     result = _native_result()
     result.pressure_complex[:] = complex(1.0e308, 0.0)
     assert all(np.isfinite(spl_on_axis(result)))
-    di = calculate_di_from_polar_patterns(
-        {
-            "horizontal": [[[0.0, 1.0e308], [90.0, 1.0e308], [180.0, 1.0e308]]],
-            "vertical": [[[0.0, 1.0e308], [90.0, 1.0e308], [180.0, 1.0e308]]],
-        }
+    di = calculate_di_from_spherical_grid(
+        [0.0, 90.0, 180.0],
+        [0.0, 120.0, 240.0],
+        np.full((1, 3, 3), 1.0e308),
     )
     assert di[0] == pytest.approx(0.0)
     assert np.isfinite(di[0])

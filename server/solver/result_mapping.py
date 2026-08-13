@@ -22,11 +22,7 @@ from .acoustics import reference_air_density_kg_per_m3, reference_sound_speed_m_
 from .beam_shape import beam_shape_summary
 from .context import SolverContext
 from .contract import build_directivity_metadata, frequency_failure
-from .directivity_index import (
-    calculate_di_from_polar_patterns,
-    calculate_plane_di_from_polar_patterns,
-    calculate_di_from_spherical_grid,
-)
+from .directivity_index import calculate_di_from_spherical_grid
 from .quadrants import native_symmetry_plane_for_quadrants
 
 
@@ -351,7 +347,7 @@ def observation_config(
     msh_text: str | None = None,
     aperture_tag: int | None = None,
 ) -> Any:
-    """Build native observation config with the v1 sphere-feature fallback."""
+    """Build native observation config, requesting a DI sphere when supported."""
 
     if observation_config_cls is None:
         raise unavailable_error(f"{package_name} is not installed.")
@@ -405,12 +401,15 @@ def observation_config(
             msh_text,
             aperture_tag=aperture_tag,
         )
-    if polar.get("spherical_sampling"):
+    # DI is a spherical quantity, so its field grid is part of every solve and
+    # is independent of the H/V/D display cuts. ``spherical_sampling`` only
+    # controls whether the full grid is retained for the 3D balloon result.
+    if supports("sphere_grid"):
         kwargs["sphere_grid"] = (
             int(polar.get("spherical_theta_count") or 37),
             int(polar.get("spherical_phi_count") or 72),
         )
-        if context.sim_type == 1:
+        if context.sim_type == 1 and supports("sphere_theta_max_deg"):
             kwargs["sphere_theta_max_deg"] = 90.0
     try:
         return observation_config_cls(**kwargs)
@@ -750,25 +749,9 @@ def build_solver_response(
             hemisphere=bool(balloon["hemisphere"]),
         )
         di_method = "spherical_grid"
-        di_planes: list[str] = []
     else:
-        di_values = calculate_di_from_polar_patterns(
-            patterns,
-            hemisphere=context.sim_type == 1,
-        )
-        di_method = "horizontal_vertical_orbit_approximation"
-        di_planes = [plane for plane in ("horizontal", "vertical") if plane in patterns]
-    di_payload: list[float | None] | dict[str, list[float | None]] = di_values
-    if not any(value is not None for value in di_values):
-        plane_di = calculate_plane_di_from_polar_patterns(patterns)
-        if any(value is not None for values in plane_di.values() for value in values):
-            di_payload = plane_di
-            di_method = "per_plane_axisymmetric_approximation"
-            di_planes = [
-                plane
-                for plane, values in plane_di.items()
-                if any(value is not None for value in values)
-            ]
+        di_values = [None] * len(frequency_values)
+        di_method = "unavailable"
     # This is strictly a level/display normalization. Raw wrapped phase is an
     # independent payload and must never pass through this mutating function.
     _renormalize_directivity(
@@ -820,40 +803,15 @@ def build_solver_response(
         },
         observation,
     )
-    angle_start, angle_end, _angle_count = context.polar_config.get(
-        "angle_range", (0.0, 180.0, 37)
-    )
-    polar_limit = 90.0 if context.sim_type == 1 else 180.0
-    measured_both_orbit_sides = (
-        float(angle_start) <= -polar_limit and float(angle_end) >= polar_limit
-    ) or float(angle_end) - float(angle_start) >= 2.0 * polar_limit
-    orbit_side_method = (
-        "not_applicable"
-        if di_method in {"spherical_grid", "per_plane_axisymmetric_approximation"}
-        else "measured" if measured_both_orbit_sides else "mirrored"
-    )
-    plane_approximation = di_method == "per_plane_axisymmetric_approximation"
     metadata["directivity_index"] = {
-        "available": (
-            any(value is not None for values in di_payload.values() for value in values)
-            if isinstance(di_payload, dict)
-            else any(value is not None for value in di_payload)
-        ),
-        "definition": (
-            "10log10(2 / integral(relative mean-square pressure * sin(theta) dtheta))"
-            if plane_approximation
-            else "10log10(reference-axis mean-square pressure / full-sphere mean-square pressure)"
-        ),
+        "available": any(value is not None for value in di_values),
+        "definition": "10log10(reference-axis mean-square pressure / full-sphere mean-square pressure)",
         "method": di_method,
-        "domain": "per_plane_axisymmetric_approximation" if plane_approximation else "full_sphere",
+        "domain": "full_sphere",
         "power_average": "linear_mean_square_pressure",
-        "planes_used": di_planes,
-        "opposing_orbit_sides": orbit_side_method,
-        "rear_hemisphere": (
-            "implicit_in_plane_integral"
-            if plane_approximation
-            else "zero_radiation" if context.sim_type == 1 else "sampled"
-        ),
+        "planes_used": [],
+        "opposing_orbit_sides": "not_applicable",
+        "rear_hemisphere": "zero_radiation" if context.sim_type == 1 else "sampled",
     }
     metadata.update(
         {
@@ -893,20 +851,21 @@ def build_solver_response(
         },
         "di": {
             "frequencies": frequency_values,
-            "di": di_payload,
+            "di": di_values,
         },
         "metadata": metadata,
     }
 
     requested = bool(context.polar_config.get("spherical_sampling"))
-    configured = getattr(config.observation, "sphere_grid", None) is not None
+    configured = requested and getattr(config.observation, "sphere_grid", None) is not None
+    balloon_available = requested and balloon is not None
     metadata["balloon_sampling"] = {
         "requested": requested,
         "configured": configured,
-        "available": balloon is not None,
+        "available": balloon_available,
         "status": (
             "available"
-            if balloon is not None
+            if balloon_available
             else "backend_unsupported"
             if requested and not configured
             else "missing_result"
@@ -914,7 +873,8 @@ def build_solver_response(
             else "disabled"
         ),
     }
-    if balloon is not None:
+    if balloon_available:
+        assert balloon is not None
         response["balloon"] = {
             "frequencies": frequency_values,
             "theta_deg": [round(float(value), 3) for value in balloon["theta_deg"]],

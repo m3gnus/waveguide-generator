@@ -118,6 +118,9 @@ def test_golden_units_phase_nulls_impedance_di_and_partial_warning() -> None:
     assert response["metadata"]["phase_quantity"] == "raw_wrapped_pressure_phase"
     assert response["metadata"]["impedance_drive"] == "unit_acceleration"
     assert response["metadata"]["balloon_sampling"]["status"] == "disabled"
+    assert response["di"]["di"] == [None, None]
+    assert response["metadata"]["directivity_index"]["method"] == "unavailable"
+    assert response["metadata"]["directivity_index"]["planes_used"] == []
     assert response["metadata"]["directivity"]["effective_distance_m"] == 2.0
     assert response["metadata"]["directivity"]["sound_speed_m_per_s"] == pytest.approx(
         SOUND_SPEED_M_PER_S
@@ -187,8 +190,8 @@ def test_streamed_bempp_directivity_is_live_when_pressure_is_unavailable() -> No
     assert response["metadata"]["provisional"]["completed_frequency_count"] == 2
 
 
-def test_combined_di_keeps_the_native_on_axis_reference_when_display_norm_changes() -> None:
-    """The polar display reference must not change the integrated full DI."""
+def test_polar_display_data_cannot_create_or_change_di_without_a_sphere() -> None:
+    """H/V display cuts never substitute for a complete spherical field."""
 
     angles = np.linspace(0.0, 180.0, 181)
     levels = -6.0 * np.square(angles / 30.0)
@@ -229,16 +232,44 @@ def test_combined_di_keeps_the_native_on_axis_reference_when_display_norm_change
     assert ten_degree["directivity_phase"]["horizontal"][0][10][1] == pytest.approx(
         np.angle(result.pressure_complex[0, 0, 10], deg=True)
     )
-    assert ten_degree["di"]["di"] == pytest.approx(
-        [13.186937494670495, 13.186937494670495]
-    )
-    assert ten_degree["metadata"]["directivity_index"]["method"] == (
-        "horizontal_vertical_orbit_approximation"
-    )
-    assert ten_degree["metadata"]["directivity_index"]["opposing_orbit_sides"] == "mirrored"
+    assert ten_degree["di"]["di"] == [None, None]
+    assert ten_degree["metadata"]["directivity_index"]["method"] == "unavailable"
+    assert ten_degree["metadata"]["directivity_index"]["domain"] == "full_sphere"
+    assert ten_degree["metadata"]["directivity_index"]["planes_used"] == []
 
 
-def test_incomplete_single_plane_run_keeps_v1_compatible_plane_di() -> None:
+def test_spherical_di_is_independent_of_display_planes_and_balloon_retention() -> None:
+    context = _context(spherical=False)
+    context.sim_type = 1
+    first = _native_result(sphere=True)
+    second = _native_result(sphere=True)
+    second.observation_planes = ["diagonal"]
+    second.directivity_db = np.full((2, 1, 3), 90.0)
+    second.pressure_complex = np.ones((2, 1, 3), dtype=np.complex128) * 20.0e-6
+
+    responses = [
+        build_solver_response(
+            result=result,
+            config=_config(sphere_grid=(2, 3)),
+            context=context,
+            start_time=0.0,
+            metadata={},
+            sound_speed_m_per_s=SOUND_SPEED_M_PER_S,
+        )
+        for result in (first, second)
+    ]
+
+    assert responses[0]["di"]["di"] == responses[1]["di"]["di"]
+    assert all(
+        response["metadata"]["directivity_index"]["method"] == "spherical_grid"
+        for response in responses
+    )
+    assert all(response["metadata"]["directivity_index"]["planes_used"] == [] for response in responses)
+    assert all(response["metadata"]["balloon_sampling"]["status"] == "disabled" for response in responses)
+    assert all("balloon" not in response for response in responses)
+
+
+def test_single_plane_run_never_publishes_plane_data_as_di() -> None:
     result = _native_result()
     result.observation_planes = ["horizontal"]
     result.observation_angles_deg = np.asarray([0.0, 45.0, 90.0])
@@ -256,12 +287,12 @@ def test_incomplete_single_plane_run_keeps_v1_compatible_plane_di() -> None:
         sound_speed_m_per_s=SOUND_SPEED_M_PER_S,
     )
 
-    assert response["di"]["di"]["horizontal"] == pytest.approx([8.194195, 11.374987], abs=1.0e-6)
+    assert response["di"]["di"] == [None, None]
     metadata = response["metadata"]["directivity_index"]
-    assert metadata["available"] is True
-    assert metadata["method"] == "per_plane_axisymmetric_approximation"
-    assert metadata["domain"] == "per_plane_axisymmetric_approximation"
-    assert metadata["planes_used"] == ["horizontal"]
+    assert metadata["available"] is False
+    assert metadata["method"] == "unavailable"
+    assert metadata["domain"] == "full_sphere"
+    assert metadata["planes_used"] == []
 
 
 @pytest.mark.parametrize(
