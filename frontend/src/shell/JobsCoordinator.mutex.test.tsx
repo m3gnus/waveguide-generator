@@ -4,8 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
 import { preferencesStore } from '../prefs/preferences';
 import type { CadReturnIngestRecord } from '../api/cadlink';
+import type { ImportedSolveSubmission } from '../jobs/actions';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
-import { designForFamily } from '../stores/design';
+import { designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
 import { resetSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
@@ -71,6 +72,21 @@ function failedJob(): JobItem {
   };
 }
 
+function importedSubmission(ingestId: string): ImportedSolveSubmission {
+  return {
+    geometry: {
+      type: 'imported', ingest_id: ingestId, manifest_sha256: `sha256:m:${ingestId}`, artifact_sha256: `sha256:a:${ingestId}`,
+      drive_channels: [{ id: 'drive', source_ids: ['source'], motion: 'normal' }],
+      mesh: { rigid_size_mm: 8, transition_mm: 8, source_size_mm: { source: 4 } }, acknowledged_findings: [], skipped_source_ids: [], exterior_only: false,
+    },
+    options: {
+      engine: 'metal', symmetry: 'auto', mesh_validation_mode: 'warn', verbose: false, frequency_spacing: 'log',
+      frequency_range: [200, 20_000], num_frequencies: 24,
+      polar_config: { angle_range: [0, 180, 37], angle_step: 5, distance: 2, norm_angle: 5, inclination: 45, enabled_axes: ['horizontal'], observation_origin: 'mouth', spherical_sampling: false },
+    },
+  };
+}
+
 function MainSolveButton() {
   const solve = useSolveControl();
   return <button disabled={solve.disabled} title={solve.title} onClick={solve.solve}>{solve.label}</button>;
@@ -83,6 +99,7 @@ describe('solve invocation mutex', () => {
   beforeEach(async () => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     preferencesStore.resetForTests();
+    resetDesignStore();
     resetCadReturnStore();
     resetSolveOptionsStore();
     importedMeshStore.clear();
@@ -184,18 +201,7 @@ describe('solve invocation mutex', () => {
   it('routes imported submissions through the same invocation mutex', async () => {
     const pending = deferred<string>();
     mocks.submitImported.mockReturnValue(pending.promise);
-    const submission = {
-      geometry: {
-        type: 'imported' as const, ingest_id: 'wgi_example', manifest_sha256: 'sha256:m', artifact_sha256: 'sha256:a',
-        drive_channels: [{ id: 'drive', source_ids: ['source'], motion: 'normal' as const }],
-        mesh: { rigid_size_mm: 8, transition_mm: 8, source_size_mm: { source: 4 } }, acknowledged_findings: [], skipped_source_ids: [],
-      },
-      options: {
-        engine: 'metal', symmetry: 'auto' as const, mesh_validation_mode: 'warn' as const, verbose: false, frequency_spacing: 'log' as const,
-        frequency_range: [200, 20_000] as [number, number], num_frequencies: 24,
-        polar_config: { angle_range: [0, 180, 37] as [number, number, number], angle_step: 5, distance: 2, norm_angle: 5, inclination: 45, enabled_axes: ['horizontal'] as ('horizontal')[], observation_origin: 'mouth' as const, spherical_sampling: false },
-      },
-    };
+    const submission = importedSubmission('wgi_example');
     let first!: Promise<void>;
     await act(async () => {
       const run = jobsCoordinatorBridge.getSnapshot().runImported;
@@ -208,7 +214,19 @@ describe('solve invocation mutex', () => {
     await act(async () => { pending.resolve('job-imported'); await first; });
   });
 
-  it('switches the main Solve control and routing from parametric to Fusion CAD mode', async () => {
+  it('increments CAD names after a new ingest but ignores parametric edits between identical solves', async () => {
+    mocks.submitImported.mockResolvedValue('job-cad');
+    const first = importedSubmission('wgi_first');
+
+    await act(async () => { await jobsCoordinatorBridge.getSnapshot().runImported(first); });
+    act(() => useDesignStore.getState().updateField('R', 141));
+    await act(async () => { await jobsCoordinatorBridge.getSnapshot().runImported(structuredClone(first)); });
+    await act(async () => { await jobsCoordinatorBridge.getSnapshot().runImported(importedSubmission('wgi_second')); });
+
+    expect(mocks.submitImported.mock.calls.map((call) => call[2])).toEqual(['horn', 'horn', 'horn2']);
+  });
+
+  it('submits a full CAD solve from the main control without mounting CadLinkPanel', async () => {
     const ingestId = 'wgi_01J5A8QK3M9T2XVBH0RD7NWE6C';
     const record = {
       ingest_id: ingestId,

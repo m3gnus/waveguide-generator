@@ -1,19 +1,34 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { CadReturnIngestRecord } from '../api/cadlink';
+import { buildImportedSubmission } from '../jobs/importedSubmission';
+import { projectSubmittedImport } from '../jobs/submittedProjection';
+import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
+import { resetDesignStore, useDesignStore } from '../stores/design';
+import { resetDocumentStore } from '../stores/document';
+import { resetSolveOptionsStore } from '../stores/solveOptions';
+import { workspaceModeStore } from '../stores/workspaceMode';
 import { JobsPreferencesSurface, ResultsPreferencesSurface } from './PreferencesSurface';
 import { preferencesStore } from './preferences';
+
+function readyCadRecord(ingestId: string): CadReturnIngestRecord {
+  return {
+    ingest_id: ingestId, manifest_sha256: `manifest:${ingestId}`, artifact_sha256: `artifact:${ingestId}`, report_sha256: `report:${ingestId}`,
+    findings: [], evidence: { fem_air_volumes: [] }, polar_grid_derivation: {},
+  } as unknown as CadReturnIngestRecord;
+}
 
 describe('preferences surfaces', () => {
   let host: HTMLDivElement;
   let root: Root;
   beforeEach(() => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-    localStorage.clear(); preferencesStore.resetForTests();
+    localStorage.clear(); preferencesStore.resetForTests(); resetCadReturnStore(); resetDesignStore(); resetDocumentStore(); resetSolveOptionsStore(); workspaceModeStore.setMode('parametric');
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
     host = document.createElement('div'); document.body.append(host); root = createRoot(host);
   });
-  afterEach(() => { act(() => root.unmount()); vi.unstubAllGlobals(); host.remove(); });
+  afterEach(() => { act(() => root.unmount()); vi.unstubAllGlobals(); host.remove(); workspaceModeStore.setMode('parametric'); });
 
   it('renders all smoothing, reference, export, automation, and format controls', async () => {
     await act(async () => { root.render(<ResultsPreferencesSurface/>); await Promise.resolve(); });
@@ -78,6 +93,24 @@ describe('preferences surfaces', () => {
       format.dispatchEvent(new Event('change', { bubbles: true }));
     });
     expect(host.querySelector('.job-name-preview')?.textContent).toContain('next · horn_2026-08-12');
+  });
+
+  it('uses the imported projection for the CAD naming preview', () => {
+    useCadReturnStore.setState({
+      ingestRecord: readyCadRecord('wgi_first'), needsIngest: false,
+      driveChannels: [{ id: 'drive', source_ids: ['source'], motion: 'normal' }],
+      sourceSizesMm: { source: 2 }, rigidSizeMm: 5, transitionMm: 5,
+    });
+    workspaceModeStore.setMode('cad');
+    const baseline = projectSubmittedImport(buildImportedSubmission(useCadReturnStore.getState()));
+    preferencesStore.update({ outputName: 'cad-run', nameSourceProjection: baseline });
+    act(() => root.render(<JobsPreferencesSurface/>));
+
+    expect(host.querySelector('.job-name-preview')?.textContent).toContain('next · cad-run');
+    act(() => useDesignStore.getState().updateField('R', 141));
+    expect(host.querySelector('.job-name-preview')?.textContent).toContain('next · cad-run');
+    act(() => useCadReturnStore.setState({ ingestRecord: readyCadRecord('wgi_second') }));
+    expect(host.querySelector('.job-name-preview')?.textContent).toContain('next · cad-run2');
   });
 
   it('configures design-change numbering independently of the date', () => {

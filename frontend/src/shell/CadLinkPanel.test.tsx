@@ -10,7 +10,7 @@ import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOpt
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import meshFixture from '../viewport/test-fixtures/tagged_sources-small.msh?raw';
 import { buildImportedSubmission, CadLinkPanel, fusionWorkflowView, newestReturnArrival, onshapeWorkflowView, showIngestedMeshInViewport } from './CadLinkPanel';
-import { CadLinkCoordinator } from './CadLinkCoordinator';
+import { CadLinkCoordinator, cadLinkCoordinatorBridge } from './CadLinkCoordinator';
 
 const listing: CadReturnListing = {
   items: [{
@@ -89,7 +89,7 @@ describe('CadLinkPanel', () => {
 
   const clickIngest = async () => {
     const ingest = [...host.querySelectorAll<HTMLButtonElement>('button')]
-      .find((button) => button.textContent === 'Prepare simulation' || button.textContent === 'Rebuild mesh')!;
+      .find((button) => button.textContent === 'Prepare simulation')!;
     await act(async () => { ingest.click(); await Promise.resolve(); await Promise.resolve(); });
     return ingest;
   };
@@ -101,7 +101,9 @@ describe('CadLinkPanel', () => {
     const acknowledgement = host.querySelector<HTMLInputElement>('.cad-findings input[type="checkbox"]')!;
     act(() => { acknowledgement.click(); });
     expect(importedSubmissionBlocker()).toBeNull();
-    expect([...host.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Rebuild mesh')?.disabled).toBe(false);
+    for (const moved of ['Mesh detail', 'Drive channels & drivers', 'Crossover', 'Rebuild mesh']) {
+      expect(host.textContent).not.toContain(moved);
+    }
     expect(host.textContent).not.toContain('Explicit solve sweep');
     expect([...host.querySelectorAll<HTMLButtonElement>('button')].some((button) => button.textContent === 'Solve CAD import')).toBe(false);
     expect(host.querySelector('.cad-viewport-source-buttons')).toBeNull();
@@ -369,7 +371,8 @@ describe('CadLinkPanel', () => {
   it('selects the newest readable return when CAD Link first mounts', async () => {
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
     expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(listing.items[0].bundlePath);
-    expect(host.textContent).toContain('Mesh detail');
+    expect(host.textContent).toContain('Prepare this Fusion return for the viewport and solver.');
+    expect(host.textContent).not.toContain('Mesh detail');
   });
 
   it('shows the selected CAD program, settings link, and an Open button when Fusion is closed', async () => {
@@ -502,11 +505,14 @@ describe('CadLinkPanel', () => {
     // Untouched pair input: log-spaced default inside the sweep,
     // round(sqrt(200 * 5000)) = 1000.
     expect(buildImportedSubmission(useCadReturnStore.getState()).geometry.combine)
-      .toEqual({ members: ['drive-mf', 'drive-hf'], crossovers_hz: [1_000], level_match: true });
+      .toEqual({ members: ['drive-mf', 'drive-hf'], crossovers_hz: [1_000], level_match: true, align: true });
 
     useCadReturnStore.getState().setCombineCrossover('drive-mf\u2192drive-hf', 1_200);
     expect(buildImportedSubmission(useCadReturnStore.getState()).geometry.combine)
-      .toEqual({ members: ['drive-mf', 'drive-hf'], crossovers_hz: [1_200], level_match: true });
+      .toEqual({ members: ['drive-mf', 'drive-hf'], crossovers_hz: [1_200], level_match: true, align: true });
+
+    useCadReturnStore.getState().setCombineAlign(false);
+    expect(buildImportedSubmission(useCadReturnStore.getState()).geometry.combine?.align).toBe(false);
 
     // A single remaining channel drops the wire even while enabled.
     useCadReturnStore.setState({ driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }] });
@@ -555,7 +561,7 @@ describe('CadLinkPanel', () => {
     await renderAndSelect();
     await clickIngest();
     act(() => useCadReturnStore.getState().setSourceSize('source-hf', 2.5));
-    await clickIngest();
+    await act(async () => { await cadLinkCoordinatorBridge.getSnapshot().ingest(); });
     act(() => host.querySelector<HTMLInputElement>('.cad-findings input[type="checkbox"]')!.click());
     const submission = buildImportedSubmission(useCadReturnStore.getState());
     expect(submission.geometry).toMatchObject({
@@ -587,7 +593,7 @@ describe('CadLinkPanel', () => {
     expect(host.textContent).toContain('source inventory or source sizing suggestions changed');
     expect(useCadReturnStore.getState().sourceSizesMm['source-hf']).toBe(2.5);
     expect(importedSubmissionBlocker()).toContain('source inventory or source sizing suggestions changed');
-    expect([...host.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Rebuild mesh')?.disabled).toBe(false);
+    expect(host.textContent).not.toContain('Rebuild mesh');
   });
 
   it('renders an unreadable listing row disabled with the server reason', async () => {
@@ -673,6 +679,7 @@ describe('CadLinkPanel', () => {
     }));
     await renderAndSelect();
     await clickIngest();
-    expect(host.textContent).toContain('Allow recorded area drift');
+    expect(useCadReturnStore.getState().areaDriftSourceIds).toContain('source-hf');
+    expect(host.textContent).not.toContain('Allow recorded area drift');
   });
 });

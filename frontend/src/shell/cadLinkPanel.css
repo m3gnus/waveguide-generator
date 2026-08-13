@@ -53,16 +53,10 @@
 .cad-verdict { display: grid; grid-template-columns: minmax(90px, auto) 1fr; gap: 3px 8px; margin: 4px 0; padding: 5px; border-left: 2px solid var(--amber); background: var(--ov1); }
 .cad-verdict.ok { border-color: var(--green); }
 .cad-verdict small { grid-column: 2; color: var(--fg3); }
-.cad-row, .cad-channel-row, .cad-channel-summary { display: grid; grid-template-columns: minmax(90px, 1fr) auto; align-items: center; gap: 6px; padding: 4px 0; border-top: 1px solid var(--hair); }
+.cad-row { display: grid; grid-template-columns: minmax(90px, 1fr) auto; align-items: center; gap: 6px; padding: 4px 0; border-top: 1px solid var(--hair); }
 .cad-row small { grid-column: 1 / -1; color: var(--fg3); }
 .ok-text { color: var(--green); }.warn-text { color: var(--amber); }
-.cad-source { margin-top: 6px; padding-top: 5px; border-top: 1px solid var(--hair); }
-.cad-sizing .field-row { grid-template-columns: minmax(115px, 1fr) var(--field-w); }
-.cad-sizing .field-label { min-width: 0; }
-.cad-sizing .field-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cad-source.skipped { opacity: .66; }
 .cad-findings label { display: flex; gap: 7px; padding: 6px 0; border-top: 1px solid var(--hair); }
 .cad-findings label.blocking b::after { content: ' · blocking'; color: var(--amber); font-weight: 500; }
 .cad-findings label span { display: grid; }.cad-findings small { color: var(--fg3); }
-.cad-channel-summary { margin-left: 12px; color: var(--fg2); font-size: var(--text-micro); }
 .cadlink-panel .empty-state { min-height: 120px; }

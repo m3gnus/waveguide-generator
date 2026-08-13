@@ -1,15 +1,26 @@
 import type { DesignDocument } from '../stores/design';
 import type { SolveOptions } from '../stores/solveOptions';
+import type { ImportedSolveSubmission } from './actions';
 
 type CanonicalScalar = string | number | boolean | null;
 type CanonicalValue = CanonicalScalar | CanonicalValue[] | { [key: string]: CanonicalValue };
 
-export interface SubmittedDesignProjection {
+interface SubmittedProjectionBase {
   version: 1;
-  kind: 'design';
-  design: { [key: string]: CanonicalValue };
   solveOptions: { [key: string]: CanonicalValue };
 }
+
+export interface SubmittedParametricProjection extends SubmittedProjectionBase {
+  kind: 'design';
+  design: { [key: string]: CanonicalValue };
+}
+
+export interface SubmittedImportedProjection extends SubmittedProjectionBase {
+  kind: 'imported';
+  geometry: { [key: string]: CanonicalValue };
+}
+
+export type SubmittedDesignProjection = SubmittedParametricProjection | SubmittedImportedProjection;
 
 /**
  * Every family-owned scalar which is submitted at the root of a design.
@@ -54,7 +65,7 @@ function canonicalize(value: unknown): CanonicalValue {
 export function projectSubmittedDesign(
   design: DesignDocument,
   solveOptions: SolveOptions,
-): SubmittedDesignProjection {
+): SubmittedParametricProjection {
   const projectedDesign: Record<string, CanonicalValue> = { formula: design.formula };
   for (const key of [...FAMILY_SCALARS, ...COMMON_SCALARS]) {
     const value = design[key];
@@ -65,7 +76,39 @@ export function projectSubmittedDesign(
     version: 1,
     kind: 'design',
     design: projectedDesign,
-    solveOptions: canonicalize(solveOptions) as SubmittedDesignProjection['solveOptions'],
+    solveOptions: canonicalize(solveOptions) as SubmittedParametricProjection['solveOptions'],
+  };
+}
+
+/**
+ * Project only the imported geometry and electrical/solve choices that reach
+ * the solver. In particular, the parametric design on screen is deliberately
+ * absent: it describes a future CAD rebuild, not the already-ingested artifact
+ * this submission will solve.
+ */
+export function projectSubmittedImport(
+  submission: ImportedSolveSubmission,
+): SubmittedImportedProjection {
+  const { geometry, options } = submission;
+  const projectedGeometry: Record<string, unknown> = {
+    ingest_id: geometry.ingest_id,
+    manifest_sha256: geometry.manifest_sha256,
+    artifact_sha256: geometry.artifact_sha256,
+    drive_channels: geometry.drive_channels,
+    mesh: geometry.mesh,
+    exterior_only: geometry.exterior_only ?? false,
+  };
+  // These fields are conditional on the wire, but when present they alter the
+  // solved levels just as surely as a driver spec does. Keeping them beside
+  // drive_channels prevents a voltage-only edit from reusing the old run name.
+  if (geometry.drive_voltage_v !== undefined) projectedGeometry.drive_voltage_v = geometry.drive_voltage_v;
+  if (geometry.rg_ohm !== undefined) projectedGeometry.rg_ohm = geometry.rg_ohm;
+  if (geometry.combine !== undefined) projectedGeometry.combine = geometry.combine;
+  return {
+    version: 1,
+    kind: 'imported',
+    geometry: canonicalize(projectedGeometry) as SubmittedImportedProjection['geometry'],
+    solveOptions: canonicalize(options) as SubmittedImportedProjection['solveOptions'],
   };
 }
 
@@ -81,8 +124,8 @@ export function submittedProjectionsEqual(
 export function isSubmittedDesignProjection(value: unknown): value is SubmittedDesignProjection {
   if (!value || typeof value !== 'object') return false;
   const candidate = value as Partial<SubmittedDesignProjection>;
-  return candidate.version === 1
-    && candidate.kind === 'design'
-    && Boolean(candidate.design && typeof candidate.design === 'object')
-    && Boolean(candidate.solveOptions && typeof candidate.solveOptions === 'object');
+  if (candidate.version !== 1 || !candidate.solveOptions || typeof candidate.solveOptions !== 'object') return false;
+  if (candidate.kind === 'design') return Boolean(candidate.design && typeof candidate.design === 'object');
+  if (candidate.kind === 'imported') return Boolean(candidate.geometry && typeof candidate.geometry === 'object');
+  return false;
 }

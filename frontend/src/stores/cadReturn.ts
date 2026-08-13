@@ -36,6 +36,7 @@ interface CadReturnState {
   combineEnabled: boolean;
   combineCrossoversHz: Record<string, number>;
   combineLevelMatch: boolean | null;
+  combineAlign: boolean | null;
   channelDrivers: Record<string, ChannelDriverForm>;
   driveVoltageV: number;
   frequencyStartHz: number;
@@ -62,6 +63,7 @@ interface CadReturnState {
   setCombineEnabled: (enabled: boolean) => void;
   setCombineCrossover: (pairKey: string, hz: number) => void;
   setCombineLevelMatch: (value: boolean | null) => void;
+  setCombineAlign: (value: boolean | null) => void;
   setChannelDriverEnabled: (channelId: string, enabled: boolean) => void;
   setChannelDriverField: (channelId: string, field: DriverFieldKey, value: number | null) => void;
   setDriveVoltage: (value: number) => void;
@@ -155,6 +157,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
   combineEnabled: false,
   combineCrossoversHz: {},
   combineLevelMatch: null,
+  combineAlign: null,
   channelDrivers: {},
   driveVoltageV: 2.83,
   frequencyStartHz: 200,
@@ -173,6 +176,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
     combineEnabled: false,
     combineCrossoversHz: {},
     combineLevelMatch: null,
+    combineAlign: null,
     channelDrivers: {},
     needsIngest: true,
     ingestedBundleIdentity: null,
@@ -270,6 +274,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
     combineCrossoversHz: { ...state.combineCrossoversHz, [pairKey]: hz },
   })),
   setCombineLevelMatch: (combineLevelMatch) => set({ combineLevelMatch }),
+  setCombineAlign: (combineAlign) => set({ combineAlign }),
   setChannelDriverEnabled: (channelId, enabled) => set((state) => ({
     channelDrivers: {
       ...state.channelDrivers,
@@ -351,8 +356,8 @@ export function combineLevelMatchDefault(
 }
 
 export function combineWire(
-  state: Pick<CadReturnState, 'combineEnabled' | 'driveChannels' | 'selectedBundle' | 'combineCrossoversHz' | 'combineLevelMatch' | 'channelDrivers' | 'frequencyStartHz' | 'frequencyEndHz'>,
-): { members: string[]; crossovers_hz: number[]; level_match: boolean } | undefined {
+  state: Pick<CadReturnState, 'combineEnabled' | 'driveChannels' | 'selectedBundle' | 'combineCrossoversHz' | 'combineLevelMatch' | 'combineAlign' | 'channelDrivers' | 'frequencyStartHz' | 'frequencyEndHz'>,
+): { members: string[]; crossovers_hz: number[]; level_match: boolean; align: boolean } | undefined {
   if (!state.combineEnabled) return undefined;
   const pairs = combineChain(state);
   if (!pairs.length) return undefined;
@@ -360,6 +365,10 @@ export function combineWire(
     members: combineMembers(state),
     crossovers_hz: pairs.map((pair) => pair.hz),
     level_match: state.combineLevelMatch ?? combineLevelMatchDefault(state),
+    // Null means the user has never made a choice. Preserve the server's
+    // existing aligned-sum behaviour while still making the choice explicit
+    // on every newly submitted wire.
+    align: state.combineAlign ?? true,
   };
 }
 
@@ -387,6 +396,7 @@ export function resetCadReturnStore(): void {
     combineEnabled: false,
     combineCrossoversHz: {},
     combineLevelMatch: null,
+    combineAlign: null,
     channelDrivers: {},
     driveVoltageV: 2.83,
     frequencyStartHz: 200,

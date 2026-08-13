@@ -65,6 +65,15 @@
 .effective-grid-readout { display: grid; gap: 2px; margin-top: 6px; padding: 7px; border-left: 3px solid var(--green); background: var(--ov1); }
 .effective-grid-readout.widened { border-color: var(--amber); }
 .effective-grid-readout span, .effective-grid-readout small { color: var(--fg3); font-size: var(--text-micro); line-height: 1.4; }
+.cad-mesh-intro { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; margin-bottom: 4px; padding-bottom: 7px; border-bottom: 1px solid var(--hair-soft); }
+.cad-mesh-intro p { margin: 0; color: var(--fg3); font-size: var(--text-micro); line-height: 1.4; }
+.cad-channel-list { display: grid; gap: 3px; }
+.cad-channel { padding-top: 3px; border-top: 1px solid var(--hair-soft); }
+.cad-channel-row, .cad-channel-summary { display: grid; grid-template-columns: minmax(90px, 1fr) auto; align-items: center; gap: 6px; padding: 4px 0; }
+.cad-channel-row { border-top: 1px solid var(--hair-soft); }
+.cad-channel-summary { margin-left: 12px; color: var(--fg2); font-size: var(--text-micro); }
+.cad-source { padding: 4px 0; border-top: 1px solid var(--hair-soft); }
+.cad-source.skipped { opacity: .66; }
 /* No width of its own. The directivity-map angles are rendered by a different
    component from the parameter registry's fields, and it gave them a width of
    their own -- so "Sweep start" under Frequency Sweep and "Sweep start" under
@@ -157,6 +166,9 @@
   .section-body > .linked-design-action,
   .section-body > .cad-solve-fact,
   .section-body > .effective-grid-readout,
+  .section-body > .cad-mesh-intro,
+  .section-body > .cad-channel-list,
+  .section-body > .cad-source,
   .section-body > .schema-gap,
   .section-body > .point-paste,
   .section-body > p { grid-column: 1 / -1; }
