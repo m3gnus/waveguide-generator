@@ -422,6 +422,25 @@ class ImportedGeometrySource(JobModel):
     acknowledged_findings: list[str] = Field(default_factory=list)
     skipped_source_ids: list[str] = Field(default_factory=list)
     exterior_only: bool = False
+    # Passive-cardioid is deliberately additive to the imported-job wire. A
+    # missing rear volume is the opt-in boundary, so old requests take the
+    # exact pre-campaign solve path. Keep the model and BEM areas separate:
+    # the former drives the chamber/port physics while the latter records the
+    # physical aperture represented by the radiation matrix.
+    passive_cardioid_rear_volume_l: float | None = Field(
+        default=None, gt=0, allow_inf_nan=False
+    )
+    passive_cardioid_port_length_mm: float | None = Field(
+        default=None, ge=0, allow_inf_nan=False
+    )
+    model_port_area_m2: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    bem_port_area_m2: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    port_area_source: Literal["user", "bem_aperture"] | None = None
+    passive_cardioid_foam_resistance_pa_s_m3: float | None = Field(
+        default=None, ge=0, allow_inf_nan=False
+    )
+    passive_cardioid_invert_port: bool = True
+    passive_cardioid_coupled: bool = False
 
     @field_validator("ingest_id")
     @classmethod
@@ -496,6 +515,46 @@ class ImportedGeometrySource(JobModel):
                     f"combine id {self.combine.id!r} collides with a drive channel id"
                 )
         return self
+
+    @model_validator(mode="after")
+    def validate_passive_cardioid(self) -> "ImportedGeometrySource":
+        enabled = self.passive_cardioid_rear_volume_l is not None
+        if not enabled:
+            if self.passive_cardioid_coupled:
+                raise ValueError(
+                    "passive_cardioid_coupled requires passive_cardioid_rear_volume_l"
+                )
+            return self
+
+        required = {
+            "passive_cardioid_port_length_mm": self.passive_cardioid_port_length_mm,
+            "model_port_area_m2": self.model_port_area_m2,
+            "bem_port_area_m2": self.bem_port_area_m2,
+            "port_area_source": self.port_area_source,
+            "passive_cardioid_foam_resistance_pa_s_m3": (
+                self.passive_cardioid_foam_resistance_pa_s_m3
+            ),
+        }
+        missing = [name for name, value in required.items() if value is None]
+        if missing:
+            raise ValueError(
+                "passive cardioid requires " + ", ".join(missing)
+            )
+        if self.port_area_source == "bem_aperture" and not math.isclose(
+            float(self.model_port_area_m2),
+            float(self.bem_port_area_m2),
+            rel_tol=1.0e-12,
+            abs_tol=0.0,
+        ):
+            raise ValueError(
+                "port_area_source='bem_aperture' requires model_port_area_m2 "
+                "to equal bem_port_area_m2"
+            )
+        return self
+
+    @property
+    def passive_cardioid_enabled(self) -> bool:
+        return self.passive_cardioid_rear_volume_l is not None
 
 
 GeometrySource = Annotated[

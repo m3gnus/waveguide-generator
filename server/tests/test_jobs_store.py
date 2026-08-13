@@ -85,6 +85,16 @@ def test_created_jobs_get_consecutive_run_numbers(tmp_path: Path) -> None:
     assert store.get_job_row("second")["run_number"] == 2
 
 
+def test_radiation_impedance_artifact_round_trip(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    store.create_job(_job("cardioid"))
+
+    store.store_radiation_impedance("cardioid", b"matrix-npz")
+
+    assert store.get_radiation_impedance("cardioid") == b"matrix-npz"
+
+
 def test_run_numbers_are_not_reused_after_deleting_the_newest_job(tmp_path: Path) -> None:
     store = JobStore(tmp_path / "jobs.db")
     store.initialize()
