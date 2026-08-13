@@ -47,6 +47,24 @@ export interface FusionCadLink {
   exportSequence: string | null;
 }
 
+export type CadRealizedDimensionsState = 'no_link' | 'link_unavailable' | 'export_missing' | 'not_captured' | 'unavailable' | 'current' | 'stale';
+
+export interface CadRealizedParameter {
+  /** Values are document-global in CAD, so identity travels with every row. */
+  instanceId: string | null;
+  name: string;
+  value: number;
+  unit: string | null;
+  role: string;
+}
+
+export interface CadRealizedDimensions {
+  state: CadRealizedDimensionsState;
+  instanceId: string | null;
+  exportId: string | null;
+  parameters: CadRealizedParameter[];
+}
+
 export interface FusionCadStatus {
   cadApplication: 'fusion360';
   state: FusionCadState;
@@ -61,6 +79,7 @@ export interface FusionCadStatus {
   link: FusionCadLink | null;
   wgChangesAvailable: boolean;
   fusionChangesAvailable: boolean;
+  realizedDimensions: CadRealizedDimensions;
 }
 
 export interface CadReturnIngestRequest {

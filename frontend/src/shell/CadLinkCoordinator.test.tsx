@@ -43,6 +43,7 @@ const closedFusion: FusionCadStatus = {
   link: null,
   wgChangesAvailable: false,
   fusionChangesAvailable: false,
+  realizedDimensions: { state: 'link_unavailable', instanceId: null, exportId: null, parameters: [] },
 };
 
 const ingestRecord: CadReturnIngestRecord = {

@@ -12,13 +12,20 @@ import hashlib
 import pytest
 
 from server.app import create_app
-from server.cadlink.api import FusionStatusRequest, fusion_status
+from server.cadlink.api import (
+    FusionStatusRequest,
+    _realized_dimensions_payload,
+    fusion_status,
+)
+from server.cadlink.identity import design_hash
 from server.cadlink.fusion_status import (
     FUSION_STATUS_FILENAME,
     FUSION_STATUS_TTL,
     fusion_process_running,
     read_fusion_status,
 )
+from server.cadlink.store import CadLinkStore
+from server.design.schema import DesignConfig
 
 
 NOW = datetime(2026, 8, 12, 15, 30, tzinfo=timezone.utc)
@@ -86,6 +93,26 @@ def _read(workspace: Path, **updates: object) -> dict[str, object]:
     }
     arguments.update(updates)
     return read_fusion_status(workspace, **arguments)  # type: ignore[arg-type]
+
+
+def _registered_export(
+    store: CadLinkStore, design: DesignConfig, manifest: object, *, key: str
+) -> tuple[object, dict[str, object]]:
+    saved = store.save(
+        requested=None,
+        design_hash=design_hash(design),
+        filename="tritonia.cfg",
+        snapshot_builder=lambda _identity: "snapshot",
+    )
+    identity = saved["identity"]
+    exported = store.allocate_export(
+        design_id=identity.design_id,
+        geometry_hash="sha256:geometry-" + key,
+        artifact_sha256="sha256:artifact-" + key,
+        manifest_json=json.dumps(manifest),
+        idempotency_key=key,
+    )
+    return identity, exported
 
 
 def test_missing_stale_and_no_document_heartbeats_are_distinct(tmp_path: Path) -> None:
@@ -262,4 +289,147 @@ def test_status_endpoint_hashes_the_design_in_wg_and_requires_a_workspace(
         "link": None,
         "wgChangesAvailable": False,
         "fusionChangesAvailable": False,
+        "realizedDimensions": {
+            "state": "link_unavailable",
+            "instanceId": None,
+            "exportId": None,
+            "parameters": [],
+        },
     }
+
+
+def test_status_reads_role_preserving_parameters_from_the_linked_export(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data_dir = tmp_path / "data"
+    app = create_app(data_dir=data_dir)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    app.state.workspace.select(workspace)
+    design = DesignConfig.model_validate({"formula": "OSSE", "L": 120, "a": 45})
+    identity, exported = _registered_export(
+        app.state.cadlink_store,
+        design,
+        {
+            "parameters": [
+                {
+                    "name": "wg_tritonia_v_throat_dia",
+                    "value": 25.4,
+                    "unit": "mm",
+                    "role": "interface",
+                },
+                {
+                    "name": "wg_tritonia_v_coverage_h",
+                    "value": 90,
+                    "role": "informational",
+                },
+            ]
+        },
+        key="captured",
+    )
+    link = _link(
+        designId=identity.design_id,
+        exportId=exported["export_id"],
+        designHash=design_hash(design),
+    )
+    monkeypatch.setattr("server.cadlink.api.fusion_process_running", lambda: False)
+    monkeypatch.setattr(
+        "server.cadlink.api.read_fusion_status",
+        lambda *_args, **_kwargs: {
+            "cadApplication": "fusion360",
+            "state": "current",
+            "running": True,
+            "processRunning": True,
+            "updatedAt": "2026-08-13T12:00:00Z",
+            "documentName": "Tritonia V",
+            "documentId": "fusion:doc-a",
+            "currentFormula": "OSSE",
+            "fusionFormula": "OSSE",
+            "link": link,
+            "wgChangesAvailable": False,
+            "fusionChangesAvailable": False,
+        },
+    )
+    payload = FusionStatusRequest.model_validate(
+        {
+            "design": design.model_dump(mode="json"),
+            "identity": {
+                "designId": identity.design_id,
+                "lineageId": identity.lineage_id,
+                "baseEditVersion": identity.edit_version,
+            },
+        }
+    )
+
+    response = asyncio.run(fusion_status(payload, SimpleNamespace(app=app)))
+
+    assert response["realizedDimensions"] == {
+        "state": "current",
+        "instanceId": "instance-a",
+        "exportId": exported["export_id"],
+        "parameters": [
+            {
+                "instanceId": "instance-a",
+                "name": "wg_tritonia_v_throat_dia",
+                "value": 25.4,
+                "unit": "mm",
+                "role": "interface",
+            },
+            {
+                "instanceId": "instance-a",
+                "name": "wg_tritonia_v_coverage_h",
+                "value": 90.0,
+                "unit": None,
+                "role": "informational",
+            },
+        ],
+    }
+
+
+def test_realized_parameter_absent_and_stale_states_are_explicit(tmp_path: Path) -> None:
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    design = DesignConfig.model_validate({"formula": "OSSE", "L": 120, "a": 45})
+    _identity, exported = _registered_export(store, design, {}, key="old-bundle")
+    base_status = {"link": _link(exportId=exported["export_id"])}
+
+    not_captured = _realized_dimensions_payload(
+        base_status, store, current_design_hash=design_hash(design)
+    )
+    missing = _realized_dimensions_payload(
+        {"link": _link(exportId="wge_registry_row_was_removed")},
+        store,
+        current_design_hash=design_hash(design),
+    )
+    captured = store.allocate_export(
+        design_id=exported["design_id"],
+        geometry_hash="sha256:geometry-new",
+        artifact_sha256="sha256:artifact-new",
+        manifest_json=json.dumps(
+            {
+                "parameters": [
+                    {
+                        "name": "wg_tritonia_v_depth",
+                        "value": 190,
+                        "unit": "mm",
+                        "role": "interface",
+                    }
+                ]
+            }
+        ),
+        idempotency_key="captured-old-design",
+    )
+    stale = _realized_dimensions_payload(
+        {"link": _link(exportId=captured["export_id"])},
+        store,
+        current_design_hash="sha256:newer-design-on-screen",
+    )
+
+    assert not_captured["state"] == "not_captured"
+    assert missing["state"] == "export_missing"
+    assert stale["state"] == "stale"
+    assert stale["parameters"][0]["value"] == 190.0
+    assert _realized_dimensions_payload(
+        {"state": "not_linked", "link": None},
+        store,
+        current_design_hash=design_hash(design),
+    )["state"] == "no_link"
