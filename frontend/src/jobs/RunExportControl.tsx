@@ -34,6 +34,8 @@ const FORMAT_CATALOG: CatalogItem[] = [
   { id: 'png', format: 'png', label: 'Charts', trailing: '.png', group: 'Results', needsResult: true, needsDesign: false },
   { id: 'on_axis_frd', label: 'On-axis response', trailing: '.frd', group: 'Results', needsResult: true, needsDesign: false },
   { id: 'polar_frd', label: 'Polar set (VituixCAD)', trailing: '.frd', group: 'Results', needsResult: true, needsDesign: false },
+  { id: 'zma', format: 'zma', label: 'Electrical impedance (VituixCAD)', trailing: '.zma', group: 'Results', needsResult: true, needsDesign: false },
+  { id: 'vxp', format: 'vxp', label: 'VituixCAD project', trailing: '.vxp', group: 'Results', needsResult: true, needsDesign: false },
   { id: 'csv', format: 'csv', label: 'Frequency data', trailing: '.csv', group: 'Results', needsResult: true, needsDesign: false },
   { id: 'json', format: 'json', label: 'Full results', trailing: '.json', group: 'Results', needsResult: true, needsDesign: false },
   { id: 'step', format: 'step', label: 'STEP solid', trailing: '.step', group: 'Geometry & design', needsResult: false, needsDesign: true },

@@ -8,6 +8,8 @@ export interface ObservationMetadata {
 
 export interface ResultMetadata extends Record<string, unknown> {
   observation?: ObservationMetadata;
+  /** Electrical impedance is engineering convention even when pressure is solver convention. */
+  impedance_phase_convention?: string;
   /** Channel membership used to join wrapper-owned CAD validity evidence. */
   source_ids?: string[];
   per_source_frequency_validity?: Record<string, {

@@ -44,6 +44,8 @@ export const EXPORT_FORMATS = [
   { id: 'txt', label: 'Summary Text Report' },
   { id: 'polar_csv', label: 'Polar Directivity CSV' },
   { id: 'impedance_csv', label: 'Impedance CSV' },
+  { id: 'zma', label: 'VituixCAD Impedance (ZMA)' },
+  { id: 'vxp', label: 'VituixCAD Project (VXP)' },
   { id: 'vacs', label: 'ABEC Spectrum (VACS)' },
   { id: 'stl', label: 'Waveguide STL' },
   { id: 'fusion_csv', label: 'Fusion 360 CSV Curves' },

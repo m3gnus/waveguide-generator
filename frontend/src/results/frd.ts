@@ -1,5 +1,6 @@
 import type { Preferences } from '../prefs/preferences';
 import { applySmoothing, type SmoothingValue } from './smoothing';
+import { phaseSpatialSign, wrapPhaseDegrees } from './phaseConvention';
 import { resultChannelFileSuffix, scopeResultChannel, type ResultPayload } from './types';
 
 export interface PolarFrdFile {
@@ -79,39 +80,15 @@ interface PropagationReference {
   spatialSign: 1 | -1;
 }
 
-const POSITIVE_SPATIAL_CONVENTIONS = new Set([
-  'exp(+ikr)', 'e(+ikr)', '+ikr', 'positive', 'positive-spatial', 'metal',
-  'hornlab-metal', 'metal-bem', 'hornlab-metal-bem', 'bempp', 'bempp-cl',
-  'bemppcl', 'hornlab-bempp-bem', 'bempp-cl-numba', 'bempp-cl-opencl',
-]);
-const NEGATIVE_SPATIAL_CONVENTIONS = new Set([
-  'exp(-ikr)', 'e(-ikr)', '-ikr', 'negative', 'negative-spatial', 'legacy',
-  'auto', 'default',
-]);
-
-function phaseSpatialSign(result: ResultPayload): 1 | -1 | null {
-  const raw = String(result.metadata?.phase_time_convention ?? '')
-    .trim().toLowerCase().replaceAll('_', '-').replaceAll(' ', '');
-  if (POSITIVE_SPATIAL_CONVENTIONS.has(raw)) return 1;
-  if (NEGATIVE_SPATIAL_CONVENTIONS.has(raw)) return -1;
-  return null;
-}
-
 function propagationReference(result: ResultPayload): PropagationReference | null {
   const metadata = result.metadata?.observation;
   if (!metadata || typeof metadata !== 'object') return null;
   const distanceM = metadata.effective_distance_m ?? metadata.requested_distance_m;
   const speedOfSoundMps = metadata.sound_speed_m_per_s;
-  const spatialSign = phaseSpatialSign(result);
+  const spatialSign = phaseSpatialSign(result.metadata?.phase_time_convention);
   return finite(distanceM) && finite(speedOfSoundMps) && distanceM >= 0 && speedOfSoundMps > 0 && spatialSign !== null
     ? { distanceM, speedOfSoundMps, spatialSign }
     : null;
-}
-
-/** Wrap degrees to (-180, 180], deliberately mapping -180 to +180. */
-function wrapPhaseDegrees(value: number): number {
-  const positive = ((value % 360) + 360) % 360;
-  return positive > 180 ? positive - 360 : positive;
 }
 
 function exportPhaseDegrees(

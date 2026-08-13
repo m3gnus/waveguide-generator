@@ -34,6 +34,8 @@ not alternate geometry authorities.
 | Chart PNGs | Canonical HornLab response charts plus a separately rendered directivity map, using the selected theme/smoothing. |
 | On-axis FRD | Tab-delimited frequency, SPL, phase triples readable by REW and VituixCAD; includes smoothing and propagation-reference notes. |
 | Polar FRD set | Horizontal/vertical per-angle files under `hor`/`ver`, written into a selected workspace subdirectory; only angles with phase coverage are emitted. |
+| Electrical ZMA | Per driver-modelled channel, tab-delimited frequency, magnitude in ohms, and engineering `exp(+jωt)` phase. Refused unless `impedance_units` is `ohms`; unit-drive acoustic impedance is never coerced. |
+| VituixCAD project | Version-2 `.vxp` project plus every referenced per-channel on-axis FRD and electrical ZMA. Uses the solved LR4 filters, gains, and delays when the eligible driver channels exactly match a combined result. |
 | Frequency CSV | Exact-key union of SPL, DI, and impedance frequency grids. Empty cells mean unavailable, never interpolated. |
 | Full JSON | Timestamp, smoothing selection, and the complete stored result contract. |
 | Summary text | Human summary and the same union-grid detailed rows as the frequency CSV. |

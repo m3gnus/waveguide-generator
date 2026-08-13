@@ -11,8 +11,8 @@ function job(id: string, rating: number | null, created: string, completed = cre
 
 describe('client preferences', () => {
   beforeEach(() => { localStorage.clear(); preferencesStore.resetForTests(); });
-  it('persists the eleven-format selection and export counter migration field', () => {
-    expect(EXPORT_FORMATS).toHaveLength(11);
+  it('persists the thirteen-format selection and export counter migration field', () => {
+    expect(EXPORT_FORMATS).toHaveLength(13);
     expect(CHART_TYPES).toHaveLength(10);
     expect(MAP_REFERENCES).toEqual([-3, -6, -9, -12]);
     preferencesStore.update({ exportFormats: [] });
