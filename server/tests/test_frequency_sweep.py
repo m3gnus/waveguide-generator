@@ -58,3 +58,24 @@ def test_native_result_is_restored_to_ascending_frequency_contract() -> None:
     assert result.sphere_pressure_complex[:, 0].tolist() == [101, 103, 105, 107]
     assert result.surface_pressure_avg[2].tolist() == [201, 203, 205, 207]
     assert result.solver_log == [{"frequency_hz": 100.0}, {"frequency_hz": 700.0}]
+
+
+def test_bempp_read_only_directivity_alias_sorts_its_backing_spl_field() -> None:
+    class BemppShapedResult:
+        def __init__(self) -> None:
+            self.frequencies_hz = np.asarray([100.0, 700.0, 500.0, 300.0])
+            self.pressure_complex = np.asarray([[1], [7], [5], [3]])
+            self.spl_db = np.asarray([[10], [70], [50], [30]])
+            self.impedance = np.asarray([1, 7, 5, 3])
+
+        @property
+        def directivity_db(self) -> np.ndarray:
+            return self.spl_db
+
+    result = BemppShapedResult()
+
+    returned = sort_native_result_frequencies(result)
+
+    assert returned is result
+    assert result.frequencies_hz.tolist() == [100.0, 300.0, 500.0, 700.0]
+    assert result.directivity_db[:, 0].tolist() == [10, 30, 50, 70]
