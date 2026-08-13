@@ -36,8 +36,8 @@ describe('preferences surfaces', () => {
     expect(host.querySelector<HTMLSelectElement>('[aria-label="Map reference"]')?.options).toHaveLength(4);
     expect(host.querySelector<HTMLSelectElement>('[aria-label="Results layout count"]')?.options).toHaveLength(5);
     expect(host.querySelector('[aria-label="Export counter"]')).toBeNull();
-    expect(host.querySelectorAll('[aria-label^="Manual export:"]')).toHaveLength(11);
-    expect(host.querySelectorAll('[aria-label^="Automatic export:"]')).toHaveLength(11);
+    expect(host.querySelectorAll('[aria-label^="Manual export:"]')).toHaveLength(13);
+    expect(host.querySelectorAll('[aria-label^="Automatic export:"]')).toHaveLength(13);
     expect(host.textContent).toContain('Preferred manual export formats');
     expect(host.textContent).toContain('Automatic export formats');
     expect(host.textContent).toContain('Auto-export completed jobs');

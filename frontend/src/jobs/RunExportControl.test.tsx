@@ -235,6 +235,23 @@ describe('RunExportControl', () => {
     });
   });
 
+  it.each([
+    ['Electrical impedance (VituixCAD)', 'zma'],
+    ['VituixCAD project', 'vxp'],
+  ] as const)('registers %s in the result catalogue', async (label, format) => {
+    render();
+    openMenu();
+
+    const item = menuItem(label);
+    expect(item.getAttribute('aria-disabled')).toBeNull();
+    await act(async () => { item.click(); await settle(); });
+
+    expect(mocks.runExportBundle).toHaveBeenCalledWith(
+      expect.objectContaining({ result: expect.any(Object) }),
+      [format],
+    );
+  });
+
   it('downloads exactly one on-axis FRD file', async () => {
     mocks.fetchJobResults.mockResolvedValue(directivityResult());
     render();

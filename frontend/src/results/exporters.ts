@@ -6,6 +6,7 @@ import { resolveChartTheme, type ExportFormat, type Preferences } from '../prefs
 import { applySmoothing, type SmoothingValue } from './smoothing';
 import { complexToDb } from './mappers';
 import { resultChannelFileSuffix, resultChannels, scopeResultChannel, type ResultPayload } from './types';
+import { buildVituixCadProjectFiles, buildZma, hasElectricalImpedance } from './vituixcad';
 
 export interface ExportContext {
   result?: ResultPayload;
@@ -362,13 +363,22 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
     return outputs.map((output) => output.filename);
   }
   if (format === 'png') return chartPng(context);
+  if (format === 'vxp') {
+    if (!context.result) throw new Error('This export requires completed result data.');
+    // Build every member before saving the first. A malformed project must not
+    // leave orphaned support files in Downloads or in the automatic staging set.
+    const files = buildVituixCadProjectFiles(context.result, context.preferences, context.jobStem);
+    files.forEach(({ text, filename, type }) => saveText(text, filename, type));
+    return files.map(({ filename }) => filename);
+  }
   const result = requireResult(context);
-  const builders: Record<Exclude<ExportFormat, 'mwg_config' | 'step' | 'stl' | 'fusion_csv' | 'png'>, () => [string, string, string]> = {
+  const builders: Record<Exclude<ExportFormat, 'mwg_config' | 'step' | 'stl' | 'fusion_csv' | 'png' | 'vxp'>, () => [string, string, string]> = {
     csv: () => [buildFrequencyCsv(result, context.preferences), `${baseName}.csv`, 'text/csv;charset=utf-8'],
     json: () => [buildFullResultsJson(result, context.preferences, now), `${baseName}.json`, 'application/json;charset=utf-8'],
     txt: () => [buildSummaryText(result, context.preferences, now), `${baseName}_summary.txt`, 'text/plain;charset=utf-8'],
     polar_csv: () => [buildPolarCsv(result), `${baseName}_polar.csv`, 'text/csv;charset=utf-8'],
     impedance_csv: () => [buildImpedanceCsv(result), `${baseName}_impedance.csv`, 'text/csv;charset=utf-8'],
+    zma: () => [buildZma(result), `${baseName}.zma`, 'text/plain;charset=utf-8'],
     vacs: () => [buildVacs(result, now), `${baseName}_spectrum.txt`, 'text/plain;charset=utf-8'],
   };
   const [content, filename, type] = builders[format]();
@@ -379,16 +389,43 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
 export async function runExportBundle(context: ExportContext, formats = context.preferences.exportFormats): Promise<ExportBundleResult> {
   const files: string[] = [];
   const failures: ExportFailure[] = [];
-  const resultFormats = new Set<ExportFormat>(['png', 'csv', 'json', 'txt', 'polar_csv', 'impedance_csv', 'vacs']);
+  const emitted = new Set<string>();
+  const saveBlob = context.saveBlob ?? downloadBlob;
+  const saveText = context.saveText ?? downloadText;
+  const resultFormats = new Set<ExportFormat>(['png', 'csv', 'json', 'txt', 'polar_csv', 'impedance_csv', 'zma', 'vacs']);
   for (const format of formats) {
-    const channels = context.result && !context.channelId && resultFormats.has(format)
-      ? resultChannels(context.result)
-      : [];
-    const variants = channels.length > 1
+    const allChannels = context.result && !context.channelId && resultFormats.has(format)
+      ? resultChannels(context.result) : [];
+    let channels = allChannels;
+    if (format === 'zma' && channels.some(({ result }) => hasElectricalImpedance(result))) {
+      // A combined or unit-drive channel is not a failed electrical export; it
+      // is deliberately outside the ZMA artifact family. If none are eligible,
+      // retain every variant so the caller receives the explicit refusal.
+      channels = channels.filter(({ result }) => hasElectricalImpedance(result));
+    }
+    const variants = allChannels.length > 1 && channels.length
       ? channels.map(({ id }) => ({ ...context, channelId: id }))
       : [context];
     for (const variant of variants) {
-      try { files.push(...await runExportFormat(format, variant)); }
+      try {
+        // A VXP owns its support FRD/ZMA files, while users may also select ZMA
+        // explicitly. Suppress a second write/download by portable relative
+        // name; the builders are shared, so the duplicate is byte-identical.
+        const produced = await runExportFormat(format, {
+          ...variant,
+          saveBlob: (blob, filename) => {
+            if (emitted.has(filename)) return;
+            emitted.add(filename);
+            saveBlob(blob, filename);
+          },
+          saveText: (content, filename, type) => {
+            if (emitted.has(filename)) return;
+            emitted.add(filename);
+            saveText(content, filename, type);
+          },
+        });
+        produced.forEach((filename) => { if (!files.includes(filename)) files.push(filename); });
+      }
       catch (error) { failures.push({ format, reason: error instanceof Error ? error.message : String(error) }); }
     }
   }
@@ -402,18 +439,21 @@ export async function runWorkspaceExportBundle(
   context: ExportContext,
   formats = context.preferences.autoExportFormats,
 ): Promise<ExportBundleResult> {
-  const prepared: WorkspaceFile[] = [];
+  const prepared = new Map<string, WorkspaceFile>();
   const bundle = await runExportBundle({
     ...context,
-    saveBlob: (blob, filename) => prepared.push({ blob, filename }),
+    // VXP is a self-contained bundle and can share a ZMA dependency with an
+    // explicitly selected ZMA format. Stage by relative name so automatic
+    // export sends one backend member instead of a duplicate-path request.
+    saveBlob: (blob, filename) => prepared.set(filename, { blob, filename }),
     saveText: (content, filename, type = 'text/plain;charset=utf-8') => {
-      prepared.push({ filename, blob: new Blob([content], { type }) });
+      prepared.set(filename, { filename, blob: new Blob([content], { type }) });
     },
   }, formats);
-  if (!prepared.length) return { ...bundle, files: [] };
+  if (!prepared.size) return { ...bundle, files: [] };
   const written = await writeWorkspaceFiles(
     context.jobStem,
-    prepared,
+    [...prepared.values()],
     context.fetcher ?? fetch,
   );
   return { ...bundle, files: written.files };
