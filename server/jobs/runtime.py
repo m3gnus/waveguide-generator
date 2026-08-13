@@ -41,11 +41,8 @@ from server.platform.instance import LOCK_OPEN_FLAGS, lock_exclusive, unlock
 from server.solver.imported import (
     ImportedMeshArtifactError,
     ImportedSymmetryUnsupportedError,
-    global_frequency_caveat,
     imported_symmetry_from_cut_planes,
-    mesh_frequency_validation,
     read_verified_import_mesh,
-    requested_max_frequency_hz,
     verify_record_mesh_text,
 )
 from server.solver.symmetry import resolve_symmetry, validate_symmetry_mode
@@ -312,7 +309,6 @@ class _ImportedSubmission:
     msh_text: str
     mesh_stats: dict[str, Any]
     symmetry_metadata: dict[str, Any]
-    global_frequency_caveat: dict[str, Any] | None
     anchor_design_id: str | None
     anchor_snapshot: dict[str, Any] | None
 
@@ -411,39 +407,6 @@ def _validate_imported_polar_grid(
                     "requested": [requested_start, requested_end],
                 },
             )
-
-
-def _validate_imported_frequency(
-    request: SolveRequest,
-    record: Mapping[str, Any],
-    active_source_ids: set[str],
-) -> dict[str, Any] | None:
-    validation = mesh_frequency_validation(record)
-    requested_max = requested_max_frequency_hz(request)
-    per_source = validation.get("per_source")
-    per_source = per_source if isinstance(per_source, Mapping) else {}
-    exceeded: dict[str, float] = {}
-    for source_id in sorted(active_source_ids):
-        item = per_source.get(source_id)
-        if not isinstance(item, Mapping):
-            raise ImportedSolveRefusal(
-                "ingest_record_incomplete",
-                f"ingestion record has no frequency-validity result for active source {source_id!r}",
-            )
-        limit = float(item.get("effective_max_valid_frequency_hz", 0.0))
-        if requested_max > limit:
-            exceeded[source_id] = limit
-    if exceeded:
-        detail = ", ".join(
-            f"{source_id} (limit {limit:g} Hz)"
-            for source_id, limit in exceeded.items()
-        )
-        raise ImportedSolveRefusal(
-            "source_frequency_limit",
-            f"requested maximum {requested_max:g} Hz exceeds active source limits: {detail}",
-            details={"requested_max_frequency_hz": requested_max, "sources": exceeded},
-        )
-    return global_frequency_caveat(request, record)
 
 
 class _CancelledAtCheckpoint(RuntimeError):
@@ -720,7 +683,6 @@ class JobRuntime:
             task_metadata["imported_geometry"] = {
                 "ingest_id": request.geometry.ingest_id,
                 "anchor_design_id": imported.anchor_design_id,
-                "global_frequency_caveat": imported.global_frequency_caveat,
             }
         job_record = {
             "id": job_id,
@@ -925,7 +887,6 @@ class JobRuntime:
                 "Phase 2 imported solves support diagonal observation only at the default 45-degree inclination",
                 details={"inclination": polar.inclination},
             )
-        caveat = _validate_imported_frequency(request, record, active_sources)
         try:
             msh_text = await asyncio.to_thread(read_verified_import_mesh, record)
         except ImportedMeshArtifactError as exc:
@@ -970,7 +931,6 @@ class JobRuntime:
             msh_text=msh_text,
             mesh_stats=mesh_stats,
             symmetry_metadata=symmetry_metadata,
-            global_frequency_caveat=caveat,
             anchor_design_id=anchor_design_id,
             anchor_snapshot=anchor_snapshot,
         )
