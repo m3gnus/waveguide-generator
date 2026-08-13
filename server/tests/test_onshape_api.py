@@ -11,9 +11,8 @@ import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Mapping
+from typing import Any
 
-from fastapi import HTTPException
 import pytest
 
 from server.cadlink.identity import SaveIdentity, design_hash
@@ -83,6 +82,8 @@ def test_link_round_trips_and_updates_in_place(tmp_path: Path) -> None:
         variable_studio_element_id="VARS",
         feature_studio_element_id="FEATURES",
         native_feature_id="NATIVE-1",
+        datum_feature_studio_element_id="DATUM-FEATURES",
+        datum_feature_id="DATUM-1",
         build_mode="native",
         document_name="Demo Horn",
         is_public=True,
@@ -95,6 +96,8 @@ def test_link_round_trips_and_updates_in_place(tmp_path: Path) -> None:
     assert first["is_public"] == 1
     assert first["feature_studio_element_id"] == "FEATURES"
     assert first["native_feature_id"] == "NATIVE-1"
+    assert first["datum_feature_studio_element_id"] == "DATUM-FEATURES"
+    assert first["datum_feature_id"] == "DATUM-1"
     assert first["build_mode"] == "native"
 
     second = store.save_onshape_link(
@@ -107,6 +110,8 @@ def test_link_round_trips_and_updates_in_place(tmp_path: Path) -> None:
         variable_studio_element_id="VARS",
         feature_studio_element_id="FEATURES",
         native_feature_id="NATIVE-1",
+        datum_feature_studio_element_id="DATUM-FEATURES",
+        datum_feature_id="DATUM-1",
         build_mode="native",
         document_name="Demo Horn",
         is_public=True,
@@ -122,6 +127,8 @@ def test_link_round_trips_and_updates_in_place(tmp_path: Path) -> None:
     assert stored["last_design_hash"] == "hash-2"
     assert stored["feature_studio_element_id"] == "FEATURES"
     assert stored["native_feature_id"] == "NATIVE-1"
+    assert stored["datum_feature_studio_element_id"] == "DATUM-FEATURES"
+    assert stored["datum_feature_id"] == "DATUM-1"
     assert stored["build_mode"] == "native"
 
     rows = store.find_onshape_links_for_lineage(identity.lineage_id)
@@ -306,7 +313,55 @@ def _bundle(tmp_path: Path) -> Path:
     (bundle / "waveguide.step").write_text("ISO-10303-21;\n", encoding="utf-8")
     (bundle / "wglink.json").write_text(
         json.dumps(
-            {"parameters": [{"name": "wg_demo_depth", "value": 190.0, "unit": "mm", "role": "interface"}]}
+            {
+                "parameters": [
+                    {"name": "wg_demo_depth", "value": 190.0, "unit": "mm", "role": "interface"}
+                ],
+                "datums": {
+                    "rim_planar": True,
+                    "WG_AXIS": {"type": "axis", "origin_mm": [0, 0, 0], "direction": [0, 0, 1]},
+                    "WG_THROAT_PLANE": {
+                        "type": "plane",
+                        "origin_mm": [0, 0, 0],
+                        "normal": [0, 0, 1],
+                        "exact": True,
+                    },
+                    "WG_MOUTH_PLANE": {
+                        "type": "plane",
+                        "origin_mm": [0, 0, 190],
+                        "normal": [0, 0, 1],
+                        "exact": True,
+                    },
+                    "WG_MOUTH_OUTLINE_INNER": {
+                        "type": "polyline",
+                        "closed": True,
+                        "points_mm": [[10, 0, 190], [0, 10, 190], [-10, 0, 190]],
+                    },
+                    "WG_MOUTH_OUTLINE_OUTER": {
+                        "type": "polyline",
+                        "closed": True,
+                        "points_mm": [[12, 0, 190], [0, 12, 190], [-12, 0, 190]],
+                    },
+                    "WG_GEOM_MIDPLANE_Y": {
+                        "type": "plane",
+                        "origin_mm": [0, 0, 0],
+                        "normal": [0, 1, 0],
+                        "exact": True,
+                    },
+                    "WG_SOLVER_CUT_PLANE_Y": {
+                        "type": "plane",
+                        "origin_mm": [0, 0, 0],
+                        "normal": [0, 1, 0],
+                        "exact": True,
+                    },
+                    "WG_SOLVER_CUT_PLANE_X": {
+                        "type": "plane",
+                        "origin_mm": [0, 0, 0],
+                        "normal": [1, 0, 0],
+                        "exact": True,
+                    },
+                },
+            }
         ),
         encoding="utf-8",
     )

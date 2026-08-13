@@ -40,6 +40,7 @@ def _manifest(edge_type: int = 2) -> dict:
         "enc_x0": -50.0,
         "enc_y0": -40.0,
         "enc_z_front": 20.0,
+        "vertical_offset": 0.0,
     }
     return {
         "parameters": [
@@ -52,6 +53,72 @@ def _manifest(edge_type: int = 2) -> dict:
             for name, value in values.items()
         ],
         "enclosure": {"edge_type": edge_type},
+        "datums": {
+            "rim_planar": True,
+            "WG_AXIS": {"type": "axis", "origin_mm": [0, 0, 0], "direction": [0, 0, 1]},
+            "WG_THROAT_PLANE": {
+                "type": "plane",
+                "origin_mm": [0, 0, 0],
+                "normal": [0, 0, 1],
+                "exact": True,
+            },
+            "WG_MOUTH_PLANE": {
+                "type": "plane",
+                "origin_mm": [0, 0, 20],
+                "normal": [0, 0, 1],
+                "exact": True,
+            },
+            "WG_MOUTH_OUTLINE_INNER": {
+                "type": "polyline",
+                "closed": True,
+                "points_mm": [[3, 0, 20], [0, 3, 20], [-3, 0, 20]],
+            },
+            "WG_MOUTH_OUTLINE_OUTER": {
+                "type": "polyline",
+                "closed": True,
+                "points_mm": [[50, -40, 20], [50, 40, 20], [-50, 40, 20], [-50, -40, 20]],
+            },
+            "WG_BAFFLE_PLANE": {
+                "type": "plane",
+                "origin_mm": [0, 0, 20],
+                "normal": [0, 0, 1],
+                "exact": True,
+            },
+            "WG_BAFFLE_OUTLINE_FACE": {
+                "type": "polyline",
+                "closed": True,
+                "points_mm": [[46, -36, 20], [46, 36, 20], [-46, 36, 20], [-46, -36, 20]],
+            },
+            "WG_BAFFLE_OUTLINE_ENVELOPE": {
+                "type": "polyline",
+                "closed": True,
+                "points_mm": [[50, -40, 20], [50, 40, 20], [-50, 40, 20], [-50, -40, 20]],
+            },
+            "WG_ENC_BACK_PLANE": {
+                "type": "plane",
+                "origin_mm": [0, 0, -10],
+                "normal": [0, 0, 1],
+                "exact": True,
+            },
+            "WG_GEOM_MIDPLANE_Y": {
+                "type": "plane",
+                "origin_mm": [0, 0, 0],
+                "normal": [0, 1, 0],
+                "exact": True,
+            },
+            "WG_SOLVER_CUT_PLANE_Y": {
+                "type": "plane",
+                "origin_mm": [0, 0, 0],
+                "normal": [0, 1, 0],
+                "exact": True,
+            },
+            "WG_SOLVER_CUT_PLANE_X": {
+                "type": "plane",
+                "origin_mm": [0, 0, 0],
+                "normal": [1, 0, 0],
+                "exact": True,
+            },
+        },
     }
 
 
@@ -94,12 +161,29 @@ def _native_transport() -> FakeTransport:
         "GET", "/documents/DID", 200, {"name": "Horn", "public": False, "trash": False}
     )
     transport.route("POST", "/featurestudios/d/DID/w/WID/e/FS", 204, None)
-    transport.route("POST", "/featurestudios/d/DID/w/WID", 200, {"id": "FS"})
+    transport.route_many(
+        "POST",
+        "/featurestudios/d/DID/w/WID",
+        [(200, {"id": "FS"}), (200, {"id": "DATUM-FS"})],
+    )
     transport.route(
         "GET",
         "/featurestudios/d/DID/w/WID/e/FS/featurespecs",
         200,
         {"featureSpecs": [{"message": {"namespace": "authoritative::namespace"}}]},
+    )
+    transport.route("POST", "/featurestudios/d/DID/w/WID/e/DATUM-FS", 204, None)
+    transport.route(
+        "GET",
+        "/featurestudios/d/DID/w/WID/e/DATUM-FS/featurespecs",
+        200,
+        {"featureSpecs": [{"message": {"namespace": "datum::namespace"}}]},
+    )
+    transport.route(
+        "GET",
+        "/featurestudios/d/DID/w/WID/e/DATUM-FS",
+        200,
+        {"contents": "previous datum source"},
     )
     transport.route(
         "GET",
@@ -111,11 +195,13 @@ def _native_transport() -> FakeTransport:
             "libraryVersion": 3044,
         },
     )
-    transport.route(
+    transport.route_many(
         "POST",
         "/partstudios/d/DID/w/WID/e/PART/features",
-        200,
-        {"feature": {"message": {"featureId": "NATIVE"}}},
+        [
+            (200, {"feature": {"message": {"featureId": "NATIVE"}}}),
+            (200, {"feature": {"message": {"featureId": "DATUM"}}}),
+        ],
     )
     transport.route("POST", "/partstudios/d/DID/w/WID", 200, {"id": "PART"})
     transport.route(
@@ -178,6 +264,8 @@ def test_native_send_creates_studios_pushes_source_and_adds_feature(
     assert result.target.feature_studio_element_id == "FS"
     assert result.target.part_studio_element_id == "PART"
     assert result.target.native_feature_id == "NATIVE"
+    assert result.target.datum_feature_studio_element_id == "DATUM-FS"
+    assert result.target.datum_feature_id == "DATUM"
     assert not [call for call in transport.calls if call["path"].startswith("/blobelements")]
 
     source_call = next(
@@ -215,6 +303,8 @@ def test_second_native_send_updates_feature_without_creating_elements(
             variable_studio_element_id="VARS",
             feature_studio_element_id="FS",
             native_feature_id="NATIVE",
+            datum_feature_studio_element_id="DATUM-FS",
+            datum_feature_id="DATUM",
         ),
     )
     assert result.created_document is False
@@ -235,7 +325,7 @@ def test_empty_feature_specs_reports_the_hidden_compile_error() -> None:
         _adapter(transport).push_feature_studio_source("DID", "WID", "FS", "source")
 
 
-def test_import_mode_never_calls_feature_studio(tmp_path: Path) -> None:
+def test_import_mode_creates_only_the_datum_feature_studio(tmp_path: Path) -> None:
     from test_onshape_adapter import _bundle as import_bundle
     from test_onshape_adapter import _send_transport
 
@@ -247,4 +337,11 @@ def test_import_mode_never_calls_feature_studio(tmp_path: Path) -> None:
         step_filename="demo.step",
     )
     assert result.build_mode == "import"
-    assert not [call for call in transport.calls if "/featurestudios/" in call["path"]]
+    sources = [
+        json.loads(call["body"])["contents"]
+        for call in transport.calls
+        if call["method"] == "POST" and "/featurestudios/" in call["path"] and "/e/" in call["path"]
+    ]
+    assert len(sources) == 1
+    assert "wgManagedDatums" in sources[0]
+    assert "wgWaveguide" not in sources[0]

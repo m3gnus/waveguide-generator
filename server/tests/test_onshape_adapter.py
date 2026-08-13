@@ -55,6 +55,9 @@ class FakeTransport:
     def route(self, method: str, path_suffix: str, status: int, body: Any) -> None:
         self.routes[(method, path_suffix)] = (status, body)
 
+    def route_many(self, method: str, path_suffix: str, replies: list[tuple[int, Any]]) -> None:
+        self.routes[(method, path_suffix)] = replies  # type: ignore[assignment]
+
     def __call__(
         self,
         method: str,
@@ -73,10 +76,19 @@ class FakeTransport:
                 "timeout": timeout,
             }
         )
-        for (route_method, suffix), reply in self.routes.items():
-            if route_method == method and path.startswith(suffix):
+        matching = [
+            (suffix, reply)
+            for (route_method, suffix), reply in self.routes.items()
+            if route_method == method and path.startswith(suffix)
+        ]
+        if matching:
+            _suffix, reply = max(matching, key=lambda item: len(item[0]))
+            if isinstance(reply, list):
+                if not reply:
+                    raise AssertionError(f"no canned reply for {method} {path}")
+                status, payload = reply.pop(0)
+            else:
                 status, payload = reply
-                break
         else:
             if not self.replies:
                 raise AssertionError(f"no canned reply for {method} {path}")
@@ -380,7 +392,59 @@ def _bundle(tmp_path: Path) -> Path:
                 "parameters": [
                     {"name": "wg_demo_throat_dia", "value": 25.4, "unit": "mm", "role": "interface"},
                     {"name": "wg_demo_mouth_w", "value": 320.0, "unit": "mm", "role": "interface"},
+                    {"name": "wg_demo_mouth_h", "value": 240.0, "unit": "mm", "role": "interface"},
+                    {"name": "wg_demo_depth", "value": 100.0, "unit": "mm", "role": "interface"},
+                    {
+                        "name": "wg_demo_vertical_offset",
+                        "value": 0.0,
+                        "unit": "mm",
+                        "role": "interface",
+                    },
                 ],
+                "datums": {
+                    "rim_planar": True,
+                    "WG_AXIS": {"type": "axis", "origin_mm": [0, 0, 0], "direction": [0, 0, 1]},
+                    "WG_THROAT_PLANE": {
+                        "type": "plane",
+                        "origin_mm": [0, 0, 0],
+                        "normal": [0, 0, 1],
+                        "exact": True,
+                    },
+                    "WG_MOUTH_PLANE": {
+                        "type": "plane",
+                        "origin_mm": [0, 0, 100],
+                        "normal": [0, 0, 1],
+                        "exact": True,
+                    },
+                    "WG_GEOM_MIDPLANE_Y": {
+                        "type": "plane",
+                        "origin_mm": [0, 0, 0],
+                        "normal": [0, 1, 0],
+                        "exact": True,
+                    },
+                    "WG_SOLVER_CUT_PLANE_Y": {
+                        "type": "plane",
+                        "origin_mm": [0, 0, 0],
+                        "normal": [0, 1, 0],
+                        "exact": True,
+                    },
+                    "WG_SOLVER_CUT_PLANE_X": {
+                        "type": "plane",
+                        "origin_mm": [0, 0, 0],
+                        "normal": [1, 0, 0],
+                        "exact": True,
+                    },
+                    "WG_MOUTH_OUTLINE_INNER": {
+                        "type": "polyline",
+                        "closed": True,
+                        "points_mm": [[160, 0, 100], [0, 120, 100], [-160, 0, 100]],
+                    },
+                    "WG_MOUTH_OUTLINE_OUTER": {
+                        "type": "polyline",
+                        "closed": True,
+                        "points_mm": [[166, 0, 100], [0, 126, 100], [-166, 0, 100]],
+                    },
+                },
             }
         ),
         encoding="utf-8",
@@ -409,6 +473,32 @@ def _send_transport() -> FakeTransport:
     transport.route("POST", "/variables/d/DID/w/WID/e/VARS/variablestudioscope", 204, None)
     transport.route("POST", "/variables/d/DID/w/WID/e/VARS/variables", 204, None)
     transport.route("POST", "/variables/d/DID/w/WID/e/PART/variablestudioreferences", 204, None)
+    transport.route("POST", "/featurestudios/d/DID/w/WID", 200, {"id": "DATUM-FS"})
+    transport.route("POST", "/featurestudios/d/DID/w/WID/e/DATUM-FS", 204, None)
+    transport.route(
+        "GET",
+        "/featurestudios/d/DID/w/WID/e/DATUM-FS/featurespecs",
+        200,
+        {"featureSpecs": [{"message": {"namespace": "datum::namespace"}}]},
+    )
+    transport.route(
+        "GET",
+        "/featurestudios/d/DID/w/WID/e/DATUM-FS",
+        200,
+        {"contents": "previous datum source"},
+    )
+    transport.route(
+        "GET",
+        "/partstudios/d/DID/w/WID/e/PART/features",
+        200,
+        {"serializationVersion": "1.2.3", "sourceMicroversion": "micro", "libraryVersion": 3044},
+    )
+    transport.route(
+        "POST",
+        "/partstudios/d/DID/w/WID/e/PART/features",
+        200,
+        {"feature": {"message": {"featureId": "DATUM"}}},
+    )
     transport.route(
         "GET",
         "/documents/d/DID/w/WID/elements",
@@ -433,8 +523,10 @@ def test_first_send_creates_a_document_and_pushes_variables(tmp_path: Path) -> N
         blob_element_id="BLOB",
         part_studio_element_id="PART",
         variable_studio_element_id="VARS",
+        datum_feature_studio_element_id="DATUM-FS",
+        datum_feature_id="DATUM",
     )
-    assert result.variables_pushed == 2
+    assert result.variables_pushed == 5
     assert result.is_public is False
     assert result.document_url == "https://cad.onshape.com/documents/DID/w/WID"
     assert result.part_names == ("demo",)
@@ -445,7 +537,13 @@ def test_first_send_creates_a_document_and_pushes_variables(tmp_path: Path) -> N
             if call["path"] == "/variables/d/DID/w/WID/e/VARS/variables"
         )["body"]
     )
-    assert [item["name"] for item in pushed] == ["wg_demo_throat_dia", "wg_demo_mouth_w"]
+    assert [item["name"] for item in pushed] == [
+        "wg_demo_throat_dia",
+        "wg_demo_mouth_w",
+        "wg_demo_mouth_h",
+        "wg_demo_depth",
+        "wg_demo_vertical_offset",
+    ]
 
 
 def test_second_send_updates_in_place_without_creating_anything(tmp_path: Path) -> None:
@@ -465,6 +563,8 @@ def test_second_send_updates_in_place_without_creating_anything(tmp_path: Path) 
             blob_element_id="BLOB",
             part_studio_element_id="PART",
             variable_studio_element_id="VARS",
+            datum_feature_studio_element_id="DATUM-FS",
+            datum_feature_id="DATUM",
         ),
     )
     assert result.created_document is False
@@ -545,7 +645,7 @@ def test_a_refused_reference_does_not_fail_a_send(tmp_path: Path) -> None:
         document_name="Demo Horn",
         step_filename="demo.step",
     )
-    assert result.variables_pushed == 2, "the geometry and variables still landed"
+    assert result.variables_pushed == 5, "the geometry and variables still landed"
 
 
 def test_a_refused_scope_does_not_fail_a_send(tmp_path: Path) -> None:
@@ -557,7 +657,7 @@ def test_a_refused_scope_does_not_fail_a_send(tmp_path: Path) -> None:
         document_name="Demo Horn",
         step_filename="demo.step",
     )
-    assert result.variables_pushed == 2, "the geometry and variables still landed"
+    assert result.variables_pushed == 5, "the geometry and variables still landed"
 
 
 def test_an_update_leaves_variable_scope_and_references_alone(tmp_path: Path) -> None:
