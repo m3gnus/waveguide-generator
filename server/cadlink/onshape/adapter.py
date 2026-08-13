@@ -292,7 +292,11 @@ class OnshapeAdapter:
         return element_id, translation_id
 
     def await_translation(
-        self, translation_id: str, *, timeout_s: float = TRANSLATION_TIMEOUT_S
+        self,
+        translation_id: str,
+        *,
+        timeout_s: float = TRANSLATION_TIMEOUT_S,
+        operation: str = "importing the waveguide STEP",
     ) -> dict[str, Any]:
         """Poll one translation to ``DONE``, with the backoff Onshape asks for.
 
@@ -313,16 +317,77 @@ class OnshapeAdapter:
             if state == "FAILED":
                 reason = _string(body.get("failureReason")) or "no reason given"
                 raise OnshapeTranslationFailed(
-                    f"Onshape could not import the waveguide STEP: {reason}"
+                    f"Onshape failed while {operation}: {reason}"
                 )
             if self._monotonic() >= deadline:
                 raise OnshapeTranslationFailed(
-                    "Onshape did not finish importing the waveguide within "
+                    f"Onshape did not finish {operation} within "
                     f"{int(timeout_s)} seconds. The upload may still complete; "
                     "check the document in Onshape before sending again."
                 )
             self._sleep(delay)
             delay = min(delay * 1.5, _POLL_MAX_S)
+
+    def create_step_export(
+        self,
+        document_id: str,
+        workspace_id: str,
+        part_studio_id: str,
+    ) -> str:
+        """Start the official asynchronous Part Studio → STEP translation."""
+
+        response = self._client.post(
+            f"/partstudios/d/{document_id}/w/{workspace_id}/e/{part_studio_id}/translations",
+            json_body={
+                "formatName": "STEP",
+                "storeInDocument": False,
+                "translate": True,
+            },
+            timeout=TRANSLATION_TIMEOUT_S,
+        )
+        body = response.body if isinstance(response.body, Mapping) else {}
+        translation_id = _string(body.get("id"))
+        if translation_id is None:
+            raise OnshapeTranslationFailed(
+                "Onshape accepted the STEP export request but did not return a translation id."
+            )
+        return translation_id
+
+    def await_step_export(
+        self, translation_id: str, *, timeout_s: float = TRANSLATION_TIMEOUT_S
+    ) -> tuple[dict[str, Any], str]:
+        """Wait for a STEP export and return its single external-data id."""
+
+        result = self.await_translation(
+            translation_id,
+            timeout_s=timeout_s,
+            operation="exporting the linked Part Studio to STEP",
+        )
+        external = result.get("resultExternalDataIds")
+        ids = (
+            [value for item in external if (value := _string(item))]
+            if isinstance(external, list)
+            else []
+        )
+        if len(ids) != 1:
+            raise OnshapeTranslationFailed(
+                "Onshape finished the STEP export but did not report exactly one "
+                f"external data file (reported {len(ids)})."
+            )
+        return result, ids[0]
+
+    def download_external_data(self, document_id: str, foreign_id: str) -> bytes:
+        """Retrieve exact translated bytes through the credential-safe client."""
+
+        response = self._client.request_bytes(
+            "GET", f"/documents/d/{document_id}/externaldata/{foreign_id}"
+        )
+        payload = response.body
+        if not isinstance(payload, bytes) or not payload:
+            raise OnshapeTranslationFailed(
+                "Onshape returned an empty body for the completed STEP export."
+            )
+        return payload
 
     # -- native features --------------------------------------------------
 

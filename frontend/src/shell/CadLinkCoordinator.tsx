@@ -9,7 +9,7 @@ import {
   type FusionCadStatus,
 } from '../api/cadlink';
 import { sendDesignToCad, type WgLinkExportResponse } from '../api/designIo';
-import { getOnshapeConnection, getOnshapeStatus, type OnshapeConnection, type OnshapeStatus } from '../api/onshape';
+import { getOnshapeConnection, getOnshapeStatus, returnOnshapeToWg, type OnshapeConnection, type OnshapeStatus } from '../api/onshape';
 import { preferencesStore, usePreferences } from '../prefs/preferences';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { subscribeRevision, useDesignStore } from '../stores/design';
@@ -39,6 +39,7 @@ interface CadLinkCoordinatorSnapshot {
   onshapeConnection: OnshapeConnection | null;
   refresh(options?: RefreshOptions): Promise<void>;
   refreshOnshapeStatus(committed?: DesignIdentity): Promise<void>;
+  returnFromOnshape(): Promise<void>;
   expectFusionReturn(requestId: string, requestedAt?: number): void;
   ingest(): Promise<void>;
   sendToFusion(target?: { documentId: string; returnStateHash: string | null }): Promise<WgLinkExportResponse>;
@@ -63,6 +64,7 @@ let bridgeSnapshot: CadLinkCoordinatorSnapshot = {
   onshapeConnection: null,
   refresh: unavailable,
   refreshOnshapeStatus: unavailableRefreshOnshape,
+  returnFromOnshape: unavailable,
   expectFusionReturn: () => undefined,
   ingest: unavailable,
   sendToFusion: unavailable,
@@ -440,6 +442,58 @@ export function CadLinkCoordinator() {
     }
   }, [reportViewportNotice]);
 
+  const returnFromOnshape = useCallback(async () => {
+    if (!identity?.designId) throw new Error('Send this design to Onshape before returning it.');
+    const ingestGeneration = useCadReturnStore.getState().beginIngestIntent();
+    const viewportGeneration = importedMeshStore.beginIntent();
+    setIngesting(true); setError(null); setStatus(null); setViewportNotice(null);
+    try {
+      const result = await returnOnshapeToWg(identity.designId);
+      const sources = result.ingest.sources.map((source) => ({
+        id: source.id,
+        role: source.role,
+        required: source.required,
+        suggestedResolutionMm: source.suggested_resolution_mm,
+        defaultDriveChannelId: source.default_drive_channel_id,
+      }));
+      const bundle: CadReturnBundle = {
+        name: result.bundle.name,
+        bundlePath: result.bundle.bundlePath,
+        modifiedAt: result.ingest.created_at,
+        readable: true,
+        documentName: result.bundle.documentName,
+        requestId: null,
+        sourceCount: result.bundle.sourceCount,
+        instanceCount: result.bundle.instanceCount,
+        sources,
+      };
+      const state = useCadReturnStore.getState();
+      state.selectBundle(bundle);
+      const selectedGeneration = state.beginIngestIntent();
+      if (!useCadReturnStore.getState().applyIngest(result.ingest, selectedGeneration)) {
+        setStatus('Discarded the Onshape return because the selected design changed.');
+        return;
+      }
+      setBundles([bundle]);
+      setStatus(`Returned and ingested ${result.bundle.documentName ?? result.bundle.name} from Onshape.`);
+      workspaceNavigation.activate('cadlink');
+      void showIngestedMeshInViewport(
+        result.ingest,
+        result.bundle.documentName ?? result.bundle.name,
+        reportViewportNotice,
+        fetch,
+        viewportGeneration,
+      );
+    } catch (reason) {
+      if (useCadReturnStore.getState().isCurrentIngestIntent(ingestGeneration)) {
+        setError(reason instanceof Error ? reason.message : String(reason));
+      }
+      throw reason;
+    } finally {
+      setIngesting(false);
+    }
+  }, [identity?.designId, reportViewportNotice]);
+
   const clearFeedback = useCallback(() => { setError(null); setStatus(null); }, []);
   const reportError = useCallback((message: string) => setError(message), []);
   const reportStatus = useCallback((message: string) => setStatus(message), []);
@@ -458,6 +512,7 @@ export function CadLinkCoordinator() {
       onshapeConnection,
       refresh,
       refreshOnshapeStatus,
+      returnFromOnshape,
       expectFusionReturn,
       ingest,
       sendToFusion,
@@ -480,6 +535,7 @@ export function CadLinkCoordinator() {
       onshapeConnection: null,
       refresh: unavailable,
       refreshOnshapeStatus: unavailableRefreshOnshape,
+      returnFromOnshape: unavailable,
       expectFusionReturn: () => undefined,
       ingest: unavailable,
       sendToFusion: unavailable,
@@ -502,6 +558,7 @@ export function CadLinkCoordinator() {
     onshapeStatus,
     refresh,
     refreshOnshapeStatus,
+    returnFromOnshape,
     reportError,
     reportStatus,
     reportViewportNotice,
