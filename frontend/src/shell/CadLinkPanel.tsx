@@ -214,31 +214,59 @@ function RecordSummary({ record }: { record: CadReturnIngestRecord }) {
   </>;
 }
 
-/** Show the ingested solve mesh in the viewport: in CAD Link mode the model
- * being solved is the CAD return, not the parametric preview. Advisory — a
- * failure leaves the viewport as it was rather than blocking the ingest. */
-async function showIngestedMeshInViewport(
-  ingestId: string,
+/** Prefer the independently tessellated full CAD display artifact. Older
+ * records and advisory display failures fall back to the exact solver mesh. */
+export async function showIngestedMeshInViewport(
+  record: CadReturnIngestRecord,
   name: string,
-  symmetryCutPlanes: readonly string[] = [],
+  onNotice?: (notice: string) => void,
+  fetcher: typeof fetch = fetch,
 ): Promise<void> {
+  const ingestId = record.ingest_id;
   const available = importedMeshStore.getSnapshot().scene;
   if (available?.source === 'cad' && available.ingestId === ingestId) {
     importedMeshStore.showImported();
     return;
   }
   try {
-    const response = await fetch(`/api/cadlink/ingest/${encodeURIComponent(ingestId)}/mesh`);
+    const response = await fetcher(`/api/cadlink/ingest/${encodeURIComponent(ingestId)}/viewport-mesh`);
+    if (response.ok) {
+      importedMeshStore.set(createImportedMeshScene(
+        name,
+        parseMSH(await response.text()),
+        'cad',
+        ingestId,
+        record.symmetry.cut_planes ?? [],
+        {
+          fullDomain: true,
+          solvedTriangleCount: record.mesh?.stats.triangle_count,
+          artifactToken: record.viewport_mesh?.content_sha256 ?? `${ingestId}:viewport`,
+        },
+      ));
+      return;
+    }
+    if (response.status === 409) {
+      onNotice?.('The independent CAD viewport artifact failed verification. Showing the exact solver mesh instead.');
+    }
+  } catch {
+    // The independent display artifact is advisory; try the solver artifact.
+  }
+  try {
+    const response = await fetcher(`/api/cadlink/ingest/${encodeURIComponent(ingestId)}/mesh`);
     if (!response.ok) return;
     importedMeshStore.set(createImportedMeshScene(
       name,
       parseMSH(await response.text()),
       'cad',
       ingestId,
-      symmetryCutPlanes,
+      record.symmetry.cut_planes ?? [],
+      {
+        solvedTriangleCount: record.mesh?.stats.triangle_count,
+        artifactToken: record.mesh_content_sha256 ?? `${ingestId}:solver`,
+      },
     ));
   } catch {
-    // The viewport keeps whatever it was showing.
+    // The viewport keeps whatever it was showing if both artifacts fail.
   }
 }
 
@@ -301,6 +329,7 @@ export function CadLinkPanel() {
   const [confirmWgOverwrite, setConfirmWgOverwrite] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
+  const [viewportNotice, setViewportNotice] = useState<string | null>(null);
   const [fusionStatus, setFusionStatus] = useState<FusionCadStatus | null>(null);
   const seenReturnRevisions = useRef<Map<string, string> | null>(null);
   const fusionStatusRequest = useRef(0);
@@ -403,7 +432,7 @@ export function CadLinkPanel() {
   const ingest = async () => {
     const current = useCadReturnStore.getState();
     if (!current.selectedBundle) return;
-    setIngesting(true); setError(null); setStatus(null);
+    setIngesting(true); setError(null); setStatus(null); setViewportNotice(null);
     try {
       const skipped = new Set(current.skippedSourceIds);
       const record = await ingestReturn({
@@ -419,9 +448,9 @@ export function CadLinkPanel() {
       current.applyIngest(record);
       setStatus(`Ingested ${record.ingest_id}. Review the verdicts before solving.`);
       void showIngestedMeshInViewport(
-        record.ingest_id,
+        record,
         current.selectedBundle.documentName || current.selectedBundle.name,
-        record.symmetry.cut_planes ?? [],
+        setViewportNotice,
       );
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : String(reason);
@@ -528,12 +557,13 @@ export function CadLinkPanel() {
     {!fusionStatus?.fusionChangesAvailable && canRequestFusionReturn && <button className="cad-secondary-action" disabled={requestingReturn} onClick={() => void bringFromFusion()}>{requestingReturn ? 'Requesting…' : 'Refresh geometry from Fusion'}</button>}
     {error && <div className="cad-alert" role="alert">{error}</div>}
     {state.ingestStaleReason && <div className="cad-alert" role="status">{state.ingestStaleReason} Re-ingest before solving.</div>}
+    {viewportNotice && <div className="cad-alert" role="status">{viewportNotice}</div>}
     {status && <div className="cad-status-strip" role="status">{status}</div>}
     {state.selectedBundle?.readable && <div className="cad-return-quick-action">
       <div><b>{state.selectedBundle.documentName ?? state.selectedBundle.name}</b><span>{state.ingestRecord ? 'Choose what the viewport displays.' : 'Prepare this Fusion return for the viewport and solver.'}</span></div>
       {state.ingestRecord ? <div className="cad-viewport-source-buttons" aria-label="CAD viewport source">
         <button className={!viewportMesh.active ? 'active' : ''} aria-pressed={!viewportMesh.active} onClick={() => importedMeshStore.showParametric()}>Parametric</button>
-        <button className={viewportMesh.active ? 'active' : ''} aria-pressed={viewportMesh.active} onClick={() => void showIngestedMeshInViewport(state.ingestRecord!.ingest_id, state.selectedBundle!.documentName || state.selectedBundle!.name, state.ingestRecord!.symmetry.cut_planes ?? [])}>Fusion CAD</button>
+        <button className={viewportMesh.active ? 'active' : ''} aria-pressed={viewportMesh.active} onClick={() => { setViewportNotice(null); void showIngestedMeshInViewport(state.ingestRecord!, state.selectedBundle!.documentName || state.selectedBundle!.name, setViewportNotice); }}>Fusion CAD</button>
       </div> : <button className="primary" disabled={ingesting} onClick={() => void ingest()}>{ingesting ? 'Preparing…' : 'Prepare simulation'}</button>}
     </div>}
     {!loading && error?.includes('No workspace folder') && <div className="empty-state"><b>No workspace selected</b><span>Choose a workspace folder in Settings, then refresh this panel.</span></div>}

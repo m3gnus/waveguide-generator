@@ -10,6 +10,7 @@ from server.mesh.imported import (
     RoleResolutionError,
     allocate_imported_tags,
     imported_tessellation_settings,
+    imported_viewport_tessellation_settings,
     resolve_instance_source,
     resolve_user_source,
     rigid_inverse,
@@ -55,6 +56,17 @@ def test_imported_tessellation_is_curvature_aware_but_bounded() -> None:
         "mesh_size_max_mm": 12.0,
         "algorithm": 6,
     }
+
+
+def test_imported_viewport_tessellation_is_scale_based_and_coarsens() -> None:
+    first = imported_viewport_tessellation_settings([0, 0, 0, 420, 400, 300])
+    second = imported_viewport_tessellation_settings(
+        [0, 0, 0, 420, 400, 300], retry=1
+    )
+    assert 1.0 <= first["mesh_size_max_mm"] <= 6.0
+    assert first["curvature_segments_per_2pi"] == 48
+    assert second["mesh_size_max_mm"] > first["mesh_size_max_mm"]
+    assert second["curvature_segments_per_2pi"] < first["curvature_segments_per_2pi"]
 
 
 def test_rigid_transform_refuses_scale_and_mirror() -> None:
