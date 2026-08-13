@@ -196,6 +196,15 @@ def test_parameterized_expression_cached_value_survives_schema_wire_round_trip()
     assert reopened.root.a.raw == "45 + cos(p)"
 
 
+def test_morph_target_shape_remains_expression_capable() -> None:
+    design = DesignConfig.model_validate(
+        {"formula": "OSSE", "morph": {"target_shape": "2 + (p > 0)"}}
+    )
+
+    assert design.root.morph.target_shape is not None
+    assert design.root.morph.target_shape.raw == "2 + (p > 0)"
+
+
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), {"value": "NaN"}])
 def test_expr_rejects_non_finite_values(value: object) -> None:
     with pytest.raises(ValidationError, match="finite"):

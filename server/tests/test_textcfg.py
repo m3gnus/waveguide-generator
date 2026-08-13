@@ -104,6 +104,35 @@ def test_new_design_uses_v1_header_v2_discriminator_and_writer_order() -> None:
     assert parse(text).design.formula == "OSSE"
 
 
+@pytest.mark.parametrize("exponent", [6, "4 + 2*cos(p)"])
+def test_morph_exponent_round_trips_through_exact_text_key(exponent: int | str) -> None:
+    design = DesignConfig.model_validate(
+        {
+            "formula": "OSSE",
+            "morph": {"target_shape": 3, "target_exponent": exponent},
+        }
+    )
+
+    text = serialize(design)
+    assert f"Morph.Exponent = {exponent}\n" in text
+
+    reopened = parse(text).design.root.morph.target_exponent
+    assert reopened is not None
+    assert reopened.text() == str(exponent)
+
+
+def test_morph_exponent_is_mapped_while_unknown_key_remains_passthrough() -> None:
+    parsed = parse(
+        "OSSE = {\n}\nMorph.Exponent = 6\nMorph.FutureOption = alpha=beta\n"
+    )
+
+    exponent = parsed.design.root.morph.target_exponent
+    assert exponent is not None
+    assert exponent.value == 6
+    assert "Morph.Exponent" not in parsed.extra_keys
+    assert parsed.extra_keys["Morph.FutureOption"] == "alpha=beta"
+
+
 @pytest.mark.parametrize(
     ("raw", "value"),
     [("6.35*2", 12.7), ("10 + 2*p", None)],

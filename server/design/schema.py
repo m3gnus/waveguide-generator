@@ -502,6 +502,7 @@ class ConfigBlock(StrictModel):
 
 class MorphConfig(StrictModel):
     target_shape: Expr | None = None
+    target_exponent: Expr | None = None
     target_width: Expr | None = None
     target_height: Expr | None = None
     corner_radius: Expr | None = None
