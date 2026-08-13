@@ -67,7 +67,7 @@ function WorkspaceSettings() {
 
   return <section className="settings-theme workspace-settings" aria-labelledby="settings-workspace-title" aria-busy={busy !== undefined}>
     <h3 id="settings-workspace-title">Workspace</h3>
-    <p className="cad-settings-note">Automatic results are saved here. The default is the <code>output</code> folder beside Waveguide Generator; AppData continues to hold internal databases and logs, not new automatic exports.</p>
+    <p className="cad-settings-note">Manual and automatic run exports are saved here. The default is the <code>output</code> folder beside Waveguide Generator; AppData continues to hold internal databases and logs, not result exports.</p>
     <p className="workspace-settings-path" title={path}>{path ?? (error ? 'Unavailable' : 'Loading…')}</p>
     <div className="settings-theme-options">
       <button disabled={!path || busy !== undefined} onClick={() => void run('open')}>Open folder</button>
