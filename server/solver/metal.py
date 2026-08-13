@@ -1410,6 +1410,13 @@ def solve_imported_metal_from_msh_text(
                 channel_metadata = channel_response["metadata"]
                 channel_metadata["impedance_units"] = "ohms"
                 channel_metadata["impedance_quantity"] = "electrical_input_impedance"
+                # hornlab_sim's LEM uses engineering +jω throughout. The
+                # channel's pressure tag remains exp(+ikr), so impedance needs
+                # its own tag or an exporter could faithfully apply the wrong
+                # sign while trying to honour the acoustic convention.
+                channel_metadata["impedance_phase_convention"] = (
+                    "engineering_exp_plus_jwt"
+                )
                 channel_metadata["impedance_drive"] = "voltage"
                 channel_metadata["driver"] = driver_payload
                 channel_metadata["drive"] = {

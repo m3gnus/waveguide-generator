@@ -1384,6 +1384,7 @@ def test_driver_channel_scales_fields_and_reports_electrical_impedance(
     metadata = driven["metadata"]
     assert metadata["impedance_units"] == "ohms"
     assert metadata["impedance_quantity"] == "electrical_input_impedance"
+    assert metadata["impedance_phase_convention"] == "engineering_exp_plus_jwt"
     assert metadata["impedance_drive"] == "voltage"
     assert metadata["drive"] == {"voltage_v": 2.83, "rg_ohm": 0.0}
     assert metadata["driver"]["source_id"] == "source-c"
