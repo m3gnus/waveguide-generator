@@ -134,6 +134,329 @@ interface PartialResultMessage {
   result: JobResults;
 }
 
+type JsonRecord = Record<string, unknown>;
+type EventType = EventMessage['type'];
+
+const EVENT_TYPES = new Set<EventType>([
+  'queued', 'started', 'progress', 'stage', 'log', 'completed', 'failed',
+  'cancelled', 'deleted', 'metadata',
+]);
+const FORBIDDEN_JSON_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
+
+function isRecord(value: unknown): value is JsonRecord {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function hasOwn(record: JsonRecord, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(record, key);
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) >= 0;
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === 'string';
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+function isNullableNumber(value: unknown): boolean {
+  return value === null || isFiniteNumber(value);
+}
+
+function isNumberArray(value: unknown, nullable = false): value is number[] {
+  return Array.isArray(value) && value.every(nullable ? isNullableNumber : isFiniteNumber);
+}
+
+/** Reject non-JSON values and keys that are hazardous when records are merged. */
+function isSafeJson(value: unknown, depth = 0): boolean {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return true;
+  if (isFiniteNumber(value)) return true;
+  if (depth >= 40) return false;
+  if (Array.isArray(value)) return value.every((item) => isSafeJson(item, depth + 1));
+  if (!isRecord(value)) return false;
+  return Object.entries(value).every(([key, item]) => (
+    !FORBIDDEN_JSON_KEYS.has(key) && isSafeJson(item, depth + 1)
+  ));
+}
+
+function isTimestamp(value: unknown): value is string {
+  return typeof value === 'string' && Number.isFinite(Date.parse(value));
+}
+
+function isNullableTimestamp(value: unknown): value is string | null {
+  return value === null || isTimestamp(value);
+}
+
+function isAutoExportFormats(value: unknown): value is JobItem['auto_export_formats'] {
+  // Older rows and future exporters may attach fields beyond the current
+  // complete/failed UI projection. The UI treats unrecognised entries as not
+  // complete, so retaining safe objects is the forward-compatible choice.
+  return isRecord(value)
+    && isSafeJson(value)
+    && Object.values(value).every((entry) => isRecord(entry));
+}
+
+/**
+ * Snapshot rows are durable application state. Validate all fields consumed by
+ * the UI and reject unsafe nested JSON before a row reaches sorting or merges.
+ * Unknown safe fields are retained so additive server changes stay compatible.
+ */
+function isJobItem(value: unknown): value is JobItem {
+  if (!isRecord(value) || !isSafeJson(value)) return false;
+  if (typeof value.id !== 'string' || value.id.length === 0) return false;
+  if (!Number.isSafeInteger(value.run_number) || Number(value.run_number) < 1) return false;
+  if (!(value.parent_job_id === null || typeof value.parent_job_id === 'string')) return false;
+  if (!['queued', 'running', 'complete', 'error', 'cancelled'].includes(String(value.status))) return false;
+  if (!isFiniteNumber(value.progress) || value.progress < 0 || value.progress > 1) return false;
+  if (!isNullableString(value.stage) || !isNullableString(value.stage_message)) return false;
+  if (!isTimestamp(value.created_at) || !isTimestamp(value.queued_at)) return false;
+  if (!isNullableTimestamp(value.started_at) || !isNullableTimestamp(value.completed_at)) return false;
+  if (!isRecord(value.config_summary) || !isRecord(value.solve_options)) return false;
+  if (typeof value.has_results !== 'boolean' || typeof value.has_mesh_artifact !== 'boolean') return false;
+  if (!isNullableString(value.label) || !isNullableString(value.error_message)) return false;
+  if (typeof value.cancellation_requested !== 'boolean') return false;
+  if (!(value.mesh_stats === null || isRecord(value.mesh_stats))) return false;
+  if (!(value.script_snapshot === null || isRecord(value.script_snapshot))) return false;
+  if (!isNonNegativeInteger(value.design_revision) || !isRecord(value.polar_grid)) return false;
+  if (!(value.rating === null || (
+    Number.isSafeInteger(value.rating) && Number(value.rating) >= 0 && Number(value.rating) <= 5
+  ))) return false;
+  if (!isStringArray(value.exported_files)) return false;
+  if (!isNullableTimestamp(value.auto_export_completed_at)) return false;
+  if (!isAutoExportFormats(value.auto_export_formats)) return false;
+  if (!isNullableString(value.raw_results_file) || !isNullableString(value.mesh_artifact_file)) return false;
+  if (!isStringArray(value.log_tail)) return false;
+  if (hasOwn(value, 'results_discarded_at') && !isNullableTimestamp(value.results_discarded_at)) return false;
+  if (hasOwn(value, 'mesh_discarded_at') && !isNullableTimestamp(value.mesh_discarded_at)) return false;
+  if (hasOwn(value, 'solve_path') && !(
+    value.solve_path === null || value.solve_path === 'full-3d' || value.solve_path === 'axisymmetric-meridian'
+  )) return false;
+  if (hasOwn(value, 'axisymmetric_eligibility_reasons') && !isStringArray(value.axisymmetric_eligibility_reasons)) return false;
+  if (hasOwn(value, 'solve_wall_time_seconds') && !(
+    value.solve_wall_time_seconds === null
+    || (isFiniteNumber(value.solve_wall_time_seconds) && value.solve_wall_time_seconds >= 0)
+  )) return false;
+  return true;
+}
+
+function isJobResults(value: unknown, depth = 0): value is JobResults {
+  if (depth >= 8 || !isRecord(value) || !isSafeJson(value)) return false;
+  if (!isNumberArray(value.frequencies)) return false;
+  for (const blockName of ['spl_on_axis', 'impedance'] as const) {
+    if (!hasOwn(value, blockName)) continue;
+    const block = value[blockName];
+    if (!isRecord(block)) return false;
+    for (const key of ['frequencies', 'spl', 'phase_degrees', 'real', 'imaginary']) {
+      if (hasOwn(block, key) && !isNumberArray(block[key], true)) return false;
+    }
+  }
+  if (hasOwn(value, 'di')) {
+    const block = value.di;
+    if (!isRecord(block)) return false;
+    if (hasOwn(block, 'frequencies') && !isNumberArray(block.frequencies)) return false;
+    if (hasOwn(block, 'di')) {
+      const values = block.di;
+      if (!isNumberArray(values, true) && !(
+        isRecord(values) && Object.values(values).every((series) => isNumberArray(series, true))
+      )) return false;
+    }
+  }
+  for (const blockName of ['directivity', 'directivity_phase'] as const) {
+    if (!hasOwn(value, blockName)) continue;
+    const block = value[blockName];
+    if (!isRecord(block)) return false;
+    const validSample = (sample: unknown): boolean => (
+      Array.isArray(sample)
+      && sample.length === 2
+      && isFiniteNumber(sample[0])
+      && (isNullableNumber(sample[1]) || (
+        Array.isArray(sample[1])
+        && sample[1].length === 2
+        && sample[1].every(isFiniteNumber)
+      ))
+    );
+    if (!Object.values(block).every((rows) => (
+      Array.isArray(rows)
+      && rows.every((row) => Array.isArray(row) && row.every(validSample))
+    ))) return false;
+  }
+  if (hasOwn(value, 'metadata') && !isRecord(value.metadata)) return false;
+  if (hasOwn(value, 'balloon')) {
+    const balloon = value.balloon;
+    if (!isRecord(balloon)) return false;
+    if (!isNumberArray(balloon.frequencies) || !isNumberArray(balloon.theta_deg) || !isNumberArray(balloon.phi_deg)) return false;
+    if (!Array.isArray(balloon.spl_norm_db) || !balloon.spl_norm_db.every((grid) => (
+      Array.isArray(grid)
+      && grid.every((row) => isNumberArray(row, true))
+    ))) return false;
+    if (hasOwn(balloon, 'distance_m') && !isFiniteNumber(balloon.distance_m)) return false;
+    if (hasOwn(balloon, 'hemisphere') && typeof balloon.hemisphere !== 'boolean') return false;
+  }
+  if (hasOwn(value, 'beam_shape')) {
+    const beam = value.beam_shape;
+    if (!isRecord(beam)) return false;
+    for (const key of [
+      'frequencies', 'shape_exponent', 'fit_residual_percent',
+      'horizontal_beamwidth_deg', 'vertical_beamwidth_deg', 'aspect_ratio',
+      'spherical_di_db',
+    ]) {
+      if (hasOwn(beam, key) && !isNumberArray(beam[key], true)) return false;
+    }
+    if (hasOwn(beam, 'valid') && !(
+      Array.isArray(beam.valid) && beam.valid.every((item) => typeof item === 'boolean')
+    )) return false;
+    if (hasOwn(beam, 'level_db') && !isFiniteNumber(beam.level_db)) return false;
+    for (const key of ['di_domain', 'di_sampling_domain']) {
+      if (hasOwn(beam, key) && typeof beam[key] !== 'string') return false;
+    }
+  }
+  if (hasOwn(value, 'channel_order') && !isStringArray(value.channel_order)) return false;
+  if (hasOwn(value, 'channels')) {
+    if (!isRecord(value.channels)) return false;
+    if (!Object.values(value.channels).every((result) => isJobResults(result, depth + 1))) return false;
+  }
+  return true;
+}
+
+function optionalEpochIsValid(message: JsonRecord): boolean {
+  return !hasOwn(message, 'epoch') || isNonNegativeInteger(message.epoch);
+}
+
+function parseHello(message: JsonRecord): HelloMessage | null {
+  if (!isNonNegativeInteger(message.epoch)) return null;
+  if (!isFiniteNumber(message.heartbeatSec) || message.heartbeatSec <= 0) return null;
+  return message as unknown as HelloMessage;
+}
+
+function parseSnapshot(message: JsonRecord): SnapshotMessage | null {
+  if (!optionalEpochIsValid(message) || !isNonNegativeInteger(message.cursor) || !Array.isArray(message.jobs)) return null;
+  if (!message.jobs.every(isJobItem)) return null;
+  const ids = new Set(message.jobs.map((job) => job.id));
+  if (ids.size !== message.jobs.length) return null;
+  return message as unknown as SnapshotMessage;
+}
+
+function sanitizeMetadataChanges(value: unknown): Partial<JobItem> & JsonRecord | null {
+  if (!isRecord(value)) return null;
+  const patch: Partial<JobItem> & JsonRecord = {};
+  if (hasOwn(value, 'label')) {
+    if (!isNullableString(value.label)) return null;
+    patch.label = value.label;
+  }
+  if (hasOwn(value, 'rating')) {
+    if (!(value.rating === null || (Number.isSafeInteger(value.rating) && Number(value.rating) >= 0 && Number(value.rating) <= 5))) return null;
+    patch.rating = value.rating as number | null;
+  }
+  if (hasOwn(value, 'exported_files')) {
+    if (!isStringArray(value.exported_files)) return null;
+    patch.exported_files = value.exported_files;
+  }
+  if (hasOwn(value, 'auto_export_completed_at')) {
+    if (!isNullableTimestamp(value.auto_export_completed_at)) return null;
+    patch.auto_export_completed_at = value.auto_export_completed_at;
+  }
+  if (hasOwn(value, 'auto_export_formats')) {
+    if (!isAutoExportFormats(value.auto_export_formats)) return null;
+    patch.auto_export_formats = value.auto_export_formats;
+  }
+  for (const key of ['raw_results_file', 'mesh_artifact_file'] as const) {
+    if (!hasOwn(value, key)) continue;
+    if (!isNullableString(value[key])) return null;
+    patch[key] = value[key];
+  }
+  for (const key of ['results_discarded_at', 'mesh_discarded_at'] as const) {
+    if (!hasOwn(value, key)) continue;
+    if (!isNullableTimestamp(value[key])) return null;
+    patch[key] = value[key];
+  }
+  if (hasOwn(value, 'script_snapshot')) {
+    if (!(value.script_snapshot === null || (isRecord(value.script_snapshot) && isSafeJson(value.script_snapshot)))) return null;
+    patch.script_snapshot = value.script_snapshot;
+  }
+  for (const key of ['has_results', 'has_mesh_artifact'] as const) {
+    if (!hasOwn(value, key)) continue;
+    if (typeof value[key] !== 'boolean') return null;
+    patch[key] = value[key];
+  }
+  // Retention metadata is intentionally delivered through this event type,
+  // even though these newer fields are not consumed by the current UI.
+  if (hasOwn(value, 'has_radiation_impedance_artifact')) {
+    if (typeof value.has_radiation_impedance_artifact !== 'boolean') return null;
+    patch.has_radiation_impedance_artifact = value.has_radiation_impedance_artifact;
+  }
+  return patch;
+}
+
+function parseEvent(message: JsonRecord): EventMessage | { unknownType: string; cursor: number; jobId: string } | null {
+  if (!optionalEpochIsValid(message) || !isNonNegativeInteger(message.cursor)) return null;
+  if (typeof message.jobId !== 'string' || message.jobId.length === 0 || typeof message.type !== 'string') return null;
+  if (hasOwn(message, 'payload') && !isRecord(message.payload)) return null;
+  if (!EVENT_TYPES.has(message.type as EventType)) {
+    return { unknownType: message.type, cursor: message.cursor, jobId: message.jobId };
+  }
+  const source = (message.payload ?? {}) as JsonRecord;
+  const payload: JsonRecord = {};
+  if (message.type === 'started' && hasOwn(source, 'started_at')) {
+    if (!isTimestamp(source.started_at)) return null;
+    payload.started_at = source.started_at;
+  }
+  if (message.type === 'progress') {
+    if (!isFiniteNumber(source.progress) || source.progress < 0 || source.progress > 1) return null;
+    payload.progress = source.progress;
+  }
+  if (message.type === 'stage') {
+    if (hasOwn(source, 'stage')) {
+      if (!isNullableString(source.stage)) return null;
+      payload.stage = source.stage;
+    }
+    if (hasOwn(source, 'message')) {
+      if (!isNullableString(source.message)) return null;
+      payload.message = source.message;
+    }
+    if (hasOwn(source, 'progress')) {
+      if (!isFiniteNumber(source.progress) || source.progress < 0 || source.progress > 1) return null;
+      payload.progress = source.progress;
+    }
+  }
+  if (message.type === 'log') {
+    if (hasOwn(source, 'chunk')) {
+      if (typeof source.chunk !== 'string') return null;
+      payload.chunk = source.chunk;
+    }
+    if (hasOwn(source, 'lines')) {
+      if (!isStringArray(source.lines)) return null;
+      payload.lines = source.lines;
+    }
+  }
+  if ((message.type === 'failed' || message.type === 'cancelled') && hasOwn(source, 'message')) {
+    if (typeof source.message !== 'string') return null;
+    payload.message = source.message;
+  }
+  if (message.type === 'metadata' && hasOwn(source, 'changed')) {
+    const changed = sanitizeMetadataChanges(source.changed);
+    if (changed === null) return null;
+    payload.changed = changed;
+  }
+  return { ...message, type: message.type as EventType, payload } as unknown as EventMessage;
+}
+
+function parsePartialResult(message: JsonRecord): PartialResultMessage | null {
+  if (!optionalEpochIsValid(message)) return null;
+  if (typeof message.jobId !== 'string' || message.jobId.length === 0) return null;
+  if (!Number.isSafeInteger(message.revision) || Number(message.revision) < 1) return null;
+  if (hasOwn(message, 'snapshot') && typeof message.snapshot !== 'boolean') return null;
+  if (!isJobResults(message.result)) return null;
+  return message as unknown as PartialResultMessage;
+}
+
 const OPEN = 1;
 const MAX_JOB_REFRESH_ATTEMPTS = 3;
 const defaultFactory: JobsWebSocketFactory = (url) => new WebSocket(url) as unknown as JobsWebSocketLike;
@@ -307,19 +630,31 @@ export class JobsSocketManager {
 
   private onMessage(socket: JobsWebSocketLike, raw: unknown): void {
     if (socket !== this.socket || typeof raw !== 'string') return;
-    let message: HelloMessage | SnapshotMessage | EventMessage | PartialResultMessage | { kind?: string; epoch?: number };
+    let decoded: unknown;
     try {
-      message = JSON.parse(raw) as typeof message;
+      decoded = JSON.parse(raw) as unknown;
     } catch {
       this.update({ error: 'Malformed jobs message' });
       return;
     }
-    if ((message as { v?: unknown }).v !== 1) {
+    if (!isRecord(decoded)) {
+      this.update({ error: 'Malformed jobs message' });
+      return;
+    }
+    if (decoded.v !== 1) {
       this.update({ error: 'Unsupported jobs protocol message' });
       return;
     }
-    if (message.kind === 'hello') {
-      const hello = message as HelloMessage;
+    if (typeof decoded.kind !== 'string') {
+      this.update({ error: 'Malformed jobs message' });
+      return;
+    }
+    if (decoded.kind === 'hello') {
+      const hello = parseHello(decoded);
+      if (hello === null) {
+        this.update({ error: 'Invalid jobs hello message' });
+        return;
+      }
       if (this.helloSeen) return;
       this.helloSeen = true;
       this.reconnectAttempt = 0;
@@ -331,28 +666,36 @@ export class JobsSocketManager {
       }
       return;
     }
-    if (!this.helloSeen || ('epoch' in message && message.epoch !== undefined && message.epoch !== this.snapshot.epoch)) return;
-    this.armHeartbeat();
-    if (message.kind === 'partialResult') {
-      const partial = message as PartialResultMessage;
-      if (
-        typeof partial.jobId === 'string'
-        && Number.isInteger(partial.revision)
-        && partial.result
-        && typeof partial.result === 'object'
-      ) {
-        const applied = provisionalResults.apply(
-          partial.jobId,
-          partial.revision,
-          partial.result,
-          partial.snapshot === true,
-        );
-        if (!applied) void this.refreshPartialResults(partial.jobId);
-      }
+    if (!this.helloSeen) return;
+    if (!optionalEpochIsValid(decoded)) {
+      this.update({ error: 'Invalid jobs message epoch' });
       return;
     }
-    if (message.kind === 'snapshot') {
-      const incoming = message as SnapshotMessage;
+    if (hasOwn(decoded, 'epoch') && decoded.epoch !== this.snapshot.epoch) return;
+    if (decoded.kind === 'partialResult') {
+      const partial = parsePartialResult(decoded);
+      if (partial === null) {
+        this.update({ error: 'Invalid jobs partialResult message' });
+        return;
+      }
+      this.armHeartbeat();
+      const applied = provisionalResults.apply(
+        partial.jobId,
+        partial.revision,
+        partial.result,
+        partial.snapshot === true,
+      );
+      if (!applied) void this.refreshPartialResults(partial.jobId);
+      this.update({ error: null });
+      return;
+    }
+    if (decoded.kind === 'snapshot') {
+      const incoming = parseSnapshot(decoded);
+      if (incoming === null) {
+        this.update({ error: 'Invalid jobs snapshot message' });
+        return;
+      }
+      this.armHeartbeat();
       this.gapTargetCursor = null;
       new Set([...this.snapshot.jobs.map((job) => job.id), ...incoming.jobs.map((job) => job.id)])
         .forEach((jobId) => this.markJobMutation(jobId));
@@ -362,7 +705,61 @@ export class JobsSocketManager {
       this.update({ cursor: incoming.cursor, jobs: this.sortJobs(incoming.jobs), error: null });
       return;
     }
-    if (message.kind === 'event') this.onEvent(message as EventMessage);
+    if (decoded.kind === 'event') {
+      const event = parseEvent(decoded);
+      if (event === null) {
+        if (isNonNegativeInteger(decoded.cursor)) {
+          this.armHeartbeat();
+          this.onUnusableEvent({
+            cursor: decoded.cursor,
+            error: 'Invalid jobs event message; resyncing',
+          });
+          return;
+        }
+        this.update({ error: 'Invalid jobs event message' });
+        return;
+      }
+      this.armHeartbeat();
+      if ('unknownType' in event) {
+        this.onUnusableEvent({
+          cursor: event.cursor,
+          error: `Unsupported jobs event type "${event.unknownType}"; resyncing`,
+        });
+        return;
+      }
+      this.onEvent(event);
+      return;
+    }
+    // Additive message kinds are ignored until this client understands them.
+    // They still prove the connection is alive.
+    this.armHeartbeat();
+  }
+
+  private onUnusableEvent(message: { cursor: number; error: string }): void {
+    const cursor = this.snapshot.cursor;
+    if (cursor !== null && message.cursor <= cursor) return;
+    if (cursor !== null && message.cursor !== cursor + 1) {
+      this.gapTargetCursor = message.cursor;
+      this.update({ error: `Jobs event gap (${cursor} → ${message.cursor}); resyncing` });
+      if (this.socket?.readyState === OPEN && this.snapshot.epoch !== null) {
+        this.socket.send(JSON.stringify({
+          v: 1,
+          kind: 'resume',
+          epoch: this.snapshot.epoch,
+          cursor,
+        }));
+      }
+      return;
+    }
+    // The cursor is real, but this client cannot safely infer the event's
+    // effect. Advance past it and rebuild durable rows through the HTTP source
+    // of truth so an additive server event cannot wedge replay forever.
+    this.gapTargetCursor = null;
+    this.update({
+      cursor: message.cursor,
+      error: message.error,
+    });
+    void this.refetchJobs();
   }
 
   private onEvent(message: EventMessage): void {
@@ -377,6 +774,7 @@ export class JobsSocketManager {
         this.update({
           cursor: message.cursor,
           jobs: this.snapshot.jobs.filter((job) => job.id !== message.jobId),
+          error: this.snapshot.error,
         });
       } else {
         this.commitEvent(message);
@@ -408,6 +806,7 @@ export class JobsSocketManager {
       this.update({
         cursor: message.cursor,
         jobs: this.snapshot.jobs.filter((job) => job.id !== message.jobId),
+        error: null,
       });
       return;
     }
@@ -425,7 +824,10 @@ export class JobsSocketManager {
    */
   private commitEvent(message: EventMessage): void {
     const jobs = this.applyDelta(message);
-    this.update(jobs === null ? { cursor: message.cursor } : { cursor: message.cursor, jobs });
+    const error = this.gapTargetCursor === null ? null : this.snapshot.error;
+    this.update(jobs === null
+      ? { cursor: message.cursor, error }
+      : { cursor: message.cursor, jobs, error });
   }
 
   private eventNeedsRefresh(message: EventMessage): boolean {
@@ -460,7 +862,9 @@ export class JobsSocketManager {
     if (message.type === 'failed') Object.assign(patch, { status: 'error', error_message: String(payload.message ?? 'Simulation failed') });
     if (message.type === 'cancelled') Object.assign(patch, { status: 'cancelled', error_message: String(payload.message ?? 'Simulation cancelled') });
     if (message.type === 'failed' || message.type === 'cancelled') provisionalResults.remove(message.jobId);
-    if (message.type === 'metadata' && payload.changed && typeof payload.changed === 'object') {
+    if (message.type === 'metadata' && isRecord(payload.changed)) {
+      // parseEvent has already copied only the metadata fields that the jobs
+      // protocol permits. Never merge the raw server object into a job row.
       Object.assign(patch, payload.changed as Partial<JobItem>);
     }
     return this.patchedJobs(message.jobId, patch);
@@ -477,11 +881,17 @@ export class JobsSocketManager {
       while (offset < total) {
         const response = await this.fetcher(`/api/jobs?limit=${pageSize}&offset=${offset}`);
         if (!response.ok) throw await responseError(response);
-        const body = await response.json() as { items: JobItem[]; total?: number };
+        const body = await response.json() as unknown;
+        if (!isRecord(body) || !Array.isArray(body.items) || !body.items.every(isJobItem)) {
+          throw new Error('Invalid jobs list response');
+        }
+        if (hasOwn(body, 'total') && !isNonNegativeInteger(body.total)) {
+          throw new Error('Invalid jobs list total');
+        }
         if (generation !== this.refetchGeneration) return;
         body.items.forEach((job) => fetched.set(job.id, job));
         offset += body.items.length;
-        total = Number.isInteger(body.total) && Number(body.total) >= 0 ? Number(body.total) : offset;
+        total = isNonNegativeInteger(body.total) ? body.total : offset;
         // A changing database can legitimately make the final page shorter
         // than the count observed on an earlier page. Never spin on an empty
         // page while trying to reach a now-stale total.
@@ -543,9 +953,16 @@ export class JobsSocketManager {
           return;
         }
         if (!response.ok) throw await responseError(response);
-        const body = await response.json() as { revision?: number; result?: JobResults };
-        if (Number.isInteger(body.revision) && body.result && typeof body.result === 'object') {
+        const body = await response.json() as unknown;
+        if (
+          isRecord(body)
+          && Number.isSafeInteger(body.revision)
+          && Number(body.revision) >= 1
+          && isJobResults(body.result)
+        ) {
           provisionalResults.apply(jobId, Number(body.revision), body.result, true);
+        } else {
+          throw new Error('Invalid partial results response');
         }
       } catch (error) {
         this.update({ error: error instanceof Error ? error.message : String(error) });
@@ -573,7 +990,8 @@ export class JobsSocketManager {
           return;
         }
         if (!response.ok) throw await responseError(response);
-        const job = await response.json() as JobItem;
+        const job = await response.json() as unknown;
+        if (!isJobItem(job) || job.id !== jobId) throw new Error('Invalid job status response');
         if (this.jobGenerations.get(jobId) !== generation) return;
         if ((this.jobMutationVersions.get(jobId) ?? 0) > mutationBaseline) continue;
         this.markJobMutation(jobId);
