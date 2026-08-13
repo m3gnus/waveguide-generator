@@ -295,6 +295,24 @@ describe('jobs panel run list', () => {
     expect(host.querySelector('.run-name-preview')?.textContent).toContain('winner2');
   });
 
+  it('keeps a manually committed CAD run name when the first projection becomes available', async () => {
+    workspaceModeStore.setMode('cad');
+    publishJobs([]);
+    await act(async () => root.render(<JobsPanel/>));
+    const input = host.querySelector<HTMLInputElement>('[aria-label="Run name"]')!;
+    act(() => input.focus());
+    act(() => enter(input, 'named-before-ingest'));
+    act(() => input.blur());
+
+    act(() => useCadReturnStore.setState({
+      ingestRecord: readyCadRecord('wgi_first'), needsIngest: false,
+      driveChannels: [{ id: 'drive', source_ids: ['source'], motion: 'normal' }],
+      sourceSizesMm: { source: 2 }, rigidSizeMm: 5, transitionMm: 5,
+    }));
+
+    expect(host.querySelector('.run-name-preview')?.textContent).toContain('next · named-before-ingest');
+  });
+
   it('previews CAD naming from the ingest and ignores parametric edits', async () => {
     useCadReturnStore.setState({
       ingestRecord: readyCadRecord('wgi_first'), needsIngest: false,

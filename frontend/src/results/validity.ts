@@ -51,12 +51,17 @@ export function resultFrequencyValidity(
   if (!perSource) return null;
 
   const declaredSourceIds = sourceIds(resultMetadata.source_ids);
-  // A flat payload may carry its own validity map without a source_ids join.
-  // Channel wrappers may not: using every wrapper source there would silently
-  // turn another channel's limit into this channel's result caveat.
+  const recordedSourceIds = Object.keys(perSource);
+  const channelCount = wrapper.channels ? Object.keys(wrapper.channels).length : 0;
+  // Missing membership is safe only when there is exactly one possible join:
+  // either the wrapper contains one channel, or the evidence map contains one
+  // source. With several channels and several sources we still refuse to guess,
+  // because assigning another channel's ceiling is worse than omitting a caveat.
   const relevantSourceIds = declaredSourceIds.length
     ? declaredSourceIds
-    : wrapper.channels ? [] : Object.keys(perSource);
+    : !wrapper.channels || channelCount === 1 || recordedSourceIds.length === 1
+      ? recordedSourceIds
+      : [];
   const sources = relevantSourceIds.flatMap((sourceId): SourceFrequencyValidity[] => {
     const effectiveMaxFrequencyHz = positiveFinite(
       record(perSource[sourceId])?.effective_max_valid_frequency_hz,

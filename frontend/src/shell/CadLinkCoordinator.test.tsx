@@ -70,6 +70,12 @@ const ingestRecord: CadReturnIngestRecord = {
   tag_map: {},
 };
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settle) => { resolve = settle; });
+  return { promise, resolve };
+}
+
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 }
@@ -163,6 +169,45 @@ describe('CadLinkCoordinator', () => {
     expect(activate).toHaveBeenCalledWith('cadlink');
   });
 
+  it('ignores an older return listing that finishes after a newer refresh', async () => {
+    const olderResponse = deferred<Response>();
+    const newerResponse = deferred<Response>();
+    let listingRequest = 0;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) {
+        listingRequest += 1;
+        if (listingRequest === 1) return json({ items: [initialBundle] });
+        return listingRequest === 2 ? olderResponse.promise : newerResponse.promise;
+      }
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      return json({}, 404);
+    }));
+    await renderCoordinator();
+    const older = { ...initialBundle, modifiedAt: '2026-08-12T00:00:00Z', documentName: 'Older listing' };
+    const newer = { ...initialBundle, modifiedAt: '2026-08-13T00:00:00Z', documentName: 'Newest listing' };
+
+    let olderRefresh!: Promise<void>;
+    let newerRefresh!: Promise<void>;
+    await act(async () => {
+      olderRefresh = cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
+      newerRefresh = cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
+      await Promise.resolve();
+    });
+    await act(async () => {
+      newerResponse.resolve(json({ items: [newer] }));
+      await newerRefresh;
+    });
+    await act(async () => {
+      olderResponse.resolve(json({ items: [older] }));
+      await olderRefresh;
+    });
+
+    expect(cadLinkCoordinatorBridge.getSnapshot().bundles).toEqual([newer]);
+    expect(useCadReturnStore.getState().selectedBundle).toEqual(newer);
+    expect(cadLinkCoordinatorBridge.getSnapshot().status).toBe('Received Newest listing from Fusion 360.');
+  });
+
   it('marks an ingestion stale while the CAD Link panel is unmounted', async () => {
     let listing = { items: [initialBundle] };
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
@@ -173,7 +218,7 @@ describe('CadLinkCoordinator', () => {
     }));
     await renderCoordinator();
     act(() => {
-      useCadReturnStore.getState().applyIngest(ingestRecord);
+      useCadReturnStore.getState().applyIngest(ingestRecord, useCadReturnStore.getState().beginIngestIntent());
       useCadReturnStore.getState().setSourceSize('source-hf', 3);
     });
 
@@ -197,6 +242,42 @@ describe('CadLinkCoordinator', () => {
   });
 
   it.each([
+    ['the selected return changes', () => useCadReturnStore.getState().selectBundle({
+      ...initialBundle,
+      name: 'other.wgreturn',
+      bundlePath: 'wgreturn/other.wgreturn',
+      documentName: 'Other speaker',
+    })],
+    ['the design is replaced', () => useDesignStore.getState().loadDesign(designForFamily('ICW'))],
+  ] as const)('discards and reports an in-flight ingest when %s', async (_reason, supersede) => {
+    const response = deferred<Response>();
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json({ items: [initialBundle] });
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.endsWith('/ingest')) return response.promise;
+      return json({}, 404);
+    }));
+    await renderCoordinator();
+
+    let pending!: Promise<void>;
+    await act(async () => {
+      pending = cadLinkCoordinatorBridge.getSnapshot().ingest();
+      await Promise.resolve();
+    });
+    act(supersede);
+    await act(async () => {
+      response.resolve(json(ingestRecord));
+      await pending;
+    });
+
+    const state = useCadReturnStore.getState();
+    expect(state.ingestRecord).toBeNull();
+    expect(state.needsIngest).toBe(true);
+    expect(cadLinkCoordinatorBridge.getSnapshot().status).toContain('Discarded');
+  });
+
+  it.each([
     ['loadDesign', () => useDesignStore.getState().loadDesign(designForFamily('ICW'))],
     ['replaceDesign', () => useDesignStore.getState().replaceDesign(designForFamily('R-OSSE'))],
     ['New design', () => resetDesignStore()],
@@ -210,7 +291,7 @@ describe('CadLinkCoordinator', () => {
     await renderCoordinator();
     act(() => {
       const cad = useCadReturnStore.getState();
-      cad.applyIngest(ingestRecord);
+      cad.applyIngest(ingestRecord, cad.beginIngestIntent());
       cad.setSourceChannel('source-hf', 'custom-hf');
       cad.setChannelMotion('custom-hf', 'axial');
       cad.setChannelDriverEnabled('custom-hf', true);
