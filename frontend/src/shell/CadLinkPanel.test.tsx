@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadReturnIngestRecord, CadReturnListing, FusionCadStatus } from '../api/cadlink';
 import { preferencesStore } from '../prefs/preferences';
+import { importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
@@ -10,7 +11,6 @@ import { importedMeshStore } from '../viewport/importedMeshStore';
 import meshFixture from '../viewport/test-fixtures/tagged_sources-small.msh?raw';
 import { buildImportedSubmission, CadLinkPanel, fusionWorkflowView, newestReturnArrival, onshapeWorkflowView, showIngestedMeshInViewport } from './CadLinkPanel';
 import { CadLinkCoordinator } from './CadLinkCoordinator';
-import { jobsCoordinatorBridge } from './JobsCoordinator';
 
 const listing: CadReturnListing = {
   items: [{
@@ -94,18 +94,17 @@ describe('CadLinkPanel', () => {
     return ingest;
   };
 
-  it('runs listing → ingest → blocking acknowledgement → solve enabled', async () => {
+  it('runs listing → ingest → blocking acknowledgement without a duplicate local solve control', async () => {
     await renderAndSelect();
     await clickIngest();
-    const solve = [...host.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Solve CAD import')!;
-    expect(solve.disabled).toBe(true);
-    expect(host.textContent).toContain('Acknowledge 1 blocking finding');
+    expect(importedSubmissionBlocker()).toContain('Acknowledge 1 blocking finding');
     const acknowledgement = host.querySelector<HTMLInputElement>('.cad-findings input[type="checkbox"]')!;
     act(() => { acknowledgement.click(); });
-    expect(solve.disabled).toBe(false);
+    expect(importedSubmissionBlocker()).toBeNull();
     expect([...host.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Rebuild mesh')?.disabled).toBe(false);
-    expect([...host.querySelectorAll<HTMLButtonElement>('button')].some((button) => button.textContent === 'Fusion CAD')).toBe(true);
-    expect([...host.querySelectorAll<HTMLButtonElement>('button')].some((button) => button.textContent === 'Parametric')).toBe(true);
+    expect(host.textContent).not.toContain('Explicit solve sweep');
+    expect([...host.querySelectorAll<HTMLButtonElement>('button')].some((button) => button.textContent === 'Solve CAD import')).toBe(false);
+    expect(host.querySelector('.cad-viewport-source-buttons')).toBeNull();
   });
 
   it('tries the full-domain viewport artifact before silently falling back on 404', async () => {
@@ -532,11 +531,7 @@ describe('CadLinkPanel', () => {
     expect(polar.enabled_axes).toEqual(expect.arrayContaining(['vertical', 'diagonal']));
   });
 
-  it('size change → re-ingest → solve submits the new report acknowledgement wire', async () => {
-    const runImported = vi.fn().mockResolvedValue(undefined);
-    vi.spyOn(jobsCoordinatorBridge, 'getSnapshot').mockReturnValue({
-      ...jobsCoordinatorBridge.getSnapshot(), runImported,
-    });
+  it('size change → re-ingest produces the new report acknowledgement wire', async () => {
     let ingestCount = 0;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       if (String(input).endsWith('/returns')) return json(listing);
@@ -562,19 +557,14 @@ describe('CadLinkPanel', () => {
     act(() => useCadReturnStore.getState().setSourceSize('source-hf', 2.5));
     await clickIngest();
     act(() => host.querySelector<HTMLInputElement>('.cad-findings input[type="checkbox"]')!.click());
-    await act(async () => {
-      [...host.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Solve CAD import')!.click();
-      await Promise.resolve();
-    });
-
-    expect(runImported).toHaveBeenCalledOnce();
-    expect(runImported.mock.calls[0][0].geometry).toMatchObject({
+    const submission = buildImportedSubmission(useCadReturnStore.getState());
+    expect(submission.geometry).toMatchObject({
       mesh: { source_size_mm: { 'source-hf': 2.5 } },
       acknowledged_findings: [`sha256:${'2'.repeat(64)}:finding-a`],
     });
   });
 
-  it('marks a changed refreshed bundle stale, preserves sizing edits, and disables Solve', async () => {
+  it('marks a changed refreshed bundle stale and preserves sizing edits', async () => {
     let listingCount = 0;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       if (String(input).endsWith('/returns')) {
@@ -596,7 +586,7 @@ describe('CadLinkPanel', () => {
 
     expect(host.textContent).toContain('source inventory or source sizing suggestions changed');
     expect(useCadReturnStore.getState().sourceSizesMm['source-hf']).toBe(2.5);
-    expect([...host.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Solve CAD import')?.disabled).toBe(true);
+    expect(importedSubmissionBlocker()).toContain('source inventory or source sizing suggestions changed');
     expect([...host.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Rebuild mesh')?.disabled).toBe(false);
   });
 

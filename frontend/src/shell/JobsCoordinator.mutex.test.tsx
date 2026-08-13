@@ -7,6 +7,7 @@ import type { CadReturnIngestRecord } from '../api/cadlink';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { designForFamily } from '../stores/design';
 import { resetSolveOptionsStore } from '../stores/solveOptions';
+import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import type { ImportedMeshScene } from '../viewport/importedMesh';
 import { JobsCoordinator, jobsCoordinatorBridge, useSolveControl } from './JobsCoordinator';
@@ -85,6 +86,7 @@ describe('solve invocation mutex', () => {
     resetCadReturnStore();
     resetSolveOptionsStore();
     importedMeshStore.clear();
+    workspaceModeStore.setMode('parametric');
     publishJobs([]);
     resetCadReturnStore();
     importedMeshStore.clear();
@@ -103,6 +105,7 @@ describe('solve invocation mutex', () => {
     publishJobs([]);
     vi.restoreAllMocks();
     vi.clearAllMocks();
+    workspaceModeStore.setMode('parametric');
   });
 
   it('submits only once when run is invoked twice in the same tick', async () => {
@@ -205,7 +208,7 @@ describe('solve invocation mutex', () => {
     await act(async () => { pending.resolve('job-imported'); await first; });
   });
 
-  it('makes the main Solve control submit the Fusion CAD mesh shown in the viewport', async () => {
+  it('switches the main Solve control and routing from parametric to Fusion CAD mode', async () => {
     const ingestId = 'wgi_01J5A8QK3M9T2XVBH0RD7NWE6C';
     const record = {
       ingest_id: ingestId,
@@ -233,6 +236,8 @@ describe('solve invocation mutex', () => {
       root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>);
     });
     const solve = host.querySelector<HTMLButtonElement>('button')!;
+    expect(solve.textContent).toBe('Solve');
+    act(() => workspaceModeStore.setMode('cad'));
     expect(solve.textContent).toBe('Solve Fusion CAD');
     expect(solve.title).toContain('displayed Fusion CAD model');
     await act(async () => { solve.click(); await Promise.resolve(); await Promise.resolve(); });
@@ -240,6 +245,17 @@ describe('solve invocation mutex', () => {
     expect(mocks.submitImported).toHaveBeenCalledOnce();
     expect(mocks.submitImported.mock.calls[0][0].geometry.ingest_id).toBe(ingestId);
     expect(mocks.submitDesign).not.toHaveBeenCalled();
+  });
+
+  it('enters CAD mode without an ingest and exposes the submission blocker', async () => {
+    await act(async () => {
+      root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>);
+      workspaceModeStore.setMode('cad');
+    });
+    const solve = host.querySelector<HTMLButtonElement>('button')!;
+    expect(solve.textContent).toBe('Solve Fusion CAD');
+    expect(solve.disabled).toBe(true);
+    expect(solve.title).toBe('Ingest a CAD return before solving.');
   });
 
   it('guards two fast retries routed through the coordinator bridge', async () => {

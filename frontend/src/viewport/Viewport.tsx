@@ -2,9 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import type { DecodedFrame } from '../api/frame';
 import { PREVIEW_FINE_IDLE_MS, previewSocket } from '../api/previewSocket';
 import { postSymmetry, toSolveDesign } from '../jobs/actions';
+import { useCadReturnStore } from '../stores/cadReturn';
 import { subscribeRevision, useDesignStore } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
 import { useSolveOptionsStore } from '../stores/solveOptions';
+import { workspaceModeStore } from '../stores/workspaceMode';
+import { cadLinkCoordinatorBridge, showIngestedMeshInViewport } from '../shell/CadLinkCoordinator';
 import { Icon } from '../shell/icons';
 import { useViewerPreferences, viewerPreferences, type CameraProjection } from '../viewerprefs/viewerPreferences';
 import { ViewerPreferencesPanel } from '../viewerprefs/ViewerPreferencesPanel';
@@ -60,6 +63,9 @@ export function Viewport() {
   const designRevision = useDesignStore((state) => state.designRevision);
   const solveSymmetry = useSolveOptionsStore((state) => state.symmetry);
   const filename = useDocumentStore((state) => state.filename);
+  const workspaceMode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
+  const cadRecord = useCadReturnStore((state) => state.ingestRecord);
+  const cadName = useCadReturnStore((state) => state.selectedBundle?.documentName ?? state.selectedBundle?.name ?? 'Fusion CAD');
   const theme = useViewportTheme();
   const preferences = useViewerPreferences();
   const selectedRef = useRef<DecodedFrame | null>(null);
@@ -114,12 +120,15 @@ export function Viewport() {
     importedMeshStore.getSnapshot,
     importedMeshStore.getSnapshot,
   );
-  const importedMesh = importedMeshState.showing === 'cad'
+  const cadMesh = cadRecord && importedMeshState.cad?.ingestId === cadRecord.ingest_id
     ? importedMeshState.cad
+    : null;
+  const importedMesh = workspaceMode === 'cad'
+    ? cadMesh
     : importedMeshState.showing === 'file'
       ? importedMeshState.file
       : null;
-  const availableImportedMesh = importedMesh ?? importedMeshState.file ?? importedMeshState.cad;
+  const availableFileMesh = importedMeshState.file;
   const [importError, setImportError] = useState<string | null>(null);
   const [dismissedPreviewError, setDismissedPreviewError] = useState<string | null>(null);
   const [refreshRequestedAt, setRefreshRequestedAt] = useState<number | null>(null);
@@ -134,10 +143,12 @@ export function Viewport() {
   const zoom = (direction: ZoomRequest['direction']) => setZoomRequest((current) => ({ direction, nonce: current.nonce + 1 }));
   const toggleProjection = () => setCameraProjection((current) => current === 'perspective' ? 'orthographic' : 'perspective');
   const reportClientFrame = useCallback((milliseconds: number) => setClientFrameMs(milliseconds), []);
-  const activeScene = importedMesh?.scene ?? scene;
+  const activeScene = workspaceMode === 'cad' ? importedMesh?.scene ?? null : importedMesh?.scene ?? scene;
   const sceneMarker = importedMesh
     ? `msh:${importedMesh.artifactToken}`
-    : `${selected?.header.epoch ?? 0}:${selected?.header.seq ?? 0}:${selected?.header.designRevision ?? 0}:${selected?.header.lod ?? ''}:${preferences.tintSolvedRegion ? solvedQuadrants : 'same'}`;
+    : workspaceMode === 'cad'
+      ? 'cad:empty'
+      : `${selected?.header.epoch ?? 0}:${selected?.header.seq ?? 0}:${selected?.header.designRevision ?? 0}:${selected?.header.lod ?? ''}:${preferences.tintSolvedRegion ? solvedQuadrants : 'same'}`;
   const surfaces = activeScene?.surfaces ?? [];
   const webgl = canRenderWebGL() && renderFailure === null;
   const hasSurfaces = hasRenderableSurfaces(activeScene);
@@ -146,12 +157,12 @@ export function Viewport() {
   const connectionInterrupted = preferences.liveUpdate && preview.connection !== 'connected';
   const badge = previewBadge(preferences.liveUpdate, preview.connection, preview.error, preview.stale);
   const previewError = preview.error ? previewErrorMessage(preview.error, preview.errorRevision, designRevision) : null;
-  const showPreviewError = previewError !== null && dismissedPreviewError !== preview.error;
+  const showPreviewError = workspaceMode === 'parametric' && previewError !== null && dismissedPreviewError !== preview.error;
   // Geometry that builds but is not what was asked for. An unreachable guiding
   // curve is the motivating case: the coverage solver clamps, the mouth quietly
   // leaves the guide shape, and from the rail it looks like the parameters
   // stopped responding. An imported mesh is not ours to diagnose.
-  const geometryWarnings = importedMesh ? [] : selected?.header.previewMetadata?.warnings ?? [];
+  const geometryWarnings = workspaceMode === 'cad' || importedMesh ? [] : selected?.header.previewMetadata?.warnings ?? [];
   const behindDesign = preview.stale || preview.displayedRevision !== designRevision;
   const refresh = () => {
     setDismissedPreviewError(null);
@@ -165,7 +176,7 @@ export function Viewport() {
   };
 
   const importMesh = async (file: File | undefined) => {
-    if (!file) return;
+    if (!file || workspaceMode === 'cad') return;
     const generation = importedMeshStore.beginIntent();
     setImportError(null);
     try {
@@ -182,6 +193,37 @@ export function Viewport() {
     importedMeshStore.showParametric();
     setImportError(null);
   };
+
+  const previousWorkspaceMode = useRef(workspaceMode);
+  useEffect(() => {
+    if (workspaceMode === 'parametric') {
+      // Leaving CAD deliberately returns to the live parametric scene. A file
+      // import remains cached and can still be reselected by its own badge.
+      // Do not reset on unrelated CAD-store updates while already parametric:
+      // that would make a standalone file overlay disappear under the cursor.
+      if (previousWorkspaceMode.current === 'cad') importedMeshStore.showParametric();
+      previousWorkspaceMode.current = workspaceMode;
+      return;
+    }
+    previousWorkspaceMode.current = workspaceMode;
+    const generation = importedMeshStore.beginIntent();
+    if (!cadRecord) {
+      importedMeshStore.clear('cad');
+      return;
+    }
+    const cached = importedMeshStore.getSnapshot().cad;
+    if (cached?.ingestId === cadRecord.ingest_id) {
+      importedMeshStore.showCad(generation);
+      return;
+    }
+    void showIngestedMeshInViewport(
+      cadRecord,
+      cadName,
+      (notice) => cadLinkCoordinatorBridge.getSnapshot().reportViewportNotice(notice),
+      fetch,
+      generation,
+    );
+  }, [cadName, cadRecord, workspaceMode]);
 
   // The mesh may be set from outside this component (CAD Link after an
   // ingest), so the camera refit follows the store rather than the setters.
@@ -266,7 +308,7 @@ export function Viewport() {
       zoomRequest={zoomRequest}
       cameraProjection={cameraProjection}
       preferences={preferences}
-      frameStartedAt={importedMesh || !selected ? null : latencyClock.current.requestStartedAt(selected.header)}
+      frameStartedAt={workspaceMode === 'cad' || importedMesh || !selected ? null : latencyClock.current.requestStartedAt(selected.header)}
       onClientFrame={reportClientFrame}
       theme={theme}
       onRenderFailure={setRenderFailure}
@@ -274,18 +316,18 @@ export function Viewport() {
     />}
 
     <div className="viewport-title">
-      <b>{importedMesh?.name ?? documentDisplayName(filename) ?? 'Untitled design'}</b>
+      <b>{importedMesh?.name ?? (workspaceMode === 'cad' ? cadName : documentDisplayName(filename) ?? 'Untitled design')}</b>
       <span>{importedMesh
         ? `${importedMesh.triangleCount.toLocaleString()} display triangles${importedMesh.triangleCount !== importedMesh.solvedTriangleCount ? ` · ${importedMesh.solvedTriangleCount.toLocaleString()} solved` : ''} · ${importedMesh.physicalGroupCount} physical group${importedMesh.physicalGroupCount === 1 ? '' : 's'}`
-        : viewportSubtitle(design)}</span>
+        : workspaceMode === 'cad' ? 'No ingested CAD viewport mesh' : viewportSubtitle(design)}</span>
     </div>
     <div className="viewport-live">
-      {availableImportedMesh && <span className="imported-mesh-badge" aria-label="Viewport geometry source">
+      {workspaceMode === 'parametric' && availableFileMesh && <span className="imported-mesh-badge" aria-label="Standalone mesh display">
         <button type="button" className={!importedMesh ? 'active' : ''} aria-pressed={!importedMesh} onClick={showParametric}>Parametric</button>
-        <button type="button" className={importedMesh ? 'active' : ''} aria-pressed={Boolean(importedMesh)} onClick={() => availableImportedMesh.source === 'cad' ? importedMeshStore.showCad() : importedMeshStore.showFile()}>{availableImportedMesh.source === 'cad' ? 'Fusion CAD' : 'Imported mesh'}</button>
+        <button type="button" className={importedMesh?.source === 'file' ? 'active' : ''} aria-pressed={importedMesh?.source === 'file'} onClick={() => importedMeshStore.showFile()}>Imported mesh</button>
       </span>}
-      <span className={badge.className}><i />{refreshRequestedAt === null ? badge.label : 'REFRESHING'}</span>
-      {behindDesign && !importedMesh && <button
+      {workspaceMode === 'parametric' && <span className={badge.className}><i />{refreshRequestedAt === null ? badge.label : 'REFRESHING'}</span>}
+      {workspaceMode === 'parametric' && behindDesign && !importedMesh && <button
         type="button"
         className="viewport-refresh"
         disabled={refreshRequestedAt !== null}
@@ -293,13 +335,15 @@ export function Viewport() {
         aria-label={`Rebuild the preview. ${staleReason(preferences.liveUpdate, preview.connection, preview.error)}`}
         onClick={refresh}
       ><Icon name="reset"/>{preferences.liveUpdate ? 'Refresh' : 'Resume'}</button>}
-      <span>geometry <b>{selected?.header.evalMs?.toFixed(1) ?? '—'}</b> ms · on screen <b>{formatClientLatency(clientFrameMs)}</b></span>
+      {workspaceMode === 'parametric'
+        ? <span>geometry <b>{selected?.header.evalMs?.toFixed(1) ?? '—'}</b> ms · on screen <b>{formatClientLatency(clientFrameMs)}</b></span>
+        : <span>Fusion CAD workspace</span>}
     </div>
 
     {!activeScene && <div className="viewport-empty" role="status" aria-live="polite">
       <i className="viewport-empty-mark"><i /></i>
-      <b>{preferences.liveUpdate ? 'Waiting for geometry' : 'Live updates paused'}</b>
-      <span>{importError ?? preview.error ?? (!preferences.liveUpdate ? 'Enable Live updates in viewer preferences, or import an ASCII Gmsh 2.2 mesh.' : connectionInterrupted ? `Preview engine ${preview.connection}. The viewport will resume automatically.` : 'Requesting a live FRAME-SPEC scene from the local preview engine.')}</span>
+      <b>{workspaceMode === 'cad' ? 'No CAD geometry yet' : preferences.liveUpdate ? 'Waiting for geometry' : 'Live updates paused'}</b>
+      <span>{workspaceMode === 'cad' ? 'Bring a model back from Fusion and prepare it in CAD Link.' : importError ?? preview.error ?? (!preferences.liveUpdate ? 'Enable Live updates in viewer preferences, or import an ASCII Gmsh 2.2 mesh.' : connectionInterrupted ? `Preview engine ${preview.connection}. The viewport will resume automatically.` : 'Requesting a live FRAME-SPEC scene from the local preview engine.')}</span>
     </div>}
     {showPreviewError && <div className="viewport-error-banner" role="alert">
       <span>{previewError}</span>
@@ -382,7 +426,7 @@ export function Viewport() {
       <i className="wg2-tool-divider" />
       <div className="viewport-tool-group">
         <input ref={meshInput} className="mesh-file-input" type="file" accept=".msh,text/plain" aria-label="Import Gmsh mesh" onChange={(event) => void importMesh(event.target.files?.[0])} />
-        <button type="button" title="Import Gmsh 2.2 mesh" aria-label="Import Gmsh 2.2 mesh" onClick={() => meshInput.current?.click()}><span className="wg2-text-glyph">MSH</span></button>
+        <button type="button" disabled={workspaceMode === 'cad'} title={workspaceMode === 'cad' ? 'Standalone MSH import is available in Parametric mode only.' : 'Import Gmsh 2.2 mesh'} aria-label="Import Gmsh 2.2 mesh" onClick={() => meshInput.current?.click()}><span className="wg2-text-glyph">MSH</span></button>
         <button type="button" className={preferencesOpen ? 'on' : ''} title="Viewer preferences" aria-label="Viewer preferences" aria-expanded={preferencesOpen} onClick={() => setPreferencesOpen((value) => !value)}><Icon name="settings"/></button>
       </div>
     </div>

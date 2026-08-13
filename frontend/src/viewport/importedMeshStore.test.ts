@@ -58,6 +58,12 @@ describe('importedMeshStore', () => {
     expect(importedMeshStore.getSnapshot()).toEqual({ cad: null, file: null, showing: 'parametric' });
   });
 
+  it('can fill the CAD slot without stealing a parametric viewport', () => {
+    const generation = importedMeshStore.beginIntent();
+    expect(importedMeshStore.setCad(cadScene, generation, false)).toBe(true);
+    expect(importedMeshStore.getSnapshot()).toEqual({ cad: cadScene, file: null, showing: 'parametric' });
+  });
+
   it('keeps the snapshot reference stable across no-op calls', () => {
     const empty = importedMeshStore.getSnapshot();
     importedMeshStore.showCad();

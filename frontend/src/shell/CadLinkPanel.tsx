@@ -2,9 +2,7 @@ import { useState, useSyncExternalStore } from 'react';
 import { requestFusionReturn, type CadReturnFinding, type CadReturnIngestRecord, type FusionCadStatus } from '../api/cadlink';
 import { OnshapePublicConsentRequired, sendDesignToOnshape, type OnshapeStatus } from '../api/onshape';
 import { NumberField } from '../design/NumberField';
-import { FrequencySweepControls, ToggleRow } from '../design/SolveOptionsSections';
-import { useSendToCad } from '../design/useSendToCad';
-import { buildImportedSubmission, importedSubmissionBlocker } from '../jobs/importedSubmission';
+import { ToggleRow } from '../design/SolveOptionsSections';
 import { usePreferences } from '../prefs/preferences';
 import {
   blockingFindings,
@@ -16,13 +14,10 @@ import {
   type ChannelDriverForm,
   type DriverFieldKey,
 } from '../stores/cadReturn';
-import { useSolveOptionsStore } from '../stores/solveOptions';
-import { importedMeshStore } from '../viewport/importedMeshStore';
 import { useDesignStore } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
 import { filenameStem } from '../viewport/presentation';
-import { cadLinkCoordinatorBridge, showIngestedMeshInViewport } from './CadLinkCoordinator';
-import { jobsCoordinatorBridge } from './JobsCoordinator';
+import { cadLinkCoordinatorBridge } from './CadLinkCoordinator';
 import { Icon } from './icons';
 import { requestSettings } from './settingsNavigation';
 import './cadLinkPanel.css';
@@ -272,26 +267,17 @@ function DriverFields({ channel, form, onField }: {
 
 export function CadLinkPanel() {
   const state = useCadReturnStore();
-  const solveStore = useSolveOptionsStore();
   const preferences = usePreferences();
   const design = useDesignStore((current) => current.design);
   const designRevision = useDesignStore((current) => current.designRevision);
   const filename = useDocumentStore((current) => current.filename);
   const identity = useDocumentStore((current) => current.identity);
   const setCadLink = useDocumentStore((current) => current.setCadLink);
-  const jobsCoordinator = useSyncExternalStore(jobsCoordinatorBridge.subscribe, jobsCoordinatorBridge.getSnapshot, jobsCoordinatorBridge.getSnapshot);
   const cadCoordinator = useSyncExternalStore(cadLinkCoordinatorBridge.subscribe, cadLinkCoordinatorBridge.getSnapshot, cadLinkCoordinatorBridge.getSnapshot);
-  const viewportMesh = useSyncExternalStore(
-    importedMeshStore.subscribe,
-    importedMeshStore.getSnapshot,
-    importedMeshStore.getSnapshot,
-  );
-  const [submitting, setSubmitting] = useState(false);
   const [requestingReturn, setRequestingReturn] = useState(false);
   const [confirmWgOverwrite, setConfirmWgOverwrite] = useState(false);
   const [confirmPublicDocument, setConfirmPublicDocument] = useState<string | null>(null);
   const [sendingToOnshape, setSendingToOnshape] = useState(false);
-  const { send: sendToCad, sending } = useSendToCad();
   const onshape = preferences.cadApplication === 'onshape';
   const {
     bundles,
@@ -345,7 +331,7 @@ export function CadLinkPanel() {
         setConfirmWgOverwrite(true);
         return;
       }
-      const result = await sendToCad(
+      await cadCoordinator.sendToFusion(
         action === 'update' && fusionStatus?.documentId
           ? {
               documentId: fusionStatus.documentId,
@@ -354,10 +340,6 @@ export function CadLinkPanel() {
           : undefined,
       );
       setConfirmWgOverwrite(false);
-      cadCoordinator.reportStatus(action === 'update'
-        ? `Update sent to Fusion 360 · sequence ${result.sequence}`
-        : `Opening in Fusion 360 · sequence ${result.sequence}`);
-      await cadCoordinator.refresh();
     } catch (reason) { cadCoordinator.reportError(reason instanceof Error ? reason.message : String(reason)); }
   };
 
@@ -385,17 +367,6 @@ export function CadLinkPanel() {
 
   const activeSources = (state.selectedBundle?.sources ?? []).filter((source) => !state.skippedSourceIds.includes(source.id));
   const channelIds = [...new Set((state.selectedBundle?.sources ?? []).map((source) => source.defaultDriveChannelId))];
-  const femVolumes = state.ingestRecord?.evidence?.fem_air_volumes ?? [];
-  const solveReason = importedSubmissionBlocker(state, solveStore);
-  const solve = async () => {
-    if (solveReason) return;
-    setSubmitting(true); cadCoordinator.clearFeedback();
-    try {
-      await jobsCoordinator.runImported(buildImportedSubmission(useCadReturnStore.getState()));
-      cadCoordinator.reportStatus('CAD import solve submitted to Jobs.');
-    } catch (reason) { cadCoordinator.reportError(reason instanceof Error ? reason.message : String(reason)); }
-    finally { setSubmitting(false); }
-  };
   const driftSources = new Set([...state.areaDriftSourceIds, ...(state.ingestRecord?.role_findings ?? [])
     .filter((finding) => String(finding.kind).includes('area-drift'))
     .map((finding) => String(finding.source_id))]);
@@ -406,7 +377,7 @@ export function CadLinkPanel() {
   const actionLabel = onshape
     ? (workflow.action === 'update' ? 'Send WG changes to Onshape' : `Create ${shownName} in Onshape`)
     : (workflow.action === 'update' ? 'Send WG changes to Fusion' : `Open ${shownName} in Fusion 360`);
-  const busy = onshape ? sendingToOnshape : sending;
+  const busy = onshape ? sendingToOnshape : cadCoordinator.sendingToFusion;
   const canRequestFusionReturn = Boolean(
     fusionStatus?.running && fusionStatus.documentName && fusionStatus.documentId
     && fusionStatus.link && identity?.designId,
@@ -428,7 +399,7 @@ export function CadLinkPanel() {
       {onshape && onshapeConnection?.insecureKeyFile && <div className="cad-alert" role="alert">The Onshape key file at {onshapeConnection.credentialsPath} is readable by other accounts on this machine. Restrict it with <code>chmod 600</code>.</div>}
       {workflow.action && !confirmWgOverwrite && !confirmPublicDocument && <button className="primary cad-primary-action" disabled={busy} onClick={() => void send()}>{busy ? (workflow.action === 'update' ? 'Updating…' : onshape ? 'Creating…' : 'Opening…') : actionLabel}</button>}
       {confirmPublicDocument && <div className="cad-direction-alert" role="alert"><div><b>This document will be public</b><span>{confirmPublicDocument}</span></div><div className="cad-confirm-actions"><button onClick={() => setConfirmPublicDocument(null)}>Cancel</button><button className="primary" disabled={sendingToOnshape} onClick={() => void sendToOnshape(true)}>Continue: create a public document</button></div></div>}
-      {confirmWgOverwrite && <div className="cad-direction-alert" role="alert"><div><b>Both WG and Fusion changed</b><span>This rebuilds only the linked waveguide from WG. Separate cabinet and mid-woofer bodies stay in Fusion, but direct edits to the linked waveguide are replaced.</span></div><div className="cad-confirm-actions"><button onClick={() => setConfirmWgOverwrite(false)}>Cancel</button><button className="primary" disabled={sending} onClick={() => void send()}>Continue: send WG changes</button></div></div>}
+      {confirmWgOverwrite && <div className="cad-direction-alert" role="alert"><div><b>Both WG and Fusion changed</b><span>This rebuilds only the linked waveguide from WG. Separate cabinet and mid-woofer bodies stay in Fusion, but direct edits to the linked waveguide are replaced.</span></div><div className="cad-confirm-actions"><button onClick={() => setConfirmWgOverwrite(false)}>Cancel</button><button className="primary" disabled={cadCoordinator.sendingToFusion} onClick={() => void send()}>Continue: send WG changes</button></div></div>}
       {onshape && error && <div className="cad-alert" role="alert">{error}</div>}
       {onshape && status && <div className="cad-status-strip" role="status">{status}</div>}
     </section>
@@ -448,11 +419,8 @@ export function CadLinkPanel() {
     {viewportNotice && <div className="cad-alert" role="status">{viewportNotice}</div>}
     {status && <div className="cad-status-strip" role="status">{status}</div>}
     {state.selectedBundle?.readable && <div className="cad-return-quick-action">
-      <div><b>{state.selectedBundle.documentName ?? state.selectedBundle.name}</b><span>{state.ingestRecord ? 'Choose what the viewport displays.' : 'Prepare this Fusion return for the viewport and solver.'}</span></div>
-      {state.ingestRecord ? <div className="cad-viewport-source-buttons" aria-label="CAD viewport source">
-        <button className={viewportMesh.showing !== 'cad' ? 'active' : ''} aria-pressed={viewportMesh.showing !== 'cad'} onClick={() => importedMeshStore.showParametric()}>Parametric</button>
-        <button className={viewportMesh.showing === 'cad' ? 'active' : ''} aria-pressed={viewportMesh.showing === 'cad'} onClick={() => { cadCoordinator.reportViewportNotice(null); void showIngestedMeshInViewport(state.ingestRecord!, state.selectedBundle!.documentName || state.selectedBundle!.name, cadCoordinator.reportViewportNotice); }}>Fusion CAD</button>
-      </div> : <button className="primary" disabled={ingesting} onClick={() => void cadCoordinator.ingest()}>{ingesting ? 'Preparing…' : 'Prepare simulation'}</button>}
+      <div><b>{state.selectedBundle.documentName ?? state.selectedBundle.name}</b><span>{state.ingestRecord ? 'Prepared for the CAD workspace and solver.' : 'Prepare this Fusion return for the viewport and solver.'}</span></div>
+      {!state.ingestRecord && <button className="primary" disabled={ingesting} onClick={() => void cadCoordinator.ingest()}>{ingesting ? 'Preparing…' : 'Prepare simulation'}</button>}
     </div>}
     {!loading && error?.includes('No workspace folder') && <div className="empty-state"><b>No workspace selected</b><span>Choose a workspace folder in Settings, then refresh this panel.</span></div>}
     {!loading && !error && bundles.length === 0 && <div className="empty-state"><b>No CAD returns</b><span>Returned bundles appear under the selected workspace’s wgreturn folder.</span></div>}
@@ -461,7 +429,7 @@ export function CadLinkPanel() {
       role="listitem"
       className={state.selectedBundle?.bundlePath === bundle.bundlePath ? 'selected' : ''}
       disabled={!bundle.readable || ingesting}
-      onClick={() => { state.selectBundle(bundle); importedMeshStore.showParametric(); }}
+      onClick={() => { state.selectBundle(bundle); }}
       title={!bundle.readable ? bundle.reason ?? 'Manifest is unreadable' : undefined}
     ><b>{bundle.documentName ?? bundle.name}</b><span>{bundle.readable ? `${bundle.sourceCount} sources · ${bundle.instanceCount} linked instances` : bundle.reason ?? 'Manifest is unreadable'}</span><time>{new Date(bundle.modifiedAt).toLocaleString()}</time></button>)}</div>}
 
@@ -470,6 +438,7 @@ export function CadLinkPanel() {
         <header><div><h3>Mesh detail</h3><p>Smaller values are finer and support higher frequencies. Curved CAD faces receive bounded extra refinement automatically.</p></div>{state.ingestRecord && <button className="primary" disabled={ingesting} onClick={() => void cadCoordinator.ingest()}>{ingesting ? 'Preparing…' : 'Rebuild mesh'}</button>}</header>
         <NumberField label="Cabinet & waveguide" unit="mm" value={state.rigidSizeMm} min={0.01} step={0.5} precision={2} description="Maximum target size for rigid CAD surfaces; tight curvature may be refined further." onCommit={state.setRigidSize}/>
         <NumberField label="Size transition" unit="mm" value={state.transitionMm} min={0.01} step={0.5} precision={2} description="Maximum size transition between adjacent mesh regions." onCommit={state.setTransition}/>
+        {(state.ingestRecord?.evidence?.fem_air_volumes?.length ?? 0) > 0 && <ToggleRow id="cad-exterior-only" label="Exterior-only Phase 2 solve" help="Explicitly exclude the returned FEM air volumes. Phase 2 solves only the exterior Metal free-space problem." checked={state.exteriorOnly} onChange={state.setExteriorOnly}/>}
         {state.selectedBundle.sources.map((source) => <div className={`cad-source ${state.skippedSourceIds.includes(source.id) ? 'skipped' : ''}`} key={source.id}>
           <NumberField label={`${source.role} source`} unit="mm" value={state.sourceSizesMm[source.id] ?? source.suggestedResolutionMm} min={0.01} step={0.25} precision={2} description={`${source.id} · suggested ${source.suggestedResolutionMm} mm`} disabled={state.skippedSourceIds.includes(source.id)} onCommit={(value) => state.setSourceSize(source.id, value)}/>
           {!source.required && <ToggleRow id={`skip-${source.id}`} label="Skip optional source" help="Exclude this optional source from ingestion and the solve. This creates a blocking finding." checked={state.skippedSourceIds.includes(source.id)} onChange={(checked) => state.setSkipped(source.id, checked)}/>} 
@@ -511,17 +480,6 @@ export function CadLinkPanel() {
             {state.combineEnabled && <ToggleRow id="cad-combine-level" label="Level match members" help="Equalise member band levels before summing. Defaults off when every member carries a driver model — real voltage-driven levels should not be re-equalised." checked={state.combineLevelMatch ?? combineLevelMatchDefault(state)} onChange={state.setCombineLevelMatch}/>}
           </>}
         </section>
-        <section className="cad-section">
-          <header><h3>Explicit solve sweep</h3><span className="cad-status">Metal · full 3-D · free space</span></header>
-          {femVolumes.length > 0 && <ToggleRow id="cad-exterior-only" label="Exterior-only Phase 2 solve" help="Explicitly exclude the returned FEM air volumes. Phase 2 solves only the exterior Metal free-space problem." checked={state.exteriorOnly} onChange={state.setExteriorOnly}/>} 
-          <FrequencySweepControls idPrefix="cad-import" context="imported"/>
-          {solveStore.frequencyMode === 'range' && <div className="cad-sweep-grid">
-            <NumberField label="Start" unit="Hz" value={state.frequencyStartHz} min={1} step={10} precision={0} onCommit={(frequencyStartHz) => state.setSweep({ frequencyStartHz })}/>
-            <NumberField label="End" unit="Hz" value={state.frequencyEndHz} min={1} step={100} precision={0} onCommit={(frequencyEndHz) => state.setSweep({ frequencyEndHz })}/>
-            <NumberField label="Points" value={state.frequencyCount} min={1} max={401} step={1} precision={0} onCommit={(frequencyCount) => state.setSweep({ frequencyCount })}/>
-          </div>}
-        </section>
-        <div className="cad-solve-bar"><div>{solveReason ?? 'All blocking findings acknowledged. Ready to submit.'}</div><button className="primary" disabled={Boolean(solveReason) || submitting || ingesting} onClick={() => void solve()}>{submitting ? 'Submitting…' : 'Solve CAD import'}</button></div>
       </>}
     </>}
     </section>}

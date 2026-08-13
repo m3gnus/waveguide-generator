@@ -3,9 +3,10 @@ import { jobsSocket } from '../api/jobsSocket';
 import { compareSelection } from '../api/results';
 import { DesignFileMenu } from '../design/DesignFileMenu';
 import { PARAMETER_REGISTRY, PARAMETER_SECTION_DEFINITIONS, fieldAppliesToFamily, fieldMatchesQuery, type ParameterTab } from '../design/parameterRegistry';
-import { RESULT_PANEL_COUNTS, preferencesStore, runDisplayName } from '../prefs/preferences';
+import { RESULT_PANEL_COUNTS, preferencesStore, runDisplayName, usePreferences, type Preferences } from '../prefs/preferences';
 import { useDesignStore, type DesignFamily } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
+import { workspaceModeStore, type WorkspaceMode } from '../stores/workspaceMode';
 import { requestParameterReveal } from '../design/ParamPanel';
 import { BrandMark, Icon } from './icons';
 import { useSolveControl } from './JobsCoordinator';
@@ -51,6 +52,45 @@ export function buildParameterPaletteEntries(family?: DesignFamily): PaletteEntr
   });
 }
 
+export function WorkspaceModeSwitch() {
+  const preferences = usePreferences();
+  const mode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
+  const fusion = preferences.cadApplication === 'fusion360';
+  const cadDisabledReason = 'The CAD return leg is Fusion-only. Select Autodesk Fusion 360 in Settings to use CAD mode.';
+
+  useEffect(() => {
+    // A preferences change can make the already-selected mode unavailable.
+    // Exit immediately so Onshape never inherits a Fusion solve route.
+    if (!fusion && mode === 'cad') workspaceModeStore.setMode('parametric');
+  }, [fusion, mode]);
+
+  const option = (value: WorkspaceMode, label: string) => {
+    const disabled = value === 'cad' && !fusion;
+    return <button
+      type="button"
+      role="radio"
+      className={mode === value ? 'on' : ''}
+      aria-checked={mode === value}
+      disabled={disabled}
+      title={disabled ? cadDisabledReason : `Use ${label} workspace mode`}
+      onClick={() => workspaceModeStore.setMode(value)}
+    >{label}</button>;
+  };
+
+  return <div className="theme-toggle workspace-mode-toggle" role="radiogroup" aria-label="Workspace mode">
+    {option('parametric', 'Parametric')}
+    {option('cad', fusion ? 'Fusion CAD' : 'CAD')}
+  </div>;
+}
+
+export function workspaceModePaletteEntries(cadApplication: Preferences['cadApplication']): PaletteEntry[] {
+  const onshape = cadApplication === 'onshape';
+  return [
+    { id: 'mode-parametric', kind: 'Commands', label: 'Mode: Parametric', run: () => workspaceModeStore.setMode('parametric') },
+    { id: 'mode-fusion-cad', kind: 'Commands', label: 'Mode: Fusion CAD', detail: onshape ? 'The CAD return leg is Fusion-only.' : undefined, disabled: onshape, run: () => workspaceModeStore.setMode('cad') },
+  ];
+}
+
 export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
   const solve = useSolveControl();
   const undo = useDesignStore((state) => state.undo);
@@ -62,6 +102,7 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
   const [settingsSection, setSettingsSection] = useState<SettingsSection>();
   const [updateOpen, setUpdateOpen] = useState(false);
   const update = useUpdateStatus();
+  const preferences = usePreferences();
   const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
   const temporal = useDesignStore.temporal.getState();
   const canUndo = temporal.pastStates.length > 0 || Boolean(useDesignStore.getState().dragSnapshot);
@@ -114,12 +155,13 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
       { id: 'reset-layout', kind: 'Commands', label: 'Reset layout', run: onResetLayout },
       { id: 'dark-theme', kind: 'Commands', label: 'Dark theme', run: () => setTheme('dark') },
       { id: 'light-theme', kind: 'Commands', label: 'Light theme', run: () => setTheme('light') },
+      ...workspaceModePaletteEntries(preferences.cadApplication),
       { id: 'settings', kind: 'Commands', label: 'Settings', run: showSettings },
       { id: 'application-update', kind: 'Commands', label: update.data?.availability === 'available' ? `Update WG to ${update.data.release?.version ?? 'latest'}` : 'Application update', detail: update.data?.availability === 'available' ? 'Update available' : `Version ${__WG2_VERSION__}`, keywords: 'version release upgrade', run: () => setUpdateOpen(true) },
       ...RESULT_PANEL_COUNTS.map((count) => ({ id: `results-${count}`, kind: 'Commands' as const, label: `Results: ${count} chart${count === 1 ? '' : 's'}`, keywords: `panel count layout`, run: () => preferencesStore.setChartCount(count) })),
     ];
     return [...parameters, ...jobEntries, ...commands];
-  }, [canRedo, canUndo, family, jobs, onResetLayout, redo, showSettings, solve, undo, update.data?.availability, update.data?.release?.version]);
+  }, [canRedo, canUndo, family, jobs, onResetLayout, preferences.cadApplication, redo, showSettings, solve, undo, update.data?.availability, update.data?.release?.version]);
 
   return <header className="topbar">
     <div className="brand"><BrandMark/><div><span className="brand-name">WAVEGUIDE GENERATOR</span><UpdateButton snapshot={update} open={updateOpen} onOpen={() => setUpdateOpen(true)}/></div></div>
@@ -130,6 +172,7 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
       <button className="icon-button" disabled={!canRedo} onClick={redo} title="Redo"><Icon name="redo"/></button>
     </div>
     <CommandPalette entries={paletteEntries}/>
+    <WorkspaceModeSwitch/>
     <button className="solve-button" disabled={solve.disabled} title={solve.title} aria-busy={solve.submitting} onClick={solve.solve}><Icon name="play"/>{solve.label}<kbd>{commandShortcutLabel('↵')}</kbd></button>
     <i className="v-separator" />
     <div className="theme-toggle" aria-label="Color theme">

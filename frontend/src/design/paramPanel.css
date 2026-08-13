@@ -53,6 +53,18 @@
 .toggle-row input, .axis-toggles input, .point-paste input { accent-color: var(--acc); }
 .axis-toggles { display: flex; flex-wrap: wrap; gap: 4px 8px; margin: 4px 0; padding: 6px; border: 1px solid var(--hair-soft); border-radius: var(--r3); color: var(--fg2); font-size: var(--text-micro); text-transform: capitalize; }
 .section-note, .paste-meta { margin: 4px 0; color: var(--fg4); font-size: var(--text-micro); line-height: 1.35; }
+.linked-design-card { display: grid; grid-template-columns: 9px minmax(0, 1fr); align-items: start; gap: 8px; padding: 7px; border: 1px solid var(--hair-soft); background: var(--ov1); }
+.linked-design-card > div { display: grid; gap: 2px; }
+.linked-design-card span:not(.cad-connection-dot) { color: var(--fg3); font-size: var(--text-micro); line-height: 1.4; }
+.linked-design-drift { margin: 5px 0; color: var(--amber); font-size: var(--text-micro); }
+.linked-design-action { width: 100%; min-height: 30px; }
+.cad-mode-empty { display: grid; gap: 6px; margin: 10px 8px; padding: 14px; border: 1px solid color-mix(in srgb, var(--acc) 38%, var(--hair)); background: color-mix(in srgb, var(--acc) 6%, var(--surface-panel)); }
+.cad-mode-empty span { color: var(--fg3); font-size: var(--text-micro); }
+.cad-mode-empty button { justify-content: center; min-height: 30px; }
+.cad-solve-fact { display: flex; justify-content: space-between; gap: 8px; margin: 3px 0; padding: 6px 8px; border: 1px solid var(--hair-soft); background: var(--ov1); color: var(--fg2); font-size: var(--text-micro); }
+.effective-grid-readout { display: grid; gap: 2px; margin-top: 6px; padding: 7px; border-left: 3px solid var(--green); background: var(--ov1); }
+.effective-grid-readout.widened { border-color: var(--amber); }
+.effective-grid-readout span, .effective-grid-readout small { color: var(--fg3); font-size: var(--text-micro); line-height: 1.4; }
 /* No width of its own. The directivity-map angles are rendered by a different
    component from the parameter registry's fields, and it gave them a width of
    their own -- so "Sweep start" under Frequency Sweep and "Sweep start" under
@@ -140,6 +152,11 @@
   .section-body > .filter-note,
   .section-body > .parameter-empty,
   .section-body > .field-error,
+  .section-body > .linked-design-card,
+  .section-body > .linked-design-drift,
+  .section-body > .linked-design-action,
+  .section-body > .cad-solve-fact,
+  .section-body > .effective-grid-readout,
   .section-body > .schema-gap,
   .section-body > .point-paste,
   .section-body > p { grid-column: 1 / -1; }
