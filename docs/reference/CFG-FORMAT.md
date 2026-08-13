@@ -98,8 +98,38 @@ Migrations run before validation and are independently reported:
 5. `005_freeform_normalized_axis` converts legacy absolute-z anchors to the shared
    normalized `t` axis and moves physical length to the top-level design.
 
+A migration is reported as applied only when its `applies_if` predicate matches, and
+those predicates recognise the payloads their transform can rewrite **completely** —
+not merely payloads that look legacy. `005_freeform_normalized_axis` is the clearest
+case: it applies only when a full normalisation plan can be built, so a file carrying
+partial or unresolvable absolute-z anchors is left alone and is not reported as
+migrated. A migration note therefore means "this file was rewritten", never "this file
+resembled an old one".
+
 The migrations are defined in `server/design/migrate.py` and frozen by
 `server/tests/test_migrate.py`, `test_textcfg.py`, and `test_preview_ws_translate.py`.
+
+## Adding keys without a format bump
+
+`design-format` is **2** and adding a schema key does not change it. Unknown top-level
+assignments and blocks round-trip unchanged, so a file written by a newer build stays
+readable by an older one: the older reader preserves the key it does not understand
+rather than dropping or rejecting it. The version is reserved for changes that alter
+how existing text is *interpreted* — a renamed key, a changed unit, a new default that
+silently shifts geometry — because only those can make an old reader wrong rather than
+merely incomplete.
+
+`Morph.Exponent` is the current example. It is a normal schema key
+(`server/design/textcfg.py`, read and written like any other), the mesher maps it to
+`morphExponent`, and `design-format` stayed at 2.
+
+Not everything the application sends to a solve belongs in this file. The passive
+cardioid's fields — rear volume, port length and area, port-area provenance, foam
+resistance, coupled-output flag — are **job** fields on the imported-geometry wire
+model (`server/jobs/models.py`), not design fields. They are absent from the schema and
+from this format by design: they describe one solve request against imported CAD, not
+the portable parametric design, and a `.cfg` that carried them would imply a
+reproducibility it cannot offer.
 
 ## CAD identity block
 
