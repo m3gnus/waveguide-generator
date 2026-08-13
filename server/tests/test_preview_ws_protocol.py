@@ -620,6 +620,44 @@ def test_runtime_error_carries_revision_and_internal_message() -> None:
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize(
+    ("diagnostic", "field"),
+    [
+        (
+            "FREEFORM morph to the rectangle target produces a non-convex outline "
+            "near t=0.75; increase morphCorner or reduce how far the target departs "
+            "from the drawn mouth; minimum feasible corner radius is ~15 mm",
+            "morph.corner_radius",
+        ),
+        (
+            "FREEFORM crossSections span 0..1 produces a non-convex outline near "
+            "t=0.75; adjust its shape, aspect, or corner setting",
+            "design",
+        ),
+    ],
+)
+def test_convexity_errors_are_routed_only_to_the_actionable_field(
+    diagnostic: str, field: str
+) -> None:
+    async def scenario() -> None:
+        def broken_builder(*_args: Any) -> Any:
+            raise ValueError(diagnostic)
+
+        transport = FakeTransport()
+        protocol = PreviewProtocol(epoch=32, preview_builder=broken_builder)
+        task = asyncio.create_task(protocol.run(transport))
+        await _wait_until(lambda: bool(transport.json))
+        await transport.incoming.put(_request(32, 7, revision=28))
+        await _wait_until(lambda: len(transport.json) == 2)
+        await transport.incoming.put(None)
+        await task
+
+        assert transport.json[1]["fields"] == {field: diagnostic}
+        assert transport.json[1]["designRevision"] == 28
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(("field", "value"), [("seq", "1"), ("seq", True), ("designRevision", "2")])
 def test_sequence_and_revision_fields_are_strict_integers(field: str, value: object) -> None:
     async def scenario() -> None:

@@ -107,7 +107,8 @@ export function NumberField({
   const emptyMessage = empty && !optional ? 'This value is required.' : undefined;
   const validationMessage = draft.trim() && Number.isFinite(parsed) ? validate?.(parsed) : undefined;
   const draftMessage = rangeMessage ?? emptyMessage ?? validationMessage;
-  const invalid = (empty && !optional) || (!empty && !isExpression && (!Number.isFinite(parsed) || outOfRange || Boolean(validationMessage)));
+  const draftInvalid = (empty && !optional) || (!empty && !isExpression && (!Number.isFinite(parsed) || outOfRange || Boolean(validationMessage)));
+  const invalid = Boolean(invalidMessage) || draftInvalid;
 
   useEffect(() => {
     if (!editing && !drag.current) setDraft(displayed);
@@ -121,7 +122,7 @@ export function NumberField({
       return;
     }
     if (draft === displayed) return;
-    if (invalid) {
+    if (draftInvalid) {
       setDraft(displayed);
       return;
     }

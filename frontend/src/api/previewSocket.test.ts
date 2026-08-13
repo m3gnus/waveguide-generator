@@ -204,8 +204,61 @@ describe('preview socket state machine', () => {
     socket.message(JSON.stringify({ v: 1, kind: 'error', epoch: 3, designRevision: 57, code: 'internal', message: 'inconsistent local orientation' }));
     // Discarding this used to leave the viewport reading STALE with no reason.
     expect(manager.getSnapshot().error).toBe('inconsistent local orientation');
+    expect(manager.getSnapshot().errorFields).toBeNull();
     expect(manager.getSnapshot().errorRevision).toBe(57);
     expect(manager.getSnapshot().stale).toBe(true);
+    manager.stop();
+  });
+
+  it('preserves validated field errors and keeps unknown keys globally actionable', () => {
+    const socket = new MockSocket();
+    const manager = new PreviewSocketManager(() => socket, 'ws://test/ws/preview');
+    manager.start();
+    socket.message(JSON.stringify({ v: 1, kind: 'hello', epoch: 3, heartbeatSec: 15 }));
+    socket.message(JSON.stringify({
+      v: 1,
+      kind: 'error',
+      epoch: 3,
+      designRevision: 1,
+      code: 'validation',
+      fields: { 'morph.corner_radius': 'raise the radius', future_field: 'future detail', malformed: 42 },
+    }));
+
+    expect(manager.getSnapshot()).toMatchObject({
+      error: 'raise the radius',
+      errorRevision: 1,
+      errorFields: { 'morph.corner_radius': 'raise the radius', future_field: 'future detail' },
+    });
+    manager.stop();
+  });
+
+  it('does not resurrect a field error after a newer lane has superseded it', () => {
+    const socket = new MockSocket();
+    const manager = new PreviewSocketManager(() => socket, 'ws://test/ws/preview');
+    manager.start();
+    socket.message(JSON.stringify({ v: 1, kind: 'hello', epoch: 3, heartbeatSec: 15 }));
+    socket.message(JSON.stringify({ v: 1, kind: 'error', epoch: 3, seq: 3, designRevision: 3, code: 'validation', fields: { 'morph.corner_radius': 'new failure' } }));
+    socket.message(JSON.stringify({ v: 1, kind: 'error', epoch: 3, seq: 2, designRevision: 2, code: 'validation', fields: { 'morph.corner_radius': 'late old failure' } }));
+
+    expect(manager.getSnapshot()).toMatchObject({
+      error: 'new failure',
+      errorRevision: 3,
+      errorFields: { 'morph.corner_radius': 'new failure' },
+    });
+    manager.stop();
+  });
+
+  it('does not resurrect a same-revision field error after a newer request succeeded', () => {
+    const socket = new MockSocket();
+    const manager = new PreviewSocketManager(() => socket, 'ws://test/ws/preview');
+    useDesignStore.setState({ designRevision: 57 });
+    manager.start();
+    socket.message(JSON.stringify({ v: 1, kind: 'hello', epoch: 3, heartbeatSec: 15 }));
+    socket.message(fixture()); // request seq 412 succeeded
+    socket.message(JSON.stringify({ v: 1, kind: 'error', epoch: 3, seq: 411, designRevision: 57, code: 'validation', fields: { 'morph.corner_radius': 'late coarse failure' } }));
+
+    expect(manager.getSnapshot().error).toBeNull();
+    expect(manager.getSnapshot().errorFields).toBeNull();
     manager.stop();
   });
 
@@ -219,6 +272,7 @@ describe('preview socket state machine', () => {
     expect(manager.getSnapshot().error).toBe('bad expression');
     socket.message(fixture());
     expect(manager.getSnapshot().error).toBeNull();
+    expect(manager.getSnapshot().errorFields).toBeNull();
     expect(manager.getSnapshot().errorRevision).toBeNull();
     manager.stop();
   });

@@ -460,6 +460,23 @@ def _validation_fields(error: ValidationError, *, prefix: str | None = None) -> 
     return fields
 
 
+def _compute_value_error_fields(request: _Request, error: ValueError) -> dict[str, str]:
+    """Attribute mesher failures only when their diagnostic is unambiguous.
+
+    FREEFORM's convexity guard deliberately distinguishes a rectangle-morph
+    failure from a defect in the cross-section schedule. Only the former is
+    repaired by changing Morph Corner Radius, so keep every other mesher
+    ``ValueError`` at the global design/points target.
+    """
+
+    message = str(error)
+    if request.kind == "preview" and message.startswith(
+        "FREEFORM morph to the rectangle target produces a non-convex outline"
+    ):
+        return {"morph.corner_radius": message}
+    return {"design" if request.kind == "preview" else "points": message}
+
+
 class PreviewProtocol:
     """One-connection state machine, latest-wins per lane (see ``_lane``)."""
 
@@ -748,7 +765,7 @@ class PreviewProtocol:
                     current.seq,
                     current.design_revision,
                     "validation",
-                    fields={"design" if current.kind == "preview" else "points": str(exc)},
+                    fields=_compute_value_error_fields(current, exc),
                 )
             except Exception as exc:  # pragma: no cover - exact failures are dependency-specific
                 await self._error(
