@@ -854,6 +854,17 @@ class JobStore:
                 """,
                 (job_id, matrix_npz),
             )
+            conn.execute(
+                """UPDATE simulation_jobs
+                   SET task_metadata_json = json_set(
+                         COALESCE(task_metadata_json, '{}'),
+                         '$.has_radiation_impedance_artifact', json('true'),
+                         '$.radiation_impedance_artifact_bytes', ?
+                       ),
+                       updated_at = ?
+                   WHERE id = ?""",
+                (len(matrix_npz), _now_iso(), job_id),
+            )
 
     def get_radiation_impedance(self, job_id: str) -> bytes | None:
         with self._lock, self._connection() as conn:
@@ -862,6 +873,27 @@ class JobStore:
                 (job_id,),
             ).fetchone()
             return bytes(row["matrix_npz"]) if row else None
+
+    def delete_radiation_impedance(self, job_id: str) -> bool:
+        """Delete a non-durable matrix and clear its advertised availability."""
+
+        with self._lock, self._transaction() as conn:
+            deleted = conn.execute(
+                "DELETE FROM simulation_radiation_impedance WHERE job_id = ?",
+                (job_id,),
+            ).rowcount
+            conn.execute(
+                """UPDATE simulation_jobs
+                   SET task_metadata_json = json_set(
+                         COALESCE(task_metadata_json, '{}'),
+                         '$.has_radiation_impedance_artifact', json('false'),
+                         '$.radiation_impedance_artifact_bytes', json('null')
+                       ),
+                       updated_at = ?
+                   WHERE id = ?""",
+                (_now_iso(), job_id),
+            )
+            return bool(deleted)
 
     def delete_job_with_event(self, job_id: str) -> tuple[bool, dict[str, Any] | None]:
         """Delete one row and retain a terminal deleted event."""
@@ -923,6 +955,24 @@ class JobStore:
                 """,
                 (restart_error_message, now, now),
             )
+            running_ids = [str(row["id"]) for row in running]
+            if running_ids:
+                placeholders = ",".join("?" for _ in running_ids)
+                conn.execute(
+                    f"DELETE FROM simulation_radiation_impedance "
+                    f"WHERE job_id IN ({placeholders})",
+                    running_ids,
+                )
+                conn.execute(
+                    f"""UPDATE simulation_jobs
+                        SET task_metadata_json = json_set(
+                              COALESCE(task_metadata_json, '{{}}'),
+                              '$.has_radiation_impedance_artifact', json('false'),
+                              '$.radiation_impedance_artifact_bytes', json('null')
+                            )
+                        WHERE id IN ({placeholders})""",
+                    running_ids,
+                )
             for row in running:
                 failed_events.append(
                     self._append_event(
@@ -1040,6 +1090,46 @@ class JobStore:
             ]
             removed_ids.extend(str(value) for value in overflow)
             removed_ids = list(dict.fromkeys(removed_ids))
+            standalone_radiation_rows = conn.execute(
+                """SELECT simulation_jobs.id
+                   FROM simulation_radiation_impedance
+                   JOIN simulation_jobs
+                     ON simulation_jobs.id = simulation_radiation_impedance.job_id
+                   WHERE simulation_jobs.status IN ('complete', 'error', 'cancelled')
+                     AND COALESCE(CAST(json_extract(
+                           simulation_jobs.task_metadata_json, '$.rating'
+                         ) AS INTEGER), 0) <= 0
+                     AND (
+                       simulation_jobs.has_results = 0
+                       OR COALESCE(
+                         json_extract(
+                           simulation_jobs.task_metadata_json, '$.imported_at'
+                         ),
+                         simulation_jobs.completed_at,
+                         simulation_jobs.created_at
+                       ) < ?
+                     )""",
+                (cutoff,),
+            ).fetchall()
+            removed_radiation_ids: list[str] = []
+            if removed_ids:
+                placeholders = ",".join("?" for _ in removed_ids)
+                removed_radiation_ids = [
+                    str(row["job_id"])
+                    for row in conn.execute(
+                        f"SELECT job_id FROM simulation_radiation_impedance "
+                        f"WHERE job_id IN ({placeholders})",
+                        removed_ids,
+                    ).fetchall()
+                ]
+            radiation_ids = list(
+                dict.fromkeys(
+                    [
+                        *removed_radiation_ids,
+                        *(str(row["id"]) for row in standalone_radiation_rows),
+                    ]
+                )
+            )
             mesh_rows = conn.execute(
                 """SELECT id FROM simulation_jobs
                    WHERE status IN ('complete', 'error', 'cancelled')
@@ -1069,15 +1159,28 @@ class JobStore:
                     removed_ids,
                 )
                 conn.execute(
-                    f"DELETE FROM simulation_radiation_impedance WHERE job_id IN ({placeholders})",
-                    removed_ids,
-                )
-                conn.execute(
                     f"UPDATE simulation_jobs SET has_results = 0, "
                     "task_metadata_json = json_set(COALESCE(task_metadata_json, '{}'), "
                     "'$.results_discarded_at', ?) "
                     f"WHERE id IN ({placeholders})",
                     [discarded_at, *removed_ids],
+                )
+            if radiation_ids:
+                placeholders = ",".join("?" for _ in radiation_ids)
+                conn.execute(
+                    f"DELETE FROM simulation_radiation_impedance "
+                    f"WHERE job_id IN ({placeholders})",
+                    radiation_ids,
+                )
+                conn.execute(
+                    f"""UPDATE simulation_jobs
+                        SET task_metadata_json = json_set(
+                              COALESCE(task_metadata_json, '{{}}'),
+                              '$.has_radiation_impedance_artifact', json('false'),
+                              '$.radiation_impedance_artifact_bytes', json('null')
+                            )
+                        WHERE id IN ({placeholders})""",
+                    radiation_ids,
                 )
             if mesh_ids:
                 placeholders = ",".join("?" for _ in mesh_ids)
@@ -1092,7 +1195,9 @@ class JobStore:
                     f"WHERE id IN ({placeholders})",
                     [discarded_at, *mesh_ids],
                 )
-            affected_ids = list(dict.fromkeys([*removed_ids, *mesh_ids]))
+            affected_ids = list(
+                dict.fromkeys([*removed_ids, *radiation_ids, *mesh_ids])
+            )
             if emit_events and affected_ids:
                 events = [
                     self._append_event(
@@ -1102,6 +1207,11 @@ class JobStore:
                         {
                             "changed": {
                                 **({"has_results": False} if job_id in removed_ids else {}),
+                                **(
+                                    {"has_radiation_impedance_artifact": False}
+                                    if job_id in radiation_ids
+                                    else {}
+                                ),
                                 **(
                                     {"has_mesh_artifact": False}
                                     if job_id in mesh_ids

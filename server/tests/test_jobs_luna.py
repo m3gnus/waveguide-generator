@@ -428,6 +428,150 @@ def test_real_completion_flushes_latest_coalesced_progress_and_log(
     asyncio.run(scenario())
 
 
+def test_radiation_artifact_availability_and_failure_warning_are_job_visible(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        store = JobStore(tmp_path / "jobs.db")
+        store.initialize()
+        runtime = JobRuntime(store)
+        runtime._started = True
+
+        class Engine:
+            name = "mock"
+
+            async def run(self, _request: Any, **_kwargs: Any) -> Any:
+                return SimpleNamespace(
+                    results={
+                        "channels": {"main": {}},
+                        "metadata": {
+                            "passive_cardioid": {
+                                "enabled": True,
+                                "status": "complete",
+                            }
+                        },
+                    },
+                    msh_text=None,
+                    mesh_stats=None,
+                    channel_bases=None,
+                    radiation_impedance=b"matrix-npz",
+                )
+
+        store.create_job(_record("available"))
+        await runtime._run_real_engine("available", _request(), Engine())
+        available = runtime._serialize_job(store.get_job_row("available"))
+        assert available["status"] == "complete"
+        assert available["has_radiation_impedance_artifact"] is True
+        assert available["radiation_impedance_artifact_bytes"] == len(b"matrix-npz")
+        assert available["persistence_warnings"] == []
+
+        store.create_job(_record("unavailable"))
+
+        def fail_store(_job_id: str, _matrix_npz: bytes) -> None:
+            raise sqlite3.OperationalError("disk full")
+
+        monkeypatch.setattr(store, "store_radiation_impedance", fail_store)
+        await runtime._run_real_engine("unavailable", _request(), Engine())
+        unavailable = runtime._serialize_job(store.get_job_row("unavailable"))
+        assert unavailable["status"] == "complete"
+        assert unavailable["has_radiation_impedance_artifact"] is False
+        assert unavailable["radiation_impedance_artifact_bytes"] is None
+        assert len(unavailable["persistence_warnings"]) == 1
+        assert "could not be saved" in unavailable["persistence_warnings"][0]
+        assert "disk full" in unavailable["persistence_warnings"][0]
+        assert store.get_results("unavailable")["metadata"]["passive_cardioid"] == {
+            "enabled": True,
+            "status": "complete",
+        }
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_degraded_cardioid_result_completes_with_main_channels(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        store = JobStore(tmp_path / "jobs.db")
+        store.initialize()
+        store.create_job(_record("degraded"))
+        runtime = JobRuntime(store)
+        runtime._started = True
+
+        class Engine:
+            name = "mock"
+
+            async def run(self, _request: Any, **_kwargs: Any) -> Any:
+                return SimpleNamespace(
+                    results={
+                        "channels": {"mf": {}, "port": {}},
+                        "channel_order": ["mf", "port"],
+                        "metadata": {
+                            "passive_cardioid": {
+                                "enabled": True,
+                                "coupled": True,
+                                "status": "failed",
+                                "reason": "matrix campaign exploded",
+                            }
+                        },
+                    },
+                    msh_text=None,
+                    mesh_stats=None,
+                    channel_bases=None,
+                    radiation_impedance=None,
+                )
+
+        await runtime._run_real_engine("degraded", _request(), Engine())
+
+        assert store.get_job_row("degraded")["status"] == "complete"
+        results = store.get_results("degraded")
+        assert set(results["channels"]) == {"mf", "port"}
+        assert "passive_cardioid" not in results["channels"]
+        assert results["metadata"]["passive_cardioid"]["status"] == "failed"
+        assert store.get_radiation_impedance("degraded") is None
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_noncomplete_exit_cleans_persisted_radiation_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        store = JobStore(tmp_path / "jobs.db")
+        store.initialize()
+        store.create_job(_record("persistence-failed"))
+        runtime = JobRuntime(store)
+        runtime._started = True
+
+        class Engine:
+            name = "mock"
+
+            async def run(self, _request: Any, **_kwargs: Any) -> Any:
+                return SimpleNamespace(
+                    results={"channels": {"main": {}}, "metadata": {}},
+                    msh_text=None,
+                    mesh_stats=None,
+                    channel_bases=None,
+                    radiation_impedance=b"matrix-npz",
+                )
+
+        def fail_completion(*_args: Any, **_kwargs: Any) -> None:
+            raise sqlite3.OperationalError("results unavailable")
+
+        monkeypatch.setattr(store, "complete_job", fail_completion)
+        await runtime._run_real_engine(
+            "persistence-failed", _request(), Engine()
+        )
+
+        assert store.get_job_row("persistence-failed")["status"] == "error"
+        assert store.get_radiation_impedance("persistence-failed") is None
+        metadata = store.get_job_row("persistence-failed")["task_metadata"]
+        assert metadata["has_radiation_impedance_artifact"] is False
+        assert metadata["radiation_impedance_artifact_bytes"] is None
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
 def test_graceful_shutdown_flushes_last_buffered_log(tmp_path: Path) -> None:
     async def scenario() -> None:
         store = JobStore(tmp_path / "jobs.db")
