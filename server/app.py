@@ -84,7 +84,10 @@ class _HashedAssetStaticFiles(StaticFiles):
 
 
 def create_app(
-    *, data_dir: str | Path | None = None, solver_warmup: bool = False
+    *,
+    data_dir: str | Path | None = None,
+    solver_warmup: bool = False,
+    update_request_path: str | Path | None = None,
 ) -> FastAPI:
     """Assemble an app instance without creating persistent directories.
 
@@ -264,6 +267,9 @@ def create_app(
         running_version=VERSION,
         data_dir=resolved_data_dir,
         repo_root=Path(__file__).resolve().parents[1],
+        update_request_path=(
+            Path(update_request_path) if update_request_path is not None else None
+        ),
     )
     # Job tasks stop first; only then may their shared gmsh owner be finalized.
     application.router.add_event_handler("shutdown", shutdown_mesher_prewarm)

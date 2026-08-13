@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getUpdateStatus } from './updates';
+import { getUpdateStatus, installApplicationUpdate } from './updates';
 
 const payload = {
   schemaVersion: 1,
@@ -12,6 +12,7 @@ const payload = {
   nextCheckAt: null,
   checkout: { kind: 'release' },
   action: null,
+  canInstall: false,
   lastError: null,
 };
 
@@ -34,5 +35,19 @@ describe('getUpdateStatus', () => {
     await expect(getUpdateStatus()).rejects.toThrow('invalid');
     vi.stubGlobal('fetch', vi.fn(async () => new Response('offline', { status: 503 })));
     await expect(getUpdateStatus()).rejects.toThrow('(503)');
+  });
+
+  it('requests installation with a non-simple confirmation header', async () => {
+    const fetchMock = vi.fn(async () => new Response(
+      JSON.stringify({ accepted: true, tag: 'v2.0.1' }),
+      { status: 202 },
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(installApplicationUpdate()).resolves.toEqual({ accepted: true, tag: 'v2.0.1' });
+    expect(fetchMock).toHaveBeenCalledWith('/api/updates/install', {
+      method: 'POST',
+      headers: { 'X-WG-Update': 'install' },
+    });
   });
 });

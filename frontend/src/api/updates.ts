@@ -39,7 +39,13 @@ export interface UpdateStatus {
   nextCheckAt: string | null;
   checkout: CheckoutStatus;
   action: UpdateAction | null;
+  canInstall: boolean;
   lastError: string | null;
+}
+
+export interface UpdateInstallAccepted {
+  accepted: true;
+  tag: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -56,8 +62,31 @@ export async function getUpdateStatus(refresh = false): Promise<UpdateStatus> {
     || typeof payload.runningVersion !== 'string'
     || !isRecord(payload.checkout)
     || typeof payload.checkout.kind !== 'string'
+    || typeof payload.canInstall !== 'boolean'
   ) {
     throw new Error('Update status response is invalid');
   }
   return payload as unknown as UpdateStatus;
+}
+
+export async function installApplicationUpdate(): Promise<UpdateInstallAccepted> {
+  const response = await fetch('/api/updates/install', {
+    method: 'POST',
+    headers: { 'X-WG-Update': 'install' },
+  });
+  if (!response.ok) {
+    let detail = `Update installation request failed (${response.status})`;
+    try {
+      const payload: unknown = await response.json();
+      if (isRecord(payload) && typeof payload.detail === 'string') detail = payload.detail;
+    } catch {
+      // Keep the status-based fallback when the response is not JSON.
+    }
+    throw new Error(detail);
+  }
+  const payload: unknown = await response.json();
+  if (!isRecord(payload) || payload.accepted !== true || typeof payload.tag !== 'string') {
+    throw new Error('Update installation response is invalid');
+  }
+  return payload as unknown as UpdateInstallAccepted;
 }
