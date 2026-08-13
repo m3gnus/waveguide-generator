@@ -173,6 +173,74 @@ describe('results chart layouts', () => {
     expect(host.querySelector('.result-summary-copy')).toBeNull();
   });
 
+  it('renders a curve caveat only when the solved band exceeds its validity ceiling', () => {
+    const above: ResultPayload = {
+      frequencies: [100, 20_000],
+      spl_on_axis: { frequencies: [100, 20_000], spl: [80, 85] },
+      metadata: { source_ids: ['driver'] },
+    };
+    const below: ResultPayload = {
+      ...above,
+      frequencies: [100, 1_000],
+      spl_on_axis: { frequencies: [100, 1_000], spl: [80, 82] },
+    };
+    const wrapper = (channel: ResultPayload): ResultPayload => ({
+      frequencies: [], channels: { drive: channel },
+      metadata: { per_source_frequency_validity: { driver: { effective_max_valid_frequency_hz: 1_200 } } },
+    });
+
+    act(() => root.render(createElement(ResultsChartGrid, {
+      chartTypes: ['frequency_response'], result: above, named: [], tokens, wrapper: wrapper(above), channelId: 'drive',
+    })));
+    expect(host.querySelector('.result-caveat summary')?.textContent).toContain('valid ≤ 1.20 kHz');
+
+    act(() => root.render(createElement(ResultsChartGrid, {
+      chartTypes: ['frequency_response'], result: below, named: [], tokens, wrapper: wrapper(below), channelId: 'drive',
+    })));
+    expect(host.querySelector('.result-caveat')).toBeNull();
+  });
+
+  it('shows the governing ceiling and reachable per-source detail for a multi-source curve', () => {
+    const combined: ResultPayload = {
+      frequencies: [100, 20_000],
+      spl_on_axis: { frequencies: [100, 20_000], spl: [80, 85] },
+      metadata: { source_ids: ['high-source', 'low-source'] },
+    };
+    const wrapper: ResultPayload = {
+      frequencies: [], channels: { combined },
+      metadata: { per_source_frequency_validity: {
+        'high-source': { effective_max_valid_frequency_hz: 12_000 },
+        'low-source': { effective_max_valid_frequency_hz: 1_200 },
+      } },
+    };
+
+    act(() => root.render(createElement(ResultsChartGrid, {
+      chartTypes: ['frequency_response'], result: combined, named: [], tokens, wrapper, channelId: 'combined',
+    })));
+    const caveat = host.querySelector<HTMLDetailsElement>('.result-caveat')!;
+    expect(caveat.querySelector('summary')?.textContent).toContain('1.20 kHz');
+    act(() => caveat.querySelector('summary')?.click());
+    expect(caveat.open).toBe(true);
+    expect(caveat.textContent).toContain('high-source: 12.0 kHz');
+    expect(caveat.textContent).toContain('low-source: 1.20 kHz');
+  });
+
+  it('shows recorded combine warnings on a rendered combined-channel curve', () => {
+    const warning = "crossover 2400 Hz is above channel 'high' source validity limit 1200 Hz";
+    const combined: ResultPayload = {
+      frequencies: [100, 20_000],
+      spl_on_axis: { frequencies: [100, 20_000], spl: [80, 85] },
+      metadata: { combine: { warnings: [warning] } },
+    };
+
+    act(() => root.render(createElement(ResultsChartGrid, {
+      chartTypes: ['frequency_response'], result: combined, named: [], tokens,
+    })));
+    const caveat = host.querySelector<HTMLDetailsElement>('.result-caveat')!;
+    expect(caveat.querySelector('summary')?.textContent).toBe('1 result warning');
+    expect(caveat.textContent).toContain(warning);
+  });
+
   it('copies the formatted summary text and confirms success', async () => {
     const groups: SummaryGroup[] = [{ title: 'Run', rows: [{ label: 'Name', value: 'OSSE v4' }] }];
     const writeText = vi.fn(async () => undefined);
