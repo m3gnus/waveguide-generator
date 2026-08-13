@@ -11,6 +11,10 @@ fail() {
   echo
   echo "ERROR: $1"
   echo
+  if [[ "${WG2_FINDER_APP:-0}" == "1" ]] && command -v osascript >/dev/null 2>&1; then
+    MESSAGE="$1" osascript -e \
+      'display alert "Waveguide Generator could not start" message (system attribute "MESSAGE") as critical'
+  fi
   if [[ -t 0 ]]; then
     read -r -p "Press Return to close..." _unused
   fi
@@ -66,6 +70,12 @@ if [[ -n "${WG2_PYTHON:-}" ]] && \
    ! "$PYTHON" -c "import fastapi, uvicorn" >/dev/null 2>&1
 then
   fail "The selected Python environment cannot import FastAPI and Uvicorn."
+fi
+
+if ! "$PYTHON" scripts/frontend_freshness.py --check --quiet; then
+  echo "WARNING: Local frontend sources are newer than frontend/dist."
+  echo "         For a current review build, quit and run launchers/macos/launch-wg-dev.command."
+  echo
 fi
 
 echo "Starting the Waveguide Generator status window..."
