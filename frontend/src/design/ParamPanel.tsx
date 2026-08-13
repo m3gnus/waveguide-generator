@@ -4,11 +4,19 @@ import { convertDesignToFreeform } from '../api/designIo';
 import { importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { postSymmetry, toSolveDesign, type SymmetryResolution } from '../jobs/actions';
 import { usePreferences } from '../prefs/preferences';
-import { useCadReturnStore } from '../stores/cadReturn';
+import {
+  combineChain,
+  combineLevelMatchDefault,
+  DRIVER_REQUIRED_KEYS,
+  useCadReturnStore,
+  type CadDriveChannel,
+  type ChannelDriverForm,
+  type DriverFieldKey,
+} from '../stores/cadReturn';
 import { useDesignStore, type DesignDocument, type DesignFamily, type DesignValue } from '../stores/design';
 import { useSolveOptionsStore, type SymmetryMode } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
-import { DirectivityMapControls, SolveOptionsControls } from './SolveOptionsSections';
+import { DirectivityMapControls, SolveOptionsControls, ToggleRow } from './SolveOptionsSections';
 import { EditablePointTable, EditableStationTable } from './FreeformEditors';
 import { lambdaSixthHint } from './lambdaLimit';
 import { NumberField } from './NumberField';
@@ -551,6 +559,109 @@ function CadFrequencySweep() {
   </>;
 }
 
+const DRIVER_FIELD_LABELS: ReadonlyArray<{ key: DriverFieldKey; label: string; unit: string; step: number }> = [
+  { key: 'sd_cm2', label: 'Sd', unit: 'cm²', step: 5 },
+  { key: 'bl_t_m', label: 'Bl', unit: 'T·m', step: 0.5 },
+  { key: 're_ohm', label: 'Re', unit: 'Ω', step: 0.1 },
+  { key: 'le_mh', label: 'Le', unit: 'mH', step: 0.05 },
+  { key: 'mmd_g', label: 'Mmd', unit: 'g', step: 1 },
+  { key: 'cms_m_per_n', label: 'Cms', unit: 'm/N', step: 0.0001 },
+  { key: 'rms_kg_per_s', label: 'Rms', unit: 'kg/s', step: 0.1 },
+  { key: 'xmax_mm', label: 'Xmax', unit: 'mm', step: 0.5 },
+  { key: 'count', label: 'Count', unit: '', step: 1 },
+  { key: 'rear_volume_l', label: 'Rear vol', unit: 'L', step: 0.5 },
+];
+
+/** Hornresp-unit T/S entry for one drive channel. Plain inputs are required:
+ * an empty field means "not provided", which NumberField cannot represent. */
+function DriverFields({ channel, form, onField }: {
+  channel: CadDriveChannel;
+  form: ChannelDriverForm | undefined;
+  onField: (field: DriverFieldKey, value: number | null) => void;
+}) {
+  const missing = DRIVER_REQUIRED_KEYS.filter((key) => form?.fields[key] === undefined);
+  return <div className="cad-driver-grid">
+    {DRIVER_FIELD_LABELS.map(({ key, label, unit, step }) => <label key={key} className="cad-driver-field">
+      <span>{label}{unit ? ` (${unit})` : ''}{DRIVER_REQUIRED_KEYS.includes(key) ? ' *' : ''}</span>
+      <input
+        type="number"
+        min={0}
+        step={step}
+        value={form?.fields[key] ?? ''}
+        aria-label={`${label} for ${channel.id}`}
+        onChange={(event) => onField(key, event.target.value === '' ? null : Number(event.target.value))}
+      />
+    </label>)}
+    {missing.length > 0 && <p className="cad-driver-hint">Required: {missing.map((key) => DRIVER_FIELD_LABELS.find((item) => item.key === key)?.label ?? key).join(', ')}. The channel solves as a unit-drive basis until they are set. Vas/Fs/Qms alternatives are accepted through the API.</p>}
+  </div>;
+}
+
+function CadDriveChannels() {
+  const state = useCadReturnStore();
+  const activeSources = (state.selectedBundle?.sources ?? []).filter((source) => !state.skippedSourceIds.includes(source.id));
+  const channelIds = [...new Set((state.selectedBundle?.sources ?? []).map((source) => source.defaultDriveChannelId))];
+  return <>
+    <p className="section-note">Assign two sources to the same channel to drive them together.</p>
+    <div className="cad-channel-list">
+      {activeSources.map((source) => {
+        const channel = state.driveChannels.find((item) => item.source_ids.includes(source.id));
+        return <div className="cad-channel-row" key={source.id}><b>{source.id}</b><select aria-label={`Drive channel for ${source.id}`} value={channel?.id ?? ''} onChange={(event) => state.setSourceChannel(source.id, event.target.value)}>{channelIds.map((id) => <option value={id} key={id}>{id}</option>)}</select></div>;
+      })}
+      {state.driveChannels.map((channel) => {
+        const driverForm = state.channelDrivers[channel.id];
+        const driverEligible = channel.source_ids.length === 1 && channel.motion === 'normal';
+        return <div className="cad-channel" key={channel.id}>
+          <div className="cad-channel-summary"><span>{channel.id} · {channel.source_ids.join(' + ')}</span><select aria-label={`Motion for ${channel.id}`} value={channel.motion} onChange={(event) => state.setChannelMotion(channel.id, event.target.value as 'normal' | 'axial')}><option value="normal">Normal motion</option><option value="axial">Axial motion</option></select></div>
+          {driverEligible && <ToggleRow id={`cad-driver-${channel.id}`} label={`Driver T/S · ${channel.id}`} help="Voltage-driven Thiele-Small coupling. The channel's levels become absolute at the drive voltage and its impedance chart becomes the electrical input impedance in ohms." checked={driverForm?.enabled ?? false} onChange={(checked) => state.setChannelDriverEnabled(channel.id, checked)}/>}
+          {driverEligible && driverForm?.enabled && <DriverFields channel={channel} form={driverForm} onField={(field, value) => state.setChannelDriverField(channel.id, field, value)}/>}
+        </div>;
+      })}
+    </div>
+    {state.driveChannels.some((channel) => state.channelDrivers[channel.id]?.enabled)
+      && <NumberField label="Drive voltage" unit="V" value={state.driveVoltageV} min={0.01} step={0.1} precision={2} description="RMS voltage applied to every driver channel (2.83 V ≈ 1 W into 8 Ω)" onCommit={state.setDriveVoltage}/>}
+  </>;
+}
+
+function CadCrossover() {
+  const state = useCadReturnStore();
+  if (state.driveChannels.length < 2) return <p className="section-note">Two or more drive channels are required for a combined output.</p>;
+  return <>
+    <ToggleRow id="cad-combine" label="Combined output (LR4 sum)" help="Append an LR4 crossover sum of the drive channels as one more result channel. The chain runs lowest band first, ordered by the sources' return roles (LF → MF → HF)." checked={state.combineEnabled} onChange={state.setCombineEnabled}/>
+    {state.combineEnabled && <>
+      <p className="section-note">Untouched crossover defaults follow the current Frequency Sweep.</p>
+      {combineChain(state).map((pair) => <NumberField key={pair.key} label={`${pair.lower} → ${pair.upper}`} unit="Hz" value={pair.hz} min={1} step={50} precision={0} description="Crossover between adjacent channels" onCommit={(value) => state.setCombineCrossover(pair.key, value)}/>)}
+      <ToggleRow id="cad-combine-level" label="Level match members" help="Equalise member band levels before summing. Defaults off when every member carries a driver model — real voltage-driven levels should not be re-equalised." checked={state.combineLevelMatch ?? combineLevelMatchDefault(state)} onChange={state.setCombineLevelMatch}/>
+      <ToggleRow id="cad-combine-align" label="Time-align members" help="Delay each member so the crossover sums coherently, from the phase of the solved fields at each crossover frequency. Off sums the members as solved." checked={state.combineAlign ?? true} onChange={state.setCombineAlign}/>
+    </>}
+  </>;
+}
+
+function CadMeshDetail() {
+  const state = useCadReturnStore();
+  const cadCoordinator = useSyncExternalStore(
+    cadLinkCoordinatorBridge.subscribe,
+    cadLinkCoordinatorBridge.getSnapshot,
+    cadLinkCoordinatorBridge.getSnapshot,
+  );
+  const driftSources = new Set([...state.areaDriftSourceIds, ...(state.ingestRecord?.role_findings ?? [])
+    .filter((finding) => String(finding.kind).includes('area-drift'))
+    .map((finding) => String(finding.source_id))]);
+  return <>
+    <div className="cad-mesh-intro"><p>Smaller values are finer. Curved CAD faces receive bounded extra refinement automatically.</p><button className="primary" disabled={cadCoordinator.ingesting || !state.selectedBundle?.readable} onClick={() => void cadCoordinator.ingest()}>{cadCoordinator.ingesting ? 'Preparing…' : 'Rebuild mesh'}</button></div>
+    <NumberField label="Cabinet & waveguide" unit="mm" value={state.rigidSizeMm} min={0.01} step={0.5} precision={2} description="Maximum target size for rigid CAD surfaces; tight curvature may be refined further." onCommit={state.setRigidSize}/>
+    <NumberField label="Size transition" unit="mm" value={state.transitionMm} min={0.01} step={0.5} precision={2} description="Maximum size transition between adjacent mesh regions." onCommit={state.setTransition}/>
+    {(state.ingestRecord?.evidence?.fem_air_volumes?.length ?? 0) > 0 && <ToggleRow id="cad-exterior-only" label="Exterior-only Phase 2 solve" help="Explicitly exclude the returned FEM air volumes. Phase 2 solves only the exterior Metal free-space problem." checked={state.exteriorOnly} onChange={state.setExteriorOnly}/>}
+    {(state.selectedBundle?.sources ?? []).map((source) => <div className={`cad-source ${state.skippedSourceIds.includes(source.id) ? 'skipped' : ''}`} key={source.id}>
+      <NumberField label={`${source.role} source`} unit="mm" value={state.sourceSizesMm[source.id] ?? source.suggestedResolutionMm} min={0.01} step={0.25} precision={2} description={`${source.id} · suggested ${source.suggestedResolutionMm} mm`} disabled={state.skippedSourceIds.includes(source.id)} onCommit={(value) => state.setSourceSize(source.id, value)}/>
+      {!source.required && <ToggleRow id={`skip-${source.id}`} label="Skip optional source" help="Exclude this optional source from ingestion and the solve. This creates a blocking finding." checked={state.skippedSourceIds.includes(source.id)} onChange={(checked) => state.setSkipped(source.id, checked)}/>}
+      {driftSources.has(source.id) && <ToggleRow id={`drift-${source.id}`} label="Allow recorded area drift" help="Explicitly accept the source-area mismatch and re-ingest. The override remains a finding that must be acknowledged." checked={state.areaDriftOverrides.includes(source.id)} onChange={(checked) => state.setAreaDriftOverride(source.id, checked)}/>}
+    </div>)}
+    {state.ingestStaleReason && <div className="field-error" role="status">{state.ingestStaleReason} Rebuild the mesh before solving.</div>}
+    {cadCoordinator.error && <div className="field-error" role="alert">{cadCoordinator.error}</div>}
+    {cadCoordinator.status && <p className="section-note" role="status">{cadCoordinator.status}</p>}
+  </>;
+}
+
 function CadSimulationEmpty() {
   return <div className="cad-mode-empty" role="status"><b>No CAD geometry yet</b><span>Bring a model back from Fusion, then prepare it for simulation.</span><button className="primary" onClick={() => workspaceNavigation.activate('cadlink')}>Open CAD Link</button></div>;
 }
@@ -684,7 +795,10 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
           {!searching && tab === 'simulation' && ingestRecord && <>
             <Section title="Frequency Sweep" description="The explicit range submitted with this imported CAD geometry." forceOpen={false}><CadFrequencySweep/></Section>
             <Section title="Directivity Map" description="Display-plane and angular sampling controls, including the effective imported-CAD grid." forceOpen={false}><DirectivityMapControls effectiveDerivation={ingestRecord.polar_grid_derivation}/></Section>
+            <Section title="Drive channels & drivers" description="Source-to-channel assignment, motion, voltage drive, and per-channel Thiele-Small data." forceOpen={false}><CadDriveChannels/></Section>
+            <Section title="Crossover" description="Optional LR4 combination of adjacent drive channels, including level and phase alignment choices." forceOpen={false}><CadCrossover/></Section>
             <Section title="Solve options" description="Imported-CAD validation, frequency selection, and diagnostic controls. Geometry fixes the backend and domain." forceOpen={false}><SolveOptionsControls mode="cad" ingestRecord={ingestRecord}/></Section>
+            <Section title="Mesh detail" description="Imported-CAD surface sizing, optional-source policy, domain choice, and mesh regeneration." forceOpen={false}><CadMeshDetail/></Section>
           </>}
         </>}
       {searching && [...fieldsBySection.values()].every((fields) => fields.length === 0) && <div className="parameter-empty">No parameter labels or keys match “{query}”.</div>}

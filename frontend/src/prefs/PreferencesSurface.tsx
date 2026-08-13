@@ -1,9 +1,12 @@
-import { useEffect, useState, type RefObject } from 'react';
+import { useEffect, useState, useSyncExternalStore, type RefObject } from 'react';
+import { buildImportedSubmission } from '../jobs/importedSubmission';
 import { decorateRunName, nextRunName, runNameFromFilename, type RunNameDateFormat, type RunNameDatePosition, type RunNameNumberFormat, type RunNameNumberPosition } from '../jobs/runNaming';
-import { projectSubmittedDesign, type SubmittedDesignProjection } from '../jobs/submittedProjection';
+import { projectSubmittedDesign, projectSubmittedImport, type SubmittedDesignProjection } from '../jobs/submittedProjection';
+import { useCadReturnStore } from '../stores/cadReturn';
 import { useDesignStore } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
 import { useSolveOptionsStore } from '../stores/solveOptions';
+import { workspaceModeStore } from '../stores/workspaceMode';
 import { EXPORT_FORMATS, MAP_REFERENCES, MATCH_INTERFACE_THEME, RESULT_PANEL_COUNTS, preferencesStore, usePreferences, type JobSort, type MapReference } from './preferences';
 import { SMOOTHING_MODES, type SmoothingMode } from '../results/smoothing';
 import { Icon } from '../shell/icons';
@@ -90,10 +93,20 @@ export function ResultsPreferencesSurface({ expanded = false, popover = false, o
 function JobsPreferencesContent({ now = new Date() }: { now?: Date }) {
   const preferences = usePreferences();
   const design = useDesignStore((state) => state.design);
+  const cadReturn = useCadReturnStore();
   const solveOptions = useSolveOptionsStore();
   const filename = useDocumentStore((state) => state.filename);
+  const workspaceMode = useSyncExternalStore(
+    workspaceModeStore.subscribe,
+    workspaceModeStore.getSnapshot,
+    workspaceModeStore.getSnapshot,
+  ).mode;
   let projection: SubmittedDesignProjection | null = null;
-  try { projection = projectSubmittedDesign(design, solveOptions.options()); } catch { /* invalid options cannot be submitted yet */ }
+  try {
+    projection = workspaceMode === 'cad'
+      ? projectSubmittedImport(buildImportedSubmission(cadReturn))
+      : projectSubmittedDesign(design, solveOptions.options());
+  } catch { /* an invalid or absent submission cannot establish a naming baseline yet */ }
   const displayedCore = projection
     ? nextRunName(preferences, projection, filename)
     : (preferences.nameSourceProjection ? preferences.outputName : runNameFromFilename(filename));

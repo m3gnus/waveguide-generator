@@ -8,7 +8,7 @@ import { hydrateJobDesign } from '../jobs/jobDesign';
 import { exportStemForJob } from '../jobs/exportNaming';
 import { buildImportedSubmission, importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { decorateRunName, nextRunName } from '../jobs/runNaming';
-import { projectSubmittedDesign, type SubmittedDesignProjection } from '../jobs/submittedProjection';
+import { projectSubmittedDesign, projectSubmittedImport, type SubmittedDesignProjection } from '../jobs/submittedProjection';
 import { preferencesStore, usePreferences } from '../prefs/preferences';
 import { runWorkspaceExportBundle, saveMeshArtifactToWorkspace } from '../results/exporters';
 import type { ResultPayload } from '../results/types';
@@ -180,12 +180,15 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       setSubmitting(true);
       setActionError(null);
       const options: SolveOptions = { ...submission.options, engine: 'metal', symmetry: 'auto' };
-      const projection = projectSubmittedDesign(design, options);
+      const effectiveSubmission = { ...submission, options };
+      // The ingested artifact is the solve truth. Parametric edits can request
+      // the next CAD rebuild, but they must not rename a byte-identical solve.
+      const projection = projectSubmittedImport(effectiveSubmission);
       const naming = preferencesStore.getSnapshot();
       const coreName = nextRunName(naming, projection, filename);
       const label = decorateRunName(coreName, naming, now());
       await submitImported(
-        { ...submission, options },
+        effectiveSubmission,
         fetch,
         label,
       );
@@ -195,7 +198,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       submissionInFlight.current = false;
       setSubmitting(false);
     }
-  }, [capabilities, capabilityError, design, filename, now, preferences]);
+  }, [capabilities, capabilityError, filename, now, preferences]);
 
   const retry = useCallback(async (jobId: string) => {
     if (submissionInFlight.current) return;

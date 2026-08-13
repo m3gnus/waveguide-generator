@@ -3,10 +3,15 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
 import { compareSelection } from '../api/results';
+import type { CadReturnIngestRecord } from '../api/cadlink';
+import { buildImportedSubmission } from '../jobs/importedSubmission';
+import { projectSubmittedImport } from '../jobs/submittedProjection';
 import { preferencesStore } from '../prefs/preferences';
+import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetDesignStore, useDesignStore } from '../stores/design';
 import { resetDocumentStore } from '../stores/document';
 import { resetSolveOptionsStore } from '../stores/solveOptions';
+import { workspaceModeStore } from '../stores/workspaceMode';
 import { jobCardPropsEqual, JobsPanel, selectJob, type JobCardProps } from './JobsPanel';
 import { currentJobLabel } from './JobsCoordinator';
 
@@ -43,6 +48,13 @@ function enter(input: HTMLInputElement, value: string): void {
   input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }));
 }
 
+function readyCadRecord(ingestId: string): CadReturnIngestRecord {
+  return {
+    ingest_id: ingestId, manifest_sha256: `manifest:${ingestId}`, artifact_sha256: `artifact:${ingestId}`, report_sha256: `report:${ingestId}`,
+    findings: [], evidence: { fem_air_volumes: [] }, polar_grid_derivation: {},
+  } as unknown as CadReturnIngestRecord;
+}
+
 describe('jobs panel run list', () => {
   let host: HTMLDivElement;
   let root: Root;
@@ -51,10 +63,12 @@ describe('jobs panel run list', () => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     localStorage.clear();
     preferencesStore.resetForTests();
+    resetCadReturnStore();
     resetDesignStore();
     resetDocumentStore();
     resetSolveOptionsStore();
     compareSelection.setPrimary(null);
+    workspaceModeStore.setMode('parametric');
     host = document.createElement('div');
     document.body.append(host);
     root = createRoot(host);
@@ -66,6 +80,7 @@ describe('jobs panel run list', () => {
     act(() => publishJobs([]));
     vi.restoreAllMocks();
     vi.clearAllMocks();
+    workspaceModeStore.setMode('parametric');
   });
 
   it('limits one-second clock invalidation to active run cards', () => {
@@ -278,6 +293,25 @@ describe('jobs panel run list', () => {
 
     act(() => useDesignStore.getState().updateField('R', 141));
     expect(host.querySelector('.run-name-preview')?.textContent).toContain('winner2');
+  });
+
+  it('previews CAD naming from the ingest and ignores parametric edits', async () => {
+    useCadReturnStore.setState({
+      ingestRecord: readyCadRecord('wgi_first'), needsIngest: false,
+      driveChannels: [{ id: 'drive', source_ids: ['source'], motion: 'normal' }],
+      sourceSizesMm: { source: 2 }, rigidSizeMm: 5, transitionMm: 5,
+    });
+    workspaceModeStore.setMode('cad');
+    const baseline = projectSubmittedImport(buildImportedSubmission(useCadReturnStore.getState()));
+    preferencesStore.update({ outputName: 'cad-run', nameSourceProjection: baseline });
+    publishJobs([]);
+    await act(async () => root.render(<JobsPanel/>));
+
+    expect(host.querySelector('.run-name-preview')?.textContent).toContain('next · cad-run');
+    act(() => useDesignStore.getState().updateField('R', 141));
+    expect(host.querySelector('.run-name-preview')?.textContent).toContain('next · cad-run');
+    act(() => useCadReturnStore.setState({ ingestRecord: readyCadRecord('wgi_second') }));
+    expect(host.querySelector('.run-name-preview')?.textContent).toContain('next · cad-run2');
   });
 
   it('shows the exact dated label that submission will use while editing only the core', async () => {

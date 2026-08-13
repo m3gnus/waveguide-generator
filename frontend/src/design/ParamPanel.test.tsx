@@ -1,8 +1,10 @@
 import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { CadReturnIngestRecord } from '../api/cadlink';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
+import { buildImportedSubmission, importedSubmissionBlocker } from '../jobs/importedSubmission';
+import { cadLinkCoordinatorBridge } from '../shell/CadLinkCoordinator';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
@@ -19,10 +21,38 @@ let queryClient: QueryClient;
 
 const cadRecord = {
   ingest_id: 'wgi_mode_test', manifest_sha256: 'sha256:manifest', artifact_sha256: 'sha256:artifact', report_sha256: 'sha256:report',
-  findings: [], evidence: { fem_air_volumes: [] },
+  findings: [], evidence: { fem_air_volumes: [{ required: true }] },
   symmetry: { cut_planes: ['x0'], planes: {} },
   polar_grid_derivation: { axes: { vertical: { minimum_deg: -180, maximum_deg: 180, symmetry_accepted: false } } },
+  role_findings: [{ kind: 'source-area-drift', source_id: 'source-mf' }],
 } as unknown as CadReturnIngestRecord;
+
+const cadBundle = {
+  name: 'speaker.wgreturn', bundlePath: 'wgreturn/speaker.wgreturn', modifiedAt: '2026-08-13T12:00:00Z', readable: true,
+  documentName: 'Speaker', requestId: null, sourceCount: 2, instanceCount: 1,
+  sources: [
+    { id: 'source-hf', role: 'HF', required: true, suggestedResolutionMm: 2, defaultDriveChannelId: 'drive-hf' },
+    { id: 'source-mf', role: 'MF', required: false, suggestedResolutionMm: 4, defaultDriveChannelId: 'drive-mf' },
+  ],
+} satisfies CadReturnBundle;
+
+function setCadReady(): void {
+  useCadReturnStore.setState({
+    selectedBundle: cadBundle,
+    ingestRecord: cadRecord,
+    needsIngest: false,
+    sourceSizesMm: { 'source-hf': 2, 'source-mf': 4 },
+    rigidSizeMm: 5,
+    transitionMm: 4,
+    driveChannels: [
+      { id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' },
+      { id: 'drive-mf', source_ids: ['source-mf'], motion: 'normal' },
+    ],
+    channelDrivers: { 'drive-hf': { enabled: true, fields: {} } },
+    exteriorOnly: true,
+    combineEnabled: true,
+  });
+}
 
 function withQueryClient(children: ReactNode) {
   return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
@@ -67,6 +97,7 @@ describe('ParamPanel inventory UX', () => {
     host.remove();
     queryClient.clear();
     workspaceModeStore.setMode('parametric');
+    vi.restoreAllMocks();
   });
 
   it('filters across labels and ATH/v1 keys, including a mode-hidden field', () => {
@@ -112,11 +143,7 @@ describe('ParamPanel inventory UX', () => {
   it('renders only the CAD workspace section set and trims forced solve options', () => {
     act(() => {
       useDesignStore.getState().setFamily('OSSE');
-      useCadReturnStore.setState({
-        ingestRecord: cadRecord,
-        needsIngest: false,
-        driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }],
-      });
+      setCadReady();
       workspaceModeStore.setMode('cad');
     });
     const titles = () => [...host.querySelectorAll<HTMLElement>('[data-section]')].map((section) => section.dataset.section);
@@ -124,13 +151,44 @@ describe('ParamPanel inventory UX', () => {
     expect(host.textContent).not.toContain('Surface sampling');
 
     act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
-    expect(titles()).toEqual(['Frequency Sweep', 'Directivity Map', 'Solve options']);
+    expect(titles()).toEqual(['Frequency Sweep', 'Directivity Map', 'Drive channels & drivers', 'Crossover', 'Solve options', 'Mesh detail']);
     for (const hidden of ['Source Definition', 'Solve & export mesh', 'Output & Passthrough']) expect(host.textContent).not.toContain(hidden);
     expect(host.querySelector('#solve-engine')).toBeNull();
     expect(host.querySelector('#solve-symmetry')).toBeNull();
     expect(host.textContent).toContain('Metal · full 3-D · free space');
     expect(host.textContent).toContain('Ingested cut planesx0');
     expect(host.textContent).toContain('Effective grid −180° … 180°');
+  });
+
+  it('renders every moved CAD control in the Simulation rail and submits its visible crossover state', () => {
+    const ingest = vi.spyOn(cadLinkCoordinatorBridge.getSnapshot(), 'ingest').mockResolvedValue(undefined);
+    act(() => {
+      setCadReady();
+      workspaceModeStore.setMode('cad');
+      root.render(withQueryClient(<ParamPanel tab="simulation" />));
+    });
+
+    for (const id of ['cad-combine', 'cad-combine-level', 'cad-combine-align', 'cad-exterior-only', 'skip-source-mf', 'drift-source-mf']) {
+      expect(host.querySelector(`#${id}`), id).not.toBeNull();
+    }
+    expect(host.querySelector('[aria-label="Drive channel for source-hf"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="Motion for drive-hf"]')).not.toBeNull();
+    expect(host.textContent).toContain('Cabinet & waveguide');
+    expect(host.textContent).toContain('Size transition');
+    expect(host.textContent).toContain('HF source');
+    expect(host.textContent).toContain('MF source');
+    expect(host.textContent).toContain('Drive voltage');
+
+    const align = host.querySelector<HTMLInputElement>('#cad-combine-align')!;
+    expect(align.checked).toBe(true);
+    act(() => align.click());
+    expect(useCadReturnStore.getState().combineAlign).toBe(false);
+    expect(buildImportedSubmission(useCadReturnStore.getState()).geometry.combine?.align).toBe(false);
+    expect(importedSubmissionBlocker()).toBeNull();
+
+    const rebuild = [...host.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Rebuild mesh')!;
+    act(() => rebuild.click());
+    expect(ingest).toHaveBeenCalledOnce();
   });
 
   it('shows the CAD simulation empty state without hiding formula editing on Geometry', () => {
@@ -145,11 +203,7 @@ describe('ParamPanel inventory UX', () => {
 
   it('writes the CAD sweep without changing design.simulation and surfaces an invalid range', () => {
     act(() => {
-      useCadReturnStore.setState({
-        ingestRecord: cadRecord,
-        needsIngest: false,
-        driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }],
-      });
+      setCadReady();
       workspaceModeStore.setMode('cad');
       root.render(withQueryClient(<ParamPanel tab="simulation" />));
     });

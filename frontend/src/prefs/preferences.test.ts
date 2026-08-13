@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { JobItem } from '../api/jobsSocket';
-import { projectSubmittedDesign } from '../jobs/submittedProjection';
+import { projectSubmittedDesign, type SubmittedImportedProjection } from '../jobs/submittedProjection';
 import { designForFamily } from '../stores/design';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { applyJobPreferences, CHART_TYPES, EXPORT_FORMATS, loadPreferences, MAP_REFERENCES, preferencesStore, readPreferences, runDisplayName, STORAGE_VERSION } from './preferences';
@@ -105,6 +105,21 @@ describe('client preferences', () => {
     preferencesStore.update({ outputName: 'asro68', nameSourceProjection: projection });
     const stored = localStorage.getItem('waveguide-v2-g3-preferences');
     expect(loadPreferences(stored)).toMatchObject({ outputName: 'asro68', nameSourceProjection: projection });
+  });
+  it('round-trips imported naming projections including crossover alignment', () => {
+    const projection: SubmittedImportedProjection = {
+      version: 1,
+      kind: 'imported',
+      geometry: {
+        ingest_id: 'wgi_round_trip',
+        combine: { members: ['mf', 'hf'], crossovers_hz: [1_200], level_match: true, align: false },
+      },
+      solveOptions: { engine: 'metal', symmetry: 'auto' },
+    };
+    preferencesStore.update({ outputName: 'cad-run', nameSourceProjection: projection });
+
+    expect(loadPreferences(localStorage.getItem('waveguide-v2-g3-preferences')))
+      .toMatchObject({ outputName: 'cad-run', nameSourceProjection: projection });
   });
   it('migrates old version/date naming state without keeping the retired fields', () => {
     const stored = JSON.stringify({ version: 4, preferences: {

@@ -1,12 +1,25 @@
 import { describe, expect, it } from 'vitest';
 import { designForFamily } from '../stores/design';
+import type { ImportedSolveSubmission } from './actions';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { decorateRunName, incrementTrailingDigits, nextRunLabel, nextRunName, runNameDateFor, runNameFromFilename } from './runNaming';
-import { projectSubmittedDesign } from './submittedProjection';
+import { projectSubmittedDesign, projectSubmittedImport } from './submittedProjection';
 
 function projection() {
   resetSolveOptionsStore();
   return projectSubmittedDesign(designForFamily('R-OSSE'), useSolveOptionsStore.getState().options());
+}
+
+function importedProjection(ingestId: string) {
+  return projectSubmittedImport({
+    geometry: {
+      type: 'imported', ingest_id: ingestId, manifest_sha256: `manifest:${ingestId}`, artifact_sha256: `artifact:${ingestId}`,
+      drive_channels: [{ id: 'drive', source_ids: ['source'], motion: 'normal' }],
+      mesh: { rigid_size_mm: 5, transition_mm: 5, source_size_mm: { source: 2 } },
+      acknowledged_findings: [], skipped_source_ids: [], exterior_only: false,
+    },
+    options: { ...useSolveOptionsStore.getState().options(), engine: 'metal', symmetry: 'auto' },
+  } satisfies ImportedSolveSubmission);
 }
 
 describe('design-tracking run names', () => {
@@ -87,5 +100,14 @@ describe('design-tracking run names', () => {
 
     expect(nextRunName(naming, changed)).toBe('horn2');
     expect(nextRunLabel(naming, changed, '', now)).toBe('horn2_260812');
+  });
+
+  it('keeps an imported run name for the same ingest and increments for a new ingest', () => {
+    resetSolveOptionsStore();
+    const baseline = importedProjection('wgi_first');
+    const naming = { outputName: 'cad-run', nameSourceProjection: baseline };
+
+    expect(nextRunName(naming, structuredClone(baseline))).toBe('cad-run');
+    expect(nextRunName(naming, importedProjection('wgi_second'))).toBe('cad-run2');
   });
 });
