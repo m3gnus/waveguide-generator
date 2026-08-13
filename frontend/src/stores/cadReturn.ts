@@ -46,6 +46,7 @@ interface CadReturnState {
   ingestStaleReason: string | null;
   selectBundle: (bundle: CadReturnBundle | null) => void;
   refreshSelectedBundle: (bundle: CadReturnBundle | null) => void;
+  markIngestStale: (reason: string) => void;
   applyIngest: (record: CadReturnIngestRecord) => void;
   acknowledge: (findingId: string, value: boolean) => void;
   acknowledgeAllBlocking: () => void;
@@ -192,6 +193,9 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
       ...(reason ? { needsIngest: true, ingestStaleReason: reason } : {}),
     };
   }),
+  markIngestStale: (reason) => set((state) => (
+    state.ingestRecord ? { needsIngest: true, ingestStaleReason: reason } : {}
+  )),
   applyIngest: (ingestRecord) => {
     const skipped = new Set(ingestRecord.skipped_source_ids);
     const current = get();
