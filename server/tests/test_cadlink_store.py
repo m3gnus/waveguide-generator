@@ -51,18 +51,19 @@ def test_registry_schema_is_separate_versioned_and_snapshot_preserving(tmp_path:
     assert db_path.exists()
     assert not (tmp_path / "db" / "simulations.db").exists()
     conn = sqlite3.connect(db_path)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
     assert {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")} >= {
         "designs",
         "exports",
         "ingests",
+        "onshape_links",
     }
     snapshot = conn.execute("SELECT snapshot_text FROM designs").fetchone()[0]
     assert snapshot == first["text"]
     conn.close()
 
 
-def test_v2_registry_with_rows_migrates_to_v3_without_data_loss(tmp_path: Path) -> None:
+def test_v2_registry_with_rows_migrates_to_current_without_data_loss(tmp_path: Path) -> None:
     store = CadLinkStore.for_data_dir(tmp_path)
     saved = _save(store)
     design_id = saved["identity"].design_id  # type: ignore[union-attr]
@@ -89,7 +90,7 @@ def test_v2_registry_with_rows_migrates_to_v3_without_data_loss(tmp_path: Path) 
     migrated.close()
 
     connection = sqlite3.connect(db_path)
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == 4
     assert connection.execute("SELECT COUNT(*) FROM designs").fetchone()[0] == 1
     assert connection.execute("SELECT COUNT(*) FROM exports").fetchone()[0] == 1
     connection.close()
