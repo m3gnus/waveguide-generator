@@ -557,11 +557,31 @@ function LinkedDesignCard({ forceOpen = false }: { forceOpen?: boolean }) {
       <span className="cad-connection-dot" aria-hidden="true"/>
       <div><b>{workflow.headline}</b><span>{workflow.detail}</span></div>
     </div>
-    {driftCount > 0 && <p className="linked-design-drift">{driftCount} managed parameters have local edits</p>}
+    <FusionParameterDrift
+      parameterDriftCount={driftCount}
+      driftedParameters={cadCoordinator.fusionStatus?.link?.driftedParameters}
+    />
     {workflow.action && <button className="primary linked-design-action" disabled={cadCoordinator.sendingToFusion} onClick={send}>{cadCoordinator.sendingToFusion ? 'Sending…' : actionLabel}</button>}
     {cadCoordinator.error && <div className="field-error" role="alert">{cadCoordinator.error}</div>}
     {cadCoordinator.status && <p className="section-note" role="status">{cadCoordinator.status}</p>}
   </Section>;
+}
+
+/** New WGLink builds name every edited managed parameter. Keep the aggregate
+ * fallback for older add-ins, but enumerate exact Fusion names when available:
+ * enclosure builds also manage a synthetic `mouth_overshoot` parameter which
+ * has no corresponding row in the exported realized-dimensions table. */
+export function FusionParameterDrift({ parameterDriftCount, driftedParameters }: {
+  parameterDriftCount: number;
+  driftedParameters?: readonly string[];
+}) {
+  if (parameterDriftCount <= 0) return null;
+  return <div className="linked-design-drift">
+    <p>{parameterDriftCount} managed parameter{parameterDriftCount === 1 ? ' has' : 's have'} local edits</p>
+    {driftedParameters && driftedParameters.length > 0 && <ul aria-label="Locally edited Fusion parameters">
+      {driftedParameters.map((name) => <li key={name}><code>{name}</code></li>)}
+    </ul>}
+  </div>;
 }
 
 const REALIZED_DIMENSION_LABELS: ReadonlyArray<{ suffix: string; label: string }> = [

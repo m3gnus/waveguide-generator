@@ -11,7 +11,7 @@ import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
-import { ParamPanel, RealizedDimensionsSection, domainName, parameterRevealRequest, requestParameterReveal, resolveOuterBodyMode, symmetrySummary } from './ParamPanel';
+import { FusionParameterDrift, ParamPanel, RealizedDimensionsSection, domainName, parameterRevealRequest, requestParameterReveal, resolveOuterBodyMode, symmetrySummary } from './ParamPanel';
 
 /**
  * The panel reads capabilities and symmetry through React Query, exactly as
@@ -271,6 +271,23 @@ describe('ParamPanel inventory UX', () => {
     expect(edited[0].textContent).toContain('Realized depth');
     expect(edited[0].textContent).toContain('Edited in Fusion');
     expect(edited[0].textContent).not.toContain('Enclosure depth');
+  });
+
+  it('names every edited Fusion parameter even when no realized row can match it', () => {
+    act(() => root.render(<FusionParameterDrift
+      parameterDriftCount={2}
+      driftedParameters={['wg_tritonia_v_depth', 'wg_tritonia_v_mouth_overshoot']}
+    />));
+
+    expect(host.textContent).toContain('2 managed parameters have local edits');
+    expect([...host.querySelectorAll('li')].map((item) => item.textContent)).toEqual([
+      'wg_tritonia_v_depth',
+      'wg_tritonia_v_mouth_overshoot',
+    ]);
+
+    act(() => root.render(<FusionParameterDrift parameterDriftCount={1}/>));
+    expect(host.textContent).toContain('1 managed parameter has local edits');
+    expect(host.querySelector('ul')).toBeNull();
   });
 
   it('tells the truth for no link, pre-capture, missing-registry, and stale-export states', () => {
