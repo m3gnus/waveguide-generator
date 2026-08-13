@@ -64,7 +64,7 @@ describe('SettingsDialog', () => {
     const section = host.querySelector<HTMLElement>('[aria-labelledby="settings-workspace-title"]')!;
     expect(section).not.toBeNull();
     expect(section.textContent).toContain('/data/workspace');
-    expect(section.textContent).toContain('not new automatic exports');
+    expect(section.textContent).toContain('not result exports');
 
     const buttons = [...section.querySelectorAll<HTMLButtonElement>('button')];
     await act(async () => buttons.find((button) => button.textContent === 'Open folder')!.click());
