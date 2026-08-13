@@ -1,6 +1,7 @@
 import type { JobItem } from '../api/jobsSocket';
 import { runDisplayName } from '../prefs/preferences';
 import type { ResultPayload } from './types';
+import { formatValidityFrequency, resultCombineWarnings, resultFrequencyValidity } from './validity';
 
 /** One label/value line. `title` becomes the row's hover text when set. */
 export interface SummaryRow {
@@ -70,6 +71,23 @@ export function summaryGroups(_context: SummaryContext): SummaryGroup[] {
   else if (frequencySource === 'generated_grid' && frequencySpacing === 'log') row(sweep, 'Spacing', 'logarithmic');
   else if (frequencySource === 'generated_grid' && frequencySpacing === 'linear') row(sweep, 'Spacing', 'linear');
   group(groups, 'Sweep', sweep);
+
+  const validity = resultFrequencyValidity(result, wrapper);
+  if (validity) {
+    const validityRows: SummaryRow[] = [];
+    row(validityRows, 'Governing ceiling', formatValidityFrequency(validity.governingMaxFrequencyHz));
+    validity.sources.forEach(({ sourceId, effectiveMaxFrequencyHz }) => {
+      row(validityRows, `Source ${sourceId}`, formatValidityFrequency(effectiveMaxFrequencyHz));
+    });
+    if (validity.exceedsCeiling && validity.solvedMaxFrequencyHz !== null) {
+      row(
+        validityRows,
+        'Result caveat',
+        `Solved curve extends to ${formatValidityFrequency(validity.solvedMaxFrequencyHz)}; values above the governing ceiling are outside the recorded validity range.`,
+      );
+    }
+    group(groups, 'Validity', validityRows, validity.exceedsCeiling ? 'warning' : undefined);
+  }
 
   const solve: SummaryRow[] = [];
   const engine = firstString(metadata('engine'), metadata('solver_backend'), metadata('solver_mode'));
@@ -184,6 +202,7 @@ export function summaryGroups(_context: SummaryContext): SummaryGroup[] {
   group(groups, 'Import', importRows);
 
   const runWarnings = strings(metadata('warnings'));
+  const combineWarnings = resultCombineWarnings(result);
   const failures = failureTexts(metadata('failures'));
   const failureCount = finite(metadata('failure_count')) ?? failures.length;
   const partial = metadata('partial_success') === true;
@@ -196,7 +215,11 @@ export function summaryGroups(_context: SummaryContext): SummaryGroup[] {
   // metadata.warnings. Showing only the run warnings therefore left the
   // Diagnostics group announcing a warned mesh while withholding the sentence
   // that says what is wrong — the exact gap this card exists to close.
-  const warningTexts = [...runWarnings, ...meshWarnings.filter((text) => !runWarnings.includes(text))];
+  // Combine warnings describe a curve that was produced successfully, which is
+  // exactly why they cannot be inferred from warning_count or partial_success.
+  // Merge all three stores explicitly and de-duplicate without changing their
+  // server order, so a crossover-validity warning is never silently discarded.
+  const warningTexts = [...new Set([...runWarnings, ...combineWarnings, ...meshWarnings])];
   const warningCount = finite(metadata('warning_count')) ?? warningTexts.length;
   const explicitValidationState = firstString(meshValidation?.state, meshValidation?.status);
   const validationFailed = integrity?.valid === false || meshValidation?.valid === false
@@ -205,7 +228,7 @@ export function summaryGroups(_context: SummaryContext): SummaryGroup[] {
     || Boolean(validationWarnings?.length)
     || (finite(meshValidation?.warning_count) ?? 0) > 0
     || explicitValidationState === 'warning' || explicitValidationState === 'warnings';
-  if (validationFailed || validationWarned || warningCount > 0 || failureCount > 0 || partial) {
+  if (validationFailed || validationWarned || warningTexts.length > 0 || warningCount > 0 || failureCount > 0 || partial) {
     const diagnostics: SummaryRow[] = [];
     const validationMode = string(meshValidation?.mode);
     const validationState = validationFailed ? 'failed' : validationWarned ? 'warnings' : integrity?.valid === true ? 'passed' : null;

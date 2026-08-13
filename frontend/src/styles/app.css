@@ -501,6 +501,23 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .chart-stub button { padding: 4px 8px; border: 1px solid rgba(var(--acc-rgb), .38); border-radius: var(--r3); background: rgba(var(--acc-rgb), .1); color: var(--acc); cursor: pointer; }
 .chart-stub button:hover:not(:disabled) { border-color: rgba(var(--acc-rgb), .65); background: rgba(var(--acc-rgb), .17); }
 .chart-stub button:disabled { opacity: .55; cursor: wait; }
+/* A validity ceiling qualifies a curve that is still worth rendering, so it
+   uses the compact warning disclosure already established over the viewport.
+   Keeping the detail collapsed preserves the plot; opening it makes every
+   source ceiling and non-fatal combine warning reachable in the same card. */
+.result-caveat { position: absolute; top: 24px; right: 6px; z-index: 4; max-width: calc(100% - 12px); color: var(--amber); font-size: var(--text-micro); line-height: 1.4; pointer-events: none; }
+.result-caveat summary { display: flex; align-items: center; gap: 6px; width: max-content; max-width: 100%; min-height: 22px; margin-left: auto; padding: 3px 7px; overflow: hidden; border: 1px solid rgba(var(--amber-rgb), .34); border-radius: var(--r3); background: color-mix(in srgb, var(--chart-bg) 88%, transparent); box-shadow: var(--glass-sh); color: var(--amber); font: 650 var(--text-micro)/1.35 var(--mono); letter-spacing: .03em; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; pointer-events: auto; list-style: none; backdrop-filter: blur(8px); }
+.result-caveat summary::-webkit-details-marker { display: none; }
+.result-caveat summary > i { width: 5px; height: 5px; flex: none; border-radius: 50%; background: currentColor; box-shadow: 0 0 7px rgba(var(--amber-rgb), .55); }
+.result-caveat summary:hover, .result-caveat summary:focus-visible { border-color: rgba(var(--amber-rgb), .62); background: color-mix(in srgb, var(--amber) 12%, var(--chart-bg)); }
+.result-caveat summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.result-caveat[open] { width: min(460px, calc(100% - 12px)); }
+.result-caveat-details { width: 100%; max-height: min(260px, calc(100vh - 120px)); margin-top: 4px; overflow: auto; padding: 8px 11px; border: 1px solid rgba(var(--amber-rgb), .34); border-radius: var(--r3); background: var(--surface-floating); box-shadow: var(--float-sh); color: var(--fg2); pointer-events: auto; backdrop-filter: blur(14px); }
+.result-caveat-details > b { display: block; margin-bottom: 5px; color: var(--amber); font-size: var(--text-micro); letter-spacing: .08em; text-transform: uppercase; }
+.result-caveat-details p { margin: 0 0 7px; }
+.result-caveat-details ul { display: grid; gap: 5px; margin: 0; padding-left: 16px; }
+.result-caveat-details ul + ul { margin-top: 7px; padding-top: 7px; border-top: 1px solid var(--hair); }
+.result-caveat-details li span { color: var(--fg4); }
 .chart-placeholder svg { position: absolute; inset: 4px 0; width: 100%; height: calc(100% - 8px); }
 .chart-placeholder path { fill: none; stroke: var(--acc); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
 .canonical-plot { position: absolute; inset: 0; display: grid; min-width: 0; min-height: 0; place-items: stretch; overflow: hidden; background: var(--bg); }

@@ -8,6 +8,16 @@ export interface ObservationMetadata {
 
 export interface ResultMetadata extends Record<string, unknown> {
   observation?: ObservationMetadata;
+  /** Channel membership used to join wrapper-owned CAD validity evidence. */
+  source_ids?: string[];
+  per_source_frequency_validity?: Record<string, {
+    effective_max_valid_frequency_hz?: number;
+    [key: string]: unknown;
+  }>;
+  combine?: {
+    warnings?: string[];
+    [key: string]: unknown;
+  };
 }
 
 export interface ResultPayload extends JobResults {

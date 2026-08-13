@@ -2,7 +2,13 @@ import type { JobResults, NullableNumber, PolarSample } from '../api/results';
 import { applySmoothing, type SmoothingMode } from './smoothing';
 import { resultChannels, type ResultPayload } from './types';
 
-export interface NamedResult { id: string; label: string; result: JobResults }
+export interface NamedResult {
+  id: string;
+  label: string;
+  result: JobResults;
+  /** The CAD envelope owns per-source evidence that its channel does not repeat. */
+  wrapper?: JobResults;
+}
 
 /** Expand an imported result's unit-drive bases into the same named flow as runs. */
 export function expandResultChannels(id: string, label: string, result: JobResults): NamedResult[] {
@@ -13,6 +19,7 @@ export function expandResultChannels(id: string, label: string, result: JobResul
     id: `${id}#${channel}`,
     label: `${label} · ${channel}`,
     result: channelResult,
+    wrapper: result,
   }));
 }
 

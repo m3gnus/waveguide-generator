@@ -100,7 +100,7 @@ describe('simulation summary groups', () => {
   it('uses the CAD wrapper for import provenance and marks shared batch timing', () => {
     const channel: ResultPayload = {
       frequencies: [100, 200],
-      metadata: { performance: { total_time_seconds: 125 }, engine: 'hornlab-metal-bem' },
+      metadata: { performance: { total_time_seconds: 125 }, engine: 'hornlab-metal-bem', source_ids: ['tweeter'] },
     };
     const manifest = 'sha256:1234567890abcdef';
     const wrapper: ResultPayload = {
@@ -122,7 +122,9 @@ describe('simulation summary groups', () => {
     });
     expect(row(groups, 'Import', 'Channel')?.value).toBe('high · 2 channels');
     expect(row(groups, 'Import', 'Manifest')).toEqual({ label: 'Manifest', value: manifest.slice(0, 12), title: manifest });
-    expect(row(groups, 'Import', 'Frequency validity')).toBeUndefined();
+    expect(row(groups, 'Validity', 'Governing ceiling')?.value).toBe('20.0 kHz');
+    expect(row(groups, 'Validity', 'Source tweeter')?.value).toBe('20.0 kHz');
+    expect(groups.find(({ title }) => title === 'Validity')?.tone).toBeUndefined();
   });
 
   it('keeps solved and symmetry-expanded triangle counts distinct', () => {
@@ -201,6 +203,45 @@ describe('simulation summary groups', () => {
     const diagnostics = summaryGroups({ result }).find(({ title }) => title === 'Diagnostics');
 
     expect(diagnostics?.rows.filter(({ label }) => label === 'Warning')).toHaveLength(1);
+  });
+
+  it('reads nested combine warnings even when top-level warning_count is zero', () => {
+    const warning = "crossover 2400 Hz is above channel 'high' source validity limit 1200 Hz";
+    const result: ResultPayload = {
+      frequencies: [100, 20_000],
+      metadata: { warnings: [], warning_count: 0, combine: { warnings: [warning] } },
+    };
+
+    const diagnostics = summaryGroups({ result }).find(({ title }) => title === 'Diagnostics');
+
+    expect(diagnostics?.tone).toBe('warning');
+    expect(diagnostics?.rows.filter(({ label }) => label === 'Warning').map(({ value }) => value)).toEqual([warning]);
+  });
+
+  it('reports the governing effective ceiling and every source when they differ', () => {
+    const result: ResultPayload = {
+      frequencies: [100, 20_000],
+      metadata: { source_ids: ['high-source', 'low-source'] },
+    };
+    const wrapper: ResultPayload = {
+      frequencies: [],
+      channels: { combined: result },
+      metadata: {
+        per_source_frequency_validity: {
+          'high-source': { effective_max_valid_frequency_hz: 12_000 },
+          'low-source': { effective_max_valid_frequency_hz: 1_200 },
+        },
+      },
+    };
+
+    const groups = summaryGroups({ result, wrapper, channelId: 'combined' });
+    const validity = groups.find(({ title }) => title === 'Validity');
+
+    expect(validity?.tone).toBe('warning');
+    expect(row(groups, 'Validity', 'Governing ceiling')?.value).toBe('1.20 kHz');
+    expect(row(groups, 'Validity', 'Source high-source')?.value).toBe('12.0 kHz');
+    expect(row(groups, 'Validity', 'Source low-source')?.value).toBe('1.20 kHz');
+    expect(row(groups, 'Validity', 'Result caveat')?.value).toContain('extends to 20.0 kHz');
   });
 
   it('uses a worded balloon status when no balloon block was returned', () => {
