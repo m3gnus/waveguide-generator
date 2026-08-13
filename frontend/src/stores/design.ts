@@ -736,6 +736,7 @@ export function resetDesignStore(): void {
   useDesignStore.temporal.getState().clear();
   useDesignStore.temporal.getState().resume();
   useDesignStore.setState({ design: structuredClone(seedDesign), designRevision: 1, dragSnapshot: null });
+  bump('load', true);
 }
 
 /**
