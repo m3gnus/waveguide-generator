@@ -15,6 +15,8 @@ import platform
 import shutil
 import subprocess
 
+from server.platform.process import background_process_kwargs
+
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +76,7 @@ def focus_cad(*, system: str | None = None, environ: dict[str, str] | None = Non
             check=False,
             capture_output=True,
             timeout=15,
+            **background_process_kwargs(system=resolved),
         )
     except (OSError, subprocess.SubprocessError) as exc:
         logger.info("Could not bring Fusion forward: %s", exc)

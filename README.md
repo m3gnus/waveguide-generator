@@ -109,6 +109,15 @@ the wrong thing. Automatic installation is available when WG was opened through
 its status window. For a copied command, close Waveguide Generator first so the
 installer can acquire the application data lock.
 
+### Output workspace
+
+Automatic result exports default to the `output/` folder inside the Waveguide
+Generator checkout. This folder is user-visible and does not require selecting
+or approving a protected operating-system data directory. A different output
+folder can be selected once in **Settings → Workspace**. Internal databases,
+logs, and process locks remain under the platform application-data directory;
+new automatic result exports do not.
+
 ### Original-app run migration
 
 On launch, Waveguide Generator looks for the original application's v1 run

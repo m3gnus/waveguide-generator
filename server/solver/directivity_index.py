@@ -5,14 +5,11 @@ logarithm of the reference-axis mean-square pressure divided by its average
 over all directions.  A horizontal or vertical cut can have a useful *plane*
 index, but those partial indices are not the conventional loudspeaker DI.
 
-When a spherical result grid is available, this module integrates it directly.
-Otherwise it implements the customary approximate full-sphere calculation
-from horizontal and vertical polar orbits.  Every average is performed in
-linear power and weighted by the solid angle represented by each sample.
-
-The definition follows ANSI/ASA acoustical terminology.  The H/V fallback is
-the approximate full-sphere construction described by Tylka and Choueiri,
-``On the Calculation of Full and Partial Directivity Indices`` (Eq. 3).
+This module integrates a complete spherical result grid directly. Horizontal,
+vertical, and diagonal curves are display cuts through that field; no subset
+or selection of those curves can change the reported DI. Every average is
+performed in linear power and weighted by the solid angle represented by each
+sample.
 """
 
 from __future__ import annotations
@@ -182,95 +179,4 @@ def calculate_di_from_spherical_grid(
     return values
 
 
-def _polar_angle_groups(pattern: Any, maximum_deg: float) -> dict[float, list[float]] | None:
-    groups: dict[float, list[float]] = {}
-    for point in pattern or []:
-        if not point or len(point) < 2 or point[1] is None:
-            return None
-        try:
-            raw_angle, level = float(point[0]), float(point[1])
-        except (TypeError, ValueError):
-            return None
-        if not math.isfinite(raw_angle) or not math.isfinite(level):
-            return None
-        # Fold signed/full-orbit angles onto polar angle theta.  When both sides
-        # of an orbit were sampled they remain separate power samples in the
-        # group and are averaged below; a 0..180 half-orbit therefore carries
-        # the usual bilateral-symmetry approximation explicitly.
-        theta = math.degrees(math.acos(max(-1.0, min(1.0, math.cos(math.radians(raw_angle))))))
-        if theta <= maximum_deg + _ANGLE_TOLERANCE_DEG:
-            key = round(min(theta, maximum_deg), 9)
-            groups.setdefault(key, []).append(level)
-    if not groups:
-        return None
-    angles = np.asarray(sorted(groups), dtype=np.float64)
-    if (
-        abs(float(angles[0])) > _ANGLE_TOLERANCE_DEG
-        or abs(float(angles[-1]) - maximum_deg) > _ANGLE_TOLERANCE_DEG
-    ):
-        return None
-    return groups
-
-
-def calculate_di_from_polar_patterns(
-    directivity_patterns: dict[str, list[list[list[float | None]]]],
-    *,
-    hemisphere: bool = False,
-) -> list[float | None]:
-    """Approximate full-sphere DI by combining the H and V polar orbits.
-
-    This is deliberately not a per-plane result.  Horizontal and vertical
-    samples in the same polar-angle strip share that strip's spherical-area
-    weight.  A diagonal display cut is not another independent share of the
-    sphere and is therefore excluded from this conventional H/V approximation.
-    """
-
-    horizontal = directivity_patterns.get("horizontal")
-    vertical = directivity_patterns.get("vertical")
-    if horizontal is None or vertical is None:
-        count = max((len(patterns) for patterns in directivity_patterns.values()), default=0)
-        return [None] * count
-    count = max(len(horizontal), len(vertical))
-    maximum_deg = 90.0 if hemisphere else 180.0
-    represented_fraction = 0.5 if hemisphere else 1.0
-    values: list[float | None] = []
-    for frequency_index in range(count):
-        if frequency_index >= len(horizontal) or frequency_index >= len(vertical):
-            values.append(None)
-            continue
-        h_groups = _polar_angle_groups(horizontal[frequency_index], maximum_deg)
-        v_groups = _polar_angle_groups(vertical[frequency_index], maximum_deg)
-        if h_groups is None or v_groups is None or set(h_groups) != set(v_groups):
-            values.append(None)
-            continue
-        theta = np.asarray(sorted(h_groups), dtype=np.float64)
-        theta_weights = _theta_weights(theta, maximum_deg)
-        if theta_weights is None:
-            values.append(None)
-            continue
-        levels: list[float] = []
-        weights: list[float] = []
-        reference_levels: list[float] = []
-        for angle, strip_weight in zip(theta, theta_weights, strict=True):
-            key = round(float(angle), 9)
-            directional_levels = [*h_groups[key], *v_groups[key]]
-            share = float(strip_weight) / len(directional_levels)
-            levels.extend(directional_levels)
-            weights.extend([share] * len(directional_levels))
-            if abs(float(angle)) <= _ANGLE_TOLERANCE_DEG:
-                reference_levels.extend(directional_levels)
-        values.append(
-            _di_from_weighted_levels(
-                np.asarray(levels),
-                np.asarray(weights),
-                np.asarray(reference_levels),
-                represented_sphere_fraction=represented_fraction,
-            )
-        )
-    return values
-
-
-__all__ = [
-    "calculate_di_from_polar_patterns",
-    "calculate_di_from_spherical_grid",
-]
+__all__ = ["calculate_di_from_spherical_grid"]
