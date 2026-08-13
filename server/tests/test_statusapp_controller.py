@@ -146,9 +146,9 @@ def test_stale_local_frontend_is_served_with_an_amber_warning(tmp_path: Path) ->
             return snapshot if snapshot.frontend.state is ServiceState.WARNING else None
 
         warning = _wait_for(warning_snapshot)
-        assert (
-            "launch-wg-dev.command" in warning.frontend.reason
-            or "npm run build" in warning.frontend.reason
+        assert "npm run build" in warning.frontend.reason
+        assert "launch-wg-dev" not in warning.frontend.reason, (
+            "the retired dev launcher must not be advised any more"
         )
     finally:
         controller.close()
