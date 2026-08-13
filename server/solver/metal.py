@@ -718,9 +718,21 @@ def _radiation_matrix_npz(
         # is an unlabelled column per port and the reduction's membership is
         # unrecoverable from the artifact.
         in_phase_aperture_names=np.asarray(port_names),
+        reciprocity_max_abs=diagnostics.reciprocity_max_abs,
         reciprocity_max_rel=diagnostics.reciprocity_max_rel,
         passivity_min_eig=diagnostics.passivity_min_eig,
+        passivity_min_eig_reciprocal=diagnostics.passivity_min_eig_reciprocal,
         passivity_ok=diagnostics.passivity_ok,
+        # low_ka_self_impedance and low_ka_self_impedance_rel_error are
+        # deliberately NOT written. They are dict[str, NDArray] on
+        # RadiationMatrixDiagnostics, and np.savez stores a dict as a 0-d object
+        # array, which np.load(..., allow_pickle=False) refuses outright --
+        # "Object arrays cannot be loaded when allow_pickle=False". That is the
+        # reader every consumer here uses, so writing them would not enrich the
+        # artifact, it would make the whole file unreadable at the first key
+        # anyone touched. They remain available in the result metadata, which is
+        # JSON and can carry a mapping. Every key in this archive must survive
+        # a no-pickle load; the test reads all of them for exactly that reason.
     )
     return buffer.getvalue()
 
@@ -1283,6 +1295,7 @@ def solve_imported_metal_from_msh_text(
 
     path: Path | None = None
     cardioid_campaign: dict[str, Any] | None = None
+    cardioid_failure: dict[str, Any] | None = None
     coupled_native_result: Any | None = None
     coupled_payload: dict[str, Any] | None = None
     coupled_mf_channel: Any | None = None
@@ -1317,26 +1330,48 @@ def solve_imported_metal_from_msh_text(
 
         if geometry.passive_cardioid_enabled:
             consumer_hz = np.asarray(results[0].frequencies_hz, dtype=np.float64)
-            cardioid_campaign = _run_passive_cardioid_campaign(
-                path,
-                config,
-                geometry,
-                record,
-                consumer_hz,
-                stage_callback=stage_callback,
-                cancellation_callback=cancellation_callback,
-            )
-            if geometry.passive_cardioid_coupled:
-                (
-                    coupled_native_result,
-                    coupled_payload,
-                    coupled_mf_channel,
-                ) = _coupled_cardioid_result(
-                    cardioid_campaign,
+            try:
+                cardioid_campaign = _run_passive_cardioid_campaign(
+                    path,
+                    config,
                     geometry,
                     record,
-                    sorted_results,
+                    consumer_hz,
+                    stage_callback=stage_callback,
+                    cancellation_callback=cancellation_callback,
                 )
+                if geometry.passive_cardioid_coupled:
+                    (
+                        coupled_native_result,
+                        coupled_payload,
+                        coupled_mf_channel,
+                    ) = _coupled_cardioid_result(
+                        cardioid_campaign,
+                        geometry,
+                        record,
+                        sorted_results,
+                    )
+            except Exception as exc:
+                # The runtime cancellation callback is intentionally checked
+                # again before degrading. Its private exception type cannot be
+                # imported here without coupling the solver to the scheduler,
+                # while the durable cancellation state remains authoritative.
+                if cancellation_callback is not None:
+                    cancellation_callback()
+                logger.warning(
+                    "Passive-cardioid campaign failed after the main solve: %s",
+                    exc,
+                )
+                cardioid_campaign = None
+                coupled_native_result = None
+                coupled_payload = None
+                coupled_mf_channel = None
+                cardioid_failure = {
+                    "enabled": True,
+                    "coupled": geometry.passive_cardioid_coupled,
+                    "status": "failed",
+                    "reason": str(exc),
+                }
 
         driver_payloads: dict[str, dict[str, Any]] = {}
         for channel, result in zip(geometry.drive_channels, results, strict=True):
@@ -1507,6 +1542,7 @@ def solve_imported_metal_from_msh_text(
                 {
                     "impedance_units": "ohms",
                     "impedance_quantity": "electrical_input_impedance",
+                    "impedance_phase_convention": "engineering_exp_plus_jwt",
                     "impedance_drive": "voltage",
                 }
             )
@@ -1611,6 +1647,7 @@ def solve_imported_metal_from_msh_text(
         metadata["passive_cardioid"] = {
             "enabled": True,
             "coupled": geometry.passive_cardioid_coupled,
+            "status": "complete",
             "frequencies_hz": json_safe_native_value(matrix_result.frequencies_hz),
             "validity_cap_hz": float(cardioid_campaign["validity_cap_hz"]),
             "apertures": [
@@ -1654,6 +1691,8 @@ def solve_imported_metal_from_msh_text(
                 ),
             },
         }
+    elif cardioid_failure is not None:
+        metadata["passive_cardioid"] = cardioid_failure
     envelope: dict[str, Any] = {
         "channels": channels,
         "channel_order": channel_order,

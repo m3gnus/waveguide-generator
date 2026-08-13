@@ -93,6 +93,48 @@ def test_radiation_impedance_artifact_round_trip(tmp_path: Path) -> None:
     store.store_radiation_impedance("cardioid", b"matrix-npz")
 
     assert store.get_radiation_impedance("cardioid") == b"matrix-npz"
+    metadata = store.get_job_row("cardioid")["task_metadata"]
+    assert metadata["has_radiation_impedance_artifact"] is True
+    assert metadata["radiation_impedance_artifact_bytes"] == len(b"matrix-npz")
+
+    assert store.delete_radiation_impedance("cardioid") is True
+    assert store.get_radiation_impedance("cardioid") is None
+    metadata = store.get_job_row("cardioid")["task_metadata"]
+    assert metadata["has_radiation_impedance_artifact"] is False
+    assert metadata["radiation_impedance_artifact_bytes"] is None
+
+
+def test_retention_prunes_standalone_radiation_impedance_rows(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    store.create_job(_job("orphan", "running"))
+    store.store_radiation_impedance("orphan", b"matrix-npz")
+    store.update_job(
+        "orphan",
+        status="error",
+        completed_at=datetime.now().isoformat(),
+    )
+
+    assert store.prune_terminal_jobs(retention_days=30) == 0
+    assert store.get_radiation_impedance("orphan") is None
+    metadata = store.get_job_row("orphan")["task_metadata"]
+    assert metadata["has_radiation_impedance_artifact"] is False
+    assert metadata["radiation_impedance_artifact_bytes"] is None
+
+
+def test_startup_recovery_removes_running_radiation_impedance(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    store.create_job(_job("interrupted", "running"))
+    store.store_radiation_impedance("interrupted", b"matrix-npz")
+
+    store.recover_on_startup("restart")
+
+    assert store.get_job_row("interrupted")["status"] == "error"
+    assert store.get_radiation_impedance("interrupted") is None
+    metadata = store.get_job_row("interrupted")["task_metadata"]
+    assert metadata["has_radiation_impedance_artifact"] is False
+    assert metadata["radiation_impedance_artifact_bytes"] is None
 
 
 def test_run_numbers_are_not_reused_after_deleting_the_newest_job(tmp_path: Path) -> None:
