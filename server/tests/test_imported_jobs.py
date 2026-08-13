@@ -21,7 +21,6 @@ from server.solver import metal
 from server.solver.base import EngineRunResult
 from server.solver.imported import (
     ImportedSymmetryUnsupportedError,
-    global_frequency_caveat,
     mesh_text_sha256,
 )
 from server.solver.result_mapping import REFERENCE_RHO_C
@@ -380,21 +379,17 @@ async def _runtime_fixture(
     return runtime, str(row["ingest_id"]), record
 
 
-def test_submit_persists_ingestion_mesh_summary_caveat_and_availability(tmp_path: Path) -> None:
+def test_submit_persists_ingestion_mesh_summary_and_availability(tmp_path: Path) -> None:
     async def scenario() -> None:
-        runtime, ingest_id, record = await _runtime_fixture(tmp_path)
+        runtime, ingest_id, _record_data = await _runtime_fixture(tmp_path)
         try:
             request = _request(ingest_id)
+            request.options.frequencies_hz = [100.0, 20_000.0]
             job_id = await runtime.submit(request)
             row = runtime.store.get_job_row(job_id)
             assert row is not None
             assert row["config_summary_json"]["formula_type"] == "cad-import"
-            assert row["task_metadata"]["imported_geometry"]["global_frequency_caveat"][
-                "code"
-            ] == "global_mesh_frequency_limit_exceeded"
-            assert row["task_metadata"]["imported_geometry"][
-                "global_frequency_caveat"
-            ] == global_frequency_caveat(request, record)
+            assert "global_frequency_caveat" not in row["task_metadata"]["imported_geometry"]
             assert runtime.store.get_mesh_artifact(job_id).startswith("$MeshFormat")
             serialized = runtime._serialize_job(row)
             assert serialized["design_availability"]["source"] == "cad-import"
@@ -548,13 +543,6 @@ def test_required_fem_volume_needs_exterior_only_override(tmp_path: Path) -> Non
             ),
             {},
             "polar_grid_narrowing",
-        ),
-        (
-            lambda value, _record: value.options.__setattr__(
-                "frequencies_hz", [100.0, 1300.0]
-            ),
-            {},
-            "source_frequency_limit",
         ),
         (
             lambda value, _record: value.options.__setattr__("engine", "bempp"),
@@ -784,7 +772,7 @@ def test_multi_source_orchestration_uses_channel_bases_and_anchor_frame(
     assert_no_tag_keys(response)
 
 
-def test_result_caveat_uses_this_job_sweep(
+def test_frequency_validity_estimates_are_not_exposed_as_result_caveats(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(metal, "metal_status", lambda: {"available": True, "reason": "ok"})
@@ -808,17 +796,10 @@ def test_result_caveat_uses_this_job_sweep(
         "requested_max_frequency_hz"
     ] = 20_000.0
 
-    below = _request("wgi_" + "0" * 26)
-    below.options.frequencies_hz = [100.0, 200.0]
-    below_response = metal.solve_imported_metal_from_msh_text("msh", below, record)
-    assert below_response["metadata"]["global_frequency_caveat"] is None
-
     above = _request("wgi_" + "0" * 26)
-    above.options.frequencies_hz = [100.0, 1000.0]
+    above.options.frequencies_hz = [100.0, 20_000.0]
     above_response = metal.solve_imported_metal_from_msh_text("msh", above, record)
-    assert above_response["metadata"]["global_frequency_caveat"][
-        "requested_max_frequency_hz"
-    ] == 1000.0
+    assert "global_frequency_caveat" not in above_response["metadata"]
 
 
 def test_unlinked_frame_fallback_and_real_mixed_motion_config(

@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
-from server.jobs.models import SolveRequest
 from server.mesh.artifact import (
     ImportedMeshArtifactError,
     mesh_text_sha256,
@@ -52,16 +51,6 @@ def imported_symmetry_from_cut_planes(cut_planes: Iterable[Any]) -> ImportedSymm
     return ImportedSymmetry("full", 1234, None, ordered)
 
 
-def requested_max_frequency_hz(request: SolveRequest) -> float:
-    """Return this job's requested sweep maximum from its authoritative wire."""
-
-    explicit = request.options.frequencies_hz
-    if explicit is not None:
-        return float(explicit[-1])
-    assert request.options.frequency_range is not None
-    return float(request.options.frequency_range[1])
-
-
 def mesh_frequency_validation(record: Mapping[str, Any]) -> Mapping[str, Any]:
     mesh = record.get("mesh")
     mesh = mesh if isinstance(mesh, Mapping) else {}
@@ -71,42 +60,13 @@ def mesh_frequency_validation(record: Mapping[str, Any]) -> Mapping[str, Any]:
     return validation if isinstance(validation, Mapping) else {}
 
 
-def global_frequency_caveat(
-    request: SolveRequest, record: Mapping[str, Any]
-) -> dict[str, Any] | None:
-    """Build the conservative global-limit caveat for this job's sweep only."""
-
-    validation = mesh_frequency_validation(record)
-    global_limit_raw = validation.get("global_max_valid_frequency_hz")
-    if global_limit_raw is None:
-        global_limit_raw = validation.get("max_valid_frequency_hz")
-    if global_limit_raw is None:
-        return None
-    requested_max = requested_max_frequency_hz(request)
-    global_limit = float(global_limit_raw)
-    if requested_max <= global_limit:
-        return None
-    return {
-        "code": "global_mesh_frequency_limit_exceeded",
-        "policy": "global_warn_source_hard",
-        "requested_max_frequency_hz": requested_max,
-        "global_max_valid_frequency_hz": global_limit,
-        "message": (
-            f"Requested maximum {requested_max:g} Hz exceeds the conservative global "
-            f"mesh limit {global_limit:g} Hz; active source patches remain valid."
-        ),
-    }
-
-
 __all__ = [
     "ImportedSymmetry",
     "ImportedSymmetryUnsupportedError",
     "ImportedMeshArtifactError",
-    "global_frequency_caveat",
     "imported_symmetry_from_cut_planes",
     "mesh_frequency_validation",
     "mesh_text_sha256",
     "read_verified_import_mesh",
-    "requested_max_frequency_hz",
     "verify_record_mesh_text",
 ]

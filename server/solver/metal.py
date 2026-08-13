@@ -39,7 +39,6 @@ from .frequency_sweep import (
 from .formulation import DEFAULT_BEM_FORMULATION, DEFAULT_COMPLEX_K_SHIFT
 from .infinite_baffle import require_full_3d_aperture_tag
 from .imported import (
-    global_frequency_caveat,
     imported_symmetry_from_cut_planes,
     mesh_frequency_validation,
     read_verified_import_mesh,
@@ -958,7 +957,6 @@ def solve_imported_metal_from_msh_text(
         )
         channels[geometry.combine.id] = combined_response
         channel_order.append(geometry.combine.id)
-    global_caveat = global_frequency_caveat(request, record)
     fem_volumes = (
         (record.get("evidence") or {}).get("fem_air_volumes")
         if isinstance(record.get("evidence"), Mapping)
@@ -979,7 +977,6 @@ def solve_imported_metal_from_msh_text(
         "tag_namespace": record.get("tag_namespace"),
         "tag_map": json_safe_native_value(record.get("tag_map") or {}),
         "per_source_frequency_validity": per_source_validity,
-        "global_frequency_caveat": global_caveat,
         "symmetry_planes_used": sorted(cut_planes),
         "polar_grid_derivation": json_safe_native_value(
             record.get("polar_grid_derivation") or {}
