@@ -541,21 +541,20 @@ def test_a_reachable_guiding_curve_leaves_the_frame_warning_free() -> None:
     assert header["previewMetadata"]["warnings"] == []
 
 
-def test_freeform_morph_is_silently_ignored_by_the_pinned_preview() -> None:
-    """Pins a real gap the morph controls are waiting on, with an alarm.
+def test_freeform_morph_reshapes_the_preview_mouth() -> None:
+    """The counterpart to the alarm this replaces.
 
-    The registry offers Superellipse and the whole morph section for FREEFORM,
-    but the pinned mesher predates FREEFORM morphing. It does not merely fail
-    to apply it -- the preview builds a horn as though no morph were asked for,
-    so the viewport quietly contradicts the design, and an impossible target
-    passes without complaint. The solve path refuses the same design, so the
-    two disagree.
+    Until the mesher morph work was installed, a FREEFORM design carrying a
+    morph built a preview identical to no morph at all -- the viewport quietly
+    contradicted the design while the solve refused it. The predecessor of this
+    test asserted that broken behaviour on purpose so the engine change could
+    not land unnoticed. It fired; this is the flip it asked for.
 
-    Both assertions below FLIP once the mesher morph work is pushed and
-    pins.json is bumped: the morph then changes the preview, and an
-    out-of-range target is rejected. Verified against the pending stack
-    (mesher a4663b3) rather than assumed. This test failing is the signal that
-    the bump landed -- update it then, and delete this note.
+    The assertions are deliberately about what the morph *achieves* rather than
+    that it changes something. A drawn mouth of 100 x 80 mm is clearly
+    anisotropic; a 400 x 400 superellipse target should erase that and land the
+    mouth on the typed half-extent of 200 mm. Asserting only inequality would
+    stay green if the morph applied the wrong target.
     """
 
     base: dict[str, object] = {
@@ -569,25 +568,33 @@ def test_freeform_morph_is_silently_ignored_by_the_pinned_preview() -> None:
         ],
     }
 
-    def vertices(payload: dict[str, object]) -> np.ndarray:
-        config = _translate(payload)
-        geometry = build_preview_geometry(config, preview_options("coarse"))
-        return np.concatenate(
-            [np.asarray(surface.positions).reshape(-1) for surface in geometry.surfaces]
+    def half_extents(payload: dict[str, object]) -> tuple[float, float]:
+        geometry = build_preview_geometry(_translate(payload), preview_options("coarse"))
+        points = np.concatenate(
+            [np.asarray(surface.positions).reshape(-1, 3) for surface in geometry.surfaces]
         )
+        return float(np.max(np.abs(points[:, 0]))), float(np.max(np.abs(points[:, 1])))
 
-    aggressive = {
-        **base,
-        "morph": {
-            "target_shape": 3,
-            "target_exponent": 2,
-            "target_width": 400,
-            "target_height": 400,
-        },
-    }
-    # The morph reaches the engine; the engine ignores it.
-    assert _translate(aggressive)["morph"]["morphTarget"] == 3
-    assert np.array_equal(vertices(base), vertices(aggressive))
+    drawn_x, drawn_y = half_extents(base)
+    assert drawn_x / drawn_y > 1.15, "the drawn mouth should be clearly anisotropic"
 
-    # And a target no engine defines builds just as quietly.
-    vertices({**base, "morph": {"target_shape": 99}})
+    morphed_x, morphed_y = half_extents(
+        {
+            **base,
+            "morph": {
+                "target_shape": 3,
+                "target_exponent": 2,
+                "target_width": 400,
+                "target_height": 400,
+            },
+        }
+    )
+    # A square target on an anisotropic mouth: both axes land on the typed
+    # half-extent, so the anisotropy is gone rather than merely reduced.
+    assert morphed_x == pytest.approx(200.0, abs=3.0)
+    assert morphed_y == pytest.approx(200.0, abs=3.0)
+    assert morphed_x / morphed_y == pytest.approx(1.0, abs=0.01)
+
+    # A target no engine defines is now refused by name instead of building.
+    with pytest.raises(ValueError, match="valid values 0, 1, 2, or 3"):
+        half_extents({**base, "morph": {"target_shape": 99}})
