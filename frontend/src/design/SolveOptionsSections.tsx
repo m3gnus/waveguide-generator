@@ -97,11 +97,11 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null 
  * because `.section-body` is a container-query grid whose rules select direct
  * children — an extra div would become the grid item and drop the row's layout.
  */
-export function ToggleRow({ id, label, help, checked, onChange }: {
-  id: string; label: string; help: string; checked: boolean; onChange: (checked: boolean) => void;
+export function ToggleRow({ id, label, help, checked, onChange, revealId }: {
+  id: string; label: string; help: string; checked: boolean; onChange: (checked: boolean) => void; revealId?: string;
 }) {
   const tip = useHelpTip({ title: label, text: help });
-  return <label className="toggle-row" htmlFor={id} {...tip.triggerProps}>
+  return <label className="toggle-row" htmlFor={id} data-control-reveal-id={revealId} {...tip.triggerProps}>
     <span>{label}</span>
     <input id={id} type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />
     {tip.tip}

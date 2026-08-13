@@ -38,6 +38,14 @@ import {
 import { cadLinkCoordinatorBridge } from '../shell/CadLinkCoordinator';
 import { fusionWorkflowView, onshapeWorkflowView } from '../shell/CadLinkPanel';
 import { workspaceNavigation } from '../shell/workspaceNavigation';
+import {
+  CAD_CONTROLS,
+  CAD_CONTROL_DESCRIPTORS,
+  CAD_DRIVER_FIELD_CONTROLS,
+  cadControlIsAvailable,
+  cadControlMatchesQuery,
+  type CadControlSection,
+} from './cadControlRegistry';
 import './paramPanel.css';
 
 interface SectionProps {
@@ -46,6 +54,7 @@ interface SectionProps {
   description?: string;
   children: ReactNode;
   forceOpen: boolean;
+  revealId?: string;
 }
 
 const storageKey = (title: string) => `wg-param-section-open:${title}`;
@@ -93,7 +102,7 @@ export function useParameterHelp(): boolean {
   return useSyncExternalStore(parameterHelpStore.subscribe, parameterHelpStore.getSnapshot, parameterHelpStore.getSnapshot);
 }
 
-function Section({ title, summary, description, children, forceOpen }: SectionProps) {
+function Section({ title, summary, description, children, forceOpen, revealId }: SectionProps) {
   const [open, setOpen] = useState(() => storedSectionState(title));
   const helpVisible = useParameterHelp();
   const shownOpen = forceOpen || open;
@@ -103,7 +112,7 @@ function Section({ title, summary, description, children, forceOpen }: SectionPr
     try { localStorage.setItem(storageKey(title), String(next)); } catch { /* storage is optional */ }
   };
   return (
-    <section className={`param-section${shownOpen ? '' : ' closed'}`} data-section={title}>
+    <section className={`param-section${shownOpen ? '' : ' closed'}`} data-section={title} data-control-reveal-id={revealId}>
       {/* A real heading wrapping the disclosure button. The rail is the primary
           way into ~119 parameters and had no headings at all, so a screen
           reader offered no structure to navigate by and the only way to reach a
@@ -459,7 +468,14 @@ function QuadrantControl({ design, label }: { design: DesignDocument; label: str
 
 export const REVEAL_PARAMETER_EVENT = 'wg:reveal-parameter';
 
-export interface RevealRequest { id: string; tab: ParameterTab; query: string }
+export interface RevealRequest {
+  id: string;
+  tab: ParameterTab;
+  query: string;
+  /** Older callers omit this and retain the registry-parameter route. */
+  target?: 'parameter' | 'control';
+  fallbackId?: string;
+}
 
 /**
  * A reveal request that waits to be claimed.
@@ -503,7 +519,7 @@ export function requestParameterReveal(detail: RevealRequest): void {
   window.dispatchEvent(new CustomEvent(REVEAL_PARAMETER_EVENT, { detail }));
 }
 
-function LinkedDesignCard() {
+function LinkedDesignCard({ forceOpen = false }: { forceOpen?: boolean }) {
   const preferences = usePreferences();
   const cadCoordinator = useSyncExternalStore(
     cadLinkCoordinatorBridge.subscribe,
@@ -535,7 +551,12 @@ function LinkedDesignCard() {
     : onshape
       ? workflow.action === 'update' ? 'Send WG changes to Onshape' : 'Create in Onshape'
       : workflow.action === 'update' ? 'Send WG changes to Fusion' : 'Open in Fusion 360';
-  return <Section title="Linked design" description="The CAD document linked to this design, its aggregate freshness, and the outbound rebuild action." forceOpen={false}>
+  return <Section
+    title={CAD_CONTROLS.linkedDesign.section}
+    description="The CAD document linked to this design, its aggregate freshness, and the outbound rebuild action."
+    forceOpen={forceOpen}
+    revealId={CAD_CONTROLS.linkedDesign.reveal.id}
+  >
     <div className={`linked-design-card cad-connection-${workflow.state}`}>
       <span className="cad-connection-dot" aria-hidden="true"/>
       <div><b>{workflow.headline}</b><span>{workflow.detail}</span></div>
@@ -611,7 +632,7 @@ const REALIZED_EMPTY_COPY: Record<Exclude<CadRealizedDimensions['state'], 'curre
 
 /** D7a outputs are evidence, never controls. Their manifest role decides what
  * belongs here; suffixes only supply friendly labels and a stable visual order. */
-export function RealizedDimensionsSection({ snapshot }: { snapshot: CadRealizedDimensions | null }) {
+export function RealizedDimensionsSection({ snapshot, forceOpen = false }: { snapshot: CadRealizedDimensions | null; forceOpen?: boolean }) {
   const interfaceParameters = (snapshot?.parameters ?? [])
     .filter((parameter) => parameter.role === 'interface')
     .sort((left, right) => realizedDimensionOrder(left) - realizedDimensionOrder(right)
@@ -621,7 +642,12 @@ export function RealizedDimensionsSection({ snapshot }: { snapshot: CadRealizedD
     ? REALIZED_EMPTY_COPY[snapshot.state]
     : null;
 
-  return <Section title="Realized dimensions" description="Read-only dimensions published by WG as the cabinet-facing CAD interface." forceOpen={false}>
+  return <Section
+    title={CAD_CONTROLS.realizedDimensions.section}
+    description="Read-only dimensions published by WG as the cabinet-facing CAD interface."
+    forceOpen={forceOpen}
+    revealId={CAD_CONTROLS.realizedDimensions.reveal.id}
+  >
     {!snapshot && <div className="realized-dimensions-empty" role="status"><b>Checking linked export…</b><span>WG is resolving the active Fusion instance and its published parameter table.</span></div>}
     {empty && <div className="realized-dimensions-empty" role="status"><b>{empty.title}</b><span>{empty.detail}</span></div>}
     {valuesAvailable && snapshot.state === 'stale' && <div className="realized-dimensions-warning" role="status"><b>From an older CAD export</b><span>These values were published before the design now on screen changed. They are historical, not current dimensions.</span></div>}
@@ -645,13 +671,13 @@ export function RealizedDimensionsSection({ snapshot }: { snapshot: CadRealizedD
   </Section>;
 }
 
-function RealizedDimensionsCard() {
+function RealizedDimensionsCard({ forceOpen = false }: { forceOpen?: boolean }) {
   const cadCoordinator = useSyncExternalStore(
     cadLinkCoordinatorBridge.subscribe,
     cadLinkCoordinatorBridge.getSnapshot,
     cadLinkCoordinatorBridge.getSnapshot,
   );
-  return <RealizedDimensionsSection snapshot={cadCoordinator.fusionStatus?.realizedDimensions ?? null}/>;
+  return <RealizedDimensionsSection snapshot={cadCoordinator.fusionStatus?.realizedDimensions ?? null} forceOpen={forceOpen}/>;
 }
 
 function CadFrequencySweep() {
@@ -660,25 +686,12 @@ function CadFrequencySweep() {
   const blocker = importedSubmissionBlocker(cadReturn, solveStore);
   const rangeMessage = blocker === 'Enter a valid explicit frequency sweep.' ? blocker : null;
   return <>
-    <NumberField label="Sweep start" unit="Hz" value={cadReturn.frequencyStartHz} min={1} step={10} precision={0} description="Lowest frequency of the generated imported-CAD sweep." onCommit={(frequencyStartHz) => cadReturn.setSweep({ frequencyStartHz })}/>
-    <NumberField label="Sweep end" unit="Hz" value={cadReturn.frequencyEndHz} min={1} step={10} precision={0} description="Highest frequency of the generated imported-CAD sweep." onCommit={(frequencyEndHz) => cadReturn.setSweep({ frequencyEndHz })}/>
-    <NumberField label="Frequency samples" value={cadReturn.frequencyCount} min={1} max={401} step={1} precision={0} description="How many frequencies are solved across the imported-CAD range." onCommit={(frequencyCount) => cadReturn.setSweep({ frequencyCount })}/>
+    <NumberField label={CAD_CONTROLS.sweepStart.label} revealId={CAD_CONTROLS.sweepStart.reveal.id} unit="Hz" value={cadReturn.frequencyStartHz} min={1} step={10} precision={0} description="Lowest frequency of the generated imported-CAD sweep." onCommit={(frequencyStartHz) => cadReturn.setSweep({ frequencyStartHz })}/>
+    <NumberField label={CAD_CONTROLS.sweepEnd.label} revealId={CAD_CONTROLS.sweepEnd.reveal.id} unit="Hz" value={cadReturn.frequencyEndHz} min={1} step={10} precision={0} description="Highest frequency of the generated imported-CAD sweep." onCommit={(frequencyEndHz) => cadReturn.setSweep({ frequencyEndHz })}/>
+    <NumberField label={CAD_CONTROLS.frequencySamples.label} revealId={CAD_CONTROLS.frequencySamples.reveal.id} value={cadReturn.frequencyCount} min={1} max={401} step={1} precision={0} description="How many frequencies are solved across the imported-CAD range." onCommit={(frequencyCount) => cadReturn.setSweep({ frequencyCount })}/>
     {rangeMessage && <div className="field-error" role="alert">{rangeMessage}</div>}
   </>;
 }
-
-const DRIVER_FIELD_LABELS: ReadonlyArray<{ key: DriverFieldKey; label: string; unit: string; step: number }> = [
-  { key: 'sd_cm2', label: 'Sd', unit: 'cm²', step: 5 },
-  { key: 'bl_t_m', label: 'Bl', unit: 'T·m', step: 0.5 },
-  { key: 're_ohm', label: 'Re', unit: 'Ω', step: 0.1 },
-  { key: 'le_mh', label: 'Le', unit: 'mH', step: 0.05 },
-  { key: 'mmd_g', label: 'Mmd', unit: 'g', step: 1 },
-  { key: 'cms_m_per_n', label: 'Cms', unit: 'm/N', step: 0.0001 },
-  { key: 'rms_kg_per_s', label: 'Rms', unit: 'kg/s', step: 0.1 },
-  { key: 'xmax_mm', label: 'Xmax', unit: 'mm', step: 0.5 },
-  { key: 'count', label: 'Count', unit: '', step: 1 },
-  { key: 'rear_volume_l', label: 'Rear vol', unit: 'L', step: 0.5 },
-];
 
 /** Hornresp-unit T/S entry for one drive channel. Plain inputs are required:
  * an empty field means "not provided", which NumberField cannot represent. */
@@ -689,18 +702,18 @@ function DriverFields({ channel, form, onField }: {
 }) {
   const missing = DRIVER_REQUIRED_KEYS.filter((key) => form?.fields[key] === undefined);
   return <div className="cad-driver-grid">
-    {DRIVER_FIELD_LABELS.map(({ key, label, unit, step }) => <label key={key} className="cad-driver-field">
-      <span>{label}{unit ? ` (${unit})` : ''}{DRIVER_REQUIRED_KEYS.includes(key) ? ' *' : ''}</span>
+    {CAD_DRIVER_FIELD_CONTROLS.map(({ driverKey, label, unit, step, reveal }) => <label key={driverKey} className="cad-driver-field" data-control-reveal-id={reveal.id}>
+      <span>{label}{unit ? ` (${unit})` : ''}{DRIVER_REQUIRED_KEYS.includes(driverKey) ? ' *' : ''}</span>
       <input
         type="number"
         min={0}
         step={step}
-        value={form?.fields[key] ?? ''}
+        value={form?.fields[driverKey] ?? ''}
         aria-label={`${label} for ${channel.id}`}
-        onChange={(event) => onField(key, event.target.value === '' ? null : Number(event.target.value))}
+        onChange={(event) => onField(driverKey, event.target.value === '' ? null : Number(event.target.value))}
       />
     </label>)}
-    {missing.length > 0 && <p className="cad-driver-hint">Required: {missing.map((key) => DRIVER_FIELD_LABELS.find((item) => item.key === key)?.label ?? key).join(', ')}. The channel solves as a unit-drive basis until they are set. Vas/Fs/Qms alternatives are accepted through the API.</p>}
+    {missing.length > 0 && <p className="cad-driver-hint">Required: {missing.map((key) => CAD_DRIVER_FIELD_CONTROLS.find((item) => item.driverKey === key)?.label ?? key).join(', ')}. The channel solves as a unit-drive basis until they are set. Vas/Fs/Qms alternatives are accepted through the API.</p>}
   </div>;
 }
 
@@ -713,20 +726,20 @@ function CadDriveChannels() {
     <div className="cad-channel-list">
       {activeSources.map((source) => {
         const channel = state.driveChannels.find((item) => item.source_ids.includes(source.id));
-        return <div className="cad-channel-row" key={source.id}><b>{source.id}</b><select aria-label={`Drive channel for ${source.id}`} value={channel?.id ?? ''} onChange={(event) => state.setSourceChannel(source.id, event.target.value)}>{channelIds.map((id) => <option value={id} key={id}>{id}</option>)}</select></div>;
+        return <div className="cad-channel-row" data-control-reveal-id={CAD_CONTROLS.channelAssignment.reveal.id} key={source.id}><b>{source.id}</b><select aria-label={`${CAD_CONTROLS.channelAssignment.label} for ${source.id}`} value={channel?.id ?? ''} onChange={(event) => state.setSourceChannel(source.id, event.target.value)}>{channelIds.map((id) => <option value={id} key={id}>{id}</option>)}</select></div>;
       })}
       {state.driveChannels.map((channel) => {
         const driverForm = state.channelDrivers[channel.id];
         const driverEligible = channel.source_ids.length === 1 && channel.motion === 'normal';
         return <div className="cad-channel" key={channel.id}>
-          <div className="cad-channel-summary"><span>{channel.id} · {channel.source_ids.join(' + ')}</span><select aria-label={`Motion for ${channel.id}`} value={channel.motion} onChange={(event) => state.setChannelMotion(channel.id, event.target.value as 'normal' | 'axial')}><option value="normal">Normal motion</option><option value="axial">Axial motion</option></select></div>
-          {driverEligible && <ToggleRow id={`cad-driver-${channel.id}`} label={`Driver T/S · ${channel.id}`} help="Voltage-driven Thiele-Small coupling. The channel's levels become absolute at the drive voltage and its impedance chart becomes the electrical input impedance in ohms." checked={driverForm?.enabled ?? false} onChange={(checked) => state.setChannelDriverEnabled(channel.id, checked)}/>}
+          <div className="cad-channel-summary" data-control-reveal-id={CAD_CONTROLS.channelMotion.reveal.id}><span>{channel.id} · {channel.source_ids.join(' + ')}</span><select aria-label={`${CAD_CONTROLS.channelMotion.label} for ${channel.id}`} value={channel.motion} onChange={(event) => state.setChannelMotion(channel.id, event.target.value as 'normal' | 'axial')}><option value="normal">Normal motion</option><option value="axial">Axial motion</option></select></div>
+          {driverEligible && <ToggleRow id={`cad-driver-${channel.id}`} label={`${CAD_CONTROLS.driverToggle.label} · ${channel.id}`} revealId={CAD_CONTROLS.driverToggle.reveal.id} help="Voltage-driven Thiele-Small coupling. The channel's levels become absolute at the drive voltage and its impedance chart becomes the electrical input impedance in ohms." checked={driverForm?.enabled ?? false} onChange={(checked) => state.setChannelDriverEnabled(channel.id, checked)}/>}
           {driverEligible && driverForm?.enabled && <DriverFields channel={channel} form={driverForm} onField={(field, value) => state.setChannelDriverField(channel.id, field, value)}/>}
         </div>;
       })}
     </div>
     {state.driveChannels.some((channel) => state.channelDrivers[channel.id]?.enabled)
-      && <NumberField label="Drive voltage" unit="V" value={state.driveVoltageV} min={0.01} step={0.1} precision={2} description="RMS voltage applied to every driver channel (2.83 V ≈ 1 W into 8 Ω)" onCommit={state.setDriveVoltage}/>}
+      && <NumberField label={CAD_CONTROLS.driveVoltage.label} revealId={CAD_CONTROLS.driveVoltage.reveal.id} unit="V" value={state.driveVoltageV} min={0.01} step={0.1} precision={2} description="RMS voltage applied to every driver channel (2.83 V ≈ 1 W into 8 Ω)" onCommit={state.setDriveVoltage}/>}
   </>;
 }
 
@@ -734,12 +747,12 @@ function CadCrossover() {
   const state = useCadReturnStore();
   if (state.driveChannels.length < 2) return <p className="section-note">Two or more drive channels are required for a combined output.</p>;
   return <>
-    <ToggleRow id="cad-combine" label="Combined output (LR4 sum)" help="Append an LR4 crossover sum of the drive channels as one more result channel. The chain runs lowest band first, ordered by the sources' return roles (LF → MF → HF)." checked={state.combineEnabled} onChange={state.setCombineEnabled}/>
+    <ToggleRow id="cad-combine" label={CAD_CONTROLS.combinedOutput.label} revealId={CAD_CONTROLS.combinedOutput.reveal.id} help="Append an LR4 crossover sum of the drive channels as one more result channel. The chain runs lowest band first, ordered by the sources' return roles (LF → MF → HF)." checked={state.combineEnabled} onChange={state.setCombineEnabled}/>
     {state.combineEnabled && <>
       <p className="section-note">Untouched crossover defaults follow the current Frequency Sweep.</p>
-      {combineChain(state).map((pair) => <NumberField key={pair.key} label={`${pair.lower} → ${pair.upper}`} unit="Hz" value={pair.hz} min={1} step={50} precision={0} description="Crossover between adjacent channels" onCommit={(value) => state.setCombineCrossover(pair.key, value)}/>)}
-      <ToggleRow id="cad-combine-level" label="Level match members" help="Equalise member band levels before summing. Defaults off when every member carries a driver model — real voltage-driven levels should not be re-equalised." checked={state.combineLevelMatch ?? combineLevelMatchDefault(state)} onChange={state.setCombineLevelMatch}/>
-      <ToggleRow id="cad-combine-align" label="Time-align members" help="Delay each member so the crossover sums coherently, from the phase of the solved fields at each crossover frequency. Off sums the members as solved." checked={state.combineAlign ?? true} onChange={state.setCombineAlign}/>
+      {combineChain(state).map((pair) => <NumberField key={pair.key} label={`${pair.lower} → ${pair.upper}`} revealId={CAD_CONTROLS.crossoverFrequency.reveal.id} unit="Hz" value={pair.hz} min={1} step={50} precision={0} description={CAD_CONTROLS.crossoverFrequency.label} onCommit={(value) => state.setCombineCrossover(pair.key, value)}/>)}
+      <ToggleRow id="cad-combine-level" label={CAD_CONTROLS.levelMatch.label} revealId={CAD_CONTROLS.levelMatch.reveal.id} help="Equalise member band levels before summing. Defaults off when every member carries a driver model — real voltage-driven levels should not be re-equalised." checked={state.combineLevelMatch ?? combineLevelMatchDefault(state)} onChange={state.setCombineLevelMatch}/>
+      <ToggleRow id="cad-combine-align" label={CAD_CONTROLS.timeAlign.label} revealId={CAD_CONTROLS.timeAlign.reveal.id} help="Delay each member so the crossover sums coherently, from the phase of the solved fields at each crossover frequency. Off sums the members as solved." checked={state.combineAlign ?? true} onChange={state.setCombineAlign}/>
     </>}
   </>;
 }
@@ -756,13 +769,13 @@ function CadMeshDetail() {
     .map((finding) => String(finding.source_id))]);
   return <>
     <div className="cad-mesh-intro"><p>Smaller values are finer. Curved CAD faces receive bounded extra refinement automatically.</p><button className="primary" disabled={cadCoordinator.ingesting || !state.selectedBundle?.readable} onClick={() => void cadCoordinator.ingest()}>{cadCoordinator.ingesting ? 'Preparing…' : 'Rebuild mesh'}</button></div>
-    <NumberField label="Cabinet & waveguide" unit="mm" value={state.rigidSizeMm} min={0.01} step={0.5} precision={2} description="Maximum target size for rigid CAD surfaces; tight curvature may be refined further." onCommit={state.setRigidSize}/>
-    <NumberField label="Size transition" unit="mm" value={state.transitionMm} min={0.01} step={0.5} precision={2} description="Maximum size transition between adjacent mesh regions." onCommit={state.setTransition}/>
-    {(state.ingestRecord?.evidence?.fem_air_volumes?.length ?? 0) > 0 && <ToggleRow id="cad-exterior-only" label="Exterior-only Phase 2 solve" help="Explicitly exclude the returned FEM air volumes. Phase 2 solves only the exterior Metal free-space problem." checked={state.exteriorOnly} onChange={state.setExteriorOnly}/>}
+    <NumberField label={CAD_CONTROLS.rigidSize.label} revealId={CAD_CONTROLS.rigidSize.reveal.id} unit="mm" value={state.rigidSizeMm} min={0.01} step={0.5} precision={2} description="Maximum target size for rigid CAD surfaces; tight curvature may be refined further." onCommit={state.setRigidSize}/>
+    <NumberField label={CAD_CONTROLS.transitionSize.label} revealId={CAD_CONTROLS.transitionSize.reveal.id} unit="mm" value={state.transitionMm} min={0.01} step={0.5} precision={2} description="Maximum size transition between adjacent mesh regions." onCommit={state.setTransition}/>
+    {(state.ingestRecord?.evidence?.fem_air_volumes?.length ?? 0) > 0 && <ToggleRow id="cad-exterior-only" label={CAD_CONTROLS.exteriorOnly.label} revealId={CAD_CONTROLS.exteriorOnly.reveal.id} help="Explicitly exclude the returned FEM air volumes. Phase 2 solves only the exterior Metal free-space problem." checked={state.exteriorOnly} onChange={state.setExteriorOnly}/>}
     {(state.selectedBundle?.sources ?? []).map((source) => <div className={`cad-source ${state.skippedSourceIds.includes(source.id) ? 'skipped' : ''}`} key={source.id}>
-      <NumberField label={`${source.role} source`} unit="mm" value={state.sourceSizesMm[source.id] ?? source.suggestedResolutionMm} min={0.01} step={0.25} precision={2} description={`${source.id} · suggested ${source.suggestedResolutionMm} mm`} disabled={state.skippedSourceIds.includes(source.id)} onCommit={(value) => state.setSourceSize(source.id, value)}/>
-      {!source.required && <ToggleRow id={`skip-${source.id}`} label="Skip optional source" help="Exclude this optional source from ingestion and the solve. This creates a blocking finding." checked={state.skippedSourceIds.includes(source.id)} onChange={(checked) => state.setSkipped(source.id, checked)}/>}
-      {driftSources.has(source.id) && <ToggleRow id={`drift-${source.id}`} label="Allow recorded area drift" help="Explicitly accept the source-area mismatch and re-ingest. The override remains a finding that must be acknowledged." checked={state.areaDriftOverrides.includes(source.id)} onChange={(checked) => state.setAreaDriftOverride(source.id, checked)}/>}
+      <NumberField label={`${source.role} source`} revealId={CAD_CONTROLS.sourceSize.reveal.id} unit="mm" value={state.sourceSizesMm[source.id] ?? source.suggestedResolutionMm} min={0.01} step={0.25} precision={2} description={`${source.id} · suggested ${source.suggestedResolutionMm} mm`} disabled={state.skippedSourceIds.includes(source.id)} onCommit={(value) => state.setSourceSize(source.id, value)}/>
+      {!source.required && <ToggleRow id={`skip-${source.id}`} label={CAD_CONTROLS.skipSource.label} revealId={CAD_CONTROLS.skipSource.reveal.id} help="Exclude this optional source from ingestion and the solve. This creates a blocking finding." checked={state.skippedSourceIds.includes(source.id)} onChange={(checked) => state.setSkipped(source.id, checked)}/>}
+      {driftSources.has(source.id) && <ToggleRow id={`drift-${source.id}`} label={CAD_CONTROLS.areaDrift.label} revealId={CAD_CONTROLS.areaDrift.reveal.id} help="Explicitly accept the source-area mismatch and re-ingest. The override remains a finding that must be acknowledged." checked={state.areaDriftOverrides.includes(source.id)} onChange={(checked) => state.setAreaDriftOverride(source.id, checked)}/>}
     </div>)}
     {state.ingestStaleReason && <div className="field-error" role="status">{state.ingestStaleReason} Rebuild the mesh before solving.</div>}
     {cadCoordinator.error && <div className="field-error" role="alert">{cadCoordinator.error}</div>}
@@ -795,6 +808,12 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
       .filter((field) => fieldMatchesQuery(field, query));
     return [title, fields] as const;
   })), [definitions, design, query]);
+  const matchingCadSections = useMemo(() => new Set(CAD_CONTROL_DESCRIPTORS
+    .filter((descriptor) => workspaceMode === 'cad' && descriptor.tab === tab)
+    .filter((descriptor) => cadControlIsAvailable(descriptor, Boolean(ingestRecord)))
+    .filter((descriptor) => cadControlMatchesQuery(descriptor, query))
+    .map((descriptor) => descriptor.section)), [ingestRecord, query, tab, workspaceMode]);
+  const cadSectionMatches = (section: CadControlSection) => matchingCadSections.has(section);
 
   useEffect(() => {
     const apply = () => {
@@ -802,8 +821,17 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
       if (!detail) return;
       setQuery(detail.query);
       requestAnimationFrame(() => requestAnimationFrame(() => {
-        const entry = [...document.querySelectorAll<HTMLElement>(`[data-param-tab="${tab}"] [data-parameter-id]`)]
-          .find((element) => element.dataset.parameterId === detail.id);
+        const entries = detail.target === 'control'
+          ? document.querySelectorAll<HTMLElement>(`[data-param-tab="${tab}"] [data-control-reveal-id]`)
+          : document.querySelectorAll<HTMLElement>(`[data-param-tab="${tab}"] [data-parameter-id]`);
+        const revealIds = [detail.id, detail.fallbackId].filter((id): id is string => Boolean(id));
+        const candidates = [...entries];
+        // Prefer the leaf target. Conditional CAD controls (driver fields,
+        // crossover options) name their owning section as a fallback so a
+        // collapsed or currently disabled child still reveals useful context.
+        const entry = detail.target === 'control'
+          ? revealIds.map((id) => candidates.find((element) => element.dataset.controlRevealId === id)).find(Boolean)
+          : candidates.find((element) => element.dataset.parameterId === detail.id);
         // jsdom has no scrollIntoView, and losing focus matters more than losing
         // the scroll, so never let the nicety take the necessity down with it.
         try { entry?.scrollIntoView({ block: 'center' }); } catch { /* not scrollable here */ }
@@ -890,7 +918,7 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
           onClick={() => parameterHelpStore.toggle()}
         ><Icon name="info" /></button>
       </div>
-      {!searching && workspaceMode === 'cad' && tab === 'geometry' && <LinkedDesignCard/>}
+      {workspaceMode === 'cad' && tab === 'geometry' && cadSectionMatches(CAD_CONTROLS.linkedDesign.section) && <LinkedDesignCard forceOpen={searching}/>}
       {!searching && tab === 'geometry' && modelTypeSection}
       {workspaceMode === 'parametric' ? definitions.map((definition) => <div key={definition.title}>
           {renderRegistrySection(definition)}
@@ -899,18 +927,18 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
         </div>)
         : <>
           {definitions.map(renderRegistrySection)}
-          {!searching && tab === 'geometry' && <RealizedDimensionsCard/>}
+          {tab === 'geometry' && cadSectionMatches(CAD_CONTROLS.realizedDimensions.section) && <RealizedDimensionsCard forceOpen={searching}/>}
           {!searching && tab === 'simulation' && !ingestRecord && <CadSimulationEmpty/>}
-          {!searching && tab === 'simulation' && ingestRecord && <>
-            <Section title="Frequency Sweep" description="The explicit range submitted with this imported CAD geometry." forceOpen={false}><CadFrequencySweep/></Section>
-            <Section title="Directivity Map" description="Display-plane and angular sampling controls, including the effective imported-CAD grid." forceOpen={false}><DirectivityMapControls effectiveDerivation={ingestRecord.polar_grid_derivation}/></Section>
-            <Section title="Drive channels & drivers" description="Source-to-channel assignment, motion, voltage drive, and per-channel Thiele-Small data." forceOpen={false}><CadDriveChannels/></Section>
-            <Section title="Crossover" description="Optional LR4 combination of adjacent drive channels, including level and phase alignment choices." forceOpen={false}><CadCrossover/></Section>
-            <Section title="Solve options" description="Imported-CAD validation, frequency selection, and diagnostic controls. Geometry fixes the backend and domain." forceOpen={false}><SolveOptionsControls mode="cad" ingestRecord={ingestRecord}/></Section>
-            <Section title="Mesh detail" description="Imported-CAD surface sizing, optional-source policy, domain choice, and mesh regeneration." forceOpen={false}><CadMeshDetail/></Section>
+          {tab === 'simulation' && ingestRecord && <>
+            {cadSectionMatches(CAD_CONTROLS.frequencySweep.section) && <Section title={CAD_CONTROLS.frequencySweep.section} description="The explicit range submitted with this imported CAD geometry." forceOpen={searching} revealId={CAD_CONTROLS.frequencySweep.reveal.id}><CadFrequencySweep/></Section>}
+            {cadSectionMatches(CAD_CONTROLS.directivityMap.section) && <Section title={CAD_CONTROLS.directivityMap.section} description="Display-plane and angular sampling controls, including the effective imported-CAD grid." forceOpen={searching} revealId={CAD_CONTROLS.directivityMap.reveal.id}><DirectivityMapControls effectiveDerivation={ingestRecord.polar_grid_derivation}/></Section>}
+            {cadSectionMatches(CAD_CONTROLS.driveChannels.section) && <Section title={CAD_CONTROLS.driveChannels.section} description="Source-to-channel assignment, motion, voltage drive, and per-channel Thiele-Small data." forceOpen={searching} revealId={CAD_CONTROLS.driveChannels.reveal.id}><CadDriveChannels/></Section>}
+            {cadSectionMatches(CAD_CONTROLS.crossover.section) && <Section title={CAD_CONTROLS.crossover.section} description="Optional LR4 combination of adjacent drive channels, including level and phase alignment choices." forceOpen={searching} revealId={CAD_CONTROLS.crossover.reveal.id}><CadCrossover/></Section>}
+            {cadSectionMatches(CAD_CONTROLS.solveOptions.section) && <Section title={CAD_CONTROLS.solveOptions.section} description="Imported-CAD validation, frequency selection, and diagnostic controls. Geometry fixes the backend and domain." forceOpen={searching} revealId={CAD_CONTROLS.solveOptions.reveal.id}><SolveOptionsControls mode="cad" ingestRecord={ingestRecord}/></Section>}
+            {cadSectionMatches(CAD_CONTROLS.meshDetail.section) && <Section title={CAD_CONTROLS.meshDetail.section} description="Imported-CAD surface sizing, optional-source policy, domain choice, and mesh regeneration." forceOpen={searching} revealId={CAD_CONTROLS.meshDetail.reveal.id}><CadMeshDetail/></Section>}
           </>}
         </>}
-      {searching && [...fieldsBySection.values()].every((fields) => fields.length === 0) && <div className="parameter-empty">No parameter labels or keys match “{query}”.</div>}
+      {searching && [...fieldsBySection.values()].every((fields) => fields.length === 0) && matchingCadSections.size === 0 && <div className="parameter-empty">No parameter labels or keys match “{query}”.</div>}
     </div>
   );
 }

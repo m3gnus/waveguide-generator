@@ -1,6 +1,10 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { parameterRevealRequest } from '../design/ParamPanel';
+import { PARAMETER_REGISTRY } from '../design/parameterRegistry';
+import { designForFamily } from '../stores/design';
+import { workspaceModeStore } from '../stores/workspaceMode';
 import { CommandPalette, type PaletteEntry } from './CommandPalette';
 import { buildParameterPaletteEntries } from './TopBar';
 import { workspaceNavigation } from './Workspace';
@@ -19,7 +23,14 @@ describe('CommandPalette', () => {
     host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     act(() => root.render(<CommandPalette entries={entries}/>));
   });
-  afterEach(() => { act(() => root.unmount()); vi.restoreAllMocks(); host.remove(); });
+  afterEach(() => {
+    act(() => root.unmount());
+    parameterRevealRequest.claim('geometry');
+    parameterRevealRequest.claim('simulation');
+    workspaceModeStore.setMode('parametric');
+    vi.restoreAllMocks();
+    host.remove();
+  });
 
   it('opens on Ctrl-K and prevents the browser default', () => {
     const shortcut = new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true, cancelable: true });
@@ -73,6 +84,51 @@ describe('CommandPalette', () => {
       await Promise.resolve();
     });
     expect(activate).toHaveBeenCalledWith('simulation');
+  });
+
+  it('uses CAD descriptors in CAD mode and excludes registry sections the rail hides', () => {
+    const design = designForFamily('OSSE');
+    const cad = buildParameterPaletteEntries(design.formula, { mode: 'cad', design, cadReturnReady: true });
+
+    expect(cad.find((entry) => entry.id === 'cad-control-cad.frequency.start')?.matches?.('frequencyStartHz')).toBe(true);
+    expect(cad.find((entry) => entry.id === 'cad-control-cad.driver.sd_cm2')?.matches?.('Thiele-Small Sd')).toBe(true);
+    expect(cad.find((entry) => entry.id === 'cad-control-cad.crossover')?.matches?.('LR4 crossover')).toBe(true);
+    expect(cad.some((entry) => entry.id === 'parameter-simulation.f1')).toBe(false);
+    expect(cad.some((entry) => entry.id === 'parameter-source.velocity')).toBe(false);
+    // Geometry formula sections remain visible in the CAD rail, so the shared
+    // section predicate keeps their entries searchable too.
+    expect(cad.some((entry) => entry.id === 'parameter-osse.L')).toBe(true);
+  });
+
+  it('keeps the parametric palette inventory exactly registry-backed', () => {
+    const design = designForFamily('OSSE');
+    const parametric = buildParameterPaletteEntries(undefined, { mode: 'parametric', design, cadReturnReady: true });
+    expect(parametric.map((entry) => entry.id)).toEqual(PARAMETER_REGISTRY.map((field) => `parameter-${field.id}`));
+    expect(parametric.some((entry) => entry.id.startsWith('cad-control-'))).toBe(false);
+  });
+
+  it('restores the owning workspace mode before routing a stale palette entry', () => {
+    const design = designForFamily('OSSE');
+    const activate = vi.spyOn(workspaceNavigation, 'activate').mockReturnValue(true);
+    const cadControl = buildParameterPaletteEntries(design.formula, { mode: 'cad', design, cadReturnReady: true })
+      .find((entry) => entry.id === 'cad-control-cad.frequency.start')!;
+
+    workspaceModeStore.setMode('parametric');
+    act(() => cadControl.run());
+    expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
+    expect(activate).toHaveBeenLastCalledWith('simulation');
+    expect(parameterRevealRequest.claim('simulation')).toMatchObject({
+      id: 'cad.frequency.start', target: 'control', query: 'Sweep start',
+    });
+
+    const parametricField = buildParameterPaletteEntries(design.formula, { mode: 'parametric', design })
+      .find((entry) => entry.id === 'parameter-simulation.f1')!;
+    workspaceModeStore.setMode('cad');
+    act(() => parametricField.run());
+    expect(workspaceModeStore.getSnapshot().mode).toBe('parametric');
+    expect(parameterRevealRequest.claim('simulation')).toMatchObject({
+      id: 'simulation.f1', target: 'parameter',
+    });
   });
 
   it('hints the modifier the host platform actually has', () => {
