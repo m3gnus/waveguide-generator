@@ -1,4 +1,4 @@
-import { useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { requestFusionReturn, type CadReturnFinding, type CadReturnIngestRecord, type FusionCadStatus } from '../api/cadlink';
 import { OnshapePublicConsentRequired, sendDesignToOnshape, type OnshapeStatus } from '../api/onshape';
 import { usePreferences } from '../prefs/preferences';
@@ -233,6 +233,7 @@ export function CadLinkPanel() {
   const [confirmWgOverwrite, setConfirmWgOverwrite] = useState(false);
   const [confirmPublicDocument, setConfirmPublicDocument] = useState<string | null>(null);
   const [sendingToOnshape, setSendingToOnshape] = useState(false);
+  const onshapeSendGeneration = useRef(0);
   const onshape = preferences.cadApplication === 'onshape';
   const {
     bundles,
@@ -246,16 +247,25 @@ export function CadLinkPanel() {
     onshapeConnection,
   } = cadCoordinator;
 
+  useEffect(() => () => { onshapeSendGeneration.current += 1; }, []);
+
   // The outbound leg for Onshape. There is no local client to notify and no
   // workspace folder to write into: WG uploads the bundle over HTTPS itself.
   const sendToOnshape = async (allowPublic = false) => {
+    const request = ++onshapeSendGeneration.current;
+    const sourceRevision = designRevision;
     cadCoordinator.clearFeedback(); setSendingToOnshape(true);
     try {
       const wasLinked = onshapeStatus?.state === 'stale' || onshapeStatus?.state === 'current';
       const result = await sendDesignToOnshape(
         design, designRevision, filenameStem(filename), identity, { allowPublic },
       );
+      if (request !== onshapeSendGeneration.current) return;
       setConfirmPublicDocument(null);
+      if (useDesignStore.getState().designRevision !== sourceRevision) {
+        cadCoordinator.reportStatus('Sent the previous design to Onshape, but the WG design changed while it was uploading. Send again to link the current design.');
+        return;
+      }
       const visibility = result.onshape.isPublic ? ' · public document' : '';
       cadCoordinator.reportStatus(result.onshape.createdDocument
         ? `Created ${result.onshape.documentName} in Onshape · ${result.onshape.variablesPushed} parameters${visibility}`
@@ -265,6 +275,7 @@ export function CadLinkPanel() {
       // pre-send closure briefly reporting the new document as not linked.
       await cadCoordinator.refreshOnshapeStatus(result.identity);
     } catch (reason) {
+      if (request !== onshapeSendGeneration.current) return;
       // HTTP 428 is control flow, not a generic send error: this dialog is the
       // only path that can retry with allowPublic on an Onshape Free account.
       if (reason instanceof OnshapePublicConsentRequired) {
@@ -272,7 +283,9 @@ export function CadLinkPanel() {
       } else {
         cadCoordinator.reportError(reason instanceof Error ? reason.message : String(reason));
       }
-    } finally { setSendingToOnshape(false); }
+    } finally {
+      if (request === onshapeSendGeneration.current) setSendingToOnshape(false);
+    }
   };
 
   // The outbound leg. Sending refreshes the list because the bundle it writes

@@ -111,10 +111,18 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose }: {
   onClose: () => void;
 }) {
   const dialog = useRef<HTMLDivElement>(null);
+  const operationGeneration = useRef(0);
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<string>();
   const data = snapshot.data;
   const mismatch = Boolean(data && data.runningVersion !== __WG2_VERSION__);
+
+  const close = useCallback(() => {
+    operationGeneration.current += 1;
+    setBusy(false);
+    setFeedback(undefined);
+    onClose();
+  }, [onClose]);
 
   useEffect(() => {
     if (!open) return;
@@ -123,7 +131,7 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose }: {
     const keydown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault();
-        onClose();
+        close();
         return;
       }
       trapDialogFocus(dialog, event);
@@ -134,43 +142,51 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose }: {
       document.removeEventListener('keydown', keydown);
       previous?.focus();
     };
-  }, [onClose, open]);
+  }, [close, open]);
 
-  useEffect(() => { if (!open) setFeedback(undefined); }, [open]);
+  useEffect(() => {
+    if (open) return;
+    operationGeneration.current += 1;
+    setBusy(false);
+    setFeedback(undefined);
+  }, [open]);
 
   if (!open) return null;
 
   const refresh = async () => {
+    const operation = ++operationGeneration.current;
     setBusy(true);
     setFeedback(undefined);
     try {
       const result = await onRefresh();
-      setFeedback(result.lastError ? `Could not refresh: ${result.lastError}` : 'Update status refreshed.');
+      if (operation === operationGeneration.current) setFeedback(result.lastError ? `Could not refresh: ${result.lastError}` : 'Update status refreshed.');
     } catch (reason) {
-      setFeedback(`Could not refresh: ${reason instanceof Error ? reason.message : String(reason)}`);
+      if (operation === operationGeneration.current) setFeedback(`Could not refresh: ${reason instanceof Error ? reason.message : String(reason)}`);
     } finally {
-      setBusy(false);
+      if (operation === operationGeneration.current) setBusy(false);
     }
   };
   const copy = async () => {
     if (!data?.action) return;
+    const operation = ++operationGeneration.current;
     try {
       await navigator.clipboard.writeText(data.action.command);
-      setFeedback('Update command copied. Close Waveguide Generator, then run it.');
+      if (operation === operationGeneration.current) setFeedback('Update command copied. Close Waveguide Generator, then run it.');
     } catch {
-      setFeedback('Clipboard access failed. Select and copy the command below.');
+      if (operation === operationGeneration.current) setFeedback('Clipboard access failed. Select and copy the command below.');
     }
   };
   const install = async () => {
+    const operation = ++operationGeneration.current;
     setBusy(true);
     setFeedback(undefined);
     try {
       const result = await installApplicationUpdate();
-      setFeedback(`Installing ${result.tag}. WG will close and restart.`);
+      if (operation === operationGeneration.current) setFeedback(`Installing ${result.tag}. WG will close and restart.`);
     } catch (reason) {
-      setFeedback(`Could not start the update: ${reason instanceof Error ? reason.message : String(reason)}`);
+      if (operation === operationGeneration.current) setFeedback(`Could not start the update: ${reason instanceof Error ? reason.message : String(reason)}`);
     } finally {
-      setBusy(false);
+      if (operation === operationGeneration.current) setBusy(false);
     }
   };
 
@@ -194,9 +210,9 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose }: {
     summary = `Version ${data.runningVersion} is up to date. ${checkedLabel(data.checkedAt)}.`;
   }
 
-  return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+  return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) close(); }}>
     <div ref={dialog} className="settings-dialog update-dialog" role="dialog" aria-modal="true" aria-labelledby="update-dialog-title" aria-busy={busy}>
-      <header><div><h2 id="update-dialog-title">{title}</h2><p>{summary}</p></div><button className="dialog-close" aria-label="Close update details" onClick={onClose}><Icon name="close"/></button></header>
+      <header><div><h2 id="update-dialog-title">{title}</h2><p>{summary}</p></div><button className="dialog-close" aria-label="Close update details" onClick={close}><Icon name="close"/></button></header>
       <div className="update-dialog-body">
         {data?.checkout.reason && <p className={`update-checkout-note ${data.checkout.updateSupported ? '' : 'blocked'}`}><b>{data.checkout.kind === 'development' ? 'Development checkout' : 'Checkout status'}</b>{data.checkout.reason}</p>}
         {data?.freshness === 'stale' && <p className="update-stale-note">Showing the last successful result. {data.lastError}</p>}
@@ -212,7 +228,7 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose }: {
           {mismatch
             ? <button className="primary" onClick={() => window.location.reload()}>Reload WG</button>
             : <button disabled={busy} onClick={() => void refresh()}>{busy ? 'Checking…' : 'Check again'}</button>}
-          <button onClick={onClose}>Close</button>
+          <button onClick={close}>Close</button>
         </div>
         {feedback && <p className="update-feedback" role="status" aria-atomic="true">{feedback}</p>}
       </div>

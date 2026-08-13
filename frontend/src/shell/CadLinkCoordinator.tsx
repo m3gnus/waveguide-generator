@@ -120,9 +120,11 @@ export async function showIngestedMeshInViewport(
     const response = await fetcher(`/api/cadlink/ingest/${encodeURIComponent(ingestId)}/viewport-mesh`);
     if (!importedMeshStore.isCurrentGeneration(generation)) return;
     if (response.ok) {
+      const meshText = await response.text();
+      if (!importedMeshStore.isCurrentGeneration(generation)) return;
       importedMeshStore.setCad(createImportedMeshScene(
         name,
-        parseMSH(await response.text()),
+        parseMSH(meshText),
         'cad',
         ingestId,
         record.symmetry.cut_planes ?? [],
@@ -144,9 +146,11 @@ export async function showIngestedMeshInViewport(
   try {
     const response = await fetcher(`/api/cadlink/ingest/${encodeURIComponent(ingestId)}/mesh`);
     if (!response.ok || !importedMeshStore.isCurrentGeneration(generation)) return;
+    const meshText = await response.text();
+    if (!importedMeshStore.isCurrentGeneration(generation)) return;
     importedMeshStore.setCad(createImportedMeshScene(
       name,
-      parseMSH(await response.text()),
+      parseMSH(meshText),
       'cad',
       ingestId,
       record.symmetry.cut_planes ?? [],
@@ -180,6 +184,8 @@ export function CadLinkCoordinator() {
   const [onshapeConnection, setOnshapeConnection] = useState<OnshapeConnection | null>(null);
   const seenReturnRevisions = useRef<Map<string, string> | null>(null);
   const returnListRequest = useRef(0);
+  const fusionSendRequest = useRef(0);
+  const ingestRequest = useRef(0);
   const fusionStatusRequest = useRef(0);
   const onshapeStatusRequest = useRef(0);
   const onshapeConnectionRequested = useRef(false);
@@ -190,7 +196,11 @@ export function CadLinkCoordinator() {
 
   useEffect(() => {
     mounted.current = true;
-    return () => { mounted.current = false; };
+    return () => {
+      mounted.current = false;
+      fusionSendRequest.current += 1;
+      ingestRequest.current += 1;
+    };
   }, []);
 
   useEffect(() => subscribeRevision((event) => {
@@ -343,6 +353,7 @@ export function CadLinkCoordinator() {
    * panel both call this bridge so identity adoption, feedback, and return-list
    * refresh cannot drift into subtly different send paths. */
   const sendToFusion = useCallback(async (target?: { documentId: string; returnStateHash: string | null }) => {
+    const request = ++fusionSendRequest.current;
     setSendingToFusion(true); setError(null); setStatus(null);
     try {
       const result = await sendDesignToCad(
@@ -354,17 +365,21 @@ export function CadLinkCoordinator() {
         undefined,
         target ?? null,
       );
-      if (result.identity) setCadLink(result.identity, 'current');
-      setStatus(target
-        ? `Update sent to Fusion 360 · sequence ${result.sequence}`
-        : `Opening in Fusion 360 · sequence ${result.sequence}`);
-      await refresh();
+      if (request === fusionSendRequest.current && mounted.current) {
+        if (result.identity) setCadLink(result.identity, 'current');
+        setStatus(target
+          ? `Update sent to Fusion 360 · sequence ${result.sequence}`
+          : `Opening in Fusion 360 · sequence ${result.sequence}`);
+        await refresh();
+      }
       return result;
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      if (request === fusionSendRequest.current && mounted.current) {
+        setError(reason instanceof Error ? reason.message : String(reason));
+      }
       throw reason;
     } finally {
-      setSendingToFusion(false);
+      if (request === fusionSendRequest.current && mounted.current) setSendingToFusion(false);
     }
   }, [design, designRevision, filename, identity, refresh, setCadLink]);
 
@@ -396,6 +411,7 @@ export function CadLinkCoordinator() {
     // This intent covers the ingest record itself. The viewport has a separate
     // token because its follow-up artifact fetch can be superseded independently.
     const ingestGeneration = current.beginIngestIntent();
+    const request = ++ingestRequest.current;
     // Intent starts before the network request. A later viewport choice must
     // win even when this ingest's mesh fetch eventually completes.
     const viewportGeneration = importedMeshStore.beginIntent();
@@ -413,9 +429,12 @@ export function CadLinkCoordinator() {
         areaDriftOverrides: current.areaDriftOverrides,
       });
       if (!useCadReturnStore.getState().applyIngest(record, ingestGeneration)) {
-        setStatus('Discarded a completed ingest because its selected return or design was superseded. Rebuild the mesh for the current state.');
+        if (request === ingestRequest.current && mounted.current) {
+          setStatus('Discarded a completed ingest because its selected return or design was superseded. Rebuild the mesh for the current state.');
+        }
         return;
       }
+      if (request !== ingestRequest.current || !mounted.current) return;
       setStatus(`Ingested ${record.ingest_id}. Review the verdicts before solving.`);
       void showIngestedMeshInViewport(
         record,
@@ -426,9 +445,12 @@ export function CadLinkCoordinator() {
       );
     } catch (reason) {
       if (!useCadReturnStore.getState().isCurrentIngestIntent(ingestGeneration)) {
-        setStatus('Discarded an ingest response because its selected return or design was superseded. Rebuild the mesh for the current state.');
+        if (request === ingestRequest.current && mounted.current) {
+          setStatus('Discarded an ingest response because its selected return or design was superseded. Rebuild the mesh for the current state.');
+        }
         return;
       }
+      if (request !== ingestRequest.current || !mounted.current) return;
       const message = reason instanceof Error ? reason.message : String(reason);
       const structured = reason instanceof CadLinkApiError ? reason.areaDriftSources : [];
       structured.forEach(current.flagAreaDrift);
@@ -438,7 +460,7 @@ export function CadLinkCoordinator() {
       }
       setError(message);
     } finally {
-      setIngesting(false);
+      if (request === ingestRequest.current && mounted.current) setIngesting(false);
     }
   }, [reportViewportNotice]);
 

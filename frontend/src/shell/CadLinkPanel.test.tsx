@@ -6,6 +6,7 @@ import { preferencesStore } from '../prefs/preferences';
 import { importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
+import { resetDesignStore, useDesignStore } from '../stores/design';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import meshFixture from '../viewport/test-fixtures/tagged_sources-small.msh?raw';
@@ -71,7 +72,7 @@ describe('CadLinkPanel', () => {
   let root: Root;
   beforeEach(() => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-    resetCadReturnStore(); resetSolveOptionsStore(); resetDocumentStore(); preferencesStore.resetForTests();
+    resetCadReturnStore(); resetSolveOptionsStore(); resetDocumentStore(); resetDesignStore(); preferencesStore.resetForTests();
     host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
@@ -152,6 +153,24 @@ describe('CadLinkPanel', () => {
     expect(events[2]).toContain(`/${record.ingest_id}/mesh`);
   });
 
+  it('does not publish a viewport scene superseded while the response body is read', async () => {
+    let resolveText!: (text: string) => void;
+    const text = new Promise<string>((resolve) => { resolveText = resolve; });
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: () => text,
+    } as Response);
+    const generation = importedMeshStore.beginIntent();
+    const pending = showIngestedMeshInViewport(record, 'Old speaker', undefined, fetcher, generation);
+    await Promise.resolve();
+    importedMeshStore.beginIntent();
+    resolveText(meshFixture);
+    await pending;
+
+    expect(importedMeshStore.getSnapshot().cad).toBeNull();
+  });
+
   it('maps Fusion presence and config freshness to one explicit action', () => {
     expect(fusionWorkflowView(closedFusion)).toMatchObject({
       headline: 'Fusion 360 is closed', action: 'open',
@@ -203,7 +222,7 @@ describe('CadLinkPanel', () => {
    * path, the consent path, and a failure. */
   const renderOnshape = async (
     status: Record<string, unknown>,
-    send: () => Response = () => json({}),
+    send: () => Response | Promise<Response> = () => json({}),
     connection: Record<string, unknown> = {
       configured: true, reachable: true, credentialsPath: '/x/onshape.env', detail: null,
       insecureKeyFile: false, account: { id: 'ACC', name: 'Owner' },
@@ -409,6 +428,32 @@ describe('CadLinkPanel', () => {
     });
     expect(host.querySelector('.cad-alert[role="alert"]')?.textContent).toContain('rate limit');
     expect(host.querySelector('.cad-status-strip')).toBeNull();
+  });
+
+  it('does not attach an Onshape identity to a design changed during upload', async () => {
+    let resolveSend!: (response: Response) => void;
+    const pending = new Promise<Response>((resolve) => { resolveSend = resolve; });
+    await renderOnshape(onshapeStatus(), () => pending);
+    act(() => host.querySelector<HTMLButtonElement>('.cad-primary-action')!.click());
+    act(() => useDesignStore.getState().updateField('R', 155));
+
+    await act(async () => {
+      resolveSend(json({
+        bundlePath: '/data/x.wglink', bundleId: 'wgb_1', exportId: 'wge_1', sequence: 1,
+        designHash: 'sha256:a', geometryHash: 'sha256:b', artifactSha256: 'sha256:c',
+        identity: { designId: 'wgd_stale', lineageId: 'wgl_stale', baseEditVersion: 1 },
+        onshape: {
+          documentId: 'DID', workspaceId: 'WID', documentName: 'Old design',
+          documentUrl: 'https://cad.onshape.com/documents/DID/w/WID', createdDocument: true,
+          isPublic: false, variablesPushed: 6, partNames: ['Old design'], accountId: 'ACC',
+        },
+      }));
+      await pending;
+      await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    });
+
+    expect(useDocumentStore.getState().identity).toBeNull();
+    expect(host.querySelector('.cad-status-strip')?.textContent).toContain('WG design changed while it was uploading');
   });
 
   it('recognizes a newly written or replaced Fusion return for automatic opening', () => {

@@ -170,6 +170,24 @@ describe('solve invocation mutex', () => {
     expect(mocks.submitDesign.mock.calls.map((call) => call[3].label)).toEqual(['horn', 'horn2', 'horn2']);
   });
 
+  it('does not overwrite a newer manual run name when submission finishes', async () => {
+    const pending = deferred<string>();
+    mocks.submitDesign.mockReturnValue(pending.promise);
+    let run!: Promise<void>;
+    await act(async () => {
+      run = jobsCoordinatorBridge.getSnapshot().run(designForFamily('OSSE'));
+      await Promise.resolve();
+    });
+    act(() => preferencesStore.update({ outputName: 'user-choice' }));
+
+    await act(async () => {
+      pending.resolve('job-one');
+      await run;
+    });
+
+    expect(preferencesStore.getSnapshot().outputName).toBe('user-choice');
+  });
+
   it('increments the core while suffix dates decorate only submitted labels', async () => {
     mocks.submitDesign.mockResolvedValue('job');
     preferencesStore.update({ runNameDatePosition: 'suffix' });

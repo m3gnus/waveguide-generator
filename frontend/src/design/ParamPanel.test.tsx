@@ -100,6 +100,36 @@ describe('ParamPanel inventory UX', () => {
     queryClient.clear();
     workspaceModeStore.setMode('parametric');
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('does not apply a FREEFORM conversion after the user cancels it', async () => {
+    const originalFormula = useDesignStore.getState().design.formula;
+    let resolveConversion!: (response: Response) => void;
+    const conversion = new Promise<Response>((resolve) => { resolveConversion = resolve; });
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      if (String(input).startsWith('/api/design/convert')) return conversion;
+      return Promise.resolve(new Response('not found', { status: 404 }));
+    }));
+    const family = host.querySelector<HTMLSelectElement>('#family')!;
+    act(() => {
+      family.value = 'FREEFORM';
+      family.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    const buttons = () => [...host.querySelectorAll<HTMLButtonElement>('[aria-label="Switch to FREEFORM"] button')];
+    act(() => buttons().find((button) => button.textContent === 'Convert current design')!.click());
+    expect(host.textContent).toContain('Converting…');
+    act(() => buttons().find((button) => button.textContent === 'Cancel')!.click());
+
+    await act(async () => {
+      resolveConversion(new Response(JSON.stringify({ design: designForFamily('FREEFORM') }), { status: 200 }));
+      await conversion;
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(useDesignStore.getState().design.formula).toBe(originalFormula);
+    expect(host.querySelector('[aria-label="Switch to FREEFORM"]')).toBeNull();
   });
 
   it('filters across labels and ATH/v1 keys, including a mode-hidden field', () => {

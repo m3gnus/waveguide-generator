@@ -55,6 +55,12 @@ function Harness({ value, refresh = async () => value }: { value: UpdateStatus; 
   </>;
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settle) => { resolve = settle; });
+  return { promise, resolve };
+}
+
 describe('UpdateControl', () => {
   let host: HTMLDivElement;
   let root: Root;
@@ -150,5 +156,27 @@ describe('UpdateControl', () => {
     act(() => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })));
     expect(host.querySelector('[role="dialog"]')).toBeNull();
     expect(document.activeElement).toBe(opener);
+  });
+
+  it('discards refresh feedback when the dialog closes before the request finishes', async () => {
+    const pending = deferred<UpdateStatus>();
+    act(() => root.render(<Harness value={status()} refresh={() => pending.promise}/>));
+    const opener = host.querySelector<HTMLButtonElement>('.update-indicator')!;
+    await act(async () => opener.click());
+    const check = [...host.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent === 'Check again')!;
+    act(() => check.click());
+    const close = host.querySelector<HTMLButtonElement>('.dialog-close')!;
+    act(() => close.click());
+
+    await act(async () => {
+      pending.resolve(status({ availability: 'current' }));
+      await pending.promise;
+      await Promise.resolve();
+    });
+    await act(async () => opener.click());
+
+    expect(host.textContent).not.toContain('Update status refreshed');
+    expect(host.querySelector('[aria-busy="true"]')).toBeNull();
   });
 });

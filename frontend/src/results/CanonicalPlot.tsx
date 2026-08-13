@@ -76,7 +76,9 @@ export async function fetchCanonicalPlot(
   try {
     return await pending;
   } catch (error) {
-    imageCache.delete(key);
+    // The bounded cache can evict this request while it is still in flight.
+    // Delete only our own entry: the same key may already have a newer owner.
+    if (imageCache.get(key) === pending) imageCache.delete(key);
     throw error;
   }
 }
