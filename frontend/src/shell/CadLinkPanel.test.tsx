@@ -9,6 +9,7 @@ import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOpt
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import meshFixture from '../viewport/test-fixtures/tagged_sources-small.msh?raw';
 import { buildImportedSubmission, CadLinkPanel, fusionWorkflowView, newestReturnArrival, onshapeWorkflowView, showIngestedMeshInViewport } from './CadLinkPanel';
+import { CadLinkCoordinator } from './CadLinkCoordinator';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 
 const listing: CadReturnListing = {
@@ -55,6 +56,10 @@ const currentFusion: FusionCadStatus = {
   },
 };
 
+function CadLinkTestSurface() {
+  return <><CadLinkCoordinator/><CadLinkPanel/></>;
+}
+
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 }
@@ -76,7 +81,7 @@ describe('CadLinkPanel', () => {
   afterEach(() => { act(() => root.unmount()); importedMeshStore.clear(); vi.unstubAllGlobals(); host.remove(); });
 
   const renderAndSelect = async () => {
-    await act(async () => { root.render(<CadLinkPanel/>); await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
     const bundle = host.querySelector<HTMLButtonElement>('.cad-bundle-list button')!;
     act(() => bundle.click());
     return bundle;
@@ -213,7 +218,7 @@ describe('CadLinkPanel', () => {
       return json({}, 404);
     }));
     await act(async () => {
-      root.render(<CadLinkPanel/>);
+      root.render(<CadLinkTestSurface/>);
       await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
     });
     return calls;
@@ -247,6 +252,8 @@ describe('CadLinkPanel', () => {
 
   it('asks for confirmation before creating a world-readable document, then sends', async () => {
     let allowPublic: unknown = null;
+    const mintedIdentity = { designId: 'wgd_a', lineageId: 'wgl_a', baseEditVersion: 1 };
+    const statusIdentities: unknown[] = [];
     preferencesStore.update({ cadApplication: 'onshape' });
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
@@ -257,7 +264,10 @@ describe('CadLinkPanel', () => {
           plan: { name: 'Onshape Free public only', group: 'Free', publicOnly: true },
         });
       }
-      if (path.endsWith('/onshape/status')) return json(onshapeStatus());
+      if (path.endsWith('/onshape/status')) {
+        statusIdentities.push(JSON.parse(String(init?.body)).identity);
+        return json(onshapeStatus());
+      }
       if (path.endsWith('/onshape/send')) {
         allowPublic = JSON.parse(String(init?.body)).allowPublic;
         if (allowPublic !== true) {
@@ -266,6 +276,7 @@ describe('CadLinkPanel', () => {
         return json({
           bundlePath: '/data/x.wglink', bundleId: 'wgb_1', exportId: 'wge_1', sequence: 1,
           designHash: 'sha256:a', geometryHash: 'sha256:b', artifactSha256: 'sha256:c',
+          identity: mintedIdentity,
           onshape: {
             documentId: 'DID', workspaceId: 'WID', documentName: 'Tritonia',
             documentUrl: 'https://cad.onshape.com/documents/DID/w/WID',
@@ -276,7 +287,7 @@ describe('CadLinkPanel', () => {
       return json({}, 404);
     }));
     await act(async () => {
-      root.render(<CadLinkPanel/>);
+      root.render(<CadLinkTestSurface/>);
       await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
     });
 
@@ -299,6 +310,7 @@ describe('CadLinkPanel', () => {
     expect(allowPublic).toBe(true);
     expect(host.querySelector('.cad-status-strip')?.textContent)
       .toContain('Created Tritonia in Onshape · 6 parameters · public document');
+    expect(statusIdentities.at(-1)).toEqual(mintedIdentity);
   });
 
   it('offers to update a linked document and links out to it', async () => {
@@ -356,13 +368,13 @@ describe('CadLinkPanel', () => {
   });
 
   it('selects the newest readable return when CAD Link first mounts', async () => {
-    await act(async () => { root.render(<CadLinkPanel/>); await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
     expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(listing.items[0].bundlePath);
     expect(host.textContent).toContain('Mesh detail');
   });
 
   it('shows the selected CAD program, settings link, and an Open button when Fusion is closed', async () => {
-    await act(async () => { root.render(<CadLinkPanel/>); await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
     expect(host.querySelector('.cad-workflow-header')?.textContent).toContain('Autodesk Fusion 360');
     expect(host.querySelector<HTMLButtonElement>('.cad-workflow-header button')?.textContent).toContain('Change');
     expect(host.querySelector('.cad-connection')?.textContent).toContain('Fusion 360 is closed');
@@ -373,7 +385,7 @@ describe('CadLinkPanel', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/fusion-status')
       ? json(currentFusion)
       : json(listing)));
-    await act(async () => { root.render(<CadLinkPanel/>); await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
     expect(host.querySelector('.cad-connection')?.textContent).toContain('Fusion 360 is open · Tritonia V');
     expect(host.querySelector('.cad-connection')?.textContent).toContain('13 managed CAD parameters');
     expect(host.querySelector('.cad-primary-action')).toBeNull();
@@ -384,7 +396,7 @@ describe('CadLinkPanel', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/fusion-status')
       ? json(stale)
       : json(listing)));
-    await act(async () => { root.render(<CadLinkPanel/>); await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
     expect(host.querySelector('.cad-connection')?.textContent).toContain('Fusion has OSSE; WG is now R-OSSE');
     expect(host.querySelector<HTMLButtonElement>('.cad-primary-action')?.textContent).toBe('Send WG changes to Fusion');
   });
@@ -427,7 +439,7 @@ describe('CadLinkPanel', () => {
       if (path.endsWith('/returns')) return json(listing);
       return json(record);
     }));
-    await act(async () => { root.render(<CadLinkPanel/>); await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
 
     expect(host.textContent).toContain('Send WG changes to Fusion');
     expect(host.textContent).toContain('Bring Fusion changes into WG');
@@ -593,7 +605,7 @@ describe('CadLinkPanel', () => {
       ...listing.items[0], readable: false, documentName: null, sourceCount: null, instanceCount: null,
       sources: [], reason: 'suggested resolution must be positive',
     }] })));
-    await act(async () => { root.render(<CadLinkPanel/>); await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
     const row = host.querySelector<HTMLButtonElement>('.cad-bundle-list button')!;
     expect(row.disabled).toBe(true);
     expect(row.textContent).toContain('suggested resolution must be positive');
@@ -629,7 +641,7 @@ describe('CadLinkPanel', () => {
         identity: { designId: 'wgd_01K00000000000000000000000', lineageId: 'wgl_01K00000000000000000000000', baseEditVersion: 2 },
       });
     }));
-    await act(async () => { root.render(<CadLinkPanel/>); await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
 
     const send = [...host.querySelectorAll<HTMLButtonElement>('.cad-send button')]
       .find((button) => button.textContent === 'Open waveguide in Fusion 360')!;
@@ -651,7 +663,7 @@ describe('CadLinkPanel', () => {
       if (path === '/api/workspace/path') return json({ selected: true, path: '/cad' });
       return json({ detail: 'CAD-link bundle name is already used by another design: horn.wglink' }, 409);
     }));
-    await act(async () => { root.render(<CadLinkPanel/>); await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
 
     const send = [...host.querySelectorAll<HTMLButtonElement>('.cad-send button')]
       .find((button) => button.textContent === 'Open waveguide in Fusion 360')!;
