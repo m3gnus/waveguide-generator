@@ -1,9 +1,13 @@
 import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { convertDesignToFreeform } from '../api/designIo';
+import { importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { postSymmetry, toSolveDesign, type SymmetryResolution } from '../jobs/actions';
+import { usePreferences } from '../prefs/preferences';
+import { useCadReturnStore } from '../stores/cadReturn';
 import { useDesignStore, type DesignDocument, type DesignFamily, type DesignValue } from '../stores/design';
 import { useSolveOptionsStore, type SymmetryMode } from '../stores/solveOptions';
+import { workspaceModeStore } from '../stores/workspaceMode';
 import { DirectivityMapControls, SolveOptionsControls } from './SolveOptionsSections';
 import { EditablePointTable, EditableStationTable } from './FreeformEditors';
 import { lambdaSixthHint } from './lambdaLimit';
@@ -17,10 +21,14 @@ import {
   fieldAcceptsExpression,
   fieldIsVisible,
   fieldMatchesQuery,
+  parameterSectionIsVisible,
   type ParameterDefinition,
   type ParameterSectionDefinition,
   type ParameterTab,
 } from './parameterRegistry';
+import { cadLinkCoordinatorBridge } from '../shell/CadLinkCoordinator';
+import { fusionWorkflowView, onshapeWorkflowView } from '../shell/CadLinkPanel';
+import { workspaceNavigation } from '../shell/workspaceNavigation';
 import './paramPanel.css';
 
 interface SectionProps {
@@ -486,8 +494,71 @@ export function requestParameterReveal(detail: RevealRequest): void {
   window.dispatchEvent(new CustomEvent(REVEAL_PARAMETER_EVENT, { detail }));
 }
 
+function LinkedDesignCard() {
+  const preferences = usePreferences();
+  const cadCoordinator = useSyncExternalStore(
+    cadLinkCoordinatorBridge.subscribe,
+    cadLinkCoordinatorBridge.getSnapshot,
+    cadLinkCoordinatorBridge.getSnapshot,
+  );
+  const onshape = preferences.cadApplication === 'onshape';
+  const workflow = onshape
+    ? onshapeWorkflowView(cadCoordinator.onshapeStatus)
+    : fusionWorkflowView(cadCoordinator.fusionStatus);
+  const driftCount = cadCoordinator.fusionStatus?.link?.parameterDriftCount ?? 0;
+  const fusionConflict = cadCoordinator.fusionStatus?.fusionChangesAvailable === true
+    && cadCoordinator.fusionStatus?.wgChangesAvailable === true;
+  const send = () => {
+    // Onshape's consent and Fusion's two-way conflict confirmations stay in
+    // CAD Link. A one-way Fusion send can use the coordinator directly.
+    if (onshape || fusionConflict) {
+      workspaceNavigation.activate('cadlink');
+      return;
+    }
+    const status = cadCoordinator.fusionStatus;
+    const target = workflow.action === 'update' && status?.documentId
+      ? { documentId: status.documentId, returnStateHash: status.link?.documentSignatureHash ?? null }
+      : undefined;
+    void cadCoordinator.sendToFusion(target).catch(() => undefined);
+  };
+  const actionLabel = fusionConflict
+    ? 'Review sync direction'
+    : onshape
+      ? workflow.action === 'update' ? 'Send WG changes to Onshape' : 'Create in Onshape'
+      : workflow.action === 'update' ? 'Send WG changes to Fusion' : 'Open in Fusion 360';
+  return <Section title="Linked design" description="The CAD document linked to this design, its aggregate freshness, and the outbound rebuild action." forceOpen={false}>
+    <div className={`linked-design-card cad-connection-${workflow.state}`}>
+      <span className="cad-connection-dot" aria-hidden="true"/>
+      <div><b>{workflow.headline}</b><span>{workflow.detail}</span></div>
+    </div>
+    {driftCount > 0 && <p className="linked-design-drift">{driftCount} managed parameters have local edits</p>}
+    {workflow.action && <button className="primary linked-design-action" disabled={cadCoordinator.sendingToFusion} onClick={send}>{cadCoordinator.sendingToFusion ? 'Sending…' : actionLabel}</button>}
+    {cadCoordinator.error && <div className="field-error" role="alert">{cadCoordinator.error}</div>}
+    {cadCoordinator.status && <p className="section-note" role="status">{cadCoordinator.status}</p>}
+  </Section>;
+}
+
+function CadFrequencySweep() {
+  const cadReturn = useCadReturnStore();
+  const solveStore = useSolveOptionsStore();
+  const blocker = importedSubmissionBlocker(cadReturn, solveStore);
+  const rangeMessage = blocker === 'Enter a valid explicit frequency sweep.' ? blocker : null;
+  return <>
+    <NumberField label="Sweep start" unit="Hz" value={cadReturn.frequencyStartHz} min={1} step={10} precision={0} description="Lowest frequency of the generated imported-CAD sweep." onCommit={(frequencyStartHz) => cadReturn.setSweep({ frequencyStartHz })}/>
+    <NumberField label="Sweep end" unit="Hz" value={cadReturn.frequencyEndHz} min={1} step={10} precision={0} description="Highest frequency of the generated imported-CAD sweep." onCommit={(frequencyEndHz) => cadReturn.setSweep({ frequencyEndHz })}/>
+    <NumberField label="Frequency samples" value={cadReturn.frequencyCount} min={1} max={401} step={1} precision={0} description="How many frequencies are solved across the imported-CAD range." onCommit={(frequencyCount) => cadReturn.setSweep({ frequencyCount })}/>
+    {rangeMessage && <div className="field-error" role="alert">{rangeMessage}</div>}
+  </>;
+}
+
+function CadSimulationEmpty() {
+  return <div className="cad-mode-empty" role="status"><b>No CAD geometry yet</b><span>Bring a model back from Fusion, then prepare it for simulation.</span><button className="primary" onClick={() => workspaceNavigation.activate('cadlink')}>Open CAD Link</button></div>;
+}
+
 export function ParamPanel({ tab }: { tab: ParameterTab }) {
   const design = useDesignStore((state) => state.design);
+  const workspaceMode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
+  const ingestRecord = useCadReturnStore((state) => state.ingestRecord);
   const setFamily = useDesignStore((state) => state.setFamily);
   const loadDesign = useDesignStore((state) => state.loadDesign);
   const helpVisible = useParameterHelp();
@@ -496,12 +567,15 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
   const [conversionError, setConversionError] = useState<string | null>(null);
   const [converting, setConverting] = useState(false);
   const searching = Boolean(query.trim());
-  const fieldsBySection = useMemo(() => new Map(PARAMETER_SECTION_DEFINITIONS.filter((definition) => definition.tab === tab).map(({ title }) => {
+  const definitions = useMemo(() => PARAMETER_SECTION_DEFINITIONS
+    .filter((definition) => definition.tab === tab)
+    .filter((definition) => parameterSectionIsVisible(definition, workspaceMode, design)), [design, tab, workspaceMode]);
+  const fieldsBySection = useMemo(() => new Map(definitions.map(({ title }) => {
     const fields = PARAMETER_REGISTRY.filter((field) => field.section === title)
       .filter((field) => query.trim() ? fieldAppliesToFamily(field, design.formula) : fieldIsVisible(field, design))
       .filter((field) => fieldMatchesQuery(field, query));
     return [title, fields] as const;
-  })), [design, query, tab]);
+  })), [definitions, design, query]);
 
   useEffect(() => {
     const apply = () => {
@@ -583,8 +657,6 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
     </div>}
   </Section>;
 
-  const definitions = PARAMETER_SECTION_DEFINITIONS.filter((definition) => definition.tab === tab);
-
   return (
     <div className="param-panel panel-scroll" data-param-tab={tab}>
       <div className="parameter-search">
@@ -599,12 +671,22 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
           onClick={() => parameterHelpStore.toggle()}
         ><Icon name="info" /></button>
       </div>
+      {!searching && workspaceMode === 'cad' && tab === 'geometry' && <LinkedDesignCard/>}
       {!searching && tab === 'geometry' && modelTypeSection}
-      {definitions.map((definition) => <div key={definition.title}>
-        {renderRegistrySection(definition)}
-        {!searching && definition.title === 'Frequency Sweep' && <Section title="Directivity Map" description="Polar planes and angular sampling used for directivity exports and plots." forceOpen={false}><DirectivityMapControls /></Section>}
-        {!searching && definition.title === 'Source Definition' && <Section title="Solve options" description="Backend engine, validation, which frequencies get solved, and diagnostic output controls." forceOpen={false}><SolveOptionsControls /></Section>}
-      </div>)}
+      {workspaceMode === 'parametric' ? definitions.map((definition) => <div key={definition.title}>
+          {renderRegistrySection(definition)}
+          {!searching && definition.title === 'Frequency Sweep' && <Section title="Directivity Map" description="Polar planes and angular sampling used for directivity exports and plots." forceOpen={false}><DirectivityMapControls /></Section>}
+          {!searching && definition.title === 'Source Definition' && <Section title="Solve options" description="Backend engine, validation, which frequencies get solved, and diagnostic output controls." forceOpen={false}><SolveOptionsControls /></Section>}
+        </div>)
+        : <>
+          {definitions.map(renderRegistrySection)}
+          {!searching && tab === 'simulation' && !ingestRecord && <CadSimulationEmpty/>}
+          {!searching && tab === 'simulation' && ingestRecord && <>
+            <Section title="Frequency Sweep" description="The explicit range submitted with this imported CAD geometry." forceOpen={false}><CadFrequencySweep/></Section>
+            <Section title="Directivity Map" description="Display-plane and angular sampling controls, including the effective imported-CAD grid." forceOpen={false}><DirectivityMapControls effectiveDerivation={ingestRecord.polar_grid_derivation}/></Section>
+            <Section title="Solve options" description="Imported-CAD validation, frequency selection, and diagnostic controls. Geometry fixes the backend and domain." forceOpen={false}><SolveOptionsControls mode="cad" ingestRecord={ingestRecord}/></Section>
+          </>}
+        </>}
       {searching && [...fieldsBySection.values()].every((fields) => fields.length === 0) && <div className="parameter-empty">No parameter labels or keys match “{query}”.</div>}
     </div>
   );

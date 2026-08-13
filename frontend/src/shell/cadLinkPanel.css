@@ -13,7 +13,7 @@
 .cad-direction-alert button, .cad-secondary-action { justify-content: center; width: 100%; }
 .cad-confirm-actions { display: grid; grid-template-columns: 1fr 1.7fr; gap: 6px; }
 .cad-secondary-action { margin-top: 8px; }
-.cadlink-toolbar, .cad-section > header, .cad-solve-bar { display: flex; align-items: center; gap: 7px; }
+.cadlink-toolbar, .cad-section > header { display: flex; align-items: center; gap: 7px; }
 .cadlink-toolbar { min-height: 28px; border-bottom: 1px solid var(--hair); padding-bottom: 6px; }
 .cadlink-toolbar button, .cad-section button { display: inline-flex; align-items: center; gap: 4px; }
 .cad-alert, .cad-status-strip { margin: 7px 0; padding: 6px 7px; border: 1px solid var(--red); background: color-mix(in srgb, var(--red) 8%, transparent); }
@@ -22,9 +22,6 @@
 .cad-return-quick-action > div:first-child { display: grid; gap: 2px; }
 .cad-return-quick-action span { color: var(--fg3); font-size: var(--text-micro); }
 .cad-return-quick-action > button { justify-content: center; width: 100%; min-height: 34px; }
-.cad-viewport-source-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
-.cad-viewport-source-buttons button { justify-content: center; min-height: 32px; }
-.cad-viewport-source-buttons button.active { border-color: var(--acc); background: color-mix(in srgb, var(--acc) 15%, var(--surface-panel)); color: var(--acc); }
 .cad-bundle-list { display: grid; gap: 4px; margin: 7px 0; }
 .cad-bundle-list > button { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1px 8px; width: 100%; padding: 7px; text-align: left; border: 1px solid var(--hair); background: var(--surface-panel); }
 .cad-bundle-list > button.selected { border-color: var(--inv-bg); background: var(--ov2); }
@@ -68,7 +65,4 @@
 .cad-findings label.blocking b::after { content: ' · blocking'; color: var(--amber); font-weight: 500; }
 .cad-findings label span { display: grid; }.cad-findings small { color: var(--fg3); }
 .cad-channel-summary { margin-left: 12px; color: var(--fg2); font-size: var(--text-micro); }
-.cad-sweep-grid { display: grid; gap: 4px; }
-.cad-solve-bar { position: sticky; bottom: 0; margin: 8px -7px -7px; padding: 8px; border-top: 1px solid var(--hair); background: color-mix(in srgb, var(--surface-panel) 94%, transparent); backdrop-filter: blur(8px); }
-.cad-solve-bar div { flex: 1; color: var(--fg2); font-size: var(--text-micro); }
 .cadlink-panel .empty-state { min-height: 120px; }

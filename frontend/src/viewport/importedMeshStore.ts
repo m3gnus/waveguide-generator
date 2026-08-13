@@ -38,8 +38,8 @@ class ImportedMeshStore {
     return generation === this.generation;
   }
 
-  setCad(scene: ImportedMeshScene, generation = this.beginIntent()): boolean {
-    return this.setSlot('cad', scene, generation);
+  setCad(scene: ImportedMeshScene, generation = this.beginIntent(), activate = true): boolean {
+    return this.setSlot('cad', scene, generation, activate);
   }
 
   setFile(scene: ImportedMeshScene, generation = this.beginIntent()): boolean {
@@ -71,10 +71,11 @@ class ImportedMeshStore {
     this.publish({ cad, file, showing });
   }
 
-  private setSlot(slot: ImportedMeshSlot, scene: ImportedMeshScene, generation: number): boolean {
+  private setSlot(slot: ImportedMeshSlot, scene: ImportedMeshScene, generation: number, activate = true): boolean {
     if (!this.isCurrentGeneration(generation)) return false;
-    if (this.value[slot] === scene && this.value.showing === slot) return true;
-    this.publish({ ...this.value, [slot]: scene, showing: slot });
+    const showing = activate ? slot : this.value.showing;
+    if (this.value[slot] === scene && this.value.showing === showing) return true;
+    this.publish({ ...this.value, [slot]: scene, showing });
     return true;
   }
 

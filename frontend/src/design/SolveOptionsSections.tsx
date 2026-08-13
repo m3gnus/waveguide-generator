@@ -1,8 +1,11 @@
 import { useCapabilities } from '../jobs/useCapabilities';
+import type { CadReturnIngestRecord } from '../api/cadlink';
+import { widenPolarToDerivation } from '../jobs/importedSubmission';
 import { HelpTipRow, useHelpTip } from './HelpTip';
 import {
   MAX_FREQUENCY_POINTS,
   parseFrequencyList,
+  polarConfigFromUi,
   useSolveOptionsStore,
   type FrequencyMode,
   type FrequencySpacing,
@@ -11,6 +14,7 @@ import {
   type PolarAxis,
   type PolarUiState,
 } from '../stores/solveOptions';
+import type { WorkspaceMode } from '../stores/workspaceMode';
 
 export const solverModeLabels = {
   auto: 'Auto',
@@ -52,7 +56,10 @@ export function FrequencySweepControls({ idPrefix, context }: { idPrefix: string
   </>;
 }
 
-export function SolveOptionsControls() {
+export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null }: {
+  mode?: WorkspaceMode;
+  ingestRecord?: CadReturnIngestRecord | null;
+} = {}) {
   const store = useSolveOptionsStore();
   const { engines, error } = useCapabilities();
   const backendEngines = engines.filter((engine) => engine.name.toLowerCase() !== 'circsym');
@@ -61,16 +68,23 @@ export function SolveOptionsControls() {
     : backendEngines.find((engine) => engine.name.toLowerCase() === store.engine);
   const fastPaths = selectedEngine?.fast_paths ?? [];
   return <>
-    <HelpTipRow className="select-row" text="Which BEM engine runs the solve. AUTO takes the first backend that is actually available on this machine. All backends solve the same problem; they differ in speed and in which fast paths they support."><label htmlFor="solve-engine">Solver backend</label><select id="solve-engine" value={store.engine} onChange={(event) => store.setEngine(event.target.value)}>
-      <option value="auto">AUTO — first available</option>
-      {backendEngines.map((engine) => <option key={engine.name} value={engine.name.toLowerCase()} disabled={!engine.available}>{engine.name}{engine.available ? engine.version ? ` · ${engine.version}` : '' : ` · unavailable${engine.reason ? `: ${engine.reason}` : ''}`}</option>)}
-    </select></HelpTipRow>
-    <p className="section-note">{selectedEngine?.name.toLowerCase() === 'metal' && fastPaths.includes('axisymmetric-meridian')
-      ? 'Metal capability: automatic axisymmetric meridian fast path when the geometry is eligible.'
-      : 'Selected backend capability: Full 3D.'}</p>
-    <p className="section-note">Solver mode labels: {solverModeLabels.auto}, {solverModeLabels.full_3d}, {solverModeLabels.circsym}.</p>
+    {mode === 'parametric' ? <>
+      <HelpTipRow className="select-row" text="Which BEM engine runs the solve. AUTO takes the first backend that is actually available on this machine. All backends solve the same problem; they differ in speed and in which fast paths they support."><label htmlFor="solve-engine">Solver backend</label><select id="solve-engine" value={store.engine} onChange={(event) => store.setEngine(event.target.value)}>
+        <option value="auto">AUTO — first available</option>
+        {backendEngines.map((engine) => <option key={engine.name} value={engine.name.toLowerCase()} disabled={!engine.available}>{engine.name}{engine.available ? engine.version ? ` · ${engine.version}` : '' : ` · unavailable${engine.reason ? `: ${engine.reason}` : ''}`}</option>)}
+      </select></HelpTipRow>
+      <p className="section-note">{selectedEngine?.name.toLowerCase() === 'metal' && fastPaths.includes('axisymmetric-meridian')
+        ? 'Metal capability: automatic axisymmetric meridian fast path when the geometry is eligible.'
+        : 'Selected backend capability: Full 3D.'}</p>
+      <p className="section-note">Solver mode labels: {solverModeLabels.auto}, {solverModeLabels.full_3d}, {solverModeLabels.circsym}.</p>
+    </> : <>
+      {/* Imported submissions force both values. Static facts keep the rail
+          honest without creating a second control that the submit path drops. */}
+      <p className="cad-solve-fact"><b>Solver</b><span>Metal · full 3-D · free space</span></p>
+      <p className="cad-solve-fact"><b>Ingested cut planes</b><span>{ingestRecord?.symmetry.cut_planes?.length ? ingestRecord.symmetry.cut_planes.join(', ') : 'none · full domain'}</span></p>
+    </>}
     <HelpTipRow className="select-row" text="What happens when the solver mesh fails its topology check. Warn solves anyway and reports the problem; Strict refuses to solve a mesh that is not watertight; Off hides the warning entirely. Results from an invalid mesh cannot be trusted, so leave this on Warn unless you know why."><label htmlFor="mesh-validation-mode">Mesh validation policy</label><select id="mesh-validation-mode" value={store.meshValidationMode} onChange={(event) => store.setMeshValidationMode(event.target.value as MeshValidationMode)}><option value="warn">Warn</option><option value="strict">Strict</option><option value="off">Off</option></select></HelpTipRow>
-    <FrequencySweepControls idPrefix="design-solve" context="design" />
+    <FrequencySweepControls idPrefix={mode === 'cad' ? 'cad-solve' : 'design-solve'} context={mode === 'cad' ? 'imported' : 'design'} />
     <ToggleRow id="solve-verbose" label="Verbose backend logging" help="Records the backend's own per-frequency diagnostics in the job log. Useful when a solve fails or looks wrong; it makes logs much longer." checked={store.verbose} onChange={store.setVerbose} />
     {error && <div className="field-error" role="alert">Capabilities unavailable: {error}</div>}
   </>;
@@ -101,7 +115,45 @@ function PolarNumber({ id, label, help, value, unit, min, max, step = 1, disable
   return <div className={`field-row polar-number${disabled ? ' field-disabled' : ''}`}><label className="field-label" htmlFor={id} {...tip.triggerProps}>{label}{tip.tip}</label><div className="number-control"><input id={id} type="number" value={value} min={min} max={max} step={step} disabled={disabled} onChange={(event) => update(Number(event.target.value))} /><span className="unit">{unit}</span></div></div>;
 }
 
-export function DirectivityMapControls() {
+const AXIS_INITIALS: Record<PolarAxis, string> = { horizontal: 'H', vertical: 'V', diagonal: 'D' };
+
+export interface EffectiveGridView {
+  summary: string;
+  detail: string;
+  widened: boolean;
+}
+
+/** Preview the exact imported-submit mutation on a disposable options object.
+ * This must call widenPolarToDerivation: presenting a separately reimplemented
+ * approximation would recreate the silent-submit mismatch this readout fixes. */
+export function effectiveGridView(
+  polar: PolarUiState,
+  derivation: Record<string, unknown>,
+): EffectiveGridView {
+  const before = polarConfigFromUi(polar);
+  const options = {
+    engine: 'metal', symmetry: 'auto' as const, mesh_validation_mode: 'warn' as const,
+    verbose: false, frequency_spacing: 'log' as const, polar_config: structuredClone(before),
+  };
+  widenPolarToDerivation(options, derivation);
+  const effective = options.polar_config;
+  const [start, end, count] = effective.angle_range;
+  const step = count > 1 ? (end - start) / (count - 1) : effective.angle_step;
+  const axes = effective.enabled_axes.map((axis) => AXIS_INITIALS[axis]).join(' + ');
+  const widened = before.angle_range.some((value, index) => value !== effective.angle_range[index])
+    || before.enabled_axes.some((axis, index) => axis !== effective.enabled_axes[index])
+    || before.enabled_axes.length !== effective.enabled_axes.length;
+  const angle = (value: number) => `${String(value).replace('-', '−')}°`;
+  return {
+    summary: `Effective grid ${angle(start)} … ${angle(end)}, ${Number(step.toFixed(6))}° steps · ${axes || 'no display planes'}`,
+    detail: widened
+      ? 'Widened from your settings because the returned model requires additional display-plane coverage.'
+      : 'Matches your settings; no widening is required.',
+    widened,
+  };
+}
+
+export function DirectivityMapControls({ effectiveDerivation }: { effectiveDerivation?: Record<string, unknown> } = {}) {
   const polar = useSolveOptionsStore((state) => state.polar);
   const update = useSolveOptionsStore((state) => state.updatePolar);
   const toggleAxis = useSolveOptionsStore((state) => state.toggleAxis);
@@ -109,6 +161,7 @@ export function DirectivityMapControls() {
     if (Number.isFinite(value)) update({ [key]: value });
   };
   const axisHelp = useHelpTip({ title: 'Directivity planes', text: 'Which planes through the horn axis are measured. Horizontal and vertical are the usual pair; diagonal catches what a non-round mouth does between them.' });
+  const effective = effectiveDerivation ? effectiveGridView(polar, effectiveDerivation) : null;
   return <>
     <PolarNumber id="polar-angle-start" label="Sweep start" help="First off-axis angle measured in each directivity plane. 0° is on-axis; negative angles cover the other side." value={polar.angleStart} unit="°" step={1} update={numeric('angleStart')} />
     <PolarNumber id="polar-angle-end" label="Sweep end" help="Last off-axis angle measured in each directivity plane. 90° reaches the baffle plane." value={polar.angleEnd} unit="°" step={1} update={numeric('angleEnd')} />
@@ -120,5 +173,6 @@ export function DirectivityMapControls() {
     <HelpTipRow className="select-row" text="The point the measurement angles pivot around. Mouth rotates about the mouth centre, which is what a measured polar set matches; Throat pivots at the driver instead."><label htmlFor="polar-observation-origin">Measurement origin</label><select id="polar-observation-origin" value={polar.observationOrigin} onChange={(event) => update({ observationOrigin: event.target.value as ObservationOrigin })}><option value="mouth">Mouth</option><option value="throat">Throat</option></select></HelpTipRow>
     <ToggleRow id="polar-spherical-sampling" label="Keep 3D balloon result" help="WG samples a spherical field for Directivity Index independently of the selected H/V/D display planes. Enable this to retain that grid for the 3D balloon and forward-beam views; availability depends on the backend." checked={polar.sphericalSampling} onChange={(sphericalSampling) => update({ sphericalSampling })} />
     <p className="section-note">Directivity Index always uses the complete spherical field. This option controls whether WG also stores that field for 3D views.</p>
+    {effective && <div className={`effective-grid-readout${effective.widened ? ' widened' : ''}`} role="status"><b>{effective.summary}</b><span>{effective.detail}</span><small>Display planes and angle range only; Directivity Index always uses the complete spherical field.</small></div>}
   </>;
 }

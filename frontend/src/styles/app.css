@@ -61,7 +61,14 @@ button:disabled { cursor: default; }
 .command-affordance svg { width: 13px; height: 13px; flex: none; }
 .command-affordance span { flex: 1; overflow: hidden; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
 kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2px; border-radius: var(--r3); background: var(--kbd-bg); color: var(--fg2); font: var(--text-micro)/1 var(--mono); }
-.solve-button { display: flex; align-items: center; gap: 6px; height: 27px; padding: 0 8px 0 8px; border-radius: var(--r2); background: var(--solve-grad); box-shadow: var(--solve-sh); color: var(--solve-fg); font-size: var(--text-base); font-weight: 600; }
+/* Wide enough for "Solve Fusion CAD" so the label never resizes the button.
+   The workspace-mode switch sits immediately before it in the same flex row,
+   and a button that grows on mode change drags that switch sideways under the
+   pointer -- so toggling twice means aiming twice. Centred, so the shorter
+   "Solve" stays optically attached to its own control rather than drifting.
+   170px is the measured width of the longest label, "Solve Fusion CAD" plus
+   its shortcut chip. */
+.solve-button { display: flex; align-items: center; justify-content: center; gap: 6px; min-width: 170px; height: 27px; padding: 0 8px 0 8px; border-radius: var(--r2); background: var(--solve-grad); box-shadow: var(--solve-sh); color: var(--solve-fg); font-size: var(--text-base); font-weight: 600; }
 .solve-button:disabled { filter: saturate(.55); opacity: .5; }
 .solve-button svg { width: 11px; }
 .solve-button kbd { border-color: var(--solve-kbd-bd); background: var(--solve-kbd); color: var(--solve-kbd-fg); }
@@ -69,6 +76,10 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .theme-toggle button { display: grid; place-items: center; width: 24px; height: 20px; border-radius: var(--r3); background: transparent; color: var(--fg3); }
 .theme-toggle button.on { background: var(--seg-on); box-shadow: var(--seg-on-sh); color: var(--inv-fg); }
 .theme-toggle svg { width: 13px; }
+.workspace-mode-toggle { flex: none; border-color: rgba(var(--acc-rgb), .32); background: rgba(var(--acc-rgb), .12); }
+.workspace-mode-toggle button { width: auto; min-width: 42px; padding: 0 7px; color: var(--acc); font-size: var(--text-micro); font-weight: 650; white-space: nowrap; opacity: .62; }
+.workspace-mode-toggle button.on { background: rgba(var(--acc-rgb), .2); box-shadow: none; color: var(--acc); opacity: 1; }
+.workspace-mode-toggle button:disabled { opacity: .32; }
 .revision-chip { color: var(--fg4); font: var(--text-micro) var(--mono); }
 .design-file-menu { position: relative; flex: none; }
 .design-menu-popover {
@@ -699,6 +710,7 @@ textarea:disabled { opacity: .48; }
 .icon-button { width: var(--control-h); height: var(--control-h); }
 .theme-toggle { height: var(--control-h); align-items: center; padding: 2px; border-radius: var(--r); background: var(--surface-raised); }
 .theme-toggle button { width: 26px; height: 24px; }
+.workspace-mode-toggle button { width: auto; height: 24px; }
 .command-affordance { border-radius: var(--r); background: var(--surface-raised); }
 .solve-button { padding-inline: 12px 8px; background: var(--solve-grad); color: var(--solve-fg); box-shadow: var(--solve-sh); font-size: var(--text-base); }
 .revision-chip { font-size: var(--text-micro); }

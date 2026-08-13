@@ -1,4 +1,5 @@
 import type { DesignDocument, DesignFamily } from '../stores/design';
+import type { WorkspaceMode } from '../stores/workspaceMode';
 
 export type ParameterSection =
   | 'Profile Dimensions'
@@ -18,6 +19,10 @@ export interface ParameterSectionDefinition {
   title: ParameterSection;
   tab: ParameterTab;
   description: string;
+  /** Section policy is deliberately data-aware rather than a mode list. CAD
+   * is the first consumer; later sections can use the same gate when their
+   * presence depends on actual design content. */
+  visibleWhen?: (ctx: { mode: WorkspaceMode; design: DesignDocument }) => boolean;
 }
 
 export type ParameterKind = 'number' | 'select' | 'text' | 'toggle' | 'table' | 'indicator';
@@ -60,6 +65,7 @@ const surfaceSampling = 'Surface sampling' as const;
 const frequencySweep = 'Frequency Sweep' as const;
 const sourceDefinition = 'Source Definition' as const;
 const solveExportMesh = 'Solve & export mesh' as const;
+const parametricWorkspaceOnly: NonNullable<ParameterSectionDefinition['visibleWhen']> = ({ mode }) => mode === 'parametric';
 
 const number = (
   id: string,
@@ -309,28 +315,41 @@ export const PARAMETER_SECTION_DEFINITIONS: readonly ParameterSectionDefinition[
     title: 'Surface sampling',
     tab: 'geometry',
     description: 'How the horn surface is sampled into a mesh for export and for the BEM solve. The live viewport ignores the angular and length counts — it tessellates adaptively to a chord-error budget and refines on its own once you stop editing — so raising them costs solve time without making the preview smoother.',
+    visibleWhen: parametricWorkspaceOnly,
   },
   {
     title: 'Frequency Sweep',
     tab: 'simulation',
     description: 'Backend BEM sweep start, end, and sample count. These stay aligned with import and export config keys.',
+    visibleWhen: parametricWorkspaceOnly,
   },
   {
     title: 'Source Definition',
     tab: 'simulation',
     description: 'Source surface, orientation, and contour inputs used to build the radiating boundary.',
+    visibleWhen: parametricWorkspaceOnly,
   },
   {
     title: 'Solve & export mesh',
     tab: 'simulation',
     description: 'HornLab mesher sizing and export-coordinate controls used for solves, downloads, and persisted mesh artifacts.',
+    visibleWhen: parametricWorkspaceOnly,
   },
   {
     title: 'Output & Passthrough',
     tab: 'simulation',
     description: 'Output flags, plus imported configuration content preserved verbatim for lossless export. Values here round-trip; they do not change the viewport, the solve, or the exported geometry.',
+    visibleWhen: parametricWorkspaceOnly,
   },
 ];
+
+export function parameterSectionIsVisible(
+  definition: ParameterSectionDefinition,
+  mode: WorkspaceMode,
+  design: DesignDocument,
+): boolean {
+  return definition.visibleWhen?.({ mode, design }) ?? true;
+}
 
 export const PARAMETER_SECTIONS: ParameterSection[] = PARAMETER_SECTION_DEFINITIONS.map(({ title }) => title);
 

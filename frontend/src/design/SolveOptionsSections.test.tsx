@@ -2,7 +2,9 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DirectivityMapControls, FrequencySweepControls, SolveOptionsControls } from './SolveOptionsSections';
+import type { CadReturnIngestRecord } from '../api/cadlink';
+import { defaultPolarUi, resetSolveOptionsStore } from '../stores/solveOptions';
+import { DirectivityMapControls, effectiveGridView, FrequencySweepControls, SolveOptionsControls } from './SolveOptionsSections';
 
 /**
  * The solve and directivity controls are not registry-driven, so the registry's
@@ -16,6 +18,7 @@ describe('solve and directivity control help', () => {
   beforeEach(() => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     vi.useFakeTimers();
+    resetSolveOptionsStore();
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     host = document.createElement('div');
     document.body.append(host);
@@ -56,6 +59,36 @@ describe('solve and directivity control help', () => {
       expect(host.querySelector(`#${id}`)).not.toBeNull();
     }
     expect(host.textContent).not.toContain("design's sweep start");
+  });
+
+  it('replaces forced imported backend and domain controls with ingest facts', () => {
+    const ingestRecord = { symmetry: { cut_planes: ['x0', 'y0'] } } as CadReturnIngestRecord;
+    render(<SolveOptionsControls mode="cad" ingestRecord={ingestRecord}/>);
+    expect(host.querySelector('#solve-engine')).toBeNull();
+    expect(host.querySelector('#solve-symmetry')).toBeNull();
+    expect(host.textContent).toContain('Metal · full 3-D · free space');
+    expect(host.textContent).toContain('x0, y0');
+    expect(host.querySelector('#mesh-validation-mode')).not.toBeNull();
+    expect(host.querySelector('#cad-solve-frequency-mode')).not.toBeNull();
+    expect(host.querySelector('#solve-verbose')).not.toBeNull();
+  });
+
+  it('reports widened and unchanged effective display grids through the submission derivation', () => {
+    const widened = effectiveGridView(
+      { ...structuredClone(defaultPolarUi), angleEnd: 90, enabledAxes: ['horizontal'] },
+      { axes: { vertical: { minimum_deg: -180, maximum_deg: 180, symmetry_accepted: false } } },
+    );
+    expect(widened).toMatchObject({ widened: true });
+    expect(widened.summary).toContain('−180° … 180°');
+    expect(widened.summary).toContain('H + V');
+    expect(widened.detail).toContain('Widened from your settings');
+
+    const unchanged = effectiveGridView(
+      structuredClone(defaultPolarUi),
+      { axes: { horizontal: { minimum_deg: 0, maximum_deg: 180, symmetry_accepted: true } } },
+    );
+    expect(unchanged).toMatchObject({ widened: false });
+    expect(unchanged.detail).toContain('no widening is required');
   });
 
   it('describes the CAD sweep in imported-return terms', () => {

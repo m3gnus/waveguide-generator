@@ -2,8 +2,11 @@ import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { CadReturnIngestRecord } from '../api/cadlink';
+import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
+import { workspaceModeStore } from '../stores/workspaceMode';
 import { ParamPanel, domainName, parameterRevealRequest, requestParameterReveal, resolveOuterBodyMode, symmetrySummary } from './ParamPanel';
 
 /**
@@ -13,6 +16,13 @@ import { ParamPanel, domainName, parameterRevealRequest, requestParameterReveal,
  * failed jsdom fetch from rescheduling after the test has torn the root down.
  */
 let queryClient: QueryClient;
+
+const cadRecord = {
+  ingest_id: 'wgi_mode_test', manifest_sha256: 'sha256:manifest', artifact_sha256: 'sha256:artifact', report_sha256: 'sha256:report',
+  findings: [], evidence: { fem_air_volumes: [] },
+  symmetry: { cut_planes: ['x0'], planes: {} },
+  polar_grid_derivation: { axes: { vertical: { minimum_deg: -180, maximum_deg: 180, symmetry_accepted: false } } },
+} as unknown as CadReturnIngestRecord;
 
 function withQueryClient(children: ReactNode) {
   return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
@@ -43,7 +53,9 @@ describe('ParamPanel inventory UX', () => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     localStorage.clear();
     resetDesignStore();
+    resetCadReturnStore();
     resetSolveOptionsStore();
+    workspaceModeStore.setMode('parametric');
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     host = document.createElement('div');
     document.body.append(host);
@@ -54,6 +66,7 @@ describe('ParamPanel inventory UX', () => {
     act(() => root.unmount());
     host.remove();
     queryClient.clear();
+    workspaceModeStore.setMode('parametric');
   });
 
   it('filters across labels and ATH/v1 keys, including a mode-hidden field', () => {
@@ -84,6 +97,78 @@ describe('ParamPanel inventory UX', () => {
     expect(localStorage.getItem('wg-param-active-tab')).toBeNull();
     expect(host.querySelector('[data-param-tab="geometry"]')).not.toBeNull();
     expect(host.textContent).not.toContain('complete design inventory');
+  });
+
+  it('preserves the complete parametric section set', () => {
+    act(() => useDesignStore.getState().setFamily('OSSE'));
+    const titles = () => [...host.querySelectorAll<HTMLElement>('[data-section]')].map((section) => section.dataset.section);
+    expect(titles()).toEqual(['Model Type', 'Profile Dimensions', 'Throat Extension', 'Morph Target', 'Wall & Enclosure', 'Guiding Curve', 'Surface sampling']);
+    act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
+    expect(titles()).toEqual(['Frequency Sweep', 'Directivity Map', 'Source Definition', 'Solve options', 'Solve & export mesh', 'Output & Passthrough']);
+    expect(host.querySelector('#solve-engine')).not.toBeNull();
+    expect(host.querySelector('#solve-symmetry')).not.toBeNull();
+  });
+
+  it('renders only the CAD workspace section set and trims forced solve options', () => {
+    act(() => {
+      useDesignStore.getState().setFamily('OSSE');
+      useCadReturnStore.setState({
+        ingestRecord: cadRecord,
+        needsIngest: false,
+        driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }],
+      });
+      workspaceModeStore.setMode('cad');
+    });
+    const titles = () => [...host.querySelectorAll<HTMLElement>('[data-section]')].map((section) => section.dataset.section);
+    expect(titles()).toEqual(['Linked design', 'Model Type', 'Profile Dimensions', 'Throat Extension', 'Morph Target', 'Wall & Enclosure', 'Guiding Curve']);
+    expect(host.textContent).not.toContain('Surface sampling');
+
+    act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
+    expect(titles()).toEqual(['Frequency Sweep', 'Directivity Map', 'Solve options']);
+    for (const hidden of ['Source Definition', 'Solve & export mesh', 'Output & Passthrough']) expect(host.textContent).not.toContain(hidden);
+    expect(host.querySelector('#solve-engine')).toBeNull();
+    expect(host.querySelector('#solve-symmetry')).toBeNull();
+    expect(host.textContent).toContain('Metal · full 3-D · free space');
+    expect(host.textContent).toContain('Ingested cut planesx0');
+    expect(host.textContent).toContain('Effective grid −180° … 180°');
+  });
+
+  it('shows the CAD simulation empty state without hiding formula editing on Geometry', () => {
+    act(() => workspaceModeStore.setMode('cad'));
+    expect(host.querySelector('[data-section="Linked design"]')).not.toBeNull();
+    expect(host.querySelector('[data-section="Profile Dimensions"]')).not.toBeNull();
+    act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
+    expect(host.textContent).toContain('No CAD geometry yet');
+    expect(host.textContent).toContain('Open CAD Link');
+    expect(host.querySelector('[data-section]')).toBeNull();
+  });
+
+  it('writes the CAD sweep without changing design.simulation and surfaces an invalid range', () => {
+    act(() => {
+      useCadReturnStore.setState({
+        ingestRecord: cadRecord,
+        needsIngest: false,
+        driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }],
+      });
+      workspaceModeStore.setMode('cad');
+      root.render(withQueryClient(<ParamPanel tab="simulation" />));
+    });
+    const designStart = useDesignStore.getState().design.simulation.f1;
+    const sweepSection = host.querySelector<HTMLElement>('[data-section="Frequency Sweep"]')!;
+    const row = [...sweepSection.querySelectorAll<HTMLElement>('.field-row')]
+      .find((item) => item.querySelector('.field-name')?.textContent === 'Sweep start')!;
+    const input = row.querySelector<HTMLInputElement>('input')!;
+    act(() => {
+      input.focus();
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, '750');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    act(() => input.blur());
+    expect(useCadReturnStore.getState().frequencyStartHz).toBe(750);
+    expect(useDesignStore.getState().design.simulation.f1).toBe(designStart);
+
+    act(() => useCadReturnStore.getState().setSweep({ frequencyEndHz: 500 }));
+    expect(sweepSection.textContent).toContain('Enter a valid explicit frequency sweep.');
   });
 
   it('omits field-count labels while retaining informative summaries', () => {

@@ -8,6 +8,7 @@ import {
   type CadReturnIngestRecord,
   type FusionCadStatus,
 } from '../api/cadlink';
+import { sendDesignToCad, type WgLinkExportResponse } from '../api/designIo';
 import { getOnshapeConnection, getOnshapeStatus, type OnshapeConnection, type OnshapeStatus } from '../api/onshape';
 import { preferencesStore, usePreferences } from '../prefs/preferences';
 import { useCadReturnStore } from '../stores/cadReturn';
@@ -17,6 +18,7 @@ import { workspaceModeStore } from '../stores/workspaceMode';
 import { createImportedMeshScene } from '../viewport/importedMesh';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { parseMSH } from '../viewport/mshParser';
+import { filenameStem } from '../viewport/presentation';
 import { workspaceNavigation } from './workspaceNavigation';
 
 interface RefreshOptions {
@@ -28,6 +30,7 @@ interface CadLinkCoordinatorSnapshot {
   bundles: CadReturnBundle[];
   loading: boolean;
   ingesting: boolean;
+  sendingToFusion: boolean;
   error: string | null;
   status: string | null;
   viewportNotice: string | null;
@@ -38,6 +41,7 @@ interface CadLinkCoordinatorSnapshot {
   refreshOnshapeStatus(committed?: DesignIdentity): Promise<void>;
   expectFusionReturn(requestId: string, requestedAt?: number): void;
   ingest(): Promise<void>;
+  sendToFusion(target?: { documentId: string; returnStateHash: string | null }): Promise<WgLinkExportResponse>;
   clearFeedback(): void;
   reportError(message: string): void;
   reportStatus(message: string): void;
@@ -50,6 +54,7 @@ let bridgeSnapshot: CadLinkCoordinatorSnapshot = {
   bundles: [],
   loading: true,
   ingesting: false,
+  sendingToFusion: false,
   error: null,
   status: null,
   viewportNotice: null,
@@ -60,6 +65,7 @@ let bridgeSnapshot: CadLinkCoordinatorSnapshot = {
   refreshOnshapeStatus: unavailableRefreshOnshape,
   expectFusionReturn: () => undefined,
   ingest: unavailable,
+  sendToFusion: unavailable,
   clearFeedback: () => undefined,
   reportError: () => undefined,
   reportStatus: () => undefined,
@@ -105,7 +111,7 @@ export async function showIngestedMeshInViewport(
   const ingestId = record.ingest_id;
   const available = importedMeshStore.getSnapshot().cad;
   if (available?.ingestId === ingestId) {
-    importedMeshStore.showCad(generation);
+    if (workspaceModeStore.getSnapshot().mode === 'cad') importedMeshStore.showCad(generation);
     return;
   }
   try {
@@ -123,7 +129,7 @@ export async function showIngestedMeshInViewport(
           solvedTriangleCount: record.mesh?.stats.triangle_count,
           artifactToken: record.viewport_mesh?.content_sha256 ?? `${ingestId}:viewport`,
         },
-      ), generation);
+      ), generation, workspaceModeStore.getSnapshot().mode === 'cad');
       return;
     }
     if (response.status === 409) {
@@ -146,7 +152,7 @@ export async function showIngestedMeshInViewport(
         solvedTriangleCount: record.mesh?.stats.triangle_count,
         artifactToken: record.mesh_content_sha256 ?? `${ingestId}:solver`,
       },
-    ), generation);
+    ), generation, workspaceModeStore.getSnapshot().mode === 'cad');
   } catch {
     // The viewport keeps whatever it was showing if both artifacts fail.
   }
@@ -157,10 +163,13 @@ export function CadLinkCoordinator() {
   const design = useDesignStore((state) => state.design);
   const designRevision = useDesignStore((state) => state.designRevision);
   const identity = useDocumentStore((state) => state.identity);
+  const filename = useDocumentStore((state) => state.filename);
+  const setCadLink = useDocumentStore((state) => state.setCadLink);
   const selectedBundlePath = useCadReturnStore((state) => state.selectedBundle?.bundlePath ?? null);
   const [bundles, setBundles] = useState<CadReturnBundle[]>([]);
   const [loading, setLoading] = useState(true);
   const [ingesting, setIngesting] = useState(false);
+  const [sendingToFusion, setSendingToFusion] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [viewportNotice, setViewportNotice] = useState<string | null>(null);
@@ -294,7 +303,9 @@ export function CadLinkCoordinator() {
       const opened = arrived ?? initial;
       if (opened) {
         useCadReturnStore.getState().selectBundle(opened);
-        importedMeshStore.showParametric();
+        // Selecting evidence invalidates a load for the previous return, but
+        // mode—not return discovery—decides what the viewport displays.
+        importedMeshStore.beginIntent();
       }
       if (arrived) {
         if (arrived.requestId === pendingReturnRequestId.current) {
@@ -315,6 +326,35 @@ export function CadLinkCoordinator() {
       if (!background) setLoading(false);
     }
   }, []);
+
+  /** One outbound Fusion action for every surface. The rail card and CAD Link
+   * panel both call this bridge so identity adoption, feedback, and return-list
+   * refresh cannot drift into subtly different send paths. */
+  const sendToFusion = useCallback(async (target?: { documentId: string; returnStateHash: string | null }) => {
+    setSendingToFusion(true); setError(null); setStatus(null);
+    try {
+      const result = await sendDesignToCad(
+        design,
+        designRevision,
+        filenameStem(filename),
+        identity,
+        fetch,
+        undefined,
+        target ?? null,
+      );
+      if (result.identity) setCadLink(result.identity, 'current');
+      setStatus(target
+        ? `Update sent to Fusion 360 · sequence ${result.sequence}`
+        : `Opening in Fusion 360 · sequence ${result.sequence}`);
+      await refresh();
+      return result;
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+      throw reason;
+    } finally {
+      setSendingToFusion(false);
+    }
+  }, [design, designRevision, filename, identity, refresh, setCadLink]);
 
   // Returns arrive in the workspace's wgreturn folder, which only the Fusion
   // add-in writes. Onshape bundles use WG's data directory and never enter this
@@ -386,6 +426,7 @@ export function CadLinkCoordinator() {
       bundles,
       loading,
       ingesting,
+      sendingToFusion,
       error,
       status,
       viewportNotice,
@@ -396,6 +437,7 @@ export function CadLinkCoordinator() {
       refreshOnshapeStatus,
       expectFusionReturn,
       ingest,
+      sendToFusion,
       clearFeedback,
       reportError,
       reportStatus,
@@ -406,6 +448,7 @@ export function CadLinkCoordinator() {
       bundles: [],
       loading: true,
       ingesting: false,
+      sendingToFusion: false,
       error: null,
       status: null,
       viewportNotice: null,
@@ -416,6 +459,7 @@ export function CadLinkCoordinator() {
       refreshOnshapeStatus: unavailableRefreshOnshape,
       expectFusionReturn: () => undefined,
       ingest: unavailable,
+      sendToFusion: unavailable,
       clearFeedback: () => undefined,
       reportError: () => undefined,
       reportStatus: () => undefined,
@@ -429,6 +473,7 @@ export function CadLinkCoordinator() {
     fusionStatus,
     ingest,
     ingesting,
+    sendingToFusion,
     loading,
     onshapeConnection,
     onshapeStatus,
@@ -437,6 +482,7 @@ export function CadLinkCoordinator() {
     reportError,
     reportStatus,
     reportViewportNotice,
+    sendToFusion,
     status,
     viewportNotice,
   ]);

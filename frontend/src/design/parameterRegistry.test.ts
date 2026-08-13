@@ -7,6 +7,7 @@ import {
   EXPRESSION_PARAMETER_IDS,
   fieldIsVisible,
   fieldMatchesQuery,
+  parameterSectionIsVisible,
   traceEntryIsRegistered,
 } from './parameterRegistry';
 
@@ -73,6 +74,17 @@ describe('complete parameter registry', () => {
     expect(sectionFor('mesh.wall_thickness')).toBe('Wall & Enclosure');
     expect(sectionFor('mesh.quadrants')).toBe('Solve & export mesh');
     expect(sectionFor('source.shape')).toBe('Source Definition');
+  });
+
+  it('uses a mode-and-design predicate for section visibility', () => {
+    const design = designForFamily('OSSE');
+    const visible = (title: string, mode: 'parametric' | 'cad') => parameterSectionIsVisible(
+      PARAMETER_SECTION_DEFINITIONS.find((section) => section.title === title)!, mode, design,
+    );
+    expect(visible('Profile Dimensions', 'cad')).toBe(true);
+    expect(visible('Surface sampling', 'parametric')).toBe(true);
+    expect(visible('Surface sampling', 'cad')).toBe(false);
+    expect(visible('Source Definition', 'cad')).toBe(false);
   });
 
   it('applies profile and guiding controls to the correct family', () => {

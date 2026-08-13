@@ -16,6 +16,7 @@ import { useDesignStore, type DesignDocument } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { useSolveOptionsStore, type SolveOptions } from '../stores/solveOptions';
+import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 
 interface SolveControl {
@@ -103,6 +104,11 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     importedMeshStore.getSnapshot,
     importedMeshStore.getSnapshot,
   );
+  const workspaceMode = useSyncExternalStore(
+    workspaceModeStore.subscribe,
+    workspaceModeStore.getSnapshot,
+    workspaceModeStore.getSnapshot,
+  ).mode;
   const preferences = usePreferences();
   const automation = useRef(new JobAutomation()).current;
   const { engines: capabilities, error: capabilityError } = useCapabilities();
@@ -123,11 +129,15 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     : viewportGeometry.showing === 'file'
       ? viewportGeometry.file
       : null;
-  const cadGeometryActive = visibleImported?.source === 'cad';
-  const fileGeometryActive = visibleImported?.source === 'file';
-  const cadGeometryMismatch = cadGeometryActive && (
-    !visibleImported.ingestId
-    || visibleImported.ingestId !== cadReturn.ingestRecord?.ingest_id
+  // Mode owns solve intent. The viewport CAD slot is evidence for the mismatch
+  // guard only; an empty slot must still route to the imported blocker so CAD
+  // mode can truthfully say that an ingest is required.
+  const cadGeometryActive = workspaceMode === 'cad';
+  const fileGeometryActive = !cadGeometryActive && visibleImported?.source === 'file';
+  const cadViewportGeometry = viewportGeometry.cad;
+  const cadGeometryMismatch = cadGeometryActive && cadReturn.ingestRecord !== null && cadViewportGeometry !== null && (
+    !cadViewportGeometry.ingestId
+    || cadViewportGeometry.ingestId !== cadReturn.ingestRecord?.ingest_id
   );
   const cadSolveBlocker = cadGeometryMismatch
     ? 'The displayed Fusion CAD mesh does not match the selected ingestion. Prepare or reselect it before solving.'

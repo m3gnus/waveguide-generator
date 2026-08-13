@@ -2,9 +2,16 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DecodedFrame } from '../api/frame';
+import type { CadReturnIngestRecord } from '../api/cadlink';
 import type { PreviewSnapshot } from '../api/previewSocket';
+import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetDesignStore } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
+import { workspaceModeStore } from '../stores/workspaceMode';
+import { createImportedMeshScene } from './importedMesh';
+import { importedMeshStore } from './importedMeshStore';
+import { parseMSH } from './mshParser';
+import meshFixture from './test-fixtures/tagged_sources-small.msh?raw';
 
 const frame: DecodedFrame = {
   header: {
@@ -65,6 +72,9 @@ describe('Viewport preview errors', () => {
   beforeEach(() => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     resetDesignStore();
+    resetCadReturnStore();
+    importedMeshStore.clear();
+    workspaceModeStore.setMode('parametric');
     useDocumentStore.setState({ filename: 'loaded-design.cfg' });
     host = document.createElement('div');
     document.body.append(host);
@@ -75,6 +85,8 @@ describe('Viewport preview errors', () => {
   afterEach(() => {
     act(() => root.unmount());
     useDocumentStore.setState({ filename: 'tritonia_mk2.cfg' });
+    importedMeshStore.clear();
+    workspaceModeStore.setMode('parametric');
     host.remove();
   });
 
@@ -115,6 +127,27 @@ describe('Viewport preview errors', () => {
     expect(timing?.textContent).toBe('geometry 1388.0 ms · on screen —');
     expect(timing?.textContent).not.toContain('+ client');
   });
+
+  it('switches between the parametric scene and matching CAD slot, and guards MSH import', () => {
+    const ingestId = 'wgi_viewport_mode';
+    act(() => {
+      useCadReturnStore.setState({
+        ingestRecord: { ingest_id: ingestId } as CadReturnIngestRecord,
+        selectedBundle: { documentName: 'Speaker CAD', name: 'speaker.wgreturn' } as never,
+      });
+      importedMeshStore.setCad(createImportedMeshScene('Speaker CAD', parseMSH(meshFixture), 'cad', ingestId));
+    });
+    expect(host.querySelector('.viewport-title b')?.textContent).toBe('loaded-design');
+
+    act(() => workspaceModeStore.setMode('cad'));
+    expect(host.querySelector('.viewport-title b')?.textContent).toBe('Speaker CAD');
+    expect(host.querySelector<HTMLButtonElement>('[aria-label="Import Gmsh 2.2 mesh"]')?.disabled).toBe(true);
+    expect(host.querySelector('.imported-mesh-badge')).toBeNull();
+
+    act(() => workspaceModeStore.setMode('parametric'));
+    expect(host.querySelector('.viewport-title b')?.textContent).toBe('loaded-design');
+    expect(host.querySelector<HTMLButtonElement>('[aria-label="Import Gmsh 2.2 mesh"]')?.disabled).toBe(false);
+  });
 });
 
 describe('Viewport geometry warnings', () => {
@@ -134,6 +167,8 @@ describe('Viewport geometry warnings', () => {
   beforeEach(() => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     resetDesignStore();
+    resetCadReturnStore();
+    workspaceModeStore.setMode('parametric');
   });
 
   afterEach(() => {
@@ -141,6 +176,8 @@ describe('Viewport geometry warnings', () => {
     host.remove();
     previewSnapshot.error = savedError;
     frame.header.previewMetadata = undefined;
+    importedMeshStore.clear();
+    workspaceModeStore.setMode('parametric');
   });
 
   // The mesher reports a guiding curve its coverage solver could not reach.
