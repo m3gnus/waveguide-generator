@@ -95,9 +95,25 @@ def _installer_hint() -> str:
     return "installers/linux/install.sh"
 
 
+def missing_frontend_reason() -> str:
+    """Why the interface is missing and what fixes it.
+
+    Shared so the status window and terminal mode cannot describe the same
+    condition differently -- terminal mode reaches this through __main__, which
+    guards before handing over to a server that would otherwise raise a
+    starlette error from several frames deep.
+    """
+
+    return f"frontend/dist missing — run {_installer_hint()} or scripts/fetch_spa.py"
+
+
 def _review_build_hint() -> str:
+    # macOS has a single launcher that rebuilds a stale frontend on the way up,
+    # so relaunching is the shortest correct advice. This warning is only
+    # reachable when that rebuild was skipped or could not run, in which case
+    # the manual build is the fallback either way.
     if sys.platform == "darwin":
-        return "launchers/macos/launch-wg-dev.command"
+        return "cd frontend && npm run build, or quit and reopen Waveguide Generator"
     return "cd frontend && npm run build"
 
 
@@ -323,7 +339,7 @@ class StatusController:
             dist_index = self.repo_root / "frontend" / "dist" / "index.html"
             if not dist_index.is_file():
                 reason = (
-                    f"frontend/dist missing — run {_installer_hint()} or scripts/fetch_spa.py"
+                    missing_frontend_reason()
                 )
                 return self._set_error("Backend not started because the interface is missing", reason)
             frontend_is_fresh, freshness_reason = frontend_freshness(self.repo_root)
@@ -488,7 +504,7 @@ class StatusController:
         if not dist_index.is_file():
             frontend = LampStatus(
                 ServiceState.ERROR,
-                f"frontend/dist missing — run {_installer_hint()} or scripts/fetch_spa.py",
+                missing_frontend_reason(),
             )
         else:
             try:

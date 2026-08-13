@@ -46,7 +46,16 @@ INTERPRETER_OVERRIDE_ENV_VARS = ("WG2_PYTHON",)
 
 #: Every other WG2_* knob the launchers read. Listed so that adding a new one
 #: forces a decision about whether it belongs above.
-OTHER_LAUNCHER_ENV_VARS = ("WG2_FINDER_APP", "WG2_NO_PAUSE")
+#:
+#: WG2_SKIP_FRONTEND_BUILD serves the existing frontend/dist without running the
+#: freshness check. It selects no interpreter, so it stays out of the list above:
+#: it only decides whether the macOS launcher may rebuild the interface before
+#: starting the server it was going to start anyway.
+OTHER_LAUNCHER_ENV_VARS = (
+    "WG2_FINDER_APP",
+    "WG2_NO_PAUSE",
+    "WG2_SKIP_FRONTEND_BUILD",
+)
 
 
 def read(path: Path) -> str:
