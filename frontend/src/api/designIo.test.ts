@@ -103,6 +103,25 @@ describe('design save requests', () => {
     await saveDesignDocument(hydrateDesignDocument({ formula: 'OSSE' }), 'horn.cfg', identity, fetcher);
     expect(payload).toMatchObject({ filename: 'horn.cfg', identity });
   });
+
+  it('keeps an imported ATH Mesh.Quadrants value in the save payload', async () => {
+    let payload: Record<string, unknown> = {};
+    const fetcher = (async (_url: string, init?: RequestInit) => {
+      payload = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({
+        text: 'Mesh.Quadrants = 14\n', suggestedFilename: 'half-y.cfg',
+        identity: { designId: 'wgd_01K00000000000000000000000', lineageId: 'wgl_01K00000000000000000000000', baseEditVersion: 1 },
+        forked: false, from: null,
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as typeof fetch;
+
+    const imported = hydrateDesignDocument({ formula: 'OSSE', mesh: { quadrants: 14 } });
+    await saveDesignDocument(imported, 'half-y.cfg', null, fetcher);
+    expect(payload).toMatchObject({
+      filename: 'half-y.cfg',
+      design: { mesh: { quadrants: 14 } },
+    });
+  });
 });
 
 describe('Send to CAD requests', () => {

@@ -48,6 +48,9 @@
 .schema-gap small { grid-column: 1 / -1; color: var(--fg4); font-size: var(--text-micro); line-height: 1.35; }
 .passthrough-row { display: flex; justify-content: space-between; min-height: 23px; align-items: center; gap: 8px; color: var(--fg1); font-size: var(--text-base); }
 .passthrough-row b { color: var(--green); font: var(--text-micro) var(--mono); font-weight: 500; }
+.stored-ath-readout { align-items: flex-start; }
+.stored-ath-readout > span { display: flex; flex-direction: column; gap: 2px; }
+.stored-ath-readout small { max-width: 290px; color: var(--fg4); font-size: var(--text-micro); line-height: 1.35; }
 .parameter-empty { margin: 12px 8px; padding: 12px; border: 1px dashed var(--hair); border-radius: var(--r2); color: var(--fg3); font-size: var(--text-micro); }
 .toggle-row { display: flex; align-items: center; justify-content: space-between; min-height: 24px; color: var(--fg1); font-size: var(--text-base); }
 .toggle-row input, .axis-toggles input, .point-paste input { accent-color: var(--acc); }
@@ -173,6 +176,7 @@
   .section-body > .family-row,
   .section-body > .family-switch-choice,
   .section-body > .outer-body-mode,
+  .section-body > .solve-domain-control,
   .section-body > .resolved-mode,
   .section-body > .section-note,
   .section-body > .filter-note,
@@ -196,6 +200,4 @@
   .section-body > p { grid-column: 1 / -1; }
   /* Formula fields take the full rail so long ATH expressions get the width. */
   .section-body > .parameter-entry:has(.expression-row) { grid-column: 1 / -1; }
-  /* Same for the quadrant control: it is a stack of four rows, not a field. */
-  .section-body > .parameter-entry:has(.quadrant-wrap) { grid-column: 1 / -1; }
 }

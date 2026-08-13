@@ -143,6 +143,36 @@ describe('ParamPanel inventory UX', () => {
     expect(host.querySelector('#solve-symmetry')).not.toBeNull();
   });
 
+  it('keeps Solve domain authoritative and demotes stored ATH quadrants to a read-only passthrough', () => {
+    act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
+    const sections = [...host.querySelectorAll<HTMLElement>('[data-section]')];
+    const solveMesh = sections.find((section) => section.dataset.section === 'Solve & export mesh')!;
+    const passthrough = sections.find((section) => section.dataset.section === 'Output & Passthrough')!;
+    expect(sections.map((section) => section.dataset.section)).toEqual([
+      'Frequency Sweep', 'Directivity Map', 'Source Definition', 'Solve options', 'Solve & export mesh', 'Output & Passthrough',
+    ]);
+    const stored = passthrough.querySelector<HTMLElement>('[data-parameter-id="mesh.quadrants"]')!;
+
+    expect(solveMesh.querySelector('#solve-symmetry')).not.toBeNull();
+    expect(solveMesh.querySelector('[data-parameter-id="mesh.quadrants"]')).toBeNull();
+    expect(host.querySelector('.quadrants')).toBeNull();
+    expect([...host.querySelectorAll('button')].some((button) => /^Q[1-4]$/.test(button.textContent ?? ''))).toBe(false);
+    expect(stored.textContent).toContain('Stored ATH Mesh.Quadrants');
+    expect(stored.textContent).toContain('WG overwrites it on solve and ignores it on export.');
+    expect(stored.querySelector('input, select, button, textarea')).toBeNull();
+
+    const before = structuredClone(useDesignStore.getState().design.quadrants);
+    const storedValue = useDesignStore.getState().design.mesh.quadrants;
+    const select = solveMesh.querySelector<HTMLSelectElement>('#solve-symmetry')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set?.call(select, 'quarter');
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(useSolveOptionsStore.getState().options().symmetry).toBe('quarter');
+    expect(useDesignStore.getState().design.quadrants).toEqual(before);
+    expect(useDesignStore.getState().design.mesh.quadrants).toBe(storedValue);
+  });
+
   it('renders only the CAD workspace section set and trims forced solve options', () => {
     act(() => {
       useDesignStore.getState().setFamily('OSSE');
@@ -328,6 +358,27 @@ describe('ParamPanel inventory UX', () => {
     expect(entry).not.toBeNull();
     expect(document.activeElement).toBe(entry.querySelector('input'));
     expect(host.querySelector<HTMLInputElement>('#parameter-filter-simulation')?.value).toBe('Sweep start');
+  });
+
+  it('routes the moved ATH quadrants palette entry to its read-only passthrough row', async () => {
+    const activate = vi.spyOn(workspaceNavigation, 'activate').mockReturnValue(true);
+    act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
+    const design = useDesignStore.getState().design;
+    const storedQuadrants = buildParameterPaletteEntries(design.formula, {
+      mode: 'parametric', design,
+    }).find((entry) => entry.id === 'parameter-mesh.quadrants')!;
+
+    expect(storedQuadrants.label).toBe('Stored ATH Mesh.Quadrants');
+    await act(async () => {
+      storedQuadrants.run();
+      await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    });
+
+    expect(activate).toHaveBeenCalledWith('simulation');
+    const target = host.querySelector<HTMLElement>('[data-parameter-id="mesh.quadrants"]')!;
+    expect(target.closest('[data-section]')?.getAttribute('data-section')).toBe('Output & Passthrough');
+    expect(document.activeElement).toBe(target);
+    expect(host.querySelector<HTMLInputElement>('#parameter-filter-simulation')?.value).toBe('Stored ATH Mesh.Quadrants');
   });
 
   it('switches to CAD mode and claims a non-registry palette reveal', async () => {

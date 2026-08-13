@@ -228,6 +228,11 @@ function TextField({ field, value, disabled, onCommit }: {
 }
 
 function passthroughStatus(field: ParameterDefinition, design: DesignDocument): string {
+  // Mesh.Quadrants is modeled, unlike the block/key indicators below, but it
+  // is deliberately read-only here. Editing this stored ATH value would bring
+  // back a second apparent domain control even though solve and export discard
+  // it; the value remains visible so imported config fidelity is inspectable.
+  if (field.id === 'mesh.quadrants') return String(getAtPath(design, field.path) ?? 'Not present');
   const names = Object.keys(design.extra_blocks);
   if (field.id === 'passthrough.abec') {
     const count = names.filter((name) => name.toLocaleUpperCase().startsWith('ABEC')).length;
@@ -298,7 +303,11 @@ function FieldControl({ field, design }: { field: ParameterDefinition; design: D
   };
 
   if (field.kind === 'indicator') {
-    return <HelpTipRow className="passthrough-row" text={field.description}><span>{field.label}</span><b>{passthroughStatus(field, design)}</b></HelpTipRow>;
+    const storedAthQuadrants = field.id === 'mesh.quadrants';
+    return <HelpTipRow className={`passthrough-row${storedAthQuadrants ? ' stored-ath-readout' : ''}`} text={field.description}>
+      <span>{field.label}{storedAthQuadrants && <small>Preserved for ATH .cfg round-trip; WG overwrites it on solve and ignores it on export.</small>}</span>
+      <b>{passthroughStatus(field, design)}</b>
+    </HelpTipRow>;
   }
   if (field.kind === 'table') {
     if (field.id === 'freeform.crossSections') return <EditableStationTable field={field} stations={Array.isArray(value) ? value : []} />;
@@ -434,11 +443,10 @@ function AutoSymmetryReadout({ design }: { design: DesignDocument }) {
   </div>;
 }
 
-function QuadrantControl({ design, label }: { design: DesignDocument; label: string }) {
-  const setQuadrants = useDesignStore((state) => state.setQuadrants);
+function SolveDomainControl({ design }: { design: DesignDocument }) {
   const symmetry = useSolveOptionsStore((state) => state.symmetry);
   const setSymmetry = useSolveOptionsStore((state) => state.setSymmetry);
-  return <div className="quadrant-wrap">
+  return <div className="solve-domain-control">
     <div className="select-row">
       <label htmlFor="solve-symmetry">Solve domain</label>
       <select id="solve-symmetry" value={symmetry} onChange={(event) => setSymmetry(event.target.value as SymmetryMode)}>
@@ -446,23 +454,6 @@ function QuadrantControl({ design, label }: { design: DesignDocument; label: str
       </select>
     </div>
     {symmetry === 'auto' && <AutoSymmetryReadout design={design} />}
-    <span className="quadrant-title">{label}</span>
-    {/* The tile grid and its readout are the only pair that belongs side by
-        side; everything else in this control is a full-width row. */}
-    <div className="quadrant-picker">
-      <div className="quadrants">
-        {[2, 1, 3, 4].map((quadrant) => <button key={quadrant} className={design.quadrants.includes(quadrant) ? 'on' : ''} onClick={() => {
-          const next = design.quadrants.includes(quadrant) ? design.quadrants.filter((item) => item !== quadrant) : [...design.quadrants, quadrant];
-          if (next.length) setQuadrants(next);
-        }}>Q{quadrant}</button>)}
-      </div>
-      <div className="quadrant-meta">
-        <b>{domainName(design.mesh.quadrants)}</b>
-        <span>{design.quadrants.length} of 4 quadrants</span>
-        <em>schema mask {design.mesh.quadrants}</em>
-      </div>
-    </div>
-    {symmetry === 'auto' && <p className="section-note">This is the design&rsquo;s own ATH <code>Mesh.Quadrants</code> field and is saved as written. Auto decides the solved domain instead.</p>}
   </div>;
 }
 
@@ -835,7 +826,8 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
         // jsdom has no scrollIntoView, and losing focus matters more than losing
         // the scroll, so never let the nicety take the necessity down with it.
         try { entry?.scrollIntoView({ block: 'center' }); } catch { /* not scrollable here */ }
-        entry?.querySelector<HTMLElement>('input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])')?.focus();
+        const focusTarget = entry?.querySelector<HTMLElement>('input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])') ?? entry;
+        focusTarget?.focus();
       }));
     };
     // Claim on mount and on every later request; whichever comes second is a
@@ -850,8 +842,8 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
     };
   }, [tab]);
 
-  const renderField = (field: ParameterDefinition) => <div className="parameter-entry" data-parameter-id={field.id} data-parameter-key={field.legacyKey} key={field.id}>
-    {field.id === 'mesh.quadrants' ? <QuadrantControl design={design} label={field.label} /> : <FieldControl field={field} design={design} />}
+  const renderField = (field: ParameterDefinition) => <div className="parameter-entry" data-parameter-id={field.id} data-parameter-key={field.legacyKey} tabIndex={field.kind === 'indicator' ? -1 : undefined} key={field.id}>
+    <FieldControl field={field} design={design} />
   </div>;
 
   const renderRegistrySection = (definition: ParameterSectionDefinition) => {
@@ -865,6 +857,11 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
       forceOpen={searching}
     >
       {definition.title === 'Wall & Enclosure' && <WallEnclosureModeControl design={design} />}
+      {/* Domain is an execution option, not a saved design parameter. Keeping
+          it independent of mesh.quadrants prevents the round-trip-only ATH
+          field from masquerading as a second solve/export control, while its
+          section remains hidden wholesale in CAD mode. */}
+      {definition.title === 'Solve & export mesh' && !searching && <SolveDomainControl design={design} />}
       {fields.map(renderField)}
       {searching && fields.some((field) => !fieldIsVisible(field, design)) && <p className="filter-note">Some matches are normally hidden by the active mode; they are shown here for discoverability.</p>}
     </Section>;
