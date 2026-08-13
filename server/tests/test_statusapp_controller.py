@@ -133,6 +133,27 @@ def test_start_poll_quit_lifecycle_checks_health_and_spa_probes(tmp_path: Path) 
     assert process.poll() is not None
 
 
+def test_stale_local_frontend_is_served_with_an_amber_warning(tmp_path: Path) -> None:
+    controller = _controller(tmp_path)
+    source = controller.repo_root / "frontend" / "src" / "main.tsx"
+    source.parent.mkdir(parents=True)
+    source.write_text("export {};\n", encoding="utf-8")
+
+    controller.start()
+    try:
+        def warning_snapshot():
+            snapshot = controller.poll()
+            return snapshot if snapshot.frontend.state is ServiceState.WARNING else None
+
+        warning = _wait_for(warning_snapshot)
+        assert (
+            "launch-wg-dev.command" in warning.frontend.reason
+            or "npm run build" in warning.frontend.reason
+        )
+    finally:
+        controller.close()
+
+
 def test_status_owner_consumes_only_a_ready_valid_update_request(tmp_path: Path) -> None:
     controller = _controller(tmp_path)
     controller.start()
