@@ -444,6 +444,22 @@ def test_the_windows_installer_never_calls_itself_after_a_pull():
     assert '"10"' in read(BATCH_ENTRY_POINT), "the entry point must handle the relaunch code"
 
 
+def test_the_windows_installer_keeps_its_own_path_while_parsing_arguments():
+    """Top-level argument parsing must not shift the batch file out of ``%0``.
+
+    Plain ``shift`` moves ``%1`` into ``%0``. After parsing ``--root ROOT
+    --no-launch``, the later ``%~f0`` self-relaunch would therefore resolve
+    ``--no-launch`` relative to ROOT instead of naming the staged installer.
+    ``shift /1`` deliberately leaves ``%0`` unchanged.
+    """
+
+    source = batch_code(read(BATCH_INSTALLER))
+    parser = source.split(":parse_args", 1)[1].split(":show_usage", 1)[0]
+    assert re.search(r"^shift /1$", parser, re.IGNORECASE | re.MULTILINE)
+    assert not re.search(r"^shift$", parser, re.IGNORECASE | re.MULTILINE)
+    assert 'call "%~f0" %*' in source
+
+
 def test_the_git_update_explains_both_states_that_stop_it():
     # A branch with no upstream and a dirty tree are both normal. v1 only handled
     # the first and let `git pull --ff-only` discover the second, whose message
