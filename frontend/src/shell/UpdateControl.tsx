@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { getUpdateStatus, type UpdateStatus } from '../api/updates';
+import { getUpdateStatus, installApplicationUpdate, type UpdateStatus } from '../api/updates';
 import { Icon } from './icons';
 import { trapDialogFocus } from './SettingsDialog';
 
@@ -161,6 +161,18 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose }: {
       setFeedback('Clipboard access failed. Select and copy the command below.');
     }
   };
+  const install = async () => {
+    setBusy(true);
+    setFeedback(undefined);
+    try {
+      const result = await installApplicationUpdate();
+      setFeedback(`Installing ${result.tag}. WG will close and restart.`);
+    } catch (reason) {
+      setFeedback(`Could not start the update: ${reason instanceof Error ? reason.message : String(reason)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   let title = `Waveguide Generator ${__WG2_VERSION__}`;
   let summary = checkedLabel(data?.checkedAt);
@@ -169,7 +181,9 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose }: {
     summary = `This tab is ${__WG2_VERSION__}; the running application is ${data?.runningVersion}. Reload before continuing.`;
   } else if (data?.availability === 'available' && data.release) {
     title = `Waveguide Generator ${data.release.version} is available`;
-    summary = `You are running ${data.runningVersion}. Close Waveguide Generator before running the updater.`;
+    summary = data.canInstall
+      ? `You are running ${data.runningVersion}. Install the update now or copy the fallback command.`
+      : `You are running ${data.runningVersion}. Close Waveguide Generator before running the updater.`;
   } else if (data?.availability === 'incomplete') {
     title = 'An update is being published';
     summary = 'The release exists, but its verified interface files are not ready yet. WG will check again shortly.';
@@ -187,9 +201,10 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose }: {
         {data?.checkout.reason && <p className={`update-checkout-note ${data.checkout.updateSupported ? '' : 'blocked'}`}><b>{data.checkout.kind === 'development' ? 'Development checkout' : 'Checkout status'}</b>{data.checkout.reason}</p>}
         {data?.freshness === 'stale' && <p className="update-stale-note">Showing the last successful result. {data.lastError}</p>}
         {data?.action && <section className="update-command" aria-labelledby="update-command-title">
-          <div><h3 id="update-command-title">Update with {data.action.shell}</h3><p>The exact release tag and local installer path are already included.</p></div>
+          <div><h3 id="update-command-title">Install this update</h3><p>WG will close, run the verified installer, and restart. The {data.action.shell} command remains available as a fallback.</p></div>
           <pre tabIndex={0}>{data.action.command}</pre>
-          <button className="primary" onClick={() => void copy()}>Copy update command</button>
+          {data.canInstall && <button className="primary" disabled={busy} onClick={() => void install()}>{busy ? 'Starting…' : 'Install update'}</button>}
+          <button disabled={busy} onClick={() => void copy()}>Copy update command</button>
         </section>}
         {data?.availability === 'available' && !data.action && <p className="update-blocked">This release is available, but WG will not suggest an update command until the checkout issue above is resolved.</p>}
         {data?.release && <a className="update-release-link" href={data.release.url} target="_blank" rel="noreferrer">View release details</a>}

@@ -96,16 +96,18 @@ standard library and validates the resulting ICNS container with `iconutil`.
 
 The version in the top-left corner checks GitHub's latest published full
 release after the interface opens. When a newer, complete release is available
-it turns amber and says **update available**; click it for the exact local
-installer command and release details. The same action is available from the
-command palette as **Application update**.
+it turns amber and says **update available**. Click **Install update** to close
+WG, run the verified platform installer, and restart automatically. The dialog
+also retains the exact local installer command as a manual fallback. The same
+action is available from the command palette as **Application update**.
 
 WG caches successful checks, retries incomplete releases quickly, and keeps the
 last known result when the network is unavailable. It also inspects the local
 checkout without changing it: modified, development, detached, and non-Git
-installs are explained instead of being handed a command that would silently do
-the wrong thing. Close Waveguide Generator before running a copied update
-command so the installer can acquire the application data lock.
+installs are explained instead of being handed an action that would silently do
+the wrong thing. Automatic installation is available when WG was opened through
+its status window. For a copied command, close Waveguide Generator first so the
+installer can acquire the application data lock.
 
 ### Original-app run migration
 

@@ -40,6 +40,7 @@ function status(overrides: Partial<UpdateStatus> = {}): UpdateStatus {
       shell: 'Terminal',
       command: "bash '/Applications/WG checkout/installers/macos/install-wg.command' --tag v2.0.1",
     },
+    canInstall: true,
     lastError: null,
     ...overrides,
   };
@@ -63,6 +64,10 @@ describe('UpdateControl', () => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
     writeText.mockClear();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      JSON.stringify({ accepted: true, tag: 'v2.0.1' }),
+      { status: 202 },
+    )));
     host = document.createElement('div');
     document.body.append(host);
     root = createRoot(host);
@@ -71,6 +76,7 @@ describe('UpdateControl', () => {
   afterEach(() => {
     act(() => root.unmount());
     host.remove();
+    vi.unstubAllGlobals();
   });
 
   it('renders an explicit responsive update alert and copies the exact command', async () => {
@@ -95,6 +101,7 @@ describe('UpdateControl', () => {
   it('blocks the easy action for a modified checkout while retaining release availability', async () => {
     const value = status({
       action: null,
+      canInstall: false,
       checkout: {
         ...status().checkout,
         kind: 'modified',
@@ -107,6 +114,21 @@ describe('UpdateControl', () => {
     await act(async () => host.querySelector<HTMLButtonElement>('.update-indicator')!.click());
     expect(host.textContent).toContain('WG will not suggest an update command');
     expect(host.querySelector('.update-command')).toBeNull();
+  });
+
+  it('hands a ready release to the in-app installer', async () => {
+    act(() => root.render(<Harness value={status()}/>));
+    await act(async () => host.querySelector<HTMLButtonElement>('.update-indicator')!.click());
+    const install = [...host.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent === 'Install update')!;
+
+    await act(async () => install.click());
+
+    expect(fetch).toHaveBeenCalledWith('/api/updates/install', {
+      method: 'POST',
+      headers: { 'X-WG-Update': 'install' },
+    });
+    expect(host.textContent).toContain('WG will close and restart');
   });
 
   it('prioritizes frontend/backend skew over release status', () => {
