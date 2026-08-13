@@ -110,7 +110,6 @@ describe('simulation summary groups', () => {
       metadata: {
         geometry_type: 'imported', ingest_id: 'wgi_123', manifest_sha256: manifest,
         solve_path: 'full-3d',
-        global_frequency_caveat: { message: 'The global mesh policy is conservative; active sources remain valid.' },
         per_source_frequency_validity: { tweeter: { effective_max_valid_frequency_hz: 20_000 } },
       },
     };
@@ -123,7 +122,7 @@ describe('simulation summary groups', () => {
     });
     expect(row(groups, 'Import', 'Channel')?.value).toBe('high · 2 channels');
     expect(row(groups, 'Import', 'Manifest')).toEqual({ label: 'Manifest', value: manifest.slice(0, 12), title: manifest });
-    expect(row(groups, 'Import', 'Frequency validity')?.value).toContain('active sources remain valid');
+    expect(row(groups, 'Import', 'Frequency validity')).toBeUndefined();
   });
 
   it('keeps solved and symmetry-expanded triangle counts distinct', () => {
