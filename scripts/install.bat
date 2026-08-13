@@ -51,44 +51,44 @@ exit /b 1
 
 :arg_after_pull
 set "AFTER_PULL=1"
-shift
+shift /1
 goto parse_args
 :arg_root
 set "WG_ROOT=%~2"
-shift
-shift
+shift /1
+shift /1
 goto parse_args
 :arg_no_launch
 set "LAUNCH="
-shift
+shift /1
 goto parse_args
 :arg_force
 set "FORCE=1"
-shift
+shift /1
 goto parse_args
 :arg_skip_spa
 set "SKIP_SPA=1"
-shift
+shift /1
 goto parse_args
 :arg_spa_archive
 set "SPA_ARCHIVE=%~2"
-shift
-shift
+shift /1
+shift /1
 goto parse_args
 :arg_spa_base_url
 set "SPA_BASE_URL=%~2"
-shift
-shift
+shift /1
+shift /1
 goto parse_args
 :arg_version
 set "SPA_VERSION=%~2"
-shift
-shift
+shift /1
+shift /1
 goto parse_args
 :arg_tag
 set "TAG=%~2"
-shift
-shift
+shift /1
+shift /1
 goto parse_args
 
 :show_usage
