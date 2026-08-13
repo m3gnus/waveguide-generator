@@ -37,6 +37,7 @@ from server.platform.paths import ensure_data_layout
 from server.platform.signal_rearm import (
     rearm_registered_signals,
     register_signal_rearm,
+    restore_sigpipe_ignore,
     unregister_signal_rearm,
 )
 from server.protocol.frame import DEFAULT_MAX_FRAME_BYTES
@@ -361,6 +362,28 @@ def test_registered_native_signal_rearm_callbacks_are_removable() -> None:
     rearm_registered_signals()
 
     assert calls == ["rearmed"]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="SIGPIPE is a POSIX signal")
+def test_sigpipe_restore_overrides_a_native_change_hidden_by_pythons_cache() -> None:
+    """A C-level handler change must be repaired even when getsignal lies."""
+
+    import ctypes
+    import signal
+
+    c_signal = ctypes.CDLL(None).signal
+    c_signal.argtypes = [ctypes.c_int, ctypes.c_void_p]
+    c_signal.restype = ctypes.c_void_p
+    try:
+        c_signal(signal.SIGPIPE, ctypes.c_void_p(int(signal.SIG_DFL)))
+        assert signal.getsignal(signal.SIGPIPE) == signal.SIG_IGN
+
+        restore_sigpipe_ignore()
+
+        previous = c_signal(signal.SIGPIPE, ctypes.c_void_p(int(signal.SIG_DFL)))
+        assert previous == int(signal.SIG_IGN)
+    finally:
+        restore_sigpipe_ignore()
 
 
 def test_public_gmsh_worker_rearms_registered_signals_on_the_main_thread(
