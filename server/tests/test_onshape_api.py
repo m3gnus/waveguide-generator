@@ -515,6 +515,47 @@ def test_connection_without_credentials_does_not_call_onshape(tmp_path: Path, mo
     assert transport.calls == []
 
 
+def test_a_failed_connection_check_is_cached_too(tmp_path: Path, monkeypatch) -> None:
+    """A remount loop must not hammer an endpoint already known to be failing.
+
+    Nothing throttles this on the Onshape side -- a bad key pair answers 401 as
+    fast as a good one answers 200 -- so the only brake is here.
+    """
+
+    store = _store(tmp_path)
+    monkeypatch.setattr(
+        onshape_api,
+        "_credentials_state",
+        lambda: {"configured": True, "credentialsPath": "/x", "detail": None, "insecureKeyFile": False},
+    )
+    monkeypatch.setattr(
+        onshape_api, "load_credentials", lambda: OnshapeCredentials(access_key="A", secret_key="B")
+    )
+    transport = FakeTransport()
+    transport.route("GET", "/users/sessioninfo", 401, {"message": "Not authorized"})
+    request = _request(store, tmp_path, transport)
+
+    first = asyncio.run(onshape_api.connection(request))
+    assert first["reachable"] is False
+    calls = len(transport.calls)
+    assert calls > 0
+
+    for _ in range(5):
+        repeated = asyncio.run(onshape_api.connection(request))
+        assert repeated["reachable"] is False
+    assert len(transport.calls) == calls, "a cached failure spends no further rate limit"
+
+    # The failure clock is much shorter than the success clock, so a fixed key
+    # pair or a recovered network is picked up quickly rather than in 5 minutes.
+    assert onshape_api.CONNECTION_FAILURE_TTL_S < onshape_api.CONNECTION_CACHE_TTL_S
+    cached = request.app.state.onshape_connection
+    assert cached["ttl"] == onshape_api.CONNECTION_FAILURE_TTL_S
+
+    # An explicit refresh still re-checks: that is the button's whole purpose.
+    asyncio.run(onshape_api.connection(request, refresh=True))
+    assert len(transport.calls) > calls
+
+
 def test_connection_reports_an_unreachable_account_without_failing(tmp_path: Path, monkeypatch) -> None:
     store = _store(tmp_path)
     monkeypatch.setattr(
