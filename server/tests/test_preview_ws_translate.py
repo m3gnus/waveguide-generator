@@ -7,6 +7,7 @@ import json
 import math
 from pathlib import Path
 
+import numpy as np
 import pytest
 from hornlab_mesher.preview.api import build_preview_geometry
 
@@ -538,3 +539,55 @@ def test_unreachable_guiding_curve_reaches_the_frontend_as_a_frame_warning() -> 
 def test_a_reachable_guiding_curve_leaves_the_frame_warning_free() -> None:
     header = _build_frame({**_UNREACHABLE_GUIDE, "L": 400})
     assert header["previewMetadata"]["warnings"] == []
+
+
+def test_freeform_morph_is_silently_ignored_by_the_pinned_preview() -> None:
+    """Pins a real gap the morph controls are waiting on, with an alarm.
+
+    The registry offers Superellipse and the whole morph section for FREEFORM,
+    but the pinned mesher predates FREEFORM morphing. It does not merely fail
+    to apply it -- the preview builds a horn as though no morph were asked for,
+    so the viewport quietly contradicts the design, and an impossible target
+    passes without complaint. The solve path refuses the same design, so the
+    two disagree.
+
+    Both assertions below FLIP once the mesher morph work is pushed and
+    pins.json is bumped: the morph then changes the preview, and an
+    out-of-range target is rejected. Verified against the pending stack
+    (mesher a4663b3) rather than assumed. This test failing is the signal that
+    the bump landed -- update it then, and delete this note.
+    """
+
+    base: dict[str, object] = {
+        "formula": "FREEFORM",
+        "length": 120,
+        "profile_h": {"points": [{"t": 0, "r": 12.7}, {"t": 1, "r": 100}]},
+        "profile_v": {"points": [{"t": 0, "r": 12.7}, {"t": 1, "r": 80}]},
+        "cross_sections": [
+            {"t": 0, "shape": "ellipse"},
+            {"t": 1, "shape": "ellipse"},
+        ],
+    }
+
+    def vertices(payload: dict[str, object]) -> np.ndarray:
+        config = _translate(payload)
+        geometry = build_preview_geometry(config, preview_options("coarse"))
+        return np.concatenate(
+            [np.asarray(surface.positions).reshape(-1) for surface in geometry.surfaces]
+        )
+
+    aggressive = {
+        **base,
+        "morph": {
+            "target_shape": 3,
+            "target_exponent": 2,
+            "target_width": 400,
+            "target_height": 400,
+        },
+    }
+    # The morph reaches the engine; the engine ignores it.
+    assert _translate(aggressive)["morph"]["morphTarget"] == 3
+    assert np.array_equal(vertices(base), vertices(aggressive))
+
+    # And a target no engine defines builds just as quietly.
+    vertices({**base, "morph": {"target_shape": 99}})
