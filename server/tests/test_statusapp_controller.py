@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import sys
@@ -130,6 +131,34 @@ def test_start_poll_quit_lifecycle_checks_health_and_spa_probes(tmp_path: Path) 
     stopped = controller.close()
     assert stopped.backend.state is ServiceState.STOPPED
     assert process.poll() is not None
+
+
+def test_status_owner_consumes_only_a_ready_valid_update_request(tmp_path: Path) -> None:
+    controller = _controller(tmp_path)
+    controller.start()
+    try:
+        request_path = controller.update_request_path
+        assert request_path is not None
+        request_path.write_text(json.dumps({
+            "schemaVersion": 1,
+            "kind": "install_release",
+            "tag": "v2.0.1",
+            "readyAtEpoch": time.time() + 60,
+        }), encoding="utf-8")
+
+        assert controller.take_update_request() is None
+        assert request_path.is_file()
+
+        request_path.write_text(json.dumps({
+            "schemaVersion": 1,
+            "kind": "install_release",
+            "tag": "v2.0.1",
+            "readyAtEpoch": 0,
+        }), encoding="utf-8")
+        assert controller.take_update_request() == "v2.0.1"
+        assert not request_path.exists()
+    finally:
+        controller.close()
 
 
 def test_child_ready_file_replaces_the_unreserved_preflight_port(tmp_path: Path) -> None:

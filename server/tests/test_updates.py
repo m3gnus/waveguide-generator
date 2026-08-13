@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 import subprocess
 import threading
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+import pytest
 
 from server.updates.api import mount_updates
 from server.updates.service import (
@@ -87,6 +89,30 @@ def test_newer_ready_release_produces_an_exact_absolute_update_command(tmp_path:
     assert str(tmp_path.resolve()) in result["action"]["command"]
     assert result["action"]["command"].endswith(" --tag v2.0.1")
     assert (tmp_path / "data" / "cache" / "update-status.json").is_file()
+    assert result["canInstall"] is False
+
+
+def test_ready_release_can_signal_the_status_owner_for_installation(tmp_path: Path):
+    now = [1_700_000_000.0]
+    request_path = tmp_path / "control" / "update.json"
+    request_path.parent.mkdir()
+    update = service(
+        tmp_path,
+        lambda _etag: ReleaseResponse(release("2.0.1"), None),
+        now,
+        platform_name="darwin",
+        update_request_path=request_path,
+    )
+
+    assert update.get_status()["canInstall"] is True
+    result = update.request_install()
+    payload = json.loads(request_path.read_text(encoding="utf-8"))
+
+    assert result == {"accepted": True, "tag": "v2.0.1"}
+    assert payload["schemaVersion"] == 1
+    assert payload["kind"] == "install_release"
+    assert payload["tag"] == "v2.0.1"
+    assert payload["readyAtEpoch"] > 0
 
 
 def test_incomplete_release_rechecks_quickly_and_never_offers_an_action(tmp_path: Path):
@@ -280,3 +306,32 @@ def test_status_endpoint_runs_the_blocking_service_off_loop(tmp_path: Path):
     refreshed = asyncio.run(endpoint(refresh=True))
     assert regular["force"] is False and regular["thread"] != main_thread
     assert refreshed["force"] is True and refreshed["thread"] != main_thread
+
+
+def test_install_endpoint_requires_confirmation_and_runs_off_loop(tmp_path: Path):
+    class FakeService:
+        def request_install(self) -> dict[str, object]:
+            return {
+                "accepted": True,
+                "tag": "v2.0.1",
+                "thread": threading.get_ident(),
+            }
+
+    app = FastAPI()
+    mount_updates(
+        app,
+        running_version="2.0.0",
+        data_dir=tmp_path,
+        repo_root=tmp_path,
+        service=FakeService(),  # type: ignore[arg-type]
+    )
+    endpoint = next(route.endpoint for route in app.routes if route.path == "/api/updates/install")
+    main_thread = threading.get_ident()
+
+    with pytest.raises(HTTPException) as denied:
+        asyncio.run(endpoint(confirmation=None))
+    assert denied.value.status_code == 403
+
+    accepted = asyncio.run(endpoint(confirmation="install"))
+    assert accepted["accepted"] is True
+    assert accepted["thread"] != main_thread
