@@ -11,11 +11,26 @@ the main event loop immediately after each initialize/finalize boundary.
 from __future__ import annotations
 
 from collections.abc import Callable
+import os
+import signal
 import threading
 
 
 _lock = threading.Lock()
 _callbacks: dict[object, Callable[[], None]] = {}
+
+
+def restore_sigpipe_ignore() -> None:
+    """Restore Python's safe SIGPIPE disposition at the operating-system level.
+
+    A native library can call ``signal(2)`` directly.  Python's
+    ``signal.getsignal`` then keeps reporting its cached ``SIG_IGN`` even though
+    the kernel disposition has changed, so this must be an unconditional
+    ``signal.signal`` call rather than a read-before-write check.
+    """
+
+    if os.name == "posix":
+        signal.signal(signal.SIGPIPE, signal.SIG_IGN)
 
 
 def register_signal_rearm(callback: Callable[[], None]) -> object:
@@ -51,6 +66,7 @@ def rearm_registered_signals() -> None:
 __all__ = [
     "rearm_registered_signals",
     "register_signal_rearm",
+    "restore_sigpipe_ignore",
     "signal_rearm_is_needed",
     "unregister_signal_rearm",
 ]
