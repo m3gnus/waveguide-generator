@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 import json
 import logging
+import os
 from pathlib import Path
 import re
 import shlex
@@ -54,6 +55,10 @@ class UpdateRateLimitError(RuntimeError):
     def __init__(self, message: str, *, retry_at: float | None) -> None:
         super().__init__(message)
         self.retry_at = retry_at
+
+
+class UpdateInstallUnavailable(RuntimeError):
+    """The current process cannot safely hand a release to the installer."""
 
 
 def _iso(timestamp: float | None) -> str | None:
@@ -231,6 +236,7 @@ class UpdateService:
         clock: Clock = time.time,
         platform_name: str = sys.platform,
         checkout_probe: Callable[[Path, str], dict[str, Any]] = checkout_status,
+        update_request_path: Path | None = None,
     ) -> None:
         _version(running_version)
         self.running_version = running_version
@@ -240,6 +246,9 @@ class UpdateService:
         self.clock = clock
         self.platform_name = platform_name
         self.checkout_probe = checkout_probe
+        self.update_request_path = (
+            Path(update_request_path).resolve() if update_request_path is not None else None
+        )
         self.cache_path = self.data_dir / "cache" / "update-status.json"
         self._lock = threading.Lock()
         self._cache: dict[str, Any] | None = None
@@ -399,5 +408,57 @@ class UpdateService:
                 "nextCheckAt": _iso(float(cache["nextCheckEpoch"])) if cache.get("nextCheckEpoch") is not None else None,
                 "checkout": checkout,
                 "action": action,
+                "canInstall": action is not None and self.update_request_path is not None,
                 "lastError": last_error,
             }
+
+    def request_install(self) -> dict[str, object]:
+        """Validate and atomically signal the status owner to install a release."""
+
+        request_path = self.update_request_path
+        if request_path is None:
+            raise UpdateInstallUnavailable(
+                "Automatic installation is available only when WG is running from its status window."
+            )
+
+        status = self.get_status()
+        release = status.get("release")
+        action = status.get("action")
+        if (
+            status.get("availability") != "available"
+            or not isinstance(release, dict)
+            or release.get("assetsReady") is not True
+            or not isinstance(action, dict)
+            or status.get("canInstall") is not True
+        ):
+            raise UpdateInstallUnavailable(
+                "The update is no longer ready for automatic installation. Check again and resolve any checkout warning."
+            )
+
+        tag = str(release.get("tag") or "")
+        if TAG_RE.fullmatch(tag) is None:
+            raise UpdateInstallUnavailable("The offered release tag is invalid.")
+
+        payload = {
+            "schemaVersion": 1,
+            "kind": "install_release",
+            "tag": tag,
+            # Give the HTTP response time to reach the browser before the
+            # status owner observes this file and gracefully stops the server.
+            "readyAtEpoch": time.time() + 0.75,
+        }
+        temporary = request_path.with_name(
+            f".{request_path.name}.{os.getpid()}.{threading.get_ident()}.tmp"
+        )
+        try:
+            temporary.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+            temporary.replace(request_path)
+        except OSError as exc:
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
+            raise UpdateInstallUnavailable(
+                f"WG could not create the update handoff: {exc}"
+            ) from exc
+        return {"accepted": True, "tag": tag}

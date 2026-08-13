@@ -251,6 +251,11 @@ def main(argv: list[str] | None = None) -> int:
         app = create_app(
             data_dir=paths.root,
             solver_warmup=_solver_warmup_enabled(),
+            update_request_path=(
+                args.status_control.with_name("update.json")
+                if args.status_control is not None
+                else None
+            ),
         )
         config = uvicorn.Config(
             app,

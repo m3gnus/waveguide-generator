@@ -23,6 +23,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from server.platform.instance import PORT_SCAN_COUNT, requested_port, select_port
+from .updater import UpdateHandoffError, consume_update_request, launch_update_handoff
 
 
 HOST = "127.0.0.1"
@@ -221,6 +222,7 @@ class StatusController:
         self._temporary_directory: tempfile.TemporaryDirectory[str] | None = None
         self._control_path: Path | None = None
         self._ready_path: Path | None = None
+        self._update_request_path: Path | None = None
         self._windows_job: object | None = None
         self._registered_atexit = False
         self._port: int | None = None
@@ -241,6 +243,11 @@ class StatusController:
     def process(self) -> subprocess.Popen[str] | None:
         with self._lock:
             return self._process
+
+    @property
+    def update_request_path(self) -> Path | None:
+        with self._lock:
+            return self._update_request_path
 
     def __enter__(self) -> StatusController:
         self.start()
@@ -330,6 +337,7 @@ class StatusController:
             self._temporary_directory = tempfile.TemporaryDirectory(prefix="wg2-statusapp-")
             self._control_path = Path(self._temporary_directory.name) / "stop"
             self._ready_path = Path(self._temporary_directory.name) / "ready.json"
+            self._update_request_path = Path(self._temporary_directory.name) / "update.json"
             self._port = port
             url = f"http://{HOST}:{port}/"
             environment = dict(self.environ)
@@ -525,8 +533,34 @@ class StatusController:
         self._temporary_directory = None
         self._control_path = None
         self._ready_path = None
+        self._update_request_path = None
         if temporary_directory is not None:
             temporary_directory.cleanup()
+
+    def take_update_request(self) -> str | None:
+        """Return one delayed, validated UI request when it is ready to run."""
+
+        with self._lock:
+            path = self._update_request_path
+        if path is None:
+            return None
+        try:
+            return consume_update_request(path)
+        except UpdateHandoffError as exc:
+            with self._lock:
+                self._output.append(str(exc))
+            return None
+
+    def launch_update(self, tag: str) -> None:
+        """Start the independent updater before this status owner shuts down."""
+
+        launch_update_handoff(
+            self.repo_root,
+            tag,
+            os.getpid(),
+            environ=self.environ,
+            server_args=self.server_args,
+        )
 
     def stop(self) -> StatusSnapshot:
         """Request graceful shutdown, then guarantee the entire tree is gone."""

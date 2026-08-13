@@ -31,6 +31,7 @@ class StatusView:
         self._poll_running = False
         self._next_poll_at = 0.0
         self._updates: queue.SimpleQueue[tuple[str, StatusSnapshot]] = queue.SimpleQueue()
+        self._update_errors: queue.SimpleQueue[str] = queue.SimpleQueue()
 
         root.title("Waveguide Generator")
         root.resizable(False, False)
@@ -78,6 +79,12 @@ class StatusView:
         self._updates.put(("started", self.controller.start()))
 
     def _tick(self) -> None:
+        while not self._update_errors.empty():
+            self._closing = False
+            error = self._update_errors.get()
+            self._backend_reason.set("Update could not start")
+            self._frontend_reason.set(error)
+            self._open_button.configure(state="normal" if self.controller.url else "disabled")
         while not self._updates.empty():
             kind, snapshot = self._updates.get()
             if kind == "closed":
@@ -90,6 +97,10 @@ class StatusView:
                 self._next_poll_at = time.monotonic() + 0.55
             if not self._closing:
                 self._render(snapshot)
+        if not self._closing:
+            requested_update = self.controller.take_update_request()
+            if requested_update is not None:
+                self._start_update(requested_update)
         if (
             not self._closing
             and not self._starting
@@ -99,6 +110,26 @@ class StatusView:
             self._poll_running = True
             threading.Thread(target=self._poll, name="wg2-status-poll", daemon=True).start()
         self.root.after(100, self._tick)
+
+    def _start_update(self, tag: str) -> None:
+        self._closing = True
+        self._backend_reason.set(f"Preparing {tag}…")
+        self._frontend_reason.set("WG will close, install the update, and restart.")
+        self._open_button.configure(state="disabled")
+        threading.Thread(
+            target=self._handoff_update,
+            args=(tag,),
+            name="wg2-status-update",
+            daemon=True,
+        ).start()
+
+    def _handoff_update(self, tag: str) -> None:
+        try:
+            self.controller.launch_update(tag)
+        except Exception as exc:  # noqa: BLE001 - keep the current healthy app usable
+            self._update_errors.put(str(exc) or type(exc).__name__)
+            return
+        self._updates.put(("closed", self.controller.close()))
 
     def _poll(self) -> None:
         self._updates.put(("snapshot", self.controller.poll()))
