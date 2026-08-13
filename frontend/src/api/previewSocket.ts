@@ -19,6 +19,8 @@ export interface PreviewSnapshot {
   stale: boolean;
   dropped: number;
   error: string | null;
+  /** Validated server field paths for the current preview error. */
+  errorFields: Readonly<Record<string, string>> | null;
   /** Design revision the current error belongs to, so the UI can say so. */
   errorRevision: number | null;
 }
@@ -53,10 +55,18 @@ interface ErrorMessage {
   v: 1;
   kind: 'error';
   epoch?: number;
-  designRevision: number;
+  seq?: number;
+  designRevision?: number;
   code: string;
   message?: string;
   fields?: Record<string, string>;
+}
+
+/** Keep only actionable wire entries; malformed values remain a global error. */
+function validatedErrorFields(value: unknown): Record<string, string> | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const entries = Object.entries(value).filter(([key, message]) => key.trim() && typeof message === 'string' && message.trim());
+  return entries.length ? Object.fromEntries(entries) : null;
 }
 
 const OPEN = 1;
@@ -73,6 +83,8 @@ function previewUrl(): string {
 export class PreviewSocketManager {
   private socket: WebSocketLike | null = null;
   private seq = 0;
+  /** Newest request outcome seen on this connection, across coarse/fine lanes. */
+  private latestOutcomeSeq = 0;
   private helloSeen = false;
   private reconnectAttempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -92,7 +104,7 @@ export class PreviewSocketManager {
   private unregisterTimer: (() => void) | null = null;
   private snapshot: PreviewSnapshot = {
     connection: 'idle', epoch: null, frame: null, displayedRevision: null,
-    lastValidRevision: null, stale: true, dropped: 0, error: null, errorRevision: null,
+    lastValidRevision: null, stale: true, dropped: 0, error: null, errorFields: null, errorRevision: null,
   };
 
   constructor(
@@ -171,15 +183,16 @@ export class PreviewSocketManager {
 
   private connect(reconnecting: boolean): void {
     if (this.stopped) return;
-    this.update({ connection: reconnecting ? 'reconnecting' : 'connecting', error: null });
+    this.update({ connection: reconnecting ? 'reconnecting' : 'connecting', error: null, errorFields: null, errorRevision: null });
     const socket = this.factory(this.url);
     this.socket = socket;
     this.seq = 0;
+    this.latestOutcomeSeq = 0;
     this.helloSeen = false;
     socket.binaryType = 'arraybuffer';
     socket.onopen = () => undefined;
     socket.onmessage = (event) => this.onMessage(socket, event.data);
-    socket.onerror = () => this.update({ error: 'Preview connection error' });
+    socket.onerror = () => this.update({ error: 'Preview connection error', errorFields: null, errorRevision: null });
     socket.onclose = () => {
       if (this.socket !== socket) return;
       this.socket = null;
@@ -200,11 +213,11 @@ export class PreviewSocketManager {
     try {
       message = JSON.parse(data) as HelloMessage | DroppedMessage | ErrorMessage;
     } catch {
-      this.update({ error: 'Malformed preview control message' });
+      this.update({ error: 'Malformed preview control message', errorFields: null, errorRevision: null });
       return;
     }
     if ((message as { v?: unknown }).v !== 1) {
-      this.update({ error: 'Unsupported preview protocol message' });
+      this.update({ error: 'Unsupported preview protocol message', errorFields: null, errorRevision: null });
       return;
     }
     if (message.kind === 'hello') {
@@ -213,7 +226,7 @@ export class PreviewSocketManager {
       this.reconnectAttempt = 0;
       this.heartbeatMs = Math.max(250, message.heartbeatSec * 2_000);
       this.maxFrameBytes = message.limits?.maxFrameBytes;
-      this.update({ connection: 'connected', epoch: message.epoch, error: null });
+      this.update({ connection: 'connected', epoch: message.epoch, error: null, errorFields: null, errorRevision: null });
       this.armHeartbeat();
       this.sendProgressive();
       return;
@@ -227,8 +240,21 @@ export class PreviewSocketManager {
       // Record every failure, not only the ones whose revision still matches.
       // Editing again while a preview is failing used to swallow the reason and
       // leave the viewport reading STALE with nothing to explain it.
-      const detail = message.message ?? Object.values(message.fields ?? {})[0] ?? message.code;
-      this.update({ error: detail, errorRevision: message.designRevision ?? null, stale: true });
+      const fields = validatedErrorFields(message.fields);
+      const errorRevision = Number.isInteger(message.designRevision) ? message.designRevision! : null;
+      const errorSeq = Number.isInteger(message.seq) ? message.seq! : null;
+      // A successful newer frame, or a newer failure already on screen, has
+      // superseded this response. The coarse and fine lanes can finish out of
+      // order, so accepting it would resurrect a field error the user fixed.
+      if (errorRevision !== null && errorRevision < (this.snapshot.lastValidRevision ?? 0)) return;
+      if (errorRevision !== null && errorRevision < (this.snapshot.errorRevision ?? 0)) return;
+      if (errorSeq !== null && errorSeq < this.latestOutcomeSeq) return;
+      const detail = (typeof message.message === 'string' && message.message.trim())
+        || Object.values(fields ?? {})[0]
+        || (typeof message.code === 'string' && message.code.trim())
+        || 'Preview request failed';
+      if (errorSeq !== null) this.latestOutcomeSeq = Math.max(this.latestOutcomeSeq, errorSeq);
+      this.update({ error: detail, errorFields: fields, errorRevision, stale: true });
     }
   }
 
@@ -259,12 +285,13 @@ export class PreviewSocketManager {
     try {
       frame = decodeFrame(buffer, this.maxFrameBytes);
     } catch (error) {
-      this.update({ error: error instanceof Error ? error.message : String(error) });
+      this.update({ error: error instanceof Error ? error.message : String(error), errorFields: null, errorRevision: null });
       return;
     }
     const { header } = frame;
     const revision = useDesignStore.getState().designRevision;
     const frameRevision = header.designRevision ?? -1;
+    const frameSeq = header.seq ?? 0;
     if (
       header.v !== 1
       || header.kind !== 'preview'
@@ -277,14 +304,17 @@ export class PreviewSocketManager {
     }
     // An error belongs to the revision that produced it. A frame older than
     // that revision does not answer it, so it must not clear the message.
-    const clearsError = this.snapshot.errorRevision === null
-      || frameRevision >= this.snapshot.errorRevision;
+    const clearsError = frameSeq >= this.latestOutcomeSeq && (
+      this.snapshot.errorRevision === null
+      || frameRevision >= this.snapshot.errorRevision
+    );
+    this.latestOutcomeSeq = Math.max(this.latestOutcomeSeq, frameSeq);
     this.update({
       frame,
       displayedRevision: frameRevision,
       lastValidRevision: frameRevision,
       stale: frameRevision !== revision,
-      ...(clearsError ? { error: null, errorRevision: null } : {}),
+      ...(clearsError ? { error: null, errorFields: null, errorRevision: null } : {}),
     });
   }
 

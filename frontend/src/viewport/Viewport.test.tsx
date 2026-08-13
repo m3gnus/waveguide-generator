@@ -48,6 +48,7 @@ const previewSnapshot: PreviewSnapshot = {
   stale: true,
   dropped: 0,
   error: 'ATH expression is unsupported',
+  errorFields: null,
   errorRevision: 0,
 };
 

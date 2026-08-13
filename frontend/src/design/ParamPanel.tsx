@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { convertDesignToFreeform } from '../api/designIo';
+import { previewSocket } from '../api/previewSocket';
 import type { CadRealizedDimensions, CadRealizedParameter } from '../api/cadlink';
 import { importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { postSymmetry, toSolveDesign, type SymmetryResolution } from '../jobs/actions';
@@ -288,7 +289,25 @@ function MouthResolutionHint({ design, value }: { design: DesignDocument; value:
   </div>;
 }
 
-function FieldControl({ field, design }: { field: ParameterDefinition; design: DesignDocument }) {
+/** Match both direct preview keys and Pydantic's design/root-qualified paths. */
+export function previewErrorForParameter(
+  field: ParameterDefinition,
+  fields: Readonly<Record<string, string>> | null,
+): string | undefined {
+  if (!fields) return undefined;
+  const paths = new Set([field.id, field.path].filter((path): path is string => Boolean(path)));
+  for (const path of [...paths]) {
+    paths.add(`design.${path}`);
+    paths.add(`design.root.${path}`);
+  }
+  for (const path of paths) {
+    const message = fields[path];
+    if (message) return message;
+  }
+  return undefined;
+}
+
+function FieldControl({ field, design, serverError }: { field: ParameterDefinition; design: DesignDocument; serverError?: string }) {
   const updateValue = useDesignStore((state) => state.updateValue);
   const updateValues = useDesignStore((state) => state.updateValues);
   const updateExpression = useDesignStore((state) => state.updateExpression);
@@ -352,7 +371,7 @@ function FieldControl({ field, design }: { field: ParameterDefinition; design: D
       precision={field.precision}
       disabled={disabled}
       disabledReason={disabledReason}
-      invalidMessage={error}
+      invalidMessage={error ?? serverError}
       validate={(next) => prospectiveValidation(field, design, next)}
       onCommit={(next) => commit(next)}
       optional={optional}
@@ -815,6 +834,20 @@ function CadSimulationEmpty() {
 
 export function ParamPanel({ tab }: { tab: ParameterTab }) {
   const design = useDesignStore((state) => state.design);
+  const designRevision = useDesignStore((state) => state.designRevision);
+  const previewErrorFields = useSyncExternalStore(
+    previewSocket.subscribe,
+    () => previewSocket.getSnapshot().errorFields,
+    () => previewSocket.getSnapshot().errorFields,
+  );
+  const previewErrorRevision = useSyncExternalStore(
+    previewSocket.subscribe,
+    () => previewSocket.getSnapshot().errorRevision,
+    () => previewSocket.getSnapshot().errorRevision,
+  );
+  // Keep a superseded failure in the viewport's global explanation, but do not
+  // pin it beside a value that the user has already changed.
+  const currentPreviewFields = previewErrorRevision === designRevision ? previewErrorFields : null;
   const workspaceMode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
   const ingestRecord = useCadReturnStore((state) => state.ingestRecord);
   const setFamily = useDesignStore((state) => state.setFamily);
@@ -882,7 +915,8 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
   }, [tab]);
 
   const renderField = (field: ParameterDefinition) => <div className="parameter-entry" data-parameter-id={field.id} data-parameter-key={field.legacyKey} tabIndex={field.kind === 'indicator' ? -1 : undefined} key={field.id}>
-    <FieldControl field={field} design={design} />
+    <FieldControl field={field} design={design} serverError={previewErrorForParameter(field, currentPreviewFields)} />
+    {field.kind !== 'number' && previewErrorForParameter(field, currentPreviewFields) && <div className="field-error" role="alert">{previewErrorForParameter(field, currentPreviewFields)}</div>}
   </div>;
 
   const renderRegistrySection = (definition: ParameterSectionDefinition) => {

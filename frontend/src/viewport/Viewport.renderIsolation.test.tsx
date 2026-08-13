@@ -56,6 +56,7 @@ const previewSnapshot: PreviewSnapshot = {
   stale: false,
   dropped: 0,
   error: null,
+  errorFields: null,
   errorRevision: null,
 };
 
