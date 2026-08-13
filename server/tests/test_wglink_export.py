@@ -58,8 +58,8 @@ def _install_fake_write(monkeypatch) -> list[object]:
 
     writes: list[object] = []
 
-    def fake_write(geometry, output_path, *, identity, **_kwargs):
-        writes.append(geometry)
+    def fake_write(geometry, output_path, *, identity, **kwargs):
+        writes.append({"geometry": geometry, "kwargs": kwargs})
         target = Path(output_path)
         target.mkdir()
         step_hash = "sha256:" + "a" * 64
@@ -115,6 +115,11 @@ def test_wglink_export_writes_identity_hashes_and_retries_without_rebuilding(
     assert stale_retry.value.status_code == 409
     assert retry == retry_from_other_workspace == first
     assert len(writes) == 2
+    source = writes[0]["kwargs"]["interface_sources"][0]
+    assert source.id == "source-hf"
+    assert source.role == "HF"
+    assert source.default_drive_channel_id == "drive-hf"
+    assert source.suggested_resolution_mm == pytest.approx(4.0)
     assert first["sequence"] == 1
     assert second["sequence"] == 2
     assert first["bundlePath"] == str(workspace / "wglink" / "demo_horn.wglink")

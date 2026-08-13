@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from hornlab_mesher import WgLinkIdentity, write_wglink
+from hornlab_mesher import WgLinkIdentity, WgLinkSourceInterface, write_wglink
 from hornlab_mesher.config_builder import resolve_geometry
 from server.cadlink.onshape.return_leg import write_and_ingest_return, write_return_bundle
 from server.cadlink.store import CadLinkStore
@@ -47,21 +47,18 @@ def _outbound(tmp_path: Path) -> tuple[dict, bytes]:
         ),
         instance_slug="demo",
         open_throat=True,
+        interface_sources=[
+            WgLinkSourceInterface(
+                id="source-hf",
+                role="HF",
+                required=True,
+                default_drive_channel_id="drive-hf",
+                patch_policy="single-connected",
+                expected_connected_components=1,
+                suggested_resolution_mm=4.0,
+            )
+        ],
     )
-    # This is the minimum proposed additive source-interface slice. Shipping
-    # wglink 1.1 does not emit it yet; the refusal below pins that blocker.
-    product.manifest["required_features"].append("return-source-interface-v1")
-    product.manifest["interface"] = {
-        "return_source": {
-            "id": "source-hf",
-            "role": "HF",
-            "required": True,
-            "default_drive_channel_id": "drive-hf",
-            "patch_policy": "single-connected",
-            "expected_connected_components": 1,
-            "suggested_resolution_mm": 4.0,
-        }
-    }
     def source_bearing_step(path: Path) -> bytes:
         import gmsh
 
@@ -82,8 +79,8 @@ def _outbound(tmp_path: Path) -> tuple[dict, bytes]:
 
 def test_shipping_wglink_refuses_missing_source_policy(tmp_path: Path) -> None:
     outbound, step = _outbound(tmp_path)
-    outbound["required_features"].remove("return-source-interface-v1")
-    outbound["interface"] = {}
+    outbound["required_features"].remove("source-interface-v1")
+    outbound["interface"] = {"sources": []}
     with pytest.raises(ValueError, match="no WG-authored return-source interface"):
         _run_in_gmsh_session(
             write_return_bundle,
