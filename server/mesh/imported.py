@@ -606,7 +606,6 @@ def build_imported_mesh(
     tessellation = imported_tessellation_settings(normalized_sizes)
     allocation = allocate_imported_tags(source_list, skipped_source_ids=skipped)
     options = dict(options or {})
-    requested_max_frequency_hz = options.get("requested_max_frequency_hz")
     raw_area_drift_overrides = options.get("area_drift_overrides", ())
     if not isinstance(raw_area_drift_overrides, (list, tuple, set, frozenset)):
         raise ImportedMeshError("role resolution: areaDriftOverrides must be an array of source ids")
@@ -1107,15 +1106,9 @@ def build_imported_mesh(
                 tags,
                 step_specs,
                 unit_scale_to_m=1.0e-3,
-                requested_max_frequency_hz=(
-                    None if requested_max_frequency_hz is None else float(requested_max_frequency_hz)
-                ),
+                requested_max_frequency_hz=None,
                 transition_mm=normalized_sizes["transition_mm"],
             )
-            if frequency.get("invalid_sources"):
-                raise ImportedMeshError(
-                    f"meshing: requested frequency exceeds active source limits: {frequency['invalid_sources']}"
-                )
             processed.points = points_mm * 1.0e-3
             final_path = Path(temporary) / "imported.msh"
             meshio.write(final_path, processed, file_format="gmsh22", binary=False)
