@@ -81,6 +81,9 @@ def test_link_round_trips_and_updates_in_place(tmp_path: Path) -> None:
         blob_element_id="BLOB",
         part_studio_element_id="PART",
         variable_studio_element_id="VARS",
+        feature_studio_element_id="FEATURES",
+        native_feature_id="NATIVE-1",
+        build_mode="native",
         document_name="Demo Horn",
         is_public=True,
         last_export_id="wge_1",
@@ -90,6 +93,9 @@ def test_link_round_trips_and_updates_in_place(tmp_path: Path) -> None:
         saved_at="2026-08-13T09:05:00Z",
     )
     assert first["is_public"] == 1
+    assert first["feature_studio_element_id"] == "FEATURES"
+    assert first["native_feature_id"] == "NATIVE-1"
+    assert first["build_mode"] == "native"
 
     second = store.save_onshape_link(
         design_id=identity.design_id,
@@ -99,6 +105,9 @@ def test_link_round_trips_and_updates_in_place(tmp_path: Path) -> None:
         blob_element_id="BLOB",
         part_studio_element_id="PART",
         variable_studio_element_id="VARS",
+        feature_studio_element_id="FEATURES",
+        native_feature_id="NATIVE-1",
+        build_mode="native",
         document_name="Demo Horn",
         is_public=True,
         last_export_id="wge_2",
@@ -109,7 +118,11 @@ def test_link_round_trips_and_updates_in_place(tmp_path: Path) -> None:
     )
     assert second["last_sequence"] == 2
     assert second["created_at"] == first["created_at"], "the link kept its identity"
-    assert store.get_onshape_link(identity.design_id, "ACC")["last_design_hash"] == "hash-2"
+    stored = store.get_onshape_link(identity.design_id, "ACC")
+    assert stored["last_design_hash"] == "hash-2"
+    assert stored["feature_studio_element_id"] == "FEATURES"
+    assert stored["native_feature_id"] == "NATIVE-1"
+    assert stored["build_mode"] == "native"
 
     rows = store.find_onshape_links_for_lineage(identity.lineage_id)
     assert [row["document_id"] for row in rows] == ["DID"]
