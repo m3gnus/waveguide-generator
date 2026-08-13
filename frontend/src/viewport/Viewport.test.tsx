@@ -47,6 +47,7 @@ const previewSnapshot: PreviewSnapshot = {
 const refreshCalls: number[] = [];
 
 vi.mock('../api/previewSocket', () => ({
+  PREVIEW_FINE_IDLE_MS: 140,
   previewSocket: {
     subscribe: () => () => undefined,
     getSnapshot: () => previewSnapshot,
@@ -175,6 +176,8 @@ describe('Viewport geometry warnings', () => {
   it('stays out of the way when the mesher reports nothing', () => {
     render(undefined);
     expect(host.querySelector('.viewport-warning')).toBeNull();
+    act(() => root.unmount());
+    host.remove();
     render([]);
     expect(host.querySelector('.viewport-warning')).toBeNull();
   });
