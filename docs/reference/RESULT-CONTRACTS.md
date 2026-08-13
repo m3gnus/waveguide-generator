@@ -26,7 +26,7 @@ retaining valid values.
 | `directivity[plane]` | per-frequency `[angle_deg, normalized_level_db]` pairs; each row is shifted so the configured normalization angle is 0 dB |
 | `directivity_phase[plane]` | raw wrapped pressure phase with the same plane/frequency/angle shape as directivity; it is never level-normalized |
 | `impedance.real/imaginary` | dimensionless specific acoustic impedance `Z/(rho*c)`, mapped from unit-acceleration pressure with the solver medium's `rho*c` |
-| `di.di` | full-sphere power directivity index; uses the spherical grid when valid, otherwise the documented H/V-orbit approximation |
+| `di.di` | full-sphere power directivity index integrated from a complete spherical pressure grid; `null` when the backend cannot supply one — display cuts are never substituted |
 | `balloon` | normalized spherical SPL grid with theta/phi axes, distance, and hemisphere flag when requested and supported |
 | `beam_shape` | fitted forward-beam diagnostics; nullable per frequency and accompanied by validity/residual metadata |
 
@@ -51,9 +51,11 @@ phase.
 ## Directivity index and balloon
 
 DI is `10log10(reference-axis mean-square pressure / full-sphere mean-square pressure)`
-with linear mean-square-pressure integration. `metadata.directivity_index` states the
-method, planes used, opposing-orbit treatment, and rear-hemisphere policy. Infinite
-baffle results treat the rear hemisphere as zero radiation.
+with linear mean-square-pressure integration. Only a complete spherical pressure grid
+is accepted: WG requests the sphere independently of the selected H/V/D display cuts,
+and the balloon flag controls only whether that grid is retained in the public result.
+`metadata.directivity_index` states the method and rear-hemisphere policy. Infinite
+baffle results treat the physically absent rear hemisphere as zero radiation.
 
 `metadata.balloon_sampling.status` is exactly one of `disabled`, `available`,
 `backend_unsupported`, or `missing_result`. Requested-but-unavailable data must not be
