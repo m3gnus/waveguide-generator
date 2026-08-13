@@ -20,9 +20,10 @@ the manual path only.
 
 ## Remaining engineering
 
-- [ ] Fold on-axis FRD, polar FRD, and the second directivity PNG request into the
-      shared export dispatcher. `RunExportControl.tsx` currently marks all three as
-      temporary seams.
+- [x] Fold on-axis FRD, polar FRD, and the second directivity PNG request into the
+      shared export dispatcher. All three are now first-class preference formats;
+      manual polar sets retain their selected-Workspace destination, while automatic
+      polar sets use the common per-run Workspace staging path.
 - [ ] Decide whether a **manual** multi-format action remains multiple browser downloads,
       gains one server-built archive, or reuses the workspace write route the automatic
       path now takes. If an archive is built, define a versioned manifest, member hashes,

@@ -39,6 +39,8 @@ export const EXPORT_FORMATS = [
   { id: 'mwg_config', label: 'Parameter Config (.cfg)' },
   { id: 'step', label: 'Waveguide STEP (solid)' },
   { id: 'png', label: 'Chart Images (PNG)' },
+  { id: 'on_axis_frd', label: 'On-axis Response (FRD)' },
+  { id: 'polar_frd', label: 'Polar Set (VituixCAD FRD)' },
   { id: 'csv', label: 'Frequency Data CSV' },
   { id: 'json', label: 'Full Results JSON' },
   { id: 'txt', label: 'Summary Text Report' },

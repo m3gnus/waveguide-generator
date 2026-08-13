@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { resolveChartTheme, type Preferences } from '../prefs/preferences';
-import { buildChartRenderPayload, type ChartReference } from './exporters';
+import type { Preferences } from '../prefs/preferences';
+import { buildChartRenderPayload, buildDirectivityRenderPayload, type ChartReference } from './exporters';
 import type { ResultPayload } from './types';
 
 export type CanonicalChartKind = 'frequency_response' | 'directivity_index' | 'impedance' | 'beam_shape';
@@ -13,12 +13,6 @@ export interface CanonicalPlotRequest {
 
 const imageCache = new Map<string, Promise<string>>();
 const CACHE_LIMIT = 32;
-
-function directivityFor(result: ResultPayload, plane?: string): Record<string, unknown> {
-  if (!plane) return result.directivity ?? {};
-  const patterns = (result.directivity as Record<string, unknown> | undefined)?.[plane];
-  return patterns ? { [plane]: patterns } : {};
-}
 
 export function buildCanonicalChartRequest(
   kind: CanonicalChartKind,
@@ -41,15 +35,7 @@ export function buildCanonicalDirectivityRequest(
 ): CanonicalPlotRequest {
   return {
     endpoint: '/api/render-directivity',
-    payload: {
-      frequencies: result.frequencies,
-      directivity: directivityFor(result, plane),
-      reference_frequencies: reference?.result.frequencies ?? null,
-      reference_directivity: reference ? directivityFor(reference.result, plane) : null,
-      reference_label: reference?.label ?? null,
-      reference_level: preferences.mapReference,
-      theme: resolveChartTheme(preferences.chartTheme),
-    },
+    payload: buildDirectivityRenderPayload(result, preferences, plane, reference),
   };
 }
 

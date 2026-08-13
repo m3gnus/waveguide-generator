@@ -50,9 +50,11 @@ are normalized for the path only; the job label is not changed. Multiple result 
 add a safe channel suffix.
 
 The bundle dispatcher runs selected formats sequentially and returns both successful
-filenames and per-format failures. One failure does not erase earlier successes, and a
-retry can target the failed format. The Fusion curve pair is fetched completely before
-either browser download begins so a half-format cannot appear successful.
+filenames and per-format failures. This includes on-axis FRD, polar FRD, and both
+canonical PNG render requests; they do not have separate run-menu implementations.
+One failure does not erase earlier successes, and a retry can target the failed format.
+The Fusion curve pair is fetched completely before either browser download begins so a
+half-format cannot appear successful.
 
 Automatic export has its own format list and records status per format. It is complete
 only when every selected automatic format completed; failed formats remain retryable.
