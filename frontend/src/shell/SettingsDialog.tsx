@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
+import { getOnshapeConnection, type OnshapeConnection } from '../api/onshape';
 import { JobsPreferencesSurface, ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
 import { preferencesStore, usePreferences, type CadApplication } from '../prefs/preferences';
 import { Icon } from './icons';
@@ -77,8 +78,59 @@ function WorkspaceSettings() {
   </section>;
 }
 
+/** Report who the stored Onshape key pair authenticates as.
+ *
+ * Deliberately read-only. The key pair is created by the account owner at
+ * Onshape's developer portal and pasted into a file outside every git
+ * repository; WG shows where that file is and never offers a field to type a
+ * secret into (CAD-LINK-PLAN.md section 8.6).
+ */
+function OnshapeConnectionStatus() {
+  const [connection, setConnection] = useState<OnshapeConnection | null>(null);
+  const [checking, setChecking] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const check = useCallback(async (refresh: boolean) => {
+    setChecking(true); setError(null);
+    try {
+      setConnection(await getOnshapeConnection(refresh));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally { setChecking(false); }
+  }, []);
+  useEffect(() => { void check(false); }, [check]);
+
+  if (checking && connection === null) return <p className="cad-settings-note">Checking the Onshape connection…</p>;
+  if (error) return <p className="workspace-settings-error" role="status">{error}</p>;
+  if (!connection) return null;
+
+  return <div className="cad-settings-connection">
+    {connection.configured
+      ? connection.reachable
+        ? <p className="cad-settings-note" role="status">
+            Connected as <b>{connection.account?.name ?? 'this account'}</b>
+            {connection.plan?.name ? ` · ${connection.plan.name}` : ''}
+            {connection.plan?.publicOnly === true
+              ? ' — this plan makes every document public, so anyone with the link can view designs you send.'
+              : ''}
+          </p>
+        : <p className="workspace-settings-error" role="status">{connection.detail ?? 'Onshape could not be reached with the stored key pair.'}</p>
+      : <p className="cad-settings-note">
+          No API key pair yet. Create one at <b>dev-portal.onshape.com/keys</b> and save the two values to <code>{connection.credentialsPath}</code> as
+          {' '}<code>ONSHAPE_ACCESS_KEY</code> and <code>ONSHAPE_SECRET_KEY</code>. WG reads that file; it never asks you to type a key here.
+        </p>}
+    {connection.insecureKeyFile && <p className="workspace-settings-error" role="status">
+      That key file is readable by other accounts on this machine. Restrict it with <code>chmod 600</code>.
+    </p>}
+    <div className="settings-theme-options">
+      <button disabled={checking} onClick={() => void check(true)}>{checking ? 'Checking…' : 'Check connection'}</button>
+    </div>
+  </div>;
+}
+
 function CadSettings() {
   const preferences = usePreferences();
+  const onshape = preferences.cadApplication === 'onshape';
   return <section id="settings-cad" className="settings-theme cad-settings" aria-labelledby="settings-cad-title" tabIndex={-1}>
     <h3 id="settings-cad-title">CAD Link</h3>
     <label className="ui-field">CAD application<select
@@ -87,9 +139,12 @@ function CadSettings() {
       onChange={(event) => preferencesStore.update({ cadApplication: event.target.value as CadApplication })}
     >
       <option value="fusion360">Autodesk Fusion 360</option>
-      <option value="onshape" disabled>Onshape — coming soon</option>
+      <option value="onshape">Onshape</option>
     </select></label>
-    <p className="cad-settings-note">WGLink opens and updates the active waveguide in Fusion 360. Onshape support is coming soon.</p>
+    <p className="cad-settings-note">{onshape
+      ? 'WG uploads the waveguide to Onshape over its API: the solid arrives as an imported part and the managed WG parameters as a Variable Studio. Sending again replaces the part in place, so features you build on it are kept. Bringing Onshape geometry back into WG for simulation is Fusion-only for now.'
+      : 'WGLink opens and updates the active waveguide in Fusion 360, and can bring Fusion geometry back into WG for simulation.'}</p>
+    {onshape && <OnshapeConnectionStatus/>}
   </section>;
 }
 

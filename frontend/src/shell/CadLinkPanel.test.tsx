@@ -8,7 +8,7 @@ import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import meshFixture from '../viewport/test-fixtures/tagged_sources-small.msh?raw';
-import { buildImportedSubmission, cadWorkflowView, CadLinkPanel, newestReturnArrival, showIngestedMeshInViewport } from './CadLinkPanel';
+import { buildImportedSubmission, CadLinkPanel, fusionWorkflowView, newestReturnArrival, onshapeWorkflowView, showIngestedMeshInViewport } from './CadLinkPanel';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 
 const listing: CadReturnListing = {
@@ -145,21 +145,206 @@ describe('CadLinkPanel', () => {
   });
 
   it('maps Fusion presence and config freshness to one explicit action', () => {
-    expect(cadWorkflowView('fusion360', closedFusion)).toMatchObject({
+    expect(fusionWorkflowView(closedFusion)).toMatchObject({
       headline: 'Fusion 360 is closed', action: 'open',
     });
-    expect(cadWorkflowView('fusion360', currentFusion)).toMatchObject({
+    expect(fusionWorkflowView(currentFusion)).toMatchObject({
       state: 'current', action: null,
     });
-    expect(cadWorkflowView('fusion360', { ...closedFusion, state: 'addin_offline', processRunning: true })).toMatchObject({
+    expect(fusionWorkflowView({ ...closedFusion, state: 'addin_offline', processRunning: true })).toMatchObject({
       state: 'addin-offline', action: null,
     });
-    expect(cadWorkflowView('fusion360', { ...currentFusion, state: 'stale', wgChangesAvailable: true })).toMatchObject({
+    expect(fusionWorkflowView({ ...currentFusion, state: 'stale', wgChangesAvailable: true })).toMatchObject({
       state: 'stale', action: 'update',
     });
-    expect(cadWorkflowView('onshape', null)).toMatchObject({
-      state: 'coming-soon', action: null,
+  });
+
+  it('maps Onshape link state to one explicit action', () => {
+    const credentials = { configured: true, credentialsPath: '/home/x/.config/hornlab/onshape.env', detail: null, insecureKeyFile: false };
+    const link = {
+      designId: 'wgd_1', accountId: 'ACC', documentId: 'DID', workspaceId: 'WID',
+      documentName: 'Tritonia', documentUrl: 'https://cad.onshape.com/documents/DID/w/WID',
+      isPublic: true, partStudioElementId: 'PART', variableStudioElementId: 'VARS',
+      lastSequence: 3, updatedAt: '2026-08-13T09:00:00Z',
+    };
+    const base = { credentials, link: null, wgChangesAvailable: false, currentFormula: 'osse' } as const;
+
+    expect(onshapeWorkflowView(null)).toMatchObject({ state: 'checking', action: null });
+    expect(onshapeWorkflowView({ ...base, state: 'not_configured' })).toMatchObject({
+      state: 'not-configured', action: null,
     });
+    // The path to the key file is what makes the message actionable.
+    expect(onshapeWorkflowView({ ...base, state: 'not_configured' }).detail)
+      .toContain('/home/x/.config/hornlab/onshape.env');
+    expect(onshapeWorkflowView({ ...base, state: 'not_linked' })).toMatchObject({
+      state: 'not-linked', action: 'open',
+    });
+    expect(onshapeWorkflowView({ ...base, state: 'current', link })).toMatchObject({
+      state: 'current', headline: 'Onshape · Tritonia', action: null,
+    });
+    expect(onshapeWorkflowView({ ...base, state: 'stale', link, wgChangesAvailable: true })).toMatchObject({
+      state: 'stale', action: 'update',
+    });
+    // The reason an update is safe is the whole point of the blob re-upload.
+    expect(onshapeWorkflowView({ ...base, state: 'stale', link, wgChangesAvailable: true }).detail)
+      .toContain('in place');
+  });
+
+  /** Render the panel with Onshape selected, serving canned Onshape replies.
+   * `send` decides what POST /send answers, so one helper covers the happy
+   * path, the consent path, and a failure. */
+  const renderOnshape = async (
+    status: Record<string, unknown>,
+    send: () => Response = () => json({}),
+    connection: Record<string, unknown> = {
+      configured: true, reachable: true, credentialsPath: '/x/onshape.env', detail: null,
+      insecureKeyFile: false, account: { id: 'ACC', name: 'Owner' },
+      plan: { name: 'Onshape Free public only', group: 'Free', publicOnly: true },
+    },
+  ) => {
+    preferencesStore.update({ cadApplication: 'onshape' });
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      calls.push(path);
+      if (path.startsWith('/api/cadlink/onshape/connection')) return json(connection);
+      if (path.endsWith('/onshape/status')) return json(status);
+      if (path.endsWith('/onshape/send')) return send();
+      return json({}, 404);
+    }));
+    await act(async () => {
+      root.render(<CadLinkPanel/>);
+      await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    });
+    return calls;
+  };
+
+  const onshapeStatus = (overrides: Record<string, unknown> = {}) => ({
+    state: 'not_linked',
+    credentials: { configured: true, credentialsPath: '/x/onshape.env', detail: null, insecureKeyFile: false },
+    link: null,
+    wgChangesAvailable: false,
+    currentFormula: 'osse',
+    ...overrides,
+  });
+
+  it('offers to create an Onshape document and states the public-plan consequence', async () => {
+    const calls = await renderOnshape(onshapeStatus());
+    expect(host.querySelector('.cad-connection')?.textContent).toContain('Not in Onshape yet');
+    expect(host.querySelector<HTMLButtonElement>('.cad-primary-action')?.textContent)
+      .toContain('in Onshape');
+    expect(host.textContent).toContain('makes every document world-readable');
+    // The Onshape leg needs no workspace folder and no Fusion heartbeat.
+    expect(calls.some((path) => path.includes('/fusion-status'))).toBe(false);
+    expect(calls.some((path) => path.includes('/returns'))).toBe(false);
+  });
+
+  it('does not offer the Fusion return workflow under Onshape', async () => {
+    await renderOnshape(onshapeStatus());
+    expect(host.textContent).toContain('Not available for Onshape yet');
+    expect(host.querySelector('.cad-bundle-list')).toBeNull();
+  });
+
+  it('asks for confirmation before creating a world-readable document, then sends', async () => {
+    let allowPublic: unknown = null;
+    preferencesStore.update({ cadApplication: 'onshape' });
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path.startsWith('/api/cadlink/onshape/connection')) {
+        return json({
+          configured: true, reachable: true, credentialsPath: '/x/onshape.env', detail: null,
+          insecureKeyFile: false, account: { id: 'ACC', name: 'Owner' },
+          plan: { name: 'Onshape Free public only', group: 'Free', publicOnly: true },
+        });
+      }
+      if (path.endsWith('/onshape/status')) return json(onshapeStatus());
+      if (path.endsWith('/onshape/send')) {
+        allowPublic = JSON.parse(String(init?.body)).allowPublic;
+        if (allowPublic !== true) {
+          return json({ detail: 'This Onshape account is on the Free plan, which can only create public documents.' }, 428);
+        }
+        return json({
+          bundlePath: '/data/x.wglink', bundleId: 'wgb_1', exportId: 'wge_1', sequence: 1,
+          designHash: 'sha256:a', geometryHash: 'sha256:b', artifactSha256: 'sha256:c',
+          onshape: {
+            documentId: 'DID', workspaceId: 'WID', documentName: 'Tritonia',
+            documentUrl: 'https://cad.onshape.com/documents/DID/w/WID',
+            createdDocument: true, isPublic: true, variablesPushed: 6, partNames: ['Tritonia'], accountId: 'ACC',
+          },
+        });
+      }
+      return json({}, 404);
+    }));
+    await act(async () => {
+      root.render(<CadLinkPanel/>);
+      await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    });
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('.cad-primary-action')!.click();
+      await Promise.resolve(); await Promise.resolve();
+    });
+    expect(allowPublic).toBe(false);
+    const confirm = host.querySelector<HTMLElement>('.cad-direction-alert')!;
+    expect(confirm.textContent).toContain('This document will be public');
+    // Nothing is created until the user actually confirms.
+    expect(host.querySelector('.cad-status-strip')).toBeNull();
+
+    const proceed = [...confirm.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent!.startsWith('Continue'))!;
+    await act(async () => {
+      proceed.click();
+      await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    });
+    expect(allowPublic).toBe(true);
+    expect(host.querySelector('.cad-status-strip')?.textContent)
+      .toContain('Created Tritonia in Onshape · 6 parameters · public document');
+  });
+
+  it('offers to update a linked document and links out to it', async () => {
+    await renderOnshape(onshapeStatus({
+      state: 'stale',
+      wgChangesAvailable: true,
+      link: {
+        designId: 'wgd_a', accountId: 'ACC', documentId: 'DID', workspaceId: 'WID',
+        documentName: 'Tritonia', documentUrl: 'https://cad.onshape.com/documents/DID/w/WID',
+        isPublic: true, partStudioElementId: 'PART', variableStudioElementId: 'VARS',
+        lastSequence: 2, updatedAt: '2026-08-13T09:00:00Z',
+      },
+    }));
+    expect(host.querySelector('.cad-connection')?.textContent).toContain('WG design changed · Tritonia');
+    expect(host.querySelector<HTMLButtonElement>('.cad-primary-action')?.textContent)
+      .toBe('Send WG changes to Onshape');
+    const link = host.querySelector<HTMLAnchorElement>('.cad-onshape-open')!;
+    expect(link.href).toBe('https://cad.onshape.com/documents/DID/w/WID');
+    expect(link.rel).toContain('noopener');
+  });
+
+  it('offers no action and explains where the key goes when Onshape is not connected', async () => {
+    await renderOnshape(
+      onshapeStatus({
+        state: 'not_configured',
+        credentials: { configured: false, credentialsPath: '/x/onshape.env', detail: 'No key pair', insecureKeyFile: false },
+      }),
+      () => json({}),
+      { configured: false, reachable: false, credentialsPath: '/x/onshape.env', detail: 'No key pair', insecureKeyFile: false, account: null, plan: null },
+    );
+    expect(host.querySelector('.cad-connection')?.textContent).toContain('Onshape is not connected');
+    expect(host.querySelector('.cad-connection')?.textContent).toContain('/x/onshape.env');
+    expect(host.querySelector('.cad-primary-action')).toBeNull();
+  });
+
+  it('reports an Onshape send failure without claiming success', async () => {
+    await renderOnshape(
+      onshapeStatus(),
+      () => json({ detail: 'Onshape rate limit reached (429).' }, 429),
+    );
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('.cad-primary-action')!.click();
+      await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    });
+    expect(host.querySelector('.cad-alert[role="alert"]')?.textContent).toContain('rate limit');
+    expect(host.querySelector('.cad-status-strip')).toBeNull();
   });
 
   it('recognizes a newly written or replaced Fusion return for automatic opening', () => {
@@ -206,7 +391,7 @@ describe('CadLinkPanel', () => {
 
   it('explains local Fusion parameter edits instead of claiming synchronization', async () => {
     const stale = { ...currentFusion, state: 'stale' as const, wgChangesAvailable: true, link: { ...currentFusion.link!, parameterDriftCount: 2 } };
-    expect(cadWorkflowView('fusion360', stale).detail).toContain('2 managed Fusion parameters have local edits');
+    expect(fusionWorkflowView(stale).detail).toContain('2 managed Fusion parameters have local edits');
   });
 
   it('keeps Fusion body changes separate from WG parameter changes', () => {
@@ -216,11 +401,11 @@ describe('CadLinkPanel', () => {
       fusionChangesAvailable: true,
       link: { ...currentFusion.link!, localBodyState: 'modified' as const },
     };
-    expect(cadWorkflowView('fusion360', fusionOnly)).toMatchObject({
+    expect(fusionWorkflowView(fusionOnly)).toMatchObject({
       headline: 'Fusion geometry has changed · Tritonia V', action: null,
     });
     const both = { ...fusionOnly, wgChangesAvailable: true };
-    expect(cadWorkflowView('fusion360', both)).toMatchObject({
+    expect(fusionWorkflowView(both)).toMatchObject({
       headline: 'WG and Fusion both changed · Tritonia V', action: 'update',
     });
   });

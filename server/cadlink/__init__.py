@@ -6,11 +6,13 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:  # pragma: no cover - import-time typing only
     from .api import mount_cadlink
     from .identity import CadLink, OpenClassification, SaveIdentity, classify_open, design_hash
+    from .onshape.api import mount_onshape
     from .store import CadLinkStore
 
 
 _EXPORTS = {
     "mount_cadlink": ".api",
+    "mount_onshape": ".onshape.api",
     "CadLink": ".identity",
     "OpenClassification": ".identity",
     "SaveIdentity": ".identity",
@@ -42,4 +44,5 @@ __all__ = [
     "classify_open",
     "design_hash",
     "mount_cadlink",
+    "mount_onshape",
 ]
