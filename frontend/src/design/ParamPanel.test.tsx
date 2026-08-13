@@ -173,6 +173,27 @@ describe('ParamPanel inventory UX', () => {
     expect(useDesignStore.getState().design.mesh.quadrants).toBe(storedValue);
   });
 
+  it('finds and reveals the semantic Solve domain control through rail and palette search', async () => {
+    act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
+    const filter = host.querySelector<HTMLInputElement>('#parameter-filter-simulation')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(filter, 'Solve domain');
+      filter.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(host.querySelector('#solve-symmetry')).not.toBeNull();
+
+    const design = useDesignStore.getState().design;
+    const entry = buildParameterPaletteEntries(design.formula, { mode: 'parametric', design })
+      .find((candidate) => candidate.id === 'parametric-control-solve-domain')!;
+    await act(async () => {
+      entry.run();
+      await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    });
+
+    expect(host.querySelector<HTMLInputElement>('#parameter-filter-simulation')?.value).toBe('Solve domain');
+    expect(document.activeElement).toBe(host.querySelector('#solve-symmetry'));
+  });
+
   it('renders only the CAD workspace section set and trims forced solve options', () => {
     act(() => {
       useDesignStore.getState().setFamily('OSSE');

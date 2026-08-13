@@ -45,10 +45,12 @@ interface CadReturnState {
   needsIngest: boolean;
   ingestedBundleIdentity: string | null;
   ingestStaleReason: string | null;
+  beginIngestIntent: () => number;
+  isCurrentIngestIntent: (generation: number) => boolean;
   selectBundle: (bundle: CadReturnBundle | null) => void;
   refreshSelectedBundle: (bundle: CadReturnBundle | null) => void;
   markIngestStale: (reason: string) => void;
-  applyIngest: (record: CadReturnIngestRecord) => void;
+  applyIngest: (record: CadReturnIngestRecord, generation: number) => boolean;
   acknowledge: (findingId: string, value: boolean) => void;
   acknowledgeAllBlocking: () => void;
   setSourceSize: (sourceId: string, value: number) => void;
@@ -114,6 +116,16 @@ function bundleChangeReason(previous: CadReturnBundle, current: CadReturnBundle 
   return 'The return bundle was modified after this ingestion.';
 }
 
+// This token deliberately lives outside Zustand state: advancing intent must
+// reject a late network result without manufacturing a render by itself. Every
+// input that changes the bytes an ingest represents advances the same token.
+let ingestIntentGeneration = 0;
+
+function supersedeIngestIntent(): number {
+  ingestIntentGeneration += 1;
+  return ingestIntentGeneration;
+}
+
 function reconcileListing(state: CadReturnState, selectedBundle: CadReturnBundle) {
   const ids = new Set(selectedBundle.sources.map((source) => source.id));
   const sourceSizesMm = Object.fromEntries(selectedBundle.sources.map((source) => [
@@ -166,41 +178,61 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
   needsIngest: true,
   ingestedBundleIdentity: null,
   ingestStaleReason: null,
-  selectBundle: (selectedBundle) => set({
-    selectedBundle,
-    ingestRecord: null,
-    acknowledgedFindingIds: [],
-    ...initialFromBundle(selectedBundle),
-    areaDriftSourceIds: [],
-    exteriorOnly: false,
-    combineEnabled: false,
-    combineCrossoversHz: {},
-    combineLevelMatch: null,
-    combineAlign: null,
-    channelDrivers: {},
-    needsIngest: true,
-    ingestedBundleIdentity: null,
-    ingestStaleReason: null,
-  }),
-  refreshSelectedBundle: (selectedBundle) => set((state) => {
-    const previous = state.selectedBundle;
-    if (!previous) return {};
-    const differsFromIngest = state.ingestRecord && (
-      !selectedBundle || state.ingestedBundleIdentity !== bundleIdentity(selectedBundle)
-    );
-    const reason = differsFromIngest
-      ? bundleChangeReason(previous, selectedBundle) ?? state.ingestStaleReason ?? 'The return listing differs from the bundle used for this ingestion.'
-      : null;
-    if (!selectedBundle) return reason ? { needsIngest: true, ingestStaleReason: reason } : {};
-    return {
-      ...reconcileListing(state, selectedBundle),
-      ...(reason ? { needsIngest: true, ingestStaleReason: reason } : {}),
-    };
-  }),
-  markIngestStale: (reason) => set((state) => (
-    state.ingestRecord ? { needsIngest: true, ingestStaleReason: reason } : {}
-  )),
-  applyIngest: (ingestRecord) => {
+  beginIngestIntent: supersedeIngestIntent,
+  isCurrentIngestIntent: (generation) => generation === ingestIntentGeneration,
+  selectBundle: (selectedBundle) => {
+    supersedeIngestIntent();
+    set({
+      selectedBundle,
+      ingestRecord: null,
+      acknowledgedFindingIds: [],
+      ...initialFromBundle(selectedBundle),
+      areaDriftSourceIds: [],
+      exteriorOnly: false,
+      combineEnabled: false,
+      combineCrossoversHz: {},
+      combineLevelMatch: null,
+      combineAlign: null,
+      channelDrivers: {},
+      needsIngest: true,
+      ingestedBundleIdentity: null,
+      ingestStaleReason: null,
+    });
+  },
+  refreshSelectedBundle: (selectedBundle) => {
+    const previous = get().selectedBundle;
+    // A listing revision can replace the geometry under the same path. Advance
+    // intent even before any ingest record exists, or an older request could
+    // later attach itself to the revised evidence as though it described it.
+    if (previous && (!selectedBundle || bundleIdentity(previous) !== bundleIdentity(selectedBundle))) {
+      supersedeIngestIntent();
+    }
+    set((state) => {
+      const previous = state.selectedBundle;
+      if (!previous) return {};
+      const differsFromIngest = state.ingestRecord && (
+        !selectedBundle || state.ingestedBundleIdentity !== bundleIdentity(selectedBundle)
+      );
+      const reason = differsFromIngest
+        ? bundleChangeReason(previous, selectedBundle) ?? state.ingestStaleReason ?? 'The return listing differs from the bundle used for this ingestion.'
+        : null;
+      if (!selectedBundle) return reason ? { needsIngest: true, ingestStaleReason: reason } : {};
+      return {
+        ...reconcileListing(state, selectedBundle),
+        ...(reason ? { needsIngest: true, ingestStaleReason: reason } : {}),
+      };
+    });
+  },
+  markIngestStale: (reason) => {
+    // Design replacement must supersede an in-flight ingest even when there is
+    // no completed record yet, which is why invalidation is outside the guard.
+    supersedeIngestIntent();
+    set((state) => (
+      state.ingestRecord ? { needsIngest: true, ingestStaleReason: reason } : {}
+    ));
+  },
+  applyIngest: (ingestRecord, generation) => {
+    if (generation !== ingestIntentGeneration) return false;
     const skipped = new Set(ingestRecord.skipped_source_ids);
     const current = get();
     const channels = current.driveChannels.flatMap((channel) => {
@@ -223,6 +255,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
       ingestedBundleIdentity: current.selectedBundle ? bundleIdentity(current.selectedBundle) : null,
       ingestStaleReason: null,
     });
+    return true;
   },
   acknowledge: (findingId, value) => set((state) => ({
     acknowledgedFindingIds: value
@@ -232,24 +265,30 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
   acknowledgeAllBlocking: () => set((state) => ({
     acknowledgedFindingIds: state.ingestRecord?.findings.filter((finding) => finding.blocking).map((finding) => finding.id) ?? [],
   })),
-  setSourceSize: (sourceId, value) => set((state) => ({ sourceSizesMm: { ...state.sourceSizesMm, [sourceId]: value }, needsIngest: true })),
-  setRigidSize: (rigidSizeMm) => set({ rigidSizeMm, needsIngest: true }),
-  setTransition: (transitionMm) => set({ transitionMm, needsIngest: true }),
-  setSkipped: (sourceId, skipped) => set((state) => {
-    const skippedSourceIds = skipped
-      ? [...new Set([...state.skippedSourceIds, sourceId])]
-      : state.skippedSourceIds.filter((id) => id !== sourceId);
-    let driveChannels = state.driveChannels.map((channel) => ({ ...channel, source_ids: channel.source_ids.filter((id) => id !== sourceId) })).filter((channel) => channel.source_ids.length);
-    if (!skipped && !driveChannels.some((channel) => channel.source_ids.includes(sourceId))) {
+  setSourceSize: (sourceId, value) => {
+    supersedeIngestIntent();
+    set((state) => ({ sourceSizesMm: { ...state.sourceSizesMm, [sourceId]: value }, needsIngest: true }));
+  },
+  setRigidSize: (rigidSizeMm) => { supersedeIngestIntent(); set({ rigidSizeMm, needsIngest: true }); },
+  setTransition: (transitionMm) => { supersedeIngestIntent(); set({ transitionMm, needsIngest: true }); },
+  setSkipped: (sourceId, skipped) => {
+    supersedeIngestIntent();
+    set((state) => {
+      const skippedSourceIds = skipped
+        ? [...new Set([...state.skippedSourceIds, sourceId])]
+        : state.skippedSourceIds.filter((id) => id !== sourceId);
+      let driveChannels = state.driveChannels.map((channel) => ({ ...channel, source_ids: channel.source_ids.filter((id) => id !== sourceId) })).filter((channel) => channel.source_ids.length);
+      if (!skipped && !driveChannels.some((channel) => channel.source_ids.includes(sourceId))) {
+        const source = state.selectedBundle?.sources.find((item) => item.id === sourceId);
+        if (source) driveChannels = [...driveChannels, { id: source.defaultDriveChannelId, source_ids: [sourceId], motion: 'normal' }];
+      }
       const source = state.selectedBundle?.sources.find((item) => item.id === sourceId);
-      if (source) driveChannels = [...driveChannels, { id: source.defaultDriveChannelId, source_ids: [sourceId], motion: 'normal' }];
-    }
-    const source = state.selectedBundle?.sources.find((item) => item.id === sourceId);
-    const sourceSizesMm = !skipped && source && state.sourceSizesMm[sourceId] === undefined
-      ? { ...state.sourceSizesMm, [sourceId]: source.suggestedResolutionMm }
-      : state.sourceSizesMm;
-    return { skippedSourceIds, driveChannels, sourceSizesMm, needsIngest: true };
-  }),
+      const sourceSizesMm = !skipped && source && state.sourceSizesMm[sourceId] === undefined
+        ? { ...state.sourceSizesMm, [sourceId]: source.suggestedResolutionMm }
+        : state.sourceSizesMm;
+      return { skippedSourceIds, driveChannels, sourceSizesMm, needsIngest: true };
+    });
+  },
   setSourceChannel: (sourceId, channelId) => set((state) => {
     const activeIds = (state.selectedBundle?.sources ?? []).map((source) => source.id).filter((id) => !state.skippedSourceIds.includes(id));
     const rows = activeIds.map((id) => {
@@ -261,12 +300,15 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
   setChannelMotion: (channelId, motion) => set((state) => ({
     driveChannels: state.driveChannels.map((channel) => channel.id === channelId ? { ...channel, motion } : channel),
   })),
-  setAreaDriftOverride: (sourceId, enabled) => set((state) => ({
-    areaDriftOverrides: enabled
-      ? [...new Set([...state.areaDriftOverrides, sourceId])]
-      : state.areaDriftOverrides.filter((id) => id !== sourceId),
-    needsIngest: true,
-  })),
+  setAreaDriftOverride: (sourceId, enabled) => {
+    supersedeIngestIntent();
+    set((state) => ({
+      areaDriftOverrides: enabled
+        ? [...new Set([...state.areaDriftOverrides, sourceId])]
+        : state.areaDriftOverrides.filter((id) => id !== sourceId),
+      needsIngest: true,
+    }));
+  },
   flagAreaDrift: (sourceId) => set((state) => ({ areaDriftSourceIds: [...new Set([...state.areaDriftSourceIds, sourceId])] })),
   setExteriorOnly: (exteriorOnly) => set({ exteriorOnly }),
   setCombineEnabled: (combineEnabled) => set({ combineEnabled }),
@@ -386,6 +428,7 @@ export function acknowledgedFindingWire(record: CadReturnIngestRecord, findingId
 }
 
 export function resetCadReturnStore(): void {
+  supersedeIngestIntent();
   useCadReturnStore.setState({
     selectedBundle: null,
     ingestRecord: null,

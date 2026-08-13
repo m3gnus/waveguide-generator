@@ -177,6 +177,7 @@ export function CadLinkCoordinator() {
   const [onshapeStatus, setOnshapeStatus] = useState<OnshapeStatus | null>(null);
   const [onshapeConnection, setOnshapeConnection] = useState<OnshapeConnection | null>(null);
   const seenReturnRevisions = useRef<Map<string, string> | null>(null);
+  const returnListRequest = useRef(0);
   const fusionStatusRequest = useRef(0);
   const onshapeStatusRequest = useRef(0);
   const onshapeConnectionRequested = useRef(false);
@@ -262,16 +263,21 @@ export function CadLinkCoordinator() {
 
   const refresh = useCallback(async (options: RefreshOptions = {}) => {
     const background = options.background === true;
+    const request = ++returnListRequest.current;
     // The wgreturn folder belongs exclusively to the Fusion add-in. Keeping
     // the guard inside the command also prevents callers from accidentally
     // reading it while the always-mounted coordinator is in Onshape mode.
     if (preferencesStore.getSnapshot().cadApplication === 'onshape') {
-      if (!background) setLoading(false);
+      setLoading(false);
       return;
     }
     if (!background) { setLoading(true); setError(null); }
     try {
       const response = await listReturns();
+      // Poll, manual refresh, and the post-send refresh may overlap. Only the
+      // newest request may revise evidence or auto-select a return; otherwise a
+      // slow old directory snapshot can roll the whole CAD state backwards.
+      if (request !== returnListRequest.current) return;
       setBundles(response.items);
       const previous = seenReturnRevisions.current;
       const next = new Map(response.items.map((item) => [item.bundlePath, item.modifiedAt]));
@@ -321,9 +327,13 @@ export function CadLinkCoordinator() {
         useCadReturnStore.getState().refreshSelectedBundle(current ?? null);
       }
     } catch (reason) {
-      if (!background) setError(reason instanceof Error ? reason.message : String(reason));
+      if (request === returnListRequest.current && !background) {
+        setError(reason instanceof Error ? reason.message : String(reason));
+      }
     } finally {
-      if (!background) setLoading(false);
+      // A background poll can supersede the initial foreground listing. The
+      // latest completion owns the loading flag even when it did not raise it.
+      if (request === returnListRequest.current) setLoading(false);
     }
   }, []);
 
@@ -365,7 +375,10 @@ export function CadLinkCoordinator() {
     const timer = window.setInterval(() => {
       void refresh({ background: true, autoOpenNew: true });
     }, 2_500);
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearInterval(timer);
+      returnListRequest.current += 1;
+    };
   }, [onshape, refresh]);
 
   const expectFusionReturn = useCallback((requestId: string, requestedAt = Date.now()) => {
@@ -378,6 +391,9 @@ export function CadLinkCoordinator() {
   const ingest = useCallback(async () => {
     const current = useCadReturnStore.getState();
     if (!current.selectedBundle) return;
+    // This intent covers the ingest record itself. The viewport has a separate
+    // token because its follow-up artifact fetch can be superseded independently.
+    const ingestGeneration = current.beginIngestIntent();
     // Intent starts before the network request. A later viewport choice must
     // win even when this ingest's mesh fetch eventually completes.
     const viewportGeneration = importedMeshStore.beginIntent();
@@ -394,7 +410,10 @@ export function CadLinkCoordinator() {
         skippedSourceIds: current.skippedSourceIds,
         areaDriftOverrides: current.areaDriftOverrides,
       });
-      current.applyIngest(record);
+      if (!useCadReturnStore.getState().applyIngest(record, ingestGeneration)) {
+        setStatus('Discarded a completed ingest because its selected return or design was superseded. Rebuild the mesh for the current state.');
+        return;
+      }
       setStatus(`Ingested ${record.ingest_id}. Review the verdicts before solving.`);
       void showIngestedMeshInViewport(
         record,
@@ -404,6 +423,10 @@ export function CadLinkCoordinator() {
         viewportGeneration,
       );
     } catch (reason) {
+      if (!useCadReturnStore.getState().isCurrentIngestIntent(ingestGeneration)) {
+        setStatus('Discarded an ingest response because its selected return or design was superseded. Rebuild the mesh for the current state.');
+        return;
+      }
       const message = reason instanceof Error ? reason.message : String(reason);
       const structured = reason instanceof CadLinkApiError ? reason.areaDriftSources : [];
       structured.forEach(current.flagAreaDrift);

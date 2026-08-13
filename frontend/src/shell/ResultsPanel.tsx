@@ -580,9 +580,9 @@ export function curveCaveatData(items: NamedResult[]): CurveCaveatData | null {
     );
     return resolved ? [{ item, resolved }] : [];
   });
-  const validityExceeded = validity.some(({ resolved }) => resolved.exceedsCeiling);
-  const sources = validityExceeded
-    ? validity.flatMap(({ item, resolved }) => resolved.sources.map((source) => ({
+  const exceededValidity = validity.filter(({ resolved }) => resolved.exceedsCeiling);
+  const sources = exceededValidity.length
+    ? exceededValidity.flatMap(({ item, resolved }) => resolved.sources.map((source) => ({
       key: `${item.id}:${source.sourceId}:${source.effectiveMaxFrequencyHz}`,
       label: item.label,
       ...source,
@@ -596,7 +596,7 @@ export function curveCaveatData(items: NamedResult[]): CurveCaveatData | null {
       ? Math.min(...sources.map(({ effectiveMaxFrequencyHz }) => effectiveMaxFrequencyHz))
       : null,
     solvedMaxFrequencyHz: sources.length
-      ? Math.max(...validity.flatMap(({ resolved }) => resolved.solvedMaxFrequencyHz === null ? [] : [resolved.solvedMaxFrequencyHz]))
+      ? Math.max(...exceededValidity.flatMap(({ resolved }) => resolved.solvedMaxFrequencyHz === null ? [] : [resolved.solvedMaxFrequencyHz]))
       : null,
     sources,
     warnings,

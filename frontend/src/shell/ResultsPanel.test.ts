@@ -6,8 +6,9 @@ import type { ChartTokens } from '../results/EChart';
 import type { NamedResult } from '../results/mappers';
 import type { SummaryContext, SummaryGroup } from '../results/summary';
 import type { ResultPayload } from '../results/types';
+import { resultFrequencyValidity } from '../results/validity';
 import { designForFamily, serializeDesign } from '../stores/design';
-import { beamShapeMissingReason, COMPARABLE_CHARTS, directivityIndexOption, directivityMapPanels, impedanceOption, ResultsChartGrid, resolvedPolarStepNotice, resultExportSnapshot, resultLayoutClass } from './ResultsPanel';
+import { beamShapeMissingReason, COMPARABLE_CHARTS, curveCaveatData, directivityIndexOption, directivityMapPanels, impedanceOption, ResultsChartGrid, resolvedPolarStepNotice, resultExportSnapshot, resultLayoutClass } from './ResultsPanel';
 
 const summaryMocks = vi.hoisted(() => ({
   groups: vi.fn<(context: SummaryContext) => SummaryGroup[]>(() => []),
@@ -89,6 +90,69 @@ describe('result comparison charts', () => {
       expect.objectContaining({ color: '#f90', type: 'solid' }),
       expect.objectContaining({ color: '#f90', type: 'dashed' }),
     ]);
+  });
+
+  it('aggregates validity sources only from compared curves that exceed their ceilings', () => {
+    const exceeded: ResultPayload = {
+      frequencies: [100, 20_000],
+      metadata: { source_ids: ['limited'] },
+    };
+    const compliant: ResultPayload = {
+      frequencies: [100, 200],
+      metadata: { source_ids: ['short'] },
+    };
+    const caveat = curveCaveatData([
+      {
+        ...named('exceeded', 'Long run', exceeded),
+        wrapper: {
+          frequencies: [], channels: { drive: exceeded },
+          metadata: { per_source_frequency_validity: { limited: { effective_max_valid_frequency_hz: 1_000 } } },
+        },
+      },
+      {
+        ...named('compliant', 'Short run', compliant),
+        wrapper: {
+          frequencies: [], channels: { drive: compliant },
+          metadata: { per_source_frequency_validity: { short: { effective_max_valid_frequency_hz: 500 } } },
+        },
+      },
+    ]);
+
+    expect(caveat?.governingMaxFrequencyHz).toBe(1_000);
+    expect(caveat?.solvedMaxFrequencyHz).toBe(20_000);
+    expect(caveat?.sources.map(({ sourceId }) => sourceId)).toEqual(['limited']);
+  });
+});
+
+describe('result frequency validity joins', () => {
+  it('uses missing channel membership only when the wrapper join is provably unambiguous', () => {
+    const channel: ResultPayload = { frequencies: [100, 2_000] };
+    const singleChannelWrapper: ResultPayload = {
+      frequencies: [],
+      channels: { drive: channel },
+      metadata: { per_source_frequency_validity: {
+        source: { effective_max_valid_frequency_hz: 1_000 },
+        second: { effective_max_valid_frequency_hz: 1_500 },
+      } },
+    };
+    const oneSourceWrapper: ResultPayload = {
+      frequencies: [],
+      channels: { drive: channel, other: { frequencies: [] } },
+      metadata: { per_source_frequency_validity: { source: { effective_max_valid_frequency_hz: 1_000 } } },
+    };
+    const ambiguousWrapper: ResultPayload = {
+      ...oneSourceWrapper,
+      metadata: { per_source_frequency_validity: {
+        source: { effective_max_valid_frequency_hz: 1_000 },
+        other: { effective_max_valid_frequency_hz: 500 },
+      } },
+    };
+
+    expect(resultFrequencyValidity(channel, singleChannelWrapper)?.sources.map(({ sourceId }) => sourceId))
+      .toEqual(['source', 'second']);
+    expect(resultFrequencyValidity(channel, oneSourceWrapper)?.sources.map(({ sourceId }) => sourceId))
+      .toEqual(['source']);
+    expect(resultFrequencyValidity(channel, ambiguousWrapper)).toBeNull();
   });
 });
 

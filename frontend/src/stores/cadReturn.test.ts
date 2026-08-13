@@ -47,12 +47,12 @@ describe('CAD return store', () => {
 
   it('gates on every blocking finding and resets acknowledgements on re-ingest', () => {
     useCadReturnStore.getState().selectBundle(bundle);
-    useCadReturnStore.getState().applyIngest(record());
+    useCadReturnStore.getState().applyIngest(record(), useCadReturnStore.getState().beginIngestIntent());
     expect(unacknowledgedBlocking(useCadReturnStore.getState())).toEqual(['finding-a']);
     useCadReturnStore.getState().acknowledge('finding-a', true);
     expect(unacknowledgedBlocking(useCadReturnStore.getState())).toEqual([]);
     expect(acknowledgedFindingWire(record(), ['finding-a'])).toEqual(['sha256:wgi_one:finding-a']);
-    useCadReturnStore.getState().applyIngest(record('wgi_two'));
+    useCadReturnStore.getState().applyIngest(record('wgi_two'), useCadReturnStore.getState().beginIngestIntent());
     expect(useCadReturnStore.getState().acknowledgedFindingIds).toEqual([]);
     expect(unacknowledgedBlocking(useCadReturnStore.getState())).toEqual(['finding-a']);
   });
@@ -70,7 +70,7 @@ describe('CAD return store', () => {
 
   it('marks a refreshed changed listing stale while preserving sizing edits', () => {
     useCadReturnStore.getState().selectBundle(bundle);
-    useCadReturnStore.getState().applyIngest(record());
+    useCadReturnStore.getState().applyIngest(record(), useCadReturnStore.getState().beginIngestIntent());
     useCadReturnStore.getState().setSourceSize('source-hf', 2.25);
     useCadReturnStore.getState().refreshSelectedBundle({
       ...bundle,

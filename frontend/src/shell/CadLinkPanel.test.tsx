@@ -456,7 +456,7 @@ describe('CadLinkPanel', () => {
 
   it('builds acknowledgement wires from the current record, filters skipped sizes, and emits range/list sweep shapes', () => {
     useCadReturnStore.getState().selectBundle(listing.items[0]);
-    useCadReturnStore.getState().applyIngest(record);
+    useCadReturnStore.getState().applyIngest(record, useCadReturnStore.getState().beginIngestIntent());
     useCadReturnStore.getState().acknowledge('finding-a', true);
     useCadReturnStore.setState({
       sourceSizesMm: { 'source-hf': 3.25, optional: 9 },
@@ -484,7 +484,7 @@ describe('CadLinkPanel', () => {
 
   it('emits the combine wire only when enabled, chained by role band order', () => {
     useCadReturnStore.getState().selectBundle(listing.items[0]);
-    useCadReturnStore.getState().applyIngest(record);
+    useCadReturnStore.getState().applyIngest(record, useCadReturnStore.getState().beginIngestIntent());
     useCadReturnStore.setState({
       selectedBundle: {
         ...listing.items[0],
@@ -524,7 +524,7 @@ describe('CadLinkPanel', () => {
 
   it('widens the polar request to the derivation instead of submitting a narrowing grid', () => {
     useCadReturnStore.getState().selectBundle(listing.items[0]);
-    useCadReturnStore.getState().applyIngest(record);
+    useCadReturnStore.getState().applyIngest(record, useCadReturnStore.getState().beginIngestIntent());
     const submission = buildImportedSubmission(useCadReturnStore.getState());
     const polar = submission.options.polar_config as {
       angle_range: [number, number, number];

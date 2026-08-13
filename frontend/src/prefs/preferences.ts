@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import type { JobItem } from '../api/jobsSocket';
-import { isSubmittedDesignProjection, type SubmittedDesignProjection } from '../jobs/submittedProjection';
-import { normalizeRunName, type RunNameDateFormat, type RunNameDatePosition, type RunNameNumberFormat, type RunNameNumberPosition } from '../jobs/runNaming';
+import { isSubmittedDesignProjection } from '../jobs/submittedProjection';
+import { normalizeRunName, UNBOUND_RUN_NAME_SOURCE, type RunNameDateFormat, type RunNameDatePosition, type RunNameNumberFormat, type RunNameNumberPosition, type RunNameSourceProjection } from '../jobs/runNaming';
 import type { SmoothingMode } from '../results/smoothing';
 
 export const CHART_TYPES = [
@@ -70,7 +70,7 @@ export interface Preferences {
   autoExportOnComplete: boolean;
   autoDownloadMesh: boolean;
   outputName: string;
-  nameSourceProjection: SubmittedDesignProjection | null;
+  nameSourceProjection: RunNameSourceProjection;
   runNameDatePosition: RunNameDatePosition;
   runNameDateFormat: RunNameDateFormat;
   runNameNumberPosition: RunNameNumberPosition;
@@ -140,9 +140,11 @@ export function normalize(raw: Partial<Preferences> = {}): Preferences {
     autoExportOnComplete: raw.autoExportOnComplete === true,
     autoDownloadMesh: raw.autoDownloadMesh === true,
     outputName: normalizeRunName(raw.outputName),
-    nameSourceProjection: isSubmittedDesignProjection(raw.nameSourceProjection)
-      ? structuredClone(raw.nameSourceProjection)
-      : null,
+    nameSourceProjection: raw.nameSourceProjection === UNBOUND_RUN_NAME_SOURCE
+      ? UNBOUND_RUN_NAME_SOURCE
+      : isSubmittedDesignProjection(raw.nameSourceProjection)
+        ? structuredClone(raw.nameSourceProjection)
+        : null,
     runNameDatePosition: runNameDatePositions.has(raw.runNameDatePosition as RunNameDatePosition)
       ? raw.runNameDatePosition as RunNameDatePosition
       : defaults.runNameDatePosition,

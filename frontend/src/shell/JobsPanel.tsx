@@ -5,7 +5,7 @@ import { DesignAvailabilityNotice, RerunButton } from '../jobs/DesignAvailabilit
 import { canLoadJobDesign, replaceWithJobDesign } from '../jobs/jobDesign';
 import { canExportRun, RunExportControl } from '../jobs/RunExportControl';
 import { buildImportedSubmission } from '../jobs/importedSubmission';
-import { decorateRunName, nextRunName, runNameFromFilename } from '../jobs/runNaming';
+import { decorateRunName, nextRunName, runNameFromFilename, UNBOUND_RUN_NAME_SOURCE } from '../jobs/runNaming';
 import { projectSubmittedDesign, projectSubmittedImport, type SubmittedDesignProjection } from '../jobs/submittedProjection';
 import { applyJobPreferences, preferencesStore, runDisplayName, usePreferences } from '../prefs/preferences';
 import { JobsPreferencesSurface, ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
@@ -253,13 +253,16 @@ function RunNameField({ actions, now = new Date() }: { actions?: ReactNode; now?
   } catch { /* an invalid or absent submission cannot establish a naming baseline yet */ }
   const displayedCore = projection
     ? nextRunName(preferences, projection, filename)
-    : (preferences.nameSourceProjection ? preferences.outputName : runNameFromFilename(filename));
+    : (preferences.nameSourceProjection !== null ? preferences.outputName : runNameFromFilename(filename));
   const displayedLabel = decorateRunName(displayedCore, preferences, now);
   const [draft, setDraft] = useState(displayedCore);
   const [editing, setEditing] = useState(false);
   useEffect(() => { if (!editing) setDraft(displayedCore); }, [displayedCore, editing]);
   const commit = (value: string) => {
-    preferencesStore.update({ outputName: value, nameSourceProjection: projection });
+    preferencesStore.update({
+      outputName: value,
+      nameSourceProjection: projection ?? UNBOUND_RUN_NAME_SOURCE,
+    });
     setEditing(false);
   };
   return <div className="run-name-field">
