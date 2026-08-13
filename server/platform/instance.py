@@ -240,7 +240,12 @@ class InstanceLock:
             try:
                 os.lseek(descriptor, 0, os.SEEK_SET)
                 os.ftruncate(descriptor, 0)
-                os.write(descriptor, payload)
+                written = 0
+                while written < len(payload):
+                    count = os.write(descriptor, payload[written:])
+                    if count <= 0:
+                        raise OSError("instance lock metadata write made no progress")
+                    written += count
                 os.fsync(descriptor)
             except OSError as exc:
                 raise InstanceLockError(

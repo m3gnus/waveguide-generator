@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import re
@@ -34,6 +35,25 @@ CURRENT_TTL_SECONDS = 6 * 60 * 60
 AVAILABLE_TTL_SECONDS = 12 * 60 * 60
 INCOMPLETE_TTL_SECONDS = 2 * 60
 ERROR_BACKOFF_SECONDS = (5 * 60, 10 * 60, 20 * 60, 60 * 60)
+_CACHE_FIELDS = frozenset(
+    {
+        "schemaVersion",
+        "etag",
+        "release",
+        "availability",
+        "lastAttemptEpoch",
+        "checkedAtEpoch",
+        "nextCheckEpoch",
+        "failureCount",
+        "lastError",
+    }
+)
+_RELEASE_CACHE_FIELDS = frozenset(
+    {"version", "tag", "url", "publishedAt", "assetsReady"}
+)
+_AVAILABILITY_VALUES = frozenset(
+    {"unknown", "incomplete", "available", "current", "ahead"}
+)
 
 log = logging.getLogger("wg.updates")
 
@@ -74,6 +94,88 @@ def _version(tag_or_version: str) -> tuple[int, int, int]:
     if match is None:
         raise ValueError(f"Unsupported release version: {tag_or_version!r}")
     return tuple(int(part) for part in match.groups())  # type: ignore[return-value]
+
+
+def _cache_epoch(value: Any, field: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"update-cache {field} must be a timestamp")
+    timestamp = float(value)
+    if not math.isfinite(timestamp) or timestamp < 0:
+        raise ValueError(f"update-cache {field} must be a timestamp")
+    try:
+        _iso(timestamp)
+    except (OSError, OverflowError, ValueError) as exc:
+        raise ValueError(f"update-cache {field} must be a timestamp") from exc
+    return timestamp
+
+
+def _validated_cached_release(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != _RELEASE_CACHE_FIELDS:
+        raise ValueError("update-cache release has invalid fields")
+    version = value.get("version")
+    tag = value.get("tag")
+    url = value.get("url")
+    published_at = value.get("publishedAt")
+    assets_ready = value.get("assetsReady")
+    if not isinstance(version, str):
+        raise ValueError("update-cache release version is invalid")
+    _version(version)
+    if tag != f"v{version}" or url != f"{RELEASE_PAGE_ROOT}/{tag}":
+        raise ValueError("update-cache release identity is invalid")
+    if not isinstance(assets_ready, bool):
+        raise ValueError("update-cache release assetsReady is invalid")
+    if published_at is not None:
+        if not isinstance(published_at, str):
+            raise ValueError("update-cache release publishedAt is invalid")
+        try:
+            parsed = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("update-cache release publishedAt is invalid") from exc
+        if parsed.utcoffset() is None:
+            raise ValueError("update-cache release publishedAt is invalid")
+    return {
+        "version": version,
+        "tag": tag,
+        "url": url,
+        "publishedAt": published_at,
+        "assetsReady": assets_ready,
+    }
+
+
+def _validated_cache(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) - _CACHE_FIELDS:
+        raise ValueError("update-cache has invalid fields")
+    schema = value.get("schemaVersion")
+    if isinstance(schema, bool) or not isinstance(schema, int) or schema != CACHE_SCHEMA:
+        raise ValueError("unsupported update-cache schema")
+
+    normalized: dict[str, Any] = {"schemaVersion": CACHE_SCHEMA}
+    if "etag" in value:
+        etag = value["etag"]
+        if not isinstance(etag, str) or not etag:
+            raise ValueError("update-cache etag is invalid")
+        normalized["etag"] = etag
+    if "release" in value:
+        normalized["release"] = _validated_cached_release(value["release"])
+    if "availability" in value:
+        availability = value["availability"]
+        if not isinstance(availability, str) or availability not in _AVAILABILITY_VALUES:
+            raise ValueError("update-cache availability is invalid")
+        normalized["availability"] = availability
+    for field in ("lastAttemptEpoch", "checkedAtEpoch", "nextCheckEpoch"):
+        if field in value:
+            normalized[field] = _cache_epoch(value[field], field)
+    if "failureCount" in value:
+        failures = value["failureCount"]
+        if isinstance(failures, bool) or not isinstance(failures, int) or failures < 0:
+            raise ValueError("update-cache failureCount is invalid")
+        normalized["failureCount"] = failures
+    if "lastError" in value:
+        last_error = value["lastError"]
+        if last_error is not None and not isinstance(last_error, str):
+            raise ValueError("update-cache lastError is invalid")
+        normalized["lastError"] = last_error
+    return normalized
 
 
 def fetch_latest_release(etag: str | None = None) -> ReleaseResponse:
@@ -261,9 +363,7 @@ class UpdateService:
             return self._cache
         try:
             candidate = json.loads(self.cache_path.read_text(encoding="utf-8"))
-            if not isinstance(candidate, dict) or candidate.get("schemaVersion") != CACHE_SCHEMA:
-                raise ValueError("unsupported update-cache schema")
-            self._cache = candidate
+            self._cache = _validated_cache(candidate)
         except (OSError, ValueError, json.JSONDecodeError):
             self._cache = {"schemaVersion": CACHE_SCHEMA}
         return self._cache

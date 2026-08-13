@@ -22,6 +22,7 @@ from server.platform.paths import data_paths
 
 ALLOWED_STATUSES = frozenset({"queued", "running", "complete", "error", "cancelled"})
 MESH_ARTIFACT_GRACE_MINUTES = 60
+SUPPORTED_SCHEMA_VERSION = 4
 ALLOWED_JOB_UPDATE_FIELDS = frozenset(
     {
         "status",
@@ -217,6 +218,14 @@ class JobStore:
 
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._lock, self._transaction() as conn:
+            schema_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+            if schema_version > SUPPORTED_SCHEMA_VERSION:
+                raise RuntimeError(
+                    f"Database {self.db_path} was created by a newer version of "
+                    "Waveguide Generator "
+                    f"(schema {schema_version}); this version supports schemas up to "
+                    f"{SUPPORTED_SCHEMA_VERSION}. Upgrade Waveguide Generator to open it."
+                )
             for statement in _SCHEMA_STATEMENTS:
                 conn.execute(statement)
             columns = {
@@ -231,7 +240,7 @@ class JobStore:
                 conn.execute("ALTER TABLE simulation_jobs ADD COLUMN task_metadata_json TEXT")
             self._backfill_job_identity(conn)
             # Keep the v1 schema marker. job_events is an additive v2 transport table.
-            conn.execute("PRAGMA user_version = 4")
+            conn.execute(f"PRAGMA user_version = {SUPPORTED_SCHEMA_VERSION}")
 
     def backfill_job_identity(self) -> None:
         """Assign identities to unnumbered jobs deterministically and idempotently.
