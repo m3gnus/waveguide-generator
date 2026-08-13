@@ -48,7 +48,7 @@ function ResultsPreferencesContent() {
   const themes = useThemes();
   return <section className="preferences-section">
     <h3 className="preferences-section-title">Results & export</h3>
-    <p className="preferences-section-copy">Chart layout, processing, and automatic export defaults. Automatic files are saved under the selected Workspace folder without browser download prompts.</p>
+    <p className="preferences-section-copy">Chart layout, processing, and automatic export defaults. Automatic files are saved under the Workspace folder without browser download prompts; before a custom folder is selected, WG uses its local <code>output</code> folder.</p>
     <div className="preferences-grid">
       <ResultPanelCountControl/>
       <label className="ui-field">Smoothing<select aria-label="Smoothing" value={preferences.smoothing} onChange={(event) => preferencesStore.update({ smoothing: event.target.value as SmoothingMode })}>{SMOOTHING_MODES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>

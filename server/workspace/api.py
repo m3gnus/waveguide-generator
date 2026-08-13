@@ -153,9 +153,13 @@ def _select_workspace_folder() -> str | None:
 
 
 class WorkspaceState:
-    def __init__(self, data_dir: Path) -> None:
+    def __init__(self, data_dir: Path, *, default_path: Path | None = None) -> None:
         paths = data_paths(data_dir)
-        self.default_path = paths.workspace.resolve()
+        self.default_path = (
+            Path(default_path).expanduser().resolve()
+            if default_path is not None
+            else paths.workspace.resolve()
+        )
         self.settings_path = (paths.root / "workspace_settings.json").resolve()
         self._selected: Path | None = None
         self._loaded = False
@@ -245,14 +249,10 @@ def create_workspace_router(state: WorkspaceState) -> APIRouter:
 
     @router.post("/write-export")
     async def workspace_write_export(request: WriteExportRequest) -> dict[str, Any]:
-        selected = state.selected_path()
-        if selected is None:
-            raise HTTPException(
-                status_code=409,
-                detail="No workspace folder has been selected. Choose a workspace folder first.",
-            )
-
-        workspace_root = selected.resolve()
+        # Automatic exports must work on first launch without a native folder
+        # picker. Production supplies ``<checkout>/output`` as this fallback;
+        # an explicit selection still overrides it.
+        workspace_root = state.path().resolve()
         try:
             subdirectory_segments = _path_segments(request.subdirectory, "subdirectory")
             export_directory = workspace_root.joinpath(*subdirectory_segments).resolve()
@@ -338,8 +338,10 @@ def create_workspace_router(state: WorkspaceState) -> APIRouter:
     return router
 
 
-def mount_workspace(application: FastAPI) -> WorkspaceState:
-    state = WorkspaceState(Path(application.state.data_dir))
+def mount_workspace(
+    application: FastAPI, *, default_path: Path | None = None
+) -> WorkspaceState:
+    state = WorkspaceState(Path(application.state.data_dir), default_path=default_path)
     application.state.workspace = state
     application.include_router(create_workspace_router(state))
     return state
