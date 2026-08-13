@@ -3,23 +3,19 @@ import { CadLinkApiError, getFusionCadStatus, ingestReturn, listReturns, request
 import { NumberField } from '../design/NumberField';
 import { FrequencySweepControls, ToggleRow } from '../design/SolveOptionsSections';
 import { useSendToCad } from '../design/useSendToCad';
-import type { ImportedSolveSubmission } from '../jobs/actions';
+import { buildImportedSubmission, importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { usePreferences, type CadApplication } from '../prefs/preferences';
 import {
-  acknowledgedFindingWire,
   blockingFindings,
-  channelDriverWire,
   combineChain,
   combineLevelMatchDefault,
-  combineWire,
   DRIVER_REQUIRED_KEYS,
-  unacknowledgedBlocking,
   useCadReturnStore,
   type CadDriveChannel,
   type ChannelDriverForm,
   type DriverFieldKey,
 } from '../stores/cadReturn';
-import { parseFrequencyList, useSolveOptionsStore } from '../stores/solveOptions';
+import { useSolveOptionsStore } from '../stores/solveOptions';
 import { createImportedMeshScene } from '../viewport/importedMesh';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { parseMSH } from '../viewport/mshParser';
@@ -31,6 +27,10 @@ import { Icon } from './icons';
 import { requestSettings } from './settingsNavigation';
 import { workspaceNavigation } from './workspaceNavigation';
 import './cadLinkPanel.css';
+
+// Kept as public panel helpers for existing callers; implementation lives next
+// to the two solve entry points so the global command can share it.
+export { buildImportedSubmission, widenPolarToDerivation } from '../jobs/importedSubmission';
 
 const FRESHNESS_COPY: Record<string, string> = {
   current: 'Current — unchanged fingerprint and the saved design still agree with this generator.',
@@ -217,11 +217,26 @@ function RecordSummary({ record }: { record: CadReturnIngestRecord }) {
 /** Show the ingested solve mesh in the viewport: in CAD Link mode the model
  * being solved is the CAD return, not the parametric preview. Advisory — a
  * failure leaves the viewport as it was rather than blocking the ingest. */
-async function showIngestedMeshInViewport(ingestId: string, name: string): Promise<void> {
+async function showIngestedMeshInViewport(
+  ingestId: string,
+  name: string,
+  symmetryCutPlanes: readonly string[] = [],
+): Promise<void> {
+  const available = importedMeshStore.getSnapshot().scene;
+  if (available?.source === 'cad' && available.ingestId === ingestId) {
+    importedMeshStore.showImported();
+    return;
+  }
   try {
     const response = await fetch(`/api/cadlink/ingest/${encodeURIComponent(ingestId)}/mesh`);
     if (!response.ok) return;
-    importedMeshStore.set(createImportedMeshScene(name, parseMSH(await response.text())));
+    importedMeshStore.set(createImportedMeshScene(
+      name,
+      parseMSH(await response.text()),
+      'cad',
+      ingestId,
+      symmetryCutPlanes,
+    ));
   } catch {
     // The viewport keeps whatever it was showing.
   }
@@ -264,81 +279,6 @@ function DriverFields({ channel, form, onField }: {
   </div>;
 }
 
-const POLAR_AXIS_ORDER = ['horizontal', 'vertical', 'diagonal'] as const;
-
-/** The ingestion record's derivation may be widened but never narrowed, so the
- * submission starts FROM it: pinned axes (rejected mirror planes) force a full
- * −180…180 sweep and stay enabled, at the user's angular step. */
-export function widenPolarToDerivation(
-  options: ImportedSolveSubmission['options'],
-  derivation: Record<string, unknown>,
-): void {
-  const axes = (derivation as { axes?: Record<string, { minimum_deg?: number; maximum_deg?: number }> })?.axes ?? {};
-  const polar = options.polar_config as
-    | { angle_range: [number, number, number]; enabled_axes: string[] }
-    | undefined;
-  if (!polar || !Object.keys(axes).length) return;
-  const [start, end, count] = polar.angle_range;
-  const step = count > 1 ? (end - start) / (count - 1) : 5;
-  let widenedStart = start;
-  let widenedEnd = end;
-  const enabled = new Set(polar.enabled_axes);
-  for (const [axis, spec] of Object.entries(axes)) {
-    const minimum = typeof spec.minimum_deg === 'number' ? spec.minimum_deg : 0;
-    const maximum = typeof spec.maximum_deg === 'number' ? spec.maximum_deg : 180;
-    if (minimum <= -180 && maximum >= 180) enabled.add(axis);
-    widenedStart = Math.min(widenedStart, minimum);
-    widenedEnd = Math.max(widenedEnd, maximum);
-  }
-  if (widenedStart !== start || widenedEnd !== end) {
-    const widenedCount = Math.max(count, Math.round((widenedEnd - widenedStart) / step) + 1);
-    polar.angle_range = [widenedStart, widenedEnd, widenedCount];
-  }
-  polar.enabled_axes = POLAR_AXIS_ORDER.filter((axis) => enabled.has(axis));
-}
-
-export function buildImportedSubmission(
-  state: ReturnType<typeof useCadReturnStore.getState>,
-): ImportedSolveSubmission {
-  const record = state.ingestRecord;
-  if (!record) throw new Error('Ingest a CAD return before solving.');
-  const solveStore = useSolveOptionsStore.getState();
-  const options = solveStore.options() as ImportedSolveSubmission['options'];
-  if (solveStore.frequencyMode === 'range') {
-    options.frequency_range = [state.frequencyStartHz, state.frequencyEndHz];
-    options.num_frequencies = state.frequencyCount;
-  }
-  options.engine = 'metal';
-  options.symmetry = 'auto';
-  widenPolarToDerivation(options, record.polar_grid_derivation);
-  const combine = combineWire(state);
-  return {
-    geometry: {
-      type: 'imported',
-      ingest_id: record.ingest_id,
-      manifest_sha256: record.manifest_sha256,
-      artifact_sha256: record.artifact_sha256,
-      drive_channels: state.driveChannels.map((channel) => {
-        const driver = channelDriverWire(state.channelDrivers[channel.id]);
-        return { ...channel, source_ids: [...channel.source_ids], ...(driver ? { driver } : {}) };
-      }),
-      ...(state.driveChannels.some((channel) => channelDriverWire(state.channelDrivers[channel.id]))
-        ? { drive_voltage_v: state.driveVoltageV }
-        : {}),
-      mesh: {
-        rigid_size_mm: state.rigidSizeMm,
-        transition_mm: state.transitionMm,
-        source_size_mm: Object.fromEntries(Object.entries(state.sourceSizesMm).filter(([id]) => !state.skippedSourceIds.includes(id))),
-      },
-      acknowledged_findings: acknowledgedFindingWire(record, state.acknowledgedFindingIds),
-      skipped_source_ids: [...state.skippedSourceIds],
-      exterior_only: state.exteriorOnly,
-      ...(combine ? { combine } : {}),
-    },
-    options,
-  };
-}
-
 export function CadLinkPanel() {
   const state = useCadReturnStore();
   const solveStore = useSolveOptionsStore();
@@ -348,6 +288,11 @@ export function CadLinkPanel() {
   const filename = useDocumentStore((current) => current.filename);
   const identity = useDocumentStore((current) => current.identity);
   const coordinator = useSyncExternalStore(jobsCoordinatorBridge.subscribe, jobsCoordinatorBridge.getSnapshot, jobsCoordinatorBridge.getSnapshot);
+  const viewportMesh = useSyncExternalStore(
+    importedMeshStore.subscribe,
+    importedMeshStore.getSnapshot,
+    importedMeshStore.getSnapshot,
+  );
   const [bundles, setBundles] = useState<CadReturnBundle[]>([]);
   const [loading, setLoading] = useState(true);
   const [ingesting, setIngesting] = useState(false);
@@ -427,6 +372,7 @@ export function CadLinkPanel() {
       const opened = arrived ?? initial;
       if (opened) {
         useCadReturnStore.getState().selectBundle(opened);
+        importedMeshStore.showParametric();
       }
       if (arrived) {
         if (arrived.requestId === pendingReturnRequestId.current) {
@@ -472,7 +418,11 @@ export function CadLinkPanel() {
       });
       current.applyIngest(record);
       setStatus(`Ingested ${record.ingest_id}. Review the verdicts before solving.`);
-      void showIngestedMeshInViewport(record.ingest_id, current.selectedBundle.documentName || current.selectedBundle.name);
+      void showIngestedMeshInViewport(
+        record.ingest_id,
+        current.selectedBundle.documentName || current.selectedBundle.name,
+        record.symmetry.cut_planes ?? [],
+      );
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : String(reason);
       const structured = reason instanceof CadLinkApiError ? reason.areaDriftSources : [];
@@ -535,21 +485,10 @@ export function CadLinkPanel() {
     }
   };
 
-  const unacknowledged = unacknowledgedBlocking(state);
   const activeSources = (state.selectedBundle?.sources ?? []).filter((source) => !state.skippedSourceIds.includes(source.id));
   const channelIds = [...new Set((state.selectedBundle?.sources ?? []).map((source) => source.defaultDriveChannelId))];
-  const rangeInvalid = solveStore.frequencyMode === 'range' && (
-    !(state.frequencyStartHz > 0) || state.frequencyEndHz <= state.frequencyStartHz || state.frequencyCount < 1 || state.frequencyCount > 401
-  );
-  const listInvalid = solveStore.frequencyMode === 'list' && parseFrequencyList(solveStore.frequencyListText).frequencies === null;
   const femVolumes = state.ingestRecord?.evidence?.fem_air_volumes ?? [];
-  const requiredFem = femVolumes.some((volume) => !volume || typeof volume !== 'object' || (volume as Record<string, unknown>).required !== false);
-  const solveReason = !state.ingestRecord ? 'Ingest the selected bundle first.'
-    : state.needsIngest ? state.ingestStaleReason ?? 'Sizing or source selection changed. Re-ingest before solving.'
-      : unacknowledged.length ? `Acknowledge ${unacknowledged.length} blocking finding${unacknowledged.length === 1 ? '' : 's'} before solving.`
-        : requiredFem && !state.exteriorOnly ? 'This return includes FEM air volumes. Explicitly choose an exterior-only Phase 2 solve.'
-        : rangeInvalid || listInvalid ? 'Enter a valid explicit frequency sweep.'
-          : !state.driveChannels.length ? 'At least one drive channel is required.' : null;
+  const solveReason = importedSubmissionBlocker(state, solveStore);
   const solve = async () => {
     if (solveReason) return;
     setSubmitting(true); setError(null); setStatus(null);
@@ -590,6 +529,13 @@ export function CadLinkPanel() {
     {error && <div className="cad-alert" role="alert">{error}</div>}
     {state.ingestStaleReason && <div className="cad-alert" role="status">{state.ingestStaleReason} Re-ingest before solving.</div>}
     {status && <div className="cad-status-strip" role="status">{status}</div>}
+    {state.selectedBundle?.readable && <div className="cad-return-quick-action">
+      <div><b>{state.selectedBundle.documentName ?? state.selectedBundle.name}</b><span>{state.ingestRecord ? 'Choose what the viewport displays.' : 'Prepare this Fusion return for the viewport and solver.'}</span></div>
+      {state.ingestRecord ? <div className="cad-viewport-source-buttons" aria-label="CAD viewport source">
+        <button className={!viewportMesh.active ? 'active' : ''} aria-pressed={!viewportMesh.active} onClick={() => importedMeshStore.showParametric()}>Parametric</button>
+        <button className={viewportMesh.active ? 'active' : ''} aria-pressed={viewportMesh.active} onClick={() => void showIngestedMeshInViewport(state.ingestRecord!.ingest_id, state.selectedBundle!.documentName || state.selectedBundle!.name, state.ingestRecord!.symmetry.cut_planes ?? [])}>Fusion CAD</button>
+      </div> : <button className="primary" disabled={ingesting} onClick={() => void ingest()}>{ingesting ? 'Preparing…' : 'Prepare simulation'}</button>}
+    </div>}
     {!loading && error?.includes('No workspace folder') && <div className="empty-state"><b>No workspace selected</b><span>Choose a workspace folder in Settings, then refresh this panel.</span></div>}
     {!loading && !error && bundles.length === 0 && <div className="empty-state"><b>No CAD returns</b><span>Returned bundles appear under the selected workspace’s wgreturn folder.</span></div>}
     {bundles.length > 0 && <div className="cad-bundle-list" role="list" aria-label="Designs returned from CAD">{bundles.map((bundle) => <button
@@ -597,14 +543,14 @@ export function CadLinkPanel() {
       role="listitem"
       className={state.selectedBundle?.bundlePath === bundle.bundlePath ? 'selected' : ''}
       disabled={!bundle.readable || ingesting}
-      onClick={() => state.selectBundle(bundle)}
+      onClick={() => { state.selectBundle(bundle); importedMeshStore.showParametric(); }}
       title={!bundle.readable ? bundle.reason ?? 'Manifest is unreadable' : undefined}
     ><b>{bundle.documentName ?? bundle.name}</b><span>{bundle.readable ? `${bundle.sourceCount} sources · ${bundle.instanceCount} linked instances` : bundle.reason ?? 'Manifest is unreadable'}</span><time>{new Date(bundle.modifiedAt).toLocaleString()}</time></button>)}</div>}
 
     {state.selectedBundle?.readable && <>
       <section className="cad-section cad-sizing">
-        <header><div><h3>Mesh detail</h3><p>Smaller values are finer and support higher frequencies.</p></div><button className="primary" disabled={ingesting} onClick={() => void ingest()}>{ingesting ? 'Preparing…' : state.ingestRecord ? 'Rebuild mesh' : 'Prepare simulation'}</button></header>
-        <NumberField label="Cabinet & waveguide" unit="mm" value={state.rigidSizeMm} min={0.01} step={0.5} precision={2} description="Mesh size for rigid CAD surfaces." onCommit={state.setRigidSize}/>
+        <header><div><h3>Mesh detail</h3><p>Smaller values are finer and support higher frequencies. Curved CAD faces receive bounded extra refinement automatically.</p></div>{state.ingestRecord && <button className="primary" disabled={ingesting} onClick={() => void ingest()}>{ingesting ? 'Preparing…' : 'Rebuild mesh'}</button>}</header>
+        <NumberField label="Cabinet & waveguide" unit="mm" value={state.rigidSizeMm} min={0.01} step={0.5} precision={2} description="Maximum target size for rigid CAD surfaces; tight curvature may be refined further." onCommit={state.setRigidSize}/>
         <NumberField label="Size transition" unit="mm" value={state.transitionMm} min={0.01} step={0.5} precision={2} description="Maximum size transition between adjacent mesh regions." onCommit={state.setTransition}/>
         {state.selectedBundle.sources.map((source) => <div className={`cad-source ${state.skippedSourceIds.includes(source.id) ? 'skipped' : ''}`} key={source.id}>
           <NumberField label={`${source.role} source`} unit="mm" value={state.sourceSizesMm[source.id] ?? source.suggestedResolutionMm} min={0.01} step={0.25} precision={2} description={`${source.id} · suggested ${source.suggestedResolutionMm} mm`} disabled={state.skippedSourceIds.includes(source.id)} onCommit={(value) => state.setSourceSize(source.id, value)}/>

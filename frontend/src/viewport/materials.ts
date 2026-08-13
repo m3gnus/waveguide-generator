@@ -136,8 +136,20 @@ function normalsMaterial(clippingPlanes: Plane[], flat: boolean): ShaderMaterial
   });
 }
 
-function surfaceMaterial(mode: DisplayMode, materialClass: SurfaceMaterialClass, clippingPlanes: Plane[], theme: ViewportTheme) {
+function surfaceMaterial(
+  mode: DisplayMode,
+  materialClass: SurfaceMaterialClass,
+  clippingPlanes: Plane[],
+  theme: ViewportTheme,
+  solvedTint = false,
+) {
   const color = classColor(materialClass, theme);
+  if (solvedTint) {
+    color.lerp(
+      new Color(tokenColor('--vp-solved-domain-material', theme === 'light' ? '#a96b4d' : '#d58c62')),
+      0.28,
+    );
+  }
   const flatShading = materialClass.endsWith('-flat');
   if (mode === 'wireframe') {
     return new MeshBasicMaterial({ color, wireframe: true, transparent: true, opacity: 0.9, side: FrontSide, clippingPlanes });
@@ -172,12 +184,23 @@ function surfaceMaterial(mode: DisplayMode, materialClass: SurfaceMaterialClass,
   });
 }
 
-export function createMaterialLibrary(mode: DisplayMode, clipPlane: Plane | null, theme: ViewportTheme = 'dark'): MaterialLibrary {
+export function createMaterialLibrary(
+  mode: DisplayMode,
+  clipPlane: Plane | null,
+  theme: ViewportTheme = 'dark',
+  tintSolvedRegion = true,
+): MaterialLibrary {
   const clippingPlanes = clipPlane ? [clipPlane] : [];
   const surfaces = Object.fromEntries(classes.map((materialClass) => [
     materialClass,
     surfaceMaterial(mode, materialClass, clippingPlanes, theme),
   ])) as Record<SurfaceMaterialClass, ReturnType<typeof surfaceMaterial>>;
+  const solvedSurfaces = tintSolvedRegion
+    ? Object.fromEntries(classes.map((materialClass) => [
+        materialClass,
+        surfaceMaterial(mode, materialClass, clippingPlanes, theme, true),
+      ])) as Record<SurfaceMaterialClass, ReturnType<typeof surfaceMaterial>>
+    : surfaces;
   const wire = new MeshBasicMaterial({
     color: tokenColor('--vp-wire-material', theme === 'light' ? '#26384a' : '#9ed4f4'),
     wireframe: true, transparent: true, opacity: theme === 'light' ? 0.42 : 0.34, side: FrontSide, clippingPlanes,
@@ -203,6 +226,6 @@ export function createMaterialLibrary(mode: DisplayMode, clipPlane: Plane | null
     stencilWrite: true, stencilRef: 0, stencilFunc: NotEqualStencilFunc,
     stencilFail: ReplaceStencilOp, stencilZFail: ReplaceStencilOp, stencilZPass: ReplaceStencilOp,
   });
-  const all = [...new Set([...Object.values(surfaces), wire, edge, stencilBack, stencilFront, cap])];
-  return { surfaces, wire, edge, stencilBack, stencilFront, cap, all };
+  const all = [...new Set([...Object.values(surfaces), ...Object.values(solvedSurfaces), wire, edge, stencilBack, stencilFront, cap])];
+  return { surfaces, solvedSurfaces, wire, edge, stencilBack, stencilFront, cap, all };
 }

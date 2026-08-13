@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { DecodedFrame } from '../api/frame';
 import { PREVIEW_FINE_IDLE_MS, previewSocket } from '../api/previewSocket';
+import { postSymmetry, toSolveDesign } from '../jobs/actions';
 import { subscribeRevision, useDesignStore } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
+import { useSolveOptionsStore } from '../stores/solveOptions';
 import { Icon } from '../shell/icons';
 import { useViewerPreferences, viewerPreferences, type CameraProjection } from '../viewerprefs/viewerPreferences';
 import { ViewerPreferencesPanel } from '../viewerprefs/ViewerPreferencesPanel';
@@ -14,6 +16,7 @@ import { ClientLatencyClock, formatClientLatency } from './clientLatency';
 import { selectPreferredFrame } from './lodPolicy';
 import { parseMSH } from './mshParser';
 import { documentDisplayName, previewBadge, previewErrorMessage, staleReason, viewportSubtitle } from './presentation';
+import { markParametricSolvedDomain, quadrantsForSolveMode, type DisplayQuadrants } from './symmetryScene';
 import type { CameraPreset, DisplayMode, ViewportTheme } from './types';
 import { canRenderWebGL, type CameraRequest, type ZoomRequest, ViewportCanvas } from './ViewportCanvas';
 import './viewport.css';
@@ -31,6 +34,11 @@ const modes: Array<{ mode: DisplayMode; title: string; icon?: 'clay' | 'wire' | 
 
 /** How long the viewport may lag the design before it says so out loud. */
 const STALL_NOTICE_MS = 1_500;
+const SYMMETRY_TINT_DEBOUNCE_MS = 400;
+
+function displayQuadrants(value: number): DisplayQuadrants {
+  return value === 1 || value === 12 || value === 14 ? value : 1234;
+}
 
 function documentTheme(): ViewportTheme {
   return document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
@@ -50,6 +58,7 @@ export function Viewport() {
   const preview = useSyncExternalStore(previewSocket.subscribe, previewSocket.getSnapshot, previewSocket.getSnapshot);
   const design = useDesignStore((state) => state.design);
   const designRevision = useDesignStore((state) => state.designRevision);
+  const solveSymmetry = useSolveOptionsStore((state) => state.symmetry);
   const filename = useDocumentStore((state) => state.filename);
   const theme = useViewportTheme();
   const preferences = useViewerPreferences();
@@ -65,7 +74,31 @@ export function Viewport() {
   if (selected !== selectedRef.current) {
     selectedRef.current = selected;
   }
-  const scene = useMemo(() => selected ? frameToScene(selected) : null, [selected]);
+  const previewScene = useMemo(() => selected ? frameToScene(selected) : null, [selected]);
+  const [autoQuadrants, setAutoQuadrants] = useState<DisplayQuadrants>(() => displayQuadrants(design.mesh.quadrants));
+  const symmetryBody = useMemo(() => JSON.stringify(toSolveDesign(design)), [design]);
+  useEffect(() => {
+    if (!preferences.tintSolvedRegion || solveSymmetry !== 'auto' || previewScene === null) return undefined;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      void postSymmetry(symmetryBody, fetch, controller.signal)
+        .then((resolution) => setAutoQuadrants(resolution.quadrants))
+        .catch(() => {
+          if (!controller.signal.aborted) setAutoQuadrants(displayQuadrants(design.mesh.quadrants));
+        });
+    }, SYMMETRY_TINT_DEBOUNCE_MS);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [design.mesh.quadrants, preferences.tintSolvedRegion, previewScene, solveSymmetry, symmetryBody]);
+  const solvedQuadrants = quadrantsForSolveMode(solveSymmetry, autoQuadrants);
+  const scene = useMemo(
+    () => previewScene && preferences.tintSolvedRegion
+      ? markParametricSolvedDomain(previewScene, solvedQuadrants)
+      : previewScene,
+    [preferences.tintSolvedRegion, previewScene, solvedQuadrants],
+  );
   const [mode, setMode] = useState<DisplayMode>('clay');
   const [sectionCut, setSectionCut] = useState(false);
   const [showEnclosure, setShowEnclosure] = useState(true);
@@ -76,11 +109,13 @@ export function Viewport() {
   const [zoomRequest, setZoomRequest] = useState<ZoomRequest>({ direction: 'in', nonce: 0 });
   const [cameraProjection, setCameraProjection] = useState<CameraProjection>(() => preferences.startupCameraMode);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
-  const importedMesh = useSyncExternalStore(
+  const importedMeshState = useSyncExternalStore(
     importedMeshStore.subscribe,
     importedMeshStore.getSnapshot,
     importedMeshStore.getSnapshot,
   );
+  const availableImportedMesh = importedMeshState.scene;
+  const importedMesh = importedMeshState.active ? availableImportedMesh : null;
   const [importError, setImportError] = useState<string | null>(null);
   const [dismissedPreviewError, setDismissedPreviewError] = useState<string | null>(null);
   const [refreshRequestedAt, setRefreshRequestedAt] = useState<number | null>(null);
@@ -98,7 +133,7 @@ export function Viewport() {
   const activeScene = importedMesh?.scene ?? scene;
   const sceneMarker = importedMesh
     ? `msh:${importedMesh.name}:${importedMesh.triangleCount}`
-    : `${selected?.header.epoch ?? 0}:${selected?.header.seq ?? 0}:${selected?.header.designRevision ?? 0}:${selected?.header.lod ?? ''}`;
+    : `${selected?.header.epoch ?? 0}:${selected?.header.seq ?? 0}:${selected?.header.designRevision ?? 0}:${selected?.header.lod ?? ''}:${preferences.tintSolvedRegion ? solvedQuadrants : 'same'}`;
   const surfaces = activeScene?.surfaces ?? [];
   const webgl = canRenderWebGL() && renderFailure === null;
   const hasSurfaces = hasRenderableSurfaces(activeScene);
@@ -138,8 +173,8 @@ export function Viewport() {
     }
   };
 
-  const clearImportedMesh = () => {
-    importedMeshStore.set(null);
+  const showParametric = () => {
+    importedMeshStore.showParametric();
     setImportError(null);
   };
 
@@ -236,11 +271,14 @@ export function Viewport() {
     <div className="viewport-title">
       <b>{importedMesh?.name ?? documentDisplayName(filename) ?? 'Untitled design'}</b>
       <span>{importedMesh
-        ? `${importedMesh.triangleCount.toLocaleString()} triangles · ${importedMesh.physicalGroupCount} physical group${importedMesh.physicalGroupCount === 1 ? '' : 's'}`
+        ? `${importedMesh.triangleCount.toLocaleString()} display triangles${importedMesh.triangleCount !== importedMesh.solvedTriangleCount ? ` · ${importedMesh.solvedTriangleCount.toLocaleString()} solved` : ''} · ${importedMesh.physicalGroupCount} physical group${importedMesh.physicalGroupCount === 1 ? '' : 's'}`
         : viewportSubtitle(design)}</span>
     </div>
     <div className="viewport-live">
-      {importedMesh && <span className="imported-mesh-badge">IMPORTED MESH <button type="button" onClick={clearImportedMesh}>Clear</button></span>}
+      {availableImportedMesh && <span className="imported-mesh-badge" aria-label="Viewport geometry source">
+        <button type="button" className={!importedMesh ? 'active' : ''} aria-pressed={!importedMesh} onClick={showParametric}>Parametric</button>
+        <button type="button" className={importedMesh ? 'active' : ''} aria-pressed={Boolean(importedMesh)} onClick={() => importedMeshStore.showImported()}>{availableImportedMesh.source === 'cad' ? 'Fusion CAD' : 'Imported mesh'}</button>
+      </span>}
       <span className={badge.className}><i />{refreshRequestedAt === null ? badge.label : 'REFRESHING'}</span>
       {behindDesign && !importedMesh && <button
         type="button"
