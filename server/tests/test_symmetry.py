@@ -97,7 +97,9 @@ def test_vertical_offset_keeps_both_planes() -> None:
 
 
 def test_symmetry_contract_documents_vertical_offset_as_rigid_placement() -> None:
-    contract = (Path(__file__).parents[2] / "docs" / "SYMMETRY-CONTRACT.md").read_text()
+    contract = (
+        Path(__file__).parents[2] / "docs" / "reference" / "SYMMETRY-CONTRACT.md"
+    ).read_text()
 
     assert "any non-zero or non-scalar value rejects xz" not in contract
     assert "Only a non-finite or non-scalar value rejects xz" in contract

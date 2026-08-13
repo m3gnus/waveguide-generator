@@ -24,7 +24,7 @@ Every function here is best-effort. A server started without a console -- from
 that is a normal state, not a failure.
 
 The ctypes prototypes are explicit for the reason recorded in
-``docs/WINDOWS-VALIDATION.md`` §4.1a: ctypes assumes a C ``int`` return, but a
+``docs/validation/2026-08/WINDOWS-VALIDATION.md`` §4.1a: ctypes assumes a C ``int`` return, but a
 ``HANDLE`` is pointer-sized, so an unprototyped call truncates the handle on
 64-bit Windows and then operates on a bogus value.
 """
