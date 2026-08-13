@@ -2,6 +2,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadReturnIngestRecord, CadReturnListing, FusionCadStatus } from '../api/cadlink';
+import type { OnshapeLink } from '../api/onshape';
 import { preferencesStore } from '../prefs/preferences';
 import { importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
@@ -188,10 +189,12 @@ describe('CadLinkPanel', () => {
 
   it('maps Onshape link state to one explicit action', () => {
     const credentials = { configured: true, credentialsPath: '/home/x/.config/hornlab/onshape.env', detail: null, insecureKeyFile: false };
-    const link = {
+    const link: OnshapeLink = {
       designId: 'wgd_1', accountId: 'ACC', documentId: 'DID', workspaceId: 'WID',
       documentName: 'Tritonia', documentUrl: 'https://cad.onshape.com/documents/DID/w/WID',
       isPublic: true, partStudioElementId: 'PART', variableStudioElementId: 'VARS',
+      featureStudioElementId: null, nativeFeatureId: null,
+      datumFeatureStudioElementId: null, datumFeatureId: null, buildMode: 'import',
       lastSequence: 3, updatedAt: '2026-08-13T09:00:00Z',
     };
     const base = { credentials, link: null, wgChangesAvailable: false, currentFormula: 'osse' } as const;
@@ -280,6 +283,8 @@ describe('CadLinkPanel', () => {
       designId: 'wgd_a', accountId: 'ACC', documentId: 'DID', workspaceId: 'WID',
       documentName: 'Tritonia', documentUrl: 'https://cad.onshape.com/documents/DID/w/WID',
       isPublic: true, partStudioElementId: 'PART', variableStudioElementId: 'VARS',
+      featureStudioElementId: null, nativeFeatureId: null,
+      datumFeatureStudioElementId: null, datumFeatureId: null, buildMode: 'import',
       lastSequence: 2, updatedAt: '2026-08-13T09:00:00Z',
     };
     preferencesStore.update({ cadApplication: 'onshape' });
@@ -392,6 +397,8 @@ describe('CadLinkPanel', () => {
         designId: 'wgd_a', accountId: 'ACC', documentId: 'DID', workspaceId: 'WID',
         documentName: 'Tritonia', documentUrl: 'https://cad.onshape.com/documents/DID/w/WID',
         isPublic: true, partStudioElementId: 'PART', variableStudioElementId: 'VARS',
+        featureStudioElementId: null, nativeFeatureId: null,
+        datumFeatureStudioElementId: null, datumFeatureId: null, buildMode: 'import',
         lastSequence: 2, updatedAt: '2026-08-13T09:00:00Z',
       },
     }));

@@ -1,6 +1,7 @@
 # Frontend async mutation audit (#31)
 
-Date: 2026-08-13  
+Date: 2026-08-13
+
 Scope: production frontend stores, coordinators, API managers, and action surfaces. Tests were read only to establish existing guarantees; `previewSocket` was intentionally out of scope.
 
 ## Rule used
