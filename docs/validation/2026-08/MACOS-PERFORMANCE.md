@@ -1,5 +1,8 @@
 # Apple Silicon performance validation
 
+> Historical measurements captured in August 2026. They are retained as baselines,
+> not as a claim about the current release or current dependency pins.
+
 Measured 2026-08-07/08 from `windows-support` at `1791083`, before the local
 changes described in the last section. The host was a 10-core Apple M1 Max with
 64 GiB RAM, macOS 26.5.2, Python 3.13.1, and Node 24.13.0. These are macOS

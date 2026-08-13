@@ -18,7 +18,9 @@ def _between(text: str, start: str, end: str | None = None) -> str:
 
 
 def test_frame_performance_note_describes_current_preview_frames() -> None:
-    performance = _between(_read("docs/FRAME-SPEC.md"), "## Performance notes")
+    performance = _between(
+        _read("docs/reference/FRAME-SPEC.md"), "## Performance notes"
+    )
     launcher = _read("launch/serve.py")
 
     assert "0.23–0.64 MB" in performance
@@ -34,7 +36,7 @@ def test_frame_performance_note_describes_current_preview_frames() -> None:
 
 def test_windows_performance_describes_serial_sweep_default() -> None:
     section = _between(
-        _read("docs/WINDOWS-PERFORMANCE.md"),
+        _read("docs/validation/2026-08/WINDOWS-PERFORMANCE.md"),
         "### 4.3 Parallel sweeps are available, and never silent",
         "### 4.4",
     )
@@ -46,22 +48,20 @@ def test_windows_performance_describes_serial_sweep_default() -> None:
     assert "It now passes the engine's own auto mode" not in section
 
 
-def test_cutover_docs_describe_the_written_windows_ci_leg() -> None:
-    cutover = _read("docs/P6-CUTOVER-PLAN.md")
-    ci_section = _between(cutover, "### P6.3", "### P6.4")
-    windows_section = _between(cutover, "### P6.4", "### P6.5")
-    validation = _read("docs/WINDOWS-VALIDATION.md")
-    normalized_ci = " ".join(ci_section.split())
+def test_release_docs_distinguish_current_workflow_from_dated_evidence() -> None:
+    readiness = _read("docs/plans/RELEASE-READINESS.md")
+    workflow = _read(".github/workflows/ci.yml")
+    validation = _read("docs/validation/2026-08/WINDOWS-VALIDATION.md")
 
-    assert "ubuntu + macos + windows" in normalized_ci
-    assert "Windows job" not in ci_section
-    assert "no Windows CI job" not in windows_section
+    assert "Ubuntu, macOS, Windows, frontend, codec, and drift" in readiness
+    assert "os: [ubuntu-latest, macos-latest, windows-latest]" in workflow
+    assert "Confirm the current GitHub Actions matrix is green" in readiness
     assert "Windows CI leg is written but unexecuted" in validation
 
 
 def test_spa_docs_distinguish_module_import_from_app_construction() -> None:
     validation = _between(
-        _read("docs/WINDOWS-VALIDATION.md"),
+        _read("docs/validation/2026-08/WINDOWS-VALIDATION.md"),
         "### 2.1 Node was not an obstacle, but it is still required",
         "### 2.2",
     )

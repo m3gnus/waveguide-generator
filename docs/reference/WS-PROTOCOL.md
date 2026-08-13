@@ -13,7 +13,8 @@ Client→server messages and server→client control messages are JSON:
 
 - `v` — protocol version. Server rejects unknown majors with close code 4400.
 - `epoch` — **connection epoch**: server assigns on accept (`hello`), client echoes on every message. Responses carry the epoch they answer; the client drops anything from a stale epoch (kills late frames from a pre-reconnect socket).
-- Binary frames (preview geometry) follow FRAME-SPEC.md; their header carries `epoch`, `seq`, and `designRevision` so binary and JSON reconcile identically.
+- Binary preview geometry follows [FRAME-SPEC](FRAME-SPEC.md); its header carries
+  `epoch`, `seq`, and `designRevision` so binary and JSON reconcile identically.
 
 Handshake: server sends `{"v":1,"kind":"hello","epoch":N,"heartbeatSec":15,"limits":{"maxFrameBytes":...}}` on accept. Heartbeat: server pings every `heartbeatSec`; client closes + reconnects (exponential backoff, 250 ms → 5 s cap) on 2 missed beats.
 
