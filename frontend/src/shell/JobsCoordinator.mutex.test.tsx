@@ -226,7 +226,7 @@ describe('solve invocation mutex', () => {
       skippedSourceIds: [],
       acknowledgedFindingIds: [],
     });
-    importedMeshStore.set({ name: 'Fusion speaker', source: 'cad', ingestId } as ImportedMeshScene);
+    importedMeshStore.setCad({ name: 'Fusion speaker', source: 'cad', ingestId } as ImportedMeshScene);
     mocks.submitImported.mockResolvedValue('job-cad');
 
     await act(async () => {

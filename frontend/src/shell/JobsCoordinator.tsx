@@ -118,7 +118,11 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   }
   const capability = capabilities.find((engine) => engine.name.toLowerCase() === effectiveEngine.toLowerCase()) ?? null;
   const metalCapability = capabilities.find((engine) => engine.name.toLowerCase() === 'metal') ?? null;
-  const visibleImported = viewportGeometry.active ? viewportGeometry.scene : null;
+  const visibleImported = viewportGeometry.showing === 'cad'
+    ? viewportGeometry.cad
+    : viewportGeometry.showing === 'file'
+      ? viewportGeometry.file
+      : null;
   const cadGeometryActive = visibleImported?.source === 'cad';
   const fileGeometryActive = visibleImported?.source === 'file';
   const cadGeometryMismatch = cadGeometryActive && (
