@@ -28,7 +28,7 @@ from server.mesh.imported import geometry_candidate_matches
 
 
 RETURN_SUBDIRECTORY = Path("cadlink") / "onshape" / "wgreturn"
-SOURCE_INTERFACE_FEATURE = "return-source-interface-v1"
+SOURCE_INTERFACE_FEATURE = "source-interface-v1"
 
 
 class OnshapeReturnError(ValueError):
@@ -68,23 +68,30 @@ def _utc_now() -> str:
 def _source_policy_from_export(manifest: Mapping[str, Any]) -> dict[str, Any]:
     features = manifest.get("required_features")
     interface = manifest.get("interface")
-    raw = interface.get("return_source") if isinstance(interface, Mapping) else None
+    sources = interface.get("sources") if isinstance(interface, Mapping) else None
     if (
         not isinstance(features, list)
         or SOURCE_INTERFACE_FEATURE not in features
-        or not isinstance(raw, Mapping)
+        or not isinstance(sources, list)
+        or not sources
     ):
         raise OnshapeReturnError(
             "The linked outbound bundle has no WG-authored return-source interface. "
             "Its throat geometry is known, but source role, source id, and drive-channel "
             "identity are not; WG will not default them to HF."
         )
+    if len(sources) != 1 or not isinstance(sources[0], Mapping):
+        raise OnshapeReturnError(
+            "The Onshape linked-throat return currently requires exactly one "
+            "wglink.interface.sources[] record."
+        )
+    raw = sources[0]
     policy = dict(raw)
     for key in ("id", "role", "default_drive_channel_id", "patch_policy"):
-        _string(policy.get(key), f"wglink.interface.return_source.{key}")
+        _string(policy.get(key), f"wglink.interface.sources[0].{key}")
     if not isinstance(policy.get("required"), bool):
         raise OnshapeReturnError(
-            "Stored outbound evidence is missing wglink.interface.return_source.required."
+            "Stored outbound evidence is missing wglink.interface.sources[0].required."
         )
     components = policy.get("expected_connected_components")
     if isinstance(components, bool) or not isinstance(components, int) or components < 1:
