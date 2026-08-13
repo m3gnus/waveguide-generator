@@ -111,7 +111,9 @@ export function Viewport() {
   const [showStats, setShowStats] = useState(false);
   const [clientFrameMs, setClientFrameMs] = useState<number | null>(null);
   const [renderFailure, setRenderFailure] = useState<string | null>(null);
-  const [cameraRequest, setCameraRequest] = useState<CameraRequest>({ preset: 'three-quarter', nonce: 0 });
+  // Start square to the mouth. The former three-quarter perspective made a
+  // circular aperture look elliptical/tilted before the user touched the view.
+  const [cameraRequest, setCameraRequest] = useState<CameraRequest>({ preset: 'front', nonce: 0 });
   const [zoomRequest, setZoomRequest] = useState<ZoomRequest>({ direction: 'in', nonce: 0 });
   const [cameraProjection, setCameraProjection] = useState<CameraProjection>(() => preferences.startupCameraMode);
   const [preferencesOpen, setPreferencesOpen] = useState(false);

@@ -4,7 +4,11 @@ import { fetchJobResults } from '../api/results';
 import { ActionMenu, type ActionMenuItem } from '../design/ActionMenu';
 import { usePreferences, type ExportFormat } from '../prefs/preferences';
 import { resultExportSnapshot } from '../results/exportContext';
-import { runExportBundle, type ExportContext } from '../results/exporters';
+import {
+  runWorkspaceExportBundle,
+  type ExportBundleResult,
+  type ExportContext,
+} from '../results/exporters';
 import type { ResultPayload } from '../results/types';
 import { EMPTY_RUN_EXPORT_STATE, useRunExportStore, type RunExportOutcome } from '../stores/runExports';
 import { canLoadJobDesign, jobDesignAvailability, jobRerunState } from './jobDesign';
@@ -65,6 +69,13 @@ function jobName(job: JobItem): string {
   return job.label?.trim() || `${String(job.config_summary.formula_type ?? 'design').toLowerCase()}_${job.id.slice(0, 8)}`;
 }
 
+function workspaceNotice(label: string, result: Pick<ExportBundleResult, 'directory' | 'files'>): string {
+  const count = `${result.files.length} file${result.files.length === 1 ? '' : 's'}`;
+  return result.directory
+    ? `${label} · ${count} written to ${result.directory}`
+    : `${label} · ${count} written to Workspace`;
+}
+
 export function RunExportControl({ job, compact = false, onOpenExportSettings }: RunExportControlProps) {
   const preferences = usePreferences();
   const operation = useRunExportStore((state) => state.jobs[job.id] ?? EMPTY_RUN_EXPORT_STATE);
@@ -88,14 +99,9 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
   };
 
   const exportOne = (format: ExportFormat) => execute(job.id, [format], async (): Promise<RunExportOutcome> => {
-    const result = await runExportBundle(await buildContext([format]), [format]);
+    const result = await runWorkspaceExportBundle(await buildContext([format]), [format]);
     await recordFiles(result.files);
-    const polarDirectory = format === 'polar_frd' && result.files.length
-      ? result.files[0].replace(/[\\/][^\\/]+$/, '')
-      : null;
-    const notice = polarDirectory
-      ? `${result.files.length} polar FRD files written to ${polarDirectory}`
-      : `${formatLabel(format)} exported · ${result.files.length} file${result.files.length === 1 ? '' : 's'}`;
+    const notice = workspaceNotice(formatLabel(format), result);
     return result.failures.length ? {
       notice,
       error: `${notice} · ${result.failures.map(({ reason }) => reason).join('; ')}`,
@@ -106,9 +112,9 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
   const exportPreferred = () => {
     const formats = [...preferences.exportFormats];
     return execute(job.id, formats, async (): Promise<RunExportOutcome> => {
-      const result = await runExportBundle(await buildContext(formats), formats);
+      const result = await runWorkspaceExportBundle(await buildContext(formats), formats);
       await recordFiles(result.files);
-      const fileText = `${result.files.length} file${result.files.length === 1 ? '' : 's'} exported`;
+      const fileText = workspaceNotice('Export', result);
       if (!result.failures.length) return { notice: fileText };
       const failed = result.failures.map(({ format, reason }) => `${formatLabel(format)}: ${reason}`).join('; ');
       return {

@@ -13,7 +13,7 @@ import { JobsPanel } from '../shell/JobsPanel';
 
 const mocks = vi.hoisted(() => ({
   fetchJobResults: vi.fn(),
-  runExportBundle: vi.fn(),
+  runWorkspaceExportBundle: vi.fn(),
 }));
 
 vi.mock('../api/results', async (importOriginal) => ({
@@ -22,7 +22,7 @@ vi.mock('../api/results', async (importOriginal) => ({
 }));
 
 vi.mock('../results/exporters', () => ({
-  runExportBundle: mocks.runExportBundle,
+  runWorkspaceExportBundle: mocks.runWorkspaceExportBundle,
 }));
 
 function deferred<T>() {
@@ -90,7 +90,11 @@ describe('RunExportControl', () => {
     publishJobs([]);
     useRunExportStore.getState().resetForTests();
     mocks.fetchJobResults.mockResolvedValue({ frequencies: [1000], spl_on_axis: { spl: [90] } });
-    mocks.runExportBundle.mockResolvedValue({ files: ['1_stored_horn_v07.csv'], failures: [] });
+    mocks.runWorkspaceExportBundle.mockResolvedValue({
+      directory: 'C:/chosen/1_stored_horn_v07',
+      files: ['C:/chosen/1_stored_horn_v07/1_stored_horn_v07.csv'],
+      failures: [],
+    });
     patchMetadata = vi.spyOn(jobsSocket, 'patchMetadata').mockResolvedValue(undefined);
     vi.stubGlobal('fetch', vi.fn());
     host = document.createElement('div');
@@ -169,15 +173,17 @@ describe('RunExportControl', () => {
 
     expect(mocks.fetchJobResults).toHaveBeenCalledOnce();
     expect(mocks.fetchJobResults).toHaveBeenCalledWith(job.id);
-    expect(mocks.runExportBundle).toHaveBeenCalledOnce();
-    const [context, formats] = mocks.runExportBundle.mock.calls[0];
+    expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledOnce();
+    const [context, formats] = mocks.runWorkspaceExportBundle.mock.calls[0];
     expect(formats).toEqual(['csv']);
     expect(context.result).toEqual(await mocks.fetchJobResults.mock.results[0].value);
     expect(context.design).toEqual(hydrateJobDesign(job));
     expect(context.designRevision).toBe(42);
     expect(context.jobStem).toBe('1_stored_horn_v07');
     expect(context.preferences.outputName).toBe('horn');
-    expect(patchMetadata).toHaveBeenCalledWith(job.id, { exported_files: ['earlier.csv', '1_stored_horn_v07.csv'] });
+    expect(patchMetadata).toHaveBeenCalledWith(job.id, {
+      exported_files: ['earlier.csv', 'C:/chosen/1_stored_horn_v07/1_stored_horn_v07.csv'],
+    });
   });
 
   it('keeps design-only exports after result retention and disables result formats', async () => {
@@ -196,7 +202,7 @@ describe('RunExportControl', () => {
     await act(async () => { menuItem('STEP solid').click(); await settle(); });
 
     expect(mocks.fetchJobResults).not.toHaveBeenCalled();
-    expect(mocks.runExportBundle).toHaveBeenCalledWith(
+    expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(
       expect.objectContaining({ design: hydrateJobDesign(job), designRevision: 42 }),
       ['step'],
     );
@@ -208,19 +214,28 @@ describe('RunExportControl', () => {
       channels: { 'drive-hf': directivityResult(), 'drive-mf': directivityResult() },
     };
     mocks.fetchJobResults.mockResolvedValue(wrapped);
-    mocks.runExportBundle.mockResolvedValue({
-      files: ['1_stored_horn_v07-drive-hf.csv', '1_stored_horn_v07-drive-mf.csv'], failures: [],
+    mocks.runWorkspaceExportBundle.mockResolvedValue({
+      directory: 'C:/chosen/1_stored_horn_v07',
+      files: [
+        'C:/chosen/1_stored_horn_v07/1_stored_horn_v07-drive-hf.csv',
+        'C:/chosen/1_stored_horn_v07/1_stored_horn_v07-drive-mf.csv',
+      ],
+      failures: [],
     });
     render();
     openMenu();
     await act(async () => { menuItem('Frequency data').click(); await settle(); });
 
-    expect(mocks.runExportBundle).toHaveBeenCalledWith(
+    expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(
       expect.objectContaining({ result: wrapped }),
       ['csv'],
     );
     expect(patchMetadata).toHaveBeenCalledWith('job-export-1', {
-      exported_files: ['earlier.csv', '1_stored_horn_v07-drive-hf.csv', '1_stored_horn_v07-drive-mf.csv'],
+      exported_files: [
+        'earlier.csv',
+        'C:/chosen/1_stored_horn_v07/1_stored_horn_v07-drive-hf.csv',
+        'C:/chosen/1_stored_horn_v07/1_stored_horn_v07-drive-mf.csv',
+      ],
     });
   });
 
@@ -235,72 +250,92 @@ describe('RunExportControl', () => {
     expect(item.getAttribute('aria-disabled')).toBeNull();
     await act(async () => { item.click(); await settle(); });
 
-    expect(mocks.runExportBundle).toHaveBeenCalledWith(
+    expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(
       expect.objectContaining({ result: expect.any(Object) }),
       [format],
     );
   });
 
-  it('dispatches exactly one on-axis FRD file', async () => {
+  it('writes exactly one on-axis FRD file to the Workspace', async () => {
     mocks.fetchJobResults.mockResolvedValue(directivityResult());
-    mocks.runExportBundle.mockResolvedValue({ files: ['1_stored_horn_v07.frd'], failures: [] });
+    mocks.runWorkspaceExportBundle.mockResolvedValue({
+      directory: 'C:/chosen/1_stored_horn_v07',
+      files: ['C:/chosen/1_stored_horn_v07/1_stored_horn_v07.frd'],
+      failures: [],
+    });
     render();
     openMenu();
     await act(async () => { menuItem('On-axis response').click(); await settle(); });
 
     expect(mocks.fetchJobResults).toHaveBeenCalledOnce();
-    expect(mocks.runExportBundle).toHaveBeenCalledWith(expect.objectContaining({ result: directivityResult() }), ['on_axis_frd']);
+    expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(
+      expect.objectContaining({ result: directivityResult() }),
+      ['on_axis_frd'],
+    );
     expect(patchMetadata).toHaveBeenCalledWith('job-export-1', {
-      exported_files: ['earlier.csv', '1_stored_horn_v07.frd'],
+      exported_files: ['earlier.csv', 'C:/chosen/1_stored_horn_v07/1_stored_horn_v07.frd'],
     });
   });
 
-  it('dispatches one on-axis FRD per drive channel', async () => {
+  it('writes one on-axis FRD per drive channel', async () => {
     const wrapped = {
       frequencies: [], channel_order: ['drive-hf', 'drive-mf'],
       channels: { 'drive-hf': directivityResult(), 'drive-mf': directivityResult() },
     };
     mocks.fetchJobResults.mockResolvedValue(wrapped);
-    mocks.runExportBundle.mockResolvedValue({
-      files: ['1_stored_horn_v07-drive-hf.frd', '1_stored_horn_v07-drive-mf.frd'], failures: [],
+    mocks.runWorkspaceExportBundle.mockResolvedValueOnce({
+      directory: 'C:/chosen/1_stored_horn_v07',
+      files: [
+        'C:/chosen/1_stored_horn_v07/1_stored_horn_v07-drive-hf.frd',
+        'C:/chosen/1_stored_horn_v07/1_stored_horn_v07-drive-mf.frd',
+      ],
+      failures: [],
     });
     render();
     openMenu();
     await act(async () => { menuItem('On-axis response').click(); await settle(); });
 
-    expect(mocks.runExportBundle).toHaveBeenCalledWith(expect.objectContaining({ result: wrapped }), ['on_axis_frd']);
+    expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(
+      expect.objectContaining({ result: wrapped }),
+      ['on_axis_frd'],
+    );
     expect(patchMetadata).toHaveBeenCalledWith('job-export-1', { exported_files: [
-      'earlier.csv', '1_stored_horn_v07-drive-hf.frd', '1_stored_horn_v07-drive-mf.frd',
+      'earlier.csv',
+      'C:/chosen/1_stored_horn_v07/1_stored_horn_v07-drive-hf.frd',
+      'C:/chosen/1_stored_horn_v07/1_stored_horn_v07-drive-mf.frd',
     ] });
   });
 
   it('posts the complete polar set to the workspace and reports its count', async () => {
     mocks.fetchJobResults.mockResolvedValue(directivityResult());
-    mocks.runExportBundle.mockResolvedValue({
-      files: Array.from({ length: 6 }, (_, index) => `/chosen/1_stored_horn_v07/${index}.frd`), failures: [],
+    mocks.runWorkspaceExportBundle.mockResolvedValueOnce({
+      directory: 'C:/chosen/1_stored_horn_v07',
+      files: Array.from({ length: 6 }, (_, index) => `C:/chosen/1_stored_horn_v07/${index}.frd`),
+      failures: [],
     });
     render(completeJob({ polar_grid: { angle_step: 5 } }));
     openMenu();
     await act(async () => { menuItem('Polar set (VituixCAD)').click(); await settle(); });
 
-    expect(mocks.runExportBundle).toHaveBeenCalledWith(expect.any(Object), ['polar_frd']);
-    expect(document.querySelector('[role="status"]')?.textContent).toContain('6 polar FRD files written');
-    expect(document.querySelector('[role="status"]')?.textContent).toContain('/chosen/1_stored_horn_v07');
+    expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(expect.any(Object), ['polar_frd']);
+    expect(document.querySelector('[role="status"]')?.textContent).toContain('6 files written');
+    expect(document.querySelector('[role="status"]')?.textContent).toContain('C:/chosen/1_stored_horn_v07');
   });
 
-  it('asks for a workspace selection and writes nothing when it is cancelled', async () => {
+  it('uses the configured default Workspace without opening a picker', async () => {
     mocks.fetchJobResults.mockResolvedValue(directivityResult());
-    mocks.runExportBundle.mockResolvedValue({
-      files: [], failures: [{ format: 'polar_frd', reason: 'Workspace selection was cancelled. No files were written.' }],
+    mocks.runWorkspaceExportBundle.mockResolvedValueOnce({
+      directory: 'C:/default/output/1_stored_horn_v07',
+      files: Array.from({ length: 6 }, (_, index) => `C:/default/output/1_stored_horn_v07/${index}.frd`),
+      failures: [],
     });
     render(completeJob({ polar_grid: { angle_step: 5 } }));
     openMenu();
     await act(async () => { menuItem('Polar set (VituixCAD)').click(); await settle(); });
 
-    expect(mocks.runExportBundle).toHaveBeenCalledWith(expect.any(Object), ['polar_frd']);
-    expect(document.querySelector('[role="alert"]')?.textContent).toContain('cancelled');
-    expect(document.querySelector('[role="alert"]')?.textContent).toContain('No files were written');
-    expect(patchMetadata).not.toHaveBeenCalled();
+    expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(expect.any(Object), ['polar_frd']);
+    expect(globalThis.fetch).not.toHaveBeenCalledWith('/api/workspace/select', expect.anything());
+    expect(document.querySelector('[role="status"]')?.textContent).toContain('C:/default/output/1_stored_horn_v07');
   });
 
   it('disables the polar set with a reason when the run has no directivity data', () => {
@@ -314,20 +349,27 @@ describe('RunExportControl', () => {
 
   it('dispatches both canonical chart images as one PNG format', async () => {
     mocks.fetchJobResults.mockResolvedValue(directivityResult());
-    mocks.runExportBundle.mockResolvedValue({
-      files: ['1_stored_horn_v07_frequency_response.png', '1_stored_horn_v07_directivity_map.png'], failures: [],
+    mocks.runWorkspaceExportBundle.mockResolvedValueOnce({
+      directory: 'C:/chosen/1_stored_horn_v07',
+      files: [
+        'C:/chosen/1_stored_horn_v07/1_stored_horn_v07_frequency_response.png',
+        'C:/chosen/1_stored_horn_v07/1_stored_horn_v07_directivity_map.png',
+      ],
+      failures: [],
     });
     render();
     openMenu();
     await act(async () => { menuItem('Charts').click(); await settle(); });
 
-    expect(mocks.runExportBundle).toHaveBeenCalledWith(expect.any(Object), ['png']);
+    expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(expect.any(Object), ['png']);
     expect(document.querySelector('[role="status"]')?.textContent).toContain('2 files');
+    expect(document.querySelector('[role="status"]')?.textContent).toContain('C:/chosen/1_stored_horn_v07');
   });
 
   it('surfaces polar write failures without claiming success', async () => {
     mocks.fetchJobResults.mockResolvedValue(directivityResult());
-    mocks.runExportBundle.mockResolvedValue({
+    mocks.runWorkspaceExportBundle.mockResolvedValueOnce({
+      directory: 'C:/chosen/1_stored_horn_v07',
       files: [], failures: [{ format: 'polar_frd', reason: 'disk is full' }],
     });
     render(completeJob({ polar_grid: { angle_step: 5 } }));
@@ -345,7 +387,7 @@ describe('RunExportControl', () => {
     act(() => { host.querySelector<HTMLButtonElement>('.action-menu-primary')!.click(); });
 
     expect(document.querySelector('[role="menu"]')).not.toBeNull();
-    expect(mocks.runExportBundle).not.toHaveBeenCalled();
+    expect(mocks.runWorkspaceExportBundle).not.toHaveBeenCalled();
     expect(mocks.fetchJobResults).not.toHaveBeenCalled();
   });
 
@@ -355,9 +397,9 @@ describe('RunExportControl', () => {
     await act(async () => { host.querySelector<HTMLButtonElement>('.action-menu-primary')!.click(); await Promise.resolve(); });
 
     expect(mocks.fetchJobResults).toHaveBeenCalledOnce();
-    expect(mocks.runExportBundle).toHaveBeenCalledOnce();
-    expect(mocks.runExportBundle.mock.calls[0][1]).toEqual(['csv', 'step']);
-    expect(mocks.runExportBundle.mock.calls[0][0].design).toEqual(hydrateJobDesign(completeJob()));
+    expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledOnce();
+    expect(mocks.runWorkspaceExportBundle.mock.calls[0][1]).toEqual(['csv', 'step']);
+    expect(mocks.runWorkspaceExportBundle.mock.calls[0][0].design).toEqual(hydrateJobDesign(completeJob()));
   });
 
   it('disables design formats with the stored reason while leaving result formats enabled', () => {
@@ -377,22 +419,23 @@ describe('RunExportControl', () => {
 
   it('reports partial bundle success with the failed format and reason', async () => {
     preferencesStore.update({ exportFormats: ['csv', 'step'] });
-    mocks.runExportBundle.mockResolvedValue({
-      files: ['1_stored_horn_v07.csv'],
+    mocks.runWorkspaceExportBundle.mockResolvedValue({
+      directory: 'C:/chosen/1_stored_horn_v07',
+      files: ['C:/chosen/1_stored_horn_v07/1_stored_horn_v07.csv'],
       failures: [{ format: 'step', reason: 'geometry service unavailable' }],
     });
     render();
     await act(async () => { host.querySelector<HTMLButtonElement>('.action-menu-primary')!.click(); await Promise.resolve(); });
 
     const alert = document.querySelector('[role="alert"]');
-    expect(alert?.textContent).toContain('1 file exported');
+    expect(alert?.textContent).toContain('1 file written');
     expect(alert?.textContent).toContain('STEP solid (.step)');
     expect(alert?.textContent).toContain('geometry service unavailable');
   });
 
   it('keeps an in-flight export in the store after the control unmounts', async () => {
     const pending = deferred<{ files: string[]; failures: [] }>();
-    mocks.runExportBundle.mockReturnValue(pending.promise);
+    mocks.runWorkspaceExportBundle.mockReturnValue(pending.promise);
     const job = completeJob();
     render(job);
     openMenu();

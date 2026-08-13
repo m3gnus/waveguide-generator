@@ -110,12 +110,12 @@ installer can acquire the application data lock.
 
 ### Output workspace
 
-Automatic result exports default to the `output/` folder inside the Waveguide
-Generator checkout. This folder is user-visible and does not require selecting
-or approving a protected operating-system data directory. A different output
-folder can be selected once in **Settings → Workspace**. Internal databases,
-logs, and process locks remain under the platform application-data directory;
-new automatic result exports do not.
+Manual and automatic run exports default to the `output/` folder inside the
+Waveguide Generator checkout. This folder is user-visible and does not require
+browser download permission or approval for a protected operating-system data
+directory. A different output folder can be selected once in **Settings →
+Workspace**. Internal databases, logs, and process locks remain under the
+platform application-data directory; result exports do not.
 
 ### Original-app run migration
 

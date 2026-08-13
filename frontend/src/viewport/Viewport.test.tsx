@@ -129,6 +129,15 @@ describe('Viewport preview errors', () => {
     expect(timing?.textContent).not.toContain('+ client');
   });
 
+  it('starts in an untilted orthographic front view for precise shape inspection', () => {
+    const front = [...host.querySelectorAll<HTMLButtonElement>('.viewport-tool-text')]
+      .find((button) => button.textContent === 'Front');
+    const projection = host.querySelector<HTMLButtonElement>('.projection-toggle');
+
+    expect(front?.classList.contains('on')).toBe(true);
+    expect(projection?.textContent).toBe('Ortho');
+  });
+
   it('switches between the parametric scene and matching CAD slot, and guards MSH import', () => {
     const ingestId = 'wgi_viewport_mode';
     act(() => {
