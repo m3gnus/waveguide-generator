@@ -1,5 +1,6 @@
 #!/bin/bash
-# Minimal unsigned app-bundle entry for a repository checkout.
+# Minimal unsigned app-bundle entry for a repository checkout. Runtime setup is
+# deliberately owned by launch-wg.command so Finder and Terminal cannot drift.
 
 set -u
 
@@ -13,7 +14,7 @@ if [[ "$(sysctl -n sysctl.proc_translated 2>/dev/null)" == "1" ]]; then
 fi
 
 REPO_DIR="$(cd "$(dirname "$0")/../../../../.." && pwd)"
-VENV_PYTHON="$REPO_DIR/.venv/bin/python"
+LAUNCHER="$REPO_DIR/launchers/macos/launch-wg.command"
 
 fail() {
     message="$1"
@@ -25,28 +26,9 @@ fail() {
     exit 1
 }
 
-if [[ ! -f "$REPO_DIR/launchers/statusapp/__main__.py" ]]; then
+if [[ ! -x "$LAUNCHER" ]]; then
     fail "The app must stay in launchers/macos inside the Waveguide Generator checkout."
 fi
 
-if [[ ! -x "$VENV_PYTHON" ]]; then
-    BOOTSTRAP_PYTHON=""
-    for candidate in python3.13 python3
-    do
-        if command -v "$candidate" >/dev/null 2>&1 && \
-           "$candidate" -c 'import sys; raise SystemExit(sys.version_info[:2] != (3, 13))' >/dev/null 2>&1
-        then
-            BOOTSTRAP_PYTHON="$(command -v "$candidate")"
-            break
-        fi
-    done
-    if [[ -z "$BOOTSTRAP_PYTHON" ]]; then
-        fail "The repository environment is missing, and CPython 3.13 was not found as python3. Install Python 3.13 or run installers/macos/install-wg.command."
-    fi
-    if ! "$BOOTSTRAP_PYTHON" "$REPO_DIR/scripts/bootstrap.py"; then
-        fail "The repository environment was missing and python3 could not prepare it. Run installers/macos/install-wg.command for full diagnostics."
-    fi
-fi
-
-cd "$REPO_DIR" || fail "Could not enter the repository folder: $REPO_DIR"
-exec "$VENV_PYTHON" -m launchers.statusapp "$@"
+export WG2_FINDER_APP=1
+exec "$LAUNCHER" "$@"

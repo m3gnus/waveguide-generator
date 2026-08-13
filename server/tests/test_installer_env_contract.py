@@ -46,7 +46,7 @@ INTERPRETER_OVERRIDE_ENV_VARS = ("WG2_PYTHON",)
 
 #: Every other WG2_* knob the launchers read. Listed so that adding a new one
 #: forces a decision about whether it belongs above.
-OTHER_LAUNCHER_ENV_VARS = ("WG2_NO_PAUSE",)
+OTHER_LAUNCHER_ENV_VARS = ("WG2_FINDER_APP", "WG2_NO_PAUSE")
 
 
 def read(path: Path) -> str:
