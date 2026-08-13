@@ -95,6 +95,15 @@ existing key names should be mirrored exactly rather than paralleled.
 them. That also makes WG's numbers and any reference numbers comparable by
 construction, since they come from the same code.
 
+**Artifact invariant: every NPZ key must survive a no-pickle load.** The
+archive carries genuine arrays only — never dicts or other object-dtyped
+values, which `np.load(..., allow_pickle=False)` (the standard reader across
+this project) refuses at read time. Mapping-shaped diagnostics such as
+`low_ka_self_impedance` live in the JSON result metadata instead. The writer's
+test enforces this by *reading every key*: an assertion that never materialises
+the thing it guards is not a guard, and a names-only check stays green over an
+unreadable field.
+
 **Thresholds must not be naive constants.** On the shipped, accepted reference
 run: `reciprocity_max_rel` min 2.966e-05, median 4.190e-04, **max 1.145e-01 at
 14794.8 Hz** — three orders above the median. `passivity_min_eig` min 1.062,
