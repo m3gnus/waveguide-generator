@@ -8,8 +8,11 @@ frequency cancellation, metadata, and common mapping port v1
 from __future__ import annotations
 
 import asyncio
+from copy import copy
+from dataclasses import replace
 from functools import lru_cache
 import importlib.metadata
+from io import BytesIO
 import logging
 import tempfile
 import time
@@ -18,12 +21,14 @@ from typing import Any, Mapping
 
 import numpy as np
 
+from hornlab_sim.methods import driver_coupling, radiation_impedance
+
 from server.jobs.models import ImportedGeometrySource, SolveRequest
 from server.mesh.builder import _solver_mesher_config, build_solver_mesh
 
 from .acoustics import solver_sound_speed_m_per_s
 from .combine import combine_drive_channels, serialize_channel_bases
-from .driver_lem import channel_drive_scaling
+from .driver_lem import channel_drive_scaling, hornlab_driver
 from .base import (
     ArtifactCallback,
     CancelCallback,
@@ -531,6 +536,292 @@ def _record_source_area_m2(record: Mapping[str, Any], source_id: str) -> float:
     )
 
 
+def _passive_cardioid_apertures(
+    source_tags: Mapping[str, Any],
+    record: Mapping[str, Any],
+) -> tuple[dict[str, list[int]], list[str], str]:
+    """Resolve PORT_EXIT faces and the MF diaphragm from an ingest tag map.
+
+    The returned names are the physical names carried by the mapping.  This is
+    intentional: storing only the matrix and diagnostics cannot expose a solve
+    over the wrong reciprocal/passive faces, while name plus tag can.
+    """
+
+    entries = [(str(name), int(tag)) for name, tag in source_tags.items()]
+    by_upper = {name.strip().upper(): (name, tag) for name, tag in entries}
+
+    exact = by_upper.get("PORT_EXIT")
+    if exact is not None:
+        port_entries = [exact]
+    else:
+        port_entries = [
+            by_upper[name]
+            for name in ("PORT_EXIT_L", "PORT_EXIT_R")
+            if name in by_upper
+        ]
+        if not port_entries:
+            port_entries = [
+                by_upper[name]
+                for name in ("MID_PORT_EXIT_LEFT", "MID_PORT_EXIT_RIGHT")
+                if name in by_upper
+            ]
+    if not port_entries:
+        raise ValueError(
+            "passive cardioid requires PORT_EXIT, PORT_EXIT_L/PORT_EXIT_R, or "
+            "mid_port_exit_left/mid_port_exit_right in the ingestion source tag map"
+        )
+
+    mf_candidates: list[tuple[str, str, int]] = []
+    for source in record.get("sources") or []:
+        if not isinstance(source, Mapping):
+            continue
+        source_id = str(source.get("id") or "")
+        if str(source.get("role") or "").strip().upper() != "MF":
+            continue
+        if source_id in source_tags:
+            mf_candidates.append(("MF", source_id, int(source_tags[source_id])))
+    if not mf_candidates and "MF" in by_upper:
+        name, tag = by_upper["MF"]
+        mf_candidates.append((name, name, tag))
+    if len(mf_candidates) != 1:
+        raise ValueError(
+            "passive cardioid requires exactly one MF diaphragm in the ingestion source tag map"
+        )
+    mf_name, mf_source_id, mf_tag = mf_candidates[0]
+
+    port_tags = [tag for _name, tag in port_entries]
+    if len(set(port_tags)) != len(port_tags) or mf_tag in port_tags:
+        raise ValueError("passive cardioid aperture tag mapping contains duplicate faces")
+    aperture_tags = {name: [tag] for name, tag in port_entries}
+    aperture_tags[mf_name] = [mf_tag]
+    return aperture_tags, [name for name, _tag in port_entries], mf_source_id
+
+
+def _frequency_value_indices(
+    consumer_hz: np.ndarray,
+    requested_hz: np.ndarray,
+    *,
+    consumer_name: str,
+    requested_name: str,
+) -> np.ndarray:
+    """Map one frequency grid into another by value, never by array length."""
+
+    consumer = np.asarray(consumer_hz, dtype=np.float64).reshape(-1)
+    requested = np.asarray(requested_hz, dtype=np.float64).reshape(-1)
+    indices: list[int] = []
+    used: set[int] = set()
+    for frequency in requested:
+        matches = np.flatnonzero(
+            np.isclose(consumer, frequency, rtol=1.0e-12, atol=1.0e-9)
+        )
+        if matches.size != 1:
+            raise ValueError(
+                f"{requested_name} frequency {frequency:.12g} Hz has "
+                f"{matches.size} matches in {consumer_name}; grids cannot be reconciled"
+            )
+        index = int(matches[0])
+        if index in used:
+            raise ValueError(
+                f"{requested_name} repeats {frequency:.12g} Hz while reconciling "
+                f"against {consumer_name}"
+            )
+        used.add(index)
+        indices.append(index)
+    return np.asarray(indices, dtype=np.int64)
+
+
+def _cardioid_frequency_grid(
+    consumer_hz: np.ndarray,
+    *,
+    record: Mapping[str, Any],
+    aperture_source_ids: list[str],
+) -> tuple[np.ndarray, np.ndarray, float]:
+    """Return the consumer-grid subset inside every populated validity cap."""
+
+    consumer = np.asarray(consumer_hz, dtype=np.float64).reshape(-1)
+    caps = [float(consumer[-1])]
+    validation = mesh_frequency_validation(record)
+    per_source = validation.get("per_source")
+    per_source = per_source if isinstance(per_source, Mapping) else {}
+    for source_id in aperture_source_ids:
+        item = per_source.get(source_id)
+        if not isinstance(item, Mapping):
+            continue
+        value = item.get("effective_max_valid_frequency_hz")
+        if isinstance(value, (int, float)) and np.isfinite(value):
+            caps.append(float(value))
+    for field in ("source_freq_max", "source_freq_max_hz"):
+        values = record.get(field)
+        if not isinstance(values, Mapping):
+            continue
+        for source_id in aperture_source_ids:
+            value = values.get(source_id)
+            if isinstance(value, (int, float)) and np.isfinite(value):
+                caps.append(float(value))
+    cap = min(caps)
+    selected = consumer[consumer <= cap + max(1.0e-9, abs(cap) * 1.0e-12)]
+    if selected.size == 0:
+        raise ValueError(
+            f"passive-cardioid validity cap {cap:g} Hz is below the consumer grid"
+        )
+    indices = _frequency_value_indices(
+        consumer,
+        selected,
+        consumer_name="imported channel grid",
+        requested_name="radiation campaign grid",
+    )
+    return selected, indices, cap
+
+
+def _radiation_matrix_npz(
+    result: radiation_impedance.RadiationImpedanceResult,
+    diagnostics: radiation_impedance.RadiationMatrixDiagnostics,
+    *,
+    aperture_tags: Mapping[str, list[int]],
+    port_names: list[str],
+) -> bytes:
+    """Serialize the reference matrix artifact plus physical face tags."""
+
+    port_indices = [result.aperture_names.index(name) for name in port_names]
+    in_phase_load = np.stack(
+        [
+            radiation_impedance.termination_load_from_solver_matrix(
+                result.impedance_matrix,
+                receiver_index=receiver,
+                source_indices=port_indices,
+            )
+            for receiver in port_indices
+        ],
+        axis=1,
+    )
+    buffer = BytesIO()
+    np.savez_compressed(
+        buffer,
+        frequencies_hz=result.frequencies_hz,
+        aperture_names=np.asarray(result.aperture_names),
+        aperture_area_m2=np.asarray(
+            [result.aperture_area_m2[name] for name in result.aperture_names],
+            dtype=np.float64,
+        ),
+        aperture_tag=np.asarray(
+            [aperture_tags[name][0] for name in result.aperture_names],
+            dtype=np.int64,
+        ),
+        solver_impedance_matrix=result.impedance_matrix,
+        engineering_impedance_matrix=(
+            radiation_impedance.termination_load_from_solver_matrix(
+                result.impedance_matrix
+            )
+        ),
+        in_phase_termination_load=in_phase_load,
+        reciprocity_max_rel=diagnostics.reciprocity_max_rel,
+        passivity_min_eig=diagnostics.passivity_min_eig,
+        passivity_ok=diagnostics.passivity_ok,
+    )
+    return buffer.getvalue()
+
+
+def _run_passive_cardioid_campaign(
+    mesh_path: Path,
+    config: Any,
+    geometry: ImportedGeometrySource,
+    record: Mapping[str, Any],
+    consumer_hz: np.ndarray,
+    *,
+    stage_callback: StageCallback | None,
+    cancellation_callback: CancelCallback | None,
+) -> dict[str, Any]:
+    source_tags = record.get("source_tags")
+    if not isinstance(source_tags, Mapping):
+        raise ValueError("ingestion record has no source tag map")
+    aperture_tags, port_names, mf_source_id = _passive_cardioid_apertures(
+        source_tags, record
+    )
+    aperture_source_ids = [*port_names, mf_source_id]
+    campaign_hz, consumer_indices, cap_hz = _cardioid_frequency_grid(
+        consumer_hz,
+        record=record,
+        aperture_source_ids=aperture_source_ids,
+    )
+
+    def campaign_progress(index: int, total: int, frequency_hz: float) -> None:
+        if cancellation_callback:
+            cancellation_callback()
+        if stage_callback:
+            stage_callback(
+                "radiation_impedance",
+                index / max(1, total),
+                f"Solving passive-cardioid radiation impedance "
+                f"{index + 1}/{total} at {frequency_hz:g} Hz",
+            )
+
+    if cancellation_callback:
+        cancellation_callback()
+    if stage_callback:
+        stage_callback(
+            "radiation_impedance",
+            0.0,
+            "Configuring passive-cardioid radiation-impedance campaign",
+        )
+    campaign_config = replace(
+        config,
+        progress_callback=campaign_progress,
+        on_frequency_result=None,
+        source_velocity_profiles={},
+    )
+    result = radiation_impedance.solve_aperture_matrix(
+        mesh_path,
+        aperture_tags,
+        campaign_hz,
+        campaign_config,
+    )
+    result_indices = _frequency_value_indices(
+        np.asarray(result.frequencies_hz, dtype=np.float64),
+        campaign_hz,
+        consumer_name="radiation solver result grid",
+        requested_name="radiation campaign grid",
+    )
+    result = replace(
+        result,
+        frequencies_hz=np.asarray(result.frequencies_hz)[result_indices],
+        impedance_matrix=np.asarray(result.impedance_matrix)[result_indices],
+    )
+    diagnostics = radiation_impedance.matrix_diagnostics(result)
+    if cancellation_callback:
+        cancellation_callback()
+    if stage_callback:
+        stage_callback(
+            "radiation_impedance",
+            1.0,
+            "Completed passive-cardioid radiation-impedance campaign",
+        )
+
+    actual_bem_area = sum(float(result.aperture_area_m2[name]) for name in port_names)
+    expected_bem_area = float(geometry.bem_port_area_m2)
+    if not np.isclose(actual_bem_area, expected_bem_area, rtol=1.0e-6, atol=1.0e-12):
+        raise ValueError(
+            "passive-cardioid BEM port area does not match the requested face identity: "
+            f"matrix={actual_bem_area:.12g} m^2, request={expected_bem_area:.12g} m^2"
+        )
+    return {
+        "result": result,
+        "diagnostics": diagnostics,
+        "artifact": _radiation_matrix_npz(
+            result,
+            diagnostics,
+            aperture_tags=aperture_tags,
+            port_names=port_names,
+        ),
+        "aperture_tags": aperture_tags,
+        "port_names": port_names,
+        "mf_name": next(name for name in result.aperture_names if name not in port_names),
+        "mf_source_id": mf_source_id,
+        "consumer_indices": consumer_indices,
+        "validity_cap_hz": cap_hz,
+        "actual_bem_port_area_m2": actual_bem_area,
+    }
+
+
 def _apply_channel_driver(
     channel: Any,
     result: Any,
@@ -571,6 +862,176 @@ def _apply_channel_driver(
     payload["source_id"] = source_id
     payload["source_area_m2"] = area_m2
     return payload
+
+
+def _slice_native_result(result: Any, indices: np.ndarray) -> Any:
+    """Copy one native result onto an explicitly reconciled frequency grid."""
+
+    sliced = copy(result)
+    count = len(np.asarray(result.frequencies_hz).reshape(-1))
+    for name, value in vars(result).items():
+        if isinstance(value, np.ndarray) and value.ndim and value.shape[0] == count:
+            setattr(sliced, name, np.asarray(value)[indices].copy())
+        elif isinstance(value, Mapping):
+            mapped: dict[Any, Any] = {}
+            changed = False
+            for key, item in value.items():
+                if isinstance(item, np.ndarray) and item.ndim and item.shape[0] == count:
+                    mapped[key] = np.asarray(item)[indices].copy()
+                    changed = True
+                else:
+                    mapped[key] = item
+            if changed:
+                setattr(sliced, name, mapped)
+    return sliced
+
+
+def _pressure_directivity_db(pressure: np.ndarray) -> np.ndarray:
+    magnitude = np.maximum(np.abs(pressure), np.finfo(np.float64).tiny)
+    return 20.0 * np.log10(magnitude)
+
+
+def _coupled_cardioid_result(
+    campaign: Mapping[str, Any],
+    geometry: ImportedGeometrySource,
+    record: Mapping[str, Any],
+    sorted_results: Mapping[str, Any],
+) -> tuple[Any, dict[str, Any], Any]:
+    """Build a derived voltage-driven cardioid result from unit channel bases."""
+
+    mf_source_id = str(campaign["mf_source_id"])
+    mf_channels = [
+        channel
+        for channel in geometry.drive_channels
+        if mf_source_id in channel.source_ids
+    ]
+    if len(mf_channels) != 1 or mf_channels[0].driver is None:
+        raise ValueError(
+            "coupled passive cardioid requires the MF diaphragm's drive channel "
+            "to carry one driver model"
+        )
+    mf_channel = mf_channels[0]
+    port_names = list(campaign["port_names"])
+    port_channels = [
+        channel
+        for channel in geometry.drive_channels
+        if set(port_names).issubset(set(channel.source_ids))
+    ]
+    if len(port_channels) != 1:
+        raise ValueError(
+            "coupled passive cardioid requires all PORT_EXIT patches in one drive channel"
+        )
+    port_channel = port_channels[0]
+
+    matrix_result = campaign["result"]
+    names = list(matrix_result.aperture_names)
+    port_indices = [names.index(name) for name in port_names]
+    mf_index = names.index(str(campaign["mf_name"]))
+    matrix = np.asarray(matrix_result.impedance_matrix, dtype=np.complex128)
+    termination_load = radiation_impedance.termination_load_from_solver_matrix(
+        matrix,
+        receiver_index=port_indices[0],
+        source_indices=port_indices,
+    )
+    z_port_from_mf = radiation_impedance.termination_load_from_solver_matrix(
+        matrix,
+        receiver_index=port_indices[0],
+        source_indices=[mf_index],
+    )
+    z_mm = radiation_impedance.termination_load_from_solver_matrix(
+        matrix,
+        receiver_index=mf_index,
+        source_indices=[mf_index],
+    )
+    z_mf_from_port = radiation_impedance.termination_load_from_solver_matrix(
+        matrix,
+        receiver_index=mf_index,
+        source_indices=port_indices,
+    )
+    frequencies = np.asarray(matrix_result.frequencies_hz, dtype=np.float64)
+    coupled = driver_coupling.coupled_cardioid_response(
+        frequencies,
+        driver=hornlab_driver(mf_channel.driver),
+        z_mm=z_mm,
+        z_mf_from_port=z_mf_from_port,
+        z_port_from_mf=z_port_from_mf,
+        termination_load=termination_load,
+        chamber_volume_m3=float(geometry.passive_cardioid_rear_volume_l) * 1.0e-3,
+        port_area_m2=float(geometry.model_port_area_m2),
+        port_length_m=float(geometry.passive_cardioid_port_length_mm) * 1.0e-3,
+        series_resistance_pa_s_m3=float(
+            geometry.passive_cardioid_foam_resistance_pa_s_m3
+        ),
+        rear_sign=-1.0 if geometry.passive_cardioid_invert_port else 1.0,
+        drive_voltage_v=geometry.drive_voltage_v,
+        rg_ohm=geometry.rg_ohm,
+    )
+
+    mf_source_result = sorted_results[mf_channel.id]
+    port_source_result = sorted_results[port_channel.id]
+    mf_indices = _frequency_value_indices(
+        np.asarray(mf_source_result.frequencies_hz, dtype=np.float64),
+        frequencies,
+        consumer_name=f"MF channel {mf_channel.id!r} grid",
+        requested_name="radiation campaign grid",
+    )
+    port_result_indices = _frequency_value_indices(
+        np.asarray(port_source_result.frequencies_hz, dtype=np.float64),
+        frequencies,
+        consumer_name=f"PORT_EXIT channel {port_channel.id!r} grid",
+        requested_name="radiation campaign grid",
+    )
+    mf_result = _slice_native_result(mf_source_result, mf_indices)
+    port_result = _slice_native_result(port_source_result, port_result_indices)
+    mf_area_m2 = _record_source_area_m2(record, mf_source_id)
+    bem_port_area_m2 = float(campaign["actual_bem_port_area_m2"])
+    relative_port_acceleration = (
+        mf_area_m2 / bem_port_area_m2
+    ) * coupled.port_to_cone_ratio
+    total_unit_pressure = np.asarray(
+        mf_result.pressure_complex, dtype=np.complex128
+    ) + np.conjugate(relative_port_acceleration)[:, None, None] * np.asarray(
+        port_result.pressure_complex, dtype=np.complex128
+    )
+    scale_raw = np.conjugate(
+        1j
+        * 2.0
+        * np.pi
+        * frequencies
+        * coupled.cone_volume_velocity
+        / mf_area_m2
+    )
+    mf_result.pressure_complex = total_unit_pressure * scale_raw[:, None, None]
+    mf_result.directivity_db = _pressure_directivity_db(mf_result.pressure_complex)
+
+    mf_sphere = getattr(mf_result, "sphere_pressure_complex", None)
+    port_sphere = getattr(port_result, "sphere_pressure_complex", None)
+    if mf_sphere is not None and port_sphere is not None:
+        total_sphere = np.asarray(mf_sphere, dtype=np.complex128) + np.conjugate(
+            relative_port_acceleration
+        )[:, None] * np.asarray(port_sphere, dtype=np.complex128)
+        mf_result.sphere_pressure_complex = total_sphere * scale_raw[:, None]
+
+    payload = {
+        "mf_source_id": mf_source_id,
+        "mf_channel_id": mf_channel.id,
+        "port_channel_id": port_channel.id,
+        "mf_area_m2": mf_area_m2,
+        "drive_voltage_v": geometry.drive_voltage_v,
+        "rg_ohm": geometry.rg_ohm,
+        "rear_drive_sign": -1.0 if geometry.passive_cardioid_invert_port else 1.0,
+        "model_port_area_m2": float(geometry.model_port_area_m2),
+        "bem_port_area_m2": bem_port_area_m2,
+        "port_area_source": geometry.port_area_source,
+        "electrical_input_impedance_ohm": coupled.electrical_input_impedance,
+        "cone_excursion_mm": coupled.cone_excursion_m * 1.0e3,
+        "cone_volume_velocity": coupled.cone_volume_velocity,
+        "port_volume_velocity": coupled.port_volume_velocity,
+        "port_to_cone_ratio": coupled.port_to_cone_ratio,
+        "acoustic_load": coupled.acoustic_load,
+        "mmd_correction_g": float(coupled.mmd_correction_kg) * 1.0e3,
+    }
+    return mf_result, payload, mf_channel
 
 
 def _combined_channel_response(
@@ -817,6 +1278,10 @@ def solve_imported_metal_from_msh_text(
     config = _native_config_or_unavailable(kwargs)
 
     path: Path | None = None
+    cardioid_campaign: dict[str, Any] | None = None
+    coupled_native_result: Any | None = None
+    coupled_payload: dict[str, Any] | None = None
+    coupled_mf_channel: Any | None = None
     try:
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".msh", delete=False, encoding="utf-8"
@@ -842,11 +1307,39 @@ def solve_imported_metal_from_msh_text(
                 "multi-source Metal solver returned a different number of bases than requested"
             )
         sorted_results: dict[str, Any] = {}
-        driver_payloads: dict[str, dict[str, Any]] = {}
         for channel, result in zip(geometry.drive_channels, results, strict=True):
             sort_native_result_frequencies(result)
             sorted_results[channel.id] = result
-            if channel.driver is not None:
+
+        if geometry.passive_cardioid_enabled:
+            consumer_hz = np.asarray(results[0].frequencies_hz, dtype=np.float64)
+            cardioid_campaign = _run_passive_cardioid_campaign(
+                path,
+                config,
+                geometry,
+                record,
+                consumer_hz,
+                stage_callback=stage_callback,
+                cancellation_callback=cancellation_callback,
+            )
+            if geometry.passive_cardioid_coupled:
+                (
+                    coupled_native_result,
+                    coupled_payload,
+                    coupled_mf_channel,
+                ) = _coupled_cardioid_result(
+                    cardioid_campaign,
+                    geometry,
+                    record,
+                    sorted_results,
+                )
+
+        driver_payloads: dict[str, dict[str, Any]] = {}
+        for channel, result in zip(geometry.drive_channels, results, strict=True):
+            cardioid_owns_driver = (
+                coupled_mf_channel is not None and channel.id == coupled_mf_channel.id
+            )
+            if channel.driver is not None and not cardioid_owns_driver:
                 # Scale before packaging AND before the bases are serialized,
                 # so recombination sees the same voltage-driven fields the
                 # channel contract reports.
@@ -926,7 +1419,105 @@ def solve_imported_metal_from_msh_text(
                 warnings = channel_metadata.setdefault("warnings", [])
                 warnings.extend(driver_payload.get("warnings") or [])
                 channel_metadata["warning_count"] = len(warnings)
+            elif cardioid_owns_driver:
+                channel_response["metadata"]["driver_coupling_deferred_to"] = (
+                    "passive_cardioid"
+                )
             channels[channel.id] = channel_response
+
+        if coupled_native_result is not None and coupled_payload is not None:
+            coupled_frequencies = tuple(
+                float(value)
+                for value in np.asarray(
+                    coupled_native_result.frequencies_hz, dtype=np.float64
+                )
+            )
+            coupled_context = replace(
+                context,
+                frequency_range=(coupled_frequencies[0], coupled_frequencies[-1]),
+                num_frequencies=len(coupled_frequencies),
+                frequencies_hz=coupled_frequencies,
+                source_motion="normal",
+            )
+            coupled_metadata = {
+                "solver_backend": "metal",
+                "solver_mode": "full_3d",
+                "geometry_type": "imported",
+                "drive_channel_id": "passive_cardioid",
+                "derived_from_channels": [
+                    coupled_payload["mf_channel_id"],
+                    coupled_payload["port_channel_id"],
+                ],
+                "engine": "hornlab-metal-bem",
+                "phase_time_convention": "exp(+ikr)",
+                "passive_cardioid": {
+                    key: json_safe_native_value(value)
+                    for key, value in coupled_payload.items()
+                    if key
+                    not in {
+                        "electrical_input_impedance_ohm",
+                        "cone_excursion_mm",
+                        "cone_volume_velocity",
+                        "port_volume_velocity",
+                        "port_to_cone_ratio",
+                        "acoustic_load",
+                    }
+                },
+                "performance": {"total_time_seconds": time.time() - started},
+                "metal": {
+                    "solver_mode": "full_3d",
+                    "native_symmetry_plane": kwargs["native_symmetry_plane"],
+                    "native_check_open_edges": False,
+                    "formulation": kwargs["formulation"],
+                    "complex_k_shift": kwargs["complex_k_shift"],
+                    "solver_log": [],
+                },
+            }
+            coupled_response = build_solver_response(
+                result=coupled_native_result,
+                config=config,
+                context=coupled_context,
+                start_time=started,
+                metadata=coupled_metadata,
+                sound_speed_m_per_s=solver_sound_speed_m_per_s(
+                    "hornlab_metal_bem"
+                ),
+            )
+            electrical = np.asarray(
+                coupled_payload["electrical_input_impedance_ohm"],
+                dtype=np.complex128,
+            )
+            coupled_response["impedance"] = {
+                "frequencies": list(coupled_frequencies),
+                "real": electrical.real.tolist(),
+                "imaginary": electrical.imag.tolist(),
+            }
+            coupled_response["metadata"].update(
+                {
+                    "impedance_units": "ohms",
+                    "impedance_quantity": "electrical_input_impedance",
+                    "impedance_drive": "voltage",
+                }
+            )
+            coupled_response["passive_cardioid"] = {
+                "cone_excursion_mm": json_safe_native_value(
+                    coupled_payload["cone_excursion_mm"]
+                ),
+                "cone_volume_velocity": json_safe_native_value(
+                    coupled_payload["cone_volume_velocity"]
+                ),
+                "port_volume_velocity": json_safe_native_value(
+                    coupled_payload["port_volume_velocity"]
+                ),
+                "port_to_cone_ratio": json_safe_native_value(
+                    coupled_payload["port_to_cone_ratio"]
+                ),
+                "acoustic_load": json_safe_native_value(
+                    coupled_payload["acoustic_load"]
+                ),
+            }
+            channels["passive_cardioid"] = coupled_response
+            channel_order.append("passive_cardioid")
     finally:
         if path is not None:
             try:
@@ -1003,6 +1594,55 @@ def solve_imported_metal_from_msh_text(
         ),
         "performance": {"total_time_seconds": time.time() - started},
     }
+    if cardioid_campaign is not None:
+        matrix_result = cardioid_campaign["result"]
+        diagnostics = cardioid_campaign["diagnostics"]
+        metadata["passive_cardioid"] = {
+            "enabled": True,
+            "coupled": geometry.passive_cardioid_coupled,
+            "frequencies_hz": json_safe_native_value(matrix_result.frequencies_hz),
+            "validity_cap_hz": float(cardioid_campaign["validity_cap_hz"]),
+            "apertures": [
+                {
+                    "name": name,
+                    "tag": int(cardioid_campaign["aperture_tags"][name][0]),
+                    "area_m2": float(matrix_result.aperture_area_m2[name]),
+                }
+                for name in matrix_result.aperture_names
+            ],
+            "model": {
+                "rear_volume_l": float(geometry.passive_cardioid_rear_volume_l),
+                "port_length_mm": float(geometry.passive_cardioid_port_length_mm),
+                "model_port_area_m2": float(geometry.model_port_area_m2),
+                "bem_port_area_m2": float(geometry.bem_port_area_m2),
+                "port_area_source": geometry.port_area_source,
+                "foam_resistance_pa_s_m3": float(
+                    geometry.passive_cardioid_foam_resistance_pa_s_m3
+                ),
+                "invert_port": geometry.passive_cardioid_invert_port,
+            },
+            "diagnostics": {
+                "reciprocity_max_abs": json_safe_native_value(
+                    diagnostics.reciprocity_max_abs
+                ),
+                "reciprocity_max_rel": json_safe_native_value(
+                    diagnostics.reciprocity_max_rel
+                ),
+                "passivity_min_eig": json_safe_native_value(
+                    diagnostics.passivity_min_eig
+                ),
+                "passivity_min_eig_reciprocal": json_safe_native_value(
+                    diagnostics.passivity_min_eig_reciprocal
+                ),
+                "passivity_ok": json_safe_native_value(diagnostics.passivity_ok),
+                "low_ka_self_impedance": json_safe_native_value(
+                    diagnostics.low_ka_self_impedance
+                ),
+                "low_ka_self_impedance_rel_error": json_safe_native_value(
+                    diagnostics.low_ka_self_impedance_rel_error
+                ),
+            },
+        }
     envelope: dict[str, Any] = {
         "channels": channels,
         "channel_order": channel_order,
@@ -1010,6 +1650,8 @@ def solve_imported_metal_from_msh_text(
     }
     if channel_bases_npz is not None:
         envelope["_channel_bases_npz"] = channel_bases_npz
+    if cardioid_campaign is not None:
+        envelope["_radiation_impedance_npz"] = cardioid_campaign["artifact"]
     return envelope
 
 
@@ -1091,11 +1733,13 @@ class MetalEngine:
             )
             results.setdefault("metadata", {})["mesh_stats"] = mesh_stats
             channel_bases = results.pop("_channel_bases_npz", None)
+            radiation_matrix = results.pop("_radiation_impedance_npz", None)
             return EngineRunResult(
                 results=results,
                 msh_text=msh_text,
                 mesh_stats=mesh_stats,
                 channel_bases=channel_bases,
+                radiation_impedance=radiation_matrix,
             )
 
         mode = str(request.design.root.simulation.solver_mode or "auto").strip().lower()

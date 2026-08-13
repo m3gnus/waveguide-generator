@@ -136,6 +136,11 @@ _SCHEMA_STATEMENTS = (
       bases_npz BLOB NOT NULL,
       FOREIGN KEY(job_id) REFERENCES simulation_jobs(id) ON DELETE CASCADE
     )""",
+    """CREATE TABLE IF NOT EXISTS simulation_radiation_impedance (
+      job_id TEXT PRIMARY KEY,
+      matrix_npz BLOB NOT NULL,
+      FOREIGN KEY(job_id) REFERENCES simulation_jobs(id) ON DELETE CASCADE
+    )""",
     """CREATE INDEX IF NOT EXISTS idx_simulation_jobs_status_created
       ON simulation_jobs(status, created_at DESC)""",
     # The index above only serves a *filtered* list. The unfiltered list and
@@ -837,6 +842,27 @@ class JobStore:
             ).fetchone()
             return bytes(row["bases_npz"]) if row else None
 
+    def store_radiation_impedance(self, job_id: str, matrix_npz: bytes) -> None:
+        with self._lock, self._transaction() as conn:
+            if not self._job_exists(conn, job_id):
+                return
+            conn.execute(
+                """
+                INSERT INTO simulation_radiation_impedance (job_id, matrix_npz)
+                VALUES (?, ?)
+                ON CONFLICT(job_id) DO UPDATE SET matrix_npz = excluded.matrix_npz
+                """,
+                (job_id, matrix_npz),
+            )
+
+    def get_radiation_impedance(self, job_id: str) -> bytes | None:
+        with self._lock, self._connection() as conn:
+            row = conn.execute(
+                "SELECT matrix_npz FROM simulation_radiation_impedance WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+            return bytes(row["matrix_npz"]) if row else None
+
     def delete_job_with_event(self, job_id: str) -> tuple[bool, dict[str, Any] | None]:
         """Delete one row and retain a terminal deleted event."""
 
@@ -1040,6 +1066,10 @@ class JobStore:
                 deleted_results = int(cur.rowcount or 0)
                 conn.execute(
                     f"DELETE FROM simulation_channel_bases WHERE job_id IN ({placeholders})",
+                    removed_ids,
+                )
+                conn.execute(
+                    f"DELETE FROM simulation_radiation_impedance WHERE job_id IN ({placeholders})",
                     removed_ids,
                 )
                 conn.execute(

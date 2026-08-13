@@ -1033,6 +1033,22 @@ class JobRuntime:
             raise JobResourceUnavailableError("Results not available")
         return results
 
+    async def get_radiation_impedance(self, job_id: str) -> bytes:
+        """Return the lossless passive-cardioid radiation matrix artifact."""
+
+        await self.start()
+        row = self._require_job(job_id)
+        if row["status"] != "complete":
+            raise JobConflictError(f"Job not complete. Current status: {row['status']}")
+        artifact = await asyncio.to_thread(
+            self.store.get_radiation_impedance, job_id
+        )
+        if artifact is None:
+            raise JobResourceUnavailableError(
+                "This job has no passive-cardioid radiation-impedance artifact"
+            )
+        return artifact
+
     async def recombine_results(
         self, job_id: str, spec: ChannelCombineSpec
     ) -> dict[str, Any]:
@@ -1671,6 +1687,22 @@ class JobRuntime:
                 logger.warning(
                     "Channel-bases persistence failed for job %s: %s", job_id, exc
                 )
+        radiation_matrix = getattr(outcome, "radiation_impedance", None)
+        if radiation_matrix is not None:
+            try:
+                await asyncio.to_thread(
+                    self.store.store_radiation_impedance,
+                    job_id,
+                    radiation_matrix,
+                )
+            except Exception as exc:
+                # Results remain usable; only the optional lossless matrix
+                # download is unavailable if persistence fails.
+                logger.warning(
+                    "Radiation-impedance persistence failed for job %s: %s",
+                    job_id,
+                    exc,
+                )
 
         self._check_cancelled(job_id)
         try:
@@ -1761,6 +1793,9 @@ class JobRuntime:
         elif stage == "frequency_solve":
             public_stage = "solve"
             overall = 0.35 + normalized * 0.50
+        elif stage == "radiation_impedance":
+            public_stage = "radiation_impedance"
+            overall = 0.85 + normalized * 0.10
         elif stage in {"directivity", "finalizing"}:
             public_stage = "postprocess"
             overall = 0.85 + normalized * 0.14
