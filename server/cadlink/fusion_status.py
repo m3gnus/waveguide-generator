@@ -170,10 +170,24 @@ def _link_payload(value: object) -> dict[str, Any] | None:
     parameter_drift_count = value.get("parameterDriftCount")
     if isinstance(parameter_drift_count, bool) or not isinstance(parameter_drift_count, int):
         parameter_drift_count = 0
+    raw_drifted_parameters = value.get("driftedParameters")
+    drifted_parameters = (
+        sorted(set(raw_drifted_parameters))
+        if (
+            isinstance(raw_drifted_parameters, list)
+            and all(isinstance(name, str) and bool(name) for name in raw_drifted_parameters)
+        )
+        else None
+    )
+    if drifted_parameters is not None:
+        # New WGLink builds publish the names and derive the count from them.
+        # Do the same at the trust boundary so a torn or hand-written heartbeat
+        # cannot make the aggregate disagree with the fields WG will mark.
+        parameter_drift_count = len(drifted_parameters)
     document_body_count = value.get("documentBodyCount")
     if isinstance(document_body_count, bool) or not isinstance(document_body_count, int):
         document_body_count = 0
-    return {
+    payload = {
         "instanceId": instance_id,
         "bundlePath": _string(value.get("bundlePath")),
         "designId": _string(value.get("designId")),
@@ -193,6 +207,12 @@ def _link_payload(value: object) -> dict[str, Any] | None:
         "exportId": _string(value.get("exportId")),
         "exportSequence": _string(value.get("exportSequence")),
     }
+    # Older add-ins publish only parameterDriftCount. Omitting the new member
+    # retains that distinction so WG can keep the aggregate fallback instead
+    # of pretending it knows which parameters changed.
+    if drifted_parameters is not None:
+        payload["driftedParameters"] = drifted_parameters
+    return payload
 
 
 def read_fusion_status(

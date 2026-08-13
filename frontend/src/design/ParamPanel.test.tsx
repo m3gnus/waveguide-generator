@@ -252,6 +252,27 @@ describe('ParamPanel inventory UX', () => {
     expect(host.querySelector('input')).toBeNull();
   });
 
+  it('marks only realized fields named by the Fusion drift contract', () => {
+    const snapshot: CadRealizedDimensions = {
+      state: 'current', instanceId: 'instance-a', exportId: 'wge_4',
+      parameters: [
+        { instanceId: 'instance-a', name: 'wg_tritonia_v_depth', value: 190, unit: 'mm', role: 'interface' },
+        { instanceId: 'instance-a', name: 'wg_tritonia_v_enc_depth', value: 280, unit: 'mm', role: 'interface' },
+      ],
+    };
+
+    act(() => root.render(<RealizedDimensionsSection
+      snapshot={snapshot}
+      driftedParameters={['wg_tritonia_v_depth']}
+    />));
+
+    const edited = host.querySelectorAll<HTMLElement>('[data-locally-edited="true"]');
+    expect(edited).toHaveLength(1);
+    expect(edited[0].textContent).toContain('Realized depth');
+    expect(edited[0].textContent).toContain('Edited in Fusion');
+    expect(edited[0].textContent).not.toContain('Enclosure depth');
+  });
+
   it('tells the truth for no link, pre-capture, missing-registry, and stale-export states', () => {
     const empty = (state: CadRealizedDimensions['state']): CadRealizedDimensions => ({
       state, instanceId: state === 'no_link' ? null : 'instance-a', exportId: state === 'no_link' ? null : 'wge_4', parameters: [],
