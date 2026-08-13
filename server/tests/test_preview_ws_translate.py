@@ -335,6 +335,25 @@ def test_morph_real_target_extents_keep_waveguide_scale() -> None:
     }
 
 
+def test_morph_exponent_is_dimensionless_while_target_width_is_scaled() -> None:
+    config = _translate(
+        {
+            "formula": "OSSE",
+            "scale": 1.5,
+            "morph": {"target_shape": 3, "target_exponent": 6, "target_width": 80},
+        }
+    )
+
+    assert config["morph"]["morphExponent"] == 6.0
+    assert config["morph"]["morphWidth"] == 120.0
+
+
+def test_absent_morph_exponent_is_omitted_from_mesher_config() -> None:
+    config = _translate({"formula": "OSSE", "morph": {"target_shape": 3}})
+
+    assert "morphExponent" not in config["morph"]
+
+
 def test_tritonia_reference_import_translates_to_mesher_config() -> None:
     path = Path(__file__).with_name("data") / "260308tritonia-q.txt"
     opened = asyncio.run(open_design(path.read_text(encoding="utf-8")))
@@ -395,6 +414,7 @@ def test_every_expression_capable_field_survives_translation() -> None:
             },
             "morph": {
                 "target_shape": 1,
+                "target_exponent": expr,
                 "target_width": expr,
                 "target_height": expr,
                 "corner_radius": expr,
@@ -406,7 +426,14 @@ def test_every_expression_capable_field_survives_translation() -> None:
 
     for key in ("gcurveDist", "gcurveWidth", "gcurveAspectRatio", "gcurveSeN", "gcurveRot", "gcurveSfA"):
         assert config["gcurve"][key] == expr, f"{key} was flattened"
-    for key in ("morphWidth", "morphHeight", "morphCorner", "morphRate", "morphFixed"):
+    for key in (
+        "morphExponent",
+        "morphWidth",
+        "morphHeight",
+        "morphCorner",
+        "morphRate",
+        "morphFixed",
+    ):
         assert config["morph"][key] == expr, f"{key} was flattened"
     for key in (
         "L",
