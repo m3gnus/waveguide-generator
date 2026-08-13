@@ -12,8 +12,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from launchers.statusapp import __main__ as entrypoint
 from launchers.statusapp.controller import missing_frontend_reason
 

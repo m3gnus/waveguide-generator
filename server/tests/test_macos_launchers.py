@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -88,4 +89,12 @@ def test_a_missing_frontend_build_is_named_rather_than_raised() -> None:
 
 def test_macos_launchers_are_executable() -> None:
     for path in (COMMAND, APP_EXECUTABLE):
-        assert path.stat().st_mode & 0o111, f"{path.relative_to(ROOT)} is not executable"
+        relative = path.relative_to(ROOT)
+        mode = subprocess.run(
+            ["git", "ls-files", "--stage", "--", relative.as_posix()],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.split(maxsplit=1)[0]
+        assert mode == "100755", f"{relative} is not executable in the Git index"
