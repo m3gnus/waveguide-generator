@@ -4,6 +4,7 @@ import { compareSelection } from '../api/results';
 import { CAD_CONTROL_DESCRIPTORS, cadControlIsAvailable, cadControlMatchesQuery } from '../design/cadControlRegistry';
 import { DesignFileMenu } from '../design/DesignFileMenu';
 import { PARAMETER_REGISTRY, PARAMETER_SECTION_DEFINITIONS, fieldAppliesToFamily, fieldMatchesQuery, parameterSectionIsVisible, type ParameterTab } from '../design/parameterRegistry';
+import { PARAMETRIC_CONTROL_DESCRIPTORS, parametricControlMatchesQuery } from '../design/parametricControlRegistry';
 import { RESULT_PANEL_COUNTS, preferencesStore, runDisplayName, usePreferences, type Preferences } from '../prefs/preferences';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { useDesignStore, type DesignDocument, type DesignFamily } from '../stores/design';
@@ -29,11 +30,16 @@ function initialTheme(): Theme {
 const parameterTabBySection = new Map(PARAMETER_SECTION_DEFINITIONS.map((section) => [section.title, section.tab]));
 const parameterSectionByTitle = new Map(PARAMETER_SECTION_DEFINITIONS.map((section) => [section.title, section]));
 
-export function revealParameterFromPalette(id: string, tab: ParameterTab, query: string): void {
+export function revealParameterFromPalette(
+  id: string,
+  tab: ParameterTab,
+  query: string,
+  owningMode: WorkspaceMode = 'parametric',
+): void {
   // A palette entry can outlive the mode in which its result list was built.
   // Establish the owning workspace before the dock panel is activated or the
   // still-mounted panel could claim a request for controls it is about to hide.
-  workspaceModeStore.setMode('parametric');
+  workspaceModeStore.setMode(owningMode);
   workspaceNavigation.activate(tab);
   // The request waits to be claimed, so it does not need to be timed to land
   // after the panel mounts — and not deferring it means the route still works
@@ -45,6 +51,12 @@ export function revealCadControlFromPalette(id: string, tab: ParameterTab, query
   workspaceModeStore.setMode('cad');
   workspaceNavigation.activate(tab);
   requestParameterReveal({ id, tab, query, target: 'control', fallbackId });
+}
+
+export function revealParametricControlFromPalette(id: string, tab: ParameterTab, query: string): void {
+  workspaceModeStore.setMode('parametric');
+  workspaceNavigation.activate(tab);
+  requestParameterReveal({ id, tab, query, target: 'control' });
 }
 
 export interface ParameterPaletteContext {
@@ -77,10 +89,23 @@ export function buildParameterPaletteEntries(family?: DesignFamily, context: Par
         detail: [...new Set([field.symbol, field.legacyKey].filter(Boolean))].join(' · '),
         keywords: [field.id, field.path, field.symbol, field.legacyKey].filter(Boolean).join(' '),
         matches: (query) => fieldMatchesQuery(field, query) || Boolean(field.symbol?.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())),
-        run: () => revealParameterFromPalette(field.id, tab, field.label),
+        // The same formula section can belong to CAD mode. Capture the mode that
+        // made this entry visible so executing it never jumps to another owner.
+        run: () => revealParameterFromPalette(field.id, tab, field.label, mode),
       };
     });
-  if (mode !== 'cad') return parameterEntries;
+  if (mode !== 'cad') {
+    const parametricControls: PaletteEntry[] = PARAMETRIC_CONTROL_DESCRIPTORS.map((descriptor) => ({
+      id: `parametric-control-${descriptor.id}`,
+      kind: 'Parameters',
+      label: descriptor.label,
+      detail: descriptor.section,
+      keywords: [descriptor.id, descriptor.section, ...descriptor.keywords].join(' '),
+      matches: (query) => parametricControlMatchesQuery(descriptor, query),
+      run: () => revealParametricControlFromPalette(descriptor.reveal.id, descriptor.tab, descriptor.label),
+    }));
+    return [...parameterEntries, ...parametricControls];
+  }
 
   const cadEntries: PaletteEntry[] = CAD_CONTROL_DESCRIPTORS
     .filter((descriptor) => cadControlIsAvailable(descriptor, cadReturnReady))
