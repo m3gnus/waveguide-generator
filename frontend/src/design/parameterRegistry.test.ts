@@ -174,4 +174,13 @@ describe('complete parameter registry', () => {
   it('documents ATH\'s omitted wall-thickness default', () => {
     expect(PARAMETER_REGISTRY.find((item) => item.id === 'mesh.wall_thickness')?.description).toContain('5 mm');
   });
+
+  it('explains how the throat extension relates to each formula\'s a0 control', () => {
+    const description = (id: string) => PARAMETER_REGISTRY.find((item) => item.id === id)?.description;
+
+    expect(description('osse.a0')).toContain('meet tangentially');
+    expect(description('rosse.a0')).toContain('does not guarantee a tangent join');
+    expect(description('common.throat_ext_angle')).toContain('independent of a0');
+    expect(description('common.throat_ext_length')).toContain('does not change the computed OS-SE or R-OSSE flare');
+  });
 });
