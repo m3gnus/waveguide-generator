@@ -19,6 +19,8 @@ from typing import Any
 import urllib.error
 import urllib.request
 
+from server.platform.process import background_process_kwargs
+
 
 REPOSITORY = "m3gnus/waveguide-generator"
 LATEST_RELEASE_API = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"
@@ -123,6 +125,7 @@ def _run_git(repo_root: Path, *args: str) -> str | None:
             capture_output=True,
             text=True,
             timeout=2.0,
+            **background_process_kwargs(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return None

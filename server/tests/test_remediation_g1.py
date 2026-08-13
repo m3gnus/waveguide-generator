@@ -392,8 +392,12 @@ def test_workspace_routes_use_v2_data_layout(tmp_path: Path, monkeypatch) -> Non
         monkeypatch.setattr(workspace_api, "_select_workspace_folder", lambda: str(selected))
         response = await endpoints["/api/workspace/select"]()
         assert response == {"selected": True, "path": str(selected.resolve())}
-        calls: list[list[str]] = []
-        monkeypatch.setattr(workspace_api.subprocess, "Popen", lambda command: calls.append(command))
+        calls: list[tuple[list[str], dict[str, object]]] = []
+        monkeypatch.setattr(
+            workspace_api.subprocess,
+            "Popen",
+            lambda command, **kwargs: calls.append((command, kwargs)),
+        )
         opened = await endpoints["/api/workspace/open"]()
         assert opened["path"] == str(selected.resolve())
         assert calls
