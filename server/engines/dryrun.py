@@ -11,10 +11,7 @@ from server.jobs.models import PolarConfig
 from server.solver.acoustics import solver_sound_speed_m_per_s
 from server.solver.beam_shape import beam_shape_summary
 from server.solver.contract import build_directivity_metadata
-from server.solver.directivity_index import (
-    calculate_di_from_polar_patterns,
-    calculate_di_from_spherical_grid,
-)
+from server.solver.directivity_index import calculate_di_from_spherical_grid
 
 
 def _canonical_seed(design: Mapping[str, Any]) -> tuple[str, float]:
@@ -178,8 +175,35 @@ class DryRunEngine:
                         for angle in angles
                     ]
                 )
-        directivity_index = calculate_di_from_polar_patterns(
-            patterns,
+        # DI is always derived from a sphere and never from the selected polar
+        # display cuts. The balloon switch controls publication of this grid,
+        # not whether the synthetic solver samples it for DI.
+        theta_count = int(polar["spherical_theta_count"])
+        phi_count = int(polar["spherical_phi_count"])
+        theta_max = 90.0 if sim_type == "infinite-baffle" else 180.0
+        theta = [theta_max * index / (theta_count - 1) for index in range(theta_count)]
+        phi = [360.0 * index / phi_count for index in range(phi_count)]
+        grids: list[list[list[float]]] = []
+        for frequency in frequencies:
+            beam_h = max(18.0, 92.0 / (1.0 + (frequency / (1500.0 + seed * 400.0)) ** 0.72))
+            beam_v = max(14.0, beam_h * (0.73 + seed * 0.08))
+            grid: list[list[float]] = []
+            for theta_value in theta:
+                row = []
+                for phi_value in phi:
+                    phi_rad = math.radians(phi_value)
+                    inverse_beam_sq = (
+                        math.cos(phi_rad) ** 2 / beam_h**2
+                        + math.sin(phi_rad) ** 2 / beam_v**2
+                    )
+                    row.append(round(-12.0 * theta_value**1.8 * inverse_beam_sq**0.9, 4))
+                grid.append(row)
+            grids.append(grid)
+        hemisphere = theta_max <= 90.0
+        directivity_index = calculate_di_from_spherical_grid(
+            theta,
+            phi,
+            grids,
             hemisphere=hemisphere,
         )
 
@@ -188,10 +212,6 @@ class DryRunEngine:
             "effective_distance_m": float(polar["distance"]),
             "sound_speed_m_per_s": solver_sound_speed_m_per_s("hornlab_metal_bem"),
         }
-        polar_limit = 90.0 if hemisphere else 180.0
-        measured_both_orbit_sides = (
-            float(angle_start) <= -polar_limit and float(angle_end) >= polar_limit
-        ) or float(angle_end) - float(angle_start) >= 2.0 * polar_limit
         metadata: dict[str, Any] = {
             "engine": "dryrun",
             "synthetic": True,
@@ -219,15 +239,11 @@ class DryRunEngine:
             "directivity_index": {
                 "available": any(value is not None for value in directivity_index),
                 "definition": "10log10(reference-axis mean-square pressure / full-sphere mean-square pressure)",
-                "method": "horizontal_vertical_orbit_approximation",
+                "method": "spherical_grid",
                 "domain": "full_sphere",
                 "power_average": "linear_mean_square_pressure",
-                "planes_used": [
-                    plane for plane in ("horizontal", "vertical") if plane in patterns
-                ],
-                "opposing_orbit_sides": (
-                    "measured" if measured_both_orbit_sides else "mirrored"
-                ),
+                "planes_used": [],
+                "opposing_orbit_sides": "not_applicable",
                 "rear_hemisphere": "zero_radiation" if hemisphere else "sampled",
             },
         }
@@ -250,28 +266,6 @@ class DryRunEngine:
         }
 
         if polar["spherical_sampling"]:
-            theta_count = int(polar["spherical_theta_count"])
-            phi_count = int(polar["spherical_phi_count"])
-            theta_max = 90.0 if sim_type == "infinite-baffle" else 180.0
-            theta = [theta_max * index / (theta_count - 1) for index in range(theta_count)]
-            phi = [360.0 * index / phi_count for index in range(phi_count)]
-            grids: list[list[list[float]]] = []
-            for frequency in frequencies:
-                beam_h = max(18.0, 92.0 / (1.0 + (frequency / (1500.0 + seed * 400.0)) ** 0.72))
-                beam_v = max(14.0, beam_h * (0.73 + seed * 0.08))
-                grid: list[list[float]] = []
-                for theta_value in theta:
-                    row = []
-                    for phi_value in phi:
-                        phi_rad = math.radians(phi_value)
-                        inverse_beam_sq = (
-                            math.cos(phi_rad) ** 2 / beam_h**2
-                            + math.sin(phi_rad) ** 2 / beam_v**2
-                        )
-                        row.append(round(-12.0 * theta_value**1.8 * inverse_beam_sq**0.9, 4))
-                    grid.append(row)
-                grids.append(grid)
-            hemisphere = theta_max <= 90.0
             response["balloon"] = {
                 "frequencies": frequencies,
                 "theta_deg": theta,
@@ -280,21 +274,6 @@ class DryRunEngine:
                 "distance_m": float(polar["distance"]),
                 "hemisphere": hemisphere,
             }
-            directivity_index = calculate_di_from_spherical_grid(
-                theta,
-                phi,
-                grids,
-                hemisphere=hemisphere,
-            )
-            response["di"]["di"] = directivity_index
-            metadata["directivity_index"].update(
-                {
-                    "available": any(value is not None for value in directivity_index),
-                    "method": "spherical_grid",
-                    "planes_used": [],
-                    "opposing_orbit_sides": "not_applicable",
-                }
-            )
             summary = beam_shape_summary(theta, phi, grids, frequencies, hemisphere=hemisphere)
             if summary is not None:
                 response["beam_shape"] = summary

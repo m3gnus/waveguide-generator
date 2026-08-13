@@ -166,6 +166,61 @@ def test_all_solve_controls_flow_into_solver_context() -> None:
     assert native.values["normalization_angle_deg"] == 15
 
 
+def test_full_sphere_di_sampling_is_independent_of_balloon_output() -> None:
+    context = SolverContext(
+        design=_design(),
+        frequency_range=(100, 200),
+        num_frequencies=2,
+    )
+    assert context.polar_config["spherical_sampling"] is False
+
+    class SphereCapableObservationConfig:
+        def __init__(
+            self,
+            *,
+            planes: list[str],
+            distance_m: float,
+            angle_min_deg: float,
+            angle_max_deg: float,
+            angle_count: int,
+            origin: str,
+            sphere_grid: tuple[int, int],
+            sphere_theta_max_deg: float = 180.0,
+        ) -> None:
+            self.sphere_grid = sphere_grid
+            self.sphere_theta_max_deg = sphere_theta_max_deg
+
+    native = observation_config(
+        context,
+        SphereCapableObservationConfig,
+        RuntimeError,
+        "test-adapter",
+    )
+
+    assert native.sphere_grid == (37, 72)
+    assert native.sphere_theta_max_deg == 180.0
+
+
+def test_pinned_bempp_contract_accepts_the_internal_di_sphere() -> None:
+    from hornlab_bempp_bem import ObservationConfig as BemppObservationConfig
+
+    context = SolverContext(
+        design=_design(),
+        frequency_range=(100, 200),
+        num_frequencies=2,
+    )
+
+    native = observation_config(
+        context,
+        BemppObservationConfig,
+        RuntimeError,
+        "hornlab-bempp-bem",
+    )
+
+    assert native.sphere_grid == (37, 72)
+    assert native.sphere_theta_max_deg == 180.0
+
+
 def test_current_native_contract_gets_custom_diagonal_points_and_normalization() -> None:
     context = SolverContext(
         design=_design(),
@@ -392,8 +447,12 @@ def test_workspace_routes_use_v2_data_layout(tmp_path: Path, monkeypatch) -> Non
         monkeypatch.setattr(workspace_api, "_select_workspace_folder", lambda: str(selected))
         response = await endpoints["/api/workspace/select"]()
         assert response == {"selected": True, "path": str(selected.resolve())}
-        calls: list[list[str]] = []
-        monkeypatch.setattr(workspace_api.subprocess, "Popen", lambda command: calls.append(command))
+        calls: list[tuple[list[str], dict[str, object]]] = []
+        monkeypatch.setattr(
+            workspace_api.subprocess,
+            "Popen",
+            lambda command, **kwargs: calls.append((command, kwargs)),
+        )
         opened = await endpoints["/api/workspace/open"]()
         assert opened["path"] == str(selected.resolve())
         assert calls

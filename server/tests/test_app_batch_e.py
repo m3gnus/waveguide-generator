@@ -109,6 +109,19 @@ def test_health_and_placeholder_shell(tmp_path: Path) -> None:
     assert len(shell.text) > 100
 
 
+def test_explicit_workspace_default_is_separate_from_internal_data(tmp_path: Path) -> None:
+    data_dir = tmp_path / "app-data"
+    workspace_dir = tmp_path / "waveguide-generator" / "output"
+    client = TestClient(create_app(data_dir=data_dir, workspace_dir=workspace_dir))
+
+    response = client.get("/api/workspace/path")
+
+    assert response.status_code == 200
+    assert response.json() == {"path": str(workspace_dir.resolve()), "selected": False}
+    assert workspace_dir.is_dir()
+    assert not (data_dir / "workspace").exists()
+
+
 def test_capabilities_and_dryrun_guard(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("WG2_ENABLE_DRYRUN", raising=False)
     client = TestClient(create_app(data_dir=tmp_path))

@@ -17,6 +17,8 @@ import shutil
 import subprocess
 from typing import Any, Mapping
 
+from server.platform.process import background_process_kwargs
+
 
 FUSION_STATUS_FILENAME = ".fusion-status.json"
 IPC_SUBDIRECTORY = Path("ipc") / "wglink"
@@ -48,6 +50,7 @@ def fusion_process_running(*, system: str | None = None) -> bool:
             check=False,
             capture_output=True,
             timeout=2,
+            **background_process_kwargs(system=resolved),
         )
     except (OSError, subprocess.SubprocessError):
         return False

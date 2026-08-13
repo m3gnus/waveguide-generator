@@ -10,7 +10,7 @@ import { buildImportedSubmission, importedSubmissionBlocker } from '../jobs/impo
 import { decorateRunName, nextRunName } from '../jobs/runNaming';
 import { projectSubmittedDesign, type SubmittedDesignProjection } from '../jobs/submittedProjection';
 import { preferencesStore, usePreferences } from '../prefs/preferences';
-import { downloadMeshArtifact, runExportBundle } from '../results/exporters';
+import { runWorkspaceExportBundle, saveMeshArtifactToWorkspace } from '../results/exporters';
 import type { ResultPayload } from '../results/types';
 import { useDesignStore, type DesignDocument } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
@@ -204,9 +204,9 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
 
   useEffect(() => {
     void automation.process(jobs, preferences, {
-      downloadMesh: (job) => downloadMeshArtifact(job),
+      downloadMesh: (job) => saveMeshArtifactToWorkspace(job),
       markMeshDownloaded: (job, filename) => jobsSocket.patchMetadata(job.id, { mesh_artifact_file: filename }),
-      exportCompleted: async (job, formats) => runExportBundle({
+      exportCompleted: async (job, formats) => runWorkspaceExportBundle({
         result: await fetchJobResults(job.id) as ResultPayload,
         design: hydrateJobDesign(job) ?? undefined,
         designRevision: job.design_revision,
