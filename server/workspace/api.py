@@ -19,6 +19,7 @@ from fastapi import APIRouter, FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from server.platform.paths import data_paths
+from server.platform.process import background_process_kwargs
 
 
 logger = logging.getLogger(__name__)
@@ -105,7 +106,13 @@ def _select_workspace_folder() -> str | None:
         ]
     for command in commands:
         try:
-            result = subprocess.run(command, capture_output=True, text=True, timeout=120)
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                **background_process_kwargs(system=system),
+            )
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
             continue
         if result.returncode == 0 and result.stdout.strip():
@@ -210,7 +217,7 @@ def create_workspace_router(state: WorkspaceState) -> APIRouter:
             else ["xdg-open", str(path)]
         )
         try:
-            subprocess.Popen(command)
+            subprocess.Popen(command, **background_process_kwargs())
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Failed to open folder: {exc}") from exc
         return {"status": "opened", "path": str(path)}

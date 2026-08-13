@@ -113,16 +113,24 @@ def test_running_fusion_without_a_heartbeat_is_addin_offline(tmp_path: Path) -> 
 
 
 def test_process_probe_is_non_activating_and_platform_specific(monkeypatch) -> None:
-    calls: list[list[str]] = []
+    calls: list[tuple[list[str], dict[str, object]]] = []
 
-    def fake_run(command, **_kwargs):
-        calls.append(list(command))
+    def fake_run(command, **kwargs):
+        calls.append((list(command), kwargs))
         return SimpleNamespace(returncode=0, stdout=b"")
 
     monkeypatch.setattr("server.cadlink.fusion_status.shutil.which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr("server.cadlink.fusion_status.subprocess.run", fake_run)
     assert fusion_process_running(system="Darwin") is True
-    assert calls == [["/usr/bin/pgrep", "-x", "Autodesk Fusion"]]
+    assert calls[0][0] == ["/usr/bin/pgrep", "-x", "Autodesk Fusion"]
+    assert "creationflags" not in calls[0][1]
+
+    monkeypatch.setattr(
+        "server.platform.process.subprocess.CREATE_NO_WINDOW", 0x08000000, raising=False
+    )
+    assert fusion_process_running(system="Windows") is False
+    assert calls[1][0] == ["/usr/bin/tasklist", "/FI", "IMAGENAME eq Fusion360.exe", "/NH"]
+    assert calls[1][1]["creationflags"] == 0x08000000
 
 
 def test_active_document_reports_unlinked_current_and_stale_designs(tmp_path: Path) -> None:
