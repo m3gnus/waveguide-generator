@@ -1,12 +1,18 @@
 import type { JobItem } from '../api/jobsSocket';
 import { jobsSocket } from '../api/jobsSocket';
-import { downloadBlob, downloadText } from '../api/designIo';
 import { fetchJobResults } from '../api/results';
 import { ActionMenu, type ActionMenuItem } from '../design/ActionMenu';
 import { usePreferences, type ExportFormat } from '../prefs/preferences';
 import { buildCanonicalDirectivityRequest } from '../results/CanonicalPlot';
 import { resultExportSnapshot } from '../results/exportContext';
-import { runExportBundle, runExportFormat, type ExportContext } from '../results/exporters';
+import {
+  runExportFormat,
+  runWorkspaceExportBundle,
+  writeWorkspaceFiles,
+  type ExportBundleResult,
+  type ExportContext,
+  type WorkspaceFile,
+} from '../results/exporters';
 import { buildOnAxisFrd, buildPolarFrdSet } from '../results/frd';
 import { resultChannelFileSuffix, resultChannels, scopeResultChannel, type ResultPayload } from '../results/types';
 import { EMPTY_RUN_EXPORT_STATE, useRunExportStore, type RunExportOutcome } from '../stores/runExports';
@@ -82,6 +88,13 @@ function pngBlob(dataUri: string): Blob {
   return new Blob([bytes], { type: 'image/png' });
 }
 
+function workspaceNotice(label: string, result: Pick<ExportBundleResult, 'directory' | 'files'>): string {
+  const count = `${result.files.length} file${result.files.length === 1 ? '' : 's'}`;
+  return result.directory
+    ? `${label} · ${count} written to ${result.directory}`
+    : `${label} · ${count} written to Workspace`;
+}
+
 export function RunExportControl({ job, compact = false, onOpenExportSettings }: RunExportControlProps) {
   const preferences = usePreferences();
   const operation = useRunExportStore((state) => state.jobs[job.id] ?? EMPTY_RUN_EXPORT_STATE);
@@ -105,9 +118,9 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
   };
 
   const exportOne = (format: ExportFormat) => execute(job.id, [format], async (): Promise<RunExportOutcome> => {
-    const result = await runExportBundle(await buildContext([format]), [format]);
+    const result = await runWorkspaceExportBundle(await buildContext([format]), [format]);
     await recordFiles(result.files);
-    const notice = `${formatLabel(format)} exported · ${result.files.length} file${result.files.length === 1 ? '' : 's'}`;
+    const notice = workspaceNotice(formatLabel(format), result);
     return result.failures.length ? {
       notice,
       error: `${notice} · ${result.failures.map(({ reason }) => reason).join('; ')}`,
@@ -122,13 +135,16 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
     const result = await fetchJobResults(job.id) as ResultPayload;
     const channels = resultChannels(result);
     const variants = channels.length > 1 ? channels.map(({ id }) => id) : [undefined];
-    const files = variants.map((channelId) => {
+    const prepared = variants.map((channelId): WorkspaceFile => {
       const filename = `${context.jobStem}${resultChannelFileSuffix(result, channelId)}.frd`;
-      downloadText(buildOnAxisFrd(result, context.preferences, channelId), filename);
-      return filename;
+      return {
+        filename,
+        blob: new Blob([buildOnAxisFrd(result, context.preferences, channelId)], { type: 'text/plain;charset=utf-8' }),
+      };
     });
-    await recordFiles(files);
-    return { notice: `On-axis response (.frd) exported · ${files.length} file${files.length === 1 ? '' : 's'}` };
+    const written = await writeWorkspaceFiles(context.jobStem, prepared);
+    await recordFiles(written.files);
+    return { notice: workspaceNotice('On-axis response (.frd)', written) };
   });
 
   // Temporary seam: fold this VituixCAD set action into the shared export
@@ -140,29 +156,13 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
     const variants = channels.length > 1 ? channels.map(({ id }) => id) : [undefined];
     const files = variants.flatMap((channelId) => buildPolarFrdSet(result, context.preferences, context.jobStem, channelId));
     if (!files.length) throw new Error('This run has no directivity data for a polar FRD set.');
-
-    const pathResponse = await fetch('/api/workspace/path');
-    if (!pathResponse.ok) throw await responseError(pathResponse);
-    let workspace = await pathResponse.json() as { selected?: boolean; path?: string };
-    if (!workspace.selected) {
-      const selectResponse = await fetch('/api/workspace/select', { method: 'POST' });
-      if (!selectResponse.ok) throw await responseError(selectResponse);
-      workspace = await selectResponse.json() as { selected?: boolean; path?: string };
-      if (!workspace.selected) {
-        throw new Error('Workspace selection was cancelled. No files were written.');
-      }
-    }
-
-    const writeResponse = await fetch('/api/workspace/write-export', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        subdirectory: context.jobStem,
-        members: files.map(({ filename, text }) => ({ relative_path: filename, text })),
-      }),
-    });
-    if (!writeResponse.ok) throw await responseError(writeResponse);
-    const written = await writeResponse.json() as { directory: string; files: string[] };
+    const written = await writeWorkspaceFiles(
+      context.jobStem,
+      files.map(({ filename, text }) => ({
+        filename,
+        blob: new Blob([text], { type: 'text/plain;charset=utf-8' }),
+      })),
+    );
     await recordFiles(written.files);
     return { notice: `${written.files.length} polar FRD files written to ${written.directory}` };
   });
@@ -174,7 +174,7 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
     const result = context.result!;
     const channels = resultChannels(result);
     const variants = channels.length > 1 ? channels.map(({ id }) => id) : [undefined];
-    const files: string[] = [];
+    const prepared: WorkspaceFile[] = [];
     for (const channelId of variants) {
       const directivityRequest = buildCanonicalDirectivityRequest(scopeResultChannel(result, channelId), context.preferences);
       const directivityResponse = await fetch(directivityRequest.endpoint, {
@@ -186,21 +186,25 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
       const directivityBody = await directivityResponse.json() as { image?: string };
       if (!directivityBody.image) throw new Error('HornLab plots returned no directivity image.');
 
-      files.push(...await runExportFormat('png', { ...context, channelId }));
+      await runExportFormat('png', {
+        ...context,
+        channelId,
+        saveBlob: (blob, filename) => prepared.push({ blob, filename }),
+      });
       const directivityFilename = `${context.jobStem}${resultChannelFileSuffix(result, channelId)}_directivity_map.png`;
-      downloadBlob(pngBlob(directivityBody.image), directivityFilename);
-      files.push(directivityFilename);
+      prepared.push({ blob: pngBlob(directivityBody.image), filename: directivityFilename });
     }
-    await recordFiles(files);
-    return { notice: `Charts (.png) exported · ${files.length} files` };
+    const written = await writeWorkspaceFiles(context.jobStem, prepared);
+    await recordFiles(written.files);
+    return { notice: workspaceNotice('Charts (.png)', written) };
   });
 
   const exportPreferred = () => {
     const formats = [...preferences.exportFormats];
     return execute(job.id, formats, async (): Promise<RunExportOutcome> => {
-      const result = await runExportBundle(await buildContext(formats), formats);
+      const result = await runWorkspaceExportBundle(await buildContext(formats), formats);
       await recordFiles(result.files);
-      const fileText = `${result.files.length} file${result.files.length === 1 ? '' : 's'} exported`;
+      const fileText = workspaceNotice('Export', result);
       if (!result.failures.length) return { notice: fileText };
       const failed = result.failures.map(({ format, reason }) => `${formatLabel(format)}: ${reason}`).join('; ');
       return {

@@ -27,7 +27,9 @@ export const DEFAULT_VIEWER_PREFERENCES: Readonly<ViewerPreferences> = Object.fr
   keyboardPanEnabled: false,
   liveUpdate: true,
   tintSolvedRegion: true,
-  startupCameraMode: 'perspective',
+  // Orthographic projection keeps circles circular on screen and makes small
+  // H/V geometry differences inspectable without perspective foreshortening.
+  startupCameraMode: 'orthographic',
 });
 
 interface PreferenceEnvelope {

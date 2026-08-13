@@ -6,7 +6,7 @@ import { compareSelection, fetchJobResults, provisionalResults, recombineJobResu
 import { EChart, useChartTokens, type ChartTokens } from '../results/EChart';
 import { beamShapeSeries, directivityGrid, directivityIndexSeries, expandResultChannels, impedanceSeries, splSeries, type NamedResult } from '../results/mappers';
 import { BalloonRenderer, ChartStub, ForwardBeamRenderer, hasBalloonData, type ChartStubAction } from '../results/balloon';
-import { runExportBundle } from '../results/exporters';
+import { runWorkspaceExportBundle } from '../results/exporters';
 import { resultExportSnapshot } from '../results/exportContext';
 export { resultExportSnapshot } from '../results/exportContext';
 import { summaryGroups, summaryText, type SummaryGroup, type SummaryRow } from '../results/summary';
@@ -1038,11 +1038,12 @@ export function ResultsPanel() {
     try {
       const job = jobs.find(({ id }) => id === selection.primary);
       if (!job) throw new Error('The selected run is no longer available for export.');
-      const result = await runExportBundle({ result: primary, ...resultExportSnapshot(job), jobStem: exportStemForJob(job), preferences }, preferences.exportFormats);
+      const result = await runWorkspaceExportBundle({ result: primary, ...resultExportSnapshot(job), jobStem: exportStemForJob(job), preferences }, preferences.exportFormats);
       if (selection.primary && result.files.length) {
         await jobsSocket.patchMetadata(selection.primary, { exported_files: [...new Set([...(job?.exported_files ?? []), ...result.files])] });
       }
-      setExportStatus(`${result.files.length} file${result.files.length === 1 ? '' : 's'} exported${result.failures.length ? ` · ${result.failures.length} failed: ${result.failures.map(({ format, reason }) => `${format} (${reason})`).join(', ')}` : ''}`);
+      const destination = result.directory ? ` written to ${result.directory}` : ' written to Workspace';
+      setExportStatus(`${result.files.length} file${result.files.length === 1 ? '' : 's'}${destination}${result.failures.length ? ` · ${result.failures.length} failed: ${result.failures.map(({ format, reason }) => `${format} (${reason})`).join(', ')}` : ''}`);
     } catch (reason) { setExportStatus(reason instanceof Error ? reason.message : String(reason)); }
     finally { setExporting(false); }
   };

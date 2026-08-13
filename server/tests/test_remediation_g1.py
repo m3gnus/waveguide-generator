@@ -476,6 +476,14 @@ def test_chart_routes_expose_every_theme_and_use_hornlab_plots(monkeypatch) -> N
     monkeypatch.setattr(charts_api, "_plots", lambda: fake)
     monkeypatch.setattr(
         charts_api,
+        "render_directivity_heatmap_b64",
+        lambda _plots, frequencies, directivity, **kwargs: calls.append(
+            ("directivity", kwargs["theme"])
+        )
+        or "Yg==",
+    )
+    monkeypatch.setattr(
+        charts_api,
         "_preview",
         lambda theme: calls.append(("preview", theme)) or "Yw==",
     )
