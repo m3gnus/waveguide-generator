@@ -72,9 +72,11 @@
 .realized-dimension-list.stale { border-color: color-mix(in srgb, var(--amber) 42%, var(--hair)); background: color-mix(in srgb, var(--amber) 3%, var(--surface-panel)); }
 .realized-dimension-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; min-height: 36px; padding: 4px 7px; border-top: 1px solid var(--hair-soft); }
 .realized-dimension-row:first-child { border-top: 0; }
+.realized-dimension-row.locally-edited { box-shadow: inset 3px 0 var(--amber); background: color-mix(in srgb, var(--amber) 6%, transparent); }
 .realized-dimension-row dt { min-width: 0; }
 .realized-dimension-row dt span, .realized-dimension-row dt code { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .realized-dimension-row dt span { color: var(--fg2); font-size: var(--text-base); }
+.realized-dimension-row dt span .realized-dimension-drift { display: inline; margin-left: 6px; color: var(--amber); font-size: var(--text-micro); font-weight: 600; }
 .realized-dimension-row dt code { margin-top: 1px; color: var(--fg4); font-size: var(--text-micro); }
 .realized-dimension-row dd { margin: 0; color: var(--fg); font: 600 var(--text-base) var(--mono); }
 .realized-dimension-row dd small { margin-left: 4px; color: var(--fg3); font: var(--text-micro) var(--ui); }

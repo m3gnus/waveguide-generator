@@ -181,7 +181,47 @@ def test_active_document_reports_unlinked_current_and_stale_designs(tmp_path: Pa
     assert stale["currentFormula"] == "R-OSSE"
 
     _write_status(workspace, links=[_link(parameterDriftCount=1)])
-    assert _read(workspace)["state"] == "stale"
+    legacy = _read(workspace)
+    assert legacy["state"] == "stale"
+    assert legacy["link"]["parameterDriftCount"] == 1
+    assert "driftedParameters" not in legacy["link"]
+
+
+def test_parameter_drift_names_are_validated_and_define_the_aggregate(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    _write_status(workspace, links=[_link(
+        parameterDriftCount=99,
+        driftedParameters=[
+            "wg_tritonia_v_mouth_w",
+            "wg_tritonia_v_depth",
+            "wg_tritonia_v_depth",
+        ],
+    )])
+
+    status = _read(workspace)
+
+    assert status["state"] == "stale"
+    assert status["link"]["driftedParameters"] == [
+        "wg_tritonia_v_depth",
+        "wg_tritonia_v_mouth_w",
+    ]
+    assert status["link"]["parameterDriftCount"] == 2
+
+
+@pytest.mark.parametrize("invalid", ["wg_depth", ["wg_depth", None], ["", "wg_depth"]])
+def test_invalid_parameter_drift_names_fall_back_to_the_legacy_count(
+    tmp_path: Path, invalid: object,
+) -> None:
+    workspace = tmp_path / "workspace"
+    _write_status(workspace, links=[_link(
+        parameterDriftCount=1,
+        driftedParameters=invalid,
+    )])
+
+    link = _read(workspace)["link"]
+
+    assert link["parameterDriftCount"] == 1
+    assert "driftedParameters" not in link
 
 
 def test_fusion_body_drift_is_new_only_until_that_fingerprint_is_returned(tmp_path: Path) -> None:

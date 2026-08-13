@@ -38,6 +38,8 @@ export interface FusionCadLink {
   configPresent: boolean;
   parameterCount: number;
   parameterDriftCount: number;
+  /** Absent when the active document is reported by an older WGLink add-in. */
+  driftedParameters?: string[];
   localBodyState: 'unmodified' | 'modified' | 'missing' | 'unknown';
   bodyFingerprintHash: string | null;
   documentSignatureHash: string | null;

@@ -628,7 +628,12 @@ const REALIZED_EMPTY_COPY: Record<Exclude<CadRealizedDimensions['state'], 'curre
 
 /** D7a outputs are evidence, never controls. Their manifest role decides what
  * belongs here; suffixes only supply friendly labels and a stable visual order. */
-export function RealizedDimensionsSection({ snapshot, forceOpen = false }: { snapshot: CadRealizedDimensions | null; forceOpen?: boolean }) {
+export function RealizedDimensionsSection({ snapshot, driftedParameters = [], forceOpen = false }: {
+  snapshot: CadRealizedDimensions | null;
+  driftedParameters?: readonly string[];
+  forceOpen?: boolean;
+}) {
+  const drifted = new Set(driftedParameters);
   const interfaceParameters = (snapshot?.parameters ?? [])
     .filter((parameter) => parameter.role === 'interface')
     .sort((left, right) => realizedDimensionOrder(left) - realizedDimensionOrder(right)
@@ -653,12 +658,13 @@ export function RealizedDimensionsSection({ snapshot, forceOpen = false }: { sna
       {interfaceParameters.length > 0
         ? <dl className={`realized-dimension-list${snapshot.state === 'stale' ? ' stale' : ''}`}>
           {interfaceParameters.map((parameter) => <div
-            className="realized-dimension-row"
+            className={`realized-dimension-row${drifted.has(parameter.name) ? ' locally-edited' : ''}`}
             data-instance-id={parameter.instanceId ?? ''}
             data-role={parameter.role}
+            data-locally-edited={drifted.has(parameter.name) ? 'true' : undefined}
             key={`${parameter.instanceId ?? 'unknown'}:${parameter.name}`}
           >
-            <dt><span>{realizedDimensionLabel(parameter.name)}</span><code>{parameter.name}</code></dt>
+            <dt><span>{realizedDimensionLabel(parameter.name)}{drifted.has(parameter.name) && <small className="realized-dimension-drift">Edited in Fusion</small>}</span><code>{parameter.name}</code></dt>
             <dd>{formatRealizedValue(parameter.value)}{parameter.unit && <small>{parameter.unit}</small>}</dd>
           </div>)}
         </dl>
@@ -673,7 +679,11 @@ function RealizedDimensionsCard({ forceOpen = false }: { forceOpen?: boolean }) 
     cadLinkCoordinatorBridge.getSnapshot,
     cadLinkCoordinatorBridge.getSnapshot,
   );
-  return <RealizedDimensionsSection snapshot={cadCoordinator.fusionStatus?.realizedDimensions ?? null} forceOpen={forceOpen}/>;
+  return <RealizedDimensionsSection
+    snapshot={cadCoordinator.fusionStatus?.realizedDimensions ?? null}
+    driftedParameters={cadCoordinator.fusionStatus?.link?.driftedParameters}
+    forceOpen={forceOpen}
+  />;
 }
 
 function CadFrequencySweep() {
