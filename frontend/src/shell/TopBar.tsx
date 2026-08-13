@@ -105,7 +105,7 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
       run: () => { compareSelection.setPrimary(job.id); workspaceNavigation.activate('results'); },
     }));
     const commands: PaletteEntry[] = [
-      { id: 'solve', kind: 'Commands', label: 'Solve', detail: solve.title, disabled: solve.disabled, run: solve.solve },
+      { id: 'solve', kind: 'Commands', label: solve.label, detail: solve.title, disabled: solve.disabled, run: solve.solve },
       { id: 'undo', kind: 'Commands', label: 'Undo', disabled: !canUndo, run: undo },
       { id: 'redo', kind: 'Commands', label: 'Redo', disabled: !canRedo, run: redo },
       { id: 'open', kind: 'Commands', label: 'Open', detail: 'Open a design file', run: () => fileAction('Open…') },
@@ -130,7 +130,7 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
       <button className="icon-button" disabled={!canRedo} onClick={redo} title="Redo"><Icon name="redo"/></button>
     </div>
     <CommandPalette entries={paletteEntries}/>
-    <button className="solve-button" disabled={solve.disabled} title={solve.title} aria-busy={solve.submitting} onClick={solve.solve}><Icon name="play"/>Solve<kbd>{commandShortcutLabel('↵')}</kbd></button>
+    <button className="solve-button" disabled={solve.disabled} title={solve.title} aria-busy={solve.submitting} onClick={solve.solve}><Icon name="play"/>{solve.label}<kbd>{commandShortcutLabel('↵')}</kbd></button>
     <i className="v-separator" />
     <div className="theme-toggle" aria-label="Color theme">
       <button className={theme === 'dark' ? 'on' : ''} onClick={() => setTheme('dark')} aria-label="Dark theme" aria-pressed={theme === 'dark'}><Icon name="moon"/></button>

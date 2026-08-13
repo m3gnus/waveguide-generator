@@ -6,6 +6,7 @@ import { useCapabilities, useCapabilityRefreshOnReconnect } from '../jobs/useCap
 import { JobAutomation } from '../jobs/automation';
 import { hydrateJobDesign } from '../jobs/jobDesign';
 import { exportStemForJob } from '../jobs/exportNaming';
+import { buildImportedSubmission, importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { decorateRunName, nextRunName } from '../jobs/runNaming';
 import { projectSubmittedDesign, type SubmittedDesignProjection } from '../jobs/submittedProjection';
 import { preferencesStore, usePreferences } from '../prefs/preferences';
@@ -13,12 +14,15 @@ import { downloadMeshArtifact, runExportBundle } from '../results/exporters';
 import type { ResultPayload } from '../results/types';
 import { useDesignStore, type DesignDocument } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
+import { useCadReturnStore } from '../stores/cadReturn';
 import { useSolveOptionsStore, type SolveOptions } from '../stores/solveOptions';
+import { importedMeshStore } from '../viewport/importedMeshStore';
 
 interface SolveControl {
   solve(): void;
   disabled: boolean;
   submitting: boolean;
+  label: string;
   title: string;
 }
 
@@ -91,7 +95,14 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   const design = useDesignStore((state) => state.design);
   const revision = useDesignStore((state) => state.designRevision);
   const filename = useDocumentStore((state) => state.filename);
-  const selectedEngine = useSolveOptionsStore((state) => state.engine);
+  const solveOptions = useSolveOptionsStore();
+  const selectedEngine = solveOptions.engine;
+  const cadReturn = useCadReturnStore();
+  const viewportGeometry = useSyncExternalStore(
+    importedMeshStore.subscribe,
+    importedMeshStore.getSnapshot,
+    importedMeshStore.getSnapshot,
+  );
   const preferences = usePreferences();
   const automation = useRef(new JobAutomation()).current;
   const { engines: capabilities, error: capabilityError } = useCapabilities();
@@ -106,6 +117,19 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     try { effectiveEngine = resolveEngine('auto', { engines: capabilities }, design.simulation.solver_mode); } catch { /* surfaced below */ }
   }
   const capability = capabilities.find((engine) => engine.name.toLowerCase() === effectiveEngine.toLowerCase()) ?? null;
+  const metalCapability = capabilities.find((engine) => engine.name.toLowerCase() === 'metal') ?? null;
+  const visibleImported = viewportGeometry.active ? viewportGeometry.scene : null;
+  const cadGeometryActive = visibleImported?.source === 'cad';
+  const fileGeometryActive = visibleImported?.source === 'file';
+  const cadGeometryMismatch = cadGeometryActive && (
+    !visibleImported.ingestId
+    || visibleImported.ingestId !== cadReturn.ingestRecord?.ingest_id
+  );
+  const cadSolveBlocker = cadGeometryMismatch
+    ? 'The displayed Fusion CAD mesh does not match the selected ingestion. Prepare or reselect it before solving.'
+    : cadGeometryActive
+      ? importedSubmissionBlocker(cadReturn, solveOptions)
+      : null;
 
   const run = useCallback(async (nextDesign: DesignDocument, nextRevision = revision) => {
     if (submissionInFlight.current) return;
@@ -199,28 +223,51 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   }, [automation, jobs, preferences, reportError]);
 
   const unavailable = capability?.reason ?? capabilityError ?? 'Checking solver engine capability…';
+  const activeCapability = cadGeometryActive ? metalCapability : capability;
   const solve = useCallback(() => {
-    void run(design, revision).catch((error) => reportError(error instanceof Error ? error.message : String(error)));
-  }, [design, reportError, revision, run]);
+    const action = async () => {
+      if (fileGeometryActive) {
+        throw new Error('A standalone imported mesh is for viewport inspection only. Show Parametric to solve the WG design.');
+      }
+      if (cadGeometryActive) {
+        if (cadSolveBlocker) throw new Error(cadSolveBlocker);
+        await runImported(buildImportedSubmission(useCadReturnStore.getState()));
+        return;
+      }
+      await run(design, revision);
+    };
+    void action().catch((error) => reportError(error instanceof Error ? error.message : String(error)));
+  }, [cadGeometryActive, cadSolveBlocker, design, fileGeometryActive, reportError, revision, run, runImported]);
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && capability?.available && !submitting) {
+      if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && activeCapability?.available && !submitting && !cadSolveBlocker && !fileGeometryActive) {
         event.preventDefault();
         solve();
       }
     };
     window.addEventListener('keydown', shortcut);
     return () => window.removeEventListener('keydown', shortcut);
-  }, [capability, solve, submitting]);
+  }, [activeCapability, cadSolveBlocker, fileGeometryActive, solve, submitting]);
 
   const control = useMemo<SolveControl>(() => ({
     solve,
-    disabled: !capability?.available || submitting,
+    disabled: !activeCapability?.available || submitting || Boolean(cadSolveBlocker) || fileGeometryActive,
     submitting,
-    title: capability?.available
-      ? (submitting ? 'Submitting solve…' : `Solve current design with ${selectedEngine === 'auto' ? `AUTO (${capability.name})` : capability.name}`)
-      : unavailable,
-  }), [capability, selectedEngine, solve, submitting, unavailable]);
+    label: cadGeometryActive ? 'Solve Fusion CAD' : 'Solve',
+    title: submitting
+      ? 'Submitting solve…'
+      : fileGeometryActive
+        ? 'Standalone imported meshes are viewport-only. Show Parametric to solve the WG design.'
+        : cadSolveBlocker
+          ? cadSolveBlocker
+          : cadGeometryActive && activeCapability?.available
+            ? 'Solve the displayed Fusion CAD model with Metal'
+            : activeCapability?.available
+              ? `Solve current design with ${selectedEngine === 'auto' ? `AUTO (${activeCapability.name})` : activeCapability.name}`
+              : cadGeometryActive
+                ? metalCapability?.reason ?? capabilityError ?? 'Metal engine is unavailable'
+                : unavailable,
+  }), [activeCapability, cadGeometryActive, cadSolveBlocker, capabilityError, fileGeometryActive, metalCapability?.reason, selectedEngine, solve, submitting, unavailable]);
 
   return <SolveContext.Provider value={control}>{children}<JobAnnouncer jobs={jobs}/></SolveContext.Provider>;
 }

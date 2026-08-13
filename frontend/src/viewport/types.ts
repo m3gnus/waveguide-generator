@@ -15,10 +15,14 @@ export interface SceneSurface {
   normals: Float32Array;
   indices: Uint32Array;
   curvature: Float32Array | null;
+  /** True only for triangles in the physical mesh domain sent to the solver.
+   * Reflected/full-model display copies remain false. */
+  solvedDomain?: boolean;
 }
 
 export interface MaterialLibrary {
   surfaces: Record<SurfaceMaterialClass, Material>;
+  solvedSurfaces: Record<SurfaceMaterialClass, Material>;
   wire: Material;
   edge: Material;
   stencilBack: Material;

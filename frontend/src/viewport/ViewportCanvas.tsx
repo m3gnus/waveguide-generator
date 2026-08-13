@@ -599,7 +599,10 @@ function Scene({ scene, sceneMarker, mode, showEnclosure, sectionCut, cameraRequ
   const scheduler = useMemo(() => new DemandRenderScheduler(invalidate), [invalidate]);
   useFrame(() => scheduler.flush(), 0);
   const clipPlane = useMemo(() => sectionCut ? new Plane(new Vector3(1, 0, 0), 0) : null, [sectionCut]);
-  const materials = useMemo(() => createMaterialLibrary(mode, clipPlane, theme), [clipPlane, mode, theme]);
+  const materials = useMemo(
+    () => createMaterialLibrary(mode, clipPlane, theme, preferences.tintSolvedRegion),
+    [clipPlane, mode, preferences.tintSolvedRegion, theme],
+  );
   const center = useMemo(() => scene.bounds.getCenter(new Vector3()), [scene.bounds]);
   const size = useMemo(() => scene.bounds.getSize(new Vector3()), [scene.bounds]);
   const controls = useRef<OrbitControlsInstance>(null);
