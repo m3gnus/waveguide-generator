@@ -4,6 +4,7 @@ import { viewerPreferences } from '../viewerprefs/viewerPreferences';
 import { StatusBar } from './StatusBar';
 import { TopBar } from './TopBar';
 import { Workspace } from './Workspace';
+import { CadLinkCoordinator } from './CadLinkCoordinator';
 import { JobsCoordinator } from './JobsCoordinator';
 import { useDocumentTitle } from './useDocumentTitle';
 
@@ -25,5 +26,5 @@ export function Shell() {
       previewSocket.stop();
     };
   }, []);
-  return <JobsCoordinator><div className="app-shell"><TopBar onResetLayout={() => setResetKey((value) => value + 1)}/><Workspace resetKey={resetKey}/><StatusBar/></div></JobsCoordinator>;
+  return <><CadLinkCoordinator/><JobsCoordinator><div className="app-shell"><TopBar onResetLayout={() => setResetKey((value) => value + 1)}/><Workspace resetKey={resetKey}/><StatusBar/></div></JobsCoordinator></>;
 }
