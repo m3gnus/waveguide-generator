@@ -308,6 +308,7 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
         "morph": _clean(
             {
                 "morphTarget": _expr(morph.target_shape),
+                "morphExponent": _expr(morph.target_exponent),
                 # ATH and profile_sampling.py define absent/zero target extents
                 # as implicit extents derived from the waveguide mouth.
                 "morphWidth": _scaled_expr(morph.target_width, scale),
