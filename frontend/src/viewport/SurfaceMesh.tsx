@@ -38,7 +38,7 @@ export function SurfaceMesh({ surface, mode, visible, sectionCut, materials, sch
     return geometry;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- positions/indices identify the surface's geometry
   }, [mode, visible, surface.positions, surface.indices, surface.normals]);
-  const material = materials.surfaces[surface.materialClass];
+  const material = (surface.solvedDomain ? materials.solvedSurfaces : materials.surfaces)[surface.materialClass];
   const edgeFallback = mode === 'edges' && Math.floor(surface.indices.length / 3) > MAX_EDGE_TRIANGLES;
   const edgeFillMaterial = useMemo(() => {
     if (!edgeFallback) return null;

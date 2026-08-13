@@ -30,7 +30,8 @@
 .wg2-viewport .paused-badge { border: 1px solid rgba(var(--amber-rgb), .34); background: rgba(var(--amber-rgb), .13); color: var(--amber); }
 .wg2-viewport .error-badge { border: 1px solid rgba(var(--red-rgb), .38); background: rgba(var(--red-rgb), .13); color: var(--red); }
 .wg2-viewport .imported-mesh-badge { gap: 6px; border: 1px solid rgba(var(--acc-rgb), .32); background: rgba(var(--acc-rgb), .12); color: var(--acc); letter-spacing: .09em; }
-.wg2-viewport .imported-mesh-badge button { padding: 0 0 0 6px; border-left: 1px solid rgba(var(--acc-rgb), .3); background: transparent; color: inherit; font: 650 var(--text-micro) var(--ui); letter-spacing: .05em; text-transform: uppercase; }
+.wg2-viewport .imported-mesh-badge button { padding: 2px 6px; border: 0; border-radius: var(--r2); background: transparent; color: inherit; font: 650 var(--text-micro) var(--ui); letter-spacing: .05em; text-transform: uppercase; opacity: .62; }
+.wg2-viewport .imported-mesh-badge button.active { background: rgba(var(--acc-rgb), .2); opacity: 1; }
 .mesh-import-error { position: absolute; z-index: 4; top: 45px; right: 12px; max-width: min(440px, calc(100% - 24px)); padding: 6px 8px; border: 1px solid rgba(var(--red-rgb), .35); border-radius: var(--r3); background: var(--glass-bg); color: var(--red); font-size: var(--text-micro); box-shadow: var(--glass-sh); }
 
 .viewer-preferences { position: absolute; z-index: 6; right: 12px; bottom: 86px; display: flex; flex-direction: column; width: min(310px, calc(100% - 24px)); max-height: min(570px, calc(100% - 102px)); border: 1px solid var(--glass-bd); border-radius: var(--r3); background: var(--glass-bg); box-shadow: var(--glass-sh); color: var(--fg2); pointer-events: auto; backdrop-filter: blur(18px) saturate(1.25); }

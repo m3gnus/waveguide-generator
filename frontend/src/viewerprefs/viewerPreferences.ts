@@ -11,6 +11,7 @@ export interface ViewerPreferences {
   invertWheelZoom: boolean;
   keyboardPanEnabled: boolean;
   liveUpdate: boolean;
+  tintSolvedRegion: boolean;
   startupCameraMode: CameraProjection;
 }
 
@@ -25,6 +26,7 @@ export const DEFAULT_VIEWER_PREFERENCES: Readonly<ViewerPreferences> = Object.fr
   invertWheelZoom: false,
   keyboardPanEnabled: false,
   liveUpdate: true,
+  tintSolvedRegion: true,
   startupCameraMode: 'perspective',
 });
 
@@ -55,6 +57,7 @@ export function parseViewerPreferences(raw: string | null): ViewerPreferences {
       invertWheelZoom: typeof stored.invertWheelZoom === 'boolean' ? stored.invertWheelZoom : DEFAULT_VIEWER_PREFERENCES.invertWheelZoom,
       keyboardPanEnabled: typeof stored.keyboardPanEnabled === 'boolean' ? stored.keyboardPanEnabled : DEFAULT_VIEWER_PREFERENCES.keyboardPanEnabled,
       liveUpdate: typeof stored.liveUpdate === 'boolean' ? stored.liveUpdate : DEFAULT_VIEWER_PREFERENCES.liveUpdate,
+      tintSolvedRegion: typeof stored.tintSolvedRegion === 'boolean' ? stored.tintSolvedRegion : DEFAULT_VIEWER_PREFERENCES.tintSolvedRegion,
       startupCameraMode: stored.startupCameraMode === 'orthographic' || stored.startupCameraMode === 'perspective'
         ? stored.startupCameraMode
         : DEFAULT_VIEWER_PREFERENCES.startupCameraMode,

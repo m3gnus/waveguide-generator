@@ -2,11 +2,17 @@ import { Box3, Vector3 } from 'three';
 import type { FrameScene } from './frameScene';
 import type { ParsedMSH } from './mshParser';
 import type { SceneSurface } from './types';
+import { expandImportedSymmetry } from './symmetryScene';
 
 export interface ImportedMeshScene {
   name: string;
+  source: 'cad' | 'file';
+  /** Present for CAD-return scenes so the solve command can prove that the
+   * visible mesh and the immutable ingestion record are the same artifact. */
+  ingestId: string | null;
   scene: FrameScene;
   triangleCount: number;
+  solvedTriangleCount: number;
   physicalGroupCount: number;
 }
 
@@ -172,7 +178,13 @@ function roleForTag(tag: number, physicalNames: Map<number, string>): string {
   return `imported.${name}`;
 }
 
-export function createImportedMeshScene(name: string, mesh: ParsedMSH): ImportedMeshScene {
+export function createImportedMeshScene(
+  name: string,
+  mesh: ParsedMSH,
+  source: ImportedMeshScene['source'] = 'file',
+  ingestId: string | null = null,
+  symmetryCutPlanes: readonly string[] = [],
+): ImportedMeshScene {
   if (mesh.indices.length === 0) throw new Error('The MSH file contains no triangle elements');
   const grouped = new Map<number, number[]>();
   for (let triangle = 0; triangle < mesh.physicalTags.length; triangle += 1) {
@@ -201,10 +213,15 @@ export function createImportedMeshScene(name: string, mesh: ParsedMSH): Imported
     bounds.expandByPoint(point.set(mesh.vertices[offset], mesh.vertices[offset + 1], mesh.vertices[offset + 2]));
   }
   if (bounds.isEmpty()) bounds.set(new Vector3(-1, -1, -1), new Vector3(1, 1, 1));
+  const solvedScene = { surfaces, bounds, hasCurvature: false };
+  const scene = expandImportedSymmetry(solvedScene, symmetryCutPlanes);
   return {
     name,
-    scene: { surfaces, bounds, hasCurvature: false },
-    triangleCount: mesh.indices.length / 3,
+    source,
+    ingestId,
+    scene,
+    triangleCount: scene.surfaces.reduce((count, surface) => count + surface.indices.length / 3, 0),
+    solvedTriangleCount: mesh.indices.length / 3,
     physicalGroupCount: grouped.size,
   };
 }

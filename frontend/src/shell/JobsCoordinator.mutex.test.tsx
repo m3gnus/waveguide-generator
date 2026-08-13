@@ -3,9 +3,13 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
 import { preferencesStore } from '../prefs/preferences';
+import type { CadReturnIngestRecord } from '../api/cadlink';
+import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { designForFamily } from '../stores/design';
 import { resetSolveOptionsStore } from '../stores/solveOptions';
-import { JobsCoordinator, jobsCoordinatorBridge } from './JobsCoordinator';
+import { importedMeshStore } from '../viewport/importedMeshStore';
+import type { ImportedMeshScene } from '../viewport/importedMesh';
+import { JobsCoordinator, jobsCoordinatorBridge, useSolveControl } from './JobsCoordinator';
 import { JobsPanel } from './JobsPanel';
 
 const mocks = vi.hoisted(() => ({
@@ -66,6 +70,11 @@ function failedJob(): JobItem {
   };
 }
 
+function MainSolveButton() {
+  const solve = useSolveControl();
+  return <button disabled={solve.disabled} title={solve.title} onClick={solve.solve}>{solve.label}</button>;
+}
+
 describe('solve invocation mutex', () => {
   let host: HTMLDivElement;
   let root: Root;
@@ -73,8 +82,12 @@ describe('solve invocation mutex', () => {
   beforeEach(async () => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     preferencesStore.resetForTests();
+    resetCadReturnStore();
     resetSolveOptionsStore();
+    importedMeshStore.clear();
     publishJobs([]);
+    resetCadReturnStore();
+    importedMeshStore.clear();
     vi.spyOn(jobsSocket, 'start').mockImplementation(() => undefined);
     vi.spyOn(jobsSocket, 'stop').mockImplementation(() => undefined);
     vi.spyOn(jobsSocket, 'refresh').mockResolvedValue(undefined);
@@ -190,6 +203,43 @@ describe('solve invocation mutex', () => {
     expect(mocks.submitImported).toHaveBeenCalledOnce();
     expect(mocks.submitDesign).not.toHaveBeenCalled();
     await act(async () => { pending.resolve('job-imported'); await first; });
+  });
+
+  it('makes the main Solve control submit the Fusion CAD mesh shown in the viewport', async () => {
+    const ingestId = 'wgi_01J5A8QK3M9T2XVBH0RD7NWE6C';
+    const record = {
+      ingest_id: ingestId,
+      manifest_sha256: `sha256:${'1'.repeat(64)}`,
+      artifact_sha256: `sha256:${'2'.repeat(64)}`,
+      report_sha256: `sha256:${'3'.repeat(64)}`,
+      findings: [],
+      evidence: { fem_air_volumes: [] },
+      polar_grid_derivation: {},
+    } as unknown as CadReturnIngestRecord;
+    useCadReturnStore.setState({
+      ingestRecord: record,
+      needsIngest: false,
+      driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }],
+      sourceSizesMm: { 'source-hf': 4 },
+      rigidSizeMm: 8,
+      transitionMm: 12,
+      skippedSourceIds: [],
+      acknowledgedFindingIds: [],
+    });
+    importedMeshStore.set({ name: 'Fusion speaker', source: 'cad', ingestId } as ImportedMeshScene);
+    mocks.submitImported.mockResolvedValue('job-cad');
+
+    await act(async () => {
+      root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>);
+    });
+    const solve = host.querySelector<HTMLButtonElement>('button')!;
+    expect(solve.textContent).toBe('Solve Fusion CAD');
+    expect(solve.title).toContain('displayed Fusion CAD model');
+    await act(async () => { solve.click(); await Promise.resolve(); await Promise.resolve(); });
+
+    expect(mocks.submitImported).toHaveBeenCalledOnce();
+    expect(mocks.submitImported.mock.calls[0][0].geometry.ingest_id).toBe(ingestId);
+    expect(mocks.submitDesign).not.toHaveBeenCalled();
   });
 
   it('guards two fast retries routed through the coordinator bridge', async () => {

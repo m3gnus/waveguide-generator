@@ -2,6 +2,11 @@ import type { ImportedMeshScene } from './importedMesh';
 
 type Listener = () => void;
 
+export interface ImportedMeshState {
+  scene: ImportedMeshScene | null;
+  active: boolean;
+}
+
 /** The imported mesh shown in place of the parametric preview.
  *
  * Lives outside the Viewport component so other panels can drive it: the
@@ -9,7 +14,7 @@ type Listener = () => void;
  * the viewport's Clear control clears it regardless of who set it.
  */
 class ImportedMeshStore {
-  private value: ImportedMeshScene | null = null;
+  private value: ImportedMeshState = { scene: null, active: false };
   private listeners = new Set<Listener>();
 
   subscribe = (listener: Listener): (() => void) => {
@@ -17,11 +22,29 @@ class ImportedMeshStore {
     return () => this.listeners.delete(listener);
   };
 
-  getSnapshot = (): ImportedMeshScene | null => this.value;
+  getSnapshot = (): ImportedMeshState => this.value;
 
   set(scene: ImportedMeshScene | null): void {
-    if (scene === this.value) return;
-    this.value = scene;
+    if (scene === this.value.scene && this.value.active === Boolean(scene)) return;
+    this.value = { scene, active: scene !== null };
+    this.listeners.forEach((listener) => listener());
+  }
+
+  showParametric(): void {
+    if (!this.value.active) return;
+    this.value = { ...this.value, active: false };
+    this.listeners.forEach((listener) => listener());
+  }
+
+  showImported(): void {
+    if (this.value.scene === null || this.value.active) return;
+    this.value = { ...this.value, active: true };
+    this.listeners.forEach((listener) => listener());
+  }
+
+  clear(): void {
+    if (this.value.scene === null && !this.value.active) return;
+    this.value = { scene: null, active: false };
     this.listeners.forEach((listener) => listener());
   }
 }
