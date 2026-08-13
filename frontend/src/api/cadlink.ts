@@ -105,6 +105,24 @@ export interface CadReturnFreshnessInstance {
   facts?: unknown[];
 }
 
+export interface CadMeshTriangleStats extends Record<string, unknown> {
+  triangle_count: number;
+  full_domain_triangle_count?: number;
+  domain_multiplier?: number;
+  vertex_count?: number;
+}
+
+export interface CadViewportMeshMetadata {
+  available: boolean;
+  content_sha256?: string;
+  cache_key?: string;
+  cache_hit?: boolean;
+  transformed_geometry_hash?: string;
+  stats?: CadMeshTriangleStats & { domain?: string; units?: string };
+  metadata?: Record<string, unknown>;
+  reason?: string;
+}
+
 export interface CadReturnIngestRecord {
   ingest_id: string;
   created_at: string;
@@ -112,6 +130,7 @@ export interface CadReturnIngestRecord {
   manifest_sha256: string;
   artifact_sha256: string;
   report_sha256: string;
+  mesh_content_sha256?: string;
   acoustic_domain: string;
   scope: {
     status: string;
@@ -123,6 +142,12 @@ export interface CadReturnIngestRecord {
   evidence?: { instances?: unknown[]; fem_air_volumes?: unknown[]; [key: string]: unknown };
   sources: CadReturnSource[];
   mesh_sizes: { rigid_size_mm: number; transition_mm: number; source_size_mm: Record<string, number> };
+  mesh?: {
+    stats: CadMeshTriangleStats;
+    metadata?: Record<string, unknown>;
+    integrity?: Record<string, unknown>;
+  };
+  viewport_mesh?: CadViewportMeshMetadata;
   skipped_source_ids: string[];
   freshness: {
     verdict: 'unlinked' | 'per-instance';

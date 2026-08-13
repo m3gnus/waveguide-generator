@@ -19,6 +19,7 @@ from server.mesh.imported import (
     ImportedMeshDependencyError,
     RoleResolutionError,
     build_imported_mesh,
+    build_imported_viewport_mesh,
     validate_imported_sizes,
 )
 from server.mesh.artifact import mesh_text_sha256
@@ -27,7 +28,8 @@ from server.platform.paths import data_paths
 from .wgreturn import WgReturnBundle, read_wgreturn
 
 
-IMPORT_MESH_PIPELINE_CONTRACT = "wg-import-solve-v2"
+IMPORT_MESH_PIPELINE_CONTRACT = "wg-import-solve-v3"
+IMPORT_VIEWPORT_PIPELINE_CONTRACT = "wg-import-viewport-v1"
 
 
 class IngestRefusal(ValueError):
@@ -354,6 +356,36 @@ def _cache_lookup_key(
     ).hexdigest()
 
 
+def _viewport_cache_lookup_key(
+    bundle: WgReturnBundle,
+    manifest: Mapping[str, Any],
+    skipped_source_ids: list[str],
+    options: Mapping[str, Any],
+) -> str:
+    """Index visual tessellation independently of acoustic mesh sizing."""
+
+    from server.mesh.imported import allocate_imported_tags
+
+    return hashlib.sha256(
+        _canonical(
+            {
+                "viewport_pipeline_contract": IMPORT_VIEWPORT_PIPELINE_CONTRACT,
+                "artifact_sha256": bundle.artifact_sha256,
+                "manifest_sha256": bundle.manifest_sha256,
+                "sources": manifest["sources"],
+                "instances": manifest["instances"],
+                "skipped_source_ids": sorted(skipped_source_ids),
+                "prep_options": options,
+                "tags": allocate_imported_tags(
+                    manifest["sources"], skipped_source_ids=skipped_source_ids
+                ),
+                "mesher_version": _package_version("hornlab-waveguide-mesher"),
+                "gmsh_version": _package_version("gmsh"),
+            }
+        )
+    ).hexdigest()
+
+
 def _load_cached_mesh(mesh_path: Path, metadata_path: Path) -> dict[str, Any] | None:
     if not mesh_path.is_file() or not metadata_path.is_file():
         return None
@@ -372,13 +404,65 @@ def _write_cache(mesh_path: Path, metadata_path: Path, result: Mapping[str, Any]
         staged_mesh = temporary / mesh_path.name
         staged_meta = temporary / metadata_path.name
         staged_mesh.write_text(str(result["msh_text"]), encoding="utf-8")
-        sidecar = {key: value for key, value in result.items() if key != "msh_text"}
+        sidecar = {
+            key: value
+            for key, value in result.items()
+            if key not in {"msh_text", "viewport_msh_text"}
+        }
         staged_meta.write_bytes(_canonical(sidecar) + b"\n")
         # Metadata is the commit marker: publish mesh first, metadata last.
         os.replace(staged_mesh, mesh_path)
         os.replace(staged_meta, metadata_path)
     finally:
         shutil.rmtree(temporary, ignore_errors=True)
+
+
+def _load_cached_viewport_mesh(
+    mesh_path: Path, metadata_path: Path
+) -> dict[str, Any] | None:
+    if not mesh_path.is_file() or not metadata_path.is_file():
+        return None
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        msh_text = mesh_path.read_text(encoding="utf-8")
+        expected = str(metadata["content_sha256"])
+        if mesh_text_sha256(msh_text) != expected:
+            return None
+        return {**metadata, "msh_text": msh_text}
+    except (KeyError, OSError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+
+
+def _write_viewport_cache(
+    mesh_path: Path,
+    metadata_path: Path,
+    viewport: Mapping[str, Any],
+    *,
+    transformed_geometry_hash: str,
+    healing: Mapping[str, Any],
+) -> dict[str, Any]:
+    msh_text = str(viewport["msh_text"])
+    metadata = {
+        "content_sha256": mesh_text_sha256(msh_text),
+        "transformed_geometry_hash": transformed_geometry_hash,
+        "healing_mode": str(healing.get("mode") or "none"),
+        "healing_options": list(healing.get("options") or ()),
+        "stats": viewport["stats"],
+        "metadata": viewport["metadata"],
+    }
+    mesh_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = Path(tempfile.mkdtemp(prefix=".wg2-import-viewport-", dir=mesh_path.parent))
+    try:
+        staged_mesh = temporary / mesh_path.name
+        staged_meta = temporary / metadata_path.name
+        staged_mesh.write_text(msh_text, encoding="utf-8")
+        staged_meta.write_bytes(_canonical(metadata) + b"\n")
+        os.replace(staged_mesh, mesh_path)
+        # Metadata is the commit marker and carries the digest for later reads.
+        os.replace(staged_meta, metadata_path)
+    finally:
+        shutil.rmtree(temporary, ignore_errors=True)
+    return {**metadata, "msh_text": msh_text}
 
 
 def ingest_bundle(
@@ -409,6 +493,37 @@ def ingest_bundle(
         raise
     options = dict(prep_options or {})
     imports_root = data_paths(data_dir).root / "imports"
+    viewport_lookup_key = _viewport_cache_lookup_key(
+        bundle, manifest, skipped_source_ids, options
+    )
+    viewport_index_path = (
+        imports_root / "viewports" / "index" / f"{viewport_lookup_key}.txt"
+    )
+    viewport_cache_key: str | None = None
+    try:
+        indexed_viewport = viewport_index_path.read_text(encoding="ascii").strip()
+        if len(indexed_viewport) == 64 and all(
+            character in "0123456789abcdef" for character in indexed_viewport
+        ):
+            viewport_cache_key = indexed_viewport
+    except OSError:
+        pass
+    viewport_mesh_path = (
+        imports_root / "viewports" / f"{viewport_cache_key}.msh"
+        if viewport_cache_key
+        else imports_root / "viewports" / ".pending.msh"
+    )
+    viewport_metadata_path = (
+        imports_root / "viewports" / f"{viewport_cache_key}.json"
+        if viewport_cache_key
+        else imports_root / "viewports" / ".pending.json"
+    )
+    viewport_artifact = (
+        _load_cached_viewport_mesh(viewport_mesh_path, viewport_metadata_path)
+        if viewport_cache_key
+        else None
+    )
+    viewport_cache_hit = viewport_artifact is not None
     lookup_key = _cache_lookup_key(
         bundle, manifest, normalized_mesh, skipped_source_ids, options
     )
@@ -432,6 +547,7 @@ def ingest_bundle(
                 normalized_mesh,
                 skipped_source_ids=skipped_source_ids,
                 options=options,
+                include_viewport_mesh=viewport_artifact is None,
             )
         except ImportedMeshDependencyError:
             raise
@@ -474,6 +590,65 @@ def ingest_bundle(
         os.replace(temporary_index, index_path)
     assert built is not None
     assert cache_key is not None
+
+    viewport_failure_reason: str | None = None
+    if viewport_artifact is None:
+        generated_viewport: dict[str, Any] | None = None
+        if built.get("viewport_msh_text") is not None:
+            generated_viewport = {
+                "msh_text": built["viewport_msh_text"],
+                "stats": built["viewport_mesh"]["stats"],
+                "metadata": built["viewport_mesh"]["metadata"],
+            }
+        elif cache_hit and isinstance(built.get("viewport_recipe"), Mapping):
+            try:
+                generated_viewport = build_imported_viewport_mesh(
+                    bundle.assembly_path,
+                    manifest,
+                    built["viewport_recipe"],
+                    expected_geometry_hash=str(built["transformed_geometry_hash"]),
+                    tag_allocation=built["tag_allocation"],
+                )
+            except Exception as exc:
+                viewport_failure_reason = f"{type(exc).__name__}: {exc}"
+        if generated_viewport is not None:
+            viewport_digest = mesh_text_sha256(str(generated_viewport["msh_text"]))
+            viewport_cache_key = viewport_digest.removeprefix("sha256:")
+            viewport_mesh_path = imports_root / "viewports" / f"{viewport_cache_key}.msh"
+            viewport_metadata_path = imports_root / "viewports" / f"{viewport_cache_key}.json"
+            try:
+                viewport_artifact = _write_viewport_cache(
+                    viewport_mesh_path,
+                    viewport_metadata_path,
+                    generated_viewport,
+                    transformed_geometry_hash=str(built["transformed_geometry_hash"]),
+                    healing=built["healing"],
+                )
+            except Exception as exc:
+                viewport_artifact = None
+                viewport_failure_reason = f"{type(exc).__name__}: {exc}"
+            if viewport_artifact is not None:
+                try:
+                    viewport_index_path.parent.mkdir(parents=True, exist_ok=True)
+                    temporary_viewport_index = viewport_index_path.with_name(
+                        f".{viewport_index_path.name}.{os.getpid()}.tmp"
+                    )
+                    temporary_viewport_index.write_text(
+                        viewport_cache_key + "\n", encoding="ascii"
+                    )
+                    os.replace(temporary_viewport_index, viewport_index_path)
+                except OSError:
+                    # The content-addressed artifact and record remain valid;
+                    # a later ingest can simply regenerate the lookup index.
+                    pass
+        elif viewport_failure_reason is None:
+            viewport_state = built.get("viewport_mesh")
+            if isinstance(viewport_state, Mapping):
+                viewport_failure_reason = str(
+                    viewport_state.get("reason") or "visual tessellation unavailable"
+                )
+            else:
+                viewport_failure_reason = "visual tessellation unavailable"
     freshness = compute_freshness(manifest, store, recompute=recompute_freshness)
 
     findings = list(scope_findings)
@@ -542,6 +717,26 @@ def ingest_bundle(
             "mesh_cache_key": cache_key,
             "mesh_content_sha256": mesh_text_sha256(str(built["msh_text"])),
             "mesh_cache_hit": cache_hit,
+            "viewport_mesh": (
+                {
+                    "available": True,
+                    "store_path": str(viewport_mesh_path),
+                    "cache_key": viewport_cache_key,
+                    "content_sha256": viewport_artifact["content_sha256"],
+                    "cache_hit": viewport_cache_hit,
+                    "transformed_geometry_hash": viewport_artifact[
+                        "transformed_geometry_hash"
+                    ],
+                    "stats": viewport_artifact["stats"],
+                    "metadata": viewport_artifact["metadata"],
+                }
+                if viewport_artifact is not None
+                else {
+                    "available": False,
+                    "reason": viewport_failure_reason
+                    or "visual tessellation unavailable",
+                }
+            ),
             "scope": {
                 "status": manifest["scope"]["status"],
                 "degraded_skip_count": len(scope_findings),

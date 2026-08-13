@@ -37,6 +37,17 @@ NORMAL_ANGLE_DEG = 0.1
 # while the floor below prevents tiny CAD details from exploding solve cost.
 IMPORTED_CURVATURE_SEGMENTS = 24
 IMPORTED_CURVATURE_REFINEMENT_LIMIT = 2.0
+# The CAD viewport is a presentation artifact, not an acoustic discretisation.
+# Its sizing is therefore scale/curvature driven and explicitly capped for the
+# browser instead of inheriting source-frequency or rigid-wall solve targets.
+IMPORTED_VIEWPORT_CURVATURE_SEGMENTS = 48
+IMPORTED_VIEWPORT_SCALE_DIVISOR = 140.0
+IMPORTED_VIEWPORT_MIN_SIZE_MM = 1.0
+IMPORTED_VIEWPORT_MAX_SIZE_MM = 6.0
+IMPORTED_VIEWPORT_MIN_REFINEMENT = 4.0
+IMPORTED_VIEWPORT_MAX_TRIANGLES = 350_000
+IMPORTED_VIEWPORT_MAX_ATTEMPTS = 3
+IMPORTED_VIEWPORT_COARSENING_FACTOR = 1.5
 
 
 class ImportedMeshError(ValueError):
@@ -120,6 +131,38 @@ def imported_tessellation_settings(sizes: Mapping[str, Any]) -> dict[str, float 
         "mesh_size_min_mm": finest / IMPORTED_CURVATURE_REFINEMENT_LIMIT,
         "mesh_size_max_mm": float(sizes["rigid_size_mm"]),
         "algorithm": 6,
+    }
+
+
+def imported_viewport_tessellation_settings(
+    bounds_mm: Iterable[float], *, retry: int = 0
+) -> dict[str, float | int]:
+    """Return bounded visual-only sizing for a full-domain OCC model."""
+
+    bounds = np.asarray(list(bounds_mm), dtype=float)
+    if bounds.shape != (6,) or not np.isfinite(bounds).all():
+        raise ImportedMeshError("viewport meshing: model bounds are invalid")
+    diagonal = float(np.linalg.norm(bounds[3:] - bounds[:3]))
+    if diagonal <= 0.0:
+        raise ImportedMeshError("viewport meshing: model bounds are empty")
+    if retry < 0 or retry >= IMPORTED_VIEWPORT_MAX_ATTEMPTS:
+        raise ImportedMeshError("viewport meshing: invalid coarsening retry")
+    base_max = min(
+        IMPORTED_VIEWPORT_MAX_SIZE_MM,
+        max(IMPORTED_VIEWPORT_MIN_SIZE_MM, diagonal / IMPORTED_VIEWPORT_SCALE_DIVISOR),
+    )
+    coarsening = IMPORTED_VIEWPORT_COARSENING_FACTOR**retry
+    mesh_max = base_max * coarsening
+    return {
+        "model_diagonal_mm": diagonal,
+        "mesh_size_min_mm": mesh_max / IMPORTED_VIEWPORT_MIN_REFINEMENT,
+        "mesh_size_max_mm": mesh_max,
+        "curvature_segments_per_2pi": max(
+            16,
+            int(round(IMPORTED_VIEWPORT_CURVATURE_SEGMENTS / coarsening)),
+        ),
+        "algorithm": 6,
+        "retry": retry,
     }
 
 
@@ -554,6 +597,231 @@ def _mesh_arrays(mesh: Any) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return np.asarray(mesh.points, dtype=float), triangles, tags
 
 
+def _geometry_fingerprint(geometries: Iterable[Any]) -> str:
+    return "sha256:" + hashlib.sha256(
+        json.dumps(
+            [
+                {"center_mm": list(center), "area_mm2": area}
+                for center, area in geometries
+            ],
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _surface_model_bounds_mm(gmsh: Any, surfaces: Iterable[int]) -> tuple[float, ...]:
+    boxes = [gmsh.model.getBoundingBox(2, int(surface)) for surface in surfaces]
+    if not boxes:
+        raise ImportedMeshError("viewport meshing: imported model has no surfaces")
+    lower = np.min(np.asarray([box[:3] for box in boxes], dtype=float), axis=0)
+    upper = np.max(np.asarray([box[3:] for box in boxes], dtype=float), axis=0)
+    return tuple(float(value) for value in np.concatenate((lower, upper)))
+
+
+def build_imported_viewport_mesh(
+    assembly_path: str | Path,
+    manifest: Mapping[str, Any],
+    recipe: Mapping[str, Any],
+    *,
+    expected_geometry_hash: str,
+    tag_allocation: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Build one advisory full-domain display mesh in a fresh OCC model.
+
+    This pass deliberately runs after the acoustic artifact is complete. It
+    reimports the same STEP with the winning healing options and proves the
+    normalized geometry fingerprint before tessellating. Any exception is
+    caught by the ingestion caller and can never trigger solver healing.
+    """
+
+    try:
+        import gmsh
+        import meshio
+        from hornlab_mesher import OccSurfaceRole
+        from hornlab_mesher.step_import import (
+            StepFaceGroup,
+            StepLabelSelector,
+            anchor_surface_order,
+            gmsh_surface_geometries,
+            gmsh_surface_tags,
+            postprocess_mesh,
+        )
+    except ImportError as exc:
+        raise ImportedMeshDependencyError(
+            "CAD viewport meshing requires hornlab-waveguide-mesher, gmsh, and meshio"
+        ) from exc
+
+    matrix = np.asarray(recipe.get("normalisation_matrix"), dtype=float)
+    if matrix.shape != (4, 4) or not np.isfinite(matrix).all():
+        raise ImportedMeshError("viewport meshing: normalization recipe is invalid")
+    reference = [
+        (tuple(float(value) for value in item[0]), float(item[1]))
+        for item in recipe.get("surface_order_reference", ())
+    ]
+    raw_groups = recipe.get("groups_by_tag")
+    if not isinstance(raw_groups, Mapping):
+        raise ImportedMeshError("viewport meshing: physical-group recipe is missing")
+
+    gmsh.clear()
+    try:
+        gmsh.model.add("wgreturn-viewport")
+        selected_healing = {str(value) for value in recipe.get("healing_options", ())}
+        for option_name in {
+            "Geometry.OCCFixDegenerated",
+            "Geometry.OCCFixSmallEdges",
+            "Geometry.OCCFixSmallFaces",
+            "Geometry.OCCSewFaces",
+        }:
+            gmsh.option.setNumber(option_name, 1 if option_name in selected_healing else 0)
+        imported = gmsh.model.occ.importShapes(str(assembly_path), highestDimOnly=True)
+        gmsh.model.occ.synchronize()
+        if not imported:
+            raise ImportedMeshError("viewport meshing: assembly STEP contains no OCC geometry")
+        if not np.allclose(matrix, np.eye(4)):
+            gmsh.model.occ.affineTransform(imported, matrix.reshape(-1).tolist())
+            gmsh.model.occ.synchronize()
+
+        surfaces = gmsh_surface_tags()
+        geometries = gmsh_surface_geometries(surfaces)
+        observed_hash = _geometry_fingerprint(geometries)
+        if observed_hash != expected_geometry_hash:
+            raise ImportedMeshError(
+                "viewport meshing: normalized geometry fingerprint differs from solve truth"
+            )
+        ordered_surfaces = (
+            anchor_surface_order(surfaces, geometries, reference)
+            if reference
+            else surfaces
+        )
+
+        source_by_id = {str(source["id"]): source for source in manifest["sources"]}
+        source_specs = []
+        for raw_tag, raw_indices in raw_groups.items():
+            tag = int(raw_tag)
+            indices = [int(value) for value in raw_indices]
+            if any(index < 0 or index >= len(ordered_surfaces) for index in indices):
+                raise ImportedMeshError("viewport meshing: physical-group surface index is invalid")
+            selected = [int(ordered_surfaces[index]) for index in indices]
+            if not selected:
+                continue
+            gmsh.model.addPhysicalGroup(2, selected, tag)
+            if tag == RIGID_TAG:
+                gmsh.model.setPhysicalName(2, tag, "wg-import-v1|rigid")
+                continue
+            tag_entry = tag_allocation["tag_map"].get(str(tag))
+            if not isinstance(tag_entry, Mapping) or tag_entry.get("source_id") is None:
+                raise ImportedMeshError(f"viewport meshing: unknown physical tag {tag}")
+            source_id = str(tag_entry["source_id"])
+            source = source_by_id[source_id]
+            role = str(source["role"])
+            gmsh.model.setPhysicalName(
+                2,
+                tag,
+                _physical_name(tag, source_id, source.get("instance_id"), role),
+            )
+            source_specs.append(
+                StepFaceGroup(
+                    source_id,
+                    StepLabelSelector(source_id),
+                    OccSurfaceRole(role),
+                    tag=tag,
+                    resolution_mm=0.0,
+                )
+            )
+
+        bounds_mm = _surface_model_bounds_mm(gmsh, surfaces)
+        last_error: Exception | None = None
+        for retry in range(IMPORTED_VIEWPORT_MAX_ATTEMPTS):
+            settings = imported_viewport_tessellation_settings(bounds_mm, retry=retry)
+            try:
+                gmsh.model.mesh.clear()
+                points = [tag for dim, tag in gmsh.model.getEntities(0) if dim == 0]
+                if points:
+                    gmsh.model.mesh.setSize(
+                        [(0, point) for point in points],
+                        float(settings["mesh_size_max_mm"]),
+                    )
+                gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
+                gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 1)
+                gmsh.option.setNumber("Mesh.MeshSizeMin", settings["mesh_size_min_mm"])
+                gmsh.option.setNumber("Mesh.MeshSizeMax", settings["mesh_size_max_mm"])
+                gmsh.option.setNumber(
+                    "Mesh.MeshSizeFromCurvature",
+                    settings["curvature_segments_per_2pi"],
+                )
+                gmsh.option.setNumber("Mesh.Algorithm", settings["algorithm"])
+                gmsh.option.setNumber("Mesh.SaveAll", 0)
+                gmsh.option.setNumber("Mesh.MshFileVersion", 2.2)
+                gmsh.option.setNumber("Mesh.Binary", 0)
+                gmsh.model.mesh.generate(2)
+                with tempfile.TemporaryDirectory(prefix="wg2-imported-viewport-") as temporary:
+                    raw_path = Path(temporary) / "raw.msh"
+                    gmsh.write(str(raw_path))
+                    raw_mesh = meshio.read(raw_path)
+                    processed, repair, topology = postprocess_mesh(
+                        raw_mesh,
+                        source_specs,
+                        symmetry_planes=(),
+                        tolerance=5.0e-3,
+                    )
+                    points_mm, triangles, tags = _mesh_arrays(processed)
+                    if len(triangles) > IMPORTED_VIEWPORT_MAX_TRIANGLES:
+                        raise ImportedMeshError(
+                            "viewport meshing: generated "
+                            f"{len(triangles):,} triangles, exceeding the "
+                            f"{IMPORTED_VIEWPORT_MAX_TRIANGLES:,} browser ceiling"
+                        )
+                    if len(triangles) == 0:
+                        raise ImportedMeshError("viewport meshing: generated no triangles")
+                    processed.points = points_mm * 1.0e-3
+                    final_path = Path(temporary) / "viewport.msh"
+                    meshio.write(final_path, processed, file_format="gmsh22", binary=False)
+                    msh_text = final_path.read_text(encoding="utf-8", errors="replace")
+                bounds_min = np.min(points_mm, axis=0) * 1.0e-3
+                bounds_max = np.max(points_mm, axis=0) * 1.0e-3
+                unique_tags, counts = np.unique(tags, return_counts=True)
+                return {
+                    "msh_text": msh_text,
+                    "stats": {
+                        "vertex_count": int(len(points_mm)),
+                        "triangle_count": int(len(triangles)),
+                        "tag_counts": {
+                            str(int(tag)): int(count)
+                            for tag, count in zip(unique_tags, counts, strict=True)
+                        },
+                        "units": "m",
+                        "domain": "full",
+                        "bounds_m": {
+                            "min_x": float(bounds_min[0]),
+                            "min_y": float(bounds_min[1]),
+                            "min_z": float(bounds_min[2]),
+                            "max_x": float(bounds_max[0]),
+                            "max_y": float(bounds_max[1]),
+                            "max_z": float(bounds_max[2]),
+                        },
+                    },
+                    "metadata": {
+                        "purpose": "cad-viewport",
+                        "source_geometry_hash": observed_hash,
+                        "tessellation": settings,
+                        "triangle_ceiling": IMPORTED_VIEWPORT_MAX_TRIANGLES,
+                        "attempt_count": retry + 1,
+                        "postprocess": repair,
+                        "topology": topology,
+                    },
+                }
+            except Exception as exc:
+                last_error = exc
+        assert last_error is not None
+        raise ImportedMeshError(
+            f"viewport meshing: all bounded tessellation attempts failed: {last_error}"
+        ) from last_error
+    finally:
+        gmsh.clear()
+
+
 def build_imported_mesh(
     assembly_path: str | Path,
     manifest: Mapping[str, Any],
@@ -561,6 +829,7 @@ def build_imported_mesh(
     *,
     skipped_source_ids: Iterable[str] = (),
     options: Mapping[str, Any] | None = None,
+    include_viewport_mesh: bool = True,
 ) -> dict[str, Any]:
     """Build, tag, post-process and inspect one validated CAD-return STEP."""
 
@@ -665,17 +934,7 @@ def build_imported_mesh(
                 f"({len(face_order)} ADVANCED_FACE records, {len(surfaces)} OCC surfaces)"
             )
         geometries = gmsh_surface_geometries(surfaces)
-        transformed_geometry_hash = "sha256:" + hashlib.sha256(
-            json.dumps(
-                [
-                    {"center_mm": list(center), "area_mm2": area}
-                    for center, area in geometries
-                ],
-                allow_nan=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        ).hexdigest()
+        transformed_geometry_hash = _geometry_fingerprint(geometries)
         ordered_surfaces = surfaces
         reanchor_residuals: list[dict[str, Any]] = []
         if surface_order_reference is not None:
@@ -946,6 +1205,21 @@ def build_imported_mesh(
             )
 
         rigid = sorted(set(surfaces) - claimed)
+        surface_order_index = {
+            int(surface): index for index, surface in enumerate(ordered_surfaces)
+        }
+        viewport_groups_by_tag: dict[str, list[int]] = {
+            str(RIGID_TAG): [surface_order_index[int(surface)] for surface in rigid]
+        }
+        for source in source_list:
+            source_id = str(source["id"])
+            outcome = resolutions.get(source_id) or {}
+            if outcome.get("skipped"):
+                continue
+            source_tag = int(allocation["source_tags"][source_id])
+            viewport_groups_by_tag[str(source_tag)] = [
+                surface_order_index[int(surface)] for surface in outcome["surfaces"]
+            ]
         groups = [
             OccSurfaceGroup("rigid", OccSurfaceSelector(rigid), OccSurfaceRole("rigid"))
         ]
@@ -1084,6 +1358,15 @@ def build_imported_mesh(
                 "volumes": len(gmsh.model.getEntities(3)),
             },
             "transformed_geometry_hash": transformed_geometry_hash,
+            "viewport_recipe": {
+                "normalisation_matrix": normalization.tolist(),
+                "healing_options": list(healing_options),
+                "surface_order_reference": [
+                    [list(center), float(area)]
+                    for center, area in (surface_order_reference or geometries)
+                ],
+                "groups_by_tag": viewport_groups_by_tag,
+            },
         }
         if mesh_error is not None:
             return state
@@ -1245,6 +1528,26 @@ def build_imported_mesh(
     result["tag_allocation"] = allocation
     result["healing"] = healing
     result["polar_grid_derivation"] = polar_grid_from_symmetry(result["symmetry"])
+    if include_viewport_mesh:
+        try:
+            viewport = build_imported_viewport_mesh(
+                assembly_path,
+                manifest,
+                result["viewport_recipe"],
+                expected_geometry_hash=str(result["transformed_geometry_hash"]),
+                tag_allocation=allocation,
+            )
+            result["viewport_msh_text"] = viewport["msh_text"]
+            result["viewport_mesh"] = {
+                "available": True,
+                "stats": viewport["stats"],
+                "metadata": viewport["metadata"],
+            }
+        except Exception as exc:
+            result["viewport_mesh"] = {
+                "available": False,
+                "reason": f"{type(exc).__name__}: {exc}",
+            }
     return result
 
 
@@ -1256,7 +1559,9 @@ __all__ = [
     "TAG_NAMESPACE",
     "allocate_imported_tags",
     "build_imported_mesh",
+    "build_imported_viewport_mesh",
     "geometry_candidate_matches",
+    "imported_viewport_tessellation_settings",
     "polar_grid_from_symmetry",
     "resolve_instance_source",
     "resolve_user_source",
