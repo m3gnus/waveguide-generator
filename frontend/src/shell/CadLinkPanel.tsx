@@ -254,17 +254,19 @@ export async function showIngestedMeshInViewport(
   name: string,
   onNotice?: (notice: string) => void,
   fetcher: typeof fetch = fetch,
+  generation = importedMeshStore.beginIntent(),
 ): Promise<void> {
   const ingestId = record.ingest_id;
-  const available = importedMeshStore.getSnapshot().scene;
-  if (available?.source === 'cad' && available.ingestId === ingestId) {
-    importedMeshStore.showImported();
+  const available = importedMeshStore.getSnapshot().cad;
+  if (available?.ingestId === ingestId) {
+    importedMeshStore.showCad(generation);
     return;
   }
   try {
     const response = await fetcher(`/api/cadlink/ingest/${encodeURIComponent(ingestId)}/viewport-mesh`);
+    if (!importedMeshStore.isCurrentGeneration(generation)) return;
     if (response.ok) {
-      importedMeshStore.set(createImportedMeshScene(
+      importedMeshStore.setCad(createImportedMeshScene(
         name,
         parseMSH(await response.text()),
         'cad',
@@ -275,7 +277,7 @@ export async function showIngestedMeshInViewport(
           solvedTriangleCount: record.mesh?.stats.triangle_count,
           artifactToken: record.viewport_mesh?.content_sha256 ?? `${ingestId}:viewport`,
         },
-      ));
+      ), generation);
       return;
     }
     if (response.status === 409) {
@@ -284,10 +286,11 @@ export async function showIngestedMeshInViewport(
   } catch {
     // The independent display artifact is advisory; try the solver artifact.
   }
+  if (!importedMeshStore.isCurrentGeneration(generation)) return;
   try {
     const response = await fetcher(`/api/cadlink/ingest/${encodeURIComponent(ingestId)}/mesh`);
-    if (!response.ok) return;
-    importedMeshStore.set(createImportedMeshScene(
+    if (!response.ok || !importedMeshStore.isCurrentGeneration(generation)) return;
+    importedMeshStore.setCad(createImportedMeshScene(
       name,
       parseMSH(await response.text()),
       'cad',
@@ -297,7 +300,7 @@ export async function showIngestedMeshInViewport(
         solvedTriangleCount: record.mesh?.stats.triangle_count,
         artifactToken: record.mesh_content_sha256 ?? `${ingestId}:solver`,
       },
-    ));
+    ), generation);
   } catch {
     // The viewport keeps whatever it was showing if both artifacts fail.
   }
@@ -509,6 +512,7 @@ export function CadLinkPanel() {
   const ingest = async () => {
     const current = useCadReturnStore.getState();
     if (!current.selectedBundle) return;
+    const viewportGeneration = importedMeshStore.beginIntent();
     setIngesting(true); setError(null); setStatus(null); setViewportNotice(null);
     try {
       const skipped = new Set(current.skippedSourceIds);
@@ -528,6 +532,8 @@ export function CadLinkPanel() {
         record,
         current.selectedBundle.documentName || current.selectedBundle.name,
         setViewportNotice,
+        fetch,
+        viewportGeneration,
       );
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : String(reason);
@@ -684,8 +690,8 @@ export function CadLinkPanel() {
     {state.selectedBundle?.readable && <div className="cad-return-quick-action">
       <div><b>{state.selectedBundle.documentName ?? state.selectedBundle.name}</b><span>{state.ingestRecord ? 'Choose what the viewport displays.' : 'Prepare this Fusion return for the viewport and solver.'}</span></div>
       {state.ingestRecord ? <div className="cad-viewport-source-buttons" aria-label="CAD viewport source">
-        <button className={!viewportMesh.active ? 'active' : ''} aria-pressed={!viewportMesh.active} onClick={() => importedMeshStore.showParametric()}>Parametric</button>
-        <button className={viewportMesh.active ? 'active' : ''} aria-pressed={viewportMesh.active} onClick={() => { setViewportNotice(null); void showIngestedMeshInViewport(state.ingestRecord!, state.selectedBundle!.documentName || state.selectedBundle!.name, setViewportNotice); }}>Fusion CAD</button>
+        <button className={viewportMesh.showing !== 'cad' ? 'active' : ''} aria-pressed={viewportMesh.showing !== 'cad'} onClick={() => importedMeshStore.showParametric()}>Parametric</button>
+        <button className={viewportMesh.showing === 'cad' ? 'active' : ''} aria-pressed={viewportMesh.showing === 'cad'} onClick={() => { setViewportNotice(null); void showIngestedMeshInViewport(state.ingestRecord!, state.selectedBundle!.documentName || state.selectedBundle!.name, setViewportNotice); }}>Fusion CAD</button>
       </div> : <button className="primary" disabled={ingesting} onClick={() => void ingest()}>{ingesting ? 'Preparing…' : 'Prepare simulation'}</button>}
     </div>}
     {!loading && error?.includes('No workspace folder') && <div className="empty-state"><b>No workspace selected</b><span>Choose a workspace folder in Settings, then refresh this panel.</span></div>}
