@@ -5,14 +5,11 @@ logarithm of the reference-axis mean-square pressure divided by its average
 over all directions.  A horizontal or vertical cut can have a useful *plane*
 index, but those partial indices are not the conventional loudspeaker DI.
 
-When a spherical result grid is available, this module integrates it directly.
-Otherwise it implements the customary approximate full-sphere calculation
-from horizontal and vertical polar orbits.  Every average is performed in
-linear power and weighted by the solid angle represented by each sample.
-
-The definition follows ANSI/ASA acoustical terminology.  The H/V fallback is
-the approximate full-sphere construction described by Tylka and Choueiri,
-``On the Calculation of Full and Partial Directivity Indices`` (Eq. 3).
+This module integrates a complete spherical result grid directly. Horizontal,
+vertical, and diagonal curves are display cuts through that field; no subset
+or selection of those curves can change the reported DI. Every average is
+performed in linear power and weighted by the solid angle represented by each
+sample.
 """
 
 from __future__ import annotations
@@ -26,11 +23,6 @@ import numpy as np
 _DB_TO_NEPER = math.log(10.0) / 10.0
 _NEPER_TO_DB = 10.0 / math.log(10.0)
 _ANGLE_TOLERANCE_DEG = 1.0e-6
-
-try:
-    _trapezoid = np.trapezoid
-except AttributeError:  # NumPy <2 compatibility
-    _trapezoid = np.trapz
 
 
 def _log_weighted_mean_energy(levels_db: np.ndarray, weights: np.ndarray) -> float | None:
@@ -187,141 +179,4 @@ def calculate_di_from_spherical_grid(
     return values
 
 
-def _polar_angle_groups(pattern: Any, maximum_deg: float) -> dict[float, list[float]] | None:
-    groups: dict[float, list[float]] = {}
-    for point in pattern or []:
-        if not point or len(point) < 2 or point[1] is None:
-            return None
-        try:
-            raw_angle, level = float(point[0]), float(point[1])
-        except (TypeError, ValueError):
-            return None
-        if not math.isfinite(raw_angle) or not math.isfinite(level):
-            return None
-        # Fold signed/full-orbit angles onto polar angle theta.  When both sides
-        # of an orbit were sampled they remain separate power samples in the
-        # group and are averaged below; a 0..180 half-orbit therefore carries
-        # the usual bilateral-symmetry approximation explicitly.
-        theta = math.degrees(math.acos(max(-1.0, min(1.0, math.cos(math.radians(raw_angle))))))
-        if theta <= maximum_deg + _ANGLE_TOLERANCE_DEG:
-            key = round(min(theta, maximum_deg), 9)
-            groups.setdefault(key, []).append(level)
-    if not groups:
-        return None
-    angles = np.asarray(sorted(groups), dtype=np.float64)
-    if (
-        abs(float(angles[0])) > _ANGLE_TOLERANCE_DEG
-        or abs(float(angles[-1]) - maximum_deg) > _ANGLE_TOLERANCE_DEG
-    ):
-        return None
-    return groups
-
-
-def calculate_di_from_polar_patterns(
-    directivity_patterns: dict[str, list[list[list[float | None]]]],
-    *,
-    hemisphere: bool = False,
-) -> list[float | None]:
-    """Approximate full-sphere DI by combining the H and V polar orbits.
-
-    This is deliberately not a per-plane result.  Horizontal and vertical
-    samples in the same polar-angle strip share that strip's spherical-area
-    weight.  A diagonal display cut is not another independent share of the
-    sphere and is therefore excluded from this conventional H/V approximation.
-    """
-
-    horizontal = directivity_patterns.get("horizontal")
-    vertical = directivity_patterns.get("vertical")
-    if horizontal is None or vertical is None:
-        count = max((len(patterns) for patterns in directivity_patterns.values()), default=0)
-        return [None] * count
-    count = max(len(horizontal), len(vertical))
-    maximum_deg = 90.0 if hemisphere else 180.0
-    represented_fraction = 0.5 if hemisphere else 1.0
-    values: list[float | None] = []
-    for frequency_index in range(count):
-        if frequency_index >= len(horizontal) or frequency_index >= len(vertical):
-            values.append(None)
-            continue
-        h_groups = _polar_angle_groups(horizontal[frequency_index], maximum_deg)
-        v_groups = _polar_angle_groups(vertical[frequency_index], maximum_deg)
-        if h_groups is None or v_groups is None or set(h_groups) != set(v_groups):
-            values.append(None)
-            continue
-        theta = np.asarray(sorted(h_groups), dtype=np.float64)
-        theta_weights = _theta_weights(theta, maximum_deg)
-        if theta_weights is None:
-            values.append(None)
-            continue
-        levels: list[float] = []
-        weights: list[float] = []
-        reference_levels: list[float] = []
-        for angle, strip_weight in zip(theta, theta_weights, strict=True):
-            key = round(float(angle), 9)
-            directional_levels = [*h_groups[key], *v_groups[key]]
-            share = float(strip_weight) / len(directional_levels)
-            levels.extend(directional_levels)
-            weights.extend([share] * len(directional_levels))
-            if abs(float(angle)) <= _ANGLE_TOLERANCE_DEG:
-                reference_levels.extend(directional_levels)
-        values.append(
-            _di_from_weighted_levels(
-                np.asarray(levels),
-                np.asarray(weights),
-                np.asarray(reference_levels),
-                represented_sphere_fraction=represented_fraction,
-            )
-        )
-    return values
-
-
-def calculate_plane_di_from_polar_patterns(
-    directivity_patterns: dict[str, list[list[list[float | None]]]],
-) -> dict[str, list[float | None]]:
-    """Return the v1-compatible axisymmetric DI estimate for each polar plane.
-
-    These values are intentionally a fallback, not a replacement for the
-    full-sphere result above.  A single plane or a partial 0..90-degree sweep
-    cannot define conventional loudspeaker DI, but v1 exposed this useful
-    axisymmetric estimate and existing WG workflows rely on it.
-    """
-
-    per_plane: dict[str, list[float | None]] = {}
-    for plane_id, patterns in directivity_patterns.items():
-        values: list[float | None] = []
-        for pattern in patterns:
-            samples: list[tuple[float, float]] = []
-            for point in pattern or []:
-                if not point or len(point) < 2 or point[1] is None:
-                    continue
-                try:
-                    angle, level = float(point[0]), float(point[1])
-                except (TypeError, ValueError):
-                    continue
-                if math.isfinite(angle) and math.isfinite(level):
-                    samples.append((angle, level))
-            if len(samples) < 3:
-                values.append(None)
-                continue
-            samples.sort(key=lambda item: item[0])
-            angles = np.deg2rad([sample[0] for sample in samples])
-            levels_db = np.asarray([sample[1] for sample in samples], dtype=np.float64)
-            shift_db = float(np.max(levels_db))
-            scaled_energy = np.power(10.0, (levels_db - shift_db) / 10.0)
-            scaled_integral = float(_trapezoid(scaled_energy * np.sin(angles), angles))
-            if scaled_integral <= 0.0 or not math.isfinite(scaled_integral):
-                values.append(None)
-                continue
-            log_integral = shift_db * _DB_TO_NEPER + math.log(scaled_integral)
-            di = _NEPER_TO_DB * (math.log(2.0) - log_integral)
-            # V1 clipped negative plane estimates to zero.
-            values.append(max(0.0, di) if math.isfinite(di) else None)
-        per_plane[str(plane_id)] = values
-    return per_plane
-
-
-__all__ = [
-    "calculate_di_from_polar_patterns",
-    "calculate_plane_di_from_polar_patterns",
-    "calculate_di_from_spherical_grid",
-]
+__all__ = ["calculate_di_from_spherical_grid"]
