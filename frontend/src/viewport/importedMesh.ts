@@ -2,7 +2,9 @@ import { Box3, Vector3 } from 'three';
 import type { FrameScene } from './frameScene';
 import type { ParsedMSH } from './mshParser';
 import type { SceneSurface } from './types';
-import { expandImportedSymmetry } from './symmetryScene';
+import { expandImportedSymmetry, markParametricSolvedDomain, quadrantsForCutPlanes } from './symmetryScene';
+
+let nextArtifactToken = 1;
 
 export interface ImportedMeshScene {
   name: string;
@@ -14,6 +16,18 @@ export interface ImportedMeshScene {
   triangleCount: number;
   solvedTriangleCount: number;
   physicalGroupCount: number;
+  /** Changes whenever the underlying artifact changes, even if its triangle
+   * count and display name happen to match an earlier scene. */
+  artifactToken: string;
+}
+
+export interface ImportedMeshSceneOptions {
+  /** The supplied mesh already covers the complete display domain. */
+  fullDomain?: boolean;
+  /** Actual solver-domain count when the supplied visual artifact is separate. */
+  solvedTriangleCount?: number;
+  /** Stable digest/token supplied by the artifact owner when available. */
+  artifactToken?: string;
 }
 
 interface CreaseSplitGeometry {
@@ -184,6 +198,7 @@ export function createImportedMeshScene(
   source: ImportedMeshScene['source'] = 'file',
   ingestId: string | null = null,
   symmetryCutPlanes: readonly string[] = [],
+  options: ImportedMeshSceneOptions = {},
 ): ImportedMeshScene {
   if (mesh.indices.length === 0) throw new Error('The MSH file contains no triangle elements');
   const grouped = new Map<number, number[]>();
@@ -214,15 +229,18 @@ export function createImportedMeshScene(
   }
   if (bounds.isEmpty()) bounds.set(new Vector3(-1, -1, -1), new Vector3(1, 1, 1));
   const solvedScene = { surfaces, bounds, hasCurvature: false };
-  const scene = expandImportedSymmetry(solvedScene, symmetryCutPlanes);
+  const scene = options.fullDomain
+    ? markParametricSolvedDomain(solvedScene, quadrantsForCutPlanes(symmetryCutPlanes))
+    : expandImportedSymmetry(solvedScene, symmetryCutPlanes);
   return {
     name,
     source,
     ingestId,
     scene,
     triangleCount: scene.surfaces.reduce((count, surface) => count + surface.indices.length / 3, 0),
-    solvedTriangleCount: mesh.indices.length / 3,
+    solvedTriangleCount: options.solvedTriangleCount ?? mesh.indices.length / 3,
     physicalGroupCount: grouped.size,
+    artifactToken: options.artifactToken ?? `imported-${nextArtifactToken++}`,
   };
 }
 
