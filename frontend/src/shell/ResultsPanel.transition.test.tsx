@@ -6,6 +6,13 @@ import { compareSelection, provisionalResults, resultsCache } from '../api/resul
 import { preferencesStore } from '../prefs/preferences';
 import { ResultsPanel } from './ResultsPanel';
 
+const exportMocks = vi.hoisted(() => ({
+  runWorkspaceExportBundle: vi.fn(),
+}));
+vi.mock('../results/exporters', () => ({
+  runWorkspaceExportBundle: exportMocks.runWorkspaceExportBundle,
+}));
+
 function job(id: string): JobItem {
   return {
     id, run_number: 1, parent_job_id: null,
@@ -51,6 +58,11 @@ describe('atomic results display transitions', () => {
     compareSelection.clear();
     preferencesStore.resetForTests();
     preferencesStore.update({ chartTypes: ['summary'] });
+    exportMocks.runWorkspaceExportBundle.mockReset().mockResolvedValue({
+      directory: 'C:\\Users\\tester\\AppData\\Roaming\\WaveguideGenerator\\workspace\\1_old',
+      files: ['C:\\Users\\tester\\AppData\\Roaming\\WaveguideGenerator\\workspace\\1_old\\1_old.csv'],
+      failures: [],
+    });
     pending = new Map();
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => new Promise<Response>((resolve) => {
       pending.set(String(input).split('/').at(-1)!, resolve);
@@ -72,6 +84,7 @@ describe('atomic results display transitions', () => {
     resultsCache.clear();
     provisionalResults.clear();
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it('keeps one complete previous set until the new set swaps atomically', async () => {
@@ -215,5 +228,26 @@ describe('atomic results display transitions', () => {
     expect(host.textContent).not.toContain('Live ·');
     expect(host.querySelector('.results-panel')?.getAttribute('data-result-primary')).toBe('live');
     expect(provisionalResults.get('live')).toBeUndefined();
+  });
+
+  it('writes the Results toolbar export through the selected Workspace', async () => {
+    preferencesStore.update({ exportFormats: ['csv'] });
+    const patchMetadata = vi.spyOn(jobsSocket, 'patchMetadata').mockResolvedValue(undefined);
+    await act(async () => { root.render(<ResultsPanel/>); });
+    await act(async () => { pending.get('old')!(response([100])); });
+
+    const exportButton = [...host.querySelectorAll('button')]
+      .find((button) => button.textContent === 'Export (1)');
+    expect(exportButton).toBeDefined();
+    await act(async () => { exportButton!.click(); });
+
+    expect(exportMocks.runWorkspaceExportBundle).toHaveBeenCalledWith(
+      expect.objectContaining({ jobStem: '1_old' }),
+      ['csv'],
+    );
+    expect(patchMetadata).toHaveBeenCalledWith('old', {
+      exported_files: ['C:\\Users\\tester\\AppData\\Roaming\\WaveguideGenerator\\workspace\\1_old\\1_old.csv'],
+    });
+    expect(host.textContent).toContain('1 file written to C:\\Users\\tester\\AppData\\Roaming\\WaveguideGenerator\\workspace\\1_old');
   });
 });
