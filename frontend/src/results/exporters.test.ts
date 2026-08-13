@@ -229,6 +229,7 @@ describe('result exporters', () => {
     }, ['csv', 'png']);
 
     expect(bundle).toEqual({
+      directory: 'C:/output/horn_1',
       files: ['C:/output/horn_1/horn_1.csv', 'C:/output/horn_1/horn_1_spl.png'],
       failures: [],
     });

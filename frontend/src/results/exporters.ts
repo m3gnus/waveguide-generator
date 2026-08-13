@@ -21,7 +21,12 @@ export interface ExportContext {
 }
 
 export interface ExportFailure { format: ExportFormat; reason: string }
-export interface ExportBundleResult { files: string[]; failures: ExportFailure[] }
+export interface ExportBundleResult {
+  files: string[];
+  failures: ExportFailure[];
+  /** Absolute backend destination for Workspace exports. */
+  directory?: string;
+}
 
 function finite(value: unknown): number | null {
   const numeric = Number(value);
@@ -202,12 +207,12 @@ interface GeometryDownload {
   filename: string;
 }
 
-interface WorkspaceFile {
+export interface WorkspaceFile {
   filename: string;
   blob: Blob;
 }
 
-interface WorkspaceWriteResponse {
+export interface WorkspaceWriteResponse {
   directory: string;
   files: string[];
 }
@@ -395,9 +400,9 @@ export async function runExportBundle(context: ExportContext, formats = context.
   return { files, failures };
 }
 
-/** Prepare automatic exports in memory, then write them through the backend.
- * Browser downloads require repeated user permission and are therefore kept
- * for explicit manual exports only. */
+/** Prepare exports in memory, then write them through the backend Workspace.
+ * Automatic exports and every run-result export entry point use this path so
+ * browser download permissions cannot silently redirect files to Downloads. */
 export async function runWorkspaceExportBundle(
   context: ExportContext,
   formats = context.preferences.autoExportFormats,
@@ -416,7 +421,7 @@ export async function runWorkspaceExportBundle(
     prepared,
     context.fetcher ?? fetch,
   );
-  return { ...bundle, files: written.files };
+  return { ...bundle, directory: written.directory, files: written.files };
 }
 
 export async function downloadMeshArtifact(
