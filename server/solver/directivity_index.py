@@ -27,6 +27,11 @@ _DB_TO_NEPER = math.log(10.0) / 10.0
 _NEPER_TO_DB = 10.0 / math.log(10.0)
 _ANGLE_TOLERANCE_DEG = 1.0e-6
 
+try:
+    _trapezoid = np.trapezoid
+except AttributeError:  # NumPy <2 compatibility
+    _trapezoid = np.trapz
+
 
 def _log_weighted_mean_energy(levels_db: np.ndarray, weights: np.ndarray) -> float | None:
     """Return ln(weighted mean-square pressure) without overflowing."""
@@ -270,7 +275,53 @@ def calculate_di_from_polar_patterns(
     return values
 
 
+def calculate_plane_di_from_polar_patterns(
+    directivity_patterns: dict[str, list[list[list[float | None]]]],
+) -> dict[str, list[float | None]]:
+    """Return the v1-compatible axisymmetric DI estimate for each polar plane.
+
+    These values are intentionally a fallback, not a replacement for the
+    full-sphere result above.  A single plane or a partial 0..90-degree sweep
+    cannot define conventional loudspeaker DI, but v1 exposed this useful
+    axisymmetric estimate and existing WG workflows rely on it.
+    """
+
+    per_plane: dict[str, list[float | None]] = {}
+    for plane_id, patterns in directivity_patterns.items():
+        values: list[float | None] = []
+        for pattern in patterns:
+            samples: list[tuple[float, float]] = []
+            for point in pattern or []:
+                if not point or len(point) < 2 or point[1] is None:
+                    continue
+                try:
+                    angle, level = float(point[0]), float(point[1])
+                except (TypeError, ValueError):
+                    continue
+                if math.isfinite(angle) and math.isfinite(level):
+                    samples.append((angle, level))
+            if len(samples) < 3:
+                values.append(None)
+                continue
+            samples.sort(key=lambda item: item[0])
+            angles = np.deg2rad([sample[0] for sample in samples])
+            levels_db = np.asarray([sample[1] for sample in samples], dtype=np.float64)
+            shift_db = float(np.max(levels_db))
+            scaled_energy = np.power(10.0, (levels_db - shift_db) / 10.0)
+            scaled_integral = float(_trapezoid(scaled_energy * np.sin(angles), angles))
+            if scaled_integral <= 0.0 or not math.isfinite(scaled_integral):
+                values.append(None)
+                continue
+            log_integral = shift_db * _DB_TO_NEPER + math.log(scaled_integral)
+            di = _NEPER_TO_DB * (math.log(2.0) - log_integral)
+            # V1 clipped negative plane estimates to zero.
+            values.append(max(0.0, di) if math.isfinite(di) else None)
+        per_plane[str(plane_id)] = values
+    return per_plane
+
+
 __all__ = [
     "calculate_di_from_polar_patterns",
+    "calculate_plane_di_from_polar_patterns",
     "calculate_di_from_spherical_grid",
 ]

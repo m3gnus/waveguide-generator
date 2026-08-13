@@ -9,6 +9,7 @@ import pytest
 
 from server.solver.directivity_index import (
     calculate_di_from_polar_patterns,
+    calculate_plane_di_from_polar_patterns,
     calculate_di_from_spherical_grid,
 )
 
@@ -100,3 +101,17 @@ def test_incomplete_angular_domain_is_unavailable() -> None:
     }
     assert calculate_di_from_polar_patterns(patterns) == [None]
     assert calculate_di_from_polar_patterns(patterns, hemisphere=True)[0] is not None
+
+
+def test_v1_plane_fallback_accepts_one_plane_and_partial_sweep() -> None:
+    patterns = {
+        "horizontal": [
+            _pattern([0.0, -3.0, -12.0], [0.0, 45.0, 90.0]),
+            _pattern([0.0, -6.0, -18.0], [0.0, 45.0, 90.0]),
+        ]
+    }
+
+    result = calculate_plane_di_from_polar_patterns(patterns)
+
+    assert set(result) == {"horizontal"}
+    assert result["horizontal"] == pytest.approx([8.194195, 11.374987], abs=1.0e-6)

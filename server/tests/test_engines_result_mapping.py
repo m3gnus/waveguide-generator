@@ -238,6 +238,32 @@ def test_combined_di_keeps_the_native_on_axis_reference_when_display_norm_change
     assert ten_degree["metadata"]["directivity_index"]["opposing_orbit_sides"] == "mirrored"
 
 
+def test_incomplete_single_plane_run_keeps_v1_compatible_plane_di() -> None:
+    result = _native_result()
+    result.observation_planes = ["horizontal"]
+    result.observation_angles_deg = np.asarray([0.0, 45.0, 90.0])
+    result.directivity_db = np.asarray([[[0.0, -3.0, -12.0]], [[0.0, -6.0, -18.0]]])
+    result.pressure_complex = np.ones((2, 1, 3), dtype=np.complex128) * 20.0e-6
+    context = _context()
+    context.polar_config.update({"angle_range": (0.0, 90.0, 3), "enabled_axes": ["horizontal"]})
+
+    response = build_solver_response(
+        result=result,
+        config=_config(),
+        context=context,
+        start_time=0.0,
+        metadata={},
+        sound_speed_m_per_s=SOUND_SPEED_M_PER_S,
+    )
+
+    assert response["di"]["di"]["horizontal"] == pytest.approx([8.194195, 11.374987], abs=1.0e-6)
+    metadata = response["metadata"]["directivity_index"]
+    assert metadata["available"] is True
+    assert metadata["method"] == "per_plane_axisymmetric_approximation"
+    assert metadata["domain"] == "per_plane_axisymmetric_approximation"
+    assert metadata["planes_used"] == ["horizontal"]
+
+
 @pytest.mark.parametrize(
     ("requested", "configured", "with_sphere", "status"),
     [
