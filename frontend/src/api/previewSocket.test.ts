@@ -124,6 +124,28 @@ describe('preview socket state machine', () => {
     manager.stop();
   });
 
+  it('rebuilds the preview after New design rewinds the revision', () => {
+    const socket = new MockSocket();
+    const manager = new PreviewSocketManager(() => socket, 'ws://test/ws/preview');
+    useDesignStore.setState({ designRevision: 57 });
+    manager.start();
+    socket.message(JSON.stringify({ v: 1, kind: 'hello', epoch: 3, heartbeatSec: 15 }));
+    socket.message(fixture());
+    expect(manager.getSnapshot().displayedRevision).toBe(57);
+
+    // New design rewinds the counter to 1. The rendered revision is a floor
+    // against late frames inside one editing stream; carried across a document
+    // load it rejects every frame the new document will ever produce.
+    resetDesignStore();
+    for (let i = 0; i < 9; i += 1) useDesignStore.getState().updateField('a', 40 + i);
+    expect(useDesignStore.getState().designRevision).toBe(10);
+    socket.message(fixtureAtRevision(10));
+
+    expect(manager.getSnapshot().displayedRevision).toBe(10);
+    expect(manager.getSnapshot().stale).toBe(false);
+    manager.stop();
+  });
+
   it('does not go backwards when an older frame arrives after a newer one', () => {
     const socket = new MockSocket();
     const manager = new PreviewSocketManager(() => socket, 'ws://test/ws/preview');
