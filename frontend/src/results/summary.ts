@@ -180,8 +180,6 @@ export function summaryGroups(_context: SummaryContext): SummaryGroup[] {
     if (ingestId) row(importRows, 'Ingest', ingestId);
     const manifest = string(wrapperMetadata.manifest_sha256);
     if (manifest) row(importRows, 'Manifest', manifest.slice(0, 12), manifest);
-    const validity = frequencyValidity(wrapperMetadata.global_frequency_caveat, wrapperMetadata.per_source_frequency_validity);
-    if (validity) row(importRows, 'Frequency validity', validity);
   }
   group(groups, 'Import', importRows);
 
@@ -365,20 +363,6 @@ function balloonStatusText(sampling: Record<string, unknown> | undefined): strin
 function channelIds(result: ResultPayload): string[] {
   const channels = object(result.channels);
   return channels ? Object.keys(channels) : [];
-}
-
-function frequencyValidity(caveatValue: unknown, perSourceValue: unknown): string | undefined {
-  const caveat = object(caveatValue);
-  const caveatText = string(caveatValue) ?? string(caveat?.message) ?? readableOptionalToken(caveat?.code);
-  const perSource = object(perSourceValue);
-  const sourceCount = perSource ? Object.keys(perSource).length : 0;
-  const sourceText = sourceCount ? `per-source validity recorded for ${sourceCount.toLocaleString()} source${sourceCount === 1 ? '' : 's'}` : undefined;
-  return [caveatText, sourceText].filter((value): value is string => Boolean(value)).join(' · ') || undefined;
-}
-
-function readableOptionalToken(value: unknown): string | undefined {
-  const text = string(value);
-  return text ? readableToken(text) : undefined;
 }
 
 function strings(value: unknown): string[] {
