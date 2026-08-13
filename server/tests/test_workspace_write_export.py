@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from pathlib import Path
 
 import pytest
@@ -49,6 +50,75 @@ def test_write_export_happy_path(tmp_path: Path) -> None:
     }
     assert (workspace / "horn_1/hor/a.frd").read_text() == "one"
     assert (workspace / "horn_1/ver/b.frd").read_text() == "two"
+
+
+def test_binary_auto_export_merges_new_files_and_accepts_identical_retries(tmp_path: Path) -> None:
+    state, workspace = selected_state(tmp_path)
+    first = workspace_api.WriteExportRequest(
+        subdirectory="horn_1",
+        existing="merge_identical",
+        members=[
+            {
+                "relative_path": "horn_1_plot.png",
+                "content_base64": base64.b64encode(b"\x89PNG\r\n").decode("ascii"),
+            }
+        ],
+    )
+    call(state, first)
+    retry = workspace_api.WriteExportRequest(
+        subdirectory="horn_1",
+        existing="merge_identical",
+        members=[
+            first.members[0].model_dump(),
+            {"relative_path": "horn_1.csv", "text": "frequency,level\n100,90\n"},
+        ],
+    )
+
+    response = call(state, retry)
+
+    assert response["files"] == [
+        str(workspace / "horn_1/horn_1_plot.png"),
+        str(workspace / "horn_1/horn_1.csv"),
+    ]
+    assert (workspace / "horn_1/horn_1_plot.png").read_bytes() == b"\x89PNG\r\n"
+    assert (workspace / "horn_1/horn_1.csv").read_text() == "frequency,level\n100,90\n"
+
+
+def test_merge_refuses_to_overwrite_a_different_existing_export(tmp_path: Path) -> None:
+    state, workspace = selected_state(tmp_path)
+    call(
+        state,
+        workspace_api.WriteExportRequest(
+            subdirectory="horn_1",
+            existing="merge_identical",
+            members=[{"relative_path": "horn_1.csv", "text": "original"}],
+        ),
+    )
+    conflicting = workspace_api.WriteExportRequest(
+        subdirectory="horn_1",
+        existing="merge_identical",
+        members=[{"relative_path": "horn_1.csv", "text": "replacement"}],
+    )
+
+    with pytest.raises(HTTPException, match="different content") as caught:
+        call(state, conflicting)
+
+    assert caught.value.status_code == 409
+    assert (workspace / "horn_1/horn_1.csv").read_text() == "original"
+
+
+def test_write_export_rejects_invalid_binary_encoding_without_writing(tmp_path: Path) -> None:
+    state, workspace = selected_state(tmp_path)
+    payload = workspace_api.WriteExportRequest(
+        subdirectory="horn_1",
+        members=[{"relative_path": "bad.png", "content_base64": "not base64!"}],
+    )
+
+    with pytest.raises(HTTPException, match="invalid base64") as caught:
+        call(state, payload)
+
+    assert caught.value.status_code == 422
+    assert list(workspace.iterdir()) == []
 
 
 def test_write_export_requires_selected_workspace(tmp_path: Path) -> None:

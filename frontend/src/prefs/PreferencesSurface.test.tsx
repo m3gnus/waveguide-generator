@@ -26,7 +26,7 @@ describe('preferences surfaces', () => {
     expect(host.textContent).toContain('Preferred manual export formats');
     expect(host.textContent).toContain('Automatic export formats');
     expect(host.textContent).toContain('Auto-export completed jobs');
-    expect(host.textContent).toContain('Auto-download solve mesh');
+    expect(host.textContent).toContain('Auto-save solve mesh to Workspace');
   });
 
   it('edits manual and automatic formats independently and warns about an empty enabled auto list', async () => {

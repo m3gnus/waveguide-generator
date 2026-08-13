@@ -26,18 +26,18 @@ export class JobAutomation {
         try {
           filename = await dependencies.downloadMesh(job);
         } catch (error) {
-          // Nothing reached the browser, so a later job update may safely retry.
+          // Nothing was saved, so a later job update may safely retry.
           this.meshStarted.delete(job.id);
-          dependencies.reportError(`Mesh auto-download failed for ${job.id.slice(0, 6)}: ${error instanceof Error ? error.message : String(error)}`);
+          dependencies.reportError(`Mesh auto-save failed for ${job.id.slice(0, 6)}: ${error instanceof Error ? error.message : String(error)}`);
           return;
         }
         try {
           await dependencies.markMeshDownloaded(job, filename);
         } catch (error) {
-          // The download already happened. Keep the session guard so a failed
+          // The file was already saved. Keep the session guard so a failed
           // metadata write cannot duplicate it; an unmarked job retries after
           // an app restart, when this in-memory guard intentionally resets.
-          dependencies.reportError(`Could not record mesh auto-download for ${job.id.slice(0, 6)}: ${error instanceof Error ? error.message : String(error)}`);
+          dependencies.reportError(`Could not record mesh auto-save for ${job.id.slice(0, 6)}: ${error instanceof Error ? error.message : String(error)}`);
         }
       })());
     });
@@ -69,7 +69,7 @@ export class JobAutomation {
         if (result.failures.length) dependencies.reportError(`Auto-export for ${job.id.slice(0, 6)} completed with ${result.failures.length} failure${result.failures.length === 1 ? '' : 's'}: ${result.failures.map(({ format, reason }) => `${format} (${reason})`).join(', ')}`);
       }).catch((error) => {
         // Whether export preparation or its metadata patch failed, retrying on
-        // the next jobs event can duplicate browser downloads. Keep one attempt
+        // the next jobs event can duplicate work. Keep one attempt
         // per job per app session; persisted null/failed state remains eligible
         // when a fresh JobAutomation is created after restart.
         dependencies.reportError(`Auto-export failed for ${job.id.slice(0, 6)}: ${error instanceof Error ? error.message : String(error)}`);

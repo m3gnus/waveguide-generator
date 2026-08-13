@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import json
 import logging
 import os
@@ -12,11 +14,11 @@ import re
 import shutil
 import subprocess
 import tempfile
-from typing import Any
+from typing import Any, Literal
 import unicodedata
 
 from fastapi import APIRouter, FastAPI, HTTPException
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from server.platform.paths import data_paths
 from server.platform.process import background_process_kwargs
@@ -25,7 +27,9 @@ from server.platform.process import background_process_kwargs
 logger = logging.getLogger(__name__)
 
 MAX_EXPORT_MEMBERS = 100
-MAX_EXPORT_BYTES = 16 * 1024 * 1024
+# Automatic bundles can include tessellated STL/STEP geometry and rendered
+# plots, so the old text-export ceiling was too small for otherwise valid runs.
+MAX_EXPORT_BYTES = 256 * 1024 * 1024
 _WINDOWS_DEVICE_NAME = re.compile(
     r"^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$", re.IGNORECASE
 )
@@ -36,7 +40,14 @@ class ExportMember(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     relative_path: str = Field(min_length=1)
-    text: str
+    text: str | None = None
+    content_base64: str | None = None
+
+    @model_validator(mode="after")
+    def one_content_source(self) -> "ExportMember":
+        if (self.text is None) == (self.content_base64 is None):
+            raise ValueError("exactly one of text or content_base64 is required")
+        return self
 
 
 class WriteExportRequest(BaseModel):
@@ -44,6 +55,16 @@ class WriteExportRequest(BaseModel):
 
     subdirectory: str = Field(min_length=1)
     members: list[ExportMember] = Field(min_length=1, max_length=MAX_EXPORT_MEMBERS)
+    existing: Literal["reject", "merge_identical"] = "reject"
+
+
+def _member_bytes(member: ExportMember) -> bytes:
+    if member.text is not None:
+        return member.text.encode("utf-8")
+    try:
+        return base64.b64decode(member.content_base64 or "", validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError(f"{member.relative_path!r} contains invalid base64 data") from exc
 
 
 def _path_segments(raw: str, label: str) -> list[str]:
@@ -253,21 +274,38 @@ def create_workspace_router(state: WorkspaceState) -> APIRouter:
                     raise ValueError(f"{label} duplicates another member path")
                 seen.add(destination)
                 portable_seen.add(portable_key)
-                encoded = member.text.encode("utf-8")
+                encoded = _member_bytes(member)
                 total_bytes += len(encoded)
                 if total_bytes > MAX_EXPORT_BYTES:
                     raise ValueError(
-                        f"Export set exceeds the {MAX_EXPORT_BYTES}-byte UTF-8 size limit"
+                        f"Export set exceeds the {MAX_EXPORT_BYTES}-byte binary size limit"
                     )
                 prepared.append((segments, encoded, destination))
         except (OSError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-        if export_directory.exists() or export_directory.is_symlink():
-            raise HTTPException(
-                status_code=409,
-                detail=f"Export directory already exists: {export_directory}",
-            )
+        export_exists = export_directory.exists() or export_directory.is_symlink()
+        if export_exists and request.existing == "reject":
+            raise HTTPException(status_code=409, detail=f"Export directory already exists: {export_directory}")
+        if export_exists:
+            if export_directory.is_symlink() or not export_directory.is_dir():
+                raise HTTPException(status_code=409, detail=f"Export path is not a directory: {export_directory}")
+            for _segments, encoded, destination in prepared:
+                if not (destination.exists() or destination.is_symlink()):
+                    continue
+                try:
+                    identical = (
+                        not destination.is_symlink()
+                        and destination.is_file()
+                        and destination.read_bytes() == encoded
+                    )
+                except OSError:
+                    identical = False
+                if not identical:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"Export file already exists with different content: {destination}",
+                    )
 
         export_directory.parent.mkdir(parents=True, exist_ok=True)
         staging_directory = Path(
@@ -278,7 +316,16 @@ def create_workspace_router(state: WorkspaceState) -> APIRouter:
                 staged_file = staging_directory.joinpath(*segments)
                 staged_file.parent.mkdir(parents=True, exist_ok=True)
                 staged_file.write_bytes(encoded)
-            os.replace(staging_directory, export_directory)
+            if request.existing == "reject":
+                os.replace(staging_directory, export_directory)
+            else:
+                export_directory.mkdir(exist_ok=True)
+                for segments, _encoded, destination in prepared:
+                    if destination.exists():
+                        continue
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    os.replace(staging_directory.joinpath(*segments), destination)
+                shutil.rmtree(staging_directory, ignore_errors=True)
         except Exception as exc:
             shutil.rmtree(staging_directory, ignore_errors=True)
             raise HTTPException(status_code=500, detail=f"Failed to write export set: {exc}") from exc
