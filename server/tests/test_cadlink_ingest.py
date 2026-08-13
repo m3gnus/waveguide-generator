@@ -13,12 +13,20 @@ import asyncio
 
 import pytest
 import numpy as np
+from fastapi import HTTPException
 from pydantic import ValidationError
 
 from server.app import create_app
-from server.cadlink.api import CadReturnIngestRequest, get_ingest, list_returns, post_ingest
+from server.cadlink.api import (
+    CadReturnIngestRequest,
+    get_ingest,
+    get_ingest_viewport_mesh,
+    list_returns,
+    post_ingest,
+)
 from server.cadlink.ingest import IngestRefusal, _canonical, compute_freshness, evaluate_instance_freshness, ingest_bundle, validate_registry_echoes
 from server.mesh.imported import ImportedMeshDependencyError, polar_grid_from_symmetry
+from server.mesh.artifact import mesh_text_sha256
 from server.cadlink.wgreturn import WgReturnBundle
 from server.cadlink.store import CadLinkStore
 from server.engines.registry import EngineInfo, EngineRegistry
@@ -335,6 +343,48 @@ def test_get_ingest_reads_store_off_event_loop(monkeypatch, tmp_path: Path) -> N
     assert calls
 
 
+def test_viewport_mesh_endpoint_distinguishes_absence_and_corruption(
+    monkeypatch, tmp_path: Path
+) -> None:
+    ingest_id = "wgi_01J5A8QK3M9T2XVBH0RD7NWE6C"
+    app = SimpleNamespace(state=SimpleNamespace(cadlink_store=object()))
+    current_record: dict[str, object] = {"ingest_id": ingest_id}
+
+    async def fake_to_thread(function, *args):
+        if function.__name__ == "get_ingestion_record":
+            return current_record
+        return function(*args)
+
+    monkeypatch.setattr("server.cadlink.api.asyncio.to_thread", fake_to_thread)
+    with pytest.raises(HTTPException) as absent:
+        asyncio.run(
+            get_ingest_viewport_mesh(ingest_id, SimpleNamespace(app=app))
+        )
+    assert absent.value.status_code == 404
+
+    viewport_path = tmp_path / "viewport.msh"
+    viewport_path.write_text("visual", encoding="utf-8")
+    current_record = {
+        "ingest_id": ingest_id,
+        "viewport_mesh": {
+            "available": True,
+            "store_path": str(viewport_path),
+            "content_sha256": mesh_text_sha256("different"),
+        },
+    }
+    with pytest.raises(HTTPException) as corrupt:
+        asyncio.run(
+            get_ingest_viewport_mesh(ingest_id, SimpleNamespace(app=app))
+        )
+    assert corrupt.value.status_code == 409
+
+    current_record["viewport_mesh"]["content_sha256"] = mesh_text_sha256("visual")  # type: ignore[index]
+    response = asyncio.run(
+        get_ingest_viewport_mesh(ingest_id, SimpleNamespace(app=app))
+    )
+    assert response.body == b"visual"
+
+
 def test_canonical_json_coerces_numpy_values() -> None:
     assert json.loads(_canonical({"scalar": np.int64(3), "array": np.array([1.5])})) == {
         "array": [1.5],
@@ -375,6 +425,12 @@ def test_ingestion_record_publishes_role_findings_and_numpy_metadata(
     )
     built = {
         "msh_text": "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n",
+        "viewport_msh_text": "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n$Comments\nviewport\n$EndComments\n",
+        "viewport_mesh": {
+            "available": True,
+            "stats": {"triangle_count": np.int64(4), "domain": "full"},
+            "metadata": {"purpose": "cad-viewport"},
+        },
         "transformed_geometry_hash": "sha256:" + "3" * 64,
         "normalisation": {"matrix": np.eye(4)},
         "role_resolution": {"source-hf": {"surfaces": [1]}},
@@ -437,6 +493,82 @@ def test_ingestion_record_publishes_role_findings_and_numpy_metadata(
     ]
     assert any(item["kind"] == "source-paint-missing" for item in record["findings"])
     assert record["mesh"]["metadata"]["numpy_array"] == [1, 2]
+    assert record["viewport_mesh"]["available"] is True
+    assert record["viewport_mesh"]["stats"]["triangle_count"] == 4
+    assert Path(record["viewport_mesh"]["store_path"]).read_text(encoding="utf-8").endswith(
+        "$EndComments\n"
+    )
+
+
+def test_visual_mesh_failure_is_advisory_and_does_not_create_healing_finding(
+    monkeypatch, tmp_path: Path
+) -> None:
+    bundle_path = tmp_path / "visual-failure.wgreturn"
+    bundle_path.mkdir()
+    manifest_path = bundle_path / "wgreturn.json"
+    assembly_path = bundle_path / "assembly.step"
+    manifest_path.write_text("{}", encoding="utf-8")
+    assembly_path.write_text("STEP", encoding="utf-8")
+    manifest = {
+        "return": {"id": "wgr_01J5A8QK3M9T2XVBH0RD7NWE6C"},
+        "coordinate_system": {"solver_anchor_instance_id": None},
+        "assembly": {"n_bodies_expected": 1},
+        "scope": {
+            "included": [{}], "skipped": [], "status": "clean", "fem_air_volumes": [],
+        },
+        "instances": [],
+        "sources": [],
+    }
+    bundle = WgReturnBundle(
+        path=bundle_path,
+        manifest_path=manifest_path,
+        manifest=manifest,
+        manifest_sha256="sha256:" + "1" * 64,
+        assembly_path=assembly_path,
+        artifact_sha256="sha256:" + "2" * 64,
+        members={"assembly.step": assembly_path},
+    )
+    symmetry = {
+        "cut_planes": [],
+        "planes": {axis: {"accepted": False} for axis in ("x0", "y0", "z0")},
+    }
+    built = {
+        "msh_text": "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n",
+        "transformed_geometry_hash": "sha256:" + "3" * 64,
+        "normalisation": {"matrix": np.eye(4), "anchor_instance_id": None},
+        "role_resolution": {},
+        "role_findings": [],
+        "symmetry": symmetry,
+        "healing": {"performed": False, "mode": "none", "options": []},
+        "polar_grid_derivation": polar_grid_from_symmetry(symmetry),
+        "sizing_estimate": {"triangles": 1},
+        "tag_allocation": {
+            "tag_namespace": "wg-import-v1",
+            "tag_map": {"1": {"source_id": None, "instance_id": None, "role": "rigid"}},
+            "source_tags": {},
+        },
+        "stats": {"triangle_count": 1},
+        "metadata": {},
+        "integrity": {"valid": True},
+        "viewport_mesh": {"available": False, "reason": "visual tessellation failed"},
+    }
+    monkeypatch.setattr("server.cadlink.ingest.read_wgreturn", lambda _path: bundle)
+    monkeypatch.setattr(
+        "server.cadlink.ingest.build_imported_mesh", lambda *_args, **_kwargs: built
+    )
+    record = ingest_bundle(
+        bundle_path,
+        {"rigid_size_mm": 20, "transition_mm": 30, "source_size_mm": {}},
+        [],
+        CadLinkStore(tmp_path / "cadlink.db"),
+        tmp_path / "data",
+    )
+    assert record["viewport_mesh"] == {
+        "available": False,
+        "reason": "visual tessellation failed",
+    }
+    assert record["healing"]["performed"] is False
+    assert all(item["kind"] != "healing-performed" for item in record["findings"])
 
 
 def test_occ_ingest_end_to_end_writes_tag_names_reuses_cache_and_solves(
@@ -637,12 +769,23 @@ def test_occ_ingest_end_to_end_writes_tag_names_reuses_cache_and_solves(
         gmsh.option.setNumber("General.Terminal", 0)
         first = ingest_bundle(bundle, sizes, [], store, data_dir)
         second = ingest_bundle(bundle, sizes, [], store, data_dir)
+        changed_sizes = deepcopy(sizes)
+        changed_sizes["rigid_size_mm"] = 18
+        third = ingest_bundle(bundle, changed_sizes, [], store, data_dir)
     finally:
         if initialized_here and gmsh.isInitialized():
             gmsh.finalize()
 
     assert first["mesh_cache_hit"] is False
     assert second["mesh_cache_hit"] is True
+    assert third["mesh_cache_hit"] is False
+    assert first["mesh_content_sha256"] == second["mesh_content_sha256"]
+    assert first["viewport_mesh"]["available"] is True
+    assert first["viewport_mesh"]["stats"]["domain"] == "full"
+    assert second["viewport_mesh"]["cache_hit"] is True
+    assert third["viewport_mesh"]["cache_hit"] is True
+    assert first["viewport_mesh"]["content_sha256"] == third["viewport_mesh"]["content_sha256"]
+    assert first["viewport_mesh"]["store_path"] != first["mesh_store_path"]
     assert first["normalisation"]["assembly_frame_is_solver_frame"] is True
     assert set(first["tag_map"]) == {"1", "101", "102", "103"}
     assert first["symmetry"]["planes"]["x0"]["accepted"] is False

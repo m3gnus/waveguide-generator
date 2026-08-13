@@ -122,6 +122,18 @@ export function markParametricSolvedDomain(
   return { ...scene, surfaces };
 }
 
+/** Map origin cut planes to the positive-side domain retained by the solver.
+ * This is shared by parametric symmetry tinting and full-domain CAD viewport
+ * artifacts, whose triangles must be classified without being mirrored. */
+export function quadrantsForCutPlanes(cutPlanes: readonly string[]): DisplayQuadrants {
+  const cutX = cutPlanes.includes('x0');
+  const cutY = cutPlanes.includes('y0');
+  if (cutX && cutY) return 1;
+  if (cutX) return 14;
+  if (cutY) return 12;
+  return 1234;
+}
+
 export function quadrantsForSolveMode(
   mode: 'auto' | 'full' | 'half_xz' | 'half_yz' | 'quarter',
   autoQuadrants: DisplayQuadrants = 1234,
