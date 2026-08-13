@@ -33,7 +33,7 @@ class JobsTransport(Protocol):
 class JobsProtocol:
     """Snapshot first, then durable events with replay-or-snapshot resume.
 
-    This implements the new v2 behavior in ``docs/WS-PROTOCOL.md:45-68``;
+    This implements the behavior in ``docs/reference/WS-PROTOCOL.md``;
     lifecycle payloads remain derivable from the v1-compatible HTTP store.
     """
 

@@ -1,5 +1,8 @@
 # Windows performance work — 2026-08-07
 
+> Historical measurements for the machine and revision described below. This report
+> preserves measured baselines; it is not a current release-readiness statement.
+
 A pass over everything between double-clicking the launcher and reading a
 result, on the machine described in
 [WINDOWS-VALIDATION.md §1](WINDOWS-VALIDATION.md) (AMD Ryzen 7 5825U, 12
@@ -100,7 +103,8 @@ message was zlib-deflated synchronously on the event loop. The preview socket
 carries 170–335 kB geometry frames of float32 at up to 30 Hz while a control is
 being dragged: poorly compressible data, on the most latency-sensitive path in
 the application, on the one thread that also has to answer every request.
-`docs/WS-PROTOCOL.md` already recorded that "localhost bandwidth is free"; the
+[The WebSocket protocol](../../reference/WS-PROTOCOL.md) already recorded that
+"localhost bandwidth is free"; the
 CPU was not.
 
 ### 2.2 gzip at level 1, and assets that stop revalidating
@@ -239,7 +243,7 @@ startup handler. Measured phases in a fresh interpreter here:
 When explicitly enabled, this does not make Stop *immediate*. It can move the
 unstoppable window off the user's first solve, but a solve started during the
 warmup can contend with it. Process-isolated solves remain the only way to make
-Stop immediate, and remain deferred (`docs/P6-CUTOVER-PLAN.md`).
+Stop immediate, and remain deferred in [release readiness](../../plans/RELEASE-READINESS.md).
 
 ### 4.2 The capability probe is cached
 
@@ -262,7 +266,7 @@ The caveat is real and is therefore announced in the solve log and the job
 metadata before the solve starts, rather than discovered by pressing Stop:
 **Stop cannot cancel a frequency already running in a sibling worker process.**
 The measurements that settled the serial default are in
-`docs/P6-CUTOVER-PLAN.md` §3, decision 6.
+the measured release-readiness record, where the old cutover decision 6 lived.
 
 ### 4.4 Symmetry resolution is memoized
 
@@ -380,7 +384,7 @@ dispose — the shape `stores/autosave.ts` already used.
    `server/solver/beam_shape.py` evaluates 144 rays per frequency one at a
    time. Both are the "postprocess" stage users watch at 0.85–0.99 progress and
    both are worth vectorising exactly as §5 did — with the same differential
-   verification, because `docs/RESULT-CONTRACTS.md` requires byte-identical
+   verification, because the [result contract](../../reference/RESULT-CONTRACTS.md) requires byte-identical
    output. Not attempted here.
 2. **Deferring numpy from module scope.** It is ~118 ms of startup, but it is
    imported by `server/preview/core.py`, which the first preview frame needs
