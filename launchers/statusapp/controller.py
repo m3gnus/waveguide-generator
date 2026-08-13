@@ -96,8 +96,12 @@ def _installer_hint() -> str:
 
 
 def _review_build_hint() -> str:
+    # macOS has a single launcher that rebuilds a stale frontend on the way up,
+    # so relaunching is the shortest correct advice. This warning is only
+    # reachable when that rebuild was skipped or could not run, in which case
+    # the manual build is the fallback either way.
     if sys.platform == "darwin":
-        return "launchers/macos/launch-wg-dev.command"
+        return "cd frontend && npm run build, or quit and reopen Waveguide Generator"
     return "cd frontend && npm run build"
 
 
