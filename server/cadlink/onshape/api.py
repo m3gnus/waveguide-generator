@@ -17,7 +17,7 @@ import asyncio
 import logging
 from pathlib import Path
 import time
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -73,6 +73,9 @@ class OnshapeSendRequest(BaseModel):
     # Explicit consent to create a world-readable document, which is the only
     # kind Onshape's Free plan allows. Never defaulted to true.
     allow_public: bool = Field(default=False, alias="allowPublic")
+    build_mode: Literal["import", "native"] = Field(
+        default="import", alias="buildMode"
+    )
 
 
 class OnshapeUnlinkRequest(BaseModel):
@@ -123,6 +126,9 @@ def _link_payload(row: dict[str, Any] | None) -> dict[str, Any] | None:
         "isPublic": bool(row.get("is_public")),
         "partStudioElementId": row.get("part_studio_element_id"),
         "variableStudioElementId": row.get("variable_studio_element_id"),
+        "featureStudioElementId": row.get("feature_studio_element_id"),
+        "nativeFeatureId": row.get("native_feature_id"),
+        "buildMode": row.get("build_mode") or "import",
         "lastSequence": row.get("last_sequence"),
         "updatedAt": row.get("updated_at"),
     }
@@ -273,6 +279,7 @@ def _push(
     design_hash_value: str,
     geometry_hash_value: str | None,
     allow_public: bool,
+    build_mode: Literal["import", "native"] = "import",
 ) -> dict[str, Any]:
     """Materialise the bundle in Onshape and record where it landed."""
 
@@ -286,6 +293,8 @@ def _push(
             blob_element_id=str(existing["blob_element_id"]),
             part_studio_element_id=existing.get("part_studio_element_id"),
             variable_studio_element_id=existing.get("variable_studio_element_id"),
+            feature_studio_element_id=existing.get("feature_studio_element_id"),
+            native_feature_id=existing.get("native_feature_id"),
         )
         if existing
         else None
@@ -299,6 +308,7 @@ def _push(
             step_filename=step_filename,
             target=target,
             allow_public=allow_public,
+            build_mode=build_mode,
         )
     except OnshapeHttpError as exc:
         # The stored document is gone (deleted in Onshape, or the account
@@ -320,6 +330,9 @@ def _push(
         blob_element_id=result.target.blob_element_id,
         part_studio_element_id=result.target.part_studio_element_id,
         variable_studio_element_id=result.target.variable_studio_element_id,
+        feature_studio_element_id=result.target.feature_studio_element_id,
+        native_feature_id=result.target.native_feature_id,
+        build_mode=result.build_mode,
         document_name=result.document_name,
         is_public=result.is_public,
         last_export_id=export_id,
@@ -336,6 +349,7 @@ def _push(
         "isPublic": result.is_public,
         "variablesPushed": result.variables_pushed,
         "partNames": list(result.part_names),
+        "buildMode": result.build_mode,
         "accountId": account_id,
     }
 
@@ -408,6 +422,7 @@ async def send(
             design_hash_value=str(export.get("designHash") or ""),
             geometry_hash_value=str(export.get("geometryHash") or "") or None,
             allow_public=payload.allow_public,
+            build_mode=payload.build_mode,
         )
     except Exception as exc:
         raise _onshape_error(exc) from exc

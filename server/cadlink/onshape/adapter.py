@@ -22,9 +22,10 @@ import logging
 from pathlib import Path
 import re
 import time
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Literal, Mapping, Sequence
 
 from .client import OnshapeClient, OnshapeError, OnshapeHttpError
+from .native import FEATURE_TYPE, build_featurescript
 
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,8 @@ class OnshapeTarget:
     blob_element_id: str
     part_studio_element_id: str | None = None
     variable_studio_element_id: str | None = None
+    feature_studio_element_id: str | None = None
+    native_feature_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -79,6 +82,7 @@ class OnshapeSendResult:
     is_public: bool
     variables_pushed: int
     translation_id: str | None
+    build_mode: str = "import"
     part_names: tuple[str, ...] = ()
 
 
@@ -311,6 +315,201 @@ class OnshapeAdapter:
             self._sleep(delay)
             delay = min(delay * 1.5, _POLL_MAX_S)
 
+    # -- native features --------------------------------------------------
+
+    def ensure_feature_studio(
+        self,
+        document_id: str,
+        workspace_id: str,
+        *,
+        element_id: str | None = None,
+        name: str = "WG Build",
+    ) -> str:
+        """Return the generator Feature Studio, creating it only when absent."""
+
+        if element_id:
+            return element_id
+        response = self._client.post(
+            f"/featurestudios/d/{document_id}/w/{workspace_id}",
+            json_body={"name": name},
+        )
+        body = response.body if isinstance(response.body, Mapping) else {}
+        studio_id = _string(body.get("id"))
+        if studio_id is None:
+            raise OnshapeAdapterError(
+                "Onshape created the WG Feature Studio but reported no element id."
+            )
+        return studio_id
+
+    def push_feature_studio_source(
+        self,
+        document_id: str,
+        workspace_id: str,
+        element_id: str,
+        source: str,
+    ) -> str:
+        """Replace the source and return Onshape's authoritative namespace.
+
+        A namespace assembled from document ids looks plausible but Onshape
+        rejects it. The compiled feature spec is the only reliable source.
+        """
+
+        path = f"/featurestudios/d/{document_id}/w/{workspace_id}/e/{element_id}"
+        self._client.post(path, json_body={"contents": source})
+        response = self._client.get(f"{path}/featurespecs")
+        body = response.body if isinstance(response.body, Mapping) else {}
+        specs = body.get("featureSpecs")
+        if not isinstance(specs, list) or not specs:
+            raise OnshapeAdapterError(
+                "Onshape could not compile the generated WG Feature Studio "
+                "(its featureSpecs reply was empty, and Onshape supplied no diagnostic)."
+            )
+        first = specs[0]
+        message = first.get("message") if isinstance(first, Mapping) else None
+        namespace = _string(message.get("namespace")) if isinstance(message, Mapping) else None
+        if namespace is None:
+            raise OnshapeAdapterError(
+                "Onshape compiled the WG Feature Studio but reported no feature namespace."
+            )
+        return namespace
+
+    def create_part_studio(
+        self, document_id: str, workspace_id: str, name: str
+    ) -> str:
+        """Create the Part Studio that owns the native WG feature."""
+
+        response = self._client.post(
+            f"/partstudios/d/{document_id}/w/{workspace_id}",
+            json_body={"name": name},
+        )
+        body = response.body if isinstance(response.body, Mapping) else {}
+        studio_id = _string(body.get("id"))
+        if studio_id is None:
+            raise OnshapeAdapterError(
+                "Onshape created the native WG Part Studio but reported no element id."
+            )
+        return studio_id
+
+    def _feature_request(
+        self,
+        document_id: str,
+        workspace_id: str,
+        part_studio_id: str,
+        namespace: str,
+        *,
+        feature_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Build the live-proven BTJson feature envelope and version context."""
+
+        current_response = self._client.get(
+            f"/partstudios/d/{document_id}/w/{workspace_id}/e/{part_studio_id}/features"
+        )
+        current = (
+            current_response.body
+            if isinstance(current_response.body, Mapping)
+            else {}
+        )
+        try:
+            versions = {
+                key: current[key]
+                for key in (
+                    "serializationVersion",
+                    "sourceMicroversion",
+                    "libraryVersion",
+                )
+            }
+        except KeyError as exc:
+            raise OnshapeAdapterError(
+                "Onshape did not report the Part Studio version context needed "
+                "to add the native WG feature."
+            ) from exc
+
+        # The features endpoint accepts this BTJson envelope. The flatter
+        # OpenAPI `btType` representation is rejected with an unhelpful 400.
+        message: dict[str, Any] = {
+            "featureType": FEATURE_TYPE,
+            "name": "WG Waveguide",
+            "suppressed": False,
+            "namespace": namespace,
+            "parameters": [
+                {
+                    "type": 144,
+                    "typeName": "BTMParameterBoolean",
+                    "message": {
+                        "parameterId": "buildEnclosure",
+                        "value": True,
+                    },
+                }
+            ],
+        }
+        if feature_id is not None:
+            message["featureId"] = feature_id
+        return {
+            "feature": {
+                "type": 134,
+                "typeName": "BTMFeature",
+                "message": message,
+            },
+            **versions,
+        }
+
+    def add_native_feature(
+        self,
+        document_id: str,
+        workspace_id: str,
+        part_studio_id: str,
+        namespace: str,
+    ) -> str:
+        """Instantiate the generated custom feature and return its feature id."""
+
+        path = f"/partstudios/d/{document_id}/w/{workspace_id}/e/{part_studio_id}/features"
+        response = self._client.post(
+            path,
+            json_body=self._feature_request(
+                document_id, workspace_id, part_studio_id, namespace
+            ),
+            timeout=600.0,
+        )
+        body = response.body if isinstance(response.body, Mapping) else {}
+        feature = body.get("feature")
+        message = feature.get("message") if isinstance(feature, Mapping) else None
+        feature_id = (
+            _string(message.get("featureId"))
+            if isinstance(message, Mapping)
+            else None
+        ) or _string(body.get("featureId"))
+        if feature_id is None:
+            raise OnshapeAdapterError(
+                "Onshape added the native WG feature but reported no feature id."
+            )
+        return feature_id
+
+    def update_native_feature(
+        self,
+        document_id: str,
+        workspace_id: str,
+        part_studio_id: str,
+        feature_id: str,
+        namespace: str,
+    ) -> None:
+        """Regenerate the existing feature so downstream references survive."""
+
+        path = (
+            f"/partstudios/d/{document_id}/w/{workspace_id}/e/{part_studio_id}"
+            f"/features/featureid/{feature_id}"
+        )
+        self._client.post(
+            path,
+            json_body=self._feature_request(
+                document_id,
+                workspace_id,
+                part_studio_id,
+                namespace,
+                feature_id=feature_id,
+            ),
+            timeout=600.0,
+        )
+
     # -- parameters --------------------------------------------------------
 
     def ensure_variable_studio(
@@ -466,6 +665,26 @@ def read_bundle(bundle_path: str | Path) -> tuple[dict[str, Any], bytes]:
     return dict(manifest), step_path.read_bytes()
 
 
+def _read_point_grid(bundle_path: str | Path) -> dict[str, Any]:
+    """Read the realised geometry needed by the native FeatureScript build."""
+
+    path = Path(bundle_path) / "point-grid.json"
+    if not path.is_file():
+        raise OnshapeAdapterError(
+            "The CAD-link bundle is missing point-grid.json, so it cannot be "
+            "built from native Onshape features. Send the design to CAD again."
+        )
+    try:
+        grid = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise OnshapeAdapterError(
+            "The CAD-link point grid could not be read. Send the design to CAD again."
+        ) from exc
+    if not isinstance(grid, Mapping):
+        raise OnshapeAdapterError("The CAD-link point grid is not an object.")
+    return dict(grid)
+
+
 def send_bundle(
     adapter: OnshapeAdapter,
     bundle_path: str | Path,
@@ -474,6 +693,7 @@ def send_bundle(
     step_filename: str,
     target: OnshapeTarget | None = None,
     allow_public: bool = False,
+    build_mode: Literal["import", "native"] = "import",
 ) -> OnshapeSendResult:
     """Create or update the Onshape materialisation of one bundle.
 
@@ -492,12 +712,16 @@ def send_bundle(
         blob_element_id: str | None = None
         variable_studio_id: str | None = None
         part_studio_id: str | None = None
+        feature_studio_id: str | None = None
+        native_feature_id: str | None = None
     else:
         document_id = target.document_id
         workspace_id = target.workspace_id
         blob_element_id = target.blob_element_id
         variable_studio_id = target.variable_studio_element_id
         part_studio_id = target.part_studio_element_id
+        feature_studio_id = target.feature_studio_element_id
+        native_feature_id = target.native_feature_id
         summary = adapter.document_summary(document_id)
         if summary.get("trashed"):
             raise OnshapeAdapterError(
@@ -507,21 +731,54 @@ def send_bundle(
         reported = summary.get("public")
         is_public = bool(reported) if isinstance(reported, bool) else False
 
-    blob_element_id, translation_id = adapter.upload_step(
-        document_id,
-        workspace_id,
-        step_bytes,
-        filename=step_filename,
-        blob_element_id=blob_element_id,
-    )
-    if translation_id:
-        translation = adapter.await_translation(translation_id)
-        # Present on a create, null on an update because the existing Part
-        # Studio was updated rather than replaced. Keep whichever id we know.
-        results = translation.get("resultElementIds")
-        if isinstance(results, list):
-            first = next((_string(item) for item in results if _string(item)), None)
-            part_studio_id = first or part_studio_id
+    translation_id: str | None = None
+    if build_mode == "import":
+        blob_element_id, translation_id = adapter.upload_step(
+            document_id,
+            workspace_id,
+            step_bytes,
+            filename=step_filename,
+            blob_element_id=blob_element_id,
+        )
+        if translation_id:
+            translation = adapter.await_translation(translation_id)
+            # Present on a create, null on an update because the existing Part
+            # Studio was updated rather than replaced. Keep whichever id we know.
+            results = translation.get("resultElementIds")
+            if isinstance(results, list):
+                first = next((_string(item) for item in results if _string(item)), None)
+                part_studio_id = first or part_studio_id
+    else:
+        try:
+            source = build_featurescript(_read_point_grid(bundle_path), manifest)
+        except ValueError as exc:
+            raise OnshapeAdapterError(
+                f"The CAD-link point grid cannot produce a native Onshape build: {exc}"
+            ) from exc
+        feature_studio_id = adapter.ensure_feature_studio(
+            document_id,
+            workspace_id,
+            element_id=feature_studio_id,
+        )
+        namespace = adapter.push_feature_studio_source(
+            document_id, workspace_id, feature_studio_id, source
+        )
+        if part_studio_id is None:
+            part_studio_id = adapter.create_part_studio(
+                document_id, workspace_id, document_name
+            )
+        if native_feature_id is None:
+            native_feature_id = adapter.add_native_feature(
+                document_id, workspace_id, part_studio_id, namespace
+            )
+        else:
+            adapter.update_native_feature(
+                document_id,
+                workspace_id,
+                part_studio_id,
+                native_feature_id,
+                namespace,
+            )
 
     part_names: tuple[str, ...] = ()
     try:
@@ -560,9 +817,11 @@ def send_bundle(
         target=OnshapeTarget(
             document_id=document_id,
             workspace_id=workspace_id,
-            blob_element_id=blob_element_id,
+            blob_element_id=blob_element_id or "",
             part_studio_element_id=part_studio_id,
             variable_studio_element_id=variable_studio_id,
+            feature_studio_element_id=feature_studio_id,
+            native_feature_id=native_feature_id,
         ),
         document_name=document_name,
         document_url=adapter.client.document_url(document_id, workspace_id),
@@ -570,6 +829,7 @@ def send_bundle(
         is_public=is_public,
         variables_pushed=variables_pushed,
         translation_id=translation_id,
+        build_mode=build_mode,
         part_names=part_names,
     )
 
