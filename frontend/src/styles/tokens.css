@@ -113,6 +113,7 @@
   --vp-wire-material: #ece8e0;
   --vp-edge-material: var(--acc);
   --vp-cap-material: #c07a4e;
+  --vp-solved-domain-material: #d58c62;
   /* Semantic UI foundation — shared by every workspace surface. */
   --surface-canvas: #191817;
   --surface-panel: #211f1d;
@@ -296,6 +297,7 @@
   --vp-wire-material: #2f3234;
   --vp-edge-material: var(--acc);
   --vp-cap-material: #a5674a;
+  --vp-solved-domain-material: #a96b4d;
 
   /* added by the Console/Vellum system */
   --surface-field: #e6e7e1;

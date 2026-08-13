@@ -37,6 +37,17 @@ describe('viewport material mode matrix', () => {
     }
   });
 
+  it('can tint or match the solved symmetry region from viewer preferences', () => {
+    const tinted = createMaterialLibrary('clay', null, 'dark', true);
+    expect((tinted.solvedSurfaces['horn-smooth'] as MeshStandardMaterial).color.getHexString())
+      .not.toBe((tinted.surfaces['horn-smooth'] as MeshStandardMaterial).color.getHexString());
+    tinted.all.forEach((material) => material.dispose());
+
+    const matched = createMaterialLibrary('clay', null, 'dark', false);
+    expect(matched.solvedSurfaces['horn-smooth']).toBe(matched.surfaces['horn-smooth']);
+    matched.all.forEach((material) => material.dispose());
+  });
+
   it('uses true flat shading for flat classes, including a face-normal zebra shader', () => {
     const clay = createMaterialLibrary('clay', null);
     expect((clay.surfaces['horn-smooth'] as MeshStandardMaterial).flatShading).toBe(false);

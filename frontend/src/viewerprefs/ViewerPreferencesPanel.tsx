@@ -38,6 +38,9 @@ export function ViewerPreferencesPanel({ preferences, onClose }: { preferences: 
       <TogglePreference label="Keyboard pan" checked={preferences.keyboardPanEnabled} onChange={(keyboardPanEnabled) => viewerPreferences.update({ keyboardPanEnabled })} />
       <TogglePreference label="Live updates" checked={preferences.liveUpdate} onChange={(liveUpdate) => viewerPreferences.update({ liveUpdate })} />
 
+      <h3>Geometry</h3>
+      <TogglePreference label="Tint solved symmetry region" checked={preferences.tintSolvedRegion} onChange={(tintSolvedRegion) => viewerPreferences.update({ tintSolvedRegion })} />
+
       <fieldset>
         <legend>Startup camera</legend>
         <label><input type="radio" name="startup-camera" checked={preferences.startupCameraMode === 'perspective'} onChange={() => setProjection('perspective')} />Perspective</label>

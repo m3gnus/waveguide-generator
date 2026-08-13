@@ -97,6 +97,8 @@ describe('CadLinkPanel', () => {
     act(() => { acknowledgement.click(); });
     expect(solve.disabled).toBe(false);
     expect([...host.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Rebuild mesh')?.disabled).toBe(false);
+    expect([...host.querySelectorAll<HTMLButtonElement>('button')].some((button) => button.textContent === 'Fusion CAD')).toBe(true);
+    expect([...host.querySelectorAll<HTMLButtonElement>('button')].some((button) => button.textContent === 'Parametric')).toBe(true);
   });
 
   it('maps Fusion presence and config freshness to one explicit action', () => {
