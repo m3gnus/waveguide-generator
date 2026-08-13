@@ -290,6 +290,16 @@ export class PreviewSocketManager {
 
   private onRevision(event: RevisionEvent): void {
     if (event.immediate) this.barrierRevision = event.revision;
+    // Loading a document is a discontinuity, not a late frame. The rendered
+    // revision is a floor that stops an older in-flight answer from replacing a
+    // newer one within one editing stream, and `New design` rewinds the counter
+    // to 1 -- so without clearing the floor here, every frame for the new
+    // document is older than the one on screen and gets dropped. The viewport
+    // then keeps showing the previous design, permanently stale, until the user
+    // makes as many edits as the old document had revisions.
+    if (event.reason === 'load' && event.revision < (this.snapshot.displayedRevision ?? 0)) {
+      this.update({ displayedRevision: null });
+    }
     this.update({ stale: event.revision !== this.snapshot.displayedRevision });
     if (event.immediate) {
       this.cancelPreviewTimers();
