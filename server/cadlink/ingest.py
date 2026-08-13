@@ -27,6 +27,9 @@ from server.platform.paths import data_paths
 from .wgreturn import WgReturnBundle, read_wgreturn
 
 
+IMPORT_MESH_PIPELINE_CONTRACT = "wg-import-solve-v2"
+
+
 class IngestRefusal(ValueError):
     """A stage-labelled validation or consistency refusal."""
 
@@ -306,7 +309,7 @@ def _cache_key(
     )
 
     payload = {
-        "import_pipeline_contract": "wg-import-solve-v1",
+        "import_pipeline_contract": IMPORT_MESH_PIPELINE_CONTRACT,
         "artifact_sha256": bundle.artifact_sha256,
         "manifest_sha256": bundle.manifest_sha256,
         "normalisation_transform": transform,
@@ -336,7 +339,7 @@ def _cache_lookup_key(
     return hashlib.sha256(
         _canonical(
             {
-                "import_pipeline_contract": "wg-import-solve-v1",
+                "import_pipeline_contract": IMPORT_MESH_PIPELINE_CONTRACT,
                 "artifact_sha256": bundle.artifact_sha256,
                 "manifest_sha256": bundle.manifest_sha256,
                 "sources": manifest["sources"],
