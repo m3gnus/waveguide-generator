@@ -16,6 +16,8 @@ from typing import Any
 from fastapi import APIRouter, FastAPI, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .directivity import render_directivity_heatmap_b64
+
 
 # Matches the live chart palette in frontend/src/results/EChart.tsx; the two
 # are a pair and must move together.
@@ -187,8 +189,8 @@ def _render_directivity(payload: dict[str, Any]) -> str | None:
             reference_label=payload.get("reference_label"),
         )
     with _render_lock:
-        return _plots().directivity_heatmap_from_legacy_dict(
-            payload["frequencies"], payload["directivity"], **kwargs
+        return render_directivity_heatmap_b64(
+            _plots(), payload["frequencies"], payload["directivity"], **kwargs
         )
 
 

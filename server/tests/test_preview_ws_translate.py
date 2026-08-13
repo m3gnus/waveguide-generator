@@ -9,6 +9,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from hornlab_mesher.config_builder import build_geometry_params, build_point_grid
 from hornlab_mesher.preview.api import build_preview_geometry
 
 from server.design.schema import DesignConfig
@@ -20,6 +21,59 @@ from server.preview.translate import design_to_mesher_config
 
 def _translate(payload: dict[str, object]) -> dict[str, object]:
     return design_to_mesher_config(DesignConfig.model_validate(payload))
+
+
+@pytest.mark.parametrize("morph_target", [0, 2], ids=["none", "circle"])
+def test_scalar_round_rosse_has_no_hidden_azimuth_morph(morph_target: int) -> None:
+    """None and zero-sized Circle settings must keep every meridian identical."""
+
+    config = _translate(
+        {
+            "formula": "R-OSSE",
+            "R": 140,
+            "r0": 12.7,
+            "a0": 15.5,
+            "a": 25,
+            "k": 2,
+            "m": 0.85,
+            "b": 0.2,
+            "r": 0.4,
+            "q": 3.4,
+            "tmax": 1,
+            "morph": {
+                "target_shape": morph_target,
+                "target_width": 0,
+                "target_height": 0,
+                "corner_radius": 0,
+                "rate": 3,
+                "fixed_part": 0,
+                "allow_shrinkage": 0,
+            },
+            "mesh": {
+                "angular_segments": 40,
+                "length_segments": 20,
+                "wall_thickness": 5,
+            },
+        }
+    )
+    parameters, _formula, _mode = build_geometry_params(config)
+    grid = build_point_grid(parameters)
+    phi_count = int(grid["grid_n_phi"])
+    axial_count = int(grid["grid_n_length"]) + 1
+    points = np.asarray(grid["inner_points"], dtype=float).reshape(
+        phi_count, axial_count, 3
+    )
+    radii = np.hypot(points[:, :, 0], points[:, :, 1])
+
+    np.testing.assert_allclose(
+        radii, np.broadcast_to(radii[0], radii.shape), rtol=0, atol=1e-12
+    )
+    np.testing.assert_allclose(
+        points[:, :, 2],
+        np.broadcast_to(points[0, :, 2], points[:, :, 2].shape),
+        rtol=0,
+        atol=1e-12,
+    )
 
 
 def test_osse_family_and_guiding_curve_golden() -> None:
