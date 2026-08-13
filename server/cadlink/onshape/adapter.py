@@ -25,6 +25,13 @@ import time
 from typing import Any, Callable, Literal, Mapping, Sequence
 
 from .client import OnshapeClient, OnshapeError, OnshapeHttpError
+from .datums import (
+    DATUM_FEATURE_NAME,
+    DATUM_FEATURE_PARAMETER,
+    DATUM_FEATURE_TYPE,
+    DATUM_STUDIO_NAME,
+    build_datum_featurescript,
+)
 from .native import FEATURE_TYPE, build_featurescript
 
 
@@ -69,6 +76,8 @@ class OnshapeTarget:
     variable_studio_element_id: str | None = None
     feature_studio_element_id: str | None = None
     native_feature_id: str | None = None
+    datum_feature_studio_element_id: str | None = None
+    datum_feature_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -373,6 +382,23 @@ class OnshapeAdapter:
             )
         return namespace
 
+    def read_feature_studio_source(
+        self, document_id: str, workspace_id: str, element_id: str
+    ) -> str:
+        """Read source before an update so a failed regeneration can roll back."""
+
+        response = self._client.get(
+            f"/featurestudios/d/{document_id}/w/{workspace_id}/e/{element_id}"
+        )
+        body = response.body if isinstance(response.body, Mapping) else {}
+        source = _string(body.get("contents"))
+        if source is None:
+            raise OnshapeAdapterError(
+                "Onshape did not return the existing WG datum source, so WG "
+                "refused to replace it without a rollback point."
+            )
+        return source
+
     def create_part_studio(
         self, document_id: str, workspace_id: str, name: str
     ) -> str:
@@ -398,6 +424,9 @@ class OnshapeAdapter:
         namespace: str,
         *,
         feature_id: str | None = None,
+        feature_type: str = FEATURE_TYPE,
+        feature_name: str = "WG Waveguide",
+        boolean_parameter: str = "buildEnclosure",
     ) -> dict[str, Any]:
         """Build the live-proven BTJson feature envelope and version context."""
 
@@ -427,8 +456,8 @@ class OnshapeAdapter:
         # The features endpoint accepts this BTJson envelope. The flatter
         # OpenAPI `btType` representation is rejected with an unhelpful 400.
         message: dict[str, Any] = {
-            "featureType": FEATURE_TYPE,
-            "name": "WG Waveguide",
+            "featureType": feature_type,
+            "name": feature_name,
             "suppressed": False,
             "namespace": namespace,
             "parameters": [
@@ -436,7 +465,7 @@ class OnshapeAdapter:
                     "type": 144,
                     "typeName": "BTMParameterBoolean",
                     "message": {
-                        "parameterId": "buildEnclosure",
+                        "parameterId": boolean_parameter,
                         "value": True,
                     },
                 }
@@ -509,6 +538,125 @@ class OnshapeAdapter:
             ),
             timeout=600.0,
         )
+
+    def add_datum_feature(
+        self,
+        document_id: str,
+        workspace_id: str,
+        part_studio_id: str,
+        namespace: str,
+    ) -> str:
+        """Add the single managed feature that owns every contract datum."""
+
+        path = f"/partstudios/d/{document_id}/w/{workspace_id}/e/{part_studio_id}/features"
+        response = self._client.post(
+            path,
+            json_body=self._feature_request(
+                document_id,
+                workspace_id,
+                part_studio_id,
+                namespace,
+                feature_type=DATUM_FEATURE_TYPE,
+                feature_name=DATUM_FEATURE_NAME,
+                boolean_parameter=DATUM_FEATURE_PARAMETER,
+            ),
+        )
+        body = response.body if isinstance(response.body, Mapping) else {}
+        feature = body.get("feature")
+        message = feature.get("message") if isinstance(feature, Mapping) else None
+        feature_id = (
+            _string(message.get("featureId")) if isinstance(message, Mapping) else None
+        ) or _string(body.get("featureId"))
+        if feature_id is None:
+            raise OnshapeAdapterError(
+                "Onshape added the WG datum feature but reported no feature id."
+            )
+        return feature_id
+
+    def update_datum_feature(
+        self,
+        document_id: str,
+        workspace_id: str,
+        part_studio_id: str,
+        feature_id: str,
+        namespace: str,
+    ) -> None:
+        """Regenerate the datum feature in place, preserving its feature id."""
+
+        path = (
+            f"/partstudios/d/{document_id}/w/{workspace_id}/e/{part_studio_id}"
+            f"/features/featureid/{feature_id}"
+        )
+        self._client.post(
+            path,
+            json_body=self._feature_request(
+                document_id,
+                workspace_id,
+                part_studio_id,
+                namespace,
+                feature_id=feature_id,
+                feature_type=DATUM_FEATURE_TYPE,
+                feature_name=DATUM_FEATURE_NAME,
+                boolean_parameter=DATUM_FEATURE_PARAMETER,
+            ),
+        )
+
+    def materialize_datums(
+        self,
+        document_id: str,
+        workspace_id: str,
+        part_studio_id: str,
+        source: str,
+        *,
+        feature_studio_id: str | None = None,
+        feature_id: str | None = None,
+    ) -> tuple[str, str]:
+        """Create or atomically update the managed datum source and feature.
+
+        Updating a Feature Studio and updating its Part Studio feature are two
+        API edits.  Keep the previous source and feature namespace so the
+        second edit can be reversed if regeneration is rejected.
+        """
+
+        studio_id = self.ensure_feature_studio(
+            document_id,
+            workspace_id,
+            element_id=feature_studio_id,
+            name=DATUM_STUDIO_NAME,
+        )
+        previous_source: str | None = None
+        if feature_id is not None:
+            previous_source = self.read_feature_studio_source(document_id, workspace_id, studio_id)
+        namespace = self.push_feature_studio_source(document_id, workspace_id, studio_id, source)
+        if feature_id is None:
+            return studio_id, self.add_datum_feature(
+                document_id, workspace_id, part_studio_id, namespace
+            )
+        try:
+            self.update_datum_feature(
+                document_id, workspace_id, part_studio_id, feature_id, namespace
+            )
+        except OnshapeError as update_error:
+            assert previous_source is not None
+            try:
+                previous_namespace = self.push_feature_studio_source(
+                    document_id, workspace_id, studio_id, previous_source
+                )
+                self.update_datum_feature(
+                    document_id,
+                    workspace_id,
+                    part_studio_id,
+                    feature_id,
+                    previous_namespace,
+                )
+            except OnshapeError as rollback_error:
+                raise OnshapeAdapterError(
+                    "Onshape rejected the WG datum update and also refused its "
+                    "automatic rollback. Open the document and inspect WG Datums "
+                    "before sending again."
+                ) from rollback_error
+            raise update_error
+        return studio_id, feature_id
 
     # -- parameters --------------------------------------------------------
 
@@ -714,6 +862,8 @@ def send_bundle(
         part_studio_id: str | None = None
         feature_studio_id: str | None = None
         native_feature_id: str | None = None
+        datum_feature_studio_id: str | None = None
+        datum_feature_id: str | None = None
     else:
         document_id = target.document_id
         workspace_id = target.workspace_id
@@ -722,6 +872,8 @@ def send_bundle(
         part_studio_id = target.part_studio_element_id
         feature_studio_id = target.feature_studio_element_id
         native_feature_id = target.native_feature_id
+        datum_feature_studio_id = target.datum_feature_studio_element_id
+        datum_feature_id = target.datum_feature_id
         summary = adapter.document_summary(document_id)
         if summary.get("trashed"):
             raise OnshapeAdapterError(
@@ -813,6 +965,25 @@ def send_bundle(
             document_id, workspace_id, part_studio_id, variable_studio_id
         )
 
+    if part_studio_id is None:
+        raise OnshapeAdapterError(
+            "Onshape did not report the Part Studio that should own the WG datums."
+        )
+    try:
+        datum_source = build_datum_featurescript(manifest)
+    except ValueError as exc:
+        raise OnshapeAdapterError(
+            f"The CAD-link datum catalogue cannot be materialized in Onshape: {exc}"
+        ) from exc
+    datum_feature_studio_id, datum_feature_id = adapter.materialize_datums(
+        document_id,
+        workspace_id,
+        part_studio_id,
+        datum_source,
+        feature_studio_id=datum_feature_studio_id,
+        feature_id=datum_feature_id,
+    )
+
     return OnshapeSendResult(
         target=OnshapeTarget(
             document_id=document_id,
@@ -822,6 +993,8 @@ def send_bundle(
             variable_studio_element_id=variable_studio_id,
             feature_studio_element_id=feature_studio_id,
             native_feature_id=native_feature_id,
+            datum_feature_studio_element_id=datum_feature_studio_id,
+            datum_feature_id=datum_feature_id,
         ),
         document_name=document_name,
         document_url=adapter.client.document_url(document_id, workspace_id),

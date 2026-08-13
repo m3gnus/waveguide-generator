@@ -83,6 +83,8 @@ _SCHEMA = (
       variable_studio_element_id TEXT,
       feature_studio_element_id TEXT,
       native_feature_id TEXT,
+      datum_feature_studio_element_id TEXT,
+      datum_feature_id TEXT,
       build_mode TEXT,
       document_name TEXT NOT NULL,
       is_public INTEGER NOT NULL DEFAULT 0,
@@ -121,7 +123,7 @@ class CadLinkStore:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._lock, self._transaction() as conn:
             version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-            if version not in {0, 1, 2, 3, 4, 5}:
+            if version not in {0, 1, 2, 3, 4, 5, 6}:
                 raise RuntimeError(f"unsupported cadlink.db schema version {version}")
             for statement in _SCHEMA:
                 conn.execute(statement)
@@ -136,11 +138,13 @@ class CadLinkStore:
             for column in (
                 "feature_studio_element_id",
                 "native_feature_id",
+                "datum_feature_studio_element_id",
+                "datum_feature_id",
                 "build_mode",
             ):
                 if column not in onshape_columns:
                     conn.execute(f"ALTER TABLE onshape_links ADD COLUMN {column} TEXT")
-            conn.execute("PRAGMA user_version = 5")
+            conn.execute("PRAGMA user_version = 6")
         self._initialized = True
 
     def get_design(self, design_id: str) -> dict[str, Any] | None:
@@ -494,6 +498,8 @@ class CadLinkStore:
         last_geometry_hash: str | None,
         feature_studio_element_id: str | None = None,
         native_feature_id: str | None = None,
+        datum_feature_studio_element_id: str | None = None,
+        datum_feature_id: str | None = None,
         build_mode: str | None = None,
         saved_at: str | None = None,
     ) -> dict[str, Any]:
@@ -512,10 +518,11 @@ class CadLinkStore:
                 INSERT INTO onshape_links (
                   design_id, account_id, document_id, workspace_id, blob_element_id,
                   part_studio_element_id, variable_studio_element_id,
-                  feature_studio_element_id, native_feature_id, build_mode,
+                  feature_studio_element_id, native_feature_id,
+                  datum_feature_studio_element_id, datum_feature_id, build_mode,
                   document_name, is_public, last_export_id, last_sequence,
                   last_design_hash, last_geometry_hash, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (design_id, account_id) DO UPDATE SET
                   document_id = excluded.document_id,
                   workspace_id = excluded.workspace_id,
@@ -524,6 +531,8 @@ class CadLinkStore:
                   variable_studio_element_id = excluded.variable_studio_element_id,
                   feature_studio_element_id = excluded.feature_studio_element_id,
                   native_feature_id = excluded.native_feature_id,
+                  datum_feature_studio_element_id = excluded.datum_feature_studio_element_id,
+                  datum_feature_id = excluded.datum_feature_id,
                   build_mode = excluded.build_mode,
                   document_name = excluded.document_name,
                   is_public = excluded.is_public,
@@ -543,6 +552,8 @@ class CadLinkStore:
                     variable_studio_element_id,
                     feature_studio_element_id,
                     native_feature_id,
+                    datum_feature_studio_element_id,
+                    datum_feature_id,
                     build_mode,
                     document_name,
                     1 if is_public else 0,

@@ -22,6 +22,11 @@ export interface OnshapeLink {
   isPublic: boolean;
   partStudioElementId: string | null;
   variableStudioElementId: string | null;
+  featureStudioElementId: string | null;
+  nativeFeatureId: string | null;
+  datumFeatureStudioElementId: string | null;
+  datumFeatureId: string | null;
+  buildMode: 'import' | 'native';
   lastSequence: number | null;
   updatedAt: string;
 }

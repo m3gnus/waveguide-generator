@@ -128,6 +128,8 @@ def _link_payload(row: dict[str, Any] | None) -> dict[str, Any] | None:
         "variableStudioElementId": row.get("variable_studio_element_id"),
         "featureStudioElementId": row.get("feature_studio_element_id"),
         "nativeFeatureId": row.get("native_feature_id"),
+        "datumFeatureStudioElementId": row.get("datum_feature_studio_element_id"),
+        "datumFeatureId": row.get("datum_feature_id"),
         "buildMode": row.get("build_mode") or "import",
         "lastSequence": row.get("last_sequence"),
         "updatedAt": row.get("updated_at"),
@@ -295,6 +297,8 @@ def _push(
             variable_studio_element_id=existing.get("variable_studio_element_id"),
             feature_studio_element_id=existing.get("feature_studio_element_id"),
             native_feature_id=existing.get("native_feature_id"),
+            datum_feature_studio_element_id=existing.get("datum_feature_studio_element_id"),
+            datum_feature_id=existing.get("datum_feature_id"),
         )
         if existing
         else None
@@ -332,6 +336,8 @@ def _push(
         variable_studio_element_id=result.target.variable_studio_element_id,
         feature_studio_element_id=result.target.feature_studio_element_id,
         native_feature_id=result.target.native_feature_id,
+        datum_feature_studio_element_id=result.target.datum_feature_studio_element_id,
+        datum_feature_id=result.target.datum_feature_id,
         build_mode=result.build_mode,
         document_name=result.document_name,
         is_public=result.is_public,
