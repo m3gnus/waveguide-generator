@@ -1,0 +1,26 @@
+# Waveguide Generator documentation
+
+This directory separates current product contracts from plans and dated evidence. A
+document under `history/`, `legacy/`, or `validation/` describes a past state; it is not
+an instruction to reimplement that state.
+
+| Document | Audience | Status | Authority / last verified |
+|---|---|---|---|
+| [User guide](USER-GUIDE.md) | Users | Current overview | UI and API, 2026-08-13 |
+| [Development guide](DEVELOPMENT.md) | Contributors and AI agents | Current orientation | Repository layout and tests, 2026-08-13 |
+| [Configuration format](reference/CFG-FORMAT.md) | Developers and integrations | Canonical contract | `server/design/`, 2026-08-13 |
+| [Binary frame format](reference/FRAME-SPEC.md) | Preview clients and servers | Canonical contract | `server/protocol/` and `shared/js/` |
+| [WebSocket protocol](reference/WS-PROTOCOL.md) | Preview/jobs clients and servers | Canonical contract | `server/preview/`, `server/jobs/`, and frontend socket managers |
+| [Solve symmetry](reference/SYMMETRY-CONTRACT.md) | Solver and geometry developers | Canonical contract | `server/solver/symmetry.py` and its tests |
+| [Result contract](reference/RESULT-CONTRACTS.md) | Solver, chart, and export developers | Canonical contract | `server/solver/result_mapping.py`, 2026-08-13 |
+| [Export contract](reference/EXPORT-CONTRACTS.md) | UI, API, and CAD developers | Canonical contract | `server/exports/` and `frontend/src/results/`, 2026-08-13 |
+| [Release readiness](plans/RELEASE-READINESS.md) | Maintainers | Active checklist | Local repository evidence, 2026-08-13 |
+| [Run-export follow-ups](plans/RUN-EXPORT-FOLLOWUPS.md) | Product and export developers | Active plan | Remaining work only, 2026-08-13 |
+| [V1 compatibility](legacy/V1-COMPATIBILITY.md) | Maintainers and migration work | Maintained legacy summary | Current code plus archived v1 inventory |
+| [August 2026 rebuild](history/REBUILD-2026-08.md) | Maintainers | Historical summary | Git history; not an implementation brief |
+| [August 2026 validation](validation/2026-08/README.md) | Maintainers | Dated evidence | Captured machines and commits; not current release status |
+
+The active CAD-link plans intentionally remain at the workspace root while another
+task is editing them. When that plan closes, public-safe authoritative material will
+be curated into `plans/cad-link/`; private or superseded working notes belong in the
+workspace archive.

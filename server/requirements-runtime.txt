@@ -14,7 +14,7 @@ pillow==12.2.0
 # default and what it calls its production backend. That holds on Windows and
 # Linux. It does not hold on Apple Silicon, whose ICD exposes the GPU and no CPU
 # device, so BEMPP assembles on the numba fallback there whether or not this is
-# installed (measured 2026-08-08; docs/P6-CUTOVER-PLAN.md section 3, item 7).
+# installed (measured 2026-08-08; docs/validation/2026-08/WINDOWS-PERFORMANCE.md).
 # The pin stays unconditional anyway. It costs a few MB of prebuilt wheels, and
 # keeping it is what lets the capability probe distinguish an installed
 # runtime/device failure from a missing package and report the device inventory
