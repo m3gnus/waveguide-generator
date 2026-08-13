@@ -49,6 +49,10 @@ router = APIRouter(prefix="/api/cadlink/onshape", tags=["cadlink"])
 
 # A connection check is two API calls; the panel may ask for it on every mount.
 CONNECTION_CACHE_TTL_S = 300.0
+# Failures are cached far more briefly: long enough to stop a remount loop from
+# hammering a failing endpoint, short enough that fixing the key pair or the
+# network shows up almost immediately.
+CONNECTION_FAILURE_TTL_S = 30.0
 BUNDLE_SUBDIRECTORY = Path("cadlink") / "onshape"
 
 
@@ -169,7 +173,7 @@ async def connection(request: Request, refresh: bool = False) -> dict[str, Any]:
     if (
         not refresh
         and isinstance(cached, dict)
-        and now - float(cached.get("checkedAt", 0.0)) < CONNECTION_CACHE_TTL_S
+        and now - float(cached.get("checkedAt", 0.0)) < float(cached.get("ttl", CONNECTION_CACHE_TTL_S))
     ):
         return {**state, **cached["payload"]}
 
@@ -179,13 +183,23 @@ async def connection(request: Request, refresh: bool = False) -> dict[str, Any]:
         plan = await asyncio.to_thread(client.plan_summary)
     except OnshapeError as exc:
         # Advisory route: report unreachable rather than failing the panel.
-        return {
-            **state,
+        # A failure is cached too, on a shorter clock. Without this, every mount
+        # of the panel retries two API calls against an endpoint already known
+        # to be failing -- and a bad key pair answers 401 just as fast as a good
+        # one answers 200, so nothing throttles the retries but the user's
+        # patience. The short TTL keeps a transient outage recovering quickly.
+        failure = {
             "reachable": False,
             "account": None,
             "plan": None,
             "detail": str(exc),
         }
+        request.app.state.onshape_connection = {
+            "checkedAt": now,
+            "payload": failure,
+            "ttl": CONNECTION_FAILURE_TTL_S,
+        }
+        return {**state, **failure}
 
     account_id = str(session.get("id") or "") or None
     payload = {
@@ -201,7 +215,11 @@ async def connection(request: Request, refresh: bool = False) -> dict[str, Any]:
         },
         "rateLimitRemaining": client.last_rate_limit_remaining,
     }
-    request.app.state.onshape_connection = {"checkedAt": now, "payload": payload}
+    request.app.state.onshape_connection = {
+        "checkedAt": now,
+        "payload": payload,
+        "ttl": CONNECTION_CACHE_TTL_S,
+    }
     if account_id:
         request.app.state.onshape_account_id = account_id
     return {**state, **payload}
