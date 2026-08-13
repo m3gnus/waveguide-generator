@@ -2,14 +2,14 @@ import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
+import type { CadRealizedDimensions, CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
 import { buildImportedSubmission, importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { cadLinkCoordinatorBridge } from '../shell/CadLinkCoordinator';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
-import { ParamPanel, domainName, parameterRevealRequest, requestParameterReveal, resolveOuterBodyMode, symmetrySummary } from './ParamPanel';
+import { ParamPanel, RealizedDimensionsSection, domainName, parameterRevealRequest, requestParameterReveal, resolveOuterBodyMode, symmetrySummary } from './ParamPanel';
 
 /**
  * The panel reads capabilities and symmetry through React Query, exactly as
@@ -134,6 +134,7 @@ describe('ParamPanel inventory UX', () => {
     act(() => useDesignStore.getState().setFamily('OSSE'));
     const titles = () => [...host.querySelectorAll<HTMLElement>('[data-section]')].map((section) => section.dataset.section);
     expect(titles()).toEqual(['Model Type', 'Profile Dimensions', 'Throat Extension', 'Morph Target', 'Wall & Enclosure', 'Guiding Curve', 'Surface sampling']);
+    expect(host.querySelector('[data-section="Realized dimensions"]')).toBeNull();
     act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
     expect(titles()).toEqual(['Frequency Sweep', 'Directivity Map', 'Source Definition', 'Solve options', 'Solve & export mesh', 'Output & Passthrough']);
     expect(host.querySelector('#solve-engine')).not.toBeNull();
@@ -147,7 +148,7 @@ describe('ParamPanel inventory UX', () => {
       workspaceModeStore.setMode('cad');
     });
     const titles = () => [...host.querySelectorAll<HTMLElement>('[data-section]')].map((section) => section.dataset.section);
-    expect(titles()).toEqual(['Linked design', 'Model Type', 'Profile Dimensions', 'Throat Extension', 'Morph Target', 'Wall & Enclosure', 'Guiding Curve']);
+    expect(titles()).toEqual(['Linked design', 'Model Type', 'Profile Dimensions', 'Throat Extension', 'Morph Target', 'Wall & Enclosure', 'Guiding Curve', 'Realized dimensions']);
     expect(host.textContent).not.toContain('Surface sampling');
 
     act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
@@ -158,6 +159,69 @@ describe('ParamPanel inventory UX', () => {
     expect(host.textContent).toContain('Metal · full 3-D · free space');
     expect(host.textContent).toContain('Ingested cut planesx0');
     expect(host.textContent).toContain('Effective grid −180° … 180°');
+  });
+
+  it('renders manifest interface roles as read-only per-instance facts and omits informational roles', () => {
+    const snapshot: CadRealizedDimensions = {
+      state: 'current', instanceId: 'instance-a', exportId: 'wge_4',
+      parameters: [
+        { instanceId: 'instance-a', name: 'wg_tritonia_v_throat_dia', value: 25.4, unit: 'mm', role: 'interface' },
+        { instanceId: 'instance-a', name: 'wg_tritonia_v_mouth_w', value: 348.75, unit: 'mm', role: 'interface' },
+        { instanceId: 'instance-a', name: 'wg_tritonia_v_mouth_h', value: 584.3, unit: 'mm', role: 'interface' },
+        { instanceId: 'instance-a', name: 'wg_tritonia_v_depth', value: 284.6, unit: 'mm', role: 'interface' },
+        { instanceId: 'instance-a', name: 'wg_tritonia_v_wall_t', value: 5, unit: 'mm', role: 'interface' },
+        { instanceId: 'instance-a', name: 'wg_tritonia_v_vertical_offset', value: -12, unit: 'mm', role: 'interface' },
+        { instanceId: 'instance-a', name: 'wg_tritonia_v_enc_w', value: 344, unit: 'mm', role: 'interface' },
+        { instanceId: 'instance-a', name: 'wg_tritonia_v_enc_h', value: 579, unit: 'mm', role: 'interface' },
+        { instanceId: 'instance-a', name: 'wg_tritonia_v_enc_depth', value: 280, unit: 'mm', role: 'interface' },
+        { instanceId: 'instance-a', name: 'wg_tritonia_v_future_api_value', value: 12, unit: 'mm', role: 'interface' },
+        { instanceId: 'instance-a', name: 'wg_tritonia_v_coverage_h', value: 90, unit: null, role: 'informational' },
+      ],
+    };
+
+    act(() => root.render(<RealizedDimensionsSection snapshot={snapshot}/>));
+
+    const rows = host.querySelectorAll<HTMLElement>('[data-role="interface"]');
+    expect(rows).toHaveLength(10);
+    expect([...rows].every((row) => row.dataset.instanceId === 'instance-a')).toBe(true);
+    expect(host.textContent).toContain('Realized throat diameter');
+    expect(host.textContent).toContain('Mouth width');
+    expect(host.textContent).toContain('Mouth height');
+    expect(host.textContent).toContain('Realized depth');
+    expect(host.textContent).toContain('Wall thickness');
+    expect(host.textContent).toContain('Vertical offset');
+    expect(host.textContent).toContain('Enclosure width');
+    expect(host.textContent).toContain('Enclosure height');
+    expect(host.textContent).toContain('Enclosure depth');
+    expect(host.textContent).toContain('wg_tritonia_v_future_api_value');
+    expect(host.textContent).not.toContain('coverage_h');
+    expect(host.textContent).toContain('the values WG published to CAD and the cabinet references');
+    expect(host.querySelector('input')).toBeNull();
+  });
+
+  it('tells the truth for no link, pre-capture, missing-registry, and stale-export states', () => {
+    const empty = (state: CadRealizedDimensions['state']): CadRealizedDimensions => ({
+      state, instanceId: state === 'no_link' ? null : 'instance-a', exportId: state === 'no_link' ? null : 'wge_4', parameters: [],
+    });
+    const absent: Array<[CadRealizedDimensions['state'], string]> = [
+      ['no_link', 'No CAD link yet'],
+      ['not_captured', 'This CAD link predates parameter capture'],
+      ['export_missing', 'not available in this WG registry'],
+    ];
+    for (const [state, copy] of absent) {
+      act(() => root.render(<RealizedDimensionsSection snapshot={empty(state)}/>));
+      expect(host.textContent).toContain(copy);
+      expect(host.querySelector('.realized-dimension-list')).toBeNull();
+    }
+
+    act(() => root.render(<RealizedDimensionsSection snapshot={{
+      state: 'stale', instanceId: 'instance-a', exportId: 'wge_4',
+      parameters: [{ instanceId: 'instance-a', name: 'wg_tritonia_v_depth', value: 190, unit: 'mm', role: 'interface' }],
+    }}/>));
+    expect(host.textContent).toContain('From an older CAD export');
+    expect(host.textContent).toContain('historical, not current dimensions');
+    expect(host.querySelector('.realized-dimension-list.stale')).not.toBeNull();
+    expect(host.textContent).toContain('190mm');
   });
 
   it('renders every moved CAD control in the Simulation rail and submits its visible crossover state', () => {

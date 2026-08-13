@@ -58,6 +58,23 @@
 .linked-design-card span:not(.cad-connection-dot) { color: var(--fg3); font-size: var(--text-micro); line-height: 1.4; }
 .linked-design-drift { margin: 5px 0; color: var(--amber); font-size: var(--text-micro); }
 .linked-design-action { width: 100%; min-height: 30px; }
+.realized-dimensions-empty, .realized-dimensions-warning { display: grid; gap: 3px; padding: 9px; border: 1px solid var(--hair-soft); background: var(--ov1); }
+.realized-dimensions-empty b, .realized-dimensions-warning b { color: var(--fg1); font-size: var(--text-base); }
+.realized-dimensions-empty span, .realized-dimensions-warning span { color: var(--fg3); font-size: var(--text-micro); line-height: 1.4; }
+.realized-dimensions-warning { border-color: color-mix(in srgb, var(--amber) 55%, var(--hair)); border-left: 3px solid var(--amber); background: color-mix(in srgb, var(--amber) 6%, var(--surface-panel)); }
+.realized-dimensions-intro { margin: 0 0 6px; color: var(--fg3); font-size: var(--text-micro); line-height: 1.45; }
+.realized-dimensions-meta { display: block; margin: 0 0 6px; color: var(--fg4); font-size: var(--text-micro); }
+.realized-dimensions-meta code { color: var(--fg3); font-family: var(--mono); }
+.realized-dimension-list { margin: 0; border: 1px solid color-mix(in srgb, var(--acc) 34%, var(--hair)); background: color-mix(in srgb, var(--acc) 4%, var(--surface-panel)); }
+.realized-dimension-list.stale { border-color: color-mix(in srgb, var(--amber) 42%, var(--hair)); background: color-mix(in srgb, var(--amber) 3%, var(--surface-panel)); }
+.realized-dimension-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; min-height: 36px; padding: 4px 7px; border-top: 1px solid var(--hair-soft); }
+.realized-dimension-row:first-child { border-top: 0; }
+.realized-dimension-row dt { min-width: 0; }
+.realized-dimension-row dt span, .realized-dimension-row dt code { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.realized-dimension-row dt span { color: var(--fg2); font-size: var(--text-base); }
+.realized-dimension-row dt code { margin-top: 1px; color: var(--fg4); font-size: var(--text-micro); }
+.realized-dimension-row dd { margin: 0; color: var(--fg); font: 600 var(--text-base) var(--mono); }
+.realized-dimension-row dd small { margin-left: 4px; color: var(--fg3); font: var(--text-micro) var(--ui); }
 .cad-mode-empty { display: grid; gap: 6px; margin: 10px 8px; padding: 14px; border: 1px solid color-mix(in srgb, var(--acc) 38%, var(--hair)); background: color-mix(in srgb, var(--acc) 6%, var(--surface-panel)); }
 .cad-mode-empty span { color: var(--fg3); font-size: var(--text-micro); }
 .cad-mode-empty button { justify-content: center; min-height: 30px; }
@@ -164,6 +181,11 @@
   .section-body > .linked-design-card,
   .section-body > .linked-design-drift,
   .section-body > .linked-design-action,
+  .section-body > .realized-dimensions-empty,
+  .section-body > .realized-dimensions-warning,
+  .section-body > .realized-dimensions-intro,
+  .section-body > .realized-dimensions-meta,
+  .section-body > .realized-dimension-list,
   .section-body > .cad-solve-fact,
   .section-body > .effective-grid-readout,
   .section-body > .cad-mesh-intro,

@@ -42,6 +42,7 @@ const closedFusion: FusionCadStatus = {
   cadApplication: 'fusion360', state: 'closed', processRunning: false, running: false, updatedAt: null,
   documentName: null, documentId: null, currentFormula: 'OSSE', fusionFormula: null, link: null,
   wgChangesAvailable: false, fusionChangesAvailable: false,
+  realizedDimensions: { state: 'link_unavailable', instanceId: null, exportId: null, parameters: [] },
 };
 const currentFusion: FusionCadStatus = {
   ...closedFusion,
@@ -54,6 +55,7 @@ const currentFusion: FusionCadStatus = {
     documentSignatureHash: 'sha256:return-state', documentBodyCount: 3, sourceStateHash: 'sha256:sources',
     exportId: 'wge_2', exportSequence: '2',
   },
+  realizedDimensions: { state: 'current', instanceId: 'instance-a', exportId: 'wge_2', parameters: [] },
 };
 
 function CadLinkTestSurface() {

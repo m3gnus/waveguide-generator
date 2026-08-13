@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { convertDesignToFreeform } from '../api/designIo';
+import type { CadRealizedDimensions, CadRealizedParameter } from '../api/cadlink';
 import { importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { postSymmetry, toSolveDesign, type SymmetryResolution } from '../jobs/actions';
 import { usePreferences } from '../prefs/preferences';
@@ -546,6 +547,113 @@ function LinkedDesignCard() {
   </Section>;
 }
 
+const REALIZED_DIMENSION_LABELS: ReadonlyArray<{ suffix: string; label: string }> = [
+  { suffix: '_throat_dia', label: 'Realized throat diameter' },
+  { suffix: '_mouth_w', label: 'Mouth width' },
+  { suffix: '_mouth_h', label: 'Mouth height' },
+  { suffix: '_depth', label: 'Realized depth' },
+  { suffix: '_wall_t', label: 'Wall thickness' },
+  { suffix: '_vertical_offset', label: 'Vertical offset' },
+  { suffix: '_enc_w', label: 'Enclosure width' },
+  { suffix: '_enc_h', label: 'Enclosure height' },
+  { suffix: '_enc_depth', label: 'Enclosure depth' },
+  { suffix: '_enc_edge', label: 'Enclosure edge radius' },
+  { suffix: '_enc_x0', label: 'Enclosure X minimum' },
+  { suffix: '_enc_y0', label: 'Enclosure Y minimum' },
+  { suffix: '_enc_z_front', label: 'Enclosure front Z' },
+];
+
+function realizedDimensionLabel(name: string): string {
+  return realizedDimensionDefinition(name)?.label ?? name;
+}
+
+function realizedDimensionDefinition(name: string): typeof REALIZED_DIMENSION_LABELS[number] | undefined {
+  // `enc_depth` also ends in `depth`; prefer the most specific contract suffix
+  // while retaining the table's semantic order for presentation.
+  return REALIZED_DIMENSION_LABELS
+    .filter(({ suffix }) => name.endsWith(suffix))
+    .sort((left, right) => right.suffix.length - left.suffix.length)[0];
+}
+
+function realizedDimensionOrder(parameter: CadRealizedParameter): number {
+  const definition = realizedDimensionDefinition(parameter.name);
+  const index = definition ? REALIZED_DIMENSION_LABELS.indexOf(definition) : -1;
+  return index < 0 ? REALIZED_DIMENSION_LABELS.length : index;
+}
+
+function formatRealizedValue(value: number): string {
+  const normalized = Object.is(value, -0) ? 0 : value;
+  return normalized.toFixed(3).replace(/\.000$/, '').replace(/(\.\d*?)0+$/, '$1');
+}
+
+const REALIZED_EMPTY_COPY: Record<Exclude<CadRealizedDimensions['state'], 'current' | 'stale'>, { title: string; detail: string }> = {
+  no_link: {
+    title: 'No CAD link yet',
+    detail: 'Send this design to Fusion to publish cabinet-reference dimensions.',
+  },
+  link_unavailable: {
+    title: 'Linked instance unavailable',
+    detail: 'Open the linked design in Fusion so WG can identify its exact instance and export.',
+  },
+  export_missing: {
+    title: 'Linked export unavailable',
+    detail: 'This Fusion link\'s exact export is not available in this WG registry.',
+  },
+  not_captured: {
+    title: 'Realized dimensions were not captured',
+    detail: 'This CAD link predates parameter capture. Send the design to Fusion again to publish them.',
+  },
+  unavailable: {
+    title: 'Realized dimensions unavailable',
+    detail: 'WG could not read a valid parameter table from the linked export manifest.',
+  },
+};
+
+/** D7a outputs are evidence, never controls. Their manifest role decides what
+ * belongs here; suffixes only supply friendly labels and a stable visual order. */
+export function RealizedDimensionsSection({ snapshot }: { snapshot: CadRealizedDimensions | null }) {
+  const interfaceParameters = (snapshot?.parameters ?? [])
+    .filter((parameter) => parameter.role === 'interface')
+    .sort((left, right) => realizedDimensionOrder(left) - realizedDimensionOrder(right)
+      || left.name.localeCompare(right.name));
+  const valuesAvailable = snapshot?.state === 'current' || snapshot?.state === 'stale';
+  const empty = snapshot && snapshot.state !== 'current' && snapshot.state !== 'stale'
+    ? REALIZED_EMPTY_COPY[snapshot.state]
+    : null;
+
+  return <Section title="Realized dimensions" description="Read-only dimensions published by WG as the cabinet-facing CAD interface." forceOpen={false}>
+    {!snapshot && <div className="realized-dimensions-empty" role="status"><b>Checking linked export…</b><span>WG is resolving the active Fusion instance and its published parameter table.</span></div>}
+    {empty && <div className="realized-dimensions-empty" role="status"><b>{empty.title}</b><span>{empty.detail}</span></div>}
+    {valuesAvailable && snapshot.state === 'stale' && <div className="realized-dimensions-warning" role="status"><b>From an older CAD export</b><span>These values were published before the design now on screen changed. They are historical, not current dimensions.</span></div>}
+    {valuesAvailable && <>
+      <p className="realized-dimensions-intro">These read-only facts are the values WG published to CAD and the cabinet references. Change the formula parameters above, then rebuild in Fusion, to produce new values.</p>
+      <small className="realized-dimensions-meta">Instance <code>{snapshot.instanceId ?? 'unknown'}</code> · export <code>{snapshot.exportId ?? 'unknown'}</code></small>
+      {interfaceParameters.length > 0
+        ? <dl className={`realized-dimension-list${snapshot.state === 'stale' ? ' stale' : ''}`}>
+          {interfaceParameters.map((parameter) => <div
+            className="realized-dimension-row"
+            data-instance-id={parameter.instanceId ?? ''}
+            data-role={parameter.role}
+            key={`${parameter.instanceId ?? 'unknown'}:${parameter.name}`}
+          >
+            <dt><span>{realizedDimensionLabel(parameter.name)}</span><code>{parameter.name}</code></dt>
+            <dd>{formatRealizedValue(parameter.value)}{parameter.unit && <small>{parameter.unit}</small>}</dd>
+          </div>)}
+        </dl>
+        : <div className="realized-dimensions-empty" role="status"><b>No interface-role dimensions</b><span>The manifest contains no dimensions marked for the cabinet-facing CAD interface.</span></div>}
+    </>}
+  </Section>;
+}
+
+function RealizedDimensionsCard() {
+  const cadCoordinator = useSyncExternalStore(
+    cadLinkCoordinatorBridge.subscribe,
+    cadLinkCoordinatorBridge.getSnapshot,
+    cadLinkCoordinatorBridge.getSnapshot,
+  );
+  return <RealizedDimensionsSection snapshot={cadCoordinator.fusionStatus?.realizedDimensions ?? null}/>;
+}
+
 function CadFrequencySweep() {
   const cadReturn = useCadReturnStore();
   const solveStore = useSolveOptionsStore();
@@ -791,6 +899,7 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
         </div>)
         : <>
           {definitions.map(renderRegistrySection)}
+          {!searching && tab === 'geometry' && <RealizedDimensionsCard/>}
           {!searching && tab === 'simulation' && !ingestRecord && <CadSimulationEmpty/>}
           {!searching && tab === 'simulation' && ingestRecord && <>
             <Section title="Frequency Sweep" description="The explicit range submitted with this imported CAD geometry." forceOpen={false}><CadFrequencySweep/></Section>

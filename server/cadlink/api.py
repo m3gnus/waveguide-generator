@@ -8,7 +8,7 @@ import json
 import math
 from pathlib import Path
 import re
-from typing import Any
+from typing import Any, Mapping
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.responses import PlainTextResponse
@@ -73,6 +73,95 @@ class FusionReturnRequest(BaseModel):
 
 
 router = APIRouter(prefix="/api/cadlink", tags=["cadlink"])
+
+
+def _realized_dimensions_payload(
+    status: Mapping[str, Any],
+    store: CadLinkStore,
+    *,
+    current_design_hash: str,
+) -> dict[str, Any]:
+    """Read the linked export's immutable CAD parameter contract."""
+
+    link = status.get("link")
+    if not isinstance(link, Mapping):
+        return {
+            # A closed/offline Fusion session cannot prove the design has never
+            # been linked: there may be several documents and no active instance
+            # from which to select the exact immutable export.
+            "state": (
+                "no_link" if status.get("state") == "not_linked" else "link_unavailable"
+            ),
+            "instanceId": None,
+            "exportId": None,
+            "parameters": [],
+        }
+
+    instance_id = link.get("instanceId")
+    instance_id = instance_id if isinstance(instance_id, str) and instance_id else None
+    export_id = link.get("exportId")
+    export_id = export_id if isinstance(export_id, str) and export_id else None
+    base = {
+        "instanceId": instance_id,
+        "exportId": export_id,
+        "parameters": [],
+    }
+    if export_id is None:
+        return {"state": "export_missing", **base}
+
+    exported = store.get_export(export_id)
+    if exported is None:
+        return {"state": "export_missing", **base}
+    try:
+        manifest = json.loads(str(exported["manifest_json"]))
+    except (KeyError, UnicodeError, ValueError, TypeError, json.JSONDecodeError):
+        return {"state": "unavailable", **base}
+    if not isinstance(manifest, Mapping):
+        return {"state": "unavailable", **base}
+
+    raw_parameters = manifest.get("parameters")
+    if not isinstance(raw_parameters, list) or not raw_parameters:
+        return {"state": "not_captured", **base}
+
+    parameters: list[dict[str, Any]] = []
+    for raw in raw_parameters:
+        if not isinstance(raw, Mapping):
+            continue
+        name = raw.get("name")
+        value = raw.get("value")
+        if (
+            not isinstance(name, str)
+            or not name
+            or isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+        ):
+            continue
+        unit = raw.get("unit")
+        role = raw.get("role")
+        # Do not infer interface membership from a suffix list. The manifest role
+        # is the API boundary, while a missing role keeps pre-role bundles aligned
+        # with the existing CAD adapters' backwards-compatible interpretation.
+        parameters.append(
+            {
+                "instanceId": instance_id,
+                "name": name,
+                "value": float(value),
+                "unit": unit if isinstance(unit, str) and unit else None,
+                "role": role if isinstance(role, str) and role else "interface",
+            }
+        )
+    if not parameters:
+        return {"state": "unavailable", **base}
+
+    # The immutable export row, not the live Fusion freshness aggregate, says
+    # whether these particular values describe the design currently on screen.
+    payload_state = (
+        "current"
+        if exported.get("design_hash") == current_design_hash
+        else "stale"
+    )
+    return {"state": payload_state, **base, "parameters": parameters}
 
 
 def _return_listing(workspace_root: Path) -> list[dict[str, Any]]:
@@ -219,15 +308,24 @@ async def fusion_status(
             ):
                 returned_bundle = candidate_path
                 break
-    return await asyncio.to_thread(
+    current_hash = design_hash(payload.design)
+    status = await asyncio.to_thread(
         read_fusion_status,
         Path(request.app.state.data_dir),
-        current_design_hash=design_hash(payload.design),
+        current_design_hash=current_hash,
         current_formula=payload.design.root.formula,
         design_id=payload.identity.design_id if payload.identity else None,
         process_running=await asyncio.to_thread(fusion_process_running),
         returned_bundle=returned_bundle,
     )
+    store: CadLinkStore = request.app.state.cadlink_store
+    status["realizedDimensions"] = await asyncio.to_thread(
+        _realized_dimensions_payload,
+        status,
+        store,
+        current_design_hash=current_hash,
+    )
+    return status
 
 
 @router.post("/request-fusion-return")
