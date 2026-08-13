@@ -25,6 +25,27 @@ _FREQUENCY_SHAPED_RESULT_FIELDS = (
 )
 
 
+def _set_frequency_shaped_field(result: Any, field: str, value: np.ndarray) -> None:
+    """Assign a sorted native array, respecting solver compatibility aliases.
+
+    ``hornlab_bempp_bem.SolveResult.directivity_db`` is a read-only alias for
+    its stored ``spl_db`` field, while Metal stores ``directivity_db``
+    directly.  Keep that difference at this adapter boundary rather than
+    requiring either native package to imitate the other's dataclass layout.
+    """
+
+    descriptor = getattr(type(result), field, None)
+    if (
+        field == "directivity_db"
+        and isinstance(descriptor, property)
+        and descriptor.fset is None
+        and hasattr(result, "spl_db")
+    ):
+        result.spl_db = value
+        return
+    setattr(result, field, value)
+
+
 def canonical_frequencies(context: SolverContext) -> np.ndarray:
     """Return the ascending frequency axis described by ``context``."""
 
@@ -81,7 +102,7 @@ def sort_native_result_frequencies(result: Any) -> Any:
             continue
         array = np.asarray(value)
         if array.ndim >= 1 and array.shape[0] == frequencies.size:
-            setattr(result, field, array[order])
+            _set_frequency_shaped_field(result, field, array[order])
     surface_pressure = getattr(result, "surface_pressure_avg", None)
     if isinstance(surface_pressure, dict):
         result.surface_pressure_avg = {
