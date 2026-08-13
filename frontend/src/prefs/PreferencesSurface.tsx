@@ -1,6 +1,6 @@
 import { useEffect, useState, useSyncExternalStore, type RefObject } from 'react';
 import { buildImportedSubmission } from '../jobs/importedSubmission';
-import { decorateRunName, nextRunName, runNameFromFilename, type RunNameDateFormat, type RunNameDatePosition, type RunNameNumberFormat, type RunNameNumberPosition } from '../jobs/runNaming';
+import { decorateRunName, nextRunName, runNameFromFilename, UNBOUND_RUN_NAME_SOURCE, type RunNameDateFormat, type RunNameDatePosition, type RunNameNumberFormat, type RunNameNumberPosition } from '../jobs/runNaming';
 import { projectSubmittedDesign, projectSubmittedImport, type SubmittedDesignProjection } from '../jobs/submittedProjection';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { useDesignStore } from '../stores/design';
@@ -109,13 +109,16 @@ function JobsPreferencesContent({ now = new Date() }: { now?: Date }) {
   } catch { /* an invalid or absent submission cannot establish a naming baseline yet */ }
   const displayedCore = projection
     ? nextRunName(preferences, projection, filename)
-    : (preferences.nameSourceProjection ? preferences.outputName : runNameFromFilename(filename));
+    : (preferences.nameSourceProjection !== null ? preferences.outputName : runNameFromFilename(filename));
   const displayedLabel = decorateRunName(displayedCore, preferences, now);
   const [nameDraft, setNameDraft] = useState(displayedCore);
   const [editing, setEditing] = useState(false);
   useEffect(() => { if (!editing) setNameDraft(displayedCore); }, [displayedCore, editing]);
   const commitName = () => {
-    preferencesStore.update({ outputName: nameDraft, nameSourceProjection: projection });
+    preferencesStore.update({
+      outputName: nameDraft,
+      nameSourceProjection: projection ?? UNBOUND_RUN_NAME_SOURCE,
+    });
     setEditing(false);
   };
   return <section className="preferences-section">

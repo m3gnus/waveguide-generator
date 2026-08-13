@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { preferencesStore } from '../prefs/preferences';
 import { runExportBundle, runExportFormat, runWorkspaceExportBundle } from './exporters';
 import type { ResultPayload } from './types';
-import { buildZma } from './vituixcad';
+import { buildZma, hasElectricalImpedance } from './vituixcad';
 
 function electricalResult(overrides: Partial<ResultPayload> = {}): ResultPayload {
   return {
@@ -61,6 +61,7 @@ describe('VituixCAD exports', () => {
       impedance: { frequencies: [100], real: [0], imaginary: [2] },
       metadata: {
         impedance_units: 'ohms',
+        impedance_quantity: 'electrical_input_impedance',
         impedance_phase_convention: 'solver_exp_plus_ikr',
       },
     }));
@@ -75,6 +76,18 @@ describe('VituixCAD exports', () => {
       impedance: { frequencies: [100], real: [1], imaginary: [2] },
       metadata: { impedance_units: 'Z/(rho*c)', phase_time_convention: 'exp(+ikr)' },
     })).toThrow('Only a channel with a driver model has electrical input impedance');
+  });
+
+  it.each([undefined, 'acoustic_input_impedance'])('refuses tag-absent ohmic impedance without the electrical-input quantity (%s)', (quantity) => {
+    const result = electricalResult({
+      metadata: {
+        impedance_units: 'ohms',
+        ...(quantity ? { impedance_quantity: quantity } : {}),
+      },
+    });
+
+    expect(hasElectricalImpedance(result)).toBe(false);
+    expect(() => buildZma(result)).toThrow('impedance_quantity "electrical_input_impedance"');
   });
 
   it('fans ZMA out only to driver-modelled channels with the established suffix', async () => {
@@ -183,6 +196,41 @@ describe('VituixCAD exports', () => {
     ]);
     expect(parameters).toContainEqual(['f', '1200']);
     expect(parameters).toContainEqual(['dt', '250']);
+  });
+
+  it('allocates distinct portable dependency names for channel ids that sanitize alike', async () => {
+    const wrapper: ResultPayload = {
+      frequencies: [],
+      channel_order: ['mf/a', 'mf a'],
+      channels: {
+        'mf/a': electricalResult(),
+        'mf a': electricalResult(),
+      },
+    };
+    const saveText = vi.fn();
+
+    const bundle = await runExportBundle({
+      result: wrapper,
+      jobStem: 'horn_7',
+      preferences: preferencesStore.getSnapshot(),
+      saveText,
+    }, ['vxp', 'zma']);
+
+    expect(bundle).toEqual({
+      files: [
+        'horn_7-mf-a.frd', 'horn_7-mf-a.zma',
+        'horn_7-mf-a-2.frd', 'horn_7-mf-a-2.zma',
+        'horn_7.vxp',
+      ],
+      failures: [],
+    });
+    const project = String(saveText.mock.calls.find(([, filename]) => filename === 'horn_7.vxp')?.[0]);
+    const document = new DOMParser().parseFromString(project, 'application/xml');
+    expect([...document.querySelectorAll('DRIVER > RESPONSE > FileName')].map((node) => node.textContent))
+      .toEqual(['horn_7-mf-a.frd', 'horn_7-mf-a-2.frd']);
+    expect([...document.querySelectorAll('DRIVER > ImpedanceFile')].map((node) => node.textContent))
+      .toEqual(['horn_7-mf-a.zma', 'horn_7-mf-a-2.zma']);
+    expect(new Set(saveText.mock.calls.map(([, filename]) => String(filename))).size).toBe(5);
   });
 
   it('writes VXP dependencies through the automatic workspace flow and de-duplicates selected ZMA', async () => {

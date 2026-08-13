@@ -100,10 +100,28 @@ describe('CommandPalette', () => {
     expect(cad.some((entry) => entry.id === 'parameter-osse.L')).toBe(true);
   });
 
-  it('keeps the parametric palette inventory exactly registry-backed', () => {
+  it('keeps a CAD-visible formula parameter in its owning CAD workspace mode', () => {
+    const design = designForFamily('OSSE');
+    const throat = buildParameterPaletteEntries(design.formula, { mode: 'cad', design, cadReturnReady: true })
+      .find((entry) => entry.id === 'parameter-osse.a0')!;
+
+    workspaceModeStore.setMode('cad');
+    act(() => throat.run());
+
+    expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
+    expect(parameterRevealRequest.claim('geometry')).toMatchObject({
+      id: 'osse.a0', target: 'parameter',
+    });
+  });
+
+  it('adds the semantic Solve domain control to the registry-backed parametric palette', () => {
     const design = designForFamily('OSSE');
     const parametric = buildParameterPaletteEntries(undefined, { mode: 'parametric', design, cadReturnReady: true });
-    expect(parametric.map((entry) => entry.id)).toEqual(PARAMETER_REGISTRY.map((field) => `parameter-${field.id}`));
+    expect(parametric.slice(0, PARAMETER_REGISTRY.length).map((entry) => entry.id))
+      .toEqual(PARAMETER_REGISTRY.map((field) => `parameter-${field.id}`));
+    expect(parametric.find((entry) => entry.id === 'parametric-control-solve-domain')).toMatchObject({
+      label: 'Solve domain', detail: 'Solve & export mesh',
+    });
     expect(parametric.some((entry) => entry.id.startsWith('cad-control-'))).toBe(false);
   });
 

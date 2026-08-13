@@ -1,8 +1,11 @@
 import { submittedProjectionsEqual, type SubmittedDesignProjection } from './submittedProjection';
 
+export const UNBOUND_RUN_NAME_SOURCE = 'unbound' as const;
+export type RunNameSourceProjection = SubmittedDesignProjection | typeof UNBOUND_RUN_NAME_SOURCE | null;
+
 export interface RunNamingState {
   outputName: string;
-  nameSourceProjection: SubmittedDesignProjection | null;
+  nameSourceProjection: RunNameSourceProjection;
   runNameNumberPosition?: RunNameNumberPosition;
   runNameNumberFormat?: RunNameNumberFormat;
 }
@@ -74,8 +77,12 @@ export function nextRunName(
   projection: SubmittedDesignProjection,
   documentFilename = '',
 ): string {
-  if (!naming.nameSourceProjection) return runNameFromFilename(documentFilename);
   const current = normalizeRunName(naming.outputName);
+  // Null means no name has been chosen yet and retains the filename default.
+  // Unbound means the user committed this name while no valid solve projection
+  // existed; the first projection adopts that name instead of replacing it.
+  if (naming.nameSourceProjection === UNBOUND_RUN_NAME_SOURCE) return current;
+  if (naming.nameSourceProjection === null) return runNameFromFilename(documentFilename);
   if (submittedProjectionsEqual(naming.nameSourceProjection, projection)) return current;
   if (naming.runNameNumberPosition === 'off') return current;
   return incrementTrailingDigits(current, runNumberWidth(naming.runNameNumberFormat));

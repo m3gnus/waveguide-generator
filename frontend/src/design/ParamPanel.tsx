@@ -46,6 +46,11 @@ import {
   cadControlMatchesQuery,
   type CadControlSection,
 } from './cadControlRegistry';
+import {
+  PARAMETRIC_CONTROLS,
+  PARAMETRIC_CONTROL_DESCRIPTORS,
+  parametricControlMatchesQuery,
+} from './parametricControlRegistry';
 import './paramPanel.css';
 
 interface SectionProps {
@@ -446,7 +451,7 @@ function AutoSymmetryReadout({ design }: { design: DesignDocument }) {
 function SolveDomainControl({ design }: { design: DesignDocument }) {
   const symmetry = useSolveOptionsStore((state) => state.symmetry);
   const setSymmetry = useSolveOptionsStore((state) => state.setSymmetry);
-  return <div className="solve-domain-control">
+  return <div className="solve-domain-control" data-control-reveal-id={PARAMETRIC_CONTROLS.solveDomain.reveal.id}>
     <div className="select-row">
       <label htmlFor="solve-symmetry">Solve domain</label>
       <select id="solve-symmetry" value={symmetry} onChange={(event) => setSymmetry(event.target.value as SymmetryMode)}>
@@ -805,6 +810,10 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
     .filter((descriptor) => cadControlMatchesQuery(descriptor, query))
     .map((descriptor) => descriptor.section)), [ingestRecord, query, tab, workspaceMode]);
   const cadSectionMatches = (section: CadControlSection) => matchingCadSections.has(section);
+  const matchingParametricSections = useMemo(() => new Set(PARAMETRIC_CONTROL_DESCRIPTORS
+    .filter((descriptor) => workspaceMode === 'parametric' && descriptor.tab === tab)
+    .filter((descriptor) => parametricControlMatchesQuery(descriptor, query))
+    .map((descriptor) => descriptor.section)), [query, tab, workspaceMode]);
 
   useEffect(() => {
     const apply = () => {
@@ -848,7 +857,9 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
 
   const renderRegistrySection = (definition: ParameterSectionDefinition) => {
     const fields = fieldsBySection.get(definition.title) ?? [];
-    const hasCustomMode = definition.title === 'Wall & Enclosure' && !searching;
+    const showSolveDomain = definition.title === PARAMETRIC_CONTROLS.solveDomain.section
+      && (!searching || matchingParametricSections.has(definition.title));
+    const hasCustomMode = (definition.title === 'Wall & Enclosure' && !searching) || showSolveDomain;
     if (fields.length === 0 && !hasCustomMode) return null;
     return <Section
       key={definition.title}
@@ -861,7 +872,7 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
           it independent of mesh.quadrants prevents the round-trip-only ATH
           field from masquerading as a second solve/export control, while its
           section remains hidden wholesale in CAD mode. */}
-      {definition.title === 'Solve & export mesh' && !searching && <SolveDomainControl design={design} />}
+      {showSolveDomain && <SolveDomainControl design={design} />}
       {fields.map(renderField)}
       {searching && fields.some((field) => !fieldIsVisible(field, design)) && <p className="filter-note">Some matches are normally hidden by the active mode; they are shown here for discoverability.</p>}
     </Section>;

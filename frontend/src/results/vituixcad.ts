@@ -9,6 +9,17 @@ export interface VituixCadTextFile {
   type: string;
 }
 
+function assertUniquePortableFilenames(files: readonly VituixCadTextFile[]): void {
+  const portable = new Set<string>();
+  files.forEach(({ filename }) => {
+    const key = filename.normalize('NFKC').toLocaleLowerCase();
+    if (portable.has(key)) {
+      throw new Error(`VituixCAD project export refused: ${filename} aliases another bundle member on a portable filesystem.`);
+    }
+    portable.add(key);
+  });
+}
+
 interface ProjectDriver {
   id: string;
   model: string;
@@ -60,6 +71,12 @@ function electricalImpedance(result: ResultPayload): NonNullable<ResultPayload['
       + 'Only a channel with a driver model has electrical input impedance; unit-drive acoustic impedance cannot be exported as ZMA.',
     );
   }
+  if (result.metadata?.impedance_quantity !== 'electrical_input_impedance') {
+    throw new Error(
+      'ZMA export refused: this channel is not tagged with impedance_quantity "electrical_input_impedance". '
+      + 'Ohmic units alone do not prove the impedance quantity or its phase convention.',
+    );
+  }
   if (!result.impedance) {
     throw new Error('ZMA export refused: the driver-modelled channel has no electrical impedance samples.');
   }
@@ -67,7 +84,9 @@ function electricalImpedance(result: ResultPayload): NonNullable<ResultPayload['
 }
 
 export function hasElectricalImpedance(result: ResultPayload): boolean {
-  return result.metadata?.impedance_units === 'ohms' && result.impedance !== undefined;
+  return result.metadata?.impedance_units === 'ohms'
+    && result.metadata?.impedance_quantity === 'electrical_input_impedance'
+    && result.impedance !== undefined;
 }
 
 function impedancePhaseRule(result: ResultPayload): { factor: 1 | -1; note: string } {
@@ -90,10 +109,9 @@ function impedancePhaseRule(result: ResultPayload): { factor: 1 | -1; note: stri
     throw new Error(`ZMA export refused: unsupported impedance phase convention ${String(explicit)}.`);
   }
 
-  // Slice-2 results written before the dedicated tag still have a safe and
-  // unambiguous origin: impedance_quantity is hornlab_sim's engineering-domain
-  // electrical_input_impedance. Keep those durable results exportable while
-  // making the missing tag visible in the artifact itself.
+  // electricalImpedance has already required both the ohms unit and hornlab_sim's
+  // engineering-domain electrical_input_impedance quantity. Only that exact
+  // legacy contract makes a missing phase tag unambiguous; ohms alone never does.
   return {
     factor: 1,
     note: 'engineering exp(+jωt), inferred from HornLab electrical-ohms contract (impedance tag absent)',
@@ -438,7 +456,7 @@ export function buildVituixCadProjectFiles(
   const eligible = candidates.filter(({ result: channel }) => hasElectricalImpedance(channel));
   if (!eligible.length) {
     throw new Error(
-      'VituixCAD project export refused: no channel has driver-modelled electrical impedance tagged with impedance_units "ohms".',
+      'VituixCAD project export refused: no channel has driver-modelled electrical impedance tagged with impedance_units "ohms" and impedance_quantity "electrical_input_impedance".',
     );
   }
 
@@ -469,5 +487,9 @@ export function buildVituixCadProjectFiles(
     text: buildVxp(orderedDrivers, active),
     type: 'application/xml;charset=utf-8',
   });
+  // Preflight before runExportFormat writes the first dependency. The suffix
+  // allocator should make this tautological; retaining the bundle-level guard
+  // ensures a future filename family cannot reintroduce silent overwrites.
+  assertUniquePortableFilenames(files);
   return files;
 }
