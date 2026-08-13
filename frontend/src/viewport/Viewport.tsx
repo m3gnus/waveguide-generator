@@ -132,7 +132,7 @@ export function Viewport() {
   const reportClientFrame = useCallback((milliseconds: number) => setClientFrameMs(milliseconds), []);
   const activeScene = importedMesh?.scene ?? scene;
   const sceneMarker = importedMesh
-    ? `msh:${importedMesh.name}:${importedMesh.triangleCount}`
+    ? `msh:${importedMesh.artifactToken}`
     : `${selected?.header.epoch ?? 0}:${selected?.header.seq ?? 0}:${selected?.header.designRevision ?? 0}:${selected?.header.lod ?? ''}:${preferences.tintSolvedRegion ? solvedQuadrants : 'same'}`;
   const surfaces = activeScene?.surfaces ?? [];
   const webgl = canRenderWebGL() && renderFailure === null;
