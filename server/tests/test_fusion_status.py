@@ -242,7 +242,11 @@ def test_whole_document_signature_detects_added_bodies_and_source_changes(tmp_pa
         documentBodyCount=1,
         sourceStateHash=source_hash,
     )])
-    assert _read(workspace, returned_bundle=returned)["fusionChangesAvailable"] is False
+    unchanged = _read(workspace, returned_bundle=returned)
+    assert unchanged["fusionChangesAvailable"] is False
+    assert unchanged["documentChanged"] is False
+    assert unchanged["documentChangeDetectable"] is True
+    assert unchanged["staleDetectionExplanation"] is None
 
     _write_status(workspace, links=[_link(
         documentSignatureHash="sha256:return-with-mids",
@@ -252,6 +256,33 @@ def test_whole_document_signature_detects_added_bodies_and_source_changes(tmp_pa
     changed = _read(workspace, returned_bundle=returned)
     assert changed["state"] == "stale"
     assert changed["fusionChangesAvailable"] is True
+    assert changed["documentChanged"] is True
+    assert changed["documentChangeDetectable"] is True
+
+
+def test_hashless_return_reports_document_staleness_as_undetectable(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    returned = workspace / "legacy.wgreturn"
+    returned.mkdir(parents=True)
+    (returned / "wgreturn.json").write_text(json.dumps({
+        "wgreturn_version": "1.0",
+        "assembly": {"n_bodies_expected": 1},
+        "instances": [],
+        "sources": [],
+    }))
+    _write_status(
+        workspace,
+        links=[_link(documentSignatureHash="sha256:current-document")],
+    )
+
+    status = _read(workspace, returned_bundle=returned)
+
+    assert status["documentChanged"] is False
+    assert status["documentChangeDetectable"] is False
+    assert status["staleDetectionExplanation"] == (
+        "stale detection unavailable: this returned bundle predates wgreturn 1.1 "
+        "and carries no document signature"
+    )
 
 
 def test_an_unsaved_design_can_match_a_fusion_link_by_exact_hash(tmp_path: Path) -> None:
@@ -289,6 +320,9 @@ def test_status_endpoint_hashes_the_design_in_wg_and_requires_a_workspace(
         "link": None,
         "wgChangesAvailable": False,
         "fusionChangesAvailable": False,
+        "documentChanged": False,
+        "documentChangeDetectable": False,
+        "staleDetectionExplanation": None,
         "realizedDimensions": {
             "state": "link_unavailable",
             "instanceId": None,

@@ -658,6 +658,20 @@ def ingest_bundle(
     for item in freshness_records:
         if item["verdict"] != "current":
             findings.append({"id": item["finding_id"], "kind": "freshness", "blocking": True, "instance_id": item["instance_id"], "verdict": item["verdict"]})
+    # A pre-1.1 bundle with no document signature cannot be compared for
+    # staleness. Recording it on the bundle is not enough: an unsurfaced
+    # degradation is the silent one this schema version exists to end, so it
+    # becomes a finding like any other. Not blocking -- the geometry is fine and
+    # solvable, it is only the freshness answer that is unavailable.
+    for degradation in getattr(bundle, "degradations", ()):
+        findings.append(
+            {
+                "id": _finding_id("stale-detection-unavailable", degradation),
+                "kind": "stale-detection-unavailable",
+                "blocking": False,
+                "reason": degradation,
+            }
+        )
     if built["healing"]["performed"]:
         findings.append({"id": _finding_id("healing-performed", {"mode": built["healing"]["mode"], "cache_key": cache_key}), "kind": "healing-performed", "blocking": True, "mode": built["healing"]["mode"]})
     for item in built.get("role_findings", []):
