@@ -48,7 +48,7 @@ function ResultsPreferencesContent() {
   const themes = useThemes();
   return <section className="preferences-section">
     <h3 className="preferences-section-title">Results & export</h3>
-    <p className="preferences-section-copy">Chart layout, processing, and automatic export defaults.</p>
+    <p className="preferences-section-copy">Chart layout, processing, and automatic export defaults. Automatic files are saved under the selected Workspace folder without browser download prompts.</p>
     <div className="preferences-grid">
       <ResultPanelCountControl/>
       <label className="ui-field">Smoothing<select aria-label="Smoothing" value={preferences.smoothing} onChange={(event) => preferencesStore.update({ smoothing: event.target.value as SmoothingMode })}>{SMOOTHING_MODES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
@@ -60,7 +60,7 @@ function ResultsPreferencesContent() {
     </div>
     <div className="preferences-checks">
       <label className="ui-check"><input type="checkbox" checked={preferences.autoExportOnComplete} onChange={(event) => preferencesStore.update({ autoExportOnComplete: event.target.checked })}/>Auto-export completed jobs</label>
-      <label className="ui-check"><input type="checkbox" checked={preferences.autoDownloadMesh} onChange={(event) => preferencesStore.update({ autoDownloadMesh: event.target.checked })}/>Auto-download solve mesh</label>
+      <label className="ui-check"><input type="checkbox" checked={preferences.autoDownloadMesh} onChange={(event) => preferencesStore.update({ autoDownloadMesh: event.target.checked })}/>Auto-save solve mesh to Workspace</label>
     </div>
     <fieldset className="preferences-formats">
       <legend>Preferred manual export formats</legend>

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { designForFamily } from '../stores/design';
 import { preferencesStore } from '../prefs/preferences';
 import type { ResultPayload } from './types';
-import { buildChartRenderPayload, buildFrequencyCsv, buildFullResultsJson, buildImpedanceCsv, buildPolarCsv, buildSummaryText, downloadMeshArtifact, runExportBundle, runExportFormat } from './exporters';
+import { buildChartRenderPayload, buildFrequencyCsv, buildFullResultsJson, buildImpedanceCsv, buildPolarCsv, buildSummaryText, downloadMeshArtifact, runExportBundle, runExportFormat, runWorkspaceExportBundle, saveMeshArtifactToWorkspace } from './exporters';
 
 const result: ResultPayload = {
   frequencies: [100, 200],
@@ -202,5 +202,61 @@ describe('result exporters', () => {
     expect(filename).toBe('123_asro68.msh');
     expect(saveBlob.mock.calls[0][1]).toBe('123_asro68.msh');
     expect(await (saveBlob.mock.calls[0][0] as Blob).text()).toBe('stored mesh bytes');
+  });
+
+  it('writes automatic text and binary exports to the Workspace without browser downloads', async () => {
+    const requests: Array<{ path: string; init?: RequestInit }> = [];
+    const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+      const path = String(input);
+      requests.push({ path, init });
+      if (path === '/api/render-charts') {
+        return new Response(JSON.stringify({ charts: { spl: 'data:image/png;base64,AQID' } }), { status: 200 });
+      }
+      if (path === '/api/workspace/write-export') {
+        return new Response(JSON.stringify({
+          directory: 'C:/output/horn_1',
+          files: ['C:/output/horn_1/horn_1.csv', 'C:/output/horn_1/horn_1_spl.png'],
+        }), { status: 200 });
+      }
+      return new Response('not found', { status: 404 });
+    });
+
+    const bundle = await runWorkspaceExportBundle({
+      result,
+      jobStem: 'horn_1',
+      preferences: preferencesStore.getSnapshot(),
+      fetcher,
+    }, ['csv', 'png']);
+
+    expect(bundle).toEqual({
+      files: ['C:/output/horn_1/horn_1.csv', 'C:/output/horn_1/horn_1_spl.png'],
+      failures: [],
+    });
+    const write = requests.find(({ path }) => path === '/api/workspace/write-export')!;
+    const payload = JSON.parse(String(write.init?.body));
+    expect(payload).toMatchObject({ subdirectory: 'horn_1', existing: 'merge_identical' });
+    expect(payload.members.map((member: { relative_path: string }) => member.relative_path)).toEqual([
+      'horn_1.csv', 'horn_1_spl.png',
+    ]);
+    expect(payload.members[1].content_base64).toBe('AQID');
+  });
+
+  it('auto-saves the mesh into the same per-run Workspace directory', async () => {
+    const fetcher = vi.fn<typeof fetch>(async (input) => {
+      if (String(input) === '/api/mesh-artifact/artifact-uuid') return new Response('mesh bytes', { status: 200 });
+      return new Response(JSON.stringify({
+        directory: 'C:/output/123_asro68',
+        files: ['C:/output/123_asro68/123_asro68.msh'],
+      }), { status: 200 });
+    });
+
+    const saved = await saveMeshArtifactToWorkspace({
+      id: 'artifact-uuid', run_number: 123, label: 'asro68', config_summary: {},
+    }, fetcher);
+
+    expect(saved).toBe('C:/output/123_asro68/123_asro68.msh');
+    expect(fetcher.mock.calls.map(([input]) => String(input))).toEqual([
+      '/api/mesh-artifact/artifact-uuid', '/api/workspace/write-export',
+    ]);
   });
 });

@@ -202,6 +202,43 @@ interface GeometryDownload {
   filename: string;
 }
 
+interface WorkspaceFile {
+  filename: string;
+  blob: Blob;
+}
+
+interface WorkspaceWriteResponse {
+  directory: string;
+  files: string[];
+}
+
+async function blobBase64(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const chunks: string[] = [];
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    chunks.push(String.fromCharCode(...bytes.subarray(offset, offset + 0x8000)));
+  }
+  return btoa(chunks.join(''));
+}
+
+export async function writeWorkspaceFiles(
+  subdirectory: string,
+  members: WorkspaceFile[],
+  fetcher: typeof fetch = fetch,
+): Promise<WorkspaceWriteResponse> {
+  const encoded = await Promise.all(members.map(async ({ filename, blob }) => ({
+    relative_path: filename,
+    content_base64: await blobBase64(blob),
+  })));
+  const response = await fetcher('/api/workspace/write-export', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ subdirectory, members: encoded, existing: 'merge_identical' }),
+  });
+  if (!response.ok) throw await responseError(response);
+  return response.json() as Promise<WorkspaceWriteResponse>;
+}
+
 async function fetchGeometry(context: ExportContext, kind: 'step' | 'stl' | 'profiles', filename: string, profileKind?: 'profiles' | 'slices'): Promise<GeometryDownload> {
   if (!context.design) throw new Error('This export requires a saved design snapshot.');
   const fetcher = context.fetcher ?? fetch;
@@ -358,6 +395,30 @@ export async function runExportBundle(context: ExportContext, formats = context.
   return { files, failures };
 }
 
+/** Prepare automatic exports in memory, then write them through the backend.
+ * Browser downloads require repeated user permission and are therefore kept
+ * for explicit manual exports only. */
+export async function runWorkspaceExportBundle(
+  context: ExportContext,
+  formats = context.preferences.autoExportFormats,
+): Promise<ExportBundleResult> {
+  const prepared: WorkspaceFile[] = [];
+  const bundle = await runExportBundle({
+    ...context,
+    saveBlob: (blob, filename) => prepared.push({ blob, filename }),
+    saveText: (content, filename, type = 'text/plain;charset=utf-8') => {
+      prepared.push({ filename, blob: new Blob([content], { type }) });
+    },
+  }, formats);
+  if (!prepared.length) return { ...bundle, files: [] };
+  const written = await writeWorkspaceFiles(
+    context.jobStem,
+    prepared,
+    context.fetcher ?? fetch,
+  );
+  return { ...bundle, files: written.files };
+}
+
 export async function downloadMeshArtifact(
   job: Pick<JobItem, 'id' | 'run_number' | 'label' | 'config_summary'>,
   fetcher: typeof fetch = fetch,
@@ -368,4 +429,16 @@ export async function downloadMeshArtifact(
   const filename = `${exportStemForJob(job)}.msh`;
   saveBlob(await response.blob(), filename);
   return filename;
+}
+
+export async function saveMeshArtifactToWorkspace(
+  job: Pick<JobItem, 'id' | 'run_number' | 'label' | 'config_summary'>,
+  fetcher: typeof fetch = fetch,
+): Promise<string> {
+  let prepared: WorkspaceFile | null = null;
+  await downloadMeshArtifact(job, fetcher, (blob, filename) => { prepared = { blob, filename }; });
+  if (!prepared) throw new Error('Mesh artifact returned no file.');
+  const written = await writeWorkspaceFiles(exportStemForJob(job), [prepared], fetcher);
+  if (!written.files[0]) throw new Error('Workspace returned no saved mesh path.');
+  return written.files[0];
 }
