@@ -400,9 +400,9 @@ export async function runExportBundle(context: ExportContext, formats = context.
   return { files, failures };
 }
 
-/** Prepare automatic exports in memory, then write them through the backend.
- * Browser downloads require repeated user permission and are therefore kept
- * for explicit manual exports only. */
+/** Prepare exports in memory, then write them through the backend Workspace.
+ * Automatic exports and every run-result export entry point use this path so
+ * browser download permissions cannot silently redirect files to Downloads. */
 export async function runWorkspaceExportBundle(
   context: ExportContext,
   formats = context.preferences.autoExportFormats,
