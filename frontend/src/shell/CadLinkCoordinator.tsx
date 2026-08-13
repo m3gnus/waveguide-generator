@@ -11,8 +11,9 @@ import {
 import { getOnshapeConnection, getOnshapeStatus, type OnshapeConnection, type OnshapeStatus } from '../api/onshape';
 import { preferencesStore, usePreferences } from '../prefs/preferences';
 import { useCadReturnStore } from '../stores/cadReturn';
-import { useDesignStore } from '../stores/design';
+import { subscribeRevision, useDesignStore } from '../stores/design';
 import { useDocumentStore, type DesignIdentity } from '../stores/document';
+import { workspaceModeStore } from '../stores/workspaceMode';
 import { createImportedMeshScene } from '../viewport/importedMesh';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { parseMSH } from '../viewport/mshParser';
@@ -179,6 +180,17 @@ export function CadLinkCoordinator() {
     mounted.current = true;
     return () => { mounted.current = false; };
   }, []);
+
+  useEffect(() => subscribeRevision((event) => {
+    if (event.reason !== 'load') return;
+    workspaceModeStore.setMode('parametric');
+    // A replacement may be the document this return belongs to, so retain the
+    // evidence and channel work for the freshness verdict instead of guessing
+    // ownership here. The stale gate makes the old geometry unsendable now.
+    useCadReturnStore.getState().markIngestStale(
+      'The design was replaced after this CAD return was ingested. Re-ingest before solving.',
+    );
+  }), []);
 
   const refreshFusionStatus = useCallback(async () => {
     if (preferences.cadApplication !== 'fusion360') return;

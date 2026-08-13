@@ -2,10 +2,12 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadReturnBundle, CadReturnIngestRecord, FusionCadStatus } from '../api/cadlink';
+import { importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { preferencesStore } from '../prefs/preferences';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
-import { resetDesignStore } from '../stores/design';
+import { designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
 import { resetDocumentStore } from '../stores/document';
+import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { CadLinkCoordinator, cadLinkCoordinatorBridge } from './CadLinkCoordinator';
 import { workspaceNavigation } from './workspaceNavigation';
@@ -80,6 +82,7 @@ describe('CadLinkCoordinator', () => {
     resetCadReturnStore();
     resetDesignStore();
     resetDocumentStore();
+    workspaceModeStore.setMode('parametric');
     preferencesStore.resetForTests();
     host = document.createElement('div');
     document.body.append(host);
@@ -89,6 +92,7 @@ describe('CadLinkCoordinator', () => {
   afterEach(() => {
     act(() => root.unmount());
     importedMeshStore.clear();
+    workspaceModeStore.setMode('parametric');
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     vi.useRealTimers();
@@ -189,5 +193,53 @@ describe('CadLinkCoordinator', () => {
     expect(state.needsIngest).toBe(true);
     expect(state.ingestStaleReason).toContain('source inventory or source sizing suggestions changed');
     expect(state.sourceSizesMm['source-hf']).toBe(3);
+  });
+
+  it.each([
+    ['loadDesign', () => useDesignStore.getState().loadDesign(designForFamily('ICW'))],
+    ['replaceDesign', () => useDesignStore.getState().replaceDesign(designForFamily('R-OSSE'))],
+    ['New design', () => resetDesignStore()],
+  ] as const)('%s returns to parametric mode and invalidates retained CAD state', async (_path, replace) => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json({ items: [initialBundle] });
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      return json({}, 404);
+    }));
+    await renderCoordinator();
+    act(() => {
+      const cad = useCadReturnStore.getState();
+      cad.applyIngest(ingestRecord);
+      cad.setSourceChannel('source-hf', 'custom-hf');
+      cad.setChannelMotion('custom-hf', 'axial');
+      cad.setChannelDriverEnabled('custom-hf', true);
+      cad.setChannelDriverField('custom-hf', 'sd_cm2', 54);
+      cad.setCombineEnabled(true);
+      cad.setCombineCrossover('custom-hf→custom-mf', 1_200);
+      cad.acknowledge('reviewed-finding', true);
+      workspaceModeStore.setMode('cad');
+    });
+
+    expect(importedSubmissionBlocker()).toBeNull();
+    const retainedBundle = useCadReturnStore.getState().selectedBundle;
+    const retainedRecord = useCadReturnStore.getState().ingestRecord;
+    const retainedChannels = useCadReturnStore.getState().driveChannels;
+    const retainedDrivers = useCadReturnStore.getState().channelDrivers;
+    const retainedCrossovers = useCadReturnStore.getState().combineCrossoversHz;
+    const retainedAcknowledgements = useCadReturnStore.getState().acknowledgedFindingIds;
+
+    act(replace);
+
+    const state = useCadReturnStore.getState();
+    expect(workspaceModeStore.getSnapshot().mode).toBe('parametric');
+    expect(state.selectedBundle).toBe(retainedBundle);
+    expect(state.ingestRecord).toBe(retainedRecord);
+    expect(state.driveChannels).toBe(retainedChannels);
+    expect(state.channelDrivers).toBe(retainedDrivers);
+    expect(state.combineCrossoversHz).toBe(retainedCrossovers);
+    expect(state.acknowledgedFindingIds).toBe(retainedAcknowledgements);
+    expect(state.needsIngest).toBe(true);
+    expect(state.ingestStaleReason).toContain('design was replaced');
+    expect(importedSubmissionBlocker()).toBe(state.ingestStaleReason);
   });
 });
