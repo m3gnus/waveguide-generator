@@ -8,6 +8,7 @@ import subprocess
 import sys
 from typing import Any
 
+from server import app as app_module
 from server.app import VERSION, create_app
 from server.engines.registry import detect_engines
 
@@ -39,7 +40,14 @@ class TestClient:
     def __init__(self, app) -> None:
         self.app = app
 
-    def get(self, path: str, headers: dict[str, str] | None = None) -> Response:
+    def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        headers: dict[str, str] | None = None,
+        body: bytes = b"",
+    ) -> Response:
         async def request() -> Response:
             sent: list[dict[str, Any]] = []
             delivered = False
@@ -48,7 +56,11 @@ class TestClient:
                 nonlocal delivered
                 if not delivered:
                     delivered = True
-                    return {"type": "http.request", "body": b"", "more_body": False}
+                    return {
+                        "type": "http.request",
+                        "body": body,
+                        "more_body": False,
+                    }
                 return {"type": "http.disconnect"}
 
             async def send(message: dict[str, Any]) -> None:
@@ -67,7 +79,7 @@ class TestClient:
                     "type": "http",
                     "asgi": {"version": "3.0", "spec_version": "2.3"},
                     "http_version": "1.1",
-                    "method": "GET",
+                    "method": method,
                     "scheme": "http",
                     "path": path,
                     "raw_path": path.encode("ascii"),
@@ -81,14 +93,25 @@ class TestClient:
                 send,
             )
             start = next(message for message in sent if message["type"] == "http.response.start")
-            body = b"".join(
+            response_body = b"".join(
                 message.get("body", b"")
                 for message in sent
                 if message["type"] == "http.response.body"
             )
-            return Response(status_code=start["status"], body=body)
+            return Response(status_code=start["status"], body=response_body)
 
         return asyncio.run(request())
+
+    def get(self, path: str, headers: dict[str, str] | None = None) -> Response:
+        return self.request("GET", path, headers=headers)
+
+    def post(
+        self,
+        path: str,
+        body: bytes,
+        headers: dict[str, str] | None = None,
+    ) -> Response:
+        return self.request("POST", path, headers=headers, body=body)
 
 
 def test_health_and_placeholder_shell(tmp_path: Path) -> None:
@@ -144,7 +167,10 @@ def test_capabilities_and_dryrun_guard(tmp_path: Path, monkeypatch) -> None:
     assert enabled[0].available is True
 
 
-def test_origin_guard_rejects_remote_and_allows_loopback(tmp_path: Path) -> None:
+def test_origin_guard_requires_own_authority_or_allowlisted_loopback(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("WG2_EXTRA_WS_ORIGINS", "http://localhost:3101")
     client = TestClient(create_app(data_dir=tmp_path))
     rejected = client.get("/health", headers={"Origin": "https://example.com"})
     assert rejected.status_code == 403
@@ -154,12 +180,42 @@ def test_origin_guard_rejects_remote_and_allows_loopback(tmp_path: Path) -> None
     assert rebound.status_code == 403
     assert "Non-local Host" in rebound.json()["detail"]
 
-    for origin in ("http://localhost:3100", "http://127.0.0.1:3100", "http://[::1]:3100"):
-        assert client.get("/health", headers={"Origin": origin}).status_code == 200
+    assert (
+        client.get(
+            "/health", headers={"Origin": "http://127.0.0.1:3100"}
+        ).status_code
+        == 200
+    )
+    assert (
+        client.get(
+            "/health", headers={"Origin": "http://localhost:3101"}
+        ).status_code
+        == 200
+    )
+    assert (
+        client.get(
+            "/health", headers={"Origin": "http://127.0.0.1:3102"}
+        ).status_code
+        == 403
+    )
     for host in ("localhost:3100", "127.0.0.1:3100", "[::1]:3100"):
         assert client.get("/health", headers={"Host": host}).status_code == 200
     for host in ("localhost", "127.0.0.1:3101", "[::1]:3101"):
         assert client.get("/health", headers={"Host": host}).status_code == 403
+
+
+def test_streaming_request_body_limit_returns_413(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(app_module, "MAX_REQUEST_BODY_BYTES", 5)
+    application = create_app(data_dir=tmp_path)
+    client = TestClient(application)
+
+    headers = {"Content-Type": "application/json"}
+    assert client.post("/api/design/symmetry", b"12345", headers).status_code != 413
+    oversized = client.post("/api/design/symmetry", b"123456", headers)
+    assert oversized.status_code == 413
+    assert "64 MB" in oversized.json()["detail"]
 
 
 def test_pins_preserve_oracle_inventory_and_render_deterministically(tmp_path: Path) -> None:

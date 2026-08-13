@@ -35,6 +35,16 @@ def test_imported_tags_are_deterministic_complete_and_do_not_use_parametric_valu
     assert not ({3, 4} & set(result["source_tags"].values()))
 
 
+def test_imported_tags_reject_duplicate_normalized_source_ids() -> None:
+    with pytest.raises(ImportedMeshError, match="duplicate normalized source ids.*'1'"):
+        allocate_imported_tags(
+            [
+                {"id": 1, "role": "MF", "instance_id": None},
+                {"id": "1", "role": "HF", "instance_id": None},
+            ]
+        )
+
+
 def test_sizes_cover_exactly_non_skipped_sources() -> None:
     sources = [{"id": "a"}, {"id": "b"}]
     assert validate_imported_sizes(sources, {"rigid_size_mm": 10, "transition_mm": 20, "source_size_mm": {"a": 2}}, skipped_source_ids=["b"])["source_size_mm"] == {"a": 2.0}
@@ -145,6 +155,16 @@ def test_port_exit_alias_is_guarded() -> None:
         )
         == set()
     )
+
+
+def test_casefolded_step_label_collisions_require_identical_face_sets() -> None:
+    with pytest.raises(RoleResolutionError, match="PORT.*port"):
+        _lookup_faces(["port"], {"PORT": [7], "port": [9]})
+
+    assert _lookup_faces(["port"], {"PORT": [7, 9], "port": [9, 7]}) == {
+        7,
+        9,
+    }
 
 
 def test_shared_instance_paint_is_reconciled_across_sources_and_r16_stays_live() -> None:
