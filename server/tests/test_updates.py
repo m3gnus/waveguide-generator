@@ -92,6 +92,56 @@ def test_newer_ready_release_produces_an_exact_absolute_update_command(tmp_path:
     assert result["canInstall"] is False
 
 
+@pytest.mark.parametrize(
+    ("field", "corrupt_value"),
+    [
+        ("release.version", "not-a-version"),
+        ("nextCheckEpoch", "tomorrow"),
+        ("failureCount", "many"),
+    ],
+)
+def test_any_corrupt_cached_field_discards_the_whole_cache(
+    tmp_path: Path, field: str, corrupt_value: object
+) -> None:
+    now = [1_700_000_000.0]
+    cached_release = {
+        "version": "2.0.1",
+        "tag": "v2.0.1",
+        "url": "https://github.com/m3gnus/waveguide-generator/releases/tag/v2.0.1",
+        "publishedAt": "2026-08-11T12:00:00Z",
+        "assetsReady": True,
+    }
+    cache: dict[str, Any] = {
+        "schemaVersion": 1,
+        "etag": '"stale"',
+        "release": cached_release,
+        "availability": "available",
+        "lastAttemptEpoch": now[0] - 10,
+        "checkedAtEpoch": now[0] - 10,
+        "nextCheckEpoch": now[0] + 10_000,
+        "failureCount": 0,
+        "lastError": None,
+    }
+    if field == "release.version":
+        cached_release["version"] = corrupt_value
+    else:
+        cache[field] = corrupt_value
+    cache_path = tmp_path / "data" / "cache" / "update-status.json"
+    cache_path.parent.mkdir(parents=True)
+    cache_path.write_text(json.dumps(cache), encoding="utf-8")
+    etags: list[str | None] = []
+
+    def fetch(etag: str | None) -> ReleaseResponse:
+        etags.append(etag)
+        return ReleaseResponse(release("2.0.0"), None)
+
+    result = service(tmp_path, fetch, now).get_status()
+
+    assert result["availability"] == "current"
+    assert result["cached"] is False
+    assert etags == [None]
+
+
 def test_ready_release_can_signal_the_status_owner_for_installation(tmp_path: Path):
     now = [1_700_000_000.0]
     request_path = tmp_path / "control" / "update.json"

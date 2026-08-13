@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from logging.handlers import RotatingFileHandler
 import os
@@ -115,6 +116,40 @@ def test_advisory_lock_rejects_partially_written_live_owner(tmp_path: Path) -> N
     finally:
         instance.unlock(descriptor)
         os.close(descriptor)
+
+
+def test_instance_metadata_write_retries_short_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_write = instance.os.write
+    write_sizes: list[int] = []
+
+    def short_write(descriptor: int, payload: bytes) -> int:
+        chunk = payload[:3]
+        write_sizes.append(len(chunk))
+        return real_write(descriptor, chunk)
+
+    monkeypatch.setattr(instance.os, "write", short_write)
+    lock = InstanceLock(tmp_path)
+    try:
+        assert lock.acquire(3100) == InstanceInfo(pid=os.getpid(), port=3100)
+    finally:
+        lock.release()
+
+    assert len(write_sizes) > 1
+    assert json.loads((tmp_path / "server.pid").read_text(encoding="utf-8")) == {
+        "pid": os.getpid(),
+        "port": 3100,
+    }
+
+
+def test_instance_metadata_write_refuses_zero_progress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(instance.os, "write", lambda _descriptor, _payload: 0)
+
+    with pytest.raises(InstanceLockError, match="made no progress"):
+        InstanceLock(tmp_path).acquire(3100)
 
 
 def test_pid_liveness_probe_answers_without_killing() -> None:

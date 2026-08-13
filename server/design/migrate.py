@@ -422,24 +422,9 @@ def _migrate_removed_freeform_controls(payload: Payload) -> None:
 
 
 def _has_freeform_millimetre_axis(payload: Payload) -> bool:
-    """Recognize the two persisted pre-005 FREEFORM point representations."""
+    """Recognize only pre-005 payloads that the transform can fully rewrite."""
 
-    if payload.get("formula") != "FREEFORM":
-        return False
-    for profile_name in ("profile_h", "profile_v"):
-        profile = payload.get(profile_name)
-        if not isinstance(profile, Mapping):
-            continue
-        points = profile.get("points")
-        if not isinstance(points, (list, tuple)):
-            continue
-        if any(isinstance(point, Mapping) and "z" in point for point in points):
-            return True
-        if "length" not in payload and any(
-            isinstance(point, (list, tuple)) and len(point) >= 2 for point in points
-        ):
-            return True
-    return False
+    return _freeform_normalized_axis_plan(payload) is not None
 
 
 def _scalar_number(value: Any) -> float | None:
@@ -471,6 +456,43 @@ def _legacy_axis_point(point: Any) -> tuple[float, dict[str, Any]] | None:
     return None
 
 
+def _freeform_normalized_axis_plan(
+    payload: Payload,
+) -> tuple[float, dict[str, list[dict[str, Any]]]] | None:
+    """Validate and prepare the complete two-profile migration atomically."""
+
+    if payload.get("formula") != "FREEFORM":
+        return None
+    horizontal = payload.get("profile_h")
+    if not isinstance(horizontal, Mapping):
+        return None
+    horizontal_points = horizontal.get("points")
+    if not isinstance(horizontal_points, (list, tuple)) or not horizontal_points:
+        return None
+    last = _legacy_axis_point(horizontal_points[-1])
+    if last is None or last[0] <= 0:
+        return None
+    length = last[0]
+
+    rewritten_profiles: dict[str, list[dict[str, Any]]] = {}
+    for profile_name in ("profile_h", "profile_v"):
+        profile = payload.get(profile_name)
+        if not isinstance(profile, Mapping):
+            return None
+        points = profile.get("points")
+        if not isinstance(points, (list, tuple)):
+            return None
+        rewritten: list[dict[str, Any]] = []
+        for point in points:
+            parsed = _legacy_axis_point(point)
+            if parsed is None:
+                return None
+            z, values = parsed
+            rewritten.append({"t": z / length, **values})
+        rewritten_profiles[profile_name] = rewritten
+    return length, rewritten_profiles
+
+
 def _migrate_freeform_normalized_axis(payload: Payload) -> None:
     """Store anchors in normalized design space while preserving every anchor.
 
@@ -479,33 +501,10 @@ def _migrate_freeform_normalized_axis(payload: Payload) -> None:
     instead of being silently repaired as a separate coordinate system.
     """
 
-    horizontal = payload.get("profile_h")
-    if not isinstance(horizontal, Mapping):
+    plan = _freeform_normalized_axis_plan(payload)
+    if plan is None:
         return
-    horizontal_points = horizontal.get("points")
-    if not isinstance(horizontal_points, (list, tuple)) or not horizontal_points:
-        return
-    last = _legacy_axis_point(horizontal_points[-1])
-    if last is None or last[0] <= 0:
-        return
-    length = last[0]
-
-    rewritten_profiles: dict[str, list[dict[str, Any]]] = {}
-    for profile_name in ("profile_h", "profile_v"):
-        profile = payload.get(profile_name)
-        if not isinstance(profile, Mapping):
-            return
-        points = profile.get("points")
-        if not isinstance(points, (list, tuple)):
-            return
-        rewritten: list[dict[str, Any]] = []
-        for point in points:
-            parsed = _legacy_axis_point(point)
-            if parsed is None:
-                return
-            z, values = parsed
-            rewritten.append({"t": z / length, **values})
-        rewritten_profiles[profile_name] = rewritten
+    length, rewritten_profiles = plan
 
     payload["length"] = length
     for profile_name, points in rewritten_profiles.items():

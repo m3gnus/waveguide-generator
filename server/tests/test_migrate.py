@@ -268,6 +268,19 @@ def test_axis_migration_does_not_invent_an_invalid_length(mouth_z: object) -> No
         DesignConfig.model_validate(migrated)
 
 
+def test_axis_migration_does_not_report_success_for_malformed_second_profile() -> None:
+    payload = {
+        "formula": "FREEFORM",
+        "profile_h": {"points": [{"z": 0, "r": 10}, {"z": 100, "r": 50}]},
+        "profile_v": {"points": [{"z": 0, "r": 10}, {"r": 40}]},
+    }
+
+    migrated, applied = apply_migrations(payload)
+
+    assert migrated == payload
+    assert all(item.name != "005_freeform_normalized_axis" for item in applied)
+
+
 @pytest.mark.parametrize(
     "ratio",
     ["NaN", "Infinity", 10**10000],

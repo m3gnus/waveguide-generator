@@ -14,6 +14,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from server.engines.registry import EngineRegistry, detect_engines
 from server.design.schema import DesignConfig
@@ -25,9 +26,9 @@ from server.jobs import mount_jobs
 from server.mesh.gmsh_worker import prewarm_gmsh_worker, shutdown_gmsh_worker
 from server.mesh.prewarm import prewarm_mesher, shutdown_mesher_prewarm
 from server.platform.origin import (
-    local_origin,
     local_request_host,
     parse_extra_websocket_origins,
+    request_origin_allowed,
 )
 from server.platform.paths import resolve_data_dir
 from server.preview.service import mount_preview
@@ -46,7 +47,75 @@ VERSION = str(
 FRONTEND_DIST = Path(__file__).resolve().parents[1] / "frontend" / "dist"
 DEFAULT_WORKSPACE_DIR = Path(__file__).resolve().parents[1] / "output"
 request_log = logging.getLogger("wg.requests")
-_local_origin = local_origin
+MAX_REQUEST_BODY_BYTES = 64 * 1024 * 1024
+
+
+class _RequestBodyLimitMiddleware:
+    """Enforce a global byte ceiling without buffering accepted request bodies."""
+
+    def __init__(self, app: ASGIApp, *, max_body_bytes: int) -> None:
+        self.app = app
+        self.max_body_bytes = max_body_bytes
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        for name, raw_value in scope.get("headers", ()):
+            if name.lower() != b"content-length":
+                continue
+            try:
+                declared_size = int(raw_value)
+            except ValueError:
+                break
+            if declared_size > self.max_body_bytes:
+                await self._reject(scope, receive, send)
+                return
+            break
+
+        received = 0
+        response_started = False
+        too_large = False
+
+        async def limited_receive() -> Message:
+            nonlocal received, too_large
+            if too_large:
+                return {"type": "http.disconnect"}
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > self.max_body_bytes:
+                    too_large = True
+                    return {"type": "http.disconnect"}
+            return message
+
+        async def tracked_send(message: Message) -> None:
+            nonlocal response_started
+            if too_large:
+                return
+            if message["type"] == "http.response.start":
+                response_started = True
+            await send(message)
+
+        try:
+            await self.app(scope, limited_receive, tracked_send)
+        except Exception:
+            if not too_large:
+                raise
+        if too_large:
+            if response_started:
+                raise RuntimeError(
+                    "request body exceeded the limit after the response started"
+                ) from None
+            await self._reject(scope, receive, send)
+
+    @staticmethod
+    async def _reject(scope: Scope, receive: Receive, send: Send) -> None:
+        await JSONResponse(
+            status_code=413,
+            content={"detail": "Request body exceeds the 64 MB limit."},
+        )(scope, receive, send)
 
 
 async def prewarm_solver() -> None:
@@ -123,6 +192,10 @@ def create_app(
     # 0.3% of loopback bytes for 89 ms of first-paint latency is not a trade
     # worth making.
     application.add_middleware(GZipMiddleware, minimum_size=500, compresslevel=1)
+    application.add_middleware(
+        _RequestBodyLimitMiddleware,
+        max_body_bytes=MAX_REQUEST_BODY_BYTES,
+    )
     # One persistent owner thread services every gmsh call.  Prewarming here
     # retains the v1 off-main-thread ``interruptible=False`` invariant from
     # ``server/services/gmsh_worker.py:44-84`` and removes the first-build cliff.
@@ -178,9 +251,15 @@ def create_app(
                 },
             )
         origin = request.headers.get("origin")
-        if origin is not None and not _local_origin(origin):
+        if not request_origin_allowed(
+            origin=origin,
+            host=host,
+            scheme=request.url.scheme,
+            bound_port=bound_port,
+            extra_origins=extra_ws_origins,
+        ):
             request_log.warning(
-                "Rejected %s %s from non-local Origin %r; use the local application URL",
+                "Rejected %s %s from disallowed Origin %r; use the local application URL",
                 request.method,
                 request.url.path,
                 origin,
@@ -188,8 +267,8 @@ def create_app(
             return JSONResponse(
                 status_code=403,
                 content={
-                    "detail": "Non-local Origin rejected. Open Waveguide Generator "
-                    "from http://127.0.0.1 or http://localhost."
+                    "detail": "Non-local Origin or unapproved cross-origin request "
+                    "rejected. Open Waveguide Generator from its current loopback URL."
                 },
             )
         return await call_next(request)

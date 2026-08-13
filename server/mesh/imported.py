@@ -171,13 +171,29 @@ def allocate_imported_tags(
 ) -> dict[str, Any]:
     """Allocate deterministic collision-free tags and their complete meaning."""
 
+    source_list = list(sources)
+    normalized_ids = [str(source["id"]) for source in source_list]
+    seen_ids: set[str] = set()
+    duplicate_id_set: set[str] = set()
+    for source_id in normalized_ids:
+        if source_id in seen_ids:
+            duplicate_id_set.add(source_id)
+        else:
+            seen_ids.add(source_id)
+    duplicate_ids = sorted(duplicate_id_set)
+    if duplicate_ids:
+        raise ImportedMeshError(
+            "tag allocation: duplicate normalized source ids are not allowed: "
+            f"{duplicate_ids}"
+        )
+
     skipped = set(skipped_source_ids)
     tag_map: dict[str, dict[str, Any]] = {
         str(RIGID_TAG): {"source_id": None, "instance_id": None, "role": "rigid"}
     }
     source_tags: dict[str, int] = {}
     tag = FIRST_SOURCE_TAG
-    for source in sources:
+    for source in source_list:
         source_id = str(source["id"])
         if source_id in skipped:
             continue
@@ -408,7 +424,21 @@ def _lookup_faces(
     """Resolve case-insensitive labels with the legacy guarded port alias."""
 
     result: set[int] = set()
-    folded = {key.casefold(): value for key, value in groups.items()}
+    folded: dict[str, set[int]] = {}
+    labels_by_folded: dict[str, list[str]] = {}
+    for raw_label, raw_faces in groups.items():
+        label = str(raw_label)
+        folded_label = label.casefold()
+        faces = {int(face) for face in raw_faces}
+        previous = folded.get(folded_label)
+        labels_by_folded.setdefault(folded_label, []).append(label)
+        if previous is not None and previous != faces:
+            raise RoleResolutionError(
+                "role resolution: case-insensitive STEP labels collide with "
+                "different face sets: "
+                f"{labels_by_folded[folded_label]}"
+            )
+        folded[folded_label] = faces
     label_values = tuple(labels)
     selected = {str(label).casefold() for label in label_values}
     requested = {
