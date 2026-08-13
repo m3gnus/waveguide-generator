@@ -114,6 +114,15 @@ describe('Viewport preview errors', () => {
     expect(timing?.textContent).toBe('geometry 1388.0 ms · on screen —');
     expect(timing?.textContent).not.toContain('+ client');
   });
+
+  it('starts in an untilted orthographic front view for precise shape inspection', () => {
+    const front = [...host.querySelectorAll<HTMLButtonElement>('.viewport-tool-text')]
+      .find((button) => button.textContent === 'Front');
+    const projection = host.querySelector<HTMLButtonElement>('.projection-toggle');
+
+    expect(front?.classList.contains('on')).toBe(true);
+    expect(projection?.textContent).toBe('Ortho');
+  });
 });
 
 describe('Viewport geometry warnings', () => {
