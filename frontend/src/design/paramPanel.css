@@ -60,6 +60,10 @@
 .linked-design-card > div { display: grid; gap: 2px; }
 .linked-design-card span:not(.cad-connection-dot) { color: var(--fg3); font-size: var(--text-micro); line-height: 1.4; }
 .linked-design-drift { margin: 5px 0; color: var(--amber); font-size: var(--text-micro); }
+.linked-design-drift p { margin: 0; }
+.linked-design-drift ul { display: flex; flex-wrap: wrap; gap: 3px; margin: 4px 0 0; padding: 0; list-style: none; }
+.linked-design-drift li { min-width: 0; padding: 2px 5px; border: 1px solid color-mix(in srgb, var(--amber) 38%, var(--hair)); border-radius: var(--r3); background: color-mix(in srgb, var(--amber) 6%, var(--surface-panel)); }
+.linked-design-drift code { display: block; overflow: hidden; color: var(--amber); font-family: var(--mono); text-overflow: ellipsis; white-space: nowrap; }
 .linked-design-action { width: 100%; min-height: 30px; }
 .realized-dimensions-empty, .realized-dimensions-warning { display: grid; gap: 3px; padding: 9px; border: 1px solid var(--hair-soft); background: var(--ov1); }
 .realized-dimensions-empty b, .realized-dimensions-warning b { color: var(--fg1); font-size: var(--text-base); }
