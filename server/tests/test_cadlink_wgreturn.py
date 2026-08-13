@@ -52,6 +52,26 @@ def test_worked_example_shape_and_real_member_table_validate(tmp_path: Path) -> 
     assert result.manifest["sources"][0]["id"] == "source-hf"
     assert result.manifest["instances"][0]["config"]["dimensions"]["length"]["raw"] == "130"
     assert result.artifact_sha256.startswith("sha256:")
+    assert result.degradations == (
+        "stale detection unavailable: this returned bundle predates wgreturn 1.1 "
+        "and carries no document signature",
+    )
+
+
+def test_signature_hash_contract_tracks_wgreturn_minor_version(tmp_path: Path) -> None:
+    missing = _manifest(b"STEP")
+    missing["wgreturn_version"] = "1.1"
+    with pytest.raises(WgReturnError, match=r"\$\.assembly\.signature_hash: is required"):
+        read_wgreturn(write_bundle(tmp_path / "missing", missing))
+
+    current = _manifest(b"STEP")
+    current["wgreturn_version"] = "1.1"
+    current["assembly"]["signature_hash"] = "sha256:document"
+    assert read_wgreturn(write_bundle(tmp_path / "current", current)).degradations == ()
+
+    legacy = _manifest(b"STEP")
+    legacy["assembly"]["signature_hash"] = "sha256:document"
+    assert read_wgreturn(write_bundle(tmp_path / "legacy", legacy)).degradations == ()
 
 
 @pytest.mark.parametrize(
@@ -190,3 +210,32 @@ def test_reader_enforces_disc_area_and_anchor_rules(tmp_path: Path) -> None:
     unknown["coordinate_system"]["solver_anchor_instance_id"] = "unknown"
     with pytest.raises(WgReturnError, match="must name the sole instance"):
         read_wgreturn(write_bundle(tmp_path / "unknown-anchor", unknown))
+
+
+def test_an_empty_signature_hash_is_refused_like_a_missing_one(tmp_path: Path) -> None:
+    """A blank hash compares equal to nothing and would fail open.
+
+    ``_string`` already rejects it, so this pins existing behaviour rather than
+    adding any: a later "just check the key is present" refactor would
+    reintroduce exactly the silence the version bump exists to remove.
+    """
+
+    blank = _manifest(b"STEP")
+    blank["wgreturn_version"] = "1.1"
+    blank["assembly"]["signature_hash"] = ""
+    with pytest.raises(WgReturnError, match=r"\$\.assembly\.signature_hash: must be a non-empty string"):
+        read_wgreturn(write_bundle(tmp_path / "blank", blank))
+
+
+def test_the_degradation_reaches_ingestion_findings_not_just_the_bundle() -> None:
+    """Recording a degradation nobody reads is still a silent degradation.
+
+    The bundle carries it, but the ingestion record is what a user sees, so
+    surfacing it as a finding is the part that actually closes the gap.
+    """
+
+    from server.cadlink import ingest
+
+    source = Path(ingest.__file__).read_text(encoding="utf-8")
+    assert "stale-detection-unavailable" in source
+    assert "degradations" in source
