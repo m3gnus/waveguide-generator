@@ -20,7 +20,7 @@ const TRACEABILITY_KEYS = {
   FREEFORM: ['scale', 'length', 'throatRadius', 'throatAngle', 'mouthRadiusH', 'mouthAngleH', 'interiorH', 'mouthRadiusV', 'mouthAngleV', 'interiorV', 'crossSections', 'inflectionPolicy'],
   COMMON: [
     'throatExtAngle', 'throatExtLength', 'slotLength',
-    'morphTarget', 'morphWidth', 'morphHeight', 'morphCorner', 'morphRate', 'morphFixed', 'morphAllowShrinkage',
+    'morphTarget', 'morphWidth', 'morphHeight', 'morphExponent', 'morphCorner', 'morphRate', 'morphFixed', 'morphAllowShrinkage',
     'wallThickness', 'encDepth', 'encEdge', 'encEdgeType', 'encSpaceL', 'encSpaceT', 'encSpaceR', 'encSpaceB',
     'throatProfile', 'rot', 'gcurveType', 'gcurveDist', 'gcurveWidth', 'gcurveAspectRatio', 'gcurveSeN', 'gcurveSf',
     'gcurveSfA', 'gcurveSfB', 'gcurveSfM1', 'gcurveSfM2', 'gcurveSfN1', 'gcurveSfN2', 'gcurveSfN3', 'gcurveRot', 'circArcTermAngle', 'circArcRadius',
@@ -34,8 +34,8 @@ const TRACEABILITY_KEYS = {
 describe('complete parameter registry', () => {
   it('covers every current family-qualified traceability entry with no deferrals', () => {
     const encodedCount = Object.values(TRACEABILITY_KEYS).reduce<number>((count, keys) => count + keys.length, 0);
-    expect(encodedCount).toBe(105);
-    expect(TRACEABILITY_PARAMETER_INVENTORY).toHaveLength(105);
+    expect(encodedCount).toBe(106);
+    expect(TRACEABILITY_PARAMETER_INVENTORY).toHaveLength(106);
     expect(TRACEABILITY_PARAMETER_INVENTORY.every(traceEntryIsRegistered)).toBe(true);
 
     for (const [family, keys] of Object.entries(TRACEABILITY_KEYS)) {
@@ -105,7 +105,7 @@ describe('complete parameter registry', () => {
     expect(visibleIds('FREEFORM')).toContain('freeform.crossSections');
     expect(visibleIds('FREEFORM')).toContain('freeform.inflectionPolicy');
     expect(visibleIds('FREEFORM').some((id) => id.includes('TangentScale') || id.includes('overshoot'))).toBe(false);
-    expect(visibleIds('FREEFORM')).not.toContain('morph.target_shape');
+    expect(visibleIds('FREEFORM')).toContain('morph.target_shape');
     const length = PARAMETER_REGISTRY.find((field) => field.id === 'freeform.length')!;
     expect(length.path).toBe('length');
     expect(length.mirrorPaths).toBeUndefined();
@@ -126,6 +126,9 @@ describe('complete parameter registry', () => {
     expect(visible('guide.superellipse_n', osse)).toBe(false);
     osse.guiding_curve.curve_type = 1;
     expect(visible('guide.superellipse_n', osse)).toBe(true);
+    expect(visible('morph.target_exponent', osse)).toBe(false);
+    osse.morph.target_shape = 3;
+    expect(visible('morph.target_exponent', osse)).toBe(true);
     osse.mesh.sampling_mode = 'zmap';
     expect(visible('mesh.z_map_points', osse)).toBe(true);
   });
@@ -136,10 +139,32 @@ describe('complete parameter registry', () => {
     expect(PARAMETER_REGISTRY.find((field) => field.legacyKey === 'sourceVelocity')?.id).toBe('source.velocity_convention');
   });
 
-  it('marks all 43 daggered rows expression-capable, with tuple support for both enclosure resolutions', () => {
+  it('marks all 43 daggered rows and the morph exponent expression-capable, with tuple support for both enclosure resolutions', () => {
     const tupleIds = new Set(['enclosure.front_resolution', 'enclosure.back_resolution']);
-    expect([...EXPRESSION_PARAMETER_IDS].filter((id) => !tupleIds.has(id))).toHaveLength(43);
+    expect([...EXPRESSION_PARAMETER_IDS].filter((id) => !tupleIds.has(id))).toHaveLength(44);
+    expect(EXPRESSION_PARAMETER_IDS.has('morph.target_exponent')).toBe(true);
     expect([...tupleIds].every((id) => EXPRESSION_PARAMETER_IDS.has(id))).toBe(true);
+  });
+
+  it('registers the Superellipse morph target and its conditional exponent control', () => {
+    const target = PARAMETER_REGISTRY.find((field) => field.id === 'morph.target_shape')!;
+    expect(target.options).toEqual([
+      { value: 0, label: 'None' },
+      { value: 1, label: 'Rectangle' },
+      { value: 2, label: 'Circle' },
+      { value: 3, label: 'Superellipse' },
+    ]);
+
+    const exponent = PARAMETER_REGISTRY.find((field) => field.id === 'morph.target_exponent')!;
+    expect(exponent).toMatchObject({
+      legacyKey: 'morphExponent',
+      path: 'morph.target_exponent',
+      section: 'Morph Target',
+      kind: 'number',
+      min: 2,
+      max: 16,
+      families: ['R-OSSE', 'OSSE', 'ICW', 'FREEFORM'],
+    });
   });
 
   it('keeps solve-mesh preconfiguration visible while outer-body fields follow the explicit mode', () => {
