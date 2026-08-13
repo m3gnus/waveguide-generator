@@ -3,10 +3,16 @@
 Status: active checklist. Last local verification: 2026-08-13.
 
 The rebuilt application is on `main`, the remote is the existing
-`m3gnus/waveguide-generator` repository, the local repository has `v0.2.1` and
-`v0.2.2` tags, and hosted CI has run since the initial port. These facts supersede the
-pre-cutover plan. Local tags and workflow files do not prove that a current GitHub
+`m3gnus/waveguide-generator` repository, the local repository has `v0.2.1`, `v0.2.2`
+and `v0.2.3` tags, and hosted CI has run since the initial port. These facts supersede
+the pre-cutover plan. Local tags and workflow files do not prove that a current GitHub
 release or every remote check succeeded.
+
+`v0.2.3` is the current declared version in `shared/version.json`, and its Windows and
+BEMPP hotfix work is merged to `main`. It carries the first release whose automatic
+exports are written server-side into the workspace rather than downloaded by the
+browser, so its install and upgrade evidence is not interchangeable with the `v0.2.2`
+reports below.
 
 ## Verified locally
 
@@ -30,6 +36,9 @@ release or every remote check succeeded.
       platforms, recording pre/post job counts and artifact hashes.
 - [ ] Publish owned-hardware Metal/BEMPP qualification evidence for the exact pins.
 - [ ] Complete the beta matrix and record duration, machines, backends, and failures.
+- [ ] Confirm automatic exports land in the configured workspace on a fresh install of
+      each platform, including the `<checkout>/output` default and a workspace on a
+      path with spaces. This route is new in `v0.2.3` and no dated report covers it.
 - [ ] Sweep the maintained compatibility summary and explicitly accept or close every
       remaining deliberate divergence.
 
