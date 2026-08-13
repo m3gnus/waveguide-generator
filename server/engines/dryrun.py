@@ -13,6 +13,7 @@ from server.solver.beam_shape import beam_shape_summary
 from server.solver.contract import build_directivity_metadata
 from server.solver.directivity_index import (
     calculate_di_from_polar_patterns,
+    calculate_plane_di_from_polar_patterns,
     calculate_di_from_spherical_grid,
 )
 
@@ -182,6 +183,12 @@ class DryRunEngine:
             patterns,
             hemisphere=hemisphere,
         )
+        plane_approximation = not any(value is not None for value in directivity_index)
+        di_payload: list[float | None] | dict[str, list[float | None]]
+        if plane_approximation:
+            di_payload = calculate_plane_di_from_polar_patterns(patterns)
+        else:
+            di_payload = directivity_index
 
         observation = {
             "requested_distance_m": float(polar["distance"]),
@@ -217,18 +224,41 @@ class DryRunEngine:
             "verbose": bool(verbose),
             "directivity": build_directivity_metadata(polar, observation),
             "directivity_index": {
-                "available": any(value is not None for value in directivity_index),
-                "definition": "10log10(reference-axis mean-square pressure / full-sphere mean-square pressure)",
-                "method": "horizontal_vertical_orbit_approximation",
-                "domain": "full_sphere",
+                "available": (
+                    any(value is not None for values in di_payload.values() for value in values)
+                    if isinstance(di_payload, dict)
+                    else any(value is not None for value in di_payload)
+                ),
+                "definition": (
+                    "10log10(2 / integral(relative mean-square pressure * sin(theta) dtheta))"
+                    if plane_approximation
+                    else "10log10(reference-axis mean-square pressure / full-sphere mean-square pressure)"
+                ),
+                "method": (
+                    "per_plane_axisymmetric_approximation"
+                    if plane_approximation
+                    else "horizontal_vertical_orbit_approximation"
+                ),
+                "domain": (
+                    "per_plane_axisymmetric_approximation" if plane_approximation else "full_sphere"
+                ),
                 "power_average": "linear_mean_square_pressure",
                 "planes_used": [
-                    plane for plane in ("horizontal", "vertical") if plane in patterns
+                    plane
+                    for plane in patterns
+                    if not isinstance(di_payload, dict)
+                    or any(value is not None for value in di_payload.get(plane, []))
                 ],
                 "opposing_orbit_sides": (
-                    "measured" if measured_both_orbit_sides else "mirrored"
+                    "not_applicable"
+                    if plane_approximation
+                    else "measured" if measured_both_orbit_sides else "mirrored"
                 ),
-                "rear_hemisphere": "zero_radiation" if hemisphere else "sampled",
+                "rear_hemisphere": (
+                    "implicit_in_plane_integral"
+                    if plane_approximation
+                    else "zero_radiation" if hemisphere else "sampled"
+                ),
             },
         }
         response: dict[str, Any] = {
@@ -245,7 +275,7 @@ class DryRunEngine:
                 "real": impedance_real,
                 "imaginary": impedance_imaginary,
             },
-            "di": {"frequencies": frequencies, "di": directivity_index},
+            "di": {"frequencies": frequencies, "di": di_payload},
             "metadata": metadata,
         }
 

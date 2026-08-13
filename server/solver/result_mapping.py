@@ -24,6 +24,7 @@ from .context import SolverContext
 from .contract import build_directivity_metadata, frequency_failure
 from .directivity_index import (
     calculate_di_from_polar_patterns,
+    calculate_plane_di_from_polar_patterns,
     calculate_di_from_spherical_grid,
 )
 from .quadrants import native_symmetry_plane_for_quadrants
@@ -757,6 +758,17 @@ def build_solver_response(
         )
         di_method = "horizontal_vertical_orbit_approximation"
         di_planes = [plane for plane in ("horizontal", "vertical") if plane in patterns]
+    di_payload: list[float | None] | dict[str, list[float | None]] = di_values
+    if not any(value is not None for value in di_values):
+        plane_di = calculate_plane_di_from_polar_patterns(patterns)
+        if any(value is not None for values in plane_di.values() for value in values):
+            di_payload = plane_di
+            di_method = "per_plane_axisymmetric_approximation"
+            di_planes = [
+                plane
+                for plane, values in plane_di.items()
+                if any(value is not None for value in values)
+            ]
     # This is strictly a level/display normalization. Raw wrapped phase is an
     # independent payload and must never pass through this mutating function.
     _renormalize_directivity(
@@ -817,18 +829,31 @@ def build_solver_response(
     ) or float(angle_end) - float(angle_start) >= 2.0 * polar_limit
     orbit_side_method = (
         "not_applicable"
-        if di_method == "spherical_grid"
+        if di_method in {"spherical_grid", "per_plane_axisymmetric_approximation"}
         else "measured" if measured_both_orbit_sides else "mirrored"
     )
+    plane_approximation = di_method == "per_plane_axisymmetric_approximation"
     metadata["directivity_index"] = {
-        "available": any(value is not None for value in di_values),
-        "definition": "10log10(reference-axis mean-square pressure / full-sphere mean-square pressure)",
+        "available": (
+            any(value is not None for values in di_payload.values() for value in values)
+            if isinstance(di_payload, dict)
+            else any(value is not None for value in di_payload)
+        ),
+        "definition": (
+            "10log10(2 / integral(relative mean-square pressure * sin(theta) dtheta))"
+            if plane_approximation
+            else "10log10(reference-axis mean-square pressure / full-sphere mean-square pressure)"
+        ),
         "method": di_method,
-        "domain": "full_sphere",
+        "domain": "per_plane_axisymmetric_approximation" if plane_approximation else "full_sphere",
         "power_average": "linear_mean_square_pressure",
         "planes_used": di_planes,
         "opposing_orbit_sides": orbit_side_method,
-        "rear_hemisphere": "zero_radiation" if context.sim_type == 1 else "sampled",
+        "rear_hemisphere": (
+            "implicit_in_plane_integral"
+            if plane_approximation
+            else "zero_radiation" if context.sim_type == 1 else "sampled"
+        ),
     }
     metadata.update(
         {
@@ -868,7 +893,7 @@ def build_solver_response(
         },
         "di": {
             "frequencies": frequency_values,
-            "di": di_values,
+            "di": di_payload,
         },
         "metadata": metadata,
     }
