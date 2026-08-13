@@ -64,7 +64,14 @@ def _outbound(tmp_path: Path) -> tuple[dict, bytes]:
 
         gmsh.clear()
         gmsh.model.add("source-bearing-return")
-        gmsh.model.occ.addCylinder(0, 0, 0, 0, 0, 70, 12.7)
+        gmsh.model.occ.importShapes(str(product.step_path), highestDimOnly=True)
+        throat = product.manifest["datums"]["WG_THROAT_PLANE"]["origin_mm"]
+        diameter = next(
+            item["value"]
+            for item in product.manifest["parameters"]
+            if item["name"].endswith("_throat_dia")
+        )
+        gmsh.model.occ.addDisk(*throat, diameter / 2.0, diameter / 2.0)
         gmsh.model.occ.synchronize()
         gmsh.write(str(path))
         return path.read_bytes()
@@ -121,6 +128,11 @@ def test_onshape_return_preserves_identity_source_evidence_and_checksums(tmp_pat
     assert instance["export_id"] == outbound["export"]["id"]
     assert instance["origin_bundle_id"] == outbound["bundle"]["id"]
     assert instance["body_evidence"]["local_body_state"] == "unknown"
+    assert manifest["assembly"]["n_bodies_expected"] == 2
+    assert {item["body_kind"] for item in manifest["scope"]["included"]} == {
+        "solid",
+        "surface",
+    }
     assert source["selectors"]["linked_throat"]["instance_id"] == "onshape-PART"
     assert source["observed"]["face_count"] == 1
     assert source["observed"]["total_area_mm2"] == pytest.approx(

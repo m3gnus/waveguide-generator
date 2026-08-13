@@ -196,7 +196,11 @@ def _fingerprints_match(first: Mapping[str, Any], second: Mapping[str, Any]) -> 
     if abs(left_volume - right_volume) > volume_tolerance:
         return False
     return all(
-        abs(left - right) <= max(1.0e-4, 1.0e-7 * max(abs(left), abs(right)))
+        # The outbound fingerprint is measured before STEP serialization.
+        # OCC's write/read round trip expands that box by its modelling
+        # tolerance (about 0.006 mm in the regression fixture), so identity
+        # matching needs a machining-negligible 0.01 mm floor.
+        abs(left - right) <= max(1.0e-2, 1.0e-7 * max(abs(left), abs(right)))
         for left, right in zip(left_bbox, right_bbox, strict=True)
     )
 
@@ -215,11 +219,20 @@ def inspect_step(
 
     gmsh.clear()
     gmsh.model.add("onshape-return-evidence")
-    roots = gmsh.model.occ.importShapes(str(step_path), highestDimOnly=True)
+    # ``highestDimOnly=True`` drops a standalone sheet whenever the same STEP
+    # also contains a solid. Import every dimension, then define root bodies as
+    # volumes plus surfaces that have no owning volume. Constituent solid faces
+    # remain available for source matching but do not inflate the body count.
+    imported = gmsh.model.occ.importShapes(str(step_path), highestDimOnly=False)
     gmsh.model.occ.synchronize()
-    if not roots:
+    if not imported:
         raise OnshapeReturnError("Onshape's STEP export contains no importable CAD bodies.")
-    root_bodies = [(int(dim), int(tag)) for dim, tag in roots if int(dim) in {2, 3}]
+    root_bodies = [(3, int(tag)) for _dim, tag in gmsh.model.getEntities(3)]
+    root_bodies.extend(
+        (2, int(surface))
+        for _dim, surface in gmsh.model.getEntities(2)
+        if len(gmsh.model.getAdjacencies(2, int(surface))[0]) == 0
+    )
     if not root_bodies:
         raise OnshapeReturnError("Onshape's STEP export contains no solid or surface bodies.")
 
