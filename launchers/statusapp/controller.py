@@ -22,6 +22,7 @@ from typing import IO
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from scripts.frontend_freshness import frontend_freshness
 from server.platform.instance import PORT_SCAN_COUNT, requested_port, select_port
 from .updater import UpdateHandoffError, consume_update_request, launch_update_handoff
 
@@ -34,6 +35,7 @@ class ServiceState(str, Enum):
 
     STARTING = "starting"
     OK = "ok"
+    WARNING = "warning"
     ERROR = "error"
     STOPPED = "stopped"
 
@@ -91,6 +93,12 @@ def _installer_hint() -> str:
     if os.name == "nt":
         return r"installers\windows\install-and-update.bat"
     return "installers/linux/install.sh"
+
+
+def _review_build_hint() -> str:
+    if sys.platform == "darwin":
+        return "launchers/macos/launch-wg-dev.command"
+    return "cd frontend && npm run build"
 
 
 def _windows_job_for(process: subprocess.Popen[str]) -> object | None:
@@ -226,6 +234,7 @@ class StatusController:
         self._windows_job: object | None = None
         self._registered_atexit = False
         self._port: int | None = None
+        self._frontend_source_warning: str | None = None
         self._snapshot = StatusSnapshot(
             backend=LampStatus(ServiceState.STOPPED, "Not started"),
             frontend=LampStatus(ServiceState.STOPPED, "Not started"),
@@ -317,6 +326,8 @@ class StatusController:
                     f"frontend/dist missing — run {_installer_hint()} or scripts/fetch_spa.py"
                 )
                 return self._set_error("Backend not started because the interface is missing", reason)
+            frontend_is_fresh, freshness_reason = frontend_freshness(self.repo_root)
+            self._frontend_source_warning = None if frontend_is_fresh else freshness_reason
 
             serve_script = self.repo_root / "launch" / "serve.py"
             if self.server_command is None and not serve_script.is_file():
@@ -485,7 +496,14 @@ class StatusController:
                 normalized = body.lower()
                 if status != 200 or b"<html" not in normalized:
                     raise RuntimeError("SPA route did not return HTML")
-                frontend = LampStatus(ServiceState.OK, "SPA is being served")
+                if self._frontend_source_warning is None:
+                    frontend = LampStatus(ServiceState.OK, "SPA is being served")
+                else:
+                    frontend = LampStatus(
+                        ServiceState.WARNING,
+                        "SPA is being served, but "
+                        f"{self._frontend_source_warning}. Run {_review_build_hint()}.",
+                    )
             except (OSError, RuntimeError, HTTPError, URLError) as exc:
                 frontend = LampStatus(ServiceState.ERROR, "SPA route failed: " + _probe_failure(exc))
 
