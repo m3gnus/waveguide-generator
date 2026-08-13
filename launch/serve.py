@@ -250,6 +250,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         app = create_app(
             data_dir=paths.root,
+            workspace_dir=REPO_ROOT / "output",
             solver_warmup=_solver_warmup_enabled(),
             update_request_path=(
                 args.status_control.with_name("update.json")

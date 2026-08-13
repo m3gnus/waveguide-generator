@@ -345,6 +345,7 @@ def test_launcher_aligns_websocket_transport_limits_with_frame_protocol(
     assert config_kwargs["ws_max_size"] == DEFAULT_MAX_FRAME_BYTES
     assert config_kwargs["ws_max_queue"] == 1
     assert app_kwargs["solver_warmup"] is False
+    assert app_kwargs["workspace_dir"] == serve.REPO_ROOT / "output"
     assert listener_closed is True
     assert lock_released is True
     assert migration_checked is True

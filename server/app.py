@@ -44,6 +44,7 @@ VERSION = str(
     )["version"]
 )
 FRONTEND_DIST = Path(__file__).resolve().parents[1] / "frontend" / "dist"
+DEFAULT_WORKSPACE_DIR = Path(__file__).resolve().parents[1] / "output"
 request_log = logging.getLogger("wg.requests")
 _local_origin = local_origin
 
@@ -86,6 +87,7 @@ class _HashedAssetStaticFiles(StaticFiles):
 def create_app(
     *,
     data_dir: str | Path | None = None,
+    workspace_dir: str | Path | None = None,
     solver_warmup: bool = False,
     update_request_path: str | Path | None = None,
 ) -> FastAPI:
@@ -259,7 +261,15 @@ def create_app(
         engine_registry,
         extra_ws_origins=extra_ws_origins,
     )
-    mount_workspace(application)
+    if workspace_dir is not None:
+        resolved_workspace_dir = Path(workspace_dir).expanduser().resolve()
+    elif data_dir is None:
+        resolved_workspace_dir = DEFAULT_WORKSPACE_DIR
+    else:
+        # Explicit data roots keep tests and embedded callers isolated unless
+        # they also opt into a separate user-document workspace.
+        resolved_workspace_dir = resolved_data_dir / "workspace"
+    mount_workspace(application, default_path=resolved_workspace_dir)
     mount_cadlink(application)
     mount_charts(application)
     mount_updates(

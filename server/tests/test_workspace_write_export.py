@@ -121,11 +121,21 @@ def test_write_export_rejects_invalid_binary_encoding_without_writing(tmp_path: 
     assert list(workspace.iterdir()) == []
 
 
-def test_write_export_requires_selected_workspace(tmp_path: Path) -> None:
-    state = workspace_api.WorkspaceState(tmp_path / "data")
-    with pytest.raises(HTTPException, match="No workspace folder") as caught:
-        call(state, request("horn_1", [("a.frd", "one")]))
-    assert caught.value.status_code == 409
+def test_write_export_uses_visible_default_without_folder_selection(tmp_path: Path) -> None:
+    workspace = tmp_path / "waveguide-generator" / "output"
+    state = workspace_api.WorkspaceState(
+        tmp_path / "data",
+        default_path=workspace,
+    )
+
+    response = call(state, request("horn_1", [("a.frd", "one")]))
+
+    assert response == {
+        "directory": str(workspace / "horn_1"),
+        "files": [str(workspace / "horn_1" / "a.frd")],
+    }
+    assert (workspace / "horn_1" / "a.frd").read_text() == "one"
+    assert state.selected_path() is None
 
 
 def test_deleted_workspace_selection_is_stale_and_is_not_recreated(tmp_path: Path) -> None:
