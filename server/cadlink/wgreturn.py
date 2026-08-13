@@ -19,7 +19,7 @@ import unicodedata
 
 
 SUPPORTED_MAJOR = 1
-SUPPORTED_VERSION = "1.0"
+SUPPORTED_VERSION = "1.1"
 SUPPORTED_FEATURES = frozenset(
     {
         "checksummed-files-v1",
@@ -48,6 +48,10 @@ _VERSION = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 _SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 _RETURN_ID = re.compile(r"^wgr_[0-9A-HJKMNP-TV-Z]{26}$")
 _WINDOWS_DRIVE = re.compile(r"^[A-Za-z]:")
+_LEGACY_SIGNATURE_DEGRADATION = (
+    "stale detection unavailable: this returned bundle predates wgreturn 1.1 "
+    "and carries no document signature"
+)
 
 
 class WgReturnError(ValueError):
@@ -73,6 +77,7 @@ class WgReturnBundle:
     assembly_path: Path
     artifact_sha256: str
     members: dict[str, Path]
+    degradations: tuple[str, ...] = ()
 
 
 def _fail(path: str, message: str) -> None:
@@ -382,6 +387,7 @@ def validate_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
         _fail("$.wgreturn_version", "must be exactly major.minor")
     if int(match.group(1)) != SUPPORTED_MAJOR:
         _fail("$.wgreturn_version", f"unsupported major {match.group(1)}; reader supports {SUPPORTED_VERSION}")
+    minor_version = int(match.group(2))
     features = _list(_required(manifest, "required_features", "$"), "$.required_features")
     feature_names = []
     for index, item in enumerate(features):
@@ -423,6 +429,15 @@ def validate_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     _string(_required(assembly, "file", "$.assembly"), "$.assembly.file")
     _integer(_required(assembly, "n_bodies_expected", "$.assembly"), "$.assembly.n_bodies_expected", minimum=1)
     _bbox(_required(assembly, "bbox_mm", "$.assembly"), "$.assembly.bbox_mm")
+    # Version 1.1 makes the document signature mandatory so a missing value
+    # cannot silently turn an unknown freshness comparison into "unchanged".
+    if minor_version >= 1:
+        _string(
+            _required(assembly, "signature_hash", "$.assembly"),
+            "$.assembly.signature_hash",
+        )
+    elif assembly.get("signature_hash") is not None:
+        _string(assembly["signature_hash"], "$.assembly.signature_hash")
 
     scope = _mapping(_required(manifest, "scope", "$"), "$.scope")
     _string(_required(scope, "selection", "$.scope"), "$.scope.selection")
@@ -588,6 +603,12 @@ def read_wgreturn(path: str | Path) -> WgReturnBundle:
         assembly_path=members[assembly_name].resolve(),
         artifact_sha256=str(table[assembly_name]["sha256"]),
         members={name: member.resolve() for name, member in members.items()},
+        degradations=(
+            (_LEGACY_SIGNATURE_DEGRADATION,)
+            if manifest["wgreturn_version"] == "1.0"
+            and manifest["assembly"].get("signature_hash") is None
+            else ()
+        ),
     )
 
 

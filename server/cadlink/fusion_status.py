@@ -24,6 +24,10 @@ FUSION_STATUS_FILENAME = ".fusion-status.json"
 IPC_SUBDIRECTORY = Path("ipc") / "wglink"
 FUSION_STATUS_TTL = timedelta(seconds=20)
 _MAX_STATUS_BYTES = 256 * 1024
+_LEGACY_SIGNATURE_EXPLANATION = (
+    "stale detection unavailable: this returned bundle predates wgreturn 1.1 "
+    "and carries no document signature"
+)
 
 
 def fusion_process_running(*, system: str | None = None) -> bool:
@@ -218,6 +222,9 @@ def read_fusion_status(
         "link": None,
         "wgChangesAvailable": False,
         "fusionChangesAvailable": False,
+        "documentChanged": False,
+        "documentChangeDetectable": False,
+        "staleDetectionExplanation": None,
     }
     try:
         if marker.is_symlink() or not marker.is_file():
@@ -293,6 +300,14 @@ def read_fusion_status(
         and returned_document_hash
         and current_document_hash != returned_document_hash
     )
+    document_change_detectable = bool(
+        current_document_hash and returned_document_hash
+    )
+    stale_detection_explanation = (
+        _LEGACY_SIGNATURE_EXPLANATION
+        if returned_bundle is not None and returned_document_hash is None
+        else None
+    )
     inventory_changed = bool(
         returned_body_count is not None
         and link.get("documentBodyCount")
@@ -326,6 +341,9 @@ def read_fusion_status(
         "link": link,
         "wgChangesAvailable": wg_changes_available,
         "fusionChangesAvailable": fusion_changes_available,
+        "documentChanged": document_changed,
+        "documentChangeDetectable": document_change_detectable,
+        "staleDetectionExplanation": stale_detection_explanation,
     }
 
 
