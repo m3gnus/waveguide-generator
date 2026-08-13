@@ -353,21 +353,33 @@ def _wglink_response(
     return payload
 
 
+UNAVAILABLE_WORKSPACE = (
+    "The selected workspace folder is unavailable. Choose a workspace folder first."
+)
+
+
 def _export_wglink_sync(
     request: WgLinkExportRequest,
     store: CadLinkStore,
     workspace_root: Path,
     idempotency_key: str,
+    unavailable_detail: str = UNAVAILABLE_WORKSPACE,
 ) -> dict[str, Any]:
+    """Build one identity-bearing bundle under ``workspace_root/wglink``.
+
+    ``workspace_root`` is the user's selected workspace for the Fusion leg, and
+    WG's own data directory for Onshape -- which has no local client, so
+    requiring a workspace folder merely to reach a cloud CAD would be a tax with
+    no purpose. Everything else about the bundle, including its identity and its
+    place in the export sequence, is the same either way.
+    """
+
     from hornlab_mesher import WgLinkIdentity, write_wglink
     from hornlab_mesher.config_builder import resolve_geometry
 
     workspace_root = workspace_root.resolve()
     if not workspace_root.is_dir():
-        raise HTTPException(
-            status_code=409,
-            detail="The selected workspace folder is unavailable. Choose a workspace folder first.",
-        )
+        raise HTTPException(status_code=409, detail=unavailable_detail)
     wglink_root = (workspace_root / "wglink").resolve()
     if workspace_root != wglink_root and workspace_root not in wglink_root.parents:
         raise HTTPException(status_code=422, detail="CAD-link destination resolves outside the selected workspace")
@@ -392,10 +404,7 @@ def _export_wglink_sync(
     try:
         wglink_root.mkdir(exist_ok=True)
     except OSError as exc:
-        raise HTTPException(
-            status_code=409,
-            detail="The selected workspace folder is unavailable. Choose a workspace folder first.",
-        ) from exc
+        raise HTTPException(status_code=409, detail=unavailable_detail) from exc
 
 
     def build(facts: Mapping[str, object]) -> Mapping[str, str]:

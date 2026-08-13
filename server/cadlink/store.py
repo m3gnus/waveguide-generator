@@ -69,6 +69,30 @@ _SCHEMA = (
     """,
     "CREATE INDEX IF NOT EXISTS ingests_by_manifest ON ingests(manifest_sha256)",
     "CREATE INDEX IF NOT EXISTS ingests_by_artifact ON ingests(artifact_sha256)",
+    # Onshape has no local add-in to hold link state, so WG owns it. One row per
+    # (design, account): the document a design was sent to, and the elements
+    # inside it that an update must reuse rather than recreate.
+    """
+    CREATE TABLE IF NOT EXISTS onshape_links (
+      design_id TEXT NOT NULL REFERENCES designs(design_id),
+      account_id TEXT NOT NULL,
+      document_id TEXT NOT NULL,
+      workspace_id TEXT NOT NULL,
+      blob_element_id TEXT NOT NULL,
+      part_studio_element_id TEXT,
+      variable_studio_element_id TEXT,
+      document_name TEXT NOT NULL,
+      is_public INTEGER NOT NULL DEFAULT 0,
+      last_export_id TEXT,
+      last_sequence INTEGER,
+      last_design_hash TEXT,
+      last_geometry_hash TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (design_id, account_id)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS onshape_links_by_document ON onshape_links(document_id)",
 )
 
 
@@ -94,7 +118,7 @@ class CadLinkStore:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._lock, self._transaction() as conn:
             version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-            if version not in {0, 1, 2, 3}:
+            if version not in {0, 1, 2, 3, 4}:
                 raise RuntimeError(f"unsupported cadlink.db schema version {version}")
             for statement in _SCHEMA:
                 conn.execute(statement)
@@ -103,7 +127,7 @@ class CadLinkStore:
             }
             if "bundle_path" not in export_columns:
                 conn.execute("ALTER TABLE exports ADD COLUMN bundle_path TEXT")
-            conn.execute("PRAGMA user_version = 3")
+            conn.execute("PRAGMA user_version = 4")
         self._initialized = True
 
     def get_design(self, design_id: str) -> dict[str, Any] | None:
@@ -383,6 +407,146 @@ class CadLinkStore:
                 "SELECT * FROM exports WHERE idempotency_key = ?", (idempotency_key,)
             ).fetchone()
         return self._row(row) or {}
+
+    def get_onshape_link(
+        self, design_id: str, account_id: str | None = None
+    ) -> dict[str, Any] | None:
+        """The link for one design. ``account_id=None`` means any account.
+
+        Status polling has no Onshape account id to hand -- resolving one costs
+        a network round trip, and the panel polls -- so it asks for whichever
+        link is newest and reports the account it belongs to.
+        """
+
+        if account_id is None:
+            return self._read_one(
+                "SELECT * FROM onshape_links WHERE design_id = ? "
+                "ORDER BY updated_at DESC LIMIT 1",
+                (design_id,),
+            )
+        return self._read_one(
+            "SELECT * FROM onshape_links WHERE design_id = ? AND account_id = ?",
+            (design_id, account_id),
+        )
+
+    def find_onshape_links_for_lineage(
+        self, lineage_id: str, account_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Every linked document in one lineage, newest first.
+
+        A design forks on a conflicting save (see ``save``), which mints a new
+        ``design_id`` in the same lineage. Without this the forked design would
+        look unlinked and create a second Onshape document for what the user
+        experiences as one design.
+        """
+
+        if not self._initialized and (
+            str(self.db_path) == ":memory:" or not self.db_path.exists()
+        ):
+            return []
+        sql = """
+            SELECT onshape_links.* FROM onshape_links
+            JOIN designs ON designs.design_id = onshape_links.design_id
+            WHERE designs.lineage_id = ?
+        """
+        parameters: tuple[object, ...] = (lineage_id,)
+        if account_id is not None:
+            sql += " AND onshape_links.account_id = ?"
+            parameters = (lineage_id, account_id)
+        sql += " ORDER BY onshape_links.updated_at DESC"
+        with self._lock:
+            try:
+                rows = self._connect().execute(sql, parameters).fetchall()
+            except sqlite3.OperationalError as exc:
+                if "no such table" in str(exc):
+                    return []
+                raise
+        return [dict(row) for row in rows]
+
+    def save_onshape_link(
+        self,
+        *,
+        design_id: str,
+        account_id: str,
+        document_id: str,
+        workspace_id: str,
+        blob_element_id: str,
+        part_studio_element_id: str | None,
+        variable_studio_element_id: str | None,
+        document_name: str,
+        is_public: bool,
+        last_export_id: str | None,
+        last_sequence: int | None,
+        last_design_hash: str | None,
+        last_geometry_hash: str | None,
+        saved_at: str | None = None,
+    ) -> dict[str, Any]:
+        """Record where a design now lives in Onshape, replacing any prior row."""
+
+        self.initialize()
+        now = saved_at or utc_now()
+        with self._lock, self._transaction() as conn:
+            existing = conn.execute(
+                "SELECT created_at FROM onshape_links WHERE design_id = ? AND account_id = ?",
+                (design_id, account_id),
+            ).fetchone()
+            created_at = str(existing["created_at"]) if existing else now
+            conn.execute(
+                """
+                INSERT INTO onshape_links (
+                  design_id, account_id, document_id, workspace_id, blob_element_id,
+                  part_studio_element_id, variable_studio_element_id, document_name,
+                  is_public, last_export_id, last_sequence, last_design_hash,
+                  last_geometry_hash, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (design_id, account_id) DO UPDATE SET
+                  document_id = excluded.document_id,
+                  workspace_id = excluded.workspace_id,
+                  blob_element_id = excluded.blob_element_id,
+                  part_studio_element_id = excluded.part_studio_element_id,
+                  variable_studio_element_id = excluded.variable_studio_element_id,
+                  document_name = excluded.document_name,
+                  is_public = excluded.is_public,
+                  last_export_id = excluded.last_export_id,
+                  last_sequence = excluded.last_sequence,
+                  last_design_hash = excluded.last_design_hash,
+                  last_geometry_hash = excluded.last_geometry_hash,
+                  updated_at = excluded.updated_at
+                """,
+                (
+                    design_id,
+                    account_id,
+                    document_id,
+                    workspace_id,
+                    blob_element_id,
+                    part_studio_element_id,
+                    variable_studio_element_id,
+                    document_name,
+                    1 if is_public else 0,
+                    last_export_id,
+                    last_sequence,
+                    last_design_hash,
+                    last_geometry_hash,
+                    created_at,
+                    now,
+                ),
+            )
+            row = conn.execute(
+                "SELECT * FROM onshape_links WHERE design_id = ? AND account_id = ?",
+                (design_id, account_id),
+            ).fetchone()
+        return self._row(row) or {}
+
+    def delete_onshape_link(self, design_id: str, account_id: str) -> bool:
+        """Forget a link so the next send creates a fresh document."""
+
+        self.initialize()
+        with self._lock, self._transaction() as conn:
+            cursor = conn.execute(
+                "DELETE FROM onshape_links WHERE design_id = ? AND account_id = ?",
+                (design_id, account_id),
+            )
+        return cursor.rowcount > 0
 
     def close(self) -> None:
         with self._connections_lock:
