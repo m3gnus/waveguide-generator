@@ -10,13 +10,13 @@ CSV union-frequency join, chart/directivity PNGs, on-axis FRD, VituixCAD H/V FRD
 stored polar phase, STEP solid/surface, STL, config, JSON, polar/impedance CSV, and
 Fusion curve exports are implemented. Those are current behavior, not plan items.
 
-`v0.2.3` added the workspace write route. **Automatic** exports no longer download
-through the browser: `runWorkspaceExportBundle` posts every member of one completed run
-to `POST /api/workspace/write-export` in a single request, and the server writes them
-into the configured workspace, defaulting to `<checkout>/output`. **Manual** exports from
-the run menu still download, one browser download per format. That split is deliberate
-and is the starting point for the archive decision below, which is now a question about
-the manual path only.
+`v0.2.3` added the workspace write route. **Manual and automatic completed-run exports**
+no longer download through the browser: every run-result entry point uses
+`runWorkspaceExportBundle`, which prepares the selected members in memory and posts them
+to `POST /api/workspace/write-export` in a single request. The server writes them into
+the configured workspace, defaulting to `<checkout>/output`, under the run's stable
+subdirectory. Browser download permissions and the browser's Downloads destination are
+therefore outside the completed-run export path.
 
 ## Remaining engineering
 
@@ -24,13 +24,13 @@ the manual path only.
       shared export dispatcher. All three are now first-class preference formats;
       manual polar sets retain their selected-Workspace destination, while automatic
       polar sets use the common per-run Workspace staging path.
-- [ ] Decide whether a **manual** multi-format action remains multiple browser downloads,
-      gains one server-built archive, or reuses the workspace write route the automatic
-      path now takes. If an archive is built, define a versioned manifest, member hashes,
-      omission/failure states, ZIP64/size limits, cancellation, temp-file cleanup, and
-      exactly one download per action. The automatic path answered this for itself by
-      writing files into the workspace; it did not answer it for the manual one, and
-      three destinations for the same artifacts would be one too many.
+- [ ] Decide whether a multi-format action should remain individual members in one
+      Workspace run directory or gain one server-built archive in that directory. If an
+      archive is built, define a versioned manifest, member hashes, omission/failure
+      states, ZIP64/size limits, cancellation, temp-file cleanup, and the relationship
+      between the archive and its expanded members. Manual and automatic run exports
+      already share the Workspace route; this is now a packaging and retention decision,
+      not a browser-download destination decision.
 - [ ] Give archived exports a job-snapshot transaction boundary so retention cannot
       remove results or mesh artifacts halfway through assembly.
 - [ ] Reconcile VACS: it remains a preferences format and emits magnitude-only polar
@@ -48,9 +48,9 @@ the manual path only.
 
 - Should an archive include every available artifact or only the selected formats?
 - Are server-rendered chart PNGs always included together, or independently selectable?
-- Does automatic export ever create an archive, or only durable individual files?
-  (It writes individual files into the workspace today; the question is whether that is
-  the settled answer or an interim one.)
+- Do manual or automatic exports ever create an archive, or only durable individual
+  files? (Both write individual files into the workspace today; the question is whether
+  that is the settled answer or an interim one.)
 - Which artifacts are long-lived records versus reproducible conveniences?
 
 Coordinate the shared catalogue/numbering decision with the active CAD-link plan. The
