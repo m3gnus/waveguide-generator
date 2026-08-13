@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { CadLinkApiError, getFusionCadStatus, ingestReturn, listReturns, requestFusionReturn, type CadReturnBundle, type CadReturnFinding, type CadReturnIngestRecord, type FusionCadStatus } from '../api/cadlink';
-import { getOnshapeConnection, getOnshapeStatus, OnshapePublicConsentRequired, sendDesignToOnshape, type OnshapeConnection, type OnshapeStatus } from '../api/onshape';
+import { useState, useSyncExternalStore } from 'react';
+import { requestFusionReturn, type CadReturnFinding, type CadReturnIngestRecord, type FusionCadStatus } from '../api/cadlink';
+import { OnshapePublicConsentRequired, sendDesignToOnshape, type OnshapeStatus } from '../api/onshape';
 import { NumberField } from '../design/NumberField';
 import { FrequencySweepControls, ToggleRow } from '../design/SolveOptionsSections';
 import { useSendToCad } from '../design/useSendToCad';
@@ -17,21 +17,20 @@ import {
   type DriverFieldKey,
 } from '../stores/cadReturn';
 import { useSolveOptionsStore } from '../stores/solveOptions';
-import { createImportedMeshScene } from '../viewport/importedMesh';
 import { importedMeshStore } from '../viewport/importedMeshStore';
-import { parseMSH } from '../viewport/mshParser';
 import { useDesignStore } from '../stores/design';
-import { useDocumentStore, type DesignIdentity } from '../stores/document';
+import { useDocumentStore } from '../stores/document';
 import { filenameStem } from '../viewport/presentation';
+import { cadLinkCoordinatorBridge, showIngestedMeshInViewport } from './CadLinkCoordinator';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { Icon } from './icons';
 import { requestSettings } from './settingsNavigation';
-import { workspaceNavigation } from './workspaceNavigation';
 import './cadLinkPanel.css';
 
 // Kept as public panel helpers for existing callers; implementation lives next
 // to the two solve entry points so the global command can share it.
 export { buildImportedSubmission, widenPolarToDerivation } from '../jobs/importedSubmission';
+export { newestReturnArrival, showIngestedMeshInViewport } from './CadLinkCoordinator';
 
 const FRESHNESS_COPY: Record<string, string> = {
   current: 'Current — unchanged fingerprint and the saved design still agree with this generator.',
@@ -89,19 +88,6 @@ export function onshapeWorkflowView(status: OnshapeStatus | null): CadWorkflowVi
     detail: `WG parameters changed after this Onshape part was built. Sending again replaces the imported part in place, so features you built on it in Onshape are kept.`,
     action: 'update',
   };
-}
-
-export function newestReturnArrival(
-  items: CadReturnBundle[],
-  previous: Map<string, string> | null,
-  nowMs = Date.now(),
-): CadReturnBundle | null {
-  const recentThreshold = nowMs - 60_000;
-  return items.find((item) => item.readable && (
-    previous
-      ? previous.get(item.bundlePath) !== item.modifiedAt
-      : Date.parse(item.modifiedAt) >= recentThreshold
-  )) ?? null;
 }
 
 export function fusionWorkflowView(status: FusionCadStatus | null): CadWorkflowView {
@@ -247,65 +233,6 @@ function RecordSummary({ record }: { record: CadReturnIngestRecord }) {
   </>;
 }
 
-/** Prefer the independently tessellated full CAD display artifact. Older
- * records and advisory display failures fall back to the exact solver mesh. */
-export async function showIngestedMeshInViewport(
-  record: CadReturnIngestRecord,
-  name: string,
-  onNotice?: (notice: string) => void,
-  fetcher: typeof fetch = fetch,
-  generation = importedMeshStore.beginIntent(),
-): Promise<void> {
-  const ingestId = record.ingest_id;
-  const available = importedMeshStore.getSnapshot().cad;
-  if (available?.ingestId === ingestId) {
-    importedMeshStore.showCad(generation);
-    return;
-  }
-  try {
-    const response = await fetcher(`/api/cadlink/ingest/${encodeURIComponent(ingestId)}/viewport-mesh`);
-    if (!importedMeshStore.isCurrentGeneration(generation)) return;
-    if (response.ok) {
-      importedMeshStore.setCad(createImportedMeshScene(
-        name,
-        parseMSH(await response.text()),
-        'cad',
-        ingestId,
-        record.symmetry.cut_planes ?? [],
-        {
-          fullDomain: true,
-          solvedTriangleCount: record.mesh?.stats.triangle_count,
-          artifactToken: record.viewport_mesh?.content_sha256 ?? `${ingestId}:viewport`,
-        },
-      ), generation);
-      return;
-    }
-    if (response.status === 409) {
-      onNotice?.('The independent CAD viewport artifact failed verification. Showing the exact solver mesh instead.');
-    }
-  } catch {
-    // The independent display artifact is advisory; try the solver artifact.
-  }
-  if (!importedMeshStore.isCurrentGeneration(generation)) return;
-  try {
-    const response = await fetcher(`/api/cadlink/ingest/${encodeURIComponent(ingestId)}/mesh`);
-    if (!response.ok || !importedMeshStore.isCurrentGeneration(generation)) return;
-    importedMeshStore.setCad(createImportedMeshScene(
-      name,
-      parseMSH(await response.text()),
-      'cad',
-      ingestId,
-      record.symmetry.cut_planes ?? [],
-      {
-        solvedTriangleCount: record.mesh?.stats.triangle_count,
-        artifactToken: record.mesh_content_sha256 ?? `${ingestId}:solver`,
-      },
-    ), generation);
-  } catch {
-    // The viewport keeps whatever it was showing if both artifacts fail.
-  }
-}
-
 const DRIVER_FIELD_LABELS: ReadonlyArray<{ key: DriverFieldKey; label: string; unit: string; step: number }> = [
   { key: 'sd_cm2', label: 'Sd', unit: 'cm²', step: 5 },
   { key: 'bl_t_m', label: 'Bl', unit: 'T·m', step: 0.5 },
@@ -352,206 +279,36 @@ export function CadLinkPanel() {
   const filename = useDocumentStore((current) => current.filename);
   const identity = useDocumentStore((current) => current.identity);
   const setCadLink = useDocumentStore((current) => current.setCadLink);
-  const coordinator = useSyncExternalStore(jobsCoordinatorBridge.subscribe, jobsCoordinatorBridge.getSnapshot, jobsCoordinatorBridge.getSnapshot);
+  const jobsCoordinator = useSyncExternalStore(jobsCoordinatorBridge.subscribe, jobsCoordinatorBridge.getSnapshot, jobsCoordinatorBridge.getSnapshot);
+  const cadCoordinator = useSyncExternalStore(cadLinkCoordinatorBridge.subscribe, cadLinkCoordinatorBridge.getSnapshot, cadLinkCoordinatorBridge.getSnapshot);
   const viewportMesh = useSyncExternalStore(
     importedMeshStore.subscribe,
     importedMeshStore.getSnapshot,
     importedMeshStore.getSnapshot,
   );
-  const [bundles, setBundles] = useState<CadReturnBundle[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [ingesting, setIngesting] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [requestingReturn, setRequestingReturn] = useState(false);
   const [confirmWgOverwrite, setConfirmWgOverwrite] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [status, setStatus] = useState<string | null>(null);
-  const [viewportNotice, setViewportNotice] = useState<string | null>(null);
-  const [fusionStatus, setFusionStatus] = useState<FusionCadStatus | null>(null);
-  const [onshapeStatus, setOnshapeStatus] = useState<OnshapeStatus | null>(null);
-  const [onshapeConnection, setOnshapeConnection] = useState<OnshapeConnection | null>(null);
   const [confirmPublicDocument, setConfirmPublicDocument] = useState<string | null>(null);
   const [sendingToOnshape, setSendingToOnshape] = useState(false);
-  const seenReturnRevisions = useRef<Map<string, string> | null>(null);
-  const fusionStatusRequest = useRef(0);
-  const onshapeStatusRequest = useRef(0);
-  const pendingReturnRequestId = useRef<string | null>(null);
-  const pendingReturnRequestedAt = useRef<number | null>(null);
   const { send: sendToCad, sending } = useSendToCad();
   const onshape = preferences.cadApplication === 'onshape';
-
-  const refreshFusionStatus = useCallback(async () => {
-    if (preferences.cadApplication !== 'fusion360') return;
-    const request = ++fusionStatusRequest.current;
-    try {
-      const next = await getFusionCadStatus(
-        design, identity, state.selectedBundle?.bundlePath ?? null,
-      );
-      if (request === fusionStatusRequest.current
-        && ['closed', 'addin_offline', 'no_document', 'not_linked', 'current', 'stale'].includes(next.state)) {
-        setFusionStatus(next);
-      }
-    } catch {
-      // Presence is advisory. Workspace and export errors are presented by the
-      // actual action; a missed heartbeat must not hide CAD returns.
-    }
-  }, [design, identity, preferences.cadApplication, state.selectedBundle?.bundlePath]);
-
-  useEffect(() => {
-    setFusionStatus(null);
-    if (preferences.cadApplication !== 'fusion360') return undefined;
-    void refreshFusionStatus();
-    const timer = window.setInterval(() => { void refreshFusionStatus(); }, 2_500);
-    return () => {
-      window.clearInterval(timer);
-      fusionStatusRequest.current += 1;
-    };
-  }, [designRevision, preferences.cadApplication, refreshFusionStatus]);
-
-  // `committed` is the identity a send just registered. Without it the refresh
-  // that follows a first send would still carry the pre-send identity -- which
-  // is null for an unsaved design -- and report the design it had just linked
-  // as unlinked until the next render settled.
-  const refreshOnshapeStatus = useCallback(async (committed?: DesignIdentity) => {
-    const request = ++onshapeStatusRequest.current;
-    try {
-      const next = await getOnshapeStatus(design, committed ?? identity);
-      if (request === onshapeStatusRequest.current) setOnshapeStatus(next);
-    } catch {
-      // Advisory, like the Fusion heartbeat: the send itself reports failures.
-    }
-  }, [design, identity]);
-
-  // No interval. This status is derived from WG's own registry and changes
-  // only when the design or a send does, both of which re-run this effect --
-  // and the connection check spends Onshape rate limit, so it runs once per
-  // mount rather than on a timer.
-  useEffect(() => {
-    setOnshapeStatus(null);
-    if (!onshape) return;
-    void refreshOnshapeStatus();
-  }, [designRevision, onshape, refreshOnshapeStatus]);
-
-  useEffect(() => {
-    if (!onshape) { setOnshapeConnection(null); return; }
-    let cancelled = false;
-    void getOnshapeConnection()
-      .then((next) => { if (!cancelled) setOnshapeConnection(next); })
-      .catch(() => { /* the status card already reports an unconfigured link */ });
-    return () => { cancelled = true; };
-  }, [onshape]);
-
-  const refresh = useCallback(async (options: { background?: boolean; autoOpenNew?: boolean } = {}) => {
-    const background = options.background === true;
-    if (!background) { setLoading(true); setError(null); }
-    try {
-      const response = await listReturns();
-      setBundles(response.items);
-      const previous = seenReturnRevisions.current;
-      const next = new Map(response.items.map((item) => [item.bundlePath, item.modifiedAt]));
-      const requested = pendingReturnRequestId.current
-        ? response.items.find((item) => (
-            item.readable && item.requestId === pendingReturnRequestId.current
-          )) ?? null
-        : null;
-      if (
-        pendingReturnRequestId.current
-        && pendingReturnRequestedAt.current !== null
-        && Date.now() - pendingReturnRequestedAt.current > 60_000
-      ) {
-        pendingReturnRequestId.current = null;
-        pendingReturnRequestedAt.current = null;
-        setError('Fusion did not return the requested model within 60 seconds. Check Fusion for a WGLink message, then retry.');
-      }
-      const arrived = options.autoOpenNew
-        ? requested ?? (
-            pendingReturnRequestId.current
-              ? null
-              : newestReturnArrival(response.items, previous)
-          )
-        : null;
-      seenReturnRevisions.current = next;
-      const initial = previous === null
-        ? response.items.find((item) => item.readable) ?? null
-        : null;
-      const opened = arrived ?? initial;
-      if (opened) {
-        useCadReturnStore.getState().selectBundle(opened);
-        importedMeshStore.showParametric();
-      }
-      if (arrived) {
-        if (arrived.requestId === pendingReturnRequestId.current) {
-          pendingReturnRequestId.current = null;
-          pendingReturnRequestedAt.current = null;
-        }
-        setStatus(`Received ${arrived.documentName ?? arrived.name} from Fusion 360.`);
-        workspaceNavigation.activate('cadlink');
-      } else if (!initial) {
-        const selected = useCadReturnStore.getState().selectedBundle;
-        if (!selected) return;
-        const current = response.items.find((bundle) => bundle.bundlePath === selected.bundlePath);
-        useCadReturnStore.getState().refreshSelectedBundle(current ?? null);
-      }
-    } catch (reason) {
-      if (!background) setError(reason instanceof Error ? reason.message : String(reason));
-    }
-    finally { if (!background) setLoading(false); }
-  }, []);
-  // Returns arrive in the workspace's wgreturn folder, which only the Fusion
-  // add-in writes. Polling it under Onshape would report a missing workspace
-  // folder as an error for a leg that does not use one.
-  useEffect(() => {
-    if (onshape) { setLoading(false); return undefined; }
-    void refresh({ autoOpenNew: true });
-    const timer = window.setInterval(() => {
-      void refresh({ background: true, autoOpenNew: true });
-    }, 2_500);
-    return () => window.clearInterval(timer);
-  }, [onshape, refresh]);
-
-  const ingest = async () => {
-    const current = useCadReturnStore.getState();
-    if (!current.selectedBundle) return;
-    const viewportGeneration = importedMeshStore.beginIntent();
-    setIngesting(true); setError(null); setStatus(null); setViewportNotice(null);
-    try {
-      const skipped = new Set(current.skippedSourceIds);
-      const record = await ingestReturn({
-        bundlePath: current.selectedBundle.bundlePath,
-        mesh: {
-          rigidSizeMm: current.rigidSizeMm,
-          transitionMm: current.transitionMm,
-          sourceSizeMm: Object.fromEntries(Object.entries(current.sourceSizesMm).filter(([id]) => !skipped.has(id))),
-        },
-        skippedSourceIds: current.skippedSourceIds,
-        areaDriftOverrides: current.areaDriftOverrides,
-      });
-      current.applyIngest(record);
-      setStatus(`Ingested ${record.ingest_id}. Review the verdicts before solving.`);
-      void showIngestedMeshInViewport(
-        record,
-        current.selectedBundle.documentName || current.selectedBundle.name,
-        setViewportNotice,
-        fetch,
-        viewportGeneration,
-      );
-    } catch (reason) {
-      const message = reason instanceof Error ? reason.message : String(reason);
-      const structured = reason instanceof CadLinkApiError ? reason.areaDriftSources : [];
-      structured.forEach(current.flagAreaDrift);
-      if (!structured.length) {
-        const drift = /source ['"]([^'"]+)['"] area drift/i.exec(message);
-        if (drift) current.flagAreaDrift(drift[1]);
-      }
-      setError(message);
-    }
-    finally { setIngesting(false); }
-  };
+  const {
+    bundles,
+    loading,
+    ingesting,
+    error,
+    status,
+    viewportNotice,
+    fusionStatus,
+    onshapeStatus,
+    onshapeConnection,
+  } = cadCoordinator;
 
   // The outbound leg for Onshape. There is no local client to notify and no
   // workspace folder to write into: WG uploads the bundle over HTTPS itself.
   const sendToOnshape = async (allowPublic = false) => {
-    setError(null); setStatus(null); setSendingToOnshape(true);
+    cadCoordinator.clearFeedback(); setSendingToOnshape(true);
     try {
       const wasLinked = onshapeStatus?.state === 'stale' || onshapeStatus?.state === 'current';
       const result = await sendDesignToOnshape(
@@ -559,16 +316,20 @@ export function CadLinkPanel() {
       );
       setConfirmPublicDocument(null);
       const visibility = result.onshape.isPublic ? ' · public document' : '';
-      setStatus(result.onshape.createdDocument
+      cadCoordinator.reportStatus(result.onshape.createdDocument
         ? `Created ${result.onshape.documentName} in Onshape · ${result.onshape.variablesPushed} parameters${visibility}`
         : `Updated ${result.onshape.documentName} in Onshape · sequence ${result.sequence}${visibility}`);
       if (!wasLinked && result.identity) setCadLink(result.identity, 'current');
-      await refreshOnshapeStatus(result.identity);
+      // A first send can mint this identity. Passing it explicitly avoids the
+      // pre-send closure briefly reporting the new document as not linked.
+      await cadCoordinator.refreshOnshapeStatus(result.identity);
     } catch (reason) {
+      // HTTP 428 is control flow, not a generic send error: this dialog is the
+      // only path that can retry with allowPublic on an Onshape Free account.
       if (reason instanceof OnshapePublicConsentRequired) {
         setConfirmPublicDocument(reason.message);
       } else {
-        setError(reason instanceof Error ? reason.message : String(reason));
+        cadCoordinator.reportError(reason instanceof Error ? reason.message : String(reason));
       }
     } finally { setSendingToOnshape(false); }
   };
@@ -577,7 +338,7 @@ export function CadLinkPanel() {
   // is what CAD picks up, and a return for it lands in the same workspace.
   const send = async () => {
     if (onshape) { await sendToOnshape(); return; }
-    setError(null); setStatus(null);
+    cadCoordinator.clearFeedback();
     try {
       const action = fusionWorkflowView(fusionStatus).action;
       if (action === 'update' && fusionStatus?.fusionChangesAvailable && !confirmWgOverwrite) {
@@ -593,15 +354,15 @@ export function CadLinkPanel() {
           : undefined,
       );
       setConfirmWgOverwrite(false);
-      setStatus(action === 'update'
+      cadCoordinator.reportStatus(action === 'update'
         ? `Update sent to Fusion 360 · sequence ${result.sequence}`
         : `Opening in Fusion 360 · sequence ${result.sequence}`);
-      await refresh();
-    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+      await cadCoordinator.refresh();
+    } catch (reason) { cadCoordinator.reportError(reason instanceof Error ? reason.message : String(reason)); }
   };
 
   const bringFromFusion = async () => {
-    setRequestingReturn(true); setError(null); setStatus(null);
+    setRequestingReturn(true); cadCoordinator.clearFeedback();
     try {
       if (!identity?.designId || !fusionStatus?.documentId || !fusionStatus.link) {
         throw new Error('Fusion changed documents. Refresh CAD Link and try again.');
@@ -612,12 +373,11 @@ export function CadLinkPanel() {
         instanceId: fusionStatus.link.instanceId,
         expectedReturnStateHash: fusionStatus.link.documentSignatureHash,
       });
-      pendingReturnRequestId.current = result.requestId;
-      pendingReturnRequestedAt.current = Date.now();
-      setStatus(`Requested current geometry from ${result.documentName}. Waiting for Fusion…`);
-      await refresh({ background: true, autoOpenNew: true });
+      cadCoordinator.expectFusionReturn(result.requestId);
+      cadCoordinator.reportStatus(`Requested current geometry from ${result.documentName}. Waiting for Fusion…`);
+      await cadCoordinator.refresh({ background: true, autoOpenNew: true });
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      cadCoordinator.reportError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setRequestingReturn(false);
     }
@@ -629,11 +389,11 @@ export function CadLinkPanel() {
   const solveReason = importedSubmissionBlocker(state, solveStore);
   const solve = async () => {
     if (solveReason) return;
-    setSubmitting(true); setError(null); setStatus(null);
+    setSubmitting(true); cadCoordinator.clearFeedback();
     try {
-      await coordinator.runImported(buildImportedSubmission(useCadReturnStore.getState()));
-      setStatus('CAD import solve submitted to Jobs.');
-    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+      await jobsCoordinator.runImported(buildImportedSubmission(useCadReturnStore.getState()));
+      cadCoordinator.reportStatus('CAD import solve submitted to Jobs.');
+    } catch (reason) { cadCoordinator.reportError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setSubmitting(false); }
   };
   const driftSources = new Set([...state.areaDriftSourceIds, ...(state.ingestRecord?.role_findings ?? [])
@@ -680,7 +440,7 @@ export function CadLinkPanel() {
       </div>
     </section>}
     {!onshape && <section className="cad-workflow cad-return-workflow">
-    <header className="cad-workflow-header"><span className="cad-step">2</span><div><h3>CAD → SIMULATION</h3><p>Bring Fusion geometry and source tags into WG.</p></div><button disabled={loading || ingesting} onClick={() => void refresh()}><Icon name="reset"/>{loading ? 'Loading…' : 'Refresh'}</button></header>
+    <header className="cad-workflow-header"><span className="cad-step">2</span><div><h3>CAD → SIMULATION</h3><p>Bring Fusion geometry and source tags into WG.</p></div><button disabled={loading || ingesting} onClick={() => void cadCoordinator.refresh()}><Icon name="reset"/>{loading ? 'Loading…' : 'Refresh'}</button></header>
     {fusionStatus?.fusionChangesAvailable && <div className="cad-direction-alert"><div><b>Fusion geometry has changed</b><span>The active Fusion body or source setup differs from the last design returned to WG.</span></div><button className="primary" disabled={!canRequestFusionReturn || requestingReturn} onClick={() => void bringFromFusion()}>{requestingReturn ? 'Requesting…' : 'Bring Fusion changes into WG'}</button></div>}
     {!fusionStatus?.fusionChangesAvailable && canRequestFusionReturn && <button className="cad-secondary-action" disabled={requestingReturn} onClick={() => void bringFromFusion()}>{requestingReturn ? 'Requesting…' : 'Refresh geometry from Fusion'}</button>}
     {error && <div className="cad-alert" role="alert">{error}</div>}
@@ -691,8 +451,8 @@ export function CadLinkPanel() {
       <div><b>{state.selectedBundle.documentName ?? state.selectedBundle.name}</b><span>{state.ingestRecord ? 'Choose what the viewport displays.' : 'Prepare this Fusion return for the viewport and solver.'}</span></div>
       {state.ingestRecord ? <div className="cad-viewport-source-buttons" aria-label="CAD viewport source">
         <button className={viewportMesh.showing !== 'cad' ? 'active' : ''} aria-pressed={viewportMesh.showing !== 'cad'} onClick={() => importedMeshStore.showParametric()}>Parametric</button>
-        <button className={viewportMesh.showing === 'cad' ? 'active' : ''} aria-pressed={viewportMesh.showing === 'cad'} onClick={() => { setViewportNotice(null); void showIngestedMeshInViewport(state.ingestRecord!, state.selectedBundle!.documentName || state.selectedBundle!.name, setViewportNotice); }}>Fusion CAD</button>
-      </div> : <button className="primary" disabled={ingesting} onClick={() => void ingest()}>{ingesting ? 'Preparing…' : 'Prepare simulation'}</button>}
+        <button className={viewportMesh.showing === 'cad' ? 'active' : ''} aria-pressed={viewportMesh.showing === 'cad'} onClick={() => { cadCoordinator.reportViewportNotice(null); void showIngestedMeshInViewport(state.ingestRecord!, state.selectedBundle!.documentName || state.selectedBundle!.name, cadCoordinator.reportViewportNotice); }}>Fusion CAD</button>
+      </div> : <button className="primary" disabled={ingesting} onClick={() => void cadCoordinator.ingest()}>{ingesting ? 'Preparing…' : 'Prepare simulation'}</button>}
     </div>}
     {!loading && error?.includes('No workspace folder') && <div className="empty-state"><b>No workspace selected</b><span>Choose a workspace folder in Settings, then refresh this panel.</span></div>}
     {!loading && !error && bundles.length === 0 && <div className="empty-state"><b>No CAD returns</b><span>Returned bundles appear under the selected workspace’s wgreturn folder.</span></div>}
@@ -707,7 +467,7 @@ export function CadLinkPanel() {
 
     {state.selectedBundle?.readable && <>
       <section className="cad-section cad-sizing">
-        <header><div><h3>Mesh detail</h3><p>Smaller values are finer and support higher frequencies. Curved CAD faces receive bounded extra refinement automatically.</p></div>{state.ingestRecord && <button className="primary" disabled={ingesting} onClick={() => void ingest()}>{ingesting ? 'Preparing…' : 'Rebuild mesh'}</button>}</header>
+        <header><div><h3>Mesh detail</h3><p>Smaller values are finer and support higher frequencies. Curved CAD faces receive bounded extra refinement automatically.</p></div>{state.ingestRecord && <button className="primary" disabled={ingesting} onClick={() => void cadCoordinator.ingest()}>{ingesting ? 'Preparing…' : 'Rebuild mesh'}</button>}</header>
         <NumberField label="Cabinet & waveguide" unit="mm" value={state.rigidSizeMm} min={0.01} step={0.5} precision={2} description="Maximum target size for rigid CAD surfaces; tight curvature may be refined further." onCommit={state.setRigidSize}/>
         <NumberField label="Size transition" unit="mm" value={state.transitionMm} min={0.01} step={0.5} precision={2} description="Maximum size transition between adjacent mesh regions." onCommit={state.setTransition}/>
         {state.selectedBundle.sources.map((source) => <div className={`cad-source ${state.skippedSourceIds.includes(source.id) ? 'skipped' : ''}`} key={source.id}>
