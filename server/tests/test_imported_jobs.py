@@ -130,6 +130,46 @@ def test_passive_cardioid_request_fields_are_additive_and_keep_areas_distinct() 
         )
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("passive_cardioid_port_length_mm", 25.0),
+        ("model_port_area_m2", 0.05),
+        ("bem_port_area_m2", 0.01),
+        ("port_area_source", "user"),
+        ("passive_cardioid_foam_resistance_pa_s_m3", 10_000.0),
+        ("passive_cardioid_invert_port", False),
+        ("passive_cardioid_coupled", True),
+    ],
+)
+def test_passive_cardioid_fields_are_rejected_when_disabled(
+    field: str, value: Any
+) -> None:
+    with pytest.raises(ValidationError, match="require passive_cardioid_rear_volume_l"):
+        _request("wgi_" + "0" * 26, **{field: value})
+
+
+def test_coupled_cardioid_reserves_derived_channel_id() -> None:
+    geometry = _geometry("wgi_" + "0" * 26)
+    geometry["drive_channels"][0]["id"] = "passive_cardioid"
+    geometry.update(
+        {
+            "passive_cardioid_rear_volume_l": 6.0,
+            "passive_cardioid_port_length_mm": 25.0,
+            "model_port_area_m2": 0.05,
+            "bem_port_area_m2": 0.01,
+            "port_area_source": "user",
+            "passive_cardioid_foam_resistance_pa_s_m3": 10_000.0,
+            "passive_cardioid_coupled": True,
+        }
+    )
+
+    with pytest.raises(ValidationError, match="reserved for coupled output"):
+        SolveRequest.model_validate(
+            {"geometry": geometry, "options": {"frequencies_hz": [100, 200]}}
+        )
+
+
 def test_passive_cardioid_aperture_mapping_resolves_imported_lr_names() -> None:
     aperture_tags, port_names, mf_source_id = metal._passive_cardioid_apertures(
         {"PORT_EXIT_L": 10, "PORT_EXIT_R": 11, "source-mf": 101},
@@ -249,10 +289,23 @@ def test_passive_cardioid_campaign_reconciles_grid_and_writes_face_identity(
             "engineering_impedance_matrix",
             "in_phase_termination_load",
             "in_phase_aperture_names",
+            "reciprocity_max_abs",
             "reciprocity_max_rel",
             "passivity_min_eig",
+            "passivity_min_eig_reciprocal",
             "passivity_ok",
         }
+        # READ every value, do not merely list the names. np.savez accepts a
+        # dict and stores it as a 0-d object array; the NAME then appears in
+        # data.files exactly like a real array, and only the read fails with
+        # "Object arrays cannot be loaded when allow_pickle=False". A names-only
+        # assertion therefore stays green on an archive no consumer can open --
+        # which is precisely what shipped before this loop existed. Every
+        # consumer reads with allow_pickle=False, so every key must survive it,
+        # and this guards additions nobody has written yet.
+        for name in data.files:
+            value = data[name]
+            assert value.dtype != object, f"{name} is an object array"
         assert data["aperture_names"].tolist() == ["PORT_EXIT", "MF"]
         assert data["aperture_tag"].tolist() == [10, 101]
         # The in-phase reduction covers the ports only; MF contributes mutual
@@ -538,6 +591,60 @@ async def _runtime_fixture(
         cadlink_store=cad_store,
     )
     return runtime, str(row["ingest_id"]), record
+
+
+def test_coupled_cardioid_topology_is_rejected_during_submission(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        mesh_sizes = {
+            "rigid_size_mm": 8.0,
+            "transition_mm": 20.0,
+            "source_size_mm": {
+                "source-a": 3.0,
+                "source-mf": 3.0,
+                "PORT_EXIT": 4.0,
+            },
+        }
+        runtime, ingest_id, _ = await _runtime_fixture(
+            tmp_path,
+            {
+                "sources": [
+                    {"id": "source-a", "role": "HF", "required": True},
+                    {"id": "source-mf", "role": "MF", "required": True},
+                    {"id": "PORT_EXIT", "role": "OTHER", "required": False},
+                ],
+                "source_tags": {"source-a": 101, "source-mf": 102, "PORT_EXIT": 103},
+                "mesh_sizes": mesh_sizes,
+            },
+        )
+        request = _request(
+            ingest_id,
+            drive_channels=[
+                {"id": "hf", "source_ids": ["source-a"]},
+                # A driver-less MF channel used to fail only after both solves.
+                {"id": "mf", "source_ids": ["source-mf"]},
+                {"id": "port", "source_ids": ["PORT_EXIT"]},
+            ],
+            mesh=mesh_sizes,
+            passive_cardioid_rear_volume_l=6.0,
+            passive_cardioid_port_length_mm=25.0,
+            model_port_area_m2=0.05,
+            bem_port_area_m2=0.01,
+            port_area_source="user",
+            passive_cardioid_foam_resistance_pa_s_m3=10_000.0,
+            passive_cardioid_coupled=True,
+        )
+        try:
+            with pytest.raises(ImportedSolveRefusal) as caught:
+                await runtime.submit(request)
+            assert caught.value.reason_code == "passive_cardioid_topology"
+            assert "driver model" in str(caught.value)
+            assert runtime.store.list_jobs()[1] == 0
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
 
 
 def test_submit_persists_ingestion_mesh_summary_and_availability(tmp_path: Path) -> None:
@@ -1048,6 +1155,117 @@ def _native_result_3f() -> SimpleNamespace:
     )
 
 
+def _coupled_failure_fixture() -> tuple[SolveRequest, dict[str, Any]]:
+    driver = {
+        "sd_cm2": 210.0,
+        "bl_t_m": 10.5,
+        "re_ohm": 5.3,
+        "le_mh": 0.5,
+        "mmd_g": 12.0,
+        "cms_m_per_n": 4.0e-4,
+        "rms_kg_per_s": 1.2,
+    }
+    request = _request(
+        "wgi_" + "0" * 26,
+        drive_channels=[
+            {"id": "mf", "source_ids": ["source-mf"], "driver": driver},
+            {"id": "port", "source_ids": ["PORT_EXIT"]},
+        ],
+        mesh={
+            "rigid_size_mm": 8.0,
+            "transition_mm": 20.0,
+            "source_size_mm": {"source-mf": 3.0, "PORT_EXIT": 3.0},
+        },
+        passive_cardioid_rear_volume_l=6.0,
+        passive_cardioid_port_length_mm=25.0,
+        model_port_area_m2=0.05,
+        bem_port_area_m2=0.01,
+        port_area_source="user",
+        passive_cardioid_foam_resistance_pa_s_m3=10_000.0,
+        passive_cardioid_coupled=True,
+    )
+    record = {
+        "sources": [
+            {
+                "id": "source-mf",
+                "role": "MF",
+                "observed": {"total_area_mm2": 21_000.0},
+            },
+            {"id": "PORT_EXIT", "role": "OTHER"},
+        ],
+        "source_tags": {"source-mf": 101, "PORT_EXIT": 10},
+        "symmetry": {"cut_planes": ["x0"]},
+        "normalisation": {"assembly_frame_is_solver_frame": True},
+        "mesh": {"metadata": {"mesh_frequency_validation": {"per_source": {}}}},
+    }
+    return request, record
+
+
+def test_cardioid_campaign_failure_keeps_main_channels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request, record = _coupled_failure_fixture()
+    monkeypatch.setattr(metal, "metal_status", lambda: {"available": True, "reason": "ok"})
+    monkeypatch.setattr(
+        metal,
+        "native_solve_multi_source",
+        lambda _mesh, sources, _config, frequencies_hz=None: [
+            _native_result_3f() for _source in sources
+        ],
+    )
+    monkeypatch.setattr(
+        metal,
+        "_run_passive_cardioid_campaign",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("matrix campaign exploded")
+        ),
+    )
+
+    response = metal.solve_imported_metal_from_msh_text("msh", request, record)
+
+    assert response["channel_order"] == ["mf", "port"]
+    assert set(response["channels"]) == {"mf", "port"}
+    assert response["metadata"]["passive_cardioid"] == {
+        "enabled": True,
+        "coupled": True,
+        "status": "failed",
+        "reason": "matrix campaign exploded",
+    }
+    assert "_radiation_impedance_npz" not in response
+
+
+def test_cardioid_campaign_degradation_does_not_swallow_cancellation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class CancelledAtCheckpoint(RuntimeError):
+        pass
+
+    request, record = _coupled_failure_fixture()
+    monkeypatch.setattr(metal, "metal_status", lambda: {"available": True, "reason": "ok"})
+    monkeypatch.setattr(
+        metal,
+        "native_solve_multi_source",
+        lambda _mesh, sources, _config, frequencies_hz=None: [
+            _native_result_3f() for _source in sources
+        ],
+    )
+    monkeypatch.setattr(
+        metal,
+        "_run_passive_cardioid_campaign",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            CancelledAtCheckpoint("cancelled")
+        ),
+    )
+
+    def cancel() -> None:
+        raise CancelledAtCheckpoint("cancelled")
+
+    with pytest.raises(CancelledAtCheckpoint, match="cancelled"):
+        metal.solve_imported_metal_from_msh_text(
+            "msh", request, record, cancellation_callback=cancel
+        )
+
+
 def test_coupled_cardioid_adds_derived_channel_and_defers_mf_driver_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1144,6 +1362,9 @@ def test_coupled_cardioid_adds_derived_channel_and_defers_mf_driver_once(
     derived = response["channels"]["passive_cardioid"]
     assert derived["metadata"]["impedance_units"] == "ohms"
     assert derived["metadata"]["impedance_drive"] == "voltage"
+    assert derived["metadata"]["impedance_phase_convention"] == (
+        "engineering_exp_plus_jwt"
+    )
     assert derived["metadata"]["passive_cardioid"]["port_area_source"] == "user"
     assert len(derived["impedance"]["real"]) == 3
     assert response["metadata"]["passive_cardioid"]["coupled"] is True

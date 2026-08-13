@@ -325,6 +325,85 @@ def _imported_record_sources(record: Mapping[str, Any]) -> list[dict[str, Any]]:
     return [dict(source) for source in sources]
 
 
+def _validate_passive_cardioid_topology(
+    geometry: ImportedGeometrySource,
+    record: Mapping[str, Any],
+) -> None:
+    """Reject a cardioid topology that the late solver backstop cannot couple."""
+
+    if not geometry.passive_cardioid_enabled:
+        return
+    source_tags = record.get("source_tags")
+    if not isinstance(source_tags, Mapping):
+        raise ImportedSolveRefusal(
+            "passive_cardioid_topology",
+            "passive cardioid requires an ingestion source tag map",
+        )
+    by_upper = {
+        str(source_id).strip().upper(): str(source_id)
+        for source_id in source_tags
+    }
+    if "PORT_EXIT" in by_upper:
+        port_source_ids = [by_upper["PORT_EXIT"]]
+    else:
+        port_source_ids = [
+            by_upper[name]
+            for name in ("PORT_EXIT_L", "PORT_EXIT_R")
+            if name in by_upper
+        ]
+        if not port_source_ids:
+            port_source_ids = [
+                by_upper[name]
+                for name in ("MID_PORT_EXIT_LEFT", "MID_PORT_EXIT_RIGHT")
+                if name in by_upper
+            ]
+    if not port_source_ids:
+        raise ImportedSolveRefusal(
+            "passive_cardioid_topology",
+            "passive cardioid requires PORT_EXIT aperture sources",
+        )
+
+    mf_source_ids = [
+        str(source.get("id") or "")
+        for source in record.get("sources") or []
+        if isinstance(source, Mapping)
+        and str(source.get("role") or "").strip().upper() == "MF"
+        and str(source.get("id") or "") in source_tags
+    ]
+    if not mf_source_ids and "MF" in by_upper:
+        mf_source_ids = [by_upper["MF"]]
+    if len(mf_source_ids) != 1:
+        raise ImportedSolveRefusal(
+            "passive_cardioid_topology",
+            "passive cardioid requires exactly one MF diaphragm source",
+        )
+    if not geometry.passive_cardioid_coupled:
+        return
+
+    mf_source_id = mf_source_ids[0]
+    mf_channels = [
+        channel
+        for channel in geometry.drive_channels
+        if mf_source_id in channel.source_ids
+    ]
+    if len(mf_channels) != 1 or mf_channels[0].driver is None:
+        raise ImportedSolveRefusal(
+            "passive_cardioid_topology",
+            "coupled passive cardioid requires the MF diaphragm's drive channel "
+            "to carry one driver model",
+        )
+    port_channels = [
+        channel
+        for channel in geometry.drive_channels
+        if set(port_source_ids).issubset(set(channel.source_ids))
+    ]
+    if len(port_channels) != 1:
+        raise ImportedSolveRefusal(
+            "passive_cardioid_topology",
+            "coupled passive cardioid requires all PORT_EXIT patches in one drive channel",
+        )
+
+
 def _imported_symmetry_metadata(
     record: Mapping[str, Any], requested: str
 ) -> dict[str, Any]:
@@ -678,6 +757,9 @@ class JobRuntime:
             "design_revision": request.design_revision,
             "polar_grid": polar_grid,
             "symmetry": symmetry_metadata,
+            "has_radiation_impedance_artifact": False,
+            "radiation_impedance_artifact_bytes": None,
+            "persistence_warnings": [],
         }
         if imported is not None:
             task_metadata["imported_geometry"] = {
@@ -811,6 +893,7 @@ class JobRuntime:
                     "extra": sorted(driven_sources - active_sources),
                 },
             )
+        _validate_passive_cardioid_topology(geometry, record)
         recorded_sizes = record.get("mesh_sizes")
         if not isinstance(recorded_sizes, Mapping):
             raise ImportedSolveRefusal(
@@ -1533,6 +1616,7 @@ class JobRuntime:
             self.events.publish(event)
         except _CancelledAtCheckpoint:
             self._partial_results.pop(job_id, None)
+            await self._discard_radiation_impedance(job_id)
             await self._flush_runtime_update(job_id, forget=True)
             event = self._transition(
                 job_id,
@@ -1698,10 +1782,34 @@ class JobRuntime:
             except Exception as exc:
                 # Results remain usable; only the optional lossless matrix
                 # download is unavailable if persistence fails.
+                warning = (
+                    "Passive-cardioid radiation-impedance artifact could not be "
+                    f"saved: {exc}"
+                )
                 logger.warning(
                     "Radiation-impedance persistence failed for job %s: %s",
                     job_id,
                     exc,
+                )
+                row = self.store.get_job_row(job_id)
+                task_metadata = (
+                    dict(row.get("task_metadata") or {})
+                    if row is not None
+                    else {}
+                )
+                warnings = [
+                    str(value)
+                    for value in task_metadata.get("persistence_warnings") or []
+                ]
+                warnings.append(warning)
+                await asyncio.to_thread(
+                    self.store.mutate_job_metadata,
+                    job_id,
+                    {
+                        "has_radiation_impedance_artifact": False,
+                        "radiation_impedance_artifact_bytes": None,
+                        "persistence_warnings": warnings,
+                    },
                 )
 
         self._check_cancelled(job_id)
@@ -1994,6 +2102,7 @@ class JobRuntime:
 
     async def _fail_job(self, job_id: str, message: str) -> None:
         self._partial_results.pop(job_id, None)
+        await self._discard_radiation_impedance(job_id)
         try:
             event = self._transition(
                 job_id,
@@ -2016,6 +2125,15 @@ class JobRuntime:
             await self._flush_runtime_update(job_id, forget=True)
         except Exception:
             logger.exception("Could not persist final logs for failed job %s", job_id)
+
+    async def _discard_radiation_impedance(self, job_id: str) -> None:
+        try:
+            await asyncio.to_thread(self.store.delete_radiation_impedance, job_id)
+        except Exception:
+            logger.exception(
+                "Could not clean up radiation-impedance artifact for job %s",
+                job_id,
+            )
 
     def _check_cancelled(self, job_id: str) -> None:
         # Deliberately synchronous: the solver thread calls this from inside a
@@ -2239,6 +2357,15 @@ class JobRuntime:
             "solve_options": _stored_solve_options(stored_config).model_dump(mode="json"),
             "has_results": bool(row.get("has_results")),
             "has_mesh_artifact": bool(row.get("has_mesh_artifact")),
+            "has_radiation_impedance_artifact": bool(
+                metadata.get("has_radiation_impedance_artifact")
+            ),
+            "radiation_impedance_artifact_bytes": metadata.get(
+                "radiation_impedance_artifact_bytes"
+            ),
+            "persistence_warnings": [
+                str(value) for value in metadata.get("persistence_warnings") or []
+            ],
             "label": row.get("label"),
             "error_message": row.get("error_message"),
             "cancellation_requested": bool(row.get("cancellation_requested")),

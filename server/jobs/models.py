@@ -519,12 +519,63 @@ class ImportedGeometrySource(JobModel):
     @model_validator(mode="after")
     def validate_passive_cardioid(self) -> "ImportedGeometrySource":
         enabled = self.passive_cardioid_rear_volume_l is not None
+        # Provenance consistency is checked whether or not the campaign runs.
+        # A disabled submission that still carries contradictory areas is a
+        # request nobody has read correctly, and serializing it unchallenged
+        # means the contradiction reappears the moment somebody enables it.
+        if (
+            self.port_area_source == "bem_aperture"
+            and self.model_port_area_m2 is not None
+            and self.bem_port_area_m2 is not None
+            and not math.isclose(
+                float(self.model_port_area_m2),
+                float(self.bem_port_area_m2),
+                rel_tol=1.0e-12,
+                abs_tol=0.0,
+            )
+        ):
+            raise ValueError(
+                "port_area_source='bem_aperture' requires model_port_area_m2 "
+                "to equal bem_port_area_m2"
+            )
         if not enabled:
+            # Returning early here used to accept every other cardioid field
+            # and silently ignore it: the values were serialized into the job
+            # and never read. Name them instead, so a half-filled form is a
+            # refusal rather than a setting that quietly does nothing.
+            stray = [
+                name
+                for name in (
+                    "passive_cardioid_port_length_mm",
+                    "model_port_area_m2",
+                    "bem_port_area_m2",
+                    "port_area_source",
+                    "passive_cardioid_foam_resistance_pa_s_m3",
+                )
+                if getattr(self, name) is not None
+            ]
             if self.passive_cardioid_coupled:
+                stray.append("passive_cardioid_coupled")
+            if not self.passive_cardioid_invert_port:
+                stray.append("passive_cardioid_invert_port")
+            if stray:
                 raise ValueError(
-                    "passive_cardioid_coupled requires passive_cardioid_rear_volume_l"
+                    "passive cardioid fields require passive_cardioid_rear_volume_l: "
+                    + ", ".join(stray)
                 )
             return self
+
+        if self.passive_cardioid_coupled:
+            # The coupled campaign adds a derived channel under this id, so a
+            # user channel or combine sharing it would be overwritten.
+            reserved_id = "passive_cardioid"
+            collides = any(
+                channel.id == reserved_id for channel in self.drive_channels
+            ) or (self.combine is not None and self.combine.id == reserved_id)
+            if collides:
+                raise ValueError(
+                    "channel id 'passive_cardioid' is reserved for coupled output"
+                )
 
         required = {
             "passive_cardioid_port_length_mm": self.passive_cardioid_port_length_mm,
@@ -745,6 +796,13 @@ class JobItem(JobModel):
     solve_options: SolveOptions
     has_results: bool
     has_mesh_artifact: bool
+    # A completed job could claim cardioid success and then 404 on the
+    # download, because a storage failure was only a server log line. These
+    # three carry the artifact's real state to the client: whether it exists,
+    # how big it is, and anything that went wrong persisting it.
+    has_radiation_impedance_artifact: bool = False
+    radiation_impedance_artifact_bytes: int | None = None
+    persistence_warnings: list[str] = Field(default_factory=list)
     label: str | None = None
     error_message: str | None = None
     cancellation_requested: bool
