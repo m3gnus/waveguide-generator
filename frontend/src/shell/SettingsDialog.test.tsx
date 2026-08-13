@@ -74,12 +74,78 @@ describe('SettingsDialog', () => {
     expect(section.textContent).toContain('/chosen/workspace');
   });
 
-  it('names Fusion 360 as the CAD application and labels Onshape as coming soon', async () => {
+  it('offers both CAD applications, defaulting to Fusion 360', async () => {
     await act(async () => host.querySelector<HTMLButtonElement>('#open-settings')!.click());
     const select = host.querySelector<HTMLSelectElement>('[aria-label="CAD application"]')!;
     expect(select.value).toBe('fusion360');
     expect(select.options[0].textContent).toBe('Autodesk Fusion 360');
-    expect(select.options[1].textContent).toContain('coming soon');
-    expect(select.options[1].disabled).toBe(true);
+    expect(select.options[1].textContent).toBe('Onshape');
+    expect(select.options[1].disabled).toBe(false);
+  });
+
+  /** Open Settings with the CAD application switched to Onshape, serving one
+   * canned connection reply. Returns the CAD section for assertions. */
+  async function openOnshapeSettings(connection: Record<string, unknown>): Promise<HTMLElement> {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).startsWith('/api/cadlink/onshape/connection')) {
+        return new Response(JSON.stringify(connection), { status: 200 });
+      }
+      return new Response('not found', { status: 404 });
+    }));
+    await act(async () => host.querySelector<HTMLButtonElement>('#open-settings')!.click());
+    const select = host.querySelector<HTMLSelectElement>('[aria-label="CAD application"]')!;
+    await act(async () => {
+      select.value = 'onshape';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    return host.querySelector<HTMLElement>('#settings-cad')!;
+  }
+
+  it('reports the Onshape account and its plan, and never offers a field to type a key into', async () => {
+    const section = await openOnshapeSettings({
+      configured: true,
+      reachable: true,
+      credentialsPath: '/home/x/.config/hornlab/onshape.env',
+      detail: null,
+      insecureKeyFile: false,
+      account: { id: 'ACC', name: 'Test Owner' },
+      plan: { name: 'Onshape Free public only', group: 'Free', publicOnly: true },
+    });
+    expect(section.textContent).toContain('Test Owner');
+    // The free-plan consequence must be stated before anything is sent.
+    expect(section.textContent).toContain('every document public');
+    // The key pair is pasted into a file by its owner, never typed into WG.
+    expect(section.querySelector('input')).toBeNull();
+  });
+
+  it('says where to put a key pair that is not configured yet', async () => {
+    const section = await openOnshapeSettings({
+      configured: false,
+      reachable: false,
+      credentialsPath: '/home/x/.config/hornlab/onshape.env',
+      detail: 'No Onshape API key pair was found.',
+      insecureKeyFile: false,
+      account: null,
+      plan: null,
+    });
+    expect(section.textContent).toContain('dev-portal.onshape.com/keys');
+    expect(section.textContent).toContain('/home/x/.config/hornlab/onshape.env');
+    expect(section.querySelector('input')).toBeNull();
+  });
+
+  it('warns when the Onshape key file is readable by other accounts', async () => {
+    const section = await openOnshapeSettings({
+      configured: true,
+      reachable: true,
+      credentialsPath: '/home/x/.config/hornlab/onshape.env',
+      detail: null,
+      insecureKeyFile: true,
+      account: { id: 'ACC', name: 'Test Owner' },
+      plan: { name: 'Professional', group: 'Professional', publicOnly: false },
+    });
+    expect(section.textContent).toContain('chmod 600');
+    expect(section.textContent).not.toContain('every document public');
   });
 });
