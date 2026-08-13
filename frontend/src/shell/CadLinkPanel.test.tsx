@@ -6,7 +6,9 @@ import { preferencesStore } from '../prefs/preferences';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
-import { buildImportedSubmission, cadWorkflowView, CadLinkPanel, newestReturnArrival } from './CadLinkPanel';
+import { importedMeshStore } from '../viewport/importedMeshStore';
+import meshFixture from '../viewport/test-fixtures/tagged_sources-small.msh?raw';
+import { buildImportedSubmission, cadWorkflowView, CadLinkPanel, newestReturnArrival, showIngestedMeshInViewport } from './CadLinkPanel';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 
 const listing: CadReturnListing = {
@@ -71,7 +73,7 @@ describe('CadLinkPanel', () => {
       return json(record);
     }));
   });
-  afterEach(() => { act(() => root.unmount()); vi.unstubAllGlobals(); host.remove(); });
+  afterEach(() => { act(() => root.unmount()); importedMeshStore.clear(); vi.unstubAllGlobals(); host.remove(); });
 
   const renderAndSelect = async () => {
     await act(async () => { root.render(<CadLinkPanel/>); await Promise.resolve(); await Promise.resolve(); });
@@ -99,6 +101,47 @@ describe('CadLinkPanel', () => {
     expect([...host.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Rebuild mesh')?.disabled).toBe(false);
     expect([...host.querySelectorAll<HTMLButtonElement>('button')].some((button) => button.textContent === 'Fusion CAD')).toBe(true);
     expect([...host.querySelectorAll<HTMLButtonElement>('button')].some((button) => button.textContent === 'Parametric')).toBe(true);
+  });
+
+  it('tries the full-domain viewport artifact before silently falling back on 404', async () => {
+    const requests: string[] = [];
+    const notices: string[] = [];
+    const fetcher = (async (input: RequestInfo | URL) => {
+      const path = String(input);
+      requests.push(path);
+      if (path.endsWith('/viewport-mesh')) return new Response('missing', { status: 404 });
+      return new Response(meshFixture, { status: 200 });
+    }) as typeof fetch;
+
+    await showIngestedMeshInViewport(record, 'Speaker', (notice) => notices.push(notice), fetcher);
+
+    expect(requests).toEqual([
+      `/api/cadlink/ingest/${record.ingest_id}/viewport-mesh`,
+      `/api/cadlink/ingest/${record.ingest_id}/mesh`,
+    ]);
+    expect(notices).toEqual([]);
+    expect(importedMeshStore.getSnapshot().scene?.artifactToken).toBe(`${record.ingest_id}:solver`);
+  });
+
+  it('reports viewport artifact corruption before falling back to the solver mesh', async () => {
+    const events: string[] = [];
+    const fetcher = (async (input: RequestInfo | URL) => {
+      const path = String(input);
+      events.push(`fetch:${path}`);
+      if (path.endsWith('/viewport-mesh')) return new Response('corrupt', { status: 409 });
+      return new Response(meshFixture, { status: 200 });
+    }) as typeof fetch;
+
+    await showIngestedMeshInViewport(
+      record,
+      'Speaker',
+      (notice) => events.push(`notice:${notice}`),
+      fetcher,
+    );
+
+    expect(events[0]).toContain('/viewport-mesh');
+    expect(events[1]).toContain('failed verification');
+    expect(events[2]).toContain(`/${record.ingest_id}/mesh`);
   });
 
   it('maps Fusion presence and config freshness to one explicit action', () => {
@@ -301,8 +344,10 @@ describe('CadLinkPanel', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       if (String(input).endsWith('/returns')) return json(listing);
       if (String(input).endsWith('/fusion-status')) return json(closedFusion);
-      // The advisory viewport-mesh fetch after each ingest is not an ingest.
-      if (String(input).endsWith('/mesh')) return new Response('missing', { status: 404 });
+      // The advisory display-artifact fetches after each ingest are not ingests.
+      if (String(input).endsWith('/viewport-mesh') || String(input).endsWith('/mesh')) {
+        return new Response('missing', { status: 404 });
+      }
       ingestCount += 1;
       const next = {
         ...record,

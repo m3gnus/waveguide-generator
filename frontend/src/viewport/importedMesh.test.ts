@@ -75,3 +75,26 @@ describe('imported mesh shading', () => {
     expect(z).toBeLessThan(1);
   });
 });
+
+describe('independent CAD viewport artifacts', () => {
+  it('keeps a full-domain artifact unmirrored while marking the solver half by centroid', () => {
+    const imported = createImportedMeshScene('full-cad.msh', mesh(
+      [
+        1, 0, 0, 2, 0, 0, 1, 1, 0,
+        -1, 0, 0, -1, 1, 0, -2, 0, 0,
+      ],
+      [[0, 1, 2], [3, 4, 5]],
+    ), 'cad', 'wgi_full', ['x0'], {
+      fullDomain: true,
+      solvedTriangleCount: 17,
+      artifactToken: 'sha256:visual',
+    });
+
+    expect(imported.triangleCount).toBe(2);
+    expect(imported.solvedTriangleCount).toBe(17);
+    expect(imported.artifactToken).toBe('sha256:visual');
+    expect(imported.scene.surfaces.some((surface) => surface.key.includes(':mirror-'))).toBe(false);
+    expect(imported.scene.surfaces.map((surface) => surface.solvedDomain).sort())
+      .toEqual([false, true]);
+  });
+});
