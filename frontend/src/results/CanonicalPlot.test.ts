@@ -19,6 +19,13 @@ const result: ResultPayload = {
   },
 };
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((settle, fail) => { resolve = settle; reject = fail; });
+  return { promise, resolve, reject };
+}
+
 describe('canonical HornLab plots', () => {
   beforeEach(() => {
     preferencesStore.resetForTests();
@@ -64,5 +71,32 @@ describe('canonical HornLab plots', () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ image: 'data:image/png;base64,Ag==' }), { status: 200 }));
     await Promise.all([fetchCanonicalPlot(request, fetcher), fetchCanonicalPlot(request, fetcher)]);
     expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not let an evicted failed request delete a newer request for the same key', async () => {
+    const first = deferred<Response>();
+    const second = deferred<Response>();
+    let targetCalls = 0;
+    const fetcher = vi.fn<typeof fetch>((_input, init) => {
+      const payload = JSON.parse(String(init?.body)) as { cacheRace?: string };
+      if (payload.cacheRace === 'target') {
+        targetCalls += 1;
+        return targetCalls === 1 ? first.promise : second.promise;
+      }
+      return Promise.resolve(new Response(JSON.stringify({ image: `data:${payload.cacheRace}` }), { status: 200 }));
+    });
+    const target = { endpoint: '/api/render-directivity' as const, payload: { cacheRace: 'target' } };
+    const failed = fetchCanonicalPlot(target, fetcher).catch((error: unknown) => error);
+    for (let index = 0; index < 32; index += 1) {
+      await fetchCanonicalPlot({ endpoint: '/api/render-directivity', payload: { cacheRace: `filler-${index}` } }, fetcher);
+    }
+    const newer = fetchCanonicalPlot(target, fetcher);
+    first.reject(new Error('old renderer failed'));
+    await failed;
+    const deduplicated = fetchCanonicalPlot(target, fetcher);
+
+    expect(targetCalls).toBe(2);
+    second.resolve(new Response(JSON.stringify({ image: 'data:newer' }), { status: 200 }));
+    await expect(Promise.all([newer, deduplicated])).resolves.toEqual(['data:newer', 'data:newer']);
   });
 });

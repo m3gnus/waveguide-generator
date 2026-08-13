@@ -8,7 +8,7 @@ import { hydrateJobDesign } from '../jobs/jobDesign';
 import { exportStemForJob } from '../jobs/exportNaming';
 import { buildImportedSubmission, importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { decorateRunName, nextRunName } from '../jobs/runNaming';
-import { projectSubmittedDesign, projectSubmittedImport, type SubmittedDesignProjection } from '../jobs/submittedProjection';
+import { projectSubmittedDesign, projectSubmittedImport, submittedProjectionsEqual, type SubmittedDesignProjection } from '../jobs/submittedProjection';
 import { preferencesStore, usePreferences } from '../prefs/preferences';
 import { runWorkspaceExportBundle, saveMeshArtifactToWorkspace } from '../results/exporters';
 import type { ResultPayload } from '../results/types';
@@ -81,7 +81,25 @@ export function currentJobLabel(
   ), preferences, now);
 }
 
-function acceptSubmittedName(coreName: string, projection: SubmittedDesignProjection): void {
+function sameNamingIntent(
+  expected: Pick<ReturnType<typeof preferencesStore.getSnapshot>, 'outputName' | 'nameSourceProjection'>,
+): boolean {
+  const current = preferencesStore.getSnapshot();
+  if (current.outputName !== expected.outputName) return false;
+  if (current.nameSourceProjection === expected.nameSourceProjection) return true;
+  if (!current.nameSourceProjection || !expected.nameSourceProjection
+    || current.nameSourceProjection === 'unbound' || expected.nameSourceProjection === 'unbound') return false;
+  return submittedProjectionsEqual(current.nameSourceProjection, expected.nameSourceProjection);
+}
+
+function acceptSubmittedName(
+  coreName: string,
+  projection: SubmittedDesignProjection,
+  expected: Pick<ReturnType<typeof preferencesStore.getSnapshot>, 'outputName' | 'nameSourceProjection'>,
+): void {
+  // A submission owns the baseline it started from, but a later name edit is
+  // newer user intent and must not be rolled back when the request completes.
+  if (!sameNamingIntent(expected)) return;
   preferencesStore.update({ outputName: coreName, nameSourceProjection: projection });
 }
 
@@ -163,7 +181,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         fetch,
         { label, designRevision: nextRevision },
       );
-      acceptSubmittedName(coreName, projection);
+      acceptSubmittedName(coreName, projection, naming);
       await jobsSocket.refresh();
     } finally {
       submissionInFlight.current = false;
@@ -192,7 +210,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         fetch,
         label,
       );
-      acceptSubmittedName(coreName, projection);
+      acceptSubmittedName(coreName, projection, naming);
       await jobsSocket.refresh();
     } finally {
       submissionInFlight.current = false;

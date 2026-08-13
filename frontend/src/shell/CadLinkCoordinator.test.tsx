@@ -6,7 +6,7 @@ import { importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { preferencesStore } from '../prefs/preferences';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
-import { resetDocumentStore } from '../stores/document';
+import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { CadLinkCoordinator, cadLinkCoordinatorBridge } from './CadLinkCoordinator';
@@ -275,6 +275,88 @@ describe('CadLinkCoordinator', () => {
     expect(state.ingestRecord).toBeNull();
     expect(state.needsIngest).toBe(true);
     expect(cadLinkCoordinatorBridge.getSnapshot().status).toContain('Discarded');
+  });
+
+  it('keeps the newer ingest busy when an older request finishes first', async () => {
+    const older = deferred<Response>();
+    const newer = deferred<Response>();
+    let ingestCalls = 0;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json({ items: [initialBundle] });
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.endsWith('/ingest')) {
+        ingestCalls += 1;
+        return ingestCalls === 1 ? older.promise : newer.promise;
+      }
+      return json({}, 404);
+    }));
+    await renderCoordinator();
+    let first!: Promise<void>;
+    let second!: Promise<void>;
+    await act(async () => {
+      first = cadLinkCoordinatorBridge.getSnapshot().ingest();
+      second = cadLinkCoordinatorBridge.getSnapshot().ingest();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      older.resolve(json({ ...ingestRecord, ingest_id: 'wgi_older' }));
+      await first;
+    });
+    expect(cadLinkCoordinatorBridge.getSnapshot().ingesting).toBe(true);
+    expect(cadLinkCoordinatorBridge.getSnapshot().status).toBeNull();
+
+    await act(async () => {
+      newer.resolve(json({ ...ingestRecord, ingest_id: 'wgi_newer' }));
+      await second;
+      await Promise.resolve();
+    });
+    expect(cadLinkCoordinatorBridge.getSnapshot().ingesting).toBe(false);
+    expect(cadLinkCoordinatorBridge.getSnapshot().status).toContain('wgi_newer');
+    expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe('wgi_newer');
+  });
+
+  it('keeps Fusion identity and feedback from the newest overlapping send', async () => {
+    const older = deferred<Response>();
+    const newer = deferred<Response>();
+    let sendCalls = 0;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === '/api/workspace/path') return json({ selected: true, path: '/workspace' });
+      if (path === '/api/export/wglink') {
+        sendCalls += 1;
+        return sendCalls === 1 ? older.promise : newer.promise;
+      }
+      if (path.endsWith('/returns')) return json({ items: [initialBundle] });
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      return json({}, 404);
+    }));
+    await renderCoordinator();
+    let first!: Promise<unknown>;
+    let second!: Promise<unknown>;
+    await act(async () => {
+      first = cadLinkCoordinatorBridge.getSnapshot().sendToFusion();
+      second = cadLinkCoordinatorBridge.getSnapshot().sendToFusion();
+      await Promise.resolve(); await Promise.resolve();
+    });
+    const result = (sequence: number, designId: string) => json({
+      bundlePath: `/workspace/${designId}.wglink`, bundleId: `wgb_${sequence}`,
+      exportId: `wge_${sequence}`, sequence, designHash: 'sha256:a', geometryHash: 'sha256:b',
+      artifactSha256: 'sha256:c', identity: { designId, lineageId: `lineage-${designId}`, baseEditVersion: sequence },
+    });
+    await act(async () => {
+      newer.resolve(result(2, 'newer-design'));
+      await second;
+    });
+    expect(useDocumentStore.getState().identity?.designId).toBe('newer-design');
+    expect(cadLinkCoordinatorBridge.getSnapshot().status).toContain('sequence 2');
+
+    await act(async () => {
+      older.resolve(result(1, 'older-design'));
+      await first;
+    });
+    expect(useDocumentStore.getState().identity?.designId).toBe('newer-design');
+    expect(cadLinkCoordinatorBridge.getSnapshot().status).toContain('sequence 2');
   });
 
   it.each([

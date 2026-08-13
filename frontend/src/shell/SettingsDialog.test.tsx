@@ -10,6 +10,12 @@ function Harness() {
   return <><button id="open-settings" onClick={() => setOpen(true)}>Settings</button><SettingsDialog open={open} theme={theme} onThemeChange={setTheme} onClose={() => setOpen(false)}/></>;
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settle) => { resolve = settle; });
+  return { promise, resolve };
+}
+
 describe('SettingsDialog', () => {
   let host: HTMLDivElement;
   let root: Root;
@@ -73,6 +79,37 @@ describe('SettingsDialog', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/workspace/open', { method: 'POST' });
     expect(fetchMock).toHaveBeenCalledWith('/api/workspace/select', { method: 'POST' });
     expect(section.textContent).toContain('/chosen/workspace');
+  });
+
+  it('does not let the initial path response overwrite a newer folder selection', async () => {
+    const initial = deferred<Response>();
+    const selected = deferred<Response>();
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      if (String(input) === '/api/workspace/path') return initial.promise;
+      if (String(input) === '/api/workspace/select') return selected.promise;
+      return Promise.resolve(new Response('not found', { status: 404 }));
+    }));
+
+    await act(async () => { host.querySelector<HTMLButtonElement>('#open-settings')!.click(); });
+    const section = host.querySelector<HTMLElement>('[aria-labelledby="settings-workspace-title"]')!;
+    const select = [...section.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent === 'Select folder…')!;
+    await act(async () => {
+      select.click();
+      await Promise.resolve();
+      selected.resolve(new Response(JSON.stringify({ path: '/newer/selection' }), { status: 200 }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(section.textContent).toContain('/newer/selection');
+
+    await act(async () => {
+      initial.resolve(new Response(JSON.stringify({ path: '/stale/initial' }), { status: 200 }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(section.textContent).toContain('/newer/selection');
+    expect(section.textContent).not.toContain('/stale/initial');
   });
 
   it('offers both CAD applications, defaulting to Fusion 360', async () => {

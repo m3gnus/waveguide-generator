@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { convertDesignToFreeform } from '../api/designIo';
 import { previewSocket } from '../api/previewSocket';
@@ -857,6 +857,7 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
   const [freeformChoice, setFreeformChoice] = useState(false);
   const [conversionError, setConversionError] = useState<string | null>(null);
   const [converting, setConverting] = useState(false);
+  const conversionGeneration = useRef(0);
   const searching = Boolean(query.trim());
   const definitions = useMemo(() => PARAMETER_SECTION_DEFINITIONS
     .filter((definition) => definition.tab === tab)
@@ -914,6 +915,8 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
     };
   }, [tab]);
 
+  useEffect(() => () => { conversionGeneration.current += 1; }, []);
+
   const renderField = (field: ParameterDefinition) => <div className="parameter-entry" data-parameter-id={field.id} data-parameter-key={field.legacyKey} tabIndex={field.kind === 'indicator' ? -1 : undefined} key={field.id}>
     <FieldControl field={field} design={design} serverError={previewErrorForParameter(field, currentPreviewFields)} />
     {field.kind !== 'number' && previewErrorForParameter(field, currentPreviewFields) && <div className="field-error" role="alert">{previewErrorForParameter(field, currentPreviewFields)}</div>}
@@ -961,17 +964,28 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
     {freeformChoice && <div className="family-switch-choice" role="group" aria-label="Switch to FREEFORM">
       <b>Switch to FREEFORM</b><span>Choose how to initialize the editable profiles.</span>
       <div><button onClick={() => { setFamily('FREEFORM'); setFreeformChoice(false); }}>Start blank</button><button disabled={converting} onClick={() => {
+        const conversion = ++conversionGeneration.current;
         const sourceRevision = useDesignStore.getState().designRevision;
         setConverting(true); setConversionError(null);
         void convertDesignToFreeform(design).then((converted) => {
+          if (conversion !== conversionGeneration.current) return;
           if (useDesignStore.getState().designRevision !== sourceRevision) {
             setConversionError('The design changed while it was being converted. Review the edits and try again.');
             return;
           }
           loadDesign(converted);
           setFreeformChoice(false);
-        }).catch((error) => setConversionError(error instanceof Error ? error.message : String(error))).finally(() => setConverting(false));
-      }}>{converting ? 'Converting…' : 'Convert current design'}</button><button onClick={() => setFreeformChoice(false)}>Cancel</button></div>
+        }).catch((error) => {
+          if (conversion === conversionGeneration.current) setConversionError(error instanceof Error ? error.message : String(error));
+        }).finally(() => {
+          if (conversion === conversionGeneration.current) setConverting(false);
+        });
+      }}>{converting ? 'Converting…' : 'Convert current design'}</button><button onClick={() => {
+        conversionGeneration.current += 1;
+        setConverting(false);
+        setConversionError(null);
+        setFreeformChoice(false);
+      }}>Cancel</button></div>
       {conversionError && <div className="field-error" role="alert">{conversionError}</div>}
     </div>}
   </Section>;

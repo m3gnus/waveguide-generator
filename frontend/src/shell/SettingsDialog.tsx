@@ -44,25 +44,28 @@ function WorkspaceSettings() {
   const [path, setPath] = useState<string>();
   const [busy, setBusy] = useState<'open' | 'select'>();
   const [error, setError] = useState<string>();
+  const requestGeneration = useRef(0);
 
   useEffect(() => {
-    let active = true;
+    const request = ++requestGeneration.current;
     void workspacePath('/path').then(
-      (value) => { if (active) setPath(value); },
-      (reason: unknown) => { if (active) setError(String(reason)); },
+      (value) => { if (request === requestGeneration.current) setPath(value); },
+      (reason: unknown) => { if (request === requestGeneration.current) setError(String(reason)); },
     );
-    return () => { active = false; };
+    return () => { requestGeneration.current += 1; };
   }, []);
 
   const run = async (action: 'open' | 'select') => {
+    const request = ++requestGeneration.current;
     setBusy(action);
     setError(undefined);
     try {
-      setPath(await workspacePath(action === 'open' ? '/open' : '/select', 'POST'));
+      const nextPath = await workspacePath(action === 'open' ? '/open' : '/select', 'POST');
+      if (request === requestGeneration.current) setPath(nextPath);
     } catch (reason) {
-      setError(String(reason));
+      if (request === requestGeneration.current) setError(String(reason));
     } finally {
-      setBusy(undefined);
+      if (request === requestGeneration.current) setBusy(undefined);
     }
   };
 
