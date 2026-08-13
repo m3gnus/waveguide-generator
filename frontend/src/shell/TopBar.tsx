@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { jobsSocket } from '../api/jobsSocket';
 import { compareSelection } from '../api/results';
+import { CAD_CONTROL_DESCRIPTORS, cadControlIsAvailable, cadControlMatchesQuery } from '../design/cadControlRegistry';
 import { DesignFileMenu } from '../design/DesignFileMenu';
-import { PARAMETER_REGISTRY, PARAMETER_SECTION_DEFINITIONS, fieldAppliesToFamily, fieldMatchesQuery, type ParameterTab } from '../design/parameterRegistry';
+import { PARAMETER_REGISTRY, PARAMETER_SECTION_DEFINITIONS, fieldAppliesToFamily, fieldMatchesQuery, parameterSectionIsVisible, type ParameterTab } from '../design/parameterRegistry';
 import { RESULT_PANEL_COUNTS, preferencesStore, runDisplayName, usePreferences, type Preferences } from '../prefs/preferences';
-import { useDesignStore, type DesignFamily } from '../stores/design';
+import { useCadReturnStore } from '../stores/cadReturn';
+import { useDesignStore, type DesignDocument, type DesignFamily } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
 import { workspaceModeStore, type WorkspaceMode } from '../stores/workspaceMode';
 import { requestParameterReveal } from '../design/ParamPanel';
@@ -25,31 +27,73 @@ function initialTheme(): Theme {
 }
 
 const parameterTabBySection = new Map(PARAMETER_SECTION_DEFINITIONS.map((section) => [section.title, section.tab]));
+const parameterSectionByTitle = new Map(PARAMETER_SECTION_DEFINITIONS.map((section) => [section.title, section]));
 
 export function revealParameterFromPalette(id: string, tab: ParameterTab, query: string): void {
+  // A palette entry can outlive the mode in which its result list was built.
+  // Establish the owning workspace before the dock panel is activated or the
+  // still-mounted panel could claim a request for controls it is about to hide.
+  workspaceModeStore.setMode('parametric');
   workspaceNavigation.activate(tab);
   // The request waits to be claimed, so it does not need to be timed to land
   // after the panel mounts — and not deferring it means the route still works
   // in a background tab, where animation frames never run.
-  requestParameterReveal({ id, tab, query });
+  requestParameterReveal({ id, tab, query, target: 'parameter' });
 }
 
-export function buildParameterPaletteEntries(family?: DesignFamily): PaletteEntry[] {
-  return PARAMETER_REGISTRY.filter((field) => !family || fieldAppliesToFamily(field, family)).map((field) => {
-    const tab = parameterTabBySection.get(field.section) ?? 'geometry';
-    return {
-      id: `parameter-${field.id}`,
+export function revealCadControlFromPalette(id: string, tab: ParameterTab, query: string, fallbackId?: string): void {
+  workspaceModeStore.setMode('cad');
+  workspaceNavigation.activate(tab);
+  requestParameterReveal({ id, tab, query, target: 'control', fallbackId });
+}
+
+export interface ParameterPaletteContext {
+  mode?: WorkspaceMode;
+  design?: DesignDocument;
+  cadReturnReady?: boolean;
+}
+
+export function buildParameterPaletteEntries(family?: DesignFamily, context: ParameterPaletteContext = {}): PaletteEntry[] {
+  const mode = context.mode ?? 'parametric';
+  const design = context.design ?? useDesignStore.getState().design;
+  const cadReturnReady = context.cadReturnReady ?? Boolean(useCadReturnStore.getState().ingestRecord);
+  const parameterEntries: PaletteEntry[] = PARAMETER_REGISTRY
+    .filter((field) => !family || fieldAppliesToFamily(field, family))
+    // Section policy already decides what the rail can render. Reusing it here
+    // prevents palette and rail from growing subtly different CAD mode rules.
+    .filter((field) => {
+      const section = parameterSectionByTitle.get(field.section);
+      return !section || parameterSectionIsVisible(section, mode, design);
+    })
+    .map((field) => {
+      const tab = parameterTabBySection.get(field.section) ?? 'geometry';
+      return {
+        id: `parameter-${field.id}`,
+        kind: 'Parameters',
+        label: field.label,
+        // The ATH symbol and the legacy config key are usually the same string
+        // (R, a, a0, k, m, b, r, q), and joining them unconditionally printed
+        // every one of those parameters as "R · R".
+        detail: [...new Set([field.symbol, field.legacyKey].filter(Boolean))].join(' · '),
+        keywords: [field.id, field.path, field.symbol, field.legacyKey].filter(Boolean).join(' '),
+        matches: (query) => fieldMatchesQuery(field, query) || Boolean(field.symbol?.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())),
+        run: () => revealParameterFromPalette(field.id, tab, field.label),
+      };
+    });
+  if (mode !== 'cad') return parameterEntries;
+
+  const cadEntries: PaletteEntry[] = CAD_CONTROL_DESCRIPTORS
+    .filter((descriptor) => cadControlIsAvailable(descriptor, cadReturnReady))
+    .map((descriptor) => ({
+      id: `cad-control-${descriptor.id}`,
       kind: 'Parameters',
-      label: field.label,
-      // The ATH symbol and the legacy config key are usually the same string
-      // (R, a, a0, k, m, b, r, q), and joining them unconditionally printed
-      // every one of those parameters as "R · R".
-      detail: [...new Set([field.symbol, field.legacyKey].filter(Boolean))].join(' · '),
-      keywords: [field.id, field.path, field.symbol, field.legacyKey].filter(Boolean).join(' '),
-      matches: (query) => fieldMatchesQuery(field, query) || Boolean(field.symbol?.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())),
-      run: () => revealParameterFromPalette(field.id, tab, field.label),
-    };
-  });
+      label: descriptor.label,
+      detail: descriptor.section,
+      keywords: [descriptor.id, descriptor.section, ...descriptor.keywords].join(' '),
+      matches: (query) => cadControlMatchesQuery(descriptor, query),
+      run: () => revealCadControlFromPalette(descriptor.reveal.id, descriptor.tab, descriptor.label, descriptor.reveal.fallbackId),
+    }));
+  return [...parameterEntries, ...cadEntries];
 }
 
 export function WorkspaceModeSwitch() {
@@ -96,7 +140,10 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
   const undo = useDesignStore((state) => state.undo);
   const redo = useDesignStore((state) => state.redo);
   const revision = useDesignStore((state) => state.designRevision);
-  const family = useDesignStore((state) => state.design.formula);
+  const design = useDesignStore((state) => state.design);
+  const family = design.formula;
+  const workspaceMode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
+  const cadReturnReady = useCadReturnStore((state) => Boolean(state.ingestRecord));
   const [theme, setTheme] = useState<Theme>(initialTheme);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>();
@@ -135,7 +182,7 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
     requestAnimationFrame(() => fileAction('Save'));
   };
   const paletteEntries = useMemo<PaletteEntry[]>(() => {
-    const parameters = buildParameterPaletteEntries(family);
+    const parameters = buildParameterPaletteEntries(family, { mode: workspaceMode, design, cadReturnReady });
     const jobEntries: PaletteEntry[] = jobs.map((job) => ({
       id: `job-${job.id}`,
       kind: 'Jobs',
@@ -161,7 +208,7 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
       ...RESULT_PANEL_COUNTS.map((count) => ({ id: `results-${count}`, kind: 'Commands' as const, label: `Results: ${count} chart${count === 1 ? '' : 's'}`, keywords: `panel count layout`, run: () => preferencesStore.setChartCount(count) })),
     ];
     return [...parameters, ...jobEntries, ...commands];
-  }, [canRedo, canUndo, family, jobs, onResetLayout, preferences.cadApplication, redo, showSettings, solve, undo, update.data?.availability, update.data?.release?.version]);
+  }, [cadReturnReady, canRedo, canUndo, design, family, jobs, onResetLayout, preferences.cadApplication, redo, showSettings, solve, undo, update.data?.availability, update.data?.release?.version, workspaceMode]);
 
   return <header className="topbar">
     <div className="brand"><BrandMark/><div><span className="brand-name">WAVEGUIDE GENERATOR</span><UpdateButton snapshot={update} open={updateOpen} onOpen={() => setUpdateOpen(true)}/></div></div>

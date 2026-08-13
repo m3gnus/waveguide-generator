@@ -30,6 +30,8 @@ interface NumberFieldProps {
   onCommitExpression?: (value: ExprNumber) => void;
   onBeginDrag?: () => void;
   onEndDrag?: () => void;
+  /** Semantic target consumed by ParamPanel's queued reveal request. */
+  revealId?: string;
 }
 
 export function NumberField({
@@ -55,6 +57,7 @@ export function NumberField({
   onCommitExpression,
   onBeginDrag,
   onEndDrag,
+  revealId,
 }: NumberFieldProps) {
   const id = useId();
   const titled = symbol ? `${label} (${symbol})` : label;
@@ -230,7 +233,11 @@ export function NumberField({
   }, []);
 
   return (
-    <div className={`field-row${modified ? ' modified' : ''}${disabled ? ' field-disabled' : ''}${holdsExpression ? ' expression-row' : ''}`} title={disabledReason}>
+    <div
+      className={`field-row${modified ? ' modified' : ''}${disabled ? ' field-disabled' : ''}${holdsExpression ? ' expression-row' : ''}`}
+      title={disabledReason}
+      data-control-reveal-id={revealId}
+    >
       <i className="modified-dot" />
       <label
         htmlFor={id}

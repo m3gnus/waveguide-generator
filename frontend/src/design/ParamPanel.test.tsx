@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadRealizedDimensions, CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
 import { buildImportedSubmission, importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { cadLinkCoordinatorBridge } from '../shell/CadLinkCoordinator';
+import { buildParameterPaletteEntries } from '../shell/TopBar';
+import { workspaceNavigation } from '../shell/workspaceNavigation';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
@@ -289,6 +291,27 @@ describe('ParamPanel inventory UX', () => {
     expect(sweepSection.textContent).toContain('Enter a valid explicit frequency sweep.');
   });
 
+  it('filters the CAD rail through the same control descriptors as the palette', () => {
+    act(() => {
+      setCadReady();
+      workspaceModeStore.setMode('cad');
+      root.render(withQueryClient(<ParamPanel tab="simulation" />));
+    });
+    const matchingSections = (query: string) => {
+      const input = host.querySelector<HTMLInputElement>('#parameter-filter-simulation')!;
+      act(() => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, query);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      return [...host.querySelectorAll<HTMLElement>('[data-section]')].map((section) => section.dataset.section);
+    };
+
+    expect(matchingSections('frequencyStartHz')).toEqual(['Frequency Sweep']);
+    expect(matchingSections('sd_cm2')).toEqual(['Drive channels & drivers']);
+    expect(matchingSections('LR4')).toEqual(['Crossover']);
+    expect(matchingSections('surface sizing')).toEqual(['Mesh detail']);
+  });
+
   it('omits field-count labels while retaining informative summaries', () => {
     const summaries = [...host.querySelectorAll<HTMLElement>('.section-summary')].map((element) => element.textContent);
     expect(summaries).toContain(useDesignStore.getState().design.formula);
@@ -304,6 +327,30 @@ describe('ParamPanel inventory UX', () => {
     const entry = host.querySelector<HTMLElement>('[data-parameter-id="simulation.f1"]')!;
     expect(entry).not.toBeNull();
     expect(document.activeElement).toBe(entry.querySelector('input'));
+    expect(host.querySelector<HTMLInputElement>('#parameter-filter-simulation')?.value).toBe('Sweep start');
+  });
+
+  it('switches to CAD mode and claims a non-registry palette reveal', async () => {
+    const activate = vi.spyOn(workspaceNavigation, 'activate').mockReturnValue(true);
+    act(() => {
+      setCadReady();
+      root.render(withQueryClient(<ParamPanel tab="simulation" />));
+    });
+    const design = useDesignStore.getState().design;
+    const sweepStart = buildParameterPaletteEntries(design.formula, {
+      mode: 'cad', design, cadReturnReady: true,
+    }).find((entry) => entry.id === 'cad-control-cad.frequency.start')!;
+
+    await act(async () => {
+      sweepStart.run();
+      await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    });
+
+    expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
+    expect(activate).toHaveBeenCalledWith('simulation');
+    const target = host.querySelector<HTMLElement>('[data-control-reveal-id="cad.frequency.start"]')!;
+    expect(target).not.toBeNull();
+    expect(document.activeElement).toBe(target.querySelector('input'));
     expect(host.querySelector<HTMLInputElement>('#parameter-filter-simulation')?.value).toBe('Sweep start');
   });
 
