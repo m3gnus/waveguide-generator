@@ -12,6 +12,7 @@ class MockSocket implements JobsWebSocketLike {
   send(data: string) { this.sent.push(data); }
   close() { this.readyState = 3; this.onclose?.({}); }
   message(value: unknown) { this.onmessage?.({ data: JSON.stringify(value) }); }
+  raw(data: string) { this.onmessage?.({ data }); }
 }
 
 function job(overrides: Partial<JobItem> = {}): JobItem {
@@ -110,6 +111,215 @@ describe('jobs websocket state machine', () => {
     socket.message({ v: 2, kind: 'event', epoch: 4, cursor: 11, jobId: 'job-1', type: 'progress', payload: { progress: .9 } });
     expect(manager.getSnapshot().jobs[0].progress).toBe(0);
     expect(manager.getSnapshot().cursor).toBe(10);
+    manager.stop();
+  });
+
+  it('validates hello fields before changing connection state and accepts a valid recovery', () => {
+    const socket = new MockSocket();
+    const manager = new JobsSocketManager(() => socket, vi.fn(), 'ws://test/ws/jobs');
+    manager.start();
+
+    socket.raw('{not-json');
+    expect(manager.getSnapshot()).toMatchObject({ connection: 'connecting', epoch: null, error: 'Malformed jobs message' });
+    socket.message(null);
+    expect(manager.getSnapshot()).toMatchObject({ connection: 'connecting', epoch: null, error: 'Malformed jobs message' });
+    socket.message({ v: 1, kind: 'hello', epoch: '4', heartbeatSec: 15 });
+    expect(manager.getSnapshot()).toMatchObject({ connection: 'connecting', epoch: null, error: 'Invalid jobs hello message' });
+    socket.message({ v: 1, kind: 'hello', epoch: 4, heartbeatSec: '15' });
+    expect(manager.getSnapshot()).toMatchObject({ connection: 'connecting', epoch: null, error: 'Invalid jobs hello message' });
+
+    socket.message({ v: 1, kind: 'hello', epoch: 4, heartbeatSec: 15 });
+    expect(manager.getSnapshot()).toMatchObject({ connection: 'connected', epoch: 4, error: null });
+    manager.stop();
+  });
+
+  it('rejects malformed snapshot arrays and rows without poisoning a later valid snapshot', () => {
+    const socket = new MockSocket();
+    const manager = new JobsSocketManager(() => socket, vi.fn(), 'ws://test/ws/jobs');
+    manager.start();
+    socket.message({ v: 1, kind: 'hello', epoch: 4, heartbeatSec: 15 });
+
+    socket.message({ v: 1, kind: 'snapshot', epoch: 4, cursor: 1, jobs: {} });
+    expect(manager.getSnapshot()).toMatchObject({ cursor: null, jobs: [], error: 'Invalid jobs snapshot message' });
+    socket.message({ v: 1, kind: 'snapshot', epoch: 4, cursor: '1', jobs: [job()] });
+    expect(manager.getSnapshot().cursor).toBeNull();
+    socket.message({ v: 1, kind: 'snapshot', epoch: 4, cursor: 1, jobs: [job({ run_number: 0 })] });
+    expect(manager.getSnapshot().jobs).toEqual([]);
+    socket.message({ v: 1, kind: 'snapshot', epoch: 4, cursor: 1, jobs: [{ ...job(), log_tail: 'not-an-array' }] });
+    expect(manager.getSnapshot().jobs).toEqual([]);
+    socket.message({ v: 1, kind: 'snapshot', epoch: 4, cursor: 1, jobs: [job(), job()] });
+    expect(manager.getSnapshot().jobs).toEqual([]);
+
+    const prototypeRow = JSON.parse(JSON.stringify(job())) as Record<string, unknown>;
+    Object.defineProperty(prototypeRow, '__proto__', { enumerable: true, value: { polluted: true } });
+    socket.message({ v: 1, kind: 'snapshot', epoch: 4, cursor: 1, jobs: [prototypeRow] });
+    expect(manager.getSnapshot().jobs).toEqual([]);
+    expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
+
+    socket.message({
+      v: 1,
+      kind: 'snapshot',
+      epoch: 4,
+      cursor: 2,
+      jobs: [{ ...job(), future_server_field: { safe: true } }],
+    });
+    expect(manager.getSnapshot()).toMatchObject({ cursor: 2, error: null });
+    expect(manager.getSnapshot().jobs[0]).toMatchObject({ id: 'job-1', future_server_field: { safe: true } });
+    manager.stop();
+  });
+
+  it('rejects malformed event cursors before applying a valid recovery event', () => {
+    const socket = new MockSocket();
+    const manager = new JobsSocketManager(() => socket, vi.fn(), 'ws://test/ws/jobs');
+    manager.start();
+    socket.message({ v: 1, kind: 'hello', epoch: 4, heartbeatSec: 15 });
+    socket.message({ v: 1, kind: 'snapshot', epoch: 4, cursor: 10, jobs: [job({ status: 'running' })] });
+
+    socket.message({ v: 1, kind: 'event', epoch: 4, cursor: '11', jobId: 'job-1', type: 'progress', payload: { progress: .4 } });
+    socket.message({ v: 1, kind: 'event', epoch: 4, cursor: -1, jobId: 'job-1', type: 'progress', payload: { progress: .4 } });
+    socket.message({ v: 1, kind: 'event', epoch: 4, cursor: Number.MAX_SAFE_INTEGER + 1, jobId: 'job-1', type: 'progress', payload: { progress: .4 } });
+    expect(manager.getSnapshot()).toMatchObject({ cursor: 10, error: 'Invalid jobs event message' });
+    expect(manager.getSnapshot().jobs[0]).toMatchObject({ progress: 0, log_tail: [] });
+
+    socket.message({
+      v: 1,
+      kind: 'event',
+      epoch: 4,
+      cursor: 11,
+      jobId: 'job-1',
+      type: 'progress',
+      payload: { progress: .4, future_payload_field: ['ignored'] },
+      future_envelope_field: { ignored: true },
+    });
+    expect(manager.getSnapshot()).toMatchObject({ cursor: 11, error: null });
+    expect(manager.getSnapshot().jobs[0].progress).toBe(.4);
+    manager.stop();
+  });
+
+  it('resyncs malformed event payloads and then accepts valid events', async () => {
+    const socket = new MockSocket();
+    const authoritative = job({ status: 'running', progress: .25 });
+    const fetcher = vi.fn(async () => json({ items: [authoritative], total: 1 }));
+    const manager = new JobsSocketManager(() => socket, fetcher, 'ws://test/ws/jobs');
+    manager.start();
+    socket.message({ v: 1, kind: 'hello', epoch: 4, heartbeatSec: 15 });
+    socket.message({ v: 1, kind: 'snapshot', epoch: 4, cursor: 10, jobs: [job({ status: 'running' })] });
+
+    socket.message({ v: 1, kind: 'event', epoch: 4, cursor: 11, jobId: 'job-1', type: 'progress', payload: [] });
+    expect(manager.getSnapshot()).toMatchObject({ cursor: 11, error: 'Invalid jobs event message; resyncing' });
+    await vi.waitFor(() => expect(manager.getSnapshot()).toMatchObject({ cursor: 11, error: null }));
+    expect(manager.getSnapshot().jobs[0].progress).toBe(.25);
+
+    // These stale malformed replays are rejected without touching the row.
+    socket.message({ v: 1, kind: 'event', epoch: 4, cursor: 11, jobId: 'job-1', type: 'progress', payload: { progress: 'fast' } });
+    socket.message({ v: 1, kind: 'event', epoch: 4, cursor: 11, jobId: 'job-1', type: 'log', payload: { lines: ['ok', 42] } });
+    expect(manager.getSnapshot().jobs[0]).toMatchObject({ progress: .25, log_tail: [] });
+
+    socket.message({ v: 1, kind: 'event', epoch: 4, cursor: 12, jobId: 'job-1', type: 'progress', payload: { progress: .5 } });
+    expect(manager.getSnapshot()).toMatchObject({ cursor: 12, error: null });
+    expect(manager.getSnapshot().jobs[0].progress).toBe(.5);
+    manager.stop();
+  });
+
+  it('whitelists metadata changes and ignores identity, lifecycle, and prototype-like keys', async () => {
+    const socket = new MockSocket();
+    const fetcher = vi.fn(async () => json({ items: [job({ label: 'kept', rating: 5 })], total: 1 }));
+    const manager = new JobsSocketManager(() => socket, fetcher, 'ws://test/ws/jobs');
+    manager.start();
+    socket.message({ v: 1, kind: 'hello', epoch: 1, heartbeatSec: 15 });
+    socket.message({ v: 1, kind: 'snapshot', epoch: 1, cursor: 1, jobs: [job()] });
+    const changed = JSON.parse(`{
+      "label":"kept",
+      "rating":5,
+      "id":"attacker",
+      "run_number":999,
+      "status":"complete",
+      "progress":1,
+      "created_at":"2099-01-01T00:00:00Z",
+      "log_tail":["forged"],
+      "__proto__":{"polluted":true},
+      "prototype":{"polluted":true},
+      "constructor":{"prototype":{"polluted":true}}
+    }`) as Record<string, unknown>;
+
+    socket.message({
+      v: 1, kind: 'event', epoch: 1, cursor: 2, jobId: 'job-1', type: 'metadata', payload: { changed },
+    });
+
+    expect(manager.getSnapshot().jobs[0]).toMatchObject({
+      id: 'job-1', run_number: 1, status: 'queued', progress: 0,
+      created_at: '2026-08-03T10:00:00Z', log_tail: [], label: 'kept', rating: 5,
+    });
+    expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
+
+    socket.message({
+      v: 1, kind: 'event', epoch: 1, cursor: 3, jobId: 'job-1', type: 'metadata', payload: { changed: { label: [] } },
+    });
+    expect(manager.getSnapshot()).toMatchObject({ cursor: 3, error: 'Invalid jobs event message; resyncing' });
+    expect(manager.getSnapshot().jobs[0].label).toBe('kept');
+    await vi.waitFor(() => expect(manager.getSnapshot()).toMatchObject({ cursor: 3, error: null }));
+    manager.stop();
+  });
+
+  it('resyncs through HTTP for an unknown future event type', async () => {
+    const socket = new MockSocket();
+    const authoritative = job({ status: 'complete', progress: 1, has_results: true });
+    const fetcher = vi.fn(async () => json({ items: [authoritative], total: 1 }));
+    const manager = new JobsSocketManager(() => socket, fetcher, 'ws://test/ws/jobs');
+    manager.start();
+    socket.message({ v: 1, kind: 'hello', epoch: 1, heartbeatSec: 15 });
+    socket.message({ v: 1, kind: 'snapshot', epoch: 1, cursor: 1, jobs: [job()] });
+
+    socket.message({
+      v: 1, kind: 'event', epoch: 1, cursor: 2, jobId: 'job-1', type: 'archived', payload: { future: ['shape'] },
+    });
+    expect(manager.getSnapshot()).toMatchObject({ cursor: 2 });
+    expect(manager.getSnapshot().error).toContain('Unsupported jobs event type');
+    await vi.waitFor(() => expect(manager.getSnapshot()).toMatchObject({
+      cursor: 2, error: null, jobs: [expect.objectContaining({ status: 'complete', progress: 1 })],
+    }));
+    expect(fetcher).toHaveBeenCalledWith('/api/jobs?limit=200&offset=0');
+    manager.stop();
+  });
+
+  it('rejects malformed partial results before accepting a valid replacement', () => {
+    const socket = new MockSocket();
+    const manager = new JobsSocketManager(() => socket, vi.fn(), 'ws://test/ws/jobs');
+    manager.start();
+    socket.message({ v: 1, kind: 'hello', epoch: 1, heartbeatSec: 15 });
+    socket.message({ v: 1, kind: 'snapshot', epoch: 1, cursor: 1, jobs: [job({ status: 'running' })] });
+
+    socket.message({ v: 1, kind: 'partialResult', epoch: 1, jobId: 'job-1', revision: 0, result: { frequencies: [200] } });
+    socket.message({ v: 1, kind: 'partialResult', epoch: 1, jobId: 'job-1', revision: 1, snapshot: 'yes', result: { frequencies: [200] } });
+    socket.message({ v: 1, kind: 'partialResult', epoch: 1, jobId: 'job-1', revision: 1, result: { frequencies: '200' } });
+    socket.message({ v: 1, kind: 'partialResult', epoch: 1, jobId: 'job-1', revision: 1, result: { frequencies: [200], channels: [] } });
+    socket.message({ v: 1, kind: 'partialResult', epoch: 1, jobId: 'job-1', revision: 1, result: { frequencies: [200], spl_on_axis: [] } });
+    socket.message({ v: 1, kind: 'partialResult', epoch: 1, jobId: 'job-1', revision: 1, result: { frequencies: [200], directivity: { horizontal: 'wide' } } });
+    const prototypeResult = JSON.parse('{"frequencies":[200],"__proto__":{"polluted":true}}');
+    socket.message({ v: 1, kind: 'partialResult', epoch: 1, jobId: 'job-1', revision: 1, result: prototypeResult });
+    expect(provisionalResults.get('job-1')).toBeUndefined();
+    expect(manager.getSnapshot()).toMatchObject({ cursor: 1, error: 'Invalid jobs partialResult message' });
+
+    socket.message({
+      v: 1,
+      kind: 'partialResult',
+      epoch: 1,
+      jobId: 'job-1',
+      revision: 1,
+      result: {
+        frequencies: [200],
+        spl_on_axis: { frequencies: [200], spl: [90], phase_degrees: [0] },
+        directivity: { horizontal: [[[0, [1, 0]]]], vertical: [[[0, 0]]] },
+        di: { frequencies: [200], di: { horizontal: [6], vertical: [5] } },
+        channels: { combined: { frequencies: [200], impedance: { frequencies: [200], real: [1], imaginary: [0] } } },
+        channel_order: ['combined'],
+      },
+    });
+    expect(provisionalResults.get('job-1')).toMatchObject({
+      revision: 1,
+      result: { frequencies: [200], channel_order: ['combined'] },
+    });
+    expect(manager.getSnapshot()).toMatchObject({ cursor: 1, error: null });
     manager.stop();
   });
 
