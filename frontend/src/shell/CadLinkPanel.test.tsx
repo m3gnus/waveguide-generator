@@ -120,7 +120,7 @@ describe('CadLinkPanel', () => {
       `/api/cadlink/ingest/${record.ingest_id}/mesh`,
     ]);
     expect(notices).toEqual([]);
-    expect(importedMeshStore.getSnapshot().scene?.artifactToken).toBe(`${record.ingest_id}:solver`);
+    expect(importedMeshStore.getSnapshot().cad?.artifactToken).toBe(`${record.ingest_id}:solver`);
   });
 
   it('reports viewport artifact corruption before falling back to the solver mesh', async () => {

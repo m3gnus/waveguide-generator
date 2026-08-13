@@ -114,8 +114,12 @@ export function Viewport() {
     importedMeshStore.getSnapshot,
     importedMeshStore.getSnapshot,
   );
-  const availableImportedMesh = importedMeshState.scene;
-  const importedMesh = importedMeshState.active ? availableImportedMesh : null;
+  const importedMesh = importedMeshState.showing === 'cad'
+    ? importedMeshState.cad
+    : importedMeshState.showing === 'file'
+      ? importedMeshState.file
+      : null;
+  const availableImportedMesh = importedMesh ?? importedMeshState.file ?? importedMeshState.cad;
   const [importError, setImportError] = useState<string | null>(null);
   const [dismissedPreviewError, setDismissedPreviewError] = useState<string | null>(null);
   const [refreshRequestedAt, setRefreshRequestedAt] = useState<number | null>(null);
@@ -162,10 +166,11 @@ export function Viewport() {
 
   const importMesh = async (file: File | undefined) => {
     if (!file) return;
+    const generation = importedMeshStore.beginIntent();
     setImportError(null);
     try {
       const imported = createImportedMeshScene(file.name, parseMSH(await file.text()));
-      importedMeshStore.set(imported);
+      importedMeshStore.setFile(imported, generation);
     } catch (error) {
       setImportError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -277,7 +282,7 @@ export function Viewport() {
     <div className="viewport-live">
       {availableImportedMesh && <span className="imported-mesh-badge" aria-label="Viewport geometry source">
         <button type="button" className={!importedMesh ? 'active' : ''} aria-pressed={!importedMesh} onClick={showParametric}>Parametric</button>
-        <button type="button" className={importedMesh ? 'active' : ''} aria-pressed={Boolean(importedMesh)} onClick={() => importedMeshStore.showImported()}>{availableImportedMesh.source === 'cad' ? 'Fusion CAD' : 'Imported mesh'}</button>
+        <button type="button" className={importedMesh ? 'active' : ''} aria-pressed={Boolean(importedMesh)} onClick={() => availableImportedMesh.source === 'cad' ? importedMeshStore.showCad() : importedMeshStore.showFile()}>{availableImportedMesh.source === 'cad' ? 'Fusion CAD' : 'Imported mesh'}</button>
       </span>}
       <span className={badge.className}><i />{refreshRequestedAt === null ? badge.label : 'REFRESHING'}</span>
       {behindDesign && !importedMesh && <button
