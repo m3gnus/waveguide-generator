@@ -15,6 +15,7 @@ from .controller import ServiceState, StatusController, StatusSnapshot
 COLORS = {
     ServiceState.STARTING: "#d99b16",
     ServiceState.OK: "#2eae5e",
+    ServiceState.WARNING: "#d99b16",
     ServiceState.ERROR: "#d94b4b",
     ServiceState.STOPPED: "#7b8490",
 }
