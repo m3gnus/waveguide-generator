@@ -9,6 +9,7 @@ from server.mesh.imported import (
     ImportedMeshError,
     RoleResolutionError,
     allocate_imported_tags,
+    imported_tessellation_settings,
     resolve_instance_source,
     resolve_user_source,
     rigid_inverse,
@@ -38,6 +39,22 @@ def test_sizes_cover_exactly_non_skipped_sources() -> None:
     assert validate_imported_sizes(sources, {"rigid_size_mm": 10, "transition_mm": 20, "source_size_mm": {"a": 2}}, skipped_source_ids=["b"])["source_size_mm"] == {"a": 2.0}
     with pytest.raises(ImportedMeshError, match="missing"):
         validate_imported_sizes(sources, {"rigid_size_mm": 10, "transition_mm": 20, "source_size_mm": {"a": 2}})
+
+
+def test_imported_tessellation_is_curvature_aware_but_bounded() -> None:
+    settings = imported_tessellation_settings(
+        {
+            "rigid_size_mm": 12.0,
+            "transition_mm": 20.0,
+            "source_size_mm": {"hf": 4.0, "mf": 8.0},
+        }
+    )
+    assert settings == {
+        "curvature_segments_per_2pi": 24,
+        "mesh_size_min_mm": 2.0,
+        "mesh_size_max_mm": 12.0,
+        "algorithm": 6,
+    }
 
 
 def test_rigid_transform_refuses_scale_and_mirror() -> None:

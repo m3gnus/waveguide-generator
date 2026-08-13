@@ -32,6 +32,11 @@ FIRST_SOURCE_TAG = 101
 AREA_REL_TOLERANCE = 0.01
 PLANE_DISTANCE_MM = 0.05
 NORMAL_ANGLE_DEG = 0.1
+# OCC's linear target size alone can leave tight fillets and curved imported
+# baffles visibly faceted. This asks Gmsh for 24 elements around a full circle,
+# while the floor below prevents tiny CAD details from exploding solve cost.
+IMPORTED_CURVATURE_SEGMENTS = 24
+IMPORTED_CURVATURE_REFINEMENT_LIMIT = 2.0
 
 
 class ImportedMeshError(ValueError):
@@ -97,6 +102,24 @@ def validate_imported_sizes(
         "rigid_size_mm": float(rigid),
         "transition_mm": float(transition),
         "source_size_mm": normalized,
+    }
+
+
+def imported_tessellation_settings(sizes: Mapping[str, Any]) -> dict[str, float | int]:
+    """Bounded curvature-aware OCC tessellation derived from validated sizes.
+
+    Curvature may refine to half the finest explicit target, never arbitrarily
+    towards zero on a small decorative fillet. The user's rigid target remains
+    the global maximum edge-size request.
+    """
+
+    values = [float(sizes["rigid_size_mm"]), *map(float, sizes["source_size_mm"].values())]
+    finest = min(values)
+    return {
+        "curvature_segments_per_2pi": IMPORTED_CURVATURE_SEGMENTS,
+        "mesh_size_min_mm": finest / IMPORTED_CURVATURE_REFINEMENT_LIMIT,
+        "mesh_size_max_mm": float(sizes["rigid_size_mm"]),
+        "algorithm": 6,
     }
 
 
@@ -580,6 +603,7 @@ def build_imported_mesh(
     if required_skips:
         raise ImportedMeshError(f"role resolution: required sources cannot be skipped: {sorted(required_skips)}")
     normalized_sizes = validate_imported_sizes(source_list, sizes, skipped_source_ids=skipped)
+    tessellation = imported_tessellation_settings(normalized_sizes)
     allocation = allocate_imported_tags(source_list, skipped_source_ids=skipped)
     options = dict(options or {})
     requested_max_frequency_hz = options.get("requested_max_frequency_hz")
@@ -1030,7 +1054,13 @@ def build_imported_mesh(
             gmsh.model.mesh.field.setAsBackgroundMesh(minimum)
         gmsh.option.setNumber("Mesh.MeshSizeExtendFromBoundary", 0)
         gmsh.option.setNumber("Mesh.MeshSizeFromPoints", 1)
-        gmsh.option.setNumber("Mesh.MeshSizeFromCurvature", 0)
+        gmsh.option.setNumber("Mesh.MeshSizeMin", tessellation["mesh_size_min_mm"])
+        gmsh.option.setNumber("Mesh.MeshSizeMax", tessellation["mesh_size_max_mm"])
+        gmsh.option.setNumber(
+            "Mesh.MeshSizeFromCurvature",
+            tessellation["curvature_segments_per_2pi"],
+        )
+        gmsh.option.setNumber("Mesh.Algorithm", tessellation["algorithm"])
 
         mesh_error: Exception | None = None
         try:
@@ -1157,6 +1187,7 @@ def build_imported_mesh(
                     "postprocess": repair,
                     "topology": topology,
                     "mesh_frequency_validation": frequency,
+                    "occ_tessellation": tessellation,
                 },
                 "sizing_estimate": sizing_estimate,
             }
