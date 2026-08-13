@@ -201,9 +201,6 @@ export const PARAMETER_REGISTRY: ParameterDefinition[] = [
   select('source.velocity_convention', 'sourceVelocity', 'source.velocity_convention', sourceDefinition, 'Velocity convention', [{ value: 'normal', label: 'Normal velocity' }, { value: 'axial', label: 'Axial rigid-piston velocity' }, { value: 'legacy', label: 'Legacy config value' }], { description: 'Which way the source surface moves. Normal drives every point along its own surface normal; Axial drives it as a rigid piston along the horn axis. Legacy takes the same choice from the numeric code in Source amplitude instead.' }),
   { id: 'source.contours', legacyKey: 'sourceContours', path: 'source.contours', section: sourceDefinition, label: 'Source contours', kind: 'text', description: 'Preserved for ATH round-trip only — custom source contours are not implemented here. Any non-empty value stops both the viewport preview and the solve from meshing.' },
 
-  // Symmetry is custom-rendered as quadrants but registered against schema mesh.quadrants.
-  { id: 'mesh.quadrants', legacyKey: 'quadrants', path: 'mesh.quadrants', section: solveExportMesh, label: 'Solve/export quadrants', kind: 'select', description: 'How much of the geometry is meshed and solved. Symmetric designs can be cut to a half or quarter domain for a much faster solve with the same answer. ATH recognises full, half-Y and half-X; anything else falls to a quarter domain. Solves started here use the Solve domain selector instead.' },
-
   // Full enclosure schema block.
   number('enclosure.depth', 'encDepth', 'enclosure.depth', wallEnclosure, 'Enclosure depth', { unit: 'mm', min: 0, max: 2_000, step: 1, visibleWhen: (design) => design.enclosure.depth > 0, description: 'Depth of the box behind the front baffle. A positive value is raised if needed to clear the horn — at least its axial span plus 1 mm. 0 means no box, leaving a free-standing horn shaped by Wall thickness. Infinite-baffle simulations ignore the enclosure entirely.' }),
   number('enclosure.edge_radius', 'encEdge', 'enclosure.edge_radius', wallEnclosure, 'Edge radius', { unit: 'mm', min: 0, max: 1_000, visibleWhen: (design) => design.enclosure.depth > 0, description: 'Size of the roundover or bevel on the outer box edges, front and rear. The front edge is the main control over baffle diffraction. It is reduced automatically to fit the box and to leave the baffle margins intact.' }),
@@ -245,10 +242,13 @@ export const PARAMETER_REGISTRY: ParameterDefinition[] = [
   // stay as ATH spells them so designs round-trip; only the labels changed.
   select('simulation.solver_mode', 'solverMode', 'simulation.solver_mode', solveExportMesh, 'Solver mode', [{ value: 'auto', label: 'Auto — meridian when eligible' }, { value: 'full_3d', label: 'Force full 3D' }, { value: 'circsym', label: 'Force axisymmetric meridian' }], { description: 'Controls the Metal backend\'s solve path. Auto solves a body of revolution on one rotated meridian slice — far faster — and everything else in full 3D. Eligibility depends on the observation settings as well as the geometry. Forcing the meridian path fails clearly when ineligible, and BEMPP is always full 3D.' }),
 
-  // Editable so imported ATH configs round-trip byte-for-byte, but inert here:
-  // the HornLab mesher rejects Mesh.ThroatSegments outright (config_parser.py
-  // "not supported; remove it or use Mesh.ZMapPoints") and has no notion of a
-  // slice density, so neither value reaches the viewport, solve, or export.
+  // These saved fields remain in the document for ATH text fidelity, but none
+  // is a solve-domain control. Runtime symmetry replaces Mesh.Quadrants before
+  // a parametric mesh is built, while geometry export always restores all four
+  // quadrants so the downloaded part is whole. The other two are similarly
+  // inert here: the mesher rejects Mesh.ThroatSegments outright and never reads
+  // a throat slice density.
+  { id: 'mesh.quadrants', legacyKey: 'quadrants', path: 'mesh.quadrants', section: 'Output & Passthrough', label: 'Stored ATH Mesh.Quadrants', kind: 'indicator', description: 'Preserved for ATH round-trip only. WG overwrites this stored value from Solve domain before a parametric solve and ignores it for geometry export, which always restores the full part.' },
   number('mesh.throat_segments', 'throatSegments', 'mesh.throat_segments', 'Output & Passthrough', 'ATH throat slice samples', { min: 0, max: 4_096, step: 1, precision: 0, description: 'Preserved for ATH round-trip only. Use Z-map sampling to bias axial stations toward the throat.' }),
   number('mesh.throat_slice_density', 'throatSliceDensity', 'mesh.throat_slice_density', 'Output & Passthrough', 'ATH throat slice density', { min: .01, max: .99, step: .01, description: 'Preserved for ATH round-trip only; the HornLab mesher does not read it.' }),
 

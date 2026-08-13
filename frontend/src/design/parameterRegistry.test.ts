@@ -72,7 +72,12 @@ describe('complete parameter registry', () => {
     const legacyApproval = PARAMETER_REGISTRY.find((field) => field.id === 'mesh.allow_large_mesh')!;
     expect(fieldIsVisible(legacyApproval, designForFamily('OSSE'))).toBe(false);
     expect(sectionFor('mesh.wall_thickness')).toBe('Wall & Enclosure');
-    expect(sectionFor('mesh.quadrants')).toBe('Solve & export mesh');
+    const storedQuadrants = PARAMETER_REGISTRY.find((field) => field.id === 'mesh.quadrants')!;
+    expect(storedQuadrants.section).toBe('Output & Passthrough');
+    expect(storedQuadrants.kind).toBe('indicator');
+    expect(storedQuadrants.label).toBe('Stored ATH Mesh.Quadrants');
+    expect(storedQuadrants.description).toContain('overwrites this stored value from Solve domain');
+    expect(storedQuadrants.description).toContain('ignores it for geometry export');
     expect(sectionFor('source.shape')).toBe('Source Definition');
   });
 

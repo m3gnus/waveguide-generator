@@ -279,29 +279,16 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .segments { display: flex; gap: 2px; padding: 2px; border: 1px solid var(--hair-soft); border-radius: var(--r3); background: var(--seg-bg); }
 .segments button { padding: 2px 6px; border-radius: var(--r3); background: transparent; color: var(--fg2); font-size: var(--text-micro); text-transform: capitalize; }
 .segments button.on { background: var(--seg-on); box-shadow: var(--seg-on-sh); color: var(--fg); }
-/* A column, not a row: this control carries a select, an auto-resolution
-   readout, the tile grid and a note, and laying those out side by side pushed
-   ~505px of content through a ~230px rail — which scrolled the whole rail
-   sideways and took every other parameter row's alignment with it. */
-.quadrant-wrap { display: flex; flex-direction: column; gap: 6px; padding: 2px 0 4px; }
-.quadrant-wrap > .select-row, .quadrant-wrap > .resolved-mode, .quadrant-wrap > .section-note { margin: 0; }
-.quadrant-title { color: var(--fg1); font-size: var(--text-base); }
+/* A column, not a row: the descriptive domain names need the whole rail and
+   Auto adds a full-width resolution readout underneath the select. */
+.solve-domain-control { display: flex; flex-direction: column; gap: 6px; padding: 2px 0 4px; }
+.solve-domain-control > .select-row, .solve-domain-control > .resolved-mode { margin: 0; }
 /* The domain names are the whole point of this select and none of them fit the
    fixed 132px every other select in the rail takes, so the label goes above it
-   and the select gets the full width — which also matches .quadrant-title. */
-.quadrant-wrap > .select-row { flex-direction: column; align-items: stretch; gap: 4px; }
-.quadrant-wrap > .select-row label { flex: none; }
-.quadrant-wrap > .select-row select { width: 100%; min-width: 0; }
-.quadrant-picker { display: flex; align-items: center; gap: 12px; }
-.quadrants { position: relative; flex: none; display: grid; grid-template: repeat(2, 20px) / repeat(2, 20px); gap: 2px; }
-.quadrants::before, .quadrants::after { content: ""; position: absolute; z-index: 0; background: var(--ov5); }
-.quadrants::before { top: 50%; right: -4px; left: -4px; height: 1px; }
-.quadrants::after { top: -4px; bottom: -4px; left: 50%; width: 1px; }
-.quadrants button { z-index: 1; border: 1px solid var(--hair-hi); border-radius: var(--r3); background: var(--ov1); color: var(--fg3); font: var(--text-micro) var(--mono); }
-.quadrants button.on { border-color: var(--inv-bg); background: var(--inv-bg); color: var(--inv-fg); }
-.quadrant-meta { display: flex; flex-direction: column; min-width: 0; gap: 1px; color: var(--fg2); font-size: var(--text-micro); }
-.quadrant-meta b { color: var(--fg1); font-size: var(--text-micro); font-weight: 560; }
-.quadrant-meta em { color: var(--green); font: normal var(--text-micro) var(--mono); }
+   and the select gets the full width. */
+.solve-domain-control > .select-row { flex-direction: column; align-items: stretch; gap: 4px; }
+.solve-domain-control > .select-row label { flex: none; }
+.solve-domain-control > .select-row select { width: 100%; min-width: 0; }
 .field-error { padding: 1px 0 2px; color: var(--red); font-size: var(--text-micro); }
 /* Empty, loading, and failed states. A dashed border reads as "not built";
    these are built and simply have nothing to show yet, so they get the same
@@ -816,7 +803,6 @@ textarea:disabled { opacity: .48; }
 .section-body { padding: 2px 8px 10px; }
 .select-row { min-height: 30px; height: auto; margin-bottom: 2px; }
 .select-row label,
-.quadrant-title,
 .field-label { font-size: var(--text-base); }
 .select-row select,
 .static-select { height: var(--control-h-sm); border: 0; border-bottom: 1px solid var(--border-default); border-radius: var(--r3); background: var(--surface-raised); box-shadow: none; font-size: var(--text-base); }
