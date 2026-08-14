@@ -24,7 +24,6 @@
 .wg2-viewport .viewport-warning,
 .wg2-viewport .viewport-error-banner { z-index: 3; }
 .wg2-viewport .viewport-tools { pointer-events: auto; }
-.mesh-file-input { display: none; }
 .wg2-text-glyph { font: 700 var(--text-micro) var(--mono); letter-spacing: -.04em; }
 .wg2-settings-glyph { font-size: 14px; line-height: 1; }
 .wg2-viewport .paused-badge { border: 1px solid rgba(var(--amber-rgb), .34); background: rgba(var(--amber-rgb), .13); color: var(--amber); }
@@ -32,7 +31,6 @@
 .wg2-viewport .imported-mesh-badge { gap: 6px; border: 1px solid rgba(var(--acc-rgb), .32); background: rgba(var(--acc-rgb), .12); color: var(--acc); letter-spacing: .09em; }
 .wg2-viewport .imported-mesh-badge button { padding: 2px 6px; border: 0; border-radius: var(--r2); background: transparent; color: inherit; font: 650 var(--text-micro) var(--ui); letter-spacing: .05em; text-transform: uppercase; opacity: .62; }
 .wg2-viewport .imported-mesh-badge button.active { background: rgba(var(--acc-rgb), .2); opacity: 1; }
-.mesh-import-error { position: absolute; z-index: 4; top: 45px; right: 12px; max-width: min(440px, calc(100% - 24px)); padding: 6px 8px; border: 1px solid rgba(var(--red-rgb), .35); border-radius: var(--r3); background: var(--glass-bg); color: var(--red); font-size: var(--text-micro); box-shadow: var(--glass-sh); }
 
 .viewer-preferences { position: absolute; z-index: 6; right: 12px; bottom: 86px; display: flex; flex-direction: column; width: min(310px, calc(100% - 24px)); max-height: min(570px, calc(100% - 102px)); border: 1px solid var(--glass-bd); border-radius: var(--r3); background: var(--glass-bg); box-shadow: var(--glass-sh); color: var(--fg2); pointer-events: auto; backdrop-filter: blur(18px) saturate(1.25); }
 .viewer-preferences header { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px 8px; border-bottom: 1px solid var(--hair); }
@@ -136,7 +134,6 @@
 .viewer-pref-scroll fieldset label { font-size: var(--text-micro); }
 .viewer-preferences footer { padding: 8px 12px; }
 .viewer-preferences footer button { min-height: var(--control-h-sm); padding-inline: 8px; border-radius: var(--r3); font-size: var(--text-micro); }
-.mesh-import-error,
 .viewport-connection-banner,
 .viewport-error-banner { border-radius: var(--r); font-size: var(--text-micro); }
 .viewport-empty,

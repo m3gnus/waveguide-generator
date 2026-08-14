@@ -86,22 +86,22 @@ describe('Viewport camera revision policy', () => {
     host.remove();
   });
 
-  it('resets the requested view for discontinuous revisions but not ordinary edits', () => {
+  it('keeps the requested view across ordinary edits, undo, redo, and document changes', () => {
     expect(latestNonce()).toBe(0);
 
     act(() => useDesignStore.getState().updateValue('R', 150));
     expect(latestNonce()).toBe(0);
 
     act(() => useDesignStore.getState().undo());
-    expect(latestNonce()).toBe(1);
+    expect(latestNonce()).toBe(0);
 
     act(() => useDesignStore.getState().redo());
-    expect(latestNonce()).toBe(2);
+    expect(latestNonce()).toBe(0);
 
     act(() => useDesignStore.getState().setFamily('OSSE'));
-    expect(latestNonce()).toBe(3);
+    expect(latestNonce()).toBe(0);
 
     act(() => useDesignStore.getState().loadDesign(designForFamily('R-OSSE')));
-    expect(latestNonce()).toBe(4);
+    expect(latestNonce()).toBe(0);
   });
 });
