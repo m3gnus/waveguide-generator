@@ -16,6 +16,7 @@ import { hydrateJobDesign } from '../jobs/jobDesign';
 import { exportStemForJob } from '../jobs/exportNaming';
 import { CHART_TYPES, MAX_RESULT_PANELS, RESULT_PANEL_COUNTS, preferencesStore, runDisplayName, usePreferences, type ChartType } from '../prefs/preferences';
 import { ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
+import { directivityFrequencyTickLabels } from '../results/directivityFrequencyAxis';
 import { Icon } from './icons';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { trapDialogFocus } from './SettingsDialog';
@@ -477,6 +478,8 @@ export function heatmapOption(
     : baseInset;
   const cells = grid.values.flatMap((rowValues, row) => rowValues.flatMap((level, column) => level === null ? [] : [[column, row, Math.max(floor, Math.min(0, level)), level, grid.frequencies[column], grid.angles[row]]]));
   const categoryAxis = { ...axes(tokens, density), axisTick: { alignWithLabel: true }, axisLabel: { ...axes(tokens, density).axisLabel, hideOverlap: true } };
+  const frequencyTickLabels = directivityFrequencyTickLabels(grid.frequencies);
+  const isFrequencyTick = (index: number) => frequencyTickLabels.has(index);
   const angleGuides = directivityAngleGuides(grid.angles, angleGuideInterval);
   const angleGuideSeries = angleGuides.length ? [{
     name: `${angleGuideInterval}° angular guides`, type: 'custom', coordinateSystem: 'cartesian2d', silent: true, z: 4, clip: true,
@@ -567,7 +570,19 @@ export function heatmapOption(
       return `${heatmapFrequencyLabel(frequencyValue)}Hz · ${Number(angleValue.toFixed(2))}° · ${level.toFixed(1)} dB`;
     } },
     grid: inset,
-    xAxis: { type: 'category', data: grid.frequencies.map((frequency) => heatmapFrequencyLabel(frequency)), ...(density === 'full' ? { name: 'Frequency [Hz]', nameLocation: 'middle' as const, nameGap: 22, nameTextStyle: { color: tokens.muted, fontSize: 11 } } : {}), ...categoryAxis, axisLabel: { ...categoryAxis.axisLabel, interval: Math.max(0, grid.factor * 2 - 1) } },
+    xAxis: {
+      type: 'category',
+      data: grid.frequencies.map((frequency) => heatmapFrequencyLabel(frequency)),
+      ...(density === 'full' ? { name: 'Frequency [Hz]', nameLocation: 'middle' as const, nameGap: 22, nameTextStyle: { color: tokens.muted, fontSize: 11 } } : {}),
+      ...categoryAxis,
+      axisTick: { ...categoryAxis.axisTick, interval: isFrequencyTick },
+      axisLabel: {
+        ...categoryAxis.axisLabel,
+        interval: isFrequencyTick,
+        formatter: (_value: string, index: number) => frequencyTickLabels.get(index) ?? '',
+      },
+      splitLine: { ...categoryAxis.splitLine, show: true, interval: isFrequencyTick },
+    },
     yAxis: { type: 'category', data: grid.angles.map((angle) => String(Number(angle.toFixed(2)))), ...(density === 'full' ? { name: 'Angle [°]', nameLocation: 'start' as const, nameGap: 10, nameTextStyle: { color: tokens.muted, fontSize: 11, align: 'right' as const, verticalAlign: 'top' as const } } : {}), ...categoryAxis, axisLabel: { ...categoryAxis.axisLabel, interval: Math.max(0, grid.factor * 2 - 1) } },
     visualMap: { min: floor, max: 0, dimension: 2, seriesIndex: 0, right: 2, top: 'middle', itemWidth: density === 'compact' ? 6 : 8, itemHeight: MAP_RAMP[density], text: ['0', `${floor}`], textStyle: { color: tokens.muted, fontSize: density === 'compact' ? 9 : 10 }, inRange: { color: tokens.colormap } },
     // Cartesian heatmaps do not chunk safely in ECharts: progressive mode can
