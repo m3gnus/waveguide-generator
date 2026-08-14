@@ -65,6 +65,16 @@ export interface ParameterPaletteContext {
   cadReturnReady?: boolean;
 }
 
+/** Enter a workspace mode and route first-time CAD users to the workflow that
+ * can make that mode usable. A prepared return stays in place because its CAD
+ * controls and viewport are already available. */
+export function activateWorkspaceMode(mode: WorkspaceMode): void {
+  workspaceModeStore.setMode(mode);
+  if (mode === 'cad' && !useCadReturnStore.getState().ingestRecord) {
+    workspaceNavigation.activate('cadlink');
+  }
+}
+
 export function buildParameterPaletteEntries(family?: DesignFamily, context: ParameterPaletteContext = {}): PaletteEntry[] {
   const mode = context.mode ?? 'parametric';
   const design = context.design ?? useDesignStore.getState().design;
@@ -142,7 +152,7 @@ export function WorkspaceModeSwitch() {
       aria-checked={mode === value}
       disabled={disabled}
       title={disabled ? cadDisabledReason : `Use ${label} workspace mode`}
-      onClick={() => workspaceModeStore.setMode(value)}
+      onClick={() => activateWorkspaceMode(value)}
     >{label}</button>;
   };
 
@@ -155,8 +165,8 @@ export function WorkspaceModeSwitch() {
 export function workspaceModePaletteEntries(cadApplication: Preferences['cadApplication']): PaletteEntry[] {
   const onshape = cadApplication === 'onshape';
   return [
-    { id: 'mode-parametric', kind: 'Commands', label: 'Mode: Parametric', run: () => workspaceModeStore.setMode('parametric') },
-    { id: 'mode-fusion-cad', kind: 'Commands', label: 'Mode: Fusion CAD', detail: onshape ? 'The CAD return leg is Fusion-only.' : undefined, disabled: onshape, run: () => workspaceModeStore.setMode('cad') },
+    { id: 'mode-parametric', kind: 'Commands', label: 'Mode: Parametric', run: () => activateWorkspaceMode('parametric') },
+    { id: 'mode-fusion-cad', kind: 'Commands', label: 'Mode: Fusion CAD', detail: onshape ? 'The CAD return leg is Fusion-only.' : undefined, disabled: onshape, run: () => activateWorkspaceMode('cad') },
   ];
 }
 
