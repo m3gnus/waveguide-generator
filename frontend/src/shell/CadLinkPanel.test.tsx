@@ -561,7 +561,8 @@ describe('CadLinkPanel', () => {
 
     // The panel owns only the inbound direction; the outbound update lives in
     // the rail and menu, whose sends park on the coordinator's conflict dialog.
-    expect(host.textContent).toContain('Bring Fusion changes into WG');
+    expect(host.textContent).toContain('Bring changes into WG');
+    expect(host.textContent).toContain('Bring changes in & solve');
     expect(host.textContent).not.toContain('Send WG changes to Fusion');
     await act(async () => { await cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion(); });
     expect(host.textContent).toContain('Both WG and Fusion changed');
@@ -662,6 +663,9 @@ describe('CadLinkPanel', () => {
       if (String(input).endsWith('/viewport-mesh') || String(input).endsWith('/mesh')) {
         return new Response('missing', { status: 404 });
       }
+      // Only the ingest route advances the report; the background polls (the
+      // CAD solve command among them) must not be counted as one.
+      if (!String(input).endsWith('/ingest')) return json({ command: null });
       ingestCount += 1;
       const next = {
         ...record,

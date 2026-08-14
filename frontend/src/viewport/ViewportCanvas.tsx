@@ -127,6 +127,15 @@ export function resizeCameraFrustum(camera: PerspectiveCamera | OrthographicCame
   camera.updateProjectionMatrix();
 }
 
+/** Keep React Three Fiber from replacing the fitted frustum on canvas resize. */
+export function ownCameraProjection<T extends PerspectiveCamera | OrthographicCamera>(camera: T): T {
+  // `manual` is React Three Fiber's camera escape hatch. Without it, Fiber
+  // rewrites an orthographic camera to canvas-pixel bounds before CameraRig's
+  // resize effect runs, permanently losing the fitted vertical span.
+  (camera as T & { manual?: boolean }).manual = true;
+  return camera;
+}
+
 /** Update only the depth bracket, preserving a user-owned position and target. */
 export function rebracketCamera(
   camera: PerspectiveCamera | OrthographicCamera,
@@ -292,8 +301,8 @@ function CameraRig({ bounds, request, zoomRequest, projection, preferences, sche
   } | null>(null);
   if (cameras.current === null) {
     cameras.current = {
-      perspective: new PerspectiveCamera(34, 1, 0.001, 100_000),
-      orthographic: new OrthographicCamera(-1, 1, 1, -1, 0.001, 100_000),
+      perspective: ownCameraProjection(new PerspectiveCamera(34, 1, 0.001, 100_000)),
+      orthographic: ownCameraProjection(new OrthographicCamera(-1, 1, 1, -1, 0.001, 100_000)),
     };
   }
   const camera = cameras.current[projection];

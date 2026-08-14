@@ -11,7 +11,9 @@ import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOpt
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import type { ImportedMeshScene } from '../viewport/importedMesh';
+import { cadLinkCoordinatorBridge } from './CadLinkCoordinator';
 import { JobsCoordinator, jobsCoordinatorBridge, useSolveControl } from './JobsCoordinator';
+import { SolveActions } from './TopBar';
 import { JobsPanel } from './JobsPanel';
 
 const mocks = vi.hoisted(() => ({
@@ -343,6 +345,26 @@ describe('solve invocation mutex', () => {
     expect(second).toBe('busy');
     expect(mocks.submitImported).toHaveBeenCalledOnce();
     await act(async () => { pending.resolve('job-cad'); await expect(first).resolves.toBe('submitted'); });
+  });
+
+  it('makes the Fusion pull the primary action when Fusion moved past the prepared geometry', async () => {
+    const pullAndSolve = vi.fn(async () => 'solving' as const);
+    vi.spyOn(cadLinkCoordinatorBridge, 'getSnapshot').mockReturnValue({
+      ...cadLinkCoordinatorBridge.getSnapshot(),
+      pullAndSolve,
+      fusionStatus: { running: true, fusionChangesAvailable: true } as never,
+    });
+    act(() => workspaceModeStore.setMode('cad'));
+    await act(async () => { root.render(<JobsCoordinator><SolveActions/></JobsCoordinator>); });
+
+    const buttons = [...host.querySelectorAll<HTMLButtonElement>('.solve-button')];
+    expect(buttons[0].textContent).toContain('Pull from Fusion & Solve');
+    // The geometry WG already prepared stays solvable beside it.
+    expect(buttons[1].textContent).toContain('Solve prepared');
+
+    await act(async () => { buttons[0].click(); await Promise.resolve(); });
+    expect(pullAndSolve).toHaveBeenCalledOnce();
+    expect(mocks.submitImported).not.toHaveBeenCalled();
   });
 
   it('enters CAD mode without an ingest and exposes the submission blocker', async () => {
