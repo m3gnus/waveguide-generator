@@ -13,7 +13,7 @@ describe('client preferences', () => {
   beforeEach(() => { localStorage.clear(); preferencesStore.resetForTests(); });
   it('persists the fifteen-format selection and export counter migration field', () => {
     expect(EXPORT_FORMATS).toHaveLength(15);
-    expect(CHART_TYPES).toHaveLength(10);
+    expect(CHART_TYPES).toHaveLength(11);
     expect(MAP_REFERENCES).toEqual([-3, -6, -9, -12]);
     preferencesStore.update({ exportFormats: [] });
     preferencesStore.toggleFormat('csv');
@@ -32,7 +32,14 @@ describe('client preferences', () => {
       runNameDateFormat: 'yymmdd',
       runNameNumberPosition: 'suffix',
       runNameNumberFormat: 'natural',
+      directivityGuideInterval: 10,
     });
+  });
+  it('persists and bounds the directivity angular guide interval', () => {
+    preferencesStore.update({ directivityGuideInterval: 15 });
+    expect(loadPreferences(localStorage.getItem('waveguide-v2-g3-preferences')).directivityGuideInterval).toBe(15);
+    expect(loadPreferences(JSON.stringify({ version: STORAGE_VERSION, preferences: { directivityGuideInterval: 0 } })).directivityGuideInterval).toBe(1);
+    expect(loadPreferences(JSON.stringify({ version: STORAGE_VERSION, preferences: { directivityGuideInterval: 999 } })).directivityGuideInterval).toBe(180);
   });
   it('migrates v7 naming preferences to opt-in date decoration', () => {
     const migrated = readPreferences(JSON.stringify({ version: 7, preferences: {

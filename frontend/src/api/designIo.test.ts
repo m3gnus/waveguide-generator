@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { downloadGeometryExport, hydrateDesignDocument, saveDesignDocument, sendDesignToCad } from './designIo';
 import { serializeDesign } from '../stores/design';
 
@@ -131,12 +131,11 @@ describe('Send to CAD requests', () => {
     baseEditVersion: 8,
   };
 
-  it('selects a workspace when needed and sends identity with one idempotency key', async () => {
+  it('requires the configured WGLink folder and sends identity with one idempotency key', async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const fetcher = (async (url: string, init?: RequestInit) => {
       calls.push({ url: String(url), init });
-      if (url === '/api/workspace/path') return new Response(JSON.stringify({ selected: false, path: '/default' }));
-      if (url === '/api/workspace/select') return new Response(JSON.stringify({ selected: true, path: '/cad' }));
+      if (url === '/api/cad-workspace/path') return new Response(JSON.stringify({ selected: true, path: '/cad' }));
       return new Response(JSON.stringify({
         bundlePath: '/cad/wglink/horn.wglink', bundleId: 'wgb_1', exportId: 'wge_1', sequence: 4,
         designHash: 'sha256:design', geometryHash: 'sha256:geometry', artifactSha256: 'sha256:step',
@@ -148,11 +147,10 @@ describe('Send to CAD requests', () => {
     );
 
     expect(calls.map(({ url }) => url)).toEqual([
-      '/api/workspace/path', '/api/workspace/select', '/api/export/wglink',
+      '/api/cad-workspace/path', '/api/export/wglink',
     ]);
-    expect(calls[1].init).toEqual({ method: 'POST' });
-    expect(new Headers(calls[2].init?.headers).get('Idempotency-Key')).toBe('attempt-1');
-    expect(JSON.parse(String(calls[2].init?.body))).toMatchObject({
+    expect(new Headers(calls[1].init?.headers).get('Idempotency-Key')).toBe('attempt-1');
+    expect(JSON.parse(String(calls[1].init?.body))).toMatchObject({
       designRevision: 12, baseName: 'horn', identity,
     });
     expect(result).toMatchObject({ sequence: 4, bundlePath: '/cad/wglink/horn.wglink' });
@@ -162,7 +160,7 @@ describe('Send to CAD requests', () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const fetcher = (async (url: string, init?: RequestInit) => {
       calls.push({ url: String(url), init });
-      if (url === '/api/workspace/path') return new Response(JSON.stringify({ selected: true, path: '/cad' }));
+      if (url === '/api/cad-workspace/path') return new Response(JSON.stringify({ selected: true, path: '/cad' }));
       return new Response(JSON.stringify({
         bundlePath: '/cad/wglink/horn.wglink', bundleId: 'wgb_1', exportId: 'wge_1', sequence: 1,
         designHash: 'sha256:design', geometryHash: 'sha256:geometry', artifactSha256: 'sha256:step',
@@ -174,14 +172,14 @@ describe('Send to CAD requests', () => {
       hydrateDesignDocument({ formula: 'OSSE' }), 1, 'horn', null, fetcher, 'attempt-1',
     );
 
-    expect(calls.map(({ url }) => url)).toEqual(['/api/workspace/path', '/api/export/wglink']);
+    expect(calls.map(({ url }) => url)).toEqual(['/api/cad-workspace/path', '/api/export/wglink']);
     expect(JSON.parse(String(calls[1].init?.body))).toMatchObject({ identity: null });
     expect(result.identity).toEqual({ ...identity, baseEditVersion: 1 });
   });
 
   it('reports a failed Fusion handoff instead of claiming the bundle is opening', async () => {
     const fetcher = (async (url: string) => {
-      if (url === '/api/workspace/path') return new Response(JSON.stringify({ selected: true, path: '/cad' }));
+      if (url === '/api/cad-workspace/path') return new Response(JSON.stringify({ selected: true, path: '/cad' }));
       return new Response(JSON.stringify({
         bundlePath: '/cad/wglink/horn.wglink', bundleId: 'wgb_1', exportId: 'wge_1', sequence: 1,
         designHash: 'sha256:design', geometryHash: 'sha256:geometry', artifactSha256: 'sha256:step',
@@ -192,5 +190,16 @@ describe('Send to CAD requests', () => {
     await expect(sendDesignToCad(
       hydrateDesignDocument({ formula: 'OSSE' }), 1, 'horn', null, fetcher, 'attempt-1',
     )).rejects.toThrow('bundle was exported, but WG could not notify Fusion');
+  });
+
+  it('routes an unconfigured Fusion connection to Settings instead of opening a surprise picker', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ selected: false, path: null }), { status: 200 }),
+    );
+    await expect(sendDesignToCad(
+      hydrateDesignDocument({ formula: 'OSSE' }), 1, 'horn', null, fetcher, 'attempt-1',
+    )).rejects.toThrow('Settings → CAD Link');
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher).toHaveBeenCalledWith('/api/cad-workspace/path');
   });
 });

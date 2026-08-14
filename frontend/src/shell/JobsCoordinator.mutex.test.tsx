@@ -7,7 +7,7 @@ import type { CadReturnIngestRecord } from '../api/cadlink';
 import type { ImportedSolveSubmission } from '../jobs/actions';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
-import { resetSolveOptionsStore } from '../stores/solveOptions';
+import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import type { ImportedMeshScene } from '../viewport/importedMesh';
@@ -25,7 +25,7 @@ vi.mock('../jobs/actions', async (importOriginal) => {
 });
 vi.mock('../jobs/useCapabilities', () => ({
   useCapabilities: () => ({
-    engines: [{ name: 'metal', available: true, reason: null, version: null, fast_paths: [] }, { name: 'dryrun', available: true, reason: null, version: null, fast_paths: [] }],
+    engines: [{ name: 'metal', available: true, reason: null, version: null, fast_paths: [] }, { name: 'bempp', available: true, reason: null, version: null, fast_paths: [] }, { name: 'dryrun', available: true, reason: null, version: null, fast_paths: [] }],
     error: null,
     isLoading: false,
   }),
@@ -157,6 +157,30 @@ describe('solve invocation mutex', () => {
     expect(mocks.submitDesign.mock.calls.map((call) => call[3].label)).toEqual(['horn', 'horn']);
   });
 
+  it('materializes the 5 mm ATH wall default before submitting to BEMPP', async () => {
+    mocks.submitDesign.mockResolvedValue('job');
+    const design = designForFamily('OSSE');
+    design.mesh.wall_thickness = 0;
+    design.enclosure.depth = 0;
+    design.simulation.sim_type = 'freestanding';
+    act(() => {
+      useDesignStore.getState().loadDesign(design);
+      useSolveOptionsStore.getState().setEngine('bempp');
+    });
+
+    await act(async () => {
+      const state = useDesignStore.getState();
+      await jobsCoordinatorBridge.getSnapshot().run(state.design, state.designRevision);
+    });
+
+    expect(useDesignStore.getState().design.mesh.wall_thickness).toBe(5);
+    expect(mocks.submitDesign).toHaveBeenCalledOnce();
+    expect(mocks.submitDesign.mock.calls[0][0].mesh.wall_thickness).toBe(5);
+    expect(mocks.submitDesign.mock.calls[0][3].designRevision).toBe(
+      useDesignStore.getState().designRevision,
+    );
+  });
+
   it('increments the accepted name only when the submitted projection changes', async () => {
     mocks.submitDesign.mockResolvedValue('job');
     const design = designForFamily('OSSE');
@@ -281,6 +305,44 @@ describe('solve invocation mutex', () => {
     expect(mocks.submitImported).toHaveBeenCalledOnce();
     expect(mocks.submitImported.mock.calls[0][0].geometry.ingest_id).toBe(ingestId);
     expect(mocks.submitDesign).not.toHaveBeenCalled();
+  });
+
+  it('gates solveCurrentCadImport on readiness and reports a busy solve instead of dropping it', async () => {
+    // Automatic callers (Pull & Solve, a Fusion solve command) use this action,
+    // so its refusal has to be a thrown reason and never a silent no-op.
+    await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport())
+      .rejects.toThrow('Ingest a CAD return before solving.');
+    expect(mocks.submitImported).not.toHaveBeenCalled();
+
+    const ingestId = 'wgi_01J5A8QK3M9T2XVBH0RD7NWE6C';
+    useCadReturnStore.setState({
+      ingestRecord: {
+        ingest_id: ingestId,
+        manifest_sha256: `sha256:${'1'.repeat(64)}`,
+        artifact_sha256: `sha256:${'2'.repeat(64)}`,
+        report_sha256: `sha256:${'3'.repeat(64)}`,
+        findings: [],
+        evidence: { fem_air_volumes: [] },
+        polar_grid_derivation: {},
+      } as unknown as CadReturnIngestRecord,
+      needsIngest: false,
+      driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }],
+      sourceSizesMm: { 'source-hf': 4 },
+      skippedSourceIds: [],
+      acknowledgedFindingIds: [],
+    });
+    const pending = deferred<string>();
+    mocks.submitImported.mockReturnValue(pending.promise);
+
+    let first!: Promise<'submitted' | 'busy'>;
+    let second!: 'submitted' | 'busy';
+    await act(async () => {
+      first = jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport();
+      second = await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport();
+    });
+    expect(second).toBe('busy');
+    expect(mocks.submitImported).toHaveBeenCalledOnce();
+    await act(async () => { pending.resolve('job-cad'); await expect(first).resolves.toBe('submitted'); });
   });
 
   it('enters CAD mode without an ingest and exposes the submission blocker', async () => {

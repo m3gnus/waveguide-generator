@@ -14,6 +14,7 @@ import { CadLinkPanel } from './CadLinkPanel';
 import { JobsPanel } from './JobsPanel';
 import { ResultsPanel } from './ResultsPanel';
 import { ViewportPanel } from './ViewportPanel';
+import { workspaceModeStore, type WorkspaceMode } from '../stores/workspaceMode';
 import { bindWorkspaceNavigation, type WorkspacePanel } from './workspaceNavigation';
 export { workspaceNavigation } from './workspaceNavigation';
 
@@ -112,17 +113,18 @@ const FALLBACK_HEIGHT = 900;
 /** Top bar plus status bar, excluded when guessing the dock size from the window. */
 const WORKSPACE_CHROME_HEIGHT = 84;
 
-export function createDefaultLayout(width: number, height: number): SerializedDockview {
+export function createDefaultLayout(width: number, height: number, mode: WorkspaceMode = 'parametric'): SerializedDockview {
   const layoutWidth = Math.max(1, Math.round(width) || FALLBACK_WIDTH);
   const layoutHeight = Math.max(1, Math.round(height) || FALLBACK_HEIGHT);
   const group = (id: string, views: ComponentName[], activeView: ComponentName = views[0]) => ({ id: `${id}-group`, views, activeView });
+  const cadLinkViews: ComponentName[] = mode === 'cad' ? ['cadlink'] : [];
   const panels = {
     geometry: { id: 'geometry', contentComponent: 'geometry', title: 'Geometry' },
     simulation: { id: 'simulation', contentComponent: 'simulation', title: 'Simulation' },
     viewport: { id: 'viewport', contentComponent: 'viewport', title: 'Viewport' },
     results: { id: 'results', contentComponent: 'results', title: 'Results' },
     jobs: { id: 'jobs', contentComponent: 'jobs', title: 'Jobs' },
-    cadlink: { id: 'cadlink', contentComponent: 'cadlink', title: 'CAD Link' },
+    ...(mode === 'cad' ? { cadlink: { id: 'cadlink', contentComponent: 'cadlink', title: 'CAD Link' } } : {}),
   };
 
   if (layoutWidth < COMPACT_BREAKPOINT) {
@@ -134,7 +136,7 @@ export function createDefaultLayout(width: number, height: number): SerializedDo
         root: {
           type: 'branch',
           size: layoutHeight,
-          data: [{ type: 'leaf', size: layoutWidth, data: group('workspace', ['geometry', 'simulation', 'viewport', 'results', 'jobs', 'cadlink'], 'viewport') }],
+          data: [{ type: 'leaf', size: layoutWidth, data: group('workspace', ['geometry', 'simulation', 'viewport', 'results', 'jobs', ...cadLinkViews], 'viewport') }],
         },
       },
       panels,
@@ -161,7 +163,7 @@ export function createDefaultLayout(width: number, height: number): SerializedDo
               size: contentWidth,
               data: [
                 { type: 'leaf', size: layoutHeight - resultsHeight, data: group('viewport', ['viewport']) },
-                { type: 'leaf', size: resultsHeight, data: group('analysis', ['results', 'jobs', 'cadlink'], 'results') },
+                { type: 'leaf', size: resultsHeight, data: group('analysis', ['results', 'jobs', ...cadLinkViews], 'results') },
               ],
             },
           ],
@@ -193,7 +195,7 @@ export function createDefaultLayout(width: number, height: number): SerializedDo
               { type: 'leaf', size: resultsHeight, data: group('results', ['results']) },
             ],
           },
-          { type: 'leaf', size: JOBS_WIDTH, data: group('jobs', ['jobs', 'cadlink'], 'jobs') },
+          { type: 'leaf', size: JOBS_WIDTH, data: group('jobs', ['jobs', ...cadLinkViews], 'jobs') },
         ],
       },
     },
@@ -210,8 +212,13 @@ export function measureHost(host: HTMLElement | null, api: DockviewApi | null): 
   ];
 }
 
-export function applyDefaultLayout(api: DockviewApi, width: number, height: number): void {
-  api.fromJSON(createDefaultLayout(width, height));
+export function applyDefaultLayout(
+  api: DockviewApi,
+  width: number,
+  height: number,
+  mode: WorkspaceMode = workspaceModeStore.getSnapshot().mode,
+): void {
+  api.fromJSON(createDefaultLayout(width, height, mode));
   // Deserializing a layout leaves dockview believing it is whatever size it
   // last measured, which collapses every panel to its 100px minimum and never
   // recovers, so state the size this layout was built for.
@@ -244,6 +251,30 @@ export function seedSize(measured: [number, number]): [number, number] {
 export function addDefaultLayout(api: DockviewApi, host: HTMLElement | null): void {
   const [width, height] = seedSize(measureHost(host, api));
   applyDefaultLayout(api, width, height);
+}
+
+/** Keep the bidirectional Fusion workflow out of the parametric workspace.
+ *
+ * A one-way parametric handoff lives in the design and run export menus. CAD
+ * Link is mounted only while CAD mode can actually use its return controls.
+ * Existing saved layouts may still contain the old always-present tab, so mode
+ * changes reconcile the live dock instead of relying only on new defaults.
+ */
+export function syncCadLinkPanel(api: DockviewApi, mode: WorkspaceMode): void {
+  const existing = api.getPanel('cadlink');
+  if (mode === 'parametric') {
+    if (existing) api.removePanel(existing);
+    return;
+  }
+  if (existing) return;
+  const reference = api.getPanel('jobs') ?? api.getPanel('results') ?? api.activePanel;
+  api.addPanel({
+    id: 'cadlink',
+    component: 'cadlink',
+    title: 'CAD Link',
+    inactive: true,
+    ...(reference ? { position: { referencePanel: reference, direction: 'within' as const } } : {}),
+  });
 }
 
 /** What a newly observed host size means for a dock laid out at `laidOut`.
@@ -331,6 +362,9 @@ export function Workspace({ resetKey }: { resetKey: number }) {
       coldStartSeeded.current = true;
       addDefaultLayout(dockview.api, host.current);
     }
+    const syncModePanels = () => syncCadLinkPanel(dockview.api, workspaceModeStore.getSnapshot().mode);
+    syncModePanels();
+    const unbindModePanels = workspaceModeStore.subscribe(syncModePanels);
     const resizeLayout = createResizeLayoutHandler(dockview.api, initialLayoutSize);
     // The mount-time size is unreliable (see nextLayoutAction), so keep watching
     // and resize the existing dock as soon as the host reports its real size.
@@ -378,6 +412,7 @@ export function Workspace({ resetKey }: { resetKey: number }) {
       persistNow();
       observer?.disconnect();
       subscription.dispose();
+      unbindModePanels();
       apiRef.current = null;
       unbindNavigation();
       coldStartSeeded.current = false;

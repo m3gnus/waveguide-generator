@@ -34,6 +34,7 @@ from server.cadlink.onshape.client import (
 from server.cadlink.onshape.credentials import (
     OnshapeCredentials,
     OnshapeCredentialsError,
+    file_is_world_readable,
     load_credentials,
 )
 
@@ -128,7 +129,7 @@ def test_credentials_prefer_environment_over_file(tmp_path: Path) -> None:
 def test_missing_credentials_explain_where_to_put_them(tmp_path: Path) -> None:
     with pytest.raises(OnshapeCredentialsError) as caught:
         load_credentials(environ={}, home=tmp_path)
-    assert "dev-portal.onshape.com/keys" in str(caught.value)
+    assert "My account > Developer > API keys" in str(caught.value)
     assert str(tmp_path / ".config" / "hornlab" / "onshape.env") in str(caught.value)
 
 
@@ -148,6 +149,13 @@ def test_credentials_never_repr_the_key_pair() -> None:
     rendered = f"{_credentials()!r} {_credentials()!s}"
     assert "ACCESS" not in rendered
     assert "SECRET" not in rendered
+
+
+def test_windows_does_not_offer_a_posix_chmod_remedy(tmp_path: Path) -> None:
+    key_file = tmp_path / "onshape.env"
+    key_file.write_text("placeholder", encoding="utf-8")
+    key_file.chmod(0o666)
+    assert file_is_world_readable(key_file, system="Windows") is False
 
 
 # -- client ----------------------------------------------------------------
@@ -203,7 +211,7 @@ def test_client_maps_an_unauthorised_reply_to_actionable_text() -> None:
     with pytest.raises(OnshapeHttpError) as caught:
         client.get("/users/sessioninfo")
     assert caught.value.is_auth_failure
-    assert "dev-portal.onshape.com/keys" in str(caught.value)
+    assert "My account > Developer > API keys" in str(caught.value)
 
 
 def test_client_wraps_a_transport_failure() -> None:

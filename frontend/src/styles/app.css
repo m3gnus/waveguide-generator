@@ -529,13 +529,7 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .directivity-multiplane > div { position: relative; flex: 1 1 0; min-width: 0; }
 /* Right-aligned so the first sub-panel's label clears the card's title chip. */
 .directivity-multiplane > div > span { position: absolute; top: 4px; right: 14px; z-index: 2; color: var(--chart-muted); font: var(--text-micro) var(--mono); letter-spacing: .08em; text-transform: uppercase; pointer-events: none; }
-.directivity-comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: minmax(80px, 1fr); gap: 1px; overflow: auto; background: var(--chart-spine); }
-.directivity-comparison > div { min-height: 80px; background: var(--chart-bg); }
 .directivity-comparison-missing { display: grid; width: 100%; height: 100%; place-items: center; padding: 24px 8px 8px; color: var(--chart-muted); font: var(--text-micro) var(--mono); text-align: center; }
-/* Compact comparison cards keep every map large enough to read. The strip is
-   horizontally inspectable in the dock; the expanded detail view tiles maps. */
-.directivity-comparison[data-density="compact"] { display: flex; gap: 1px; overflow-x: auto; overflow-y: hidden; scroll-snap-type: x proximity; }
-.directivity-comparison[data-density="compact"] > div { min-width: max(160px, 86%); height: 100%; flex: 0 0 86%; scroll-snap-align: start; }
 .result-detail-backdrop { position: fixed; inset: 0; z-index: 1800; display: grid; place-items: center; padding: 24px; background: rgba(2,5,10,.72); backdrop-filter: blur(7px); }
 .result-detail { display: flex; flex-direction: column; width: min(1240px, calc(100vw - 56px)); height: min(780px, calc(100vh - 56px)); overflow: hidden; border: 1px solid var(--chart-spine); border-radius: var(--r3); background: var(--chart-page); box-shadow: 0 28px 70px -28px #000; }
 .result-detail > header { display: flex; align-items: center; gap: 12px; min-height: 46px; padding: 6px 8px 6px 12px; border-bottom: 1px solid var(--chart-spine); color: var(--chart-fg); }
@@ -654,6 +648,21 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .workspace-settings-path { overflow: hidden; margin: 0 0 8px; color: var(--fg); font-family: var(--mono); font-size: var(--text-micro); text-overflow: ellipsis; white-space: nowrap; }.workspace-settings-error { margin: 6px 0 0; color: var(--red); font-size: var(--text-micro); }
 .cad-settings .ui-field { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(200px, 1fr); align-items: center; gap: 12px; color: var(--fg2); }
 .cad-settings-note { margin: 7px 0 0; color: var(--fg3); font-size: var(--text-micro); }
+.workspace-settings-path.not-selected { color: var(--amber); font-family: var(--ui); }
+.cad-setup-steps { display: grid; gap: 8px; margin: 10px 0 0; padding: 0; list-style: none; counter-reset: cad-setup; }
+.cad-setup-steps > li { position: relative; display: grid; gap: 2px; min-width: 0; padding: 8px 8px 8px 38px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); counter-increment: cad-setup; }
+.cad-setup-steps > li::before { position: absolute; top: 8px; left: 9px; display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--inv-bg); color: var(--inv-fg); content: counter(cad-setup); font-size: var(--text-micro); font-weight: 700; }
+.cad-setup-steps > li > b { color: var(--fg1); font-size: var(--text-base); }
+.cad-setup-steps > li > span { color: var(--fg3); font-size: var(--text-micro); }
+.cad-setup-steps a { color: var(--acc); }
+.cad-setup-folder { margin-top: 7px; padding-top: 7px; border-top: 1px solid var(--hair-soft); }
+.cad-setup-folder .cad-settings-note { margin: -2px 0 7px; }
+.cad-settings-connection { margin-top: 5px; }
+.cad-folder-manual { margin-top: 7px; color: var(--fg3); font-size: var(--text-micro); }
+.cad-folder-manual summary { width: max-content; color: var(--acc); cursor: pointer; }
+.cad-folder-manual label { display: grid; grid-template-columns: minmax(120px, .55fr) minmax(0, 1fr); align-items: center; gap: 8px; margin-top: 7px; }
+.cad-folder-manual input { min-width: 0; }
+.cad-folder-manual button { margin: 6px 0 0 auto; }
 .viewer-preferences-note { margin: 0; padding: 8px 16px 12px; color: var(--fg3); font-size: var(--text-micro); }
 .update-dialog { width: min(620px, calc(100vw - 36px)); }
 .update-dialog-body { display: grid; gap: 12px; padding: 16px; color: var(--fg2); font-size: var(--text-base); }
@@ -826,11 +835,11 @@ textarea:disabled { opacity: .48; }
 .unit { font-size: var(--text-micro); }
 .section-description { font-size: var(--text-base); line-height: 1.45; }
 
-.viewport-title { top: 0; left: 12px; height: 38px; align-items: center; gap: 8px; }
+.viewport-title { top: 0; left: 12px; height: 34px; align-items: center; gap: 8px; }
 .viewport-title b { font-size: var(--text-title); }
 .viewport-title span,
 .viewport-live { font-size: var(--text-micro); }
-.viewport-live { top: 0; right: 12px; height: 38px; }
+.viewport-live { top: 0; right: 12px; height: 34px; }
 .viewport-tools { bottom: 12px; border-radius: var(--r); background: var(--surface-raised); box-shadow: var(--float-sh); backdrop-filter: none; }
 .viewport-tools button { border-radius: var(--r3); }
 

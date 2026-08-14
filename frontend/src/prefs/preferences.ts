@@ -7,6 +7,7 @@ import type { SmoothingMode } from '../results/smoothing';
 export const CHART_TYPES = [
   { id: 'directivity_map_h', label: 'Directivity Map (H)' },
   { id: 'directivity_map_v', label: 'Directivity Map (V)' },
+  { id: 'directivity_map_d', label: 'Directivity Map (Diagonal)' },
   { id: 'directivity_map', label: 'Directivity Map (All planes)' },
   { id: 'frequency_response', label: 'Frequency Response (SPL On-Axis)' },
   { id: 'directivity_index', label: 'Directivity Index' },
@@ -65,6 +66,8 @@ export interface Preferences {
   cadApplication: CadApplication;
   smoothing: SmoothingMode;
   mapReference: MapReference;
+  /** Angular spacing of the horizontal graticule on directivity maps. */
+  directivityGuideInterval: number;
   chartTypes: ChartType[];
   chartTheme: string;
   exportFormats: ExportFormat[];
@@ -87,6 +90,7 @@ const defaults: Preferences = {
   cadApplication: 'fusion360',
   smoothing: 'none',
   mapReference: -6,
+  directivityGuideInterval: 10,
   // Every default panel must populate from a default solve. 3D Balloon and
   // Forward Beam Map both need spherical sampling, which is off by default, so
   // defaulting to them left two of six panels permanently showing their stub.
@@ -128,6 +132,10 @@ export function normalize(raw: Partial<Preferences> = {}): Preferences {
     ? [...new Set(raw.autoExportFormats.filter((id): id is ExportFormat => exportIds.has(id)))]
     : [...defaults.autoExportFormats];
   const mapReference = MAP_REFERENCES.includes(Number(raw.mapReference) as MapReference) ? Number(raw.mapReference) as MapReference : defaults.mapReference;
+  const requestedGuideInterval = Number(raw.directivityGuideInterval);
+  const directivityGuideInterval = Number.isFinite(requestedGuideInterval)
+    ? Math.max(1, Math.min(180, requestedGuideInterval))
+    : defaults.directivityGuideInterval;
   return {
     ...defaults,
     cadApplication: cadApplicationIds.has(raw.cadApplication as CadApplication)
@@ -135,6 +143,7 @@ export function normalize(raw: Partial<Preferences> = {}): Preferences {
       : defaults.cadApplication,
     smoothing: smoothingIds.has(String(raw.smoothing)) ? raw.smoothing as SmoothingMode : defaults.smoothing,
     mapReference,
+    directivityGuideInterval,
     chartTypes: charts,
     chartTheme: String(raw.chartTheme || defaults.chartTheme),
     exportFormats: formats,
@@ -165,7 +174,7 @@ export function normalize(raw: Partial<Preferences> = {}): Preferences {
   };
 }
 
-export const STORAGE_VERSION = 11;
+export const STORAGE_VERSION = 12;
 
 function migrateV1ToV2(preferences: Partial<Preferences>): Partial<Preferences> {
   const { chartTypes: _replaced, ...carried } = preferences;
@@ -225,7 +234,8 @@ function migrateV8ToV9(preferences: Partial<Preferences>): Partial<Preferences> 
  * opt-in date decoration outside those names; v8→v9 moves the untouched
  * export-theme default onto the interface; v9→v10 exposes the existing
  * design-change number as a configurable suffix; v10→v11 adds the CAD
- * application choice. Each stored version runs every
+ * application choice; v11→v12 persists the user-definable directivity
+ * guide interval. Each stored version runs every
  * step from its own onwards -- v3 used to run only its first step, so a v3
  * profile would have skipped v4→v5 entirely.
  */
@@ -240,6 +250,7 @@ const MIGRATIONS: Record<number, (preferences: Partial<Preferences>) => Partial<
   8: migrateV8ToV9,
   9: (preferences) => preferences,
   10: (preferences) => preferences,
+  11: (preferences) => preferences,
 };
 
 export function readPreferences(raw: string | null): { value: Preferences; migrated: boolean } {

@@ -32,6 +32,8 @@ const initialBundle: CadReturnBundle = {
 
 const closedFusion: FusionCadStatus = {
   cadApplication: 'fusion360',
+  cadFolderConfigured: true,
+  cadFolderPath: '/workspace',
   state: 'closed',
   processRunning: false,
   running: false,
@@ -145,6 +147,143 @@ describe('CadLinkCoordinator', () => {
     expect(calls.filter((path) => path.endsWith('/onshape/status'))).toHaveLength(1);
   });
 
+  it('enters CAD mode when an Onshape return lands so the panel can own it', async () => {
+    preferencesStore.update({ cadApplication: 'onshape' });
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_01K00000000000000000000000',
+      lineageId: 'wgl_01K00000000000000000000000',
+      baseEditVersion: 1,
+    }, 'current');
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.includes('/onshape/connection')) return json({
+        configured: true, reachable: true, credentialsPath: '/x/onshape.env', detail: null,
+        insecureKeyFile: false, account: { id: 'ACC', name: 'Owner' }, plan: null,
+      });
+      if (path.endsWith('/onshape/status')) return json({
+        state: 'current',
+        credentials: { configured: true, credentialsPath: '/x/onshape.env', detail: null, insecureKeyFile: false },
+        link: null,
+        wgChangesAvailable: false,
+        currentFormula: 'OSSE',
+      });
+      if (path.endsWith('/onshape/return')) return json({
+        translationId: 'tr_1',
+        bundle: { name: 'speaker.wgreturn', bundlePath: 'wgreturn/speaker.wgreturn', documentName: 'Speaker', sourceCount: 1, instanceCount: 1 },
+        ingest: ingestRecord,
+      });
+      return json({}, 404);
+    }));
+    const activate = vi.spyOn(workspaceNavigation, 'activate').mockReturnValue(true);
+    await renderCoordinator();
+
+    await act(async () => { await cadLinkCoordinatorBridge.getSnapshot().returnFromOnshape(); });
+
+    expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe(ingestRecord.ingest_id);
+    expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
+    expect(activate).toHaveBeenCalledWith('cadlink');
+  });
+
+  it('resolves a pull with the exact correlated arrival and times the wait out', async () => {
+    const linkedFusion: FusionCadStatus = {
+      ...closedFusion,
+      state: 'current',
+      processRunning: true,
+      running: true,
+      documentName: 'Speaker',
+      documentId: 'fusion:doc-1',
+      link: {
+        instanceId: 'wgi_1', bundlePath: null, designId: 'wgd_1', lineageId: null,
+        editVersion: null, designHash: null, designName: null, formula: 'OSSE',
+        configPresent: true, parameterCount: 3, parameterDriftCount: 0,
+        localBodyState: 'unmodified', bodyFingerprintHash: null,
+        documentSignatureHash: 'sha256:doc-state', documentBodyCount: 2,
+        sourceStateHash: null, exportId: 'wge_1', exportSequence: '4',
+      },
+    };
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_1', lineageId: 'wgl_1', baseEditVersion: 1,
+    }, 'current');
+    let listing: { items: CadReturnBundle[] } = { items: [] };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json(listing);
+      if (path.endsWith('/fusion-status')) return json(linkedFusion);
+      if (path.endsWith('/request-fusion-return')) {
+        return json({ status: 'requested', requestId: 'req_1', documentName: 'Speaker' });
+      }
+      return json({}, 404);
+    }));
+    await renderCoordinator();
+
+    let pull!: Promise<CadReturnBundle>;
+    await act(async () => {
+      pull = cadLinkCoordinatorBridge.getSnapshot().pullFromFusion();
+      await Promise.resolve(); await Promise.resolve();
+    });
+    expect(cadLinkCoordinatorBridge.getSnapshot().status).toContain('Waiting for Fusion…');
+
+    // An uncorrelated bundle must not settle this pull.
+    listing = { items: [{ ...initialBundle, requestId: 'req_other' }] };
+    await act(async () => {
+      await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
+    });
+
+    const correlated = { ...initialBundle, requestId: 'req_1', documentName: 'Speaker pulled' };
+    listing = { items: [correlated] };
+    await act(async () => {
+      await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
+    });
+    await expect(pull).resolves.toMatchObject({ requestId: 'req_1' });
+  });
+
+  it('rejects and reports a pull that Fusion never answers', async () => {
+    const linkedFusion: FusionCadStatus = {
+      ...closedFusion,
+      state: 'current', processRunning: true, running: true,
+      documentName: 'Speaker', documentId: 'fusion:doc-1',
+      link: {
+        instanceId: 'wgi_1', bundlePath: null, designId: 'wgd_1', lineageId: null,
+        editVersion: null, designHash: null, designName: null, formula: 'OSSE',
+        configPresent: true, parameterCount: 3, parameterDriftCount: 0,
+        localBodyState: 'unmodified', bodyFingerprintHash: null,
+        documentSignatureHash: 'sha256:doc-state', documentBodyCount: 2,
+        sourceStateHash: null, exportId: 'wge_1', exportSequence: '4',
+      },
+    };
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_1', lineageId: 'wgl_1', baseEditVersion: 1,
+    }, 'current');
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json({ items: [] });
+      if (path.endsWith('/fusion-status')) return json(linkedFusion);
+      if (path.endsWith('/request-fusion-return')) {
+        return json({ status: 'requested', requestId: 'req_1', documentName: 'Speaker' });
+      }
+      return json({}, 404);
+    }));
+    await renderCoordinator();
+
+    const started = Date.now();
+    const clock = vi.spyOn(Date, 'now');
+    // The handler is attached with the promise, not after the act() below:
+    // a late handler makes the rejection look unhandled to the runner.
+    let rejection: unknown;
+    await act(async () => {
+      cadLinkCoordinatorBridge.getSnapshot().pullFromFusion()
+        .then(() => undefined, (reason) => { rejection = reason; });
+      await Promise.resolve(); await Promise.resolve();
+    });
+    clock.mockReturnValue(started + 61_000);
+    await act(async () => {
+      await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
+      await Promise.resolve();
+    });
+    expect(String(rejection)).toContain('did not return the requested model within 60 seconds');
+    expect(cadLinkCoordinatorBridge.getSnapshot().error).toContain('within 60 seconds');
+  });
+
   it('detects and auto-selects a newly arrived return', async () => {
     let listing = { items: [initialBundle] };
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
@@ -165,7 +304,9 @@ describe('CadLinkCoordinator', () => {
     });
 
     expect(useCadReturnStore.getState().selectedBundle).toEqual(arrived);
-    expect(cadLinkCoordinatorBridge.getSnapshot().status).toBe('Received Speaker rebuilt from Fusion 360.');
+    expect(cadLinkCoordinatorBridge.getSnapshot().status).toBe(
+      'Received Speaker rebuilt from Fusion 360. Kept your mesh, channel, and solve settings.',
+    );
     expect(activate).toHaveBeenCalledWith('cadlink');
   });
 
@@ -205,7 +346,9 @@ describe('CadLinkCoordinator', () => {
 
     expect(cadLinkCoordinatorBridge.getSnapshot().bundles).toEqual([newer]);
     expect(useCadReturnStore.getState().selectedBundle).toEqual(newer);
-    expect(cadLinkCoordinatorBridge.getSnapshot().status).toBe('Received Newest listing from Fusion 360.');
+    expect(cadLinkCoordinatorBridge.getSnapshot().status).toBe(
+      'Received Newest listing from Fusion 360. Kept your mesh, channel, and solve settings.',
+    );
   });
 
   it('marks an ingestion stale while the CAD Link panel is unmounted', async () => {
@@ -316,13 +459,74 @@ describe('CadLinkCoordinator', () => {
     expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe('wgi_newer');
   });
 
+  it('parks a both-changed send on the conflict dialog and proceeds only on confirm', async () => {
+    const bothChanged: FusionCadStatus = {
+      ...closedFusion,
+      state: 'stale',
+      processRunning: true,
+      running: true,
+      documentName: 'Speaker v3',
+      documentId: 'fusion:doc-1',
+      wgChangesAvailable: true,
+      fusionChangesAvailable: true,
+      link: {
+        instanceId: 'wgi_1', bundlePath: null, designId: 'wgd_1', lineageId: null,
+        editVersion: null, designHash: null, designName: null, formula: 'OSSE',
+        configPresent: true, parameterCount: 3, parameterDriftCount: 0,
+        localBodyState: 'unmodified', bodyFingerprintHash: null,
+        documentSignatureHash: 'sha256:doc-state', documentBodyCount: 2,
+        sourceStateHash: null, exportId: 'wge_1', exportSequence: '4',
+      },
+    };
+    const exportBodies: Array<Record<string, unknown>> = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path === '/api/cad-workspace/path') return json({ selected: true, path: '/workspace' });
+      if (path === '/api/export/wglink') {
+        exportBodies.push(JSON.parse(String(init?.body)));
+        return json({
+          bundlePath: '/workspace/wglink/speaker.wglink', bundleId: 'wgb_2', exportId: 'wge_2',
+          sequence: 5, designHash: 'sha256:d', geometryHash: 'sha256:g', artifactSha256: 'sha256:a',
+        });
+      }
+      if (path.endsWith('/returns')) return json({ items: [] });
+      if (path.endsWith('/fusion-status')) return json(bothChanged);
+      return json({}, 404);
+    }));
+    await renderCoordinator();
+    await act(async () => { await Promise.resolve(); });
+
+    let parked: unknown = 'unset';
+    await act(async () => { parked = await cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion(); });
+    expect(parked).toBeNull();
+    expect(cadLinkCoordinatorBridge.getSnapshot().pendingFusionConflict).toBe(true);
+    expect(host.querySelector('[role="dialog"]')?.textContent).toContain('Both WG and Fusion changed');
+    expect(exportBodies).toHaveLength(0);
+
+    // Cancel clears without sending.
+    await act(async () => { cadLinkCoordinatorBridge.getSnapshot().cancelFusionConflict(); });
+    expect(cadLinkCoordinatorBridge.getSnapshot().pendingFusionConflict).toBe(false);
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    expect(exportBodies).toHaveLength(0);
+
+    // Confirm sends one update carrying the expected-document guard.
+    await act(async () => { await cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion(); });
+    await act(async () => { await cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion({ confirmed: true }); });
+    expect(exportBodies).toHaveLength(1);
+    expect(exportBodies[0]).toMatchObject({
+      expectedFusionDocumentId: 'fusion:doc-1',
+      expectedFusionReturnStateHash: 'sha256:doc-state',
+    });
+    expect(cadLinkCoordinatorBridge.getSnapshot().pendingFusionConflict).toBe(false);
+  });
+
   it('keeps Fusion identity and feedback from the newest overlapping send', async () => {
     const older = deferred<Response>();
     const newer = deferred<Response>();
     let sendCalls = 0;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
-      if (path === '/api/workspace/path') return json({ selected: true, path: '/workspace' });
+      if (path === '/api/cad-workspace/path') return json({ selected: true, path: '/workspace' });
       if (path === '/api/export/wglink') {
         sendCalls += 1;
         return sendCalls === 1 ? older.promise : newer.promise;
@@ -335,8 +539,8 @@ describe('CadLinkCoordinator', () => {
     let first!: Promise<unknown>;
     let second!: Promise<unknown>;
     await act(async () => {
-      first = cadLinkCoordinatorBridge.getSnapshot().sendToFusion();
-      second = cadLinkCoordinatorBridge.getSnapshot().sendToFusion();
+      first = cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion();
+      second = cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion();
       await Promise.resolve(); await Promise.resolve();
     });
     const result = (sequence: number, designId: string) => json({

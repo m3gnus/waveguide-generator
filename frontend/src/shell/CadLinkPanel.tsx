@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { requestFusionReturn, type CadReturnFinding, type CadReturnIngestRecord, type FusionCadStatus } from '../api/cadlink';
-import { OnshapePublicConsentRequired, sendDesignToOnshape, type OnshapeStatus } from '../api/onshape';
+import type { CadReturnFinding, CadReturnIngestRecord } from '../api/cadlink';
+import { OnshapePublicConsentRequired, sendDesignToOnshape } from '../api/onshape';
 import { usePreferences } from '../prefs/preferences';
 import {
   blockingFindings,
@@ -10,6 +10,7 @@ import { useDesignStore } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
 import { filenameStem } from '../viewport/presentation';
 import { cadLinkCoordinatorBridge } from './CadLinkCoordinator';
+import { fusionWorkflowView, onshapeWorkflowView, type CadWorkflowView } from './cadWorkflowView';
 import { Icon } from './icons';
 import { requestSettings } from './settingsNavigation';
 import './cadLinkPanel.css';
@@ -29,129 +30,9 @@ const FRESHNESS_COPY: Record<string, string> = {
   unlinked: 'Unlinked return — no Waveguide Generator design identity was attached in CAD.',
 };
 
-export interface CadWorkflowView {
-  state: 'checking' | 'closed' | 'addin-offline' | 'no-document' | 'not-linked' | 'current' | 'stale' | 'not-configured';
-  headline: string;
-  detail: string;
-  action: 'open' | 'update' | null;
-}
-
-/** The Onshape analogue of {@link fusionWorkflowView}.
- *
- * There is no process to detect and no add-in to hear from: Onshape is a web
- * service, so the only questions are whether WG has a key pair and whether the
- * design on screen still matches what was last sent. Both are answered from
- * WG's own registry, which is why this view never reports "checking".
- */
-export function onshapeWorkflowView(status: OnshapeStatus | null): CadWorkflowView {
-  if (status === null) return {
-    state: 'checking',
-    headline: 'Checking Onshape…',
-    detail: 'WG is looking for an Onshape API key pair and any linked document.',
-    action: null,
-  };
-  if (status.state === 'not_configured') return {
-    state: 'not-configured',
-    headline: 'Onshape is not connected',
-    detail: `Create an API key pair at dev-portal.onshape.com/keys and save it to ${status.credentials.credentialsPath}. WG never asks you to type it here.`,
-    action: null,
-  };
-  if (status.state === 'not_linked') return {
-    state: 'not-linked',
-    headline: 'Not in Onshape yet',
-    detail: 'WG will create an Onshape document, import this waveguide as a part, and add its managed parameters as a Variable Studio.',
-    action: 'open',
-  };
-  const documentName = status.link?.documentName ?? 'the linked document';
-  if (status.state === 'current') return {
-    state: 'current',
-    headline: `Onshape · ${documentName}`,
-    detail: `Up to date. Sequence ${status.link?.lastSequence ?? '—'} is the imported part, and the managed WG parameters are synchronized.`,
-    action: null,
-  };
-  return {
-    state: 'stale',
-    headline: `WG design changed · ${documentName}`,
-    detail: `WG parameters changed after this Onshape part was built. Sending again replaces the imported part in place, so features you built on it in Onshape are kept.`,
-    action: 'update',
-  };
-}
-
-export function fusionWorkflowView(status: FusionCadStatus | null): CadWorkflowView {
-  if (status === null) return {
-    state: 'checking',
-    headline: 'Checking Fusion 360…',
-    detail: 'WG is looking for the WGLink add-in and its active document.',
-    action: 'open',
-  };
-  if (status.state === 'closed') return {
-    state: 'closed',
-    headline: 'Fusion 360 is closed',
-    detail: 'Open this WG design in Fusion 360. WG will start Fusion and WGLink will create a Design document if needed.',
-    action: 'open',
-  };
-  if (status.state === 'addin_offline') return {
-    state: 'addin-offline',
-    headline: 'Fusion 360 is open · WGLink add-in is offline',
-    detail: 'Fusion is running, but its WGLink add-in has not reported in. In Fusion, open Utilities → Scripts and Add-Ins, then stop and run WGLink.',
-    action: null,
-  };
-  if (status.state === 'no_document') return {
-    state: 'no-document',
-    headline: 'Fusion 360 is open · no Design document',
-    detail: 'WGLink will create a Design document and insert this waveguide.',
-    action: 'open',
-  };
-  if (status.state === 'not_linked') return {
-    state: 'not-linked',
-    headline: `Fusion 360 is open${status.documentName ? ` · ${status.documentName}` : ''}`,
-    detail: 'This WG design is not linked in the active Fusion document yet.',
-    action: 'open',
-  };
-  const parameterCopy = status.link?.parameterCount
-    ? `${status.link.parameterCount} managed CAD parameters`
-    : 'the managed CAD parameters';
-  if (status.state === 'current') return {
-    state: 'current',
-    headline: `Fusion 360 is open · ${status.documentName ?? 'active document'}`,
-    detail: `Up to date. The full WG config and ${parameterCopy} are synchronized.`,
-    action: null,
-  };
-  if (!status.wgChangesAvailable && status.fusionChangesAvailable) return {
-    state: 'stale',
-    headline: `Fusion geometry has changed${status.documentName ? ` · ${status.documentName}` : ''}`,
-    detail: 'The parametric WG design has not changed. Bring the Fusion geometry into WG before rebuilding the Fusion waveguide from WG.',
-    action: null,
-  };
-  if (!status.wgChangesAvailable) return {
-    state: 'stale',
-    headline: `Fusion has local geometry changes${status.documentName ? ` · ${status.documentName}` : ''}`,
-    detail: 'The parametric WG design matches Fusion. The latest Fusion geometry has already been returned to WG for simulation.',
-    action: null,
-  };
-  const fusionFormula = status.fusionFormula?.toLocaleUpperCase();
-  const currentFormula = status.currentFormula.toLocaleUpperCase();
-  const mismatch = fusionFormula && fusionFormula !== currentFormula
-    ? `Fusion has ${fusionFormula}; WG is now ${currentFormula}.`
-    : 'WG parameters changed after this Fusion waveguide was built.';
-  const configCopy = status.link?.configPresent
-    ? ''
-    : ' This link also predates full WG config synchronization.';
-  const localEditCopy = status.link?.parameterDriftCount
-    ? ` ${status.link.parameterDriftCount} managed Fusion parameter${status.link.parameterDriftCount === 1 ? ' has' : 's have'} local edits.`
-    : status.link?.localBodyState && status.link.localBodyState !== 'unmodified'
-      ? ` The managed Fusion body is ${status.link.localBodyState}.`
-      : '';
-  const conflictCopy = status.fusionChangesAvailable
-    ? ' Fusion geometry also changed; choose which direction to synchronize.'
-    : '';
-  return {
-    state: 'stale',
-    headline: `${status.fusionChangesAvailable ? 'WG and Fusion both changed' : 'WG design changed'}${status.documentName ? ` · ${status.documentName}` : ''}`,
-    detail: `${mismatch}${configCopy}${localEditCopy}${conflictCopy}`,
-    action: 'update',
-  };
-}
+// The workflow views moved beside the coordinator's unified send path; the
+// re-export keeps this module the panel-facing home for existing callers.
+export { fusionWorkflowView, onshapeWorkflowView, type CadWorkflowView };
 
 function compactValue(value: unknown): string {
   if (value === null || value === undefined) return '—';
@@ -230,7 +111,6 @@ export function CadLinkPanel() {
   const setCadLink = useDocumentStore((current) => current.setCadLink);
   const cadCoordinator = useSyncExternalStore(cadLinkCoordinatorBridge.subscribe, cadLinkCoordinatorBridge.getSnapshot, cadLinkCoordinatorBridge.getSnapshot);
   const [requestingReturn, setRequestingReturn] = useState(false);
-  const [confirmWgOverwrite, setConfirmWgOverwrite] = useState(false);
   const [confirmPublicDocument, setConfirmPublicDocument] = useState<string | null>(null);
   const [sendingToOnshape, setSendingToOnshape] = useState(false);
   const onshapeSendGeneration = useRef(0);
@@ -288,44 +168,16 @@ export function CadLinkPanel() {
     }
   };
 
-  // The outbound leg. Sending refreshes the list because the bundle it writes
-  // is what CAD picks up, and a return for it lands in the same workspace.
-  const send = async () => {
-    if (onshape) { await sendToOnshape(); return; }
-    cadCoordinator.clearFeedback();
-    try {
-      const action = fusionWorkflowView(fusionStatus).action;
-      if (action === 'update' && fusionStatus?.fusionChangesAvailable && !confirmWgOverwrite) {
-        setConfirmWgOverwrite(true);
-        return;
-      }
-      await cadCoordinator.sendToFusion(
-        action === 'update' && fusionStatus?.documentId
-          ? {
-              documentId: fusionStatus.documentId,
-              returnStateHash: fusionStatus.link?.documentSignatureHash ?? null,
-            }
-          : undefined,
-      );
-      setConfirmWgOverwrite(false);
-    } catch (reason) { cadCoordinator.reportError(reason instanceof Error ? reason.message : String(reason)); }
-  };
+  // The Onshape outbound leg. Fusion's outbound action left this panel: the
+  // design menu and the Geometry rail call the coordinator's unified path.
+  const send = async () => { await sendToOnshape(); };
 
   const bringFromFusion = async () => {
     setRequestingReturn(true); cadCoordinator.clearFeedback();
     try {
-      if (!identity?.designId || !fusionStatus?.documentId || !fusionStatus.link) {
-        throw new Error('Fusion changed documents. Refresh CAD Link and try again.');
-      }
-      const result = await requestFusionReturn({
-        designId: identity.designId,
-        documentId: fusionStatus.documentId,
-        instanceId: fusionStatus.link.instanceId,
-        expectedReturnStateHash: fusionStatus.link.documentSignatureHash,
-      });
-      cadCoordinator.expectFusionReturn(result.requestId);
-      cadCoordinator.reportStatus(`Requested current geometry from ${result.documentName}. Waiting for Fusion…`);
-      await cadCoordinator.refresh({ background: true, autoOpenNew: true });
+      // The arrival itself is awaited by the coordinator's correlated waiter,
+      // which also owns the timeout message; this button only starts the pull.
+      void cadCoordinator.pullFromFusion().catch(() => undefined);
     } catch (reason) {
       cadCoordinator.reportError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -337,10 +189,8 @@ export function CadLinkPanel() {
   const cadApplicationLabel = onshape ? 'Onshape' : 'Autodesk Fusion 360';
   const designName = filenameStem(filename);
   const shownName = designName === 'waveguide' ? 'waveguide' : designName;
-  const actionLabel = onshape
-    ? (workflow.action === 'update' ? 'Send WG changes to Onshape' : `Create ${shownName} in Onshape`)
-    : (workflow.action === 'update' ? 'Send WG changes to Fusion' : `Open ${shownName} in Fusion 360`);
-  const busy = onshape ? sendingToOnshape : cadCoordinator.sendingToFusion;
+  const actionLabel = workflow.action === 'update' ? 'Send WG changes to Onshape' : `Create ${shownName} in Onshape`;
+  const busy = sendingToOnshape;
   const canRequestFusionReturn = Boolean(
     fusionStatus?.running && fusionStatus.documentName && fusionStatus.documentId
     && fusionStatus.link && identity?.designId,
@@ -351,21 +201,31 @@ export function CadLinkPanel() {
   const linkedDocument = onshapeStatus?.link ?? null;
 
   return <div className="cadlink-panel panel-scroll">
-    <section className="cad-workflow cad-send">
-      <header className="cad-workflow-header"><span className="cad-step">1</span><div><h3>WG → CAD</h3><p>Open or update this parametric WG design.</p></div><button className="link-button" onClick={() => requestSettings('cad')}>{cadApplicationLabel} · Change</button></header>
+    {/* Fusion's outbound leg lives in the design menu and the Geometry rail;
+        this panel only reports the connection and owns the inbound leg. The
+        Onshape workflow keeps its two numbered steps: the panel is its home. */}
+    {onshape && <section className="cad-workflow cad-send">
+      <header className="cad-workflow-header"><span className="cad-step">1</span><div><h3>WG → CAD</h3><p>Create or update this WG design in Onshape.</p></div><button className="link-button" onClick={() => requestSettings('cad')}>{cadApplicationLabel} · Change</button></header>
       <div className={`cad-connection cad-connection-${workflow.state}`}>
         <span className="cad-connection-dot" aria-hidden="true"/>
         <div><h3>{workflow.headline}</h3><p>{workflow.detail}</p></div>
       </div>
-      {onshape && linkedDocument?.documentUrl && <a className="cad-secondary-action cad-onshape-open" href={linkedDocument.documentUrl} target="_blank" rel="noreferrer noopener">Open {linkedDocument.documentName} in Onshape</a>}
-      {onshape && publicOnly && !confirmPublicDocument && <div className="cad-alert" role="status"><b>This Onshape plan creates public documents.</b> {onshapeConnection?.plan?.name ?? 'The Free plan'} makes every document world-readable — anyone with the link can view this waveguide. Confidential designs belong in Fusion 360 or on a paid Onshape plan.</div>}
-      {onshape && onshapeConnection?.insecureKeyFile && <div className="cad-alert" role="alert">The Onshape key file at {onshapeConnection.credentialsPath} is readable by other accounts on this machine. Restrict it with <code>chmod 600</code>.</div>}
-      {workflow.action && !confirmWgOverwrite && !confirmPublicDocument && <button className="primary cad-primary-action" disabled={busy} onClick={() => void send()}>{busy ? (workflow.action === 'update' ? 'Updating…' : onshape ? 'Creating…' : 'Opening…') : actionLabel}</button>}
+      {linkedDocument?.documentUrl && <a className="cad-secondary-action cad-onshape-open" href={linkedDocument.documentUrl} target="_blank" rel="noreferrer noopener">Open {linkedDocument.documentName} in Onshape</a>}
+      {publicOnly && !confirmPublicDocument && <div className="cad-alert" role="status"><b>This Onshape plan creates public documents.</b> {onshapeConnection?.plan?.name ?? 'The Free plan'} makes every document world-readable — anyone with the link can view this waveguide. Confidential designs belong in Fusion 360 or on a paid Onshape plan.</div>}
+      {onshapeConnection?.insecureKeyFile && <div className="cad-alert" role="alert">The Onshape key file at {onshapeConnection.credentialsPath} is readable by other accounts on this machine. Restrict it with <code>chmod 600</code>.</div>}
+      {workflow.action && !confirmPublicDocument && <button className="primary cad-primary-action" disabled={busy} onClick={() => void send()}>{busy ? (workflow.action === 'update' ? 'Updating…' : 'Creating…') : actionLabel}</button>}
       {confirmPublicDocument && <div className="cad-direction-alert" role="alert"><div><b>This document will be public</b><span>{confirmPublicDocument}</span></div><div className="cad-confirm-actions"><button onClick={() => setConfirmPublicDocument(null)}>Cancel</button><button className="primary" disabled={sendingToOnshape} onClick={() => void sendToOnshape(true)}>Continue: create a public document</button></div></div>}
-      {confirmWgOverwrite && <div className="cad-direction-alert" role="alert"><div><b>Both WG and Fusion changed</b><span>This rebuilds only the linked waveguide from WG. Separate cabinet and mid-woofer bodies stay in Fusion, but direct edits to the linked waveguide are replaced.</span></div><div className="cad-confirm-actions"><button onClick={() => setConfirmWgOverwrite(false)}>Cancel</button><button className="primary" disabled={cadCoordinator.sendingToFusion} onClick={() => void send()}>Continue: send WG changes</button></div></div>}
-      {onshape && error && <div className="cad-alert" role="alert">{error}</div>}
-      {onshape && status && <div className="cad-status-strip" role="status">{status}</div>}
-    </section>
+      {error && <div className="cad-alert" role="alert">{error}</div>}
+      {status && <div className="cad-status-strip" role="status">{status}</div>}
+    </section>}
+    {!onshape && <section className="cad-workflow cad-send">
+      <header className="cad-workflow-header"><div><h3>Fusion connection</h3><p>Send WG changes from the design menu or the Geometry rail.</p></div><button className="link-button" onClick={() => requestSettings('cad')}>{cadApplicationLabel} · Change</button></header>
+      <div className={`cad-connection cad-connection-${workflow.state}`}>
+        <span className="cad-connection-dot" aria-hidden="true"/>
+        <div><h3>{workflow.headline}</h3><p>{workflow.detail}</p></div>
+      </div>
+      {workflow.state === 'not-configured' && <button className="primary cad-primary-action" onClick={() => requestSettings('cad')}>Set up Fusion connection</button>}
+    </section>}
     {onshape && <section className="cad-workflow cad-return-workflow">
       <header className="cad-workflow-header"><span className="cad-step">2</span><div><h3>CAD → SIMULATION</h3><p>Bring CAD geometry and source tags into WG.</p></div></header>
       {linkedDocument ? <div className="cad-return-quick-action">
@@ -385,7 +245,7 @@ export function CadLinkPanel() {
       </>}
     </section>}
     {!onshape && <section className="cad-workflow cad-return-workflow">
-    <header className="cad-workflow-header"><span className="cad-step">2</span><div><h3>CAD → SIMULATION</h3><p>Bring Fusion geometry and source tags into WG.</p></div><button disabled={loading || ingesting} onClick={() => void cadCoordinator.refresh()}><Icon name="reset"/>{loading ? 'Loading…' : 'Refresh'}</button></header>
+    <header className="cad-workflow-header"><div><h3>FUSION → SIMULATION</h3><p>Bring Fusion geometry and source tags into WG.</p></div><button disabled={loading || ingesting} onClick={() => void cadCoordinator.refresh()}><Icon name="reset"/>{loading ? 'Loading…' : 'Refresh'}</button></header>
     {fusionStatus?.fusionChangesAvailable && <div className="cad-direction-alert"><div><b>Fusion geometry has changed</b><span>The active Fusion body or source setup differs from the last design returned to WG.</span></div><button className="primary" disabled={!canRequestFusionReturn || requestingReturn} onClick={() => void bringFromFusion()}>{requestingReturn ? 'Requesting…' : 'Bring Fusion changes into WG'}</button></div>}
     {!fusionStatus?.fusionChangesAvailable && canRequestFusionReturn && <button className="cad-secondary-action" disabled={requestingReturn} onClick={() => void bringFromFusion()}>{requestingReturn ? 'Requesting…' : 'Refresh geometry from Fusion'}</button>}
     {error && <div className="cad-alert" role="alert">{error}</div>}
@@ -396,8 +256,7 @@ export function CadLinkPanel() {
       <div><b>{state.selectedBundle.documentName ?? state.selectedBundle.name}</b><span>{state.ingestRecord ? 'Prepared for the CAD workspace and solver.' : 'Prepare this Fusion return for the viewport and solver.'}</span></div>
       {!state.ingestRecord && <button className="primary" disabled={ingesting} onClick={() => void cadCoordinator.ingest()}>{ingesting ? 'Preparing…' : 'Prepare simulation'}</button>}
     </div>}
-    {!loading && error?.includes('No workspace folder') && <div className="empty-state"><b>No workspace selected</b><span>Choose a workspace folder in Settings, then refresh this panel.</span></div>}
-    {!loading && !error && bundles.length === 0 && <div className="empty-state"><b>No CAD returns</b><span>Returned bundles appear under the selected workspace’s wgreturn folder.</span></div>}
+    {!loading && workflow.state !== 'not-configured' && !error && bundles.length === 0 && <div className="empty-state"><b>No CAD returns</b><span>Returned bundles appear under the selected WGLink folder’s wgreturn folder.</span></div>}
     {bundles.length > 0 && <div className="cad-bundle-list" role="list" aria-label="Designs returned from CAD">{bundles.map((bundle) => <button
       key={bundle.bundlePath}
       role="listitem"

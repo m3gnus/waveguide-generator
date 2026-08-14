@@ -34,6 +34,7 @@ describe('preferences surfaces', () => {
     await act(async () => { root.render(<ResultsPreferencesSurface/>); await Promise.resolve(); });
     expect(host.querySelector<HTMLSelectElement>('[aria-label="Smoothing"]')?.options).toHaveLength(11);
     expect(host.querySelector<HTMLSelectElement>('[aria-label="Map reference"]')?.options).toHaveLength(4);
+    expect(host.querySelector<HTMLInputElement>('[aria-label="Directivity angular guide interval"]')?.value).toBe('10');
     expect(host.querySelector<HTMLSelectElement>('[aria-label="Results layout count"]')?.options).toHaveLength(5);
     expect(host.querySelector('[aria-label="Export counter"]')).toBeNull();
     expect(host.querySelectorAll('[aria-label^="Manual export:"]')).toHaveLength(15);
@@ -42,6 +43,13 @@ describe('preferences surfaces', () => {
     expect(host.textContent).toContain('Automatic export formats');
     expect(host.textContent).toContain('Auto-export completed jobs');
     expect(host.textContent).toContain('Auto-save solve mesh to Workspace');
+
+    const guideInterval = host.querySelector<HTMLInputElement>('[aria-label="Directivity angular guide interval"]')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(guideInterval, '15');
+      guideInterval.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(preferencesStore.getSnapshot().directivityGuideInterval).toBe(15);
   });
 
   it('edits manual and automatic formats independently and warns about an empty enabled auto list', async () => {

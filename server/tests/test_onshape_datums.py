@@ -76,6 +76,42 @@ def test_nonplanar_mouth_does_not_invent_a_mouth_plane() -> None:
     assert 'opPolyline(context, id + "WG_MOUTH_OUTLINE_INNER"' in source
 
 
+def test_source_interface_materializes_a_stable_exportable_throat_sheet() -> None:
+    manifest = _manifest()
+    manifest["parameters"].append(
+        {
+            "name": "wg_demo_throat_dia",
+            "value": 25.4,
+            "unit": "mm",
+            "role": "interface",
+        }
+    )
+    manifest["required_features"] = ["source-interface-v1"]
+    manifest["interface"] = {
+        "sources": [
+            {
+                "id": "source-hf",
+                "role": "HF",
+                "required": True,
+            }
+        ]
+    }
+
+    source = build_datum_featurescript(manifest)
+
+    assert 'id + "WG_THROAT_SOURCE_SKETCH"' in source
+    assert 'opFillSurface(context, id + "WG_THROAT_SOURCE"' in source
+    assert 'qCreatedBy(wgThroatSourceSketchId, EntityType.EDGE)' in source
+    assert 'getVariable(context, "wg_demo_throat_dia"' in source
+    assert '"value" : "WG_THROAT_SOURCE"' in source
+
+
+def test_legacy_datum_contract_does_not_invent_a_source_sheet() -> None:
+    source = build_datum_featurescript(_manifest())
+
+    assert "WG_THROAT_SOURCE" not in source
+
+
 def test_source_rejects_nonfinite_datum_evidence() -> None:
     manifest = _manifest()
     manifest["datums"]["WG_AXIS"]["origin_mm"][0] = float("inf")

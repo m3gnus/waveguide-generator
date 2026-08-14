@@ -9,7 +9,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
 from server.charts.directivity import (
-    add_ten_degree_angle_guides,
+    add_angle_guides,
     render_directivity_heatmap_b64,
 )
 
@@ -34,7 +34,7 @@ def test_directivity_graticule_fills_every_ten_degrees_without_duplicates() -> N
     axis.set_ylim(-90, 90)
     axis.axhline(0, color="black")
 
-    add_ten_degree_angle_guides(figure, _Theme())
+    add_angle_guides(figure, _Theme())
 
     assert _horizontal_values(axis) == set(range(-80, 90, 10))
     assert len(axis.lines) == 17
@@ -45,9 +45,20 @@ def test_non_directivity_axes_are_left_alone() -> None:
     figure, axis = plt.subplots()
     axis.set_ylabel("dB")
 
-    add_ten_degree_angle_guides(figure, _Theme())
+    add_angle_guides(figure, _Theme())
 
     assert len(axis.lines) == 0
+    plt.close(figure)
+
+
+def test_directivity_graticule_uses_the_requested_interval() -> None:
+    figure, axis = plt.subplots()
+    axis.set_ylabel("Angle [deg]")
+    axis.set_ylim(-90, 90)
+
+    add_angle_guides(figure, _Theme(), angle_guide_step=15)
+
+    assert _horizontal_values(axis) == set(range(-75, 90, 15))
     plt.close(figure)
 
 

@@ -21,7 +21,16 @@ function TogglePreference({ label, checked, onChange }: { label: string; checked
   return <label className="viewer-pref-toggle"><span>{label}</span><input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} /></label>;
 }
 
-export function ViewerPreferencesPanel({ preferences, onClose }: { preferences: ViewerPreferences; onClose: () => void }) {
+interface ViewerPreferencesPanelProps {
+  preferences: ViewerPreferences;
+  showEnclosure: boolean;
+  showStats: boolean;
+  onShowEnclosure: (visible: boolean) => void;
+  onShowStats: (visible: boolean) => void;
+  onClose: () => void;
+}
+
+export function ViewerPreferencesPanel({ preferences, showEnclosure, showStats, onShowEnclosure, onShowStats, onClose }: ViewerPreferencesPanelProps) {
   const setProjection = (startupCameraMode: CameraProjection) => viewerPreferences.update({ startupCameraMode });
   return <section className="viewer-preferences" aria-label="Viewer preferences">
     <header><b>Viewer preferences</b><button type="button" aria-label="Close viewer preferences" onClick={onClose}><Icon name="close"/></button></header>
@@ -40,6 +49,8 @@ export function ViewerPreferencesPanel({ preferences, onClose }: { preferences: 
 
       <h3>Geometry</h3>
       <TogglePreference label="Tint solved symmetry region" checked={preferences.tintSolvedRegion} onChange={(tintSolvedRegion) => viewerPreferences.update({ tintSolvedRegion })} />
+      <TogglePreference label="Show enclosure" checked={showEnclosure} onChange={onShowEnclosure} />
+      <TogglePreference label="Show frame stats" checked={showStats} onChange={onShowStats} />
 
       <fieldset>
         <legend>Startup camera</legend>

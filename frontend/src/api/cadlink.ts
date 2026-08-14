@@ -22,7 +22,7 @@ export interface CadReturnBundle {
   reason?: string | null;
 }
 
-export interface CadReturnListing { items: CadReturnBundle[] }
+export interface CadReturnListing { items: CadReturnBundle[]; cadFolderConfigured: boolean }
 
 export type FusionCadState = 'closed' | 'addin_offline' | 'no_document' | 'not_linked' | 'current' | 'stale';
 
@@ -69,6 +69,11 @@ export interface CadRealizedDimensions {
 
 export interface FusionCadStatus {
   cadApplication: 'fusion360';
+  cadFolderConfigured: boolean;
+  cadFolderPath: string | null;
+  cadConnectionIssue?: 'addin_upgrade_required' | 'folder_unreadable' | 'folder_mismatch' | null;
+  adapterVersion?: string | null;
+  workspaceRoot?: string | null;
   state: FusionCadState;
   /** Fusion process detection is separate from the WGLink heartbeat. */
   processRunning: boolean;

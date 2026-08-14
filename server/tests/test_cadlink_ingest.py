@@ -149,7 +149,7 @@ def test_endpoint_validates_workspace_and_returns_pipeline_record(monkeypatch, t
     workspace = tmp_path / "workspace"
     bundle = workspace / "wgreturn" / "speaker.wgreturn"
     bundle.mkdir(parents=True)
-    app.state.workspace.select(workspace)
+    app.state.cad_workspace.select(workspace)
     expected = {"ingest_id": "wgi_01J5A8QK3M9T2XVBH0RD7NWE6C", "report_sha256": "sha256:test", "findings": []}
     monkeypatch.setattr("server.cadlink.api.ingest_bundle", lambda *_args, **_kwargs: expected)
     payload = CadReturnIngestRequest.model_validate({"bundlePath": "wgreturn/speaker.wgreturn", "mesh": {"rigidSizeMm": 20, "transitionMm": 40, "sourceSizeMm": {"source-hf": 4}}, "skippedSourceIds": [], "areaDriftOverrides": ["source-hf"]})
@@ -187,7 +187,7 @@ def test_return_listing_reads_cheap_inventory_and_marks_bad_manifests(tmp_path: 
     (bad / "wgreturn.json").write_text("{not json", encoding="utf-8")
     os.utime(good, (200, 200))
     os.utime(bad, (100, 100))
-    app.state.workspace.select(workspace)
+    app.state.cad_workspace.select(workspace)
 
     result = asyncio.run(list_returns(SimpleNamespace(app=app)))
 
@@ -249,7 +249,7 @@ def test_return_listing_rejects_escaping_symlinks_and_plain_files_and_explains_b
         ),
         encoding="utf-8",
     )
-    app.state.workspace.select(workspace)
+    app.state.cad_workspace.select(workspace)
 
     result = asyncio.run(list_returns(SimpleNamespace(app=app)))
 
@@ -258,11 +258,10 @@ def test_return_listing_rejects_escaping_symlinks_and_plain_files_and_explains_b
     assert "positive" in result["items"][0]["reason"]
 
 
-def test_return_listing_requires_a_workspace(tmp_path: Path) -> None:
+def test_return_listing_reports_an_unconfigured_wglink_folder(tmp_path: Path) -> None:
     app = create_app(data_dir=tmp_path / "data")
-    with pytest.raises(Exception) as no_workspace:
-        asyncio.run(list_returns(SimpleNamespace(app=app)))
-    assert no_workspace.value.status_code == 409
+    result = asyncio.run(list_returns(SimpleNamespace(app=app)))
+    assert result == {"items": [], "cadFolderConfigured": False}
 
 
 def test_endpoint_error_mapping_and_workspace_guards(monkeypatch, tmp_path: Path) -> None:
@@ -283,7 +282,7 @@ def test_endpoint_error_mapping_and_workspace_guards(monkeypatch, tmp_path: Path
 
     workspace = tmp_path / "workspace"
     (workspace / "wgreturn" / "speaker.wgreturn").mkdir(parents=True)
-    app.state.workspace.select(workspace)
+    app.state.cad_workspace.select(workspace)
     escaped = payload.model_copy(update={"bundle_path": "wgreturn/../outside.wgreturn"})
     with pytest.raises(Exception) as traversal:
         asyncio.run(post_ingest(escaped, SimpleNamespace(app=app)))

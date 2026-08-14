@@ -28,7 +28,7 @@ from server.mesh.imported import geometry_candidate_matches
 
 
 RETURN_SUBDIRECTORY = Path("cadlink") / "onshape" / "wgreturn"
-SOURCE_INTERFACE_FEATURE = "return-source-interface-v1"
+SOURCE_INTERFACE_FEATURE = "source-interface-v1"
 
 
 class OnshapeReturnError(ValueError):
@@ -68,23 +68,30 @@ def _utc_now() -> str:
 def _source_policy_from_export(manifest: Mapping[str, Any]) -> dict[str, Any]:
     features = manifest.get("required_features")
     interface = manifest.get("interface")
-    raw = interface.get("return_source") if isinstance(interface, Mapping) else None
+    sources = interface.get("sources") if isinstance(interface, Mapping) else None
     if (
         not isinstance(features, list)
         or SOURCE_INTERFACE_FEATURE not in features
-        or not isinstance(raw, Mapping)
+        or not isinstance(sources, list)
+        or not sources
     ):
         raise OnshapeReturnError(
             "The linked outbound bundle has no WG-authored return-source interface. "
             "Its throat geometry is known, but source role, source id, and drive-channel "
             "identity are not; WG will not default them to HF."
         )
+    if len(sources) != 1 or not isinstance(sources[0], Mapping):
+        raise OnshapeReturnError(
+            "The Onshape linked-throat return currently requires exactly one "
+            "wglink.interface.sources[] record."
+        )
+    raw = sources[0]
     policy = dict(raw)
     for key in ("id", "role", "default_drive_channel_id", "patch_policy"):
-        _string(policy.get(key), f"wglink.interface.return_source.{key}")
+        _string(policy.get(key), f"wglink.interface.sources[0].{key}")
     if not isinstance(policy.get("required"), bool):
         raise OnshapeReturnError(
-            "Stored outbound evidence is missing wglink.interface.return_source.required."
+            "Stored outbound evidence is missing wglink.interface.sources[0].required."
         )
     components = policy.get("expected_connected_components")
     if isinstance(components, bool) or not isinstance(components, int) or components < 1:
@@ -189,7 +196,11 @@ def _fingerprints_match(first: Mapping[str, Any], second: Mapping[str, Any]) -> 
     if abs(left_volume - right_volume) > volume_tolerance:
         return False
     return all(
-        abs(left - right) <= max(1.0e-4, 1.0e-7 * max(abs(left), abs(right)))
+        # The outbound fingerprint is measured before STEP serialization.
+        # OCC's write/read round trip expands that box by its modelling
+        # tolerance (about 0.006 mm in the regression fixture), so identity
+        # matching needs a machining-negligible 0.01 mm floor.
+        abs(left - right) <= max(1.0e-2, 1.0e-7 * max(abs(left), abs(right)))
         for left, right in zip(left_bbox, right_bbox, strict=True)
     )
 
@@ -208,11 +219,20 @@ def inspect_step(
 
     gmsh.clear()
     gmsh.model.add("onshape-return-evidence")
-    roots = gmsh.model.occ.importShapes(str(step_path), highestDimOnly=True)
+    # ``highestDimOnly=True`` drops a standalone sheet whenever the same STEP
+    # also contains a solid. Import every dimension, then define root bodies as
+    # volumes plus surfaces that have no owning volume. Constituent solid faces
+    # remain available for source matching but do not inflate the body count.
+    imported = gmsh.model.occ.importShapes(str(step_path), highestDimOnly=False)
     gmsh.model.occ.synchronize()
-    if not roots:
+    if not imported:
         raise OnshapeReturnError("Onshape's STEP export contains no importable CAD bodies.")
-    root_bodies = [(int(dim), int(tag)) for dim, tag in roots if int(dim) in {2, 3}]
+    root_bodies = [(3, int(tag)) for _dim, tag in gmsh.model.getEntities(3)]
+    root_bodies.extend(
+        (2, int(surface))
+        for _dim, surface in gmsh.model.getEntities(2)
+        if len(gmsh.model.getAdjacencies(2, int(surface))[0]) == 0
+    )
     if not root_bodies:
         raise OnshapeReturnError("Onshape's STEP export contains no solid or surface bodies.")
 

@@ -377,6 +377,7 @@ export function buildDirectivityRenderPayload(
     reference_directivity: reference ? directivityFor(reference.result) : null,
     reference_label: reference?.label ?? null,
     reference_level: preferences.mapReference,
+    angle_guide_step: preferences.directivityGuideInterval,
     theme: resolveChartTheme(preferences.chartTheme),
   };
 }

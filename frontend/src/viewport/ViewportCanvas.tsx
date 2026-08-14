@@ -1,7 +1,7 @@
 import { GizmoHelper, GizmoViewport, OrbitControls } from '@react-three/drei';
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import { Component, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentRef, type ErrorInfo, type ReactNode, type RefObject } from 'react';
-import { CanvasTexture, OrthographicCamera, PerspectiveCamera, Plane, Vector3 } from 'three';
+import { CanvasTexture, MathUtils, OrthographicCamera, PerspectiveCamera, Plane, Vector3 } from 'three';
 import type { CameraProjection, ViewerPreferences } from '../viewerprefs/viewerPreferences';
 import { calculateCameraFit, clippingRange, presetDirection, viewDirection, zoomedOrthographicValue, type CameraDirection } from './cameraMath';
 import { DemandRenderScheduler, installViewportTestHook } from './demandRender';
@@ -65,28 +65,66 @@ export function cameraFitKey(bounds: FrameScene['bounds'], nonce: number, projec
 /**
  * What to do with a camera fit whose inputs have changed.
  *
- * The fit key contains the model bounds, so every new preview frame asks for a
- * refit. That is what auto-frames geometry as it appears, and it is right while
- * the camera is still the one the application chose. It is wrong once the user
- * has orbited: the fit is computed from the last *requested* direction, so
- * re-applying it throws their view away and snaps back to the preset. That used
- * to happen about once per pause, because frames only ever landed between
- * gestures; now that a drag delivers frames continuously it would happen
- * several times a second.
+ * The first scene is framed automatically. After that, new preview bounds,
+ * projection changes, and panel resizes keep the same visible view so geometry
+ * revisions can be compared in place. Only an explicit view request (preset or
+ * gizmo axis, represented by a new view key) frames the model again.
  *
- * `settled` means the key is already applied. `record` means the model moved
- * under a camera the user has taken over, so remember the key and leave the
- * camera alone. `apply` means the view itself changed — a preset, a gizmo axis,
- * a projection or aspect change — which always wins the camera back.
+ * `settled` means the key is already applied. `record` remembers changed fit
+ * inputs without moving the camera. `apply` means the requested direction or
+ * reset nonce changed and therefore intentionally takes the camera back.
  */
 export function cameraFitDisposition(
   applied: { fit: string | null; view: string | null },
   next: { fit: string; view: string },
-  cameraIsUsers: boolean,
 ): 'settled' | 'record' | 'apply' {
   if (applied.fit === next.fit) return 'settled';
-  if (applied.view === next.view && cameraIsUsers) return 'record';
+  if (applied.view === next.view) return 'record';
   return 'apply';
+}
+
+/** Preserve the visible view while swapping between camera projection types. */
+export function transferCameraView(
+  previous: PerspectiveCamera | OrthographicCamera,
+  next: PerspectiveCamera | OrthographicCamera,
+  target: Vector3,
+  aspect: number,
+): void {
+  const offset = previous.position.clone().sub(target);
+  if (offset.lengthSq() === 0) offset.set(0, 0, 1);
+  const verticalSpan = previous instanceof PerspectiveCamera
+    ? 2 * offset.length() * Math.tan(MathUtils.degToRad(previous.fov / 2))
+    : (previous.top - previous.bottom) / Math.max(previous.zoom, 1e-6);
+
+  next.up.copy(previous.up);
+  if (next instanceof PerspectiveCamera) {
+    const distance = verticalSpan / (2 * Math.tan(MathUtils.degToRad(next.fov / 2)));
+    next.position.copy(target).add(offset.normalize().multiplyScalar(distance));
+  } else {
+    next.position.copy(previous.position);
+    next.zoom = 1;
+    const halfHeight = Math.max(verticalSpan / 2, 1e-6);
+    next.left = -halfHeight * Math.max(aspect, 0.01);
+    next.right = halfHeight * Math.max(aspect, 0.01);
+    next.top = halfHeight;
+    next.bottom = -halfHeight;
+  }
+  next.lookAt(target);
+  next.updateProjectionMatrix();
+}
+
+/** Resize the frustum without changing position, orientation, target, or zoom. */
+export function resizeCameraFrustum(camera: PerspectiveCamera | OrthographicCamera, aspect: number): void {
+  const safeAspect = Math.max(aspect, 0.01);
+  if (camera instanceof PerspectiveCamera) {
+    camera.aspect = safeAspect;
+  } else {
+    const centerX = (camera.left + camera.right) / 2;
+    const halfHeight = (camera.top - camera.bottom) / 2;
+    camera.left = centerX - halfHeight * safeAspect;
+    camera.right = centerX + halfHeight * safeAspect;
+  }
+  camera.updateProjectionMatrix();
 }
 
 /** Update only the depth bracket, preserving a user-owned position and target. */
@@ -248,9 +286,17 @@ function CameraRig({ bounds, request, zoomRequest, projection, preferences, sche
   const canvasSize = useThree((state) => state.size);
   const gl = useThree((state) => state.gl);
   const aspect = Math.max(canvasSize.width / Math.max(canvasSize.height, 1), 0.01);
-  const camera = useMemo<PerspectiveCamera | OrthographicCamera>(() => projection === 'orthographic'
-    ? new OrthographicCamera(-1, 1, 1, -1, 0.001, 100_000)
-    : new PerspectiveCamera(34, aspect, 0.001, 100_000), [aspect, projection]);
+  const cameras = useRef<{
+    perspective: PerspectiveCamera;
+    orthographic: OrthographicCamera;
+  } | null>(null);
+  if (cameras.current === null) {
+    cameras.current = {
+      perspective: new PerspectiveCamera(34, 1, 0.001, 100_000),
+      orthographic: new OrthographicCamera(-1, 1, 1, -1, 0.001, 100_000),
+    };
+  }
+  const camera = cameras.current[projection];
   const { x: minX, y: minY, z: minZ } = bounds.min;
   const { x: maxX, y: maxY, z: maxZ } = bounds.max;
   const center = useMemo(() => new Vector3(
@@ -273,12 +319,10 @@ function CameraRig({ bounds, request, zoomRequest, projection, preferences, sche
   const appliedRequest = useRef<string | null>(null);
   const appliedView = useRef<string | null>(null);
   const appliedZoom = useRef(zoomRequest.nonce);
-  // Whether the camera currently belongs to the user rather than to the last
-  // automatic fit. OrbitControls raises `start` only for real input, and the
-  // zoom buttons set it themselves.
-  const cameraIsUsers = useRef(false);
+  const viewTarget = useRef<Vector3 | null>(null);
+  if (viewTarget.current === null) viewTarget.current = center.clone();
   const fitKey = cameraFitKey(bounds, request.nonce, projection, aspect);
-  const viewKey = `${request.nonce}:${projection}:${aspect}:${direction.toArray().join(',')}`;
+  const viewKey = `${request.nonce}:${direction.toArray().join(',')}`;
   const fitRequestKey = `${fitKey}:${direction.toArray().join(',')}`;
   const fit = useMemo(
     () => calculateCameraFit(bounds, direction, projection, aspect),
@@ -287,15 +331,25 @@ function CameraRig({ bounds, request, zoomRequest, projection, preferences, sche
 
   useLayoutEffect(() => {
     const previous = get().camera;
+    const target = viewTarget.current ?? center;
+    if (previous !== camera
+      && (previous === cameras.current?.perspective || previous === cameras.current?.orthographic)) {
+      transferCameraView(previous, camera, target, aspect);
+    }
     set({ camera });
-    return () => set({ camera: previous });
-  }, [camera, get, set]);
+    controls.current?.target.copy(target);
+    controls.current?.update();
+  }, [aspect, camera, center, controls, get, set]);
+
+  useLayoutEffect(() => {
+    resizeCameraFrustum(camera, aspect);
+    scheduler.schedule();
+  }, [aspect, camera, scheduler]);
 
   useLayoutEffect(() => {
     const disposition = cameraFitDisposition(
       { fit: appliedRequest.current, view: appliedView.current },
       { fit: fitRequestKey, view: viewKey },
-      cameraIsUsers.current,
     );
     if (disposition === 'settled') return;
     if (disposition === 'record') {
@@ -304,7 +358,6 @@ function CameraRig({ bounds, request, zoomRequest, projection, preferences, sche
       return;
     }
     appliedView.current = viewKey;
-    cameraIsUsers.current = false;
     camera.position.copy(fit.position);
     camera.up.copy(cameraUp(direction));
     camera.lookAt(fit.center);
@@ -320,26 +373,26 @@ function CameraRig({ bounds, request, zoomRequest, projection, preferences, sche
     camera.near = fit.near;
     camera.far = fit.far;
     camera.updateProjectionMatrix();
+    viewTarget.current?.copy(fit.center);
     controls.current?.target.copy(fit.center);
     controls.current?.update();
     appliedRequest.current = fitRequestKey;
     scheduler.schedule();
   }, [aspect, boundsRadius, camera, center, direction, fit, fitRequestKey, scheduler, viewKey]);
 
-  // Re-centring the orbit target belongs to the same decision: a pan the user
-  // made is theirs to keep, and the layout effect above has already recorded
-  // whether this fit was applied.
+  // The first fit may run before the sibling OrbitControls ref is attached.
+  // Apply only the target from the most recent explicit view request; geometry
+  // updates must never recenter a target the user has panned.
   useEffect(() => {
     const instance = controls.current;
-    if (!instance || cameraIsUsers.current) return;
-    instance.target.copy(fit.center);
+    if (!instance || !viewTarget.current) return;
+    instance.target.copy(viewTarget.current);
     instance.update();
     scheduler.schedule();
-  }, [fit, fitRequestKey, scheduler]);
+  }, [request.nonce, scheduler]);
 
   useLayoutEffect(() => {
     if (appliedZoom.current === zoomRequest.nonce) return;
-    cameraIsUsers.current = true;
     const target = controls.current?.target ?? center;
     if (camera instanceof OrthographicCamera) {
       camera.zoom = zoomedOrthographicValue(camera.zoom, zoomRequest.direction);
@@ -383,17 +436,17 @@ function CameraRig({ bounds, request, zoomRequest, projection, preferences, sche
     ref={controls}
     camera={camera}
     makeDefault
-    target={[center.x, center.y, center.z]}
     rotateSpeed={preferences.rotateSpeed}
     zoomSpeed={preferences.zoomSpeed}
     panSpeed={preferences.panSpeed}
     enableDamping={preferences.dampingEnabled}
     dampingFactor={preferences.dampingFactor}
     zoomToCursor
-    // `start` fires for real input only -- pointer down, wheel, touch -- not for
-    // the programmatic `update()` calls the fit and the rebracket make.
-    onStart={() => { cameraIsUsers.current = true; }}
-    onChange={() => { rebracket(); scheduler.schedule(); }}
+    onChange={() => {
+      if (controls.current && viewTarget.current) viewTarget.current.copy(controls.current.target);
+      rebracket();
+      scheduler.schedule();
+    }}
   />;
 }
 

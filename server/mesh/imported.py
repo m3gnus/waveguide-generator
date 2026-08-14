@@ -650,6 +650,29 @@ def _surface_model_bounds_mm(gmsh: Any, surfaces: Iterable[int]) -> tuple[float,
     return tuple(float(value) for value in np.concatenate((lower, upper)))
 
 
+def _import_occ_root_bodies(gmsh: Any, assembly_path: str | Path) -> list[tuple[int, int]]:
+    """Import all STEP topology and return only independently transformable bodies.
+
+    Gmsh's ``highestDimOnly=True`` discards a standalone source sheet whenever
+    the same STEP also contains a solid. Importing every dimension preserves
+    that interface. The roots are then the volumes plus surfaces that are not
+    constituent faces of a volume, so an affine transform is applied exactly
+    once to each body.
+    """
+
+    imported = gmsh.model.occ.importShapes(str(assembly_path), highestDimOnly=False)
+    gmsh.model.occ.synchronize()
+    if not imported:
+        return []
+    roots = [(3, int(tag)) for _dim, tag in gmsh.model.getEntities(3)]
+    roots.extend(
+        (2, int(tag))
+        for _dim, tag in gmsh.model.getEntities(2)
+        if len(gmsh.model.getAdjacencies(2, int(tag))[0]) == 0
+    )
+    return roots
+
+
 def build_imported_viewport_mesh(
     assembly_path: str | Path,
     manifest: Mapping[str, Any],
@@ -705,8 +728,7 @@ def build_imported_viewport_mesh(
             "Geometry.OCCSewFaces",
         }:
             gmsh.option.setNumber(option_name, 1 if option_name in selected_healing else 0)
-        imported = gmsh.model.occ.importShapes(str(assembly_path), highestDimOnly=True)
-        gmsh.model.occ.synchronize()
+        imported = _import_occ_root_bodies(gmsh, assembly_path)
         if not imported:
             raise ImportedMeshError("viewport meshing: assembly STEP contains no OCC geometry")
         if not np.allclose(matrix, np.eye(4)):
@@ -867,6 +889,7 @@ def build_imported_mesh(
         import gmsh
         import meshio
         from hornlab_mesher import (
+            OccAutoCutResult,
             OccSurfaceGroup,
             OccSurfaceRole,
             OccSurfaceSelector,
@@ -948,8 +971,7 @@ def build_imported_mesh(
         }
         for option_name in all_healing:
             gmsh.option.setNumber(option_name, 1 if option_name in healing_options else 0)
-        imported = gmsh.model.occ.importShapes(str(assembly_path), highestDimOnly=True)
-        gmsh.model.occ.synchronize()
+        imported = _import_occ_root_bodies(gmsh, assembly_path)
         if not imported:
             raise ImportedMeshError("STEP import + normalisation: assembly STEP contains no OCC geometry")
         transform_values = normalization.reshape(-1).tolist()
@@ -989,8 +1011,7 @@ def build_imported_mesh(
         named = {name: [face_to_surface[face] for face in faces if face in face_to_surface] for name, faces in named_step.items()}
         styled = {name: [face_to_surface[face] for face in faces if face in face_to_surface] for name, faces in styled_step.items()}
 
-        volume_count = len(gmsh.model.getEntities(3))
-        body_count = volume_count or len(named) or (1 if surfaces else 0)
+        body_count = len(imported)
         expected_bodies = int(manifest["assembly"]["n_bodies_expected"])
         if body_count != expected_bodies:
             raise ImportedMeshError(
@@ -1267,6 +1288,7 @@ def build_imported_mesh(
                     OccSurfaceRole(source_id),
                 )
             )
+
         source_bboxes = {
             source_id: {
                 int(face): tuple(
@@ -1277,7 +1299,23 @@ def build_imported_mesh(
             for source_id, resolution in resolutions.items()
             if not resolution.get("skipped")
         }
-        cut = auto_cut_occ_geometry(groups)
+        if any(dim == 2 for dim, _tag in imported):
+            # A standalone source sheet is an intentionally open acoustic
+            # surface. Cutting every surface body independently can weld its
+            # cut edges into the solid shell and create nonmanifold topology,
+            # so mixed-dimensional returns preserve the full domain.
+            cut = OccAutoCutResult(
+                (),
+                tuple(groups),
+                {},
+                {
+                    "mode": "auto-cut",
+                    "cut_planes": [],
+                    "note": "mixed-dimensional root bodies preserve the full domain",
+                },
+            )
+        else:
+            cut = auto_cut_occ_geometry(groups)
         cut_groups = {group.name: list(group.selector.surface_tags) for group in cut.groups}
         cut_area_provenance: dict[str, dict[str, float]] = {}
         for source in source_list:
@@ -1456,7 +1494,10 @@ def build_imported_mesh(
         dense = _enforce_dense_solver_memory_ceiling(triangles, 1234, tags=tags)
         integrity = mesh_integrity_report(points_mm * 1.0e-3, triangles, symmetry_plane_axes=tuple({"x0": 0, "y0": 1}[plane] for plane in cut.planes if plane in {"x0", "y0"}))
         if not integrity.get("valid"):
-            raise ImportedMeshError("meshing: postprocessed imported mesh failed topology integrity checks")
+            raise ImportedMeshError(
+                "meshing: postprocessed imported mesh failed topology integrity checks: "
+                f"{integrity}"
+            )
         bounds_min = np.min(points_mm, axis=0) * 1.0e-3
         bounds_max = np.max(points_mm, axis=0) * 1.0e-3
         unique_tags, counts = np.unique(tags, return_counts=True)

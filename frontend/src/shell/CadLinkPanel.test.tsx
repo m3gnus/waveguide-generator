@@ -15,6 +15,7 @@ import { buildImportedSubmission, CadLinkPanel, fusionWorkflowView, newestReturn
 import { CadLinkCoordinator, cadLinkCoordinatorBridge } from './CadLinkCoordinator';
 
 const listing: CadReturnListing = {
+  cadFolderConfigured: true,
   items: [{
     name: 'speaker.wgreturn', bundlePath: 'wgreturn/speaker.wgreturn', modifiedAt: '2026-08-11T00:00:00Z', readable: true,
     documentName: 'Speaker', requestId: null, sourceCount: 1, instanceCount: 1,
@@ -42,6 +43,7 @@ const record: CadReturnIngestRecord = {
 };
 const closedFusion: FusionCadStatus = {
   cadApplication: 'fusion360', state: 'closed', processRunning: false, running: false, updatedAt: null,
+  cadFolderConfigured: true, cadFolderPath: '/cad',
   documentName: null, documentId: null, currentFormula: 'OSSE', fusionFormula: null, link: null,
   wgChangesAvailable: false, fusionChangesAvailable: false,
   realizedDimensions: { state: 'link_unavailable', instanceId: null, exportId: null, parameters: [] },
@@ -173,6 +175,9 @@ describe('CadLinkPanel', () => {
   });
 
   it('maps Fusion presence and config freshness to one explicit action', () => {
+    expect(fusionWorkflowView({ ...closedFusion, cadFolderConfigured: false })).toMatchObject({
+      state: 'not-configured', action: null,
+    });
     expect(fusionWorkflowView(closedFusion)).toMatchObject({
       headline: 'Fusion 360 is closed', action: 'open',
     });
@@ -182,6 +187,12 @@ describe('CadLinkPanel', () => {
     expect(fusionWorkflowView({ ...closedFusion, state: 'addin_offline', processRunning: true })).toMatchObject({
       state: 'addin-offline', action: null,
     });
+    expect(fusionWorkflowView({ ...currentFusion, cadConnectionIssue: 'folder_unreadable' })).toMatchObject({
+      headline: 'WGLink cannot access the selected folder', action: null,
+    });
+    expect(fusionWorkflowView({ ...currentFusion, cadConnectionIssue: 'folder_mismatch' }).detail).toContain(
+      'clear within a few seconds',
+    );
     expect(fusionWorkflowView({ ...currentFusion, state: 'stale', wgChangesAvailable: true })).toMatchObject({
       state: 'stale', action: 'update',
     });
@@ -478,12 +489,14 @@ describe('CadLinkPanel', () => {
     expect(host.textContent).not.toContain('Mesh detail');
   });
 
-  it('shows the selected CAD program, settings link, and an Open button when Fusion is closed', async () => {
+  it('shows the selected CAD program, settings link, and connection state without an outbound button', async () => {
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
     expect(host.querySelector('.cad-workflow-header')?.textContent).toContain('Autodesk Fusion 360');
     expect(host.querySelector<HTMLButtonElement>('.cad-workflow-header button')?.textContent).toContain('Change');
     expect(host.querySelector('.cad-connection')?.textContent).toContain('Fusion 360 is closed');
-    expect(host.querySelector<HTMLButtonElement>('.cad-primary-action')?.textContent).toBe('Open waveguide in Fusion 360');
+    // The Fusion outbound leg lives in the design menu and the Geometry rail.
+    expect(host.querySelector('.cad-primary-action')).toBeNull();
+    expect(host.textContent).not.toContain('WG → CAD');
   });
 
   it('shows an up-to-date active Fusion document and the communicated parameter count', async () => {
@@ -496,14 +509,14 @@ describe('CadLinkPanel', () => {
     expect(host.querySelector('.cad-primary-action')).toBeNull();
   });
 
-  it('offers an in-place Fusion update when the WG config no longer matches', async () => {
+  it('explains a stale link in the connection card and leaves the update to the rail and menu', async () => {
     const stale = { ...currentFusion, state: 'stale' as const, currentFormula: 'R-OSSE', fusionFormula: 'osse', wgChangesAvailable: true };
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/fusion-status')
       ? json(stale)
       : json(listing)));
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
     expect(host.querySelector('.cad-connection')?.textContent).toContain('Fusion has OSSE; WG is now R-OSSE');
-    expect(host.querySelector<HTMLButtonElement>('.cad-primary-action')?.textContent).toBe('Send WG changes to Fusion');
+    expect(host.querySelector('.cad-primary-action')).toBeNull();
   });
 
   it('explains local Fusion parameter edits instead of claiming synchronization', async () => {
@@ -546,11 +559,11 @@ describe('CadLinkPanel', () => {
     }));
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
 
-    expect(host.textContent).toContain('Send WG changes to Fusion');
+    // The panel owns only the inbound direction; the outbound update lives in
+    // the rail and menu, whose sends park on the coordinator's conflict dialog.
     expect(host.textContent).toContain('Bring Fusion changes into WG');
-    const send = [...host.querySelectorAll<HTMLButtonElement>('button')]
-      .find((button) => button.textContent === 'Send WG changes to Fusion')!;
-    await act(async () => { send.click(); await Promise.resolve(); });
+    expect(host.textContent).not.toContain('Send WG changes to Fusion');
+    await act(async () => { await cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion(); });
     expect(host.textContent).toContain('Both WG and Fusion changed');
     expect(host.textContent).toContain('Continue: send WG changes');
   });
@@ -733,7 +746,7 @@ describe('CadLinkPanel', () => {
       requested.push(path);
       if (path.endsWith('/returns')) return json(listing);
       if (path.endsWith('/fusion-status')) return json(closedFusion);
-      if (path === '/api/workspace/path') return json({ selected: true, path: '/cad' });
+      if (path === '/api/cad-workspace/path') return json({ selected: true, path: '/cad' });
       return json({
         bundlePath: '/cad/wglink/horn.wglink', bundleId: 'wgb_1', exportId: 'wge_1', sequence: 4,
         designHash: 'sha256:d', geometryHash: 'sha256:g', artifactSha256: 'sha256:a',
@@ -742,10 +755,8 @@ describe('CadLinkPanel', () => {
     }));
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
 
-    const send = [...host.querySelectorAll<HTMLButtonElement>('.cad-send button')]
-      .find((button) => button.textContent === 'Open waveguide in Fusion 360')!;
-    expect(send).toBeTruthy();
-    await act(async () => { send.click(); await Promise.resolve(); await Promise.resolve(); });
+    // The outbound entry points (menu, rail) all route through this bridge.
+    await act(async () => { await cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion(); await Promise.resolve(); });
 
     expect(requested).toContain('/api/export/wglink');
     expect(host.textContent).toContain('Opening in Fusion 360 · sequence 4');
@@ -759,14 +770,15 @@ describe('CadLinkPanel', () => {
       const path = String(input);
       if (path.endsWith('/returns')) return json(listing);
       if (path.endsWith('/fusion-status')) return json(closedFusion);
-      if (path === '/api/workspace/path') return json({ selected: true, path: '/cad' });
+      if (path === '/api/cad-workspace/path') return json({ selected: true, path: '/cad' });
       return json({ detail: 'CAD-link bundle name is already used by another design: horn.wglink' }, 409);
     }));
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
 
-    const send = [...host.querySelectorAll<HTMLButtonElement>('.cad-send button')]
-      .find((button) => button.textContent === 'Open waveguide in Fusion 360')!;
-    await act(async () => { send.click(); await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => {
+      await cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion().catch(() => undefined);
+      await Promise.resolve();
+    });
 
     expect(host.querySelector('[role="alert"]')?.textContent).toContain('already used by another design');
     expect(host.querySelector('.cad-bundle-list')).toBeTruthy();

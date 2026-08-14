@@ -638,4 +638,4 @@ def test_connection_reports_an_unreachable_account_without_failing(tmp_path: Pat
     transport.route("GET", "/users/sessioninfo", 401, {"message": "Not authorized"})
     result = asyncio.run(onshape_api.connection(_request(store, tmp_path, transport)))
     assert result["reachable"] is False
-    assert "dev-portal" in result["detail"]
+    assert "My account > Developer > API keys" in result["detail"]

@@ -58,6 +58,29 @@ class WriteExportRequest(BaseModel):
     existing: Literal["reject", "merge_identical"] = "reject"
 
 
+class SelectCadWorkspaceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(min_length=1, max_length=4096)
+
+
+def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    """Publish a small cross-process setting without exposing a torn file."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(payload, stream, indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def _member_bytes(member: ExportMember) -> bytes:
     if member.text is not None:
         return member.text.encode("utf-8")
@@ -96,7 +119,7 @@ def _strictly_inside(path: Path, root: Path, label: str) -> None:
         raise ValueError(f"{label} resolves outside the selected workspace")
 
 
-def _select_workspace_folder() -> str | None:
+def _select_workspace_folder(prompt: str = "Select output folder") -> str | None:
     """Open a native folder picker and return its selection, if any."""
 
     system = platform.system()
@@ -106,7 +129,7 @@ def _select_workspace_folder() -> str | None:
             [
                 "osascript",
                 "-e",
-                'set theFolder to POSIX path of (choose folder with prompt "Select output folder")',
+                f'set theFolder to POSIX path of (choose folder with prompt "{prompt}")',
             ]
         ]
     elif system == "Windows":
@@ -116,13 +139,13 @@ def _select_workspace_folder() -> str | None:
                 "-Command",
                 "Add-Type -AssemblyName System.Windows.Forms; "
                 "$f = New-Object System.Windows.Forms.FolderBrowserDialog; "
-                "$f.Description = 'Select output folder'; "
+                f"$f.Description = '{prompt}'; "
                 "if ($f.ShowDialog() -eq 'OK') { $f.SelectedPath }",
             ]
         ]
     else:
         commands = [
-            ["zenity", "--file-selection", "--directory", "--title=Select output folder"],
+            ["zenity", "--file-selection", "--directory", f"--title={prompt}"],
             ["kdialog", "--getexistingdirectory", "."],
         ]
     for command in commands:
@@ -145,7 +168,7 @@ def _select_workspace_folder() -> str | None:
         root = tk.Tk()
         root.withdraw()
         root.attributes("-topmost", True)
-        selected = filedialog.askdirectory(title="Select output folder")
+        selected = filedialog.askdirectory(title=prompt)
         root.destroy()
         return str(selected) if selected else None
     except Exception:
@@ -202,14 +225,148 @@ class WorkspaceState:
             raise ValueError(f"Selected path is not a directory: {resolved}")
         self._selected = resolved
         self._loaded = True
-        self.settings_path.parent.mkdir(parents=True, exist_ok=True)
-        self.settings_path.write_text(
-            json.dumps(
-                {"schemaVersion": 1, "workspacePath": str(resolved)}, indent=2
-            )
-            + "\n",
-            encoding="utf-8",
+        _write_json_atomic(
+            self.settings_path,
+            {"schemaVersion": 1, "workspacePath": str(resolved)},
         )
+
+
+class CadWorkspaceState(WorkspaceState):
+    """The user-visible folder shared by WG and Fusion's WGLink add-in.
+
+    Run exports and CAD exchange used to share ``WorkspaceState``. Keeping a
+    separate persisted path prevents changing an export destination from
+    silently disconnecting Fusion. Existing installations adopt their old
+    selected workspace once so upgrades do not lose a working link.
+    """
+
+    SETTINGS_NAME = "cadlink_settings.json"
+    SETTINGS_KEY = "cadLinkPath"
+
+    def __init__(self, data_dir: Path) -> None:
+        super().__init__(data_dir, default_path=data_paths(data_dir).root / "cadlink")
+        self.settings_path = (data_paths(data_dir).root / self.SETTINGS_NAME).resolve()
+        self.legacy_settings_path = (
+            data_paths(data_dir).root / "workspace_settings.json"
+        ).resolve()
+        self._migrate_legacy_selection()
+
+    def _migrate_legacy_selection(self) -> None:
+        """Adopt a proven legacy CAD exchange exactly once.
+
+        An output-only selection must not silently become a CAD connection.
+        Existing ``wglink`` or ``wgreturn`` content is the durable evidence
+        that the old shared folder was actually used by WGLink.
+        """
+
+        if self.settings_path.exists():
+            return
+        try:
+            payload = json.loads(self.legacy_settings_path.read_text(encoding="utf-8"))
+            raw_path = str(payload.get("workspacePath") or "").strip()
+            if not raw_path:
+                return
+            candidate = Path(raw_path).expanduser().resolve()
+        except (OSError, ValueError, TypeError, json.JSONDecodeError, AttributeError):
+            return
+        if not candidate.is_dir() or not any(
+            (candidate / child).is_dir() for child in ("wglink", "wgreturn")
+        ):
+            return
+        _write_json_atomic(
+            self.settings_path,
+            {"schemaVersion": 1, self.SETTINGS_KEY: str(candidate)},
+        )
+
+    def path(self) -> Path:
+        selected = self.selected_path()
+        if selected is None:
+            raise ValueError("No WGLink folder has been selected.")
+        return selected
+
+    def _load(self) -> None:
+        self._loaded = True
+        try:
+            payload = json.loads(self.settings_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return
+        if not isinstance(payload, dict):
+            return
+        raw_path = str(payload.get(self.SETTINGS_KEY) or "").strip()
+        if not raw_path:
+            return
+        candidate = Path(raw_path).expanduser().resolve()
+        if candidate.is_dir():
+            self._selected = candidate
+        else:
+            logger.warning("Persisted WGLink path is unavailable: %s", candidate)
+
+    def select(self, path: Path) -> None:
+        resolved = path.expanduser().resolve()
+        if not resolved.is_dir():
+            raise ValueError(f"Selected path is not a directory: {resolved}")
+        self._selected = resolved
+        self._loaded = True
+        _write_json_atomic(
+            self.settings_path,
+            {"schemaVersion": 1, self.SETTINGS_KEY: str(resolved)},
+        )
+
+
+def create_cad_workspace_router(state: CadWorkspaceState) -> APIRouter:
+    router = APIRouter(prefix="/api/cad-workspace", tags=["cadlink"])
+
+    @router.get("/path")
+    async def cad_workspace_path() -> dict[str, Any]:
+        selected = state.selected_path()
+        return {
+            "path": str(selected) if selected is not None else None,
+            "selected": selected is not None,
+        }
+
+    @router.post("/select")
+    async def cad_workspace_select(
+        payload: SelectCadWorkspaceRequest | None = None,
+    ) -> dict[str, Any]:
+        selected = (
+            payload.path
+            if payload is not None
+            else await asyncio.to_thread(_select_workspace_folder, "Select WGLink folder")
+        )
+        if not selected:
+            current = state.selected_path()
+            return {
+                "selected": current is not None,
+                "path": str(current) if current is not None else None,
+            }
+        try:
+            state.select(Path(selected))
+        except (OSError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"selected": True, "path": str(state.path())}
+
+    @router.post("/open")
+    async def cad_workspace_open() -> dict[str, str]:
+        try:
+            path = state.path()
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        command = (
+            ["open", str(path)]
+            if platform.system() == "Darwin"
+            else ["explorer", str(path)]
+            if platform.system() == "Windows"
+            else ["xdg-open", str(path)]
+        )
+        try:
+            subprocess.Popen(command, **background_process_kwargs())
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500, detail=f"Failed to open folder: {exc}"
+            ) from exc
+        return {"status": "opened", "path": str(path)}
+
+    return router
 
 
 def create_workspace_router(state: WorkspaceState) -> APIRouter:
@@ -344,12 +501,18 @@ def mount_workspace(
     state = WorkspaceState(Path(application.state.data_dir), default_path=default_path)
     application.state.workspace = state
     application.include_router(create_workspace_router(state))
+    cad_state = CadWorkspaceState(Path(application.state.data_dir))
+    application.state.cad_workspace = cad_state
+    application.include_router(create_cad_workspace_router(cad_state))
     return state
 
 
 __all__ = [
     "WorkspaceState",
+    "CadWorkspaceState",
     "WriteExportRequest",
+    "SelectCadWorkspaceRequest",
     "create_workspace_router",
+    "create_cad_workspace_router",
     "mount_workspace",
 ]

@@ -238,15 +238,15 @@ def _return_listing(workspace_root: Path) -> list[dict[str, Any]]:
 
 @router.get("/returns")
 async def list_returns(request: Request) -> dict[str, Any]:
-    workspace: WorkspaceState = request.app.state.workspace
+    workspace: WorkspaceState = request.app.state.cad_workspace
     selected = workspace.selected_path()
     if selected is None:
-        raise HTTPException(
-            status_code=409,
-            detail="No workspace folder has been selected. Choose a workspace folder first.",
-        )
+        return {"items": [], "cadFolderConfigured": False}
     workspace_root = selected.resolve()
-    return {"items": await asyncio.to_thread(_return_listing, workspace_root)}
+    return {
+        "items": await asyncio.to_thread(_return_listing, workspace_root),
+        "cadFolderConfigured": True,
+    }
 
 
 @router.post("/fusion-status")
@@ -255,17 +255,14 @@ async def fusion_status(
 ) -> dict[str, Any]:
     """Report whether the design on screen is open and current in Fusion."""
 
-    workspace: WorkspaceState = request.app.state.workspace
+    workspace: WorkspaceState = request.app.state.cad_workspace
     selected = workspace.selected_path()
-    if selected is None:
-        raise HTTPException(
-            status_code=409,
-            detail="No workspace folder has been selected. Choose a workspace folder first.",
-        )
-    workspace_root = selected.resolve()
+    workspace_root = selected.resolve() if selected is not None else None
     returned_bundle: Path | None = None
     if payload.return_bundle_path:
         try:
+            if workspace_root is None:
+                raise ValueError("No WGLink folder has been selected.")
             selected_return = (workspace_root / payload.return_bundle_path).resolve()
             _strictly_inside(selected_return, workspace_root, "returnBundlePath")
             if (
@@ -289,7 +286,7 @@ async def fusion_status(
                 returned_bundle = selected_return
         except (OSError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-    if returned_bundle is None and payload.identity is not None:
+    if returned_bundle is None and payload.identity is not None and workspace_root is not None:
         for candidate in _return_listing(workspace_root):
             if not candidate.get("readable"):
                 continue
@@ -318,6 +315,21 @@ async def fusion_status(
         process_running=await asyncio.to_thread(fusion_process_running),
         returned_bundle=returned_bundle,
     )
+    status["cadFolderConfigured"] = selected is not None
+    status["cadFolderPath"] = str(selected) if selected is not None else None
+    status["cadConnectionIssue"] = None
+    if selected is not None and status.get("running"):
+        reported_root = status.get("workspaceRoot")
+        if not status.get("adapterVersion"):
+            status["cadConnectionIssue"] = "addin_upgrade_required"
+        elif not reported_root:
+            status["cadConnectionIssue"] = "folder_unreadable"
+        else:
+            try:
+                if Path(str(reported_root)).expanduser().resolve() != selected.resolve():
+                    status["cadConnectionIssue"] = "folder_mismatch"
+            except (OSError, ValueError):
+                status["cadConnectionIssue"] = "folder_mismatch"
     store: CadLinkStore = request.app.state.cadlink_store
     status["realizedDimensions"] = await asyncio.to_thread(
         _realized_dimensions_payload,
@@ -393,12 +405,12 @@ def _ingest_error(exc: Exception) -> HTTPException:
 
 @router.post("/ingest")
 async def post_ingest(payload: CadReturnIngestRequest, request: Request) -> dict[str, Any]:
-    workspace: WorkspaceState = request.app.state.workspace
+    workspace: WorkspaceState = request.app.state.cad_workspace
     selected = workspace.selected_path()
     if selected is None:
         raise HTTPException(
             status_code=409,
-            detail="No workspace folder has been selected. Choose a workspace folder first.",
+            detail="No WGLink folder has been selected. Choose one in Settings → CAD Link first.",
         )
     try:
         segments = _path_segments(payload.bundle_path, "bundlePath")

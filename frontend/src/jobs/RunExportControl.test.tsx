@@ -14,6 +14,12 @@ import { JobsPanel } from '../shell/JobsPanel';
 const mocks = vi.hoisted(() => ({
   fetchJobResults: vi.fn(),
   runWorkspaceExportBundle: vi.fn(),
+  sendDesignToCad: vi.fn(),
+}));
+
+vi.mock('../api/designIo', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../api/designIo')>(),
+  sendDesignToCad: mocks.sendDesignToCad,
 }));
 
 vi.mock('../api/results', async (importOriginal) => ({
@@ -94,6 +100,11 @@ describe('RunExportControl', () => {
       directory: 'C:/chosen/1_stored_horn_v07',
       files: ['C:/chosen/1_stored_horn_v07/1_stored_horn_v07.csv'],
       failures: [],
+    });
+    mocks.sendDesignToCad.mockResolvedValue({
+      bundlePath: '/cad-library/wglink/1_stored_horn_v07.wglink',
+      bundleId: 'wgb_1', exportId: 'wge_1', sequence: 7,
+      designHash: 'sha256:d', geometryHash: 'sha256:g', artifactSha256: 'sha256:a',
     });
     patchMetadata = vi.spyOn(jobsSocket, 'patchMetadata').mockResolvedValue(undefined);
     vi.stubGlobal('fetch', vi.fn());
@@ -184,6 +195,30 @@ describe('RunExportControl', () => {
     expect(patchMetadata).toHaveBeenCalledWith(job.id, {
       exported_files: ['earlier.csv', 'C:/chosen/1_stored_horn_v07/1_stored_horn_v07.csv'],
     });
+  });
+
+  it('puts Send to CAD first and hands off the selected run snapshot', async () => {
+    const job = completeJob();
+    render(job);
+    openMenu();
+
+    const labels = [...document.querySelectorAll<HTMLElement>('.action-menu-item-label')]
+      .map((element) => element.textContent);
+    expect(labels[0]).toBe('Send to CAD');
+
+    await act(async () => { menuItem('Send to CAD').click(); await settle(); });
+
+    expect(mocks.sendDesignToCad).toHaveBeenCalledWith(
+      hydrateJobDesign(job),
+      42,
+      '1_stored_horn_v07',
+      null,
+    );
+    expect(mocks.fetchJobResults).not.toHaveBeenCalled();
+    expect(mocks.runWorkspaceExportBundle).not.toHaveBeenCalled();
+    expect(host.querySelector('[role="status"]')?.textContent).toContain(
+      'Sent to CAD · sequence 7 · /cad-library/wglink/1_stored_horn_v07.wglink',
+    );
   });
 
   it('keeps design-only exports after result retention and disables result formats', async () => {
