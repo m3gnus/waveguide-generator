@@ -192,7 +192,11 @@ def _fingerprints_match(first: Mapping[str, Any], second: Mapping[str, Any]) -> 
         return False
     if len(left_bbox) != 6 or len(right_bbox) != 6:
         return False
-    volume_tolerance = max(1.0e-3, 1.0e-6 * max(abs(left_volume), abs(right_volume)))
+    # A live Onshape import/export of the regression waveguide changed volume
+    # by 2.33e-5 relative while moving its bounds by only 0.001745 mm. Keep a
+    # small margin over that measured translation noise; kind, tight bounds,
+    # and the exactly-one-candidate rule still prevent identity by proximity.
+    volume_tolerance = max(1.0e-3, 5.0e-5 * max(abs(left_volume), abs(right_volume)))
     if abs(left_volume - right_volume) > volume_tolerance:
         return False
     return all(
