@@ -8,6 +8,7 @@ import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import meshFixture from '../viewport/test-fixtures/tagged_sources-small.msh?raw';
+import { CadLinkCoordinator } from '../shell/CadLinkCoordinator';
 import { DesignFileMenu } from './DesignFileMenu';
 
 /**
@@ -53,7 +54,10 @@ afterEach(() => {
 });
 
 function open(): HTMLButtonElement[] {
-  act(() => root.render(<DesignFileMenu/>));
+  // Send to CAD goes through the coordinator's unified path, so the real
+  // coordinator is part of the unit under test. Its background status polls
+  // are filtered out of request assertions with sendRequests().
+  act(() => root.render(<><CadLinkCoordinator/><DesignFileMenu/></>));
   const chip = container.querySelector<HTMLButtonElement>('button.file-chip');
   act(() => chip?.click());
   const items = [...container.querySelectorAll<HTMLButtonElement>('.design-menu-item')];
@@ -66,6 +70,10 @@ function itemNamed(label: string): HTMLButtonElement {
   const found = open().find((item) => item.textContent?.startsWith(label));
   if (!found) throw new Error(`no export menu item named ${label}`);
   return found;
+}
+
+function sendRequests(): string[] {
+  return requested.filter((path) => path === '/api/cad-workspace/path' || path === '/api/export/wglink');
 }
 
 describe('design file export menu', () => {
@@ -98,13 +106,13 @@ describe('design file export menu', () => {
   it('requests the solid from the plain STEP item', async () => {
     const item = itemNamed('STEP solid');
     await act(async () => { item.click(); });
-    expect(requested).toEqual(['/api/export/step?body=solid']);
+    expect(requested.filter((path) => path.startsWith('/api/export/'))).toEqual(['/api/export/step?body=solid']);
   });
 
   it('requests the inner surface from the surface item', async () => {
     const item = itemNamed('STEP inner surface');
     await act(async () => { item.click(); });
-    expect(requested).toEqual(['/api/export/step?body=surface']);
+    expect(requested.filter((path) => path.startsWith('/api/export/'))).toEqual(['/api/export/step?body=surface']);
   });
 
   it('sends a saved design to CAD and reports its sequence and destination', async () => {
@@ -129,7 +137,7 @@ describe('design file export menu', () => {
     const item = itemNamed('Send to CAD');
     await act(async () => { item.click(); });
 
-    expect(requested).toEqual(['/api/cad-workspace/path', '/api/export/wglink']);
+    expect(sendRequests()).toEqual(['/api/cad-workspace/path', '/api/export/wglink']);
     expect(container.querySelector('[role="status"]')?.textContent).toContain(
       'Sent to CAD · sequence 7 · /cad-library/wglink/tritonia_mk2.wglink',
     );
@@ -160,7 +168,7 @@ describe('design file export menu', () => {
       item.click();
     });
 
-    expect(requested).toEqual(['/api/cad-workspace/path', '/api/export/wglink']);
+    expect(sendRequests()).toEqual(['/api/cad-workspace/path', '/api/export/wglink']);
   });
 
   it('sends an unsaved design and adopts the identity the server committed', async () => {
@@ -185,7 +193,7 @@ describe('design file export menu', () => {
     const item = itemNamed('Send to CAD');
     await act(async () => { item.click(); });
 
-    expect(requested).toEqual(['/api/cad-workspace/path', '/api/export/wglink']);
+    expect(sendRequests()).toEqual(['/api/cad-workspace/path', '/api/export/wglink']);
     expect(useDocumentStore.getState().identity?.baseEditVersion).toBe(1);
     expect(useDocumentStore.getState().classification).toBe('current');
   });

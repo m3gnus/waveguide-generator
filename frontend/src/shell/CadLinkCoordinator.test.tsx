@@ -355,6 +355,67 @@ describe('CadLinkCoordinator', () => {
     expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe('wgi_newer');
   });
 
+  it('parks a both-changed send on the conflict dialog and proceeds only on confirm', async () => {
+    const bothChanged: FusionCadStatus = {
+      ...closedFusion,
+      state: 'stale',
+      processRunning: true,
+      running: true,
+      documentName: 'Speaker v3',
+      documentId: 'fusion:doc-1',
+      wgChangesAvailable: true,
+      fusionChangesAvailable: true,
+      link: {
+        instanceId: 'wgi_1', bundlePath: null, designId: 'wgd_1', lineageId: null,
+        editVersion: null, designHash: null, designName: null, formula: 'OSSE',
+        configPresent: true, parameterCount: 3, parameterDriftCount: 0,
+        localBodyState: 'unmodified', bodyFingerprintHash: null,
+        documentSignatureHash: 'sha256:doc-state', documentBodyCount: 2,
+        sourceStateHash: null, exportId: 'wge_1', exportSequence: '4',
+      },
+    };
+    const exportBodies: Array<Record<string, unknown>> = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path === '/api/cad-workspace/path') return json({ selected: true, path: '/workspace' });
+      if (path === '/api/export/wglink') {
+        exportBodies.push(JSON.parse(String(init?.body)));
+        return json({
+          bundlePath: '/workspace/wglink/speaker.wglink', bundleId: 'wgb_2', exportId: 'wge_2',
+          sequence: 5, designHash: 'sha256:d', geometryHash: 'sha256:g', artifactSha256: 'sha256:a',
+        });
+      }
+      if (path.endsWith('/returns')) return json({ items: [] });
+      if (path.endsWith('/fusion-status')) return json(bothChanged);
+      return json({}, 404);
+    }));
+    await renderCoordinator();
+    await act(async () => { await Promise.resolve(); });
+
+    let parked: unknown = 'unset';
+    await act(async () => { parked = await cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion(); });
+    expect(parked).toBeNull();
+    expect(cadLinkCoordinatorBridge.getSnapshot().pendingFusionConflict).toBe(true);
+    expect(host.querySelector('[role="dialog"]')?.textContent).toContain('Both WG and Fusion changed');
+    expect(exportBodies).toHaveLength(0);
+
+    // Cancel clears without sending.
+    await act(async () => { cadLinkCoordinatorBridge.getSnapshot().cancelFusionConflict(); });
+    expect(cadLinkCoordinatorBridge.getSnapshot().pendingFusionConflict).toBe(false);
+    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    expect(exportBodies).toHaveLength(0);
+
+    // Confirm sends one update carrying the expected-document guard.
+    await act(async () => { await cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion(); });
+    await act(async () => { await cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion({ confirmed: true }); });
+    expect(exportBodies).toHaveLength(1);
+    expect(exportBodies[0]).toMatchObject({
+      expectedFusionDocumentId: 'fusion:doc-1',
+      expectedFusionReturnStateHash: 'sha256:doc-state',
+    });
+    expect(cadLinkCoordinatorBridge.getSnapshot().pendingFusionConflict).toBe(false);
+  });
+
   it('keeps Fusion identity and feedback from the newest overlapping send', async () => {
     const older = deferred<Response>();
     const newer = deferred<Response>();
@@ -374,8 +435,8 @@ describe('CadLinkCoordinator', () => {
     let first!: Promise<unknown>;
     let second!: Promise<unknown>;
     await act(async () => {
-      first = cadLinkCoordinatorBridge.getSnapshot().sendToFusion();
-      second = cadLinkCoordinatorBridge.getSnapshot().sendToFusion();
+      first = cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion();
+      second = cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion();
       await Promise.resolve(); await Promise.resolve();
     });
     const result = (sequence: number, designId: string) => json({
