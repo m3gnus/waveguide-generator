@@ -241,7 +241,7 @@ describe('simulation summary groups', () => {
     expect(row(groups, 'Validity', 'Governing ceiling')?.value).toBe('1.20 kHz');
     expect(row(groups, 'Validity', 'Source high-source')?.value).toBe('12.0 kHz');
     expect(row(groups, 'Validity', 'Source low-source')?.value).toBe('1.20 kHz');
-    expect(row(groups, 'Validity', 'Result caveat')?.value).toContain('extends to 20.0 kHz');
+    expect(row(groups, 'Validity', 'Accuracy')?.value).toBe('Results might not be very accurate above 1.20 kHz.');
   });
 
   it('uses a worded balloon status when no balloon block was returned', () => {
