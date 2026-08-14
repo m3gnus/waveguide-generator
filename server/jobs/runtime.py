@@ -54,6 +54,52 @@ MAX_LOG_CHARS = 32_000
 MAX_LOG_EVENT_CHARS = 2_000
 CANCELLED_MESSAGE = "Simulation cancelled by user"
 RUNTIME_PERSIST_INTERVAL_SECONDS = 0.15
+BEMPP_DEFAULT_WALL_THICKNESS_MM = 5.0
+
+
+def _apply_bempp_wall_default(request: SolveRequest, engine_name: str) -> SolveRequest:
+    """Materialize ATH's closed-wall default for BEMPP free-standing solves.
+
+    BEMPP has no CircSym path and its open-shell pressure space treats free-rim
+    degrees of freedom differently from the closed-body formulation. Keep an
+    inactive enclosure plus a missing/zero wall from silently entering that
+    backend-specific topology. Revalidating the copied wire also keeps the
+    authoritative design and its atomic snapshot identical.
+    """
+
+    if engine_name != "bempp" or not isinstance(
+        request.geometry, ParametricGeometrySource
+    ):
+        return request
+    root = request.design.root
+    if root.simulation.sim_type == "infinite-baffle":
+        return request
+
+    if root.enclosure is not None and root.enclosure.depth is not None:
+        enclosure_depth = root.enclosure.depth.constant_value()
+        if enclosure_depth is None or float(enclosure_depth) > 0.0:
+            return request
+
+    wall = root.mesh.wall_thickness
+    wall_value = wall.constant_value() if wall is not None else None
+    if wall is not None and (wall_value is None or float(wall_value) != 0.0):
+        return request
+
+    payload = request.model_dump(mode="json")
+    geometry = payload["geometry"]
+    geometry["design"]["mesh"]["wall_thickness"] = (
+        BEMPP_DEFAULT_WALL_THICKNESS_MM
+    )
+    geometry["design_snapshot"]["design"]["mesh"]["wall_thickness"] = (
+        BEMPP_DEFAULT_WALL_THICKNESS_MM
+    )
+    corrected = SolveRequest.model_validate(payload)
+    logger.info(
+        "BEMPP selected for a free-standing bare horn; applying ATH's %.g mm "
+        "wall-thickness default",
+        BEMPP_DEFAULT_WALL_THICKNESS_MM,
+    )
+    return corrected
 
 
 def _sort_provisional_frequencies(result: dict[str, Any]) -> None:
@@ -739,6 +785,7 @@ class JobRuntime:
                 f"Solve engine '{engine_name}' is unavailable. "
                 f"{reason or fallback_reason}"
             )
+        request = _apply_bempp_wall_default(request, engine_name)
 
         job_id = str(uuid.uuid4())
         now = _now_iso()

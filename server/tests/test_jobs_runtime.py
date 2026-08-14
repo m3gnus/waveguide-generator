@@ -9,7 +9,9 @@ from typing import Any
 
 import pytest
 
+from server.design.schema import Expr
 from server.engines.dryrun import DryRunEngine
+from server.engines.registry import EngineInfo, EngineRegistry
 from server.jobs.models import SolveRequest
 from server.jobs.runtime import (
     JobConflictError,
@@ -17,6 +19,7 @@ from server.jobs.runtime import (
     JobNotFoundError,
     JobResourceUnavailableError,
     JobRuntime,
+    _apply_bempp_wall_default,
     merge_provisional_results,
 )
 from server.jobs.store import JobStore
@@ -34,6 +37,86 @@ def _request(*, delay_ms: int = 2, count: int = 5) -> SolveRequest:
             "options": {"engine": "dryrun", "stage_delay_ms": delay_ms},
         }
     )
+
+
+def _bare_request(*, engine: str = "bempp", wall: float | None = 0) -> SolveRequest:
+    mesh = {} if wall is None else {"wall_thickness": wall}
+    return SolveRequest.model_validate(
+        {
+            "design": {
+                "formula": "OSSE",
+                "L": 120,
+                "a": 45,
+                "mesh": mesh,
+                "enclosure": {"depth": 0},
+                "simulation": {
+                    "f1": 250,
+                    "f2": 8000,
+                    "num_frequencies": 2,
+                    "sim_type": "freestanding",
+                },
+            },
+            "options": {"engine": engine, "stage_delay_ms": 0},
+        }
+    )
+
+
+@pytest.mark.parametrize("wall", [None, 0])
+def test_bempp_materializes_ath_wall_default_without_mutating_input(
+    wall: float | None,
+) -> None:
+    request = _bare_request(wall=wall)
+
+    corrected = _apply_bempp_wall_default(request, "bempp")
+
+    assert corrected is not request
+    assert corrected.design.root.mesh.wall_thickness is not None
+    assert corrected.design.root.mesh.wall_thickness.constant_value() == 5
+    assert corrected.design_snapshot is not None
+    snapshot_wall = corrected.design_snapshot.design.root.mesh.wall_thickness
+    assert snapshot_wall is not None
+    assert snapshot_wall.constant_value() == 5
+    original_wall = request.design.root.mesh.wall_thickness
+    assert (original_wall.constant_value() if original_wall is not None else None) == wall
+
+
+def test_bempp_wall_default_leaves_closed_and_non_bempp_designs_unchanged() -> None:
+    thick = _bare_request(wall=6)
+    enclosed = _bare_request(wall=0)
+    assert enclosed.design.root.enclosure is not None
+    enclosed.design.root.enclosure.depth = Expr(value=200)
+
+    assert _apply_bempp_wall_default(thick, "bempp") is thick
+    assert _apply_bempp_wall_default(enclosed, "bempp") is enclosed
+    bare = _bare_request(wall=0)
+    assert _apply_bempp_wall_default(bare, "metal") is bare
+
+
+def test_auto_resolving_to_bempp_stores_the_corrected_five_mm_design(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        runtime = JobRuntime(
+            JobStore(tmp_path / "bempp-default.db"),
+            engine_registry=EngineRegistry(
+                detector=lambda: [EngineInfo("bempp", True, "test", "test")],
+                factory=lambda _name: DryRunEngine(),
+            ),
+        )
+        job_id = await runtime.submit(_bare_request(engine="auto", wall=0))
+        await runtime.wait_idle()
+        row = runtime.store.get_job_row(job_id)
+        assert row is not None
+        assert row["config_json"]["options"]["engine"] == "bempp"
+        geometry = row["config_json"]["geometry"]
+        assert geometry["design"]["mesh"]["wall_thickness"]["value"] == 5
+        assert (
+            geometry["design_snapshot"]["design"]["mesh"]["wall_thickness"]["value"]
+            == 5
+        )
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
 
 
 def _running_job(job_id: str) -> dict[str, Any]:

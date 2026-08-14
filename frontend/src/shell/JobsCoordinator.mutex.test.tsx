@@ -7,7 +7,7 @@ import type { CadReturnIngestRecord } from '../api/cadlink';
 import type { ImportedSolveSubmission } from '../jobs/actions';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
-import { resetSolveOptionsStore } from '../stores/solveOptions';
+import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import type { ImportedMeshScene } from '../viewport/importedMesh';
@@ -25,7 +25,7 @@ vi.mock('../jobs/actions', async (importOriginal) => {
 });
 vi.mock('../jobs/useCapabilities', () => ({
   useCapabilities: () => ({
-    engines: [{ name: 'metal', available: true, reason: null, version: null, fast_paths: [] }, { name: 'dryrun', available: true, reason: null, version: null, fast_paths: [] }],
+    engines: [{ name: 'metal', available: true, reason: null, version: null, fast_paths: [] }, { name: 'bempp', available: true, reason: null, version: null, fast_paths: [] }, { name: 'dryrun', available: true, reason: null, version: null, fast_paths: [] }],
     error: null,
     isLoading: false,
   }),
@@ -155,6 +155,30 @@ describe('solve invocation mutex', () => {
 
     expect(mocks.submitDesign).toHaveBeenCalledTimes(2);
     expect(mocks.submitDesign.mock.calls.map((call) => call[3].label)).toEqual(['horn', 'horn']);
+  });
+
+  it('materializes the 5 mm ATH wall default before submitting to BEMPP', async () => {
+    mocks.submitDesign.mockResolvedValue('job');
+    const design = designForFamily('OSSE');
+    design.mesh.wall_thickness = 0;
+    design.enclosure.depth = 0;
+    design.simulation.sim_type = 'freestanding';
+    act(() => {
+      useDesignStore.getState().loadDesign(design);
+      useSolveOptionsStore.getState().setEngine('bempp');
+    });
+
+    await act(async () => {
+      const state = useDesignStore.getState();
+      await jobsCoordinatorBridge.getSnapshot().run(state.design, state.designRevision);
+    });
+
+    expect(useDesignStore.getState().design.mesh.wall_thickness).toBe(5);
+    expect(mocks.submitDesign).toHaveBeenCalledOnce();
+    expect(mocks.submitDesign.mock.calls[0][0].mesh.wall_thickness).toBe(5);
+    expect(mocks.submitDesign.mock.calls[0][3].designRevision).toBe(
+      useDesignStore.getState().designRevision,
+    );
   });
 
   it('increments the accepted name only when the submitted projection changes', async () => {
