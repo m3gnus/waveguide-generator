@@ -135,26 +135,15 @@ export function WorkspaceModeSwitch() {
   const preferences = usePreferences();
   const mode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
   const fusion = preferences.cadApplication === 'fusion360';
-  const cadDisabledReason = 'The CAD return leg is Fusion-only. Select Autodesk Fusion 360 in Settings to use CAD mode.';
 
-  useEffect(() => {
-    // A preferences change can make the already-selected mode unavailable.
-    // Exit immediately so Onshape never inherits a Fusion solve route.
-    if (!fusion && mode === 'cad') workspaceModeStore.setMode('parametric');
-  }, [fusion, mode]);
-
-  const option = (value: WorkspaceMode, label: string) => {
-    const disabled = value === 'cad' && !fusion;
-    return <button
-      type="button"
-      role="radio"
-      className={mode === value ? 'on' : ''}
-      aria-checked={mode === value}
-      disabled={disabled}
-      title={disabled ? cadDisabledReason : `Use ${label} workspace mode`}
-      onClick={() => activateWorkspaceMode(value)}
-    >{label}</button>;
-  };
+  const option = (value: WorkspaceMode, label: string) => <button
+    type="button"
+    role="radio"
+    className={mode === value ? 'on' : ''}
+    aria-checked={mode === value}
+    title={`Use ${label} workspace mode`}
+    onClick={() => activateWorkspaceMode(value)}
+  >{label}</button>;
 
   return <div className="theme-toggle workspace-mode-toggle" role="radiogroup" aria-label="Workspace mode">
     {option('parametric', 'Parametric')}
@@ -166,7 +155,7 @@ export function workspaceModePaletteEntries(cadApplication: Preferences['cadAppl
   const onshape = cadApplication === 'onshape';
   return [
     { id: 'mode-parametric', kind: 'Commands', label: 'Mode: Parametric', run: () => activateWorkspaceMode('parametric') },
-    { id: 'mode-fusion-cad', kind: 'Commands', label: 'Mode: Fusion CAD', detail: onshape ? 'The CAD return leg is Fusion-only.' : undefined, disabled: onshape, run: () => activateWorkspaceMode('cad') },
+    { id: 'mode-fusion-cad', kind: 'Commands', label: onshape ? 'Mode: CAD' : 'Mode: Fusion CAD', run: () => activateWorkspaceMode('cad') },
   ];
 }
 

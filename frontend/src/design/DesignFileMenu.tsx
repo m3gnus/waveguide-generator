@@ -14,7 +14,7 @@ import { resetDesignStore, useDesignStore } from '../stores/design';
 import { resetDocumentStore, useDocumentStore, type CadLinkClassification, type DesignIdentity } from '../stores/document';
 import { projectSubmittedDesign } from '../jobs/submittedProjection';
 import { runNameFromFilename } from '../jobs/runNaming';
-import { preferencesStore } from '../prefs/preferences';
+import { preferencesStore, usePreferences } from '../prefs/preferences';
 import { Icon } from '../shell/icons';
 import { useSolveOptionsStore } from '../stores/solveOptions';
 import { documentDisplayName, filenameStem } from '../viewport/presentation';
@@ -83,6 +83,7 @@ export function DesignFileMenu() {
   const adoptSavedIdentity = useDocumentStore((state) => state.adoptSavedIdentity);
   const { send: sendToCadBundle } = useSendToCad();
   const workspaceMode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
+  const cadApplication = usePreferences().cadApplication;
   const [open, setOpen] = useState(false);
   const [exportsOpen, setExportsOpen] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -240,7 +241,9 @@ export function DesignFileMenu() {
       ><span>Import mesh…</span><kbd>msh</kbd></button>
       <button role="menuitem" aria-expanded={exportsOpen} className="design-menu-item" disabled={busy} onClick={() => setExportsOpen((value) => !value)}><span>Export</span><span>{exportsOpen ? '⌄' : '›'}</span></button>
       {exportsOpen && <div role="menu" aria-label="Export design" className="design-menu-nested">
-        <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void sendToCad()} title="Write an identity-bearing .wglink bundle to the selected workspace"><span>Send to CAD</span><span>.wglink</span></button>
+        {/* The .wglink bundle and its handoff are Fusion's transport; Onshape
+            sends live in the CAD Link panel and go through its own adapter. */}
+        {cadApplication === 'fusion360' && <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void sendToCad()} title="Write an identity-bearing .wglink bundle to the selected workspace"><span>Send to CAD</span><span>.wglink</span></button>}
         <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void exportOne('step')} title="Closed solid with walls and enclosure — imports straight into Fusion 360 or Onshape"><span>STEP solid</span><span>.step</span></button>
         <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void exportOne('step', 'surface')} title="Inner acoustic surface only, for thickening or lofting yourself"><span>STEP inner surface</span><span>.step</span></button>
         <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void exportOne('stl')}><span>STL</span><span>.stl</span></button>

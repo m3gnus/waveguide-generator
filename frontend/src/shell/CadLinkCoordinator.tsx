@@ -498,6 +498,9 @@ export function CadLinkCoordinator() {
       }
       setBundles([bundle]);
       setStatus(`Returned and ingested ${result.bundle.documentName ?? result.bundle.name} from Onshape.`);
+      // The CAD Link panel only exists inside the CAD workspace, and the
+      // ingested return is now the solve truth — enter the mode that owns it.
+      workspaceModeStore.setMode('cad');
       workspaceNavigation.activate('cadlink');
       void showIngestedMeshInViewport(
         result.ingest,
