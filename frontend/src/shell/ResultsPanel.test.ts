@@ -33,6 +33,7 @@ describe('result comparison charts', () => {
     directivity: {
       horizontal: [[[0, 0]], [[0, 0]]],
       vertical: [[[0, 0]], [[0, 0]]],
+      diagonal: [[[0, 0]], [[0, 0]]],
     },
     di: { frequencies: [500, 1_000], di: { horizontal: [3, 5], vertical: [2, 4] } },
     impedance: { frequencies: [500, 1_000], real: [1, 2], imaginary: [.2, .4] },
@@ -48,7 +49,7 @@ describe('result comparison charts', () => {
   it('enables comparison for SPL, every directivity map, DI, and impedance', () => {
     expect([...COMPARABLE_CHARTS]).toEqual([
       'frequency_response', 'directivity_map_h', 'directivity_map_v',
-      'directivity_map', 'directivity_index', 'impedance',
+      'directivity_map_d', 'directivity_map', 'directivity_index', 'impedance',
     ]);
   });
 
@@ -56,9 +57,13 @@ describe('result comparison charts', () => {
     expect(directivityMapPanels(items, 'directivity_map_h').map(({ plane, primaryLabel, references, hasData }) => ({ plane, primaryLabel, references: references.map(({ label }) => label), hasData }))).toEqual([
       { plane: 'horizontal', primaryLabel: 'Run A', references: ['Run B'], hasData: true },
     ]);
+    expect(directivityMapPanels(items, 'directivity_map_d').map(({ plane, primaryLabel, references, hasData }) => ({ plane, primaryLabel, references: references.map(({ label }) => label), hasData }))).toEqual([
+      { plane: 'diagonal', primaryLabel: 'Run A', references: [], hasData: true },
+    ]);
     expect(directivityMapPanels(items, 'directivity_map').map(({ plane, primaryLabel, references, hasData }) => ({ plane, primaryLabel, references: references.map(({ label }) => label), hasData }))).toEqual([
       { plane: 'horizontal', primaryLabel: 'Run A', references: ['Run B'], hasData: true },
       { plane: 'vertical', primaryLabel: 'Run A', references: [], hasData: true },
+      { plane: 'diagonal', primaryLabel: 'Run A', references: [], hasData: true },
     ]);
   });
 
@@ -235,6 +240,22 @@ describe('results chart layouts', () => {
     act(() => root.render(createElement(ResultsChartGrid, { chartTypes, result, named: [], tokens })));
     expect(host.querySelector('.result-grid')?.classList.contains(resultLayoutClass(count))).toBe(true);
     expect(host.querySelectorAll('.result-card')).toHaveLength(count);
+  });
+
+  it('lets a panel select and persist a diagonal-only directivity heatmap', () => {
+    preferencesStore.update({ chartTypes: ['summary'] });
+    act(() => root.render(createElement(ResultsHarness)));
+    const select = host.querySelector<HTMLSelectElement>('[aria-label="Panel 1 chart type"]')!;
+    expect([...select.options].find(({ value }) => value === 'directivity_map_d')?.text).toBe('Directivity Map (Diagonal)');
+
+    act(() => {
+      select.value = 'directivity_map_d';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
+    expect(preferencesStore.getSnapshot().chartTypes).toEqual(['directivity_map_d']);
+    expect(host.querySelector('.result-title b')?.textContent).toBe('Directivity Diagonal');
+    expect(host.querySelector('.chart-stub')?.textContent).toContain('diagonal polar plane');
   });
 
   it('renders summary groups, row titles, and a marked warning group', () => {

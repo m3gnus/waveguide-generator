@@ -13,7 +13,7 @@ describe('client preferences', () => {
   beforeEach(() => { localStorage.clear(); preferencesStore.resetForTests(); });
   it('persists the fifteen-format selection and export counter migration field', () => {
     expect(EXPORT_FORMATS).toHaveLength(15);
-    expect(CHART_TYPES).toHaveLength(10);
+    expect(CHART_TYPES).toHaveLength(11);
     expect(MAP_REFERENCES).toEqual([-3, -6, -9, -12]);
     preferencesStore.update({ exportFormats: [] });
     preferencesStore.toggleFormat('csv');
