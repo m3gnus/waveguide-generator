@@ -7,6 +7,7 @@ import type { SmoothingMode } from '../results/smoothing';
 export const CHART_TYPES = [
   { id: 'directivity_map_h', label: 'Directivity Map (H)' },
   { id: 'directivity_map_v', label: 'Directivity Map (V)' },
+  { id: 'directivity_map_d', label: 'Directivity Map (Diagonal)' },
   { id: 'directivity_map', label: 'Directivity Map (All planes)' },
   { id: 'frequency_response', label: 'Frequency Response (SPL On-Axis)' },
   { id: 'directivity_index', label: 'Directivity Index' },

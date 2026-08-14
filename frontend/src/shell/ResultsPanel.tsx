@@ -61,6 +61,7 @@ export const COMPARABLE_CHARTS = new Set<ChartType>([
   'frequency_response',
   'directivity_map_h',
   'directivity_map_v',
+  'directivity_map_d',
   'directivity_map',
   'directivity_index',
   'impedance',
@@ -637,6 +638,7 @@ const CHART_BADGES: Record<ChartType, { short: string; long?: string; unit?: str
   frequency_response: { short: 'SPL', long: 'On-axis SPL', unit: 'dB' },
   directivity_map_h: { short: 'Dir H', long: 'Directivity H', unit: 'dB' },
   directivity_map_v: { short: 'Dir V', long: 'Directivity V', unit: 'dB' },
+  directivity_map_d: { short: 'Dir D', long: 'Directivity Diagonal', unit: 'dB' },
   directivity_map: { short: 'Dir', long: 'Directivity', unit: 'dB' },
   directivity_index: { short: 'DI', long: 'Directivity index', unit: 'dB' },
   beam_shape: { short: 'Beam', long: 'Beam width', unit: '°' },
@@ -799,10 +801,19 @@ function orderedPlanes(items: NamedResult[]): string[] {
   return [...found].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
 }
 
-export function directivityMapPanels(items: NamedResult[], chartType: 'directivity_map_h' | 'directivity_map_v' | 'directivity_map'): DirectivityMapPanel[] {
+type DirectivityMapChartType = 'directivity_map_h' | 'directivity_map_v' | 'directivity_map_d' | 'directivity_map';
+
+function directivityPlaneForChart(chartType: DirectivityMapChartType): string | null {
+  if (chartType === 'directivity_map_h') return 'horizontal';
+  if (chartType === 'directivity_map_v') return 'vertical';
+  if (chartType === 'directivity_map_d') return 'diagonal';
+  return null;
+}
+
+export function directivityMapPanels(items: NamedResult[], chartType: DirectivityMapChartType): DirectivityMapPanel[] {
   const planes = chartType === 'directivity_map'
     ? orderedPlanes(items)
-    : [chartType === 'directivity_map_v' ? 'vertical' : 'horizontal'];
+    : [directivityPlaneForChart(chartType)!];
   return planes.map((plane) => {
     const available = items.filter((item) => Boolean((item.result.directivity as Record<string, unknown[]> | undefined)?.[plane]?.length));
     const primary = available[0] ?? items[0];
@@ -819,7 +830,7 @@ export function directivityMapPanels(items: NamedResult[], chartType: 'directivi
 }
 
 function DirectivityComparisonMaps({ chartType, items, tokens, mapReference, angleGuideInterval, density, live }: {
-  chartType: 'directivity_map_h' | 'directivity_map_v' | 'directivity_map';
+  chartType: DirectivityMapChartType;
   items: NamedResult[];
   tokens: ChartTokens;
   mapReference: number;
@@ -829,8 +840,9 @@ function DirectivityComparisonMaps({ chartType, items, tokens, mapReference, ang
 }) {
   const panels = directivityMapPanels(items, chartType);
   if (!panels.some(({ hasData }) => hasData)) {
-    const plane = chartType === 'directivity_map_v' ? 'vertical' : chartType === 'directivity_map_h' ? 'horizontal' : null;
-    return <ChartStub reason={plane ? `Directivity Map (${plane === 'horizontal' ? 'H' : 'V'}) needs the ${plane} polar plane in the result payload.` : 'Directivity Map needs at least one polar plane in the result payload.'}/>;
+    const plane = directivityPlaneForChart(chartType);
+    const planeLabel = plane === 'horizontal' ? 'H' : plane === 'vertical' ? 'V' : 'Diagonal';
+    return <ChartStub reason={plane ? `Directivity Map (${planeLabel}) needs the ${plane} polar plane in the result payload.` : 'Directivity Map needs at least one polar plane in the result payload.'}/>;
   }
   if (panels.length === 1 && panels[0].hasData) {
     const panel = panels[0];
@@ -858,7 +870,7 @@ function DirectivityComparisonMaps({ chartType, items, tokens, mapReference, ang
 export function chartRendersCurve(chartType: ChartType, result: ResultPayload, items: NamedResult[]): boolean {
   if (chartType === 'summary') return false;
   if (chartType === 'frequency_response') return items.some(({ result: item }) => Boolean(item.spl_on_axis?.spl?.length));
-  if (chartType === 'directivity_map_h' || chartType === 'directivity_map_v' || chartType === 'directivity_map') {
+  if (chartType === 'directivity_map_h' || chartType === 'directivity_map_v' || chartType === 'directivity_map_d' || chartType === 'directivity_map') {
     return directivityMapPanels(items, chartType).some(({ hasData }) => hasData);
   }
   if (chartType === 'directivity_index') return items.some(({ result: item }) => directivityIndexSeries(item as ResultPayload).length > 0);
@@ -904,7 +916,7 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
   // result snapshot has not changed.
   const plot = useMemo(() => {
     if (chartType === 'frequency_response') return result.spl_on_axis?.spl?.length ? <EChart option={splOption(overlays, tokens, preferences.smoothing, density)} label="Interactive HornLab sound pressure frequency response" live={live}/> : <ChartStub reason="Frequency Response needs spl_on_axis data from a completed solve."/>;
-    if (chartType === 'directivity_map_h' || chartType === 'directivity_map_v' || chartType === 'directivity_map') return <DirectivityComparisonMaps chartType={chartType} items={overlays} tokens={tokens} mapReference={preferences.mapReference} angleGuideInterval={preferences.directivityGuideInterval} density={density} live={live}/>;
+    if (chartType === 'directivity_map_h' || chartType === 'directivity_map_v' || chartType === 'directivity_map_d' || chartType === 'directivity_map') return <DirectivityComparisonMaps chartType={chartType} items={overlays} tokens={tokens} mapReference={preferences.mapReference} angleGuideInterval={preferences.directivityGuideInterval} density={density} live={live}/>;
     if (chartType === 'directivity_index') {
       const option = directivityIndexOption(overlays, tokens, preferences.smoothing, density);
       return Array.isArray(option.series) && option.series.length ? <EChart option={option} label="Interactive HornLab directivity index by frequency" live={live}/> : <ChartStub reason="Directivity Index needs a complete spherical field from a supported solve backend."/>;

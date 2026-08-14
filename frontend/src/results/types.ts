@@ -26,6 +26,7 @@ export interface ResultPayload extends JobResults {
   directivity_phase?: {
     horizontal?: Array<Array<[number, NullableNumber]>>;
     vertical?: Array<Array<[number, NullableNumber]>>;
+    diagonal?: Array<Array<[number, NullableNumber]>>;
   };
   metadata?: ResultMetadata;
   di?: {
