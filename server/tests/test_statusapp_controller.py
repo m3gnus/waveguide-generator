@@ -135,9 +135,15 @@ def test_start_poll_quit_lifecycle_checks_health_and_spa_probes(tmp_path: Path) 
 
 def test_stale_local_frontend_is_served_with_an_amber_warning(tmp_path: Path) -> None:
     controller = _controller(tmp_path)
+    dist_index = controller.repo_root / "frontend" / "dist" / "index.html"
     source = controller.repo_root / "frontend" / "src" / "main.tsx"
     source.parent.mkdir(parents=True)
     source.write_text("export {};\n", encoding="utf-8")
+    # The unstamped-release fallback compares mtimes. Files created back-to-back
+    # can receive the same timestamp on Windows, so make the stale ordering an
+    # explicit part of the fixture instead of relying on filesystem resolution.
+    os.utime(dist_index, ns=(1_000_000_000, 1_000_000_000))
+    os.utime(source, ns=(2_000_000_000, 2_000_000_000))
 
     controller.start()
     try:
