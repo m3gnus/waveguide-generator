@@ -46,7 +46,6 @@ interface CadLinkCoordinatorSnapshot {
   refresh(options?: RefreshOptions): Promise<void>;
   refreshOnshapeStatus(committed?: DesignIdentity): Promise<void>;
   returnFromOnshape(): Promise<void>;
-  expectFusionReturn(requestId: string, requestedAt?: number): void;
   ingest(): Promise<void>;
   ingestSelected(): Promise<CadReturnIngestRecord>;
   pullFromFusion(): Promise<CadReturnBundle>;
@@ -79,7 +78,6 @@ let bridgeSnapshot: CadLinkCoordinatorSnapshot = {
   refresh: unavailable,
   refreshOnshapeStatus: unavailableRefreshOnshape,
   returnFromOnshape: unavailable,
-  expectFusionReturn: () => undefined,
   ingest: unavailable,
   ingestSelected: unavailable,
   pullFromFusion: unavailable,
@@ -748,7 +746,6 @@ export function CadLinkCoordinator() {
       refresh,
       refreshOnshapeStatus,
       returnFromOnshape,
-      expectFusionReturn,
       ingest,
       ingestSelected,
       pullFromFusion,
@@ -776,7 +773,6 @@ export function CadLinkCoordinator() {
       refresh: unavailable,
       refreshOnshapeStatus: unavailableRefreshOnshape,
       returnFromOnshape: unavailable,
-      expectFusionReturn: () => undefined,
       ingest: unavailable,
       ingestSelected: unavailable,
       pullFromFusion: unavailable,
@@ -793,7 +789,6 @@ export function CadLinkCoordinator() {
     cancelFusionConflict,
     clearFeedback,
     error,
-    expectFusionReturn,
     fusionStatus,
     ingest,
     ingestSelected,
