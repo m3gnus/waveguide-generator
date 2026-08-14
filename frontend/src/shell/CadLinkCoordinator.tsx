@@ -3,7 +3,9 @@ import {
   CadLinkApiError,
   getFusionCadStatus,
   ingestReturn,
+  getSolveCommand,
   listReturns,
+  reportSolveCommandOutcome,
   requestFusionReturn,
   type CadReturnBundle,
   type CadReturnIngestRecord,
@@ -216,6 +218,8 @@ export function CadLinkCoordinator() {
   // Set while a caller awaits one exact correlated arrival. The poll loop is
   // still the only thing that discovers returns; this lets a composed action
   // (pull, then ingest, then solve) continue from that discovery.
+  const solveCommandInFlight = useRef(false);
+  const solveCommandSeen = useRef<string | null>(null);
   const pendingReturnWaiter = useRef<{
     requestId: string;
     settle: (bundle: CadReturnBundle) => void;
@@ -661,6 +665,68 @@ export function CadLinkCoordinator() {
       return useCadReturnStore.getState().ingestRecord ? 'blocked' : 'failed';
     }
   }, [ingestSelected, pullFromFusion]);
+
+  /** Run a Fusion-authored "solve in WG" command exactly once.
+   *
+   * Idempotency is the server's ledger, not this component: a coordinator
+   * remount or a second poll must surface the existing job rather than submit
+   * again. A blocked gate is left pending on purpose — the user acknowledges
+   * the findings and presses Solve, which consumes the same request. */
+  const consumeSolveCommand = useCallback(async () => {
+    if (solveCommandInFlight.current) return;
+    solveCommandInFlight.current = true;
+    try {
+      // Reading the marker is advisory, like the status heartbeat: an older
+      // server or a transient failure must not raise an error banner over a
+      // workflow that has not asked for anything.
+      const pending = await getSolveCommand().catch(() => null);
+      const command = pending?.command;
+      if (!pending || !command) return;
+      if (pending.outcome) {
+        if (solveCommandSeen.current === command.commandId) return;
+        solveCommandSeen.current = command.commandId;
+        if (pending.outcome.state === 'refused') setError(pending.outcome.reason ?? 'Fusion asked WG to solve a return it could not use.');
+        else setStatus('Fusion already asked WG to solve this geometry; its run is in the Jobs rail.');
+        return;
+      }
+      if (solveCommandSeen.current === command.commandId) return;
+      solveCommandSeen.current = command.commandId;
+      setStatus('Fusion asked WG to solve this model. Preparing…');
+      const bundle = bundles.find((item) => item.bundlePath === command.bundlePath)
+        ?? (await listReturns()).items.find((item) => item.bundlePath === command.bundlePath);
+      if (!bundle?.readable) {
+        const reason = 'Fusion asked WG to solve a return that is not readable in the workspace.';
+        setError(reason);
+        await reportSolveCommandOutcome({ commandId: command.commandId, state: 'refused', reason });
+        return;
+      }
+      useCadReturnStore.getState().selectArrivedBundle(bundle);
+      await ingestSelected();
+      const outcome = await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport();
+      if (outcome === 'busy') {
+        setStatus('Prepared the model Fusion sent. A solve is already running — start this one when it finishes.');
+        return;
+      }
+      setStatus('Solving the model Fusion sent.');
+      await reportSolveCommandOutcome({ commandId: command.commandId, state: 'accepted' });
+    } catch (reason) {
+      if (reason instanceof SupersededError) return;
+      const message = reason instanceof Error ? reason.message : String(reason);
+      if (mounted.current) setError(`Fusion asked WG to solve this model, but: ${message}`);
+      // Deliberately not reported: a blocked gate or a transient failure is
+      // not terminal, so the command stays available once the user fixes it.
+    } finally {
+      solveCommandInFlight.current = false;
+    }
+  }, [bundles, ingestSelected]);
+
+  // Same cadence as the returns poll, and Fusion-only: Onshape has no marker.
+  useEffect(() => {
+    if (onshape) return undefined;
+    void consumeSolveCommand();
+    const timer = window.setInterval(() => { void consumeSolveCommand(); }, 2_500);
+    return () => window.clearInterval(timer);
+  }, [consumeSolveCommand, onshape]);
 
   const clearFeedback = useCallback(() => { setError(null); setStatus(null); }, []);
   const reportError = useCallback((message: string) => setError(message), []);

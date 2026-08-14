@@ -76,6 +76,23 @@ design or run export menus. The menus' **Send to CAD** writes Fusion's `.wglink`
 transport, so it appears only while Fusion 360 is the selected CAD application;
 Onshape sends live in the CAD Link panel.
 
+Once a design is linked, the round trip can be started from either side:
+
+- **From Fusion**, **Solve in WG** exports the assembly and asks WG to prepare and
+  solve that exact bundle, so WG is already solving when you switch to it.
+- **In WG**, when the Fusion heartbeat reports that Fusion has moved past the
+  geometry WG prepared, the top-bar action becomes **Pull from Fusion & Solve**,
+  with the already-prepared solve beside it. The same pull is in the command
+  palette and in the CAD Link panel.
+
+Both paths stop where a manual solve stops: an ingestion with unacknowledged
+blocking findings, missing drive channels, or an unavailable Metal engine is
+reported and left for you, never solved around. A Fusion-initiated solve is
+recorded as spent once, so a reconnect or a reopened window cannot replay it into
+a second run. Preparing a new return keeps the mesh sizing, channel mapping,
+drivers, combine settings and sweep from the previous one whenever the source
+inventory is unchanged; findings acknowledgements are always re-earned.
+
 The detailed CAD-link implementation plan is still active workspace material. Treat
 the UI and checked-in tests as the current behavior until that plan is closed and its
 public contract is added here.
