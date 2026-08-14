@@ -13,6 +13,7 @@ import { workspaceModeStore, type WorkspaceMode } from '../stores/workspaceMode'
 import { requestParameterReveal } from '../design/ParamPanel';
 import { BrandMark, Icon } from './icons';
 import { useSolveControl } from './JobsCoordinator';
+import { cadLinkCoordinatorBridge } from './CadLinkCoordinator';
 import { CommandPalette, type PaletteEntry } from './CommandPalette';
 import { commandShortcutLabel } from './platformKeys';
 import { SettingsDialog, type Theme } from './SettingsDialog';
@@ -131,6 +132,44 @@ export function buildParameterPaletteEntries(family?: DesignFamily, context: Par
   return [...parameterEntries, ...cadEntries];
 }
 
+/** The solve actions.
+ *
+ * When Fusion has moved past the geometry WG prepared, solving what WG holds
+ * is usually the wrong action, so the pull becomes primary and the prepared
+ * solve stays beside it rather than disappearing.
+ */
+export function SolveActions() {
+  const solve = useSolveControl();
+  const mode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
+  const cadCoordinator = useSyncExternalStore(
+    cadLinkCoordinatorBridge.subscribe,
+    cadLinkCoordinatorBridge.getSnapshot,
+    cadLinkCoordinatorBridge.getSnapshot,
+  );
+  const [pulling, setPulling] = useState(false);
+  const fusionMoved = mode === 'cad' && cadCoordinator.fusionStatus?.fusionChangesAvailable === true;
+
+  return <>
+    {fusionMoved && <button
+      className="solve-button"
+      disabled={pulling || solve.submitting}
+      title="Ask Fusion for its current geometry, prepare it, and solve"
+      aria-busy={pulling}
+      onClick={() => {
+        setPulling(true);
+        void cadCoordinator.pullAndSolve().catch(() => undefined).finally(() => setPulling(false));
+      }}
+    ><Icon name="reset"/>{pulling ? 'Pulling…' : 'Pull from Fusion & Solve'}</button>}
+    <button
+      className={fusionMoved ? 'solve-button solve-button-secondary' : 'solve-button'}
+      disabled={solve.disabled || pulling}
+      title={fusionMoved ? `${solve.title} (the geometry WG already prepared)` : solve.title}
+      aria-busy={solve.submitting}
+      onClick={solve.solve}
+    ><Icon name="play"/>{fusionMoved ? 'Solve prepared' : solve.label}<kbd>{commandShortcutLabel('↵')}</kbd></button>
+  </>;
+}
+
 export function WorkspaceModeSwitch() {
   const preferences = usePreferences();
   const mode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
@@ -168,6 +207,11 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
   const family = design.formula;
   const workspaceMode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
   const cadReturnReady = useCadReturnStore((state) => Boolean(state.ingestRecord));
+  const cadCoordinator = useSyncExternalStore(
+    cadLinkCoordinatorBridge.subscribe,
+    cadLinkCoordinatorBridge.getSnapshot,
+    cadLinkCoordinatorBridge.getSnapshot,
+  );
   const [theme, setTheme] = useState<Theme>(initialTheme);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>();
@@ -218,6 +262,23 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
     }));
     const commands: PaletteEntry[] = [
       { id: 'solve', kind: 'Commands', label: solve.label, detail: solve.title, disabled: solve.disabled, run: solve.solve },
+      // The pull was reachable only from inside the CAD Link panel.
+      {
+        id: 'cad-pull-solve',
+        kind: 'Commands',
+        label: 'Pull from Fusion & Solve',
+        detail: 'Request the current Fusion geometry, prepare it, and solve',
+        disabled: workspaceMode !== 'cad' || !cadCoordinator.fusionStatus?.running,
+        run: () => { void cadLinkCoordinatorBridge.getSnapshot().pullAndSolve(); },
+      },
+      {
+        id: 'cad-pull',
+        kind: 'Commands',
+        label: 'Refresh geometry from Fusion',
+        detail: 'Request the current Fusion geometry without solving',
+        disabled: workspaceMode !== 'cad' || !cadCoordinator.fusionStatus?.running,
+        run: () => { void cadLinkCoordinatorBridge.getSnapshot().pullFromFusion().catch(() => undefined); },
+      },
       { id: 'undo', kind: 'Commands', label: 'Undo', disabled: !canUndo, run: undo },
       { id: 'redo', kind: 'Commands', label: 'Redo', disabled: !canRedo, run: redo },
       { id: 'open', kind: 'Commands', label: 'Open', detail: 'Open a design file', run: () => fileAction('Open…') },
@@ -232,7 +293,7 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
       ...RESULT_PANEL_COUNTS.map((count) => ({ id: `results-${count}`, kind: 'Commands' as const, label: `Results: ${count} chart${count === 1 ? '' : 's'}`, keywords: `panel count layout`, run: () => preferencesStore.setChartCount(count) })),
     ];
     return [...parameters, ...jobEntries, ...commands];
-  }, [cadReturnReady, canRedo, canUndo, design, family, jobs, onResetLayout, preferences.cadApplication, redo, showSettings, solve, undo, update.data?.availability, update.data?.release?.version, workspaceMode]);
+  }, [cadCoordinator.fusionStatus?.running, cadReturnReady, canRedo, canUndo, design, family, jobs, onResetLayout, preferences.cadApplication, redo, showSettings, solve, undo, update.data?.availability, update.data?.release?.version, workspaceMode]);
 
   return <header className="topbar">
     <div className="brand"><BrandMark/><div><span className="brand-name">WAVEGUIDE GENERATOR</span><UpdateButton snapshot={update} open={updateOpen} onOpen={() => setUpdateOpen(true)}/></div></div>
@@ -244,7 +305,7 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
     </div>
     <CommandPalette entries={paletteEntries}/>
     <WorkspaceModeSwitch/>
-    <button className="solve-button" disabled={solve.disabled} title={solve.title} aria-busy={solve.submitting} onClick={solve.solve}><Icon name="play"/>{solve.label}<kbd>{commandShortcutLabel('↵')}</kbd></button>
+    <SolveActions/>
     <i className="v-separator" />
     <div className="theme-toggle" aria-label="Color theme">
       <button className={theme === 'dark' ? 'on' : ''} onClick={() => setTheme('dark')} aria-label="Dark theme" aria-pressed={theme === 'dark'}><Icon name="moon"/></button>

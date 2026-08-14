@@ -219,7 +219,7 @@ export function CadLinkPanel() {
       {status && <div className="cad-status-strip" role="status">{status}</div>}
     </section>}
     {!onshape && <section className="cad-workflow cad-send">
-      <header className="cad-workflow-header"><div><h3>Fusion connection</h3><p>Send WG changes from the design menu or the Geometry rail.</p></div><button className="link-button" onClick={() => requestSettings('cad')}>{cadApplicationLabel} · Change</button></header>
+      <header className="cad-workflow-header no-step"><div><h3>Fusion connection</h3><p>Sends live in the design menu and the Geometry rail.</p></div><button className="link-button" onClick={() => requestSettings('cad')}>{cadApplicationLabel} · Change</button></header>
       <div className={`cad-connection cad-connection-${workflow.state}`}>
         <span className="cad-connection-dot" aria-hidden="true"/>
         <div><h3>{workflow.headline}</h3><p>{workflow.detail}</p></div>
@@ -245,8 +245,8 @@ export function CadLinkPanel() {
       </>}
     </section>}
     {!onshape && <section className="cad-workflow cad-return-workflow">
-    <header className="cad-workflow-header"><div><h3>FUSION → SIMULATION</h3><p>Bring Fusion geometry and source tags into WG.</p></div><button disabled={loading || ingesting} onClick={() => void cadCoordinator.refresh()}><Icon name="reset"/>{loading ? 'Loading…' : 'Refresh'}</button></header>
-    {fusionStatus?.fusionChangesAvailable && <div className="cad-direction-alert"><div><b>Fusion geometry has changed</b><span>The active Fusion body or source setup differs from the last design returned to WG.</span></div><button className="primary" disabled={!canRequestFusionReturn || requestingReturn} onClick={() => void bringFromFusion()}>{requestingReturn ? 'Requesting…' : 'Bring Fusion changes into WG'}</button></div>}
+    <header className="cad-workflow-header no-step"><div><h3>FUSION → SIMULATION</h3><p>Bring Fusion geometry and source tags into WG.</p></div><button disabled={loading || ingesting} onClick={() => void cadCoordinator.refresh()}><Icon name="reset"/>{loading ? 'Loading…' : 'Refresh'}</button></header>
+    {fusionStatus?.fusionChangesAvailable && <div className="cad-direction-alert"><div><b>Fusion geometry has changed</b><span>The active Fusion body or source setup differs from the last design returned to WG.</span></div><div className="cad-confirm-actions"><button disabled={!canRequestFusionReturn || requestingReturn} onClick={() => void bringFromFusion()}>{requestingReturn ? 'Requesting…' : 'Bring changes into WG'}</button><button className="primary" disabled={!canRequestFusionReturn || requestingReturn} onClick={() => { void cadCoordinator.pullAndSolve(); }}>Bring changes in & solve</button></div></div>}
     {!fusionStatus?.fusionChangesAvailable && canRequestFusionReturn && <button className="cad-secondary-action" disabled={requestingReturn} onClick={() => void bringFromFusion()}>{requestingReturn ? 'Requesting…' : 'Refresh geometry from Fusion'}</button>}
     {error && <div className="cad-alert" role="alert">{error}</div>}
     {state.ingestStaleReason && <div className="cad-alert" role="status">{state.ingestStaleReason} Re-ingest before solving.</div>}

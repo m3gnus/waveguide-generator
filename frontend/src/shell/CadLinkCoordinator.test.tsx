@@ -10,6 +10,7 @@ import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { CadLinkCoordinator, cadLinkCoordinatorBridge } from './CadLinkCoordinator';
+import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { workspaceNavigation } from './workspaceNavigation';
 
 const initialBundle: CadReturnBundle = {
@@ -282,6 +283,77 @@ describe('CadLinkCoordinator', () => {
     });
     expect(String(rejection)).toContain('did not return the requested model within 60 seconds');
     expect(cadLinkCoordinatorBridge.getSnapshot().error).toContain('within 60 seconds');
+  });
+
+  it('chains pull, ingest, and solve, and stops at the readiness gate instead of solving around it', async () => {
+    const linkedFusion: FusionCadStatus = {
+      ...closedFusion,
+      state: 'current', processRunning: true, running: true,
+      documentName: 'Speaker', documentId: 'fusion:doc-1',
+      link: {
+        instanceId: 'wgi_1', bundlePath: null, designId: 'wgd_1', lineageId: null,
+        editVersion: null, designHash: null, designName: null, formula: 'OSSE',
+        configPresent: true, parameterCount: 3, parameterDriftCount: 0,
+        localBodyState: 'unmodified', bodyFingerprintHash: null,
+        documentSignatureHash: 'sha256:doc-state', documentBodyCount: 2,
+        sourceStateHash: null, exportId: 'wge_1', exportSequence: '4',
+      },
+    };
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_1', lineageId: 'wgl_1', baseEditVersion: 1,
+    }, 'current');
+    let listing: { items: CadReturnBundle[] } = { items: [] };
+    const ingested = ingestRecord;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json(listing);
+      if (path.endsWith('/fusion-status')) return json(linkedFusion);
+      if (path.endsWith('/request-fusion-return')) return json({ status: 'requested', requestId: 'req_1', documentName: 'Speaker' });
+      if (path.endsWith('/ingest')) return json(ingested);
+      return json({}, 404);
+    }));
+    // The readiness gate lives inside solveCurrentCadImport, so a blocked
+    // chain is a refusal thrown from there — the same thing the real one does.
+    const solveCurrentCadImport = vi.fn(async () => {
+      throw new Error('Acknowledge 1 blocking finding before solving.');
+    });
+    vi.spyOn(jobsCoordinatorBridge, 'getSnapshot').mockReturnValue({
+      ...jobsCoordinatorBridge.getSnapshot(), solveCurrentCadImport,
+    });
+    await renderCoordinator();
+
+    const arrive = async () => {
+      listing = { items: [{ ...initialBundle, requestId: 'req_1', modifiedAt: '2026-08-13T12:00:00Z' }] };
+      await act(async () => {
+        await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
+        await Promise.resolve();
+      });
+    };
+
+    // A refused gate leaves the prepared geometry and the reason on screen.
+    let outcome!: string;
+    await act(async () => {
+      const chain = cadLinkCoordinatorBridge.getSnapshot().pullAndSolve().then((value) => { outcome = value; });
+      await Promise.resolve(); await Promise.resolve();
+      await arrive();
+      await chain;
+    });
+    expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe(ingestRecord.ingest_id);
+    expect(outcome).toBe('blocked');
+    expect(cadLinkCoordinatorBridge.getSnapshot().error).toContain('Acknowledge 1 blocking finding');
+
+    // With the gate satisfied the same chain reaches the solve.
+    solveCurrentCadImport.mockImplementation(async () => 'submitted' as never);
+    listing = { items: [] };
+    await act(async () => {
+      const chain = cadLinkCoordinatorBridge.getSnapshot().pullAndSolve().then((value) => { outcome = value; });
+      await Promise.resolve(); await Promise.resolve();
+      await arrive();
+      await chain;
+    });
+    expect(solveCurrentCadImport).toHaveBeenCalledTimes(2);
+    expect(outcome).toBe('solving');
+    expect(cadLinkCoordinatorBridge.getSnapshot().status).toBe('Solving the current Fusion geometry.');
   });
 
   it('detects and auto-selects a newly arrived return', async () => {

@@ -21,6 +21,7 @@ import { importedMeshStore } from '../viewport/importedMeshStore';
 import { parseMSH } from '../viewport/mshParser';
 import { filenameStem } from '../viewport/presentation';
 import { fusionWorkflowView } from './cadWorkflowView';
+import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { workspaceNavigation } from './workspaceNavigation';
 
 interface RefreshOptions {
@@ -47,6 +48,7 @@ interface CadLinkCoordinatorSnapshot {
   ingest(): Promise<void>;
   ingestSelected(): Promise<CadReturnIngestRecord>;
   pullFromFusion(): Promise<CadReturnBundle>;
+  pullAndSolve(): Promise<'solving' | 'blocked' | 'failed'>;
   /** The one Fusion outbound path: derives open-vs-update and the expected
    * document guard from the live status, and parks on the two-way conflict
    * (returning null) until the user confirms through the coordinator dialog. */
@@ -79,6 +81,7 @@ let bridgeSnapshot: CadLinkCoordinatorSnapshot = {
   ingest: unavailable,
   ingestSelected: unavailable,
   pullFromFusion: unavailable,
+  pullAndSolve: unavailable,
   sendWgToFusion: unavailable,
   cancelFusionConflict: () => undefined,
   clearFeedback: () => undefined,
@@ -628,6 +631,37 @@ export function CadLinkCoordinator() {
     }
   }, [identity?.designId, reportViewportNotice]);
 
+  /** Ask Fusion for its current geometry, prepare it, and start the solve.
+   *
+   * Each step is the composable action above, so this adds only the staged
+   * status and the decision about where to stop: a blocked readiness gate is
+   * reported and left for the user, never solved around. */
+  const pullAndSolve = useCallback(async (): Promise<'solving' | 'blocked' | 'failed'> => {
+    try {
+      await pullFromFusion();
+      setStatus('Received the current Fusion geometry. Preparing the simulation…');
+      await ingestSelected();
+      setStatus('Prepared. Submitting the solve…');
+      const outcome = await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport();
+      if (outcome === 'busy') {
+        setStatus('Prepared the Fusion geometry. A solve is already running — start this one when it finishes.');
+        return 'blocked';
+      }
+      setStatus('Solving the current Fusion geometry.');
+      return 'solving';
+    } catch (reason) {
+      // Supersession and the step failures already reported themselves; a
+      // readiness refusal is the interesting case and belongs on screen.
+      if (reason instanceof SupersededError) return 'blocked';
+      const message = reason instanceof Error ? reason.message : String(reason);
+      if (mounted.current) {
+        setStatus(null);
+        setError(message);
+      }
+      return useCadReturnStore.getState().ingestRecord ? 'blocked' : 'failed';
+    }
+  }, [ingestSelected, pullFromFusion]);
+
   const clearFeedback = useCallback(() => { setError(null); setStatus(null); }, []);
   const reportError = useCallback((message: string) => setError(message), []);
   const reportStatus = useCallback((message: string) => setStatus(message), []);
@@ -652,6 +686,7 @@ export function CadLinkCoordinator() {
       ingest,
       ingestSelected,
       pullFromFusion,
+      pullAndSolve,
       sendWgToFusion,
       cancelFusionConflict,
       clearFeedback,
@@ -679,6 +714,7 @@ export function CadLinkCoordinator() {
       ingest: unavailable,
       ingestSelected: unavailable,
       pullFromFusion: unavailable,
+      pullAndSolve: unavailable,
       sendWgToFusion: unavailable,
       cancelFusionConflict: () => undefined,
       clearFeedback: () => undefined,
@@ -696,6 +732,7 @@ export function CadLinkCoordinator() {
     ingest,
     ingestSelected,
     ingesting,
+    pullAndSolve,
     pullFromFusion,
     sendingToFusion,
     loading,
