@@ -12,15 +12,13 @@ import { Icon } from '../shell/icons';
 import { useViewerPreferences, viewerPreferences, type CameraProjection } from '../viewerprefs/viewerPreferences';
 import { ViewerPreferencesPanel } from '../viewerprefs/ViewerPreferencesPanel';
 import { frameToScene, hasRenderableSurfaces, MAX_EDGE_TRIANGLES } from './frameScene';
-import { createImportedMeshScene } from './importedMesh';
 import { importedMeshStore } from './importedMeshStore';
 import type { CameraDirection } from './cameraMath';
 import { ClientLatencyClock, formatClientLatency } from './clientLatency';
 import { selectPreferredFrame } from './lodPolicy';
-import { parseMSH } from './mshParser';
 import { documentDisplayName, previewBadge, previewErrorMessage, staleReason, viewportSubtitle } from './presentation';
 import { markParametricSolvedDomain, quadrantsForSolveMode, type DisplayQuadrants } from './symmetryScene';
-import type { CameraPreset, DisplayMode, ViewportTheme } from './types';
+import type { DisplayMode, ViewportTheme } from './types';
 import { canRenderWebGL, type CameraRequest, type ZoomRequest, ViewportCanvas } from './ViewportCanvas';
 import './viewport.css';
 
@@ -34,6 +32,11 @@ const modes: Array<{ mode: DisplayMode; title: string; icon?: 'clay' | 'wire' | 
   { mode: 'normals', title: 'Normals — back faces magenta', glyph: 'N' },
   { mode: 'edges', title: 'Hard-boundary edges', icon: 'section' },
 ];
+
+export function nextDisplayMode(mode: DisplayMode): DisplayMode {
+  const index = modes.findIndex((item) => item.mode === mode);
+  return modes[(index + 1) % modes.length].mode;
+}
 
 /** How long the viewport may lag the design before it says so out loud. */
 const STALL_NOTICE_MS = 1_500;
@@ -99,11 +102,15 @@ export function Viewport() {
     };
   }, [design.mesh.quadrants, preferences.tintSolvedRegion, previewScene, solveSymmetry, symmetryBody]);
   const solvedQuadrants = quadrantsForSolveMode(solveSymmetry, autoQuadrants);
+  // The preview applies the global design scale to every physical length,
+  // including Mesh.VerticalOffset. Use that placed origin when tinting the
+  // solver domain so quarter/half boundaries stay on the horn centreline.
+  const previewVerticalOffset = design.mesh.vertical_offset * design.scale;
   const scene = useMemo(
     () => previewScene && preferences.tintSolvedRegion
-      ? markParametricSolvedDomain(previewScene, solvedQuadrants)
+      ? markParametricSolvedDomain(previewScene, solvedQuadrants, previewVerticalOffset)
       : previewScene,
-    [preferences.tintSolvedRegion, previewScene, solvedQuadrants],
+    [preferences.tintSolvedRegion, previewScene, previewVerticalOffset, solvedQuadrants],
   );
   const [mode, setMode] = useState<DisplayMode>('clay');
   const [sectionCut, setSectionCut] = useState(false);
@@ -131,14 +138,9 @@ export function Viewport() {
       ? importedMeshState.file
       : null;
   const availableFileMesh = importedMeshState.file;
-  const [importError, setImportError] = useState<string | null>(null);
   const [dismissedPreviewError, setDismissedPreviewError] = useState<string | null>(null);
   const [refreshRequestedAt, setRefreshRequestedAt] = useState<number | null>(null);
   const [stalled, setStalled] = useState(false);
-  const meshInput = useRef<HTMLInputElement>(null);
-  const importedMeshActive = useRef(false);
-  importedMeshActive.current = importedMesh !== null;
-  const setCamera = (preset: CameraPreset) => setCameraRequest((current) => ({ preset, nonce: current.nonce + 1 }));
   const setCameraDirection = useCallback((direction: CameraDirection) => {
     setCameraRequest((current) => ({ direction, nonce: current.nonce + 1 }));
   }, []);
@@ -156,6 +158,8 @@ export function Viewport() {
   const hasSurfaces = hasRenderableSurfaces(activeScene);
   const edgeModeUnavailable = activeScene?.edgeModeUnavailable === true
     || Boolean(activeScene?.surfaces.some((surface) => Math.floor(surface.indices.length / 3) > MAX_EDGE_TRIANGLES));
+  const activeMode = modes.find((item) => item.mode === mode) ?? modes[0];
+  const upcomingMode = modes.find((item) => item.mode === nextDisplayMode(mode)) ?? modes[0];
   const connectionInterrupted = preferences.liveUpdate && preview.connection !== 'connected';
   const badge = previewBadge(preferences.liveUpdate, preview.connection, preview.error, preview.stale);
   const previewError = preview.error ? previewErrorMessage(preview.error, preview.errorRevision, designRevision) : null;
@@ -177,23 +181,8 @@ export function Viewport() {
     else previewSocket.refresh();
   };
 
-  const importMesh = async (file: File | undefined) => {
-    if (!file || workspaceMode === 'cad') return;
-    const generation = importedMeshStore.beginIntent();
-    setImportError(null);
-    try {
-      const imported = createImportedMeshScene(file.name, parseMSH(await file.text()));
-      importedMeshStore.setFile(imported, generation);
-    } catch (error) {
-      setImportError(error instanceof Error ? error.message : String(error));
-    } finally {
-      if (meshInput.current) meshInput.current.value = '';
-    }
-  };
-
   const showParametric = () => {
     importedMeshStore.showParametric();
-    setImportError(null);
   };
 
   const previousWorkspaceMode = useRef(workspaceMode);
@@ -237,12 +226,9 @@ export function Viewport() {
   }, [importedMesh]);
 
   useEffect(() => subscribeRevision((event) => {
-    // Immediate revisions are discontinuous jumps, not intermediate points in a
-    // drag. Give their next frame a fresh automatic fit even if the preview is
-    // currently disconnected. Imported geometry owns its camera until cleared.
-    if (event.immediate && !importedMeshActive.current) {
-      setCameraRequest((current) => ({ ...current, nonce: current.nonce + 1 }));
-    }
+    // Design revisions replace geometry inside the current view. Keeping the
+    // exact framing is what makes undo/redo and parameter changes comparable.
+    // A new imported source still gets an initial fit in the store effect above.
     const epoch = currentEpoch.current;
     if (epoch === null) return;
     if (fineRequestTimer.current) clearTimeout(fineRequestTimer.current);
@@ -345,7 +331,7 @@ export function Viewport() {
     {!activeScene && <div className="viewport-empty" role="status" aria-live="polite">
       <i className="viewport-empty-mark"><i /></i>
       <b>{workspaceMode === 'cad' ? 'No CAD geometry yet' : preferences.liveUpdate ? 'Waiting for geometry' : 'Live updates paused'}</b>
-      <span>{workspaceMode === 'cad' ? 'Bring a model back from Fusion and prepare it in CAD Link.' : importError ?? preview.error ?? (!preferences.liveUpdate ? 'Enable Live updates in viewer preferences, or import an ASCII Gmsh 2.2 mesh.' : connectionInterrupted ? `Preview engine ${preview.connection}. The viewport will resume automatically.` : 'Requesting a live FRAME-SPEC scene from the local preview engine.')}</span>
+      <span>{workspaceMode === 'cad' ? 'Bring a model back from Fusion and prepare it in CAD Link.' : preview.error ?? (!preferences.liveUpdate ? 'Enable Live updates in viewer preferences, or import an ASCII Gmsh 2.2 mesh from the design file menu.' : connectionInterrupted ? `Preview engine ${preview.connection}. The viewport will resume automatically.` : 'Requesting a live FRAME-SPEC scene from the local preview engine.')}</span>
     </div>}
     {showPreviewError && <div className="viewport-error-banner" role="alert">
       <span>{previewError}</span>
@@ -378,8 +364,6 @@ export function Viewport() {
     {activeScene && mode === 'edges' && edgeModeUnavailable && <div className="viewport-mode-empty">
       <b>Edge inspection unavailable</b><span>This frame exceeds the {MAX_EDGE_TRIANGLES.toLocaleString()}-triangle edge limit. Filled geometry remains visible while edge extraction is skipped.</span>
     </div>}
-    {importError && activeScene && <div className="mesh-import-error" role="alert">Import failed: {importError}</div>}
-
     {showStats && <div className="frame-stat-card wg2-stats">
       <span>latest displayed binary frame</span>
       <dl>
@@ -395,26 +379,16 @@ export function Viewport() {
 
     <div className="viewport-tools">
       <div className="viewport-tool-group display-mode-tools">
-        {modes.map((item) => <button
-          key={item.mode}
-          className={mode === item.mode ? 'on' : ''}
-          title={item.title}
-          aria-label={item.title}
-          aria-pressed={mode === item.mode}
-          onClick={() => setMode(item.mode)}
-        >{item.icon ? <Icon name={item.icon}/> : <span className="wg2-text-glyph">{item.glyph}</span>}</button>)}
+        <button
+          className="on"
+          title={`${activeMode.title} display. Click for ${upcomingMode.title}.`}
+          aria-label={`Display mode: ${activeMode.title}. Switch to ${upcomingMode.title}.`}
+          onClick={() => setMode(nextDisplayMode(mode))}
+        >{activeMode.icon ? <Icon name={activeMode.icon}/> : <span className="wg2-text-glyph">{activeMode.glyph}</span>}</button>
       </div>
       <i className="wg2-tool-divider" />
       <div className="viewport-tool-group">
         <button className={sectionCut ? 'on' : ''} title="Section cut at X=0" aria-label="Section cut at X=0" aria-pressed={sectionCut} onClick={() => setSectionCut((value) => !value)}><Icon name="section"/></button>
-        <button className={showEnclosure ? 'on' : ''} title="Show enclosure" aria-label="Show enclosure" aria-pressed={showEnclosure} onClick={() => setShowEnclosure((value) => !value)}><Icon name="box"/></button>
-        <button className={showStats ? 'on' : ''} title="Frame stats" aria-label="Frame stats" aria-pressed={showStats} onClick={() => setShowStats((value) => !value)}><Icon name="metrics"/></button>
-      </div>
-      <i className="wg2-tool-divider" />
-      <div className="viewport-tool-group viewport-tool-segment" aria-label="View presets">
-        <button className={`viewport-tool-text${cameraRequest.preset === 'front' ? ' on' : ''}`} onClick={() => setCamera('front')}>Front</button>
-        <button className={`viewport-tool-text${cameraRequest.preset === 'three-quarter' ? ' on' : ''}`} onClick={() => setCamera('three-quarter')}>¾</button>
-        <button className={`viewport-tool-text${cameraRequest.preset === 'top' ? ' on' : ''}`} onClick={() => setCamera('top')}>Top</button>
       </div>
       <i className="wg2-tool-divider" />
       <div className="viewport-tool-group viewport-tool-segment">
@@ -427,12 +401,17 @@ export function Viewport() {
       </div>
       <i className="wg2-tool-divider" />
       <div className="viewport-tool-group">
-        <input ref={meshInput} className="mesh-file-input" type="file" accept=".msh,text/plain" aria-label="Import Gmsh mesh" onChange={(event) => void importMesh(event.target.files?.[0])} />
-        <button type="button" disabled={workspaceMode === 'cad'} title={workspaceMode === 'cad' ? 'Standalone MSH import is available in Parametric mode only.' : 'Import Gmsh 2.2 mesh'} aria-label="Import Gmsh 2.2 mesh" onClick={() => meshInput.current?.click()}><span className="wg2-text-glyph">MSH</span></button>
         <button type="button" className={preferencesOpen ? 'on' : ''} title="Viewer preferences" aria-label="Viewer preferences" aria-expanded={preferencesOpen} onClick={() => setPreferencesOpen((value) => !value)}><Icon name="settings"/></button>
       </div>
     </div>
-    {preferencesOpen && <ViewerPreferencesPanel preferences={preferences} onClose={() => setPreferencesOpen(false)} />}
+    {preferencesOpen && <ViewerPreferencesPanel
+      preferences={preferences}
+      showEnclosure={showEnclosure}
+      showStats={showStats}
+      onShowEnclosure={setShowEnclosure}
+      onShowStats={setShowStats}
+      onClose={() => setPreferencesOpen(false)}
+    />}
     <div className="viewport-scale" aria-hidden="true"><i /></div>
   </div>;
 }

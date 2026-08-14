@@ -1,7 +1,9 @@
 import type { JobItem } from '../api/jobsSocket';
 import { jobsSocket } from '../api/jobsSocket';
 import { fetchJobResults } from '../api/results';
+import { sendDesignToCad } from '../api/designIo';
 import { ActionMenu, type ActionMenuItem } from '../design/ActionMenu';
+import { sentToCadMessage } from '../design/useSendToCad';
 import { usePreferences, type ExportFormat } from '../prefs/preferences';
 import { resultExportSnapshot } from '../results/exportContext';
 import {
@@ -11,7 +13,7 @@ import {
 } from '../results/exporters';
 import type { ResultPayload } from '../results/types';
 import { EMPTY_RUN_EXPORT_STATE, useRunExportStore, type RunExportOutcome } from '../stores/runExports';
-import { canLoadJobDesign, jobDesignAvailability, jobRerunState } from './jobDesign';
+import { canLoadJobDesign, hydrateJobDesign, jobDesignAvailability, jobRerunState } from './jobDesign';
 import { exportStemForJob } from './exportNaming';
 import './RunExportControl.css';
 
@@ -125,7 +127,33 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
     });
   };
 
+  const sendRunToCad = () => execute(job.id, [], async (): Promise<RunExportOutcome> => {
+    const design = hydrateJobDesign(job);
+    if (!design) throw new Error(designAvailability.reason ?? 'This run has no recoverable design.');
+    const result = await sendDesignToCad(
+      design,
+      job.design_revision,
+      exportStemForJob(job),
+      // A historical run is its own immutable handoff. It must not advance the
+      // CAD identity of whichever editable document happens to be on screen.
+      null,
+    );
+    return { notice: sentToCadMessage(result) };
+  });
+
   const items: ActionMenuItem[] = [
+    {
+      id: 'send-to-cad',
+      label: 'Send to CAD',
+      trailing: '.wglink',
+      group: 'CAD',
+      disabled: operation.busy || !designExportable,
+      disabledReason: designExportable ? undefined : designAvailability.reason ?? designState.reason ?? 'This run has no recoverable design.',
+      busy: operation.busy && operation.busyFormats.length === 0,
+      busyLabel: 'Sending to CAD…',
+      error: operation.lastErrorFormats.length === 0 ? operation.lastError ?? undefined : undefined,
+      onSelect: async () => { await sendRunToCad(); },
+    },
     ...FORMAT_CATALOG.map((item): ActionMenuItem => {
       const noDirectivity = item.id === 'polar_frd' && Object.keys(job.polar_grid ?? {}).length === 0;
       const noResults = item.needsResult && !job.has_results;

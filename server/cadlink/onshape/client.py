@@ -188,7 +188,7 @@ def _describe(status: int, path: str, body: str) -> str:
     if status == 401:
         return (
             "Onshape rejected the API key pair (401). Regenerate it at "
-            "https://dev-portal.onshape.com/keys and update the key file."
+            "My account > Developer > API keys and update the key file."
         )
     if status == 403:
         return (

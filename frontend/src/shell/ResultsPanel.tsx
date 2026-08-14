@@ -16,6 +16,7 @@ import { hydrateJobDesign } from '../jobs/jobDesign';
 import { exportStemForJob } from '../jobs/exportNaming';
 import { CHART_TYPES, MAX_RESULT_PANELS, RESULT_PANEL_COUNTS, preferencesStore, runDisplayName, usePreferences, type ChartType } from '../prefs/preferences';
 import { ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
+import { directivityFrequencyTickLabels } from '../results/directivityFrequencyAxis';
 import { Icon } from './icons';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { trapDialogFocus } from './SettingsDialog';
@@ -52,14 +53,15 @@ export function middleEllipsis(value: string, max = 20): string {
 /**
  * Chart types that can carry more than one run at once.
  *
- * Line charts overlay selected runs. Directivity heatmaps use labelled small
- * multiples instead: superimposing two colour fields is unreadable, while a
- * shared card keeps the maps close enough to compare.
+ * Line charts overlay selected runs. Directivity maps keep the primary run as
+ * the colour field and overlay every comparison run as a labelled contour,
+ * matching the v1 result comparison rather than shrinking runs into tiles.
  */
 export const COMPARABLE_CHARTS = new Set<ChartType>([
   'frequency_response',
   'directivity_map_h',
   'directivity_map_v',
+  'directivity_map_d',
   'directivity_map',
   'directivity_index',
   'impedance',
@@ -298,6 +300,42 @@ export function contourPointToPixels(point: ContourPoint, grid: InterpolatedDire
   ];
 }
 
+/** Project a contour from another solve onto the primary map's physical axes. */
+export function comparisonContourPointToPixels(
+  point: ContourPoint,
+  source: InterpolatedDirectivityGrid,
+  display: InterpolatedDirectivityGrid,
+  rect: PlotRect,
+): ContourPoint {
+  const interpolate = (values: number[], position: number, logarithmic = false): number => {
+    if (values.length <= 1) return values[0] ?? 0;
+    const left = Math.max(0, Math.min(values.length - 2, Math.floor(position)));
+    const t = Math.max(0, Math.min(1, position - left));
+    if (logarithmic && values[left] > 0 && values[left + 1] > 0) {
+      return values[left] * ((values[left + 1] / values[left]) ** t);
+    }
+    return values[left] + (values[left + 1] - values[left]) * t;
+  };
+  const frequency = interpolate(source.frequencies, point[0], true);
+  const angle = interpolate(source.angles, point[1]);
+  const firstFrequency = display.frequencies[0] ?? frequency;
+  const lastFrequency = display.frequencies.at(-1) ?? frequency;
+  const firstAngle = display.angles[0] ?? angle;
+  const lastAngle = display.angles.at(-1) ?? angle;
+  const frequencySpan = Math.log(lastFrequency) - Math.log(firstFrequency);
+  const angleSpan = lastAngle - firstAngle;
+  const frequencyPosition = frequencySpan && frequency > 0
+    ? (Math.log(frequency) - Math.log(firstFrequency)) / frequencySpan
+    : .5;
+  const anglePosition = angleSpan ? (angle - firstAngle) / angleSpan : .5;
+  const columns = Math.max(1, display.frequencies.length);
+  const rows = Math.max(1, display.angles.length);
+  return [
+    rect.x + (.5 + frequencyPosition * Math.max(0, columns - 1)) * rect.width / columns,
+    rect.y + rect.height - (.5 + anglePosition * Math.max(0, rows - 1)) * rect.height / rows,
+  ];
+}
+
 /** Join marching-squares fragments into continuous paths so contour lines can
  * be rounded and anti-aliased as curves rather than drawn as tiny segments. */
 export function contourPolylines(segments: ContourSegment[]): ContourPoint[][] {
@@ -372,13 +410,53 @@ export function contourPolylines(segments: ContourSegment[]): ContourPoint[][] {
 }
 
 /**
+ * Return the interior angular graticule values for a directivity map.
+ *
+ * The plot border already marks the two endpoints, so guides at those values
+ * would only thicken it. Starting from the first strict multiple also keeps a
+ * configured interval anchored to physical 0° rather than to an arbitrary
+ * sweep start.
+ */
+export function directivityAngleGuides(angles: number[], interval: number): number[] {
+  if (angles.length < 2 || !Number.isFinite(interval) || interval <= 0) return [];
+  const lower = Math.min(angles[0], angles.at(-1)!);
+  const upper = Math.max(angles[0], angles.at(-1)!);
+  const guides: number[] = [];
+  const first = (Math.floor(lower / interval) + 1) * interval;
+  for (let angle = first; angle < upper - 1e-9; angle += interval) {
+    guides.push(Number(angle.toPrecision(12)));
+  }
+  return guides;
+}
+
+/**
  * ECharts only draws cartesian heatmap cells on two *category* axes. On a log
  * or value axis every cell is emitted with an empty path — nothing renders, and
  * the guard that says so is compiled out of production builds, so the chart
  * fails silently. Index the cells against category axes instead. The frequency
  * axis still reads logarithmically because the sweep itself is log-spaced.
  */
-export function heatmapOption(result: ResultPayload, tokens: ChartTokens, plane: string, mapReference: number, density: ChartDensity = 'regular', live = false): EChartsOption {
+export interface DirectivityContourReference {
+  label: string;
+  result: ResultPayload;
+}
+
+interface DirectivityComparisonOverlay {
+  primaryLabel: string;
+  references: DirectivityContourReference[];
+  showLegend?: boolean;
+}
+
+export function heatmapOption(
+  result: ResultPayload,
+  tokens: ChartTokens,
+  plane: string,
+  mapReference: number,
+  density: ChartDensity = 'regular',
+  live = false,
+  angleGuideInterval = 10,
+  comparison?: DirectivityComparisonOverlay,
+): EChartsOption {
   // Boundary Lab renders a lighter surface while a solve is changing and one
   // canonical surface when it settles. Do the same here: the live grid has at
   // most a quarter of the usual heatmap cells and also supplies its contours,
@@ -394,43 +472,123 @@ export function heatmapOption(result: ResultPayload, tokens: ChartTokens, plane:
     ? grid
     : interpolateDirectivityGrid(result, plane, 12, MAX_CONTOUR_CELLS);
   const floor = mapReference * 5;
-  const inset = MAP_GRID[density];
+  const comparing = Boolean(comparison?.references.length);
+  const baseInset = MAP_GRID[density];
+  const inset = comparing && comparison?.showLegend !== false
+    ? { ...baseInset, top: Math.max(baseInset.top, density === 'compact' ? 27 : 31) }
+    : baseInset;
   const cells = grid.values.flatMap((rowValues, row) => rowValues.flatMap((level, column) => level === null ? [] : [[column, row, Math.max(floor, Math.min(0, level)), level, grid.frequencies[column], grid.angles[row]]]));
   const categoryAxis = { ...axes(tokens, density), axisTick: { alignWithLabel: true }, axisLabel: { ...axes(tokens, density).axisLabel, hideOverlap: true } };
+  const frequencyTickLabels = directivityFrequencyTickLabels(grid.frequencies);
+  const isFrequencyTick = (index: number) => frequencyTickLabels.has(index);
+  const angleGuides = directivityAngleGuides(grid.angles, angleGuideInterval);
+  const angleGuideSeries = angleGuides.length ? [{
+    name: `${angleGuideInterval}° angular guides`, type: 'custom', coordinateSystem: 'cartesian2d', silent: true, z: 4, clip: true,
+    data: angleGuides,
+    renderItem: (params: { coordSys?: PlotRect }, api: { value: (index: number) => unknown }) => {
+      if (!params.coordSys || grid.angles.length < 2) return null;
+      const lower = grid.angles[0];
+      const upper = grid.angles.at(-1)!;
+      const fraction = (Number(api.value(0)) - lower) / (upper - lower);
+      const y = params.coordSys.y + params.coordSys.height * (1 - fraction);
+      return { type: 'line', shape: { x1: params.coordSys.x, y1: y, x2: params.coordSys.x + params.coordSys.width, y2: y }, style: { stroke: tokens.grid, lineWidth: .8, opacity: .9 } };
+    },
+  }] : [];
   const contourLevels = [...new Set([-3, -6, -12, mapReference])].filter((level) => level >= floor).sort((a, b) => b - a);
   const contourSeries = contourLevels.flatMap((level, contourIndex) => {
     const polylines = contourPolylines(contourSegments(contourGrid.values, level)).filter((points) => points.length > 1);
     if (!polylines.length) return [];
     const labelIndex = polylines.reduce((best, points, index) => points.length > polylines[best].length ? index : best, 0);
-    const color = contourIndex === 0 ? tokens.foreground : contourIndex === 1 ? tokens.accent : tokens.series[Math.min(contourIndex, tokens.series.length - 1)] ?? tokens.muted;
+    const isComparisonContour = comparing && level === mapReference;
+    const color = isComparisonContour
+      ? seriesColor(tokens, 0)
+      : level === -6 ? tokens.foreground : level === -3 ? tokens.accent : tokens.series[Math.min(contourIndex, tokens.series.length - 1)] ?? tokens.muted;
     return [{
-      name: `${level} dB contour`, type: 'custom', coordinateSystem: 'cartesian2d', silent: true, z: 6, clip: true,
+      name: isComparisonContour ? comparison!.primaryLabel : `${level} dB contour`, type: 'custom', coordinateSystem: 'cartesian2d', silent: true, z: 6, clip: true,
+      ...(isComparisonContour ? { itemStyle: { color } } : {}),
       data: polylines.map((_points, index) => [index, index === labelIndex ? 1 : 0]),
       renderItem: (params: { coordSys?: PlotRect }, api: { value: (index: number) => unknown }) => {
         if (!params.coordSys) return null;
         const points = polylines[Number(api.value(0))].map((point) => contourPointToPixels(point, contourGrid, params.coordSys!));
         const middle = points[Math.floor(points.length / 2)];
         const children: Array<Record<string, unknown>> = [{ type: 'polyline', shape: smoothContourShape(points), style: { fill: null, stroke: color, lineWidth: level === mapReference ? 1.6 : 1.05, opacity: .92, lineCap: 'round', lineJoin: 'round', lineDash: level <= -12 ? [4, 3] : undefined } }];
-        if (Number(api.value(1))) children.push({ type: 'text', style: { x: middle[0] + 3, y: middle[1] - 3, text: `${level} dB`, fill: color, font: '8px ui-monospace, monospace', backgroundColor: tokens.background, padding: [1, 2], borderRadius: 2 } });
+        if (Number(api.value(1))) children.push({ type: 'text', style: { x: middle[0] + 3, y: middle[1] - 3, text: isComparisonContour ? middleEllipsis(comparison!.primaryLabel, 18) : `${level} dB`, fill: color, font: '8px ui-monospace, monospace', backgroundColor: tokens.background, padding: [1, 2], borderRadius: 2 } });
         return { type: 'group', children };
       },
     }];
   });
+  const comparisonSeries = comparison?.references.flatMap((reference, referenceIndex) => {
+    const referenceGrid = live
+      ? interpolateDirectivityGrid(reference.result, plane, 2, MAX_LIVE_INTERPOLATED_CELLS)
+      : interpolateDirectivityGrid(reference.result, plane, 12, MAX_CONTOUR_CELLS);
+    const polylines = contourPolylines(contourSegments(referenceGrid.values, mapReference)).filter((points) => points.length > 1);
+    if (!polylines.length) return [];
+    const labelIndex = polylines.reduce((best, points, index) => points.length > polylines[best].length ? index : best, 0);
+    const color = seriesColor(tokens, referenceIndex + 1);
+    return [{
+      name: reference.label,
+      type: 'custom',
+      coordinateSystem: 'cartesian2d',
+      silent: true,
+      z: 8 + referenceIndex,
+      clip: true,
+      itemStyle: { color },
+      data: polylines.map((_points, index) => [index, index === labelIndex ? 1 : 0]),
+      renderItem: (params: { coordSys?: PlotRect }, api: { value: (index: number) => unknown }) => {
+        if (!params.coordSys) return null;
+        const points = polylines[Number(api.value(0))].map((point) => comparisonContourPointToPixels(point, referenceGrid, contourGrid, params.coordSys!));
+        const middle = points[Math.floor(points.length / 2)];
+        const children: Array<Record<string, unknown>> = [{
+          type: 'polyline',
+          shape: smoothContourShape(points),
+          style: { fill: null, stroke: color, lineWidth: 1.7, opacity: .96, lineCap: 'round', lineJoin: 'round', lineDash: [6, 4] },
+        }];
+        if (Number(api.value(1))) children.push({
+          type: 'text',
+          style: { x: middle[0] + 3, y: middle[1] - 3, text: middleEllipsis(reference.label, 18), fill: color, font: '8px ui-monospace, monospace', backgroundColor: tokens.background, padding: [1, 2], borderRadius: 2 },
+        });
+        return { type: 'group', children };
+      },
+    }];
+  }) ?? [];
+  const comparisonLabels = comparison ? [comparison.primaryLabel, ...comparison.references.map(({ label }) => label)] : [];
   return {
     animationDuration: live ? 0 : 180,
     backgroundColor: tokens.background,
     textStyle: { color: tokens.foreground, fontFamily: 'Inter, system-ui, sans-serif' },
+    ...(comparing && comparison?.showLegend !== false ? { legend: {
+      data: comparisonLabels,
+      top: 1,
+      right: LEGEND_INSET,
+      textStyle: { color: tokens.muted, fontSize: density === 'compact' ? 9 : 10 },
+      formatter: (name: string) => middleEllipsis(name, density === 'compact' ? 11 : 18),
+      itemWidth: density === 'compact' ? 10 : 14,
+      itemHeight: 2,
+      itemGap: density === 'compact' ? 6 : 10,
+    } } : {}),
     tooltip: { trigger: 'item', confine: true, backgroundColor: tokens.background, borderColor: tokens.spine ?? tokens.grid, textStyle: { color: tokens.foreground, fontSize: 11 }, formatter: (params) => {
       const [, , , level, frequencyValue, angleValue] = (Array.isArray(params) ? params[0] : params).value as number[];
       return `${heatmapFrequencyLabel(frequencyValue)}Hz · ${Number(angleValue.toFixed(2))}° · ${level.toFixed(1)} dB`;
     } },
     grid: inset,
-    xAxis: { type: 'category', data: grid.frequencies.map((frequency) => heatmapFrequencyLabel(frequency)), ...(density === 'full' ? { name: 'Frequency [Hz]', nameLocation: 'middle' as const, nameGap: 22, nameTextStyle: { color: tokens.muted, fontSize: 11 } } : {}), ...categoryAxis, axisLabel: { ...categoryAxis.axisLabel, interval: Math.max(0, grid.factor * 2 - 1) } },
+    xAxis: {
+      type: 'category',
+      data: grid.frequencies.map((frequency) => heatmapFrequencyLabel(frequency)),
+      ...(density === 'full' ? { name: 'Frequency [Hz]', nameLocation: 'middle' as const, nameGap: 22, nameTextStyle: { color: tokens.muted, fontSize: 11 } } : {}),
+      ...categoryAxis,
+      axisTick: { ...categoryAxis.axisTick, interval: isFrequencyTick },
+      axisLabel: {
+        ...categoryAxis.axisLabel,
+        interval: isFrequencyTick,
+        formatter: (_value: string, index: number) => frequencyTickLabels.get(index) ?? '',
+      },
+      splitLine: { ...categoryAxis.splitLine, show: true, interval: isFrequencyTick },
+    },
     yAxis: { type: 'category', data: grid.angles.map((angle) => String(Number(angle.toFixed(2)))), ...(density === 'full' ? { name: 'Angle [°]', nameLocation: 'start' as const, nameGap: 10, nameTextStyle: { color: tokens.muted, fontSize: 11, align: 'right' as const, verticalAlign: 'top' as const } } : {}), ...categoryAxis, axisLabel: { ...categoryAxis.axisLabel, interval: Math.max(0, grid.factor * 2 - 1) } },
     visualMap: { min: floor, max: 0, dimension: 2, seriesIndex: 0, right: 2, top: 'middle', itemWidth: density === 'compact' ? 6 : 8, itemHeight: MAP_RAMP[density], text: ['0', `${floor}`], textStyle: { color: tokens.muted, fontSize: density === 'compact' ? 9 : 10 }, inRange: { color: tokens.colormap } },
     // Cartesian heatmaps do not chunk safely in ECharts: progressive mode can
     // stop after the first angle band and leave the rest of the map blank.
-    series: [{ type: 'heatmap', progressive: 0, z: 1, data: cells, emphasis: { itemStyle: { borderColor: tokens.accent, borderWidth: 1.2, shadowBlur: 7, shadowColor: tokens.accent } } }, ...contourSeries] as EChartsOption['series'],
+    series: [{ type: 'heatmap', progressive: 0, z: 1, data: cells, emphasis: { itemStyle: { borderColor: tokens.accent, borderWidth: 1.2, shadowBlur: 7, shadowColor: tokens.accent } } }, ...angleGuideSeries, ...contourSeries, ...comparisonSeries] as EChartsOption['series'],
   };
 }
 
@@ -480,6 +638,7 @@ const CHART_BADGES: Record<ChartType, { short: string; long?: string; unit?: str
   frequency_response: { short: 'SPL', long: 'On-axis SPL', unit: 'dB' },
   directivity_map_h: { short: 'Dir H', long: 'Directivity H', unit: 'dB' },
   directivity_map_v: { short: 'Dir V', long: 'Directivity V', unit: 'dB' },
+  directivity_map_d: { short: 'Dir D', long: 'Directivity Diagonal', unit: 'dB' },
   directivity_map: { short: 'Dir', long: 'Directivity', unit: 'dB' },
   directivity_index: { short: 'DI', long: 'Directivity index', unit: 'dB' },
   beam_shape: { short: 'Beam', long: 'Beam width', unit: '°' },
@@ -630,6 +789,8 @@ export interface DirectivityMapPanel {
   plane: string;
   result: ResultPayload;
   hasData: boolean;
+  primaryLabel: string;
+  references: DirectivityContourReference[];
 }
 
 function orderedPlanes(items: NamedResult[]): string[] {
@@ -640,41 +801,66 @@ function orderedPlanes(items: NamedResult[]): string[] {
   return [...found].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
 }
 
-export function directivityMapPanels(items: NamedResult[], chartType: 'directivity_map_h' | 'directivity_map_v' | 'directivity_map'): DirectivityMapPanel[] {
-  const planes = chartType === 'directivity_map'
-    ? orderedPlanes(items)
-    : [chartType === 'directivity_map_v' ? 'vertical' : 'horizontal'];
-  return items.flatMap((item) => planes.map((plane) => ({
-    key: `${item.id}:${plane}`,
-    label: chartType === 'directivity_map' ? `${item.label} · ${plane}` : item.label,
-    plane,
-    result: item.result as ResultPayload,
-    hasData: Boolean((item.result.directivity as Record<string, unknown[]> | undefined)?.[plane]?.length),
-  })));
+type DirectivityMapChartType = 'directivity_map_h' | 'directivity_map_v' | 'directivity_map_d' | 'directivity_map';
+
+function directivityPlaneForChart(chartType: DirectivityMapChartType): string | null {
+  if (chartType === 'directivity_map_h') return 'horizontal';
+  if (chartType === 'directivity_map_v') return 'vertical';
+  if (chartType === 'directivity_map_d') return 'diagonal';
+  return null;
 }
 
-function DirectivityComparisonMaps({ chartType, items, tokens, mapReference, density, live }: {
-  chartType: 'directivity_map_h' | 'directivity_map_v' | 'directivity_map';
+export function directivityMapPanels(items: NamedResult[], chartType: DirectivityMapChartType): DirectivityMapPanel[] {
+  const planes = chartType === 'directivity_map'
+    ? orderedPlanes(items)
+    : [directivityPlaneForChart(chartType)!];
+  return planes.map((plane) => {
+    const available = items.filter((item) => Boolean((item.result.directivity as Record<string, unknown[]> | undefined)?.[plane]?.length));
+    const primary = available[0] ?? items[0];
+    return {
+      key: plane,
+      label: plane,
+      plane,
+      result: primary?.result as ResultPayload,
+      hasData: available.length > 0,
+      primaryLabel: primary?.label ?? 'Primary',
+      references: available.slice(1).map(({ label, result }) => ({ label, result: result as ResultPayload })),
+    };
+  });
+}
+
+function DirectivityComparisonMaps({ chartType, items, tokens, mapReference, angleGuideInterval, density, live }: {
+  chartType: DirectivityMapChartType;
   items: NamedResult[];
   tokens: ChartTokens;
   mapReference: number;
+  angleGuideInterval: number;
   density: ChartDensity;
   live: boolean;
 }) {
   const panels = directivityMapPanels(items, chartType);
   if (!panels.some(({ hasData }) => hasData)) {
-    const plane = chartType === 'directivity_map_v' ? 'vertical' : chartType === 'directivity_map_h' ? 'horizontal' : null;
-    return <ChartStub reason={plane ? `Directivity Map (${plane === 'horizontal' ? 'H' : 'V'}) needs the ${plane} polar plane in the result payload.` : 'Directivity Map needs at least one polar plane in the result payload.'}/>;
+    const plane = directivityPlaneForChart(chartType);
+    const planeLabel = plane === 'horizontal' ? 'H' : plane === 'vertical' ? 'V' : 'Diagonal';
+    return <ChartStub reason={plane ? `Directivity Map (${planeLabel}) needs the ${plane} polar plane in the result payload.` : 'Directivity Map needs at least one polar plane in the result payload.'}/>;
   }
   if (panels.length === 1 && panels[0].hasData) {
     const panel = panels[0];
-    return <EChart option={heatmapOption(panel.result, tokens, panel.plane, mapReference, density, live)} label={`Interactive HornLab ${panel.plane} directivity heatmap`} live={live}/>;
+    return <EChart option={heatmapOption(panel.result, tokens, panel.plane, mapReference, density, live, angleGuideInterval, {
+      primaryLabel: panel.primaryLabel,
+      references: panel.references,
+    })} label={`Interactive HornLab ${panel.plane} directivity heatmap with comparison contours`} live={live}/>;
   }
-  return <div className={`directivity-multiplane${items.length > 1 ? ' directivity-comparison' : ''}`} data-density={density}>
-    {panels.map((panel) => <div key={panel.key}>
+  const legendPanelIndex = panels.findIndex(({ references }) => references.length > 0);
+  return <div className="directivity-multiplane" data-density={density}>
+    {panels.map((panel, index) => <div key={panel.key}>
       <span title={panel.label}>{middleEllipsis(panel.label, density === 'compact' ? 18 : 28)}</span>
       {panel.hasData
-        ? <EChart option={heatmapOption(panel.result, tokens, panel.plane, mapReference, density, live)} label={`Interactive ${panel.label} directivity heatmap`} live={live}/>
+        ? <EChart option={heatmapOption(panel.result, tokens, panel.plane, mapReference, density, live, angleGuideInterval, {
+          primaryLabel: panel.primaryLabel,
+          references: panel.references,
+          showLegend: index === legendPanelIndex,
+        })} label={`Interactive ${panel.label} directivity heatmap with comparison contours`} live={live}/>
         : <div className="directivity-comparison-missing">No {panel.plane} data</div>}
     </div>)}
   </div>;
@@ -684,7 +870,7 @@ function DirectivityComparisonMaps({ chartType, items, tokens, mapReference, den
 export function chartRendersCurve(chartType: ChartType, result: ResultPayload, items: NamedResult[]): boolean {
   if (chartType === 'summary') return false;
   if (chartType === 'frequency_response') return items.some(({ result: item }) => Boolean(item.spl_on_axis?.spl?.length));
-  if (chartType === 'directivity_map_h' || chartType === 'directivity_map_v' || chartType === 'directivity_map') {
+  if (chartType === 'directivity_map_h' || chartType === 'directivity_map_v' || chartType === 'directivity_map_d' || chartType === 'directivity_map') {
     return directivityMapPanels(items, chartType).some(({ hasData }) => hasData);
   }
   if (chartType === 'directivity_index') return items.some(({ result: item }) => directivityIndexSeries(item as ResultPayload).length > 0);
@@ -730,7 +916,7 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
   // result snapshot has not changed.
   const plot = useMemo(() => {
     if (chartType === 'frequency_response') return result.spl_on_axis?.spl?.length ? <EChart option={splOption(overlays, tokens, preferences.smoothing, density)} label="Interactive HornLab sound pressure frequency response" live={live}/> : <ChartStub reason="Frequency Response needs spl_on_axis data from a completed solve."/>;
-    if (chartType === 'directivity_map_h' || chartType === 'directivity_map_v' || chartType === 'directivity_map') return <DirectivityComparisonMaps chartType={chartType} items={overlays} tokens={tokens} mapReference={preferences.mapReference} density={density} live={live}/>;
+    if (chartType === 'directivity_map_h' || chartType === 'directivity_map_v' || chartType === 'directivity_map_d' || chartType === 'directivity_map') return <DirectivityComparisonMaps chartType={chartType} items={overlays} tokens={tokens} mapReference={preferences.mapReference} angleGuideInterval={preferences.directivityGuideInterval} density={density} live={live}/>;
     if (chartType === 'directivity_index') {
       const option = directivityIndexOption(overlays, tokens, preferences.smoothing, density);
       return Array.isArray(option.series) && option.series.length ? <EChart option={option} label="Interactive HornLab directivity index by frequency" live={live}/> : <ChartStub reason="Directivity Index needs a complete spherical field from a supported solve backend."/>;
@@ -747,7 +933,7 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
       return Array.isArray(option.series) && option.series.length ? <EChart option={option} label="Interactive HornLab normalized acoustic impedance by frequency" live={live}/> : <ChartStub reason="Acoustic Impedance needs the optional impedance result block."/>;
     }
     return null;
-  }, [beamShapeAction, chartType, density, live, overlays, preferences.mapReference, preferences.smoothing, result, tokens]);
+  }, [beamShapeAction, chartType, density, live, overlays, preferences.directivityGuideInterval, preferences.mapReference, preferences.smoothing, result, tokens]);
   return plot ?? <Summary result={result} wrapper={wrapper} job={job} channelId={channelId} density={density}/>;
 }
 

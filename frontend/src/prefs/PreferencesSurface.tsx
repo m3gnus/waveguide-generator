@@ -56,6 +56,7 @@ function ResultsPreferencesContent() {
       <ResultPanelCountControl/>
       <label className="ui-field">Smoothing<select aria-label="Smoothing" value={preferences.smoothing} onChange={(event) => preferencesStore.update({ smoothing: event.target.value as SmoothingMode })}>{SMOOTHING_MODES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
       <label className="ui-field">Map reference<select aria-label="Map reference" value={preferences.mapReference} onChange={(event) => preferencesStore.update({ mapReference: Number(event.target.value) as MapReference })}>{MAP_REFERENCES.map((value) => <option key={value} value={value}>{value} dB</option>)}</select></label>
+      <label className="ui-field">Angular guides (°)<input aria-label="Directivity angular guide interval" type="number" min={1} max={180} step={1} value={preferences.directivityGuideInterval} onChange={(event) => { if (Number.isFinite(event.target.valueAsNumber)) preferencesStore.update({ directivityGuideInterval: event.target.valueAsNumber }); }}/></label>
       {/* "Match interface" is not a server theme: it resolves to console or
           vellum at export time so a figure leaves on the same ground as the
           window it was taken from. The server never sees the sentinel. */}

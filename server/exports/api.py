@@ -374,7 +374,7 @@ def _export_wglink_sync(
     place in the export sequence, is the same either way.
     """
 
-    from hornlab_mesher import WgLinkIdentity, write_wglink
+    from hornlab_mesher import WgLinkIdentity, WgLinkSourceInterface, write_wglink
     from hornlab_mesher.config_builder import resolve_geometry
 
     workspace_root = workspace_root.resolve()
@@ -463,6 +463,22 @@ def _export_wglink_sync(
                 identity=bundle_identity,
                 instance_slug=design_name,
                 open_throat=True,
+                # The current design schema owns exactly one horn throat. Give
+                # it an explicit acoustic identity at export time so the
+                # return leg never guesses HF from anonymous CAD geometry.
+                interface_sources=[
+                    WgLinkSourceInterface(
+                        id="source-hf",
+                        role="HF",
+                        required=True,
+                        default_drive_channel_id="drive-hf",
+                        patch_policy="single-connected",
+                        expected_connected_components=1,
+                        suggested_resolution_mm=float(
+                            resolved.density.throat_res_mm
+                        ),
+                    )
+                ],
             )
             manifest_json = product.manifest_path.read_text(encoding="utf-8")
             artifact_sha256 = str(product.manifest["files"]["waveguide.step"]["sha256"])
@@ -554,12 +570,12 @@ async def export_wglink(
 ) -> dict[str, Any]:
     """Write an identity-bearing CAD-link bundle into the selected workspace."""
 
-    workspace: WorkspaceState = request.app.state.workspace
+    workspace: WorkspaceState = request.app.state.cad_workspace
     selected = workspace.selected_path()
     if selected is None:
         raise HTTPException(
             status_code=409,
-            detail="No workspace folder has been selected. Choose a workspace folder first.",
+            detail="No WGLink folder has been selected. Choose one in Settings → CAD Link first.",
         )
     store: CadLinkStore = request.app.state.cadlink_store
     result = await run_on_gmsh_worker(

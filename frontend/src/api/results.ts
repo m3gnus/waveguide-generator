@@ -6,6 +6,7 @@ export interface JobResults {
   directivity?: {
     horizontal?: PolarSample[][];
     vertical?: PolarSample[][];
+    diagonal?: PolarSample[][];
   };
   spl_on_axis?: {
     frequencies?: number[];

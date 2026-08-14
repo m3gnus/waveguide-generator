@@ -124,14 +124,11 @@ export async function sendDesignToCad(
   // CAD-link registry as part of the export, so an unsaved or edited design
   // sends like any other; `identity` is the optimistic-concurrency token when
   // there is one, not a precondition.
-  const pathResponse = await fetcher('/api/workspace/path');
+  const pathResponse = await fetcher('/api/cad-workspace/path');
   if (!pathResponse.ok) throw new Error(await errorMessage(pathResponse));
-  let workspace = await pathResponse.json() as { selected?: boolean; path?: string };
+  const workspace = await pathResponse.json() as { selected?: boolean; path?: string };
   if (!workspace.selected) {
-    const selectResponse = await fetcher('/api/workspace/select', { method: 'POST' });
-    if (!selectResponse.ok) throw new Error(await errorMessage(selectResponse));
-    workspace = await selectResponse.json() as { selected?: boolean; path?: string };
-    if (!workspace.selected) throw new Error('Send to CAD cancelled: choose a workspace folder first.');
+    throw new Error('Choose a WGLink folder in Settings → CAD Link before sending to Fusion.');
   }
 
   const response = await fetcher('/api/export/wglink', {

@@ -1,4 +1,4 @@
-"""Directivity heatmaps with an explicit ten-degree angular graticule."""
+"""Directivity heatmaps with a configurable angular graticule."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from typing import Any, Callable
 import numpy as np
 
 
-ANGLE_GUIDE_STEP_DEG = 10.0
+DEFAULT_ANGLE_GUIDE_STEP_DEG = 10.0
 
 
 def _constant_horizontal_lines(axis: Any) -> set[float]:
@@ -29,13 +29,17 @@ def _constant_horizontal_lines(axis: Any) -> set[float]:
     return values
 
 
-def add_ten_degree_angle_guides(
+def add_angle_guides(
     figure: Any,
     theme: Any,
     *,
+    angle_guide_step: float = DEFAULT_ANGLE_GUIDE_STEP_DEG,
     grid_kwargs: Callable[..., dict[str, Any]] | None = None,
 ) -> None:
-    """Fill missing 10-degree guides without duplicating HornLab's own lines."""
+    """Fill missing angular guides without duplicating HornLab's own lines."""
+
+    if not math.isfinite(angle_guide_step) or angle_guide_step <= 0:
+        raise ValueError("Directivity angle guide step must be a positive finite number")
 
     style = (
         grid_kwargs(theme, linewidth=0.5)
@@ -46,10 +50,10 @@ def add_ten_degree_angle_guides(
         if axis.get_ylabel() != "Angle [deg]":
             continue
         lower, upper = sorted(float(value) for value in axis.get_ylim())
-        first = math.ceil(lower / ANGLE_GUIDE_STEP_DEG) * ANGLE_GUIDE_STEP_DEG
+        first = math.ceil(lower / angle_guide_step) * angle_guide_step
         existing = _constant_horizontal_lines(axis)
         for angle in np.arange(
-            first, upper + ANGLE_GUIDE_STEP_DEG * 0.5, ANGLE_GUIDE_STEP_DEG
+            first, upper + angle_guide_step * 0.5, angle_guide_step
         ):
             value = float(angle)
             if value <= lower or value >= upper or round(value, 9) in existing:
@@ -72,9 +76,10 @@ def render_directivity_heatmap_b64(
     reference_frequencies: list[float] | None = None,
     reference_directivity: dict[str, Any] | None = None,
     reference_label: str | None = None,
+    angle_guide_step: float = DEFAULT_ANGLE_GUIDE_STEP_DEG,
     dpi: int = 150,
 ) -> str | None:
-    """Render through hornlab-plots, retaining overlays and adding 10° guides."""
+    """Render through hornlab-plots, retaining overlays and angular guides."""
 
     renderer = plots.directivity_heatmap_from_legacy_dict
     try:
@@ -97,7 +102,7 @@ def render_directivity_heatmap_b64(
             frequencies,
             directivity,
             dpi=dpi,
-            angle_grid_step=ANGLE_GUIDE_STEP_DEG,
+            angle_grid_step=angle_guide_step,
             **kwargs,
         )
 
@@ -120,9 +125,10 @@ def render_directivity_heatmap_b64(
         reference_planes=reference_planes,
         reference_label=reference_label,
     )
-    add_ten_degree_angle_guides(
+    add_angle_guides(
         figure,
         theme_object,
+        angle_guide_step=angle_guide_step,
         grid_kwargs=getattr(module, "theme_grid_kwargs", None),
     )
     output = io.BytesIO()
@@ -141,7 +147,7 @@ def render_directivity_heatmap_b64(
 
 
 __all__ = [
-    "ANGLE_GUIDE_STEP_DEG",
-    "add_ten_degree_angle_guides",
+    "DEFAULT_ANGLE_GUIDE_STEP_DEG",
+    "add_angle_guides",
     "render_directivity_heatmap_b64",
 ]

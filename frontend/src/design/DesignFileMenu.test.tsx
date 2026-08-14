@@ -5,6 +5,10 @@ import { jobsSocket, type JobsSnapshot } from '../api/jobsSocket';
 import { preferencesStore } from '../prefs/preferences';
 import { resetDesignStore, useDesignStore } from '../stores/design';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
+import { workspaceModeStore } from '../stores/workspaceMode';
+import { importedMeshStore } from '../viewport/importedMeshStore';
+import meshFixture from '../viewport/test-fixtures/tagged_sources-small.msh?raw';
+import { CadLinkCoordinator } from '../shell/CadLinkCoordinator';
 import { DesignFileMenu } from './DesignFileMenu';
 
 /**
@@ -22,6 +26,8 @@ beforeEach(() => {
   resetDesignStore();
   resetDocumentStore();
   preferencesStore.resetForTests();
+  importedMeshStore.clear();
+  workspaceModeStore.setMode('parametric');
   requested.length = 0;
   container = document.createElement('div');
   document.body.appendChild(container);
@@ -42,11 +48,16 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   container.remove();
+  importedMeshStore.clear();
+  workspaceModeStore.setMode('parametric');
   vi.unstubAllGlobals();
 });
 
 function open(): HTMLButtonElement[] {
-  act(() => root.render(<DesignFileMenu/>));
+  // Send to CAD goes through the coordinator's unified path, so the real
+  // coordinator is part of the unit under test. Its background status polls
+  // are filtered out of request assertions with sendRequests().
+  act(() => root.render(<><CadLinkCoordinator/><DesignFileMenu/></>));
   const chip = container.querySelector<HTMLButtonElement>('button.file-chip');
   act(() => chip?.click());
   const items = [...container.querySelectorAll<HTMLButtonElement>('.design-menu-item')];
@@ -61,23 +72,47 @@ function itemNamed(label: string): HTMLButtonElement {
   return found;
 }
 
+function sendRequests(): string[] {
+  return requested.filter((path) => path === '/api/cad-workspace/path' || path === '/api/export/wglink');
+}
+
 describe('design file export menu', () => {
+  it('imports standalone meshes from the file menu instead of the viewport toolbar', async () => {
+    act(() => root.render(<DesignFileMenu/>));
+    const input = container.querySelector<HTMLInputElement>('[aria-label="Import Gmsh mesh file"]');
+    const file = new File([meshFixture], 'reference.msh', { type: 'text/plain' });
+    Object.defineProperty(input, 'files', { configurable: true, value: [file] });
+
+    await act(async () => { input?.dispatchEvent(new Event('change', { bubbles: true })); });
+
+    expect(importedMeshStore.getSnapshot().file?.name).toBe('reference.msh');
+    expect(importedMeshStore.getSnapshot().showing).toBe('file');
+    expect(container.querySelector('[role="status"]')?.textContent).toContain('2 triangles');
+  });
+
   it('offers both STEP bodies', () => {
     const labels = open().map((item) => item.textContent ?? '');
     expect(labels.some((label) => label.startsWith('STEP solid'))).toBe(true);
     expect(labels.some((label) => label.startsWith('STEP inner surface'))).toBe(true);
   });
 
+  it('hides the Fusion-transport Send to CAD while Onshape is the CAD application', () => {
+    act(() => preferencesStore.update({ cadApplication: 'onshape' }));
+    const labels = open().map((item) => item.textContent ?? '');
+    expect(labels.some((label) => label.startsWith('Send to CAD'))).toBe(false);
+    expect(labels.some((label) => label.startsWith('STEP solid'))).toBe(true);
+  });
+
   it('requests the solid from the plain STEP item', async () => {
     const item = itemNamed('STEP solid');
     await act(async () => { item.click(); });
-    expect(requested).toEqual(['/api/export/step?body=solid']);
+    expect(requested.filter((path) => path.startsWith('/api/export/'))).toEqual(['/api/export/step?body=solid']);
   });
 
   it('requests the inner surface from the surface item', async () => {
     const item = itemNamed('STEP inner surface');
     await act(async () => { item.click(); });
-    expect(requested).toEqual(['/api/export/step?body=surface']);
+    expect(requested.filter((path) => path.startsWith('/api/export/'))).toEqual(['/api/export/step?body=surface']);
   });
 
   it('sends a saved design to CAD and reports its sequence and destination', async () => {
@@ -89,7 +124,7 @@ describe('design file export menu', () => {
     vi.mocked(fetch).mockImplementation(async (url: string | URL | Request) => {
       const path = String(url);
       requested.push(path);
-      if (path === '/api/workspace/path') {
+      if (path === '/api/cad-workspace/path') {
         return new Response(JSON.stringify({ selected: true, path: '/cad-library' }));
       }
       return new Response(JSON.stringify({
@@ -102,7 +137,7 @@ describe('design file export menu', () => {
     const item = itemNamed('Send to CAD');
     await act(async () => { item.click(); });
 
-    expect(requested).toEqual(['/api/workspace/path', '/api/export/wglink']);
+    expect(sendRequests()).toEqual(['/api/cad-workspace/path', '/api/export/wglink']);
     expect(container.querySelector('[role="status"]')?.textContent).toContain(
       'Sent to CAD · sequence 7 · /cad-library/wglink/tritonia_mk2.wglink',
     );
@@ -117,7 +152,7 @@ describe('design file export menu', () => {
     vi.mocked(fetch).mockImplementation(async (url: string | URL | Request) => {
       const path = String(url);
       requested.push(path);
-      if (path === '/api/workspace/path') {
+      if (path === '/api/cad-workspace/path') {
         return new Response(JSON.stringify({ selected: true, path: '/cad-library' }));
       }
       return new Response(JSON.stringify({
@@ -133,14 +168,14 @@ describe('design file export menu', () => {
       item.click();
     });
 
-    expect(requested).toEqual(['/api/workspace/path', '/api/export/wglink']);
+    expect(sendRequests()).toEqual(['/api/cad-workspace/path', '/api/export/wglink']);
   });
 
   it('sends an unsaved design and adopts the identity the server committed', async () => {
     vi.mocked(fetch).mockImplementation(async (url: string | URL | Request) => {
       const path = String(url);
       requested.push(path);
-      if (path === '/api/workspace/path') {
+      if (path === '/api/cad-workspace/path') {
         return new Response(JSON.stringify({ selected: true, path: '/cad-library' }));
       }
       return new Response(JSON.stringify({
@@ -158,7 +193,7 @@ describe('design file export menu', () => {
     const item = itemNamed('Send to CAD');
     await act(async () => { item.click(); });
 
-    expect(requested).toEqual(['/api/workspace/path', '/api/export/wglink']);
+    expect(sendRequests()).toEqual(['/api/cad-workspace/path', '/api/export/wglink']);
     expect(useDocumentStore.getState().identity?.baseEditVersion).toBe(1);
     expect(useDocumentStore.getState().classification).toBe('current');
   });

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
   downloadGeometryExport,
   downloadText,
@@ -14,11 +14,16 @@ import { resetDesignStore, useDesignStore } from '../stores/design';
 import { resetDocumentStore, useDocumentStore, type CadLinkClassification, type DesignIdentity } from '../stores/document';
 import { projectSubmittedDesign } from '../jobs/submittedProjection';
 import { runNameFromFilename } from '../jobs/runNaming';
-import { preferencesStore } from '../prefs/preferences';
+import { preferencesStore, usePreferences } from '../prefs/preferences';
 import { Icon } from '../shell/icons';
 import { useSolveOptionsStore } from '../stores/solveOptions';
 import { documentDisplayName, filenameStem } from '../viewport/presentation';
-import { sentToCadMessage, useSendToCad } from './useSendToCad';
+import { createImportedMeshScene } from '../viewport/importedMesh';
+import { importedMeshStore } from '../viewport/importedMeshStore';
+import { parseMSH } from '../viewport/mshParser';
+import { workspaceModeStore } from '../stores/workspaceMode';
+import { cadLinkCoordinatorBridge } from '../shell/CadLinkCoordinator';
+import { sentToCadMessage } from './useSendToCad';
 
 const ACCEPT = '.cfg,.txt,.mwg,text/plain';
 
@@ -77,7 +82,8 @@ export function DesignFileMenu() {
   const classification = useDocumentStore((state) => state.classification);
   const setCadLink = useDocumentStore((state) => state.setCadLink);
   const adoptSavedIdentity = useDocumentStore((state) => state.adoptSavedIdentity);
-  const { send: sendToCadBundle } = useSendToCad();
+  const workspaceMode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
+  const cadApplication = usePreferences().cadApplication;
   const [open, setOpen] = useState(false);
   const [exportsOpen, setExportsOpen] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -86,6 +92,7 @@ export function DesignFileMenu() {
   const busyRef = useRef(false);
   const openInput = useRef<HTMLInputElement>(null);
   const reportInput = useRef<HTMLInputElement>(null);
+  const meshInput = useRef<HTMLInputElement>(null);
   const root = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -134,6 +141,18 @@ export function DesignFileMenu() {
       markSaved(useDesignStore.getState().designRevision);
       setMessage(reportText(opened));
       if (opened.cadlink?.classification === 'missing') setAdoptionCandidate(opened.cadlink.adoptionCandidate);
+    });
+  }
+
+  async function readMesh(input: HTMLInputElement) {
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file || workspaceMode === 'cad') return;
+    await act(async () => {
+      const generation = importedMeshStore.beginIntent();
+      const imported = createImportedMeshScene(file.name, parseMSH(await file.text()));
+      importedMeshStore.setFile(imported, generation);
+      setMessage(`Showing ${file.name} in the viewport · ${imported.triangleCount.toLocaleString()} triangles`);
     });
   }
 
@@ -188,7 +207,10 @@ export function DesignFileMenu() {
 
   async function sendToCad() {
     await act(async () => {
-      setMessage(sentToCadMessage(await sendToCadBundle()));
+      // The coordinator owns the send: it derives open-vs-update, attaches the
+      // expected-document guard, and parks on the two-way conflict dialog.
+      const result = await cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion();
+      setMessage(result ? sentToCadMessage(result) : 'Both WG and Fusion changed — choose a direction in the dialog.');
     });
   }
 
@@ -206,15 +228,25 @@ export function DesignFileMenu() {
     </button>
     <input ref={openInput} hidden tabIndex={-1} type="file" accept={ACCEPT} onChange={(event) => void readSelected(event.currentTarget, false)}/>
     <input ref={reportInput} hidden tabIndex={-1} type="file" accept={ACCEPT} onChange={(event) => void readSelected(event.currentTarget, true)}/>
+    <input ref={meshInput} hidden tabIndex={-1} type="file" accept=".msh,text/plain" aria-label="Import Gmsh mesh file" onChange={(event) => void readMesh(event.currentTarget)}/>
     {open && <div role="menu" aria-label="Design file menu" className="design-menu-popover">
       <button role="menuitem" className="design-menu-item" disabled={busy} onClick={newDesign}><span>New</span><kbd>cfg</kbd></button>
       <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => openInput.current?.click()}><span>Open…</span><kbd>cfg</kbd></button>
       <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void save()}><span>Save</span><kbd>cfg</kbd></button>
       <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => reportInput.current?.click()}><span>Import report…</span><span>›</span></button>
       <div className="design-menu-divider"/>
+      <button
+        role="menuitem"
+        className="design-menu-item"
+        disabled={busy || workspaceMode === 'cad'}
+        title={workspaceMode === 'cad' ? 'Standalone mesh import is available in Parametric mode only.' : 'Show an ASCII Gmsh 2.2 mesh in the viewport'}
+        onClick={() => meshInput.current?.click()}
+      ><span>Import mesh…</span><kbd>msh</kbd></button>
       <button role="menuitem" aria-expanded={exportsOpen} className="design-menu-item" disabled={busy} onClick={() => setExportsOpen((value) => !value)}><span>Export</span><span>{exportsOpen ? '⌄' : '›'}</span></button>
       {exportsOpen && <div role="menu" aria-label="Export design" className="design-menu-nested">
-        <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void sendToCad()} title="Write an identity-bearing .wglink bundle to the selected workspace"><span>Send to CAD</span><span>.wglink</span></button>
+        {/* The .wglink bundle and its handoff are Fusion's transport; Onshape
+            sends live in the CAD Link panel and go through its own adapter. */}
+        {cadApplication === 'fusion360' && <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void sendToCad()} title="Write an identity-bearing .wglink bundle to the selected workspace"><span>Send to CAD</span><span>.wglink</span></button>}
         <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void exportOne('step')} title="Closed solid with walls and enclosure — imports straight into Fusion 360 or Onshape"><span>STEP solid</span><span>.step</span></button>
         <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void exportOne('step', 'surface')} title="Inner acoustic surface only, for thickening or lofting yourself"><span>STEP inner surface</span><span>.step</span></button>
         <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void exportOne('stl')}><span>STL</span><span>.stl</span></button>

@@ -8,7 +8,7 @@ import type { SummaryContext, SummaryGroup } from '../results/summary';
 import type { ResultPayload } from '../results/types';
 import { resultFrequencyValidity } from '../results/validity';
 import { designForFamily, serializeDesign } from '../stores/design';
-import { beamShapeMissingReason, COMPARABLE_CHARTS, curveCaveatData, directivityIndexOption, directivityMapPanels, impedanceOption, ResultsChartGrid, resolvedPolarStepNotice, resultExportSnapshot, resultLayoutClass } from './ResultsPanel';
+import { beamShapeMissingReason, COMPARABLE_CHARTS, comparisonContourPointToPixels, curveCaveatData, directivityIndexOption, directivityMapPanels, heatmapOption, impedanceOption, ResultsChartGrid, resolvedPolarStepNotice, resultExportSnapshot, resultLayoutClass } from './ResultsPanel';
 
 const summaryMocks = vi.hoisted(() => ({
   groups: vi.fn<(context: SummaryContext) => SummaryGroup[]>(() => []),
@@ -33,6 +33,7 @@ describe('result comparison charts', () => {
     directivity: {
       horizontal: [[[0, 0]], [[0, 0]]],
       vertical: [[[0, 0]], [[0, 0]]],
+      diagonal: [[[0, 0]], [[0, 0]]],
     },
     di: { frequencies: [500, 1_000], di: { horizontal: [3, 5], vertical: [2, 4] } },
     impedance: { frequencies: [500, 1_000], real: [1, 2], imaginary: [.2, .4] },
@@ -48,21 +49,50 @@ describe('result comparison charts', () => {
   it('enables comparison for SPL, every directivity map, DI, and impedance', () => {
     expect([...COMPARABLE_CHARTS]).toEqual([
       'frequency_response', 'directivity_map_h', 'directivity_map_v',
-      'directivity_map', 'directivity_index', 'impedance',
+      'directivity_map_d', 'directivity_map', 'directivity_index', 'impedance',
     ]);
   });
 
-  it('builds one labelled heatmap panel per run and plane, including missing-plane notices', () => {
-    expect(directivityMapPanels(items, 'directivity_map_h').map(({ label, plane, hasData }) => ({ label, plane, hasData }))).toEqual([
-      { label: 'Run A', plane: 'horizontal', hasData: true },
-      { label: 'Run B', plane: 'horizontal', hasData: true },
+  it('builds one heatmap per plane with runs assigned as contour overlays', () => {
+    expect(directivityMapPanels(items, 'directivity_map_h').map(({ plane, primaryLabel, references, hasData }) => ({ plane, primaryLabel, references: references.map(({ label }) => label), hasData }))).toEqual([
+      { plane: 'horizontal', primaryLabel: 'Run A', references: ['Run B'], hasData: true },
     ]);
-    expect(directivityMapPanels(items, 'directivity_map').map(({ label, hasData }) => ({ label, hasData }))).toEqual([
-      { label: 'Run A · horizontal', hasData: true },
-      { label: 'Run A · vertical', hasData: true },
-      { label: 'Run B · horizontal', hasData: true },
-      { label: 'Run B · vertical', hasData: false },
+    expect(directivityMapPanels(items, 'directivity_map_d').map(({ plane, primaryLabel, references, hasData }) => ({ plane, primaryLabel, references: references.map(({ label }) => label), hasData }))).toEqual([
+      { plane: 'diagonal', primaryLabel: 'Run A', references: [], hasData: true },
     ]);
+    expect(directivityMapPanels(items, 'directivity_map').map(({ plane, primaryLabel, references, hasData }) => ({ plane, primaryLabel, references: references.map(({ label }) => label), hasData }))).toEqual([
+      { plane: 'horizontal', primaryLabel: 'Run A', references: ['Run B'], hasData: true },
+      { plane: 'vertical', primaryLabel: 'Run A', references: [], hasData: true },
+      { plane: 'diagonal', primaryLabel: 'Run A', references: [], hasData: true },
+    ]);
+  });
+
+  it('draws comparison runs in the primary heatmap as labelled contour series', () => {
+    const map = (edge: number): ResultPayload => ({
+      frequencies: [500, 1_000],
+      directivity: { horizontal: [
+        [[0, 0], [90, edge]],
+        [[0, 0], [90, edge - 2]],
+      ] },
+    });
+    const option = heatmapOption(map(-12), comparisonTokens, 'horizontal', -6, 'full', false, 10, {
+      primaryLabel: 'Run A',
+      references: [{ label: 'Run B', result: map(-10) }],
+    });
+    const series = option.series as Array<{ name?: string; type?: string }>;
+    expect((option.legend as { data: string[] }).data).toEqual(['Run A', 'Run B']);
+    expect(series.filter(({ name }) => name === 'Run A' || name === 'Run B').map(({ name, type }) => ({ name, type }))).toEqual([
+      { name: 'Run A', type: 'custom' },
+      { name: 'Run B', type: 'custom' },
+    ]);
+  });
+
+  it('projects a comparison contour by physical frequency instead of stretching its range', () => {
+    const display = { frequencies: [100, 1_000, 10_000], angles: [0, 45, 90], values: [], factor: 1 };
+    const source = { frequencies: [1_000, 10_000], angles: [0, 90], values: [], factor: 1 };
+    const [x, y] = comparisonContourPointToPixels([0, 0], source, display, { x: 0, y: 0, width: 300, height: 300 });
+    expect(x).toBeCloseTo(150);
+    expect(y).toBe(250);
   });
 
   it('overlays DI with metric colours and run-specific solid/dashed lines', () => {
@@ -210,6 +240,22 @@ describe('results chart layouts', () => {
     act(() => root.render(createElement(ResultsChartGrid, { chartTypes, result, named: [], tokens })));
     expect(host.querySelector('.result-grid')?.classList.contains(resultLayoutClass(count))).toBe(true);
     expect(host.querySelectorAll('.result-card')).toHaveLength(count);
+  });
+
+  it('lets a panel select and persist a diagonal-only directivity heatmap', () => {
+    preferencesStore.update({ chartTypes: ['summary'] });
+    act(() => root.render(createElement(ResultsHarness)));
+    const select = host.querySelector<HTMLSelectElement>('[aria-label="Panel 1 chart type"]')!;
+    expect([...select.options].find(({ value }) => value === 'directivity_map_d')?.text).toBe('Directivity Map (Diagonal)');
+
+    act(() => {
+      select.value = 'directivity_map_d';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
+    expect(preferencesStore.getSnapshot().chartTypes).toEqual(['directivity_map_d']);
+    expect(host.querySelector('.result-title b')?.textContent).toBe('Directivity Diagonal');
+    expect(host.querySelector('.chart-stub')?.textContent).toContain('diagonal polar plane');
   });
 
   it('renders summary groups, row titles, and a marked warning group', () => {

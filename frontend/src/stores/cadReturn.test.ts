@@ -68,6 +68,61 @@ describe('CAD return store', () => {
     expect(useCadReturnStore.getState().needsIngest).toBe(true);
   });
 
+  it('carries the solve setup across a same-inventory arrival but never acknowledgements', () => {
+    const store = useCadReturnStore.getState();
+    store.selectBundle(bundle);
+    store.applyIngest(record(), store.beginIngestIntent());
+    store.acknowledge('finding-a', true);
+    store.setSourceSize('source-hf', 2.25);
+    store.setSourceChannel('source-hf', 'drive-mf');
+    store.setExteriorOnly(true);
+    store.setCombineEnabled(true);
+    store.setChannelDriverEnabled('drive-mf', true);
+    store.setSweep({ frequencyStartHz: 300, frequencyEndHz: 12_000, frequencyCount: 31 });
+
+    const arrived = {
+      ...bundle,
+      modifiedAt: '2026-08-11T02:00:00Z',
+      documentName: 'Speaker v2',
+      // New suggestions must not clobber the user's chosen sizes.
+      sources: bundle.sources.map((source) => ({ ...source, suggestedResolutionMm: 5 })),
+    };
+    expect(useCadReturnStore.getState().selectArrivedBundle(arrived)).toBe('carried');
+
+    const state = useCadReturnStore.getState();
+    expect(state.selectedBundle?.documentName).toBe('Speaker v2');
+    expect(state.sourceSizesMm['source-hf']).toBe(2.25);
+    expect(state.driveChannels).toEqual([
+      { id: 'drive-mf', source_ids: ['source-mf', 'source-hf'], motion: 'normal' },
+    ]);
+    expect(state.exteriorOnly).toBe(true);
+    expect(state.combineEnabled).toBe(true);
+    expect(state.channelDrivers['drive-mf']?.enabled).toBe(true);
+    expect(state.frequencyStartHz).toBe(300);
+    // The new geometry re-earns its evidence.
+    expect(state.ingestRecord).toBeNull();
+    expect(state.acknowledgedFindingIds).toEqual([]);
+    expect(state.needsIngest).toBe(true);
+  });
+
+  it('resets fully when an arrival changes the source inventory', () => {
+    const store = useCadReturnStore.getState();
+    store.selectBundle(bundle);
+    store.setSourceSize('source-hf', 2.25);
+    store.setCombineEnabled(true);
+
+    const arrived = {
+      ...bundle,
+      modifiedAt: '2026-08-11T02:00:00Z',
+      sourceCount: 1,
+      sources: [bundle.sources[0]],
+    };
+    expect(useCadReturnStore.getState().selectArrivedBundle(arrived)).toBe('reset');
+    const state = useCadReturnStore.getState();
+    expect(state.sourceSizesMm).toEqual({ 'source-mf': 8 });
+    expect(state.combineEnabled).toBe(false);
+  });
+
   it('marks a refreshed changed listing stale while preserving sizing edits', () => {
     useCadReturnStore.getState().selectBundle(bundle);
     useCadReturnStore.getState().applyIngest(record(), useCadReturnStore.getState().beginIngestIntent());

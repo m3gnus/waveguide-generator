@@ -234,6 +234,8 @@ def read_fusion_status(
         "state": "addin_offline" if process_running else "closed",
         "running": False,
         "processRunning": process_running,
+        "adapterVersion": None,
+        "workspaceRoot": None,
         "updatedAt": None,
         "documentName": None,
         "documentId": None,
@@ -273,6 +275,8 @@ def read_fusion_status(
         "running": True,
         "processRunning": True,
         "sessionId": _string(payload.get("sessionId")),
+        "adapterVersion": _string(payload.get("adapterVersion")),
+        "workspaceRoot": _string(payload.get("workspaceRoot")),
         "updatedAt": updated_at.isoformat().replace("+00:00", "Z"),
     }
     document = payload.get("document")

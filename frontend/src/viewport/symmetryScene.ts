@@ -86,12 +86,21 @@ function triangleInSolvedDomain(
   surface: SceneSurface,
   triangleOffset: number,
   quadrants: Exclude<DisplayQuadrants, 1234>,
+  verticalOffset: number,
 ): boolean {
   const a = surface.indices[triangleOffset] * 3;
   const b = surface.indices[triangleOffset + 1] * 3;
   const c = surface.indices[triangleOffset + 2] * 3;
   const x = (surface.positions[a] + surface.positions[b] + surface.positions[c]) / 3;
-  const y = (surface.positions[a + 1] + surface.positions[b + 1] + surface.positions[c + 1]) / 3;
+  // Mesh.VerticalOffset is a rigid placement applied after the geometry is
+  // built around its local symmetry planes. Classify in that local frame so
+  // the tint follows the shifted horn instead of continuing to split at the
+  // scene's global y=0 plane.
+  const y = (
+    surface.positions[a + 1]
+    + surface.positions[b + 1]
+    + surface.positions[c + 1]
+  ) / 3 - verticalOffset;
   if (quadrants === 12) return y >= -PLANE_EPSILON;
   if (quadrants === 14) return x >= -PLANE_EPSILON;
   return x >= -PLANE_EPSILON && y >= -PLANE_EPSILON;
@@ -102,6 +111,7 @@ function triangleInSolvedDomain(
 export function markParametricSolvedDomain(
   scene: FrameScene,
   quadrants: DisplayQuadrants,
+  verticalOffset = 0,
 ): FrameScene {
   if (quadrants === 1234) return {
     ...scene,
@@ -111,7 +121,7 @@ export function markParametricSolvedDomain(
     const solved: number[] = [];
     const displayOnly: number[] = [];
     for (let offset = 0; offset + 2 < surface.indices.length; offset += 3) {
-      const target = triangleInSolvedDomain(surface, offset, quadrants) ? solved : displayOnly;
+      const target = triangleInSolvedDomain(surface, offset, quadrants, verticalOffset) ? solved : displayOnly;
       target.push(surface.indices[offset], surface.indices[offset + 1], surface.indices[offset + 2]);
     }
     return [

@@ -130,15 +130,30 @@ describe('Viewport preview errors', () => {
   });
 
   it('starts in an untilted orthographic front view for precise shape inspection', () => {
-    const front = [...host.querySelectorAll<HTMLButtonElement>('.viewport-tool-text')]
-      .find((button) => button.textContent === 'Front');
     const projection = host.querySelector<HTMLButtonElement>('.projection-toggle');
 
-    expect(front?.classList.contains('on')).toBe(true);
     expect(projection?.textContent).toBe('Ortho');
   });
 
-  it('switches between the parametric scene and matching CAD slot, and guards MSH import', () => {
+  it('cycles display modes from one compact toolbar control', () => {
+    const mode = host.querySelector<HTMLButtonElement>('.display-mode-tools button');
+    expect(host.querySelectorAll('.display-mode-tools button')).toHaveLength(1);
+    expect(host.querySelectorAll('.viewport-tools button')).toHaveLength(6);
+    expect(host.querySelector('.viewport-tools [aria-label="Import Gmsh 2.2 mesh"]')).toBeNull();
+    expect(host.querySelector('.viewport-tools [aria-label="View presets"]')).toBeNull();
+    expect(mode?.getAttribute('aria-label')).toContain('Display mode: Clay');
+    act(() => mode?.click());
+    expect(mode?.getAttribute('aria-label')).toContain('Display mode: Solid + wireframe');
+  });
+
+  it('keeps enclosure and frame stats in viewer preferences', () => {
+    act(() => host.querySelector<HTMLButtonElement>('[aria-label="Viewer preferences"]')?.click());
+    const labels = [...host.querySelectorAll<HTMLLabelElement>('.viewer-pref-toggle')].map((label) => label.textContent);
+    expect(labels).toContain('Show enclosure');
+    expect(labels).toContain('Show frame stats');
+  });
+
+  it('switches between the parametric scene and matching CAD slot', () => {
     const ingestId = 'wgi_viewport_mode';
     act(() => {
       useCadReturnStore.setState({
@@ -151,12 +166,10 @@ describe('Viewport preview errors', () => {
 
     act(() => workspaceModeStore.setMode('cad'));
     expect(host.querySelector('.viewport-title b')?.textContent).toBe('Speaker CAD');
-    expect(host.querySelector<HTMLButtonElement>('[aria-label="Import Gmsh 2.2 mesh"]')?.disabled).toBe(true);
     expect(host.querySelector('.imported-mesh-badge')).toBeNull();
 
     act(() => workspaceModeStore.setMode('parametric'));
     expect(host.querySelector('.viewport-title b')?.textContent).toBe('loaded-design');
-    expect(host.querySelector<HTMLButtonElement>('[aria-label="Import Gmsh 2.2 mesh"]')?.disabled).toBe(false);
   });
 });
 

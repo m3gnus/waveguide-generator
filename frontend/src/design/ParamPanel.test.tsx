@@ -381,8 +381,9 @@ describe('ParamPanel inventory UX', () => {
     expect(host.querySelector('[data-section="Linked design"]')).not.toBeNull();
     expect(host.querySelector('[data-section="Profile Dimensions"]')).not.toBeNull();
     act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
-    expect(host.textContent).toContain('No CAD geometry yet');
-    expect(host.textContent).toContain('Open CAD Link');
+    expect(host.textContent).toContain('Finish the Fusion CAD workflow');
+    expect(host.textContent).toContain('set up the connection');
+    expect(host.textContent).toContain('Open CAD Link setup');
     expect(host.querySelector('[data-section]')).toBeNull();
   });
 

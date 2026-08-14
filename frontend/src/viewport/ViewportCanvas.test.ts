@@ -1,7 +1,7 @@
-import { Box3, PerspectiveCamera, Vector3 } from 'three';
+import { Box3, OrthographicCamera, PerspectiveCamera, Vector3 } from 'three';
 import { describe, expect, it, vi } from 'vitest';
 import { calculateCameraFit, clippingRange } from './cameraMath';
-import { axisColorsFromTokens, cameraFitDisposition, cameraFitKey, canRenderWebGL, canvasNeedsRemeasure, gizmoAxisDirection, installContextLossFallback, observeCanvasVisibility, pickGizmoAxis, rebracketCamera, scheduleAppliedTask, shouldShowAxisGizmo, type GizmoAxis } from './ViewportCanvas';
+import { axisColorsFromTokens, cameraFitDisposition, cameraFitKey, canRenderWebGL, canvasNeedsRemeasure, gizmoAxisDirection, installContextLossFallback, observeCanvasVisibility, pickGizmoAxis, rebracketCamera, resizeCameraFrustum, scheduleAppliedTask, shouldShowAxisGizmo, transferCameraView, type GizmoAxis } from './ViewportCanvas';
 
 class FakeScheduler {
   private readonly tasks = new Set<() => void>();
@@ -127,23 +127,23 @@ describe('cameraFitDisposition', () => {
   const otherView = '1:perspective:1.6:0,0,1';
 
   it('applies the first fit, then settles', () => {
-    expect(cameraFitDisposition({ fit: null, view: null }, { fit: 'a', view }, false)).toBe('apply');
-    expect(cameraFitDisposition({ fit: 'a', view }, { fit: 'a', view }, false)).toBe('settled');
+    expect(cameraFitDisposition({ fit: null, view: null }, { fit: 'a', view })).toBe('apply');
+    expect(cameraFitDisposition({ fit: 'a', view }, { fit: 'a', view })).toBe('settled');
   });
 
-  it('re-frames a model whose bounds moved while the camera is still the application\'s', () => {
-    expect(cameraFitDisposition({ fit: 'a', view }, { fit: 'b', view }, false)).toBe('apply');
+  it('keeps the original framing when model bounds move', () => {
+    expect(cameraFitDisposition({ fit: 'a', view }, { fit: 'b', view })).toBe('record');
   });
 
   // Every preview frame during a drag changes the bounds, and the fit is
   // computed from the last requested direction -- so applying it would snap an
   // orbited camera back to the preset several times a second.
   it('leaves a camera the user has moved alone when only the bounds changed', () => {
-    expect(cameraFitDisposition({ fit: 'a', view }, { fit: 'b', view }, true)).toBe('record');
+    expect(cameraFitDisposition({ fit: 'a', view }, { fit: 'b', view })).toBe('record');
   });
 
   it('takes the camera back when the user asks for a view', () => {
-    expect(cameraFitDisposition({ fit: 'a', view }, { fit: 'b', view: otherView }, true)).toBe('apply');
+    expect(cameraFitDisposition({ fit: 'a', view }, { fit: 'b', view: otherView })).toBe('apply');
   });
 
   it('re-brackets changed bounds without moving a user-owned camera', () => {
@@ -161,6 +161,39 @@ describe('cameraFitDisposition', () => {
 
     expect(rebracketCamera(camera, target, 500)).toBe(false);
     expect(updateProjectionMatrix).toHaveBeenCalledOnce();
+  });
+
+  it('resizes perspective and orthographic frustums without moving the camera', () => {
+    const perspective = new PerspectiveCamera(34, 1);
+    perspective.position.set(10, 20, 30);
+    resizeCameraFrustum(perspective, 2);
+    expect(perspective.aspect).toBe(2);
+    expect(perspective.position.toArray()).toEqual([10, 20, 30]);
+
+    const orthographic = new OrthographicCamera(-100, 100, 50, -50);
+    orthographic.position.set(10, 20, 30);
+    resizeCameraFrustum(orthographic, 2);
+    expect([orthographic.left, orthographic.right, orthographic.top, orthographic.bottom]).toEqual([-100, 100, 50, -50]);
+    resizeCameraFrustum(orthographic, 1);
+    expect([orthographic.left, orthographic.right, orthographic.top, orthographic.bottom]).toEqual([-50, 50, 50, -50]);
+    expect(orthographic.position.toArray()).toEqual([10, 20, 30]);
+  });
+
+  it('preserves target, orientation, and visible height across projection changes', () => {
+    const target = new Vector3(4, 5, 6);
+    const perspective = new PerspectiveCamera(34, 16 / 9);
+    perspective.position.set(4, 5, 106);
+    perspective.lookAt(target);
+    const orthographic = new OrthographicCamera(-1, 1, 1, -1);
+
+    transferCameraView(perspective, orthographic, target, 16 / 9);
+    expect(orthographic.position.toArray()).toEqual(perspective.position.toArray());
+    expect(orthographic.getWorldDirection(new Vector3()).angleTo(perspective.getWorldDirection(new Vector3()))).toBeLessThan(1e-8);
+
+    const roundTrip = new PerspectiveCamera(34, 16 / 9);
+    transferCameraView(orthographic, roundTrip, target, 16 / 9);
+    expect(roundTrip.position.distanceTo(perspective.position)).toBeLessThan(1e-8);
+    expect(roundTrip.getWorldDirection(new Vector3()).angleTo(perspective.getWorldDirection(new Vector3()))).toBeLessThan(1e-8);
   });
 });
 

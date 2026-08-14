@@ -66,6 +66,7 @@ def _parameter_table(manifest: Mapping[str, Any]) -> dict[str, tuple[str, float]
     if not isinstance(entries, Sequence) or isinstance(entries, (str, bytes)):
         return {}
     fields = (
+        "throat_dia",
         "vertical_offset",
         "enc_z_front",
         "enc_depth",
@@ -210,6 +211,20 @@ def build_datum_featurescript(manifest: Mapping[str, Any]) -> str:
     enc_w, _ = _var(parameters, "enc_w", enc_w_base)
     enc_h, _ = _var(parameters, "enc_h", enc_h_base)
 
+    required_features = manifest.get("required_features")
+    interface = manifest.get("interface")
+    interface_sources = (
+        interface.get("sources") if isinstance(interface, Mapping) else None
+    )
+    materialize_source = (
+        isinstance(required_features, Sequence)
+        and not isinstance(required_features, (str, bytes))
+        and "source-interface-v1" in required_features
+        and isinstance(interface_sources, Sequence)
+        and not isinstance(interface_sources, (str, bytes))
+        and len(interface_sources) == 1
+    )
+
     body: list[str] = []
     for key in _PLANE_KEYS:
         datum = datums.get(key)
@@ -253,6 +268,46 @@ def build_datum_featurescript(manifest: Mapping[str, Any]) -> str:
                 "height" : {mouth_h}
         }});
 {_named(operation, key)}'''
+        )
+
+    if materialize_source:
+        throat = datums.get("WG_THROAT_PLANE")
+        if not isinstance(throat, Mapping):
+            raise ValueError("source-interface-v1 requires WG_THROAT_PLANE")
+        throat_parameter = parameters.get("throat_dia")
+        if throat_parameter is None:
+            raise ValueError("source-interface-v1 requires a managed throat_dia parameter")
+        throat_origin = _vector(
+            throat.get("origin_mm"), label="WG_THROAT_PLANE.origin_mm"
+        )
+        throat_normal = _vector(
+            throat.get("normal"), label="WG_THROAT_PLANE.normal"
+        )
+        throat_origin_expr = _point_expression(
+            throat_origin,
+            vertical=vertical,
+            vertical_base=vertical_base,
+        )
+        throat_dia, _ = _var(parameters, "throat_dia", throat_parameter[1])
+        body.append(
+            f'''        // Real sheet body exported with the Part Studio; the
+        // construction throat plane alone is intentionally not source evidence.
+        var wgThroatSourceSketchId = id + "WG_THROAT_SOURCE_SKETCH";
+        var wgThroatSourceSketch = newSketchOnPlane(context, wgThroatSourceSketchId, {{
+                "sketchPlane" : plane({throat_origin_expr}, vector({_scalar(throat_normal[0])}, {_scalar(throat_normal[1])}, {_scalar(throat_normal[2])}))
+        }});
+        skCircle(wgThroatSourceSketch, "boundary", {{
+                "center" : vector(0 * millimeter, 0 * millimeter),
+                "radius" : {throat_dia} / 2
+        }});
+        skSolve(wgThroatSourceSketch);
+        opFillSurface(context, id + "WG_THROAT_SOURCE", {{
+                "edgesG0" : qCreatedBy(wgThroatSourceSketchId, EntityType.EDGE),
+                "edgesG1" : qNothing(),
+                "edgesG2" : qNothing(),
+                "guideVertices" : qNothing()
+        }});
+{_named("WG_THROAT_SOURCE", "WG_THROAT_SOURCE")}'''
         )
 
     axis_origin_expr = _point_expression(

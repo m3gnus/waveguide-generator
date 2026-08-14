@@ -30,6 +30,13 @@ interface SolveControl {
 interface CoordinatorBridgeSnapshot {
   run(design: DesignDocument, designRevision?: number): Promise<void>;
   runImported(submission: ImportedSolveSubmission): Promise<void>;
+  /** The single CAD solve entry point: readiness gate, submission build, and
+   * submit through runImported so every caller inherits the Metal capability
+   * check, the submission mutex, run naming, and the job-list refresh.
+   * Throws the blocking reason; returns 'busy' when a solve is already in
+   * flight so an automatic caller can say so instead of silently doing
+   * nothing. */
+  solveCurrentCadImport(): Promise<'submitted' | 'busy'>;
   retry(jobId: string): Promise<void>;
   reportError(message: string): void;
   actionError: string | null;
@@ -39,6 +46,7 @@ const unavailableRun = async () => { throw new Error('Solve coordinator is unava
 let bridgeSnapshot: CoordinatorBridgeSnapshot = {
   run: unavailableRun,
   runImported: unavailableRun,
+  solveCurrentCadImport: unavailableRun,
   retry: unavailableRun,
   reportError: () => undefined,
   actionError: null,
@@ -103,6 +111,23 @@ function acceptSubmittedName(
   preferencesStore.update({ outputName: coreName, nameSourceProjection: projection });
 }
 
+const CAD_VIEWPORT_MISMATCH =
+  'The displayed Fusion CAD mesh does not match the selected ingestion. Prepare or reselect it before solving.';
+
+/** The complete CAD-mode readiness rule, read from live store state so the
+ * Solve button, the keyboard shortcut, and every automatic caller apply one
+ * gate. The viewport check is evidence about what the user is looking at; the
+ * rest is the shared imported-submission blocker. */
+export function cadSolveBlockerNow(): string | null {
+  const cadReturn = useCadReturnStore.getState();
+  const cad = importedMeshStore.getSnapshot().cad;
+  if (cadReturn.ingestRecord !== null && cad !== null
+    && (!cad.ingestId || cad.ingestId !== cadReturn.ingestRecord.ingest_id)) {
+    return CAD_VIEWPORT_MISMATCH;
+  }
+  return importedSubmissionBlocker(cadReturn);
+}
+
 const jobsConnection = () => jobsSocket.getSnapshot().connection;
 
 const systemNow = () => new Date();
@@ -158,7 +183,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     || cadViewportGeometry.ingestId !== cadReturn.ingestRecord?.ingest_id
   );
   const cadSolveBlocker = cadGeometryMismatch
-    ? 'The displayed Fusion CAD mesh does not match the selected ingestion. Prepare or reselect it before solving.'
+    ? CAD_VIEWPORT_MISMATCH
     : cadGeometryActive
       ? importedSubmissionBlocker(cadReturn, solveOptions)
       : null;
@@ -170,16 +195,30 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       if (!capability?.available) throw new Error(capability?.reason ?? capabilityError ?? `${selectedEngine} engine is unavailable`);
       setSubmitting(true);
       setActionError(null);
+      let submittedDesign = nextDesign;
+      let submittedRevision = nextRevision;
+      const wallThickness = nextDesign.mesh.wall_thickness;
+      if (
+        effectiveEngine.toLowerCase() === 'bempp'
+        && nextDesign.simulation.sim_type !== 'infinite-baffle'
+        && nextDesign.enclosure.depth <= 0
+        && (wallThickness == null || wallThickness === 0)
+      ) {
+        useDesignStore.getState().updateValue('mesh.wall_thickness', 5);
+        const corrected = useDesignStore.getState();
+        submittedDesign = corrected.design;
+        submittedRevision = corrected.designRevision;
+      }
       const options = useSolveOptionsStore.getState().options();
-      const projection = projectSubmittedDesign(nextDesign, options);
+      const projection = projectSubmittedDesign(submittedDesign, options);
       const naming = preferencesStore.getSnapshot();
       const coreName = nextRunName(naming, projection, filename);
       const label = decorateRunName(coreName, naming, now());
       await submitDesign(
-        nextDesign,
+        submittedDesign,
         options,
         fetch,
-        { label, designRevision: nextRevision },
+        { label, designRevision: submittedRevision },
       );
       acceptSubmittedName(coreName, projection, naming);
       await jobsSocket.refresh();
@@ -187,7 +226,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       submissionInFlight.current = false;
       setSubmitting(false);
     }
-  }, [capability, capabilityError, filename, now, preferences, revision, selectedEngine]);
+  }, [capability, capabilityError, effectiveEngine, filename, now, preferences, revision, selectedEngine]);
 
   const runImported = useCallback(async (submission: ImportedSolveSubmission) => {
     if (submissionInFlight.current) return;
@@ -218,6 +257,16 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     }
   }, [capabilities, capabilityError, filename, now, preferences]);
 
+  // Nothing awaits between the mutex read and runImported's own claim of it,
+  // so a busy report here cannot race a submission into existence.
+  const solveCurrentCadImport = useCallback(async () => {
+    if (submissionInFlight.current) return 'busy' as const;
+    const blocker = cadSolveBlockerNow();
+    if (blocker) throw new Error(blocker);
+    await runImported(buildImportedSubmission(useCadReturnStore.getState()));
+    return 'submitted' as const;
+  }, [runImported]);
+
   const retry = useCallback(async (jobId: string) => {
     if (submissionInFlight.current) return;
     submissionInFlight.current = true;
@@ -233,9 +282,16 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
 
   const reportError = useCallback((message: string) => setActionError(message), []);
   useEffect(() => {
-    publishBridge({ run, runImported, retry, reportError, actionError });
-    return () => publishBridge({ run: unavailableRun, runImported: unavailableRun, retry: unavailableRun, reportError: () => undefined, actionError: null });
-  }, [actionError, reportError, retry, run, runImported]);
+    publishBridge({ run, runImported, solveCurrentCadImport, retry, reportError, actionError });
+    return () => publishBridge({
+      run: unavailableRun,
+      runImported: unavailableRun,
+      solveCurrentCadImport: unavailableRun,
+      retry: unavailableRun,
+      reportError: () => undefined,
+      actionError: null,
+    });
+  }, [actionError, reportError, retry, run, runImported, solveCurrentCadImport]);
 
   useEffect(() => {
     void automation.process(jobs, preferences, {
@@ -265,14 +321,13 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         throw new Error('A standalone imported mesh is for viewport inspection only. Show Parametric to solve the WG design.');
       }
       if (cadGeometryActive) {
-        if (cadSolveBlocker) throw new Error(cadSolveBlocker);
-        await runImported(buildImportedSubmission(useCadReturnStore.getState()));
+        await solveCurrentCadImport();
         return;
       }
       await run(design, revision);
     };
     void action().catch((error) => reportError(error instanceof Error ? error.message : String(error)));
-  }, [cadGeometryActive, cadSolveBlocker, design, fileGeometryActive, reportError, revision, run, runImported]);
+  }, [cadGeometryActive, design, fileGeometryActive, reportError, revision, run, solveCurrentCadImport]);
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && activeCapability?.available && !submitting && !cadSolveBlocker && !fileGeometryActive) {
@@ -284,11 +339,12 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     return () => window.removeEventListener('keydown', shortcut);
   }, [activeCapability, cadSolveBlocker, fileGeometryActive, solve, submitting]);
 
+  const cadLabel = preferences.cadApplication === 'fusion360' ? 'Fusion CAD' : 'CAD';
   const control = useMemo<SolveControl>(() => ({
     solve,
     disabled: !activeCapability?.available || submitting || Boolean(cadSolveBlocker) || fileGeometryActive,
     submitting,
-    label: cadGeometryActive ? 'Solve Fusion CAD' : 'Solve',
+    label: cadGeometryActive ? `Solve ${cadLabel}` : 'Solve',
     title: submitting
       ? 'Submitting solve…'
       : fileGeometryActive
@@ -296,13 +352,13 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         : cadSolveBlocker
           ? cadSolveBlocker
           : cadGeometryActive && activeCapability?.available
-            ? 'Solve the displayed Fusion CAD model with Metal'
+            ? `Solve the displayed ${cadLabel} model with Metal`
             : activeCapability?.available
               ? `Solve current design with ${selectedEngine === 'auto' ? `AUTO (${activeCapability.name})` : activeCapability.name}`
               : cadGeometryActive
                 ? metalCapability?.reason ?? capabilityError ?? 'Metal engine is unavailable'
                 : unavailable,
-  }), [activeCapability, cadGeometryActive, cadSolveBlocker, capabilityError, fileGeometryActive, metalCapability?.reason, selectedEngine, solve, submitting, unavailable]);
+  }), [activeCapability, cadGeometryActive, cadLabel, cadSolveBlocker, capabilityError, fileGeometryActive, metalCapability?.reason, selectedEngine, solve, submitting, unavailable]);
 
   return <SolveContext.Provider value={control}>{children}<JobAnnouncer jobs={jobs}/></SolveContext.Provider>;
 }

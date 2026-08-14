@@ -117,6 +117,10 @@ directory. A different output folder can be selected once in **Settings →
 Workspace**. Internal databases, logs, and process locks remain under the
 platform application-data directory; result exports do not.
 
+The Fusion WGLink exchange folder is configured separately under **Settings →
+CAD Link**. Changing the output folder never moves or disconnects Fusion's
+`.wglink` and `.wgreturn` exchange.
+
 ### Original-app run migration
 
 On launch, Waveguide Generator looks for the original application's v1 run
