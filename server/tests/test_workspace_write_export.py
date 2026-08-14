@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,16 @@ def endpoint(state: workspace_api.WorkspaceState):
 def path_endpoint(state: workspace_api.WorkspaceState):
     router = workspace_api.create_workspace_router(state)
     return next(route.endpoint for route in router.routes if route.path == "/api/workspace/path")
+
+
+def cad_path_endpoint(state: workspace_api.CadWorkspaceState):
+    router = workspace_api.create_cad_workspace_router(state)
+    return next(route.endpoint for route in router.routes if route.path == "/api/cad-workspace/path")
+
+
+def cad_select_endpoint(state: workspace_api.CadWorkspaceState):
+    router = workspace_api.create_cad_workspace_router(state)
+    return next(route.endpoint for route in router.routes if route.path == "/api/cad-workspace/select")
 
 
 def request(subdirectory: str, members: list[tuple[str, str]]):
@@ -50,6 +61,82 @@ def test_write_export_happy_path(tmp_path: Path) -> None:
     }
     assert (workspace / "horn_1/hor/a.frd").read_text() == "one"
     assert (workspace / "horn_1/ver/b.frd").read_text() == "two"
+
+
+def test_cad_workspace_is_separate_and_requires_a_selection(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    output = workspace_api.WorkspaceState(data, default_path=tmp_path / "output")
+    cad = workspace_api.CadWorkspaceState(data)
+
+    assert output.path() == (tmp_path / "output").resolve()
+    assert asyncio.run(cad_path_endpoint(cad)()) == {"selected": False, "path": None}
+    with pytest.raises(ValueError, match="No WGLink folder"):
+        cad.path()
+
+    exchange = tmp_path / "fusion-exchange"
+    exchange.mkdir()
+    cad.select(exchange)
+    assert cad.path() == exchange.resolve()
+    assert json.loads((data / "cadlink_settings.json").read_text()) == {
+        "schemaVersion": 1,
+        "cadLinkPath": str(exchange.resolve()),
+    }
+
+
+def test_cad_workspace_accepts_a_manual_path_when_no_native_picker_exists(
+    tmp_path: Path,
+) -> None:
+    state = workspace_api.CadWorkspaceState(tmp_path / "data")
+    exchange = tmp_path / "manual-exchange"
+    exchange.mkdir()
+    payload = workspace_api.SelectCadWorkspaceRequest(path=str(exchange))
+
+    result = asyncio.run(cad_select_endpoint(state)(payload))
+
+    assert result == {"selected": True, "path": str(exchange.resolve())}
+    assert state.selected_path() == exchange.resolve()
+
+
+def test_cad_workspace_adopts_the_previous_shared_selection(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    data.mkdir()
+    old = tmp_path / "old-shared-workspace"
+    old.mkdir()
+    (old / "wglink").mkdir()
+    (data / "workspace_settings.json").write_text(
+        json.dumps({"schemaVersion": 1, "workspacePath": str(old)}),
+        encoding="utf-8",
+    )
+
+    cad = workspace_api.CadWorkspaceState(data)
+    assert cad.selected_path() == old.resolve()
+    assert json.loads((data / "cadlink_settings.json").read_text()) == {
+        "schemaVersion": 1,
+        "cadLinkPath": str(old.resolve()),
+    }
+
+    # The migration is durable: changing the output selection cannot move CAD.
+    newer_output = tmp_path / "new-output"
+    newer_output.mkdir()
+    workspace_api.WorkspaceState(data).select(newer_output)
+    assert workspace_api.CadWorkspaceState(data).selected_path() == old.resolve()
+
+
+def test_output_only_legacy_selection_does_not_silently_configure_cad(
+    tmp_path: Path,
+) -> None:
+    data = tmp_path / "data"
+    data.mkdir()
+    output_only = tmp_path / "exports"
+    output_only.mkdir()
+    (data / "workspace_settings.json").write_text(
+        json.dumps({"schemaVersion": 1, "workspacePath": str(output_only)}),
+        encoding="utf-8",
+    )
+
+    cad = workspace_api.CadWorkspaceState(data)
+    assert cad.selected_path() is None
+    assert not (data / "cadlink_settings.json").exists()
 
 
 def test_binary_auto_export_merges_new_files_and_accepts_identical_retries(tmp_path: Path) -> None:

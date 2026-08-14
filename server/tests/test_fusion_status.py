@@ -37,6 +37,8 @@ def _write_status(
     links: list[dict[str, object]] | None = None,
     document: bool = True,
     updated_at: datetime = NOW,
+    adapter_version: str | None = None,
+    workspace_root: Path | None = None,
 ) -> Path:
     folder = workspace / "ipc" / "wglink"
     folder.mkdir(parents=True, exist_ok=True)
@@ -47,6 +49,8 @@ def _write_status(
                 "schemaVersion": 1,
                 "cadApplication": "fusion360",
                 "sessionId": "fusion-session-a",
+                "adapterVersion": adapter_version,
+                "workspaceRoot": str(workspace_root) if workspace_root is not None else None,
                 "updatedAt": updated_at.isoformat().replace("+00:00", "Z"),
                 "document": (
                     {"name": "Tritonia V", "id": "fusion:doc-a", "links": links or []}
@@ -331,7 +335,7 @@ def test_an_unsaved_design_can_match_a_fusion_link_by_exact_hash(tmp_path: Path)
     assert _read(workspace, design_id=None)["state"] == "current"
 
 
-def test_status_endpoint_hashes_the_design_in_wg_and_requires_a_workspace(
+def test_status_endpoint_hashes_the_design_and_reports_wglink_folder_setup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr("server.cadlink.api.fusion_process_running", lambda: False)
@@ -339,19 +343,24 @@ def test_status_endpoint_hashes_the_design_in_wg_and_requires_a_workspace(
     payload = FusionStatusRequest.model_validate(
         {"design": {"formula": "OSSE", "L": 120, "a": 45}}
     )
-    with pytest.raises(Exception) as missing:
-        asyncio.run(fusion_status(payload, SimpleNamespace(app=app)))
-    assert missing.value.status_code == 409
+    missing = asyncio.run(fusion_status(payload, SimpleNamespace(app=app)))
+    assert missing["cadFolderConfigured"] is False
+    assert missing["cadFolderPath"] is None
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    app.state.workspace.select(workspace)
+    app.state.cad_workspace.select(workspace)
     response = asyncio.run(fusion_status(payload, SimpleNamespace(app=app)))
     assert response == {
         "cadApplication": "fusion360",
+        "cadFolderConfigured": True,
+        "cadFolderPath": str(workspace.resolve()),
+        "cadConnectionIssue": None,
         "state": "closed",
         "running": False,
         "processRunning": False,
+        "adapterVersion": None,
+        "workspaceRoot": None,
         "updatedAt": None,
         "documentName": None,
         "documentId": None,
@@ -372,6 +381,56 @@ def test_status_endpoint_hashes_the_design_in_wg_and_requires_a_workspace(
     }
 
 
+def test_status_endpoint_reports_old_addins_and_folder_mismatches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("server.cadlink.api.fusion_process_running", lambda: False)
+    data_dir = tmp_path / "data"
+    selected = tmp_path / "selected"
+    selected.mkdir()
+    app = create_app(data_dir=data_dir)
+    app.state.cad_workspace.select(selected)
+    payload = FusionStatusRequest.model_validate(
+        {"design": {"formula": "OSSE", "L": 120, "a": 45}}
+    )
+    updated_at = datetime.now(timezone.utc)
+
+    _write_status(data_dir, document=False, updated_at=updated_at)
+    old_addin = asyncio.run(fusion_status(payload, SimpleNamespace(app=app)))
+    assert old_addin["cadConnectionIssue"] == "addin_upgrade_required"
+
+    _write_status(
+        data_dir,
+        document=False,
+        updated_at=updated_at,
+        adapter_version="1.2.3",
+    )
+    unavailable = asyncio.run(fusion_status(payload, SimpleNamespace(app=app)))
+    assert unavailable["cadConnectionIssue"] == "folder_unreadable"
+
+    other = tmp_path / "other"
+    other.mkdir()
+    _write_status(
+        data_dir,
+        document=False,
+        updated_at=updated_at,
+        adapter_version="1.2.3",
+        workspace_root=other,
+    )
+    mismatch = asyncio.run(fusion_status(payload, SimpleNamespace(app=app)))
+    assert mismatch["cadConnectionIssue"] == "folder_mismatch"
+
+    _write_status(
+        data_dir,
+        document=False,
+        updated_at=updated_at,
+        adapter_version="1.2.3",
+        workspace_root=selected,
+    )
+    connected = asyncio.run(fusion_status(payload, SimpleNamespace(app=app)))
+    assert connected["cadConnectionIssue"] is None
+
+
 def test_status_reads_role_preserving_parameters_from_the_linked_export(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -379,7 +438,7 @@ def test_status_reads_role_preserving_parameters_from_the_linked_export(
     app = create_app(data_dir=data_dir)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    app.state.workspace.select(workspace)
+    app.state.cad_workspace.select(workspace)
     design = DesignConfig.model_validate({"formula": "OSSE", "L": 120, "a": 45})
     identity, exported = _registered_export(
         app.state.cadlink_store,

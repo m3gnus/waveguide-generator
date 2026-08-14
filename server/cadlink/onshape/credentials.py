@@ -1,6 +1,6 @@
 """Locate and read the Onshape API key pair.
 
-The pair is created by the account owner at https://dev-portal.onshape.com/keys
+The pair is created by the account owner under My account > Developer > API keys
 and pasted into a ``KEY=VALUE`` file that lives outside every git repository, so
 it cannot be committed by accident.  WG only ever reads it: nothing here writes
 the file, echoes a secret into a log, or returns one across the API boundary.
@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import os
 from pathlib import Path
+import platform
 import stat
 from typing import Mapping
 
@@ -63,7 +64,7 @@ def _parse_env_file(text: str) -> dict[str, str]:
     return values
 
 
-def file_is_world_readable(path: Path) -> bool:
+def file_is_world_readable(path: Path, *, system: str | None = None) -> bool:
     """Report a key file that other local accounts can read.
 
     Advisory only: a loose mode is worth telling the owner about, but refusing
@@ -71,6 +72,10 @@ def file_is_world_readable(path: Path) -> bool:
     Windows filesystem with no POSIX bits).
     """
 
+    # Windows synthesizes POSIX read bits as 0o666; ACL inspection needs a
+    # platform-specific implementation, and recommending chmod there is wrong.
+    if (platform.system() if system is None else system) == "Windows":
+        return False
     try:
         mode = path.stat().st_mode
     except OSError:
@@ -107,8 +112,8 @@ def load_credentials(
     ).rstrip("/")
     if not access.strip() or not secret.strip():
         raise OnshapeCredentialsError(
-            "No Onshape API key pair was found. Create one at "
-            "https://dev-portal.onshape.com/keys and save it as two lines in "
+            "No Onshape API key pair was found. In Onshape, open My account > "
+            "Developer > API keys, create one, and save it as two lines in "
             f"{path}:\n"
             f"  {ACCESS_KEY_ENV}=...\n"
             f"  {SECRET_KEY_ENV}=...\n"

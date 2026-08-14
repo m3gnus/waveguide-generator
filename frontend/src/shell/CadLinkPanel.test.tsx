@@ -15,6 +15,7 @@ import { buildImportedSubmission, CadLinkPanel, fusionWorkflowView, newestReturn
 import { CadLinkCoordinator, cadLinkCoordinatorBridge } from './CadLinkCoordinator';
 
 const listing: CadReturnListing = {
+  cadFolderConfigured: true,
   items: [{
     name: 'speaker.wgreturn', bundlePath: 'wgreturn/speaker.wgreturn', modifiedAt: '2026-08-11T00:00:00Z', readable: true,
     documentName: 'Speaker', requestId: null, sourceCount: 1, instanceCount: 1,
@@ -42,6 +43,7 @@ const record: CadReturnIngestRecord = {
 };
 const closedFusion: FusionCadStatus = {
   cadApplication: 'fusion360', state: 'closed', processRunning: false, running: false, updatedAt: null,
+  cadFolderConfigured: true, cadFolderPath: '/cad',
   documentName: null, documentId: null, currentFormula: 'OSSE', fusionFormula: null, link: null,
   wgChangesAvailable: false, fusionChangesAvailable: false,
   realizedDimensions: { state: 'link_unavailable', instanceId: null, exportId: null, parameters: [] },
@@ -173,6 +175,9 @@ describe('CadLinkPanel', () => {
   });
 
   it('maps Fusion presence and config freshness to one explicit action', () => {
+    expect(fusionWorkflowView({ ...closedFusion, cadFolderConfigured: false })).toMatchObject({
+      state: 'not-configured', action: null,
+    });
     expect(fusionWorkflowView(closedFusion)).toMatchObject({
       headline: 'Fusion 360 is closed', action: 'open',
     });
@@ -182,6 +187,12 @@ describe('CadLinkPanel', () => {
     expect(fusionWorkflowView({ ...closedFusion, state: 'addin_offline', processRunning: true })).toMatchObject({
       state: 'addin-offline', action: null,
     });
+    expect(fusionWorkflowView({ ...currentFusion, cadConnectionIssue: 'folder_unreadable' })).toMatchObject({
+      headline: 'WGLink cannot access the selected folder', action: null,
+    });
+    expect(fusionWorkflowView({ ...currentFusion, cadConnectionIssue: 'folder_mismatch' }).detail).toContain(
+      'clear within a few seconds',
+    );
     expect(fusionWorkflowView({ ...currentFusion, state: 'stale', wgChangesAvailable: true })).toMatchObject({
       state: 'stale', action: 'update',
     });
@@ -733,7 +744,7 @@ describe('CadLinkPanel', () => {
       requested.push(path);
       if (path.endsWith('/returns')) return json(listing);
       if (path.endsWith('/fusion-status')) return json(closedFusion);
-      if (path === '/api/workspace/path') return json({ selected: true, path: '/cad' });
+      if (path === '/api/cad-workspace/path') return json({ selected: true, path: '/cad' });
       return json({
         bundlePath: '/cad/wglink/horn.wglink', bundleId: 'wgb_1', exportId: 'wge_1', sequence: 4,
         designHash: 'sha256:d', geometryHash: 'sha256:g', artifactSha256: 'sha256:a',
@@ -759,7 +770,7 @@ describe('CadLinkPanel', () => {
       const path = String(input);
       if (path.endsWith('/returns')) return json(listing);
       if (path.endsWith('/fusion-status')) return json(closedFusion);
-      if (path === '/api/workspace/path') return json({ selected: true, path: '/cad' });
+      if (path === '/api/cad-workspace/path') return json({ selected: true, path: '/cad' });
       return json({ detail: 'CAD-link bundle name is already used by another design: horn.wglink' }, 409);
     }));
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
