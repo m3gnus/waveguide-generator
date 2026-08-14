@@ -22,7 +22,8 @@ import { createImportedMeshScene } from '../viewport/importedMesh';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { parseMSH } from '../viewport/mshParser';
 import { workspaceModeStore } from '../stores/workspaceMode';
-import { sentToCadMessage, useSendToCad } from './useSendToCad';
+import { cadLinkCoordinatorBridge } from '../shell/CadLinkCoordinator';
+import { sentToCadMessage } from './useSendToCad';
 
 const ACCEPT = '.cfg,.txt,.mwg,text/plain';
 
@@ -81,7 +82,6 @@ export function DesignFileMenu() {
   const classification = useDocumentStore((state) => state.classification);
   const setCadLink = useDocumentStore((state) => state.setCadLink);
   const adoptSavedIdentity = useDocumentStore((state) => state.adoptSavedIdentity);
-  const { send: sendToCadBundle } = useSendToCad();
   const workspaceMode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
   const cadApplication = usePreferences().cadApplication;
   const [open, setOpen] = useState(false);
@@ -207,7 +207,10 @@ export function DesignFileMenu() {
 
   async function sendToCad() {
     await act(async () => {
-      setMessage(sentToCadMessage(await sendToCadBundle()));
+      // The coordinator owns the send: it derives open-vs-update, attaches the
+      // expected-document guard, and parks on the two-way conflict dialog.
+      const result = await cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion();
+      setMessage(result ? sentToCadMessage(result) : 'Both WG and Fusion changed — choose a direction in the dialog.');
     });
   }
 

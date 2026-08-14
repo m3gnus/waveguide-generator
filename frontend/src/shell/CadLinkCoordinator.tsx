@@ -19,6 +19,7 @@ import { createImportedMeshScene } from '../viewport/importedMesh';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { parseMSH } from '../viewport/mshParser';
 import { filenameStem } from '../viewport/presentation';
+import { fusionWorkflowView } from './cadWorkflowView';
 import { workspaceNavigation } from './workspaceNavigation';
 
 interface RefreshOptions {
@@ -37,12 +38,17 @@ interface CadLinkCoordinatorSnapshot {
   fusionStatus: FusionCadStatus | null;
   onshapeStatus: OnshapeStatus | null;
   onshapeConnection: OnshapeConnection | null;
+  pendingFusionConflict: boolean;
   refresh(options?: RefreshOptions): Promise<void>;
   refreshOnshapeStatus(committed?: DesignIdentity): Promise<void>;
   returnFromOnshape(): Promise<void>;
   expectFusionReturn(requestId: string, requestedAt?: number): void;
   ingest(): Promise<void>;
-  sendToFusion(target?: { documentId: string; returnStateHash: string | null }): Promise<WgLinkExportResponse>;
+  /** The one Fusion outbound path: derives open-vs-update and the expected
+   * document guard from the live status, and parks on the two-way conflict
+   * (returning null) until the user confirms through the coordinator dialog. */
+  sendWgToFusion(options?: { confirmed?: boolean }): Promise<WgLinkExportResponse | null>;
+  cancelFusionConflict(): void;
   clearFeedback(): void;
   reportError(message: string): void;
   reportStatus(message: string): void;
@@ -62,12 +68,14 @@ let bridgeSnapshot: CadLinkCoordinatorSnapshot = {
   fusionStatus: null,
   onshapeStatus: null,
   onshapeConnection: null,
+  pendingFusionConflict: false,
   refresh: unavailable,
   refreshOnshapeStatus: unavailableRefreshOnshape,
   returnFromOnshape: unavailable,
   expectFusionReturn: () => undefined,
   ingest: unavailable,
-  sendToFusion: unavailable,
+  sendWgToFusion: unavailable,
+  cancelFusionConflict: () => undefined,
   clearFeedback: () => undefined,
   reportError: () => undefined,
   reportStatus: () => undefined,
@@ -176,6 +184,7 @@ export function CadLinkCoordinator() {
   const [loading, setLoading] = useState(true);
   const [ingesting, setIngesting] = useState(false);
   const [sendingToFusion, setSendingToFusion] = useState(false);
+  const [pendingFusionConflict, setPendingFusionConflict] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [viewportNotice, setViewportNotice] = useState<string | null>(null);
@@ -383,6 +392,25 @@ export function CadLinkCoordinator() {
     }
   }, [design, designRevision, filename, identity, refresh, setCadLink]);
 
+  // The one Fusion outbound entry point (menu, rail, and panel). Deriving the
+  // action and the expected-document guard here means no call site can send an
+  // update without them — the drift that let the file menu bypass the two-way
+  // conflict confirmation.
+  const sendWgToFusion = useCallback(async (options?: { confirmed?: boolean }) => {
+    const current = fusionStatus;
+    const action = fusionWorkflowView(current).action;
+    if (action === 'update' && current?.fusionChangesAvailable && !options?.confirmed) {
+      setPendingFusionConflict(true);
+      return null;
+    }
+    setPendingFusionConflict(false);
+    return sendToFusion(action === 'update' && current?.documentId
+      ? { documentId: current.documentId, returnStateHash: current.link?.documentSignatureHash ?? null }
+      : undefined);
+  }, [fusionStatus, sendToFusion]);
+
+  const cancelFusionConflict = useCallback(() => setPendingFusionConflict(false), []);
+
   // Returns arrive in the workspace's wgreturn folder, which only the Fusion
   // add-in writes. Onshape bundles use WG's data directory and never enter this
   // lifecycle, so there is deliberately no returns poll in Onshape mode.
@@ -535,12 +563,14 @@ export function CadLinkCoordinator() {
       fusionStatus,
       onshapeStatus,
       onshapeConnection,
+      pendingFusionConflict,
       refresh,
       refreshOnshapeStatus,
       returnFromOnshape,
       expectFusionReturn,
       ingest,
-      sendToFusion,
+      sendWgToFusion,
+      cancelFusionConflict,
       clearFeedback,
       reportError,
       reportStatus,
@@ -558,12 +588,14 @@ export function CadLinkCoordinator() {
       fusionStatus: null,
       onshapeStatus: null,
       onshapeConnection: null,
+      pendingFusionConflict: false,
       refresh: unavailable,
       refreshOnshapeStatus: unavailableRefreshOnshape,
       returnFromOnshape: unavailable,
       expectFusionReturn: () => undefined,
       ingest: unavailable,
-      sendToFusion: unavailable,
+      sendWgToFusion: unavailable,
+      cancelFusionConflict: () => undefined,
       clearFeedback: () => undefined,
       reportError: () => undefined,
       reportStatus: () => undefined,
@@ -571,6 +603,7 @@ export function CadLinkCoordinator() {
     });
   }, [
     bundles,
+    cancelFusionConflict,
     clearFeedback,
     error,
     expectFusionReturn,
@@ -581,16 +614,32 @@ export function CadLinkCoordinator() {
     loading,
     onshapeConnection,
     onshapeStatus,
+    pendingFusionConflict,
     refresh,
     refreshOnshapeStatus,
     returnFromOnshape,
     reportError,
     reportStatus,
     reportViewportNotice,
-    sendToFusion,
+    sendWgToFusion,
     status,
     viewportNotice,
   ]);
 
-  return null;
+  // The conflict dialog renders here, not in any one entry point, so the menu,
+  // the rail card, and the panel all pass through the same confirmation.
+  if (!pendingFusionConflict) return null;
+  return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) cancelFusionConflict(); }}>
+    <div className="settings-dialog update-dialog" role="dialog" aria-modal="true" aria-labelledby="cad-conflict-title">
+      <header><div><h2 id="cad-conflict-title">Both WG and Fusion changed</h2></div></header>
+      <div className="update-dialog-body">
+        <p>Sending rebuilds only the linked waveguide from WG. Separate cabinet and mid-woofer bodies stay in Fusion, but direct edits to the linked waveguide are replaced.</p>
+        <p>To keep the Fusion edits instead, cancel and bring the Fusion geometry into WG first.</p>
+        <div className="update-dialog-actions">
+          <button onClick={cancelFusionConflict}>Cancel</button>
+          <button className="primary" disabled={sendingToFusion} onClick={() => { void sendWgToFusion({ confirmed: true }).catch(() => undefined); }}>Continue: send WG changes</button>
+        </div>
+      </div>
+    </div>
+  </div>;
 }

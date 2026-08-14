@@ -546,26 +546,18 @@ function LinkedDesignCard({ forceOpen = false }: { forceOpen?: boolean }) {
     ? onshapeWorkflowView(cadCoordinator.onshapeStatus)
     : fusionWorkflowView(cadCoordinator.fusionStatus);
   const driftCount = cadCoordinator.fusionStatus?.link?.parameterDriftCount ?? 0;
-  const fusionConflict = cadCoordinator.fusionStatus?.fusionChangesAvailable === true
-    && cadCoordinator.fusionStatus?.wgChangesAvailable === true;
   const send = () => {
-    // Onshape's consent and Fusion's two-way conflict confirmations stay in
-    // CAD Link. A one-way Fusion send can use the coordinator directly.
-    if (onshape || fusionConflict) {
+    // Onshape's public-document consent stays in CAD Link. Fusion sends use
+    // the coordinator's unified path; its dialog holds the two-way conflict.
+    if (onshape) {
       workspaceNavigation.activate('cadlink');
       return;
     }
-    const status = cadCoordinator.fusionStatus;
-    const target = workflow.action === 'update' && status?.documentId
-      ? { documentId: status.documentId, returnStateHash: status.link?.documentSignatureHash ?? null }
-      : undefined;
-    void cadCoordinator.sendToFusion(target).catch(() => undefined);
+    void cadCoordinator.sendWgToFusion().catch(() => undefined);
   };
-  const actionLabel = fusionConflict
-    ? 'Review sync direction'
-    : onshape
-      ? workflow.action === 'update' ? 'Send WG changes to Onshape' : 'Create in Onshape'
-      : workflow.action === 'update' ? 'Send WG changes to Fusion' : 'Open in Fusion 360';
+  const actionLabel = onshape
+    ? workflow.action === 'update' ? 'Send WG changes to Onshape' : 'Create in Onshape'
+    : workflow.action === 'update' ? 'Send WG changes to Fusion' : 'Open in Fusion 360';
   return <Section
     title={CAD_CONTROLS.linkedDesign.section}
     description="The CAD document linked to this design, its aggregate freshness, and the outbound rebuild action."
