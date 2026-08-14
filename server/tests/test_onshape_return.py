@@ -9,7 +9,11 @@ import pytest
 
 from hornlab_mesher import WgLinkIdentity, WgLinkSourceInterface, write_wglink
 from hornlab_mesher.config_builder import resolve_geometry
-from server.cadlink.onshape.return_leg import write_and_ingest_return, write_return_bundle
+from server.cadlink.onshape.return_leg import (
+    _fingerprints_match,
+    write_and_ingest_return,
+    write_return_bundle,
+)
 from server.cadlink.store import CadLinkStore
 from server.cadlink.wgreturn import WgReturnIntegrityError, read_wgreturn
 from server.design.schema import DesignConfig
@@ -82,6 +86,52 @@ def _outbound(tmp_path: Path) -> tuple[dict, bytes]:
     # a separate test below pins the honest refusal for the shipping O3 body.
     step = _run_in_gmsh_session(source_bearing_step, tmp_path / "source-bearing.step")
     return product.manifest, step
+
+
+def test_fingerprint_match_allows_measured_onshape_translation_noise() -> None:
+    baseline = {
+        "is_solid": True,
+        "volume_mm3": 128665.85329932554,
+        "bbox_mm": [
+            -77.72616306984958,
+            -77.72616306984958,
+            -5.005582703529123,
+            77.72616306984958,
+            77.72616306984958,
+            70.00558270352913,
+        ],
+    }
+    onshape = {
+        "is_solid": True,
+        "volume_mm3": 128668.85601470468,
+        "bbox_mm": [
+            -77.7279079509932,
+            -77.7279079509932,
+            -5.007327584673205,
+            77.7279079509932,
+            77.7279079509932,
+            70.0073275846732,
+        ],
+    }
+
+    assert _fingerprints_match(baseline, onshape)
+
+
+def test_fingerprint_match_still_rejects_material_volume_or_bounds_changes() -> None:
+    baseline = {
+        "is_solid": True,
+        "volume_mm3": 128665.0,
+        "bbox_mm": [-77.7, -77.7, -5.0, 77.7, 77.7, 70.0],
+    }
+
+    assert not _fingerprints_match(
+        baseline,
+        {**baseline, "volume_mm3": 128675.0},
+    )
+    assert not _fingerprints_match(
+        baseline,
+        {**baseline, "bbox_mm": [-77.72, -77.7, -5.0, 77.7, 77.7, 70.0]},
+    )
 
 
 def test_shipping_wglink_refuses_missing_source_policy(tmp_path: Path) -> None:
