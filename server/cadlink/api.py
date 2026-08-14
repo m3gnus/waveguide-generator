@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -26,6 +27,12 @@ from server.workspace.api import WorkspaceState, _path_segments, _strictly_insid
 
 from .fusion_status import fusion_process_running, read_fusion_status
 from .fusion_return import publish_return_request
+from .solve_command import (
+    clear_solve_command,
+    ledger_entry,
+    read_solve_command,
+    record_outcome,
+)
 from .ingest import IngestRefusal, get_ingestion_record, ingest_bundle
 from .store import CadLinkStore
 from .wgreturn import WgReturnError
@@ -70,6 +77,15 @@ class FusionReturnRequest(BaseModel):
     expected_return_state_hash: str | None = Field(
         default=None, alias="expectedReturnStateHash"
     )
+
+
+class SolveCommandOutcome(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    command_id: str = Field(alias="commandId", min_length=1)
+    state: str = Field(pattern="^(accepted|refused|blocked)$")
+    job_id: str | None = Field(default=None, alias="jobId")
+    reason: str | None = None
 
 
 router = APIRouter(prefix="/api/cadlink", tags=["cadlink"])
@@ -385,6 +401,93 @@ async def request_fusion_return(
         "requestId": request_id,
         "documentName": str(status.get("documentName") or "Untitled"),
     }
+
+
+def _pending_solve_command(data_dir: Path, workspace_root: Path) -> dict[str, Any]:
+    """The CAD-authored solve command, validated against what is on disk.
+
+    A marker is only actionable when it names a bundle inside this workspace
+    whose manifest still hashes to what the add-in recorded when it wrote the
+    command. Anything else is reported as a refusal with its reason rather than
+    silently ignored, because CAD is waiting on an answer either way.
+    """
+
+    command = read_solve_command(data_dir)
+    if command is None:
+        return {"command": None}
+    recorded = ledger_entry(data_dir, command.command_id)
+    if recorded is not None:
+        # Terminal already: replay must surface the same answer, never a
+        # second submission.
+        return {"command": command.payload(), "outcome": recorded}
+    try:
+        segments = _path_segments(command.bundle_path, "bundlePath")
+        if not segments or segments[0].casefold() != "wgreturn":
+            raise ValueError("bundlePath must be under the selected workspace's wgreturn/ directory")
+        if not segments[-1].endswith(".wgreturn"):
+            raise ValueError("bundlePath must name a .wgreturn bundle directory")
+        bundle_path = workspace_root.joinpath(*segments).resolve()
+        _strictly_inside(bundle_path, workspace_root, "bundlePath")
+        manifest = (bundle_path / "wgreturn.json").read_bytes()
+    except (ValueError, OSError) as exc:
+        return {
+            "command": command.payload(),
+            "outcome": record_outcome(
+                data_dir, command.command_id, state="refused", reason=str(exc),
+            ),
+        }
+    observed = f"sha256:{hashlib.sha256(manifest).hexdigest()}"
+    expected = command.manifest_sha256
+    if not expected.startswith("sha256:"):
+        expected = f"sha256:{expected}"
+    if observed != expected:
+        reason = (
+            "The return bundle changed after Fusion asked WG to solve it. "
+            "Send it again from Fusion."
+        )
+        return {
+            "command": command.payload(),
+            "outcome": record_outcome(data_dir, command.command_id, state="refused", reason=reason),
+        }
+    return {"command": command.payload(), "outcome": None}
+
+
+@router.get("/solve-command")
+async def get_solve_command(request: Request) -> dict[str, Any]:
+    workspace: WorkspaceState = request.app.state.cad_workspace
+    selected = workspace.selected_path()
+    if selected is None:
+        return {"command": None}
+    return await asyncio.to_thread(
+        _pending_solve_command,
+        Path(request.app.state.data_dir),
+        selected.resolve(),
+    )
+
+
+@router.post("/solve-command/outcome")
+async def post_solve_command_outcome(
+    payload: SolveCommandOutcome, request: Request
+) -> dict[str, Any]:
+    """Record what happened to a CAD solve command and retire its marker.
+
+    Only terminal outcomes are recorded. A blocked command keeps its marker so
+    the user can satisfy the gate and run the same request.
+    """
+
+    data_dir = Path(request.app.state.data_dir)
+    if payload.state == "blocked":
+        return {"state": "blocked", "cleared": False}
+    entry = await asyncio.to_thread(
+        record_outcome,
+        data_dir,
+        payload.command_id,
+        state=payload.state,
+        job_id=payload.job_id,
+        reason=payload.reason,
+    )
+    cleared = await asyncio.to_thread(clear_solve_command, data_dir, payload.command_id)
+    return {**entry, "cleared": cleared}
 
 
 def _ingest_error(exc: Exception) -> HTTPException:

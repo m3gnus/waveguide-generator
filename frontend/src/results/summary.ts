@@ -82,8 +82,8 @@ export function summaryGroups(_context: SummaryContext): SummaryGroup[] {
     if (validity.exceedsCeiling && validity.solvedMaxFrequencyHz !== null) {
       row(
         validityRows,
-        'Result caveat',
-        `Solved curve extends to ${formatValidityFrequency(validity.solvedMaxFrequencyHz)}; values above the governing ceiling are outside the recorded validity range.`,
+        'Accuracy',
+        `Results might not be very accurate above ${formatValidityFrequency(validity.governingMaxFrequencyHz)}.`,
       );
     }
     group(groups, 'Validity', validityRows, validity.exceedsCeiling ? 'warning' : undefined);

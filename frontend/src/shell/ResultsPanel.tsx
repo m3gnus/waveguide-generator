@@ -11,7 +11,6 @@ import { resultExportSnapshot } from '../results/exportContext';
 export { resultExportSnapshot } from '../results/exportContext';
 import { summaryGroups, summaryText, type SummaryGroup, type SummaryRow } from '../results/summary';
 import type { ResultPayload } from '../results/types';
-import { formatValidityFrequency, resultCombineWarnings, resultFrequencyValidity } from '../results/validity';
 import { hydrateJobDesign } from '../jobs/jobDesign';
 import { exportStemForJob } from '../jobs/exportNaming';
 import { CHART_TYPES, MAX_RESULT_PANELS, RESULT_PANEL_COUNTS, preferencesStore, runDisplayName, usePreferences, type ChartType } from '../prefs/preferences';
@@ -709,80 +708,6 @@ function Summary({ result, wrapper, job, channelId, density }: { result: ResultP
 
 const NO_NAMED_RESULTS: NamedResult[] = [];
 
-interface CurveCaveatSource {
-  key: string;
-  label: string;
-  sourceId: string;
-  effectiveMaxFrequencyHz: number;
-}
-
-interface CurveCaveatData {
-  governingMaxFrequencyHz: number | null;
-  solvedMaxFrequencyHz: number | null;
-  sources: CurveCaveatSource[];
-  warnings: string[];
-}
-
-/**
- * Collect caveats for exactly the curves rendered in one card.
- *
- * Comparable cards may include channels from several CAD envelopes. Each named
- * result therefore retains its own wrapper; joining every channel to the primary
- * wrapper would make source ids collide across runs and could display the wrong
- * governing ceiling while the plotted lines themselves remain correct.
- */
-export function curveCaveatData(items: NamedResult[]): CurveCaveatData | null {
-  const validity = items.flatMap((item) => {
-    const resolved = resultFrequencyValidity(
-      item.result as ResultPayload,
-      (item.wrapper ?? item.result) as ResultPayload,
-    );
-    return resolved ? [{ item, resolved }] : [];
-  });
-  const exceededValidity = validity.filter(({ resolved }) => resolved.exceedsCeiling);
-  const sources = exceededValidity.length
-    ? exceededValidity.flatMap(({ item, resolved }) => resolved.sources.map((source) => ({
-      key: `${item.id}:${source.sourceId}:${source.effectiveMaxFrequencyHz}`,
-      label: item.label,
-      ...source,
-    })))
-    : [];
-  const warnings = [...new Set(items.flatMap((item) => resultCombineWarnings(item.result)
-    .map((warning) => items.length > 1 ? `${item.label}: ${warning}` : warning)))];
-  if (!sources.length && !warnings.length) return null;
-  return {
-    governingMaxFrequencyHz: sources.length
-      ? Math.min(...sources.map(({ effectiveMaxFrequencyHz }) => effectiveMaxFrequencyHz))
-      : null,
-    solvedMaxFrequencyHz: sources.length
-      ? Math.max(...exceededValidity.flatMap(({ resolved }) => resolved.solvedMaxFrequencyHz === null ? [] : [resolved.solvedMaxFrequencyHz]))
-      : null,
-    sources,
-    warnings,
-  };
-}
-
-function ResultCaveat({ items }: { items: NamedResult[] }) {
-  const caveat = curveCaveatData(items);
-  if (!caveat) return null;
-  const count = (caveat.governingMaxFrequencyHz === null ? 0 : 1) + caveat.warnings.length;
-  const summary = caveat.governingMaxFrequencyHz === null
-    ? `${caveat.warnings.length} result warning${caveat.warnings.length === 1 ? '' : 's'}`
-    : `valid ≤ ${formatValidityFrequency(caveat.governingMaxFrequencyHz)}${caveat.warnings.length ? ` · ${caveat.warnings.length} warning${caveat.warnings.length === 1 ? '' : 's'}` : ''}`;
-  const sourceLabelsNeeded = new Set(caveat.sources.map(({ label }) => label)).size > 1;
-  return <details className="result-caveat" role="status">
-    <summary aria-label={`${count} result caveat${count === 1 ? '' : 's'}: ${summary}`}><i/>{summary}</summary>
-    <div className="result-caveat-details">
-      <b>Result caveat{count === 1 ? '' : 's'}</b>
-      {caveat.governingMaxFrequencyHz !== null && <>
-        <p>The rendered curve extends to {formatValidityFrequency(caveat.solvedMaxFrequencyHz ?? caveat.governingMaxFrequencyHz)}. Values above the governing {formatValidityFrequency(caveat.governingMaxFrequencyHz)} ceiling are outside the recorded validity range.</p>
-        <ul>{caveat.sources.map(({ key, label, sourceId, effectiveMaxFrequencyHz }) => <li key={key}>{sourceLabelsNeeded && <span>{label} · </span>}{sourceId}: {formatValidityFrequency(effectiveMaxFrequencyHz)}</li>)}</ul>
-      </>}
-      {caveat.warnings.length > 0 && <ul>{caveat.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>}
-    </div>
-  </details>;
-}
-
 export interface DirectivityMapPanel {
   key: string;
   label: string;
@@ -864,20 +789,6 @@ function DirectivityComparisonMaps({ chartType, items, tokens, mapReference, ang
         : <div className="directivity-comparison-missing">No {panel.plane} data</div>}
     </div>)}
   </div>;
-}
-
-/** Keep caveats off missing-data stubs: they qualify a rendered result. */
-export function chartRendersCurve(chartType: ChartType, result: ResultPayload, items: NamedResult[]): boolean {
-  if (chartType === 'summary') return false;
-  if (chartType === 'frequency_response') return items.some(({ result: item }) => Boolean(item.spl_on_axis?.spl?.length));
-  if (chartType === 'directivity_map_h' || chartType === 'directivity_map_v' || chartType === 'directivity_map_d' || chartType === 'directivity_map') {
-    return directivityMapPanels(items, chartType).some(({ hasData }) => hasData);
-  }
-  if (chartType === 'directivity_index') return items.some(({ result: item }) => directivityIndexSeries(item as ResultPayload).length > 0);
-  if (chartType === 'beam_shape') return Boolean(result.beam_shape?.frequencies?.length);
-  if (chartType === 'beam_map' || chartType === 'balloon') return hasBalloonData(result);
-  if (chartType === 'impedance') return items.some(({ result: item }) => Boolean(item.impedance?.frequencies?.length));
-  return false;
 }
 
 export function beamShapeMissingReason(result: ResultPayload): { reason: string; canEnable: boolean } {
@@ -1005,16 +916,11 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
   const subtitle = chartType.startsWith('directivity_map') ? `ref ${preferencesStore.getSnapshot().mapReference} dB${polarStep ? ` · ${polarStep}` : ''}` : chartType === 'frequency_response' ? splSubtitle(result) : null;
   const unit = CHART_BADGES[chartType]?.unit;
   const activeLabel = named.find((item) => item.result === result)?.label ?? named[0]?.label ?? 'the primary run';
-  const caveatItems = COMPARABLE_CHARTS.has(chartType) && named.length
-    ? named
-    : [{ id: 'primary', label: activeLabel, result, wrapper }];
-  const rendersCurve = chartRendersCurve(chartType, result, caveatItems);
   return <>
     <section ref={card} className={`result-card result-${index}`} data-density={density}>
       <div className="chart-placeholder" title="Hover for values · double-click for detail" onDoubleClick={() => setExpanded(true)}>
         <ResultChart chartType={chartType} result={result} named={named} tokens={tokens} density={density} live={live} beamShapeAction={beamShapeAction} wrapper={wrapper} job={job} channelId={channelId}/>
       </div>
-      {rendersCurve && <ResultCaveat items={caveatItems}/>}
       {/* Chrome floats over the plot rather than reserving a row of its own:
           a fixed header costs a quarter of a six-panel card's height. */}
       <div className="result-chrome">
@@ -1034,7 +940,7 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
     {expanded && createPortal(<div className="result-detail-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setExpanded(false); }}>
       <section ref={detail} className="result-detail" role="dialog" aria-modal="true" aria-label={`${chartLabel(chartType)} detail`}>
         <header><div><b>{chartLabel(chartType)}</b>{subtitle && <span>{subtitle}</span>}</div><small>Hover to inspect · Ctrl/scroll to zoom lines</small><button aria-label="Close detail view" onClick={() => setExpanded(false)}><Icon name="close"/></button></header>
-        <div className="result-detail-chart"><ResultChart chartType={chartType} result={result} named={named} tokens={tokens} density="full" live={live} beamShapeAction={beamShapeAction} wrapper={wrapper} job={job} channelId={channelId}/>{rendersCurve && <ResultCaveat items={caveatItems}/>}</div>
+        <div className="result-detail-chart"><ResultChart chartType={chartType} result={result} named={named} tokens={tokens} density="full" live={live} beamShapeAction={beamShapeAction} wrapper={wrapper} job={job} channelId={channelId}/></div>
       </section>
     </div>, document.body)}
   </>;
