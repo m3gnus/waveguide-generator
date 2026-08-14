@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { requestFusionReturn, type CadReturnFinding, type CadReturnIngestRecord } from '../api/cadlink';
+import type { CadReturnFinding, CadReturnIngestRecord } from '../api/cadlink';
 import { OnshapePublicConsentRequired, sendDesignToOnshape } from '../api/onshape';
 import { usePreferences } from '../prefs/preferences';
 import {
@@ -175,18 +175,9 @@ export function CadLinkPanel() {
   const bringFromFusion = async () => {
     setRequestingReturn(true); cadCoordinator.clearFeedback();
     try {
-      if (!identity?.designId || !fusionStatus?.documentId || !fusionStatus.link) {
-        throw new Error('Fusion changed documents. Refresh CAD Link and try again.');
-      }
-      const result = await requestFusionReturn({
-        designId: identity.designId,
-        documentId: fusionStatus.documentId,
-        instanceId: fusionStatus.link.instanceId,
-        expectedReturnStateHash: fusionStatus.link.documentSignatureHash,
-      });
-      cadCoordinator.expectFusionReturn(result.requestId);
-      cadCoordinator.reportStatus(`Requested current geometry from ${result.documentName}. Waiting for Fusion…`);
-      await cadCoordinator.refresh({ background: true, autoOpenNew: true });
+      // The arrival itself is awaited by the coordinator's correlated waiter,
+      // which also owns the timeout message; this button only starts the pull.
+      void cadCoordinator.pullFromFusion().catch(() => undefined);
     } catch (reason) {
       cadCoordinator.reportError(reason instanceof Error ? reason.message : String(reason));
     } finally {
