@@ -328,8 +328,13 @@ export function CadLinkCoordinator() {
         ? response.items.find((item) => item.readable) ?? null
         : null;
       const opened = arrived ?? initial;
+      let continuity: 'carried' | 'reset' = 'reset';
       if (opened) {
-        useCadReturnStore.getState().selectBundle(opened);
+        // An arrival for the same source inventory keeps the user's solve
+        // setup; a first listing or a different topology starts clean.
+        continuity = arrived
+          ? useCadReturnStore.getState().selectArrivedBundle(arrived)
+          : (useCadReturnStore.getState().selectBundle(opened), 'reset');
         // Selecting evidence invalidates a load for the previous return, but
         // mode—not return discovery—decides what the viewport displays.
         importedMeshStore.beginIntent();
@@ -339,7 +344,9 @@ export function CadLinkCoordinator() {
           pendingReturnRequestId.current = null;
           pendingReturnRequestedAt.current = null;
         }
-        setStatus(`Received ${arrived.documentName ?? arrived.name} from Fusion 360.`);
+        setStatus(`Received ${arrived.documentName ?? arrived.name} from Fusion 360.${
+          continuity === 'carried' ? ' Kept your mesh, channel, and solve settings.' : ''
+        }`);
         workspaceNavigation.activate('cadlink');
       } else if (!initial) {
         const selected = useCadReturnStore.getState().selectedBundle;
@@ -518,7 +525,8 @@ export function CadLinkCoordinator() {
         sources,
       };
       const state = useCadReturnStore.getState();
-      state.selectBundle(bundle);
+      // Same-inventory Onshape iterations keep the user's solve setup too.
+      state.selectArrivedBundle(bundle);
       const selectedGeneration = state.beginIngestIntent();
       if (!useCadReturnStore.getState().applyIngest(result.ingest, selectedGeneration)) {
         setStatus('Discarded the Onshape return because the selected design changed.');

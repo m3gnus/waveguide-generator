@@ -48,6 +48,11 @@ interface CadReturnState {
   beginIngestIntent: () => number;
   isCurrentIngestIntent: (generation: number) => boolean;
   selectBundle: (bundle: CadReturnBundle | null) => void;
+  /** Select a newly arrived return. When it correlates with the current
+   * selection — same source inventory by id, role, and required flag — the
+   * user's mesh sizes, channel mapping, drivers, combine, and sweep survive;
+   * finding acknowledgements never do. Otherwise falls back to a full reset. */
+  selectArrivedBundle: (bundle: CadReturnBundle) => 'carried' | 'reset';
   refreshSelectedBundle: (bundle: CadReturnBundle | null) => void;
   markIngestStale: (reason: string) => void;
   applyIngest: (record: CadReturnIngestRecord, generation: number) => boolean;
@@ -114,6 +119,17 @@ function bundleChangeReason(previous: CadReturnBundle, current: CadReturnBundle 
     return 'The return document or linked-instance inventory changed after ingestion.';
   }
   return 'The return bundle was modified after this ingestion.';
+}
+
+/** Two returns are solve-compatible when they expose the same sources with the
+ * same acoustic roles. Sizing suggestions may differ — the user's sizes win. */
+function compatibleSourceInventory(previous: CadReturnBundle, next: CadReturnBundle): boolean {
+  const key = (bundle: CadReturnBundle) => JSON.stringify(
+    bundle.sources
+      .map((source) => ({ id: source.id, role: source.role, required: source.required }))
+      .sort((a, b) => a.id.localeCompare(b.id)),
+  );
+  return previous.readable && next.readable && key(previous) === key(next);
 }
 
 // This token deliberately lives outside Zustand state: advancing intent must
@@ -198,6 +214,26 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
       ingestedBundleIdentity: null,
       ingestStaleReason: null,
     });
+  },
+  selectArrivedBundle: (bundle) => {
+    const previous = get().selectedBundle;
+    if (!previous || !compatibleSourceInventory(previous, bundle)) {
+      get().selectBundle(bundle);
+      return 'reset';
+    }
+    supersedeIngestIntent();
+    set((state) => ({
+      ...reconcileListing(state, bundle),
+      // The new geometry needs its own ingest, and its findings are re-earned:
+      // an acknowledgement describes evidence the user saw, not this bundle.
+      ingestRecord: null,
+      acknowledgedFindingIds: [],
+      areaDriftSourceIds: [],
+      needsIngest: true,
+      ingestedBundleIdentity: null,
+      ingestStaleReason: null,
+    }));
+    return 'carried';
   },
   refreshSelectedBundle: (selectedBundle) => {
     const previous = get().selectedBundle;
