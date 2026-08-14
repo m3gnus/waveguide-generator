@@ -372,13 +372,33 @@ export function contourPolylines(segments: ContourSegment[]): ContourPoint[][] {
 }
 
 /**
+ * Return the interior angular graticule values for a directivity map.
+ *
+ * The plot border already marks the two endpoints, so guides at those values
+ * would only thicken it. Starting from the first strict multiple also keeps a
+ * configured interval anchored to physical 0° rather than to an arbitrary
+ * sweep start.
+ */
+export function directivityAngleGuides(angles: number[], interval: number): number[] {
+  if (angles.length < 2 || !Number.isFinite(interval) || interval <= 0) return [];
+  const lower = Math.min(angles[0], angles.at(-1)!);
+  const upper = Math.max(angles[0], angles.at(-1)!);
+  const guides: number[] = [];
+  const first = (Math.floor(lower / interval) + 1) * interval;
+  for (let angle = first; angle < upper - 1e-9; angle += interval) {
+    guides.push(Number(angle.toPrecision(12)));
+  }
+  return guides;
+}
+
+/**
  * ECharts only draws cartesian heatmap cells on two *category* axes. On a log
  * or value axis every cell is emitted with an empty path — nothing renders, and
  * the guard that says so is compiled out of production builds, so the chart
  * fails silently. Index the cells against category axes instead. The frequency
  * axis still reads logarithmically because the sweep itself is log-spaced.
  */
-export function heatmapOption(result: ResultPayload, tokens: ChartTokens, plane: string, mapReference: number, density: ChartDensity = 'regular', live = false): EChartsOption {
+export function heatmapOption(result: ResultPayload, tokens: ChartTokens, plane: string, mapReference: number, density: ChartDensity = 'regular', live = false, angleGuideInterval = 10): EChartsOption {
   // Boundary Lab renders a lighter surface while a solve is changing and one
   // canonical surface when it settles. Do the same here: the live grid has at
   // most a quarter of the usual heatmap cells and also supplies its contours,
@@ -397,12 +417,25 @@ export function heatmapOption(result: ResultPayload, tokens: ChartTokens, plane:
   const inset = MAP_GRID[density];
   const cells = grid.values.flatMap((rowValues, row) => rowValues.flatMap((level, column) => level === null ? [] : [[column, row, Math.max(floor, Math.min(0, level)), level, grid.frequencies[column], grid.angles[row]]]));
   const categoryAxis = { ...axes(tokens, density), axisTick: { alignWithLabel: true }, axisLabel: { ...axes(tokens, density).axisLabel, hideOverlap: true } };
+  const angleGuides = directivityAngleGuides(grid.angles, angleGuideInterval);
+  const angleGuideSeries = angleGuides.length ? [{
+    name: `${angleGuideInterval}° angular guides`, type: 'custom', coordinateSystem: 'cartesian2d', silent: true, z: 4, clip: true,
+    data: angleGuides,
+    renderItem: (params: { coordSys?: PlotRect }, api: { value: (index: number) => unknown }) => {
+      if (!params.coordSys || grid.angles.length < 2) return null;
+      const lower = grid.angles[0];
+      const upper = grid.angles.at(-1)!;
+      const fraction = (Number(api.value(0)) - lower) / (upper - lower);
+      const y = params.coordSys.y + params.coordSys.height * (1 - fraction);
+      return { type: 'line', shape: { x1: params.coordSys.x, y1: y, x2: params.coordSys.x + params.coordSys.width, y2: y }, style: { stroke: tokens.grid, lineWidth: .8, opacity: .9 } };
+    },
+  }] : [];
   const contourLevels = [...new Set([-3, -6, -12, mapReference])].filter((level) => level >= floor).sort((a, b) => b - a);
   const contourSeries = contourLevels.flatMap((level, contourIndex) => {
     const polylines = contourPolylines(contourSegments(contourGrid.values, level)).filter((points) => points.length > 1);
     if (!polylines.length) return [];
     const labelIndex = polylines.reduce((best, points, index) => points.length > polylines[best].length ? index : best, 0);
-    const color = level === -6 ? tokens.foreground : level === -3 ? tokens.accent : tokens.series[Math.min(contourIndex, tokens.series.length - 1)] ?? tokens.muted;
+    const color = contourIndex === 0 ? tokens.foreground : contourIndex === 1 ? tokens.accent : tokens.series[Math.min(contourIndex, tokens.series.length - 1)] ?? tokens.muted;
     return [{
       name: `${level} dB contour`, type: 'custom', coordinateSystem: 'cartesian2d', silent: true, z: 6, clip: true,
       data: polylines.map((_points, index) => [index, index === labelIndex ? 1 : 0]),
@@ -430,7 +463,7 @@ export function heatmapOption(result: ResultPayload, tokens: ChartTokens, plane:
     visualMap: { min: floor, max: 0, dimension: 2, seriesIndex: 0, right: 2, top: 'middle', itemWidth: density === 'compact' ? 6 : 8, itemHeight: MAP_RAMP[density], text: ['0', `${floor}`], textStyle: { color: tokens.muted, fontSize: density === 'compact' ? 9 : 10 }, inRange: { color: tokens.colormap } },
     // Cartesian heatmaps do not chunk safely in ECharts: progressive mode can
     // stop after the first angle band and leave the rest of the map blank.
-    series: [{ type: 'heatmap', progressive: 0, z: 1, data: cells, emphasis: { itemStyle: { borderColor: tokens.accent, borderWidth: 1.2, shadowBlur: 7, shadowColor: tokens.accent } } }, ...contourSeries] as EChartsOption['series'],
+    series: [{ type: 'heatmap', progressive: 0, z: 1, data: cells, emphasis: { itemStyle: { borderColor: tokens.accent, borderWidth: 1.2, shadowBlur: 7, shadowColor: tokens.accent } } }, ...angleGuideSeries, ...contourSeries] as EChartsOption['series'],
   };
 }
 
@@ -653,11 +686,12 @@ export function directivityMapPanels(items: NamedResult[], chartType: 'directivi
   })));
 }
 
-function DirectivityComparisonMaps({ chartType, items, tokens, mapReference, density, live }: {
+function DirectivityComparisonMaps({ chartType, items, tokens, mapReference, angleGuideInterval, density, live }: {
   chartType: 'directivity_map_h' | 'directivity_map_v' | 'directivity_map';
   items: NamedResult[];
   tokens: ChartTokens;
   mapReference: number;
+  angleGuideInterval: number;
   density: ChartDensity;
   live: boolean;
 }) {
@@ -668,13 +702,13 @@ function DirectivityComparisonMaps({ chartType, items, tokens, mapReference, den
   }
   if (panels.length === 1 && panels[0].hasData) {
     const panel = panels[0];
-    return <EChart option={heatmapOption(panel.result, tokens, panel.plane, mapReference, density, live)} label={`Interactive HornLab ${panel.plane} directivity heatmap`} live={live}/>;
+    return <EChart option={heatmapOption(panel.result, tokens, panel.plane, mapReference, density, live, angleGuideInterval)} label={`Interactive HornLab ${panel.plane} directivity heatmap`} live={live}/>;
   }
   return <div className={`directivity-multiplane${items.length > 1 ? ' directivity-comparison' : ''}`} data-density={density}>
     {panels.map((panel) => <div key={panel.key}>
       <span title={panel.label}>{middleEllipsis(panel.label, density === 'compact' ? 18 : 28)}</span>
       {panel.hasData
-        ? <EChart option={heatmapOption(panel.result, tokens, panel.plane, mapReference, density, live)} label={`Interactive ${panel.label} directivity heatmap`} live={live}/>
+        ? <EChart option={heatmapOption(panel.result, tokens, panel.plane, mapReference, density, live, angleGuideInterval)} label={`Interactive ${panel.label} directivity heatmap`} live={live}/>
         : <div className="directivity-comparison-missing">No {panel.plane} data</div>}
     </div>)}
   </div>;
@@ -730,7 +764,7 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
   // result snapshot has not changed.
   const plot = useMemo(() => {
     if (chartType === 'frequency_response') return result.spl_on_axis?.spl?.length ? <EChart option={splOption(overlays, tokens, preferences.smoothing, density)} label="Interactive HornLab sound pressure frequency response" live={live}/> : <ChartStub reason="Frequency Response needs spl_on_axis data from a completed solve."/>;
-    if (chartType === 'directivity_map_h' || chartType === 'directivity_map_v' || chartType === 'directivity_map') return <DirectivityComparisonMaps chartType={chartType} items={overlays} tokens={tokens} mapReference={preferences.mapReference} density={density} live={live}/>;
+    if (chartType === 'directivity_map_h' || chartType === 'directivity_map_v' || chartType === 'directivity_map') return <DirectivityComparisonMaps chartType={chartType} items={overlays} tokens={tokens} mapReference={preferences.mapReference} angleGuideInterval={preferences.directivityGuideInterval} density={density} live={live}/>;
     if (chartType === 'directivity_index') {
       const option = directivityIndexOption(overlays, tokens, preferences.smoothing, density);
       return Array.isArray(option.series) && option.series.length ? <EChart option={option} label="Interactive HornLab directivity index by frequency" live={live}/> : <ChartStub reason="Directivity Index needs a complete spherical field from a supported solve backend."/>;
@@ -747,7 +781,7 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
       return Array.isArray(option.series) && option.series.length ? <EChart option={option} label="Interactive HornLab normalized acoustic impedance by frequency" live={live}/> : <ChartStub reason="Acoustic Impedance needs the optional impedance result block."/>;
     }
     return null;
-  }, [beamShapeAction, chartType, density, live, overlays, preferences.mapReference, preferences.smoothing, result, tokens]);
+  }, [beamShapeAction, chartType, density, live, overlays, preferences.directivityGuideInterval, preferences.mapReference, preferences.smoothing, result, tokens]);
   return plot ?? <Summary result={result} wrapper={wrapper} job={job} channelId={channelId} density={density}/>;
 }
 

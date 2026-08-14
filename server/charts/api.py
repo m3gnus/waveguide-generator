@@ -123,6 +123,7 @@ class DirectivityRenderRequest(ChartModel):
     reference_directivity: dict[str, Any] | None = None
     reference_label: str | None = None
     reference_level: float = -6.0
+    angle_guide_step: float = Field(default=10.0, gt=0.0, le=180.0)
     theme: str = DEFAULT_CHART_THEME
 
     @field_validator("theme", mode="before")
@@ -180,6 +181,7 @@ def _render_charts(payload: dict[str, Any]) -> dict[str, str]:
 def _render_directivity(payload: dict[str, Any]) -> str | None:
     kwargs: dict[str, Any] = {
         "reference_level": payload["reference_level"],
+        "angle_guide_step": payload["angle_guide_step"],
         "theme": payload["theme"],
     }
     if payload.get("reference_directivity") is not None:
