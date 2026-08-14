@@ -302,7 +302,9 @@ def build_datum_featurescript(manifest: Mapping[str, Any]) -> str:
         }});
         skSolve(wgThroatSourceSketch);
         opFillSurface(context, id + "WG_THROAT_SOURCE", {{
-                "edgesG0" : qCreatedBy(wgThroatSourceSketchId, EntityType.EDGE),
+                // A solved closed sketch exposes coincident laminar edges for
+                // its region. Fill needs one boundary, not both copies.
+                "edgesG0" : qNthElement(qCreatedBy(wgThroatSourceSketchId, EntityType.EDGE), 0),
                 "edgesG1" : qNothing(),
                 "edgesG2" : qNothing(),
                 "guideVertices" : qNothing()

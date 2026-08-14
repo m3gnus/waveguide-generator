@@ -101,7 +101,10 @@ def test_source_interface_materializes_a_stable_exportable_throat_sheet() -> Non
 
     assert 'id + "WG_THROAT_SOURCE_SKETCH"' in source
     assert 'opFillSurface(context, id + "WG_THROAT_SOURCE"' in source
-    assert 'qCreatedBy(wgThroatSourceSketchId, EntityType.EDGE)' in source
+    assert (
+        'qNthElement(qCreatedBy(wgThroatSourceSketchId, EntityType.EDGE), 0)'
+        in source
+    )
     assert 'getVariable(context, "wg_demo_throat_dia"' in source
     assert '"value" : "WG_THROAT_SOURCE"' in source
 
