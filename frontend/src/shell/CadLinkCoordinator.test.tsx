@@ -204,7 +204,9 @@ describe('CadLinkCoordinator', () => {
     });
 
     expect(useCadReturnStore.getState().selectedBundle).toEqual(arrived);
-    expect(cadLinkCoordinatorBridge.getSnapshot().status).toBe('Received Speaker rebuilt from Fusion 360.');
+    expect(cadLinkCoordinatorBridge.getSnapshot().status).toBe(
+      'Received Speaker rebuilt from Fusion 360. Kept your mesh, channel, and solve settings.',
+    );
     expect(activate).toHaveBeenCalledWith('cadlink');
   });
 
@@ -244,7 +246,9 @@ describe('CadLinkCoordinator', () => {
 
     expect(cadLinkCoordinatorBridge.getSnapshot().bundles).toEqual([newer]);
     expect(useCadReturnStore.getState().selectedBundle).toEqual(newer);
-    expect(cadLinkCoordinatorBridge.getSnapshot().status).toBe('Received Newest listing from Fusion 360.');
+    expect(cadLinkCoordinatorBridge.getSnapshot().status).toBe(
+      'Received Newest listing from Fusion 360. Kept your mesh, channel, and solve settings.',
+    );
   });
 
   it('marks an ingestion stale while the CAD Link panel is unmounted', async () => {
