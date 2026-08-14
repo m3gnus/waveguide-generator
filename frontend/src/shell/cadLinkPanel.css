@@ -44,6 +44,7 @@
 .cad-connection p { margin: 2px 0 0; }
 .cad-connection-current .cad-connection-dot { background: var(--green); box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 14%, transparent); }
 .cad-connection-stale .cad-connection-dot { background: var(--amber); box-shadow: 0 0 0 3px color-mix(in srgb, var(--amber) 14%, transparent); }
+.cad-connection-not-configured .cad-connection-dot { background: var(--amber); box-shadow: 0 0 0 3px color-mix(in srgb, var(--amber) 14%, transparent); }
 .cad-primary-action { justify-content: center; width: 100%; min-height: 34px; }
 .cad-connection-addin-offline .cad-connection-dot { background: var(--amber); box-shadow: 0 0 0 3px color-mix(in srgb, var(--amber) 14%, transparent); }
 .cad-send .cad-transport-note { margin: 8px 0 0; padding-top: 7px; border-top: 1px solid var(--hair-soft); }

@@ -89,7 +89,7 @@ describe('design file export menu', () => {
     vi.mocked(fetch).mockImplementation(async (url: string | URL | Request) => {
       const path = String(url);
       requested.push(path);
-      if (path === '/api/workspace/path') {
+      if (path === '/api/cad-workspace/path') {
         return new Response(JSON.stringify({ selected: true, path: '/cad-library' }));
       }
       return new Response(JSON.stringify({
@@ -102,7 +102,7 @@ describe('design file export menu', () => {
     const item = itemNamed('Send to CAD');
     await act(async () => { item.click(); });
 
-    expect(requested).toEqual(['/api/workspace/path', '/api/export/wglink']);
+    expect(requested).toEqual(['/api/cad-workspace/path', '/api/export/wglink']);
     expect(container.querySelector('[role="status"]')?.textContent).toContain(
       'Sent to CAD · sequence 7 · /cad-library/wglink/tritonia_mk2.wglink',
     );
@@ -117,7 +117,7 @@ describe('design file export menu', () => {
     vi.mocked(fetch).mockImplementation(async (url: string | URL | Request) => {
       const path = String(url);
       requested.push(path);
-      if (path === '/api/workspace/path') {
+      if (path === '/api/cad-workspace/path') {
         return new Response(JSON.stringify({ selected: true, path: '/cad-library' }));
       }
       return new Response(JSON.stringify({
@@ -133,14 +133,14 @@ describe('design file export menu', () => {
       item.click();
     });
 
-    expect(requested).toEqual(['/api/workspace/path', '/api/export/wglink']);
+    expect(requested).toEqual(['/api/cad-workspace/path', '/api/export/wglink']);
   });
 
   it('sends an unsaved design and adopts the identity the server committed', async () => {
     vi.mocked(fetch).mockImplementation(async (url: string | URL | Request) => {
       const path = String(url);
       requested.push(path);
-      if (path === '/api/workspace/path') {
+      if (path === '/api/cad-workspace/path') {
         return new Response(JSON.stringify({ selected: true, path: '/cad-library' }));
       }
       return new Response(JSON.stringify({
@@ -158,7 +158,7 @@ describe('design file export menu', () => {
     const item = itemNamed('Send to CAD');
     await act(async () => { item.click(); });
 
-    expect(requested).toEqual(['/api/workspace/path', '/api/export/wglink']);
+    expect(requested).toEqual(['/api/cad-workspace/path', '/api/export/wglink']);
     expect(useDocumentStore.getState().identity?.baseEditVersion).toBe(1);
     expect(useDocumentStore.getState().classification).toBe('current');
   });

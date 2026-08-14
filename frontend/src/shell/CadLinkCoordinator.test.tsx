@@ -32,6 +32,8 @@ const initialBundle: CadReturnBundle = {
 
 const closedFusion: FusionCadStatus = {
   cadApplication: 'fusion360',
+  cadFolderConfigured: true,
+  cadFolderPath: '/workspace',
   state: 'closed',
   processRunning: false,
   running: false,
@@ -322,7 +324,7 @@ describe('CadLinkCoordinator', () => {
     let sendCalls = 0;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
-      if (path === '/api/workspace/path') return json({ selected: true, path: '/workspace' });
+      if (path === '/api/cad-workspace/path') return json({ selected: true, path: '/workspace' });
       if (path === '/api/export/wglink') {
         sendCalls += 1;
         return sendCalls === 1 ? older.promise : newer.promise;

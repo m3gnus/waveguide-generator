@@ -570,12 +570,12 @@ async def export_wglink(
 ) -> dict[str, Any]:
     """Write an identity-bearing CAD-link bundle into the selected workspace."""
 
-    workspace: WorkspaceState = request.app.state.workspace
+    workspace: WorkspaceState = request.app.state.cad_workspace
     selected = workspace.selected_path()
     if selected is None:
         raise HTTPException(
             status_code=409,
-            detail="No workspace folder has been selected. Choose a workspace folder first.",
+            detail="No WGLink folder has been selected. Choose one in Settings → CAD Link first.",
         )
     store: CadLinkStore = request.app.state.cadlink_store
     result = await run_on_gmsh_worker(

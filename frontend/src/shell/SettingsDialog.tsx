@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import { getOnshapeConnection, type OnshapeConnection } from '../api/onshape';
+import { getCadWorkspace, openCadWorkspace, selectCadWorkspace } from '../api/cadWorkspace';
 import { JobsPreferencesSurface, ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
 import { preferencesStore, usePreferences, type CadApplication } from '../prefs/preferences';
 import { Icon } from './icons';
@@ -81,6 +82,54 @@ function WorkspaceSettings() {
   </section>;
 }
 
+function CadFolderSettings() {
+  const [path, setPath] = useState<string | null>();
+  const [busy, setBusy] = useState<'open' | 'select'>();
+  const [error, setError] = useState<string>();
+  const [manualPath, setManualPath] = useState('');
+  const requestGeneration = useRef(0);
+
+  useEffect(() => {
+    const request = ++requestGeneration.current;
+    void getCadWorkspace().then(
+      (value) => { if (request === requestGeneration.current) setPath(value.path); },
+      (reason: unknown) => { if (request === requestGeneration.current) setError(String(reason)); },
+    );
+    return () => { requestGeneration.current += 1; };
+  }, []);
+
+  const run = async (action: 'open' | 'select', requestedPath?: string) => {
+    const request = ++requestGeneration.current;
+    setBusy(action); setError(undefined);
+    try {
+      const result = action === 'open' ? await openCadWorkspace() : await selectCadWorkspace(requestedPath);
+      if (request === requestGeneration.current) {
+        setPath(result.path);
+        if (requestedPath && result.selected) setManualPath('');
+      }
+    } catch (reason) {
+      if (request === requestGeneration.current) setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      if (request === requestGeneration.current) setBusy(undefined);
+    }
+  };
+
+  return <div className="cad-setup-folder" aria-busy={busy !== undefined}>
+    <p className={`workspace-settings-path ${path ? '' : 'not-selected'}`} title={path ?? undefined}>{path ?? 'No WGLink folder selected'}</p>
+    <p className="cad-settings-note">WG creates <code>wglink</code> and <code>wgreturn</code> inside this folder. Choose a stable local folder that both WG and the Fusion add-in can access.</p>
+    <div className="settings-theme-options">
+      <button disabled={!path || busy !== undefined} onClick={() => void run('open')}>Open folder</button>
+      <button disabled={busy !== undefined} onClick={() => void run('select')}>{path ? 'Choose a new folder…' : 'Choose WGLink folder…'}</button>
+    </div>
+    <details className="cad-folder-manual">
+      <summary>Enter a folder path instead</summary>
+      <label>WGLink folder path<input value={manualPath} onChange={(event) => setManualPath(event.target.value)} placeholder="/path/to/WGLink exchange"/></label>
+      <button disabled={!manualPath.trim() || busy !== undefined} onClick={() => void run('select', manualPath.trim())}>Use this path</button>
+    </details>
+    {error && <p className="workspace-settings-error" role="status">{error}</p>}
+  </div>;
+}
+
 /** Report who the stored Onshape key pair authenticates as.
  *
  * Deliberately read-only. The key pair is created by the account owner at
@@ -88,7 +137,9 @@ function WorkspaceSettings() {
  * repository; WG shows where that file is and never offers a field to type a
  * secret into (CAD-LINK-PLAN.md section 8.6).
  */
-function OnshapeConnectionStatus() {
+function OnshapeConnectionStatus({ onConnection }: {
+  onConnection?: (connection: OnshapeConnection) => void;
+}) {
   const [connection, setConnection] = useState<OnshapeConnection | null>(null);
   const [checking, setChecking] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -96,11 +147,13 @@ function OnshapeConnectionStatus() {
   const check = useCallback(async (refresh: boolean) => {
     setChecking(true); setError(null);
     try {
-      setConnection(await getOnshapeConnection(refresh));
+      const next = await getOnshapeConnection(refresh);
+      setConnection(next);
+      onConnection?.(next);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally { setChecking(false); }
-  }, []);
+  }, [onConnection]);
   useEffect(() => { void check(false); }, [check]);
 
   if (checking && connection === null) return <p className="cad-settings-note">Checking the Onshape connection…</p>;
@@ -119,9 +172,10 @@ function OnshapeConnectionStatus() {
           </p>
         : <p className="workspace-settings-error" role="status">{connection.detail ?? 'Onshape could not be reached with the stored key pair.'}</p>
       : <p className="cad-settings-note">
-          No API key pair yet. Create one at <b>dev-portal.onshape.com/keys</b> and save the two values to <code>{connection.credentialsPath}</code> as
+          No API key pair yet. In Onshape, open <b>My account → Developer → API keys</b>, create one, and save the two values to <code>{connection.credentialsPath}</code> as
           {' '}<code>ONSHAPE_ACCESS_KEY</code> and <code>ONSHAPE_SECRET_KEY</code>. WG reads that file; it never asks you to type a key here.
         </p>}
+    {connection.configured && <p className="cad-settings-note">Credential file: <code>{connection.credentialsPath}</code>. Environment variables with the same names take precedence.</p>}
     {connection.insecureKeyFile && <p className="workspace-settings-error" role="status">
       That key file is readable by other accounts on this machine. Restrict it with <code>chmod 600</code>.
     </p>}
@@ -134,6 +188,8 @@ function OnshapeConnectionStatus() {
 function CadSettings() {
   const preferences = usePreferences();
   const onshape = preferences.cadApplication === 'onshape';
+  const [onshapeSetup, setOnshapeSetup] = useState<OnshapeConnection | null>(null);
+  const rememberOnshapeConnection = useCallback((connection: OnshapeConnection) => setOnshapeSetup(connection), []);
   return <section id="settings-cad" className="settings-theme cad-settings" aria-labelledby="settings-cad-title" tabIndex={-1}>
     <h3 id="settings-cad-title">CAD Link</h3>
     <label className="ui-field">CAD application<select
@@ -145,9 +201,17 @@ function CadSettings() {
       <option value="onshape">Onshape</option>
     </select></label>
     <p className="cad-settings-note">{onshape
-      ? 'WG uploads the waveguide to Onshape over its API: the solid arrives as an imported part and the managed WG parameters as a Variable Studio. Sending again replaces the part in place, so features you build on it are kept. Bringing Onshape geometry back into WG for simulation is Fusion-only for now.'
-      : 'WGLink opens and updates the active waveguide in Fusion 360, and can bring Fusion geometry back into WG for simulation.'}</p>
-    {onshape && <OnshapeConnectionStatus/>}
+      ? 'WG connects directly to your Onshape account. No local exchange folder or add-in is needed.'
+      : 'Fusion uses the WGLink add-in and one local exchange folder. Complete these steps once; WGLink then opens and updates designs from the CAD Link panel.'}</p>
+    {onshape ? <ol className="cad-setup-steps" aria-label="Set up Onshape">
+      <li><b>Create an Onshape API key</b><span>In Onshape, open <b>My account → Developer → API keys</b>, create a key for this personal connection, and copy both values before closing the dialog. <a href="https://cad.onshape.com/help/Content/Plans/my_account_developer.htm" target="_blank" rel="noreferrer noopener">Onshape instructions</a></span></li>
+      <li><b>Store the key in WG’s private credential file</b><span>Save <code>ONSHAPE_ACCESS_KEY=…</code> and <code>ONSHAPE_SECRET_KEY=…</code> in <code>{onshapeSetup?.credentialsPath ?? 'the credential file shown after the connection check'}</code>. Keep it out of synced or shared folders. WG reads it locally and never returns either value to the browser.</span></li>
+      <li><b>Verify the account</b><span>The check reports the account and plan that will own new CAD documents.</span><OnshapeConnectionStatus onConnection={rememberOnshapeConnection}/></li>
+    </ol> : <ol className="cad-setup-steps" aria-label="Set up Autodesk Fusion 360">
+      <li><b>Install and start WGLink</b><span>Install the WGLink add-in once, restart Fusion, then confirm <b>Utilities → Scripts and Add-Ins → WGLink</b> is set to run on startup. <a href="https://github.com/m3gnus/hornlab-fusion-addin/tree/main/fusion-addins/WGLink#install" target="_blank" rel="noreferrer noopener">WGLink install guide</a></span></li>
+      <li><b>Choose the WGLink folder</b><span>This is separate from the output folder below. WG and Fusion read the same setting, so it is chosen only here.</span><CadFolderSettings/></li>
+      <li><b>Open a design in Fusion</b><span>Close Settings, open <b>CAD Link</b>, and choose <b>Open in Fusion 360</b>. WG writes the bundle, starts Fusion, and the connection card confirms when WGLink is online.</span></li>
+    </ol>}
   </section>;
 }
 

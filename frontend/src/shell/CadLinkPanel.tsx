@@ -53,7 +53,7 @@ export function onshapeWorkflowView(status: OnshapeStatus | null): CadWorkflowVi
   if (status.state === 'not_configured') return {
     state: 'not-configured',
     headline: 'Onshape is not connected',
-    detail: `Create an API key pair at dev-portal.onshape.com/keys and save it to ${status.credentials.credentialsPath}. WG never asks you to type it here.`,
+    detail: `In Onshape, open My account → Developer → API keys, create a pair, and save it to ${status.credentials.credentialsPath}. WG never asks you to type it here.`,
     action: null,
   };
   if (status.state === 'not_linked') return {
@@ -83,6 +83,30 @@ export function fusionWorkflowView(status: FusionCadStatus | null): CadWorkflowV
     headline: 'Checking Fusion 360…',
     detail: 'WG is looking for the WGLink add-in and its active document.',
     action: 'open',
+  };
+  if (status.cadFolderConfigured === false) return {
+    state: 'not-configured',
+    headline: 'Fusion connection needs a WGLink folder',
+    detail: 'Choose the shared exchange folder in Settings → CAD Link. WG and the WGLink add-in will then use it automatically.',
+    action: null,
+  };
+  if (status.cadConnectionIssue === 'addin_upgrade_required') return {
+    state: 'addin-offline',
+    headline: 'WGLink needs to be updated',
+    detail: 'Fusion is running an older WGLink build that cannot confirm the selected exchange folder. Update the add-in, restart Fusion, and check again.',
+    action: null,
+  };
+  if (status.cadConnectionIssue === 'folder_unreadable') return {
+    state: 'addin-offline',
+    headline: 'WGLink cannot access the selected folder',
+    detail: 'Check that the folder still exists and that Fusion is running as the same user as WG. Then choose it again in Settings → CAD Link if needed.',
+    action: null,
+  };
+  if (status.cadConnectionIssue === 'folder_mismatch') return {
+    state: 'addin-offline',
+    headline: 'WG and Fusion are using different folders',
+    detail: 'WGLink reloads this setting automatically; it should clear within a few seconds. If it remains, update the add-in and restart Fusion.',
+    action: null,
   };
   if (status.state === 'closed') return {
     state: 'closed',
@@ -357,6 +381,7 @@ export function CadLinkPanel() {
         <span className="cad-connection-dot" aria-hidden="true"/>
         <div><h3>{workflow.headline}</h3><p>{workflow.detail}</p></div>
       </div>
+      {!onshape && workflow.state === 'not-configured' && <button className="primary cad-primary-action" onClick={() => requestSettings('cad')}>Set up Fusion connection</button>}
       {onshape && linkedDocument?.documentUrl && <a className="cad-secondary-action cad-onshape-open" href={linkedDocument.documentUrl} target="_blank" rel="noreferrer noopener">Open {linkedDocument.documentName} in Onshape</a>}
       {onshape && publicOnly && !confirmPublicDocument && <div className="cad-alert" role="status"><b>This Onshape plan creates public documents.</b> {onshapeConnection?.plan?.name ?? 'The Free plan'} makes every document world-readable — anyone with the link can view this waveguide. Confidential designs belong in Fusion 360 or on a paid Onshape plan.</div>}
       {onshape && onshapeConnection?.insecureKeyFile && <div className="cad-alert" role="alert">The Onshape key file at {onshapeConnection.credentialsPath} is readable by other accounts on this machine. Restrict it with <code>chmod 600</code>.</div>}
@@ -396,8 +421,7 @@ export function CadLinkPanel() {
       <div><b>{state.selectedBundle.documentName ?? state.selectedBundle.name}</b><span>{state.ingestRecord ? 'Prepared for the CAD workspace and solver.' : 'Prepare this Fusion return for the viewport and solver.'}</span></div>
       {!state.ingestRecord && <button className="primary" disabled={ingesting} onClick={() => void cadCoordinator.ingest()}>{ingesting ? 'Preparing…' : 'Prepare simulation'}</button>}
     </div>}
-    {!loading && error?.includes('No workspace folder') && <div className="empty-state"><b>No workspace selected</b><span>Choose a workspace folder in Settings, then refresh this panel.</span></div>}
-    {!loading && !error && bundles.length === 0 && <div className="empty-state"><b>No CAD returns</b><span>Returned bundles appear under the selected workspace’s wgreturn folder.</span></div>}
+    {!loading && workflow.state !== 'not-configured' && !error && bundles.length === 0 && <div className="empty-state"><b>No CAD returns</b><span>Returned bundles appear under the selected WGLink folder’s wgreturn folder.</span></div>}
     {bundles.length > 0 && <div className="cad-bundle-list" role="list" aria-label="Designs returned from CAD">{bundles.map((bundle) => <button
       key={bundle.bundlePath}
       role="listitem"

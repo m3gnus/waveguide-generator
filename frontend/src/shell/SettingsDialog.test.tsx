@@ -119,6 +119,30 @@ describe('SettingsDialog', () => {
     expect(select.options[0].textContent).toBe('Autodesk Fusion 360');
     expect(select.options[1].textContent).toBe('Onshape');
     expect(select.options[1].disabled).toBe(false);
+    expect(host.querySelector('#settings-cad')?.textContent).toContain('Choose the WGLink folder');
+  });
+
+  it('shows and changes the dedicated WGLink folder without changing the output workspace', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path === '/api/cad-workspace/path') return new Response(JSON.stringify({ selected: true, path: '/cad/exchange' }));
+      if (path === '/api/cad-workspace/open' && init?.method === 'POST') return new Response(JSON.stringify({ selected: true, path: '/cad/exchange' }));
+      if (path === '/api/cad-workspace/select' && init?.method === 'POST') return new Response(JSON.stringify({ selected: true, path: '/cad/new-exchange' }));
+      if (path === '/api/workspace/path') return new Response(JSON.stringify({ selected: true, path: '/exports' }));
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await act(async () => host.querySelector<HTMLButtonElement>('#open-settings')!.click());
+    const cad = host.querySelector<HTMLElement>('#settings-cad')!;
+    expect(cad.textContent).toContain('/cad/exchange');
+    expect(cad.textContent).not.toContain('/exports');
+    const buttons = [...cad.querySelectorAll<HTMLButtonElement>('.cad-setup-folder button')];
+    await act(async () => buttons.find((button) => button.textContent === 'Open folder')!.click());
+    await act(async () => buttons.find((button) => button.textContent === 'Choose a new folder…')!.click());
+    expect(cad.textContent).toContain('/cad/new-exchange');
+    expect(fetchMock).toHaveBeenCalledWith('/api/cad-workspace/open', { method: 'POST' });
+    expect(fetchMock).toHaveBeenCalledWith('/api/cad-workspace/select', { method: 'POST' });
   });
 
   /** Open Settings with the CAD application switched to Onshape, serving one
@@ -168,7 +192,7 @@ describe('SettingsDialog', () => {
       account: null,
       plan: null,
     });
-    expect(section.textContent).toContain('dev-portal.onshape.com/keys');
+    expect(section.textContent).toContain('My account → Developer → API keys');
     expect(section.textContent).toContain('/home/x/.config/hornlab/onshape.env');
     expect(section.querySelector('input')).toBeNull();
   });
