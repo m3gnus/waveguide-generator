@@ -34,8 +34,10 @@ surface is wanted. STL is a tessellated inner surface for mesh-oriented workflow
 Each completed job has its own export menu. Current result formats include chart PNGs,
 on-axis FRD, a horizontal/vertical FRD polar set for VituixCAD, frequency CSV, full
 JSON, polar and impedance CSV, and a summary report. Geometry/design formats use the
-job's stored snapshot, never the current editor. Failed formats are reported
-individually so successful files are not hidden.
+job's stored snapshot, never the current editor. **Send to CAD** is the first action
+in this menu and sends that same stored snapshot. Failed formats are reported
+individually so successful files are not hidden. The current parametric design can
+also be sent from the top-left design menu under **Export → Send to CAD**.
 
 ## CAD link
 
@@ -49,7 +51,8 @@ For Fusion 360:
 2. Choose a stable local **WGLink folder** in WG. This is intentionally separate from
    the run-output folder. WG creates `wglink/` and `wgreturn/` beneath it, and the
    Fusion add-in reads the same setting automatically.
-3. Open the CAD Link panel and choose **Open in Fusion 360**. WG writes the bundle,
+3. Switch to **Fusion CAD** mode, open the CAD Link panel, and choose **Open in Fusion
+   360**. WG writes the bundle,
    starts or raises Fusion, and reports when the add-in heartbeat is online.
 
 For Onshape:
@@ -67,7 +70,8 @@ Fusion uses the selected local folder for a bidirectional `.wglink`/`.wgreturn`
 exchange. Onshape materializes an internal `.wglink` bundle and uploads it directly;
 it does not need or use the Fusion folder. Returned CAD assemblies are treated as
 imported geometry with their own viewport and solve path; they are not converted back
-into editable parametric waveguide fields.
+into editable parametric waveguide fields. The CAD Link panel is therefore shown only
+in Fusion CAD mode; one-way parametric sends use the design or run export menus.
 
 The detailed CAD-link implementation plan is still active workspace material. Treat
 the UI and checked-in tests as the current behavior until that plan is closed and its

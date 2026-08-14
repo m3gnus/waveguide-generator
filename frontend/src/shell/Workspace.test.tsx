@@ -13,6 +13,7 @@ import {
   ReactPanelRenderer,
   LEGACY_LAYOUT_KEY,
   seedSize,
+  syncCadLinkPanel,
   Workspace,
 } from './Workspace';
 import { jobsSocket } from '../api/jobsSocket';
@@ -50,7 +51,7 @@ describe('Workspace', () => {
     host.remove();
   });
 
-  it('creates the six persisted dock panels without runtime errors', async () => {
+  it('keeps the CAD Link panel out of the parametric workspace', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     await act(async () => {
       root.render(<Workspace resetKey={0}/>);
@@ -62,9 +63,32 @@ describe('Workspace', () => {
     expect(host.textContent).toContain('Viewport');
     expect(host.textContent).toContain('Results');
     expect(host.textContent).toContain('Jobs');
-    expect(host.textContent).toContain('CAD Link');
+    expect(host.textContent).not.toContain('CAD Link');
     expect(error).not.toHaveBeenCalled();
     error.mockRestore();
+  });
+
+  it('adds CAD Link beside Jobs only while CAD mode owns it', () => {
+    const jobs = { id: 'jobs' };
+    const cadlink = { id: 'cadlink' };
+    let currentCadLink: typeof cadlink | undefined;
+    const api = {
+      activePanel: undefined,
+      getPanel: vi.fn((id: string) => id === 'jobs' ? jobs : id === 'cadlink' ? currentCadLink : undefined),
+      addPanel: vi.fn(() => { currentCadLink = cadlink; return cadlink; }),
+      removePanel: vi.fn(() => { currentCadLink = undefined; }),
+    };
+
+    syncCadLinkPanel(api as never, 'cad');
+    expect(api.addPanel).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'cadlink',
+      component: 'cadlink',
+      inactive: true,
+      position: { referencePanel: jobs, direction: 'within' },
+    }));
+
+    syncCadLinkPanel(api as never, 'parametric');
+    expect(api.removePanel).toHaveBeenCalledWith(cadlink);
   });
 
   it('ignores a stored old-key parameter layout and falls back to the new default', async () => {
@@ -266,7 +290,6 @@ describe('Workspace', () => {
                   "id": "jobs-group",
                   "views": [
                     "jobs",
-                    "cadlink",
                   ],
                 },
                 "size": 320,
@@ -279,11 +302,6 @@ describe('Workspace', () => {
           "width": 1440,
         },
         "panels": {
-          "cadlink": {
-            "contentComponent": "cadlink",
-            "id": "cadlink",
-            "title": "CAD Link",
-          },
           "geometry": {
             "contentComponent": "geometry",
             "id": "geometry",
@@ -320,7 +338,7 @@ describe('Workspace', () => {
     const rows = compact.grid.root.data as Array<{ data: unknown }>;
     expect(rows[0].data).toMatchObject({
       activeView: 'viewport',
-      views: ['geometry', 'simulation', 'viewport', 'results', 'jobs', 'cadlink'],
+      views: ['geometry', 'simulation', 'viewport', 'results', 'jobs'],
     });
   });
 
@@ -330,7 +348,14 @@ describe('Workspace', () => {
     const columns = medium.grid.root.data as Array<{ data: unknown; size: number }>;
     expect(columns.map((column) => column.size)).toEqual([326, 634]);
     const analysis = (columns[1].data as Array<{ data: { views: string[] } }>)[1];
-    expect(analysis.data.views).toEqual(['results', 'jobs', 'cadlink']);
+    expect(analysis.data.views).toEqual(['results', 'jobs']);
+  });
+
+  it('includes CAD Link in default layouts created for CAD mode', () => {
+    const wide = createDefaultLayout(1440, 900, 'cad');
+    expect(wide.panels).toHaveProperty('cadlink');
+    const columns = wide.grid.root.data as Array<{ data: unknown }>;
+    expect((columns[2].data as { views: string[] }).views).toEqual(['jobs', 'cadlink']);
   });
 
   it.each([[1440, 900], [1280, 720]])('preserves rail sizes at %d×%d', (width, height) => {
