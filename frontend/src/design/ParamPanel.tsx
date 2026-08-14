@@ -829,7 +829,7 @@ function CadMeshDetail() {
 }
 
 function CadSimulationEmpty() {
-  return <div className="cad-mode-empty" role="status"><b>No CAD geometry yet</b><span>Bring a model back from Fusion, then prepare it for simulation.</span><button className="primary" onClick={() => workspaceNavigation.activate('cadlink')}>Open CAD Link</button></div>;
+  return <div className="cad-mode-empty" role="status"><b>Finish the Fusion CAD workflow</b><span>Use CAD Link to set up the connection, open this design in Fusion, and bring the finished geometry back for simulation.</span><button className="primary" onClick={() => workspaceNavigation.activate('cadlink')}>Open CAD Link setup</button></div>;
 }
 
 export function ParamPanel({ tab }: { tab: ParameterTab }) {
