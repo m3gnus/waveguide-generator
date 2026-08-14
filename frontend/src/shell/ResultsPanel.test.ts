@@ -8,7 +8,7 @@ import type { SummaryContext, SummaryGroup } from '../results/summary';
 import type { ResultPayload } from '../results/types';
 import { resultFrequencyValidity } from '../results/validity';
 import { designForFamily, serializeDesign } from '../stores/design';
-import { beamShapeMissingReason, COMPARABLE_CHARTS, curveCaveatData, directivityIndexOption, directivityMapPanels, impedanceOption, ResultsChartGrid, resolvedPolarStepNotice, resultExportSnapshot, resultLayoutClass } from './ResultsPanel';
+import { beamShapeMissingReason, COMPARABLE_CHARTS, comparisonContourPointToPixels, curveCaveatData, directivityIndexOption, directivityMapPanels, heatmapOption, impedanceOption, ResultsChartGrid, resolvedPolarStepNotice, resultExportSnapshot, resultLayoutClass } from './ResultsPanel';
 
 const summaryMocks = vi.hoisted(() => ({
   groups: vi.fn<(context: SummaryContext) => SummaryGroup[]>(() => []),
@@ -52,17 +52,42 @@ describe('result comparison charts', () => {
     ]);
   });
 
-  it('builds one labelled heatmap panel per run and plane, including missing-plane notices', () => {
-    expect(directivityMapPanels(items, 'directivity_map_h').map(({ label, plane, hasData }) => ({ label, plane, hasData }))).toEqual([
-      { label: 'Run A', plane: 'horizontal', hasData: true },
-      { label: 'Run B', plane: 'horizontal', hasData: true },
+  it('builds one heatmap per plane with runs assigned as contour overlays', () => {
+    expect(directivityMapPanels(items, 'directivity_map_h').map(({ plane, primaryLabel, references, hasData }) => ({ plane, primaryLabel, references: references.map(({ label }) => label), hasData }))).toEqual([
+      { plane: 'horizontal', primaryLabel: 'Run A', references: ['Run B'], hasData: true },
     ]);
-    expect(directivityMapPanels(items, 'directivity_map').map(({ label, hasData }) => ({ label, hasData }))).toEqual([
-      { label: 'Run A · horizontal', hasData: true },
-      { label: 'Run A · vertical', hasData: true },
-      { label: 'Run B · horizontal', hasData: true },
-      { label: 'Run B · vertical', hasData: false },
+    expect(directivityMapPanels(items, 'directivity_map').map(({ plane, primaryLabel, references, hasData }) => ({ plane, primaryLabel, references: references.map(({ label }) => label), hasData }))).toEqual([
+      { plane: 'horizontal', primaryLabel: 'Run A', references: ['Run B'], hasData: true },
+      { plane: 'vertical', primaryLabel: 'Run A', references: [], hasData: true },
     ]);
+  });
+
+  it('draws comparison runs in the primary heatmap as labelled contour series', () => {
+    const map = (edge: number): ResultPayload => ({
+      frequencies: [500, 1_000],
+      directivity: { horizontal: [
+        [[0, 0], [90, edge]],
+        [[0, 0], [90, edge - 2]],
+      ] },
+    });
+    const option = heatmapOption(map(-12), comparisonTokens, 'horizontal', -6, 'full', false, 10, {
+      primaryLabel: 'Run A',
+      references: [{ label: 'Run B', result: map(-10) }],
+    });
+    const series = option.series as Array<{ name?: string; type?: string }>;
+    expect((option.legend as { data: string[] }).data).toEqual(['Run A', 'Run B']);
+    expect(series.filter(({ name }) => name === 'Run A' || name === 'Run B').map(({ name, type }) => ({ name, type }))).toEqual([
+      { name: 'Run A', type: 'custom' },
+      { name: 'Run B', type: 'custom' },
+    ]);
+  });
+
+  it('projects a comparison contour by physical frequency instead of stretching its range', () => {
+    const display = { frequencies: [100, 1_000, 10_000], angles: [0, 45, 90], values: [], factor: 1 };
+    const source = { frequencies: [1_000, 10_000], angles: [0, 90], values: [], factor: 1 };
+    const [x, y] = comparisonContourPointToPixels([0, 0], source, display, { x: 0, y: 0, width: 300, height: 300 });
+    expect(x).toBeCloseTo(150);
+    expect(y).toBe(250);
   });
 
   it('overlays DI with metric colours and run-specific solid/dashed lines', () => {

@@ -529,13 +529,7 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .directivity-multiplane > div { position: relative; flex: 1 1 0; min-width: 0; }
 /* Right-aligned so the first sub-panel's label clears the card's title chip. */
 .directivity-multiplane > div > span { position: absolute; top: 4px; right: 14px; z-index: 2; color: var(--chart-muted); font: var(--text-micro) var(--mono); letter-spacing: .08em; text-transform: uppercase; pointer-events: none; }
-.directivity-comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: minmax(80px, 1fr); gap: 1px; overflow: auto; background: var(--chart-spine); }
-.directivity-comparison > div { min-height: 80px; background: var(--chart-bg); }
 .directivity-comparison-missing { display: grid; width: 100%; height: 100%; place-items: center; padding: 24px 8px 8px; color: var(--chart-muted); font: var(--text-micro) var(--mono); text-align: center; }
-/* Compact comparison cards keep every map large enough to read. The strip is
-   horizontally inspectable in the dock; the expanded detail view tiles maps. */
-.directivity-comparison[data-density="compact"] { display: flex; gap: 1px; overflow-x: auto; overflow-y: hidden; scroll-snap-type: x proximity; }
-.directivity-comparison[data-density="compact"] > div { min-width: max(160px, 86%); height: 100%; flex: 0 0 86%; scroll-snap-align: start; }
 .result-detail-backdrop { position: fixed; inset: 0; z-index: 1800; display: grid; place-items: center; padding: 24px; background: rgba(2,5,10,.72); backdrop-filter: blur(7px); }
 .result-detail { display: flex; flex-direction: column; width: min(1240px, calc(100vw - 56px)); height: min(780px, calc(100vh - 56px)); overflow: hidden; border: 1px solid var(--chart-spine); border-radius: var(--r3); background: var(--chart-page); box-shadow: 0 28px 70px -28px #000; }
 .result-detail > header { display: flex; align-items: center; gap: 12px; min-height: 46px; padding: 6px 8px 6px 12px; border-bottom: 1px solid var(--chart-spine); color: var(--chart-fg); }
