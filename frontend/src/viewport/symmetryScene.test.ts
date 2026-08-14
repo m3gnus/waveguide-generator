@@ -49,6 +49,24 @@ describe('symmetry display geometry', () => {
     expect(marked.surfaces.find((item) => !item.solvedDomain)?.indices).toHaveLength(9);
   });
 
+  it('classifies quarter and horizontal-half domains around the placed vertical origin', () => {
+    const shifted = scene(surface(
+      [
+        1, 21, 0, 2, 21, 0, 1, 22, 0,
+        -1, 21, 0, -2, 21, 0, -1, 22, 0,
+        -1, 19, 0, -2, 19, 0, -1, 18, 0,
+        1, 19, 0, 2, 19, 0, 1, 18, 0,
+      ],
+      [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+    ));
+
+    const quarter = markParametricSolvedDomain(shifted, 1, 20);
+    const horizontalHalf = markParametricSolvedDomain(shifted, 12, 20);
+
+    expect(quarter.surfaces.find((item) => item.solvedDomain)?.indices).toHaveLength(3);
+    expect(horizontalHalf.surfaces.find((item) => item.solvedDomain)?.indices).toHaveLength(6);
+  });
+
   it('maps UI solve modes to the physical domain masks', () => {
     expect(quadrantsForSolveMode('quarter')).toBe(1);
     expect(quadrantsForSolveMode('half_xz')).toBe(12);
