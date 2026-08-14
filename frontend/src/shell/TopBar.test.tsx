@@ -54,17 +54,17 @@ describe('workspace mode switch', () => {
     expect(activate).not.toHaveBeenCalled();
   });
 
-  it('disables CAD under Onshape with the Fusion-only reason and exits a stale CAD mode', () => {
+  it('keeps CAD mode available under Onshape and only relabels the option', () => {
     act(() => workspaceModeStore.setMode('cad'));
     act(() => preferencesStore.update({ cadApplication: 'onshape' }));
     const radios = host.querySelectorAll<HTMLButtonElement>('[role="radio"]');
     expect([...radios].map((button) => button.textContent)).toEqual(['Parametric', 'CAD']);
-    expect(radios[1].disabled).toBe(true);
-    expect(radios[1].title).toContain('return leg is Fusion-only');
-    expect(workspaceModeStore.getSnapshot().mode).toBe('parametric');
+    expect(radios[1].disabled).toBe(false);
+    // A preferences change must not eject the user from the mode they chose.
+    expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
   });
 
-  it('registers both palette commands and applies the Onshape gate there too', () => {
+  it('registers both palette commands for either CAD application', () => {
     const activate = vi.spyOn(workspaceNavigation, 'activate').mockReturnValue(true);
     const fusion = workspaceModePaletteEntries('fusion360');
     expect(fusion.map((entry) => entry.label)).toEqual(['Mode: Parametric', 'Mode: Fusion CAD']);
@@ -73,6 +73,7 @@ describe('workspace mode switch', () => {
     expect(activate).toHaveBeenCalledWith('cadlink');
 
     const onshape = workspaceModePaletteEntries('onshape');
-    expect(onshape[1]).toMatchObject({ disabled: true, detail: 'The CAD return leg is Fusion-only.' });
+    expect(onshape.map((entry) => entry.label)).toEqual(['Mode: Parametric', 'Mode: CAD']);
+    expect(onshape[1].disabled).toBeFalsy();
   });
 });

@@ -147,6 +147,43 @@ describe('CadLinkCoordinator', () => {
     expect(calls.filter((path) => path.endsWith('/onshape/status'))).toHaveLength(1);
   });
 
+  it('enters CAD mode when an Onshape return lands so the panel can own it', async () => {
+    preferencesStore.update({ cadApplication: 'onshape' });
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_01K00000000000000000000000',
+      lineageId: 'wgl_01K00000000000000000000000',
+      baseEditVersion: 1,
+    }, 'current');
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.includes('/onshape/connection')) return json({
+        configured: true, reachable: true, credentialsPath: '/x/onshape.env', detail: null,
+        insecureKeyFile: false, account: { id: 'ACC', name: 'Owner' }, plan: null,
+      });
+      if (path.endsWith('/onshape/status')) return json({
+        state: 'current',
+        credentials: { configured: true, credentialsPath: '/x/onshape.env', detail: null, insecureKeyFile: false },
+        link: null,
+        wgChangesAvailable: false,
+        currentFormula: 'OSSE',
+      });
+      if (path.endsWith('/onshape/return')) return json({
+        translationId: 'tr_1',
+        bundle: { name: 'speaker.wgreturn', bundlePath: 'wgreturn/speaker.wgreturn', documentName: 'Speaker', sourceCount: 1, instanceCount: 1 },
+        ingest: ingestRecord,
+      });
+      return json({}, 404);
+    }));
+    const activate = vi.spyOn(workspaceNavigation, 'activate').mockReturnValue(true);
+    await renderCoordinator();
+
+    await act(async () => { await cadLinkCoordinatorBridge.getSnapshot().returnFromOnshape(); });
+
+    expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe(ingestRecord.ingest_id);
+    expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
+    expect(activate).toHaveBeenCalledWith('cadlink');
+  });
+
   it('detects and auto-selects a newly arrived return', async () => {
     let listing = { items: [initialBundle] };
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {

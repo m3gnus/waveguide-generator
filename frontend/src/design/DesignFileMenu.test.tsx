@@ -88,6 +88,13 @@ describe('design file export menu', () => {
     expect(labels.some((label) => label.startsWith('STEP inner surface'))).toBe(true);
   });
 
+  it('hides the Fusion-transport Send to CAD while Onshape is the CAD application', () => {
+    act(() => preferencesStore.update({ cadApplication: 'onshape' }));
+    const labels = open().map((item) => item.textContent ?? '');
+    expect(labels.some((label) => label.startsWith('Send to CAD'))).toBe(false);
+    expect(labels.some((label) => label.startsWith('STEP solid'))).toBe(true);
+  });
+
   it('requests the solid from the plain STEP item', async () => {
     const item = itemNamed('STEP solid');
     await act(async () => { item.click(); });

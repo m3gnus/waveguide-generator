@@ -71,7 +71,10 @@ exchange. Onshape materializes an internal `.wglink` bundle and uploads it direc
 it does not need or use the Fusion folder. Returned CAD assemblies are treated as
 imported geometry with their own viewport and solve path; they are not converted back
 into editable parametric waveguide fields. The CAD Link panel is therefore shown only
-in Fusion CAD mode; one-way parametric sends use the design or run export menus.
+in CAD mode — for either CAD application — and one-way parametric sends use the
+design or run export menus. The menus' **Send to CAD** writes Fusion's `.wglink`
+transport, so it appears only while Fusion 360 is the selected CAD application;
+Onshape sends live in the CAD Link panel.
 
 The detailed CAD-link implementation plan is still active workspace material. Treat
 the UI and checked-in tests as the current behavior until that plan is closed and its

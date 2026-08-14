@@ -298,11 +298,12 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     return () => window.removeEventListener('keydown', shortcut);
   }, [activeCapability, cadSolveBlocker, fileGeometryActive, solve, submitting]);
 
+  const cadLabel = preferences.cadApplication === 'fusion360' ? 'Fusion CAD' : 'CAD';
   const control = useMemo<SolveControl>(() => ({
     solve,
     disabled: !activeCapability?.available || submitting || Boolean(cadSolveBlocker) || fileGeometryActive,
     submitting,
-    label: cadGeometryActive ? 'Solve Fusion CAD' : 'Solve',
+    label: cadGeometryActive ? `Solve ${cadLabel}` : 'Solve',
     title: submitting
       ? 'Submitting solve…'
       : fileGeometryActive
@@ -310,13 +311,13 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         : cadSolveBlocker
           ? cadSolveBlocker
           : cadGeometryActive && activeCapability?.available
-            ? 'Solve the displayed Fusion CAD model with Metal'
+            ? `Solve the displayed ${cadLabel} model with Metal`
             : activeCapability?.available
               ? `Solve current design with ${selectedEngine === 'auto' ? `AUTO (${activeCapability.name})` : activeCapability.name}`
               : cadGeometryActive
                 ? metalCapability?.reason ?? capabilityError ?? 'Metal engine is unavailable'
                 : unavailable,
-  }), [activeCapability, cadGeometryActive, cadSolveBlocker, capabilityError, fileGeometryActive, metalCapability?.reason, selectedEngine, solve, submitting, unavailable]);
+  }), [activeCapability, cadGeometryActive, cadLabel, cadSolveBlocker, capabilityError, fileGeometryActive, metalCapability?.reason, selectedEngine, solve, submitting, unavailable]);
 
   return <SolveContext.Provider value={control}>{children}<JobAnnouncer jobs={jobs}/></SolveContext.Provider>;
 }
