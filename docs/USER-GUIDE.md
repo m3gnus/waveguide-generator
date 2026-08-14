@@ -51,9 +51,9 @@ For Fusion 360:
 2. Choose a stable local **WGLink folder** in WG. This is intentionally separate from
    the run-output folder. WG creates `wglink/` and `wgreturn/` beneath it, and the
    Fusion add-in reads the same setting automatically.
-3. Switch to **Fusion CAD** mode, open the CAD Link panel, and choose **Open in Fusion
-   360**. WG writes the bundle,
-   starts or raises Fusion, and reports when the add-in heartbeat is online.
+3. Choose **Send to CAD** in the design file menu (or **Open in Fusion 360** on the
+   Geometry rail's linked-design card in CAD mode). WG writes the bundle, starts or
+   raises Fusion, and the CAD Link panel reports when the add-in heartbeat is online.
 
 For Onshape:
 
