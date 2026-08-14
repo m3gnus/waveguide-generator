@@ -1,7 +1,7 @@
 import { Box3, OrthographicCamera, PerspectiveCamera, Vector3 } from 'three';
 import { describe, expect, it, vi } from 'vitest';
 import { calculateCameraFit, clippingRange } from './cameraMath';
-import { axisColorsFromTokens, cameraFitDisposition, cameraFitKey, canRenderWebGL, canvasNeedsRemeasure, gizmoAxisDirection, installContextLossFallback, observeCanvasVisibility, pickGizmoAxis, rebracketCamera, resizeCameraFrustum, scheduleAppliedTask, shouldShowAxisGizmo, transferCameraView, type GizmoAxis } from './ViewportCanvas';
+import { axisColorsFromTokens, cameraFitDisposition, cameraFitKey, canRenderWebGL, canvasNeedsRemeasure, gizmoAxisDirection, installContextLossFallback, observeCanvasVisibility, ownCameraProjection, pickGizmoAxis, rebracketCamera, resizeCameraFrustum, scheduleAppliedTask, shouldShowAxisGizmo, transferCameraView, type GizmoAxis } from './ViewportCanvas';
 
 class FakeScheduler {
   private readonly tasks = new Set<() => void>();
@@ -177,6 +177,15 @@ describe('cameraFitDisposition', () => {
     resizeCameraFrustum(orthographic, 1);
     expect([orthographic.left, orthographic.right, orthographic.top, orthographic.bottom]).toEqual([-50, 50, 50, -50]);
     expect(orthographic.position.toArray()).toEqual([10, 20, 30]);
+  });
+
+  it('keeps Fiber from overwriting the fitted frustum before a resize', () => {
+    const perspective = ownCameraProjection(new PerspectiveCamera());
+    const orthographic = ownCameraProjection(new OrthographicCamera(-100, 100, 50, -50));
+
+    expect((perspective as PerspectiveCamera & { manual?: boolean }).manual).toBe(true);
+    expect((orthographic as OrthographicCamera & { manual?: boolean }).manual).toBe(true);
+    expect([orthographic.left, orthographic.right, orthographic.top, orthographic.bottom]).toEqual([-100, 100, 50, -50]);
   });
 
   it('preserves target, orientation, and visible height across projection changes', () => {
