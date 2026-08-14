@@ -356,6 +356,44 @@ describe('CadLinkCoordinator', () => {
     expect(cadLinkCoordinatorBridge.getSnapshot().status).toBe('Solving the current Fusion geometry.');
   });
 
+  it('runs a Fusion solve command once and reports an already-accepted one instead of resubmitting', async () => {
+    const reported: unknown[] = [];
+    let command: Record<string, unknown> | null = {
+      commandId: 'cmd-1', returnId: 'wgr_1', bundlePath: initialBundle.bundlePath,
+      manifestSha256: 'sha256:m', requestedAt: '2026-08-14T12:00:00Z',
+    };
+    let outcome: Record<string, unknown> | null = null;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json({ items: [initialBundle] });
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.endsWith('/solve-command/outcome')) {
+        reported.push(JSON.parse(String(init?.body)));
+        return json({ state: 'accepted', cleared: true });
+      }
+      if (path.endsWith('/solve-command')) return json({ command, outcome });
+      if (path.endsWith('/ingest')) return json(ingestRecord);
+      return json({}, 404);
+    }));
+    const solveCurrentCadImport = vi.fn(async () => 'submitted' as const);
+    vi.spyOn(jobsCoordinatorBridge, 'getSnapshot').mockReturnValue({
+      ...jobsCoordinatorBridge.getSnapshot(), solveCurrentCadImport,
+    });
+
+    await renderCoordinator();
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    expect(solveCurrentCadImport).toHaveBeenCalledOnce();
+    expect(reported).toEqual([{ commandId: 'cmd-1', state: 'accepted' }]);
+    expect(cadLinkCoordinatorBridge.getSnapshot().status).toBe('Solving the model Fusion sent.');
+
+    // A terminal command surfaces its existing job; it never submits again.
+    outcome = { state: 'accepted', jobId: 'job-7', reason: null, at: '' };
+    command = { ...command, commandId: 'cmd-2' };
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(solveCurrentCadImport).toHaveBeenCalledOnce();
+  });
+
   it('detects and auto-selects a newly arrived return', async () => {
     let listing = { items: [initialBundle] };
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {

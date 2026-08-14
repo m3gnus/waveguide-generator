@@ -663,6 +663,9 @@ describe('CadLinkPanel', () => {
       if (String(input).endsWith('/viewport-mesh') || String(input).endsWith('/mesh')) {
         return new Response('missing', { status: 404 });
       }
+      // Only the ingest route advances the report; the background polls (the
+      // CAD solve command among them) must not be counted as one.
+      if (!String(input).endsWith('/ingest')) return json({ command: null });
       ingestCount += 1;
       const next = {
         ...record,

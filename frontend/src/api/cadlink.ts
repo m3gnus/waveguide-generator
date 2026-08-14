@@ -272,3 +272,39 @@ export function ingestReturn(request: CadReturnIngestRequest, fetcher: typeof fe
 export function getIngest(id: string, fetcher: typeof fetch = fetch): Promise<CadReturnIngestRecord> {
   return jsonRequest(`/api/cadlink/ingest/${encodeURIComponent(id)}`, undefined, fetcher);
 }
+
+export interface PendingSolveCommand {
+  commandId: string;
+  returnId: string;
+  bundlePath: string;
+  manifestSha256: string;
+  requestedAt: string;
+}
+
+export interface SolveCommandOutcome {
+  state: 'accepted' | 'refused';
+  jobId: string | null;
+  reason: string | null;
+  at: string;
+}
+
+/** The CAD-authored "solve this in WG" request, if one is pending.
+ *
+ * `outcome` is non-null when the command is already terminal — accepted (its
+ * job exists) or refused — so the caller reports it instead of acting again. */
+export function getSolveCommand(
+  fetcher: typeof fetch = fetch,
+): Promise<{ command: PendingSolveCommand | null; outcome?: SolveCommandOutcome | null }> {
+  return jsonRequest('/api/cadlink/solve-command', undefined, fetcher);
+}
+
+export function reportSolveCommandOutcome(
+  report: { commandId: string; state: 'accepted' | 'refused' | 'blocked'; jobId?: string | null; reason?: string | null },
+  fetcher: typeof fetch = fetch,
+): Promise<Record<string, unknown>> {
+  return jsonRequest('/api/cadlink/solve-command/outcome', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(report),
+  }, fetcher);
+}
