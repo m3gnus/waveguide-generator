@@ -107,6 +107,24 @@ describe('directivity heatmap', () => {
     expect(option.series.map((series) => series.name)).toEqual(expect.arrayContaining(['-3 dB contour', '-6 dB contour', '-12 dB contour']));
   });
 
+  it('gives the -6 dB contour the strongest foreground accent', () => {
+    const option = heatmapOption(payload(), tokens, 'horizontal', -6) as { series: Array<{
+      name?: string;
+      data?: number[][];
+      renderItem?: (params: unknown, api: { value: (index: number) => unknown }) => { children: Array<{ style: { stroke: string; lineWidth: number } }> };
+    }> };
+    const contourStyle = (name: string) => {
+      const contour = option.series.find((series) => series.name === name)!;
+      return contour.renderItem!(
+        { coordSys: { x: 0, y: 0, width: 400, height: 200 } },
+        { value: (index) => contour.data![0][index] },
+      ).children[0].style;
+    };
+
+    expect(contourStyle('-6 dB contour')).toMatchObject({ stroke: tokens.foreground, lineWidth: 1.6 });
+    expect(contourStyle('-3 dB contour')).toMatchObject({ stroke: tokens.accent, lineWidth: 1.05 });
+  });
+
   it('joins adjacent contour fragments into smoothable continuous paths', () => {
     expect(contourPolylines([
       [0, 0, 1, 1],

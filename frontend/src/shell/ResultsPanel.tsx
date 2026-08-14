@@ -435,7 +435,7 @@ export function heatmapOption(result: ResultPayload, tokens: ChartTokens, plane:
     const polylines = contourPolylines(contourSegments(contourGrid.values, level)).filter((points) => points.length > 1);
     if (!polylines.length) return [];
     const labelIndex = polylines.reduce((best, points, index) => points.length > polylines[best].length ? index : best, 0);
-    const color = contourIndex === 0 ? tokens.foreground : contourIndex === 1 ? tokens.accent : tokens.series[Math.min(contourIndex, tokens.series.length - 1)] ?? tokens.muted;
+    const color = level === -6 ? tokens.foreground : level === -3 ? tokens.accent : tokens.series[Math.min(contourIndex, tokens.series.length - 1)] ?? tokens.muted;
     return [{
       name: `${level} dB contour`, type: 'custom', coordinateSystem: 'cartesian2d', silent: true, z: 6, clip: true,
       data: polylines.map((_points, index) => [index, index === labelIndex ? 1 : 0]),
