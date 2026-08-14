@@ -4,6 +4,7 @@ import {
   getFusionCadStatus,
   ingestReturn,
   listReturns,
+  requestFusionReturn,
   type CadReturnBundle,
   type CadReturnIngestRecord,
   type FusionCadStatus,
@@ -44,6 +45,8 @@ interface CadLinkCoordinatorSnapshot {
   returnFromOnshape(): Promise<void>;
   expectFusionReturn(requestId: string, requestedAt?: number): void;
   ingest(): Promise<void>;
+  ingestSelected(): Promise<CadReturnIngestRecord>;
+  pullFromFusion(): Promise<CadReturnBundle>;
   /** The one Fusion outbound path: derives open-vs-update and the expected
    * document guard from the live status, and parks on the two-way conflict
    * (returning null) until the user confirms through the coordinator dialog. */
@@ -74,6 +77,8 @@ let bridgeSnapshot: CadLinkCoordinatorSnapshot = {
   returnFromOnshape: unavailable,
   expectFusionReturn: () => undefined,
   ingest: unavailable,
+  ingestSelected: unavailable,
+  pullFromFusion: unavailable,
   sendWgToFusion: unavailable,
   cancelFusionConflict: () => undefined,
   clearFeedback: () => undefined,
@@ -95,6 +100,10 @@ function publishBridge(snapshot: CadLinkCoordinatorSnapshot): void {
   bridgeSnapshot = snapshot;
   bridgeListeners.forEach((listener) => listener());
 }
+
+/** A step abandoned because newer user intent replaced what it was working on.
+ * Its feedback is already on screen, so a composed action stops silently. */
+export class SupersededError extends Error {}
 
 export function newestReturnArrival(
   items: CadReturnBundle[],
@@ -201,6 +210,14 @@ export function CadLinkCoordinator() {
   const mounted = useRef(true);
   const pendingReturnRequestId = useRef<string | null>(null);
   const pendingReturnRequestedAt = useRef<number | null>(null);
+  // Set while a caller awaits one exact correlated arrival. The poll loop is
+  // still the only thing that discovers returns; this lets a composed action
+  // (pull, then ingest, then solve) continue from that discovery.
+  const pendingReturnWaiter = useRef<{
+    requestId: string;
+    settle: (bundle: CadReturnBundle) => void;
+    fail: (reason: Error) => void;
+  } | null>(null);
   const onshape = preferences.cadApplication === 'onshape';
 
   useEffect(() => {
@@ -314,7 +331,12 @@ export function CadLinkCoordinator() {
       ) {
         pendingReturnRequestId.current = null;
         pendingReturnRequestedAt.current = null;
-        setError('Fusion did not return the requested model within 60 seconds. Check Fusion for a WGLink message, then retry.');
+        const timeout = 'Fusion did not return the requested model within 60 seconds. Check Fusion for a WGLink message, then retry.';
+        const waiter = pendingReturnWaiter.current;
+        pendingReturnWaiter.current = null;
+        // A composed caller owns the message: let it decide how to report.
+        if (waiter) waiter.fail(new Error(timeout));
+        else setError(timeout);
       }
       const arrived = options.autoOpenNew
         ? requested ?? (
@@ -343,6 +365,11 @@ export function CadLinkCoordinator() {
         if (arrived.requestId === pendingReturnRequestId.current) {
           pendingReturnRequestId.current = null;
           pendingReturnRequestedAt.current = null;
+        }
+        const waiter = pendingReturnWaiter.current;
+        if (waiter && arrived.requestId === waiter.requestId) {
+          pendingReturnWaiter.current = null;
+          waiter.settle(arrived);
         }
         setStatus(`Received ${arrived.documentName ?? arrived.name} from Fusion 360.${
           continuity === 'carried' ? ' Kept your mesh, channel, and solve settings.' : ''
@@ -438,11 +465,49 @@ export function CadLinkCoordinator() {
     pendingReturnRequestedAt.current = requestedAt;
   }, []);
 
+  /** Ask Fusion for the active document and resolve with the exact correlated
+   * return. Composable: the caller decides whether to ingest and solve. */
+  const pullFromFusion = useCallback(async (): Promise<CadReturnBundle> => {
+    // Failures are reported here as well as thrown, so a fire-and-forget
+    // caller still shows them and a composed caller can still stop.
+    const fail = (reason: unknown): never => {
+      const error = reason instanceof Error ? reason : new Error(String(reason));
+      if (!(error instanceof SupersededError) && mounted.current) setError(error.message);
+      throw error;
+    };
+    if (!identity?.designId || !fusionStatus?.documentId || !fusionStatus.link) {
+      return fail(new Error('Fusion changed documents. Refresh CAD Link and try again.'));
+    }
+    setError(null);
+    const result = await requestFusionReturn({
+      designId: identity.designId,
+      documentId: fusionStatus.documentId,
+      instanceId: fusionStatus.link.instanceId,
+      expectedReturnStateHash: fusionStatus.link.documentSignatureHash,
+    }).catch(fail);
+    expectFusionReturn(result.requestId);
+    setStatus(`Requested current geometry from ${result.documentName}. Waiting for Fusion…`);
+    const arrival = new Promise<CadReturnBundle>((settle, reject) => {
+      // Only one pull can be outstanding: a newer one supersedes the old wait
+      // rather than leaving a promise nothing will ever settle.
+      pendingReturnWaiter.current?.fail(new SupersededError('Superseded by a newer request for Fusion geometry.'));
+      pendingReturnWaiter.current = { requestId: result.requestId, settle, fail: reject };
+    });
+    void refresh({ background: true, autoOpenNew: true });
+    return arrival.catch(fail);
+  }, [expectFusionReturn, fusionStatus, identity?.designId, refresh]);
+
   const reportViewportNotice = useCallback((message: string | null) => setViewportNotice(message), []);
 
-  const ingest = useCallback(async () => {
+  /** Ingest the selected return and hand back the verified record.
+   *
+   * The panel button wants a void action that reports into the panel; a
+   * composed action (pull, ingest, solve) has to know whether the record
+   * exists before it can gate a solve on it. This is the composable half:
+   * it reports the same feedback and then throws or returns the record. */
+  const ingestSelected = useCallback(async (): Promise<CadReturnIngestRecord> => {
     const current = useCadReturnStore.getState();
-    if (!current.selectedBundle) return;
+    if (!current.selectedBundle) throw new Error('Select a CAD return before preparing a simulation.');
     // This intent covers the ingest record itself. The viewport has a separate
     // token because its follow-up artifact fetch can be superseded independently.
     const ingestGeneration = current.beginIngestIntent();
@@ -464,40 +529,48 @@ export function CadLinkCoordinator() {
         areaDriftOverrides: current.areaDriftOverrides,
       });
       if (!useCadReturnStore.getState().applyIngest(record, ingestGeneration)) {
-        if (request === ingestRequest.current && mounted.current) {
-          setStatus('Discarded a completed ingest because its selected return or design was superseded. Rebuild the mesh for the current state.');
-        }
-        return;
+        const superseded = 'Discarded a completed ingest because its selected return or design was superseded. Rebuild the mesh for the current state.';
+        if (request === ingestRequest.current && mounted.current) setStatus(superseded);
+        throw new SupersededError(superseded);
       }
-      if (request !== ingestRequest.current || !mounted.current) return;
-      setStatus(`Ingested ${record.ingest_id}. Review the verdicts before solving.`);
-      void showIngestedMeshInViewport(
-        record,
-        current.selectedBundle.documentName || current.selectedBundle.name,
-        reportViewportNotice,
-        fetch,
-        viewportGeneration,
-      );
+      if (request === ingestRequest.current && mounted.current) {
+        setStatus(`Ingested ${record.ingest_id}. Review the verdicts before solving.`);
+        void showIngestedMeshInViewport(
+          record,
+          current.selectedBundle.documentName || current.selectedBundle.name,
+          reportViewportNotice,
+          fetch,
+          viewportGeneration,
+        );
+      }
+      return record;
     } catch (reason) {
+      if (reason instanceof SupersededError) throw reason;
       if (!useCadReturnStore.getState().isCurrentIngestIntent(ingestGeneration)) {
-        if (request === ingestRequest.current && mounted.current) {
-          setStatus('Discarded an ingest response because its selected return or design was superseded. Rebuild the mesh for the current state.');
-        }
-        return;
+        const superseded = 'Discarded an ingest response because its selected return or design was superseded. Rebuild the mesh for the current state.';
+        if (request === ingestRequest.current && mounted.current) setStatus(superseded);
+        throw new SupersededError(superseded);
       }
-      if (request !== ingestRequest.current || !mounted.current) return;
       const message = reason instanceof Error ? reason.message : String(reason);
-      const structured = reason instanceof CadLinkApiError ? reason.areaDriftSources : [];
-      structured.forEach(current.flagAreaDrift);
-      if (!structured.length) {
-        const drift = /source ['"]([^'"]+)['"] area drift/i.exec(message);
-        if (drift) current.flagAreaDrift(drift[1]);
+      if (request === ingestRequest.current && mounted.current) {
+        const structured = reason instanceof CadLinkApiError ? reason.areaDriftSources : [];
+        structured.forEach(current.flagAreaDrift);
+        if (!structured.length) {
+          const drift = /source ['"]([^'"]+)['"] area drift/i.exec(message);
+          if (drift) current.flagAreaDrift(drift[1]);
+        }
+        setError(message);
       }
-      setError(message);
+      throw reason instanceof Error ? reason : new Error(message);
     } finally {
       if (request === ingestRequest.current && mounted.current) setIngesting(false);
     }
   }, [reportViewportNotice]);
+
+  // The panel's button: same work, feedback already presented, nothing thrown.
+  const ingest = useCallback(async () => {
+    await ingestSelected().catch(() => undefined);
+  }, [ingestSelected]);
 
   const returnFromOnshape = useCallback(async () => {
     if (!identity?.designId) throw new Error('Send this design to Onshape before returning it.');
@@ -577,6 +650,8 @@ export function CadLinkCoordinator() {
       returnFromOnshape,
       expectFusionReturn,
       ingest,
+      ingestSelected,
+      pullFromFusion,
       sendWgToFusion,
       cancelFusionConflict,
       clearFeedback,
@@ -602,6 +677,8 @@ export function CadLinkCoordinator() {
       returnFromOnshape: unavailable,
       expectFusionReturn: () => undefined,
       ingest: unavailable,
+      ingestSelected: unavailable,
+      pullFromFusion: unavailable,
       sendWgToFusion: unavailable,
       cancelFusionConflict: () => undefined,
       clearFeedback: () => undefined,
@@ -617,7 +694,9 @@ export function CadLinkCoordinator() {
     expectFusionReturn,
     fusionStatus,
     ingest,
+    ingestSelected,
     ingesting,
+    pullFromFusion,
     sendingToFusion,
     loading,
     onshapeConnection,

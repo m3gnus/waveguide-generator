@@ -307,6 +307,44 @@ describe('solve invocation mutex', () => {
     expect(mocks.submitDesign).not.toHaveBeenCalled();
   });
 
+  it('gates solveCurrentCadImport on readiness and reports a busy solve instead of dropping it', async () => {
+    // Automatic callers (Pull & Solve, a Fusion solve command) use this action,
+    // so its refusal has to be a thrown reason and never a silent no-op.
+    await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport())
+      .rejects.toThrow('Ingest a CAD return before solving.');
+    expect(mocks.submitImported).not.toHaveBeenCalled();
+
+    const ingestId = 'wgi_01J5A8QK3M9T2XVBH0RD7NWE6C';
+    useCadReturnStore.setState({
+      ingestRecord: {
+        ingest_id: ingestId,
+        manifest_sha256: `sha256:${'1'.repeat(64)}`,
+        artifact_sha256: `sha256:${'2'.repeat(64)}`,
+        report_sha256: `sha256:${'3'.repeat(64)}`,
+        findings: [],
+        evidence: { fem_air_volumes: [] },
+        polar_grid_derivation: {},
+      } as unknown as CadReturnIngestRecord,
+      needsIngest: false,
+      driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }],
+      sourceSizesMm: { 'source-hf': 4 },
+      skippedSourceIds: [],
+      acknowledgedFindingIds: [],
+    });
+    const pending = deferred<string>();
+    mocks.submitImported.mockReturnValue(pending.promise);
+
+    let first!: Promise<'submitted' | 'busy'>;
+    let second!: 'submitted' | 'busy';
+    await act(async () => {
+      first = jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport();
+      second = await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport();
+    });
+    expect(second).toBe('busy');
+    expect(mocks.submitImported).toHaveBeenCalledOnce();
+    await act(async () => { pending.resolve('job-cad'); await expect(first).resolves.toBe('submitted'); });
+  });
+
   it('enters CAD mode without an ingest and exposes the submission blocker', async () => {
     await act(async () => {
       root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>);

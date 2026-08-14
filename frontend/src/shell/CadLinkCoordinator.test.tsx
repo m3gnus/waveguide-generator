@@ -184,6 +184,106 @@ describe('CadLinkCoordinator', () => {
     expect(activate).toHaveBeenCalledWith('cadlink');
   });
 
+  it('resolves a pull with the exact correlated arrival and times the wait out', async () => {
+    const linkedFusion: FusionCadStatus = {
+      ...closedFusion,
+      state: 'current',
+      processRunning: true,
+      running: true,
+      documentName: 'Speaker',
+      documentId: 'fusion:doc-1',
+      link: {
+        instanceId: 'wgi_1', bundlePath: null, designId: 'wgd_1', lineageId: null,
+        editVersion: null, designHash: null, designName: null, formula: 'OSSE',
+        configPresent: true, parameterCount: 3, parameterDriftCount: 0,
+        localBodyState: 'unmodified', bodyFingerprintHash: null,
+        documentSignatureHash: 'sha256:doc-state', documentBodyCount: 2,
+        sourceStateHash: null, exportId: 'wge_1', exportSequence: '4',
+      },
+    };
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_1', lineageId: 'wgl_1', baseEditVersion: 1,
+    }, 'current');
+    let listing: { items: CadReturnBundle[] } = { items: [] };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json(listing);
+      if (path.endsWith('/fusion-status')) return json(linkedFusion);
+      if (path.endsWith('/request-fusion-return')) {
+        return json({ status: 'requested', requestId: 'req_1', documentName: 'Speaker' });
+      }
+      return json({}, 404);
+    }));
+    await renderCoordinator();
+
+    let pull!: Promise<CadReturnBundle>;
+    await act(async () => {
+      pull = cadLinkCoordinatorBridge.getSnapshot().pullFromFusion();
+      await Promise.resolve(); await Promise.resolve();
+    });
+    expect(cadLinkCoordinatorBridge.getSnapshot().status).toContain('Waiting for Fusion…');
+
+    // An uncorrelated bundle must not settle this pull.
+    listing = { items: [{ ...initialBundle, requestId: 'req_other' }] };
+    await act(async () => {
+      await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
+    });
+
+    const correlated = { ...initialBundle, requestId: 'req_1', documentName: 'Speaker pulled' };
+    listing = { items: [correlated] };
+    await act(async () => {
+      await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
+    });
+    await expect(pull).resolves.toMatchObject({ requestId: 'req_1' });
+  });
+
+  it('rejects and reports a pull that Fusion never answers', async () => {
+    const linkedFusion: FusionCadStatus = {
+      ...closedFusion,
+      state: 'current', processRunning: true, running: true,
+      documentName: 'Speaker', documentId: 'fusion:doc-1',
+      link: {
+        instanceId: 'wgi_1', bundlePath: null, designId: 'wgd_1', lineageId: null,
+        editVersion: null, designHash: null, designName: null, formula: 'OSSE',
+        configPresent: true, parameterCount: 3, parameterDriftCount: 0,
+        localBodyState: 'unmodified', bodyFingerprintHash: null,
+        documentSignatureHash: 'sha256:doc-state', documentBodyCount: 2,
+        sourceStateHash: null, exportId: 'wge_1', exportSequence: '4',
+      },
+    };
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_1', lineageId: 'wgl_1', baseEditVersion: 1,
+    }, 'current');
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json({ items: [] });
+      if (path.endsWith('/fusion-status')) return json(linkedFusion);
+      if (path.endsWith('/request-fusion-return')) {
+        return json({ status: 'requested', requestId: 'req_1', documentName: 'Speaker' });
+      }
+      return json({}, 404);
+    }));
+    await renderCoordinator();
+
+    const started = Date.now();
+    const clock = vi.spyOn(Date, 'now');
+    // The handler is attached with the promise, not after the act() below:
+    // a late handler makes the rejection look unhandled to the runner.
+    let rejection: unknown;
+    await act(async () => {
+      cadLinkCoordinatorBridge.getSnapshot().pullFromFusion()
+        .then(() => undefined, (reason) => { rejection = reason; });
+      await Promise.resolve(); await Promise.resolve();
+    });
+    clock.mockReturnValue(started + 61_000);
+    await act(async () => {
+      await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
+      await Promise.resolve();
+    });
+    expect(String(rejection)).toContain('did not return the requested model within 60 seconds');
+    expect(cadLinkCoordinatorBridge.getSnapshot().error).toContain('within 60 seconds');
+  });
+
   it('detects and auto-selects a newly arrived return', async () => {
     let listing = { items: [initialBundle] };
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
