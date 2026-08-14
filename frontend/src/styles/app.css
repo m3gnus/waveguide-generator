@@ -835,11 +835,11 @@ textarea:disabled { opacity: .48; }
 .unit { font-size: var(--text-micro); }
 .section-description { font-size: var(--text-base); line-height: 1.45; }
 
-.viewport-title { top: 0; left: 12px; height: 38px; align-items: center; gap: 8px; }
+.viewport-title { top: 0; left: 12px; height: 34px; align-items: center; gap: 8px; }
 .viewport-title b { font-size: var(--text-title); }
 .viewport-title span,
 .viewport-live { font-size: var(--text-micro); }
-.viewport-live { top: 0; right: 12px; height: 38px; }
+.viewport-live { top: 0; right: 12px; height: 34px; }
 .viewport-tools { bottom: 12px; border-radius: var(--r); background: var(--surface-raised); box-shadow: var(--float-sh); backdrop-filter: none; }
 .viewport-tools button { border-radius: var(--r3); }
 
