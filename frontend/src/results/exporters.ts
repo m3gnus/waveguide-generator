@@ -2,6 +2,7 @@ import { downloadBlob, downloadText } from '../api/designIo';
 import type { JobItem } from '../api/jobsSocket';
 import { exportStemForJob } from '../jobs/exportNaming';
 import { serializeDesign, type DesignDocument } from '../stores/design';
+import { designWireWithAthPolars } from '../stores/athPolars';
 import { resolveChartTheme, type ExportFormat, type Preferences } from '../prefs/preferences';
 import { applySmoothing, type SmoothingValue } from './smoothing';
 import { buildOnAxisFrd, buildPolarFrdSet } from './frd';
@@ -14,6 +15,8 @@ export interface ExportContext {
   channelId?: string;
   design?: DesignDocument;
   designRevision?: number;
+  /** The selected run's immutable directivity settings for ATH `.cfg` export. */
+  polarConfig?: unknown;
   jobStem: string;
   preferences: Preferences;
   fetcher?: typeof fetch;
@@ -414,7 +417,14 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
   const now = context.now ?? new Date();
   if (format === 'mwg_config') {
     if (!context.design) throw new Error('This export requires a saved design snapshot.');
-    const response = await (context.fetcher ?? fetch)('/api/design/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ design: serializeDesign(context.design), filename: `${baseName}_config.cfg` }) });
+    const response = await (context.fetcher ?? fetch)('/api/design/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        design: designWireWithAthPolars(serializeDesign(context.design), context.polarConfig),
+        filename: `${baseName}_config.cfg`,
+      }),
+    });
     if (!response.ok) throw await responseError(response);
     const body = await response.json() as { text: string; suggestedFilename?: string };
     const filename = body.suggestedFilename ?? `${baseName}_config.cfg`;

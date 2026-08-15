@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { DEFAULT_ATH_POLAR_UI, polarUiFromAthBlocks } from './athPolars';
 
 export type MeshValidationMode = 'warn' | 'strict' | 'off';
 export type FrequencySpacing = 'log' | 'linear';
@@ -83,17 +84,7 @@ export interface PolarUiState {
   sphericalSampling: boolean;
 }
 
-export const defaultPolarUi: PolarUiState = {
-  angleStart: 0,
-  angleEnd: 180,
-  angleStep: 5,
-  distance: 2,
-  normAngle: 5,
-  diagonalAngle: 45,
-  enabledAxes: ['horizontal', 'vertical', 'diagonal'],
-  observationOrigin: 'mouth',
-  sphericalSampling: false,
-};
+export const defaultPolarUi: PolarUiState = structuredClone(DEFAULT_ATH_POLAR_UI);
 
 export function polarConfigFromUi(ui: PolarUiState): PolarConfig {
   const numeric = [ui.angleStart, ui.angleEnd, ui.angleStep, ui.distance, ui.normAngle, ui.diagonalAngle];
@@ -218,4 +209,9 @@ export function resetSolveOptionsStore(): void {
     frequencyListText: '',
     polar: structuredClone(defaultPolarUi),
   });
+}
+
+/** Restore v1/ATH polar blocks when a `.cfg` becomes the active document. */
+export function restorePolarUiFromAthBlocks(blocks: unknown): void {
+  useSolveOptionsStore.setState({ polar: polarUiFromAthBlocks(blocks) });
 }

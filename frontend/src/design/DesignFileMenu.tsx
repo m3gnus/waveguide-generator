@@ -10,13 +10,17 @@ import {
   type CadLinkOpenState,
   type StepBody,
 } from '../api/designIo';
-import { resetDesignStore, useDesignStore } from '../stores/design';
+import { recordCommittedAthPolars, resetDesignStore, useDesignStore } from '../stores/design';
 import { resetDocumentStore, useDocumentStore, type CadLinkClassification, type DesignIdentity } from '../stores/document';
 import { projectSubmittedDesign } from '../jobs/submittedProjection';
 import { runNameFromFilename } from '../jobs/runNaming';
 import { preferencesStore, usePreferences } from '../prefs/preferences';
 import { Icon } from '../shell/icons';
-import { useSolveOptionsStore } from '../stores/solveOptions';
+import {
+  polarConfigFromUi,
+  restorePolarUiFromAthBlocks,
+  useSolveOptionsStore,
+} from '../stores/solveOptions';
 import { documentDisplayName, filenameStem } from '../viewport/presentation';
 import { createImportedMeshScene } from '../viewport/importedMesh';
 import { importedMeshStore } from '../viewport/importedMeshStore';
@@ -131,6 +135,7 @@ export function DesignFileMenu() {
       const opened = await openDesignText(text);
       const openedDesign = hydrateDesignDocument(opened.design);
       replaceDesign(openedDesign);
+      restorePolarUiFromAthBlocks(openedDesign.extra_blocks);
       setFilename(`${filenameStem(file.name)}.cfg`);
       setCadLink(editableIdentity(opened.cadlink?.identity), opened.cadlink?.classification ?? 'missing');
       let nameSourceProjection = null;
@@ -160,8 +165,10 @@ export function DesignFileMenu() {
     await act(async () => {
       const savingRevision = revision;
       const savedName = filenameStem(filename);
-      const response = await saveDesignDocument(design, filename, identity);
+      const polarConfig = polarConfigFromUi(useSolveOptionsStore.getState().polar);
+      const response = await saveDesignDocument(design, filename, identity, fetch, polarConfig);
       downloadText(response.text, filename || response.suggestedFilename);
+      recordCommittedAthPolars(polarConfig);
       setFilename(response.suggestedFilename);
       adoptSavedIdentity(response.identity);
       markSaved(savingRevision);
@@ -174,6 +181,7 @@ export function DesignFileMenu() {
   function newDesign() {
     if (revision !== savedRevision && !window.confirm('Discard unsaved changes and create a new design?')) return;
     resetDesignStore();
+    restorePolarUiFromAthBlocks({});
     resetDocumentStore();
     preferencesStore.update({ outputName: 'horn', nameSourceProjection: null });
     setMessage('New design');

@@ -104,6 +104,48 @@ def test_new_design_uses_v1_header_v2_discriminator_and_writer_order() -> None:
     assert parse(text).design.formula == "OSSE"
 
 
+def test_canonical_design_writes_v1_ath_directivity_blocks() -> None:
+    design = DesignConfig.model_validate(
+        {
+            "formula": "OSSE",
+            "extra_blocks": {
+                "Report": {"items": {"Title": '"kept"'}},
+                "ABEC.Polars:SPL_H": {
+                    "items": {
+                        "MapAngleRange": "-30,90,13",
+                        "NormAngle": "7",
+                        "Distance": "3",
+                    }
+                },
+                "ABEC.Polars:SPL_D": {
+                    "items": {
+                        "MapAngleRange": "-30,90,13",
+                        "NormAngle": "7",
+                        "Distance": "3",
+                        "Inclination": "30",
+                    }
+                },
+            },
+        }
+    )
+
+    text = serialize(design)
+    assert """ABEC.Polars:SPL_H = {
+MapAngleRange = -30,90,13
+NormAngle = 7
+Distance = 3
+}""" in text
+    assert """ABEC.Polars:SPL_D = {
+MapAngleRange = -30,90,13
+NormAngle = 7
+Distance = 3
+Inclination = 30
+}""" in text
+    reopened = parse(text).design.root
+    assert reopened.extra_blocks["Report"].items == {"Title": '"kept"'}
+    assert reopened.extra_blocks["ABEC.Polars:SPL_D"].items["Inclination"] == "30"
+
+
 @pytest.mark.parametrize("exponent", [6, "4 + 2*cos(p)"])
 def test_morph_exponent_round_trips_through_exact_text_key(exponent: int | str) -> None:
     design = DesignConfig.model_validate(

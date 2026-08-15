@@ -137,6 +137,10 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
       // A historical run is its own immutable handoff. It must not advance the
       // CAD identity of whichever editable document happens to be on screen.
       null,
+      fetch,
+      undefined,
+      null,
+      job.solve_options.polar_config,
     );
     return { notice: sentToCadMessage(result) };
   });

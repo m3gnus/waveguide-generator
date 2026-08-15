@@ -1,4 +1,5 @@
 import { serializeDesign, type DesignDocument } from '../stores/design';
+import { designWireWithAthPolars } from '../stores/athPolars';
 import type { DesignIdentity } from '../stores/document';
 import type { WgLinkExportResponse } from './designIo';
 import type { CadReturnIngestRecord } from './cadlink';
@@ -116,7 +117,7 @@ export async function sendDesignToOnshape(
   designRevision: number,
   baseName: string,
   identity: DesignIdentity | null,
-  options: { allowPublic?: boolean } = {},
+  options: { allowPublic?: boolean; polarConfig?: unknown } = {},
   fetcher: typeof fetch = fetch,
   idempotencyKey: string = globalThis.crypto?.randomUUID?.()
     ?? `onshape-${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -130,7 +131,7 @@ export async function sendDesignToOnshape(
       'Idempotency-Key': idempotencyKey,
     },
     body: JSON.stringify({
-      design: serializeDesign(design),
+      design: designWireWithAthPolars(serializeDesign(design), options.polarConfig),
       designRevision,
       baseName,
       identity,

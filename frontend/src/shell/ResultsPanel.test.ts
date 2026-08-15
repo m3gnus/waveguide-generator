@@ -1,6 +1,7 @@
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { JobItem } from '../api/jobsSocket';
 import { preferencesStore, usePreferences, type ChartType } from '../prefs/preferences';
 import type { ChartTokens } from '../results/EChart';
 import type { NamedResult } from '../results/mappers';
@@ -180,6 +181,18 @@ describe('result export design snapshot', () => {
     expect(snapshot.design?.formula).toBe('OSSE');
     expect(snapshot.design?.L).toBe(321);
     expect(snapshot.designRevision).toBe(47);
+  });
+
+  it('carries the selected run polar config into its parameter-config export', () => {
+    const polarConfig = {
+      angle_range: [0, 90, 19], distance: 3, norm_angle: 7,
+      inclination: 30, enabled_axes: ['horizontal', 'diagonal'],
+    };
+    expect(resultExportSnapshot({
+      design_revision: 47,
+      script_snapshot: { version: 1, design: serializeDesign(designForFamily('OSSE')) },
+      solve_options: { polar_config: polarConfig } as unknown as JobItem['solve_options'],
+    }).polarConfig).toBe(polarConfig);
   });
 
   it('does not substitute the live design when an old job has no readable snapshot', () => {

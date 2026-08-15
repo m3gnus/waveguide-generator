@@ -45,6 +45,41 @@ sections cover scale, throat, morphing, mesh/sizing, sampling, enclosure, source
 frequency, and simulation options. `MORPH`, `Mesh`, `Source`, and `Simulation` blocks
 are accepted alongside their flat dotted spellings.
 
+## Directivity / ATH polar blocks
+
+Portable directivity settings use the same blocks as v1 and ATH:
+
+```cfg
+ABEC.Polars:SPL_H = {
+MapAngleRange = 0,180,37
+NormAngle = 5
+Distance = 2
+}
+ABEC.Polars:SPL_V = {
+MapAngleRange = 0,180,37
+NormAngle = 5
+Distance = 2
+Inclination = 90
+}
+ABEC.Polars:SPL_D = {
+MapAngleRange = 0,180,37
+NormAngle = 5
+Distance = 2
+Inclination = 45
+}
+```
+
+`MapAngleRange` is `startDeg,endDeg,sampleCount`. A block without `Inclination`
+is horizontal; inclinations equivalent to 90 degrees are vertical; every other
+inclination is diagonal. Enabled planes are represented by which blocks exist.
+Opening a file restores these settings, and saving or exporting a run replaces
+only the managed `ABEC.Polars:*` blocks while retaining `Report` and unrelated
+ATH passthrough blocks.
+
+ATH has no portable fields for WG's measurement-origin choice or for retaining
+the full spherical balloon grid. Those remain solve options and are deliberately
+not written as invented ATH keys.
+
 ## FREEFORM: disk representation versus typed model
 
 The text format remains compatible with the physical-axis form:

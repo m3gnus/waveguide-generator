@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { temporal } from 'zundo';
 import { findParameterByPath } from '../design/parameterRegistry';
+import { replaceAthPolarBlocks } from './athPolars';
 
 export type DesignFamily = 'OSSE' | 'R-OSSE' | 'ICW' | 'FREEFORM';
 export type MutationReason = 'edit' | 'drag' | 'undo' | 'redo' | 'load' | 'family';
@@ -15,6 +16,7 @@ export interface ConfigBlock {
   items: Record<string, string>;
   lines: string[];
   comments?: string[];
+  entries?: string[];
 }
 
 export interface FreeformPoint {
@@ -737,6 +739,21 @@ export function resetDesignStore(): void {
   useDesignStore.temporal.getState().resume();
   useDesignStore.setState({ design: structuredClone(seedDesign), designRevision: 1, dragSnapshot: null });
   bump('load', true);
+}
+
+/**
+ * Record the ATH polar blocks that were actually committed without creating a
+ * geometry revision. Directivity changes do not alter the preview mesh; this
+ * sidecar update keeps CAD-link hashing and the next save aligned with the
+ * committed `.cfg` while avoiding a pointless coarse/fine geometry rebuild.
+ */
+export function recordCommittedAthPolars(polarConfig: unknown): void {
+  const state = useDesignStore.getState();
+  const extraBlocks = replaceAthPolarBlocks(state.design.extra_blocks, polarConfig);
+  if (extraBlocks === null) return;
+  useDesignStore.setState({
+    design: { ...state.design, extra_blocks: extraBlocks },
+  });
 }
 
 /**
