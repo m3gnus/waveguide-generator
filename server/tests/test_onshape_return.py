@@ -11,9 +11,11 @@ from hornlab_mesher import WgLinkIdentity, WgLinkSourceInterface, write_wglink
 from hornlab_mesher.config_builder import resolve_geometry
 from server.cadlink.onshape.return_leg import (
     _fingerprints_match,
+    _select_linked_root,
     write_and_ingest_return,
     write_return_bundle,
 )
+from server.cadlink.onshape.return_leg import OnshapeReturnError
 from server.cadlink.store import CadLinkStore
 from server.cadlink.wgreturn import WgReturnIntegrityError, read_wgreturn
 from server.design.schema import DesignConfig
@@ -134,6 +136,105 @@ def test_fingerprint_match_still_rejects_material_volume_or_bounds_changes() -> 
     )
 
 
+@pytest.mark.parametrize(
+    ("volume_mm3", "expected"),
+    [(99997.001, True), (99996.999, False)],
+)
+def test_fingerprint_volume_tolerance_boundary(
+    volume_mm3: float, expected: bool
+) -> None:
+    baseline = {
+        "is_solid": True,
+        "volume_mm3": 100000.0,
+        "bbox_mm": [-50.0, -50.0, 0.0, 50.0, 50.0, 100.0],
+    }
+
+    assert _fingerprints_match(
+        baseline, {**baseline, "volume_mm3": volume_mm3}
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("offset_mm", "expected"),
+    [(0.009999, True), (0.010001, False)],
+)
+def test_fingerprint_bounds_tolerance_boundary(
+    offset_mm: float, expected: bool
+) -> None:
+    baseline = {
+        "is_solid": True,
+        "volume_mm3": 100000.0,
+        "bbox_mm": [-50.0, -50.0, 0.0, 50.0, 50.0, 100.0],
+    }
+    moved = list(baseline["bbox_mm"])
+    moved[0] += offset_mm
+
+    assert _fingerprints_match(baseline, {**baseline, "bbox_mm": moved}) is expected
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_fingerprint_rejects_nonfinite_volume_and_bounds(value: float) -> None:
+    baseline = {
+        "is_solid": True,
+        "volume_mm3": 100000.0,
+        "bbox_mm": [-50.0, -50.0, 0.0, 50.0, 50.0, 100.0],
+    }
+    invalid_bounds = list(baseline["bbox_mm"])
+    invalid_bounds[2] = value
+
+    assert not _fingerprints_match(baseline, {**baseline, "volume_mm3": value})
+    assert not _fingerprints_match(baseline, {**baseline, "bbox_mm": invalid_bounds})
+
+
+@pytest.mark.parametrize("volume_mm3", [0.0, -1.0])
+def test_solid_fingerprint_requires_positive_volume(volume_mm3: float) -> None:
+    fingerprint = {
+        "is_solid": True,
+        "volume_mm3": volume_mm3,
+        "bbox_mm": [-1.0, -1.0, 0.0, 1.0, 1.0, 1.0],
+    }
+
+    assert not _fingerprints_match(fingerprint, fingerprint)
+
+
+def test_two_matching_solids_are_ambiguous() -> None:
+    baseline = {
+        "is_solid": True,
+        "volume_mm3": 128665.0,
+        "bbox_mm": [-77.7, -77.7, -5.0, 77.7, 77.7, 70.0],
+    }
+    roots = [(3, 1), (3, 2)]
+
+    with pytest.raises(OnshapeReturnError, match="exactly one"):
+        _select_linked_root(
+            roots,
+            {roots[0]: baseline, roots[1]: dict(baseline)},
+            baseline,
+        )
+
+
+def test_sole_same_bounds_near_copy_is_not_promoted_to_linked_identity() -> None:
+    baseline = {
+        "is_solid": True,
+        "volume_mm3": 128665.0,
+        "bbox_mm": [-77.7, -77.7, -5.0, 77.7, 77.7, 70.0],
+    }
+    roots = [(3, 1), (3, 2)]
+    near_copy = {**baseline, "volume_mm3": 128669.0}
+    unrelated = {
+        "is_solid": True,
+        "volume_mm3": 500.0,
+        "bbox_mm": [200.0, 200.0, 200.0, 210.0, 210.0, 210.0],
+    }
+
+    with pytest.raises(OnshapeReturnError, match="exactly one"):
+        _select_linked_root(
+            roots,
+            {roots[0]: near_copy, roots[1]: unrelated},
+            baseline,
+        )
+
+
 def test_shipping_wglink_refuses_missing_source_policy(tmp_path: Path) -> None:
     outbound, step = _outbound(tmp_path)
     outbound["required_features"].remove("source-interface-v1")
@@ -179,10 +280,14 @@ def test_onshape_return_preserves_identity_source_evidence_and_checksums(tmp_pat
     assert instance["origin_bundle_id"] == outbound["bundle"]["id"]
     assert instance["body_evidence"]["local_body_state"] == "unknown"
     assert manifest["assembly"]["n_bodies_expected"] == 2
-    assert {item["body_kind"] for item in manifest["scope"]["included"]} == {
+    body_kinds = [item["body_kind"] for item in manifest["scope"]["included"]]
+    assert set(body_kinds) == {
         "solid",
         "surface",
     }
+    # The serialized feature-export fixture contains one real, independently
+    # exportable throat sheet rather than duplicated coincident region edges.
+    assert body_kinds.count("surface") == 1
     assert source["selectors"]["linked_throat"]["instance_id"] == "onshape-PART"
     assert source["observed"]["face_count"] == 1
     assert source["observed"]["total_area_mm2"] == pytest.approx(
