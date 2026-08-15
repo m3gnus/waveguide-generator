@@ -6,7 +6,8 @@ import {
   blockingFindings,
   useCadReturnStore,
 } from '../stores/cadReturn';
-import { useDesignStore } from '../stores/design';
+import { recordCommittedAthPolars, useDesignStore } from '../stores/design';
+import { polarConfigFromUi, useSolveOptionsStore } from '../stores/solveOptions';
 import { useDocumentStore } from '../stores/document';
 import { filenameStem } from '../viewport/presentation';
 import { cadLinkCoordinatorBridge } from './CadLinkCoordinator';
@@ -137,8 +138,9 @@ export function CadLinkPanel() {
     cadCoordinator.clearFeedback(); setSendingToOnshape(true);
     try {
       const wasLinked = onshapeStatus?.state === 'stale' || onshapeStatus?.state === 'current';
+      const polarConfig = polarConfigFromUi(useSolveOptionsStore.getState().polar);
       const result = await sendDesignToOnshape(
-        design, designRevision, filenameStem(filename), identity, { allowPublic },
+        design, designRevision, filenameStem(filename), identity, { allowPublic, polarConfig },
       );
       if (request !== onshapeSendGeneration.current) return;
       setConfirmPublicDocument(null);
@@ -146,6 +148,7 @@ export function CadLinkPanel() {
         cadCoordinator.reportStatus('Sent the previous design to Onshape, but the WG design changed while it was uploading. Send again to link the current design.');
         return;
       }
+      recordCommittedAthPolars(polarConfig);
       const visibility = result.onshape.isPublic ? ' · public document' : '';
       cadCoordinator.reportStatus(result.onshape.createdDocument
         ? `Created ${result.onshape.documentName} in Onshape · ${result.onshape.variablesPushed} parameters${visibility}`

@@ -4,13 +4,13 @@ import { fetchJobResults } from '../api/results';
 import { resolveEngine, submitDesign, submitImported, type ImportedSolveSubmission } from '../jobs/actions';
 import { useCapabilities, useCapabilityRefreshOnReconnect } from '../jobs/useCapabilities';
 import { JobAutomation } from '../jobs/automation';
-import { hydrateJobDesign } from '../jobs/jobDesign';
 import { exportStemForJob } from '../jobs/exportNaming';
 import { buildImportedSubmission, importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { decorateRunName, nextRunName } from '../jobs/runNaming';
 import { projectSubmittedDesign, projectSubmittedImport, submittedProjectionsEqual, type SubmittedDesignProjection } from '../jobs/submittedProjection';
 import { preferencesStore, usePreferences } from '../prefs/preferences';
 import { runWorkspaceExportBundle, saveMeshArtifactToWorkspace } from '../results/exporters';
+import { resultExportSnapshot } from '../results/exportContext';
 import type { ResultPayload } from '../results/types';
 import { useDesignStore, type DesignDocument } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
@@ -299,8 +299,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       markMeshDownloaded: (job, filename) => jobsSocket.patchMetadata(job.id, { mesh_artifact_file: filename }),
       exportCompleted: async (job, formats) => runWorkspaceExportBundle({
         result: await fetchJobResults(job.id) as ResultPayload,
-        design: hydrateJobDesign(job) ?? undefined,
-        designRevision: job.design_revision,
+        ...resultExportSnapshot(job),
         jobStem: exportStemForJob(job),
         preferences,
       }, formats),

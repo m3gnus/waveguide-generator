@@ -241,7 +241,10 @@ function passthroughStatus(field: ParameterDefinition, design: DesignDocument): 
   if (field.id === 'mesh.quadrants') return String(getAtPath(design, field.path) ?? 'Not present');
   const names = Object.keys(design.extra_blocks);
   if (field.id === 'passthrough.abec') {
-    const count = names.filter((name) => name.toLocaleUpperCase().startsWith('ABEC')).length;
+    const count = names.filter((name) => (
+      name.toLocaleUpperCase().startsWith('ABEC')
+      && !name.startsWith('ABEC.Polars:')
+    )).length;
     return count ? `${count} block${count === 1 ? '' : 's'} present` : 'No blocks present';
   }
   if (field.id === 'passthrough.report') return names.some((name) => name.toLocaleLowerCase() === 'report') ? 'Block present' : 'No block present';

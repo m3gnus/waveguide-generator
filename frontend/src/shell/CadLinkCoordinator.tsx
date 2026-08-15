@@ -15,8 +15,9 @@ import { sendDesignToCad, type WgLinkExportResponse } from '../api/designIo';
 import { getOnshapeConnection, getOnshapeStatus, returnOnshapeToWg, type OnshapeConnection, type OnshapeStatus } from '../api/onshape';
 import { preferencesStore, usePreferences } from '../prefs/preferences';
 import { useCadReturnStore } from '../stores/cadReturn';
-import { subscribeRevision, useDesignStore } from '../stores/design';
+import { recordCommittedAthPolars, subscribeRevision, useDesignStore } from '../stores/design';
 import { useDocumentStore, type DesignIdentity } from '../stores/document';
+import { polarConfigFromUi, useSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { createImportedMeshScene } from '../viewport/importedMesh';
 import { importedMeshStore } from '../viewport/importedMeshStore';
@@ -404,6 +405,7 @@ export function CadLinkCoordinator() {
     const request = ++fusionSendRequest.current;
     setSendingToFusion(true); setError(null); setStatus(null);
     try {
+      const polarConfig = polarConfigFromUi(useSolveOptionsStore.getState().polar);
       const result = await sendDesignToCad(
         design,
         designRevision,
@@ -412,8 +414,10 @@ export function CadLinkCoordinator() {
         fetch,
         undefined,
         target ?? null,
+        polarConfig,
       );
       if (request === fusionSendRequest.current && mounted.current) {
+        recordCommittedAthPolars(polarConfig);
         if (result.identity) setCadLink(result.identity, 'current');
         setStatus(target
           ? `Update sent to Fusion 360 · sequence ${result.sequence}`
