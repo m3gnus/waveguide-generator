@@ -199,8 +199,20 @@ def _native_transport() -> FakeTransport:
         "POST",
         "/partstudios/d/DID/w/WID/e/PART/features",
         [
-            (200, {"feature": {"message": {"featureId": "NATIVE"}}}),
-            (200, {"feature": {"message": {"featureId": "DATUM"}}}),
+            (
+                200,
+                {
+                    "feature": {"message": {"featureId": "NATIVE"}},
+                    "featureState": {"message": {"featureStatus": "OK"}},
+                },
+            ),
+            (
+                200,
+                {
+                    "feature": {"message": {"featureId": "DATUM"}},
+                    "featureState": {"message": {"featureStatus": "OK"}},
+                },
+            ),
         ],
     )
     transport.route("POST", "/partstudios/d/DID/w/WID", 200, {"id": "PART"})

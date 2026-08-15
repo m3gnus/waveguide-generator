@@ -566,7 +566,10 @@ def _send_transport() -> FakeTransport:
         "POST",
         "/partstudios/d/DID/w/WID/e/PART/features",
         200,
-        {"feature": {"message": {"featureId": "DATUM"}}},
+        {
+            "feature": {"message": {"featureId": "DATUM"}},
+            "featureState": {"message": {"featureStatus": "OK"}},
+        },
     )
     transport.route(
         "GET",

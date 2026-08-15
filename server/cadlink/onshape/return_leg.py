@@ -29,6 +29,10 @@ from server.mesh.imported import geometry_candidate_matches
 
 RETURN_SUBDIRECTORY = Path("cadlink") / "onshape" / "wgreturn"
 SOURCE_INTERFACE_FEATURE = "source-interface-v1"
+_VOLUME_REL_TOLERANCE = 3.0e-5
+_VOLUME_ABS_TOLERANCE_MM3 = 1.0e-3
+_BBOX_REL_TOLERANCE = 1.0e-7
+_BBOX_ABS_TOLERANCE_MM = 1.0e-2
 
 
 class OnshapeReturnError(ValueError):
@@ -192,11 +196,21 @@ def _fingerprints_match(first: Mapping[str, Any], second: Mapping[str, Any]) -> 
         return False
     if len(left_bbox) != 6 or len(right_bbox) != 6:
         return False
+    if not all(
+        math.isfinite(value)
+        for value in (left_volume, right_volume, *left_bbox, *right_bbox)
+    ):
+        return False
+    if bool(first.get("is_solid")) and (left_volume <= 0 or right_volume <= 0):
+        return False
     # A live Onshape import/export of the regression waveguide changed volume
     # by 2.33e-5 relative while moving its bounds by only 0.001745 mm. Keep a
-    # small margin over that measured translation noise; kind, tight bounds,
-    # and the exactly-one-candidate rule still prevent identity by proximity.
-    volume_tolerance = max(1.0e-3, 5.0e-5 * max(abs(left_volume), abs(right_volume)))
+    # narrow margin over that measured translation noise. This is deliberately
+    # below the 3.11e-5 change of the same-bounds near-copy regression fixture.
+    volume_tolerance = max(
+        _VOLUME_ABS_TOLERANCE_MM3,
+        _VOLUME_REL_TOLERANCE * max(abs(left_volume), abs(right_volume)),
+    )
     if abs(left_volume - right_volume) > volume_tolerance:
         return False
     return all(
@@ -204,9 +218,41 @@ def _fingerprints_match(first: Mapping[str, Any], second: Mapping[str, Any]) -> 
         # OCC's write/read round trip expands that box by its modelling
         # tolerance (about 0.006 mm in the regression fixture), so identity
         # matching needs a machining-negligible 0.01 mm floor.
-        abs(left - right) <= max(1.0e-2, 1.0e-7 * max(abs(left), abs(right)))
+        abs(left - right)
+        <= max(
+            _BBOX_ABS_TOLERANCE_MM,
+            _BBOX_REL_TOLERANCE * max(abs(left), abs(right)),
+        )
         for left, right in zip(left_bbox, right_bbox, strict=True)
     )
+
+
+def _select_linked_root(
+    root_bodies: list[tuple[int, int]],
+    root_fingerprints: Mapping[tuple[int, int], Mapping[str, Any]],
+    baseline_fingerprint: Mapping[str, Any] | None,
+) -> tuple[int, int]:
+    """Resolve the linked body only when the stored evidence is unambiguous."""
+
+    if len(root_bodies) == 1:
+        return root_bodies[0]
+    if baseline_fingerprint is None:
+        raise OnshapeReturnError(
+            "The returned Onshape STEP contains multiple bodies and the stored outbound "
+            "bundle has no body fingerprint. WG cannot identify the linked instance."
+        )
+    linked_candidates = [
+        root
+        for root in root_bodies
+        if _fingerprints_match(root_fingerprints[root], baseline_fingerprint)
+    ]
+    if len(linked_candidates) != 1:
+        raise OnshapeReturnError(
+            "The returned Onshape STEP contains multiple bodies, but WG could not "
+            "identify exactly one as the stored outbound linked body. No instance "
+            "identity was assigned by proximity or name."
+        )
+    return linked_candidates[0]
 
 
 def inspect_step(
@@ -302,26 +348,9 @@ def inspect_step(
             f"{len(matches)} faces; exactly one is required. No source evidence was invented."
         )
 
-    if len(root_bodies) == 1:
-        linked_root = root_bodies[0]
-    elif baseline_fingerprint is not None:
-        linked_candidates = [
-            root
-            for root in root_bodies
-            if _fingerprints_match(root_fingerprints[root], baseline_fingerprint)
-        ]
-        if len(linked_candidates) != 1:
-            raise OnshapeReturnError(
-                "The returned Onshape STEP contains multiple bodies, but WG could not "
-                "identify exactly one as the stored outbound linked body. No instance "
-                "identity was assigned by proximity or name."
-            )
-        linked_root = linked_candidates[0]
-    else:
-        raise OnshapeReturnError(
-            "The returned Onshape STEP contains multiple bodies and the stored outbound "
-            "bundle has no body fingerprint. WG cannot identify the linked instance."
-        )
+    linked_root = _select_linked_root(
+        root_bodies, root_fingerprints, baseline_fingerprint
+    )
 
     linked_object_id = f"onshape:{linked_root[0]}:{linked_root[1]}"
     for item in included:
