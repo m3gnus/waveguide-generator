@@ -132,7 +132,10 @@ export default function InteractiveBalloon({ result, frequencyIndex }: { result:
       camera={{ position: [...BALLOON_CAMERA], fov: 38, near: .05, far: 50 }}
       dpr={[1, 2]}
       frameloop="demand"
-      gl={{ antialias: true, alpha: true }}
+      // Image actions copy this canvas after the demand-rendered frame has
+      // already been composited. Retaining the small result view's buffer is
+      // what makes that capture contain the current camera view.
+      gl={{ antialias: true, alpha: true, preserveDrawingBuffer: true }}
     >
       <BalloonScene result={result} frequencyIndex={frequencyIndex} resetNonce={resetNonce}/>
     </Canvas>

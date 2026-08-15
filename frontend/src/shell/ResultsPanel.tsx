@@ -9,10 +9,11 @@ import { BalloonRenderer, ChartStub, ForwardBeamRenderer, hasBalloonData, type C
 import { runWorkspaceExportBundle } from '../results/exporters';
 import { resultExportSnapshot } from '../results/exportContext';
 export { resultExportSnapshot } from '../results/exportContext';
+import { copyChartPng, downloadChartPng } from '../results/chartImage';
 import { summaryGroups, summaryText, type SummaryGroup, type SummaryRow } from '../results/summary';
 import type { ResultPayload } from '../results/types';
 import { hydrateJobDesign } from '../jobs/jobDesign';
-import { exportStemForJob } from '../jobs/exportNaming';
+import { exportStemForJob, exportTitleSlug } from '../jobs/exportNaming';
 import { CHART_TYPES, MAX_RESULT_PANELS, RESULT_PANEL_COUNTS, preferencesStore, runDisplayName, usePreferences, type ChartType } from '../prefs/preferences';
 import { ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
 import { directivityFrequencyTickLabels } from '../results/directivityFrequencyAxis';
@@ -95,8 +96,8 @@ const MAP_GRID: Record<ChartDensity, { left: number; right: number; top: number;
 };
 /** Colour ramp height, kept inside the shortest card it can appear in. */
 const MAP_RAMP: Record<ChartDensity, number> = { compact: 38, regular: 74, full: 150 };
-/** Legend clears the hover-revealed expand/close buttons in the same band. */
-const LEGEND_INSET = 46;
+/** Legend clears copy/download/expand/close buttons in the same band. */
+const LEGEND_INSET = 88;
 
 function axes(tokens: ChartTokens, density: ChartDensity = 'regular') {
   return {
@@ -654,6 +655,12 @@ export function chartTitle(chartType: ChartType, wide: boolean): string {
   return wide ? badge.long ?? badge.short : badge.short;
 }
 
+export function chartImageFilename(chartType: ChartType, job?: JobItem | null, channelId?: string | null): string {
+  const stem = job ? exportStemForJob(job) : 'result';
+  const channel = channelId ? `_${exportTitleSlug(channelId)}` : '';
+  return `${stem}${channel}_${chartType}.png`;
+}
+
 export function resolvedPolarStepNotice(result: JobResults): string | null {
   const grid = result.metadata?.polar_grid;
   if (!grid || typeof grid !== 'object') return null;
@@ -890,9 +897,25 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
   // both, so the user believes they are comparing when they are not.
   const comparisonIgnored = named.length > 1 && !COMPARABLE_CHARTS.has(chartType);
   const [expanded, setExpanded] = useState(false);
+  const [imageReady, setImageReady] = useState(false);
+  const [imageOperation, setImageOperation] = useState<'copy' | 'download' | null>(null);
+  const [imageStatus, setImageStatus] = useState<string | null>(null);
   const detail = useRef<HTMLElement>(null);
   const card = useRef<HTMLElement>(null);
+  const imageStatusTimer = useRef<number | null>(null);
   const { density, wide } = useCardMetrics(card);
+  useLayoutEffect(() => {
+    const element = card.current;
+    if (!element || chartType === 'summary') { setImageReady(false); return; }
+    const update = () => setImageReady(Boolean(element.querySelector('.chart-placeholder canvas')));
+    update();
+    const observer = new MutationObserver(update);
+    observer.observe(element, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, [chartType]);
+  useEffect(() => () => {
+    if (imageStatusTimer.current !== null) window.clearTimeout(imageStatusTimer.current);
+  }, []);
   useEffect(() => {
     if (!expanded) return;
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -916,6 +939,23 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
   const subtitle = chartType.startsWith('directivity_map') ? `ref ${preferencesStore.getSnapshot().mapReference} dB${polarStep ? ` · ${polarStep}` : ''}` : chartType === 'frequency_response' ? splSubtitle(result) : null;
   const unit = CHART_BADGES[chartType]?.unit;
   const activeLabel = named.find((item) => item.result === result)?.label ?? named[0]?.label ?? 'the primary run';
+  const imageAction = useCallback(async (operation: 'copy' | 'download') => {
+    const target = card.current?.querySelector<HTMLElement>('.chart-placeholder');
+    if (!target || imageOperation) return;
+    setImageOperation(operation);
+    setImageStatus(null);
+    try {
+      if (operation === 'copy') await copyChartPng(target, tokens.background);
+      else await downloadChartPng(target, chartImageFilename(chartType, job, channelId), tokens.background);
+      setImageStatus(operation === 'copy' ? 'Copied PNG' : 'Downloaded PNG');
+    } catch {
+      setImageStatus(operation === 'copy' ? 'Copy failed' : 'Download failed');
+    } finally {
+      setImageOperation(null);
+      if (imageStatusTimer.current !== null) window.clearTimeout(imageStatusTimer.current);
+      imageStatusTimer.current = window.setTimeout(() => setImageStatus(null), 1_600);
+    }
+  }, [channelId, chartType, imageOperation, job, tokens.background]);
   return <>
     <section ref={card} className={`result-card result-${index}`} data-density={density}>
       <div className="chart-placeholder" title="Hover for values · double-click for detail" onDoubleClick={() => setExpanded(true)}>
@@ -933,8 +973,13 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
         {subtitle && density !== 'compact' && <span className="result-subtitle">{subtitle}</span>}
         {comparisonIgnored && density !== 'compact' && <span className="result-single-run" title={`This chart shows one run at a time. Showing ${activeLabel}.`}>1 of {named.length}</span>}
         <span className="result-chrome-spacer"/>
+        {imageReady && <>
+          <button className="result-card-image-action" type="button" disabled={imageOperation !== null} aria-label={`Copy panel ${index + 1} as PNG`} title="Copy chart image" onClick={() => void imageAction('copy')}><Icon name="copy"/></button>
+          <button className="result-card-image-action" type="button" disabled={imageOperation !== null} aria-label={`Download panel ${index + 1} as PNG`} title="Download chart as PNG" onClick={() => void imageAction('download')}><Icon name="download"/></button>
+        </>}
         <button className="result-card-expand" aria-label={`Expand panel ${index + 1}`} title="Open detail view" onClick={() => setExpanded(true)}><Icon name="expand"/></button>
         <button className="result-card-close" aria-label={`Close panel ${index + 1}`} title="Close chart" onClick={() => preferencesStore.closeChart(index)}><Icon name="close"/></button>
+        {imageStatus && <span className="result-image-status" role="status">{imageStatus}</span>}
       </div>
     </section>
     {expanded && createPortal(<div className="result-detail-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setExpanded(false); }}>
