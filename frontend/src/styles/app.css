@@ -450,11 +450,13 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
    across the six-card dock with no visible focus indicator at all -- the ring
    was being drawn, on a fully transparent element. They also have to be
    reachable: 18px was under any sane target size. */
-.result-card-expand, .result-card-close { display: grid; place-items: center; width: 24px; height: 24px; flex: none; border-radius: var(--r3); background: transparent; color: var(--chart-muted); opacity: .4; transition: opacity .12s, background-color .12s; }
-.result-card:hover .result-card-expand, .result-card:hover .result-card-close,
-.result-card:focus-within .result-card-expand, .result-card:focus-within .result-card-close { opacity: 1; background: color-mix(in srgb, var(--chart-bg) 72%, transparent); backdrop-filter: blur(6px); }
-.result-card-expand:focus-visible, .result-card-close:focus-visible { opacity: 1; background: color-mix(in srgb, var(--chart-bg) 72%, transparent); }
-.result-card-expand:hover, .result-card-close:hover { background: var(--ov4); color: var(--chart-fg); }
+.result-card-image-action, .result-card-expand, .result-card-close { display: grid; place-items: center; width: 24px; height: 24px; flex: none; border-radius: var(--r3); background: transparent; color: var(--chart-muted); opacity: .4; transition: opacity .12s, background-color .12s; }
+.result-card:hover .result-card-image-action, .result-card:hover .result-card-expand, .result-card:hover .result-card-close,
+.result-card:focus-within .result-card-image-action, .result-card:focus-within .result-card-expand, .result-card:focus-within .result-card-close { opacity: 1; background: color-mix(in srgb, var(--chart-bg) 72%, transparent); backdrop-filter: blur(6px); }
+.result-card-image-action:focus-visible, .result-card-expand:focus-visible, .result-card-close:focus-visible { opacity: 1; background: color-mix(in srgb, var(--chart-bg) 72%, transparent); }
+.result-card-image-action:hover:not(:disabled), .result-card-expand:hover, .result-card-close:hover { background: var(--ov4); color: var(--chart-fg); }
+.result-card-image-action:disabled { cursor: wait; opacity: .3; }
+.result-image-status { position: absolute; top: 24px; right: 4px; padding: 2px 5px; border: 1px solid var(--hair-hi); border-radius: var(--r3); background: color-mix(in srgb, var(--chart-bg) 90%, transparent); color: var(--fg2); font: var(--text-micro) var(--mono); white-space: nowrap; pointer-events: none; backdrop-filter: blur(6px); }
 /* The groups scroll under a fixed copy action. Keeping the shell itself still
    prevents that action from disappearing in a long provenance report. */
 .result-summary { position: relative; width: 100%; height: 100%; min-height: 0; margin: 0; overflow: hidden; padding: 20px 6px 6px; }
@@ -841,8 +843,10 @@ textarea:disabled { opacity: .48; }
 .result-count-control select { height: 21px; }
 .result-grid { gap: var(--space-6); padding: var(--space-6); }
 .result-card { border-color: var(--border-default); border-radius: var(--r3); background: var(--surface-panel); box-shadow: none; }
+.result-card-image-action,
 .result-card-expand,
 .result-card-close { width: 19px; height: 19px; border-radius: var(--r3); }
+.result-card-image-action svg,
 .result-card-expand svg,
 .result-card-close svg,
 .job-remove svg,

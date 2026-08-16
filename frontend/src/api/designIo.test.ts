@@ -122,6 +122,35 @@ describe('design save requests', () => {
       design: { mesh: { quadrants: 14 } },
     });
   });
+
+  it('adds the current directivity sweep as v1-compatible ABEC polar blocks', async () => {
+    let payload: Record<string, unknown> = {};
+    const fetcher = (async (_url: string, init?: RequestInit) => {
+      payload = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({
+        text: 'saved', suggestedFilename: 'polar.cfg',
+        identity: { designId: 'wgd_01K00000000000000000000000', lineageId: 'wgl_01K00000000000000000000000', baseEditVersion: 1 },
+        forked: false, from: null,
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as typeof fetch;
+
+    await saveDesignDocument(hydrateDesignDocument({
+      formula: 'OSSE',
+      extra_blocks: { Report: { items: { Title: '"kept"' }, lines: [] } },
+    }), 'polar.cfg', null, fetcher, {
+      angle_range: [0, 120, 25], angle_step: 5, distance: 4, norm_angle: 8,
+      inclination: 35, enabled_axes: ['horizontal', 'diagonal'],
+      observation_origin: 'throat', spherical_sampling: true,
+    });
+
+    expect(payload).toMatchObject({ design: { extra_blocks: {
+      Report: { items: { Title: '"kept"' } },
+      'ABEC.Polars:SPL_H': { items: { MapAngleRange: '0,120,25', Distance: '4', NormAngle: '8' } },
+      'ABEC.Polars:SPL_D': { items: { MapAngleRange: '0,120,25', Distance: '4', NormAngle: '8', Inclination: '35' } },
+    } } });
+    expect((payload.design as { extra_blocks: Record<string, unknown> }).extra_blocks)
+      .not.toHaveProperty('ABEC.Polars:SPL_V');
+  });
 });
 
 describe('Send to CAD requests', () => {
