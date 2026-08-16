@@ -5,6 +5,7 @@ import { jobsSocket, type JobsSnapshot } from '../api/jobsSocket';
 import { preferencesStore } from '../prefs/preferences';
 import { resetDesignStore, useDesignStore } from '../stores/design';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
+import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import meshFixture from '../viewport/test-fixtures/tagged_sources-small.msh?raw';
@@ -25,6 +26,7 @@ const requested: string[] = [];
 beforeEach(() => {
   resetDesignStore();
   resetDocumentStore();
+  resetSolveOptionsStore();
   preferencesStore.resetForTests();
   importedMeshStore.clear();
   workspaceModeStore.setMode('parametric');
@@ -240,6 +242,34 @@ describe('design file export menu', () => {
     }, classification: 'stale_copy' });
     expect(container.querySelector('.cadlink-badge')?.textContent).toBe('stale copy');
     expect(container.querySelector('.cadlink-badge')?.getAttribute('title')).toContain('Saving will preserve both versions');
+  });
+
+  it('restores directivity controls from old ATH polar blocks on open', async () => {
+    vi.mocked(fetch).mockImplementationOnce(async () => new Response(JSON.stringify({
+      dialect: 'ath', migrationsApplied: [],
+      passthrough: { keysPreserved: [], blocksPreserved: ['ABEC.Polars:SPL_H', 'ABEC.Polars:SPL_V'], keyCount: 0, blockCount: 2 },
+      design: {
+        ...useDesignStore.getState().design,
+        extra_blocks: {
+          'ABEC.Polars:SPL_H': { items: { MapAngleRange: '-20,100,25', Distance: '3', NormAngle: '8' }, lines: [] },
+          'ABEC.Polars:SPL_V': { items: { MapAngleRange: '-20,100,25', Distance: '3', NormAngle: '8', Inclination: '270' }, lines: [] },
+        },
+      },
+      cadlink: { identity: null, classification: 'missing', adoptionCandidate: null },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+    act(() => root.render(<DesignFileMenu/>));
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+    Object.defineProperty(input, 'files', {
+      configurable: true,
+      value: [{ name: 'old-ath.cfg', text: async () => 'old ATH text' }],
+    });
+    await act(async () => { input.dispatchEvent(new Event('change', { bubbles: true })); });
+
+    expect(useSolveOptionsStore.getState().polar).toMatchObject({
+      angleStart: -20, angleEnd: 100, angleStep: 5,
+      distance: 3, normAngle: 8, enabledAxes: ['horizontal', 'vertical'],
+    });
   });
 
   it('adopts an auto-fork identity and reports it with the existing non-blocking toast', async () => {

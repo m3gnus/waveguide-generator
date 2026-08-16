@@ -1,17 +1,30 @@
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { describe, expect, it, vi } from 'vitest';
-import { buildBalloonGeometry } from './Balloon3D';
+import InteractiveBalloon, { buildBalloonGeometry } from './Balloon3D';
 import { BalloonRenderer, balloonMissingReason, closestFrequencyIndex, ForwardBeamRenderer, hasBalloonData, sampleBalloonGrid } from './balloon';
 import type { ResultPayload } from './types';
 
+const fiberMocks = vi.hoisted(() => ({ canvas: vi.fn() }));
 vi.mock('@react-three/fiber', () => ({
-  Canvas: () => <div data-testid="three-canvas"/>,
+  Canvas: (props: unknown) => { fiberMocks.canvas(props); return <div data-testid="three-canvas"/>; },
   useThree: () => ({ camera: { position: { set: vi.fn() }, up: { set: vi.fn() }, lookAt: vi.fn(), updateProjectionMatrix: vi.fn() } }),
 }));
 vi.mock('@react-three/drei', () => ({ OrbitControls: () => null }));
 
 describe('spherical result renderers', () => {
+  it('retains the 3D drawing buffer for Copy PNG and Download PNG', () => {
+    const result: ResultPayload = { frequencies: [1_000], balloon: { frequencies: [1_000], theta_deg: [0, 90], phi_deg: [0, 120, 240], spl_norm_db: [[[0, 0, 0], [-10, -12, -14]]] } };
+    const host = document.createElement('div'); document.body.append(host);
+    const root = createRoot(host);
+    fiberMocks.canvas.mockClear();
+    act(() => root.render(<InteractiveBalloon result={result} frequencyIndex={0}/>));
+    expect(fiberMocks.canvas).toHaveBeenCalledWith(expect.objectContaining({
+      gl: expect.objectContaining({ preserveDrawingBuffer: true }),
+    }));
+    act(() => root.unmount()); host.remove();
+  });
+
   it('interpolates the wrapped regular balloon grid', () => {
     const theta = [0, 90];
     const phi = [0, 90, 180, 270];

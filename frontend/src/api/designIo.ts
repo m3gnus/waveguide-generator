@@ -6,6 +6,8 @@ import {
   type DesignFamily,
   type ExprNumber,
 } from '../stores/design';
+import { designWireWithAthPolars } from '../stores/athPolars';
+import type { PolarConfig } from '../stores/solveOptions';
 import type { CadLinkClassification, DesignIdentity } from '../stores/document';
 
 export interface MigrationApplication {
@@ -97,11 +99,16 @@ export async function saveDesignDocument(
   filename: string,
   identity: DesignIdentity | null = null,
   fetcher: typeof fetch = fetch,
+  polarConfig?: PolarConfig,
 ): Promise<SaveDesignResponse> {
   const response = await fetcher('/api/design/save', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ design: serializeDesign(design), filename, identity }),
+    body: JSON.stringify({
+      design: designWireWithAthPolars(serializeDesign(design), polarConfig),
+      filename,
+      identity,
+    }),
   });
   if (!response.ok) throw new Error(await errorMessage(response));
   return response.json() as Promise<SaveDesignResponse>;
@@ -119,6 +126,7 @@ export async function sendDesignToCad(
     documentId: string;
     returnStateHash: string | null;
   } | null = null,
+  polarConfig?: unknown,
 ): Promise<WgLinkExportResponse> {
   // No save gate here. The server commits the design on screen into the
   // CAD-link registry as part of the export, so an unsaved or edited design
@@ -138,7 +146,7 @@ export async function sendDesignToCad(
       'Idempotency-Key': idempotencyKey,
     },
     body: JSON.stringify({
-      design: serializeDesign(design),
+      design: designWireWithAthPolars(serializeDesign(design), polarConfig),
       designRevision,
       baseName,
       identity,

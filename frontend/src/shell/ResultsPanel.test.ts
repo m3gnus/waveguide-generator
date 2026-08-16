@@ -1,6 +1,7 @@
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { JobItem } from '../api/jobsSocket';
 import { preferencesStore, usePreferences, type ChartType } from '../prefs/preferences';
 import type { ChartTokens } from '../results/EChart';
 import type { NamedResult } from '../results/mappers';
@@ -8,7 +9,17 @@ import type { SummaryContext, SummaryGroup } from '../results/summary';
 import type { ResultPayload } from '../results/types';
 import { resultFrequencyValidity } from '../results/validity';
 import { designForFamily, serializeDesign } from '../stores/design';
-import { beamShapeMissingReason, COMPARABLE_CHARTS, comparisonContourPointToPixels, directivityIndexOption, directivityMapPanels, heatmapOption, impedanceOption, ResultsChartGrid, resolvedPolarStepNotice, resultExportSnapshot, resultLayoutClass } from './ResultsPanel';
+import { beamShapeMissingReason, chartImageFilename, COMPARABLE_CHARTS, comparisonContourPointToPixels, directivityIndexOption, directivityMapPanels, heatmapOption, impedanceOption, ResultsChartGrid, resolvedPolarStepNotice, resultExportSnapshot, resultLayoutClass } from './ResultsPanel';
+
+const chartImageMocks = vi.hoisted(() => ({
+  copy: vi.fn<() => Promise<void>>(),
+  download: vi.fn<() => Promise<void>>(),
+}));
+vi.mock('../results/chartImage', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../results/chartImage')>(),
+  copyChartPng: chartImageMocks.copy,
+  downloadChartPng: chartImageMocks.download,
+}));
 
 const summaryMocks = vi.hoisted(() => ({
   groups: vi.fn<(context: SummaryContext) => SummaryGroup[]>(() => []),
@@ -182,6 +193,18 @@ describe('result export design snapshot', () => {
     expect(snapshot.designRevision).toBe(47);
   });
 
+  it('carries the selected run polar config into its parameter-config export', () => {
+    const polarConfig = {
+      angle_range: [0, 90, 19], distance: 3, norm_angle: 7,
+      inclination: 30, enabled_axes: ['horizontal', 'diagonal'],
+    };
+    expect(resultExportSnapshot({
+      design_revision: 47,
+      script_snapshot: { version: 1, design: serializeDesign(designForFamily('OSSE')) },
+      solve_options: { polar_config: polarConfig } as unknown as JobItem['solve_options'],
+    }).polarConfig).toBe(polarConfig);
+  });
+
   it('does not substitute the live design when an old job has no readable snapshot', () => {
     expect(resultExportSnapshot({ design_revision: 12, script_snapshot: null })).toEqual({
       design: undefined,
@@ -199,6 +222,8 @@ describe('results chart layouts', () => {
     preferencesStore.resetForTests();
     summaryMocks.groups.mockReset().mockReturnValue([]);
     summaryMocks.text.mockReset().mockReturnValue('');
+    chartImageMocks.copy.mockReset().mockResolvedValue(undefined);
+    chartImageMocks.download.mockReset().mockResolvedValue(undefined);
     host = document.createElement('div');
     document.body.append(host);
     root = createRoot(host);
@@ -288,6 +313,50 @@ describe('results chart layouts', () => {
     } finally {
       Object.defineProperty(navigator, 'clipboard', { configurable: true, value: originalClipboard });
     }
+  });
+
+  it('copies and downloads one composited PNG from a graphical chart', async () => {
+    const chartResult: ResultPayload = {
+      frequencies: [500, 1_000],
+      spl_on_axis: { frequencies: [500, 1_000], spl: [80, 82] },
+    };
+    act(() => root.render(createElement(ResultsChartGrid, {
+      chartTypes: ['frequency_response'], result: chartResult, named: [], tokens,
+    })));
+    const target = host.querySelector<HTMLElement>('.chart-placeholder')!;
+    await act(async () => { target.append(document.createElement('canvas')); await Promise.resolve(); });
+
+    const copy = host.querySelector<HTMLButtonElement>('[aria-label="Copy panel 1 as PNG"]')!;
+    const download = host.querySelector<HTMLButtonElement>('[aria-label="Download panel 1 as PNG"]')!;
+    expect(copy).not.toBeNull();
+    expect(download).not.toBeNull();
+    await act(async () => { copy.click(); });
+    expect(chartImageMocks.copy).toHaveBeenCalledWith(target, tokens.background);
+    expect(host.querySelector('.result-image-status')?.textContent).toBe('Copied PNG');
+
+    await act(async () => { download.click(); });
+    expect(chartImageMocks.download).toHaveBeenCalledWith(target, 'result_frequency_response.png', tokens.background);
+    expect(host.querySelector('.result-image-status')?.textContent).toBe('Downloaded PNG');
+  });
+
+  it('reports a blocked image clipboard without breaking the chart', async () => {
+    const chartResult: ResultPayload = {
+      frequencies: [500], spl_on_axis: { frequencies: [500], spl: [80] },
+    };
+    chartImageMocks.copy.mockRejectedValue(new Error('clipboard blocked'));
+    act(() => root.render(createElement(ResultsChartGrid, {
+      chartTypes: ['frequency_response'], result: chartResult, named: [], tokens,
+    })));
+    const target = host.querySelector<HTMLElement>('.chart-placeholder')!;
+    await act(async () => { target.append(document.createElement('canvas')); await Promise.resolve(); });
+    await act(async () => { host.querySelector<HTMLButtonElement>('[aria-label="Copy panel 1 as PNG"]')!.click(); });
+    expect(host.querySelector('.result-image-status')?.textContent).toBe('Copy failed');
+    expect(host.querySelector('.result-card')).not.toBeNull();
+  });
+
+  it('builds a portable chart filename from the run, channel, and chart type', () => {
+    const job = { run_number: 14, label: 'OSSE v4', config_summary: {} } as JobItem;
+    expect(chartImageFilename('directivity_map_h', job, 'HF left')).toBe('14_OSSE_v4_HF_left_directivity_map_h.png');
   });
 
   it('closes one card and persists the shorter chart list', () => {

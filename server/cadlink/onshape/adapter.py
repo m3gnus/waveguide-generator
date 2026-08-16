@@ -111,6 +111,27 @@ def _plan_restricts_private(exc: OnshapeHttpError) -> bool:
     )
 
 
+def _require_feature_regeneration_ok(body: object, *, operation: str) -> None:
+    """Reject a successful HTTP response whose feature failed to regenerate."""
+
+    response = body if isinstance(body, Mapping) else {}
+    state = response.get("featureState")
+    state = state if isinstance(state, Mapping) else {}
+    message = state.get("message")
+    message = message if isinstance(message, Mapping) else {}
+    # Live BTJson responses wrap BTFeatureState fields in ``message``. Accept
+    # the flattened OpenAPI representation too, but never infer OK from HTTP.
+    status = _string(message.get("featureStatus")) or _string(
+        state.get("featureStatus")
+    )
+    if status != "OK":
+        reported = repr(status) if status is not None else "a missing status"
+        raise OnshapeAdapterError(
+            f"Onshape returned HTTP success while {operation}, but reported "
+            f"{reported} instead of featureStatus 'OK'."
+        )
+
+
 def variable_params(parameters: Sequence[Mapping[str, Any]]) -> list[dict[str, str]]:
     """Translate the manifest's parameter table into Onshape variables.
 
@@ -564,6 +585,9 @@ class OnshapeAdapter:
             ),
             timeout=600.0,
         )
+        _require_feature_regeneration_ok(
+            response.body, operation="adding the native WG feature"
+        )
         body = response.body if isinstance(response.body, Mapping) else {}
         feature = body.get("feature")
         message = feature.get("message") if isinstance(feature, Mapping) else None
@@ -592,7 +616,7 @@ class OnshapeAdapter:
             f"/partstudios/d/{document_id}/w/{workspace_id}/e/{part_studio_id}"
             f"/features/featureid/{feature_id}"
         )
-        self._client.post(
+        response = self._client.post(
             path,
             json_body=self._feature_request(
                 document_id,
@@ -602,6 +626,9 @@ class OnshapeAdapter:
                 feature_id=feature_id,
             ),
             timeout=600.0,
+        )
+        _require_feature_regeneration_ok(
+            response.body, operation="updating the native WG feature"
         )
 
     def add_datum_feature(
@@ -625,6 +652,9 @@ class OnshapeAdapter:
                 feature_name=DATUM_FEATURE_NAME,
                 boolean_parameter=DATUM_FEATURE_PARAMETER,
             ),
+        )
+        _require_feature_regeneration_ok(
+            response.body, operation="adding the WG datum feature"
         )
         body = response.body if isinstance(response.body, Mapping) else {}
         feature = body.get("feature")
@@ -652,7 +682,7 @@ class OnshapeAdapter:
             f"/partstudios/d/{document_id}/w/{workspace_id}/e/{part_studio_id}"
             f"/features/featureid/{feature_id}"
         )
-        self._client.post(
+        response = self._client.post(
             path,
             json_body=self._feature_request(
                 document_id,
@@ -664,6 +694,9 @@ class OnshapeAdapter:
                 feature_name=DATUM_FEATURE_NAME,
                 boolean_parameter=DATUM_FEATURE_PARAMETER,
             ),
+        )
+        _require_feature_regeneration_ok(
+            response.body, operation="updating the WG datum feature"
         )
 
     def materialize_datums(

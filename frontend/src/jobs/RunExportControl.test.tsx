@@ -198,7 +198,14 @@ describe('RunExportControl', () => {
   });
 
   it('puts Send to CAD first and hands off the selected run snapshot', async () => {
-    const job = completeJob();
+    const polarConfig = {
+      angle_range: [0, 120, 25], angle_step: 5, distance: 3, norm_angle: 7,
+      inclination: 35, enabled_axes: ['horizontal', 'diagonal'],
+      observation_origin: 'mouth', spherical_sampling: false,
+    };
+    const job = completeJob({
+      solve_options: { polar_config: polarConfig } as unknown as JobItem['solve_options'],
+    });
     render(job);
     openMenu();
 
@@ -213,6 +220,10 @@ describe('RunExportControl', () => {
       42,
       '1_stored_horn_v07',
       null,
+      fetch,
+      undefined,
+      null,
+      polarConfig,
     );
     expect(mocks.fetchJobResults).not.toHaveBeenCalled();
     expect(mocks.runWorkspaceExportBundle).not.toHaveBeenCalled();
