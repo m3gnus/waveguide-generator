@@ -29,11 +29,11 @@ describe('workspace mode switch', () => {
     host.remove();
   });
 
-  it('routes first-time Fusion CAD users directly to the setup workflow', () => {
+  it('routes first-time CAD Link users directly to the setup workflow', () => {
     const activate = vi.spyOn(workspaceNavigation, 'activate').mockReturnValue(true);
     const group = host.querySelector('[role="radiogroup"]')!;
     const radios = group.querySelectorAll<HTMLButtonElement>('[role="radio"]');
-    expect([...radios].map((button) => button.textContent)).toEqual(['Parametric', 'Fusion CAD']);
+    expect([...radios].map((button) => button.textContent)).toEqual(['Parametric', 'CAD Link']);
     expect(radios[0].getAttribute('aria-checked')).toBe('true');
     expect(radios[1].disabled).toBe(false);
 
@@ -54,26 +54,25 @@ describe('workspace mode switch', () => {
     expect(activate).not.toHaveBeenCalled();
   });
 
-  it('keeps CAD mode available under Onshape and only relabels the option', () => {
+  // One workflow, one name. Which application sits on the far end of it is a
+  // preference, so the mode must read the same either way -- otherwise no
+  // document, screenshot, or support answer can name it.
+  it('names the mode CAD Link under Onshape as well as Fusion', () => {
     act(() => workspaceModeStore.setMode('cad'));
     act(() => preferencesStore.update({ cadApplication: 'onshape' }));
     const radios = host.querySelectorAll<HTMLButtonElement>('[role="radio"]');
-    expect([...radios].map((button) => button.textContent)).toEqual(['Parametric', 'CAD']);
+    expect([...radios].map((button) => button.textContent)).toEqual(['Parametric', 'CAD Link']);
     expect(radios[1].disabled).toBe(false);
     // A preferences change must not eject the user from the mode they chose.
     expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
   });
 
-  it('registers both palette commands for either CAD application', () => {
+  it('registers both palette commands', () => {
     const activate = vi.spyOn(workspaceNavigation, 'activate').mockReturnValue(true);
-    const fusion = workspaceModePaletteEntries('fusion360');
-    expect(fusion.map((entry) => entry.label)).toEqual(['Mode: Parametric', 'Mode: Fusion CAD']);
-    act(() => fusion[1].run());
+    const entries = workspaceModePaletteEntries();
+    expect(entries.map((entry) => entry.label)).toEqual(['Mode: Parametric', 'Mode: CAD Link']);
+    act(() => entries[1].run());
     expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
     expect(activate).toHaveBeenCalledWith('cadlink');
-
-    const onshape = workspaceModePaletteEntries('onshape');
-    expect(onshape.map((entry) => entry.label)).toEqual(['Mode: Parametric', 'Mode: CAD']);
-    expect(onshape[1].disabled).toBeFalsy();
   });
 });

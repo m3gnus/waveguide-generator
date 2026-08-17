@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import type { DecodedFrame } from '../api/frame';
 import { PREVIEW_FINE_IDLE_MS, previewSocket } from '../api/previewSocket';
 import { postSymmetry, toSolveDesign } from '../jobs/actions';
+import { cadApplicationName, usePreferences } from '../prefs/preferences';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { subscribeRevision, useDesignStore } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
@@ -68,9 +69,10 @@ export function Viewport() {
   const filename = useDocumentStore((state) => state.filename);
   const workspaceMode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
   const cadRecord = useCadReturnStore((state) => state.ingestRecord);
-  const cadName = useCadReturnStore((state) => state.selectedBundle?.documentName ?? state.selectedBundle?.name ?? 'Fusion CAD');
+  const cadName = useCadReturnStore((state) => state.selectedBundle?.documentName ?? state.selectedBundle?.name ?? 'CAD Link');
   const theme = useViewportTheme();
   const preferences = useViewerPreferences();
+  const cadApplication = cadApplicationName(usePreferences().cadApplication);
   const selectedRef = useRef<DecodedFrame | null>(null);
   const latencyClock = useRef(new ClientLatencyClock());
   const currentEpoch = useRef<number | null>(preview.epoch);
@@ -333,13 +335,13 @@ export function Viewport() {
       ><Icon name="reset"/>{preferences.liveUpdate ? 'Refresh' : 'Resume'}</button>}
       {workspaceMode === 'parametric'
         ? <span>geometry <b>{selected?.header.evalMs?.toFixed(1) ?? '—'}</b> ms · on screen <b>{formatClientLatency(clientFrameMs)}</b></span>
-        : <span>Fusion CAD workspace</span>}
+        : <span>CAD Link workspace</span>}
     </div>
 
     {!activeScene && <div className="viewport-empty" role="status" aria-live="polite">
       <i className="viewport-empty-mark"><i /></i>
       <b>{workspaceMode === 'cad' ? 'No CAD geometry yet' : preferences.liveUpdate ? 'Waiting for geometry' : 'Live updates paused'}</b>
-      <span>{workspaceMode === 'cad' ? 'Bring a model back from Fusion and prepare it in CAD Link.' : preview.error ?? (!preferences.liveUpdate ? 'Enable Live updates in viewer preferences, or import an ASCII Gmsh 2.2 mesh from the design file menu.' : connectionInterrupted ? `Preview engine ${preview.connection}. The viewport will resume automatically.` : 'Requesting a live FRAME-SPEC scene from the local preview engine.')}</span>
+      <span>{workspaceMode === 'cad' ? `Bring a model back from ${cadApplication} and prepare it in CAD Link.` : preview.error ?? (!preferences.liveUpdate ? 'Enable Live updates in viewer preferences, or import an ASCII Gmsh 2.2 mesh from the design file menu.' : connectionInterrupted ? `Preview engine ${preview.connection}. The viewport will resume automatically.` : 'Requesting a live FRAME-SPEC scene from the local preview engine.')}</span>
     </div>}
     {showPreviewError && <div className="viewport-error-banner" role="alert">
       <span>{previewError}</span>

@@ -63,6 +63,20 @@ export const MAX_RESULT_PANELS = 6;
 export type JobSort = 'completed_desc' | 'created_desc' | 'rating_desc' | 'name_asc';
 export type CadApplication = 'fusion360' | 'onshape';
 
+/**
+ * How a CAD application is named in prose.
+ *
+ * The workspace mode itself is always "CAD Link" -- it is one workflow, and
+ * which application sits on the far end of it is a preference, not a different
+ * mode. Name the vendor only where it tells the user which application WG is
+ * about to talk to; naming it in the chrome is how the mode came to be labelled
+ * "Fusion CAD" for Onshape users.
+ */
+export function cadApplicationName(application: CadApplication, form: 'short' | 'full' = 'short'): string {
+  if (application === 'onshape') return 'Onshape';
+  return form === 'full' ? 'Autodesk Fusion 360' : 'Fusion 360';
+}
+
 export interface Preferences {
   cadApplication: CadApplication;
   smoothing: SmoothingMode;
