@@ -771,6 +771,15 @@ class CrossSectionStation(StrictModel):
     corner_radius_mm: Expr | None = None
     corner_grid: list[list[Expr]] | None = None
 
+    @field_validator("corner_grid", mode="before")
+    @classmethod
+    def _reject_corner_grid(cls, corner_grid: Any) -> Any:
+        if corner_grid is not None:
+            raise ValueError(
+                "FREEFORM cross-section corner_grid is not supported by design format 2"
+            )
+        return corner_grid
+
 
 class FreeformConfig(DesignCommon):
     formula: Literal["FREEFORM"]
@@ -809,6 +818,25 @@ class FreeformConfig(DesignCommon):
         if scalars[-1] != 1:
             raise ValueError("the last cross-section station must have t = 1")
         return stations
+
+    @field_validator("corner_grids", mode="before")
+    @classmethod
+    def _reject_corner_grids(cls, corner_grids: Any) -> Any:
+        # Mirrors the mesher translation, which refuses corner-grid data
+        # outright: accepting it here only to drop it at save time is the
+        # silent-loss this validator exists to prevent.
+        if corner_grids:
+            raise ValueError("FREEFORM corner_grids are not supported by design format 2")
+        return corner_grids
+
+    @model_validator(mode="after")
+    def _shared_throat_radius(self) -> "FreeformConfig":
+        if self.profile_v.points[0].r != self.profile_h.points[0].r:
+            raise ValueError(
+                "FREEFORM profile throat radii must match because design format 2 "
+                "stores one shared throat radius"
+            )
+        return self
 
 
 DesignVariant = Annotated[

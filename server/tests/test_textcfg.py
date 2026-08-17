@@ -394,7 +394,9 @@ def test_freeform_mm_point_rows_round_trip_without_noise_or_drops() -> None:
     for row in ("33.3 22.25 17", "70 35", "25 18", "69.125 31.5 -12"):
         assert row in emitted
     assert "69.124999999" not in emitted
-    assert len(parse(emitted).design.root.profile_h.points) == 4  # type: ignore[union-attr]
+    reopened = parse(emitted).design.root
+    assert reopened.profile_h == design.profile_h  # type: ignore[union-attr]
+    assert reopened.profile_v == design.profile_v  # type: ignore[union-attr]
 
 
 def test_modified_design_preserves_duplicate_extra_assignments_and_token_order() -> None:
