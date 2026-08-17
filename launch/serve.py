@@ -45,6 +45,60 @@ from scripts.migrate_v1 import MigrationError, auto_migrate_v1  # noqa: E402
 
 
 HOST = "127.0.0.1"
+SPA_STAMP = REPO_ROOT / "frontend" / "dist" / ".wg2-spa.json"
+VERSION_MANIFEST = REPO_ROOT / "shared" / "version.json"
+
+
+def _installer_hint() -> str:
+    if sys.platform == "darwin":
+        return "installers/macos/install-wg.command"
+    if os.name == "nt":
+        return r"installers\windows\install-and-update.bat"
+    return "installers/linux/install.sh"
+
+
+def _release_interface_error() -> str | None:
+    """Refuse a checksum-stamped release interface from a different tree version.
+
+    Unstamped distributions are local developer builds and remain supported by
+    ``--skip-spa``. Once a release stamp exists, however, its version is the
+    authoritative record of which backend the prebuilt interface belongs to.
+    """
+
+    if not SPA_STAMP.is_file():
+        return None
+
+    try:
+        backend_version = json.loads(VERSION_MANIFEST.read_text(encoding="utf-8"))[
+            "version"
+        ]
+        interface_version = json.loads(SPA_STAMP.read_text(encoding="utf-8"))["version"]
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return (
+            "Waveguide Generator did not start because its release version metadata "
+            f"could not be read: {exc}. Run the installer again "
+            f"({_installer_hint()}) to install the matching interface."
+        )
+
+    if (
+        not isinstance(backend_version, str)
+        or not backend_version
+        or not isinstance(interface_version, str)
+        or not interface_version
+    ):
+        return (
+            "Waveguide Generator did not start because its release version metadata "
+            f"is invalid. Run the installer again ({_installer_hint()}) to install "
+            "the matching interface."
+        )
+
+    if interface_version == backend_version:
+        return None
+    return (
+        "Waveguide Generator did not start because the installed release interface "
+        f"is v{interface_version}, but the backend tree is v{backend_version}. Run "
+        f"the installer again ({_installer_hint()}) to install the matching interface."
+    )
 
 
 def _publish_status_ready(control_path: Path | None, port: int) -> None:
@@ -220,6 +274,14 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     except InstanceLockError as exc:
         print(f"Waveguide Generator could not start: {exc}", file=sys.stderr)
+        flush_logs()
+        return 1
+
+    interface_error = _release_interface_error()
+    if interface_error is not None:
+        print(interface_error, file=sys.stderr)
+        logging.getLogger("wg.launch").error(interface_error)
+        lock.release()
         flush_logs()
         return 1
 
