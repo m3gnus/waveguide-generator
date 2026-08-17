@@ -1,4 +1,4 @@
-import type { BufferGeometry, Material } from 'three';
+import type { Material } from 'three';
 
 export type DisplayMode = 'clay' | 'solid-wire' | 'wireframe' | 'xray' | 'zebra' | 'curvature' | 'normals' | 'edges';
 export type CameraPreset = 'front' | 'three-quarter' | 'top';
@@ -29,9 +29,4 @@ export interface MaterialLibrary {
   stencilFront: Material;
   cap: Material;
   all: Material[];
-}
-
-export interface ManagedSurfaceGeometry {
-  geometry: BufferGeometry;
-  dispose(): void;
 }

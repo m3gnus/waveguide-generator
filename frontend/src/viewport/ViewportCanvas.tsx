@@ -278,23 +278,6 @@ export function pickGizmoAxis(
   return best === null ? null : (best as { axis: GizmoAxis }).axis;
 }
 
-interface AppliedTaskKey<T> {
-  current: T;
-}
-
-export function scheduleAppliedTask<T>(
-  scheduler: Pick<DemandRenderScheduler, 'schedule'>,
-  applied: AppliedTaskKey<T>,
-  key: T,
-  task: () => void,
-): () => void {
-  if (applied.current === key) return () => undefined;
-  return scheduler.schedule(() => {
-    task();
-    applied.current = key;
-  });
-}
-
 function cameraUp(direction: Vector3): Vector3 {
   if (Math.abs(direction.y) < 0.999) return new Vector3(0, 1, 0);
   return new Vector3(0, 0, direction.y > 0 ? -1 : 1);

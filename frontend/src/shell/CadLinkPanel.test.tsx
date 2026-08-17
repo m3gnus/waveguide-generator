@@ -46,6 +46,7 @@ const closedFusion: FusionCadStatus = {
   cadFolderConfigured: true, cadFolderPath: '/cad',
   documentName: null, documentId: null, currentFormula: 'OSSE', fusionFormula: null, link: null,
   wgChangesAvailable: false, fusionChangesAvailable: false,
+  documentChanged: false, documentChangeDetectable: false, staleDetectionExplanation: null,
   realizedDimensions: { state: 'link_unavailable', instanceId: null, exportId: null, parameters: [] },
 };
 const currentFusion: FusionCadStatus = {
@@ -196,6 +197,13 @@ describe('CadLinkPanel', () => {
     expect(fusionWorkflowView({ ...currentFusion, state: 'stale', wgChangesAvailable: true })).toMatchObject({
       state: 'stale', action: 'update',
     });
+    const staleDetectionExplanation = 'Stale detection is limited for this returned bundle.';
+    expect(fusionWorkflowView({
+      ...currentFusion,
+      state: 'stale',
+      wgChangesAvailable: true,
+      staleDetectionExplanation,
+    }).detail).toContain(staleDetectionExplanation);
   });
 
   it('maps Onshape link state to one explicit action', () => {

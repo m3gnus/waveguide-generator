@@ -398,6 +398,18 @@ describe('RunExportControl', () => {
     expect(item.textContent).toContain('no directivity data');
   });
 
+  it('opens the menu instead of bulk-exporting a preferred polar set when directivity is absent', () => {
+    preferencesStore.update({ exportFormats: ['polar_frd'] });
+    render(completeJob({ polar_grid: {} }));
+
+    act(() => { host.querySelector<HTMLButtonElement>('.action-menu-primary')!.click(); });
+
+    expect(document.querySelector('[role="menu"]')).not.toBeNull();
+    expect(menuItem('Polar set (VituixCAD)').getAttribute('aria-disabled')).toBe('true');
+    expect(mocks.runWorkspaceExportBundle).not.toHaveBeenCalled();
+    expect(mocks.fetchJobResults).not.toHaveBeenCalled();
+  });
+
   it('dispatches both canonical chart images as one PNG format', async () => {
     mocks.fetchJobResults.mockResolvedValue(directivityResult());
     mocks.runWorkspaceExportBundle.mockResolvedValueOnce({

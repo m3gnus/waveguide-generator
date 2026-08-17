@@ -51,6 +51,11 @@ export function onshapeWorkflowView(status: OnshapeStatus | null): CadWorkflowVi
   };
 }
 
+function explainedStaleDetail(status: FusionCadStatus, detail: string): string {
+  const explanation = status.staleDetectionExplanation?.trim();
+  return explanation ? `${detail} ${explanation}` : detail;
+}
+
 export function fusionWorkflowView(status: FusionCadStatus | null): CadWorkflowView {
   if (status === null) return {
     state: 'checking',
@@ -118,13 +123,13 @@ export function fusionWorkflowView(status: FusionCadStatus | null): CadWorkflowV
   if (!status.wgChangesAvailable && status.fusionChangesAvailable) return {
     state: 'stale',
     headline: `Fusion geometry has changed${status.documentName ? ` · ${status.documentName}` : ''}`,
-    detail: 'The parametric WG design has not changed. Bring the Fusion geometry into WG before rebuilding the Fusion waveguide from WG.',
+    detail: explainedStaleDetail(status, 'The parametric WG design has not changed. Bring the Fusion geometry into WG before rebuilding the Fusion waveguide from WG.'),
     action: null,
   };
   if (!status.wgChangesAvailable) return {
     state: 'stale',
     headline: `Fusion has local geometry changes${status.documentName ? ` · ${status.documentName}` : ''}`,
-    detail: 'The parametric WG design matches Fusion. The latest Fusion geometry has already been returned to WG for simulation.',
+    detail: explainedStaleDetail(status, 'The parametric WG design matches Fusion. The latest Fusion geometry has already been returned to WG for simulation.'),
     action: null,
   };
   const fusionFormula = status.fusionFormula?.toLocaleUpperCase();
@@ -146,7 +151,7 @@ export function fusionWorkflowView(status: FusionCadStatus | null): CadWorkflowV
   return {
     state: 'stale',
     headline: `${status.fusionChangesAvailable ? 'WG and Fusion both changed' : 'WG design changed'}${status.documentName ? ` · ${status.documentName}` : ''}`,
-    detail: `${mismatch}${configCopy}${localEditCopy}${conflictCopy}`,
+    detail: explainedStaleDetail(status, `${mismatch}${configCopy}${localEditCopy}${conflictCopy}`),
     action: 'update',
   };
 }
