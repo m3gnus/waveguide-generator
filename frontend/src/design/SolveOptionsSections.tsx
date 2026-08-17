@@ -228,6 +228,13 @@ export function DirectivityMapControls({ effectiveDerivation }: { effectiveDeriv
   };
   const axisHelp = useHelpTip({ title: 'Directivity planes', text: 'Which planes through the horn axis are measured. Horizontal and vertical are the usual pair; diagonal catches what a non-round mouth does between them.' });
   const effective = effectiveDerivation ? effectiveGridView(polar, effectiveDerivation) : null;
+  // A diagonal on a multiple of 90 degrees is literally the horizontal or the
+  // vertical plane, so the solve measures the same plane twice. It is a legal
+  // request and stays one -- the file round-trips it -- but it costs a second
+  // identical chart, which is worth saying rather than leaving to be noticed.
+  const cardinalDiagonal = polar.enabledAxes.includes('diagonal')
+    && Number.isFinite(polar.diagonalAngle)
+    && Math.abs(polar.diagonalAngle % 90) < 1e-6;
   return <>
     <PolarNumber id="polar-angle-start" label="Sweep start" help="First off-axis angle measured in each directivity plane. 0° is on-axis; negative angles cover the other side." value={polar.angleStart} unit="°" step={1} update={numeric('angleStart')} />
     <PolarNumber id="polar-angle-end" label="Sweep end" help="Last off-axis angle measured in each directivity plane. 90° reaches the baffle plane." value={polar.angleEnd} unit="°" step={1} update={numeric('angleEnd')} />
@@ -236,6 +243,7 @@ export function DirectivityMapControls({ effectiveDerivation }: { effectiveDeriv
     <PolarNumber id="polar-norm-angle" label="Normalization angle" help="The angle held at 0 dB in normalized directivity plots. Every polar curve is shifted so this angle reads flat; it changes only the display, never the solve." value={polar.normAngle} unit="°" step={1} update={numeric('normAngle')} />
     <div className="axis-toggles" role="group" aria-label="Directivity planes" {...axisHelp.triggerProps}>{(['horizontal', 'vertical', 'diagonal'] as PolarAxis[]).map((axis) => <label key={axis}><input type="checkbox" checked={polar.enabledAxes.includes(axis)} onChange={() => toggleAxis(axis)} /> {axis}</label>)}{axisHelp.tip}</div>
     <PolarNumber id="polar-diagonal-angle" label="Diagonal plane angle" help="Where the diagonal plane sits, measured from the horizontal. 45° is the corner of a square mouth. Only used when the diagonal plane is enabled." value={polar.diagonalAngle} unit="°" step={1} disabled={!polar.enabledAxes.includes('diagonal')} update={numeric('diagonalAngle')} />
+    {cardinalDiagonal && <p className="section-note" role="status">A diagonal at {Number(polar.diagonalAngle.toFixed(6))}° is the {Math.abs((polar.diagonalAngle % 180 + 180) % 180 - 90) < 1e-6 ? 'vertical' : 'horizontal'} plane, so it will be measured and plotted twice. Use an angle between the planes, such as 45°.</p>}
     <HelpTipRow className="select-row" text="The point the measurement angles pivot around. Mouth rotates about the mouth centre, which is what a measured polar set matches; Throat pivots at the driver instead."><label htmlFor="polar-observation-origin">Measurement origin</label><select id="polar-observation-origin" value={polar.observationOrigin} onChange={(event) => update({ observationOrigin: event.target.value as ObservationOrigin })}><option value="mouth">Mouth</option><option value="throat">Throat</option></select></HelpTipRow>
     <ToggleRow id="polar-spherical-sampling" label="Keep 3D balloon result" help="WG samples a spherical field for Directivity Index independently of the selected H/V/D display planes. Enable this to retain that grid for the 3D balloon and forward-beam views; availability depends on the backend." checked={polar.sphericalSampling} onChange={(sphericalSampling) => update({ sphericalSampling })} />
     <p className="section-note">Directivity Index always uses the complete spherical field. This option controls whether WG also stores that field for 3D views.</p>

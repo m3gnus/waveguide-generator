@@ -7,6 +7,7 @@ import { importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { postSymmetry, toSolveDesign, type SymmetryResolution } from '../jobs/actions';
 import { usePreferences } from '../prefs/preferences';
 import {
+  channelAcceptsDriver,
   combineChain,
   combineLevelMatchDefault,
   DRIVER_REQUIRED_KEYS,
@@ -771,7 +772,7 @@ function CadDriveChannels() {
       })}
       {state.driveChannels.map((channel) => {
         const driverForm = state.channelDrivers[channel.id];
-        const driverEligible = channel.source_ids.length === 1 && channel.motion === 'normal';
+        const driverEligible = channelAcceptsDriver(channel);
         return <div className="cad-channel" key={channel.id}>
           <div className="cad-channel-summary" data-control-reveal-id={CAD_CONTROLS.channelMotion.reveal.id}><span>{channel.id} · {channel.source_ids.join(' + ')}</span><select aria-label={`${CAD_CONTROLS.channelMotion.label} for ${channel.id}`} value={channel.motion} onChange={(event) => state.setChannelMotion(channel.id, event.target.value as 'normal' | 'axial')}><option value="normal">Normal motion</option><option value="axial">Axial motion</option></select></div>
           {driverEligible && <ToggleRow id={`cad-driver-${channel.id}`} label={`${CAD_CONTROLS.driverToggle.label} · ${channel.id}`} revealId={CAD_CONTROLS.driverToggle.reveal.id} help="Voltage-driven Thiele-Small coupling. The channel's levels become absolute at the drive voltage and its impedance chart becomes the electrical input impedance in ohms." checked={driverForm?.enabled ?? false} onChange={(checked) => state.setChannelDriverEnabled(channel.id, checked)}/>}

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { designForFamily } from '../stores/design';
+import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { CadLinkApiError, getFusionCadStatus, getIngest, ingestReturn, listReturns, requestFusionReturn } from './cadlink';
 
 describe('CAD-link client', () => {
@@ -63,6 +64,27 @@ describe('CAD-link client', () => {
       identity,
       returnBundlePath: 'wgreturn/a.wgreturn',
     });
+  });
+
+  it('hashes freshness against the settings a send would write, not the bare design', async () => {
+    // The server decides "up to date" by hashing this payload against the one
+    // the linked document was built from. Posting `serializeDesign` alone meant
+    // a directivity change could never make the CAD copy look stale, because
+    // the blocks carrying it are only added on the way out.
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({
+      cadApplication: 'fusion360', state: 'closed', processRunning: false, running: false, updatedAt: null,
+      documentName: null, currentFormula: 'R-OSSE', fusionFormula: null, link: null,
+    }), { status: 200 }));
+    resetSolveOptionsStore();
+    useSolveOptionsStore.getState().updatePolar({ distance: 4.25, enabledAxes: ['horizontal'] });
+
+    await getFusionCadStatus(designForFamily('R-OSSE'), null, null, fetcher as typeof fetch);
+
+    const body = JSON.parse(String(fetcher.mock.calls[0][1]?.body)) as {
+      design: { extra_blocks: Record<string, { items: Record<string, string> }> };
+    };
+    expect(body.design.extra_blocks['ABEC.Polars:SPL_H'].items.Distance).toBe('4.25');
+    expect(body.design.extra_blocks['ABEC.Polars:SPL_V']).toBeUndefined();
   });
 
   it('targets an exact Fusion document and linked instance for a return', async () => {

@@ -11,7 +11,9 @@ import {
   type StepBody,
 } from '../api/designIo';
 import { recordCommittedAthPolars, resetDesignStore, useDesignStore } from '../stores/design';
+import { documentSettingsSignature, wgSolveSettingsFromStore } from '../stores/designWire';
 import { resetDocumentStore, useDocumentStore, type CadLinkClassification, type DesignIdentity } from '../stores/document';
+import { useUnsavedChanges } from '../stores/unsavedChanges';
 import { projectSubmittedDesign } from '../jobs/submittedProjection';
 import { runNameFromFilename } from '../jobs/runNaming';
 import { preferencesStore, usePreferences } from '../prefs/preferences';
@@ -79,7 +81,7 @@ export function DesignFileMenu() {
   const revision = useDesignStore((state) => state.designRevision);
   const replaceDesign = useDesignStore((state) => state.replaceDesign);
   const filename = useDocumentStore((state) => state.filename);
-  const savedRevision = useDocumentStore((state) => state.savedRevision);
+  const unsaved = useUnsavedChanges();
   const setFilename = useDocumentStore((state) => state.setFilename);
   const markSaved = useDocumentStore((state) => state.markSaved);
   const identity = useDocumentStore((state) => state.identity);
@@ -143,7 +145,7 @@ export function DesignFileMenu() {
         nameSourceProjection = projectSubmittedDesign(openedDesign, useSolveOptionsStore.getState().options());
       } catch { /* invalid solve-option drafts cannot make opening a design fail */ }
       preferencesStore.update({ outputName: runNameFromFilename(file.name), nameSourceProjection });
-      markSaved(useDesignStore.getState().designRevision);
+      markSaved(useDesignStore.getState().designRevision, documentSettingsSignature());
       setMessage(reportText(opened));
       if (opened.cadlink?.classification === 'missing') setAdoptionCandidate(opened.cadlink.adoptionCandidate);
     });
@@ -165,13 +167,20 @@ export function DesignFileMenu() {
     await act(async () => {
       const savingRevision = revision;
       const savedName = filenameStem(filename);
-      const polarConfig = polarConfigFromUi(useSolveOptionsStore.getState().polar);
-      const response = await saveDesignDocument(design, filename, identity, fetch, polarConfig);
+      // One snapshot for the file and for the saved-state baseline. Reading the
+      // store again after the request would stamp settings the file does not
+      // contain, and the document would read as saved while it was not.
+      const solveState = useSolveOptionsStore.getState();
+      const polarConfig = polarConfigFromUi(solveState.polar);
+      const savingSettings = documentSettingsSignature(solveState);
+      const response = await saveDesignDocument(
+        design, filename, identity, fetch, polarConfig, wgSolveSettingsFromStore(solveState),
+      );
       downloadText(response.text, filename || response.suggestedFilename);
       recordCommittedAthPolars(polarConfig);
       setFilename(response.suggestedFilename);
       adoptSavedIdentity(response.identity);
-      markSaved(savingRevision);
+      markSaved(savingRevision, savingSettings);
       setMessage(response.forked
         ? `Saved as a new fork of ${savedName}`
         : `Saved ${response.suggestedFilename}`);
@@ -179,7 +188,7 @@ export function DesignFileMenu() {
   }
 
   function newDesign() {
-    if (revision !== savedRevision && !window.confirm('Discard unsaved changes and create a new design?')) return;
+    if (unsaved && !window.confirm('Discard unsaved changes and create a new design?')) return;
     resetDesignStore();
     // Directivity and solver settings deliberately survive New: they describe
     // how this user measures, not which horn is on screen, and resetting them
@@ -233,7 +242,7 @@ export function DesignFileMenu() {
         title={CLASSIFICATION_DISPLAY[classification].detail}
         style={{ color: 'var(--fg3)', fontSize: 'var(--text-micro)', fontWeight: 500, letterSpacing: '.02em' }}
       >{CLASSIFICATION_DISPLAY[classification].label}</small>}
-      {revision !== savedRevision && <i className="unsaved-dot" aria-label="Unsaved changes"/>}
+      {unsaved && <i className="unsaved-dot" aria-label="Unsaved changes"/>}
       <span className="chev">⌄</span>
     </button>
     <input ref={openInput} hidden tabIndex={-1} type="file" accept={ACCEPT} onChange={(event) => void readSelected(event.currentTarget, false)}/>

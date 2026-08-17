@@ -100,8 +100,10 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
     });
   };
 
+  // 'overwrite': these two are the user asking for an export, and asking again
+  // must produce the file again. See `ExistingFilePolicy`.
   const exportOne = (format: ExportFormat) => execute(job.id, [format], async (): Promise<RunExportOutcome> => {
-    const result = await runWorkspaceExportBundle(await buildContext([format]), [format]);
+    const result = await runWorkspaceExportBundle(await buildContext([format]), [format], 'overwrite');
     await recordFiles(result.files);
     const notice = workspaceNotice(formatLabel(format), result);
     return result.failures.length ? {
@@ -114,7 +116,7 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
   const exportPreferred = () => {
     const formats = [...preferences.exportFormats];
     return execute(job.id, formats, async (): Promise<RunExportOutcome> => {
-      const result = await runWorkspaceExportBundle(await buildContext(formats), formats);
+      const result = await runWorkspaceExportBundle(await buildContext(formats), formats, 'overwrite');
       await recordFiles(result.files);
       const fileText = workspaceNotice('Export', result);
       if (!result.failures.length) return { notice: fileText };

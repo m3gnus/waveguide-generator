@@ -19,6 +19,8 @@ interface AutosaveRecord {
   filename: string;
   designRevision: number;
   savedRevision: number | null;
+  /** Absent in drafts written before directivity edits counted as changes. */
+  savedSettings?: string | null;
   identity?: DesignIdentity | null;
   classification?: CadLinkClassification | null;
   design: DesignDocument;
@@ -66,13 +68,14 @@ function hasValidCadLink(record: AutosaveRecord): boolean {
 export function writeAutosave(storage: DraftStorage | null = defaultStorage()): boolean {
   if (!storage) return false;
   const { design, designRevision } = useDesignStore.getState();
-  const { filename, savedRevision, identity, classification } = useDocumentStore.getState();
+  const { filename, savedRevision, savedSettings, identity, classification } = useDocumentStore.getState();
   const record: AutosaveRecord = {
     version: 1,
     savedAt: new Date().toISOString(),
     filename,
     designRevision,
     savedRevision,
+    savedSettings,
     identity: identity ? { ...identity } : null,
     classification,
     design: structuredClone(design),
@@ -107,6 +110,7 @@ export function restoreAutosave(storage: DraftStorage | null = defaultStorage())
     useDocumentStore.getState().restoreDocumentState({
       filename: record.filename,
       savedRevision: record.savedRevision,
+      savedSettings: typeof record.savedSettings === 'string' ? record.savedSettings : null,
       identity: record.identity ? { ...record.identity } : null,
       classification: record.classification ?? null,
     });
@@ -144,6 +148,7 @@ export function startAutosave(
   const unsubscribeDocument = useDocumentStore.subscribe((state, previous) => {
     if (state.filename !== previous.filename
       || state.savedRevision !== previous.savedRevision
+      || state.savedSettings !== previous.savedSettings
       || state.identity !== previous.identity
       || state.classification !== previous.classification) schedule();
   });

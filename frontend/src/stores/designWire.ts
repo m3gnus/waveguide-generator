@@ -10,6 +10,7 @@
 import { designWireWithAthPolars } from './athPolars';
 import type { ConfigBlock } from './design';
 import {
+  polarConfigFromUi,
   useSolveOptionsStore,
   type FrequencyMode,
   type FrequencySpacing,
@@ -71,6 +72,26 @@ export function wgSolveSettingsFromSolveOptions(options: unknown): WgSolveSettin
   };
 }
 
+/**
+ * Everything a saved `.cfg` carries that does not live in the design document.
+ *
+ * The design store's `designRevision` is a *geometry* revision: it drives the
+ * preview rebuild, so directivity and solver edits deliberately do not bump it.
+ * Those edits are still document changes -- they are written into the file and
+ * sent to CAD -- which left the unsaved indicator and the CAD freshness check
+ * blind to them. This signature is the thing those two compare instead, so a
+ * measurement distance typed after a save reads as unsaved work without
+ * pretending the mesh needs rebuilding.
+ */
+export function documentSettingsSignature(
+  state = useSolveOptionsStore.getState(),
+): string {
+  return JSON.stringify({
+    polar: polarConfigFromUi(state.polar),
+    solve: wgSolveSettingsFromStore(state),
+  });
+}
+
 /** Overlay both the ATH polar blocks and WG's solver block on a design wire. */
 export function designWireWithSolveSettings(
   design: Record<string, unknown>,
@@ -85,3 +106,22 @@ export function designWireWithSolveSettings(
   return { ...withPolars, extra_blocks: withWgSolveBlock(existing, solveSettings) };
 }
 
+/**
+ * The wire a send would write for the document on screen, right now.
+ *
+ * CAD freshness is decided by hashing this payload against the one the linked
+ * document was built from, so the status has to hash what a send would produce
+ * rather than the bare design. Hashing `serializeDesign` alone reported "up to
+ * date" after a directivity or solver change, because the blocks carrying it
+ * are added on the way out and the comparison never saw them.
+ */
+export function currentDesignWire(
+  design: Record<string, unknown>,
+  state = useSolveOptionsStore.getState(),
+): Record<string, unknown> {
+  return designWireWithSolveSettings(
+    design,
+    polarConfigFromUi(state.polar),
+    wgSolveSettingsFromStore(state),
+  );
+}
