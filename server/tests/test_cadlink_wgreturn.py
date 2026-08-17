@@ -189,9 +189,11 @@ def test_subtree_return_disables_root_document_stale_comparisons(tmp_path: Path)
     assert result["fusionChangesAvailable"] is False
     assert result["documentChanged"] is False
     assert result["documentChangeDetectable"] is False
+    # A scoped return is not a legacy one; saying so would send the user
+    # looking for a wgreturn version problem they do not have.
     assert result["staleDetectionExplanation"] == (
-        "stale detection unavailable: this returned bundle predates wgreturn 1.1 "
-        "and carries no document signature"
+        "stale detection unavailable: this return covers a selected assembly "
+        "subtree, and Fusion reports its document signature for the whole root"
     )
 
 

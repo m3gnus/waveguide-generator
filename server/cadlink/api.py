@@ -218,8 +218,16 @@ def _return_listing(workspace_root: Path) -> list[dict[str, Any]]:
             for source in sources:
                 if not isinstance(source, dict):
                     raise ValueError("manifest source has the wrong shape")
-                suggested_resolution = float(source["suggested_resolution_mm"])
-                if not math.isfinite(suggested_resolution) or suggested_resolution <= 0:
+                raw_suggested_resolution = source.get("suggested_resolution_mm")
+                suggested_resolution = (
+                    None
+                    if raw_suggested_resolution is None
+                    else float(raw_suggested_resolution)
+                )
+                if suggested_resolution is not None and (
+                    not math.isfinite(suggested_resolution)
+                    or suggested_resolution <= 0
+                ):
                     raise ValueError("manifest source suggestion is not finite and positive")
                 source_summaries.append(
                     {
@@ -418,7 +426,8 @@ def _pending_solve_command(data_dir: Path, workspace_root: Path) -> dict[str, An
     recorded = ledger_entry(data_dir, command.command_id)
     if recorded is not None:
         # Terminal already: replay must surface the same answer, never a
-        # second submission.
+        # second submission. Retire markers left by older server versions too.
+        clear_solve_command(data_dir, command.command_id)
         return {"command": command.payload(), "outcome": recorded}
     try:
         segments = _path_segments(command.bundle_path, "bundlePath")
@@ -430,11 +439,13 @@ def _pending_solve_command(data_dir: Path, workspace_root: Path) -> dict[str, An
         _strictly_inside(bundle_path, workspace_root, "bundlePath")
         manifest = (bundle_path / "wgreturn.json").read_bytes()
     except (ValueError, OSError) as exc:
+        outcome = record_outcome(
+            data_dir, command.command_id, state="refused", reason=str(exc),
+        )
+        clear_solve_command(data_dir, command.command_id)
         return {
             "command": command.payload(),
-            "outcome": record_outcome(
-                data_dir, command.command_id, state="refused", reason=str(exc),
-            ),
+            "outcome": outcome,
         }
     observed = f"sha256:{hashlib.sha256(manifest).hexdigest()}"
     expected = command.manifest_sha256
@@ -445,9 +456,13 @@ def _pending_solve_command(data_dir: Path, workspace_root: Path) -> dict[str, An
             "The return bundle changed after Fusion asked WG to solve it. "
             "Send it again from Fusion."
         )
+        outcome = record_outcome(
+            data_dir, command.command_id, state="refused", reason=reason,
+        )
+        clear_solve_command(data_dir, command.command_id)
         return {
             "command": command.payload(),
-            "outcome": record_outcome(data_dir, command.command_id, state="refused", reason=reason),
+            "outcome": outcome,
         }
     return {"command": command.payload(), "outcome": None}
 
