@@ -39,6 +39,29 @@ describe('viewport renderer guards', () => {
     expect(failure).toHaveBeenCalledWith('WebGL2 context was lost');
   });
 
+  it('reports a second loss after the context has been restored', () => {
+    const canvas = document.createElement('canvas');
+    const failure = vi.fn();
+    installContextLossFallback(canvas, failure);
+    canvas.dispatchEvent(new Event('webglcontextlost', { cancelable: true }));
+    canvas.dispatchEvent(new Event('webglcontextrestored'));
+    canvas.dispatchEvent(new Event('webglcontextlost', { cancelable: true }));
+    expect(failure).toHaveBeenCalledTimes(2);
+  });
+
+  // React Three Fiber disposes a Canvas by calling forceContextLoss() half a
+  // second after unmount. Every Parametric <-> CAD switch made before geometry
+  // is ingested unmounts the Canvas, so treating that as a fault left the
+  // viewport stuck on "WebGL2 context was lost" once the user switched back.
+  it('ignores the context loss react-three-fiber fires while disposing', () => {
+    const canvas = document.createElement('canvas');
+    const failure = vi.fn();
+    const detach = installContextLossFallback(canvas, failure);
+    detach();
+    canvas.dispatchEvent(new Event('webglcontextlost', { cancelable: true }));
+    expect(failure).not.toHaveBeenCalled();
+  });
+
   it('changes the camera fit key when bounds change without a nonce change', () => {
     const first = new Box3(new Vector3(0, 0, 0), new Vector3(1, 1, 1));
     const second = new Box3(new Vector3(10, 0, 0), new Vector3(12, 2, 2));

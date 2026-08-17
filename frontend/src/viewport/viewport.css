@@ -63,6 +63,9 @@
 .viewport-mode-empty span { color: var(--fg3); font-size: var(--text-micro); line-height: 1.45; }
 .viewport-mode-empty { border-color: rgba(var(--amber-rgb), .25); }
 .viewport-mode-empty b { color: var(--amber); }
+.viewport-retry { display: inline-flex; align-self: flex-start; align-items: center; gap: 5px; margin-top: 6px; padding: 3px 9px; border: 1px solid rgba(var(--acc-rgb), .38); border-radius: var(--r3); background: rgba(var(--acc-rgb), .12); color: var(--acc); font: 600 var(--text-micro) var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+.viewport-retry svg { width: 10px; height: 10px; }
+.viewport-retry:hover { border-color: rgba(var(--acc-rgb), .6); background: rgba(var(--acc-rgb), .2); }
 .viewport-empty-mark { position: relative; width: 34px; height: 24px; margin-bottom: 5px; border: 1px solid rgba(var(--acc-rgb), .28); border-radius: 50%; box-shadow: 0 0 20px rgba(var(--acc-rgb), .12) inset; transform: perspective(60px) rotateX(58deg); }
 .viewport-empty-mark::before,
 .viewport-empty-mark::after,
