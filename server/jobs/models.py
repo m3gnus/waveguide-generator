@@ -77,6 +77,10 @@ class PolarConfig(JobModel):
             raise ValueError("polar_config.angle_range must be increasing")
         if not 2 <= count <= 721:
             raise ValueError("polar_config angle sample count must be between 2 and 721")
+        if not start <= self.norm_angle <= end:
+            raise ValueError(
+                "polar_config.norm_angle must lie within polar_config.angle_range"
+            )
         if self.angle_step is not None:
             if not math.isfinite(self.angle_step):
                 raise ValueError("polar_config.angle_step must be finite")

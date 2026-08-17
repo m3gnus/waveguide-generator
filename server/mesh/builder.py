@@ -108,9 +108,7 @@ def _solver_mesher_config(design: DesignConfig) -> dict[str, Any]:
         _strict_scalar(root.enclosure.depth, 0.0, "enclosure.depth")
     config = design_to_mesher_config(design)
     mesh = config.setdefault("mesh", {})
-    quadrants = normalise_quadrants(
-        _strict_scalar(root.mesh.quadrants, 1234.0, "mesh.quadrants")
-    )
+    quadrants, _ = _resolve_quadrants(design)
     mesh["quadrants"] = quadrants
 
     # A y-offset moves the y-cut rim away from its native symmetry plane.  V1
@@ -134,6 +132,30 @@ def _solver_mesher_config(design: DesignConfig) -> dict[str, Any]:
     # clamp ever regresses, ``off_plane_open_edge_count`` now reports the torn
     # seam directly rather than being pre-empted by a blunt geometry change.
     return config
+
+
+def _resolve_quadrants(design: DesignConfig) -> tuple[int, str | None]:
+    """Resolve ATH quadrant semantics and describe any compatibility fallback."""
+
+    declared_expr = design.root.mesh.quadrants
+    declared = _strict_scalar(declared_expr, 1234.0, "mesh.quadrants")
+    resolved = normalise_quadrants(declared)
+    if declared_expr is None or declared == float(resolved):
+        return resolved, None
+    # normalise_quadrants truncates before matching, so a declared 12.5 lands on
+    # the half-domain 12 rather than the quarter-domain fallback. Name the domain
+    # actually solved instead of assuming the fallback.
+    domain = {
+        1: "a quarter-domain",
+        12: "a half-domain (xz)",
+        14: "a half-domain (yz)",
+        FULL_DOMAIN_QUADRANTS: "a full-domain",
+    }[resolved]
+    return resolved, (
+        f"mesh.quadrants was declared as {declared_expr.text()!r}, which ATH "
+        f"compatibility resolves to {resolved}; the solver used {domain} mesh. "
+        "Use 1, 12, 14, or 1234 to select the intended solve domain explicitly."
+    )
 
 
 def _domain_multiplier_for_quadrants(quadrants: int) -> int:
@@ -693,6 +715,7 @@ async def build_solver_mesh(
         if isinstance(design, DesignConfig)
         else DesignConfig.model_validate(design)
     )
+    _, quadrants_warning = _resolve_quadrants(validated)
     _check_cancel(cancel_cb)
     _progress(progress_cb, "mesh_prepare", 0.0, "Preparing HornLab solver mesh")
     cache_key = _solver_mesh_cache_key(validated)
@@ -714,6 +737,8 @@ async def build_solver_mesh(
     result["stats"]["mesh_cache_hit"] = cache_hit
     result["stats"]["mesh_cache_key"] = cache_key
     result["stats"]["mesh_validation_mode"] = validation_mode
+    if quadrants_warning is not None:
+        result["stats"].setdefault("warnings", []).append(quadrants_warning)
     if validation_mode == "strict" and not result["integrity"]["valid"]:
         raise RuntimeError("Solver mesh failed strict topology integrity validation")
     if validation_mode == "off":
