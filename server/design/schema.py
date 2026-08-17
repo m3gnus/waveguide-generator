@@ -26,6 +26,8 @@ from pydantic import (
 
 
 _NUMBER = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$")
+_CONFIG_BLOCK_START = re.compile(r"^[\w.:-]+\s*=\s*\{$")
+_LINE_BREAK = re.compile(r"[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]")
 _SAFE_FUNCTIONS = {
     "abs": abs,
     "acos": math.acos,
@@ -103,6 +105,48 @@ _COMPARE_OPERATORS = (ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE)
 
 class _NonConstantExpression(ValueError):
     """The ATH source is not a bounded scalar expression."""
+
+
+def _has_balanced_braces(source: str) -> bool:
+    """Match the deliberately simple brace accounting used by textcfg."""
+
+    depth = 0
+    for character in source:
+        if character == "{":
+            depth += 1
+        elif character == "}":
+            depth -= 1
+            if depth < 0:
+                return False
+    return depth == 0
+
+
+def _is_complete_legacy_function(source: str) -> bool:
+    """Return whether textcfg's multiline function collector consumes all of it."""
+
+    lines = source.splitlines()
+    if (
+        len(lines) < 2
+        or _LINE_BREAK.search(source[-1:]) is not None
+        or not lines[0].strip().startswith("function anonymous(")
+    ):
+        return False
+    depth = 0
+    opened = False
+    for index, line in enumerate(lines):
+        if "{" in line:
+            opened = True
+        depth += line.count("{") - line.count("}")
+        if depth < 0:
+            return False
+        if opened and depth == 0:
+            return index == len(lines) - 1
+    return False
+
+
+def _line_is_config_block_syntax(line: str) -> bool:
+    candidate = line.split(";", 1)[0].strip()
+    return candidate == "}" or _CONFIG_BLOCK_START.fullmatch(candidate) is not None
 
 
 def _expression_candidate(raw: str) -> str:
@@ -251,6 +295,19 @@ def _validate_expression_source(raw: str) -> None:
         raise ValueError(
             f"expression source must not exceed {_MAX_CONSTANT_EXPRESSION_CHARS} characters"
         )
+    has_newline = _LINE_BREAK.search(raw) is not None
+    legacy_function = _is_complete_legacy_function(raw) if has_newline else False
+    if has_newline and not legacy_function:
+        raise ValueError("expression source must not contain structural newlines")
+    if not _has_balanced_braces(raw):
+        raise ValueError("expression source must contain balanced braces")
+    if raw.strip().startswith("function anonymous(") and not legacy_function:
+        raise ValueError("legacy function expression must be a complete multiline value")
+    if not legacy_function and any(
+        _line_is_config_block_syntax(line) for line in raw.splitlines()
+    ):
+        raise ValueError("expression source must not contain config block syntax")
+
     if not candidate:
         return
     if _NUMBER.fullmatch(candidate):

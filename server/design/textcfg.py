@@ -32,6 +32,9 @@ if TYPE_CHECKING:
 
 _BLOCK_START = re.compile(r"^([\w.:-]+)\s*=\s*\{$")
 _MWG_SNIFF = re.compile(r";\s*(?:Parameter|MWG) config", re.IGNORECASE)
+_LINE_BREAK = re.compile(r"[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]")
+_DESIGN_FORMAT = 2
+_DESIGN_FORMAT_STAMP = re.compile(r"\bdesign-format\s*:\s*(\d+)\b", re.IGNORECASE)
 
 
 class TextConfigError(ValueError):
@@ -87,6 +90,76 @@ class ParsedDesign:
 
 def _without_comment(line: str) -> str:
     return line.split(";", 1)[0].strip()
+
+
+def _is_complete_legacy_function(value: str) -> bool:
+    """Return whether ``_collect_function`` would consume the whole value."""
+
+    lines = value.splitlines()
+    if (
+        len(lines) < 2
+        or _LINE_BREAK.search(value[-1:]) is not None
+        or not lines[0].strip().startswith("function anonymous(")
+    ):
+        return False
+    depth = 0
+    opened = False
+    for index, line in enumerate(lines):
+        if "{" in line:
+            opened = True
+        depth += line.count("{") - line.count("}")
+        if depth < 0:
+            return False
+        if opened and depth == 0:
+            return index == len(lines) - 1
+    return False
+
+
+def _has_balanced_braces(value: str) -> bool:
+    depth = 0
+    for character in value:
+        if character == "{":
+            depth += 1
+        elif character == "}":
+            depth -= 1
+            if depth < 0:
+                return False
+    return depth == 0
+
+
+def _is_block_syntax(line: str) -> bool:
+    candidate = _without_comment(line)
+    return candidate == "}" or _BLOCK_START.fullmatch(candidate) is not None
+
+
+def _validate_serialized_key(key: str) -> None:
+    if _LINE_BREAK.search(key) is not None or not _has_balanced_braces(key):
+        raise TextConfigError(f"unsafe config key {key!r}")
+    if _is_block_syntax(key):
+        raise TextConfigError(f"config key contains block syntax: {key!r}")
+
+
+def _validate_serialized_value(value: str, *, key: str) -> None:
+    has_newline = _LINE_BREAK.search(value) is not None
+    legacy_function = _is_complete_legacy_function(value) if has_newline else False
+    if has_newline and not legacy_function:
+        raise TextConfigError(f"value for {key!r} contains a structural newline")
+    if not _has_balanced_braces(value):
+        raise TextConfigError(f"value for {key!r} contains unbalanced braces")
+    if value.strip().startswith("function anonymous(") and not legacy_function:
+        raise TextConfigError(f"value for {key!r} is an incomplete legacy function")
+    if not legacy_function and any(
+        _is_block_syntax(line) for line in value.splitlines()
+    ):
+        raise TextConfigError(f"value for {key!r} contains config block syntax")
+
+
+def _append_block_entry(lines: list[str], entry: str, *, block: str) -> None:
+    if _LINE_BREAK.search(entry) is not None:
+        raise TextConfigError(f"entry in block {block!r} contains a structural newline")
+    if _is_block_syntax(entry):
+        raise TextConfigError(f"entry in block {block!r} contains config block syntax")
+    lines.append(entry)
 
 
 def _collect_function(lines: list[str], index: int, first_value: str) -> tuple[str, int]:
@@ -593,6 +666,14 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
     if not isinstance(text, str):
         raise TypeError("text must be a string")
     flat, blocks, comments, raw_values = _lex(text)
+    for comment in comments:
+        for match in _DESIGN_FORMAT_STAMP.finditer(comment):
+            version = int(match.group(1))
+            if version > _DESIGN_FORMAT:
+                raise TextConfigError(
+                    f"unsupported design format {version}; "
+                    f"this application supports up to {_DESIGN_FORMAT}"
+                )
     from server.cadlink.identity import CadLink
 
     cadlink: CadLink | None = None
@@ -648,7 +729,10 @@ def _line(
     value: Expr | tuple[Expr, Expr, Expr, Expr] | str | None,
 ) -> None:
     if value is not None:
-        lines.append(f"{key} = {_text(value)}")
+        text = _text(value)
+        _validate_serialized_key(key)
+        _validate_serialized_value(text, key=key)
+        lines.append(f"{key} = {text}")
 
 
 def _block(
@@ -663,10 +747,13 @@ def _block(
 ) -> None:
     if not emit_empty and not any(value is not None for _, value in items) and not rows:
         return
+    if _BLOCK_START.fullmatch(f"{name} = {{") is None:
+        raise TextConfigError(f"unsafe config block name {name!r}")
     lines.append(f"{name} = {{")
     for key, value in items:
         _line(lines, key, value)
-    lines.extend(rows or [])
+    for row in rows or []:
+        _append_block_entry(lines, row, block=name)
     lines.append("}")
 
 
@@ -743,9 +830,14 @@ def _serialize_canonical(
     cadlink: CadLink | None = None,
 ) -> str:
     config = design.root
-    lines = ["; Parameter config", "; Waveguide Generator design-format: 2"]
+    lines = [
+        "; Parameter config",
+        f"; Waveguide Generator design-format: {_DESIGN_FORMAT}",
+    ]
     for comment in comments or []:
         if comment not in lines and "Generated:" not in comment:
+            if _LINE_BREAK.search(comment) is not None or not comment.lstrip().startswith(";"):
+                raise TextConfigError("unsafe preserved config comment")
             lines.append(comment)
     if cadlink is not None:
         lines.extend(cadlink.block_lines())
@@ -888,14 +980,21 @@ def _serialize_canonical(
     for key, value in config.extra_keys.items():
         _line(lines, key, value)
     for name, block in config.extra_blocks.items():
+        if _BLOCK_START.fullmatch(f"{name} = {{") is None:
+            raise TextConfigError(f"unsafe config block name {name!r}")
         lines.append(f"{name} = {{")
         if block.entries:
-            lines.extend(block.entries)
+            for entry in block.entries:
+                _append_block_entry(lines, entry, block=name)
         else:
-            lines.extend(block.comments)
-            lines.extend(block.lines)
+            for comment in block.comments:
+                if not comment.lstrip().startswith(";"):
+                    raise TextConfigError(f"unsafe comment in block {name!r}")
+                _append_block_entry(lines, comment, block=name)
+            for row in block.lines:
+                _append_block_entry(lines, row, block=name)
             for key, value in block.items.items():
-                lines.append(f"{key} = {value}")
+                _line(lines, key, value)
         lines.append("}")
     return "\n".join(lines) + "\n"
 
