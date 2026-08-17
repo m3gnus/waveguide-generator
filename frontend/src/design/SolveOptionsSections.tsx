@@ -1,3 +1,6 @@
+import { useSyncExternalStore } from 'react';
+import { jobsSocket } from '../api/jobsSocket';
+import { compareSelection } from '../api/results';
 import { useCapabilities } from '../jobs/useCapabilities';
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import { widenPolarToDerivation } from '../jobs/importedSubmission';
@@ -6,6 +9,7 @@ import {
   MAX_FREQUENCY_POINTS,
   parseFrequencyList,
   polarConfigFromUi,
+  polarUiFromConfig,
   useSolveOptionsStore,
   type FrequencyMode,
   type FrequencySpacing,
@@ -14,6 +18,7 @@ import {
   type PolarAxis,
   type PolarUiState,
 } from '../stores/solveOptions';
+import { runDisplayName } from '../prefs/preferences';
 import type { WorkspaceMode } from '../stores/workspaceMode';
 
 export const solverModeLabels = {
@@ -153,6 +158,67 @@ export function effectiveGridView(
   };
 }
 
+const POLAR_FIELD_LABELS: Array<[keyof PolarUiState, string]> = [
+  ['angleStart', 'sweep start'],
+  ['angleEnd', 'sweep end'],
+  ['angleStep', 'angular step'],
+  ['distance', 'measurement distance'],
+  ['normAngle', 'normalization angle'],
+  ['diagonalAngle', 'diagonal plane angle'],
+  ['observationOrigin', 'measurement origin'],
+  ['sphericalSampling', '3D balloon'],
+];
+
+/** Which directivity settings the selected run differs from on screen. */
+export function polarDifferences(run: PolarUiState, current: PolarUiState): string[] {
+  const differences = POLAR_FIELD_LABELS.flatMap(([key, label]) => {
+    const left = run[key];
+    const right = current[key];
+    const same = typeof left === 'number' && typeof right === 'number'
+      ? Math.abs(left - right) <= Math.max(1e-9, Math.abs(left) * 1e-9)
+      : left === right;
+    return same ? [] : [label];
+  });
+  const sameAxes = run.enabledAxes.length === current.enabledAxes.length
+    && run.enabledAxes.every((axis, index) => axis === current.enabledAxes[index]);
+  return sameAxes ? differences : [...differences, 'planes'];
+}
+
+function polarSummary(polar: PolarUiState): string {
+  const angle = (value: number) => `${String(Number(value.toFixed(6))).replace('-', '−')}°`;
+  const axes = polar.enabledAxes.map((axis) => AXIS_INITIALS[axis]).join(' + ');
+  return `${polar.distance} m from ${polar.observationOrigin} · ${angle(polar.angleStart)} … ${angle(polar.angleEnd)}, ${angle(polar.angleStep)} step · norm ${angle(polar.normAngle)} · ${axes}`;
+}
+
+/**
+ * What the selected run was actually measured with.
+ *
+ * Reviewing an old result used to leave these fields showing the current
+ * draft, so the settings a run was made with were only visible if the
+ * Simulation Summary panel happened to be open. This states them where they
+ * are read, and only when they differ from what is on screen -- a run that
+ * matches the current settings needs no note.
+ */
+export function SolvedWithReadout() {
+  const selection = useSyncExternalStore(compareSelection.subscribe, compareSelection.getSnapshot, compareSelection.getSnapshot);
+  const snapshot = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot);
+  const current = useSolveOptionsStore((state) => state.polar);
+  const updatePolar = useSolveOptionsStore((state) => state.updatePolar);
+
+  const job = selection.primary ? snapshot.jobs.find((item) => item.id === selection.primary) : undefined;
+  const runPolar = polarUiFromConfig(job?.solve_options?.polar_config);
+  if (!job || !runPolar) return null;
+  const differences = polarDifferences(runPolar, current);
+  if (!differences.length) return null;
+
+  return <div className="solved-with-readout" role="status">
+    <b>{runDisplayName(job, 'short')} was solved with</b>
+    <span>{polarSummary(runPolar)}</span>
+    <small>Differs from the settings above in {differences.join(', ')}. The charts show the run; these fields describe the next solve.</small>
+    <button type="button" onClick={() => updatePolar(runPolar)}>Use the run’s settings</button>
+  </div>;
+}
+
 export function DirectivityMapControls({ effectiveDerivation }: { effectiveDerivation?: Record<string, unknown> } = {}) {
   const polar = useSolveOptionsStore((state) => state.polar);
   const update = useSolveOptionsStore((state) => state.updatePolar);
@@ -174,5 +240,6 @@ export function DirectivityMapControls({ effectiveDerivation }: { effectiveDeriv
     <ToggleRow id="polar-spherical-sampling" label="Keep 3D balloon result" help="WG samples a spherical field for Directivity Index independently of the selected H/V/D display planes. Enable this to retain that grid for the 3D balloon and forward-beam views; availability depends on the backend." checked={polar.sphericalSampling} onChange={(sphericalSampling) => update({ sphericalSampling })} />
     <p className="section-note">Directivity Index always uses the complete spherical field. This option controls whether WG also stores that field for 3D views.</p>
     {effective && <div className={`effective-grid-readout${effective.widened ? ' widened' : ''}`} role="status"><b>{effective.summary}</b><span>{effective.detail}</span><small>Display planes and angle range only; Directivity Index always uses the complete spherical field.</small></div>}
+    <SolvedWithReadout/>
   </>;
 }

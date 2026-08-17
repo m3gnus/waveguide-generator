@@ -1,6 +1,9 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
-import { DEFAULT_ATH_POLAR_UI, polarUiFromAthBlocks } from './athPolars';
+import { createJSONStorage, persist } from 'zustand/middleware';
+import { DEFAULT_ATH_POLAR_UI, athPolarOverrides } from './athPolars';
+import { durableSettings } from './durableSettings';
+import { MAX_FREQUENCY_POINTS, parseFrequencyList, type FrequencyListParse } from './frequencyList';
+import { wgSolveOverrides } from './wgSolveBlock';
 
 export type MeshValidationMode = 'warn' | 'strict' | 'off';
 export type FrequencySpacing = 'log' | 'linear';
@@ -9,8 +12,8 @@ export type ObservationOrigin = 'mouth' | 'throat';
 export type SymmetryMode = 'auto' | 'full' | 'half_xz' | 'half_yz' | 'quarter';
 export type FrequencyMode = 'range' | 'list';
 
-/** Server-side ceiling in ``SolveOptions.frequencies_hz``; mirrored for fast feedback. */
-export const MAX_FREQUENCY_POINTS = 401;
+export { MAX_FREQUENCY_POINTS, parseFrequencyList };
+export type { FrequencyListParse };
 
 /** Mirrors the polar_config request contract introduced by remediation G1. */
 export interface PolarConfig {
@@ -33,43 +36,6 @@ export interface SolveOptions {
   /** Present only in list mode; the server then ignores spacing and solves these verbatim. */
   frequencies_hz?: number[];
   polar_config: PolarConfig;
-}
-
-export interface FrequencyListParse {
-  frequencies: number[] | null;
-  error: string | null;
-}
-
-/**
- * Parse a free-typed sweep into the ``frequencies_hz`` contract.
- *
- * The rules mirror the server's validator exactly, so the dialog can reject a
- * bad list before a solve is queued. Nothing here repairs input: a list that
- * cannot be read as written is an error, never a quietly sorted or truncated
- * sweep the user did not ask for.
- */
-export function parseFrequencyList(text: string): FrequencyListParse {
-  const tokens = text.split(/[\s,;]+/).filter((token) => token.length > 0);
-  if (tokens.length === 0) return { frequencies: null, error: 'Enter at least one frequency.' };
-  if (tokens.length > MAX_FREQUENCY_POINTS) {
-    return { frequencies: null, error: `At most ${MAX_FREQUENCY_POINTS} frequencies (got ${tokens.length}).` };
-  }
-  const frequencies: number[] = [];
-  for (const token of tokens) {
-    const value = Number(token);
-    if (!Number.isFinite(value)) return { frequencies: null, error: `"${token}" is not a number.` };
-    if (value <= 0) return { frequencies: null, error: `Frequencies must be above 0 Hz ("${token}").` };
-    frequencies.push(value);
-  }
-  for (let index = 1; index < frequencies.length; index += 1) {
-    if (frequencies[index] <= frequencies[index - 1]) {
-      return {
-        frequencies: null,
-        error: `Frequencies must ascend: ${frequencies[index]} follows ${frequencies[index - 1]}.`,
-      };
-    }
-  }
-  return { frequencies, error: null };
 }
 
 export interface PolarUiState {
@@ -113,6 +79,45 @@ export function polarConfigFromUi(ui: PolarUiState): PolarConfig {
     enabled_axes: [...ui.enabledAxes],
     observation_origin: ui.observationOrigin,
     spherical_sampling: ui.sphericalSampling,
+  };
+}
+
+/**
+ * Read a recorded solve's directivity settings back into UI form.
+ *
+ * The inverse of `polarConfigFromUi`, used to show a finished run the
+ * measurement it was actually made with. Returns `null` for a run whose
+ * options are missing or unreadable, so nothing is ever presented as a run's
+ * settings unless the run really recorded them.
+ */
+export function polarUiFromConfig(config: unknown): PolarUiState | null {
+  if (config === null || typeof config !== 'object' || Array.isArray(config)) return null;
+  const source = config as Record<string, unknown>;
+  const range = source.angle_range;
+  if (!Array.isArray(range) || range.length !== 3) return null;
+  const [start, end, count] = range.map(Number);
+  const distance = Number(source.distance);
+  if (![start, end, count, distance].every(Number.isFinite) || count < 2 || end <= start) return null;
+  const normAngle = Number(source.norm_angle);
+  const inclination = Number(source.inclination);
+  const axes = Array.isArray(source.enabled_axes)
+    ? source.enabled_axes.filter((axis): axis is PolarAxis => (
+      axis === 'horizontal' || axis === 'vertical' || axis === 'diagonal'
+    ))
+    : [];
+  return {
+    angleStart: start,
+    angleEnd: end,
+    // A finished run is described by the grid it resolved to, so the step comes
+    // from the sample count rather than from a requested value the solver may
+    // have adjusted on the way in.
+    angleStep: (end - start) / (count - 1),
+    distance,
+    normAngle: Number.isFinite(normAngle) ? normAngle : defaultPolarUi.normAngle,
+    diagonalAngle: Number.isFinite(inclination) ? inclination : defaultPolarUi.diagonalAngle,
+    enabledAxes: axes.length ? axes : [...defaultPolarUi.enabledAxes],
+    observationOrigin: source.observation_origin === 'throat' ? 'throat' : 'mouth',
+    sphericalSampling: source.spherical_sampling === true,
   };
 }
 
@@ -185,7 +190,15 @@ export const useSolveOptionsStore = create<SolveOptionsStore>()(persist((set, ge
     return { ...base, frequencies_hz: frequencies };
   },
 }), {
-  name: 'waveguide-v2-solve-options',
+  name: 'solveOptions',
+  // Reads and writes stay synchronous against the durable cache, so the store
+  // still initialises during module evaluation; the server's copy arrives
+  // later and triggers the explicit rehydrate below.
+  storage: createJSONStorage(() => ({
+    getItem: (name) => durableSettings.get(name as 'solveOptions'),
+    setItem: (name, value) => durableSettings.set(name as 'solveOptions', value),
+    removeItem: (name) => durableSettings.set(name as 'solveOptions', null),
+  })),
   partialize: (state) => ({
     engine: state.engine,
     symmetry: state.symmetry,
@@ -211,7 +224,44 @@ export function resetSolveOptionsStore(): void {
   });
 }
 
-/** Restore v1/ATH polar blocks when a `.cfg` becomes the active document. */
+// The server's copy is authoritative, so re-read once it has replaced the cache.
+durableSettings.subscribe('solveOptions', () => { void useSolveOptionsStore.persist.rehydrate(); });
+
+/**
+ * Apply the directivity settings an opened `.cfg` actually specifies.
+ *
+ * Only the values present in the file are applied. This used to replace the
+ * whole polar state with `polarUiFromAthBlocks`, which returns defaults for a
+ * file that carries no `ABEC.Polars` blocks -- so opening an ATH file, or any
+ * design saved before WG wrote those blocks, silently reset measurement
+ * distance, angular step, normalization, planes, and origin, and overwrote the
+ * stored copy on the way out. A file now overrides what it describes and
+ * nothing else.
+ */
 export function restorePolarUiFromAthBlocks(blocks: unknown): void {
-  useSolveOptionsStore.setState({ polar: polarUiFromAthBlocks(blocks) });
+  const overrides = athPolarOverrides(blocks);
+  if (!overrides) return;
+  useSolveOptionsStore.setState((state) => ({ polar: { ...state.polar, ...overrides } }));
+}
+
+/**
+ * Apply everything an opened design states about its solve.
+ *
+ * Covers ATH's directivity blocks and WG's own `WG.Solve` block in one call,
+ * so a design carries the sweep, mesh policy, and measurement origin it was
+ * saved with. Settings the file is silent about are left as they are.
+ */
+export function restoreSolveSettingsFromBlocks(blocks: unknown): void {
+  restorePolarUiFromAthBlocks(blocks);
+  const solve = wgSolveOverrides(blocks);
+  if (!solve) return;
+  const { observationOrigin, sphericalSampling, ...flat } = solve;
+  useSolveOptionsStore.setState((state) => ({
+    ...flat,
+    polar: {
+      ...state.polar,
+      ...(observationOrigin !== undefined ? { observationOrigin } : {}),
+      ...(sphericalSampling !== undefined ? { sphericalSampling } : {}),
+    },
+  }));
 }

@@ -3,6 +3,7 @@ import type { JobItem } from '../api/jobsSocket';
 import { isSubmittedDesignProjection } from '../jobs/submittedProjection';
 import { normalizeRunName, UNBOUND_RUN_NAME_SOURCE, type RunNameDateFormat, type RunNameDatePosition, type RunNameNumberFormat, type RunNameNumberPosition, type RunNameSourceProjection } from '../jobs/runNaming';
 import type { SmoothingMode } from '../results/smoothing';
+import { durableSettings } from '../stores/durableSettings';
 
 export const CHART_TYPES = [
   { id: 'directivity_map_h', label: 'Directivity Map (H)' },
@@ -85,7 +86,6 @@ export interface Preferences {
   minRating: number;
 }
 
-const STORAGE_KEY = 'waveguide-v2-g3-preferences';
 const defaults: Preferences = {
   cadApplication: 'fusion360',
   smoothing: 'none',
@@ -275,14 +275,15 @@ export function loadPreferences(raw: string | null): Preferences {
   return readPreferences(raw).value;
 }
 
+function serialize(value: Preferences): string {
+  return JSON.stringify({ version: STORAGE_VERSION, preferences: value });
+}
+
 function load(): Preferences {
-  if (typeof localStorage === 'undefined') return { ...defaults };
-  const { value, migrated } = readPreferences(localStorage.getItem(STORAGE_KEY));
+  const { value, migrated } = readPreferences(durableSettings.get('preferences'));
   // Persist a migrated layout straight away, so resetting the panel selection
   // happens once rather than on every reload.
-  if (migrated) {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: STORAGE_VERSION, preferences: value })); } catch { /* persistence is best effort */ }
-  }
+  if (migrated) durableSettings.set('preferences', serialize(value));
   return value;
 }
 
@@ -293,7 +294,17 @@ class PreferenceStore {
   subscribe = (listener: () => void): (() => void) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
   update(patch: Partial<Preferences>): void {
     this.value = normalize({ ...this.value, ...patch });
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: STORAGE_VERSION, preferences: this.value })); } catch { /* persistence is best effort */ }
+    durableSettings.set('preferences', serialize(this.value));
+    this.listeners.forEach((listener) => listener());
+  }
+  /**
+   * Take the durable copy the server just supplied.
+   *
+   * This never writes back: the value already is what the server holds, and
+   * echoing it would race a change the user made while the request was out.
+   */
+  adoptDurable(raw: string | null): void {
+    this.value = readPreferences(raw).value;
     this.listeners.forEach((listener) => listener());
   }
   setChartType(index: number, chartType: ChartType): void {
@@ -342,6 +353,7 @@ class PreferenceStore {
 }
 
 export const preferencesStore = new PreferenceStore();
+durableSettings.subscribe('preferences', (raw) => preferencesStore.adoptDurable(raw));
 export function usePreferences(): Preferences {
   return useSyncExternalStore(preferencesStore.subscribe, preferencesStore.getSnapshot, preferencesStore.getSnapshot);
 }

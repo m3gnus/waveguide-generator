@@ -209,6 +209,10 @@ describe('result export design snapshot', () => {
     expect(resultExportSnapshot({ design_revision: 12, script_snapshot: null })).toEqual({
       design: undefined,
       designRevision: 12,
+      // A job with no recorded solve options contributes no WG.Solve block, so
+      // the exported config stays silent about the solve rather than
+      // describing the settings that happen to be on screen.
+      solveSettings: null,
     });
   });
 });

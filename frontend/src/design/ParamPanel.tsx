@@ -16,6 +16,7 @@ import {
   type DriverFieldKey,
 } from '../stores/cadReturn';
 import { useDesignStore, type DesignDocument, type DesignFamily, type DesignValue } from '../stores/design';
+import { namespaceStorage } from '../stores/durableSettings';
 import { useSolveOptionsStore, type SymmetryMode } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { DirectivityMapControls, SolveOptionsControls, ToggleRow } from './SolveOptionsSections';
@@ -80,10 +81,10 @@ function storedSectionState(title: string): boolean {
  * and toggled for the whole rail at once, so the explanation stays one click
  * away instead of permanently between the reader and the next field.
  */
-const HELP_KEY = 'wg-param-help-visible';
+const helpStorage = namespaceStorage('paramHelp');
 
 function storedHelpVisible(): boolean {
-  try { return localStorage.getItem(HELP_KEY) === 'true'; } catch { return false; }
+  try { return helpStorage.getItem('paramHelp') === 'true'; } catch { return false; }
 }
 
 class ParameterHelpStore {
@@ -96,7 +97,7 @@ class ParameterHelpStore {
   };
   toggle(): void {
     this.value = !this.value;
-    try { localStorage.setItem(HELP_KEY, String(this.value)); } catch { /* storage is optional */ }
+    try { helpStorage.setItem('paramHelp', String(this.value)); } catch { /* storage is optional */ }
     this.listeners.forEach((listener) => listener());
   }
   resetForTests(): void { this.value = false; }
