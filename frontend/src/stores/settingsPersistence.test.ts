@@ -157,6 +157,27 @@ describe('WG.Solve config block', () => {
   });
 });
 
+describe('every remembered setting has a durable home', () => {
+  /**
+   * The move server-side is only complete if nothing still writes straight to
+   * the browser. A store that kept its own `localStorage` key would keep the
+   * original bug for whatever it holds, and would do it silently.
+   */
+  it('leaves no store writing to localStorage directly', async () => {
+    const sources = import.meta.glob('../**/*.{ts,tsx}', { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
+    // A glob that quietly matched nothing would make this pass forever. Anchor
+    // it on the source count and on a file known to contain the pattern.
+    expect(Object.keys(sources).length).toBeGreaterThan(100);
+    expect(sources['../design/ParamPanel.tsx']).toMatch(/localStorage\.getItem/);
+
+    const offenders = Object.entries(sources)
+      .filter(([path]) => !path.includes('.test.') && !path.endsWith('durableSettings.ts'))
+      .filter(([, text]) => /localStorage\.(setItem|removeItem)\s*\(/.test(text))
+      .map(([path]) => path);
+    expect(offenders).toEqual([]);
+  });
+});
+
 describe('durable settings', () => {
   beforeEach(() => { localStorage.clear(); });
 

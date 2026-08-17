@@ -65,15 +65,65 @@ interface SectionProps {
   revealId?: string;
 }
 
-const storageKey = (title: string) => `wg-param-section-open:${title}`;
+/**
+ * Which parameter sections the user has collapsed.
+ *
+ * These were one `localStorage` key per section title, which is the one piece
+ * of remembered state that could not move to a fixed durable namespace as it
+ * stood. They are kept as a single map instead, so collapsing the sections you
+ * do not use survives the same things every other setting now survives. The
+ * legacy keys are read once so an existing rail layout carries over.
+ */
+const LEGACY_SECTION_PREFIX = 'wg-param-section-open:';
+const sectionStorage = namespaceStorage('paramSections');
+
+function readSectionMap(): Record<string, boolean> {
+  try {
+    const raw = sectionStorage.getItem('paramSections');
+    if (raw === null) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed as Record<string, unknown>)
+        .filter((entry): entry is [string, boolean] => typeof entry[1] === 'boolean'),
+    );
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Fold the pre-migration keys into the map once, on load.
+ *
+ * Reading them lazily per section would honour an existing rail layout but
+ * never make it durable, so the very loss this store was moved to survive
+ * would still take it. Publishing here means one collapsed-section layout
+ * carries over, once, and is then held like every other setting.
+ */
+function migrateLegacySectionKeys(): void {
+  try {
+    if (sectionStorage.getItem('paramSections') !== null) return;
+    const legacy: Record<string, boolean> = {};
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (key === null || !key.startsWith(LEGACY_SECTION_PREFIX)) continue;
+      legacy[key.slice(LEGACY_SECTION_PREFIX.length)] = localStorage.getItem(key) === 'true';
+    }
+    if (Object.keys(legacy).length) sectionStorage.setItem('paramSections', JSON.stringify(legacy));
+  } catch { /* storage is optional; defaults are a working rail */ }
+}
+
+migrateLegacySectionKeys();
 
 function storedSectionState(title: string): boolean {
+  const stored = readSectionMap()[title];
+  return stored === undefined ? true : stored;
+}
+
+function writeSectionState(title: string, open: boolean): void {
   try {
-    const value = localStorage.getItem(storageKey(title));
-    return value === null ? true : value === 'true';
-  } catch {
-    return true;
-  }
+    sectionStorage.setItem('paramSections', JSON.stringify({ ...readSectionMap(), [title]: open }));
+  } catch { /* storage is optional */ }
 }
 
 /**
@@ -117,7 +167,7 @@ function Section({ title, summary, description, children, forceOpen, revealId }:
   const toggle = () => {
     const next = !open;
     setOpen(next);
-    try { localStorage.setItem(storageKey(title), String(next)); } catch { /* storage is optional */ }
+    writeSectionState(title, next);
   };
   return (
     <section className={`param-section${shownOpen ? '' : ' closed'}`} data-section={title} data-control-reveal-id={revealId}>
