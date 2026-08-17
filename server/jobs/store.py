@@ -969,6 +969,11 @@ class JobStore:
             if running_ids:
                 placeholders = ",".join("?" for _ in running_ids)
                 conn.execute(
+                    f"DELETE FROM simulation_channel_bases "
+                    f"WHERE job_id IN ({placeholders})",
+                    running_ids,
+                )
+                conn.execute(
                     f"DELETE FROM simulation_radiation_impedance "
                     f"WHERE job_id IN ({placeholders})",
                     running_ids,
@@ -1100,6 +1105,21 @@ class JobStore:
             ]
             removed_ids.extend(str(value) for value in overflow)
             removed_ids = list(dict.fromkeys(removed_ids))
+            failed_channel_base_rows = conn.execute(
+                """SELECT simulation_jobs.id
+                   FROM simulation_channel_bases
+                   JOIN simulation_jobs
+                     ON simulation_jobs.id = simulation_channel_bases.job_id
+                   WHERE simulation_jobs.status IN ('error', 'cancelled')"""
+            ).fetchall()
+            channel_base_ids = list(
+                dict.fromkeys(
+                    [
+                        *removed_ids,
+                        *(str(row["id"]) for row in failed_channel_base_rows),
+                    ]
+                )
+            )
             standalone_radiation_rows = conn.execute(
                 """SELECT simulation_jobs.id
                    FROM simulation_radiation_impedance
@@ -1165,15 +1185,18 @@ class JobStore:
                 )
                 deleted_results = int(cur.rowcount or 0)
                 conn.execute(
-                    f"DELETE FROM simulation_channel_bases WHERE job_id IN ({placeholders})",
-                    removed_ids,
-                )
-                conn.execute(
                     f"UPDATE simulation_jobs SET has_results = 0, "
                     "task_metadata_json = json_set(COALESCE(task_metadata_json, '{}'), "
                     "'$.results_discarded_at', ?) "
                     f"WHERE id IN ({placeholders})",
                     [discarded_at, *removed_ids],
+                )
+            if channel_base_ids:
+                placeholders = ",".join("?" for _ in channel_base_ids)
+                conn.execute(
+                    f"DELETE FROM simulation_channel_bases "
+                    f"WHERE job_id IN ({placeholders})",
+                    channel_base_ids,
                 )
             if radiation_ids:
                 placeholders = ",".join("?" for _ in radiation_ids)

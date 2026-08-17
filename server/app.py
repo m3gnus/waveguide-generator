@@ -35,6 +35,7 @@ from server.preview.service import mount_preview
 from server.settings import mount_settings
 from server.solver.symmetry import resolve_symmetry
 from server.workspace import mount_workspace
+from server.workspace.api import MAX_EXPORT_REQUEST_BODY_BYTES
 from server.updates import mount_updates
 
 
@@ -48,20 +49,32 @@ VERSION = str(
 FRONTEND_DIST = Path(__file__).resolve().parents[1] / "frontend" / "dist"
 DEFAULT_WORKSPACE_DIR = Path(__file__).resolve().parents[1] / "output"
 request_log = logging.getLogger("wg.requests")
-MAX_REQUEST_BODY_BYTES = 64 * 1024 * 1024
+DEFAULT_MAX_REQUEST_BODY_BYTES = 64 * 1024 * 1024
+MAX_REQUEST_BODY_BYTES = DEFAULT_MAX_REQUEST_BODY_BYTES
+_WORKSPACE_EXPORT_PATH = "/api/workspace/write-export"
 
 
 class _RequestBodyLimitMiddleware:
     """Enforce a global byte ceiling without buffering accepted request bodies."""
 
-    def __init__(self, app: ASGIApp, *, max_body_bytes: int) -> None:
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        max_body_bytes: int,
+        path_limits: dict[str, int] | None = None,
+    ) -> None:
         self.app = app
         self.max_body_bytes = max_body_bytes
+        self.path_limits = dict(path_limits or {})
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
+
+        path_limit = self.path_limits.get(str(scope.get("path", "")))
+        applied_limit = path_limit if path_limit is not None else self.max_body_bytes
 
         for name, raw_value in scope.get("headers", ()):
             if name.lower() != b"content-length":
@@ -70,8 +83,14 @@ class _RequestBodyLimitMiddleware:
                 declared_size = int(raw_value)
             except ValueError:
                 break
-            if declared_size > self.max_body_bytes:
-                await self._reject(scope, receive, send)
+            if declared_size > applied_limit:
+                await self._reject(
+                    scope,
+                    receive,
+                    send,
+                    applied_limit=applied_limit,
+                    include_default=path_limit is None,
+                )
                 return
             break
 
@@ -86,7 +105,7 @@ class _RequestBodyLimitMiddleware:
             message = await receive()
             if message["type"] == "http.request":
                 received += len(message.get("body", b""))
-                if received > self.max_body_bytes:
+                if received > applied_limit:
                     too_large = True
                     return {"type": "http.disconnect"}
             return message
@@ -109,13 +128,32 @@ class _RequestBodyLimitMiddleware:
                 raise RuntimeError(
                     "request body exceeded the limit after the response started"
                 ) from None
-            await self._reject(scope, receive, send)
+            await self._reject(
+                scope,
+                receive,
+                send,
+                applied_limit=applied_limit,
+                include_default=path_limit is None,
+            )
 
     @staticmethod
-    async def _reject(scope: Scope, receive: Receive, send: Send) -> None:
+    async def _reject(
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+        *,
+        applied_limit: int,
+        include_default: bool,
+    ) -> None:
+        if applied_limit % (1024 * 1024) == 0:
+            label = f"{applied_limit // (1024 * 1024)} MB"
+        else:
+            label = f"{applied_limit} bytes"
+        if include_default and applied_limit != DEFAULT_MAX_REQUEST_BODY_BYTES:
+            label += " (64 MB production default)"
         await JSONResponse(
             status_code=413,
-            content={"detail": "Request body exceeds the 64 MB limit."},
+            content={"detail": f"Request body exceeds the {label} limit."},
         )(scope, receive, send)
 
 
@@ -196,6 +234,7 @@ def create_app(
     application.add_middleware(
         _RequestBodyLimitMiddleware,
         max_body_bytes=MAX_REQUEST_BODY_BYTES,
+        path_limits={_WORKSPACE_EXPORT_PATH: MAX_EXPORT_REQUEST_BODY_BYTES},
     )
     # One persistent owner thread services every gmsh call.  Prewarming here
     # retains the v1 off-main-thread ``interruptible=False`` invariant from

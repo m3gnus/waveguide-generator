@@ -64,8 +64,9 @@ def test_a_bundle_that_changed_after_the_command_is_refused(tmp_path) -> None:
 
     assert result["outcome"]["state"] == "refused"
     assert "changed after Fusion asked" in result["outcome"]["reason"]
-    # Recorded, so the next poll answers from the ledger instead of re-hashing.
+    # The marker is one-shot, while the ledger keeps the terminal answer.
     assert ledger_entry(data_dir, "cmd-1")["state"] == "refused"
+    assert read_solve_command(data_dir) is None
 
 
 def test_a_command_pointing_outside_the_workspace_is_refused(tmp_path) -> None:
@@ -77,6 +78,7 @@ def test_a_command_pointing_outside_the_workspace_is_refused(tmp_path) -> None:
     result = _pending_solve_command(data_dir, workspace.resolve())
 
     assert result["outcome"]["state"] == "refused"
+    assert read_solve_command(data_dir) is None
 
 
 def test_an_accepted_command_replays_its_job_instead_of_submitting_again(tmp_path) -> None:
@@ -90,6 +92,7 @@ def test_an_accepted_command_replays_its_job_instead_of_submitting_again(tmp_pat
 
     assert result["outcome"]["state"] == "accepted"
     assert result["outcome"]["jobId"] == "job-7"
+    assert read_solve_command(data_dir) is None
 
 
 def test_clearing_only_removes_the_command_it_names(tmp_path) -> None:

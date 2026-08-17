@@ -383,6 +383,7 @@ def encode_preview_geometry(
     design_revision: int,
     lod: str,
     eval_ms: float,
+    max_frame_bytes: int = DEFAULT_MAX_FRAME_BYTES,
 ) -> bytes:
     """Convert ``PreviewGeometryV1`` f64 arrays at the FRAME-SPEC boundary."""
 
@@ -446,6 +447,7 @@ def encode_preview_geometry(
             "previewMetadata": metadata,
         },
         arrays,
+        max_frame_bytes=max_frame_bytes,
     )
 
 
@@ -802,6 +804,7 @@ class PreviewProtocol:
                     "curveId": request.curve_id,
                 },
                 {"points": points},
+                max_frame_bytes=self.max_frame_bytes,
             )
         assert request.design is not None
         config = design_to_mesher_config(request.design)
@@ -842,6 +845,7 @@ class PreviewProtocol:
             design_revision=request.design_revision,
             lod=request.lod,
             eval_ms=elapsed,
+            max_frame_bytes=self.max_frame_bytes,
         )
 
     async def _frame_too_large(self, request: _Request, detail: str) -> None:

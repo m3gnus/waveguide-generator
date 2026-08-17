@@ -337,7 +337,12 @@ def decode(
     return header, arrays
 
 
-def encode(header_fields: Mapping[str, Any], arrays: Mapping[str, np.ndarray]) -> bytes:
+def encode(
+    header_fields: Mapping[str, Any],
+    arrays: Mapping[str, np.ndarray],
+    *,
+    max_frame_bytes: int = DEFAULT_MAX_FRAME_BYTES,
+) -> bytes:
     """Encode a deterministic FRAME-SPEC v1.1 frame."""
 
     if not isinstance(header_fields, Mapping) or not isinstance(arrays, Mapping):
@@ -389,7 +394,7 @@ def encode(header_fields: Mapping[str, Any], arrays: Mapping[str, np.ndarray]) -
         _fail("header-too-large", str(len(header_bytes)))
     prefix = MAGIC + struct.pack("<I", len(header_bytes)) + header_bytes
     frame = prefix + bytes(_align8(len(prefix)) - len(prefix)) + payload
-    if len(frame) > DEFAULT_MAX_FRAME_BYTES:
-        _fail("frame-too-large", str(len(frame)))
-    decode(frame)
+    if len(frame) > max_frame_bytes:
+        _fail("frame-too-large", f"{len(frame)} > {max_frame_bytes}")
+    decode(frame, max_frame_bytes=max_frame_bytes)
     return frame

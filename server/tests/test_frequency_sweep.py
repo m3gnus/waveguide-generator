@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import numpy as np
 
+from server.design.schema import DesignConfig
+from server.mesh import builder as mesh_builder
+from server.mesh.builder import build_solver_mesh, clear_solver_mesh_cache
+from server.solver.combine import combine_drive_channels
 from server.solver.context import SolverContext
 from server.solver.frequency_sweep import (
     canonical_frequencies,
@@ -79,3 +84,85 @@ def test_bempp_read_only_directivity_alias_sorts_its_backing_spl_field() -> None
     assert returned is result
     assert result.frequencies_hz.tolist() == [100.0, 300.0, 500.0, 700.0]
     assert result.directivity_db[:, 0].tolist() == [10, 30, 50, 70]
+
+
+def _combine_member(freqs: np.ndarray, angles: np.ndarray) -> SimpleNamespace:
+    field = np.ones((freqs.size, 1, angles.size), dtype=np.complex128)
+    return SimpleNamespace(
+        frequencies_hz=freqs,
+        observation_angles_deg=angles,
+        observation_planes=["horizontal"],
+        observation_points=None,
+        pressure_complex=field,
+        solver_log=[],
+        sphere_pressure_complex=None,
+        sphere_theta_deg=None,
+        sphere_phi_deg=None,
+        sphere_points=None,
+    )
+
+
+def test_combine_warns_for_off_axis_reference_and_out_of_band_crossover() -> None:
+    freqs = np.asarray([500.0, 1_000.0, 20_000.0])
+    angles = np.asarray([10.0, 40.0, 70.0])
+    results = {
+        "low": _combine_member(freqs, angles),
+        "high": _combine_member(freqs, angles),
+    }
+
+    _combined, payload = combine_drive_channels(
+        results,
+        members=["low", "high"],
+        crossovers_hz=[300.0],
+    )
+
+    assert payload["reference_angle_degrees"] == 10.0
+    assert any(
+        "nearest available angle, 10 degrees" in item
+        for item in payload["warnings"]
+    )
+    assert any(
+        "outside the solved band [500, 20000] Hz" in item
+        for item in payload["warnings"]
+    )
+
+
+def test_quadrant_compatibility_fallback_warning_is_request_local(monkeypatch) -> None:
+    calls = 0
+
+    async def fake_worker(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return {
+            "msh_text": "$MeshFormat\n",
+            "stats": {"warnings": []},
+            "integrity": {"valid": True},
+            "metadata": {},
+        }
+
+    monkeypatch.setattr(mesh_builder, "run_on_gmsh_worker", fake_worker)
+    valid = DesignConfig.model_validate(
+        {"formula": "OSSE", "mesh": {"quadrants": 1}}
+    )
+    typo = DesignConfig.model_validate(
+        {"formula": "OSSE", "mesh": {"quadrants": 9}}
+    )
+    clear_solver_mesh_cache()
+
+    async def scenario() -> None:
+        first = await build_solver_mesh(valid, {})
+        warned = await build_solver_mesh(typo, {})
+        valid_again = await build_solver_mesh(valid, {})
+
+        assert first["stats"]["warnings"] == []
+        assert warned["stats"]["mesh_cache_hit"] is True
+        assert len(warned["stats"]["warnings"]) == 1
+        assert "declared as '9'" in warned["stats"]["warnings"][0]
+        assert "quarter-domain" in warned["stats"]["warnings"][0]
+        assert valid_again["stats"]["warnings"] == []
+
+    try:
+        asyncio.run(scenario())
+        assert calls == 1
+    finally:
+        clear_solver_mesh_cache()

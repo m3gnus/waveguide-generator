@@ -91,6 +91,20 @@ def test_encoder_rejects_nonfinite_position_and_normal_arrays() -> None:
         encode({"kind": "curve"}, {"normals": np.array([[0, np.inf, 0]], dtype=np.float32)})
 
 
+def test_encoder_honors_a_configured_frame_ceiling_without_changing_bytes() -> None:
+    header = {"kind": "curve", "curveId": "limit-test"}
+    arrays = {"points": np.zeros((4, 3), dtype=np.float32)}
+    expected = encode(header, arrays)
+    too_small = len(expected) - 1
+
+    with pytest.raises(FrameError) as captured:
+        encode(header, arrays, max_frame_bytes=too_small)
+
+    assert captured.value.rule == "frame-too-large"
+    assert captured.value.detail == f"{len(expected)} > {too_small}"
+    assert encode(header, arrays, max_frame_bytes=len(expected)) == expected
+
+
 @pytest.mark.parametrize(
     ("fixture_name", "mutate", "rule"),
     [

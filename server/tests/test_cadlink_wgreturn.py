@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
 
 import pytest
 
-from server.cadlink.wgreturn import WgReturnError, read_wgreturn
+from server.cadlink.fusion_status import FUSION_STATUS_FILENAME, read_fusion_status
+from server.cadlink.wgreturn import WgReturnError, read_wgreturn, validate_manifest
 
 
 def _manifest(step: bytes) -> dict:
@@ -116,6 +118,81 @@ def test_nonfinite_json_is_refused_at_its_path(tmp_path: Path) -> None:
     manifest["assembly"]["bbox_mm"][0][0] = float("nan")
     with pytest.raises(WgReturnError, match="non-finite JSON number"):
         read_wgreturn(write_bundle(tmp_path, manifest))
+
+
+def test_only_the_instances_own_config_is_opaque_to_evidence_validation(
+    tmp_path: Path,
+) -> None:
+    verdict = _manifest(b"STEP")
+    verdict["instances"][0]["body_evidence"]["config"] = {
+        "tags": ["solver-authored"]
+    }
+    with pytest.raises(WgReturnError, match=r"body_evidence\.config\.tags.*forbidden"):
+        read_wgreturn(write_bundle(tmp_path / "verdict", verdict))
+
+    nonfinite = _manifest(b"STEP")
+    nonfinite["instances"][0]["body_evidence"]["config"] = {
+        "measurement": float("inf")
+    }
+    with pytest.raises(WgReturnError, match=r"body_evidence\.config\.measurement.*finite"):
+        validate_manifest(nonfinite)
+
+
+def test_subtree_return_disables_root_document_stale_comparisons(tmp_path: Path) -> None:
+    now = datetime(2026, 8, 17, 12, 0, tzinfo=timezone.utc)
+    workspace = tmp_path / "workspace"
+    status_folder = workspace / "ipc" / "wglink"
+    status_folder.mkdir(parents=True)
+    (status_folder / FUSION_STATUS_FILENAME).write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "cadApplication": "fusion360",
+                "updatedAt": now.isoformat().replace("+00:00", "Z"),
+                "document": {
+                    "name": "Scoped assembly",
+                    "id": "fusion:doc-a",
+                    "links": [
+                        {
+                            "instanceId": "instance-1",
+                            "designId": "wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+                            "designHash": "sha256:current",
+                            "configPresent": True,
+                            "parameterDriftCount": 0,
+                            "localBodyState": "unmodified",
+                            "documentSignatureHash": "sha256:root-document",
+                            "documentBodyCount": 9,
+                            "sourceStateHash": "sha256:root-sources",
+                        }
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest = _manifest(b"STEP")
+    manifest["scope"]["selection"] = "Speaker/Waveguide"
+    manifest["wgreturn_version"] = "1.1"
+    manifest["assembly"]["signature_hash"] = "sha256:subtree-document"
+    returned = write_bundle(workspace / "returns", manifest)
+
+    result = read_fusion_status(
+        workspace,
+        current_design_hash="sha256:current",
+        current_formula="OSSE",
+        design_id="wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+        returned_bundle=returned,
+        now=now,
+    )
+
+    assert result["state"] == "current"
+    assert result["fusionChangesAvailable"] is False
+    assert result["documentChanged"] is False
+    assert result["documentChangeDetectable"] is False
+    assert result["staleDetectionExplanation"] == (
+        "stale detection unavailable: this returned bundle predates wgreturn 1.1 "
+        "and carries no document signature"
+    )
 
 
 def test_reader_rejects_symlink_missing_size_and_absolute_members(tmp_path: Path) -> None:

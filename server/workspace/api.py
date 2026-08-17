@@ -30,6 +30,10 @@ MAX_EXPORT_MEMBERS = 100
 # Automatic bundles can include tessellated STL/STEP geometry and rendered
 # plots, so the old text-export ceiling was too small for otherwise valid runs.
 MAX_EXPORT_BYTES = 256 * 1024 * 1024
+# Binary members use base64 in the JSON request (4/3 expansion). This route-only
+# envelope leaves another 42 MiB for member metadata and JSON framing while
+# keeping the binary-content limit above as the user-facing export constraint.
+MAX_EXPORT_REQUEST_BODY_BYTES = 384 * 1024 * 1024
 _WINDOWS_DEVICE_NAME = re.compile(
     r"^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$", re.IGNORECASE
 )
