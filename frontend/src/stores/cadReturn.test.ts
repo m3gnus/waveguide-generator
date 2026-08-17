@@ -1,6 +1,13 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
-import { acknowledgedFindingWire, resetCadReturnStore, unacknowledgedBlocking, useCadReturnStore } from './cadReturn';
+import {
+  acknowledgedFindingWire,
+  DRIVER_REQUIRED_KEYS,
+  resetCadReturnStore,
+  unacknowledgedBlocking,
+  useCadReturnStore,
+} from './cadReturn';
+import { buildImportedSubmission } from '../jobs/importedSubmission';
 import { resetDocumentStore, useDocumentStore } from './document';
 
 const solveProfileStorageKey = 'waveguide-v2-g3-cad-solve-profiles';
@@ -84,7 +91,6 @@ describe('CAD return store', () => {
     store.setSourceChannel('source-hf', 'drive-mf');
     store.setExteriorOnly(true);
     store.setCombineEnabled(true);
-    store.setChannelDriverEnabled('drive-mf', true);
     store.setSweep({ frequencyStartHz: 300, frequencyEndHz: 12_000, frequencyCount: 31 });
 
     const arrived = {
@@ -104,12 +110,73 @@ describe('CAD return store', () => {
     ]);
     expect(state.exteriorOnly).toBe(true);
     expect(state.combineEnabled).toBe(true);
-    expect(state.channelDrivers['drive-mf']?.enabled).toBe(true);
     expect(state.frequencyStartHz).toBe(300);
     // The new geometry re-earns its evidence.
     expect(state.ingestRecord).toBeNull();
     expect(state.acknowledgedFindingIds).toEqual([]);
     expect(state.needsIngest).toBe(true);
+  });
+
+  it('carries an eligible channel driver across a same-inventory arrival', () => {
+    const store = useCadReturnStore.getState();
+    store.selectBundle(bundle);
+    store.setChannelDriverEnabled('drive-hf', true);
+    store.setChannelDriverField('drive-hf', 'sd_cm2', 8);
+
+    expect(store.selectArrivedBundle({ ...bundle, modifiedAt: '2026-08-11T02:00:00Z' })).toBe('carried');
+
+    const driver = useCadReturnStore.getState().channelDrivers['drive-hf'];
+    expect(driver?.enabled).toBe(true);
+    expect(driver?.fields.sd_cm2).toBe(8);
+  });
+
+  it('drops a channel driver when the channel turns axial', () => {
+    const store = useCadReturnStore.getState();
+    store.selectBundle(bundle);
+    store.setChannelDriverEnabled('drive-mf', true);
+
+    // A driver models a piston, so the server refuses one on axial motion.
+    store.setChannelMotion('drive-mf', 'axial');
+
+    expect(useCadReturnStore.getState().channelDrivers['drive-mf']).toBeUndefined();
+  });
+
+  it('drops a channel driver when a second source joins the channel', () => {
+    const store = useCadReturnStore.getState();
+    store.selectBundle(bundle);
+    store.setChannelDriverEnabled('drive-hf', true);
+
+    // Two sources leave the radiating area ambiguous, which the server refuses.
+    store.setSourceChannel('source-mf', 'drive-hf');
+
+    expect(useCadReturnStore.getState().driveChannels).toEqual([
+      { id: 'drive-hf', source_ids: ['source-mf', 'source-hf'], motion: 'normal' },
+    ]);
+    expect(useCadReturnStore.getState().channelDrivers['drive-hf']).toBeUndefined();
+  });
+
+  it('never submits a driver a channel cannot carry', () => {
+    const store = useCadReturnStore.getState();
+    store.selectBundle(bundle);
+    store.setChannelDriverEnabled('drive-hf', true);
+    DRIVER_REQUIRED_KEYS.forEach((key) => store.setChannelDriverField('drive-hf', key, 1));
+    store.applyIngest(record(), store.beginIngestIntent());
+    const complete = useCadReturnStore.getState();
+    expect(buildImportedSubmission(complete).geometry.drive_channels
+      .find((channel) => channel.id === 'drive-hf')?.driver).toBeDefined();
+
+    // A form that outlived its channel's eligibility -- reachable only past the
+    // store's own pruning -- must still never reach the server.
+    const stale = {
+      ...complete,
+      driveChannels: complete.driveChannels.map((channel) => (
+        channel.id === 'drive-hf' ? { ...channel, motion: 'axial' as const } : channel
+      )),
+    };
+    const submitted = buildImportedSubmission(stale);
+    expect(submitted.geometry.drive_channels.find((channel) => channel.id === 'drive-hf')?.driver)
+      .toBeUndefined();
+    expect(submitted.geometry.drive_voltage_v).toBeUndefined();
   });
 
   it('resets fully when an arrival changes the source inventory', () => {

@@ -1,5 +1,5 @@
 import { serializeDesign, type DesignDocument } from '../stores/design';
-import { designWireWithSolveSettings, wgSolveSettingsFromStore } from '../stores/designWire';
+import { currentDesignWire, designWireWithSolveSettings, wgSolveSettingsFromStore } from '../stores/designWire';
 import type { WgSolveSettings } from '../stores/wgSolveBlock';
 import type { DesignIdentity } from '../stores/document';
 import type { WgLinkExportResponse } from './designIo';
@@ -107,7 +107,7 @@ export async function getOnshapeStatus(
   const response = await fetcher('/api/cadlink/onshape/status', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ design: serializeDesign(design), identity }),
+    body: JSON.stringify({ design: currentDesignWire(serializeDesign(design)), identity }),
   });
   if (!response.ok) throw new Error(await errorMessage(response));
   return response.json() as Promise<OnshapeStatus>;

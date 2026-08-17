@@ -2,6 +2,7 @@ import type { ConfigBlock } from './design';
 
 const ATH_POLAR_PREFIX = 'ABEC.Polars:';
 const AXIS_ORDER = ['horizontal', 'vertical', 'diagonal'] as const;
+const DIAGONAL_BLOCK = `${ATH_POLAR_PREFIX}SPL_D`;
 const EPSILON = 1e-6;
 
 export interface AthPolarUiState {
@@ -54,6 +55,23 @@ function blockItems(block: unknown): Record<string, unknown> {
   return isRecord(block) && isRecord(block.items) ? block.items : {};
 }
 
+/**
+ * Which plane a polar block describes, block name included.
+ *
+ * Inclination is the physical truth and normally decides this on its own. It
+ * cannot decide the one case where the user picked a diagonal that lies on a
+ * cardinal plane: 0/90/180/270 read back as horizontal or vertical, so saving
+ * and reopening silently moved the selection off the diagonal the file was
+ * written with. WG's own `SPL_D` block states the axis its author chose, so it
+ * settles that case. Every other block -- including a hand-edited `SPL_H`
+ * carrying a real 45-degree inclination -- is still read from its inclination,
+ * which is what an imported ATH file means by it.
+ */
+function classifyBlock(name: string, items: Record<string, unknown>): (typeof AXIS_ORDER)[number] {
+  const byInclination = classifyInclination(items.Inclination);
+  return name === DIAGONAL_BLOCK && byInclination !== 'diagonal' ? 'diagonal' : byInclination;
+}
+
 function polarEntries(blocks: unknown): Array<[string, unknown]> {
   if (!isRecord(blocks)) return [];
   return Object.entries(blocks)
@@ -98,9 +116,9 @@ export function athPolarOverrides(blocks: unknown): Partial<AthPolarUiState> | n
   if (normAngle !== null) overrides.normAngle = normAngle;
 
   const selected = new Set<(typeof AXIS_ORDER)[number]>();
-  for (const [, block] of entries) {
+  for (const [name, block] of entries) {
     const items = blockItems(block);
-    const axis = classifyInclination(items.Inclination);
+    const axis = classifyBlock(name, items);
     selected.add(axis);
     if (axis === 'diagonal') {
       const inclination = finite(items.Inclination);
@@ -143,9 +161,9 @@ function portableBlocksConfig(blocks: unknown): PortablePolarConfig | null {
 
   const selected = new Set<(typeof AXIS_ORDER)[number]>();
   let inclination = DEFAULT_ATH_POLAR_UI.diagonalAngle;
-  for (const [, block] of entries) {
+  for (const [name, block] of entries) {
     const items = blockItems(block);
-    const axis = classifyInclination(items.Inclination);
+    const axis = classifyBlock(name, items);
     selected.add(axis);
     if (axis === 'diagonal') inclination = finite(items.Inclination) ?? inclination;
   }

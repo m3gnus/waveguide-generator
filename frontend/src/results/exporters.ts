@@ -234,10 +234,24 @@ async function blobBase64(blob: Blob): Promise<string> {
   return btoa(chunks.join(''));
 }
 
+/**
+ * What to do about files a previous export already wrote.
+ *
+ * Automatic post-run export is a background write nobody asked for twice, so
+ * it merges and refuses to change anything: `merge_identical`. A user choosing
+ * an export a second time is asking for the file again, so it replaces:
+ * `overwrite`. Merging a repeat manual export cannot work -- the JSON, summary,
+ * and VACS builders stamp the current time into their output, and smoothing or
+ * chart preferences change the bytes too, so every repeat differed and the
+ * whole bundle was rejected with a 409.
+ */
+export type ExistingFilePolicy = 'merge_identical' | 'overwrite';
+
 export async function writeWorkspaceFiles(
   subdirectory: string,
   members: WorkspaceFile[],
   fetcher: typeof fetch = fetch,
+  existing: ExistingFilePolicy = 'merge_identical',
 ): Promise<WorkspaceWriteResponse> {
   const encoded = await Promise.all(members.map(async ({ filename, blob }) => ({
     relative_path: filename,
@@ -246,7 +260,7 @@ export async function writeWorkspaceFiles(
   const response = await fetcher('/api/workspace/write-export', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ subdirectory, members: encoded, existing: 'merge_identical' }),
+    body: JSON.stringify({ subdirectory, members: encoded, existing }),
   });
   if (!response.ok) throw await responseError(response);
   return response.json() as Promise<WorkspaceWriteResponse>;
@@ -549,6 +563,7 @@ export async function runExportBundle(context: ExportContext, formats = context.
 export async function runWorkspaceExportBundle(
   context: ExportContext,
   formats = context.preferences.autoExportFormats,
+  existing: ExistingFilePolicy = 'merge_identical',
 ): Promise<ExportBundleResult> {
   const prepared = new Map<string, WorkspaceFile>();
   const bundle = await runExportBundle({
@@ -567,6 +582,7 @@ export async function runWorkspaceExportBundle(
     context.jobStem,
     [...prepared.values()],
     context.fetcher ?? fetch,
+    existing,
   );
   return { ...bundle, directory: written.directory, files: written.files };
 }
