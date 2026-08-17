@@ -71,15 +71,52 @@ def test_namespace_count_is_bounded(tmp_path: Path) -> None:
     assert store.get("ns0") == "updated"
 
 
-def test_a_corrupt_file_falls_back_to_defaults_without_raising(tmp_path: Path) -> None:
+def test_a_corrupt_file_is_preserved_and_falls_back_to_defaults(tmp_path: Path) -> None:
     """Unreadable settings must not stop WG from starting."""
 
     path = tmp_path / "ui_settings.json"
-    path.write_text("{ not json", encoding="utf-8")
+    corrupt_contents = "{ not json"
+    path.write_text(corrupt_contents, encoding="utf-8")
     store = SettingsStore(tmp_path, settings_path=path)
     assert store.all() == {}
+    corrupt_path = tmp_path / "ui_settings.json.corrupt"
+    assert corrupt_path.read_text(encoding="utf-8") == corrupt_contents
     store.put("theme", "dark")
     assert store_for(tmp_path).get("theme") == "dark"
+    assert corrupt_path.read_text(encoding="utf-8") == corrupt_contents
+
+
+def test_a_transient_read_error_cannot_wipe_existing_namespaces(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "ui_settings.json"
+    original = {
+        "schemaVersion": SCHEMA_VERSION,
+        "namespaces": {"dockLayout": {"panels": ["design", "results"]}, "preferences": "saved"},
+    }
+    path.write_text(json.dumps(original), encoding="utf-8")
+    real_read_text = Path.read_text
+    attempts = 0
+
+    def fail_first_read(target: Path, *args: object, **kwargs: object) -> str:
+        nonlocal attempts
+        if target == path and attempts == 0:
+            attempts += 1
+            raise OSError("transient read failure")
+        return real_read_text(target, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", fail_first_read)
+    store = SettingsStore(tmp_path, settings_path=path)
+
+    with pytest.raises(SettingsError, match="Could not read settings"):
+        store.put("theme", "dark")
+    assert json.loads(real_read_text(path, encoding="utf-8")) == original
+
+    store.put("theme", "dark")
+    assert json.loads(real_read_text(path, encoding="utf-8"))["namespaces"] == {
+        **original["namespaces"],
+        "theme": "dark",
+    }
 
 
 def test_entries_with_unusable_names_are_dropped_on_read(tmp_path: Path) -> None:
