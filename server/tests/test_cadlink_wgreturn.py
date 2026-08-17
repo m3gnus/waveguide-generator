@@ -192,6 +192,46 @@ def test_reader_enforces_fem_member_feature_and_purpose_coupling(tmp_path: Path)
         read_wgreturn(bundle)
 
 
+def test_reader_accepts_addin_fem_expected_body_spelling(tmp_path: Path) -> None:
+    fem = b"FEM STEP"
+    manifest = _manifest(b"STEP")
+    manifest["required_features"].append("fem-air-volume-v1")
+    manifest["files"]["fem/air.step"] = {
+        "sha256": "sha256:" + hashlib.sha256(fem).hexdigest(),
+        "size_bytes": len(fem),
+        "media_type": "model/step",
+        "purpose": "fem-air-volume",
+    }
+    manifest["scope"]["fem_air_volumes"] = [
+        {"file": "fem/air.step", "n_bodies_expected": 1}
+    ]
+    bundle = write_bundle(tmp_path, manifest)
+    (bundle / "fem").mkdir()
+    (bundle / "fem" / "air.step").write_bytes(fem)
+
+    result = read_wgreturn(bundle)
+
+    assert result.manifest["scope"]["fem_air_volumes"][0]["n_bodies_expected"] == 1
+
+
+def test_reader_accepts_addin_surface_body_fingerprint(tmp_path: Path) -> None:
+    manifest = _manifest(b"STEP")
+    surface_fingerprint = {
+        "is_solid": False,
+        "volume_mm3": None,
+        "bbox_mm": [0, 0, 0, 1, 1, 1],
+    }
+    evidence = manifest["instances"][0]["body_evidence"]
+    evidence["baseline_fingerprint"] = deepcopy(surface_fingerprint)
+    evidence["observed_fingerprint"] = deepcopy(surface_fingerprint)
+
+    result = read_wgreturn(write_bundle(tmp_path, manifest))
+
+    fingerprints = result.manifest["instances"][0]["body_evidence"]
+    assert fingerprints["baseline_fingerprint"]["volume_mm3"] is None
+    assert fingerprints["observed_fingerprint"]["volume_mm3"] is None
+
+
 def test_reader_enforces_disc_area_and_anchor_rules(tmp_path: Path) -> None:
     area = _manifest(b"STEP")
     area["instances"][0]["source_contract"]["expected_disc_area_mm2"] *= 2

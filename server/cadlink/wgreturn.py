@@ -247,9 +247,14 @@ def _validate_fingerprint(value: Any, path: str) -> None:
     if value is None:
         return
     obj = _mapping(value, path)
-    if not isinstance(_required(obj, "is_solid", path), bool):
+    is_solid = _required(obj, "is_solid", path)
+    if not isinstance(is_solid, bool):
         _fail(f"{path}.is_solid", "must be boolean")
-    _number(_required(obj, "volume_mm3", path), f"{path}.volume_mm3")
+    volume_mm3 = _required(obj, "volume_mm3", path)
+    if is_solid:
+        _number(volume_mm3, f"{path}.volume_mm3")
+    elif volume_mm3 is not None:
+        _fail(f"{path}.volume_mm3", "must be null for a surface body")
     _vector(_required(obj, "bbox_mm", path), f"{path}.bbox_mm", 6)
 
 
@@ -473,7 +478,10 @@ def validate_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     for index, item in enumerate(fem):
         volume = _mapping(item, f"$.scope.fem_air_volumes[{index}]")
         _string(_required(volume, "file", f"$.scope.fem_air_volumes[{index}]"), f"$.scope.fem_air_volumes[{index}].file")
-        expected = volume.get("n_solids_expected", volume.get("expected_solids"))
+        expected = volume.get(
+            "n_bodies_expected",
+            volume.get("n_solids_expected", volume.get("expected_solids")),
+        )
         if expected != 1:
             _fail(f"$.scope.fem_air_volumes[{index}]", "must declare exactly one expected solid")
 
