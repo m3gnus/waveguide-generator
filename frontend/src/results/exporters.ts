@@ -2,7 +2,8 @@ import { downloadBlob, downloadText } from '../api/designIo';
 import type { JobItem } from '../api/jobsSocket';
 import { exportStemForJob } from '../jobs/exportNaming';
 import { serializeDesign, type DesignDocument } from '../stores/design';
-import { designWireWithAthPolars } from '../stores/athPolars';
+import { designWireWithSolveSettings } from '../stores/designWire';
+import type { WgSolveSettings } from '../stores/wgSolveBlock';
 import { resolveChartTheme, type ExportFormat, type Preferences } from '../prefs/preferences';
 import { applySmoothing, type SmoothingValue } from './smoothing';
 import { buildOnAxisFrd, buildPolarFrdSet } from './frd';
@@ -17,6 +18,7 @@ export interface ExportContext {
   designRevision?: number;
   /** The selected run's immutable directivity settings for ATH `.cfg` export. */
   polarConfig?: unknown;
+  solveSettings?: WgSolveSettings | null;
   jobStem: string;
   preferences: Preferences;
   fetcher?: typeof fetch;
@@ -421,7 +423,11 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        design: designWireWithAthPolars(serializeDesign(context.design), context.polarConfig),
+        design: designWireWithSolveSettings(
+          serializeDesign(context.design),
+          context.polarConfig,
+          context.solveSettings ?? null,
+        ),
         filename: `${baseName}_config.cfg`,
       }),
     });

@@ -18,7 +18,7 @@ import { preferencesStore, usePreferences } from '../prefs/preferences';
 import { Icon } from '../shell/icons';
 import {
   polarConfigFromUi,
-  restorePolarUiFromAthBlocks,
+  restoreSolveSettingsFromBlocks,
   useSolveOptionsStore,
 } from '../stores/solveOptions';
 import { documentDisplayName, filenameStem } from '../viewport/presentation';
@@ -135,7 +135,7 @@ export function DesignFileMenu() {
       const opened = await openDesignText(text);
       const openedDesign = hydrateDesignDocument(opened.design);
       replaceDesign(openedDesign);
-      restorePolarUiFromAthBlocks(openedDesign.extra_blocks);
+      restoreSolveSettingsFromBlocks(openedDesign.extra_blocks);
       setFilename(`${filenameStem(file.name)}.cfg`);
       setCadLink(editableIdentity(opened.cadlink?.identity), opened.cadlink?.classification ?? 'missing');
       let nameSourceProjection = null;
@@ -181,7 +181,9 @@ export function DesignFileMenu() {
   function newDesign() {
     if (revision !== savedRevision && !window.confirm('Discard unsaved changes and create a new design?')) return;
     resetDesignStore();
-    restorePolarUiFromAthBlocks({});
+    // Directivity and solver settings deliberately survive New: they describe
+    // how this user measures, not which horn is on screen, and resetting them
+    // meant retyping the same measurement rig for every new design.
     resetDocumentStore();
     preferencesStore.update({ outputName: 'horn', nameSourceProjection: null });
     setMessage('New design');

@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
 import { useDocumentStore, type DesignIdentity } from './document';
+import { namespaceStorage } from './durableSettings';
 
 export interface CadDriveChannel {
   id: string;
@@ -78,7 +79,7 @@ interface CadReturnState {
   setSweep: (update: Partial<Pick<CadReturnState, 'frequencyStartHz' | 'frequencyEndHz' | 'frequencyCount'>>) => void;
 }
 
-const SOLVE_PROFILE_STORAGE_KEY = 'waveguide-v2-g3-cad-solve-profiles';
+const solveProfileStorage = namespaceStorage('cadSolveProfiles');
 const SOLVE_PROFILE_STORAGE_VERSION = 1;
 const MAX_SOLVE_PROFILES = 20;
 
@@ -279,13 +280,12 @@ function solveProfileKey(identity: Pick<DesignIdentity, 'designId' | 'lineageId'
 }
 
 function dropStoredSolveProfiles(): void {
-  try { localStorage.removeItem(SOLVE_PROFILE_STORAGE_KEY); } catch { /* persistence is best effort */ }
+  try { solveProfileStorage.removeItem('cadSolveProfiles'); } catch { /* persistence is best effort */ }
 }
 
 function readStoredSolveProfiles(): StoredSolveProfile[] {
-  if (typeof localStorage === 'undefined') return [];
   try {
-    const raw = localStorage.getItem(SOLVE_PROFILE_STORAGE_KEY);
+    const raw = solveProfileStorage.getItem('cadSolveProfiles');
     if (raw === null) return [];
     const parsed = JSON.parse(raw) as unknown;
     if (!isObject(parsed) || parsed.version !== SOLVE_PROFILE_STORAGE_VERSION
@@ -326,9 +326,8 @@ function readStoredSolveProfiles(): StoredSolveProfile[] {
 }
 
 function writeStoredSolveProfiles(profiles: StoredSolveProfile[]): void {
-  if (typeof localStorage === 'undefined') return;
   try {
-    localStorage.setItem(SOLVE_PROFILE_STORAGE_KEY, JSON.stringify({
+    solveProfileStorage.setItem('cadSolveProfiles', JSON.stringify({
       version: SOLVE_PROFILE_STORAGE_VERSION,
       profiles: profiles.slice(0, MAX_SOLVE_PROFILES),
     }));

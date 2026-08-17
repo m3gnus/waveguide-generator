@@ -32,6 +32,7 @@ from server.platform.origin import (
 )
 from server.platform.paths import resolve_data_dir
 from server.preview.service import mount_preview
+from server.settings import mount_settings
 from server.solver.symmetry import resolve_symmetry
 from server.workspace import mount_workspace
 from server.updates import mount_updates
@@ -352,6 +353,7 @@ def create_app(
     mount_cadlink(application)
     mount_onshape(application)
     mount_charts(application)
+    mount_settings(application)
     mount_updates(
         application,
         running_version=VERSION,
