@@ -18,13 +18,14 @@ import { CommandPalette, type PaletteEntry } from './CommandPalette';
 import { commandShortcutLabel } from './platformKeys';
 import { SettingsDialog, type Theme } from './SettingsDialog';
 import { subscribeSettingsRequests, type SettingsSection } from './settingsNavigation';
+import { namespaceStorage } from '../stores/durableSettings';
 import { workspaceNavigation } from './Workspace';
 import { UpdateButton, UpdateDialog, useUpdateStatus } from './UpdateControl';
 
-const THEME_KEY = 'wg2.theme';
+const themeStorage = namespaceStorage('theme');
 
 function initialTheme(): Theme {
-  const saved = localStorage.getItem(THEME_KEY);
+  const saved = themeStorage.getItem('theme');
   return saved === 'light' ? 'light' : 'dark';
 }
 
@@ -225,7 +226,7 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
-    localStorage.setItem(THEME_KEY, theme);
+    themeStorage.setItem('theme', theme);
   }, [theme]);
 
   useEffect(() => subscribeSettingsRequests((section) => {

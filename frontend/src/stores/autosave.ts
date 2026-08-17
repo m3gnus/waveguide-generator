@@ -1,4 +1,5 @@
 import { useDesignStore, type DesignDocument } from './design';
+import { namespaceStorage } from './durableSettings';
 import {
   useDocumentStore,
   type CadLinkClassification,
@@ -6,6 +7,10 @@ import {
 } from './document';
 
 export const AUTOSAVE_KEY = 'wg2.autosave.v1';
+
+/** The draft follows the same durable path as settings: a lost browser profile
+ * or a shifted port must not cost unsaved work either. */
+const draftStorage = namespaceStorage('designDraft');
 export const AUTOSAVE_DELAY_MS = 750;
 
 interface AutosaveRecord {
@@ -14,13 +19,17 @@ interface AutosaveRecord {
   filename: string;
   designRevision: number;
   savedRevision: number | null;
+  /** Absent in drafts written before directivity edits counted as changes. */
+  savedSettings?: string | null;
   identity?: DesignIdentity | null;
   classification?: CadLinkClassification | null;
   design: DesignDocument;
 }
 
-function defaultStorage(): Storage | null {
-  try { return typeof localStorage === 'undefined' ? null : localStorage; } catch { return null; }
+type DraftStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
+
+function defaultStorage(): DraftStorage | null {
+  return draftStorage;
 }
 
 function isRecord(value: unknown): value is AutosaveRecord {
@@ -56,16 +65,17 @@ function hasValidCadLink(record: AutosaveRecord): boolean {
     && (record.classification === undefined || record.classification === null || isClassification(record.classification));
 }
 
-export function writeAutosave(storage: Storage | null = defaultStorage()): boolean {
+export function writeAutosave(storage: DraftStorage | null = defaultStorage()): boolean {
   if (!storage) return false;
   const { design, designRevision } = useDesignStore.getState();
-  const { filename, savedRevision, identity, classification } = useDocumentStore.getState();
+  const { filename, savedRevision, savedSettings, identity, classification } = useDocumentStore.getState();
   const record: AutosaveRecord = {
     version: 1,
     savedAt: new Date().toISOString(),
     filename,
     designRevision,
     savedRevision,
+    savedSettings,
     identity: identity ? { ...identity } : null,
     classification,
     design: structuredClone(design),
@@ -81,7 +91,7 @@ export function writeAutosave(storage: Storage | null = defaultStorage()): boole
 /** Restore the most recent local draft before React mounts. Autosave is crash
  * recovery, not an explicit file save, so the stored savedRevision is retained
  * and the unsaved indicator remains accurate after restart. */
-export function restoreAutosave(storage: Storage | null = defaultStorage()): boolean {
+export function restoreAutosave(storage: DraftStorage | null = defaultStorage()): boolean {
   if (!storage) return false;
   let raw: string | null;
   try { raw = storage.getItem(AUTOSAVE_KEY); } catch { return false; }
@@ -100,6 +110,7 @@ export function restoreAutosave(storage: Storage | null = defaultStorage()): boo
     useDocumentStore.getState().restoreDocumentState({
       filename: record.filename,
       savedRevision: record.savedRevision,
+      savedSettings: typeof record.savedSettings === 'string' ? record.savedSettings : null,
       identity: record.identity ? { ...record.identity } : null,
       classification: record.classification ?? null,
     });
@@ -116,7 +127,7 @@ export interface AutosaveController {
 }
 
 export function startAutosave(
-  storage: Storage | null = defaultStorage(),
+  storage: DraftStorage | null = defaultStorage(),
   delayMs = AUTOSAVE_DELAY_MS,
   windowTarget: Window | null = typeof window === 'undefined' ? null : window,
   documentTarget: Document | null = typeof document === 'undefined' ? null : document,
@@ -137,6 +148,7 @@ export function startAutosave(
   const unsubscribeDocument = useDocumentStore.subscribe((state, previous) => {
     if (state.filename !== previous.filename
       || state.savedRevision !== previous.savedRevision
+      || state.savedSettings !== previous.savedSettings
       || state.identity !== previous.identity
       || state.classification !== previous.classification) schedule();
   });

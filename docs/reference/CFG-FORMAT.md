@@ -72,13 +72,56 @@ Inclination = 45
 `MapAngleRange` is `startDeg,endDeg,sampleCount`. A block without `Inclination`
 is horizontal; inclinations equivalent to 90 degrees are vertical; every other
 inclination is diagonal. Enabled planes are represented by which blocks exist.
-Opening a file restores these settings, and saving or exporting a run replaces
-only the managed `ABEC.Polars:*` blocks while retaining `Report` and unrelated
-ATH passthrough blocks.
+Saving or exporting a run replaces only the managed `ABEC.Polars:*` blocks while
+retaining `Report` and unrelated ATH passthrough blocks.
 
-ATH has no portable fields for WG's measurement-origin choice or for retaining
-the full spherical balloon grid. Those remain solve options and are deliberately
-not written as invented ATH keys.
+Opening a file applies **only the settings that file actually states**. A config
+with no `ABEC.Polars:*` blocks — every ATH file, and every WG design saved before
+these blocks were written — leaves the current directivity settings alone. It
+must not be read as a request for the defaults: doing so silently reset
+measurement distance, angular step, normalization, planes, and origin, and then
+overwrote the stored copy on the way out.
+
+## WG.Solve: settings ATH has no field for
+
+ATH has no portable fields for the rest of what a solve depends on, so those go
+in WG's own block rather than as invented ATH keys. ATH ignores blocks it does
+not recognise and WG's importer preserves unknown blocks verbatim, so a file
+stays readable by both tools:
+
+```cfg
+WG.Solve = {
+Engine = metal
+Symmetry = auto
+MeshValidation = strict
+Verbose = 0
+SweepPoints = list
+SweepSpacing = log
+ObservationOrigin = throat
+SphericalSampling = 1
+Frequencies = 500, 1000, 2500, 8000
+}
+```
+
+| Key | Values | Notes |
+| --- | --- | --- |
+| `Engine` | backend name, or `auto` | Validated for shape only; the backend registry owns the names. |
+| `Symmetry` | `auto`, `full`, `half_xz`, `half_yz`, `quarter` | The solved domain. Distinct from `Simulation.SolverMode`, which selects the axisymmetric fast path. |
+| `MeshValidation` | `warn`, `strict`, `off` | |
+| `Verbose` | `0`, `1` | |
+| `SweepPoints` | `range`, `list` | |
+| `SweepSpacing` | `log`, `linear` | Applies to `range` only. |
+| `ObservationOrigin` | `mouth`, `throat` | |
+| `SphericalSampling` | `0`, `1` | Retains the full balloon grid. |
+| `Frequencies` | ascending Hz, comma-separated | Written only in `list` mode, and only when the list parses. |
+
+The same rule applies on read: a key the file omits leaves that setting as it
+is, and a value that cannot be read as written is dropped rather than guessed
+at. `SweepPoints = list` is honoured only alongside a `Frequencies` list that
+parses, so a hand-edited file cannot leave WG in a mode that refuses to solve.
+
+Exporting a config from a finished run writes that run's own recorded solve
+options, never the settings currently on screen.
 
 ## FREEFORM: disk representation versus typed model
 

@@ -15,6 +15,7 @@ import { JobsPanel } from './JobsPanel';
 import { ResultsPanel } from './ResultsPanel';
 import { ViewportPanel } from './ViewportPanel';
 import { workspaceModeStore, type WorkspaceMode } from '../stores/workspaceMode';
+import { namespaceStorage } from '../stores/durableSettings';
 import { bindWorkspaceNavigation, type WorkspacePanel } from './workspaceNavigation';
 export { workspaceNavigation } from './workspaceNavigation';
 
@@ -22,6 +23,8 @@ export const LEGACY_LAYOUT_KEY = 'wg2.dockview.layout.v1';
 export const LAYOUT_KEY = 'wg2.dockview.layout.v4';
 /** Which responsive arrangement LAYOUT_KEY was saved for. See restoreDisposition. */
 export const LAYOUT_MODE_KEY = 'wg2.dockview.mode.v4';
+const layoutStorage = namespaceStorage('dockviewLayout');
+const layoutModeStorage = namespaceStorage('dockviewMode');
 
 const components = {
   geometry: () => <ParamPanel tab="geometry" />,
@@ -343,8 +346,8 @@ export function Workspace({ resetKey }: { resetKey: number }) {
     });
     const initialSize = measureHost(host.current, dockview.api);
     const initialLayoutSize = seedSize(initialSize);
-    const stored = localStorage.getItem(LAYOUT_KEY);
-    const storedMode = localStorage.getItem(LAYOUT_MODE_KEY);
+    const stored = layoutStorage.getItem(LAYOUT_KEY);
+    const storedMode = layoutModeStorage.getItem(LAYOUT_MODE_KEY);
     let restored = false;
     if (stored && restoreDisposition(storedMode, initialLayoutSize[0]) === 'restore') {
       try {
@@ -354,8 +357,8 @@ export function Workspace({ resetKey }: { resetKey: number }) {
         dockview.api.layout(initialLayoutSize[0], initialLayoutSize[1]);
         restored = true;
       } catch {
-        localStorage.removeItem(LAYOUT_KEY);
-        localStorage.removeItem(LAYOUT_MODE_KEY);
+        layoutStorage.removeItem(LAYOUT_KEY);
+        layoutModeStorage.removeItem(LAYOUT_MODE_KEY);
       }
     }
     if (!restored && !coldStartSeeded.current) {
@@ -378,7 +381,7 @@ export function Workspace({ resetKey }: { resetKey: number }) {
     // onDidLayoutChange coalesces only to a microtask, so dragging a splitter
     // fires it once per pointermove -- 60-120 Hz on a high-poll mouse. Each
     // firing walked the whole layout tree, stringified it and wrote it to
-    // localStorage synchronously, while dockview was relaying out and the
+    // storage synchronously, while dockview was relaying out and the
     // WebGL canvas was being resized. Persisting the layout is not urgent;
     // the trailing timer defers it until the drag stops, and the flush paths
     // below guarantee it still lands. Same shape as stores/autosave.ts.
@@ -389,10 +392,10 @@ export function Workspace({ resetKey }: { resetKey: number }) {
         persistTimer = null;
       }
       if (!apiRef.current || !dockview.api.totalPanels) return;
-      localStorage.setItem(LAYOUT_KEY, JSON.stringify(dockview.api.toJSON()));
+      layoutStorage.setItem(LAYOUT_KEY, JSON.stringify(dockview.api.toJSON()));
       // Recorded with the layout so the next session can tell whether this
       // arrangement was built for the window it is about to open in.
-      localStorage.setItem(LAYOUT_MODE_KEY, layoutMode(measureHost(host.current, dockview.api)[0] || initialLayoutSize[0]));
+      layoutModeStorage.setItem(LAYOUT_MODE_KEY, layoutMode(measureHost(host.current, dockview.api)[0] || initialLayoutSize[0]));
     };
     const schedulePersist = () => {
       if (persistTimer !== null) clearTimeout(persistTimer);

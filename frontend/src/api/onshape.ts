@@ -1,5 +1,6 @@
 import { serializeDesign, type DesignDocument } from '../stores/design';
-import { designWireWithAthPolars } from '../stores/athPolars';
+import { currentDesignWire, designWireWithSolveSettings, wgSolveSettingsFromStore } from '../stores/designWire';
+import type { WgSolveSettings } from '../stores/wgSolveBlock';
 import type { DesignIdentity } from '../stores/document';
 import type { WgLinkExportResponse } from './designIo';
 import type { CadReturnIngestRecord } from './cadlink';
@@ -106,7 +107,7 @@ export async function getOnshapeStatus(
   const response = await fetcher('/api/cadlink/onshape/status', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ design: serializeDesign(design), identity }),
+    body: JSON.stringify({ design: currentDesignWire(serializeDesign(design)), identity }),
   });
   if (!response.ok) throw new Error(await errorMessage(response));
   return response.json() as Promise<OnshapeStatus>;
@@ -117,7 +118,7 @@ export async function sendDesignToOnshape(
   designRevision: number,
   baseName: string,
   identity: DesignIdentity | null,
-  options: { allowPublic?: boolean; polarConfig?: unknown } = {},
+  options: { allowPublic?: boolean; polarConfig?: unknown; solveSettings?: WgSolveSettings | null } = {},
   fetcher: typeof fetch = fetch,
   idempotencyKey: string = globalThis.crypto?.randomUUID?.()
     ?? `onshape-${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -131,7 +132,11 @@ export async function sendDesignToOnshape(
       'Idempotency-Key': idempotencyKey,
     },
     body: JSON.stringify({
-      design: designWireWithAthPolars(serializeDesign(design), options.polarConfig),
+      design: designWireWithSolveSettings(
+        serializeDesign(design),
+        options.polarConfig,
+        options.solveSettings === undefined ? wgSolveSettingsFromStore() : options.solveSettings,
+      ),
       designRevision,
       baseName,
       identity,

@@ -2,6 +2,7 @@ import type { ConfigBlock } from './design';
 
 const ATH_POLAR_PREFIX = 'ABEC.Polars:';
 const AXIS_ORDER = ['horizontal', 'vertical', 'diagonal'] as const;
+const DIAGONAL_BLOCK = `${ATH_POLAR_PREFIX}SPL_D`;
 const EPSILON = 1e-6;
 
 export interface AthPolarUiState {
@@ -54,6 +55,23 @@ function blockItems(block: unknown): Record<string, unknown> {
   return isRecord(block) && isRecord(block.items) ? block.items : {};
 }
 
+/**
+ * Which plane a polar block describes, block name included.
+ *
+ * Inclination is the physical truth and normally decides this on its own. It
+ * cannot decide the one case where the user picked a diagonal that lies on a
+ * cardinal plane: 0/90/180/270 read back as horizontal or vertical, so saving
+ * and reopening silently moved the selection off the diagonal the file was
+ * written with. WG's own `SPL_D` block states the axis its author chose, so it
+ * settles that case. Every other block -- including a hand-edited `SPL_H`
+ * carrying a real 45-degree inclination -- is still read from its inclination,
+ * which is what an imported ATH file means by it.
+ */
+function classifyBlock(name: string, items: Record<string, unknown>): (typeof AXIS_ORDER)[number] {
+  const byInclination = classifyInclination(items.Inclination);
+  return name === DIAGONAL_BLOCK && byInclination !== 'diagonal' ? 'diagonal' : byInclination;
+}
+
 function polarEntries(blocks: unknown): Array<[string, unknown]> {
   if (!isRecord(blocks)) return [];
   return Object.entries(blocks)
@@ -75,31 +93,50 @@ function parseRange(value: unknown): Pick<AthPolarUiState, 'angleStart' | 'angle
   };
 }
 
-/** Read the exact ABEC polar blocks used by ATH and the v1 config editor. */
-export function polarUiFromAthBlocks(blocks: unknown): AthPolarUiState {
-  const resolved: AthPolarUiState = {
-    ...DEFAULT_ATH_POLAR_UI,
-    enabledAxes: [...DEFAULT_ATH_POLAR_UI.enabledAxes],
-  };
+/**
+ * Read only the directivity settings an ATH/v1 config actually states.
+ *
+ * `null` means the file says nothing about directivity, which is the case for
+ * every ATH file and for every WG design saved before these blocks were
+ * written. Callers must leave the user's settings alone in that case rather
+ * than falling back to defaults: the file not mentioning a measurement
+ * distance is not the file asking for 2 m.
+ */
+export function athPolarOverrides(blocks: unknown): Partial<AthPolarUiState> | null {
   const entries = polarEntries(blocks);
-  if (!entries.length) return resolved;
+  if (!entries.length) return null;
+  const overrides: Partial<AthPolarUiState> = {};
 
   const firstItems = blockItems(entries[0][1]);
   const range = parseRange(firstItems.MapAngleRange);
-  if (range) Object.assign(resolved, range);
-  resolved.distance = finite(firstItems.Distance) ?? resolved.distance;
-  resolved.normAngle = finite(firstItems.NormAngle) ?? resolved.normAngle;
+  if (range) Object.assign(overrides, range);
+  const distance = finite(firstItems.Distance);
+  if (distance !== null) overrides.distance = distance;
+  const normAngle = finite(firstItems.NormAngle);
+  if (normAngle !== null) overrides.normAngle = normAngle;
 
   const selected = new Set<(typeof AXIS_ORDER)[number]>();
-  for (const [, block] of entries) {
+  for (const [name, block] of entries) {
     const items = blockItems(block);
-    const axis = classifyInclination(items.Inclination);
+    const axis = classifyBlock(name, items);
     selected.add(axis);
-    if (axis === 'diagonal') resolved.diagonalAngle = finite(items.Inclination) ?? resolved.diagonalAngle;
+    if (axis === 'diagonal') {
+      const inclination = finite(items.Inclination);
+      if (inclination !== null) overrides.diagonalAngle = inclination;
+    }
   }
-  resolved.enabledAxes = AXIS_ORDER.filter((axis) => selected.has(axis));
-  if (!resolved.enabledAxes.length) resolved.enabledAxes = [...AXIS_ORDER];
-  return resolved;
+  const enabledAxes = AXIS_ORDER.filter((axis) => selected.has(axis));
+  if (enabledAxes.length) overrides.enabledAxes = enabledAxes;
+  return overrides;
+}
+
+/** Read the exact ABEC polar blocks used by ATH and the v1 config editor. */
+export function polarUiFromAthBlocks(blocks: unknown): AthPolarUiState {
+  return {
+    ...DEFAULT_ATH_POLAR_UI,
+    enabledAxes: [...DEFAULT_ATH_POLAR_UI.enabledAxes],
+    ...athPolarOverrides(blocks),
+  };
 }
 
 interface PortablePolarConfig {
@@ -124,9 +161,9 @@ function portableBlocksConfig(blocks: unknown): PortablePolarConfig | null {
 
   const selected = new Set<(typeof AXIS_ORDER)[number]>();
   let inclination = DEFAULT_ATH_POLAR_UI.diagonalAngle;
-  for (const [, block] of entries) {
+  for (const [name, block] of entries) {
     const items = blockItems(block);
-    const axis = classifyInclination(items.Inclination);
+    const axis = classifyBlock(name, items);
     selected.add(axis);
     if (axis === 'diagonal') inclination = finite(items.Inclination) ?? inclination;
   }

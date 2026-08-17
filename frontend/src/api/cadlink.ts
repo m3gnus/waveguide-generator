@@ -1,4 +1,5 @@
 import { serializeDesign, type DesignDocument } from '../stores/design';
+import { currentDesignWire } from '../stores/designWire';
 import type { DesignIdentity } from '../stores/document';
 
 export interface CadReturnSourceSummary {
@@ -241,7 +242,11 @@ export function getFusionCadStatus(
   return jsonRequest('/api/cadlink/fusion-status', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ design: serializeDesign(design), identity, returnBundlePath }),
+    body: JSON.stringify({
+      design: currentDesignWire(serializeDesign(design)),
+      identity,
+      returnBundlePath,
+    }),
   }, fetcher);
 }
 

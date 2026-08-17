@@ -499,7 +499,11 @@ describe('ParamPanel inventory UX', () => {
     act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
     const source = host.querySelector<HTMLElement>('[data-section="Source Definition"]')!;
     act(() => source.querySelector<HTMLButtonElement>('.section-head')!.click());
-    expect(localStorage.getItem('wg-param-section-open:Source Definition')).toBe('false');
+    // One map rather than a key per section, so this travels with every other
+    // durable setting instead of living only in this browser.
+    expect(JSON.parse(localStorage.getItem('wg-param-sections')!)).toMatchObject({
+      'Source Definition': false,
+    });
     expect(source.classList.contains('closed')).toBe(true);
   });
 

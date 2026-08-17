@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
-import { useDesignStore } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
+import { useUnsavedChanges } from '../stores/unsavedChanges';
 
 export const APP_NAME = 'Waveguide Generator';
 
@@ -23,9 +23,8 @@ export function documentTitle(filename: string, unsaved: boolean): string {
 
 export function useDocumentTitle(): void {
   const filename = useDocumentStore((state) => state.filename);
-  const savedRevision = useDocumentStore((state) => state.savedRevision);
-  const revision = useDesignStore((state) => state.designRevision);
+  const unsaved = useUnsavedChanges();
   useEffect(() => {
-    document.title = documentTitle(filename, savedRevision !== revision);
-  }, [filename, revision, savedRevision]);
+    document.title = documentTitle(filename, unsaved);
+  }, [filename, unsaved]);
 }

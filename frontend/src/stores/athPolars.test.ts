@@ -75,6 +75,34 @@ describe('ATH directivity config compatibility', () => {
     })).toBe(imported);
   });
 
+  it('round-trips a diagonal plane that lies on a cardinal angle', () => {
+    const written = replaceAthPolarBlocks({}, {
+      angle_range: [0, 180, 37],
+      distance: 2,
+      norm_angle: 10,
+      inclination: 90,
+      enabled_axes: ['diagonal'],
+    });
+
+    // Classifying by inclination alone made this block vertical on reopening,
+    // so the only enabled plane silently changed to one the user never picked.
+    expect(polarUiFromAthBlocks(written)).toMatchObject({
+      enabledAxes: ['diagonal'],
+      diagonalAngle: 90,
+    });
+  });
+
+  it('still reads an imported H block by its inclination, not its name', () => {
+    // Only WG's own SPL_D settles a cardinal ambiguity. A hand-written file
+    // that puts a real diagonal in an H-named block still means the diagonal.
+    expect(polarUiFromAthBlocks({
+      'ABEC.Polars:SPL_H': {
+        items: { MapAngleRange: '0,180,37', Distance: '2', NormAngle: '10', Inclination: '35' },
+        lines: [],
+      },
+    })).toMatchObject({ enabledAxes: ['diagonal'], diagonalAngle: 35 });
+  });
+
   it('overlays a run snapshot without changing it when stored polar data is unusable', () => {
     const design = { formula: 'OSSE', extra_blocks: { Report: { items: {}, lines: [] } } };
     expect(designWireWithAthPolars(design, null)).toBe(design);

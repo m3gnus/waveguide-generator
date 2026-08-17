@@ -194,6 +194,77 @@ def test_merge_refuses_to_overwrite_a_different_existing_export(tmp_path: Path) 
     assert (workspace / "horn_1/horn_1.csv").read_text() == "original"
 
 
+def test_repeat_manual_export_replaces_changed_files(tmp_path: Path) -> None:
+    """A user asking for an export again gets the export again.
+
+    Manual exports cannot merge: the JSON, summary and VACS builders stamp the
+    current time into their output, so a second export of the same run is never
+    byte-identical and ``merge_identical`` rejected the entire bundle.
+    """
+
+    state, workspace = selected_state(tmp_path)
+    call(
+        state,
+        workspace_api.WriteExportRequest(
+            subdirectory="horn_1",
+            existing="merge_identical",
+            members=[{"relative_path": "horn_1.json", "text": '{"timestamp": "first"}'}],
+        ),
+    )
+
+    response = call(
+        state,
+        workspace_api.WriteExportRequest(
+            subdirectory="horn_1",
+            existing="overwrite",
+            members=[
+                {"relative_path": "horn_1.json", "text": '{"timestamp": "second"}'},
+                {"relative_path": "horn_1_summary.txt", "text": "new file"},
+            ],
+        ),
+    )
+
+    assert response["files"] == [
+        str(workspace / "horn_1/horn_1.json"),
+        str(workspace / "horn_1/horn_1_summary.txt"),
+    ]
+    assert (workspace / "horn_1/horn_1.json").read_text() == '{"timestamp": "second"}'
+    assert (workspace / "horn_1/horn_1_summary.txt").read_text() == "new file"
+
+
+def test_overwrite_refuses_to_replace_a_directory_with_a_file(tmp_path: Path) -> None:
+    state, workspace = selected_state(tmp_path)
+    (workspace / "horn_1/horn_1.json").mkdir(parents=True)
+
+    with pytest.raises(HTTPException, match="is a directory") as caught:
+        call(
+            state,
+            workspace_api.WriteExportRequest(
+                subdirectory="horn_1",
+                existing="overwrite",
+                members=[{"relative_path": "horn_1.json", "text": "replacement"}],
+            ),
+        )
+
+    assert caught.value.status_code == 409
+    assert (workspace / "horn_1/horn_1.json").is_dir()
+
+
+def test_overwrite_leaves_no_staging_directory_behind(tmp_path: Path) -> None:
+    state, workspace = selected_state(tmp_path)
+    payload = workspace_api.WriteExportRequest(
+        subdirectory="horn_1",
+        existing="overwrite",
+        members=[{"relative_path": "horn_1.csv", "text": "frequency,level\n"}],
+    )
+
+    call(state, payload)
+    call(state, payload)
+
+    assert sorted(item.name for item in workspace.iterdir()) == ["horn_1"]
+    assert sorted(item.name for item in (workspace / "horn_1").iterdir()) == ["horn_1.csv"]
+
+
 def test_write_export_rejects_invalid_binary_encoding_without_writing(tmp_path: Path) -> None:
     state, workspace = selected_state(tmp_path)
     payload = workspace_api.WriteExportRequest(

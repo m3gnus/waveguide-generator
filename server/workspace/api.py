@@ -55,7 +55,14 @@ class WriteExportRequest(BaseModel):
 
     subdirectory: str = Field(min_length=1)
     members: list[ExportMember] = Field(min_length=1, max_length=MAX_EXPORT_MEMBERS)
-    existing: Literal["reject", "merge_identical"] = "reject"
+    #: ``reject`` refuses an existing directory outright. ``merge_identical``
+    #: adds only what is missing and refuses to change a file that differs; it
+    #: is what automatic post-run export uses, so a background write can never
+    #: overwrite anything. ``overwrite`` replaces the members it is given and
+    #: is for a user asking for an export a second time: several builders stamp
+    #: the current time into their output, so a repeat export is *never* byte
+    #: identical and ``merge_identical`` rejected the whole bundle.
+    existing: Literal["reject", "merge_identical", "overwrite"] = "reject"
 
 
 class SelectCadWorkspaceRequest(BaseModel):
@@ -447,6 +454,7 @@ def create_workspace_router(state: WorkspaceState) -> APIRouter:
         if export_exists:
             if export_directory.is_symlink() or not export_directory.is_dir():
                 raise HTTPException(status_code=409, detail=f"Export path is not a directory: {export_directory}")
+        if export_exists and request.existing == "merge_identical":
             for _segments, encoded, destination in prepared:
                 if not (destination.exists() or destination.is_symlink()):
                     continue
@@ -463,6 +471,15 @@ def create_workspace_router(state: WorkspaceState) -> APIRouter:
                         status_code=409,
                         detail=f"Export file already exists with different content: {destination}",
                     )
+        if export_exists and request.existing == "overwrite":
+            # Replacing a file is the point here; replacing a *directory* with a
+            # file is not, and would surface as an opaque write failure below.
+            for _segments, _encoded, destination in prepared:
+                if destination.is_dir() and not destination.is_symlink():
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"Export path is a directory, not a file: {destination}",
+                    )
 
         export_directory.parent.mkdir(parents=True, exist_ok=True)
         staging_directory = Path(
@@ -477,8 +494,12 @@ def create_workspace_router(state: WorkspaceState) -> APIRouter:
                 os.replace(staging_directory, export_directory)
             else:
                 export_directory.mkdir(exist_ok=True)
+                overwrite = request.existing == "overwrite"
                 for segments, _encoded, destination in prepared:
-                    if destination.exists():
+                    # merge_identical has already proven every existing file is
+                    # byte-identical, so skipping it keeps the write a no-op
+                    # rather than churning mtimes a file watcher would report.
+                    if destination.exists() and not overwrite:
                         continue
                     destination.parent.mkdir(parents=True, exist_ok=True)
                     os.replace(staging_directory.joinpath(*segments), destination)

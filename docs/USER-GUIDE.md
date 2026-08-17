@@ -100,8 +100,12 @@ public contract is added here.
 ## Data and recovery
 
 The status window shows the active local URL and owns the server process tree. The
-application data directory contains designs, job history, results, meshes, logs, and
-CAD-link registry state. The uninstallers preserve it unless `--data` is explicitly
-requested. Original-application runs can be imported automatically or through
+application data directory contains designs, job history, results, meshes, logs,
+CAD-link registry state, and — in `ui_settings.json` — every setting the interface
+remembers between sessions. That last one lives there rather than in the browser
+on purpose: browser storage is tied to the exact address a window was opened from,
+so a shifted port, a browser set to clear site data on exit, or simply opening WG
+in a different browser used to lose the lot. The uninstallers preserve the data
+directory unless `--data` is explicitly requested. Original-application runs can be imported automatically or through
 `scripts/migrate_v1.py`; the v1 source database is opened read-only and the current
 data is backed up before migration.

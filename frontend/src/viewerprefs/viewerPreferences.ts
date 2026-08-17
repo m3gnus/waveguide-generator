@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react';
+import { namespaceStorage } from '../stores/durableSettings';
 
 export type CameraProjection = 'perspective' | 'orthographic';
 
@@ -103,8 +104,7 @@ export class ViewerPreferencesStore {
   }
 }
 
-const browserStorage = typeof localStorage === 'undefined' ? undefined : localStorage;
-export const viewerPreferences = new ViewerPreferencesStore(browserStorage);
+export const viewerPreferences = new ViewerPreferencesStore(namespaceStorage('viewer'));
 
 export function useViewerPreferences(): ViewerPreferences {
   return useSyncExternalStore(viewerPreferences.subscribe, viewerPreferences.getSnapshot, viewerPreferences.getSnapshot);

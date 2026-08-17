@@ -251,6 +251,7 @@ describe('RunExportControl', () => {
     expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(
       expect.objectContaining({ design: hydrateJobDesign(job), designRevision: 42 }),
       ['step'],
+      'overwrite',
     );
   });
 
@@ -275,6 +276,7 @@ describe('RunExportControl', () => {
     expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(
       expect.objectContaining({ result: wrapped }),
       ['csv'],
+      'overwrite',
     );
     expect(patchMetadata).toHaveBeenCalledWith('job-export-1', {
       exported_files: [
@@ -299,6 +301,7 @@ describe('RunExportControl', () => {
     expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(
       expect.objectContaining({ result: expect.any(Object) }),
       [format],
+      'overwrite',
     );
   });
 
@@ -317,6 +320,7 @@ describe('RunExportControl', () => {
     expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(
       expect.objectContaining({ result: directivityResult() }),
       ['on_axis_frd'],
+      'overwrite',
     );
     expect(patchMetadata).toHaveBeenCalledWith('job-export-1', {
       exported_files: ['earlier.csv', 'C:/chosen/1_stored_horn_v07/1_stored_horn_v07.frd'],
@@ -344,6 +348,7 @@ describe('RunExportControl', () => {
     expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(
       expect.objectContaining({ result: wrapped }),
       ['on_axis_frd'],
+      'overwrite',
     );
     expect(patchMetadata).toHaveBeenCalledWith('job-export-1', { exported_files: [
       'earlier.csv',
@@ -363,7 +368,7 @@ describe('RunExportControl', () => {
     openMenu();
     await act(async () => { menuItem('Polar set (VituixCAD)').click(); await settle(); });
 
-    expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(expect.any(Object), ['polar_frd']);
+    expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(expect.any(Object), ['polar_frd'], 'overwrite');
     expect(document.querySelector('[role="status"]')?.textContent).toContain('6 files written');
     expect(document.querySelector('[role="status"]')?.textContent).toContain('C:/chosen/1_stored_horn_v07');
   });
@@ -379,7 +384,7 @@ describe('RunExportControl', () => {
     openMenu();
     await act(async () => { menuItem('Polar set (VituixCAD)').click(); await settle(); });
 
-    expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(expect.any(Object), ['polar_frd']);
+    expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(expect.any(Object), ['polar_frd'], 'overwrite');
     expect(globalThis.fetch).not.toHaveBeenCalledWith('/api/workspace/select', expect.anything());
     expect(document.querySelector('[role="status"]')?.textContent).toContain('C:/default/output/1_stored_horn_v07');
   });
@@ -407,7 +412,7 @@ describe('RunExportControl', () => {
     openMenu();
     await act(async () => { menuItem('Charts').click(); await settle(); });
 
-    expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(expect.any(Object), ['png']);
+    expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(expect.any(Object), ['png'], 'overwrite');
     expect(document.querySelector('[role="status"]')?.textContent).toContain('2 files');
     expect(document.querySelector('[role="status"]')?.textContent).toContain('C:/chosen/1_stored_horn_v07');
   });
@@ -445,6 +450,9 @@ describe('RunExportControl', () => {
     expect(mocks.fetchJobResults).toHaveBeenCalledOnce();
     expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledOnce();
     expect(mocks.runWorkspaceExportBundle.mock.calls[0][1]).toEqual(['csv', 'step']);
+    // A user asking for the export again gets the export again; merging would
+    // 409 on any format whose bytes carry a timestamp.
+    expect(mocks.runWorkspaceExportBundle.mock.calls[0][2]).toBe('overwrite');
     expect(mocks.runWorkspaceExportBundle.mock.calls[0][0].design).toEqual(hydrateJobDesign(completeJob()));
   });
 
