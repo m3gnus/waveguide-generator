@@ -327,6 +327,44 @@ def test_closing_the_store_releases_the_file_for_windows(tmp_path: Path) -> None
     assert not store.db_path.exists()
 
 
+def test_closed_store_rejects_connection_resurrection_on_live_thread(
+    tmp_path: Path,
+) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    store.create_job(_job("held"))
+    first_read_finished = threading.Event()
+    retry_after_close = threading.Event()
+    errors: list[BaseException] = []
+
+    def read_twice() -> None:
+        try:
+            assert store.get_job_row("held") is not None
+            first_read_finished.set()
+            retry_after_close.wait(timeout=2.0)
+            store.get_job_row("held")
+        except BaseException as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=read_twice)
+    worker.start()
+    assert first_read_finished.wait(timeout=2.0)
+
+    store.close()
+    retry_after_close.set()
+    worker.join(timeout=2.0)
+
+    assert not worker.is_alive()
+    assert len(errors) == 1
+    assert isinstance(errors[0], RuntimeError)
+    assert str(errors[0]) == (
+        "JobStore is closed; create a new JobStore to reopen the database"
+    )
+    assert not store._connections
+    with pytest.raises(RuntimeError, match="JobStore is closed"):
+        store._connect()
+
+
 def test_a_snapshot_leaves_no_transaction_open(tmp_path: Path) -> None:
     """A long-lived connection makes an unfinished read transaction permanent.
 

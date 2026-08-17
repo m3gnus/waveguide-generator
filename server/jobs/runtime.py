@@ -54,6 +54,7 @@ MAX_LOG_CHARS = 32_000
 MAX_LOG_EVENT_CHARS = 2_000
 CANCELLED_MESSAGE = "Simulation cancelled by user"
 RUNTIME_PERSIST_INTERVAL_SECONDS = 0.15
+SHUTDOWN_TASK_TIMEOUT_SECONDS = 10.0
 BEMPP_DEFAULT_WALL_THICKNESS_MM = 5.0
 
 
@@ -694,15 +695,48 @@ class JobRuntime:
             self._ensure_scheduler()
 
     async def shutdown(self) -> None:
-        """Stop local tasks without rewriting running rows; startup recovery owns them."""
+        """Cooperatively stop jobs, leaving timeout leftovers to startup recovery."""
 
         self._shutting_down = True
         # Stop accepting new buffered callbacks, then persist the last accepted
-        # checkpoint before cancelling the scheduler. Cancelling first could
+        # checkpoint before requesting cancellation. Cancelling first could
         # abandon an asyncio.to_thread file/SQLite write that is already running.
         await self._flush_all_runtime_updates(forget=True)
         tasks = tuple(self._background_tasks)
-        for task in tasks:
+
+        cancellation_signalled = False
+        for job_id in tuple(self._running):
+            try:
+                event = self.store.request_cancellation(
+                    job_id,
+                    {
+                        "stage": "cancelling",
+                        "stage_message": (
+                            "Shutdown requested; waiting for current stage checkpoint"
+                        ),
+                        "cancellation_requested": True,
+                    },
+                    {"stage": "cancelling", "message": "Shutdown requested"},
+                )
+            except Exception:
+                logger.exception(
+                    "Could not request cancellation during shutdown for job %s",
+                    job_id,
+                )
+            else:
+                if event is not None:
+                    self.events.publish(event)
+                state = self.store.cancellation_state(job_id)
+                cancellation_signalled = cancellation_signalled or bool(
+                    state is not None and state[0] == "running" and state[1]
+                )
+
+        pending: set[asyncio.Task[Any]] = set(tasks)
+        if tasks and cancellation_signalled:
+            _done, pending = await asyncio.wait(
+                tasks, timeout=SHUTDOWN_TASK_TIMEOUT_SECONDS
+            )
+        for task in pending:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
@@ -1662,9 +1696,18 @@ class JobRuntime:
                 return
             self.events.publish(event)
         except _CancelledAtCheckpoint:
-            self._partial_results.pop(job_id, None)
-            await self._discard_radiation_impedance(job_id)
-            await self._flush_runtime_update(job_id, forget=True)
+            await self._cancel_job(job_id)
+        except asyncio.CancelledError:
+            # Preserve 'running' for the next process's orphan recovery.
+            raise
+        except Exception as exc:
+            logger.error("Simulation error for job %s: %s", job_id, exc, exc_info=True)
+            await self._fail_job(job_id, str(exc))
+
+    async def _cancel_job(self, job_id: str) -> None:
+        self._partial_results.pop(job_id, None)
+        await self._discard_radiation_impedance(job_id)
+        try:
             event = self._transition(
                 job_id,
                 {
@@ -1678,13 +1721,15 @@ class JobRuntime:
                 "cancelled",
                 {"message": CANCELLED_MESSAGE},
             )
+        except Exception:
+            logger.exception("Could not persist cancellation state for job %s", job_id)
+        else:
             self.events.publish(event)
-        except asyncio.CancelledError:
-            # Preserve 'running' for the next process's orphan recovery.
-            raise
-        except Exception as exc:
-            logger.error("Simulation error for job %s: %s", job_id, exc, exc_info=True)
-            await self._fail_job(job_id, str(exc))
+
+        try:
+            await self._flush_runtime_update(job_id, forget=True)
+        except Exception:
+            logger.exception("Could not persist final logs for cancelled job %s", job_id)
 
     async def _run_real_engine(
         self,

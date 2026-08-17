@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 import sqlite3
 import threading
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -361,6 +362,70 @@ def test_cancellation_is_acknowledged_at_every_stage(
     asyncio.run(scenario())
 
 
+def test_shutdown_waits_for_threaded_solver_cancellation_checkpoint(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        database = tmp_path / "jobs.db"
+        solve_started = threading.Event()
+        solve_exited = threading.Event()
+        release_solver = threading.Event()
+
+        class CheckpointEngine:
+            name = "checkpoint"
+
+            async def run(
+                self,
+                _request: SolveRequest,
+                *,
+                cancel_cb: Any,
+                stage_cb: Any,
+            ) -> Any:
+                del stage_cb
+
+                def solve() -> Any:
+                    solve_started.set()
+                    try:
+                        while not release_solver.wait(timeout=0.01):
+                            cancel_cb()
+                        return SimpleNamespace(
+                            results={"metadata": {}},
+                            msh_text=None,
+                            mesh_stats=None,
+                        )
+                    finally:
+                        solve_exited.set()
+
+                return await asyncio.to_thread(solve)
+
+        runtime = JobRuntime(
+            JobStore(database),
+            engine_registry=EngineRegistry(
+                detector=lambda: [EngineInfo("bempp", True, "test", "test")],
+                factory=lambda _name: CheckpointEngine(),
+            ),
+        )
+        job_id = await runtime.submit(_bare_request(engine="bempp"))
+        assert await asyncio.to_thread(solve_started.wait, 2.0)
+        try:
+            await asyncio.wait_for(runtime.shutdown(), timeout=3.0)
+            assert solve_exited.is_set()
+        finally:
+            release_solver.set()
+
+        inspection = JobStore(database)
+        inspection.initialize()
+        try:
+            row = inspection.get_job_row(job_id)
+            assert row is not None
+            assert row["status"] == "cancelled"
+            assert row["cancellation_requested"] is False
+        finally:
+            inspection.close()
+
+    asyncio.run(scenario())
+
+
 def test_startup_recovery_fails_running_orphan_and_requeues_fifo(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -640,6 +705,48 @@ def test_failure_transition_survives_log_flush_error(
             assert subscriber.get_nowait()["type"] == "failed"
             assert pending.closed is True
             assert "failed" not in runtime._pending_updates
+        finally:
+            monkeypatch.setattr(store, "persist_runtime_update", original_persist)
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_cancellation_transition_survives_log_flush_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def scenario() -> None:
+        store = JobStore(tmp_path / "jobs.db")
+        store.initialize()
+        store.create_job(_running_job("cancelled"))
+        runtime = JobRuntime(store, persistence_interval_seconds=60.0)
+        runtime._started = True
+        subscriber = runtime.events.subscribe()
+        await runtime._append_log("cancelled", "last buffered line")
+        pending = runtime._pending_updates["cancelled"]
+        original_persist = store.persist_runtime_update
+
+        def fail_flush(*_args: object, **_kwargs: object) -> None:
+            raise OSError("log device unavailable")
+
+        monkeypatch.setattr(store, "persist_runtime_update", fail_flush)
+        try:
+            await runtime._cancel_job("cancelled")
+
+            row = store.get_job_row("cancelled")
+            assert row is not None
+            assert row["status"] == "cancelled"
+            assert row["stage"] == "cancelled"
+            durable = [
+                event
+                for event in store.replay_events(0)
+                if event["jobId"] == "cancelled" and event["type"] == "cancelled"
+            ]
+            assert len(durable) == 1
+            assert subscriber.qsize() == 1
+            assert subscriber.get_nowait()["type"] == "cancelled"
+            assert pending.closed is True
+            assert "cancelled" not in runtime._pending_updates
         finally:
             monkeypatch.setattr(store, "persist_runtime_update", original_persist)
             await runtime.shutdown()
