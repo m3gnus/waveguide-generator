@@ -170,6 +170,37 @@ def test_coupled_cardioid_reserves_derived_channel_id() -> None:
         )
 
 
+def test_coupled_cardioid_refuses_combine_containing_mf_channel() -> None:
+    """The MF basis is unit-acceleration under a coupled campaign, so a
+    crossover naming it would sum two different drive domains."""
+
+    mf_channel = SimpleNamespace(id="mf")
+    combine = SimpleNamespace(members=["mf", "hf"])
+
+    refusal = metal._cardioid_combine_refusal(mf_channel, combine)
+
+    assert refusal is not None
+    assert "'mf'" in refusal
+    assert "passive_cardioid" in refusal
+
+
+def test_coupled_cardioid_allows_a_combine_that_omits_the_mf_channel() -> None:
+    """Other driver-bearing channels are scaled normally, so refusing them too
+    would reject a configuration that is physically fine."""
+
+    mf_channel = SimpleNamespace(id="mf")
+
+    assert (
+        metal._cardioid_combine_refusal(
+            mf_channel, SimpleNamespace(members=["hf", "superhf"])
+        )
+        is None
+    )
+    # No coupled campaign, or no crossover at all, is likewise nothing to refuse.
+    assert metal._cardioid_combine_refusal(None, SimpleNamespace(members=["mf"])) is None
+    assert metal._cardioid_combine_refusal(mf_channel, None) is None
+
+
 def test_passive_cardioid_aperture_mapping_resolves_imported_lr_names() -> None:
     aperture_tags, port_names, mf_source_id = metal._passive_cardioid_apertures(
         {"PORT_EXIT_L": 10, "PORT_EXIT_R": 11, "source-mf": 101},

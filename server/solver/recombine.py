@@ -21,11 +21,8 @@ from server.jobs.models import (
 from .acoustics import solver_sound_speed_m_per_s
 from .combine import combine_drive_channels, deserialize_channel_bases
 from .context import SolverContext
+from .errors import RecombineError
 from .result_mapping import build_solver_response
-
-
-class RecombineError(ValueError):
-    """A user-addressable recombination refusal (maps to HTTP 422)."""
 
 
 _IMPEDANCE_OMITTED = (
