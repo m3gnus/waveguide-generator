@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { CadReturnFinding, CadReturnIngestRecord } from '../api/cadlink';
 import { OnshapePublicConsentRequired, sendDesignToOnshape } from '../api/onshape';
-import { usePreferences } from '../prefs/preferences';
+import { cadApplicationName, usePreferences } from '../prefs/preferences';
 import {
   blockingFindings,
   useCadReturnStore,
@@ -189,7 +189,7 @@ export function CadLinkPanel() {
   };
 
   const workflow = onshape ? onshapeWorkflowView(onshapeStatus) : fusionWorkflowView(fusionStatus);
-  const cadApplicationLabel = onshape ? 'Onshape' : 'Autodesk Fusion 360';
+  const cadApplicationLabel = cadApplicationName(onshape ? 'onshape' : 'fusion360', 'full');
   const designName = filenameStem(filename);
   const shownName = designName === 'waveguide' ? 'waveguide' : designName;
   const actionLabel = workflow.action === 'update' ? 'Send WG changes to Onshape' : `Create ${shownName} in Onshape`;

@@ -61,13 +61,13 @@ button:disabled { cursor: default; }
 .command-affordance svg { width: 13px; height: 13px; flex: none; }
 .command-affordance span { flex: 1; overflow: hidden; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
 kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2px; border-radius: var(--r3); background: var(--kbd-bg); color: var(--fg2); font: var(--text-micro)/1 var(--mono); }
-/* Wide enough for "Solve Fusion CAD" so the label never resizes the button.
+/* Wide enough for "Solve CAD Link" so the label never resizes the button.
    The workspace-mode switch sits immediately before it in the same flex row,
    and a button that grows on mode change drags that switch sideways under the
    pointer -- so toggling twice means aiming twice. Centred, so the shorter
    "Solve" stays optically attached to its own control rather than drifting.
-   170px is the measured width of the longest label, "Solve Fusion CAD" plus
-   its shortcut chip. */
+   170px was measured against the longer "Solve Fusion CAD" this label
+   replaced, so it still clears the widest label plus its shortcut chip. */
 .solve-button { display: flex; align-items: center; justify-content: center; gap: 6px; min-width: 170px; height: 27px; padding: 0 8px 0 8px; border-radius: var(--r2); background: var(--solve-grad); box-shadow: var(--solve-sh); color: var(--solve-fg); font-size: var(--text-base); font-weight: 600; }
 .solve-button:disabled { filter: saturate(.55); opacity: .5; }
 /* The plain solve when a Fusion pull is the recommended action beside it. */

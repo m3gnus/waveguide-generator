@@ -5,7 +5,7 @@ import { CAD_CONTROL_DESCRIPTORS, cadControlIsAvailable, cadControlMatchesQuery 
 import { DesignFileMenu } from '../design/DesignFileMenu';
 import { PARAMETER_REGISTRY, PARAMETER_SECTION_DEFINITIONS, fieldAppliesToFamily, fieldMatchesQuery, parameterSectionIsVisible, type ParameterTab } from '../design/parameterRegistry';
 import { PARAMETRIC_CONTROL_DESCRIPTORS, parametricControlMatchesQuery } from '../design/parametricControlRegistry';
-import { RESULT_PANEL_COUNTS, preferencesStore, runDisplayName, usePreferences, type Preferences } from '../prefs/preferences';
+import { RESULT_PANEL_COUNTS, preferencesStore, runDisplayName } from '../prefs/preferences';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { useDesignStore, type DesignDocument, type DesignFamily } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
@@ -172,9 +172,7 @@ export function SolveActions() {
 }
 
 export function WorkspaceModeSwitch() {
-  const preferences = usePreferences();
   const mode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
-  const fusion = preferences.cadApplication === 'fusion360';
 
   const option = (value: WorkspaceMode, label: string) => <button
     type="button"
@@ -187,15 +185,14 @@ export function WorkspaceModeSwitch() {
 
   return <div className="theme-toggle workspace-mode-toggle" role="radiogroup" aria-label="Workspace mode">
     {option('parametric', 'Parametric')}
-    {option('cad', fusion ? 'Fusion CAD' : 'CAD')}
+    {option('cad', 'CAD Link')}
   </div>;
 }
 
-export function workspaceModePaletteEntries(cadApplication: Preferences['cadApplication']): PaletteEntry[] {
-  const onshape = cadApplication === 'onshape';
+export function workspaceModePaletteEntries(): PaletteEntry[] {
   return [
     { id: 'mode-parametric', kind: 'Commands', label: 'Mode: Parametric', run: () => activateWorkspaceMode('parametric') },
-    { id: 'mode-fusion-cad', kind: 'Commands', label: onshape ? 'Mode: CAD' : 'Mode: Fusion CAD', run: () => activateWorkspaceMode('cad') },
+    { id: 'mode-cad-link', kind: 'Commands', label: 'Mode: CAD Link', run: () => activateWorkspaceMode('cad') },
   ];
 }
 
@@ -218,7 +215,6 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
   const [settingsSection, setSettingsSection] = useState<SettingsSection>();
   const [updateOpen, setUpdateOpen] = useState(false);
   const update = useUpdateStatus();
-  const preferences = usePreferences();
   const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
   const temporal = useDesignStore.temporal.getState();
   const canUndo = temporal.pastStates.length > 0 || Boolean(useDesignStore.getState().dragSnapshot);
@@ -288,13 +284,13 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
       { id: 'reset-layout', kind: 'Commands', label: 'Reset layout', run: onResetLayout },
       { id: 'dark-theme', kind: 'Commands', label: 'Dark theme', run: () => setTheme('dark') },
       { id: 'light-theme', kind: 'Commands', label: 'Light theme', run: () => setTheme('light') },
-      ...workspaceModePaletteEntries(preferences.cadApplication),
+      ...workspaceModePaletteEntries(),
       { id: 'settings', kind: 'Commands', label: 'Settings', run: showSettings },
       { id: 'application-update', kind: 'Commands', label: update.data?.availability === 'available' ? `Update WG to ${update.data.release?.version ?? 'latest'}` : 'Application update', detail: update.data?.availability === 'available' ? 'Update available' : `Version ${__WG2_VERSION__}`, keywords: 'version release upgrade', run: () => setUpdateOpen(true) },
       ...RESULT_PANEL_COUNTS.map((count) => ({ id: `results-${count}`, kind: 'Commands' as const, label: `Results: ${count} chart${count === 1 ? '' : 's'}`, keywords: `panel count layout`, run: () => preferencesStore.setChartCount(count) })),
     ];
     return [...parameters, ...jobEntries, ...commands];
-  }, [cadCoordinator.fusionStatus?.running, cadReturnReady, canRedo, canUndo, design, family, jobs, onResetLayout, preferences.cadApplication, redo, showSettings, solve, undo, update.data?.availability, update.data?.release?.version, workspaceMode]);
+  }, [cadCoordinator.fusionStatus?.running, cadReturnReady, canRedo, canUndo, design, family, jobs, onResetLayout, redo, showSettings, solve, undo, update.data?.availability, update.data?.release?.version, workspaceMode]);
 
   return <header className="topbar">
     <div className="brand"><BrandMark/><div><span className="brand-name">WAVEGUIDE GENERATOR</span><UpdateButton snapshot={update} open={updateOpen} onOpen={() => setUpdateOpen(true)}/></div></div>

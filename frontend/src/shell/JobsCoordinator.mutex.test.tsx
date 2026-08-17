@@ -300,8 +300,8 @@ describe('solve invocation mutex', () => {
     const solve = host.querySelector<HTMLButtonElement>('button')!;
     expect(solve.textContent).toBe('Solve');
     act(() => workspaceModeStore.setMode('cad'));
-    expect(solve.textContent).toBe('Solve Fusion CAD');
-    expect(solve.title).toContain('displayed Fusion CAD model');
+    expect(solve.textContent).toBe('Solve CAD Link');
+    expect(solve.title).toContain('displayed CAD Link model');
     await act(async () => { solve.click(); await Promise.resolve(); await Promise.resolve(); });
 
     expect(mocks.submitImported).toHaveBeenCalledOnce();
@@ -373,7 +373,7 @@ describe('solve invocation mutex', () => {
       workspaceModeStore.setMode('cad');
     });
     const solve = host.querySelector<HTMLButtonElement>('button')!;
-    expect(solve.textContent).toBe('Solve Fusion CAD');
+    expect(solve.textContent).toBe('Solve CAD Link');
     expect(solve.disabled).toBe(true);
     expect(solve.title).toBe('Ingest a CAD return before solving.');
   });
