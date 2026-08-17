@@ -274,6 +274,26 @@ def combine_drive_channels(
     on_axis = _on_axis_angle_index(angles, point_count)
     if on_axis is None:
         raise ValueError("combine members have no finite observation angles")
+    reference_angle_deg = float(angles[on_axis])
+    if not np.isclose(reference_angle_deg, 0.0, rtol=0.0, atol=1.0e-9):
+        warnings.append(
+            "0 degrees is not present in the sampled polar grid; combine "
+            "crossover level matching and phase alignment use the nearest "
+            f"available angle, {reference_angle_deg:g} degrees"
+        )
+
+    solved_band = (float(freqs[0]), float(freqs[-1]))
+    outside_band = [
+        float(value)
+        for value in crossovers_hz
+        if float(value) < solved_band[0] or float(value) > solved_band[1]
+    ]
+    if outside_band:
+        warnings.append(
+            f"combine crossovers_hz {outside_band} lie outside the solved band "
+            f"[{solved_band[0]:g}, {solved_band[1]:g}] Hz; level matching may "
+            "fall back to a full-band median"
+        )
 
     if freqs.size < 3:
         warnings.append(
@@ -413,6 +433,7 @@ def combine_drive_channels(
             "gains_db": gains_db,
         },
         "align": bool(align),
+        "reference_angle_degrees": reference_angle_deg,
         "delays_ms": {name: delays_s[name] * 1000.0 for name in members},
         "pair_eval_hz": pair_eval_hz,
         "weight_convention": (

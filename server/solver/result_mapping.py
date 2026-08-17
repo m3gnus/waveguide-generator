@@ -540,14 +540,38 @@ def _on_axis_pressure(result: Any) -> np.ndarray | None:
         return None
     if angles.ndim != 1 or angles.size == 0 or pressure.ndim != 3 or pressure.shape[1] == 0:
         return None
-    usable = np.flatnonzero(np.isfinite(angles))
-    usable = usable[usable < pressure.shape[2]]
-    if usable.size == 0:
+    reference = _on_axis_reference(angles, pressure.shape[2])
+    if reference is None:
         return None
-    angle_index = int(usable[np.argmin(np.abs(angles[usable]))])
+    angle_index, _angle_deg = reference
     if angle_index >= pressure.shape[2]:
         return None
     return pressure[:, 0, angle_index]
+
+
+def _on_axis_reference(
+    angles: np.ndarray, point_count: int
+) -> tuple[int, float] | None:
+    """Return the finite sample nearest zero and the angle it actually represents."""
+
+    usable = np.flatnonzero(np.isfinite(angles))
+    usable = usable[usable < point_count]
+    if usable.size == 0:
+        return None
+    angle_index = int(usable[np.argmin(np.abs(angles[usable]))])
+    return angle_index, float(angles[angle_index])
+
+
+def _on_axis_reference_angle(result: Any) -> float | None:
+    try:
+        angles = np.asarray(result.observation_angles_deg, dtype=float)
+        pressure = np.asarray(result.pressure_complex, dtype=np.complex128)
+    except (AttributeError, TypeError, ValueError):
+        return None
+    if angles.ndim != 1 or pressure.ndim != 3 or pressure.shape[1] == 0:
+        return None
+    reference = _on_axis_reference(angles, pressure.shape[2])
+    return reference[1] if reference is not None else None
 
 
 def spl_on_axis(result: Any) -> list[float | None]:
@@ -672,8 +696,6 @@ def _balloon_grid_from_result(result: Any) -> dict[str, Any] | None:
         or phi_flat.size != pressure.shape[1]
         or not np.isfinite(theta_flat).all()
         or not np.isfinite(phi_flat).all()
-        or not np.isfinite(pressure.real).all()
-        or not np.isfinite(pressure.imag).all()
     ):
         return None
     theta_axis = np.unique(theta_flat)
@@ -692,17 +714,25 @@ def _balloon_grid_from_result(result: Any) -> dict[str, Any] | None:
         or not np.allclose(phi_grid, phi_axis[None, :])
     ):
         return None
-    amplitude = np.maximum(np.abs(pressure), _BALLOON_FLOOR_AMPLITUDE)
-    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
-        spl = 20.0 * (np.log10(amplitude) - math.log10(REFERENCE_PRESSURE_PA))
-    normalized = spl - spl[:, 0][:, None]
-    if not np.isfinite(normalized).all():
-        return None
+    finite_rows = np.isfinite(pressure.real).all(axis=1) & np.isfinite(
+        pressure.imag
+    ).all(axis=1)
+    normalized = np.full(pressure.shape, np.nan, dtype=np.float64)
+    if np.any(finite_rows):
+        amplitude = np.maximum(
+            np.abs(pressure[finite_rows]), _BALLOON_FLOOR_AMPLITUDE
+        )
+        with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+            spl = 20.0 * (
+                np.log10(amplitude) - math.log10(REFERENCE_PRESSURE_PA)
+            )
+        normalized[finite_rows] = spl - spl[:, 0][:, None]
     return {
         "theta_deg": theta_axis,
         "phi_deg": phi_axis,
         "spl_norm_db": normalized.reshape(pressure.shape[0], theta_axis.size, phi_count),
         "hemisphere": bool(theta_axis[-1] <= 90.0 + 1.0e-9),
+        "invalid_frequency_indices": np.flatnonzero(~finite_rows).tolist(),
     }
 
 
@@ -736,6 +766,7 @@ def build_solver_response(
     }
     patterns = directivity(result)
     phase_patterns = directivity_phase(result)
+    on_axis_angle_deg = _on_axis_reference_angle(result)
     balloon = _balloon_grid_from_result(result)
     spherical_di_available = balloon is not None and (
         not bool(balloon["hemisphere"]) or context.sim_type == 1
@@ -788,10 +819,36 @@ def build_solver_response(
                     f"{quantity} returned {actual} samples for {expected} frequencies; unavailable samples were padded with null",
                 )
             )
+    if balloon is not None:
+        for frequency_index in balloon["invalid_frequency_indices"]:
+            failures.append(
+                frequency_failure(
+                    frequency_values[frequency_index],
+                    "postprocess",
+                    "nonfinite_spherical_pressure",
+                    "spherical pressure contains a non-finite sample; balloon "
+                    "and DI cells at this frequency were set to null",
+                )
+            )
     if any(actual != expected for actual in raw_counts.values()):
         metadata["partial_success"] = True
+    if balloon is not None and balloon["invalid_frequency_indices"]:
+        metadata["partial_success"] = True
+    metadata["spl_on_axis"] = {
+        "requested_angle_degrees": 0.0,
+        "sampled_angle_degrees": on_axis_angle_deg,
+    }
+    if on_axis_angle_deg is not None and not np.isclose(
+        on_axis_angle_deg, 0.0, rtol=0.0, atol=1.0e-9
+    ):
+        metadata["warnings"].append(
+            "0 degrees is not present in the sampled polar grid; reported "
+            "on-axis SPL and phase use the nearest available angle, "
+            f"{on_axis_angle_deg:g} degrees"
+        )
     metadata["failure_count"] = len(failures)
     _apply_solver_log_warnings(metadata)
+    metadata["warning_count"] = len(metadata["warnings"])
     metadata.setdefault("performance", {})
     metadata["performance"].setdefault("total_time_seconds", time.time() - start_time)
     metadata["observation"] = observation
