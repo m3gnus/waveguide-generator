@@ -19,7 +19,7 @@ import { selectPreferredFrame } from './lodPolicy';
 import { documentDisplayName, previewBadge, previewErrorMessage, staleReason, viewportSubtitle } from './presentation';
 import { markParametricSolvedDomain, quadrantsForSolveMode, type DisplayQuadrants } from './symmetryScene';
 import type { DisplayMode, ViewportTheme } from './types';
-import { canRenderWebGL, type CameraRequest, type ZoomRequest, ViewportCanvas } from './ViewportCanvas';
+import { canRenderWebGL, resetWebGLProbe, type CameraRequest, type ZoomRequest, ViewportCanvas } from './ViewportCanvas';
 import './viewport.css';
 
 const modes: Array<{ mode: DisplayMode; title: string; icon?: 'clay' | 'wire' | 'xray' | 'zebra' | 'curve' | 'section'; glyph?: string }> = [
@@ -183,6 +183,14 @@ export function Viewport() {
 
   const showParametric = () => {
     importedMeshStore.showParametric();
+  };
+
+  // A lost context is recoverable: mounting a fresh Canvas asks for a new one.
+  // Clearing the failure is what lets that happen, and re-probing covers the
+  // case where the whole WebGL2 capability went away and has since come back.
+  const retryRenderer = () => {
+    resetWebGLProbe();
+    setRenderFailure(null);
   };
 
   const previousWorkspaceMode = useRef(workspaceMode);
@@ -357,7 +365,11 @@ export function Viewport() {
     </details>}
     {activeScene && hasSurfaces && !webgl && !renderFailure && <div className="viewport-empty"><b>WebGL unavailable</b><span>The geometry is valid, but this environment cannot create a WebGL2 context.</span></div>}
     {activeScene && !hasSurfaces && <div className="viewport-empty" role="status"><b>No geometry surfaces</b><span>The scene is valid but contains no renderable surfaces.</span></div>}
-    {activeScene && renderFailure && <div className="viewport-empty" role="status"><b>WebGL renderer stopped</b><span>{renderFailure}. Reopen the viewport after checking graphics acceleration.</span></div>}
+    {activeScene && renderFailure && <div className="viewport-empty" role="status">
+      <b>WebGL renderer stopped</b>
+      <span>{renderFailure}. Retry to rebuild the viewport; if it stops again, check that graphics acceleration is enabled.</span>
+      <button type="button" className="viewport-retry" onClick={retryRenderer}><Icon name="reset"/>Retry</button>
+    </div>}
     {activeScene && mode === 'curvature' && !activeScene.hasCurvature && <div className="viewport-mode-empty">
       <b>Curvature heatmap unavailable</b><span>This frame has no analytic curvature section. Neutral geometry remains visible while inspection data is requested.</span>
     </div>}

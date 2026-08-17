@@ -150,11 +150,30 @@ export function rebracketCamera(
   return true;
 }
 
-export function installContextLossFallback(canvas: HTMLCanvasElement, onFailure: (message: string) => void): void {
-  canvas.addEventListener('webglcontextlost', (event) => {
+/**
+ * Report a genuine loss of the drawing context, and return a detacher.
+ *
+ * Detaching matters as much as reporting. React Three Fiber tears a Canvas down
+ * by calling `forceContextLoss()` half a second after unmount, which dispatches
+ * this very event on the canvas it is disposing. That is routine teardown, not a
+ * graphics fault -- and the viewport unmounts its Canvas whenever the active
+ * scene goes empty, which includes every Parametric -> CAD switch made before
+ * any geometry has been ingested. Reporting it left the panel permanently
+ * showing "WebGL2 context was lost" over a scene that was rendering perfectly.
+ *
+ * The listener is therefore owned by the component that mounted the Canvas and
+ * removed with it, so the disposal event lands after the listener is gone.
+ */
+export function installContextLossFallback(canvas: HTMLCanvasElement, onFailure: (message: string) => void): () => void {
+  // Not `{ once: true }`: a context can be lost again after being restored, and
+  // the second loss deserves the same notice as the first.
+  const onLost = (event: Event) => {
+    // Preventing the default is what lets the browser restore the context.
     event.preventDefault();
     onFailure('WebGL2 context was lost');
-  }, { once: true });
+  };
+  canvas.addEventListener('webglcontextlost', onLost);
+  return () => canvas.removeEventListener('webglcontextlost', onLost);
 }
 
 export function installWheelZoomInversion(element: HTMLElement, enabled: boolean): () => void {
@@ -766,7 +785,15 @@ function useCanvasRemeasure(host: RefObject<HTMLDivElement | null>): void {
 
 export const ViewportCanvas = memo(function ViewportCanvas({ onRenderFailure, ...props }: ViewportCanvasProps) {
   const host = useRef<HTMLDivElement>(null);
+  const detachContextLoss = useRef<(() => void) | null>(null);
   useCanvasRemeasure(host);
+  // Drop the context-loss listener along with the canvas that owns it, so React
+  // Three Fiber's deferred `forceContextLoss()` during disposal cannot be
+  // mistaken for a fault. See installContextLossFallback.
+  useEffect(() => () => {
+    detachContextLoss.current?.();
+    detachContextLoss.current = null;
+  }, []);
   return <CanvasErrorBoundary onError={onRenderFailure}><div ref={host} className="wg2-viewport-canvas-host"><Canvas
     className="wg2-viewport-canvas"
     frameloop="demand"
@@ -781,7 +808,7 @@ export const ViewportCanvas = memo(function ViewportCanvas({ onRenderFailure, ..
       gl.domElement.setAttribute('role', 'application');
       gl.domElement.setAttribute('aria-label', 'Waveguide geometry preview. Drag to orbit, scroll to zoom; arrow keys pan while focused.');
       gl.domElement.addEventListener('pointerdown', () => gl.domElement.focus());
-      installContextLossFallback(gl.domElement, onRenderFailure);
+      detachContextLoss.current = installContextLossFallback(gl.domElement, onRenderFailure);
     }}
   >
     <Scene {...props} />
