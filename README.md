@@ -14,7 +14,7 @@ current contracts, active plans, legacy notes, and dated validation evidence.
 ## Install
 
 Clone the repository — do not download a ZIP, because the installer updates
-itself with Git and the four pinned HornLab modules are installed from Git too.
+itself with Git and the pinned HornLab modules are installed from Git too.
 Then run the installer for your platform:
 
 | | |

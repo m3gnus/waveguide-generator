@@ -74,10 +74,26 @@ while [[ $# -gt 0 ]]; do
         --no-launch) LAUNCH=0 ;;
         --force) FORCE=1 ;;
         --skip-spa) SKIP_SPA=1 ;;
-        --spa-archive) SPA_ARCHIVE="${2:-}"; shift ;;
-        --spa-base-url) SPA_BASE_URL="${2:-}"; shift ;;
-        --version) SPA_VERSION="${2:-}"; shift ;;
-        --tag) TAG="${2:-}"; shift ;;
+        --spa-archive)
+            [[ -n "${2:-}" ]] || fail "--spa-archive needs a value, for example --spa-archive /path/to/interface.tar.gz"
+            SPA_ARCHIVE="$2"
+            shift
+            ;;
+        --spa-base-url)
+            [[ -n "${2:-}" ]] || fail "--spa-base-url needs a value, for example --spa-base-url https://example.com/releases"
+            SPA_BASE_URL="$2"
+            shift
+            ;;
+        --version)
+            [[ -n "${2:-}" ]] || fail "--version needs a value, for example --version 0.2.3"
+            SPA_VERSION="$2"
+            shift
+            ;;
+        --tag)
+            [[ -n "${2:-}" ]] || fail "--tag needs a value, for example --tag v0.2.3"
+            TAG="$2"
+            shift
+            ;;
         --help|-h) usage; exit 0 ;;
         *) fail "Unknown option: $1. Run with --help." ;;
     esac
@@ -121,7 +137,7 @@ say "  Looks good: $ROOT"
 step "Checking prerequisites..."
 
 if ! command -v git >/dev/null 2>&1; then
-    fail "Git is required, and not just to update this checkout: the four pinned
+    fail "Git is required, and not just to update this checkout: the pinned
        HornLab modules are installed straight from Git.
        macOS:  xcode-select --install
        Debian: sudo apt install git
@@ -341,7 +357,7 @@ bootstrap_args=()
 if ! "$BOOTSTRAP_PYTHON" "$ROOT/scripts/bootstrap.py" "${bootstrap_args[@]+"${bootstrap_args[@]}"}"; then
     fail "The Python environment could not be prepared; review the errors above.
        Common causes: no network access to PyPI or GitHub, or a proxy that
-       blocks Git over HTTPS (the four HornLab modules install from Git).
+       blocks Git over HTTPS (the pinned HornLab modules install from Git).
        Retry a clean build with:
          \"$BOOTSTRAP_PYTHON\" scripts/bootstrap.py --force"
 fi

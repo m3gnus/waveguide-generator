@@ -275,7 +275,7 @@ echo        Older versions cannot fetch the pinned module commits reliably.
 echo        winget install --id Git.Git -e
 exit /b 1
 :git_missing
-echo ERROR: Git is required, and not just to update this checkout: the four
+echo ERROR: Git is required, and not just to update this checkout: the
 echo        pinned HornLab modules are installed straight from Git.
 echo        winget install --id Git.Git -e
 echo        or download it from https://git-scm.com/
@@ -516,7 +516,7 @@ exit /b 1
 echo.
 echo ERROR: The Python environment could not be prepared; review the errors above.
 echo        Common causes: no network access to PyPI or GitHub, or a proxy that
-echo        blocks Git over HTTPS ^(the four HornLab modules install from Git^).
+echo        blocks Git over HTTPS ^(the pinned HornLab modules install from Git^).
 echo        Retry a clean build with:
 echo          "%BOOTSTRAP_PYTHON%" scripts\bootstrap.py --force
 exit /b 1

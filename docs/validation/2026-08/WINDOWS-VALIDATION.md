@@ -44,7 +44,7 @@ rasteriser (check 8). It does not affect the solver, which is CPU BEM.
 | Prerequisite | Needed? | Already present | Version found | Notes |
 |---|---|---|---|---|
 | CPython 3.13 | yes | yes | 3.13.3 (MSC v.1943 64-bit) | `py -3.13` resolves it; bootstrap rejects any other series |
-| Git | yes | yes | 2.53.0.windows.1 | required to install the four pinned HornLab modules from Git |
+| Git | yes | yes | 2.53.0.windows.1 | required to install the pinned HornLab modules from Git |
 | MS Visual C++ redistributable x64 | yes | **yes** | v14.51.36247.00 | `vcruntime140.dll`, `vcruntime140_1.dll`, `msvcp140.dll` present in System32 |
 | Node.js | build only | yes | v24.14.0, npm 11.19.0 | see §2.1 |
 | OpenCL runtime | **no** | n/a | n/a | see §2.2 |
