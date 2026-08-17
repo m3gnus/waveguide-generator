@@ -30,7 +30,7 @@ from server.design.schema import DesignConfig, Expr, FreeformConfig, ICWConfig, 
                 "profile_h": {"points": [{"t": 0, "r": 12.7}, {"t": 1, "r": 100}]},
                 "profile_v": {"points": [{"t": 0, "r": 12.7}, {"t": 1, "r": 80}]},
                 "cross_sections": [{"t": 0, "shape": "ellipse"}, {"t": 1, "shape": "ellipse"}],
-                "corner_grids": [{"t": 0.5, "values": [[0, 1], [2, 3]]}],
+                "corner_grids": [],
             },
             FreeformConfig,
         ),
@@ -288,6 +288,81 @@ def test_freeform_requires_v1_readable_cross_section_domain() -> None:
         "cross_sections": [],
     }
     with pytest.raises(ValidationError, match="at least 2"):
+        DesignConfig.model_validate(payload)
+
+
+def test_freeform_requires_shared_profile_throat_radius() -> None:
+    payload = {
+        "formula": "FREEFORM",
+        "length": 120,
+        "profile_h": {"points": [{"t": 0, "r": 10}, {"t": 1, "r": 50}]},
+        "profile_v": {"points": [{"t": 0, "r": 11}, {"t": 1, "r": 40}]},
+        "cross_sections": [{"t": 0, "shape": "ellipse"}, {"t": 1, "shape": "ellipse"}],
+    }
+
+    with pytest.raises(ValidationError, match="profile throat radii must match"):
+        DesignConfig.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    "points",
+    [
+        [{"t": 0, "r": 10, "angle_deg": 5}, {"t": 1, "r": 50}],
+        [{"t": 0, "r": 10}, {"t": 1, "r": 50, "angle_deg": 25}],
+    ],
+)
+def test_freeform_keeps_profile_endpoint_angles(
+    points: list[dict[str, float]],
+) -> None:
+    """Endpoint angles reach the mesher (translate sends every point's angle)
+    and v1 designs migrate carrying them, so they must stay accepted.
+
+    The text format writes only the interior points, so these do not survive a
+    save and reload -- a real defect, but one that has to be fixed by
+    persisting them, not by rejecting a design the mesher happily builds."""
+
+    payload = {
+        "formula": "FREEFORM",
+        "length": 120,
+        "profile_h": {"points": points},
+        "profile_v": {"points": [{"t": 0, "r": 10}, {"t": 1, "r": 40}]},
+        "cross_sections": [{"t": 0, "shape": "ellipse"}, {"t": 1, "shape": "ellipse"}],
+    }
+
+    assert DesignConfig.model_validate(payload) is not None
+
+
+@pytest.mark.parametrize(
+    ("replacement", "message"),
+    [
+        (
+            {"corner_grids": [{"t": 0.5, "values": [[0, 1], [2, 3]]}]},
+            "corner_grids are not supported",
+        ),
+        (
+            {
+                "cross_sections": [
+                    {"t": 0, "shape": "ellipse", "corner_grid": [[0, 1]]},
+                    {"t": 1, "shape": "ellipse"},
+                ]
+            },
+            "corner_grid is not supported",
+        ),
+    ],
+)
+def test_freeform_rejects_unsupported_corner_grids(
+    replacement: dict[str, object], message: str
+) -> None:
+    payload: dict[str, object] = {
+        "formula": "FREEFORM",
+        "length": 120,
+        "profile_h": {"points": [{"t": 0, "r": 10}, {"t": 1, "r": 50}]},
+        "profile_v": {"points": [{"t": 0, "r": 10}, {"t": 1, "r": 40}]},
+        "cross_sections": [{"t": 0, "shape": "ellipse"}, {"t": 1, "shape": "ellipse"}],
+    }
+    payload.update(replacement)
+
+    with pytest.raises(ValidationError, match=message):
         DesignConfig.model_validate(payload)
 
 
