@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
 import { useDocumentStore, type DesignIdentity } from './document';
+import { namespaceStorage } from './durableSettings';
 
 export interface CadDriveChannel {
   id: string;
@@ -78,7 +79,7 @@ interface CadReturnState {
   setSweep: (update: Partial<Pick<CadReturnState, 'frequencyStartHz' | 'frequencyEndHz' | 'frequencyCount'>>) => void;
 }
 
-const SOLVE_PROFILE_STORAGE_KEY = 'waveguide-v2-g3-cad-solve-profiles';
+const solveProfileStorage = namespaceStorage('cadSolveProfiles');
 const SOLVE_PROFILE_STORAGE_VERSION = 1;
 const MAX_SOLVE_PROFILES = 20;
 
@@ -279,13 +280,12 @@ function solveProfileKey(identity: Pick<DesignIdentity, 'designId' | 'lineageId'
 }
 
 function dropStoredSolveProfiles(): void {
-  try { localStorage.removeItem(SOLVE_PROFILE_STORAGE_KEY); } catch { /* persistence is best effort */ }
+  try { solveProfileStorage.removeItem('cadSolveProfiles'); } catch { /* persistence is best effort */ }
 }
 
 function readStoredSolveProfiles(): StoredSolveProfile[] {
-  if (typeof localStorage === 'undefined') return [];
   try {
-    const raw = localStorage.getItem(SOLVE_PROFILE_STORAGE_KEY);
+    const raw = solveProfileStorage.getItem('cadSolveProfiles');
     if (raw === null) return [];
     const parsed = JSON.parse(raw) as unknown;
     if (!isObject(parsed) || parsed.version !== SOLVE_PROFILE_STORAGE_VERSION
@@ -326,9 +326,8 @@ function readStoredSolveProfiles(): StoredSolveProfile[] {
 }
 
 function writeStoredSolveProfiles(profiles: StoredSolveProfile[]): void {
-  if (typeof localStorage === 'undefined') return;
   try {
-    localStorage.setItem(SOLVE_PROFILE_STORAGE_KEY, JSON.stringify({
+    solveProfileStorage.setItem('cadSolveProfiles', JSON.stringify({
       version: SOLVE_PROFILE_STORAGE_VERSION,
       profiles: profiles.slice(0, MAX_SOLVE_PROFILES),
     }));
@@ -420,7 +419,53 @@ function reconcileListing(state: CadReturnState, selectedBundle: CadReturnBundle
         motion: existing?.motion ?? 'normal' as const,
       };
     });
-  return { selectedBundle, sourceSizesMm, skippedSourceIds, areaDriftOverrides, driveChannels: groupChannels(rows) };
+  const driveChannels = groupChannels(rows);
+  return {
+    selectedBundle,
+    sourceSizesMm,
+    skippedSourceIds,
+    areaDriftOverrides,
+    driveChannels,
+    channelDrivers: retainedChannelDrivers(state, driveChannels),
+  };
+}
+
+/**
+ * Whether a channel can carry a driver model at all.
+ *
+ * The server refuses one on an axial or multi-source channel -- see
+ * `DriveChannel.validate_driver_applicability` -- because the radiating area
+ * and surface pressure belong to exactly one source patch. `CadDriveChannels`
+ * hides the driver controls by the same rule.
+ */
+export function channelAcceptsDriver(channel: CadDriveChannel): boolean {
+  return channel.source_ids.length === 1 && channel.motion === 'normal';
+}
+
+/**
+ * Drop driver forms whose channel can no longer carry them.
+ *
+ * A completed form used to survive the channel changing underneath it. The
+ * submission builder serializes drivers by channel id alone, so a channel that
+ * had since become axial or multi-source was still submitted with one and the
+ * server rejected the entire solve. The quieter failure is worse: a channel id
+ * is reusable, and reassigning sources can rebuild the same id around a
+ * *different* source, at which point the old driver would have been applied to
+ * the wrong radiator without a word. Keeping a form therefore requires the
+ * channel to still exist, still accept a driver, and still hold exactly the
+ * source it was filled in for.
+ */
+function retainedChannelDrivers(
+  state: Pick<CadReturnState, 'channelDrivers' | 'driveChannels'>,
+  nextChannels: CadDriveChannel[],
+): Record<string, ChannelDriverForm> {
+  const before = new Map(state.driveChannels.map((channel) => [channel.id, channel.source_ids.join(' ')]));
+  return Object.fromEntries(Object.entries(state.channelDrivers).filter(([id]) => {
+    const next = nextChannels.find((channel) => channel.id === id);
+    if (!next || !channelAcceptsDriver(next)) return false;
+    const previousMembers = before.get(id);
+    return previousMembers === undefined || previousMembers === next.source_ids.join(' ');
+  }));
 }
 
 function groupChannels(sourceChannels: Array<{ sourceId: string; channelId: string; motion: 'normal' | 'axial' }>): CadDriveChannel[] {
@@ -627,7 +672,13 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
       const sourceSizesMm = !skipped && source && state.sourceSizesMm[sourceId] === undefined
         ? { ...state.sourceSizesMm, [sourceId]: source.suggestedResolutionMm }
         : state.sourceSizesMm;
-      return { skippedSourceIds, driveChannels, sourceSizesMm, needsIngest: true };
+      return {
+        skippedSourceIds,
+        driveChannels,
+        sourceSizesMm,
+        channelDrivers: retainedChannelDrivers(state, driveChannels),
+        needsIngest: true,
+      };
     });
     saveSolveProfile(get());
   },
@@ -638,14 +689,16 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
         const existing = state.driveChannels.find((channel) => channel.source_ids.includes(id));
         return { sourceId: id, channelId: id === sourceId ? channelId : existing?.id ?? id, motion: existing?.motion ?? 'normal' as const };
       });
-      return { driveChannels: groupChannels(rows) };
+      const driveChannels = groupChannels(rows);
+      return { driveChannels, channelDrivers: retainedChannelDrivers(state, driveChannels) };
     });
     saveSolveProfile(get());
   },
   setChannelMotion: (channelId, motion) => {
-    set((state) => ({
-      driveChannels: state.driveChannels.map((channel) => channel.id === channelId ? { ...channel, motion } : channel),
-    }));
+    set((state) => {
+      const driveChannels = state.driveChannels.map((channel) => channel.id === channelId ? { ...channel, motion } : channel);
+      return { driveChannels, channelDrivers: retainedChannelDrivers(state, driveChannels) };
+    });
     saveSolveProfile(get());
   },
   setAreaDriftOverride: (sourceId, enabled) => {
@@ -747,7 +800,8 @@ export function combineLevelMatchDefault(
   state: Pick<CadReturnState, 'driveChannels' | 'channelDrivers'>,
 ): boolean {
   const allDriven = state.driveChannels.length > 0 && state.driveChannels.every(
-    (channel) => channelDriverWire(state.channelDrivers[channel.id]) !== undefined,
+    (channel) => channelAcceptsDriver(channel)
+      && channelDriverWire(state.channelDrivers[channel.id]) !== undefined,
   );
   return !allDriven;
 }

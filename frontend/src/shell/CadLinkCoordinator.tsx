@@ -17,6 +17,7 @@ import { preferencesStore, usePreferences } from '../prefs/preferences';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { recordCommittedAthPolars, subscribeRevision, useDesignStore } from '../stores/design';
 import { useDocumentStore, type DesignIdentity } from '../stores/document';
+import { documentSettingsSignature } from '../stores/designWire';
 import { polarConfigFromUi, useSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { createImportedMeshScene } from '../viewport/importedMesh';
@@ -189,6 +190,9 @@ export function CadLinkCoordinator() {
   const preferences = usePreferences();
   const design = useDesignStore((state) => state.design);
   const designRevision = useDesignStore((state) => state.designRevision);
+  // Directivity and solver settings ride along in the sent `.cfg` but never
+  // touch the geometry revision, so freshness has to watch them separately.
+  const documentSettings = useSolveOptionsStore(documentSettingsSignature);
   const identity = useDocumentStore((state) => state.identity);
   const filename = useDocumentStore((state) => state.filename);
   const setCadLink = useDocumentStore((state) => state.setCadLink);
@@ -270,7 +274,7 @@ export function CadLinkCoordinator() {
       window.clearInterval(timer);
       fusionStatusRequest.current += 1;
     };
-  }, [designRevision, preferences.cadApplication, refreshFusionStatus]);
+  }, [designRevision, documentSettings, preferences.cadApplication, refreshFusionStatus]);
 
   // `committed` is the identity a send just registered. Without it the refresh
   // that follows a first send would still carry the pre-send identity -- which
@@ -292,7 +296,7 @@ export function CadLinkCoordinator() {
     setOnshapeStatus(null);
     if (!onshape) return;
     void refreshOnshapeStatus();
-  }, [designRevision, onshape, refreshOnshapeStatus]);
+  }, [designRevision, documentSettings, onshape, refreshOnshapeStatus]);
 
   // The connection route is the only check here that spends Onshape API rate
   // limit. Delay it until Onshape is used, then make at most one request for

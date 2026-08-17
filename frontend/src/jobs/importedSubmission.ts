@@ -1,11 +1,13 @@
 import type { ImportedSolveSubmission } from './actions';
 import {
   acknowledgedFindingWire,
+  channelAcceptsDriver,
   channelDriverWire,
   combineWire,
   unacknowledgedBlocking,
   useCadReturnStore,
 } from '../stores/cadReturn';
+import type { CadDriveChannel } from '../stores/cadReturn';
 import { parseFrequencyList, useSolveOptionsStore } from '../stores/solveOptions';
 
 const POLAR_AXIS_ORDER = ['horizontal', 'vertical', 'diagonal'] as const;
@@ -79,6 +81,22 @@ export function importedSubmissionBlocker(
   return null;
 }
 
+/**
+ * The driver spec to submit for a channel, or undefined for none.
+ *
+ * Eligibility is re-checked here rather than trusted from the form. The store
+ * drops forms their channel can no longer carry, but this builder is the last
+ * thing between the panel and a submission the server would reject outright
+ * (`DriveChannel.validate_driver_applicability`), and a driver attached to the
+ * wrong kind of channel is exactly the mistake worth refusing twice.
+ */
+function submittedDriver(
+  state: Pick<CadReturnSnapshot, 'channelDrivers'>,
+  channel: CadDriveChannel,
+): Record<string, number> | undefined {
+  return channelAcceptsDriver(channel) ? channelDriverWire(state.channelDrivers[channel.id]) : undefined;
+}
+
 export function buildImportedSubmission(
   state: CadReturnSnapshot = useCadReturnStore.getState(),
 ): ImportedSolveSubmission {
@@ -101,10 +119,10 @@ export function buildImportedSubmission(
       manifest_sha256: record.manifest_sha256,
       artifact_sha256: record.artifact_sha256,
       drive_channels: state.driveChannels.map((channel) => {
-        const driver = channelDriverWire(state.channelDrivers[channel.id]);
+        const driver = submittedDriver(state, channel);
         return { ...channel, source_ids: [...channel.source_ids], ...(driver ? { driver } : {}) };
       }),
-      ...(state.driveChannels.some((channel) => channelDriverWire(state.channelDrivers[channel.id]))
+      ...(state.driveChannels.some((channel) => submittedDriver(state, channel))
         ? { drive_voltage_v: state.driveVoltageV }
         : {}),
       mesh: {
