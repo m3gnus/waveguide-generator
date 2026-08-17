@@ -583,10 +583,15 @@ def test_graceful_shutdown_flushes_last_buffered_log(tmp_path: Path) -> None:
 
         await runtime.shutdown()
 
-        row = store.get_job_row("shutdown")
-        assert row["status"] == "running"
-        assert row["task_metadata"]["log_tail"] == ["last-before-shutdown"]
-        assert store.get_job_log("shutdown") == "last-before-shutdown\n"
+        inspection = JobStore(tmp_path / "jobs.db")
+        inspection.initialize()
+        try:
+            row = inspection.get_job_row("shutdown")
+            assert row["status"] == "running"
+            assert row["task_metadata"]["log_tail"] == ["last-before-shutdown"]
+            assert inspection.get_job_log("shutdown") == "last-before-shutdown\n"
+        finally:
+            inspection.close()
 
     asyncio.run(scenario())
 

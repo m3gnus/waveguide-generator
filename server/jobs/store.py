@@ -201,6 +201,7 @@ class JobStore:
         self._local = threading.local()
         self._connections: set[sqlite3.Connection] = set()
         self._connections_lock = threading.Lock()
+        self._closed = False
 
     @classmethod
     def for_data_dir(cls, data_dir: str | Path, **kwargs: Any) -> "JobStore":
@@ -1380,6 +1381,10 @@ class JobStore:
         is retained so the existing RLock stays the ordering authority.
         """
 
+        if self._closed:
+            raise RuntimeError(
+                "JobStore is closed; create a new JobStore to reopen the database"
+            )
         existing = getattr(self._local, "conn", None)
         if existing is not None:
             return existing
@@ -1405,15 +1410,17 @@ class JobStore:
         migration tool's rollback replaces the file wholesale.
         """
 
-        with self._connections_lock:
-            connections = tuple(self._connections)
-            self._connections.clear()
-        for conn in connections:
-            try:
-                conn.close()
-            except sqlite3.Error:  # pragma: no cover - closing twice is harmless
-                pass
-        self._local = threading.local()
+        with self._lock:
+            self._closed = True
+            with self._connections_lock:
+                connections = tuple(self._connections)
+                self._connections.clear()
+            for conn in connections:
+                try:
+                    conn.close()
+                except sqlite3.Error:  # pragma: no cover - closing twice is harmless
+                    pass
+            self._local = threading.local()
 
     def checkpoint(self) -> None:
         """Fold the WAL back into the database file.

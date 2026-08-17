@@ -722,6 +722,11 @@ def _migrate_with_paths(
     # Number imported jobs immediately afterward so one migration pass leaves
     # every job with a permanent identity, in deterministic (created_at, id)
     # order among rows that do not already have one.
+    #
+    # The store above was closed on purpose, to drop the handles that would
+    # otherwise stop rollback replacing the file on Windows. A closed store
+    # stays closed, so take a fresh one rather than reviving that instance.
+    store = JobStore.for_data_dir(paths.root)
     store.backfill_job_identity()
     store.checkpoint()
     store.close()
