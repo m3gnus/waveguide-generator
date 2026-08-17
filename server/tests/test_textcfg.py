@@ -83,6 +83,11 @@ Term.n = 4
     assert "const pi" not in parsed.extra_keys
     assert serialize(parsed) == source
 
+    canonical = serialize(parsed.design)
+    reopened = parse(canonical)
+    assert reopened.design.root.a is not None  # type: ignore[union-attr]
+    assert reopened.design.root.a.raw == value.raw  # type: ignore[union-attr]
+
 
 def test_new_design_uses_v1_header_v2_discriminator_and_writer_order() -> None:
     design = DesignConfig(
@@ -102,6 +107,59 @@ def test_new_design_uses_v1_header_v2_discriminator_and_writer_order() -> None:
     assert text.startswith("; Parameter config\n; Waveguide Generator design-format: 2\n")
     assert text.index("Coverage.Angle") < text.index("Length") < text.index("Term.n")
     assert parse(text).design.formula == "OSSE"
+
+
+def test_parse_rejects_design_format_from_a_future_writer() -> None:
+    source = "; Parameter config\n; Waveguide Generator design-format: 3\nOSSE = {\n}\n"
+
+    with pytest.raises(TextConfigError, match="unsupported design format 3"):
+        parse(source)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "; Parameter config\nOSSE = {\n}\n",
+        "; Parameter config\n; Waveguide Generator design-format: 1\nOSSE = {\n}\n",
+        "; Parameter config\n; Waveguide Generator design-format: 2\nOSSE = {\n}\n",
+    ],
+)
+def test_parse_accepts_legacy_and_supported_design_formats(source: str) -> None:
+    assert parse(source).design.formula == "OSSE"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"formula": "OSSE", "coverage_mode": "controlled\n}\nOSSE = {"},
+        {"formula": "OSSE", "extra_keys": {"Future": "value\n}"}},
+        {"formula": "OSSE", "extra_keys": {"Future": "value\u2028Length = 1"}},
+        {"formula": "OSSE", "extra_keys": {"Future\n}": "value"}},
+        {
+            "formula": "OSSE",
+            "extra_blocks": {"Report": {"entries": ["row\n}\nOSSE = {"]}},
+        },
+        {
+            "formula": "OSSE",
+            "extra_blocks": {"Report": {"entries": ["}"]}},
+        },
+        {
+            "formula": "OSSE",
+            "extra_blocks": {"Report": {"entries": ["OSSE = {"]}},
+        },
+        {
+            "formula": "OSSE",
+            "extra_blocks": {"Report": {"items": {"Title": "value\n}"}}},
+        },
+    ],
+)
+def test_serialize_rejects_structural_text_from_api_payloads(
+    payload: dict[str, object],
+) -> None:
+    design = DesignConfig.model_validate(payload)
+
+    with pytest.raises(TextConfigError):
+        serialize(design)
 
 
 def test_canonical_design_writes_v1_ath_directivity_blocks() -> None:

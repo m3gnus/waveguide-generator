@@ -60,6 +60,32 @@ def test_expr_object_with_raw_only_derives_scalar_value() -> None:
 @pytest.mark.parametrize(
     "raw",
     [
+        "120\n}",
+        "12.7\n}\nOSSE = {",
+        "12.7\u2028Length = 1",
+        "120}",
+        "{120",
+        "OSSE = { ; }",
+        "} ; {",
+    ],
+)
+def test_expr_rejects_text_that_can_change_cfg_structure(raw: str) -> None:
+    with pytest.raises(ValidationError, match="expression source"):
+        Expr.model_validate(raw)
+
+
+def test_expr_preserves_complete_legacy_multiline_function() -> None:
+    raw = "function anonymous(p\n) {\nreturn 45 - 2*Math.cos(p)**2;\n}"
+
+    expression = Expr.model_validate(raw)
+
+    assert expression.raw == raw
+    assert expression.value is None
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
         "'x' * 1000000000",
         "[0] * 100000000",
         "10 ** 1000000000",
