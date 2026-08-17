@@ -45,7 +45,7 @@ MAX_NAMESPACES = 64
 
 
 class SettingsError(ValueError):
-    """A rejected write. The message is shown to the caller verbatim."""
+    """A settings operation that cannot safely be completed."""
 
 
 def valid_namespace(name: str) -> bool:
@@ -80,20 +80,51 @@ class SettingsStore:
         )
         self._namespaces: dict[str, Any] = {}
         self._loaded = False
+        self._load_error: OSError | None = None
 
     def _load(self) -> None:
-        self._loaded = True
         try:
             raw = self.settings_path.read_text(encoding="utf-8")
-        except OSError:
+        except FileNotFoundError:
+            self._load_error = None
+            self._loaded = True
+            return
+        except OSError as exc:
+            self._load_error = exc
+            self._loaded = False
+            logger.warning("Could not read settings file: %s", self.settings_path)
             return
         try:
             payload = json.loads(raw)
         except (ValueError, TypeError):
             # A corrupt file is not a reason to refuse to start. Defaults are a
             # working application; the bad file is kept so it can be inspected.
-            logger.warning("Ignoring unreadable settings file: %s", self.settings_path)
+            corrupt_path = self.settings_path.with_name(f"{self.settings_path.name}.corrupt")
+            suffix = 1
+            while corrupt_path.exists():
+                corrupt_path = self.settings_path.with_name(
+                    f"{self.settings_path.name}.{suffix}.corrupt"
+                )
+                suffix += 1
+            try:
+                self.settings_path.rename(corrupt_path)
+            except OSError as exc:
+                self._load_error = exc
+                self._loaded = False
+                logger.warning(
+                    "Could not preserve unreadable settings file: %s",
+                    self.settings_path,
+                )
+                return
+            logger.warning(
+                "Moved unreadable settings file to %s",
+                corrupt_path,
+            )
+            self._load_error = None
+            self._loaded = True
             return
+        self._load_error = None
+        self._loaded = True
         if not isinstance(payload, dict):
             return
         namespaces = payload.get("namespaces")
@@ -106,6 +137,12 @@ class SettingsStore:
     def _ensure_loaded(self) -> None:
         if not self._loaded:
             self._load()
+
+    def _ensure_writable(self) -> None:
+        if self._load_error is not None:
+            raise SettingsError(
+                f"Could not read settings from {self.settings_path}: {self._load_error}"
+            ) from self._load_error
 
     def all(self) -> dict[str, Any]:
         self._ensure_loaded()
@@ -126,6 +163,7 @@ class SettingsStore:
                 f"Invalid settings namespace {namespace!r}. Use letters, digits, '-' or '_'."
             )
         self._ensure_loaded()
+        self._ensure_writable()
         try:
             encoded = json.dumps(value)
         except (TypeError, ValueError) as exc:
@@ -149,6 +187,7 @@ class SettingsStore:
 
     def delete(self, namespace: str) -> dict[str, Any]:
         self._ensure_loaded()
+        self._ensure_writable()
         if namespace in self._namespaces:
             candidate = {
                 name: value for name, value in self._namespaces.items() if name != namespace
