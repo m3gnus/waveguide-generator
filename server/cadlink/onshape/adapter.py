@@ -1034,13 +1034,22 @@ def send_bundle(
     try:
         elements = adapter.list_elements(document_id, workspace_id)
     except OnshapeError:
-        elements = []  # advisory: the send already succeeded
-    for element in elements:
-        if str(element.get("elementType") or "").upper() != "PARTSTUDIO":
-            continue
+        # Advisory when identity is already known; otherwise the refusal below
+        # prevents an unverified Part Studio from becoming the persisted link.
+        elements = []
+    part_studios = [
+        element
+        for element in elements
+        if str(element.get("elementType") or "").upper() == "PARTSTUDIO"
+    ]
+    if part_studio_id is None:
+        if len(part_studios) != 1:
+            raise OnshapeAdapterError(
+                "Onshape did not report exactly one Part Studio that could own the WG datums."
+            )
+        part_studio_id = _string(part_studios[0].get("id"))
+    for element in part_studios:
         element_id = _string(element.get("id"))
-        if part_studio_id is None:
-            part_studio_id = element_id
         if element_id == part_studio_id:
             name = _string(element.get("name"))
             if name:

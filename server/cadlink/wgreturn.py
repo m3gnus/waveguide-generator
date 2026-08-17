@@ -127,7 +127,7 @@ def _walk(value: Any, path: str = "$") -> Iterable[tuple[str, Any]]:
             # This is WG-authored config provenance echoed by Fusion. It is
             # opaque to the CAD evidence policy and may legitimately contain
             # keys such as "symmetry" or "tags".
-            if key == "config" and path.startswith("$.instances["):
+            if key == "config" and re.fullmatch(r"\$\.instances\[\d+\]", path):
                 yield child_path, child
                 continue
             if key in FORBIDDEN_VERDICT_KEYS:

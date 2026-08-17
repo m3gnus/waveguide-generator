@@ -28,6 +28,10 @@ _LEGACY_SIGNATURE_EXPLANATION = (
     "stale detection unavailable: this returned bundle predates wgreturn 1.1 "
     "and carries no document signature"
 )
+_SCOPED_SELECTION_EXPLANATION = (
+    "stale detection unavailable: this return covers a selected assembly "
+    "subtree, and Fusion reports its document signature for the whole root"
+)
 
 
 def fusion_process_running(*, system: str | None = None) -> bool:
@@ -125,6 +129,22 @@ def _returned_document_signature_hash(returned_bundle: Path | None) -> str | Non
     if not isinstance(assembly, Mapping):
         return None
     return _string(assembly.get("signature_hash"))
+
+
+def _returned_scope_selection(returned_bundle: Path | None) -> str | None:
+    if returned_bundle is None:
+        return None
+    try:
+        resolved = returned_bundle.expanduser().resolve()
+        if resolved.is_symlink() or not resolved.is_dir() or resolved.suffix != ".wgreturn":
+            return None
+        manifest = json.loads((resolved / "wgreturn.json").read_text(encoding="utf-8"))
+        scope = manifest.get("scope")
+    except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+    if not isinstance(scope, Mapping):
+        return None
+    return _string(scope.get("selection"))
 
 
 def _returned_document_summary(returned_bundle: Path | None) -> tuple[int | None, str | None]:
@@ -311,7 +331,14 @@ def read_fusion_status(
     returned_body_hash = _returned_fingerprint_hash(returned_bundle, design_id)
     current_document_hash = link.get("documentSignatureHash")
     returned_document_hash = _returned_document_signature_hash(returned_bundle)
+    returned_scope_selection = _returned_scope_selection(returned_bundle)
     returned_body_count, returned_source_hash = _returned_document_summary(returned_bundle)
+    # WGLink's heartbeat describes the document root. A scoped return describes
+    # only the selected subtree, so none of the document-level aggregates can
+    # be compared meaningfully. ``None`` retains compatibility for callers that
+    # supply an incomplete synthetic manifest; validated bundles always carry
+    # scope.selection.
+    document_aggregates_detectable = returned_scope_selection in {None, "root"}
     linked_body_changed = (
         (
             link.get("localBodyState") == "modified"
@@ -320,25 +347,34 @@ def read_fusion_status(
         and (current_body_hash is None or current_body_hash != returned_body_hash)
     )
     document_changed = bool(
-        current_document_hash
+        document_aggregates_detectable
+        and current_document_hash
         and returned_document_hash
         and current_document_hash != returned_document_hash
     )
     document_change_detectable = bool(
-        current_document_hash and returned_document_hash
+        document_aggregates_detectable
+        and current_document_hash
+        and returned_document_hash
     )
-    stale_detection_explanation = (
-        _LEGACY_SIGNATURE_EXPLANATION
-        if returned_bundle is not None and returned_document_hash is None
-        else None
-    )
+    # A scoped return is not a legacy one: telling the user their bundle
+    # predates wgreturn 1.1 when they simply picked a subtree in the Send
+    # dialog sends them looking for the wrong problem.
+    stale_detection_explanation: str | None = None
+    if returned_bundle is not None:
+        if not document_aggregates_detectable:
+            stale_detection_explanation = _SCOPED_SELECTION_EXPLANATION
+        elif returned_document_hash is None:
+            stale_detection_explanation = _LEGACY_SIGNATURE_EXPLANATION
     inventory_changed = bool(
-        returned_body_count is not None
+        document_aggregates_detectable
+        and returned_body_count is not None
         and link.get("documentBodyCount")
         and link.get("documentBodyCount") != returned_body_count
     )
     source_changed = bool(
-        returned_source_hash
+        document_aggregates_detectable
+        and returned_source_hash
         and link.get("sourceStateHash")
         and link.get("sourceStateHash") != returned_source_hash
     )
