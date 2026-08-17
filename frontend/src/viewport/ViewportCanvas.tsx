@@ -808,6 +808,7 @@ export const ViewportCanvas = memo(function ViewportCanvas({ onRenderFailure, ..
       gl.domElement.setAttribute('role', 'application');
       gl.domElement.setAttribute('aria-label', 'Waveguide geometry preview. Drag to orbit, scroll to zoom; arrow keys pan while focused.');
       gl.domElement.addEventListener('pointerdown', () => gl.domElement.focus());
+      detachContextLoss.current?.();
       detachContextLoss.current = installContextLossFallback(gl.domElement, onRenderFailure);
     }}
   >

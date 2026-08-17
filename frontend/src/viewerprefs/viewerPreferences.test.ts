@@ -29,4 +29,18 @@ describe('viewer preference persistence', () => {
       dampingEnabled: DEFAULT_VIEWER_PREFERENCES.dampingEnabled,
     });
   });
+
+  it('adopts a durable value that arrives after construction and notifies listeners', () => {
+    const store = new ViewerPreferencesStore();
+    const listener = vi.fn();
+    store.subscribe(listener);
+
+    store.adoptDurable(JSON.stringify({
+      schemaVersion: 1,
+      viewer: { ...DEFAULT_VIEWER_PREFERENCES, rotateSpeed: 2.2, dampingEnabled: false },
+    }));
+
+    expect(store.getSnapshot()).toMatchObject({ rotateSpeed: 2.2, dampingEnabled: false });
+    expect(listener).toHaveBeenCalledOnce();
+  });
 });

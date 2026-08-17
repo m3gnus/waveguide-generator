@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import { namespaceStorage } from '../stores/durableSettings';
+import { durableSettings, namespaceStorage } from '../stores/durableSettings';
 
 export type CameraProjection = 'perspective' | 'orthographic';
 
@@ -99,12 +99,19 @@ export class ViewerPreferencesStore {
     this.listeners.forEach((listener) => listener());
   }
 
+  /** Adopt a durable value that arrived after this store was constructed. */
+  adoptDurable(raw: string | null): void {
+    this.preferences = parseViewerPreferences(raw);
+    this.listeners.forEach((listener) => listener());
+  }
+
   reset(): void {
     this.update({ ...DEFAULT_VIEWER_PREFERENCES });
   }
 }
 
 export const viewerPreferences = new ViewerPreferencesStore(namespaceStorage('viewer'));
+durableSettings.subscribe('viewer', (raw) => viewerPreferences.adoptDurable(raw));
 
 export function useViewerPreferences(): ViewerPreferences {
   return useSyncExternalStore(viewerPreferences.subscribe, viewerPreferences.getSnapshot, viewerPreferences.getSnapshot);

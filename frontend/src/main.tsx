@@ -17,14 +17,17 @@ async function start(): Promise<void> {
   await durableSettings.hydrate({ timeoutMs: 1_500 });
   startDurableSettings();
 
-  const [{ default: App }, { restoreAutosave, startAutosave }] = await Promise.all([
+  const [{ default: App }, { restoreAutosaveWithLateRetry, startAutosave }] = await Promise.all([
     import('./App'),
     import('./stores/autosave'),
   ]);
 
-  restoreAutosave();
+  const stopLateAutosaveRestore = restoreAutosaveWithLateRetry();
   const autosave = startAutosave();
-  if (import.meta.hot) import.meta.hot.dispose(() => autosave.dispose());
+  if (import.meta.hot) import.meta.hot.dispose(() => {
+    stopLateAutosaveRestore();
+    autosave.dispose();
+  });
 
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
