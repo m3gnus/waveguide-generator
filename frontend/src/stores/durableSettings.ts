@@ -116,13 +116,17 @@ export class DurableSettings {
     // cap bounds how long startup waits, not the request itself: a slow answer
     // is still applied when it lands, so a sluggish backend costs a moment of
     // cached settings rather than a whole session of them.
+    const cachedAtRequest = new Map<SettingsNamespace, string | null>();
+    for (const namespace of Object.keys(SETTINGS_NAMESPACES) as SettingsNamespace[]) {
+      cachedAtRequest.set(namespace, this.get(namespace));
+    }
     const request = (async () => {
       try {
         const response = await this.fetcher('/api/settings');
         return response.ok ? await response.json() as SettingsEnvelope : null;
       } catch { return null; /* an unreachable server leaves the cache in charge */ }
     })();
-    const applied = request.then((body) => { this.apply(body); });
+    const applied = request.then((body) => { this.apply(body, cachedAtRequest); });
 
     if (timeoutMs === undefined) {
       await applied;
@@ -132,19 +136,26 @@ export class DurableSettings {
     this.hydrated = true;
   }
 
-  private apply(envelope: SettingsEnvelope | null): void {
+  private apply(
+    envelope: SettingsEnvelope | null,
+    cachedAtRequest: ReadonlyMap<SettingsNamespace, string | null>,
+  ): void {
     if (!envelope) return;
     const stored = envelope.namespaces ?? {};
     for (const namespace of Object.keys(SETTINGS_NAMESPACES) as SettingsNamespace[]) {
+      const local = this.get(namespace);
+      // The request describes the server state from before any edits made
+      // while it was in flight. A diverged cache is therefore newer and must
+      // neither be overwritten nor reported to subscribers as server state.
+      if (local !== cachedAtRequest.get(namespace)) continue;
       const remote = stored[namespace];
       if (typeof remote === 'string') {
-        if (remote === this.get(namespace)) continue;
+        if (remote === local) continue;
         this.writeCache(namespace, remote);
         this.notify(namespace, remote);
         continue;
       }
       // Absent upstream: this browser is the only copy, so publish it once.
-      const local = this.get(namespace);
       if (local !== null) this.scheduleUpload(namespace, 0);
     }
   }

@@ -264,6 +264,31 @@ describe('durable settings', () => {
     expect(seen).toEqual(['light']);
   });
 
+  it('does not let a late answer overwrite a setting edited while hydration was in flight', async () => {
+    localStorage.setItem(SETTINGS_NAMESPACES.theme, 'dark');
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const settings = new DurableSettings({
+      writeDelayMs: () => 0,
+      fetcher: (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        if (init?.method) return response({});
+        await gate;
+        return response({ schemaVersion: 1, namespaces: { theme: 'light' } });
+      }) as unknown as typeof fetch,
+    });
+    const seen: Array<string | null> = [];
+    settings.subscribe('theme', (raw) => seen.push(raw));
+
+    await settings.hydrate({ timeoutMs: 0 });
+    settings.set('theme', 'system');
+
+    release?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(settings.get('theme')).toBe('system');
+    expect(seen).toEqual([]);
+  });
+
   it('keeps working when the browser refuses to store anything', async () => {
     const settings = new DurableSettings({ storage: null, writeDelayMs: () => 0, fetcher: (async () => response({})) as unknown as typeof fetch });
     settings.set('theme', 'light');

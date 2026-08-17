@@ -1,5 +1,5 @@
 import { useDesignStore, type DesignDocument } from './design';
-import { namespaceStorage } from './durableSettings';
+import { durableSettings, namespaceStorage } from './durableSettings';
 import {
   useDocumentStore,
   type CadLinkClassification,
@@ -27,6 +27,10 @@ interface AutosaveRecord {
 }
 
 type DraftStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
+
+interface DraftSettingsSubscriber {
+  subscribe(namespace: 'designDraft', listener: (raw: string | null) => void): () => void;
+}
 
 function defaultStorage(): DraftStorage | null {
   return draftStorage;
@@ -119,6 +123,17 @@ export function restoreAutosave(storage: DraftStorage | null = defaultStorage())
     try { storage.removeItem(AUTOSAVE_KEY); } catch { /* unavailable storage stays non-fatal */ }
     return false;
   }
+}
+
+/** Restore synchronously from cache, then retry once the durable draft arrives. */
+export function restoreAutosaveWithLateRetry(
+  settings: DraftSettingsSubscriber = durableSettings,
+  storage: DraftStorage | null = defaultStorage(),
+): () => void {
+  let restored = restoreAutosave(storage);
+  return settings.subscribe('designDraft', () => {
+    if (!restored) restored = restoreAutosave(storage);
+  });
 }
 
 export interface AutosaveController {

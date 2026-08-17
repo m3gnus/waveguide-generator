@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { AUTOSAVE_KEY, restoreAutosave, startAutosave, writeAutosave } from './autosave';
+import { AUTOSAVE_KEY, restoreAutosave, restoreAutosaveWithLateRetry, startAutosave, writeAutosave } from './autosave';
 import { resetDesignStore, seedDesign, useDesignStore } from './design';
 import { resetDocumentStore, useDocumentStore } from './document';
 
@@ -59,6 +59,39 @@ describe('design autosave', () => {
     expect(restoreAutosave()).toBe(false);
     expect(localStorage.getItem(AUTOSAVE_KEY)).toBeNull();
     expect(useDesignStore.getState().design).toEqual(seedDesign);
+  });
+
+  it('retries restoration when a durable draft arrives after the cache was checked', () => {
+    useDesignStore.getState().updateField('R', 177);
+    expect(writeAutosave()).toBe(true);
+    const raw = localStorage.getItem(AUTOSAVE_KEY)!;
+    resetDesignStore();
+
+    const values = new Map<string, string>();
+    const storage = {
+      getItem: vi.fn((key: string) => values.get(key) ?? null),
+      setItem: vi.fn((key: string, value: string) => { values.set(key, value); }),
+      removeItem: vi.fn((key: string) => { values.delete(key); }),
+    };
+    let notify: ((raw: string | null) => void) | undefined;
+    const settings = {
+      subscribe: vi.fn((_namespace: 'designDraft', listener: (raw: string | null) => void) => {
+        notify = listener;
+        return vi.fn();
+      }),
+    };
+
+    const unsubscribe = restoreAutosaveWithLateRetry(settings, storage);
+    expect(useDesignStore.getState().design).toEqual(seedDesign);
+
+    values.set(AUTOSAVE_KEY, raw);
+    notify?.(raw);
+    expect(useDesignStore.getState().design.R).toBe(177);
+
+    useDesignStore.getState().updateField('R', 199);
+    notify?.(raw);
+    expect(useDesignStore.getState().design.R).toBe(199);
+    unsubscribe();
   });
 
   it('debounces edits and flushes the latest draft before unload', () => {
