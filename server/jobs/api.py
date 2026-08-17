@@ -25,7 +25,7 @@ from server.jobs.models import (
     SolveRequest,
     StopResponse,
 )
-from server.solver.recombine import RecombineError
+from server.solver.errors import RecombineError
 from server.jobs.runtime import (
     EngineUnavailableError,
     ImportedSolveRefusal,

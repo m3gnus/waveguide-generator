@@ -907,6 +907,35 @@ def _pressure_directivity_db(pressure: np.ndarray) -> np.ndarray:
     return 20.0 * np.log10(magnitude)
 
 
+def _cardioid_combine_refusal(
+    coupled_mf_channel: Any | None, combine: Any | None
+) -> str | None:
+    """Refuse a crossover that would sum the coupled MF channel's raw basis.
+
+    Under a coupled campaign the MF channel's driver scaling is deferred to the
+    derived ``passive_cardioid`` channel, so its basis stays unit-acceleration
+    while every other driver-bearing member is voltage-driven.  Summing those
+    mixes drive domains, and level matching cannot repair a frequency-dependent
+    magnitude and phase error, so the job would otherwise complete with a
+    plausible but wrong combined response -- and persist it as channel bases
+    for every later recombine.
+
+    The campaign names the MF channel from the manifest's source roles, which
+    the request model does not carry, so this is the earliest point at which
+    the refusal can name the right channel instead of every driver-bearing one.
+    """
+
+    if coupled_mf_channel is None or combine is None:
+        return None
+    if coupled_mf_channel.id not in combine.members:
+        return None
+    return (
+        f"combine members include {coupled_mf_channel.id!r}, whose driver scaling "
+        "is owned by the derived 'passive_cardioid' channel; combine that channel "
+        "instead of the raw MF basis"
+    )
+
+
 def _coupled_cardioid_result(
     campaign: Mapping[str, Any],
     geometry: ImportedGeometrySource,
@@ -1372,6 +1401,10 @@ def solve_imported_metal_from_msh_text(
                     "status": "failed",
                     "reason": str(exc),
                 }
+
+        refusal = _cardioid_combine_refusal(coupled_mf_channel, geometry.combine)
+        if refusal is not None:
+            raise ValueError(refusal)
 
         driver_payloads: dict[str, dict[str, Any]] = {}
         for channel, result in zip(geometry.drive_channels, results, strict=True):
