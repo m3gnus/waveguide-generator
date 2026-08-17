@@ -60,6 +60,7 @@ export interface OnshapeSendResult extends WgLinkExportResponse {
     variablesPushed: number;
     partNames: string[];
     accountId: string;
+    buildMode: 'import' | 'native';
   };
 }
 

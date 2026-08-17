@@ -87,6 +87,9 @@ export interface FusionCadStatus {
   link: FusionCadLink | null;
   wgChangesAvailable: boolean;
   fusionChangesAvailable: boolean;
+  documentChanged: boolean;
+  documentChangeDetectable: boolean;
+  staleDetectionExplanation: string | null;
   realizedDimensions: CadRealizedDimensions;
 }
 

@@ -46,6 +46,9 @@ const closedFusion: FusionCadStatus = {
   link: null,
   wgChangesAvailable: false,
   fusionChangesAvailable: false,
+  documentChanged: false,
+  documentChangeDetectable: false,
+  staleDetectionExplanation: null,
   realizedDimensions: { state: 'link_unavailable', instanceId: null, exportId: null, parameters: [] },
 };
 

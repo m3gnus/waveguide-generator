@@ -105,8 +105,9 @@ export function NumberField({
         : `Must be at most ${formatBound(max, precision)}${unit ? ` ${unit}` : ''}.`
     : undefined;
   const emptyMessage = empty && !optional ? 'This value is required.' : undefined;
+  const numberMessage = !empty && !isExpression && !Number.isFinite(parsed) ? 'Enter a valid number.' : undefined;
   const validationMessage = draft.trim() && Number.isFinite(parsed) ? validate?.(parsed) : undefined;
-  const draftMessage = rangeMessage ?? emptyMessage ?? validationMessage;
+  const draftMessage = rangeMessage ?? emptyMessage ?? numberMessage ?? validationMessage;
   const draftInvalid = (empty && !optional) || (!empty && !isExpression && (!Number.isFinite(parsed) || outOfRange || Boolean(validationMessage)));
   const invalid = Boolean(invalidMessage) || draftInvalid;
 

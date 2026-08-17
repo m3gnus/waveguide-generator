@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { useDesignStore, type CrossSectionStation, type DesignValue, type FreeformPoint } from '../stores/design';
 import type { ParameterDefinition } from './parameterRegistry';
 import { HelpTipHeading } from './HelpTip';
+import { NumberField } from './NumberField';
 
 export interface ParsedPointPaste {
   points: FreeformPoint[];
@@ -110,25 +111,22 @@ export function EditablePointTable({ field, points }: { field: ParameterDefiniti
   const plane = field.id.endsWith('H') ? 'H' : 'V';
   const path = `profile_${plane.toLowerCase()}.points`;
   const interior = points.slice(1, -1);
-  const update = (index: number, key: 'z' | 'r' | 'angle_deg', raw: string) => {
+  const update = (index: number, key: 'z' | 'r' | 'angle_deg', value: number | undefined) => {
     const next = structuredClone(points);
     const target = next[index + 1];
-    if (raw.trim() === '' && key === 'angle_deg') delete target.angle_deg;
-    else {
-      const value = Number(raw);
-      if (!Number.isFinite(value)) return;
-      if (key === 'z' && (value < 1 || value > length - 1)) return;
-      if (key === 'r' && value <= 0) return;
-      if (key === 'angle_deg' && (value <= -90 || value >= 90)) return;
-      if (key === 'z') {
-        const t = value / length;
-        if (next.some((point, pointIndex) => pointIndex !== index + 1 && Math.abs(point.t - t) < 1e-9)) return;
-        target.t = t;
-        next.sort((left, right) => left.t - right.t);
-      }
-      else target[key] = value as never;
+    if (value === undefined) delete target.angle_deg;
+    else if (key === 'z') {
+      target.t = value / length;
+      next.sort((left, right) => left.t - right.t);
     }
+    else target[key] = value as never;
     updateValue(path, next);
+  };
+  const duplicatePositionMessage = (index: number, value: number) => {
+    const t = value / length;
+    return points.some((point, pointIndex) => pointIndex !== index + 1 && Math.abs(point.t - t) < 1e-9)
+      ? 'Position must not match another point.'
+      : undefined;
   };
   const add = () => {
     if (interior.length >= 62) return;
@@ -145,9 +143,9 @@ export function EditablePointTable({ field, points }: { field: ParameterDefiniti
     <div className="readonly-table-head"><HelpTipHeading title={field.label} text={field.description}>{field.label}</HelpTipHeading><span>{interior.length} / 62 interior</span></div>
     <table><thead><tr><th>z mm</th><th>r mm</th><th>angle</th><th /></tr></thead>
       <tbody>{interior.map((point, index) => <tr key={`${index}-${point.t}-${length}`}>
-        <td><input aria-label={`${plane} point ${index + 1} z`} type="number" min={1} max={length - 1} step={.1} defaultValue={Math.round(point.t * length * 10_000) / 10_000} onBlur={(event) => update(index, 'z', event.target.value)} /></td>
-        <td><input aria-label={`${plane} point ${index + 1} radius`} type="number" min={.1} step={.1} defaultValue={point.r} onBlur={(event) => update(index, 'r', event.target.value)} /></td>
-        <td><input aria-label={`${plane} point ${index + 1} angle`} type="number" min={-89} max={89} placeholder="auto" defaultValue={point.angle_deg} onBlur={(event) => update(index, 'angle_deg', event.target.value)} /></td>
+        <td><NumberField label={`${plane} point ${index + 1} z`} value={Math.round(point.t * length * 10_000) / 10_000} min={1} max={length - 1} step={.1} precision={4} unit="mm" validate={(value) => duplicatePositionMessage(index, value)} onCommit={(value) => update(index, 'z', value)} /></td>
+        <td><NumberField label={`${plane} point ${index + 1} radius`} value={point.r} min={0} step={.1} precision={4} unit="mm" validate={(value) => value <= 0 ? 'Must be greater than 0 mm.' : undefined} onCommit={(value) => update(index, 'r', value)} /></td>
+        <td><NumberField label={`${plane} point ${index + 1} angle`} value={point.angle_deg} min={-90} max={90} step={.1} precision={2} unit="°" optional validate={(value) => value <= -90 || value >= 90 ? 'Must be greater than −90 and less than 90°.' : undefined} onClear={() => update(index, 'angle_deg', undefined)} onCommit={(value) => update(index, 'angle_deg', value)} /></td>
         <td><button aria-label={`Remove ${plane} point ${index + 1}`} onClick={() => updateValue(path, points.filter((_point, pointIndex) => pointIndex !== index + 1))}>−</button></td>
       </tr>)}</tbody>
     </table>
@@ -159,11 +157,14 @@ export function EditablePointTable({ field, points }: { field: ParameterDefiniti
 export function EditableStationTable({ field, stations }: { field: ParameterDefinition; stations: CrossSectionStation[] }) {
   const updateValue = useDesignStore((state) => state.updateValue);
   const update = (index: number, update: Partial<CrossSectionStation>) => {
-    if (update.t !== undefined && (!Number.isFinite(update.t) || update.t <= 0 || update.t >= 1 || stations.some((station, item) => item !== index && Math.abs(station.t - update.t!) < 1e-9))) return;
-    if (update.exponent !== undefined && (!Number.isFinite(update.exponent) || update.exponent < 2 || update.exponent > 16)) return;
-    if (update.corner_radius_mm !== undefined && (!Number.isFinite(update.corner_radius_mm) || update.corner_radius_mm < 1)) return;
     const next = stations.map((station, item) => item === index ? { ...station, ...update } : station).sort((a, b) => a.t - b.t);
     updateValue('cross_sections', next);
+  };
+  const positionMessage = (index: number, value: number) => {
+    if (value <= 0 || value >= 1) return 'Must be greater than 0 and less than 1.';
+    return stations.some((station, item) => item !== index && Math.abs(station.t - value) < 1e-9)
+      ? 'Position must not match another station.'
+      : undefined;
   };
   const add = () => {
     if (stations.length >= 32) return;
@@ -176,9 +177,9 @@ export function EditableStationTable({ field, stations }: { field: ParameterDefi
     <div className="readonly-table-head"><HelpTipHeading title={field.label} text={field.description}>{field.label}</HelpTipHeading><span>{stations.length} / 32 stations</span></div>
     <table><thead><tr><th>t</th><th>shape</th><th>n / radius</th><th /></tr></thead><tbody>
       {stations.map((station, index) => <tr key={`${index}-${station.t}`}>
-        <td><input aria-label={`Station ${index + 1} position`} type="number" min={0} max={1} step={.01} disabled={index === 0 || index === stations.length - 1} defaultValue={station.t} onBlur={(event) => update(index, { t: Number(event.target.value) })} /></td>
+        <td><NumberField label={`Station ${index + 1} position`} value={station.t} min={0} max={1} step={.01} precision={4} disabled={index === 0 || index === stations.length - 1} validate={index === 0 || index === stations.length - 1 ? undefined : (value) => positionMessage(index, value)} onCommit={(value) => update(index, { t: value })} /></td>
         <td><select aria-label={`Station ${index + 1} shape`} value={station.shape} disabled={index === 0} onChange={(event) => update(index, { shape: event.target.value as CrossSectionStation['shape'] })}><option value="ellipse">Ellipse</option><option value="superellipse">Superellipse</option><option value="rounded_rectangle">Rounded rectangle</option></select></td>
-        <td>{station.shape === 'superellipse' ? <input aria-label={`Station ${index + 1} exponent`} type="number" min={2} max={16} step={.1} defaultValue={station.exponent ?? 4} onBlur={(event) => update(index, { exponent: Number(event.target.value) })} /> : station.shape === 'rounded_rectangle' ? <input aria-label={`Station ${index + 1} corner radius`} type="number" min={1} step={1} defaultValue={station.corner_radius_mm ?? 10} onBlur={(event) => update(index, { corner_radius_mm: Number(event.target.value) })} /> : '—'}</td>
+        <td>{station.shape === 'superellipse' ? <NumberField label={`Station ${index + 1} exponent`} value={station.exponent ?? 4} min={2} max={16} step={.1} precision={2} onCommit={(value) => update(index, { exponent: value })} /> : station.shape === 'rounded_rectangle' ? <NumberField label={`Station ${index + 1} corner radius`} value={station.corner_radius_mm ?? 10} min={1} step={1} precision={2} unit="mm" onCommit={(value) => update(index, { corner_radius_mm: value })} /> : '—'}</td>
         <td><button aria-label={`Remove station ${index + 1}`} disabled={stations.length <= 2 || index === 0 || index === stations.length - 1} onClick={() => updateValue('cross_sections', stations.filter((_station, item) => item !== index))}>−</button></td>
       </tr>)}
     </tbody></table>

@@ -67,6 +67,20 @@ function needsResults(formats: readonly ExportFormat[]): boolean {
   return formats.some((format) => CATALOG_BY_FORMAT.get(format)?.needsResult === true);
 }
 
+function unavailableFormatReason(
+  item: CatalogItem,
+  job: JobItem,
+  designExportable: boolean,
+  designUnavailableReason: string,
+): string | undefined {
+  if (item.id === 'polar_frd' && Object.keys(job.polar_grid ?? {}).length === 0) {
+    return 'This run has no directivity data for a polar FRD set.';
+  }
+  if (item.needsResult && !job.has_results) return 'This run\'s results were removed by retention.';
+  if (item.needsDesign && !designExportable) return designUnavailableReason;
+  return undefined;
+}
+
 function jobName(job: JobItem): string {
   return job.label?.trim() || `${String(job.config_summary.formula_type ?? 'design').toLowerCase()}_${job.id.slice(0, 8)}`;
 }
@@ -85,6 +99,7 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
   const designState = jobRerunState(job);
   const designExportable = canLoadJobDesign(job);
   const designAvailability = jobDesignAvailability(job);
+  const designUnavailableReason = designAvailability.reason ?? designState.reason ?? 'This run has no recoverable design.';
 
   const buildContext = async (formats: readonly ExportFormat[]): Promise<ExportContext> => ({
     ...(needsResults(formats) ? { result: await fetchJobResults(job.id) as ResultPayload } : {}),
@@ -161,21 +176,14 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
       onSelect: async () => { await sendRunToCad(); },
     },
     ...FORMAT_CATALOG.map((item): ActionMenuItem => {
-      const noDirectivity = item.id === 'polar_frd' && Object.keys(job.polar_grid ?? {}).length === 0;
-      const noResults = item.needsResult && !job.has_results;
-      const unavailable = (item.needsDesign && !designExportable) || noResults || noDirectivity;
-      const disabledReason = noDirectivity
-        ? 'This run has no directivity data for a polar FRD set.'
-        : noResults
-          ? 'This run\'s results were removed by retention.'
-        : designAvailability.reason ?? designState.reason ?? 'This run has no recoverable design.';
+      const disabledReason = unavailableFormatReason(item, job, designExportable, designUnavailableReason);
       return {
         id: item.id,
         label: item.label,
         trailing: item.trailing,
         group: item.group,
-        disabled: operation.busy || unavailable,
-        disabledReason: unavailable ? disabledReason : undefined,
+        disabled: operation.busy || Boolean(disabledReason),
+        disabledReason,
         busy: operation.busyFormats.includes(item.format),
         busyLabel: `Preparing ${item.label}…`,
         error: operation.lastErrorFormats.includes(item.format) ? operation.lastError ?? undefined : undefined,
@@ -202,7 +210,8 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
       chevronLabel={`More export options for ${jobName(job)}`}
       onPrimary={preferences.exportFormats.length && preferences.exportFormats.every((format) => {
         const item = CATALOG_BY_FORMAT.get(format);
-        return (!item?.needsResult || job.has_results) && (!item?.needsDesign || designExportable);
+        if (!item) return false;
+        return !unavailableFormatReason(item, job, designExportable, designUnavailableReason);
       }) ? async () => { await exportPreferred(); } : undefined}
     />
     {operation.lastError

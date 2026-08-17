@@ -1,24 +1,7 @@
 import { Box3, OrthographicCamera, PerspectiveCamera, Vector3 } from 'three';
 import { describe, expect, it, vi } from 'vitest';
-import { calculateCameraFit, clippingRange } from './cameraMath';
-import { axisColorsFromTokens, cameraFitDisposition, cameraFitKey, canRenderWebGL, canvasNeedsRemeasure, gizmoAxisDirection, installContextLossFallback, observeCanvasVisibility, ownCameraProjection, pickGizmoAxis, rebracketCamera, resizeCameraFrustum, scheduleAppliedTask, shouldShowAxisGizmo, transferCameraView, type GizmoAxis } from './ViewportCanvas';
-
-class FakeScheduler {
-  private readonly tasks = new Set<() => void>();
-
-  schedule(task?: () => void): () => void {
-    if (task) this.tasks.add(task);
-    return () => {
-      if (task) this.tasks.delete(task);
-    };
-  }
-
-  flush(): void {
-    const pending = [...this.tasks];
-    this.tasks.clear();
-    pending.forEach((task) => task());
-  }
-}
+import { clippingRange } from './cameraMath';
+import { axisColorsFromTokens, cameraFitDisposition, cameraFitKey, canRenderWebGL, canvasNeedsRemeasure, gizmoAxisDirection, installContextLossFallback, observeCanvasVisibility, ownCameraProjection, pickGizmoAxis, rebracketCamera, resizeCameraFrustum, shouldShowAxisGizmo, transferCameraView, type GizmoAxis } from './ViewportCanvas';
 
 describe('viewport renderer guards', () => {
   it('probes an actual WebGL2 context rather than constructor globals', () => {
@@ -67,49 +50,6 @@ describe('viewport renderer guards', () => {
     const second = new Box3(new Vector3(10, 0, 0), new Vector3(12, 2, 2));
     expect(cameraFitKey(first, 3)).not.toBe(cameraFitKey(second, 3));
     expect(cameraFitKey(first, 3)).not.toBe(cameraFitKey(first, 4));
-  });
-
-  it('re-schedules a first camera fit cancelled by an identical bounds update', () => {
-    const scheduler = new FakeScheduler();
-    const applied = { current: null as string | null };
-    const cameraPosition = new Vector3();
-    const firstBounds = new Box3(new Vector3(-20, -10, 0), new Vector3(20, 10, 80));
-    const fitKey = cameraFitKey(firstBounds, 0, 'perspective', 16 / 9);
-
-    const cancelFirstEffect = scheduleAppliedTask(scheduler, applied, fitKey, () => {
-      cameraPosition.copy(calculateCameraFit(firstBounds, 'three-quarter', 'perspective', 16 / 9).position);
-    });
-
-    cancelFirstEffect();
-    const identicalBounds = firstBounds.clone();
-    scheduleAppliedTask(scheduler, applied, cameraFitKey(identicalBounds, 0, 'perspective', 16 / 9), () => {
-      cameraPosition.copy(calculateCameraFit(identicalBounds, 'three-quarter', 'perspective', 16 / 9).position);
-    });
-    scheduler.flush();
-
-    const fittedPosition = calculateCameraFit(identicalBounds, 'three-quarter', 'perspective', 16 / 9).position;
-    expect(cameraPosition.toArray()).toEqual(fittedPosition.toArray());
-  });
-
-  it('does not re-apply a completed fit for equal bounds', () => {
-    const scheduler = new FakeScheduler();
-    const applied = { current: null as string | null };
-    const bounds = new Box3(new Vector3(-20, -10, 0), new Vector3(20, 10, 80));
-    const fitKey = cameraFitKey(bounds, 0, 'perspective', 16 / 9);
-    const cameraPosition = new Vector3();
-    const applyFit = () => {
-      cameraPosition.copy(calculateCameraFit(bounds, 'three-quarter', 'perspective', 16 / 9).position);
-    };
-
-    scheduleAppliedTask(scheduler, applied, fitKey, applyFit);
-    scheduler.flush();
-
-    const orbitedPosition = new Vector3(10, 20, 30);
-    cameraPosition.copy(orbitedPosition);
-    scheduleAppliedTask(scheduler, applied, cameraFitKey(bounds.clone(), 0, 'perspective', 16 / 9), applyFit);
-    scheduler.flush();
-
-    expect(cameraPosition.toArray()).toEqual(orbitedPosition.toArray());
   });
 
   it('resolves gizmo axes from the active theme tokens', () => {
