@@ -7,8 +7,10 @@ from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
+from server import app as app_module
 from server.workspace import api as workspace_api
 
 
@@ -348,6 +350,65 @@ def test_write_export_rejects_oversize_before_writing(tmp_path: Path, monkeypatc
     with pytest.raises(HTTPException, match="size limit"):
         call(state, request("horn_1", [("first.frd", "1234"), ("second.frd", "56")]))
     assert list(workspace.iterdir()) == []
+
+
+def test_workspace_export_request_envelope_accommodates_base64_expansion() -> None:
+    encoded_binary_limit = 4 * ((workspace_api.MAX_EXPORT_BYTES + 2) // 3)
+
+    assert workspace_api.MAX_EXPORT_REQUEST_BODY_BYTES > encoded_binary_limit
+
+
+def test_request_body_middleware_uses_the_workspace_route_limit() -> None:
+    async def downstream(scope, receive, send) -> None:
+        await receive()
+        await JSONResponse({"status": "accepted"})(scope, receive, send)
+
+    middleware = app_module._RequestBodyLimitMiddleware(
+        downstream,
+        max_body_bytes=5,
+        path_limits={"/api/workspace/write-export": 10},
+    )
+
+    async def post(path: str, body: bytes) -> tuple[int, dict[str, str]]:
+        messages: list[dict] = []
+
+        async def receive() -> dict:
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        async def send(message: dict) -> None:
+            messages.append(message)
+
+        await middleware(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": path,
+                "headers": [(b"content-length", str(len(body)).encode("ascii"))],
+            },
+            receive,
+            send,
+        )
+        start = next(item for item in messages if item["type"] == "http.response.start")
+        raw = b"".join(
+            item.get("body", b"")
+            for item in messages
+            if item["type"] == "http.response.body"
+        )
+        return start["status"], json.loads(raw)
+
+    workspace_status, _workspace_body = asyncio.run(
+        post("/api/workspace/write-export", b"123456")
+    )
+    default_status, default_body = asyncio.run(post("/api/design/symmetry", b"123456"))
+    oversized_status, oversized_body = asyncio.run(
+        post("/api/workspace/write-export", b"12345678901")
+    )
+
+    assert workspace_status == 200
+    assert default_status == 413
+    assert "5 bytes" in default_body["detail"]
+    assert oversized_status == 413
+    assert "10 bytes" in oversized_body["detail"]
 
 
 def test_invalid_member_count_is_rejected_without_writing(tmp_path: Path) -> None:

@@ -143,15 +143,38 @@ def test_startup_recovery_removes_running_radiation_impedance(tmp_path: Path) ->
     store = JobStore(tmp_path / "jobs.db")
     store.initialize()
     store.create_job(_job("interrupted", "running"))
+    store.store_channel_bases("interrupted", b"bases-npz")
     store.store_radiation_impedance("interrupted", b"matrix-npz")
 
     store.recover_on_startup("restart")
 
     assert store.get_job_row("interrupted")["status"] == "error"
+    assert store.get_channel_bases("interrupted") is None
     assert store.get_radiation_impedance("interrupted") is None
     metadata = store.get_job_row("interrupted")["task_metadata"]
     assert metadata["has_radiation_impedance_artifact"] is False
     assert metadata["radiation_impedance_artifact_bytes"] is None
+
+
+def test_retention_removes_failed_channel_bases_without_discarding_live_results(
+    tmp_path: Path,
+) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    for job_id, status in (("failed", "error"), ("cancelled", "cancelled")):
+        store.create_job(_job(job_id, status))
+        store.store_channel_bases(job_id, f"bases-{job_id}".encode())
+
+    complete = _job("complete", "complete")
+    complete["completed_at"] = datetime.now().isoformat()
+    store.create_job(complete)
+    store.store_results("complete", {"frequencies": [1000.0]})
+    store.store_channel_bases("complete", b"bases-complete")
+
+    assert store.prune_terminal_jobs(retention_days=30) == 0
+    assert store.get_channel_bases("failed") is None
+    assert store.get_channel_bases("cancelled") is None
+    assert store.get_channel_bases("complete") == b"bases-complete"
 
 
 def test_run_numbers_are_not_reused_after_deleting_the_newest_job(tmp_path: Path) -> None:

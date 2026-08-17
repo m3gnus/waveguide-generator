@@ -652,6 +652,52 @@ def test_second_send_updates_in_place_without_creating_anything(tmp_path: Path) 
     assert transport.calls[1]["path"] == "/blobelements/d/DID/w/WID/e/BLOB"
 
 
+def test_send_refuses_to_guess_between_enumerated_part_studios(tmp_path: Path) -> None:
+    transport = _send_transport()
+    transport.route(
+        "GET", "/translations/TID", 200, {"requestState": "DONE", "resultElementIds": None}
+    )
+    transport.route(
+        "GET",
+        "/documents/d/DID/w/WID/elements",
+        200,
+        [
+            {"id": "DEFAULT", "name": "Part Studio 1", "elementType": "PARTSTUDIO"},
+            {"id": "USER", "name": "User geometry", "elementType": "PARTSTUDIO"},
+        ],
+    )
+
+    with pytest.raises(OnshapeAdapterError, match="exactly one Part Studio"):
+        send_bundle(
+            _adapter(transport),
+            _bundle(tmp_path),
+            document_name="Demo Horn",
+            step_filename="demo.step",
+            target=OnshapeTarget(
+                document_id="DID", workspace_id="WID", blob_element_id="BLOB"
+            ),
+        )
+
+
+def test_send_adopts_the_only_enumerated_part_studio(tmp_path: Path) -> None:
+    transport = _send_transport()
+    transport.route(
+        "GET", "/translations/TID", 200, {"requestState": "DONE", "resultElementIds": None}
+    )
+
+    result = send_bundle(
+        _adapter(transport),
+        _bundle(tmp_path),
+        document_name="Demo Horn",
+        step_filename="demo.step",
+        target=OnshapeTarget(
+            document_id="DID", workspace_id="WID", blob_element_id="BLOB"
+        ),
+    )
+
+    assert result.target.part_studio_element_id == "PART"
+
+
 def test_send_refuses_a_trashed_document(tmp_path: Path) -> None:
     transport = _send_transport()
     transport.route("GET", "/documents/DID", 200, {"name": "Horn", "public": False, "trash": True})

@@ -218,6 +218,38 @@ def test_return_listing_reads_cheap_inventory_and_marks_bad_manifests(tmp_path: 
     }
 
 
+def test_return_listing_allows_an_omitted_source_resolution_suggestion(
+    tmp_path: Path,
+) -> None:
+    app = create_app(data_dir=tmp_path / "data")
+    workspace = tmp_path / "workspace"
+    bundle = workspace / "wgreturn" / "speaker.wgreturn"
+    bundle.mkdir(parents=True)
+    (bundle / "wgreturn.json").write_text(
+        json.dumps(
+            {
+                "document": {"name": "Speaker"},
+                "instances": [{"instance_id": "instance-a"}],
+                "sources": [
+                    {
+                        "id": "source-hf",
+                        "role": "HF",
+                        "required": True,
+                        "default_drive_channel_id": "drive-hf",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    app.state.cad_workspace.select(workspace)
+
+    result = asyncio.run(list_returns(SimpleNamespace(app=app)))
+
+    assert result["items"][0]["readable"] is True
+    assert result["items"][0]["sources"][0]["suggestedResolutionMm"] is None
+
+
 def test_return_listing_rejects_escaping_symlinks_and_plain_files_and_explains_bad_sizes(
     tmp_path: Path,
 ) -> None:

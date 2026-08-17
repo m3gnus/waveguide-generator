@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 from collections.abc import Mapping
+from concurrent.futures import Future
 import hashlib
 import io
 import json
@@ -134,6 +135,7 @@ class DirectivityRenderRequest(ChartModel):
 
 router = APIRouter(tags=["chart-export"])
 _render_lock = threading.Lock()
+_cache_lock = threading.Lock()
 _cache: OrderedDict[str, Any] = OrderedDict()
 _CACHE_LIMIT = 32
 
@@ -154,7 +156,7 @@ def _key(kind: str, payload: dict[str, Any]) -> str:
 
 
 def _cached(key: str) -> Any | None:
-    with _render_lock:
+    with _cache_lock:
         value = _cache.pop(key, None)
         if value is not None:
             _cache[key] = value
@@ -162,20 +164,45 @@ def _cached(key: str) -> Any | None:
 
 
 def _store(key: str, value: Any) -> None:
-    with _render_lock:
+    with _cache_lock:
         _cache[key] = value
         while len(_cache) > _CACHE_LIMIT:
             _cache.popitem(last=False)
 
 
-def _render_charts(payload: dict[str, Any]) -> dict[str, str]:
-    with _render_lock:
-        rendered = _plots().render_all_charts_b64(payload, theme=payload["theme"])
+def _claim_preview(key: str) -> tuple[str | Future[str], bool]:
+    """Return a cached preview or atomically claim responsibility for rendering it."""
+
+    with _cache_lock:
+        value = _cache.pop(key, None)
+        if value is not None:
+            _cache[key] = value
+            return value, False
+        future: Future[str] = Future()
+        _cache[key] = future
+        while len(_cache) > _CACHE_LIMIT:
+            _cache.popitem(last=False)
+        return future, True
+
+
+def _discard_pending_preview(key: str, pending: Future[str]) -> None:
+    with _cache_lock:
+        if _cache.get(key) is pending:
+            del _cache[key]
+
+
+def _render_charts_unlocked(payload: dict[str, Any]) -> dict[str, str]:
+    rendered = _plots().render_all_charts_b64(payload, theme=payload["theme"])
     return {
         name: f"data:image/png;base64,{image}"
         for name, image in rendered.items()
         if image is not None
     }
+
+
+def _render_charts(payload: dict[str, Any]) -> dict[str, str]:
+    with _render_lock:
+        return _render_charts_unlocked(payload)
 
 
 def _render_directivity(payload: dict[str, Any]) -> str | None:
@@ -197,48 +224,65 @@ def _render_directivity(payload: dict[str, Any]) -> str | None:
 
 
 def _preview(theme: str) -> str:
-    frequencies = [100.0, 300.0, 1000.0, 3000.0, 10_000.0]
-    angles = [-90.0, -45.0, 0.0, 45.0, 90.0]
-    directivity = {
-        "horizontal": [
-            [[angle, -12.0 * (abs(angle) / max(20.0, 80.0 - index * 10.0)) ** 1.8] for angle in angles]
-            for index in range(len(frequencies))
-        ]
-    }
-    payload = {
-        "frequencies": frequencies,
-        "spl": [91.0, 94.0, 96.0, 95.0, 92.0],
-        "di": [3.0, 4.0, 6.0, 9.0, 13.0],
-        "di_frequencies": frequencies,
-        "impedance_frequencies": frequencies,
-        "impedance_real": [1.2, 1.1, 1.0, 1.05, 1.15],
-        "impedance_imaginary": [-0.3, -0.1, 0.0, 0.1, 0.25],
-        "directivity": directivity,
-        "theme": theme,
-    }
-    rendered = _render_charts(payload)
-    images = [value.split(",", 1)[1] for value in rendered.values()][:4]
-    if not images:
-        raise RuntimeError("hornlab-plots produced no theme-preview panels")
-    import matplotlib
+    # hornlab-plots applies themes through matplotlib.rc_context, which mutates
+    # process-global rcParams. Keep its panel renders and our pyplot composition
+    # in one critical section so another theme cannot leak into either phase.
+    with _render_lock:
+        frequencies = [100.0, 300.0, 1000.0, 3000.0, 10_000.0]
+        angles = [-90.0, -45.0, 0.0, 45.0, 90.0]
+        directivity = {
+            "horizontal": [
+                [
+                    [
+                        angle,
+                        -12.0
+                        * (abs(angle) / max(20.0, 80.0 - index * 10.0)) ** 1.8,
+                    ]
+                    for angle in angles
+                ]
+                for index in range(len(frequencies))
+            ]
+        }
+        payload = {
+            "frequencies": frequencies,
+            "spl": [91.0, 94.0, 96.0, 95.0, 92.0],
+            "di": [3.0, 4.0, 6.0, 9.0, 13.0],
+            "di_frequencies": frequencies,
+            "impedance_frequencies": frequencies,
+            "impedance_real": [1.2, 1.1, 1.0, 1.05, 1.15],
+            "impedance_imaginary": [-0.3, -0.1, 0.0, 0.1, 0.25],
+            "directivity": directivity,
+            "theme": theme,
+        }
+        rendered = _render_charts_unlocked(payload)
+        images = [value.split(",", 1)[1] for value in rendered.values()][:4]
+        if not images:
+            raise RuntimeError("hornlab-plots produced no theme-preview panels")
+        import matplotlib
 
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
 
-    plots = _plots()
-    theme_object = plots.get_theme(theme)
-    figure, axes = plt.subplots(2, 2, figsize=(12, 7))
-    figure.patch.set_facecolor(theme_object.figure_bg)
-    for axis, encoded in zip(axes.ravel(), images):
-        axis.axis("off")
-        axis.imshow(plt.imread(io.BytesIO(base64.b64decode(encoded)), format="png"))
-    for axis in axes.ravel()[len(images) :]:
-        axis.axis("off")
-    figure.tight_layout()
-    output = io.BytesIO()
-    figure.savefig(output, format="png", dpi=100, facecolor=figure.get_facecolor())
-    plt.close(figure)
-    return base64.b64encode(output.getvalue()).decode("ascii")
+        plots = _plots()
+        theme_object = plots.get_theme(theme)
+        figure, axes = plt.subplots(2, 2, figsize=(12, 7))
+        try:
+            figure.patch.set_facecolor(theme_object.figure_bg)
+            for axis, encoded in zip(axes.ravel(), images):
+                axis.axis("off")
+                axis.imshow(
+                    plt.imread(io.BytesIO(base64.b64decode(encoded)), format="png")
+                )
+            for axis in axes.ravel()[len(images) :]:
+                axis.axis("off")
+            figure.tight_layout()
+            output = io.BytesIO()
+            figure.savefig(
+                output, format="png", dpi=100, facecolor=figure.get_facecolor()
+            )
+        finally:
+            plt.close(figure)
+        return base64.b64encode(output.getvalue()).decode("ascii")
 
 
 @router.get("/api/themes")
@@ -257,10 +301,21 @@ async def theme_preview(theme: str | None = Query(default=None)) -> dict[str, st
     try:
         name = _theme(theme)
         key = f"preview:{name}"
-        image = _cached(key)
-        if image is None:
-            image = await asyncio.to_thread(_preview, name)
+        entry, claimed = _claim_preview(key)
+        if claimed:
+            assert isinstance(entry, Future)
+            try:
+                image = await asyncio.to_thread(_preview, name)
+            except BaseException as exc:
+                entry.set_exception(exc)
+                _discard_pending_preview(key, entry)
+                raise
+            entry.set_result(image)
             _store(key, image)
+        elif isinstance(entry, Future):
+            image = await asyncio.wrap_future(entry)
+        else:
+            image = entry
         return {"theme": name, "image": f"data:image/png;base64,{image}"}
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
