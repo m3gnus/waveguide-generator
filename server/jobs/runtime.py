@@ -273,6 +273,23 @@ def _stored_solve_options(config: Mapping[str, Any]) -> SolveOptions:
     return SolveOptions.model_validate(legacy)
 
 
+def _recorded_resolved_quadrants(metadata: Mapping[str, Any]) -> int | None:
+    """The solve domain a job recorded at submission, if it recorded one.
+
+    Returns ``None`` for rows that never recorded a resolution -- v1 rows, whose
+    declared ``mesh.quadrants`` *is* the domain v1 meshed -- so callers can leave
+    the stored design alone rather than assuming a full domain for them.
+    """
+
+    symmetry = metadata.get("symmetry")
+    if not isinstance(symmetry, Mapping):
+        return None
+    recorded = symmetry.get("resolved_quadrants")
+    if isinstance(recorded, bool) or not isinstance(recorded, (int, float)):
+        return None
+    return int(recorded)
+
+
 def _replay_request(row: Mapping[str, Any]) -> SolveRequest:
     """Build the faithful request represented by a native or imported row."""
 
@@ -1378,12 +1395,23 @@ class JobRuntime:
                 f"({exc})."
             ) from exc
 
+        # The snapshot carries the *declared* quadrants, but the solve ran on the
+        # domain symmetry resolution picked for it, which ``_run_job`` replays
+        # from this same field. Without replaying it here too, a job solved on a
+        # quarter domain regenerates as a full-domain mesh: a different artifact,
+        # not merely a differently-built one.
+        resolved_quadrants = _recorded_resolved_quadrants(metadata)
+        if resolved_quadrants is not None:
+            design.root.mesh.quadrants = Expr(value=float(resolved_quadrants))
+
         try:
             from server.mesh.builder import build_solver_mesh
 
-            # Regeneration deliberately uses the server's currently pinned mesher,
-            # which may differ from the version that produced the solve. Force a
-            # fresh build for every download and never put it back in the job store:
+            # Regeneration reproduces the solve *domain* exactly (above), but
+            # deliberately uses the server's currently pinned mesher, which may
+            # differ from the version that produced the solve -- hence the
+            # ``regenerated``/mesher-version flags on the response. Force a fresh
+            # build for every download and never put it back in the job store:
             # retention would only discard it again.
             regenerated = await build_solver_mesh(
                 design,
