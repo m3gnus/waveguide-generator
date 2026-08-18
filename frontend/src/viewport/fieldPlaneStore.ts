@@ -14,6 +14,7 @@ import type { FrameScene } from './frameScene';
 import {
   defaultFieldPlaneWindow,
   fieldPlaneWindowForMode,
+  maxFieldSplDb,
   type FieldPlaneDisplayMode,
   type FieldPlaneValueWindow,
 } from './fieldPlaneColor';
@@ -42,6 +43,7 @@ export interface FieldPlaneStore {
   status: FieldPlaneStatus;
   error: string | null;
   field: DecodedFieldPlane | null;
+  frozenNormalizationDb: number | null;
   displayMode: FieldPlaneDisplayMode;
   rangeLocked: boolean;
   animationSpeed: number;
@@ -311,6 +313,7 @@ export function createFieldPlaneStore(
         generation: requestGeneration,
         status: current.field ? 'ready' : current.enabled ? 'idle' : current.status,
         error: null,
+        frozenNormalizationDb: null,
       });
     };
 
@@ -449,6 +452,7 @@ export function createFieldPlaneStore(
         status: 'loading',
         error: null,
         field: null,
+        frozenNormalizationDb: null,
       });
       void fetchResults(jobId)
         .then((results) => {
@@ -485,6 +489,7 @@ export function createFieldPlaneStore(
       status: 'idle',
       error: null,
       field: null,
+      frozenNormalizationDb: null,
       displayMode: renderingDefaults.fieldPlaneDisplayMode,
       rangeLocked: renderingDefaults.fieldPlaneRangeLocked,
       animationSpeed: renderingDefaults.fieldPlaneAnimationSpeed,
@@ -511,6 +516,7 @@ export function createFieldPlaneStore(
           status: 'idle',
           error: null,
           field: null,
+          frozenNormalizationDb: null,
           animating: false,
         });
       },
@@ -534,13 +540,18 @@ export function createFieldPlaneStore(
         if (!current.enabled || !current.jobId) return;
         const next = clonePlane(plane);
         remember(current.jobId, next, current.frequencyIndex);
-        set({ plane: next, dragging: false });
+        set({ plane: next, dragging: false, frozenNormalizationDb: null });
         requestCurrentPlane({ ...current, plane: next, dragging: false }, next);
       },
       beginPlaneDrag: () => {
         const current = get();
-        if (!current.enabled || !current.jobId || !current.plane) return;
-        set({ dragging: true });
+        if (!current.enabled || current.dragging || !current.jobId || !current.plane) return;
+        set({
+          dragging: true,
+          frozenNormalizationDb: current.field
+            ? maxFieldSplDb(current.field.real, current.field.imag)
+            : null,
+        });
       },
       updatePlaneDrag: (plane) => {
         const current = get();
@@ -555,13 +566,13 @@ export function createFieldPlaneStore(
         if (!current.enabled || !current.jobId || !current.plane) return;
         const next = clonePlane(plane ?? current.plane);
         remember(current.jobId, next, current.frequencyIndex);
-        set({ plane: next, dragging: false });
+        set({ plane: next, dragging: false, frozenNormalizationDb: null });
         requestCurrentPlane({ ...current, plane: next, dragging: false }, next);
       },
       cancelPending: () => {
         activationGeneration += 1;
         cancelRequests();
-        set({ dragging: false });
+        set({ dragging: false, frozenNormalizationDb: null });
       },
       resume: () => {
         const current = get();
@@ -585,6 +596,7 @@ export function createFieldPlaneStore(
           status: 'error',
           error: reason,
           field: null,
+          frozenNormalizationDb: null,
           animating: false,
         });
       },

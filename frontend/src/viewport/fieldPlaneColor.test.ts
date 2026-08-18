@@ -79,13 +79,36 @@ describe('field-plane colour oracle', () => {
     })).toBeCloseTo(1, 10);
   });
 
-  it('uses a symmetric instantaneous-pressure range at the maximum complex magnitude', () => {
-    const real = Float32Array.of(3, 0);
-    const imag = Float32Array.of(4, 2);
-    expect(maxFieldMagnitudePa(real, imag)).toBe(5);
+  it('uses a phase-independent 98th-percentile complex-magnitude window', () => {
+    const real = new Float32Array(100);
+    const imag = Float32Array.from({ length: 100 }, (_, index) => (
+      index === 99 ? 1_000 : index + 1
+    ));
+    expect(maxFieldMagnitudePa(real, imag)).toBe(1_000);
     expect(fieldPlaneWindowForMode('instantaneous', real, imag)).toEqual({
-      minimum: -5,
-      maximum: 5,
+      minimum: -98,
+      maximum: 98,
+      unit: 'Pa',
+    });
+  });
+
+  it('keeps a nonzero instantaneous window for degenerate fields', () => {
+    expect(fieldPlaneWindowForMode(
+      'instantaneous',
+      new Float32Array(),
+      new Float32Array(),
+    )).toEqual({ minimum: -1, maximum: 1, unit: 'Pa' });
+    expect(fieldPlaneWindowForMode(
+      'instantaneous',
+      new Float32Array(100),
+      new Float32Array(100),
+    )).toEqual({ minimum: -1, maximum: 1, unit: 'Pa' });
+
+    const sparse = new Float32Array(100);
+    sparse[99] = 7;
+    expect(fieldPlaneWindowForMode('instantaneous', sparse, new Float32Array(100))).toEqual({
+      minimum: -7,
+      maximum: 7,
       unit: 'Pa',
     });
   });

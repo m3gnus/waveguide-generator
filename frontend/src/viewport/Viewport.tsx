@@ -20,6 +20,7 @@ import {
   defaultFieldPlaneWindow,
   fieldPlaneColormap,
   FIELD_PLANE_DISPLAY_MODES,
+  FIELD_PLANE_INSTANTANEOUS_PERCENTILE,
   type FieldPlaneDisplayMode,
   type FieldPlaneValueWindow,
 } from './fieldPlaneColor';
@@ -77,7 +78,7 @@ export function fieldPlaneWindowReadout(
   if (mode === 'phase') {
     return `${window.minimum.toFixed(0)}…${window.maximum.toFixed(0)}°`;
   }
-  return `± ${formatPressurePa(window.maximum)} Pa`;
+  return `± ${formatPressurePa(window.maximum)} Pa (${FIELD_PLANE_INSTANTANEOUS_PERCENTILE}th pct)`;
 }
 
 function displayQuadrants(value: number): DisplayQuadrants {
