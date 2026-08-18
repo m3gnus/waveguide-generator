@@ -20,6 +20,7 @@ the exception in `validation/`: it is a blank form to copy, not evidence.
 | [V1 compatibility](legacy/V1-COMPATIBILITY.md) | Maintainers and migration work | Maintained legacy summary | Current code plus archived v1 inventory |
 | [August 2026 rebuild](history/REBUILD-2026-08.md) | Maintainers | Historical summary | Git history; not an implementation brief |
 | [Measurement template](validation/MEASUREMENT-TEMPLATE.md) | Anyone validating a build against a solve | Current template | Copy per case; pairs with the Results panel's measured overlay |
+| [Validation cases](validation/CASES.md) | Anyone judging solver accuracy | Living index | Measured-vs-simulated references; first entry is the published CAFMEH-P3 comparison |
 | [August 2026 validation](validation/2026-08/README.md) | Maintainers | Dated evidence | Captured machines and commits; not current release status |
 
 The active CAD-link plans intentionally remain at the workspace root while another
