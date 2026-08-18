@@ -18,6 +18,7 @@ from server.exports import core
 from server.exports.core import (
     StepSolidResult,
     _build_step_solid_sync,
+    _build_step_sync,
     binary_stl,
     profile_csv,
     smooth_segments,
@@ -186,6 +187,33 @@ def test_solid_step_builder_captures_mesher_cad_info() -> None:
     assert result.cad_info.n_faces > 0
     assert result.cad_info.bounding_box_mm[0] != result.cad_info.bounding_box_mm[1]
     assert result.cad_info.units == "mm"
+
+
+def _header_positions(step_text: str) -> list[int]:
+    header = step_text.partition("HEADER;")[2].partition("ENDSEC;")[0]
+    return [
+        header.find(keyword)
+        for keyword in ("FILE_DESCRIPTION", "FILE_NAME", "FILE_SCHEMA")
+    ]
+
+
+def test_both_step_bodies_write_an_iso_10303_21_header() -> None:
+    """OpenCASCADE 7.7+ writes file_name before file_description.
+
+    Fusion tolerates it; CATIA reads the product structure and drops every
+    shape, which looks like an empty tree rather than an import error. Both
+    export bodies have to correct it, and a mesher pin bump must not undo it.
+    """
+
+    design = _design().model_dump(mode="json")
+
+    for step_text in (
+        _build_step_solid_sync(design).step_text,
+        _build_step_sync(design),
+    ):
+        positions = _header_positions(step_text)
+        assert all(position >= 0 for position in positions), step_text[:400]
+        assert positions == sorted(positions), step_text[:400]
 
 
 def test_core_all_contains_public_builders() -> None:
