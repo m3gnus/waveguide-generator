@@ -100,15 +100,23 @@ describe('field-plane worker mask logic', () => {
     const mirrored = createFieldPlaneMaskMesh(halfBoxVertices(1e-8), halfBoxIndices, 'yz');
     const positions = mirrored.geometry.getAttribute('position');
 
+    expect(mirrored.snappedVertexCount).toBe(4);
     expect(mirrored.watertight).toBe(true);
     expect(positions.count).toBe(12);
     for (const index of [0, 3, 4, 7]) expect(positions.getX(index)).toBe(0);
     mirrored.geometry.dispose();
   });
 
+  it('reports zero snapped vertices when symmetry-plane coordinates do not change', () => {
+    const mirrored = createFieldPlaneMaskMesh(halfBoxVertices(), halfBoxIndices, 'yz');
+
+    expect(mirrored.snappedVertexCount).toBe(0);
+    mirrored.geometry.dispose();
+  });
+
   it('creates four consistently wound images for two active symmetry planes', () => {
-    const vertices = halfBoxVertices();
-    for (const index of [0, 1, 4, 5]) vertices[index * 3 + 1] = 0;
+    const vertices = halfBoxVertices(1e-8);
+    for (const index of [0, 1, 4, 5]) vertices[index * 3 + 1] = 1e-8;
     const quarterBoxIndices = Uint32Array.from([
       ...boxIndices.slice(0, 12),
       ...boxIndices.slice(18, 24),
@@ -116,6 +124,7 @@ describe('field-plane worker mask logic', () => {
     ]);
     const mirrored = createFieldPlaneMaskMesh(vertices, quarterBoxIndices, 'yz+xz');
 
+    expect(mirrored.snappedVertexCount).toBe(6);
     expect(mirrored.watertight).toBe(true);
     expect(mirrored.geometry.index?.count).toBe(quarterBoxIndices.length * 4);
     expect(isPointInsideMaskMesh(mirrored, [-0.5, -0.5, 0])).toBe(true);

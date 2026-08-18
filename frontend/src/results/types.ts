@@ -3,6 +3,7 @@ import type { JobResults, NullableNumber } from '../api/results';
 export interface ObservationMetadata {
   requested_distance_m?: number;
   effective_distance_m?: number;
+  observation_origin?: string;
   sound_speed_m_per_s?: number;
 }
 

@@ -15,6 +15,7 @@ from typing import Any, TextIO
 
 from pydantic import ValidationError
 
+from server.design.conventions import artifact_conventions
 from server.design.textcfg import TextConfigError, parse
 from server.engines.registry import EngineRegistry
 from server.jobs.events import JobsProtocol
@@ -196,6 +197,7 @@ def _summary(job: Mapping[str, Any]) -> dict[str, Any]:
         "jobId": job["id"],
         "status": job["status"],
         "engine": solve_options.get("engine"),
+        "conventions": artifact_conventions(),
         "timings": {
             "createdAt": job.get("created_at"),
             "queuedAt": job.get("queued_at"),

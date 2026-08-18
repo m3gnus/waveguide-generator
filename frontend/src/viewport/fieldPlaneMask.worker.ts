@@ -27,7 +27,9 @@ function loadMesh(
   }).then(async (response) => {
     if (!response.ok) throw new Error(`mesh artifact request failed (${response.status})`);
     const parsed = parseMSH(await response.text());
-    return createFieldPlaneMaskMesh(parsed.vertices, parsed.indices, symmetryPlane);
+    const mesh = createFieldPlaneMaskMesh(parsed.vertices, parsed.indices, symmetryPlane);
+    console.info(`field-plane mask: snapped ${mesh.snappedVertexCount} vertices onto the symmetry plane (tol ${mesh.snapToleranceM})`);
+    return mesh;
   }).catch((reason: unknown) => {
     meshes.delete(key);
     throw reason;
@@ -51,6 +53,7 @@ scope.onmessage = (event) => {
         nx: request.plane.nx,
         ny: request.plane.ny,
         watertight: mesh.watertight,
+        snappedVertexCount: mesh.snappedVertexCount,
         mask: mask.buffer as ArrayBuffer,
       };
       scope.postMessage(result, [result.mask]);

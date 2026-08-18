@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from server.cadlink.identity import CadLink, SaveIdentity, design_hash
 from server.cadlink.store import CadLinkStore
+from server.design.conventions import artifact_conventions
 from server.design.schema import DesignConfig
 from server.design.textcfg import serialize
 from server.mesh.gmsh_worker import run_on_gmsh_worker
@@ -480,8 +481,18 @@ def _export_wglink_sync(
                     )
                 ],
             )
+            # Optional top-level metadata is additive under WGLink 1.x, so this
+            # does not require a wglink_version or required_features change.
+            manifest = {
+                **product.manifest,
+                "conventions": artifact_conventions(),
+            }
+            product.manifest_path.write_text(
+                json.dumps(manifest, indent=2, sort_keys=True, allow_nan=False) + "\n",
+                encoding="utf-8",
+            )
             manifest_json = product.manifest_path.read_text(encoding="utf-8")
-            artifact_sha256 = str(product.manifest["files"]["waveguide.step"]["sha256"])
+            artifact_sha256 = str(manifest["files"]["waveguide.step"]["sha256"])
             _replace_bundle(staged, destination)
             return {
                 "manifest_json": manifest_json,

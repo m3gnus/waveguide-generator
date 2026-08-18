@@ -120,6 +120,24 @@ def test_solve_output_writes_artifacts_and_refuses_existing_dir(
     assert summary["status"] == "complete"
     assert summary["engine"] == "metal"
     assert summary["runNumber"] == 1
+    assert summary["conventions"] == {
+        "frame": {
+            "axes": {
+                "x": "horizontal",
+                "y": "vertical",
+                "z": "axial (throat to mouth)",
+            },
+            "axis_remap_matrix": [[1, 0, 0], [0, -1, 0], [0, 0, 1]],
+            "winding": "reversed-on-remap",
+        },
+        "units": {
+            "solver_length": "m",
+            "cad_length": "mm",
+            "frequency": "Hz",
+            "phase": "degrees",
+        },
+        "phasor": "exp(-i omega t)",
+    }
 
     capsys.readouterr()
     assert main(argv, engine_registry=_registry()) == 1
