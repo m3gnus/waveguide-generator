@@ -3,7 +3,15 @@ import { createJSONStorage, persist } from 'zustand/middleware';
 import { DEFAULT_ATH_POLAR_UI, athPolarOverrides } from './athPolars';
 import { durableSettings } from './durableSettings';
 import { MAX_FREQUENCY_POINTS, parseFrequencyList, type FrequencyListParse } from './frequencyList';
-import { wgSolveOverrides } from './wgSolveBlock';
+import {
+  ENGINE_PATTERN,
+  FREQUENCY_MODES,
+  FREQUENCY_SPACINGS,
+  MESH_VALIDATION_MODES,
+  OBSERVATION_ORIGINS,
+  SYMMETRY_MODES,
+  wgSolveOverrides,
+} from './wgSolveBlock';
 
 export type MeshValidationMode = 'warn' | 'strict' | 'off';
 export type FrequencySpacing = 'log' | 'linear';
@@ -53,6 +61,29 @@ export interface PolarUiState {
 }
 
 export const defaultPolarUi: PolarUiState = structuredClone(DEFAULT_ATH_POLAR_UI);
+
+export const POLAR_AXES: PolarAxis[] = ['horizontal', 'vertical', 'diagonal'];
+
+/**
+ * The legal range of each numeric directivity setting, stated once.
+ *
+ * These are not new limits: they are the invariants `polarConfigFromUi` has
+ * always refused to build a request outside of, written down next to the
+ * defaults so `normalizePolarUi` can enforce the same ones on a stored value.
+ * The angular positions are unbounded on purpose -- a sweep may legitimately
+ * run through negative angles -- so only finiteness is checked for those.
+ *
+ * Metres. Closer than this is inside the mouth of most horns, so a stored
+ * value below it is clamped up rather than replaced: the intent to measure
+ * close is kept, the impossible part is not.
+ */
+export const MIN_POLAR_DISTANCE_M = 0.1;
+/**
+ * Degrees, exclusive. The step has no clampable floor -- the panel offers
+ * whole degrees and a `.cfg` may legitimately state a finer one -- so a stored
+ * step that is not strictly above this falls back to the default instead.
+ */
+export const MIN_ANGLE_STEP_EXCLUSIVE_DEG = 0;
 
 export function polarConfigFromUi(ui: PolarUiState): PolarConfig {
   const numeric = [ui.angleStart, ui.angleEnd, ui.angleStep, ui.distance, ui.normAngle, ui.diagonalAngle];
@@ -125,7 +156,8 @@ export function polarUiFromConfig(config: unknown): PolarUiState | null {
   };
 }
 
-interface SolveOptionsStore {
+/** Exactly the solve settings that are written to durable storage. */
+export interface PersistedSolveOptions {
   engine: string;
   symmetry: SymmetryMode;
   meshValidationMode: MeshValidationMode;
@@ -134,6 +166,99 @@ interface SolveOptionsStore {
   frequencyMode: FrequencyMode;
   frequencyListText: string;
   polar: PolarUiState;
+}
+
+export const DEFAULT_SOLVE_OPTIONS: Readonly<PersistedSolveOptions> = Object.freeze({
+  engine: 'auto',
+  symmetry: 'auto',
+  meshValidationMode: 'warn',
+  verbose: false,
+  frequencySpacing: 'log',
+  frequencyMode: 'range',
+  frequencyListText: '',
+  polar: defaultPolarUi,
+});
+
+export function defaultSolveOptions(): PersistedSolveOptions {
+  return { ...DEFAULT_SOLVE_OPTIONS, polar: structuredClone(defaultPolarUi) };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function oneOf<T extends string>(value: unknown, allowed: T[], fallback: T): T {
+  return typeof value === 'string' && (allowed as string[]).includes(value) ? value as T : fallback;
+}
+
+function finite(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+/**
+ * Bring a stored directivity rig back inside the range the solve path accepts.
+ *
+ * The persisted copy is a plain JSON file in the application data directory, so
+ * it can arrive hand-edited, truncated, or written by a different version. It
+ * used to be spread into the store unexamined, which is enough for a
+ * non-array `enabledAxes` to throw out of the Simulation panel's render on the
+ * first `.includes` -- the whole rail, not just the field that was wrong.
+ *
+ * `fallback` is the state this value is replacing, so a rehydrate that arrives
+ * with one unreadable field keeps the user's own value for it rather than
+ * resetting the field to the shipped default.
+ */
+export function normalizePolarUi(raw: unknown, fallback: PolarUiState = defaultPolarUi): PolarUiState {
+  const stored = isRecord(raw) ? raw : {};
+  const axes = Array.isArray(stored.enabledAxes)
+    ? [...new Set(stored.enabledAxes.filter((axis): axis is PolarAxis => (POLAR_AXES as string[]).includes(axis as string)))]
+    : [];
+  const angleStep = finite(stored.angleStep, fallback.angleStep);
+  // The fallback is itself a stored value on a rehydrate, so it gets the same
+  // check before it is trusted as a replacement.
+  const fallbackStep = fallback.angleStep > MIN_ANGLE_STEP_EXCLUSIVE_DEG ? fallback.angleStep : defaultPolarUi.angleStep;
+  return {
+    angleStart: finite(stored.angleStart, fallback.angleStart),
+    angleEnd: finite(stored.angleEnd, fallback.angleEnd),
+    angleStep: angleStep > MIN_ANGLE_STEP_EXCLUSIVE_DEG ? angleStep : fallbackStep,
+    distance: Math.max(MIN_POLAR_DISTANCE_M, finite(stored.distance, fallback.distance)),
+    normAngle: finite(stored.normAngle, fallback.normAngle),
+    diagonalAngle: finite(stored.diagonalAngle, fallback.diagonalAngle),
+    // A rig with no planes cannot be solved and the panel refuses to empty the
+    // set, so an empty stored list is corruption rather than a choice.
+    enabledAxes: axes.length ? axes : [...fallback.enabledAxes],
+    observationOrigin: oneOf(stored.observationOrigin, OBSERVATION_ORIGINS, fallback.observationOrigin),
+    sphericalSampling: typeof stored.sphericalSampling === 'boolean' ? stored.sphericalSampling : fallback.sphericalSampling,
+    fieldPlane: typeof stored.fieldPlane === 'boolean' ? stored.fieldPlane : fallback.fieldPlane,
+  };
+}
+
+/**
+ * The same treatment for the flat solver settings around the rig.
+ *
+ * Applied on the way in and on the way out, so neither a corrupt stored payload
+ * nor an unvalidated in-memory value can outlive one load: `frequencyListText`
+ * held anything but a string used to throw from `String.prototype.split` the
+ * moment the sweep section rendered.
+ */
+export function normalizePersistedSolveOptions(
+  raw: unknown,
+  fallback: PersistedSolveOptions = DEFAULT_SOLVE_OPTIONS,
+): PersistedSolveOptions {
+  const stored = isRecord(raw) ? raw : {};
+  return {
+    engine: typeof stored.engine === 'string' && ENGINE_PATTERN.test(stored.engine) ? stored.engine : fallback.engine,
+    symmetry: oneOf(stored.symmetry, SYMMETRY_MODES, fallback.symmetry),
+    meshValidationMode: oneOf(stored.meshValidationMode, MESH_VALIDATION_MODES, fallback.meshValidationMode),
+    verbose: typeof stored.verbose === 'boolean' ? stored.verbose : fallback.verbose,
+    frequencySpacing: oneOf(stored.frequencySpacing, FREQUENCY_SPACINGS, fallback.frequencySpacing),
+    frequencyMode: oneOf(stored.frequencyMode, FREQUENCY_MODES, fallback.frequencyMode),
+    frequencyListText: typeof stored.frequencyListText === 'string' ? stored.frequencyListText : fallback.frequencyListText,
+    polar: normalizePolarUi(stored.polar, fallback.polar),
+  };
+}
+
+interface SolveOptionsStore extends PersistedSolveOptions {
   setEngine: (engine: string) => void;
   setSymmetry: (symmetry: SymmetryMode) => void;
   setMeshValidationMode: (mode: MeshValidationMode) => void;
@@ -148,14 +273,7 @@ interface SolveOptionsStore {
 }
 
 export const useSolveOptionsStore = create<SolveOptionsStore>()(persist((set, get) => ({
-  engine: 'auto',
-  symmetry: 'auto',
-  meshValidationMode: 'warn',
-  verbose: false,
-  frequencySpacing: 'log',
-  frequencyMode: 'range',
-  frequencyListText: '',
-  polar: structuredClone(defaultPolarUi),
+  ...defaultSolveOptions(),
   setEngine: (engine) => set({ engine }),
   setSymmetry: (symmetry) => set({ symmetry }),
   setMeshValidationMode: (meshValidationMode) => set({ meshValidationMode }),
@@ -203,37 +321,17 @@ export const useSolveOptionsStore = create<SolveOptionsStore>()(persist((set, ge
     setItem: (name, value) => durableSettings.set(name as 'solveOptions', value),
     removeItem: (name) => durableSettings.set(name as 'solveOptions', null),
   })),
-  partialize: (state) => ({
-    engine: state.engine,
-    symmetry: state.symmetry,
-    meshValidationMode: state.meshValidationMode,
-    verbose: state.verbose,
-    frequencySpacing: state.frequencySpacing,
-    frequencyMode: state.frequencyMode,
-    frequencyListText: state.frequencyListText,
-    polar: state.polar,
-  }),
-  merge: (persisted, current) => {
-    const stored = persisted as Partial<SolveOptionsStore> | undefined;
-    return {
-      ...current,
-      ...stored,
-      polar: { ...current.polar, ...(stored?.polar ?? {}) },
-    };
-  },
+  // Normalized on the way out as well as in. The store's setters take their
+  // values straight from number fields and from `.cfg` blocks, so what reaches
+  // storage has not necessarily been through the submit-time validator; a value
+  // outside the legal range is kept on screen while it is being typed but is
+  // not what the next session loads.
+  partialize: (state) => normalizePersistedSolveOptions(state),
+  merge: (persisted, current) => ({ ...current, ...normalizePersistedSolveOptions(persisted, current) }),
 }));
 
 export function resetSolveOptionsStore(): void {
-  useSolveOptionsStore.setState({
-    engine: 'auto',
-    symmetry: 'auto',
-    meshValidationMode: 'warn',
-    verbose: false,
-    frequencySpacing: 'log',
-    frequencyMode: 'range',
-    frequencyListText: '',
-    polar: structuredClone(defaultPolarUi),
-  });
+  useSolveOptionsStore.setState(defaultSolveOptions());
 }
 
 // The server's copy is authoritative, so re-read once it has replaced the cache.

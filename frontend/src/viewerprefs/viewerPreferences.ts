@@ -23,6 +23,24 @@ export interface ViewerPreferences {
 export const VIEWER_PREFERENCES_NAMESPACE = 'wg2.preferences.v1';
 export const VIEWER_PREFERENCES_SCHEMA_VERSION = 2;
 
+/**
+ * The legal range of every numeric viewer preference, next to the defaults.
+ *
+ * The bounds themselves are unchanged -- they were the literals inside
+ * `parseViewerPreferences` -- but a range that is part of the definition is
+ * one a new preference is far less likely to be added without.
+ */
+export const VIEWER_PREFERENCE_RANGES = {
+  /** Pointer-speed multipliers, all sharing one usable band. */
+  rotateSpeed: [0.1, 5],
+  zoomSpeed: [0.1, 5],
+  panSpeed: [0.1, 5],
+  /** OrbitControls inertia; above half a turn per frame it never settles. */
+  dampingFactor: [0.01, 0.5],
+  /** Field-plane phase animation, in cycles per second of wall clock. */
+  fieldPlaneAnimationSpeed: [0.1, 4],
+} as const satisfies Partial<Record<keyof ViewerPreferences, readonly [number, number]>>;
+
 export const DEFAULT_VIEWER_PREFERENCES: Readonly<ViewerPreferences> = Object.freeze({
   rotateSpeed: 1,
   zoomSpeed: 1,
@@ -48,7 +66,7 @@ interface PreferenceEnvelope {
 
 type StorageLike = Pick<Storage, 'getItem' | 'setItem'>;
 
-function finiteInRange(value: unknown, minimum: number, maximum: number): value is number {
+function finiteInRange(value: unknown, [minimum, maximum]: readonly [number, number]): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= minimum && value <= maximum;
 }
 
@@ -67,11 +85,11 @@ export function parseViewerPreferences(raw: string | null): ViewerPreferences {
       ? envelope.viewer as Partial<ViewerPreferences>
       : {};
     return {
-      rotateSpeed: finiteInRange(stored.rotateSpeed, 0.1, 5) ? stored.rotateSpeed : DEFAULT_VIEWER_PREFERENCES.rotateSpeed,
-      zoomSpeed: finiteInRange(stored.zoomSpeed, 0.1, 5) ? stored.zoomSpeed : DEFAULT_VIEWER_PREFERENCES.zoomSpeed,
-      panSpeed: finiteInRange(stored.panSpeed, 0.1, 5) ? stored.panSpeed : DEFAULT_VIEWER_PREFERENCES.panSpeed,
+      rotateSpeed: finiteInRange(stored.rotateSpeed, VIEWER_PREFERENCE_RANGES.rotateSpeed) ? stored.rotateSpeed : DEFAULT_VIEWER_PREFERENCES.rotateSpeed,
+      zoomSpeed: finiteInRange(stored.zoomSpeed, VIEWER_PREFERENCE_RANGES.zoomSpeed) ? stored.zoomSpeed : DEFAULT_VIEWER_PREFERENCES.zoomSpeed,
+      panSpeed: finiteInRange(stored.panSpeed, VIEWER_PREFERENCE_RANGES.panSpeed) ? stored.panSpeed : DEFAULT_VIEWER_PREFERENCES.panSpeed,
       dampingEnabled: typeof stored.dampingEnabled === 'boolean' ? stored.dampingEnabled : DEFAULT_VIEWER_PREFERENCES.dampingEnabled,
-      dampingFactor: finiteInRange(stored.dampingFactor, 0.01, 0.5) ? stored.dampingFactor : DEFAULT_VIEWER_PREFERENCES.dampingFactor,
+      dampingFactor: finiteInRange(stored.dampingFactor, VIEWER_PREFERENCE_RANGES.dampingFactor) ? stored.dampingFactor : DEFAULT_VIEWER_PREFERENCES.dampingFactor,
       invertWheelZoom: typeof stored.invertWheelZoom === 'boolean' ? stored.invertWheelZoom : DEFAULT_VIEWER_PREFERENCES.invertWheelZoom,
       keyboardPanEnabled: typeof stored.keyboardPanEnabled === 'boolean' ? stored.keyboardPanEnabled : DEFAULT_VIEWER_PREFERENCES.keyboardPanEnabled,
       liveUpdate: typeof stored.liveUpdate === 'boolean' ? stored.liveUpdate : DEFAULT_VIEWER_PREFERENCES.liveUpdate,
@@ -84,7 +102,7 @@ export function parseViewerPreferences(raw: string | null): ViewerPreferences {
       fieldPlaneRangeLocked: typeof stored.fieldPlaneRangeLocked === 'boolean'
         ? stored.fieldPlaneRangeLocked
         : DEFAULT_VIEWER_PREFERENCES.fieldPlaneRangeLocked,
-      fieldPlaneAnimationSpeed: finiteInRange(stored.fieldPlaneAnimationSpeed, 0.1, 4)
+      fieldPlaneAnimationSpeed: finiteInRange(stored.fieldPlaneAnimationSpeed, VIEWER_PREFERENCE_RANGES.fieldPlaneAnimationSpeed)
         ? stored.fieldPlaneAnimationSpeed
         : DEFAULT_VIEWER_PREFERENCES.fieldPlaneAnimationSpeed,
     };

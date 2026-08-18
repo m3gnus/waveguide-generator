@@ -41,6 +41,39 @@ describe('client preferences', () => {
     expect(loadPreferences(JSON.stringify({ version: STORAGE_VERSION, preferences: { directivityGuideInterval: 0 } })).directivityGuideInterval).toBe(1);
     expect(loadPreferences(JSON.stringify({ version: STORAGE_VERSION, preferences: { directivityGuideInterval: 999 } })).directivityGuideInterval).toBe(180);
   });
+  /**
+   * The durable copy is a JSON file the user can open, so every field has to
+   * survive being the wrong type. `chartTheme` used to be coerced with
+   * `String`, which handed the exporter the literal "[object Object]" as a
+   * theme name rather than falling back to the interface.
+   */
+  it('takes nothing on trust from a hand-edited payload', () => {
+    const loaded = loadPreferences(JSON.stringify({ version: STORAGE_VERSION, preferences: {
+      chartTheme: { name: 'console' },
+      chartTypes: 'frequency_response',
+      exportFormats: ['csv', 'not_a_format'],
+      smoothing: '1/9',
+      mapReference: -5,
+      counter: -3,
+      minRating: 99,
+      jobSort: 'oldest',
+      cadApplication: 'solidworks',
+      directivityGuideInterval: 'wide',
+    } }));
+    expect(loaded).toMatchObject({
+      chartTheme: 'auto',
+      exportFormats: ['csv'],
+      smoothing: 'none',
+      mapReference: -6,
+      counter: 1,
+      minRating: 5,
+      jobSort: 'completed_desc',
+      cadApplication: 'fusion360',
+      directivityGuideInterval: 10,
+    });
+    // A non-array chart list is unusable, so the shipped six panels stand.
+    expect(loaded.chartTypes).toHaveLength(6);
+  });
   it('migrates v7 naming preferences to opt-in date decoration', () => {
     const migrated = readPreferences(JSON.stringify({ version: 7, preferences: {
       outputName: 'horn12',

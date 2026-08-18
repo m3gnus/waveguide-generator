@@ -100,6 +100,26 @@ export interface Preferences {
   minRating: number;
 }
 
+/**
+ * The legal range of every numeric preference, next to the defaults it bounds.
+ *
+ * These were spelled inline in `normalize` as bare numbers. Stating them here
+ * is not a new constraint -- the values are exactly the ones that were already
+ * enforced -- but it makes the range part of the preference's definition
+ * rather than an implementation detail of one function.
+ */
+/** Degrees between graticule lines on a directivity map. */
+const GUIDE_INTERVAL_RANGE_DEG = [1, 180] as const;
+/** The run-number counter; six digits is what the naming formats can render. */
+const COUNTER_RANGE = [1, 999_999] as const;
+/** Stars, matching the rating control in the run list. */
+const MIN_RATING_RANGE = [0, 5] as const;
+
+function clampInteger(value: unknown, [minimum, maximum]: readonly [number, number], fallback: number): number {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? Math.max(minimum, Math.min(maximum, Math.floor(numeric))) : fallback;
+}
+
 const defaults: Preferences = {
   cadApplication: 'fusion360',
   smoothing: 'none',
@@ -148,7 +168,7 @@ export function normalize(raw: Partial<Preferences> = {}): Preferences {
   const mapReference = MAP_REFERENCES.includes(Number(raw.mapReference) as MapReference) ? Number(raw.mapReference) as MapReference : defaults.mapReference;
   const requestedGuideInterval = Number(raw.directivityGuideInterval);
   const directivityGuideInterval = Number.isFinite(requestedGuideInterval)
-    ? Math.max(1, Math.min(180, requestedGuideInterval))
+    ? Math.max(GUIDE_INTERVAL_RANGE_DEG[0], Math.min(GUIDE_INTERVAL_RANGE_DEG[1], requestedGuideInterval))
     : defaults.directivityGuideInterval;
   return {
     ...defaults,
@@ -159,7 +179,11 @@ export function normalize(raw: Partial<Preferences> = {}): Preferences {
     mapReference,
     directivityGuideInterval,
     chartTypes: charts,
-    chartTheme: String(raw.chartTheme || defaults.chartTheme),
+    // The theme list is open -- the backend supplies it and a profile may hold
+    // one this build has never heard of -- so only the type is checked. It used
+    // to be coerced with `String`, which turned a stored object into the
+    // literal "[object Object]" and asked the exporter to render in it.
+    chartTheme: typeof raw.chartTheme === 'string' && raw.chartTheme ? raw.chartTheme : defaults.chartTheme,
     exportFormats: formats,
     autoExportFormats: autoFormats,
     autoExportOnComplete: raw.autoExportOnComplete === true,
@@ -182,9 +206,9 @@ export function normalize(raw: Partial<Preferences> = {}): Preferences {
     runNameNumberFormat: runNameNumberFormats.has(raw.runNameNumberFormat as RunNameNumberFormat)
       ? raw.runNameNumberFormat as RunNameNumberFormat
       : defaults.runNameNumberFormat,
-    counter: Number.isFinite(Number(raw.counter)) ? Math.max(1, Math.min(999_999, Math.floor(Number(raw.counter)))) : defaults.counter,
+    counter: clampInteger(raw.counter, COUNTER_RANGE, defaults.counter),
     jobSort: jobSortIds.has(raw.jobSort as JobSort) ? raw.jobSort as JobSort : defaults.jobSort,
-    minRating: Number.isFinite(Number(raw.minRating)) ? Math.max(0, Math.min(5, Math.floor(Number(raw.minRating)))) : defaults.minRating,
+    minRating: clampInteger(raw.minRating, MIN_RATING_RANGE, defaults.minRating),
   };
 }
 

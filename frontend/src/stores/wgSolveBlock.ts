@@ -39,13 +39,19 @@ export interface WgSolveSettings {
   fieldPlane: boolean;
 }
 
-const MESH_VALIDATION_MODES: MeshValidationMode[] = ['warn', 'strict', 'off'];
-const FREQUENCY_SPACINGS: FrequencySpacing[] = ['log', 'linear'];
-const FREQUENCY_MODES: FrequencyMode[] = ['range', 'list'];
-const OBSERVATION_ORIGINS: ObservationOrigin[] = ['mouth', 'throat'];
-const SYMMETRY_MODES: SymmetryMode[] = ['auto', 'full', 'half_xz', 'half_yz', 'quarter'];
+/**
+ * The legal members of each solver enum, exported so the store that persists
+ * them normalizes against exactly the list the config reader accepts. They
+ * live here rather than in `solveOptions` because that module imports this one
+ * at runtime and this one only imports its types back.
+ */
+export const MESH_VALIDATION_MODES: MeshValidationMode[] = ['warn', 'strict', 'off'];
+export const FREQUENCY_SPACINGS: FrequencySpacing[] = ['log', 'linear'];
+export const FREQUENCY_MODES: FrequencyMode[] = ['range', 'list'];
+export const OBSERVATION_ORIGINS: ObservationOrigin[] = ['mouth', 'throat'];
+export const SYMMETRY_MODES: SymmetryMode[] = ['auto', 'full', 'half_xz', 'half_yz', 'quarter'];
 /** Engine names come from the backend registry, so only the shape is checked. */
-const ENGINE_PATTERN = /^[A-Za-z0-9_-]{1,32}$/;
+export const ENGINE_PATTERN = /^[A-Za-z0-9_-]{1,32}$/;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
