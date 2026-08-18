@@ -17,6 +17,9 @@ from launchers.statusapp.controller import missing_frontend_reason
 
 
 def test_terminal_mode_refuses_a_missing_interface(monkeypatch, capsys, tmp_path: Path) -> None:
+    # Refusals are also appended to statusapp.log; keep the suite out of the
+    # real application data directory.
+    monkeypatch.setenv("WG2_DATA_DIR", str(tmp_path))
     monkeypatch.setattr(entrypoint, "FRONTEND_INDEX", tmp_path / "frontend" / "dist" / "index.html")
 
     def _must_not_run(_arguments):  # pragma: no cover - the point is that it is not called
@@ -33,6 +36,7 @@ def test_terminal_mode_refuses_a_missing_interface(monkeypatch, capsys, tmp_path
 def test_terminal_mode_and_the_status_window_give_the_same_reason(monkeypatch, capsys, tmp_path: Path) -> None:
     """One condition, one explanation. Two wordings would be a drift bug."""
 
+    monkeypatch.setenv("WG2_DATA_DIR", str(tmp_path))
     monkeypatch.setattr(entrypoint, "FRONTEND_INDEX", tmp_path / "index.html")
     monkeypatch.setattr("launch.serve.main", lambda _arguments: 0)
     entrypoint.main(["--no-gui"])
