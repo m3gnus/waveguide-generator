@@ -805,6 +805,26 @@ def _current_user_sid() -> str:
     return completed.stdout.strip().rsplit(",", 1)[-1].strip().strip('"')
 
 
+def _creation_is_blocked(directory: Path) -> bool:
+    """Whether a *subdirectory* can still be created in ``directory``.
+
+    The backup writes a timestamped subdirectory, so that is the operation the
+    caller needs denied. It is checked separately from file creation because
+    the two do not always fall together: on an elevated account whose inherited
+    ACL grants Full Control through ``BUILTIN\\Administrators`` and
+    ``OWNER RIGHTS``, a deny ACE stops ``FILE_ADD_FILE`` while
+    ``FILE_ADD_SUBDIRECTORY`` still succeeds.
+    """
+
+    probe = directory / "_wg2-writability-probe"
+    try:
+        probe.mkdir()
+    except OSError:
+        return True
+    probe.rmdir()
+    return False
+
+
 @contextmanager
 def _unwritable(directory: Path) -> Iterator[None]:
     """Stop the current user creating entries in ``directory``, then restore it.
@@ -812,6 +832,16 @@ def _unwritable(directory: Path) -> Iterator[None]:
     chmod is not that on Windows: it only toggles the read-only attribute, which
     directories ignore for creation, so the backup would quietly succeed and the
     test would assert nothing. A deny ACE is the equivalent instrument there.
+
+    Some Windows configurations cannot express this at all. Where the account is
+    an elevated administrator that also owns the directory, its access arrives
+    through inherited ``BUILTIN\\Administrators`` and ``OWNER RIGHTS`` entries
+    rather than an ACE naming it, and denying its own SID -- or even Everyone --
+    leaves subdirectory creation permitted. Skipping there is deliberate: the
+    caller asserts that an unwritable backup aborts the migration, and on a
+    machine where the backup location cannot be made unwritable that assertion
+    has no precondition to stand on. Failing instead would report a product
+    defect that the run never actually tested for.
     """
 
     if sys.platform == "win32":
@@ -821,6 +851,12 @@ def _unwritable(directory: Path) -> Iterator[None]:
             check=True, capture_output=True,
         )
         try:
+            if not _creation_is_blocked(directory):
+                pytest.skip(
+                    "this account still creates subdirectories under a deny ACE "
+                    "(elevated administrator owning the directory), so the "
+                    "backup location cannot be made unwritable here"
+                )
             yield
         finally:
             subprocess.run(
@@ -830,6 +866,11 @@ def _unwritable(directory: Path) -> Iterator[None]:
     else:
         directory.chmod(0o500)  # readable and traversable, not writable
         try:
+            if not _creation_is_blocked(directory):
+                pytest.skip(
+                    "this account writes through mode 0500 (running as root?), "
+                    "so the backup location cannot be made unwritable here"
+                )
             yield
         finally:
             directory.chmod(0o700)

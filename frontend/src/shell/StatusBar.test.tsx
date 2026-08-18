@@ -75,7 +75,8 @@ describe('StatusBar workspace modes', () => {
     });
 
     expect(host.textContent).toContain('METAL · 1.0');
-    expect(host.textContent).toContain('CAD mesh 12,345 solved tri');
+    // Grouped in the runner's locale, not en-US — see summary.test.ts.
+    expect(host.textContent).toContain(`CAD mesh ${(12_345).toLocaleString()} solved tri`);
     expect(host.textContent).toContain('next CAD solve 250 Hz – 18 kHz · 31 f');
     expect(host.textContent).toContain('Speaker Assembly');
     expect(host.textContent).toContain('CAD return · ingested');
