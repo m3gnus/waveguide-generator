@@ -979,6 +979,17 @@ textarea:disabled { opacity: .48; }
 .result-recombine-pair input { width: 64px; height: 19px; padding: 0 4px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); color: var(--fg1); font-size: var(--text-micro); }
 .result-recombine-error { color: var(--danger, #c65b4e); white-space: nowrap; }
 
+/* Measured responses overlaid on the on-axis SPL chart. */
+.result-measured { border-bottom: 1px solid var(--hair-soft); text-transform: none; }
+.result-measured-caption { flex: none; color: var(--fg3); text-transform: uppercase; letter-spacing: .04em; }
+.result-measured-item { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.result-measured-item[data-hidden] { opacity: .55; }
+.results-toolbar .result-measured-toggle { display: inline-flex; align-items: center; gap: 4px; max-width: 172px; }
+.result-measured-toggle i { width: 12px; flex: none; border-top: 2px dotted currentColor; }
+.result-measured-item[data-hidden] .result-measured-toggle i { border-top-style: solid; opacity: .4; }
+.result-measured-offset { display: inline-flex; align-items: center; gap: 3px; color: var(--fg3); }
+.result-measured-offset input { width: 56px; height: 19px; padding: 0 4px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); color: var(--fg1); font-size: var(--text-micro); }
+
 /* Per-channel driver T/S entry in the CAD Link panel. */
 .cad-driver-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(108px, 1fr)); gap: 4px 8px; padding: 2px 6px 6px; }
 .cad-driver-field { display: flex; flex-direction: column; gap: 2px; font-size: var(--text-micro); color: var(--fg3); }

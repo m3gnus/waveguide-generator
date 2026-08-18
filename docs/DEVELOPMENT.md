@@ -7,7 +7,9 @@ Status: current contributor and agent orientation, verified 2026-08-13.
 1. Executable code and tests are the behavior authority.
 2. Documents under `reference/` state the intended stable boundary.
 3. `plans/` contains only work that is still open.
-4. `legacy/`, `history/`, and `validation/` are evidence, not task instructions.
+4. `legacy/`, `history/`, and the dated folders in `validation/` are evidence, not task
+   instructions. `validation/MEASUREMENT-TEMPLATE.md` is the exception: a blank form to
+   copy when validating a build against a solve.
 
 When a reference and code disagree, stop and reconcile them in the same change. Do not
 implement an old `BATCH-*-BRIEF.md`: those one-use work orders were removed after the

@@ -1,8 +1,9 @@
 # Waveguide Generator documentation
 
 This directory separates current product contracts from plans and dated evidence. A
-document under `history/`, `legacy/`, or `validation/` describes a past state; it is not
-an instruction to reimplement that state.
+document under `history/`, `legacy/`, or a dated folder in `validation/` describes a past
+state; it is not an instruction to reimplement that state. The measurement template is
+the exception in `validation/`: it is a blank form to copy, not evidence.
 
 | Document | Audience | Status | Authority / last verified |
 |---|---|---|---|
@@ -18,6 +19,7 @@ an instruction to reimplement that state.
 | [Run-export follow-ups](plans/RUN-EXPORT-FOLLOWUPS.md) | Product and export developers | Active plan | Remaining work only, 2026-08-13 |
 | [V1 compatibility](legacy/V1-COMPATIBILITY.md) | Maintainers and migration work | Maintained legacy summary | Current code plus archived v1 inventory |
 | [August 2026 rebuild](history/REBUILD-2026-08.md) | Maintainers | Historical summary | Git history; not an implementation brief |
+| [Measurement template](validation/MEASUREMENT-TEMPLATE.md) | Anyone validating a build against a solve | Current template | Copy per case; pairs with the Results panel's measured overlay |
 | [August 2026 validation](validation/2026-08/README.md) | Maintainers | Dated evidence | Captured machines and commits; not current release status |
 
 The active CAD-link plans intentionally remain at the workspace root while another

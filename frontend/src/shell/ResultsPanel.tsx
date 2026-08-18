@@ -18,11 +18,13 @@ import { CHART_TYPES, MAX_RESULT_PANELS, RESULT_PANEL_COUNTS, preferencesStore, 
 import { ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
 import { directivityFrequencyTickLabels } from '../results/directivityFrequencyAxis';
 import { seriesColorsByLabel } from '../results/seriesColors';
+import { parseMeasuredTrace } from '../results/measuredTrace';
 import { Icon } from './icons';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { useVisibleRedraw } from './panelVisibility';
 import { trapDialogFocus } from './SettingsDialog';
 import { useSolveOptionsStore } from '../stores/solveOptions';
+import { MAX_MEASURED_OVERLAYS, useMeasuredOverlayStore, type MeasuredOverlay } from '../stores/measuredOverlays';
 
 export function splSubtitle(result: JobResults | undefined): string {
   const observation = result?.metadata?.observation;
@@ -123,8 +125,13 @@ export function frequencyBounds(series: EChartsOption['series']): [number, numbe
   return frequencies.length ? [Math.min(...frequencies), Math.max(...frequencies)] : undefined;
 }
 
-export function lineOption(series: EChartsOption['series'], tokens: ChartTokens, yName: string, density: ChartDensity = 'regular'): EChartsOption {
-  const bounds = frequencyBounds(series);
+/**
+ * `domain` pins the frequency axis to something narrower than the drawn data.
+ * Only the measured-overlay caller needs it; everywhere else the series *are*
+ * the domain.
+ */
+export function lineOption(series: EChartsOption['series'], tokens: ChartTokens, yName: string, density: ChartDensity = 'regular', domain?: [number, number]): EChartsOption {
+  const bounds = domain ?? frequencyBounds(series);
   const inset = LINE_GRID[density];
   return {
     animationDuration: 180,
@@ -157,12 +164,56 @@ export function lineOption(series: EChartsOption['series'], tokens: ChartTokens,
   };
 }
 
-function splOption(items: NamedResult[], tokens: ChartTokens, smoothing: ReturnType<typeof usePreferences>['smoothing'], density: ChartDensity): EChartsOption {
-  const colors = seriesColorsByLabel(items.map(({ label }) => label), tokens.series, tokens.accent);
-  return lineOption(splSeries(items, smoothing).map((series, index) => {
+/** What a loaded measurement is called on the chart and in its legend. */
+export function measuredSeriesName(label: string): string {
+  return `${label} (measured)`;
+}
+
+/**
+ * On-axis SPL, with any loaded measurements drawn beside the solve.
+ *
+ * Three deliberate choices about the measured traces:
+ *
+ * - The smoothing preference is **not** applied to them. A measurement is
+ *   already smoothed by its own chain — REW's octave smoothing, and whatever
+ *   the gate window imposes below it — so smoothing again would both
+ *   double-count and quietly redescribe the file as something it is not. The
+ *   points go to the chart exactly as the file states them; only the user's dB
+ *   offset moves them.
+ * - The frequency axis stays on the simulated sweep. A measurement usually
+ *   spans 20 Hz–20 kHz while a solve covers part of that, and letting the
+ *   measurement set the domain would squeeze the result being validated into a
+ *   corner of its own chart. ECharts clips the measured curve outside those
+ *   bounds, which is the intended behaviour.
+ * - Colours come from the same label-keyed table as the runs, over the combined
+ *   label set, so a measurement keeps its colour as runs join and leave.
+ */
+export function splOption(
+  items: NamedResult[],
+  tokens: ChartTokens,
+  smoothing: ReturnType<typeof usePreferences>['smoothing'],
+  density: ChartDensity,
+  measured: MeasuredOverlay[] = [],
+): EChartsOption {
+  const measuredNames = measured.map(({ label }) => measuredSeriesName(label));
+  const colors = seriesColorsByLabel([...items.map(({ label }) => label), ...measuredNames], tokens.series, tokens.accent);
+  const simulated = splSeries(items, smoothing).map((series, index) => {
     const color = colors.get(series.name) ?? tokens.accent;
-    return { ...series, lineStyle: { color, width: index ? 1.2 : 2, type: index ? 'dashed' : 'solid' }, itemStyle: { color } };
-  }), tokens, 'dB SPL', density);
+    return { ...series, lineStyle: { color, width: index ? 1.2 : 2, type: index ? 'dashed' as const : 'solid' as const }, itemStyle: { color } };
+  });
+  const measuredSeries = measured.map((overlay, index) => {
+    const color = colors.get(measuredNames[index]) ?? tokens.accent;
+    return {
+      name: measuredNames[index],
+      type: 'line' as const,
+      showSymbol: false,
+      connectNulls: false,
+      lineStyle: { color, width: 1.4, type: 'dotted' as const },
+      itemStyle: { color },
+      data: overlay.points.map(({ frequencyHz, splDb }) => [frequencyHz, splDb + overlay.offsetDb]),
+    };
+  });
+  return lineOption([...simulated, ...measuredSeries], tokens, 'dB SPL', density, frequencyBounds(simulated));
 }
 
 export function heatmapFrequencyLabel(value: number): string {
@@ -734,6 +785,7 @@ function Summary({ result, wrapper, job, channelId, density }: { result: ResultP
 }
 
 const NO_NAMED_RESULTS: NamedResult[] = [];
+const NO_MEASURED_OVERLAYS: MeasuredOverlay[] = [];
 
 export interface DirectivityMapPanel {
   key: string;
@@ -848,12 +900,21 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
     if (!COMPARABLE_CHARTS.has(chartType)) return NO_NAMED_RESULTS;
     return named.length ? named : [{ id: 'primary', label: 'Primary', result }];
   }, [chartType, named, result]);
+  // Only the on-axis SPL chart carries measurements, and it is the only card
+  // that should rebuild when one is loaded, hidden or nudged in level.
+  const loadedMeasurements = useMeasuredOverlayStore((state) => state.overlays);
+  const measured = useMemo(
+    () => chartType === 'frequency_response'
+      ? loadedMeasurements.filter(({ visible }) => visible)
+      : NO_MEASURED_OVERLAYS,
+    [chartType, loadedMeasurements],
+  );
   // Progress and log events replace the selected JobItem many times during a
   // solve. Keep those summary-only props outside the plot memo, otherwise a
   // new progress percentage rebuilds and repaints every EChart even when its
   // result snapshot has not changed.
   const plot = useMemo(() => {
-    if (chartType === 'frequency_response') return result.spl_on_axis?.spl?.length ? <EChart option={splOption(overlays, tokens, preferences.smoothing, density)} label="Interactive HornLab sound pressure frequency response" live={live}/> : <ChartStub reason="Frequency Response needs spl_on_axis data from a completed solve."/>;
+    if (chartType === 'frequency_response') return result.spl_on_axis?.spl?.length ? <EChart option={splOption(overlays, tokens, preferences.smoothing, density, measured)} label="Interactive HornLab sound pressure frequency response" live={live}/> : <ChartStub reason="Frequency Response needs spl_on_axis data from a completed solve."/>;
     if (chartType === 'directivity_map_h' || chartType === 'directivity_map_v' || chartType === 'directivity_map_d' || chartType === 'directivity_map') return <DirectivityComparisonMaps chartType={chartType} items={overlays} tokens={tokens} mapReference={preferences.mapReference} angleGuideInterval={preferences.directivityGuideInterval} density={density} live={live}/>;
     if (chartType === 'directivity_index') {
       const option = directivityIndexOption(overlays, tokens, preferences.smoothing, density);
@@ -871,7 +932,7 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
       return Array.isArray(option.series) && option.series.length ? <EChart option={option} label="Interactive HornLab normalized acoustic impedance by frequency" live={live}/> : <ChartStub reason="Acoustic Impedance needs the optional impedance result block."/>;
     }
     return null;
-  }, [beamShapeAction, chartType, density, live, overlays, preferences.directivityGuideInterval, preferences.mapReference, preferences.smoothing, result, tokens]);
+  }, [beamShapeAction, chartType, density, live, measured, overlays, preferences.directivityGuideInterval, preferences.mapReference, preferences.smoothing, result, tokens]);
   return plot ?? <Summary result={result} wrapper={wrapper} job={job} channelId={channelId} density={density}/>;
 }
 
@@ -1124,6 +1185,46 @@ function RecombineRow({ jobId, channelId, combine, onApplied }: {
   </form>;
 }
 
+/**
+ * One row per loaded measurement, in the same strip the crossover editor uses.
+ *
+ * The offset is a plain number input rather than a slider: matching a measured
+ * curve to a simulated one is an arithmetic step ("this mic chain reads 6.2 dB
+ * low at 2.83 V/1 m"), not something to find by dragging.
+ */
+function MeasuredOverlayRow({ overlay }: { overlay: MeasuredOverlay }) {
+  const store = useMeasuredOverlayStore;
+  // The field holds text so it can be emptied mid-edit; only a parseable value
+  // reaches the store, so a half-typed "-" never redraws the chart at 0 dB.
+  const [offsetText, setOffsetText] = useState(String(overlay.offsetDb));
+  const span = `${Math.round(overlay.points[0].frequencyHz)}–${Math.round(overlay.points.at(-1)!.frequencyHz)} Hz · ${overlay.points.length} pts`;
+  return <span className="result-measured-item" data-hidden={overlay.visible ? undefined : ''}>
+    <button
+      type="button"
+      className="result-measured-toggle"
+      aria-pressed={overlay.visible}
+      title={overlay.visible ? `Hide ${overlay.label} on the on-axis SPL chart` : `Show ${overlay.label} on the on-axis SPL chart`}
+      onClick={() => store.getState().toggleVisible(overlay.id)}
+    ><i/><span title={`${overlay.label} — ${span}`}>{middleEllipsis(overlay.label, 22)}</span></button>
+    <label className="result-measured-offset">
+      <input
+        type="number"
+        step={0.5}
+        value={offsetText}
+        aria-label={`${overlay.label} level offset in decibels`}
+        title="Shift this measurement vertically. The file is not modified."
+        onChange={(event) => {
+          setOffsetText(event.target.value);
+          const offsetDb = Number(event.target.value);
+          if (event.target.value.trim() && Number.isFinite(offsetDb)) store.getState().setOffsetDb(overlay.id, offsetDb);
+        }}
+      />
+      <span>dB</span>
+    </label>
+    <button type="button" aria-label={`Remove ${overlay.label} overlay`} title="Remove this overlay" onClick={() => store.getState().remove(overlay.id)}>×</button>
+  </span>;
+}
+
 export function ResultsPanel() {
   const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
   const provisional = useSyncExternalStore(provisionalResults.subscribe, provisionalResults.getSnapshot, provisionalResults.getSnapshot);
@@ -1140,6 +1241,9 @@ export function ResultsPanel() {
   const preferencesAnchor = useRef<HTMLButtonElement | null>(null);
   const [beamRerunSubmitting, setBeamRerunSubmitting] = useState(false);
   const [primaryChannel, setPrimaryChannel] = useState<string | null>(null);
+  const measuredOverlays = useMeasuredOverlayStore((state) => state.overlays);
+  const [measuredError, setMeasuredError] = useState<string | null>(null);
+  const measuredInput = useRef<HTMLInputElement | null>(null);
 
   // Jobs arrive newest-first. A running solve becomes displayable as soon as
   // its first frequency arrives; before that, keep the last complete result.
@@ -1292,6 +1396,25 @@ export function ResultsPanel() {
   const charts = useVisibleRedraw(shown
     ? <ResultsChartGrid chartTypes={preferences.chartTypes} result={shown} named={named} tokens={tokens} live={primaryIsProvisional} beamShapeAction={beamShapeAction} wrapper={shownRaw} job={selectedJob} channelId={shownActiveChannel}/>
     : null);
+  /** Every file is attempted; the ones that fail are named rather than
+   * cancelling the ones that parsed. */
+  const loadMeasured = useCallback(async (files: File[]) => {
+    const store = useMeasuredOverlayStore.getState();
+    const problems: string[] = [];
+    for (const file of files) {
+      try {
+        const trace = parseMeasuredTrace(await file.text(), file.name);
+        if (!store.add(trace)) {
+          problems.push(`${trace.label} was not loaded: at most ${MAX_MEASURED_OVERLAYS} measurement overlays fit on the SPL chart. Remove one first.`);
+          break;
+        }
+      } catch (reason) {
+        problems.push(reason instanceof Error ? reason.message : String(reason));
+      }
+    }
+    setMeasuredError(problems.length ? problems.join(' ') : null);
+  }, []);
+
   const exportSelected = async () => {
     if (!primary || primaryIsProvisional) return;
     setExporting(true); setExportStatus(null);
@@ -1341,11 +1464,37 @@ export function ResultsPanel() {
       <span className="spacer"/>
       <label className="result-count-control" title="Number of chart panels">Charts<select aria-label="Results panel count" value={RESULT_PANEL_COUNTS.includes(preferences.chartTypes.length as never) ? preferences.chartTypes.length : ''} onChange={(event) => preferencesStore.setChartCount(Number(event.target.value))}><option value="" disabled>{preferences.chartTypes.length}</option>{RESULT_PANEL_COUNTS.map((count) => <option key={count} value={count}>{count}</option>)}</select></label>
       <button className="toolbar-icon" disabled={preferences.chartTypes.length >= MAX_RESULT_PANELS} aria-label="Add chart" title="Add chart panel" onClick={() => preferencesStore.addChart()}><Icon name="plus"/></button>
+      <input
+        ref={measuredInput}
+        hidden
+        tabIndex={-1}
+        multiple
+        type="file"
+        accept=".frd,.txt,.csv"
+        aria-label="Measured response file"
+        onChange={(event) => {
+          const files = [...(event.target.files ?? [])];
+          event.target.value = '';
+          void loadMeasured(files);
+        }}
+      />
+      <button
+        disabled={measuredOverlays.length >= MAX_MEASURED_OVERLAYS}
+        title={measuredOverlays.length >= MAX_MEASURED_OVERLAYS
+          ? `At most ${MAX_MEASURED_OVERLAYS} measurement overlays fit on the SPL chart. Remove one first.`
+          : 'Draw a measured response (FRD, or a REW text export) on the on-axis SPL chart'}
+        onClick={() => measuredInput.current?.click()}
+      >Overlay measured…</button>
       <button disabled={exporting || !primary || primaryIsProvisional || !preferences.exportFormats.length} title={primaryIsProvisional ? 'Export is available when the solve finishes' : 'Export the current result using the formats enabled in Results preferences'} onClick={() => void exportSelected()}>{exporting ? 'Exporting…' : `Export (${preferences.exportFormats.length})`}</button>
       <button ref={preferencesAnchor} className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Results preferences" aria-expanded={preferencesOpen} title="Results & export preferences" onClick={() => setPreferencesOpen((value) => !value)}><Icon name="settings"/></button>
     </div>
     {shownActiveChannel && shownCombine && display && selectedJob?.status === 'complete' && !primaryIsProvisional
       && <RecombineRow jobId={display.primaryId} channelId={shownActiveChannel} combine={shownCombine} onApplied={applyRecombined}/>}
+    {(measuredOverlays.length > 0 || measuredError) && <div className="results-toolbar result-measured">
+      <span className="result-measured-caption">Measured</span>
+      {measuredOverlays.map((overlay) => <MeasuredOverlayRow key={overlay.id} overlay={overlay}/>)}
+      {measuredError && <span className="result-recombine-error" role="alert">{measuredError}</span>}
+    </div>}
     {preferencesOpen && <ResultsPreferencesSurface popover anchorRef={preferencesAnchor} onClose={() => setPreferencesOpen(false)}/>}
     {(error || exportStatus) && <div className={error ? 'job-error' : ''} role="status" style={{ margin: 7, color: error ? undefined : 'var(--fg2)', fontSize: 'var(--text-micro)' }}>{error ?? exportStatus}{error && <button type="button" onClick={() => { setFetchError(null); setFetchAttempt((value) => value + 1); }}>Retry</button>}</div>}
     {showingPrevious && <div className="job-warning" role="status" style={{ margin: 7 }}>Showing previous results while fetching the selected run…</div>}
