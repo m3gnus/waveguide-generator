@@ -34,5 +34,5 @@ powers WG's Metal solves, published in the diyAudio thread
   optimistic for hard walls; damping is a sensitivity, not a claim.
 - **Caveats:** the published solve's mesh was resolution-valid to ~1.6 kHz; a
   follow-up mesh ladder (wall 30→5 mm) extended validity to ~4.9 kHz and is
-  the rung to cite above 1.6 kHz. The mid-driver identity is recorded
-  inconsistently across artifacts, so no absolute-SPL claim is made.
+  the rung to cite above 1.6 kHz. Mid drivers are 4× BMS 5N160 (confirmed by
+  the designer, 2026-08-18).
