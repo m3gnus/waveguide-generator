@@ -47,6 +47,9 @@ export interface JobItem {
   };
   has_results: boolean;
   has_mesh_artifact: boolean;
+  field_plane_available?: boolean;
+  field_trace_bytes?: number | null;
+  unavailable_reason?: string | null;
   label: string | null;
   error_message: string | null;
   cancellation_requested: boolean;
@@ -221,6 +224,11 @@ function isJobItem(value: unknown): value is JobItem {
   if (!isNullableTimestamp(value.started_at) || !isNullableTimestamp(value.completed_at)) return false;
   if (!isRecord(value.config_summary) || !isRecord(value.solve_options)) return false;
   if (typeof value.has_results !== 'boolean' || typeof value.has_mesh_artifact !== 'boolean') return false;
+  if (hasOwn(value, 'field_plane_available') && typeof value.field_plane_available !== 'boolean') return false;
+  if (hasOwn(value, 'field_trace_bytes') && !(
+    value.field_trace_bytes === null || isNonNegativeInteger(value.field_trace_bytes)
+  )) return false;
+  if (hasOwn(value, 'unavailable_reason') && !isNullableString(value.unavailable_reason)) return false;
   if (!isNullableString(value.label) || !isNullableString(value.error_message)) return false;
   if (typeof value.cancellation_requested !== 'boolean') return false;
   if (!(value.mesh_stats === null || isRecord(value.mesh_stats))) return false;
@@ -385,6 +393,18 @@ function sanitizeMetadataChanges(value: unknown): Partial<JobItem> & JsonRecord 
     if (!hasOwn(value, key)) continue;
     if (typeof value[key] !== 'boolean') return null;
     patch[key] = value[key];
+  }
+  if (hasOwn(value, 'field_plane_available')) {
+    if (typeof value.field_plane_available !== 'boolean') return null;
+    patch.field_plane_available = value.field_plane_available;
+  }
+  if (hasOwn(value, 'field_trace_bytes')) {
+    if (!(value.field_trace_bytes === null || isNonNegativeInteger(value.field_trace_bytes))) return null;
+    patch.field_trace_bytes = value.field_trace_bytes as number | null;
+  }
+  if (hasOwn(value, 'unavailable_reason')) {
+    if (!isNullableString(value.unavailable_reason)) return null;
+    patch.unavailable_reason = value.unavailable_reason;
   }
   // Retention metadata is intentionally delivered through this event type,
   // even though these newer fields are not consumed by the current UI.

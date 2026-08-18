@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { DecodedFrame } from '../api/frame';
+import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { PREVIEW_FINE_IDLE_MS, previewSocket } from '../api/previewSocket';
+import { compareSelection } from '../api/results';
 import { postSymmetry, toSolveDesign } from '../jobs/actions';
 import { cadApplicationName, usePreferences } from '../prefs/preferences';
 import { useCadReturnStore } from '../stores/cadReturn';
@@ -10,9 +12,12 @@ import { useSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { cadLinkCoordinatorBridge, showIngestedMeshInViewport } from '../shell/CadLinkCoordinator';
 import { Icon } from '../shell/icons';
+import { readChartTokens } from '../results/EChart';
 import { useViewerPreferences, viewerPreferences, type CameraProjection } from '../viewerprefs/viewerPreferences';
 import { ViewerPreferencesPanel } from '../viewerprefs/ViewerPreferencesPanel';
 import { frameToScene, hasRenderableSurfaces, MAX_EDGE_TRIANGLES } from './frameScene';
+import { FIELD_PLANE_WINDOW_DB, maxFieldSplDb } from './fieldPlaneColor';
+import { defaultFieldPlane, useFieldPlaneStore } from './fieldPlaneStore';
 import { importedMeshStore } from './importedMeshStore';
 import type { CameraDirection } from './cameraMath';
 import { ClientLatencyClock, formatClientLatency } from './clientLatency';
@@ -61,6 +66,27 @@ function useViewportTheme(): ViewportTheme {
   return theme;
 }
 
+export function fieldPlaneJob(jobs: readonly JobItem[], selectedJobId: string | null): JobItem | null {
+  const eligible = (job: JobItem) => job.status === 'complete' && job.field_plane_available === true;
+  return jobs.find((job) => job.id === selectedJobId && eligible(job))
+    ?? jobs.find(eligible)
+    ?? null;
+}
+
+export function fieldPlaneUnavailableTooltip(jobs: readonly JobItem[]): string {
+  const completed = jobs.find((job) => job.status === 'complete');
+  if (!completed) return 'Field plane unavailable — complete a full-3D solve first';
+  switch (completed.unavailable_reason) {
+    case 'solve_predates_traces': return 'Field plane unavailable — re-solve this design to retain field traces';
+    case 'artifact_pruned': return 'Field plane unavailable — retained traces expired; re-solve the design';
+    case 'artifact_persistence_failed': return 'Field plane unavailable — the solve could not retain its field traces';
+    case 'size_cap_exceeded': return 'Field plane unavailable — reduce the mesh or sweep size, then re-solve';
+    case 'trace_output_missing': return 'Field plane unavailable — the solver returned no field traces; re-solve the design';
+    case 'unsupported_solve_mode': return 'Field plane unavailable — use a full-3D Metal solve';
+    default: return 'Field plane unavailable — no completed run has retained field traces';
+  }
+}
+
 export function Viewport() {
   const preview = useSyncExternalStore(previewSocket.subscribe, previewSocket.getSnapshot, previewSocket.getSnapshot);
   const design = useDesignStore((state) => state.design);
@@ -73,6 +99,16 @@ export function Viewport() {
   const theme = useViewportTheme();
   const preferences = useViewerPreferences();
   const cadApplication = cadApplicationName(usePreferences().cadApplication);
+  const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
+  const resultSelection = useSyncExternalStore(compareSelection.subscribe, compareSelection.getSnapshot, compareSelection.getSnapshot);
+  const availableFieldJob = useMemo(() => fieldPlaneJob(jobs, resultSelection.primary), [jobs, resultSelection.primary]);
+  const fieldEnabled = useFieldPlaneStore((state) => state.enabled);
+  const fieldJobId = useFieldPlaneStore((state) => state.jobId);
+  const fieldStatus = useFieldPlaneStore((state) => state.status);
+  const fieldError = useFieldPlaneStore((state) => state.error);
+  const field = useFieldPlaneStore((state) => state.field);
+  const fieldFrequencyIndex = useFieldPlaneStore((state) => state.frequencyIndex);
+  const fieldFrequencies = useFieldPlaneStore((state) => state.frequenciesHz);
   const selectedRef = useRef<DecodedFrame | null>(null);
   const latencyClock = useRef(new ClientLatencyClock());
   const currentEpoch = useRef<number | null>(preview.epoch);
@@ -150,6 +186,12 @@ export function Viewport() {
   const toggleProjection = () => setCameraProjection((current) => current === 'perspective' ? 'orthographic' : 'perspective');
   const reportClientFrame = useCallback((milliseconds: number) => setClientFrameMs(milliseconds), []);
   const activeScene = workspaceMode === 'cad' ? importedMesh?.scene ?? null : importedMesh?.scene ?? scene;
+  const fieldColormap = useMemo(() => readChartTokens().colormap, [theme]);
+  const fieldWindow = useMemo(() => {
+    if (!field) return null;
+    const maximum = maxFieldSplDb(field.real, field.imag);
+    return { minimum: maximum - FIELD_PLANE_WINDOW_DB, maximum };
+  }, [field]);
   const sceneMarker = importedMesh
     ? `msh:${importedMesh.artifactToken}`
     : workspaceMode === 'cad'
@@ -181,6 +223,15 @@ export function Viewport() {
     // gate do the connecting.
     if (!preferences.liveUpdate) viewerPreferences.update({ liveUpdate: true });
     else previewSocket.refresh();
+  };
+
+  const toggleFieldPlane = () => {
+    if (fieldEnabled) {
+      useFieldPlaneStore.getState().disable();
+      return;
+    }
+    if (!availableFieldJob || !activeScene) return;
+    useFieldPlaneStore.getState().enable(availableFieldJob.id, defaultFieldPlane(activeScene));
   };
 
   const showParametric = () => {
@@ -234,6 +285,16 @@ export function Viewport() {
     lastImportedMesh.current = importedMesh;
     setCameraRequest((current) => ({ ...current, nonce: current.nonce + 1 }));
   }, [importedMesh]);
+
+  useEffect(() => {
+    if (!fieldEnabled) return;
+    if (!availableFieldJob) {
+      useFieldPlaneStore.getState().reportUnavailable('re-solve to enable field planes');
+      return;
+    }
+    if (!activeScene || fieldJobId === availableFieldJob.id) return;
+    useFieldPlaneStore.getState().selectJob(availableFieldJob.id, defaultFieldPlane(activeScene));
+  }, [activeScene, availableFieldJob, fieldEnabled, fieldJobId]);
 
   useEffect(() => subscribeRevision((event) => {
     // Design revisions replace geometry inside the current view. Keeping the
@@ -391,6 +452,30 @@ export function Viewport() {
       }) : <p>No rendered surfaces in this frame.</p>}</div>
     </div>}
 
+    {fieldEnabled && <div className="field-plane-legend" role="status" aria-live="polite">
+      <div className="field-plane-legend-title">
+        <b>Field plane</b>
+        {fieldFrequencies.length > 0
+          ? <select
+            aria-label="Field plane frequency"
+            value={fieldFrequencyIndex}
+            onChange={(event) => useFieldPlaneStore.getState().setFrequencyIndex(Number(event.target.value))}
+          >
+            {fieldFrequencies.map((frequency, index) => <option key={`${index}:${frequency}`} value={index}>{frequency.toLocaleString()} Hz</option>)}
+          </select>
+          : <span>{field?.header.frequency_hz.toLocaleString() ?? '—'} Hz</span>}
+      </div>
+      <i className="field-plane-gradient" style={{ backgroundImage: `linear-gradient(90deg, ${fieldColormap.join(', ')})` }}/>
+      <div className="field-plane-range">
+        <span>{fieldWindow ? `${fieldWindow.minimum.toFixed(1)} dB` : '— dB'}</span>
+        <span>{fieldWindow ? `${fieldWindow.maximum.toFixed(1)} dB` : '— dB'}</span>
+      </div>
+      {fieldStatus !== 'ready' && <div className={`field-plane-status ${fieldStatus}`}>
+        <span>{fieldStatus === 'loading' ? 'loading field plane…' : fieldError ?? 'field plane idle'}</span>
+        {fieldStatus === 'error' && fieldJobId && <button type="button" onClick={() => useFieldPlaneStore.getState().retry()}>Retry</button>}
+      </div>}
+    </div>}
+
     <div className="viewport-tools">
       <div className="viewport-tool-group display-mode-tools">
         <button
@@ -403,6 +488,19 @@ export function Viewport() {
       <i className="wg2-tool-divider" />
       <div className="viewport-tool-group">
         <button className={sectionCut ? 'on' : ''} title="Section cut at X=0" aria-label="Section cut at X=0" aria-pressed={sectionCut} onClick={() => setSectionCut((value) => !value)}><Icon name="section"/></button>
+      </div>
+      <div className="viewport-tool-group">
+        <button
+          type="button"
+          className={fieldEnabled ? 'on' : ''}
+          title={!availableFieldJob
+            ? fieldPlaneUnavailableTooltip(jobs)
+            : !activeScene ? 'Field plane unavailable — waiting for viewport geometry' : 'Toggle acoustic field plane'}
+          aria-label="Acoustic field plane overlay"
+          aria-pressed={fieldEnabled}
+          disabled={!fieldEnabled && (!availableFieldJob || !activeScene)}
+          onClick={toggleFieldPlane}
+        ><Icon name="field-plane"/></button>
       </div>
       <i className="wg2-tool-divider" />
       <div className="viewport-tool-group viewport-tool-segment">

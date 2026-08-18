@@ -138,12 +138,18 @@ describe('Viewport preview errors', () => {
   it('cycles display modes from one compact toolbar control', () => {
     const mode = host.querySelector<HTMLButtonElement>('.display-mode-tools button');
     expect(host.querySelectorAll('.display-mode-tools button')).toHaveLength(1);
-    expect(host.querySelectorAll('.viewport-tools button')).toHaveLength(6);
+    expect(host.querySelectorAll('.viewport-tools button')).toHaveLength(7);
     expect(host.querySelector('.viewport-tools [aria-label="Import Gmsh 2.2 mesh"]')).toBeNull();
     expect(host.querySelector('.viewport-tools [aria-label="View presets"]')).toBeNull();
     expect(mode?.getAttribute('aria-label')).toContain('Display mode: Clay');
     act(() => mode?.click());
     expect(mode?.getAttribute('aria-label')).toContain('Display mode: Solid + wireframe');
+  });
+
+  it('disables the field overlay with an actionable tooltip when no solve retained traces', () => {
+    const fieldPlane = host.querySelector<HTMLButtonElement>('[aria-label="Acoustic field plane overlay"]');
+    expect(fieldPlane?.disabled).toBe(true);
+    expect(fieldPlane?.title).toContain('complete a full-3D solve');
   });
 
   it('keeps enclosure and frame stats in viewer preferences', () => {

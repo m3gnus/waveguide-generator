@@ -28,6 +28,14 @@ function verticesAt(surface: SceneSurface, position: [number, number, number]): 
 }
 
 describe('imported mesh shading', () => {
+  it('marks imported solver and CAD meshes as metres', () => {
+    const imported = createImportedMeshScene('metres.msh', mesh(
+      [0, 0, 0, 1, 0, 0, 0, 1, 0],
+      [[0, 1, 2]],
+    ));
+    expect(imported.scene.unitsPerMetre).toBe(1);
+  });
+
   it('splits normals across a 90 degree crease instead of averaging over it', () => {
     // A horizontal face (normal +z) meeting a vertical one (normal +x) along
     // the x = z = 0 edge, wound as one consistent surface.

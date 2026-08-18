@@ -2,9 +2,11 @@ import { GizmoHelper, GizmoViewport, OrbitControls } from '@react-three/drei';
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import { Component, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentRef, type ErrorInfo, type ReactNode, type RefObject } from 'react';
 import { CanvasTexture, MathUtils, OrthographicCamera, PerspectiveCamera, Plane, Vector3 } from 'three';
+import { readChartTokens } from '../results/EChart';
 import type { CameraProjection, ViewerPreferences } from '../viewerprefs/viewerPreferences';
 import { calculateCameraFit, clippingRange, presetDirection, viewDirection, zoomedOrthographicValue, type CameraDirection } from './cameraMath';
 import { DemandRenderScheduler, installViewportTestHook } from './demandRender';
+import { FieldPlane } from './FieldPlane';
 import type { FrameScene } from './frameScene';
 import { createMaterialLibrary } from './materials';
 import { SurfaceMesh } from './SurfaceMesh';
@@ -667,6 +669,7 @@ function Scene({ scene, sceneMarker, mode, showEnclosure, sectionCut, cameraRequ
     () => createMaterialLibrary(mode, clipPlane, theme, preferences.tintSolvedRegion),
     [clipPlane, mode, preferences.tintSolvedRegion, theme],
   );
+  const fieldColormap = useMemo(() => readChartTokens().colormap, [theme]);
   const center = useMemo(() => scene.bounds.getCenter(new Vector3()), [scene.bounds]);
   const size = useMemo(() => scene.bounds.getSize(new Vector3()), [scene.bounds]);
   const controls = useRef<OrbitControlsInstance>(null);
@@ -697,6 +700,12 @@ function Scene({ scene, sceneMarker, mode, showEnclosure, sectionCut, cameraRequ
       color={theme === 'light' ? '#b0a08c' : '#c2ae97'}
       intensity={theme === 'light' ? 0.92 : 1.05}
       position={[-(size.x || 100), (size.y || 100) * 0.2, size.z || 100]}
+    />
+    <FieldPlane
+      unitsPerMetre={scene.unitsPerMetre}
+      clipPlane={clipPlane}
+      colormap={fieldColormap}
+      scheduler={scheduler}
     />
     {scene.surfaces.map((surface) => <SurfaceMesh
       key={surface.key}

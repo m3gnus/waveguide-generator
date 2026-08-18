@@ -5,6 +5,9 @@ import type { SceneSurface, SurfaceMaterialClass } from './types';
 export interface FrameScene {
   surfaces: SceneSurface[];
   bounds: Box3;
+  /** Authoritative viewport scale for solver-space overlays. Parametric
+   * previews use millimetres; imported solver/CAD meshes use metres. */
+  unitsPerMetre: 1 | 1_000;
   hasCurvature: boolean;
   edgeModeUnavailable?: boolean;
 }
@@ -100,6 +103,7 @@ export function frameToScene(frame: DecodedFrame): FrameScene {
   return {
     surfaces,
     bounds,
+    unitsPerMetre: 1_000,
     hasCurvature: surfaces.some((surface) => surface.curvature !== null),
     edgeModeUnavailable: surfaces.some((surface) => Math.floor(surface.indices.length / 3) > MAX_EDGE_TRIANGLES),
   };
