@@ -35,6 +35,7 @@ export interface FieldPlaneStore {
   dragging: boolean;
   jobId: string | null;
   geometrySha256: string | null;
+  synthesisRevision: string | null;
   plane: FieldPlaneSpec | null;
   frequencyIndex: number;
   frequenciesHz: number[];
@@ -65,6 +66,7 @@ export interface FieldPlaneStore {
   reportUnavailable: (reason: string) => void;
   retry: () => void;
   retryIfBlocked: () => void;
+  invalidateSynthesis: (revision?: string) => void;
   setDisplayMode: (mode: FieldPlaneDisplayMode) => void;
   setRangeLocked: (locked: boolean) => void;
   setAnimationSpeed: (speed: number) => void;
@@ -91,6 +93,7 @@ interface FieldPlaneStoreDependencies {
 export interface FieldPlaneCacheKeyParts {
   jobId: string;
   geometrySha256: string;
+  synthesisRevision: string | null;
   responseId: FieldPlaneResponseId;
   frequencyIndex: number;
   plane: FieldPlaneSpec;
@@ -172,6 +175,7 @@ function quantized(value: number): string {
 export function fieldPlaneCacheKey({
   jobId,
   geometrySha256,
+  synthesisRevision,
   responseId,
   frequencyIndex,
   plane,
@@ -179,7 +183,7 @@ export function fieldPlaneCacheKey({
   const transform = [...plane.origin_m, ...plane.axis_u, ...plane.axis_v, plane.width_m, plane.height_m]
     .map(quantized)
     .join(',');
-  return `${jobId}|${geometrySha256}|${responseId}|${frequencyIndex}|${transform}|${plane.nx}x${plane.ny}`;
+  return `${jobId}|${geometrySha256}|${synthesisRevision ?? 'legacy'}|${responseId}|${frequencyIndex}|${transform}|${plane.nx}x${plane.ny}`;
 }
 
 export class FieldPlaneLruCache<Value> {
@@ -322,6 +326,7 @@ export function createFieldPlaneStore(
   let requestController: AbortController | null = null;
   let cacheJobId: string | null = null;
   let cacheGeometrySha256: string | null = null;
+  let cacheSynthesisRevision: string | null = null;
   let displayedRequest: DisplayedFieldPlaneRequest | null = null;
 
   return create<FieldPlaneStore>((set, get) => {
@@ -365,10 +370,12 @@ export function createFieldPlaneStore(
 
           if (cacheGeometrySha256 !== null && cacheGeometrySha256 !== field.header.geometry_sha256) cache.clear();
           cacheGeometrySha256 = field.header.geometry_sha256;
+          cacheSynthesisRevision = field.header.synthesis_revision;
           cacheJobId = pending.jobId;
           cache.set(fieldPlaneCacheKey({
             jobId: pending.jobId,
             geometrySha256: field.header.geometry_sha256,
+            synthesisRevision: field.header.synthesis_revision,
             responseId: pending.responseId,
             frequencyIndex: pending.frequencyIndex,
             plane: pending.plane,
@@ -383,6 +390,7 @@ export function createFieldPlaneStore(
           };
           set({
             geometrySha256: field.header.geometry_sha256,
+            synthesisRevision: field.header.synthesis_revision,
             lastAppliedGeneration,
             status: 'ready',
             error: null,
@@ -437,6 +445,7 @@ export function createFieldPlaneStore(
         const cached = cache.get(fieldPlaneCacheKey({
           jobId,
           geometrySha256: cacheGeometrySha256,
+          synthesisRevision: cacheSynthesisRevision,
           responseId,
           frequencyIndex,
           plane,
@@ -453,6 +462,7 @@ export function createFieldPlaneStore(
           };
           set({
             geometrySha256: cacheGeometrySha256,
+            synthesisRevision: cacheSynthesisRevision,
             lastAppliedGeneration,
             status: 'ready',
             error: null,
@@ -515,6 +525,7 @@ export function createFieldPlaneStore(
         cache.clear();
         cacheJobId = jobId;
         cacheGeometrySha256 = null;
+        cacheSynthesisRevision = null;
       }
       const saved = remembered.get(jobId);
       const plane = clonePlane(saved?.plane ?? suppliedDefault);
@@ -523,6 +534,7 @@ export function createFieldPlaneStore(
         dragging: false,
         jobId,
         geometrySha256: cacheGeometrySha256,
+        synthesisRevision: cacheSynthesisRevision,
         plane,
         frequencyIndex: saved?.frequencyIndex ?? 0,
         frequenciesHz: [],
@@ -564,6 +576,7 @@ export function createFieldPlaneStore(
       dragging: false,
       jobId: null,
       geometrySha256: null,
+      synthesisRevision: null,
       plane: null,
       frequencyIndex: 0,
       frequenciesHz: [],
@@ -596,6 +609,7 @@ export function createFieldPlaneStore(
           dragging: false,
           jobId: null,
           geometrySha256: null,
+          synthesisRevision: null,
           plane: null,
           frequencyIndex: 0,
           frequenciesHz: [],
@@ -694,6 +708,7 @@ export function createFieldPlaneStore(
           dragging: false,
           jobId: null,
           geometrySha256: null,
+          synthesisRevision: null,
           plane: null,
           frequenciesHz: [],
           status: 'error',
@@ -713,6 +728,16 @@ export function createFieldPlaneStore(
       retryIfBlocked: () => {
         const current = get();
         if (current.status !== 'error' || current.lastErrorCode !== 'solve_running_or_queued') return;
+        if (!current.enabled || !current.jobId || !current.plane || !current.frequenciesHz.length) return;
+        requestCurrentPlane(current, current.plane);
+      },
+      invalidateSynthesis: (revision) => {
+        const current = get();
+        cache.clear();
+        if (revision !== undefined) {
+          cacheSynthesisRevision = revision;
+          set({ synthesisRevision: revision });
+        }
         if (!current.enabled || !current.jobId || !current.plane || !current.frequenciesHz.length) return;
         requestCurrentPlane(current, current.plane);
       },
