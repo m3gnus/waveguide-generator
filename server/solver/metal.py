@@ -17,7 +17,7 @@ import logging
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping
 
 import numpy as np
 
@@ -42,11 +42,9 @@ from .frequency_sweep import (
     sort_native_result_frequencies,
 )
 from .field_traces_store import (
-    FieldTraceArtifact,
-    FieldTraceChannel,
-    estimate_field_trace_retention_bytes,
-    field_trace_retention_cap_bytes,
-    mesh_trace_dof_counts,
+    METAL_FIELD_TRACE_BACKEND,
+    build_field_trace_artifact,
+    field_trace_retention_plan,
 )
 from .formulation import DEFAULT_BEM_FORMULATION, DEFAULT_COMPLEX_K_SHIFT
 from .infinite_baffle import require_full_3d_aperture_tag
@@ -289,81 +287,6 @@ def _native_check_open_edges(context: SolverContext) -> bool:
     return enclosure_depth > 0.0 or wall > 0.0
 
 
-def _field_trace_retention_plan(
-    msh_text: str,
-    *,
-    mesh_stats: Mapping[str, Any] | None,
-    frequency_count: int,
-    channel_count: int,
-    supported: bool,
-    cap_bytes: int | None,
-) -> tuple[bool, str | None, int | None, int]:
-    cap = field_trace_retention_cap_bytes() if cap_bytes is None else int(cap_bytes)
-    if cap < 0:
-        raise ValueError("field trace retention cap must be non-negative")
-    if not supported:
-        return False, "unsupported_solve_mode", None, cap
-    try:
-        n_p1, n_dp0 = mesh_trace_dof_counts(msh_text, mesh_stats)
-    except ValueError:
-        return False, "trace_size_estimate_unavailable", None, cap
-    estimated = estimate_field_trace_retention_bytes(
-        frequency_count,
-        n_p1,
-        n_dp0,
-        channel_count,
-    )
-    if estimated > cap:
-        return False, "size_cap_exceeded", estimated, cap
-    return True, None, estimated, cap
-
-
-def _field_trace_artifact(
-    msh_text: str,
-    channel_results: Sequence[tuple[str, Any]],
-    config: Any,
-) -> FieldTraceArtifact | None:
-    channels: list[FieldTraceChannel] = []
-    frequencies: NDArray[np.float64] | None = None
-    for channel_id, result in channel_results:
-        pressure = getattr(result, "surface_pressure_complex", None)
-        neumann = getattr(result, "surface_neumann_complex", None)
-        if pressure is None or neumann is None:
-            return None
-        result_frequencies = np.asarray(result.frequencies_hz, dtype=np.float64).reshape(-1)
-        if frequencies is None:
-            frequencies = result_frequencies
-        elif not np.array_equal(result_frequencies, frequencies):
-            raise ValueError("retained field-trace channel frequency grids differ")
-        channels.append(
-            FieldTraceChannel(
-                channel_id=str(channel_id),
-                pressure_p1=np.asarray(pressure, dtype=np.complex128),
-                neumann_dp0=np.asarray(neumann, dtype=np.complex128),
-            )
-        )
-    if frequencies is None:
-        return None
-    sound_speed = solver_sound_speed_m_per_s("hornlab_metal_bem")
-    k_real_f32 = (2.0 * np.pi * frequencies / sound_speed).astype(np.float32)
-    if getattr(config, "formulation", DEFAULT_BEM_FORMULATION) == "complex_k":
-        k_imag_f32 = (
-            k_real_f32.astype(np.float64)
-            * float(getattr(config, "complex_k_shift", DEFAULT_COMPLEX_K_SHIFT))
-        ).astype(np.float32)
-    else:
-        k_imag_f32 = np.zeros_like(k_real_f32)
-    return FieldTraceArtifact(
-        mesh_text=msh_text,
-        frequencies_hz=frequencies,
-        k_real=k_real_f32.astype(np.float64),
-        k_imag=k_imag_f32.astype(np.float64),
-        symmetry_plane=getattr(config, "native_symmetry_plane", None),
-        solve_path="full-3d",
-        channels=tuple(channels),
-    )
-
-
 def solve_metal_from_msh_text(
     msh_text: str,
     context: SolverContext,
@@ -429,7 +352,7 @@ def solve_metal_from_msh_text(
 
     aperture_tag = require_full_3d_aperture_tag(context, mesh_metadata)
     retain_traces, trace_reason, trace_estimated_bytes, trace_cap_bytes = (
-        _field_trace_retention_plan(
+        field_trace_retention_plan(
             msh_text,
             mesh_stats=mesh_stats,
             frequency_count=len(live_execution_frequencies(context)),
@@ -546,7 +469,13 @@ def solve_metal_from_msh_text(
         sound_speed_m_per_s=solver_sound_speed_m_per_s("hornlab_metal_bem"),
     )
     field_traces = (
-        _field_trace_artifact(msh_text, [("default", result)], config)
+        build_field_trace_artifact(
+            msh_text,
+            [("default", result)],
+            config,
+            backend=METAL_FIELD_TRACE_BACKEND,
+            sound_speed_m_per_s=solver_sound_speed_m_per_s("hornlab_metal_bem"),
+        )
         if retain_traces
         else None
     )
@@ -1335,7 +1264,7 @@ def solve_imported_metal_from_msh_text(
         imported_mesh_stats if isinstance(imported_mesh_stats, Mapping) else None
     )
     retain_traces, trace_reason, trace_estimated_bytes, trace_cap_bytes = (
-        _field_trace_retention_plan(
+        field_trace_retention_plan(
             msh_text,
             mesh_stats=imported_mesh_stats,
             frequency_count=len(live_execution_frequencies(context)),
@@ -1877,10 +1806,12 @@ def solve_imported_metal_from_msh_text(
     if cardioid_campaign is not None:
         envelope["_radiation_impedance_npz"] = cardioid_campaign["artifact"]
     field_traces = (
-        _field_trace_artifact(
+        build_field_trace_artifact(
             msh_text,
             [(channel.id, sorted_results[channel.id]) for channel in geometry.drive_channels],
             config,
+            backend=METAL_FIELD_TRACE_BACKEND,
+            sound_speed_m_per_s=solver_sound_speed_m_per_s("hornlab_metal_bem"),
         )
         if retain_traces
         else None

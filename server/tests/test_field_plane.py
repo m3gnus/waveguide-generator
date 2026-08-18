@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import struct
 import threading
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -12,11 +13,18 @@ import pytest
 
 from server.app import create_app
 from server.jobs.models import FieldPlaneRequest
+from server.jobs.models import SolveRequest
+from server.jobs.runtime import JobRuntime
 from server.jobs.store import JobStore
 from server.mesh.artifact import mesh_text_sha256
 from server.solver import field_plane
 from server.solver.combine import raw_channel_weights
-from server.solver.field_traces_store import FieldTraceArtifact, FieldTraceChannel
+from server.solver.field_traces_store import (
+    BEMPP_FIELD_TRACE_BACKEND,
+    FieldTraceArtifact,
+    FieldTraceChannel,
+    METAL_FIELD_TRACE_BACKEND,
+)
 
 
 MESH_TEXT = """$MeshFormat
@@ -33,6 +41,30 @@ $Elements
 2
 1 2 2 1 1 1 2 3
 2 2 2 1 1 1 3 4
+$EndElements
+"""
+
+TETRAHEDRON_MESH_TEXT = """$MeshFormat
+2.2 0 8
+$EndMeshFormat
+$PhysicalNames
+2
+2 1 "wall"
+2 2 "source"
+$EndPhysicalNames
+$Nodes
+4
+1 0 0 0
+2 1 0 0
+3 0 1 0
+4 0 0 1
+$EndNodes
+$Elements
+4
+1 2 2 2 2 1 3 2
+2 2 2 1 1 1 2 4
+3 2 2 1 1 1 4 3
+4 2 2 1 1 2 3 4
 $EndElements
 """
 
@@ -116,7 +148,11 @@ def _body(
     }
 
 
-def _artifact(*, multi: bool = False) -> FieldTraceArtifact:
+def _artifact(
+    *,
+    multi: bool = False,
+    backend: str = METAL_FIELD_TRACE_BACKEND,
+) -> FieldTraceArtifact:
     pressure = np.asarray([[1 + 2j, 3 + 4j, 5 + 6j, 7 + 8j]])
     neumann = np.asarray([[9 + 10j, 11 + 12j]])
     channels = [FieldTraceChannel("default", pressure, neumann)]
@@ -133,6 +169,7 @@ def _artifact(*, multi: bool = False) -> FieldTraceArtifact:
         symmetry_plane="yz",
         solve_path="full-3d",
         channels=tuple(channels),
+        backend=backend,
     )
 
 
@@ -144,6 +181,7 @@ def _create_job(
     traces: bool = True,
     multi: bool = False,
     solve_path: str = "full-3d",
+    backend: str = METAL_FIELD_TRACE_BACKEND,
 ) -> None:
     now = "2026-08-18T00:00:00"
     geometry: dict[str, Any]
@@ -215,7 +253,24 @@ def _create_job(
             )
         store.store_results(job_id, results)
     if traces:
-        store.store_field_traces(job_id, _artifact(multi=multi))
+        store.store_field_traces(
+            job_id,
+            _artifact(multi=multi, backend=backend),
+        )
+
+
+def _mock_field_backend(
+    monkeypatch: pytest.MonkeyPatch,
+    evaluator: Any,
+    *,
+    mesh_loader: Any | None = None,
+) -> None:
+    loader = mesh_loader or (lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(
+        field_plane,
+        "_load_field_backend",
+        lambda _backend: field_plane._FieldBackendAPI(loader, evaluator),
+    )
 
 
 def _decode(payload: bytes) -> tuple[dict[str, Any], np.ndarray]:
@@ -232,11 +287,6 @@ def test_happy_path_binary_round_trip_ordering_and_mesh_lru(
 ) -> None:
     mesh_loads: list[Path] = []
     points_seen: list[np.ndarray] = []
-    monkeypatch.setattr(
-        field_plane,
-        "load_mesh",
-        lambda path, **_kwargs: mesh_loads.append(Path(path)) or object(),
-    )
 
     def evaluate(
         _mesh: object,
@@ -250,7 +300,11 @@ def test_happy_path_binary_round_trip_ordering_and_mesh_lru(
         points_seen.append(points.copy())
         return points[:, 0] + 1j * points[:, 1]
 
-    monkeypatch.setattr(field_plane, "evaluate_exterior_from_traces", evaluate)
+    _mock_field_backend(
+        monkeypatch,
+        evaluate,
+        mesh_loader=lambda path, **_kwargs: mesh_loads.append(Path(path)) or object(),
+    )
 
     async def scenario() -> None:
         app = create_app(data_dir=tmp_path)
@@ -305,11 +359,112 @@ def test_happy_path_binary_round_trip_ordering_and_mesh_lru(
     asyncio.run(scenario())
 
 
+def test_artifact_backend_dispatches_matching_mesh_loader_and_evaluator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, str, dict[str, Any]]] = []
+
+    def package(backend: str) -> SimpleNamespace:
+        def load(path: Path, **kwargs: Any) -> object:
+            calls.append((backend, "load", dict(kwargs)))
+            assert Path(path).name == "mesh.msh"
+            return object()
+
+        def evaluate(*args: Any, **kwargs: Any) -> np.ndarray:
+            calls.append((backend, "evaluate", dict(kwargs)))
+            return np.zeros(np.asarray(args[5]).shape[0], dtype=np.complex128)
+
+        return SimpleNamespace(
+            load_mesh=load,
+            evaluate_exterior_from_traces=evaluate,
+        )
+
+    packages = {
+        "hornlab_metal_bem": package(METAL_FIELD_TRACE_BACKEND),
+        "hornlab_bempp_bem": package(BEMPP_FIELD_TRACE_BACKEND),
+    }
+    monkeypatch.setattr(
+        field_plane,
+        "_field_backend_status",
+        lambda _backend: {"available": True, "reason": "test"},
+    )
+    monkeypatch.setattr(
+        field_plane.importlib,
+        "import_module",
+        lambda name: packages[name],
+    )
+
+    async def scenario() -> None:
+        app = create_app(data_dir=tmp_path)
+        store = app.state.jobs_runtime.store
+        store.initialize()
+        for job_id, backend in (
+            ("metal-dispatch", METAL_FIELD_TRACE_BACKEND),
+            ("bempp-dispatch", BEMPP_FIELD_TRACE_BACKEND),
+        ):
+            _create_job(store, job_id, backend=backend)
+            status, _raw, _headers = await _request(
+                app,
+                f"/api/results/{job_id}/field-plane",
+                _body(job_id),
+            )
+            assert status == 200
+        await app.state.jobs_runtime.shutdown()
+
+    asyncio.run(scenario())
+
+    assert [call[:2] for call in calls] == [
+        (METAL_FIELD_TRACE_BACKEND, "load"),
+        (METAL_FIELD_TRACE_BACKEND, "evaluate"),
+        (BEMPP_FIELD_TRACE_BACKEND, "load"),
+        (BEMPP_FIELD_TRACE_BACKEND, "evaluate"),
+    ]
+    metal_kwargs = calls[1][2]
+    bempp_kwargs = calls[3][2]
+    assert metal_kwargs == {"symmetry_plane": "yz", "check_open_edges": True}
+    assert bempp_kwargs == {"symmetry_plane": "yz"}
+
+
+def test_artifact_backend_unavailable_returns_clear_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        field_plane,
+        "_field_backend_status",
+        lambda backend: {
+            "available": False,
+            "reason": f"{backend} runtime missing",
+        },
+    )
+    monkeypatch.setattr(
+        field_plane.importlib,
+        "import_module",
+        lambda _name: pytest.fail("an unavailable backend must not be imported"),
+    )
+
+    async def scenario() -> None:
+        app = create_app(data_dir=tmp_path)
+        store = app.state.jobs_runtime.store
+        store.initialize()
+        _create_job(store, "bempp-unavailable", backend=BEMPP_FIELD_TRACE_BACKEND)
+        status, raw, _headers = await _request(
+            app,
+            "/api/results/bempp-unavailable/field-plane",
+            _body(),
+        )
+        assert status == 422
+        detail = json.loads(raw)["detail"]
+        assert "requires backend 'bempp'" in detail
+        assert "bempp runtime missing" in detail
+        await app.state.jobs_runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
 def test_system_response_weights_both_traces_and_evaluates_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls: list[tuple[np.ndarray, np.ndarray]] = []
-    monkeypatch.setattr(field_plane, "load_mesh", lambda *_args, **_kwargs: object())
 
     def evaluate(
         _mesh: object,
@@ -323,7 +478,7 @@ def test_system_response_weights_both_traces_and_evaluates_once(
         calls.append((pressure.copy(), neumann.copy()))
         return np.full(points.shape[0], pressure[0], dtype=np.complex128)
 
-    monkeypatch.setattr(field_plane, "evaluate_exterior_from_traces", evaluate)
+    _mock_field_backend(monkeypatch, evaluate)
 
     async def scenario() -> None:
         app = create_app(data_dir=tmp_path)
@@ -435,10 +590,8 @@ def test_invalid_frequency_and_response_map_to_422(
     response_id: str,
     frequency_index: int,
 ) -> None:
-    monkeypatch.setattr(field_plane, "load_mesh", lambda *_args, **_kwargs: object())
-    monkeypatch.setattr(
-        field_plane,
-        "evaluate_exterior_from_traces",
+    _mock_field_backend(
+        monkeypatch,
         lambda *_args, **_kwargs: np.zeros(6, dtype=np.complex128),
     )
 
@@ -461,10 +614,8 @@ def test_invalid_frequency_and_response_map_to_422(
 def test_solve_permit_rejects_field_request_with_503(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(field_plane, "load_mesh", lambda *_args, **_kwargs: object())
-    monkeypatch.setattr(
-        field_plane,
-        "evaluate_exterior_from_traces",
+    _mock_field_backend(
+        monkeypatch,
         lambda *_args, **_kwargs: np.zeros(6, dtype=np.complex128),
     )
 
@@ -497,7 +648,6 @@ def test_latest_pending_field_request_wins_and_replaced_request_gets_429(
     release = threading.Event()
     calls = 0
     calls_lock = threading.Lock()
-    monkeypatch.setattr(field_plane, "load_mesh", lambda *_args, **_kwargs: object())
 
     def evaluate(*args: Any, **_kwargs: Any) -> np.ndarray:
         nonlocal calls
@@ -510,7 +660,7 @@ def test_latest_pending_field_request_wins_and_replaced_request_gets_429(
         points = np.asarray(args[5])
         return np.full(points.shape[0], call_number + 0j)
 
-    monkeypatch.setattr(field_plane, "evaluate_exterior_from_traces", evaluate)
+    _mock_field_backend(monkeypatch, evaluate)
 
     async def scenario() -> None:
         app = create_app(data_dir=tmp_path)
@@ -560,14 +710,13 @@ def test_evaluation_timeout_returns_504_but_holds_permit_until_thread_finishes(
 ) -> None:
     entered = threading.Event()
     release = threading.Event()
-    monkeypatch.setattr(field_plane, "load_mesh", lambda *_args, **_kwargs: object())
 
     def evaluate(*args: Any, **_kwargs: Any) -> np.ndarray:
         entered.set()
         assert release.wait(timeout=5.0)
         return np.zeros(np.asarray(args[5]).shape[0], dtype=np.complex128)
 
-    monkeypatch.setattr(field_plane, "evaluate_exterior_from_traces", evaluate)
+    _mock_field_backend(monkeypatch, evaluate)
 
     async def scenario() -> None:
         app = create_app(data_dir=tmp_path)
@@ -588,5 +737,107 @@ def test_evaluation_timeout_returns_504_but_holds_permit_until_thread_finishes(
         while app.state.jobs_runtime.metal_permit.field_running:
             await asyncio.sleep(0.001)
         await app.state.jobs_runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_real_bempp_engine_traces_round_trip_through_field_plane_pipeline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pytest.importorskip("hornlab_bempp_bem")
+    pytest.importorskip("bempp_cl.api")
+    from server.engines import registry
+    from server.solver import bempp
+
+    status = bempp.bempp_status()
+    if not status["available"]:
+        pytest.skip(str(status["reason"]))
+
+    async def build_tetrahedron(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {
+            "msh_text": TETRAHEDRON_MESH_TEXT,
+            "stats": {"vertex_count": 4, "triangle_count": 4},
+            "metadata": {},
+        }
+
+    monkeypatch.setattr(bempp, "build_solver_mesh", build_tetrahedron)
+    # The synthetic full tetrahedron replaces a mesher output, so it has no
+    # reduced-domain cut even if request canonicalisation selects one.
+    monkeypatch.setattr(bempp, "native_symmetry_plane", lambda _context: None)
+    request = SolveRequest.model_validate(
+        {
+            "design": {
+                "formula": "OSSE",
+                "L": 60,
+                "a": 30,
+                "a0": 10,
+                "r0": 10,
+                "mesh": {
+                    "quadrants": 1234,
+                    "wall_thickness": 2,
+                    "max_triangles": 50000,
+                },
+                "source": {"shape": 2, "velocity": 1},
+                "simulation": {
+                    "f1": 320,
+                    "f2": 321,
+                    "num_frequencies": 1,
+                    "sim_type": "freestanding",
+                    "solver_mode": "full_3d",
+                },
+            },
+            "options": {
+                "engine": "bempp",
+                "frequency_range": [320, 321],
+                "num_frequencies": 1,
+                "frequency_spacing": "linear",
+                "stage_delay_ms": 0,
+            },
+        }
+    )
+
+    async def scenario() -> None:
+        runtime = JobRuntime(
+            JobStore(tmp_path / "bempp-field-plane.db"),
+            engine_registry=registry.EngineRegistry(
+                detector=lambda: [
+                    registry.EngineInfo("bempp", True, "test", "editable")
+                ],
+                factory=lambda _name: bempp.BemppEngine(),
+            ),
+        )
+        try:
+            job_id = await runtime.submit(request)
+            await runtime.wait_idle(timeout=180.0)
+            job = await runtime.get_job(job_id)
+            assert job["status"] == "complete", job["error_message"]
+            assert job["field_plane_available"] is True
+
+            trace_record = runtime.store.get_field_trace_record(job_id)
+            assert trace_record is not None
+            assert trace_record["version"] == 2
+            loaded = runtime.store.load_field_traces(job_id, 0, "default")
+            assert loaded[6] == BEMPP_FIELD_TRACE_BACKEND
+
+            body = _body("real-bempp", response_id="channel:default")
+            body["plane"].update(
+                {
+                    "origin_m": [2.0, 2.0, 2.0],
+                    "width_m": 0.2,
+                    "height_m": 0.2,
+                    "nx": 2,
+                    "ny": 2,
+                }
+            )
+            evaluation = await runtime.evaluate_field_plane(
+                job_id,
+                FieldPlaneRequest.model_validate(body),
+            )
+            assert evaluation.frequency_hz == pytest.approx(320.0)
+            assert evaluation.pressure.shape == (4,)
+            assert np.all(np.isfinite(evaluation.pressure))
+            assert np.any(np.abs(evaluation.pressure) > 0.0)
+        finally:
+            await runtime.shutdown()
 
     asyncio.run(scenario())

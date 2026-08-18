@@ -21,6 +21,7 @@ _FREQUENCY_SHAPED_RESULT_FIELDS = (
     "directivity_db",
     "impedance",
     "surface_pressure_complex",
+    "surface_neumann_complex",
     "sphere_pressure_complex",
 )
 
