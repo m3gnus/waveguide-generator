@@ -14,7 +14,7 @@ function surface(positions: number[], indices: number[]): SceneSurface {
 }
 
 function scene(value: SceneSurface): FrameScene {
-  return { surfaces: [value], bounds: new Box3(new Vector3(0, 0, 0), new Vector3(1, 1, 0)), hasCurvature: false };
+  return { surfaces: [value], bounds: new Box3(new Vector3(0, 0, 0), new Vector3(1, 1, 0)), unitsPerMetre: 1_000, hasCurvature: false };
 }
 
 describe('symmetry display geometry', () => {

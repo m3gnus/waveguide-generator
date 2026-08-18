@@ -228,7 +228,7 @@ export function createImportedMeshScene(
     bounds.expandByPoint(point.set(mesh.vertices[offset], mesh.vertices[offset + 1], mesh.vertices[offset + 2]));
   }
   if (bounds.isEmpty()) bounds.set(new Vector3(-1, -1, -1), new Vector3(1, 1, 1));
-  const solvedScene = { surfaces, bounds, hasCurvature: false };
+  const solvedScene = { surfaces, bounds, unitsPerMetre: 1 as const, hasCurvature: false };
   const scene = options.fullDomain
     ? markParametricSolvedDomain(solvedScene, quadrantsForCutPlanes(symmetryCutPlanes))
     : expandImportedSymmetry(solvedScene, symmetryCutPlanes);

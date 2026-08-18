@@ -60,6 +60,12 @@ function hasSegment(lines: Float32Array, a: [number, number, number], b: [number
   return false;
 }
 
+describe('scene units', () => {
+  it('marks parametric preview geometry as millimetres', () => {
+    expect(frameToScene(fixture()).unitsPerMetre).toBe(1_000);
+  });
+});
+
 const EDGE_VERTEX_GRID = 1e-4;
 const FEATURE_EDGE_COSINE = Math.cos(20 * Math.PI / 180);
 
