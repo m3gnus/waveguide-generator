@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import { durableSettings, namespaceStorage } from '../stores/durableSettings';
+import type { FieldPlaneDisplayMode } from '../viewport/fieldPlaneColor';
 
 export type CameraProjection = 'perspective' | 'orthographic';
 
@@ -14,9 +15,13 @@ export interface ViewerPreferences {
   liveUpdate: boolean;
   tintSolvedRegion: boolean;
   startupCameraMode: CameraProjection;
+  fieldPlaneDisplayMode: FieldPlaneDisplayMode;
+  fieldPlaneRangeLocked: boolean;
+  fieldPlaneAnimationSpeed: number;
 }
 
 export const VIEWER_PREFERENCES_NAMESPACE = 'wg2.preferences.v1';
+export const VIEWER_PREFERENCES_SCHEMA_VERSION = 2;
 
 export const DEFAULT_VIEWER_PREFERENCES: Readonly<ViewerPreferences> = Object.freeze({
   rotateSpeed: 1,
@@ -31,10 +36,13 @@ export const DEFAULT_VIEWER_PREFERENCES: Readonly<ViewerPreferences> = Object.fr
   // Orthographic projection keeps circles circular on screen and makes small
   // H/V geometry differences inspectable without perspective foreshortening.
   startupCameraMode: 'orthographic',
+  fieldPlaneDisplayMode: 'spl',
+  fieldPlaneRangeLocked: false,
+  fieldPlaneAnimationSpeed: 1,
 });
 
 interface PreferenceEnvelope {
-  schemaVersion: 1;
+  schemaVersion: 1 | typeof VIEWER_PREFERENCES_SCHEMA_VERSION;
   viewer: ViewerPreferences;
 }
 
@@ -44,11 +52,18 @@ function finiteInRange(value: unknown, minimum: number, maximum: number): value 
   return typeof value === 'number' && Number.isFinite(value) && value >= minimum && value <= maximum;
 }
 
+function fieldPlaneDisplayMode(value: unknown): FieldPlaneDisplayMode | null {
+  return value === 'spl' || value === 'normalized' || value === 'phase' || value === 'instantaneous'
+    ? value
+    : null;
+}
+
 export function parseViewerPreferences(raw: string | null): ViewerPreferences {
   if (!raw) return { ...DEFAULT_VIEWER_PREFERENCES };
   try {
     const envelope = JSON.parse(raw) as Partial<PreferenceEnvelope>;
-    const stored = envelope?.schemaVersion === 1 && envelope.viewer && typeof envelope.viewer === 'object'
+    const stored = (envelope?.schemaVersion === 1 || envelope?.schemaVersion === VIEWER_PREFERENCES_SCHEMA_VERSION)
+      && envelope.viewer && typeof envelope.viewer === 'object'
       ? envelope.viewer as Partial<ViewerPreferences>
       : {};
     return {
@@ -64,6 +79,14 @@ export function parseViewerPreferences(raw: string | null): ViewerPreferences {
       startupCameraMode: stored.startupCameraMode === 'orthographic' || stored.startupCameraMode === 'perspective'
         ? stored.startupCameraMode
         : DEFAULT_VIEWER_PREFERENCES.startupCameraMode,
+      fieldPlaneDisplayMode: fieldPlaneDisplayMode(stored.fieldPlaneDisplayMode)
+        ?? DEFAULT_VIEWER_PREFERENCES.fieldPlaneDisplayMode,
+      fieldPlaneRangeLocked: typeof stored.fieldPlaneRangeLocked === 'boolean'
+        ? stored.fieldPlaneRangeLocked
+        : DEFAULT_VIEWER_PREFERENCES.fieldPlaneRangeLocked,
+      fieldPlaneAnimationSpeed: finiteInRange(stored.fieldPlaneAnimationSpeed, 0.1, 4)
+        ? stored.fieldPlaneAnimationSpeed
+        : DEFAULT_VIEWER_PREFERENCES.fieldPlaneAnimationSpeed,
     };
   } catch {
     return { ...DEFAULT_VIEWER_PREFERENCES };
@@ -89,12 +112,15 @@ export class ViewerPreferencesStore {
 
   update(patch: Partial<ViewerPreferences>): void {
     const next = parseViewerPreferences(JSON.stringify({
-      schemaVersion: 1,
+      schemaVersion: VIEWER_PREFERENCES_SCHEMA_VERSION,
       viewer: { ...this.preferences, ...patch },
     } satisfies PreferenceEnvelope));
     this.preferences = next;
     try {
-      this.storage?.setItem(VIEWER_PREFERENCES_NAMESPACE, JSON.stringify({ schemaVersion: 1, viewer: next } satisfies PreferenceEnvelope));
+      this.storage?.setItem(VIEWER_PREFERENCES_NAMESPACE, JSON.stringify({
+        schemaVersion: VIEWER_PREFERENCES_SCHEMA_VERSION,
+        viewer: next,
+      } satisfies PreferenceEnvelope));
     } catch { /* storage is optional */ }
     this.listeners.forEach((listener) => listener());
   }

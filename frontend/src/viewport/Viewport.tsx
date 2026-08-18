@@ -16,7 +16,13 @@ import { readChartTokens } from '../results/EChart';
 import { useViewerPreferences, viewerPreferences, type CameraProjection } from '../viewerprefs/viewerPreferences';
 import { ViewerPreferencesPanel } from '../viewerprefs/ViewerPreferencesPanel';
 import { frameToScene, hasRenderableSurfaces, MAX_EDGE_TRIANGLES } from './frameScene';
-import { FIELD_PLANE_WINDOW_DB, maxFieldSplDb } from './fieldPlaneColor';
+import {
+  defaultFieldPlaneWindow,
+  fieldPlaneColormap,
+  FIELD_PLANE_DISPLAY_MODES,
+  type FieldPlaneDisplayMode,
+  type FieldPlaneValueWindow,
+} from './fieldPlaneColor';
 import type { ModelClipMode } from './fieldPlaneClipping';
 import { fieldPlaneOffsetMetres, fieldPlanePreset, withFieldPlaneOffset } from './fieldPlaneMath';
 import { maskMatchesGeometry, useFieldPlaneMaskStore } from './fieldPlaneMaskStore';
@@ -50,6 +56,29 @@ export function nextDisplayMode(mode: DisplayMode): DisplayMode {
 /** How long the viewport may lag the design before it says so out loud. */
 const STALL_NOTICE_MS = 1_500;
 const SYMMETRY_TINT_DEBOUNCE_MS = 400;
+
+function formatPressurePa(value: number): string {
+  const magnitude = Math.abs(value);
+  if (magnitude === 0) return '0';
+  if (magnitude < 0.01 || magnitude >= 1_000) return magnitude.toExponential(3);
+  return magnitude.toPrecision(4);
+}
+
+export function fieldPlaneWindowReadout(
+  mode: FieldPlaneDisplayMode,
+  window: FieldPlaneValueWindow,
+): string {
+  if (mode === 'spl') {
+    return `${window.minimum.toFixed(1)}…${window.maximum.toFixed(1)} dB re 20 µPa`;
+  }
+  if (mode === 'normalized') {
+    return `${window.minimum.toFixed(1)}…${window.maximum.toFixed(1)} dB re field max`;
+  }
+  if (mode === 'phase') {
+    return `${window.minimum.toFixed(0)}…${window.maximum.toFixed(0)}°`;
+  }
+  return `± ${formatPressurePa(window.maximum)} Pa`;
+}
 
 function displayQuadrants(value: number): DisplayQuadrants {
   return value === 1 || value === 12 || value === 14 ? value : 1234;
@@ -150,6 +179,12 @@ export function Viewport() {
   const fieldMaskState = useFieldPlaneMaskStore((state) => state);
   const fieldFrequencyIndex = useFieldPlaneStore((state) => state.frequencyIndex);
   const fieldFrequencies = useFieldPlaneStore((state) => state.frequenciesHz);
+  const fieldDisplayMode = useFieldPlaneStore((state) => state.displayMode);
+  const fieldRangeLocked = useFieldPlaneStore((state) => state.rangeLocked);
+  const fieldAnimationSpeed = useFieldPlaneStore((state) => state.animationSpeed);
+  const fieldAnimating = useFieldPlaneStore((state) => state.animating);
+  const fieldIsolines = useFieldPlaneStore((state) => state.isolines);
+  const storedFieldWindow = useFieldPlaneStore((state) => state.windows[state.displayMode]);
   const selectedRef = useRef<DecodedFrame | null>(null);
   const latencyClock = useRef(new ClientLatencyClock());
   const currentEpoch = useRef<number | null>(preview.epoch);
@@ -229,11 +264,12 @@ export function Viewport() {
   const reportClientFrame = useCallback((milliseconds: number) => setClientFrameMs(milliseconds), []);
   const activeScene = workspaceMode === 'cad' ? importedMesh?.scene ?? null : importedMesh?.scene ?? scene;
   const fieldColormap = useMemo(() => readChartTokens().colormap, [theme]);
-  const fieldWindow = useMemo(() => {
-    if (!field) return null;
-    const maximum = maxFieldSplDb(field.real, field.imag);
-    return { minimum: maximum - FIELD_PLANE_WINDOW_DB, maximum };
-  }, [field]);
+  const activeFieldColormap = useMemo(
+    () => fieldPlaneColormap(fieldDisplayMode, fieldColormap),
+    [fieldColormap, fieldDisplayMode],
+  );
+  const fieldWindow = storedFieldWindow ?? defaultFieldPlaneWindow(fieldDisplayMode);
+  const fieldFrequencyHz = fieldFrequencies[fieldFrequencyIndex] ?? field?.header.frequency_hz ?? null;
   const sceneMarker = importedMesh
     ? `msh:${importedMesh.artifactToken}`
     : workspaceMode === 'cad'
@@ -351,6 +387,18 @@ export function Viewport() {
   useEffect(() => {
     if (clipMode === 'field-plane' && (!fieldEnabled || !fieldPlane)) setClipMode('off');
   }, [clipMode, fieldEnabled, fieldPlane]);
+
+  useEffect(() => {
+    useFieldPlaneStore.getState().applyRenderingPreferences({
+      fieldPlaneDisplayMode: preferences.fieldPlaneDisplayMode,
+      fieldPlaneRangeLocked: preferences.fieldPlaneRangeLocked,
+      fieldPlaneAnimationSpeed: preferences.fieldPlaneAnimationSpeed,
+    });
+  }, [
+    preferences.fieldPlaneAnimationSpeed,
+    preferences.fieldPlaneDisplayMode,
+    preferences.fieldPlaneRangeLocked,
+  ]);
 
   useEffect(() => subscribeRevision((event) => {
     // Design revisions replace geometry inside the current view. Keeping the
@@ -533,10 +581,63 @@ export function Viewport() {
           </select>
           : <span>{field?.header.frequency_hz.toLocaleString() ?? '—'} Hz</span>}
       </div>
-      <i className="field-plane-gradient" style={{ backgroundImage: `linear-gradient(90deg, ${fieldColormap.join(', ')})` }}/>
-      <div className="field-plane-range">
-        <span>{fieldWindow ? `${fieldWindow.minimum.toFixed(1)} dB` : '— dB'}</span>
-        <span>{fieldWindow ? `${fieldWindow.maximum.toFixed(1)} dB` : '— dB'}</span>
+      <div className="field-plane-mode-row">
+        <label>
+          <span>Mode</span>
+          <select
+            aria-label="Field plane display mode"
+            value={fieldDisplayMode}
+            onChange={(event) => useFieldPlaneStore.getState().setDisplayMode(event.target.value as FieldPlaneDisplayMode)}
+          >
+            {FIELD_PLANE_DISPLAY_MODES.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
+          </select>
+        </label>
+        <button
+          type="button"
+          className={fieldAnimating ? 'on' : ''}
+          aria-label={fieldAnimating ? 'Pause field phase animation' : 'Play field phase animation'}
+          aria-pressed={fieldAnimating}
+          title={fieldAnimating ? 'Pause phase animation' : 'Animate instantaneous pressure'}
+          onClick={() => useFieldPlaneStore.getState().setAnimating(!fieldAnimating)}
+        >{fieldAnimating ? 'Ⅱ' : '▶'}</button>
+      </div>
+      <i className="field-plane-gradient" style={{ backgroundImage: `linear-gradient(90deg, ${activeFieldColormap.join(', ')})` }}/>
+      <div className="field-plane-window">
+        <span>{fieldPlaneWindowReadout(fieldDisplayMode, fieldWindow)}</span>
+        <button
+          type="button"
+          className={fieldRangeLocked ? 'on' : ''}
+          aria-label={fieldRangeLocked ? 'Unlock field plane range' : 'Lock field plane range'}
+          aria-pressed={fieldRangeLocked}
+          onClick={() => useFieldPlaneStore.getState().setRangeLocked(!fieldRangeLocked)}
+        >{fieldRangeLocked ? 'Locked' : 'Auto'}</button>
+      </div>
+      <div className="field-plane-meta">
+        <span>frequency {fieldFrequencyHz === null ? '—' : `${fieldFrequencyHz.toLocaleString()} Hz`}</span>
+        <span>response {field?.header.response_id ?? 'system'}</span>
+      </div>
+      <div className="field-plane-render-controls">
+        <button
+          type="button"
+          className={fieldIsolines ? 'on' : ''}
+          aria-label="Toggle 6 dB field plane isolines"
+          aria-pressed={fieldIsolines}
+          disabled={fieldDisplayMode === 'phase' || fieldDisplayMode === 'instantaneous'}
+          onClick={() => useFieldPlaneStore.getState().setIsolines(!fieldIsolines)}
+        >6 dB lines</button>
+        {fieldDisplayMode === 'instantaneous' && <label className="field-plane-animation-speed">
+          <span>Cycle</span>
+          <input
+            type="range"
+            aria-label="Field phase animation speed"
+            min="0.1"
+            max="4"
+            step="0.1"
+            value={fieldAnimationSpeed}
+            onChange={(event) => useFieldPlaneStore.getState().setAnimationSpeed(Number(event.target.value))}
+          />
+          <output>{fieldAnimationSpeed.toFixed(1)}×</output>
+        </label>}
       </div>
       <div className="field-plane-presets" aria-label="Field plane presets">
         <button type="button" onClick={() => applyFieldPlanePreset('h')}>H-plane</button>

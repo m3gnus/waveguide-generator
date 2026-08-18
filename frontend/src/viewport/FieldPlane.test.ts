@@ -1,7 +1,7 @@
 import { Vector3 } from 'three';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { FieldPlaneSpec } from '../api/fieldPlane';
-import { fieldPlaneTransform } from './FieldPlane';
+import { fieldPlaneAnimationFrame, fieldPlaneTransform } from './FieldPlane';
 
 describe('field-plane scene transform', () => {
   it('converts only the solver-metre origin while preserving the declared axes', () => {
@@ -19,5 +19,15 @@ describe('field-plane scene transform', () => {
     expect(new Vector3(0, 0, 0).applyMatrix4(transform).toArray()).toEqual([1_000, 2_000, 3_000]);
     expect(new Vector3(1, 0, 0).applyMatrix4(transform).toArray()).toEqual([1_001, 2_000, 3_000]);
     expect(new Vector3(0, 1, 0).applyMatrix4(transform).toArray()).toEqual([1_000, 2_000, 3_001]);
+  });
+
+  it('keeps demand rendering alive only while instantaneous pressure is animating', () => {
+    const scheduler = { schedule: vi.fn(() => () => undefined) };
+    const phase = fieldPlaneAnimationFrame(true, 0, 0.25, 1, scheduler);
+
+    expect(phase).toBeCloseTo(Math.PI / 2, 10);
+    expect(scheduler.schedule).toHaveBeenCalledOnce();
+    expect(fieldPlaneAnimationFrame(false, phase, 0.25, 1, scheduler)).toBe(0);
+    expect(scheduler.schedule).toHaveBeenCalledOnce();
   });
 });

@@ -1,4 +1,4 @@
-import { useThree } from '@react-three/fiber';
+import { useFrame, useThree } from '@react-three/fiber';
 import { useEffect, useMemo, useRef } from 'react';
 import {
   ClampToEdgeWrapping,
@@ -9,6 +9,7 @@ import {
   Matrix4,
   NearestFilter,
   RedFormat,
+  RGFormat,
   RGBAFormat,
   Raycaster,
   ShaderMaterial,
@@ -20,7 +21,14 @@ import {
   type Plane,
 } from 'three';
 import type { DecodedFieldPlane, FieldPlaneSpec } from '../api/fieldPlane';
-import { buildLutRgba, FIELD_PLANE_WINDOW_DB, maxFieldSplDb } from './fieldPlaneColor';
+import {
+  advanceFieldPlanePhase,
+  buildLutRgba,
+  defaultFieldPlaneWindow,
+  fieldPlaneColormap,
+  FIELD_PLANE_MODE_UNIFORM,
+  maxFieldSplDb,
+} from './fieldPlaneColor';
 import {
   fieldPlaneNormal,
   rotateFieldPlane,
@@ -57,9 +65,15 @@ interface ActiveFieldPlaneDrag {
   startRay: FieldPlaneRay;
 }
 
-function floatTexture(data: Float32Array, width: number, height: number): DataTexture {
-  const texture = new DataTexture(data, width, height, RedFormat, FloatType);
-  texture.internalFormat = 'R32F';
+function complexTexture(real: Float32Array, imag: Float32Array, width: number, height: number): DataTexture {
+  if (real.length !== imag.length) throw new Error('Complex field components must have equal lengths');
+  const complex = new Float32Array(real.length * 2);
+  for (let index = 0; index < real.length; index += 1) {
+    complex[index * 2] = real[index];
+    complex[index * 2 + 1] = imag[index];
+  }
+  const texture = new DataTexture(complex, width, height, RGFormat, FloatType);
+  texture.internalFormat = 'RG32F';
   texture.minFilter = LinearFilter;
   texture.magFilter = LinearFilter;
   texture.wrapS = ClampToEdgeWrapping;
@@ -109,18 +123,38 @@ export function fieldPlaneTransform(plane: FieldPlaneSpec, unitsPerMetre: number
   return transform;
 }
 
+export function fieldPlaneAnimationFrame(
+  animating: boolean,
+  currentPhase: number,
+  deltaSeconds: number,
+  cyclesPerSecond: number,
+  scheduler: Pick<DemandRenderScheduler, 'schedule'>,
+): number {
+  if (!animating) return 0;
+  const next = advanceFieldPlanePhase(currentPhase, deltaSeconds, cyclesPerSecond);
+  scheduler.schedule();
+  return next;
+}
+
 function ReadyFieldPlane({ plane, field, unitsPerMetre, clipPlane, colormap, scheduler }: ReadyFieldPlaneProps) {
-  const fieldTextures = useMemo(() => ({
-    real: floatTexture(field.real, field.header.nx, field.header.ny),
-    imag: floatTexture(field.imag, field.header.nx, field.header.ny),
-  }), [field]);
-  const colorTexture = useMemo(() => lutTexture(colormap), [colormap]);
+  const displayMode = useFieldPlaneStore((state) => state.displayMode);
+  const rangeWindow = useFieldPlaneStore((state) => state.windows[state.displayMode]);
+  const animating = useFieldPlaneStore((state) => state.animating);
+  const animationSpeed = useFieldPlaneStore((state) => state.animationSpeed);
+  const isolines = useFieldPlaneStore((state) => state.isolines);
+  const fieldTexture = useMemo(
+    () => complexTexture(field.real, field.imag, field.header.nx, field.header.ny),
+    [field],
+  );
+  const activeColormap = useMemo(() => fieldPlaneColormap(displayMode, colormap), [colormap, displayMode]);
+  const colorTexture = useMemo(() => lutTexture(activeColormap), [activeColormap]);
   const maskState = useFieldPlaneMaskStore((state) => state);
   const appliedMask = maskMatchesGeometry(maskState, field.header.job_id, field.header.geometry_sha256)
     ? maskState.mask
     : null;
   const alphaTexture = useMemo(() => maskTexture(appliedMask), [appliedMask]);
   const maxDb = useMemo(() => maxFieldSplDb(field.real, field.imag), [field]);
+  const window = rangeWindow ?? defaultFieldPlaneWindow(displayMode);
   const material = useMemo(() => new ShaderMaterial({
     clipping: clipPlane !== null,
     clippingPlanes: clipPlane ? [clipPlane] : [],
@@ -130,30 +164,48 @@ function ReadyFieldPlane({ plane, field, unitsPerMetre, clipPlane, colormap, sch
     transparent: true,
     toneMapped: false,
     uniforms: {
-      uFieldReal: { value: fieldTextures.real },
-      uFieldImag: { value: fieldTextures.imag },
+      uFieldComplex: { value: fieldTexture },
       uColorLut: { value: colorTexture },
       uMask: { value: alphaTexture },
-      uWindowMinDb: { value: maxDb - FIELD_PLANE_WINDOW_DB },
-      uWindowMaxDb: { value: maxDb },
+      uDisplayMode: { value: FIELD_PLANE_MODE_UNIFORM[displayMode] },
+      uFieldMaxDb: { value: maxDb },
+      uWindowMin: { value: window.minimum },
+      uWindowMax: { value: window.maximum },
+      uTimePhase: { value: 0 },
+      uIsolines: { value: isolines ? 1 : 0 },
       uOpacity: { value: 0.92 },
     },
     vertexShader: FIELD_PLANE_VERTEX_SHADER,
     fragmentShader: FIELD_PLANE_FRAGMENT_SHADER,
-  }), [clipPlane, colorTexture, fieldTextures, maxDb]);
+  }), [clipPlane, colorTexture, fieldTexture, maxDb]);
   const transform = useMemo(() => fieldPlaneTransform(plane, unitsPerMetre), [plane, unitsPerMetre]);
+
+  useFrame((_state, delta) => {
+    material.uniforms.uTimePhase.value = fieldPlaneAnimationFrame(
+      animating,
+      material.uniforms.uTimePhase.value as number,
+      delta,
+      animationSpeed,
+      scheduler,
+    );
+  });
 
   useEffect(() => {
     material.uniforms.uMask.value = alphaTexture;
     scheduler.schedule();
   }, [alphaTexture, material, scheduler]);
   useEffect(() => {
+    material.uniforms.uDisplayMode.value = FIELD_PLANE_MODE_UNIFORM[displayMode];
+    material.uniforms.uWindowMin.value = window.minimum;
+    material.uniforms.uWindowMax.value = window.maximum;
+    material.uniforms.uIsolines.value = isolines ? 1 : 0;
+    if (!animating) material.uniforms.uTimePhase.value = 0;
+    scheduler.schedule();
+  }, [animating, displayMode, isolines, material, scheduler, window.maximum, window.minimum]);
+  useEffect(() => {
     scheduler.schedule();
   }, [material, scheduler, transform]);
-  useEffect(() => () => {
-    fieldTextures.real.dispose();
-    fieldTextures.imag.dispose();
-  }, [fieldTextures]);
+  useEffect(() => () => fieldTexture.dispose(), [fieldTexture]);
   useEffect(() => () => colorTexture.dispose(), [colorTexture]);
   useEffect(() => () => alphaTexture.dispose(), [alphaTexture]);
   useEffect(() => () => material.dispose(), [material]);
