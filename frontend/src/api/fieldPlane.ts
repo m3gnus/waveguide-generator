@@ -37,6 +37,7 @@ export interface FieldPlaneHeader {
   response_id: string;
   geometry_sha256: string;
   synthesis_revision: string | null;
+  symmetry_plane: string | null;
 }
 
 export interface DecodedFieldPlane {
@@ -122,6 +123,15 @@ function optionalString(header: Record<string, unknown>, key: string): string | 
   return requiredString(header, key);
 }
 
+function symmetryPlane(header: Record<string, unknown>): string | null {
+  const value = header.symmetry_plane;
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string' || !['yz', 'xz', 'xy', 'yz+xz'].includes(value)) {
+    throw new Error('Field-plane header symmetry_plane must be null or a supported symmetry plane');
+  }
+  return value;
+}
+
 function requiredFiniteNumber(header: Record<string, unknown>, key: string): number {
   const value = header[key];
   if (typeof value !== 'number' || !Number.isFinite(value)) {
@@ -165,6 +175,7 @@ function validateHeader(value: unknown): FieldPlaneHeader {
     response_id: requiredString(value, 'response_id'),
     geometry_sha256: requiredString(value, 'geometry_sha256'),
     synthesis_revision: optionalString(value, 'synthesis_revision'),
+    symmetry_plane: symmetryPlane(value),
   };
 }
 

@@ -4,6 +4,7 @@ import type { FieldPlaneMaskFailure, FieldPlaneMaskRequest, FieldPlaneMaskResult
 export interface AppliedFieldPlaneMask {
   jobId: string;
   geometrySha256: string;
+  symmetryPlane: string | null;
   generation: number;
   nx: number;
   ny: number;
@@ -13,6 +14,7 @@ export interface AppliedFieldPlaneMask {
 interface FieldPlaneMaskState {
   jobId: string | null;
   geometrySha256: string | null;
+  symmetryPlane: string | null;
   generation: number;
   watertight: boolean | null;
   mask: AppliedFieldPlaneMask | null;
@@ -24,17 +26,19 @@ interface FieldPlaneMaskState {
 }
 
 function matchesCurrent(
-  state: Pick<FieldPlaneMaskState, 'jobId' | 'geometrySha256' | 'generation'>,
-  value: Pick<FieldPlaneMaskRequest, 'jobId' | 'geometrySha256' | 'generation'>,
+  state: Pick<FieldPlaneMaskState, 'jobId' | 'geometrySha256' | 'symmetryPlane' | 'generation'>,
+  value: Pick<FieldPlaneMaskRequest, 'jobId' | 'geometrySha256' | 'symmetryPlane' | 'generation'>,
 ): boolean {
   return state.jobId === value.jobId
     && state.geometrySha256 === value.geometrySha256
+    && state.symmetryPlane === value.symmetryPlane
     && state.generation === value.generation;
 }
 
 const emptyState = {
   jobId: null,
   geometrySha256: null,
+  symmetryPlane: null,
   generation: 0,
   watertight: null,
   mask: null,
@@ -44,10 +48,13 @@ const emptyState = {
 export const useFieldPlaneMaskStore = create<FieldPlaneMaskState>((set) => ({
   ...emptyState,
   begin: (request) => set((state) => {
-    const sameGeometry = state.jobId === request.jobId && state.geometrySha256 === request.geometrySha256;
+    const sameGeometry = state.jobId === request.jobId
+      && state.geometrySha256 === request.geometrySha256
+      && state.symmetryPlane === request.symmetryPlane;
     return {
       jobId: request.jobId,
       geometrySha256: request.geometrySha256,
+      symmetryPlane: request.symmetryPlane,
       generation: request.generation,
       watertight: sameGeometry ? state.watertight : null,
       mask: sameGeometry ? state.mask : null,
@@ -59,6 +66,7 @@ export const useFieldPlaneMaskStore = create<FieldPlaneMaskState>((set) => ({
     mask: {
       jobId: result.jobId,
       geometrySha256: result.geometrySha256,
+      symmetryPlane: result.symmetryPlane,
       generation: result.generation,
       nx: result.nx,
       ny: result.ny,

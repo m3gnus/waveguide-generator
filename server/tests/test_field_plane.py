@@ -336,6 +336,7 @@ def test_happy_path_binary_round_trip_ordering_and_mesh_lru(
                 "response_id": "channel:default",
                 "geometry_sha256": mesh_text_sha256(MESH_TEXT),
                 "synthesis_revision": field_plane.NO_SYNTHESIS_REVISION,
+                "symmetry_plane": "yz",
             }
             np.testing.assert_array_equal(
                 pressure,

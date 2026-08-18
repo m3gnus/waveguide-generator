@@ -76,6 +76,7 @@ class FieldPlaneEvaluation:
     pressure: NDArray[np.complex64]
     geometry_sha256: str
     synthesis_revision: str
+    symmetry_plane: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,6 +196,7 @@ def encode_field_plane_response(
         "response_id": request.response.id,
         "geometry_sha256": evaluation.geometry_sha256,
         "synthesis_revision": evaluation.synthesis_revision,
+        "symmetry_plane": evaluation.symmetry_plane,
     }
     header_bytes = json.dumps(
         header,
@@ -360,6 +362,7 @@ class FieldPlaneService:
             pressure=np.ascontiguousarray(values, dtype=np.complex64),
             geometry_sha256=geometry_sha256,
             synthesis_revision=synthesis_revision,
+            symmetry_plane=symmetry_plane,
         )
 
     def _load_response_traces(
