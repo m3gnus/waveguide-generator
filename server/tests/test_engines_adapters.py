@@ -309,8 +309,14 @@ def test_bempp_adapter_is_cpu_fallback_and_rejects_infinite_baffle(monkeypatch) 
         created["config"] = _Config(source_motion="normal", **kwargs)
         return created["config"]
 
+    def solve(_path, _config):
+        result = _result()
+        result.surface_pressure_complex = np.ones((2, 9), dtype=np.complex128)
+        result.surface_neumann_complex = np.ones((2, 3), dtype=np.complex128)
+        return result
+
     monkeypatch.setattr(bempp, "SolveConfig", config_factory)
-    monkeypatch.setattr(bempp, "bempp_solve", lambda path, config: _result())
+    monkeypatch.setattr(bempp, "bempp_solve", solve)
     monkeypatch.setattr(bempp, "BIEFormulation", SimpleNamespace(COMPLEX_K="complex_k"))
     monkeypatch.setattr(bempp, "ObservationConfig", lambda **kwargs: SimpleNamespace(**kwargs))
     monkeypatch.setattr(
@@ -321,11 +327,17 @@ def test_bempp_adapter_is_cpu_fallback_and_rejects_infinite_baffle(monkeypatch) 
     response = bempp.solve_bempp_from_msh_text(_cabinet_msh(), _context(axial=True))
     assert captured["assembly_backend"] == "numba"
     assert captured["native_symmetry_plane"] == "yz"
+    assert captured["return_surface_traces"] is True
     assert created["config"].source_motion == "axial"
     assert captured["frame_override"].axis.tolist() == pytest.approx([0.0, 0.0, 1.0])
     assert captured["frame_override"].origin.tolist() == pytest.approx([0.0, 0.04, 0.05])
     assert getattr(captured["observation"], "custom_points", None) is None
     assert response["metadata"]["solver_backend"] == "bempp"
+    assert response["metadata"]["field_trace_retention"] == {
+        "estimated_bytes": 384,
+        "cap_bytes": 256 * 1024 * 1024,
+    }
+    assert response["_field_traces"].backend == "bempp"
     with pytest.raises(ValueError, match="cannot solve coupled infinite-baffle"):
         bempp.solve_bempp_from_msh_text("msh", _context(sim_type=1))
 

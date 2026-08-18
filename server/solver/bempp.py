@@ -18,7 +18,7 @@ import platform
 import tempfile
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from server.jobs.models import SolveRequest
 from server.mesh.builder import build_solver_mesh
@@ -35,6 +35,11 @@ from .context import SolverContext
 from .frequency_sweep import (
     live_execution_frequencies,
     sort_native_result_frequencies,
+)
+from .field_traces_store import (
+    BEMPP_FIELD_TRACE_BACKEND,
+    build_field_trace_artifact,
+    field_trace_retention_plan,
 )
 from .formulation import DEFAULT_BEM_FORMULATION, DEFAULT_COMPLEX_K_SHIFT
 from .infinite_baffle import reject_bempp_infinite_baffle
@@ -467,6 +472,8 @@ def solve_bempp_from_msh_text(
     context: SolverContext,
     *,
     mesh_metadata: dict[str, Any] | None = None,
+    mesh_stats: Mapping[str, Any] | None = None,
+    field_trace_cap_bytes: int | None = None,
     progress_callback: Any = None,
     stage_callback: StageCallback | None = None,
     cancellation_callback: CancelCallback | None = None,
@@ -488,6 +495,16 @@ def solve_bempp_from_msh_text(
         raise BemppUnavailable(
             "Installed hornlab-bempp-bem does not support explicit frequency lists."
         )
+    retain_traces, trace_reason, trace_estimated_bytes, trace_cap_bytes = (
+        field_trace_retention_plan(
+            msh_text,
+            mesh_stats=mesh_stats,
+            frequency_count=len(live_execution_frequencies(context)),
+            channel_count=1,
+            supported=True,
+            cap_bytes=field_trace_cap_bytes,
+        )
+    )
     backend = status.get("assembly_backend") or PREFERRED_ASSEMBLY_BACKEND
     started = time.time()
     if status.get("warning"):
@@ -563,6 +580,7 @@ def solve_bempp_from_msh_text(
         "assembly_backend": backend,
         "opencl_device": OPENCL_DEVICE_TYPE,
         "precision": "single",
+        "return_surface_traces": retain_traces,
     }
     # The BEMPP package's parallel sweep deliberately has no callback seam.
     # Keep an explicit multi-worker opt-in fast; the default serial/cancellable
@@ -582,6 +600,10 @@ def solve_bempp_from_msh_text(
         if "on_frequency_result" in message:
             raise BemppUnavailable(
                 "Installed hornlab-bempp-bem does not support streamed frequency results."
+            ) from exc
+        if "return_surface_traces" in message:
+            raise BemppUnavailable(
+                "Installed hornlab-bempp-bem does not support retained surface traces."
             ) from exc
         raise
     if context.source_motion != "normal":
@@ -659,6 +681,10 @@ def solve_bempp_from_msh_text(
             "total_time_seconds": time.time() - started,
             "native_timings": json_safe_native_value(dict(getattr(result, "timings", {}) or {})),
         },
+        "field_trace_retention": {
+            "estimated_bytes": trace_estimated_bytes,
+            "cap_bytes": trace_cap_bytes,
+        },
         "bempp": {
             "native_symmetry_plane": getattr(config, "native_symmetry_plane", None),
             "formulation": json_safe_native_value(getattr(config, "formulation", formulation)),
@@ -670,7 +696,7 @@ def solve_bempp_from_msh_text(
             "solver_log": json_safe_native_value(response_solver_log(getattr(result, "solver_log", []))),
         },
     }
-    return build_solver_response(
+    response = build_solver_response(
         result=result,
         config=config,
         context=context,
@@ -678,6 +704,22 @@ def solve_bempp_from_msh_text(
         metadata=metadata,
         sound_speed_m_per_s=solver_sound_speed_m_per_s("hornlab_bempp_bem"),
     )
+    field_traces = (
+        build_field_trace_artifact(
+            msh_text,
+            [("default", result)],
+            config,
+            backend=BEMPP_FIELD_TRACE_BACKEND,
+            sound_speed_m_per_s=solver_sound_speed_m_per_s("hornlab_bempp_bem"),
+        )
+        if retain_traces
+        else None
+    )
+    if retain_traces and field_traces is None:
+        trace_reason = "trace_output_missing"
+    response["_field_traces"] = field_traces
+    response["_field_trace_unavailable_reason"] = trace_reason
+    return response
 
 
 class BemppEngine:
@@ -710,6 +752,7 @@ class BemppEngine:
             mesh["msh_text"],
             context,
             mesh_metadata=mesh["metadata"],
+            mesh_stats=mesh["stats"],
             stage_callback=stage_cb,
             cancellation_callback=cancel_cb,
             result_callback=result_cb,
@@ -719,7 +762,15 @@ class BemppEngine:
         results.setdefault("metadata", {})["axisymmetric_eligibility_reasons"] = [
             "axisymmetric-meridian is a Metal-only fast path"
         ]
-        return EngineRunResult(results=results, msh_text=mesh["msh_text"], mesh_stats=mesh["stats"])
+        field_traces = results.pop("_field_traces", None)
+        field_trace_reason = results.pop("_field_trace_unavailable_reason", None)
+        return EngineRunResult(
+            results=results,
+            msh_text=mesh["msh_text"],
+            mesh_stats=mesh["stats"],
+            field_traces=field_traces,
+            field_trace_unavailable_reason=field_trace_reason,
+        )
 
 
 __all__ = ["BemppEngine", "BemppUnavailable", "bempp_status", "solve_bempp_from_msh_text"]

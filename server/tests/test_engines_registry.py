@@ -14,7 +14,11 @@ from server.jobs.models import SolveRequest
 from server.jobs.runtime import JobRuntime
 from server.jobs.store import JobStore
 from server.solver.base import EngineRunResult
-from server.solver.field_traces_store import FieldTraceArtifact, FieldTraceChannel
+from server.solver.field_traces_store import (
+    FieldTraceArtifact,
+    FieldTraceChannel,
+    METAL_FIELD_TRACE_BACKEND,
+)
 
 
 def test_detection_uses_honest_probe_reasons_and_dryrun_gate(monkeypatch) -> None:
@@ -165,6 +169,7 @@ $EndElements
                             np.ones((1, 1), dtype=np.complex128),
                         ),
                     ),
+                    backend=METAL_FIELD_TRACE_BACKEND,
                 ),
             )
 

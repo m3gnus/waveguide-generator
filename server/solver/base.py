@@ -33,7 +33,7 @@ class EngineRunResult:
     # compressed NPZ so complex matrices, diagnostics, and physical face
     # identity remain lossless and downloadable independently of result JSON.
     radiation_impedance: bytes | None = None
-    # Full-3D native Metal surface traces, retained per unsynthesized channel.
+    # Full-3D backend-native surface traces, retained per unsynthesized channel.
     field_traces: FieldTraceArtifact | None = None
     field_trace_unavailable_reason: str | None = None
 

@@ -11,8 +11,11 @@ from server.jobs.store import JobStore
 from server.mesh.artifact import mesh_text_sha256
 from server.solver.field_traces_store import (
     ArtifactCorrupt,
+    BEMPP_FIELD_TRACE_BACKEND,
+    FIELD_TRACES_VERSION,
     FieldTraceArtifact,
     FieldTraceChannel,
+    METAL_FIELD_TRACE_BACKEND,
     load_field_traces,
     write_field_traces,
 )
@@ -36,7 +39,9 @@ $EndElements
 """
 
 
-def _artifact() -> FieldTraceArtifact:
+def _artifact(
+    *, backend: str = METAL_FIELD_TRACE_BACKEND
+) -> FieldTraceArtifact:
     frequencies = np.asarray([100.0, 250.0], dtype=np.float64)
     left_p = np.asarray(
         [
@@ -60,6 +65,7 @@ def _artifact() -> FieldTraceArtifact:
             FieldTraceChannel("left", left_p, left_q),
             FieldTraceChannel("right", left_p * (2 - 1j), left_q * (2 - 1j)),
         ),
+        backend=backend,
     )
 
 
@@ -87,7 +93,8 @@ def test_field_trace_round_trip_preserves_offsets_dtype_and_geometry_hash(
     stored = write_field_traces("round-trip", _artifact(), artifact_root=root)
 
     metadata = json.loads((stored.path / "meta.json").read_text(encoding="utf-8"))
-    assert metadata["version"] == 1
+    assert metadata["version"] == FIELD_TRACES_VERSION
+    assert metadata["backend"] == METAL_FIELD_TRACE_BACKEND
     assert metadata["geometry_sha256"] == mesh_text_sha256(MESH_TEXT)
     assert metadata["dof_counts"] == {"p1": 4, "dp0": 2}
     assert metadata["channel_ids"] == ["left", "right"]
@@ -112,17 +119,21 @@ def test_field_trace_round_trip_preserves_offsets_dtype_and_geometry_hash(
     assert metadata["total_bytes"] == 192
     assert stored.bytes == 192
 
-    mesh_text, frequency_hz, k_real, symmetry, pressure, neumann = load_field_traces(
-        "round-trip",
-        1,
-        "right",
-        artifact_root=root,
-    )
+    (
+        mesh_text,
+        frequency_hz,
+        k_real,
+        symmetry,
+        pressure,
+        neumann,
+        backend,
+    ) = load_field_traces("round-trip", 1, "right", artifact_root=root)
     expected = _artifact().channels[1]
     assert mesh_text == MESH_TEXT
     assert frequency_hz == 250.0
     assert k_real == 3.75
     assert symmetry == "yz"
+    assert backend == METAL_FIELD_TRACE_BACKEND
     assert pressure.dtype == np.complex64
     assert neumann.dtype == np.complex64
     np.testing.assert_array_equal(pressure, expected.pressure_p1[1].astype(np.complex64))
@@ -131,6 +142,52 @@ def test_field_trace_round_trip_preserves_offsets_dtype_and_geometry_hash(
     (stored.path / "mesh.msh").write_text(MESH_TEXT + "\n", encoding="utf-8")
     with pytest.raises(ArtifactCorrupt, match="geometry sha256"):
         load_field_traces("round-trip", 0, "left", artifact_root=root)
+
+
+@pytest.mark.parametrize(
+    "backend", [METAL_FIELD_TRACE_BACKEND, BEMPP_FIELD_TRACE_BACKEND]
+)
+def test_field_trace_backend_round_trip(tmp_path: Path, backend: str) -> None:
+    stored = write_field_traces(
+        backend,
+        _artifact(backend=backend),
+        artifact_root=tmp_path / "field-traces",
+    )
+
+    loaded = load_field_traces(
+        backend,
+        0,
+        "left",
+        artifact_dir=stored.path,
+    )
+
+    assert stored.metadata["backend"] == backend
+    assert loaded[6] == backend
+
+
+def test_version_1_artifact_defaults_to_metal_backend(tmp_path: Path) -> None:
+    stored = write_field_traces(
+        "version-1",
+        _artifact(backend=METAL_FIELD_TRACE_BACKEND),
+        artifact_root=tmp_path / "field-traces",
+    )
+    metadata_path = stored.path / "meta.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["version"] = 1
+    metadata.pop("backend")
+    metadata_path.write_text(
+        json.dumps(metadata, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    loaded = load_field_traces(
+        "version-1",
+        0,
+        "left",
+        artifact_dir=stored.path,
+    )
+
+    assert loaded[6] == METAL_FIELD_TRACE_BACKEND
 
 
 @pytest.mark.parametrize("damage", ["meta", "binary"])

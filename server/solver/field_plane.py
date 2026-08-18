@@ -6,6 +6,7 @@ import asyncio
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+import importlib
 import json
 import math
 import os
@@ -22,16 +23,14 @@ from server.jobs.store import JobStore
 from server.mesh.artifact import mesh_text_sha256
 
 from .combine import raw_channel_weights
-from .field_traces_store import ArtifactCorrupt, ArtifactMissing
+from .field_traces_store import (
+    ArtifactCorrupt,
+    ArtifactMissing,
+    BEMPP_FIELD_TRACE_BACKEND,
+    FieldTraceBackend,
+    METAL_FIELD_TRACE_BACKEND,
+)
 from .metal_permit import MetalLease, MetalPermit
-
-
-try:
-    from hornlab_metal_bem import load_mesh
-    from hornlab_metal_bem.field_traces import evaluate_exterior_from_traces
-except (ImportError, OSError):  # pragma: no cover - capability-dependent deployment.
-    load_mesh = None  # type: ignore[assignment]
-    evaluate_exterior_from_traces = None  # type: ignore[assignment]
 
 
 FIELD_PLANE_ORDERING = "v-major-row-major"
@@ -64,6 +63,52 @@ class FieldPlaneEvaluation:
     frequency_hz: float
     pressure: NDArray[np.complex64]
     geometry_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class _FieldBackendAPI:
+    load_mesh: Callable[..., Any]
+    evaluate_exterior_from_traces: Callable[..., Any]
+
+
+def _field_backend_status(backend: FieldTraceBackend) -> Mapping[str, Any]:
+    """Probe only the backend required by a loaded trace artifact."""
+
+    if backend == METAL_FIELD_TRACE_BACKEND:
+        from .metal import metal_status
+
+        return metal_status()
+    if backend == BEMPP_FIELD_TRACE_BACKEND:
+        from .bempp import bempp_status
+
+        return bempp_status()
+    raise ArtifactCorrupt(f"field-trace backend {backend!r} is unsupported")
+
+
+def _load_field_backend(backend: FieldTraceBackend) -> _FieldBackendAPI:
+    status = _field_backend_status(backend)
+    if not bool(status.get("available")):
+        reason = str(status.get("reason") or "runtime capability probe failed")
+        raise FieldPlaneUnsupported(
+            f"Field-trace artifact requires backend {backend!r}, but that "
+            f"backend is unavailable: {reason}"
+        )
+
+    package_name = (
+        "hornlab_metal_bem"
+        if backend == METAL_FIELD_TRACE_BACKEND
+        else "hornlab_bempp_bem"
+    )
+    try:
+        package = importlib.import_module(package_name)
+        mesh_loader = getattr(package, "load_mesh")
+        evaluator = getattr(package, "evaluate_exterior_from_traces")
+    except (ImportError, OSError, AttributeError) as exc:
+        raise FieldPlaneUnsupported(
+            f"Field-trace artifact requires backend {backend!r}, but installed "
+            f"{package_name} does not provide trace field evaluation"
+        ) from exc
+    return _FieldBackendAPI(mesh_loader, evaluator)
 
 
 def field_plane_timeout_seconds(
@@ -166,7 +211,7 @@ class FieldPlaneService:
         if not math.isfinite(self.timeout_seconds) or self.timeout_seconds <= 0.0:
             raise ValueError("timeout_seconds must be finite and positive")
         self._mesh_cache_entries = mesh_cache_entries
-        self._mesh_cache: OrderedDict[tuple[str, str], Any] = OrderedDict()
+        self._mesh_cache: OrderedDict[tuple[str, str, str], Any] = OrderedDict()
         self._background_tasks: set[asyncio.Task[Any]] = set()
 
     async def evaluate(
@@ -187,7 +232,7 @@ class FieldPlaneService:
             "unsupported_solve_mode"
         ):
             raise FieldPlaneUnsupported(
-                "Field planes require a completed Metal full-3D solve"
+                "Field planes require a completed full-3D solve"
             )
         if metadata.get("field_plane_available") is not True:
             reason = str(unavailable_reason or "solve_predates_traces")
@@ -251,10 +296,6 @@ class FieldPlaneService:
         request: FieldPlaneRequest,
         points: NDArray[np.float64],
     ) -> FieldPlaneEvaluation:
-        if load_mesh is None or evaluate_exterior_from_traces is None:
-            raise FieldPlaneUnsupported(
-                "Installed hornlab-metal-bem does not provide trace field evaluation"
-            )
         (
             mesh_text,
             frequency_hz,
@@ -262,23 +303,29 @@ class FieldPlaneService:
             symmetry_plane,
             pressure,
             neumann,
+            backend,
         ) = self._load_response_traces(job_id, row, request)
+        backend_api = _load_field_backend(backend)
         geometry_sha256 = mesh_text_sha256(mesh_text)
         mesh = self._cached_mesh(
+            backend,
+            backend_api,
             job_id,
             geometry_sha256,
             mesh_text,
             symmetry_plane,
         )
-        evaluated = evaluate_exterior_from_traces(
+        evaluation_kwargs: dict[str, Any] = {"symmetry_plane": symmetry_plane}
+        if backend == METAL_FIELD_TRACE_BACKEND:
+            evaluation_kwargs["check_open_edges"] = True
+        evaluated = backend_api.evaluate_exterior_from_traces(
             mesh,
             frequency_hz,
             k_real,
             pressure,
             neumann,
             points,
-            symmetry_plane=symmetry_plane,
-            check_open_edges=True,
+            **evaluation_kwargs,
         )
         values = np.asarray(evaluated)
         if values.shape != (points.shape[0],):
@@ -296,7 +343,15 @@ class FieldPlaneService:
         job_id: str,
         row: Mapping[str, Any],
         request: FieldPlaneRequest,
-    ) -> tuple[str, float, float, str | None, NDArray[Any], NDArray[Any]]:
+    ) -> tuple[
+        str,
+        float,
+        float,
+        str | None,
+        NDArray[Any],
+        NDArray[Any],
+        FieldTraceBackend,
+    ]:
         response_id = request.response.id
         if response_id.startswith("channel:"):
             channel_id = response_id.removeprefix("channel:")
@@ -323,12 +378,14 @@ class FieldPlaneService:
         ]
         first = loaded[0]
         mesh_text, frequency_hz, k_real, symmetry_plane = first[:4]
+        backend = first[6]
         for channel in loaded[1:]:
             if (
                 channel[0] != mesh_text
                 or channel[1] != frequency_hz
                 or channel[2] != k_real
                 or channel[3] != symmetry_plane
+                or channel[6] != backend
             ):
                 raise ArtifactCorrupt(
                     "retained system channels do not share geometry and frequency metadata"
@@ -346,11 +403,27 @@ class FieldPlaneService:
             weight = complex(weights[member][0])
             pressure += weight * np.asarray(channel[4], dtype=np.complex128)
             neumann += weight * np.asarray(channel[5], dtype=np.complex128)
-        return mesh_text, frequency_hz, k_real, symmetry_plane, pressure, neumann
+        return (
+            mesh_text,
+            frequency_hz,
+            k_real,
+            symmetry_plane,
+            pressure,
+            neumann,
+            backend,
+        )
 
     def _load_channel(
         self, job_id: str, frequency_index: int, channel_id: str
-    ) -> tuple[str, float, float, str | None, NDArray[Any], NDArray[Any]]:
+    ) -> tuple[
+        str,
+        float,
+        float,
+        str | None,
+        NDArray[Any],
+        NDArray[Any],
+        FieldTraceBackend,
+    ]:
         try:
             loaded = self.store.load_field_traces(
                 job_id,
@@ -448,12 +521,14 @@ class FieldPlaneService:
 
     def _cached_mesh(
         self,
+        backend: FieldTraceBackend,
+        backend_api: _FieldBackendAPI,
         job_id: str,
         geometry_sha256: str,
         mesh_text: str,
         symmetry_plane: str | None,
     ) -> Any:
-        key = (job_id, geometry_sha256)
+        key = (backend, job_id, geometry_sha256)
         cached = self._mesh_cache.pop(key, None)
         if cached is not None:
             self._mesh_cache[key] = cached
@@ -461,8 +536,7 @@ class FieldPlaneService:
         with tempfile.TemporaryDirectory(prefix="wg2-field-plane-") as directory:
             mesh_path = Path(directory) / "mesh.msh"
             mesh_path.write_text(mesh_text, encoding="utf-8")
-            assert load_mesh is not None
-            mesh = load_mesh(
+            mesh = backend_api.load_mesh(
                 mesh_path,
                 native_symmetry_plane=symmetry_plane,
             )

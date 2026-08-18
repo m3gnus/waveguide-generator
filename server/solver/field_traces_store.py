@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 import shutil
 import tempfile
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping, Sequence
 
 import numpy as np
 from numpy.typing import NDArray
@@ -18,13 +18,19 @@ from server.mesh.artifact import mesh_text_sha256
 from server.platform.paths import data_paths
 
 
-FIELD_TRACES_VERSION = 1
+FIELD_TRACES_VERSION = 2
 FIELD_TRACES_DIRECTORY = "field-traces"
 FIELD_TRACES_MAX_BYTES_ENV = "WG2_FIELD_TRACES_MAX_BYTES"
 DEFAULT_FIELD_TRACES_MAX_BYTES = 256 * 1024 * 1024
 PHASE_CONVENTION = "solver_exp_plus_ikr"
+METAL_FIELD_TRACE_BACKEND = "metal-native"
+BEMPP_FIELD_TRACE_BACKEND = "bempp"
+FieldTraceBackend = Literal["metal-native", "bempp"]
 _COMPLEX64_LE = np.dtype("<c8")
 _SYMMETRY_PLANES = frozenset({None, "yz", "xz", "xy", "yz+xz"})
+_FIELD_TRACE_BACKENDS = frozenset(
+    {METAL_FIELD_TRACE_BACKEND, BEMPP_FIELD_TRACE_BACKEND}
+)
 
 
 class ArtifactMissing(FileNotFoundError):
@@ -55,6 +61,7 @@ class FieldTraceArtifact:
     symmetry_plane: str | None
     solve_path: str
     channels: tuple[FieldTraceChannel, ...]
+    backend: FieldTraceBackend
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,6 +169,95 @@ def mesh_trace_dof_counts(
     return vertex_count, triangle_count
 
 
+def field_trace_retention_plan(
+    msh_text: str,
+    *,
+    mesh_stats: Mapping[str, Any] | None,
+    frequency_count: int,
+    channel_count: int,
+    supported: bool,
+    cap_bytes: int | None,
+) -> tuple[bool, str | None, int | None, int]:
+    """Resolve whether a solve may retain complete surface traces."""
+
+    cap = field_trace_retention_cap_bytes() if cap_bytes is None else int(cap_bytes)
+    if cap < 0:
+        raise ValueError("field trace retention cap must be non-negative")
+    if not supported:
+        return False, "unsupported_solve_mode", None, cap
+    try:
+        n_p1, n_dp0 = mesh_trace_dof_counts(msh_text, mesh_stats)
+    except ValueError:
+        return False, "trace_size_estimate_unavailable", None, cap
+    estimated = estimate_field_trace_retention_bytes(
+        frequency_count,
+        n_p1,
+        n_dp0,
+        channel_count,
+    )
+    if estimated > cap:
+        return False, "size_cap_exceeded", estimated, cap
+    return True, None, estimated, cap
+
+
+def build_field_trace_artifact(
+    msh_text: str,
+    channel_results: Sequence[tuple[str, Any]],
+    config: Any,
+    *,
+    backend: FieldTraceBackend,
+    sound_speed_m_per_s: float,
+) -> FieldTraceArtifact | None:
+    """Build one backend-tagged artifact from native solver result traces."""
+
+    channels: list[FieldTraceChannel] = []
+    frequencies: NDArray[np.float64] | None = None
+    for channel_id, result in channel_results:
+        pressure = getattr(result, "surface_pressure_complex", None)
+        neumann = getattr(result, "surface_neumann_complex", None)
+        if pressure is None or neumann is None:
+            return None
+        result_frequencies = np.asarray(
+            result.frequencies_hz, dtype=np.float64
+        ).reshape(-1)
+        if frequencies is None:
+            frequencies = result_frequencies
+        elif not np.array_equal(result_frequencies, frequencies):
+            raise ValueError("retained field-trace channel frequency grids differ")
+        channels.append(
+            FieldTraceChannel(
+                channel_id=str(channel_id),
+                pressure_p1=np.asarray(pressure, dtype=np.complex128),
+                neumann_dp0=np.asarray(neumann, dtype=np.complex128),
+            )
+        )
+    if frequencies is None:
+        return None
+
+    k_real_f32 = (
+        2.0 * np.pi * frequencies / float(sound_speed_m_per_s)
+    ).astype(np.float32)
+    formulation = getattr(config, "formulation", "standard")
+    formulation_value = getattr(formulation, "value", formulation)
+    if formulation_value == "complex_k":
+        k_imag_f32 = (
+            k_real_f32.astype(np.float64)
+            * float(getattr(config, "complex_k_shift", 0.0))
+        ).astype(np.float32)
+    else:
+        k_imag_f32 = np.zeros_like(k_real_f32)
+    return FieldTraceArtifact(
+        mesh_text=msh_text,
+        frequencies_hz=frequencies,
+        k_real=k_real_f32.astype(np.float64),
+        k_imag=k_imag_f32.astype(np.float64),
+        symmetry_plane=getattr(config, "native_symmetry_plane", None),
+        solve_path="full-3d",
+        channels=tuple(channels),
+        backend=backend,
+    )
+
+
 def write_field_traces(
     job_id: str,
     artifact: FieldTraceArtifact,
@@ -223,6 +319,7 @@ def write_field_traces(
         total_bytes = bytes_per_channel * len(artifact.channels)
         metadata = {
             "version": FIELD_TRACES_VERSION,
+            "backend": artifact.backend,
             "job_id": job_id,
             "geometry_sha256": mesh_text_sha256(artifact.mesh_text),
             "mesh_file": mesh_path.name,
@@ -276,6 +373,7 @@ def load_field_traces(
     str | None,
     NDArray[np.complex64],
     NDArray[np.complex64],
+    FieldTraceBackend,
 ]:
     """Load one frequency and raw channel without reading other trace slices."""
 
@@ -359,6 +457,7 @@ def load_field_traces(
         validated["symmetry_plane"],
         pressure,
         neumann,
+        validated["backend"],
     )
 
 
@@ -380,6 +479,8 @@ def _validated_artifact(job_id: str, artifact: FieldTraceArtifact) -> dict[str, 
         raise ValueError("field-trace mesh_text must be non-empty")
     if artifact.symmetry_plane not in _SYMMETRY_PLANES:
         raise ValueError("unsupported field-trace symmetry plane")
+    if artifact.backend not in _FIELD_TRACE_BACKENDS:
+        raise ValueError("unsupported field-trace backend")
     if artifact.solve_path != "full-3d":
         raise ValueError("field traces are supported only for solve_path='full-3d'")
 
@@ -456,8 +557,14 @@ def _load_metadata(directory: Path) -> dict[str, Any]:
 def _validate_metadata(metadata: Mapping[str, Any], job_id: str) -> dict[str, Any]:
     try:
         version = _metadata_int(metadata, "version", minimum=1)
-        if version != FIELD_TRACES_VERSION:
+        if version not in {1, FIELD_TRACES_VERSION}:
             raise ArtifactCorrupt(f"unsupported field-trace artifact version {version}")
+        if version == 1:
+            backend = METAL_FIELD_TRACE_BACKEND
+        else:
+            backend = metadata.get("backend")
+            if backend not in _FIELD_TRACE_BACKENDS:
+                raise ArtifactCorrupt("field-trace backend is invalid")
         if metadata.get("job_id") != job_id:
             raise ArtifactCorrupt("field-trace job id does not match its directory")
         geometry_sha256 = str(metadata["geometry_sha256"])
@@ -521,6 +628,8 @@ def _validate_metadata(metadata: Mapping[str, Any], job_id: str) -> dict[str, An
     except KeyError as exc:
         raise ArtifactCorrupt(f"field-trace metadata is missing {exc.args[0]!r}") from exc
     return {
+        "version": version,
+        "backend": backend,
         "geometry_sha256": geometry_sha256,
         "mesh_file": mesh_file,
         "symmetry_plane": symmetry_plane,
@@ -594,6 +703,7 @@ def _write_fsynced(path: Path, payload: bytes) -> None:
 
 def _fsync_directory(path: Path) -> None:
     if os.name == "nt":
+        # Windows cannot open a directory with os.open(..., O_RDONLY).
         return
     descriptor = os.open(path, os.O_RDONLY)
     try:
@@ -605,15 +715,20 @@ def _fsync_directory(path: Path) -> None:
 __all__ = [
     "ArtifactCorrupt",
     "ArtifactMissing",
+    "BEMPP_FIELD_TRACE_BACKEND",
     "DEFAULT_FIELD_TRACES_MAX_BYTES",
     "FIELD_TRACES_MAX_BYTES_ENV",
     "FIELD_TRACES_VERSION",
+    "FieldTraceBackend",
     "FieldTraceArtifact",
     "FieldTraceChannel",
+    "METAL_FIELD_TRACE_BACKEND",
     "StoredFieldTraceArtifact",
+    "build_field_trace_artifact",
     "estimate_field_trace_retention_bytes",
     "field_trace_artifact_dir",
     "field_trace_retention_cap_bytes",
+    "field_trace_retention_plan",
     "field_traces_root",
     "load_field_traces",
     "mesh_trace_dof_counts",
