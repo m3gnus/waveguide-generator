@@ -132,6 +132,32 @@ def lr4_chain_weights(
     return weights
 
 
+def raw_channel_weights(
+    freqs: np.ndarray,
+    members: list[str],
+    crossovers_hz: list[float],
+    gains_db: Mapping[str, float],
+    delays_s: Mapping[str, float],
+) -> dict[str, np.ndarray]:
+    """Return factors applied to raw ``exp(+ikr)`` solver fields.
+
+    Crossover filters, gains, and delays are defined in the engineering
+    ``e^{+jωt}`` convention. Raw solver fields use ``e^{-iωt}``, so this is
+    the single convention boundary where every engineering weight is complex
+    conjugated before it is applied to pressure or Neumann traces.
+    """
+
+    frequencies = np.asarray(freqs, dtype=np.float64).reshape(-1)
+    lr4 = lr4_chain_weights(frequencies, members, crossovers_hz)
+    weights_eng = {
+        name: lr4[name]
+        * (10.0 ** (float(gains_db[name]) / 20.0))
+        * np.exp(-1j * _TWO_PI * frequencies * float(delays_s[name]))
+        for name in members
+    }
+    return {name: np.conjugate(weights_eng[name]) for name in members}
+
+
 def _interp_complex(freqs: np.ndarray, values: np.ndarray, target_hz: float) -> complex:
     """Interpolate magnitude and unwrapped phase separately at ``target_hz``."""
 
@@ -325,8 +351,6 @@ def combine_drive_channels(
         gains_db = {name: 0.0 for name in members}
         medians_db = {}
         target_db = None
-    gain_linear = {name: 10.0 ** (gains_db[name] / 20.0) for name in members}
-
     delays_s = {members[-1]: 0.0}
     pair_eval_hz: dict[str, float] = {}
     if align and len(members) > 1:
@@ -361,14 +385,14 @@ def combine_drive_channels(
     else:
         delays_s = {name: 0.0 for name in members}
 
-    weights_eng = {
-        name: lr4[name]
-        * gain_linear[name]
-        * np.exp(-1j * _TWO_PI * freqs * delays_s[name])
-        for name in members
-    }
     # The single convention boundary: engineering weight -> raw-field factor.
-    weights_raw = {name: np.conjugate(weights_eng[name]) for name in members}
+    weights_raw = raw_channel_weights(
+        freqs,
+        members,
+        crossovers_hz,
+        gains_db,
+        delays_s,
+    )
 
     combined_field = np.zeros_like(next(iter(fields.values())))
     for name in members:
