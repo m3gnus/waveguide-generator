@@ -142,6 +142,7 @@ function ReadyFieldPlane({ plane, field, unitsPerMetre, clipPlane, colormap, sch
   const animating = useFieldPlaneStore((state) => state.animating);
   const animationSpeed = useFieldPlaneStore((state) => state.animationSpeed);
   const isolines = useFieldPlaneStore((state) => state.isolines);
+  const frozenNormalizationDb = useFieldPlaneStore((state) => state.frozenNormalizationDb);
   const fieldTexture = useMemo(
     () => complexTexture(field.real, field.imag, field.header.nx, field.header.ny),
     [field],
@@ -154,6 +155,7 @@ function ReadyFieldPlane({ plane, field, unitsPerMetre, clipPlane, colormap, sch
     : null;
   const alphaTexture = useMemo(() => maskTexture(appliedMask), [appliedMask]);
   const maxDb = useMemo(() => maxFieldSplDb(field.real, field.imag), [field]);
+  const normalizationDb = frozenNormalizationDb ?? maxDb;
   const window = rangeWindow ?? defaultFieldPlaneWindow(displayMode);
   const material = useMemo(() => new ShaderMaterial({
     clipping: clipPlane !== null,
@@ -168,7 +170,7 @@ function ReadyFieldPlane({ plane, field, unitsPerMetre, clipPlane, colormap, sch
       uColorLut: { value: colorTexture },
       uMask: { value: alphaTexture },
       uDisplayMode: { value: FIELD_PLANE_MODE_UNIFORM[displayMode] },
-      uFieldMaxDb: { value: maxDb },
+      uFieldMaxDb: { value: normalizationDb },
       uWindowMin: { value: window.minimum },
       uWindowMax: { value: window.maximum },
       uTimePhase: { value: 0 },
@@ -177,7 +179,7 @@ function ReadyFieldPlane({ plane, field, unitsPerMetre, clipPlane, colormap, sch
     },
     vertexShader: FIELD_PLANE_VERTEX_SHADER,
     fragmentShader: FIELD_PLANE_FRAGMENT_SHADER,
-  }), [clipPlane, colorTexture, fieldTexture, maxDb]);
+  }), [clipPlane, colorTexture]);
   const transform = useMemo(() => fieldPlaneTransform(plane, unitsPerMetre), [plane, unitsPerMetre]);
 
   useFrame((_state, delta) => {
@@ -195,13 +197,25 @@ function ReadyFieldPlane({ plane, field, unitsPerMetre, clipPlane, colormap, sch
     scheduler.schedule();
   }, [alphaTexture, material, scheduler]);
   useEffect(() => {
+    material.uniforms.uFieldComplex.value = fieldTexture;
     material.uniforms.uDisplayMode.value = FIELD_PLANE_MODE_UNIFORM[displayMode];
+    material.uniforms.uFieldMaxDb.value = normalizationDb;
     material.uniforms.uWindowMin.value = window.minimum;
     material.uniforms.uWindowMax.value = window.maximum;
     material.uniforms.uIsolines.value = isolines ? 1 : 0;
     if (!animating) material.uniforms.uTimePhase.value = 0;
     scheduler.schedule();
-  }, [animating, displayMode, isolines, material, scheduler, window.maximum, window.minimum]);
+  }, [
+    animating,
+    displayMode,
+    fieldTexture,
+    isolines,
+    material,
+    normalizationDb,
+    scheduler,
+    window.maximum,
+    window.minimum,
+  ]);
   useEffect(() => {
     scheduler.schedule();
   }, [material, scheduler, transform]);

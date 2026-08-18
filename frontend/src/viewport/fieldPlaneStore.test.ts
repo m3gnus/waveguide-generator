@@ -9,6 +9,7 @@ import {
 } from '../api/fieldPlane';
 import type { FrameScene } from './frameScene';
 import { DEFAULT_VIEWER_PREFERENCES } from '../viewerprefs/viewerPreferences';
+import { maxFieldSplDb } from './fieldPlaneColor';
 import {
   createFieldPlaneStore,
   defaultFieldPlane,
@@ -231,6 +232,92 @@ describe('field-plane state', () => {
     await vi.waitFor(() => expect(fetchPlane).toHaveBeenCalledTimes(4));
     expect(fetchPlane.mock.calls[3][1].plane.origin_m).toEqual([0.3, 0, 0]);
     expect(fetchPlane.mock.calls[3][1].plane.nx).toBe(96);
+  });
+
+  it('freezes the normalized reference across drag fields and releases it on drag end', async () => {
+    const fetchPlane = vi.fn(async (jobId: string, request: FieldPlaneRequest) => {
+      const field = response(jobId, request);
+      field.real[0] = request.plane.nx === 48 ? 10 : request.plane.origin_m[0] === 0 ? 1 : 100;
+      return field;
+    });
+    const store = createFieldPlaneStore({
+      fetchPlane,
+      fetchResults: async () => ({ frequencies: [800] }),
+    });
+    store.getState().enable('job-1', plane);
+    await vi.waitFor(() => expect(store.getState().status).toBe('ready'));
+    const initialReference = maxFieldSplDb(
+      store.getState().field?.real ?? new Float32Array(),
+      store.getState().field?.imag ?? new Float32Array(),
+    );
+
+    store.getState().beginPlaneDrag();
+    expect(store.getState().frozenNormalizationDb).toBeCloseTo(initialReference, 5);
+    store.getState().updatePlaneDrag({ ...plane, origin_m: [0.1, 0, 0] });
+    await vi.waitFor(() => expect(store.getState().field?.header.nx).toBe(48));
+
+    expect(maxFieldSplDb(
+      store.getState().field?.real ?? new Float32Array(),
+      store.getState().field?.imag ?? new Float32Array(),
+    )).toBeGreaterThan(initialReference);
+    expect(store.getState().frozenNormalizationDb).toBeCloseTo(initialReference, 5);
+
+    store.getState().endPlaneDrag();
+    expect(store.getState().frozenNormalizationDb).toBeNull();
+    await vi.waitFor(() => expect(store.getState().field?.header.nx).toBe(96));
+    expect(store.getState().frozenNormalizationDb).toBeNull();
+  });
+
+  it('never freezes normalization for setPlane updates', async () => {
+    const store = createFieldPlaneStore({
+      fetchPlane: async (jobId, request) => {
+        const field = response(jobId, request);
+        field.real[0] = request.plane.origin_m[0] === 0 ? 1 : 2;
+        return field;
+      },
+      fetchResults: async () => ({ frequencies: [800] }),
+    });
+    store.getState().enable('job-1', plane);
+    await vi.waitFor(() => expect(store.getState().status).toBe('ready'));
+
+    store.getState().setPlane({ ...plane, origin_m: [0.1, 0, 0] });
+    expect(store.getState()).toMatchObject({ dragging: false, frozenNormalizationDb: null });
+    await vi.waitFor(() => expect(store.getState().field?.real[0]).toBe(2));
+    expect(store.getState().frozenNormalizationDb).toBeNull();
+
+    store.getState().beginPlaneDrag();
+    expect(store.getState().frozenNormalizationDb).not.toBeNull();
+    store.getState().setPlane(plane);
+    expect(store.getState()).toMatchObject({ dragging: false, frozenNormalizationDb: null });
+  });
+
+  it('clears a frozen normalization reference on cancellation, job change, and disable', async () => {
+    const store = createFieldPlaneStore({
+      fetchPlane: async (jobId, request) => {
+        const field = response(jobId, request);
+        field.real[0] = jobId === 'job-1' ? 1 : 2;
+        return field;
+      },
+      fetchResults: async () => ({ frequencies: [800] }),
+    });
+    store.getState().enable('job-1', plane);
+    await vi.waitFor(() => expect(store.getState().status).toBe('ready'));
+
+    store.getState().beginPlaneDrag();
+    expect(store.getState().frozenNormalizationDb).not.toBeNull();
+    store.getState().cancelPending();
+    expect(store.getState().frozenNormalizationDb).toBeNull();
+
+    store.getState().beginPlaneDrag();
+    store.getState().selectJob('job-2', plane);
+    expect(store.getState().frozenNormalizationDb).toBeNull();
+    await vi.waitFor(() => expect(store.getState().jobId).toBe('job-2'));
+    await vi.waitFor(() => expect(store.getState().status).toBe('ready'));
+
+    store.getState().beginPlaneDrag();
+    expect(store.getState().frozenNormalizationDb).not.toBeNull();
+    store.getState().disable();
+    expect(store.getState().frozenNormalizationDb).toBeNull();
   });
 
   it('does not let an older in-flight response replace a newer cached field', async () => {

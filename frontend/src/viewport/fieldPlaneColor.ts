@@ -4,6 +4,9 @@ export const FIELD_PLANE_NORMALIZED_MIN_DB = -40;
 export const FIELD_PLANE_PHASE_LIMIT_DEGREES = 180;
 export const FIELD_PLANE_ISOLINE_STEP_DB = 6;
 export const FIELD_PLANE_LUT_SIZE = 256;
+export const FIELD_PLANE_INSTANTANEOUS_PERCENTILE = 98;
+
+const FIELD_PLANE_DEFAULT_PRESSURE_LIMIT_PA = 1;
 
 export type FieldPlaneDisplayMode = 'spl' | 'normalized' | 'phase' | 'instantaneous';
 export type FieldPlaneWindowUnit = 'dB' | 'deg' | 'Pa';
@@ -174,6 +177,25 @@ export function maxFieldMagnitudePa(real: Float32Array, imag: Float32Array): num
   return maximum;
 }
 
+function instantaneousFieldLimitPa(real: Float32Array, imag: Float32Array): number {
+  if (real.length !== imag.length) throw new Error('Complex field components must have equal lengths');
+  const magnitudes: number[] = [];
+  let maximum = 0;
+  for (let index = 0; index < real.length; index += 1) {
+    const magnitude = Math.hypot(real[index], imag[index]);
+    if (!Number.isFinite(magnitude)) continue;
+    magnitudes.push(magnitude);
+    if (magnitude > maximum) maximum = magnitude;
+  }
+  if (magnitudes.length === 0 || maximum === 0) return FIELD_PLANE_DEFAULT_PRESSURE_LIMIT_PA;
+  magnitudes.sort((left, right) => left - right);
+  const percentileIndex = Math.floor(
+    FIELD_PLANE_INSTANTANEOUS_PERCENTILE / 100 * (magnitudes.length - 1),
+  );
+  const percentile = magnitudes[percentileIndex];
+  return percentile > 0 ? percentile : maximum;
+}
+
 export function fieldPlaneWindowForMode(
   mode: FieldPlaneDisplayMode,
   real: Float32Array,
@@ -193,7 +215,7 @@ export function fieldPlaneWindowForMode(
         unit: 'deg',
       };
     case 'instantaneous': {
-      const maximum = maxFieldMagnitudePa(real, imag);
+      const maximum = instantaneousFieldLimitPa(real, imag);
       return { minimum: -maximum, maximum, unit: 'Pa' };
     }
   }
@@ -210,7 +232,13 @@ export function defaultFieldPlaneWindow(mode: FieldPlaneDisplayMode): FieldPlane
       unit: 'deg',
     };
   }
-  if (mode === 'instantaneous') return { minimum: -1, maximum: 1, unit: 'Pa' };
+  if (mode === 'instantaneous') {
+    return {
+      minimum: -FIELD_PLANE_DEFAULT_PRESSURE_LIMIT_PA,
+      maximum: FIELD_PLANE_DEFAULT_PRESSURE_LIMIT_PA,
+      unit: 'Pa',
+    };
+  }
   return { minimum: -FIELD_PLANE_WINDOW_DB, maximum: 0, unit: 'dB' };
 }
 
