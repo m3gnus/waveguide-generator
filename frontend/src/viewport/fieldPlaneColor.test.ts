@@ -50,6 +50,8 @@ describe('field-plane colour oracle', () => {
     expect(FIELD_PLANE_FRAGMENT_SHADER).toContain('2e-5');
     expect(FIELD_PLANE_FRAGMENT_SHADER).toContain('uWindowMinDb');
     expect(FIELD_PLANE_FRAGMENT_SHADER).toContain('uWindowMaxDb');
+    expect(FIELD_PLANE_FRAGMENT_SHADER).toContain('uniform sampler2D uMask');
+    expect(FIELD_PLANE_FRAGMENT_SHADER).toContain('discard');
   });
 
   it('includes the viewport clipping chunks in both shader stages', () => {

@@ -7,6 +7,9 @@ import type { CameraProjection, ViewerPreferences } from '../viewerprefs/viewerP
 import { calculateCameraFit, clippingRange, presetDirection, viewDirection, zoomedOrthographicValue, type CameraDirection } from './cameraMath';
 import { DemandRenderScheduler, installViewportTestHook } from './demandRender';
 import { FieldPlane } from './FieldPlane';
+import { deriveCapQuad, fieldPlaneToClipPlane, staticSectionClipPlane, type ModelClipMode } from './fieldPlaneClipping';
+import { maskMatchesGeometry, useFieldPlaneMaskStore } from './fieldPlaneMaskStore';
+import { useFieldPlaneStore } from './fieldPlaneStore';
 import type { FrameScene } from './frameScene';
 import { createMaterialLibrary } from './materials';
 import { SurfaceMesh } from './SurfaceMesh';
@@ -26,7 +29,8 @@ interface ViewportCanvasProps {
   sceneMarker: string;
   mode: DisplayMode;
   showEnclosure: boolean;
-  sectionCut: boolean;
+  clipMode: ModelClipMode;
+  invertFieldClip: boolean;
   cameraRequest: CameraRequest;
   zoomRequest: ZoomRequest;
   cameraProjection: CameraProjection;
@@ -660,26 +664,52 @@ function useRepaintWhenShown(scheduler: DemandRenderScheduler): void {
   useEffect(() => observeCanvasVisibility(gl.domElement, () => scheduler.schedule()), [gl, scheduler]);
 }
 
-function Scene({ scene, sceneMarker, mode, showEnclosure, sectionCut, cameraRequest, zoomRequest, cameraProjection, preferences, frameStartedAt, onClientFrame, theme, onCameraDirection }: Omit<ViewportCanvasProps, 'onRenderFailure'>) {
+function Scene({ scene, sceneMarker, mode, showEnclosure, clipMode, invertFieldClip, cameraRequest, zoomRequest, cameraProjection, preferences, frameStartedAt, onClientFrame, theme, onCameraDirection }: Omit<ViewportCanvasProps, 'onRenderFailure'>) {
   const invalidate = useThree((state) => state.invalidate);
   const scheduler = useMemo(() => new DemandRenderScheduler(invalidate), [invalidate]);
   useFrame(() => scheduler.flush(), 0);
-  const clipPlane = useMemo(() => sectionCut ? new Plane(new Vector3(1, 0, 0), 0) : null, [sectionCut]);
+  const fieldPlane = useFieldPlaneStore((state) => state.plane);
+  const fieldJobId = useFieldPlaneStore((state) => state.jobId);
+  const fieldGeometrySha256 = useFieldPlaneStore((state) => state.geometrySha256);
+  const maskState = useFieldPlaneMaskStore((state) => state);
+  const stableClipPlane = useMemo(() => new Plane(new Vector3(1, 0, 0), 0), []);
+  const clipDefinition = useMemo(() => {
+    if (clipMode === 'section') return staticSectionClipPlane();
+    if (clipMode === 'field-plane' && fieldPlane) {
+      return fieldPlaneToClipPlane(fieldPlane, scene.unitsPerMetre, invertFieldClip);
+    }
+    return null;
+  }, [clipMode, fieldPlane, invertFieldClip, scene.unitsPerMetre]);
+  const clipActive = clipDefinition !== null;
   const materials = useMemo(
-    () => createMaterialLibrary(mode, clipPlane, theme, preferences.tintSolvedRegion),
-    [clipPlane, mode, preferences.tintSolvedRegion, theme],
+    () => createMaterialLibrary(mode, clipActive ? stableClipPlane : null, theme, preferences.tintSolvedRegion),
+    [clipActive, mode, preferences.tintSolvedRegion, stableClipPlane, theme],
   );
   const fieldColormap = useMemo(() => readChartTokens().colormap, [theme]);
   const center = useMemo(() => scene.bounds.getCenter(new Vector3()), [scene.bounds]);
   const size = useMemo(() => scene.bounds.getSize(new Vector3()), [scene.bounds]);
   const controls = useRef<OrbitControlsInstance>(null);
+  const capQuad = useMemo(() => clipDefinition ? deriveCapQuad(clipDefinition, scene.bounds, {
+    preferredAxisU: clipMode === 'field-plane' && fieldPlane
+      ? new Vector3(...fieldPlane.axis_u)
+      : undefined,
+  }) : null, [clipDefinition, clipMode, fieldPlane, scene.bounds]);
+  const capTrusted = clipMode === 'section'
+    || (clipMode === 'field-plane'
+      && maskMatchesGeometry(maskState, fieldJobId, fieldGeometrySha256)
+      && maskState.watertight === true);
 
   useEffect(() => installViewportTestHook(scheduler), [scheduler]);
   useEffect(() => () => scheduler.dispose(), [scheduler]);
   useRepaintWhenShown(scheduler);
+  useLayoutEffect(() => {
+    if (!clipDefinition) return;
+    stableClipPlane.copy(clipDefinition);
+    scheduler.schedule();
+  }, [clipDefinition, scheduler, stableClipPlane]);
   useEffect(() => {
     scheduler.schedule();
-  }, [mode, scheduler, sectionCut, showEnclosure]);
+  }, [clipMode, invertFieldClip, mode, scheduler, showEnclosure]);
   useEffect(() => () => materials.all.forEach((material) => material.dispose()), [materials]);
 
   return <>
@@ -703,7 +733,7 @@ function Scene({ scene, sceneMarker, mode, showEnclosure, sectionCut, cameraRequ
     />
     <FieldPlane
       unitsPerMetre={scene.unitsPerMetre}
-      clipPlane={clipPlane}
+      clipPlane={clipMode === 'section' ? stableClipPlane : null}
       colormap={fieldColormap}
       scheduler={scheduler}
     />
@@ -712,17 +742,17 @@ function Scene({ scene, sceneMarker, mode, showEnclosure, sectionCut, cameraRequ
       surface={surface}
       mode={mode}
       visible={showEnclosure || !surface.enclosure}
-      sectionCut={sectionCut}
+      sectionCut={clipActive}
       materials={materials}
       scheduler={scheduler}
     />)}
-    {sectionCut && <mesh
-      position={[0, center.y, center.z]}
-      rotation={[0, Math.PI / 2, 0]}
+    {capQuad && capTrusted && <mesh
+      matrix={capQuad.matrix}
+      matrixAutoUpdate={false}
       material={materials.cap}
       renderOrder={999}
     >
-      <planeGeometry args={[Math.max(size.z * 1.05, 1), Math.max(size.y * 1.05, 1)]} />
+      <planeGeometry args={[1, 1]} />
     </mesh>}
     <CameraRig bounds={scene.bounds} request={cameraRequest} zoomRequest={zoomRequest} projection={cameraProjection} preferences={preferences} scheduler={scheduler} controls={controls} />
     <CameraGizmo controls={controls} center={center} scheduler={scheduler} theme={theme} onDirection={onCameraDirection} />

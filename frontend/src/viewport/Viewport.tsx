@@ -17,7 +17,9 @@ import { useViewerPreferences, viewerPreferences, type CameraProjection } from '
 import { ViewerPreferencesPanel } from '../viewerprefs/ViewerPreferencesPanel';
 import { frameToScene, hasRenderableSurfaces, MAX_EDGE_TRIANGLES } from './frameScene';
 import { FIELD_PLANE_WINDOW_DB, maxFieldSplDb } from './fieldPlaneColor';
+import type { ModelClipMode } from './fieldPlaneClipping';
 import { fieldPlaneOffsetMetres, fieldPlanePreset, withFieldPlaneOffset } from './fieldPlaneMath';
+import { maskMatchesGeometry, useFieldPlaneMaskStore } from './fieldPlaneMaskStore';
 import { defaultFieldPlane, useFieldPlaneStore } from './fieldPlaneStore';
 import { importedMeshStore } from './importedMeshStore';
 import type { CameraDirection } from './cameraMath';
@@ -144,6 +146,8 @@ export function Viewport() {
   const fieldError = useFieldPlaneStore((state) => state.error);
   const field = useFieldPlaneStore((state) => state.field);
   const fieldPlane = useFieldPlaneStore((state) => state.plane);
+  const fieldGeometrySha256 = useFieldPlaneStore((state) => state.geometrySha256);
+  const fieldMaskState = useFieldPlaneMaskStore((state) => state);
   const fieldFrequencyIndex = useFieldPlaneStore((state) => state.frequencyIndex);
   const fieldFrequencies = useFieldPlaneStore((state) => state.frequenciesHz);
   const selectedRef = useRef<DecodedFrame | null>(null);
@@ -188,7 +192,8 @@ export function Viewport() {
     [preferences.tintSolvedRegion, previewScene, previewVerticalOffset, solvedQuadrants],
   );
   const [mode, setMode] = useState<DisplayMode>('clay');
-  const [sectionCut, setSectionCut] = useState(false);
+  const [clipMode, setClipMode] = useState<ModelClipMode>('off');
+  const [invertFieldClip, setInvertFieldClip] = useState(false);
   const [showEnclosure, setShowEnclosure] = useState(true);
   const [showStats, setShowStats] = useState(false);
   const [clientFrameMs, setClientFrameMs] = useState<number | null>(null);
@@ -264,6 +269,7 @@ export function Viewport() {
 
   const toggleFieldPlane = () => {
     if (fieldEnabled) {
+      if (clipMode === 'field-plane') setClipMode('off');
       useFieldPlaneStore.getState().disable();
       return;
     }
@@ -342,6 +348,10 @@ export function Viewport() {
     useFieldPlaneStore.getState().selectJob(availableFieldJob.id, defaultFieldPlane(activeScene));
   }, [activeScene, availableFieldJob, fieldEnabled, fieldJobId]);
 
+  useEffect(() => {
+    if (clipMode === 'field-plane' && (!fieldEnabled || !fieldPlane)) setClipMode('off');
+  }, [clipMode, fieldEnabled, fieldPlane]);
+
   useEffect(() => subscribeRevision((event) => {
     // Design revisions replace geometry inside the current view. Keeping the
     // exact framing is what makes undo/redo and parameter changes comparable.
@@ -408,7 +418,8 @@ export function Viewport() {
       sceneMarker={sceneMarker}
       mode={mode}
       showEnclosure={showEnclosure}
-      sectionCut={sectionCut}
+      clipMode={clipMode}
+      invertFieldClip={invertFieldClip}
       cameraRequest={cameraRequest}
       zoomRequest={zoomRequest}
       cameraProjection={cameraProjection}
@@ -533,6 +544,9 @@ export function Viewport() {
         <button type="button" onClick={() => applyFieldPlanePreset('mouth')}>Mouth</button>
       </div>
       <FieldPlaneOffsetInput />
+      {maskMatchesGeometry(fieldMaskState, fieldJobId, fieldGeometrySha256)
+        && fieldMaskState.watertight === false
+        && <div className="field-plane-note" role="note">open mesh: interior not masked</div>}
       {fieldStatus !== 'ready' && <div className={`field-plane-status ${fieldStatus}`} role="status" aria-live="polite">
         <span>{fieldStatus === 'loading' ? 'loading field plane…' : fieldError ?? 'field plane idle'}</span>
         {fieldStatus === 'error' && fieldJobId && <button type="button" onClick={() => useFieldPlaneStore.getState().retry()}>Retry</button>}
@@ -550,7 +564,7 @@ export function Viewport() {
       </div>
       <i className="wg2-tool-divider" />
       <div className="viewport-tool-group">
-        <button className={sectionCut ? 'on' : ''} title="Section cut at X=0" aria-label="Section cut at X=0" aria-pressed={sectionCut} onClick={() => setSectionCut((value) => !value)}><Icon name="section"/></button>
+        <button className={clipMode === 'section' ? 'on' : ''} title="Section cut at X=0" aria-label="Section cut at X=0" aria-pressed={clipMode === 'section'} onClick={() => setClipMode((value) => value === 'section' ? 'off' : 'section')}><Icon name="section"/></button>
       </div>
       <div className="viewport-tool-group">
         <button
@@ -564,6 +578,24 @@ export function Viewport() {
           disabled={!fieldEnabled && (!availableFieldJob || !activeScene)}
           onClick={toggleFieldPlane}
         ><Icon name="field-plane"/></button>
+        <button
+          type="button"
+          className={clipMode === 'field-plane' ? 'on' : ''}
+          title="Clip model to field plane"
+          aria-label="Clip model to field plane"
+          aria-pressed={clipMode === 'field-plane'}
+          disabled={!fieldEnabled || !fieldPlane}
+          onClick={() => setClipMode((value) => value === 'field-plane' ? 'off' : 'field-plane')}
+        ><Icon name="section"/></button>
+        <button
+          type="button"
+          className={invertFieldClip ? 'on' : ''}
+          title="Invert field-plane clip side"
+          aria-label="Invert field-plane clip side"
+          aria-pressed={invertFieldClip}
+          disabled={clipMode !== 'field-plane'}
+          onClick={() => setInvertFieldClip((value) => !value)}
+        ><span className="wg2-text-glyph">↔</span></button>
       </div>
       <i className="wg2-tool-divider" />
       <div className="viewport-tool-group viewport-tool-segment">

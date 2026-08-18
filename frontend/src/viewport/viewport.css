@@ -61,6 +61,7 @@
 .field-plane-legend-title,
 .field-plane-range,
 .field-plane-status { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.field-plane-note { margin-top: 6px; color: var(--fg3); font-size: var(--text-micro); line-height: 1.35; }
 .field-plane-legend-title { min-height: 20px; margin-bottom: 6px; }
 .field-plane-legend-title b { color: var(--fg1); font-size: var(--text-micro); font-weight: 680; letter-spacing: .08em; text-transform: uppercase; }
 .field-plane-legend-title span,

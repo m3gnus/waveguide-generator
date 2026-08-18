@@ -7,6 +7,7 @@ import {
   FloatType,
   LinearFilter,
   Matrix4,
+  NearestFilter,
   RedFormat,
   RGBAFormat,
   Raycaster,
@@ -30,6 +31,8 @@ import {
   type FieldPlaneRotationAxis,
 } from './fieldPlaneMath';
 import { FIELD_PLANE_FRAGMENT_SHADER, FIELD_PLANE_VERTEX_SHADER } from './fieldPlaneShader';
+import type { FieldPlaneMaskRequest, FieldPlaneMaskResponse } from './fieldPlaneMaskProtocol';
+import { maskMatchesGeometry, useFieldPlaneMaskStore, type AppliedFieldPlaneMask } from './fieldPlaneMaskStore';
 import { useFieldPlaneStore } from './fieldPlaneStore';
 import type { DemandRenderScheduler } from './demandRender';
 
@@ -78,6 +81,25 @@ function lutTexture(colormap: readonly string[]): DataTexture {
   return texture;
 }
 
+function maskTexture(mask: AppliedFieldPlaneMask | null): DataTexture {
+  const texture = new DataTexture(
+    mask?.data ?? new Uint8Array([0]),
+    mask?.nx ?? 1,
+    mask?.ny ?? 1,
+    RedFormat,
+    UnsignedByteType,
+  );
+  texture.internalFormat = 'R8';
+  texture.minFilter = NearestFilter;
+  texture.magFilter = NearestFilter;
+  texture.wrapS = ClampToEdgeWrapping;
+  texture.wrapT = ClampToEdgeWrapping;
+  texture.generateMipmaps = false;
+  texture.unpackAlignment = 1;
+  texture.needsUpdate = true;
+  return texture;
+}
+
 export function fieldPlaneTransform(plane: FieldPlaneSpec, unitsPerMetre: number): Matrix4 {
   const axisU = new Vector3(...plane.axis_u);
   const axisV = new Vector3(...plane.axis_v);
@@ -88,11 +110,16 @@ export function fieldPlaneTransform(plane: FieldPlaneSpec, unitsPerMetre: number
 }
 
 function ReadyFieldPlane({ plane, field, unitsPerMetre, clipPlane, colormap, scheduler }: ReadyFieldPlaneProps) {
-  const textures = useMemo(() => ({
+  const fieldTextures = useMemo(() => ({
     real: floatTexture(field.real, field.header.nx, field.header.ny),
     imag: floatTexture(field.imag, field.header.nx, field.header.ny),
-    lut: lutTexture(colormap),
-  }), [colormap, field]);
+  }), [field]);
+  const colorTexture = useMemo(() => lutTexture(colormap), [colormap]);
+  const maskState = useFieldPlaneMaskStore((state) => state);
+  const appliedMask = maskMatchesGeometry(maskState, field.header.job_id, field.header.geometry_sha256)
+    ? maskState.mask
+    : null;
+  const alphaTexture = useMemo(() => maskTexture(appliedMask), [appliedMask]);
   const maxDb = useMemo(() => maxFieldSplDb(field.real, field.imag), [field]);
   const material = useMemo(() => new ShaderMaterial({
     clipping: clipPlane !== null,
@@ -103,31 +130,84 @@ function ReadyFieldPlane({ plane, field, unitsPerMetre, clipPlane, colormap, sch
     transparent: true,
     toneMapped: false,
     uniforms: {
-      uFieldReal: { value: textures.real },
-      uFieldImag: { value: textures.imag },
-      uColorLut: { value: textures.lut },
+      uFieldReal: { value: fieldTextures.real },
+      uFieldImag: { value: fieldTextures.imag },
+      uColorLut: { value: colorTexture },
+      uMask: { value: alphaTexture },
       uWindowMinDb: { value: maxDb - FIELD_PLANE_WINDOW_DB },
       uWindowMaxDb: { value: maxDb },
       uOpacity: { value: 0.92 },
     },
     vertexShader: FIELD_PLANE_VERTEX_SHADER,
     fragmentShader: FIELD_PLANE_FRAGMENT_SHADER,
-  }), [clipPlane, maxDb, textures]);
+  }), [clipPlane, colorTexture, fieldTextures, maxDb]);
   const transform = useMemo(() => fieldPlaneTransform(plane, unitsPerMetre), [plane, unitsPerMetre]);
 
+  useEffect(() => {
+    material.uniforms.uMask.value = alphaTexture;
+    scheduler.schedule();
+  }, [alphaTexture, material, scheduler]);
   useEffect(() => {
     scheduler.schedule();
   }, [material, scheduler, transform]);
   useEffect(() => () => {
-    textures.real.dispose();
-    textures.imag.dispose();
-    textures.lut.dispose();
-  }, [textures]);
+    fieldTextures.real.dispose();
+    fieldTextures.imag.dispose();
+  }, [fieldTextures]);
+  useEffect(() => () => colorTexture.dispose(), [colorTexture]);
+  useEffect(() => () => alphaTexture.dispose(), [alphaTexture]);
   useEffect(() => () => material.dispose(), [material]);
 
   return <mesh matrix={transform} matrixAutoUpdate={false} material={material} renderOrder={1_000}>
     <planeGeometry args={[plane.width_m * unitsPerMetre, plane.height_m * unitsPerMetre]}/>
   </mesh>;
+}
+
+function FieldPlaneMaskController({ scheduler }: Pick<FieldPlaneProps, 'scheduler'>) {
+  const enabled = useFieldPlaneStore((state) => state.enabled);
+  const dragging = useFieldPlaneStore((state) => state.dragging);
+  const jobId = useFieldPlaneStore((state) => state.jobId);
+  const geometrySha256 = useFieldPlaneStore((state) => state.geometrySha256);
+  const plane = useFieldPlaneStore((state) => state.plane);
+  const worker = useRef<Worker | null>(null);
+  const generation = useRef(0);
+
+  useEffect(() => {
+    if (!enabled) {
+      useFieldPlaneMaskStore.getState().clear();
+      return undefined;
+    }
+    const instance = new Worker(new URL('./fieldPlaneMask.worker.ts', import.meta.url), { type: 'module' });
+    const onMessage = (event: MessageEvent<FieldPlaneMaskResponse>) => {
+      if (event.data.type === 'result') useFieldPlaneMaskStore.getState().apply(event.data);
+      else useFieldPlaneMaskStore.getState().fail(event.data);
+      scheduler.schedule();
+    };
+    instance.addEventListener('message', onMessage);
+    worker.current = instance;
+    return () => {
+      worker.current = null;
+      instance.removeEventListener('message', onMessage);
+      instance.terminate();
+      useFieldPlaneMaskStore.getState().clear();
+    };
+  }, [enabled, scheduler]);
+
+  useEffect(() => {
+    if (!enabled || dragging || !jobId || !geometrySha256 || !plane || !worker.current) return;
+    generation.current += 1;
+    const request: FieldPlaneMaskRequest = {
+      type: 'classify',
+      generation: generation.current,
+      jobId,
+      geometrySha256,
+      plane,
+    };
+    useFieldPlaneMaskStore.getState().begin(request);
+    worker.current.postMessage(request);
+  }, [dragging, enabled, geometrySha256, jobId, plane]);
+
+  return null;
 }
 
 function rayFromPointer(
@@ -303,9 +383,11 @@ export function FieldPlane(props: FieldPlaneProps) {
     if (state.enabled) state.resume();
     return () => useFieldPlaneStore.getState().cancelPending();
   }, []);
-  if (!enabled || !plane) return null;
   return <>
-    {field && <ReadyFieldPlane {...props} plane={plane} field={field}/>}
-    <FieldPlaneHandles plane={plane} unitsPerMetre={props.unitsPerMetre} scheduler={props.scheduler}/>
+    <FieldPlaneMaskController scheduler={props.scheduler}/>
+    {enabled && plane && <>
+      {field && <ReadyFieldPlane {...props} plane={plane} field={field}/>}
+      <FieldPlaneHandles plane={plane} unitsPerMetre={props.unitsPerMetre} scheduler={props.scheduler}/>
+    </>}
   </>;
 }
