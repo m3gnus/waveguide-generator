@@ -74,6 +74,31 @@ class StoredFieldTraceArtifact:
     metadata: dict[str, Any]
 
 
+@dataclass(frozen=True, slots=True)
+class FieldTraceBundle:
+    """Every retained frequency and raw channel read from one sidecar.
+
+    The slice loader exists for interactive field planes, which touch one
+    frequency and one channel per drag frame. Whole-artifact consumers -- the
+    portable radiation package -- need the complete set once, and re-reading
+    and re-hashing the mesh per slice would dominate that cost.
+    """
+
+    mesh_text: str
+    geometry_sha256: str
+    backend: FieldTraceBackend
+    symmetry_plane: str | None
+    frequencies_hz: tuple[float, ...]
+    k_real: tuple[float, ...]
+    k_imag: tuple[float, ...]
+    channel_ids: tuple[str, ...]
+    n_p1: int
+    n_dp0: int
+    #: ``(frequency, channel, dof)`` in ``channel_ids`` order.
+    pressure_p1: NDArray[np.complex64]
+    neumann_dp0: NDArray[np.complex64]
+
+
 def field_traces_root(data_dir: str | os.PathLike[str] | None = None) -> Path:
     """Return the field-trace sidecar root without creating it."""
 
@@ -380,41 +405,12 @@ def load_field_traces(
 ]:
     """Load one frequency and raw channel without reading other trace slices."""
 
-    directory = (
-        Path(artifact_dir)
-        if artifact_dir is not None
-        else field_trace_artifact_dir(
-            job_id,
-            data_dir=data_dir,
-            artifact_root=artifact_root,
-        )
+    directory, validated, mesh_text = _open_artifact(
+        job_id,
+        data_dir=data_dir,
+        artifact_root=artifact_root,
+        artifact_dir=artifact_dir,
     )
-    if not directory.is_dir():
-        raise ArtifactMissing(f"field-trace artifact is missing for job {job_id}")
-
-    metadata = _load_metadata(directory)
-    try:
-        validated = _validate_metadata(metadata, job_id)
-        mesh_path = directory / validated["mesh_file"]
-        mesh_text = mesh_path.read_text(encoding="utf-8")
-    except ArtifactCorrupt:
-        raise
-    except (OSError, UnicodeError) as exc:
-        raise ArtifactCorrupt("field-trace mesh is missing or unreadable") from exc
-    if mesh_text_sha256(mesh_text) != validated["geometry_sha256"]:
-        raise ArtifactCorrupt("field-trace geometry sha256 does not match mesh.msh")
-
-    for entry in validated["channels"]:
-        try:
-            actual_size = (directory / entry["file"]).stat().st_size
-        except OSError as exc:
-            raise ArtifactCorrupt(
-                f"field-trace channel file is missing: {entry['file']}"
-            ) from exc
-        if actual_size != entry["bytes"]:
-            raise ArtifactCorrupt(
-                f"field-trace channel byte count mismatch for {entry['id']!r}"
-            )
 
     if isinstance(frequency_index, bool) or not isinstance(frequency_index, int):
         raise TypeError("frequency_index must be an integer")
@@ -464,6 +460,63 @@ def load_field_traces(
     )
 
 
+def load_field_trace_bundle(
+    job_id: str,
+    *,
+    data_dir: str | os.PathLike[str] | None = None,
+    artifact_root: str | os.PathLike[str] | None = None,
+    artifact_dir: str | os.PathLike[str] | None = None,
+) -> FieldTraceBundle:
+    """Load every retained frequency and raw channel in a single pass."""
+
+    directory, validated, mesh_text = _open_artifact(
+        job_id,
+        data_dir=data_dir,
+        artifact_root=artifact_root,
+        artifact_dir=artifact_dir,
+    )
+
+    frequency_count = validated["frequency_count"]
+    n_p1 = validated["n_p1"]
+    n_dp0 = validated["n_dp0"]
+    channels = validated["channels"]
+    pressure = np.empty(
+        (frequency_count, len(channels), n_p1), dtype=np.complex64
+    )
+    neumann = np.empty(
+        (frequency_count, len(channels), n_dp0), dtype=np.complex64
+    )
+    for channel_index, entry in enumerate(channels):
+        try:
+            payload = (directory / entry["file"]).read_bytes()
+        except OSError as exc:
+            raise ArtifactCorrupt("field-trace channel file is unreadable") from exc
+        if len(payload) != entry["bytes"]:
+            raise ArtifactCorrupt(
+                f"field-trace channel byte count mismatch for {entry['id']!r}"
+            )
+        interleaved = np.frombuffer(payload, dtype=_COMPLEX64_LE).reshape(
+            frequency_count, n_p1 + n_dp0
+        )
+        pressure[:, channel_index, :] = interleaved[:, :n_p1]
+        neumann[:, channel_index, :] = interleaved[:, n_p1:]
+
+    return FieldTraceBundle(
+        mesh_text=mesh_text,
+        geometry_sha256=validated["geometry_sha256"],
+        backend=validated["backend"],
+        symmetry_plane=validated["symmetry_plane"],
+        frequencies_hz=tuple(validated["frequencies"]),
+        k_real=tuple(validated["k_real"]),
+        k_imag=tuple(validated["k_imag"]),
+        channel_ids=tuple(entry["id"] for entry in channels),
+        n_p1=n_p1,
+        n_dp0=n_dp0,
+        pressure_p1=pressure,
+        neumann_dp0=neumann,
+    )
+
+
 def remove_field_trace_artifact(path: str | os.PathLike[str]) -> None:
     """Remove one already-resolved artifact directory, tolerating absence."""
 
@@ -472,6 +525,53 @@ def remove_field_trace_artifact(path: str | os.PathLike[str]) -> None:
         shutil.rmtree(directory)
     except FileNotFoundError:
         return
+
+
+def _open_artifact(
+    job_id: str,
+    *,
+    data_dir: str | os.PathLike[str] | None,
+    artifact_root: str | os.PathLike[str] | None,
+    artifact_dir: str | os.PathLike[str] | None,
+) -> tuple[Path, dict[str, Any], str]:
+    """Resolve one artifact directory and prove its whole-file integrity."""
+
+    directory = (
+        Path(artifact_dir)
+        if artifact_dir is not None
+        else field_trace_artifact_dir(
+            job_id,
+            data_dir=data_dir,
+            artifact_root=artifact_root,
+        )
+    )
+    if not directory.is_dir():
+        raise ArtifactMissing(f"field-trace artifact is missing for job {job_id}")
+
+    metadata = _load_metadata(directory)
+    try:
+        validated = _validate_metadata(metadata, job_id)
+        mesh_path = directory / validated["mesh_file"]
+        mesh_text = mesh_path.read_text(encoding="utf-8")
+    except ArtifactCorrupt:
+        raise
+    except (OSError, UnicodeError) as exc:
+        raise ArtifactCorrupt("field-trace mesh is missing or unreadable") from exc
+    if mesh_text_sha256(mesh_text) != validated["geometry_sha256"]:
+        raise ArtifactCorrupt("field-trace geometry sha256 does not match mesh.msh")
+
+    for entry in validated["channels"]:
+        try:
+            actual_size = (directory / entry["file"]).stat().st_size
+        except OSError as exc:
+            raise ArtifactCorrupt(
+                f"field-trace channel file is missing: {entry['file']}"
+            ) from exc
+        if actual_size != entry["bytes"]:
+            raise ArtifactCorrupt(
+                f"field-trace channel byte count mismatch for {entry['id']!r}"
+            )
+    return directory, validated, mesh_text
 
 
 def _validated_artifact(job_id: str, artifact: FieldTraceArtifact) -> dict[str, Any]:
@@ -640,6 +740,7 @@ def _validate_metadata(metadata: Mapping[str, Any], job_id: str) -> dict[str, An
         "n_dp0": n_dp0,
         "frequencies": frequencies,
         "k_real": k_real,
+        "k_imag": k_imag,
         "frequency_count": len(frequencies),
         "frequency_slices": expected_slices,
         "channels": channels,
@@ -724,8 +825,10 @@ __all__ = [
     "FIELD_TRACES_VERSION",
     "FieldTraceBackend",
     "FieldTraceArtifact",
+    "FieldTraceBundle",
     "FieldTraceChannel",
     "METAL_FIELD_TRACE_BACKEND",
+    "PHASE_CONVENTION",
     "StoredFieldTraceArtifact",
     "build_field_trace_artifact",
     "estimate_field_trace_retention_bytes",
@@ -733,6 +836,7 @@ __all__ = [
     "field_trace_retention_cap_bytes",
     "field_trace_retention_plan",
     "field_traces_root",
+    "load_field_trace_bundle",
     "load_field_traces",
     "mesh_trace_dof_counts",
     "remove_field_trace_artifact",
