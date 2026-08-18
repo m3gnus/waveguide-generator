@@ -6,6 +6,7 @@ import asyncio
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+import hashlib
 import importlib
 import json
 import logging
@@ -37,8 +38,12 @@ from .metal_permit import MetalLease, MetalPermit
 logger = logging.getLogger(__name__)
 
 FIELD_PLANE_ORDERING = "v-major-row-major"
+FIELD_PLANE_RESPONSE_VERSION = 2
 FIELD_PLANE_TIMEOUT_ENV = "WG2_FIELD_PLANE_TIMEOUT_SECONDS"
 DEFAULT_FIELD_PLANE_TIMEOUT_SECONDS = 120.0
+NO_SYNTHESIS_REVISION = hashlib.sha256(
+    b"field-plane-synthesis:none"
+).hexdigest()[:16]
 
 #: Backends whose degraded-assembly warning has already been logged. Dragging
 #: the plane re-evaluates continuously, so this must not warn per request.
@@ -70,6 +75,7 @@ class FieldPlaneEvaluation:
     frequency_hz: float
     pressure: NDArray[np.complex64]
     geometry_sha256: str
+    synthesis_revision: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,10 +179,10 @@ def encode_field_plane_response(
     request: FieldPlaneRequest,
     evaluation: FieldPlaneEvaluation,
 ) -> bytes:
-    """Encode the version-1 JSON-header plus interleaved complex32 payload."""
+    """Encode the versioned JSON header plus interleaved complex32 payload."""
 
     header = {
-        "version": 1,
+        "version": FIELD_PLANE_RESPONSE_VERSION,
         "request_id": request.request_id,
         "job_id": job_id,
         "frequency_index": request.frequency_index,
@@ -188,6 +194,7 @@ def encode_field_plane_response(
         "pressure_unit": "Pa",
         "response_id": request.response.id,
         "geometry_sha256": evaluation.geometry_sha256,
+        "synthesis_revision": evaluation.synthesis_revision,
     }
     header_bytes = json.dumps(
         header,
@@ -319,6 +326,7 @@ class FieldPlaneService:
             pressure,
             neumann,
             backend,
+            synthesis_revision,
         ) = self._load_response_traces(job_id, row, request)
         backend_api = _load_field_backend(backend)
         geometry_sha256 = mesh_text_sha256(mesh_text)
@@ -351,6 +359,7 @@ class FieldPlaneService:
             frequency_hz=float(frequency_hz),
             pressure=np.ascontiguousarray(values, dtype=np.complex64),
             geometry_sha256=geometry_sha256,
+            synthesis_revision=synthesis_revision,
         )
 
     def _load_response_traces(
@@ -366,21 +375,34 @@ class FieldPlaneService:
         NDArray[Any],
         NDArray[Any],
         FieldTraceBackend,
+        str,
     ]:
         response_id = request.response.id
         if response_id.startswith("channel:"):
             channel_id = response_id.removeprefix("channel:")
-            return self._load_channel(job_id, request.frequency_index, channel_id)
+            return (
+                *self._load_channel(job_id, request.frequency_index, channel_id),
+                NO_SYNTHESIS_REVISION,
+            )
 
         raw_channels = self._raw_channel_ids(row)
         if len(raw_channels) == 1:
-            return self._load_channel(
-                job_id,
-                request.frequency_index,
-                raw_channels[0],
+            return (
+                *self._load_channel(
+                    job_id,
+                    request.frequency_index,
+                    raw_channels[0],
+                ),
+                NO_SYNTHESIS_REVISION,
             )
         combine = self._current_combine(job_id)
         members, crossovers_hz, gains_db, delays_s = self._combine_parameters(combine)
+        synthesis_revision = self._synthesis_revision(
+            members,
+            crossovers_hz,
+            gains_db,
+            delays_s,
+        )
         unknown = [member for member in members if member not in raw_channels]
         if unknown:
             raise ArtifactCorrupt(
@@ -426,6 +448,7 @@ class FieldPlaneService:
             pressure,
             neumann,
             backend,
+            synthesis_revision,
         )
 
     def _load_channel(
@@ -534,6 +557,35 @@ class FieldPlaneService:
             raise ArtifactCorrupt("stored system synthesis metadata is invalid")
         return members, crossovers, gains, delays
 
+    @staticmethod
+    def _synthesis_revision(
+        members: list[str],
+        crossovers_hz: list[float],
+        gains_db: Mapping[str, float],
+        delays_s: Mapping[str, float],
+    ) -> str:
+        def canonical_float(value: float) -> float:
+            return 0.0 if value == 0.0 else value
+
+        canonical = {
+            "members": members,
+            "crossovers_hz": [canonical_float(value) for value in crossovers_hz],
+            "gains_db": [
+                [name, canonical_float(gains_db[name])] for name in members
+            ],
+            "delays_s": [
+                [name, canonical_float(delays_s[name])] for name in members
+            ],
+        }
+        encoded = json.dumps(
+            canonical,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+        digest = hashlib.sha256(b"field-plane-synthesis:combine:" + encoded)
+        return digest.hexdigest()[:16]
+
     def _cached_mesh(
         self,
         backend: FieldTraceBackend,
@@ -564,6 +616,7 @@ class FieldPlaneService:
 __all__ = [
     "DEFAULT_FIELD_PLANE_TIMEOUT_SECONDS",
     "FIELD_PLANE_ORDERING",
+    "FIELD_PLANE_RESPONSE_VERSION",
     "FIELD_PLANE_TIMEOUT_ENV",
     "FieldPlaneEvaluation",
     "FieldPlaneInvalidSelection",
@@ -572,6 +625,7 @@ __all__ = [
     "FieldPlaneService",
     "FieldPlaneTimedOut",
     "FieldPlaneUnsupported",
+    "NO_SYNTHESIS_REVISION",
     "encode_field_plane_response",
     "field_plane_points",
     "field_plane_timeout_seconds",

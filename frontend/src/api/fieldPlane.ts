@@ -1,4 +1,5 @@
 export const FIELD_PLANE_VERSION = 1 as const;
+export const FIELD_PLANE_HEADER_VERSION = 2 as const;
 export const FIELD_PLANE_ORDERING = 'v-major-row-major' as const;
 
 export type Vector3Tuple = [number, number, number];
@@ -23,7 +24,7 @@ export interface FieldPlaneRequest {
 }
 
 export interface FieldPlaneHeader {
-  version: typeof FIELD_PLANE_VERSION;
+  version: typeof FIELD_PLANE_VERSION | typeof FIELD_PLANE_HEADER_VERSION;
   request_id: string;
   job_id: string;
   frequency_index: number;
@@ -35,6 +36,7 @@ export interface FieldPlaneHeader {
   pressure_unit: string;
   response_id: string;
   geometry_sha256: string;
+  synthesis_revision: string | null;
 }
 
 export interface DecodedFieldPlane {
@@ -115,6 +117,11 @@ function requiredString(header: Record<string, unknown>, key: string): string {
   return value;
 }
 
+function optionalString(header: Record<string, unknown>, key: string): string | null {
+  if (header[key] === undefined) return null;
+  return requiredString(header, key);
+}
+
 function requiredFiniteNumber(header: Record<string, unknown>, key: string): number {
   const value = header[key];
   if (typeof value !== 'number' || !Number.isFinite(value)) {
@@ -133,7 +140,7 @@ function requiredInteger(header: Record<string, unknown>, key: string, minimum =
 
 function validateHeader(value: unknown): FieldPlaneHeader {
   if (!isRecord(value)) throw new Error('Field-plane header must be a JSON object');
-  if (value.version !== FIELD_PLANE_VERSION) {
+  if (value.version !== FIELD_PLANE_VERSION && value.version !== FIELD_PLANE_HEADER_VERSION) {
     throw new Error(`Unsupported field-plane version: ${String(value.version)}`);
   }
   if (value.ordering !== FIELD_PLANE_ORDERING) {
@@ -145,7 +152,7 @@ function validateHeader(value: unknown): FieldPlaneHeader {
     throw new Error(`Field-plane grid dimensions are invalid: ${nx}x${ny}`);
   }
   return {
-    version: FIELD_PLANE_VERSION,
+    version: value.version,
     request_id: requiredString(value, 'request_id'),
     job_id: requiredString(value, 'job_id'),
     frequency_index: requiredInteger(value, 'frequency_index'),
@@ -157,6 +164,7 @@ function validateHeader(value: unknown): FieldPlaneHeader {
     pressure_unit: requiredString(value, 'pressure_unit'),
     response_id: requiredString(value, 'response_id'),
     geometry_sha256: requiredString(value, 'geometry_sha256'),
+    synthesis_revision: optionalString(value, 'synthesis_revision'),
   };
 }
 

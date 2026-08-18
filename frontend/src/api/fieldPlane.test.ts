@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   buildFieldPlaneRequest,
   decodeFieldPlane,
+  FIELD_PLANE_HEADER_VERSION,
   FIELD_PLANE_ORDERING,
   fetchFieldPlane,
   FieldPlaneHttpError,
@@ -9,7 +10,7 @@ import {
 } from './fieldPlane';
 
 const header: FieldPlaneHeader = {
-  version: 1,
+  version: FIELD_PLANE_HEADER_VERSION,
   request_id: 'request-1',
   job_id: 'job-1',
   frequency_index: 3,
@@ -21,6 +22,7 @@ const header: FieldPlaneHeader = {
   pressure_unit: 'Pa',
   response_id: 'system',
   geometry_sha256: 'abc123',
+  synthesis_revision: 'synthesis-1',
 };
 
 function encoded(
@@ -45,6 +47,15 @@ describe('field-plane binary decoder', () => {
     expect([...decoded.imag]).toEqual([-1, -2, -3.5, -4.25]);
   });
 
+  it('defaults a legacy header without a synthesis revision to null', () => {
+    const decoded = decodeFieldPlane(encoded({
+      version: 1,
+      synthesis_revision: undefined,
+    }));
+
+    expect(decoded.header.synthesis_revision).toBeNull();
+  });
+
   it('rejects truncation before and inside the declared header', () => {
     expect(() => decodeFieldPlane(new ArrayBuffer(3))).toThrow(/truncated before the header length/i);
     const buffer = encoded();
@@ -60,8 +71,12 @@ describe('field-plane binary decoder', () => {
   });
 
   it('rejects version and ordering drift', () => {
-    expect(() => decodeFieldPlane(encoded({ version: 2 }))).toThrow('Unsupported field-plane version: 2');
+    expect(() => decodeFieldPlane(encoded({ version: 3 }))).toThrow('Unsupported field-plane version: 3');
     expect(() => decodeFieldPlane(encoded({ ordering: 'u-major' }))).toThrow('Unsupported field-plane ordering: u-major');
+  });
+
+  it('rejects a present non-string synthesis revision', () => {
+    expect(() => decodeFieldPlane(encoded({ synthesis_revision: 42 }))).toThrow(/synthesis_revision must be a non-empty string/i);
   });
 });
 

@@ -1,6 +1,7 @@
 import { Box3, Vector3 } from 'three';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  FIELD_PLANE_HEADER_VERSION,
   FIELD_PLANE_ORDERING,
   FieldPlaneHttpError,
   type FieldPlaneRequest,
@@ -20,6 +21,7 @@ import {
   nearestFieldPlaneFrequencyIndex,
   shouldApplyFieldPlaneGeneration,
 } from './fieldPlaneStore';
+import { useFieldPlaneMaskStore } from './fieldPlaneMaskStore';
 
 const plane: FieldPlaneSpec = {
   origin_m: [0, 0, 0],
@@ -35,7 +37,7 @@ function response(jobId: string, request: FieldPlaneRequest): DecodedFieldPlane 
   const count = request.plane.nx * request.plane.ny;
   return {
     header: {
-      version: 1,
+      version: FIELD_PLANE_HEADER_VERSION,
       request_id: request.request_id,
       job_id: jobId,
       frequency_index: request.frequency_index,
@@ -47,6 +49,7 @@ function response(jobId: string, request: FieldPlaneRequest): DecodedFieldPlane 
       pressure_unit: 'Pa',
       response_id: 'system',
       geometry_sha256: 'geometry',
+      synthesis_revision: 'synthesis-a',
     },
     real: new Float32Array(count),
     imag: new Float32Array(count),
@@ -463,6 +466,65 @@ describe('field-plane state', () => {
     store.getState().setPlane(plane);
     await vi.waitFor(() => expect(fetchPlane).toHaveBeenCalledTimes(3));
   });
+
+  it('invalidates only pressure generations and refetches the current plane', async () => {
+    let synthesisRevision = 'synthesis-a';
+    const fetchPlane = vi.fn(async (jobId: string, request: FieldPlaneRequest) => {
+      const field = response(jobId, request);
+      field.header.geometry_sha256 = 'geometry-a';
+      field.header.synthesis_revision = synthesisRevision;
+      return field;
+    });
+    const fetchResults = vi.fn(async () => ({ frequencies: [800] }));
+    const store = createFieldPlaneStore({ fetchPlane, fetchResults });
+
+    store.getState().enable('job-1', plane);
+    await vi.waitFor(() => expect(store.getState().status).toBe('ready'));
+    expect(fetchPlane).toHaveBeenCalledOnce();
+
+    useFieldPlaneMaskStore.getState().begin({
+      type: 'classify',
+      generation: 7,
+      jobId: 'job-1',
+      geometrySha256: 'geometry-a',
+      plane,
+    });
+    useFieldPlaneMaskStore.getState().apply({
+      type: 'result',
+      generation: 7,
+      jobId: 'job-1',
+      geometrySha256: 'geometry-a',
+      nx: plane.nx,
+      ny: plane.ny,
+      watertight: true,
+      mask: new Uint8Array(plane.nx * plane.ny).buffer,
+    });
+    const maskState = useFieldPlaneMaskStore.getState();
+    const classificationInputs = {
+      dragging: store.getState().dragging,
+      enabled: store.getState().enabled,
+      geometrySha256: store.getState().geometrySha256,
+      jobId: store.getState().jobId,
+      plane: store.getState().plane,
+    };
+
+    synthesisRevision = 'synthesis-b';
+    store.getState().invalidateSynthesis(synthesisRevision);
+    await vi.waitFor(() => expect(fetchPlane).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(store.getState().synthesisRevision).toBe('synthesis-b'));
+
+    expect(store.getState()).toMatchObject(classificationInputs);
+    expect(store.getState().geometrySha256).toBe('geometry-a');
+    expect(fetchResults).toHaveBeenCalledOnce();
+    expect(useFieldPlaneMaskStore.getState()).toMatchObject({
+      jobId: maskState.jobId,
+      geometrySha256: maskState.geometrySha256,
+      generation: maskState.generation,
+      watertight: maskState.watertight,
+    });
+    expect(useFieldPlaneMaskStore.getState().mask).toBe(maskState.mask);
+    useFieldPlaneMaskStore.getState().clear();
+  });
 });
 
 describe('field-plane cache and request primitives', () => {
@@ -470,6 +532,7 @@ describe('field-plane cache and request primitives', () => {
     const parts = {
       jobId: 'job-1',
       geometrySha256: 'geometry-a',
+      synthesisRevision: 'synthesis-a',
       responseId: 'system' as const,
       frequencyIndex: 2,
       plane,
@@ -480,6 +543,7 @@ describe('field-plane cache and request primitives', () => {
       plane: { ...plane, origin_m: [0.0000004, 0, 0] },
     })).toBe(key);
     expect(fieldPlaneCacheKey({ ...parts, geometrySha256: 'geometry-b' })).not.toBe(key);
+    expect(fieldPlaneCacheKey({ ...parts, synthesisRevision: 'synthesis-b' })).not.toBe(key);
     expect(fieldPlaneCacheKey({ ...parts, plane: { ...plane, nx: 48, ny: 48 } })).not.toBe(key);
   });
 

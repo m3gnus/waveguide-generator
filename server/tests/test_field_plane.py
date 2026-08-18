@@ -323,7 +323,7 @@ def test_happy_path_binary_round_trip_ordering_and_mesh_lru(
             assert headers["cache-control"] == "no-store"
             header, pressure = _decode(raw)
             assert header == {
-                "version": 1,
+                "version": field_plane.FIELD_PLANE_RESPONSE_VERSION,
                 "request_id": request_id,
                 "job_id": "happy",
                 "frequency_index": 0,
@@ -335,6 +335,7 @@ def test_happy_path_binary_round_trip_ordering_and_mesh_lru(
                 "pressure_unit": "Pa",
                 "response_id": "channel:default",
                 "geometry_sha256": mesh_text_sha256(MESH_TEXT),
+                "synthesis_revision": field_plane.NO_SYNTHESIS_REVISION,
             }
             np.testing.assert_array_equal(
                 pressure,
@@ -520,7 +521,7 @@ def test_healthy_assembly_backend_stays_quiet(
     assert caplog.records == []
 
 
-def test_system_response_weights_both_traces_and_evaluates_once(
+def test_system_response_weights_traces_and_tracks_synthesis_revision(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls: list[tuple[np.ndarray, np.ndarray]] = []
@@ -544,15 +545,38 @@ def test_system_response_weights_both_traces_and_evaluates_once(
         store = app.state.jobs_runtime.store
         store.initialize()
         _create_job(store, "multi", multi=True)
+        revisions: list[str] = []
+        for request_id in ("initial", "identical"):
+            status, raw, _headers = await _request(
+                app,
+                "/api/results/multi/field-plane",
+                _body(request_id, response_id="system"),
+            )
+            assert status == 200
+            header, _values = _decode(raw)
+            assert header["response_id"] == "system"
+            assert isinstance(header["synthesis_revision"], str)
+            assert len(header["synthesis_revision"]) == 16
+            revisions.append(header["synthesis_revision"])
+
+        assert revisions[0] == revisions[1]
+
+        results = store.get_results("multi")
+        assert results is not None
+        results["channels"]["combined"]["metadata"]["combine"]["level_match"][
+            "gains_db"
+        ]["left"] = -2.0
+        store.store_results("multi", results)
+
         status, raw, _headers = await _request(
             app,
             "/api/results/multi/field-plane",
-            _body(response_id="system"),
+            _body("recombined", response_id="system"),
         )
         assert status == 200
-        header, _values = _decode(raw)
-        assert header["response_id"] == "system"
-        assert len(calls) == 1
+        changed_header, _values = _decode(raw)
+        assert changed_header["synthesis_revision"] != revisions[0]
+        assert len(calls) == 3
 
         base = _artifact(multi=True)
         weights = raw_channel_weights(
