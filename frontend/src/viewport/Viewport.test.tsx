@@ -138,7 +138,7 @@ describe('Viewport preview errors', () => {
   it('cycles display modes from one compact toolbar control', () => {
     const mode = host.querySelector<HTMLButtonElement>('.display-mode-tools button');
     expect(host.querySelectorAll('.display-mode-tools button')).toHaveLength(1);
-    expect(host.querySelectorAll('.viewport-tools button')).toHaveLength(7);
+    expect(host.querySelectorAll('.viewport-tools button')).toHaveLength(9);
     expect(host.querySelector('.viewport-tools [aria-label="Import Gmsh 2.2 mesh"]')).toBeNull();
     expect(host.querySelector('.viewport-tools [aria-label="View presets"]')).toBeNull();
     expect(mode?.getAttribute('aria-label')).toContain('Display mode: Clay');
@@ -150,6 +150,9 @@ describe('Viewport preview errors', () => {
     const fieldPlane = host.querySelector<HTMLButtonElement>('[aria-label="Acoustic field plane overlay"]');
     expect(fieldPlane?.disabled).toBe(true);
     expect(fieldPlane?.title).toContain('complete a full-3D solve');
+    expect(host.querySelector<HTMLButtonElement>('[aria-label="Clip model to field plane"]')?.disabled).toBe(true);
+    expect(host.querySelector<HTMLButtonElement>('[aria-label="Invert field-plane clip side"]')?.disabled).toBe(true);
+    expect(host.querySelector<HTMLButtonElement>('[aria-label="Section cut at X=0"]')).not.toBeNull();
   });
 
   it('keeps enclosure and frame stats in viewer preferences', () => {

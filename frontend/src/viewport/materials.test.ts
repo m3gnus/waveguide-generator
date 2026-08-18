@@ -1,4 +1,4 @@
-import { DoubleSide, FrontSide, MeshStandardMaterial, ShaderMaterial } from 'three';
+import { DoubleSide, FrontSide, MeshStandardMaterial, Plane, ShaderMaterial, Vector3 } from 'three';
 import { describe, expect, it } from 'vitest';
 import { createMaterialLibrary } from './materials';
 import type { DisplayMode } from './types';
@@ -6,6 +6,25 @@ import type { DisplayMode } from './types';
 const surfaceModes: DisplayMode[] = ['clay', 'solid-wire', 'wireframe', 'xray', 'zebra', 'curvature', 'edges'];
 
 describe('viewport material mode matrix', () => {
+  it('shares the mutable clip-plane reference and compiles unclipped materials separately', () => {
+    const plane = new Plane(new Vector3(1, 0, 0), 0);
+    const clipped = createMaterialLibrary('clay', plane);
+    for (const material of [
+      ...Object.values(clipped.surfaces),
+      clipped.wire,
+      clipped.edge,
+      clipped.stencilBack,
+      clipped.stencilFront,
+    ]) expect(material.clippingPlanes?.[0]).toBe(plane);
+    clipped.all.forEach((material) => material.dispose());
+
+    const unclipped = createMaterialLibrary('clay', null);
+    for (const material of Object.values(unclipped.surfaces)) {
+      expect(material.clippingPlanes).toEqual([]);
+    }
+    unclipped.all.forEach((material) => material.dispose());
+  });
+
   it('draws both sides in normals mode so an inverted patch is visible, not invisible', () => {
     const library = createMaterialLibrary('normals', null);
     for (const material of Object.values(library.surfaces)) {

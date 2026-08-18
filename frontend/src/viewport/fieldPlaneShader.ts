@@ -18,12 +18,14 @@ export const FIELD_PLANE_FRAGMENT_SHADER = `
   uniform sampler2D uFieldReal;
   uniform sampler2D uFieldImag;
   uniform sampler2D uColorLut;
+  uniform sampler2D uMask;
   uniform float uWindowMinDb;
   uniform float uWindowMaxDb;
   uniform float uOpacity;
   varying vec2 vFieldUv;
   void main() {
     #include <clipping_planes_fragment>
+    if (texture2D(uMask, vFieldUv).r > 0.0) discard;
     float fieldReal = texture2D(uFieldReal, vFieldUv).r;
     float fieldImag = texture2D(uFieldImag, vFieldUv).r;
     float magnitude = length(vec2(fieldReal, fieldImag));
