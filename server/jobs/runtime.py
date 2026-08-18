@@ -354,6 +354,87 @@ class ImportedSolveRefusal(ValueError):
 
 
 @dataclass(frozen=True)
+class SubmissionResolution:
+    """Validated parametric submission values ready for durable persistence."""
+
+    request: SolveRequest
+    engine_name: str
+    symmetry_metadata: dict[str, Any]
+
+
+async def resolve_submission(
+    request: SolveRequest,
+    engine_registry: EngineRegistry,
+) -> SubmissionResolution:
+    """Resolve every host-dependent parametric submission decision once.
+
+    This boundary deliberately stops before UUID allocation or store access so
+    non-HTTP callers can ask the runtime exactly the same questions as a real
+    submission without creating a job. Imported geometry remains tied to its
+    ingestion record and immutable mesh artifact, so JobRuntime.submit retains
+    that separate preparation and refusal path.
+    """
+
+    if not isinstance(request.geometry, ParametricGeometrySource):
+        raise ImportedSolveRefusal(
+            "imported_submission_requires_runtime",
+            "imported geometry must be prepared by JobRuntime.submit",
+        )
+
+    engine_name = request.options.engine
+    if engine_name not in {"auto", "dryrun", "metal", "bempp"}:
+        raise UnknownEngineError(f"Unknown solve engine: {engine_name}")
+
+    resolution = await asyncio.to_thread(resolve_symmetry, request.design)
+    try:
+        resolved_quadrants = validate_symmetry_mode(
+            request.options.symmetry, resolution
+        )
+    except ValueError as exc:
+        raise SymmetryValidationError(str(exc)) from exc
+    symmetry_metadata = {
+        "requested": request.options.symmetry,
+        "resolved_quadrants": resolved_quadrants,
+        "auto_resolution": resolution.as_dict(),
+        "design_quadrants": (
+            request.design.root.mesh.quadrants.text()
+            if request.design.root.mesh.quadrants is not None
+            else None
+        ),
+    }
+
+    if engine_name == "auto":
+        engine_name = await engine_registry.resolve(
+            "auto", solver_mode=request.design.root.simulation.solver_mode
+        )
+        if engine_name is None:
+            raise EngineUnavailableError(
+                "AUTO could not resolve a compatible solve engine from this host's "
+                "capabilities. Install/enable Metal or BEMPP; explicitly enable dry-run "
+                "with WG2_ENABLE_DRYRUN=1 for synthetic development solves."
+            )
+        request = request.model_copy(deep=True)
+        request.options.engine = engine_name
+    if await engine_registry.get_engine(engine_name) is None:
+        reason = await engine_registry.unavailable_reason(engine_name)
+        fallback_reason = (
+            "Dry-run solves require WG2_ENABLE_DRYRUN=1."
+            if engine_name == "dryrun"
+            else "No capability reason was reported."
+        )
+        raise EngineUnavailableError(
+            f"Solve engine '{engine_name}' is unavailable. "
+            f"{reason or fallback_reason}"
+        )
+    request = _apply_bempp_wall_default(request, engine_name)
+    return SubmissionResolution(
+        request=request,
+        engine_name=engine_name,
+        symmetry_metadata=symmetry_metadata,
+    )
+
+
+@dataclass(frozen=True)
 class _ImportedSubmission:
     record: dict[str, Any]
     msh_text: str
@@ -765,17 +846,15 @@ class JobRuntime:
         imported: _ImportedSubmission | None = None
         if isinstance(request.geometry, ImportedGeometrySource):
             imported = await self._prepare_imported_submission(request)
-        engine_name = request.options.engine
-        known = {"auto", "dryrun", "metal", "bempp"}
-        if isinstance(request.geometry, ImportedGeometrySource) and engine_name == "circsym":
-            raise ImportedSolveRefusal(
-                "imported_circsym_unsupported",
-                "imported geometry supports Metal full 3-D solves only; CircSym is unavailable",
-            )
-        if engine_name not in known:
-            raise UnknownEngineError(f"Unknown solve engine: {engine_name}")
-
         if imported is not None:
+            engine_name = request.options.engine
+            if engine_name == "circsym":
+                raise ImportedSolveRefusal(
+                    "imported_circsym_unsupported",
+                    "imported geometry supports Metal full 3-D solves only; CircSym is unavailable",
+                )
+            if engine_name not in {"auto", "dryrun", "metal", "bempp"}:
+                raise UnknownEngineError(f"Unknown solve engine: {engine_name}")
             symmetry_metadata = imported.symmetry_metadata
             if engine_name in {"bempp", "dryrun"}:
                 raise ImportedSolveRefusal(
@@ -787,49 +866,18 @@ class JobRuntime:
                 engine_name = "metal"
                 request = request.model_copy(deep=True)
                 request.options.engine = engine_name
-        else:
-            resolution = await asyncio.to_thread(resolve_symmetry, request.design)
-            try:
-                resolved_quadrants = validate_symmetry_mode(
-                    request.options.symmetry, resolution
-                )
-            except ValueError as exc:
-                raise SymmetryValidationError(str(exc)) from exc
-            symmetry_metadata = {
-                "requested": request.options.symmetry,
-                "resolved_quadrants": resolved_quadrants,
-                "auto_resolution": resolution.as_dict(),
-                "design_quadrants": (
-                    request.design.root.mesh.quadrants.text()
-                    if request.design.root.mesh.quadrants is not None
-                    else None
-                ),
-            }
-        if engine_name == "auto":
-            assert isinstance(request.geometry, ParametricGeometrySource)
-            engine_name = await self.engine_registry.resolve(
-                "auto", solver_mode=request.design.root.simulation.solver_mode
-            )
-            if engine_name is None:
+            if await self.engine_registry.get_engine(engine_name) is None:
+                reason = await self.engine_registry.unavailable_reason(engine_name)
+                fallback_reason = "No capability reason was reported."
                 raise EngineUnavailableError(
-                    "AUTO could not resolve a compatible solve engine from this host's "
-                    "capabilities. Install/enable Metal or BEMPP; explicitly enable dry-run "
-                    "with WG2_ENABLE_DRYRUN=1 for synthetic development solves."
+                    f"Solve engine '{engine_name}' is unavailable. "
+                    f"{reason or fallback_reason}"
                 )
-            request = request.model_copy(deep=True)
-            request.options.engine = engine_name
-        if await self.engine_registry.get_engine(engine_name) is None:
-            reason = await self.engine_registry.unavailable_reason(engine_name)
-            fallback_reason = (
-                "Dry-run solves require WG2_ENABLE_DRYRUN=1."
-                if engine_name == "dryrun"
-                else "No capability reason was reported."
-            )
-            raise EngineUnavailableError(
-                f"Solve engine '{engine_name}' is unavailable. "
-                f"{reason or fallback_reason}"
-            )
-        request = _apply_bempp_wall_default(request, engine_name)
+        else:
+            resolved = await resolve_submission(request, self.engine_registry)
+            request = resolved.request
+            engine_name = resolved.engine_name
+            symmetry_metadata = resolved.symmetry_metadata
 
         job_id = str(uuid.uuid4())
         now = _now_iso()
@@ -2595,7 +2643,9 @@ __all__ = [
     "JobResourceUnavailableError",
     "JobRuntime",
     "MeshArtifactDownload",
+    "SubmissionResolution",
     "SymmetryValidationError",
     "UnknownEngineError",
     "merge_provisional_results",
+    "resolve_submission",
 ]

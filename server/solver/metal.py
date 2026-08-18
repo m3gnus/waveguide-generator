@@ -1866,6 +1866,9 @@ def _circsym_eligibility_reasons(request: SolveRequest) -> list[str]:
     return reasons
 
 
+circsym_eligibility_reasons = _circsym_eligibility_reasons
+
+
 class MetalEngine:
     name = "metal"
 
@@ -2000,6 +2003,7 @@ class MetalEngine:
 __all__ = [
     "MetalEngine",
     "MetalUnavailable",
+    "circsym_eligibility_reasons",
     "metal_status",
     "solve_imported_metal_from_msh_text",
     "solve_metal_from_msh_text",

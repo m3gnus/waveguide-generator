@@ -19,6 +19,7 @@ August rebuild and remain available in Git history.
 - `frontend/src/api/` owns HTTP/WebSocket boundaries.
 - `frontend/src/viewport/` renders binary preview frames; it does not derive geometry.
 - `server/design/` parses, migrates, validates, and serializes design documents.
+- `server/cli/` provides headless design and local solve-readiness commands.
 - `server/preview/` translates a design into the pinned mesher preview API.
 - `server/jobs/` owns durable jobs, snapshot/cursor events, retention, and recovery.
 - `server/solver/` builds solver requests and maps every backend to one result contract.
