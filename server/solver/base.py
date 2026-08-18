@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from .field_traces_store import FieldTraceArtifact
+
 
 CancelCallback = Callable[[], None]
 StageCallback = Callable[[str, float, str], None]
@@ -31,6 +33,9 @@ class EngineRunResult:
     # compressed NPZ so complex matrices, diagnostics, and physical face
     # identity remain lossless and downloadable independently of result JSON.
     radiation_impedance: bytes | None = None
+    # Full-3D native Metal surface traces, retained per unsynthesized channel.
+    field_traces: FieldTraceArtifact | None = None
+    field_trace_unavailable_reason: str | None = None
 
 
 __all__ = [

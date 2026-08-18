@@ -190,6 +190,7 @@ def test_metal_adapter_maps_quadrants_axial_drive_stages_and_cancellation(monkey
     assert captured["frame_override"].origin.tolist() == pytest.approx([0.0, 0.04, 0.05])
     assert getattr(captured["observation"], "custom_points", None) is None
     assert captured["native_check_open_edges"] is False
+    assert captured["return_surface_traces"] is True
     assert cancellations == 3
     assert [stage for stage, _, _ in callbacks] == [
         "setup",
@@ -251,6 +252,33 @@ def test_metal_adapter_emits_each_frequency_through_the_canonical_mapper(monkeyp
     }
 
 
+def test_metal_trace_size_cap_skips_retention_before_mocked_solve(monkeypatch) -> None:
+    captured = {}
+
+    def config_factory(**kwargs):
+        captured.update(kwargs)
+        return _Config(**kwargs)
+
+    monkeypatch.setattr(metal, "native_config", config_factory)
+    monkeypatch.setattr(metal, "native_solve", lambda _path, _config: _result())
+    monkeypatch.setattr(metal, "metal_status", lambda: {"available": True, "reason": "ok"})
+    monkeypatch.setattr(metal, "ObservationConfig", lambda **kwargs: SimpleNamespace(**kwargs))
+
+    response = metal.solve_metal_from_msh_text(
+        _cabinet_msh(),
+        _context(),
+        field_trace_cap_bytes=1,
+    )
+
+    assert captured["return_surface_traces"] is False
+    assert response["_field_traces"] is None
+    assert response["_field_trace_unavailable_reason"] == "size_cap_exceeded"
+    assert response["metadata"]["field_trace_retention"] == {
+        "estimated_bytes": 384,
+        "cap_bytes": 1,
+    }
+
+
 def test_metal_infinite_baffle_requires_and_maps_aperture_tag(monkeypatch) -> None:
     captured = {}
     monkeypatch.setattr(metal, "native_config", lambda **kwargs: captured.update(kwargs) or _Config(**kwargs))
@@ -266,8 +294,10 @@ def test_metal_infinite_baffle_requires_and_maps_aperture_tag(monkeypatch) -> No
     )
     assert captured["aperture_tag"] == 12
     assert captured["mesh_validate"] is True
+    assert captured["return_surface_traces"] is False
     assert captured["frame_override"].origin.tolist() == pytest.approx([0.0, 0.04, 0.05])
     assert response["metadata"]["infinite_baffle"]["backend"] == "full_3d_coupled"
+    assert response["_field_trace_unavailable_reason"] == "unsupported_solve_mode"
 
 
 def test_bempp_adapter_is_cpu_fallback_and_rejects_infinite_baffle(monkeypatch) -> None:

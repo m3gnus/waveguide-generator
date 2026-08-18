@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 from pathlib import Path
+
+import numpy as np
 
 from server.engines import registry
 from server.engines.dryrun import DryRunEngine
@@ -11,6 +14,7 @@ from server.jobs.models import SolveRequest
 from server.jobs.runtime import JobRuntime
 from server.jobs.store import JobStore
 from server.solver.base import EngineRunResult
+from server.solver.field_traces_store import FieldTraceArtifact, FieldTraceChannel
 
 
 def test_detection_uses_honest_probe_reasons_and_dryrun_gate(monkeypatch) -> None:
@@ -114,6 +118,113 @@ def test_real_runtime_seam_persists_artifact_stats_results_and_stages(
         assert "stage" in event_types
         assert "log" in event_types
         assert event_types[-1] == "completed"
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_runtime_exposes_fresh_field_traces_and_marks_legacy_results(
+    tmp_path: Path,
+) -> None:
+    mesh_text = """$MeshFormat
+2.2 0 8
+$EndMeshFormat
+$Nodes
+3
+1 0 0 0
+2 1 0 0
+3 0 1 0
+$EndNodes
+$Elements
+1
+1 2 2 1 1 1 2 3
+$EndElements
+"""
+
+    class FakeMetal:
+        name = "metal"
+
+        async def run(self, request, *, cancel_cb, stage_cb):
+            del request, stage_cb
+            cancel_cb()
+            return EngineRunResult(
+                results={"frequencies": [500.0], "metadata": {"engine": "fake-metal"}},
+                msh_text=mesh_text,
+                mesh_stats={"vertex_count": 3, "triangle_count": 1},
+                field_traces=FieldTraceArtifact(
+                    mesh_text=mesh_text,
+                    frequencies_hz=np.asarray([500.0]),
+                    k_real=np.asarray([9.159]),
+                    k_imag=np.asarray([0.045795]),
+                    symmetry_plane=None,
+                    solve_path="full-3d",
+                    channels=(
+                        FieldTraceChannel(
+                            "default",
+                            np.ones((1, 3), dtype=np.complex128),
+                            np.ones((1, 1), dtype=np.complex128),
+                        ),
+                    ),
+                ),
+            )
+
+    request = SolveRequest.model_validate(
+        {
+            "design": {
+                "formula": "OSSE",
+                "simulation": {"f1": 500, "f2": 501, "num_frequencies": 1},
+            },
+            "options": {"engine": "metal", "stage_delay_ms": 0},
+        }
+    )
+
+    async def scenario() -> None:
+        store = JobStore(tmp_path / "jobs.db")
+        runtime = JobRuntime(
+            store,
+            engine_registry=registry.EngineRegistry(
+                detector=lambda: [registry.EngineInfo("metal", True, "test", "1")],
+                factory=lambda _name: FakeMetal(),
+            ),
+        )
+        fresh_id = await runtime.submit(request)
+        await runtime.wait_idle()
+
+        fresh = await runtime.get_results(fresh_id)
+        assert fresh["metadata"]["field_plane_available"] is True
+        assert fresh["metadata"]["field_trace_bytes"] == 32
+        assert fresh["metadata"]["unavailable_reason"] is None
+        fresh_job = await runtime.get_job(fresh_id)
+        assert fresh_job["field_plane_available"] is True
+        assert fresh_job["field_trace_bytes"] == 32
+
+        now = datetime.now().isoformat()
+        store.create_job(
+            {
+                "id": "legacy",
+                "status": "complete",
+                "created_at": now,
+                "updated_at": now,
+                "queued_at": now,
+                "completed_at": now,
+                "progress": 1.0,
+                "stage": "complete",
+                "stage_message": "complete",
+                "config_json": request.model_dump(mode="json"),
+                "config_summary_json": {"formula_type": "OSSE"},
+                "task_metadata": {},
+            }
+        )
+        store.store_results("legacy", {"frequencies": [500.0], "metadata": {}})
+        legacy = await runtime.get_results("legacy")
+        assert legacy["metadata"] == {
+            "field_plane_available": False,
+            "field_trace_bytes": None,
+            "unavailable_reason": "solve_predates_traces",
+        }
+        legacy_job = await runtime.get_job("legacy")
+        assert legacy_job["field_plane_available"] is False
+        assert legacy_job["unavailable_reason"] == "solve_predates_traces"
         await runtime.shutdown()
 
     asyncio.run(scenario())

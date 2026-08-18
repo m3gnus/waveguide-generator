@@ -70,23 +70,24 @@ def test_v1_schema_columns_are_exact_and_live_under_wg2_data_dir(tmp_path: Path)
         "simulation_jobs",
         "simulation_results",
         "simulation_artifacts",
+        "simulation_field_traces",
         "job_identity",
     } <= tables
-    assert version == 4
+    assert version == 5
 
 
 def test_newer_database_schema_is_refused_without_downgrading(tmp_path: Path) -> None:
     database = tmp_path / "newer.db"
     with sqlite3.connect(database) as conn:
-        conn.execute("PRAGMA user_version = 5")
+        conn.execute("PRAGMA user_version = 6")
 
     store = JobStore(database)
-    with pytest.raises(RuntimeError, match="created by a newer version.*schema 5"):
+    with pytest.raises(RuntimeError, match="created by a newer version.*schema 6"):
         store.initialize()
     store.close()
 
     with sqlite3.connect(database) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
         assert conn.execute(
             "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'"
         ).fetchone()[0] == 0
@@ -1032,7 +1033,14 @@ def test_terminal_mesh_is_pruned_after_download_or_grace_but_rated_mesh_is_exemp
     assert store.get_job_row("rated")["has_mesh_artifact"] is True
     assert store.get_mesh_artifact("rated") == "mesh-rated"
     assert store.get_job_row("rated")["run_number"] == run_numbers["rated"]
-    assert store.get_results("rated") == {"job": "rated"}
+    assert store.get_results("rated") == {
+        "job": "rated",
+        "metadata": {
+            "field_plane_available": False,
+            "field_trace_bytes": None,
+            "unavailable_reason": "solve_predates_traces",
+        },
+    }
     assert store.get_job_row("rated")["has_results"] is True
     assert store._job_log_path("rated").read_text(encoding="utf-8") == "log-rated\n"
 
@@ -1054,7 +1062,14 @@ def test_result_count_pruning_keeps_job_rows_and_run_numbers(tmp_path: Path) -> 
 
     assert store.prune_terminal_jobs(retention_days=30, max_terminal_jobs=1) == 1
     assert store.get_results("older") is None
-    assert store.get_results("newer") == {"job": "newer"}
+    assert store.get_results("newer") == {
+        "job": "newer",
+        "metadata": {
+            "field_plane_available": False,
+            "field_trace_bytes": None,
+            "unavailable_reason": "solve_predates_traces",
+        },
+    }
     assert store.get_job_row("older")["run_number"] == 1
     assert store.get_job_row("newer")["run_number"] == 2
     assert store.list_jobs()[1] == 2

@@ -1003,7 +1003,15 @@ def test_multi_source_orchestration_uses_channel_bases_and_anchor_frame(
     ) -> list[SimpleNamespace]:
         captured["sources"] = sources
         captured["frequencies_hz"] = frequencies_hz
-        return [_native_result() for _ in sources]
+        results = [_native_result() for _ in sources]
+        for index, result in enumerate(results, start=1):
+            result.surface_pressure_complex = np.full(
+                (2, 3), complex(index, -index), dtype=np.complex128
+            )
+            result.surface_neumann_complex = np.full(
+                (2, 3), complex(-index, index), dtype=np.complex128
+            )
+        return results
 
     monkeypatch.setattr(metal, "native_config", config)
     monkeypatch.setattr(metal, "native_solve_multi_source", solve_multi)
@@ -1020,17 +1028,18 @@ def test_multi_source_orchestration_uses_channel_bases_and_anchor_frame(
     mesh_path = tmp_path / "imported.msh"
     mesh_path.write_text("msh", encoding="utf-8")
     record = _record(mesh_path)
+    record["mesh"]["stats"]["vertex_count"] = 3
 
-    async def run() -> dict[str, Any]:
-        outcome = await metal.MetalEngine().run(
+    async def run() -> EngineRunResult:
+        return await metal.MetalEngine().run(
             request,
             cancel_cb=lambda: None,
             stage_cb=lambda *_args: None,
             imported_record=record,
         )
-        return outcome.results
 
-    response = asyncio.run(run())
+    outcome = asyncio.run(run())
+    response = outcome.results
 
     assert captured["sources"] == [
         {101: 1.0 + 0.0j, 102: 1.0 + 0.0j},
@@ -1054,6 +1063,15 @@ def test_multi_source_orchestration_uses_channel_bases_and_anchor_frame(
         0.08,
         0.0,
     ]
+    assert outcome.field_traces is not None
+    assert [channel.channel_id for channel in outcome.field_traces.channels] == [
+        "left",
+        "right",
+    ]
+    np.testing.assert_array_equal(
+        outcome.field_traces.channels[0].pressure_p1,
+        np.full((2, 3), 1 - 1j, dtype=np.complex128),
+    )
 
     allocated = {"1", "101", "102", "103"}
 
@@ -1069,6 +1087,49 @@ def test_multi_source_orchestration_uses_channel_bases_and_anchor_frame(
                 assert_no_tag_keys(item, path)
 
     assert_no_tag_keys(response)
+
+
+def test_channel_driver_scaling_includes_retained_pressure_and_neumann_traces(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scales = np.asarray([2 + 3j, -1 + 0.5j], dtype=np.complex128)
+    monkeypatch.setattr(
+        metal,
+        "channel_drive_scaling",
+        lambda *_args, **_kwargs: (scales, {}),
+    )
+    result = _native_result()
+    result.surface_pressure_complex = np.ones((2, 3), dtype=np.complex128)
+    result.surface_neumann_complex = np.full((2, 2), 4 - 2j, dtype=np.complex128)
+    channel = SimpleNamespace(
+        source_ids=["source-a"],
+        driver=object(),
+    )
+
+    metal._apply_channel_driver(
+        channel,
+        result,
+        {
+            "sources": [
+                {
+                    "id": "source-a",
+                    "observed": {"total_area_mm2": 1000.0},
+                }
+            ]
+        },
+        {"source-a": 101},
+        drive_voltage_v=2.83,
+        rg_ohm=0.0,
+    )
+
+    np.testing.assert_array_equal(
+        result.surface_pressure_complex,
+        np.ones((2, 3), dtype=np.complex128) * scales[:, None],
+    )
+    np.testing.assert_array_equal(
+        result.surface_neumann_complex,
+        np.full((2, 2), 4 - 2j, dtype=np.complex128) * scales[:, None],
+    )
 
 
 def test_frequency_validity_estimates_are_not_exposed_as_result_caveats(

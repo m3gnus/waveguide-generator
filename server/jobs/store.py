@@ -18,11 +18,20 @@ import threading
 from typing import Any, Callable, Iterator, Mapping, Sequence
 
 from server.platform.paths import data_paths
+from server.solver.field_traces_store import (
+    ArtifactMissing,
+    FieldTraceArtifact,
+    StoredFieldTraceArtifact,
+    field_trace_artifact_dir,
+    load_field_traces as load_field_traces_artifact,
+    remove_field_trace_artifact,
+    write_field_traces,
+)
 
 
 ALLOWED_STATUSES = frozenset({"queued", "running", "complete", "error", "cancelled"})
 MESH_ARTIFACT_GRACE_MINUTES = 60
-SUPPORTED_SCHEMA_VERSION = 4
+SUPPORTED_SCHEMA_VERSION = 5
 ALLOWED_JOB_UPDATE_FIELDS = frozenset(
     {
         "status",
@@ -142,6 +151,14 @@ _SCHEMA_STATEMENTS = (
       matrix_npz BLOB NOT NULL,
       FOREIGN KEY(job_id) REFERENCES simulation_jobs(id) ON DELETE CASCADE
     )""",
+    """CREATE TABLE IF NOT EXISTS simulation_field_traces (
+      job_id TEXT PRIMARY KEY,
+      version INTEGER NOT NULL,
+      bytes INTEGER NOT NULL CHECK (bytes >= 0),
+      path TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(job_id) REFERENCES simulation_jobs(id) ON DELETE CASCADE
+    )""",
     """CREATE INDEX IF NOT EXISTS idx_simulation_jobs_status_created
       ON simulation_jobs(status, created_at DESC)""",
     # The index above only serves a *filtered* list. The unfiltered list and
@@ -191,11 +208,17 @@ class JobStore:
         *,
         event_retention: int = 2048,
         job_logs_dir: str | Path | None = None,
+        field_traces_dir: str | Path | None = None,
     ) -> None:
         self.db_path = Path(db_path)
         self.event_retention = max(1, int(event_retention))
         self.job_logs_dir = (
             Path(job_logs_dir) if job_logs_dir is not None else self.db_path.parent / "job-logs"
+        )
+        self.field_traces_dir = (
+            Path(field_traces_dir)
+            if field_traces_dir is not None
+            else self.db_path.parent / "field-traces"
         )
         self._lock = threading.RLock()
         self._local = threading.local()
@@ -211,6 +234,7 @@ class JobStore:
         return cls(
             paths.db / "simulations.db",
             job_logs_dir=paths.logs / "jobs",
+            field_traces_dir=paths.root / "field-traces",
             **kwargs,
         )
 
@@ -240,7 +264,6 @@ class JobStore:
             if "task_metadata_json" not in columns:
                 conn.execute("ALTER TABLE simulation_jobs ADD COLUMN task_metadata_json TEXT")
             self._backfill_job_identity(conn)
-            # Keep the v1 schema marker. job_events is an additive v2 transport table.
             conn.execute(f"PRAGMA user_version = {SUPPORTED_SCHEMA_VERSION}")
 
     def backfill_job_identity(self) -> None:
@@ -805,7 +828,28 @@ class JobStore:
             row = conn.execute(
                 "SELECT results_json FROM simulation_results WHERE job_id = ?", (job_id,)
             ).fetchone()
-            return str(row["results_json"]) if row else None
+            if row is None:
+                return None
+            text = str(row["results_json"])
+        if '"field_plane_available"' in text:
+            return text
+        try:
+            decoded = json.loads(text)
+        except json.JSONDecodeError:
+            return text
+        if not isinstance(decoded, dict):
+            return text
+        metadata = decoded.get("metadata")
+        metadata = dict(metadata) if isinstance(metadata, Mapping) else {}
+        metadata.update(
+            {
+                "field_plane_available": False,
+                "field_trace_bytes": None,
+                "unavailable_reason": "solve_predates_traces",
+            }
+        )
+        decoded["metadata"] = metadata
+        return json.dumps(decoded)
 
     def store_mesh_artifact(self, job_id: str, msh_text: str) -> None:
         """Upsert original MSH text as in v1 ``server/db.py:233-253``."""
@@ -905,14 +949,138 @@ class JobStore:
             )
             return bool(deleted)
 
+    def store_field_traces(
+        self, job_id: str, artifact: FieldTraceArtifact
+    ) -> StoredFieldTraceArtifact | None:
+        """Publish a sidecar and register its small metadata row."""
+
+        with self._lock, self._connection() as conn:
+            if not self._job_exists(conn, job_id):
+                return None
+            existing = conn.execute(
+                "SELECT 1 FROM simulation_field_traces WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+        if existing is not None:
+            raise ValueError(f"field traces are already registered for job {job_id}")
+
+        target = field_trace_artifact_dir(job_id, artifact_root=self.field_traces_dir)
+        if target.exists():
+            remove_field_trace_artifact(target)
+        stored = write_field_traces(
+            job_id,
+            artifact,
+            artifact_root=self.field_traces_dir,
+        )
+        relative_path = str(stored.path.relative_to(self.field_traces_dir.parent))
+        try:
+            with self._lock, self._transaction() as conn:
+                if not self._job_exists(conn, job_id):
+                    remove_field_trace_artifact(stored.path)
+                    return None
+                conn.execute(
+                    """
+                    INSERT INTO simulation_field_traces
+                      (job_id, version, bytes, path, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        job_id,
+                        stored.version,
+                        stored.bytes,
+                        relative_path,
+                        _now_iso(),
+                    ),
+                )
+                conn.execute(
+                    """UPDATE simulation_jobs
+                       SET task_metadata_json = json_set(
+                             COALESCE(task_metadata_json, '{}'),
+                             '$.field_plane_available', json('true'),
+                             '$.field_trace_bytes', ?,
+                             '$.unavailable_reason', json('null')
+                           ),
+                           updated_at = ?
+                       WHERE id = ?""",
+                    (stored.bytes, _now_iso(), job_id),
+                )
+        except Exception:
+            remove_field_trace_artifact(stored.path)
+            raise
+        return stored
+
+    def get_field_trace_record(self, job_id: str) -> dict[str, Any] | None:
+        with self._lock, self._connection() as conn:
+            row = conn.execute(
+                """SELECT job_id, version, bytes, path, created_at
+                   FROM simulation_field_traces WHERE job_id = ?""",
+                (job_id,),
+            ).fetchone()
+            return dict(row) if row is not None else None
+
+    def load_field_traces(
+        self, job_id: str, frequency_index: int, channel_id: str
+    ) -> tuple[Any, ...]:
+        """Load one retained slice using the registered sidecar path."""
+
+        record = self.get_field_trace_record(job_id)
+        if record is None:
+            raise ArtifactMissing(f"field-trace artifact is missing for job {job_id}")
+        artifact_path = self._field_trace_path(str(record["path"]))
+        return load_field_traces_artifact(
+            job_id,
+            frequency_index,
+            channel_id,
+            artifact_dir=artifact_path,
+        )
+
+    def delete_field_traces(self, job_id: str) -> bool:
+        """Delete the metadata row first, then remove its sidecar directory."""
+
+        with self._lock, self._transaction() as conn:
+            row = conn.execute(
+                "SELECT path FROM simulation_field_traces WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+            deleted = conn.execute(
+                "DELETE FROM simulation_field_traces WHERE job_id = ?",
+                (job_id,),
+            ).rowcount
+            conn.execute(
+                """UPDATE simulation_jobs
+                   SET task_metadata_json = json_set(
+                         COALESCE(task_metadata_json, '{}'),
+                         '$.field_plane_available', json('false'),
+                         '$.field_trace_bytes', json('null'),
+                         '$.unavailable_reason', 'artifact_pruned'
+                       ),
+                       updated_at = ?
+                   WHERE id = ?""",
+                (_now_iso(), job_id),
+            )
+        path = self._field_trace_path(str(row["path"])) if row is not None else None
+        if path is not None:
+            self._remove_field_trace_path(job_id, path)
+        return bool(deleted)
+
     def delete_job_with_event(self, job_id: str) -> tuple[bool, dict[str, Any] | None]:
         """Delete one row and retain a terminal deleted event."""
 
         with self._lock, self._transaction() as conn:
+            trace_rows = conn.execute(
+                "SELECT path FROM simulation_field_traces WHERE job_id = ?",
+                (job_id,),
+            ).fetchall()
+            conn.execute(
+                "DELETE FROM simulation_field_traces WHERE job_id = ?",
+                (job_id,),
+            )
             cur = conn.execute("DELETE FROM simulation_jobs WHERE id = ?", (job_id,))
             if cur.rowcount <= 0:
                 return False, None
             event = self._append_event(conn, job_id, "deleted", {})
+        for row in trace_rows:
+            self._remove_field_trace_path(job_id, self._field_trace_path(str(row["path"])))
         self._delete_job_logs([job_id])
         return True, event
 
@@ -936,8 +1104,22 @@ class JobStore:
             if not ids:
                 return [], []
             id_placeholders = ",".join("?" for _ in ids)
+            trace_rows = conn.execute(
+                f"SELECT job_id, path FROM simulation_field_traces "
+                f"WHERE job_id IN ({id_placeholders})",
+                ids,
+            ).fetchall()
+            conn.execute(
+                f"DELETE FROM simulation_field_traces "
+                f"WHERE job_id IN ({id_placeholders})",
+                ids,
+            )
             conn.execute(f"DELETE FROM simulation_jobs WHERE id IN ({id_placeholders})", ids)
             events = [self._append_event(conn, job_id, "deleted", {}) for job_id in ids]
+        for row in trace_rows:
+            self._remove_field_trace_path(
+                str(row["job_id"]), self._field_trace_path(str(row["path"]))
+            )
         self._delete_job_logs(ids)
         return ids, events
 
@@ -952,6 +1134,7 @@ class JobStore:
 
         now = _now_iso()
         failed_events: list[dict[str, Any]] = []
+        trace_rows: list[sqlite3.Row] = []
         with self._lock, self._transaction() as conn:
             running = conn.execute(
                 "SELECT id FROM simulation_jobs WHERE status = 'running' ORDER BY created_at ASC"
@@ -968,6 +1151,16 @@ class JobStore:
             running_ids = [str(row["id"]) for row in running]
             if running_ids:
                 placeholders = ",".join("?" for _ in running_ids)
+                trace_rows = conn.execute(
+                    f"SELECT job_id, path FROM simulation_field_traces "
+                    f"WHERE job_id IN ({placeholders})",
+                    running_ids,
+                ).fetchall()
+                conn.execute(
+                    f"DELETE FROM simulation_field_traces "
+                    f"WHERE job_id IN ({placeholders})",
+                    running_ids,
+                )
                 conn.execute(
                     f"DELETE FROM simulation_channel_bases "
                     f"WHERE job_id IN ({placeholders})",
@@ -983,7 +1176,10 @@ class JobStore:
                         SET task_metadata_json = json_set(
                               COALESCE(task_metadata_json, '{{}}'),
                               '$.has_radiation_impedance_artifact', json('false'),
-                              '$.radiation_impedance_artifact_bytes', json('null')
+                              '$.radiation_impedance_artifact_bytes', json('null'),
+                              '$.field_plane_available', json('false'),
+                              '$.field_trace_bytes', json('null'),
+                              '$.unavailable_reason', 'artifact_pruned'
                             )
                         WHERE id IN ({placeholders})""",
                     running_ids,
@@ -1005,7 +1201,12 @@ class JobStore:
                    WHERE simulation_jobs.status = 'queued'
                    ORDER BY simulation_jobs.created_at ASC, job_identity.run_number ASC"""
             ).fetchall()
-            return [self._row_to_job(row) for row in queued], failed_events
+            queued_jobs = [self._row_to_job(row) for row in queued]
+        for row in trace_rows:
+            self._remove_field_trace_path(
+                str(row["job_id"]), self._field_trace_path(str(row["path"]))
+            )
+        return queued_jobs, failed_events
 
     def prune_terminal_jobs(
         self,
@@ -1066,6 +1267,7 @@ class JobStore:
         ).isoformat()
         removed_ids: list[str] = []
         events: list[dict[str, Any]] = []
+        removed_trace_rows: list[sqlite3.Row] = []
         with self._lock, self._transaction() as conn:
             aged = conn.execute(
                 """SELECT id FROM simulation_jobs
@@ -1160,6 +1362,29 @@ class JobStore:
                     ]
                 )
             )
+            trace_rows = conn.execute(
+                """SELECT simulation_field_traces.job_id,
+                          simulation_field_traces.path,
+                          simulation_jobs.status,
+                          simulation_jobs.has_results
+                   FROM simulation_field_traces
+                   JOIN simulation_jobs
+                     ON simulation_jobs.id = simulation_field_traces.job_id"""
+            ).fetchall()
+            removed_set = set(removed_ids)
+            removed_trace_rows = [
+                row
+                for row in trace_rows
+                if str(row["job_id"]) in removed_set
+                or str(row["status"]) in {"error", "cancelled"}
+                or (
+                    str(row["status"]) == "complete"
+                    and not bool(row["has_results"])
+                )
+            ]
+            trace_ids = list(
+                dict.fromkeys(str(row["job_id"]) for row in removed_trace_rows)
+            )
             mesh_rows = conn.execute(
                 """SELECT id FROM simulation_jobs
                    WHERE status IN ('complete', 'error', 'cancelled')
@@ -1215,6 +1440,24 @@ class JobStore:
                         WHERE id IN ({placeholders})""",
                     radiation_ids,
                 )
+            if trace_ids:
+                placeholders = ",".join("?" for _ in trace_ids)
+                conn.execute(
+                    f"DELETE FROM simulation_field_traces "
+                    f"WHERE job_id IN ({placeholders})",
+                    trace_ids,
+                )
+                conn.execute(
+                    f"""UPDATE simulation_jobs
+                        SET task_metadata_json = json_set(
+                              COALESCE(task_metadata_json, '{{}}'),
+                              '$.field_plane_available', json('false'),
+                              '$.field_trace_bytes', json('null'),
+                              '$.unavailable_reason', 'artifact_pruned'
+                            )
+                        WHERE id IN ({placeholders})""",
+                    trace_ids,
+                )
             if mesh_ids:
                 placeholders = ",".join("?" for _ in mesh_ids)
                 conn.execute(
@@ -1229,7 +1472,7 @@ class JobStore:
                     [discarded_at, *mesh_ids],
                 )
             affected_ids = list(
-                dict.fromkeys([*removed_ids, *radiation_ids, *mesh_ids])
+                dict.fromkeys([*removed_ids, *radiation_ids, *trace_ids, *mesh_ids])
             )
             if emit_events and affected_ids:
                 events = [
@@ -1246,6 +1489,15 @@ class JobStore:
                                     else {}
                                 ),
                                 **(
+                                    {
+                                        "field_plane_available": False,
+                                        "field_trace_bytes": None,
+                                        "unavailable_reason": "artifact_pruned",
+                                    }
+                                    if job_id in trace_ids
+                                    else {}
+                                ),
+                                **(
                                     {"has_mesh_artifact": False}
                                     if job_id in mesh_ids
                                     else {}
@@ -1256,6 +1508,10 @@ class JobStore:
                     )
                     for job_id in affected_ids
                 ]
+        for row in removed_trace_rows:
+            self._remove_field_trace_path(
+                str(row["job_id"]), self._field_trace_path(str(row["path"]))
+            )
         if deleted_results != len(removed_ids):  # pragma: no cover - SQLite rowcount invariant
             logger.warning(
                 "Retention selected %d result ids but SQLite reported %d deletions",
@@ -1457,6 +1713,27 @@ class JobStore:
         with self._lock:
             conn = self._connect()
             conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+    def _field_trace_path(self, stored_path: str) -> Path:
+        path = Path(stored_path)
+        if path.is_absolute():
+            candidate = path.resolve()
+        else:
+            candidate = (self.field_traces_dir.parent / path).resolve()
+        root = self.field_traces_dir.resolve()
+        if candidate.parent != root:
+            raise ValueError("Stored field-trace path is outside the artifact root")
+        return candidate
+
+    def _remove_field_trace_path(self, job_id: str, path: Path) -> None:
+        try:
+            remove_field_trace_artifact(path)
+        except OSError as exc:
+            logger.warning(
+                "Could not remove field-trace artifact for job %s: %s",
+                job_id,
+                exc,
+            )
 
     def _job_log_path(self, job_id: str) -> Path:
         safe = _SAFE_LOG_NAME.sub("_", str(job_id)).strip("._") or "job"
