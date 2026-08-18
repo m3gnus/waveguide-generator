@@ -42,6 +42,7 @@ not alternate geometry authorities.
 | Polar CSV | Frequency, plane, measured theta, normalized SPL. |
 | Impedance CSV | Frequency plus real/imaginary `Z/(rho*c)`. |
 | VACS | Legacy advanced/preferences format. Its polar block is magnitude-only and remains an explicit follow-up decision; it must not be described as phase-correct. |
+| Radiation package | Deterministic `.zip` re-simulatable equivalent source for one solved job: the bundled solver mesh plus the retained complex64 boundary `p` and `q` per frequency and per *raw* channel, with a schema-versioned manifest carrying the artifact conventions, symmetry plane, array layout, and per-member SHA-256. Traces stay on the reduced mesh and consumers image-expand; no combine state is baked in. Built and verified by `wg export-package`; refused with structured issue codes unless the job is complete and its traces cover every solved frequency. |
 
 ## Naming and failure behavior
 
