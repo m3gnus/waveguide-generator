@@ -253,11 +253,13 @@ def _resolve_symmetry_uncached(design: DesignConfig | Mapping[str, Any]) -> Symm
 
     # Mesh.VerticalOffset is a rigid +y placement translation the mesher applies
     # after every cut plane has run at the origin, and ``_solver_mesher_config``
-    # drops it outright for the y-cut domains (quadrants 1 and 12) that would
-    # otherwise reconstruct about the wrong plane.  A rigid translation cannot
-    # destroy a mirror plane, so it must not veto the xz reduction: doing so
-    # forced every vertically offset design onto a half or full domain for no
-    # physical reason.  Only a value the mesher cannot place is disqualifying.
+    # drops it in every domain: the solve mesh is always built in the recentred
+    # origin frame, so no cut plane can reconstruct about the wrong plane and
+    # the placement reaches only the CAD exports.  A rigid translation cannot
+    # destroy a mirror plane either, so it must not veto the xz reduction:
+    # doing so forced every vertically offset design onto a half or full domain
+    # for no physical reason.  Only a value the mesher cannot place is
+    # disqualifying.
     vertical_offset = _scalar(validated.root.mesh.vertical_offset, 0.0)
     if vertical_offset is None:
         reasons["xz"].append("mesh.vertical_offset is not a finite scalar")

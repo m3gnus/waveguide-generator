@@ -83,10 +83,10 @@ def test_rotated_guiding_curve_resolves_full_with_geometric_reasons() -> None:
 def test_vertical_offset_keeps_both_planes() -> None:
     """A rigid +y placement cannot destroy a mirror plane.
 
-    ``_solver_mesher_config`` drops the offset for the y-cut domains, so the
-    reduced mesh is still cut on y=0 and reconstructs about y=0.  Vetoing the
-    xz plane here used to push every vertically offset design onto a half (or
-    full) domain that solves to the same answer at two (or four) times the cost.
+    ``_solver_mesher_config`` drops the offset in every domain, so the reduced
+    mesh is still cut on y=0 and reconstructs about y=0.  Vetoing the xz plane
+    here used to push every vertically offset design onto a half (or full)
+    domain that solves to the same answer at two (or four) times the cost.
     """
 
     resolution = resolve_symmetry(_rosse(mesh={"vertical_offset": 2}))
@@ -103,6 +103,7 @@ def test_symmetry_contract_documents_vertical_offset_as_rigid_placement() -> Non
 
     assert "any non-zero or non-scalar value rejects xz" not in contract
     assert "Only a non-finite or non-scalar value rejects xz" in contract
+    assert "drops that placement in every domain" in contract
     assert "follows the same finite-scalar rule" in contract
 
 

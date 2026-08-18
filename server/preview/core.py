@@ -257,6 +257,22 @@ def _cache_relevant_config(config: Mapping[str, Any]) -> Any:
     return relevant
 
 
+def _recentred_preview_config(design: DesignConfig) -> dict[str, Any]:
+    """Translate a design into the viewport's recentred origin frame.
+
+    ``mesh.vertical_offset`` is CAD placement only: the viewport shows the same
+    recentred frame the solver, the field planes and the mesh artifacts live in,
+    so the preview drops it. ``design_to_mesher_config`` itself must keep it --
+    the wglink export and ``geometry_identity`` both read the placed config --
+    so it is dropped here, before the cache key is built, which also lets two
+    designs that differ only in their placement share one preview entry.
+    """
+
+    config = design_to_mesher_config(design)
+    config.setdefault("mesh", {})["verticalOffset"] = 0.0
+    return config
+
+
 def _geometry_nbytes(geometry: Any) -> int:
     total = 0
     for surface in geometry.surfaces:
@@ -807,7 +823,7 @@ class PreviewProtocol:
                 max_frame_bytes=self.max_frame_bytes,
             )
         assert request.design is not None
-        config = design_to_mesher_config(request.design)
+        config = _recentred_preview_config(request.design)
         builder = self._preview_builder
         if builder is None:
             from hornlab_mesher.preview.api import build_preview_geometry

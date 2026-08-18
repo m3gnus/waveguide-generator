@@ -189,6 +189,62 @@ def test_solid_step_builder_captures_mesher_cad_info() -> None:
     assert result.cad_info.units == "mm"
 
 
+_STEP_SOLID_STUB = (
+    "ISO-10303-21;\n"
+    "HEADER;\n"
+    "FILE_DESCRIPTION((''),'');\n"
+    "FILE_NAME('waveguide.step','',(''),(''),'','','');\n"
+    "FILE_SCHEMA(('AUTOMOTIVE_DESIGN'));\n"
+    "ENDSEC;\n"
+    "DATA;\n"
+    "#1 = ADVANCED_FACE('',(#2),#3,.T.);\n"
+    "#4 = B_SPLINE_SURFACE_WITH_KNOTS('',3,3,((#5)));\n"
+    "ENDSEC;\n"
+    "END-ISO-10303-21;\n"
+)
+
+
+def test_solid_step_carries_the_cad_placement_on_a_reduced_declared_domain(
+    monkeypatch,
+) -> None:
+    """The solid STEP is a CAD boundary, so it keeps mesh.vertical_offset.
+
+    The solve mesh is always recentred; ``write_step_from_config`` reopens a
+    reduced domain but never restores the placement, so the config the server
+    hands it has to carry it. An ATH-imported design declaring
+    ``Mesh.Quadrants = 1`` used to export an unplaced solid while the same
+    design's wglink bundle shipped placed.
+    """
+
+    import hornlab_mesher.cad as mesher_cad
+
+    captured: list[dict] = []
+
+    def fake_write(config, path):
+        captured.append(config)
+        Path(path).write_text(_STEP_SOLID_STUB, encoding="utf-8")
+        return path, _step_result().cad_info
+
+    monkeypatch.setattr(mesher_cad, "write_step_from_config", fake_write)
+    design = DesignConfig.model_validate(
+        {
+            "formula": "OSSE",
+            "L": 120,
+            "a": 45,
+            "scale": 2,
+            "mesh": {"quadrants": 1, "vertical_offset": 30},
+        }
+    )
+    result = _build_step_solid_sync(design.model_dump(mode="json"))
+
+    assert result.step_text.startswith("ISO-10303-21;")
+    assert len(captured) == 1
+    assert captured[0]["mesh"]["quadrants"] == 1
+    # The design value through the global Scale, exactly as the CAD-link bundle
+    # and the Onshape datums place it.
+    assert captured[0]["mesh"]["verticalOffset"] == 60.0
+
+
 def _header_positions(step_text: str) -> list[int]:
     header = step_text.partition("HEADER;")[2].partition("ENDSEC;")[0]
     return [

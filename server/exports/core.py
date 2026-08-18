@@ -280,8 +280,14 @@ def _build_step_solid_sync(design_dump: dict[str, Any]) -> StepSolidResult:
     # The solver's own config, so the exported part is the geometry that was
     # solved rather than a second derivation of it. write_step_from_config
     # reopens a reduced domain to all four quadrants: a solve may run on a
-    # quarter model, but a part cannot be a quarter of itself.
-    config = _solver_mesher_config(design)
+    # quarter model, but a part cannot be a quarter of itself. It does not
+    # restore ``mesh.vertical_offset`` the same way (``hornlab_mesher/cad.py``),
+    # so the placement has to survive in the config the server hands it: this is
+    # a CAD boundary, and the solid STEP carries the placement in every domain.
+    # (The wglink bundle of the same design always did; keeping it here is what
+    # stops an ATH-imported design declaring Mesh.Quadrants = 1 or 12 from
+    # exporting an unplaced solid alongside a placed bundle.)
+    config = _solver_mesher_config(design, keep_placement=True)
     with tempfile.NamedTemporaryFile(
         prefix="waveguide-solid-", suffix=".step", delete=False
     ) as handle:

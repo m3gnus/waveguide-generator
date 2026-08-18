@@ -58,6 +58,44 @@ def _tiny_design() -> DesignConfig:
     )
 
 
+def _placed_design(quadrants: int) -> DesignConfig:
+    """A design whose 30 mm placement the global Scale doubles to 60 mm."""
+
+    design = _tiny_design().model_copy(deep=True)
+    design.root.scale = Expr(value=2.0)
+    design.root.mesh.quadrants = Expr(value=float(quadrants))
+    design.root.mesh.vertical_offset = Expr(value=30.0)
+    return design
+
+
+@pytest.mark.parametrize("quadrants", [1, 12, 14, 1234])
+def test_solve_mesh_is_recentred_in_every_domain(quadrants: int) -> None:
+    """The solve frame must not depend on which domain the resolver picked.
+
+    The solver's symmetry images only mirror through the origin, so a y-cut
+    reduced mesh can never carry the placement; letting the full domains keep
+    it split the frame the field plane and the mesh artifact live in.
+    """
+
+    config = _solver_mesher_config(_placed_design(quadrants))
+    assert config["mesh"]["quadrants"] == quadrants
+    assert config["mesh"]["verticalOffset"] == 0.0
+
+
+@pytest.mark.parametrize("quadrants", [1, 12, 14, 1234])
+def test_keep_placement_hands_the_cad_boundary_the_scaled_offset(quadrants: int) -> None:
+    config = _solver_mesher_config(_placed_design(quadrants), keep_placement=True)
+    assert config["mesh"]["quadrants"] == quadrants
+    assert config["mesh"]["verticalOffset"] == 60.0
+
+
+def test_a_non_scalar_placement_is_refused_whatever_the_domain() -> None:
+    design = _placed_design(1234)
+    design.root.mesh.vertical_offset = Expr(value=30.0, raw="30 * p")
+    with pytest.raises(ValueError, match="mesh.vertical_offset"):
+        _solver_mesher_config(design)
+
+
 def test_user_triangle_budget_is_advisory_but_dense_ceiling_is_not() -> None:
     design = _tiny_design().model_copy(deep=True)
     design.root.mesh.max_triangles = Expr(value=4_500.0)

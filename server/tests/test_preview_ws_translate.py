@@ -15,7 +15,7 @@ from hornlab_mesher.preview.api import build_preview_geometry
 from server.design.schema import DesignConfig
 from server.design.migrate import apply_migrations
 from server.design_io.api import open_design
-from server.preview.core import preview_options
+from server.preview.core import _recentred_preview_config, preview_options
 from server.preview.translate import design_to_mesher_config
 
 
@@ -310,6 +310,29 @@ def test_scale_applies_once_to_v1_waveguide_lengths_but_not_enclosure() -> None:
     assert config["source"]["sourceRadius"] == 24
     assert config["enclosure"]["depth"] == 70
     assert config["enclosure"]["space_l"] == 15
+
+
+def test_preview_config_recentres_the_placement_and_nothing_else() -> None:
+    """The offset is CAD placement; the viewport shares the solver's frame.
+
+    ``design_to_mesher_config`` itself keeps the placement -- the wglink export
+    and ``geometry_identity`` read the placed config -- so only the preview's
+    own wrapper drops it, and it drops nothing else the translation scaled.
+    """
+
+    payload = {
+        "formula": "OSSE",
+        "scale": 2,
+        "L": 120,
+        "r0": 10,
+        "mesh": {"wall_thickness": 3, "vertical_offset": 5},
+    }
+    design = DesignConfig.model_validate(payload)
+    config = _recentred_preview_config(design)
+
+    assert config["mesh"]["verticalOffset"] == 0.0
+    assert config["mesh"]["wallThickness"] == 6
+    assert design_to_mesher_config(design)["mesh"]["verticalOffset"] == 10
 
 
 @pytest.mark.parametrize(

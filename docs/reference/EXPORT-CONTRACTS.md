@@ -16,7 +16,7 @@ exported per declared channel unless the user has selected a specific one.
 
 | Format | Current output |
 |---|---|
-| STEP solid | Full-domain manufacturable B-rep in millimetres, including available wall/enclosure material with an open throat. A design without material may fall back to a surface body. |
+| STEP solid | Full-domain manufacturable B-rep in millimetres, including available wall/enclosure material with an open throat. Carries the `mesh.vertical_offset` placement in every domain — it is a CAD boundary, unlike the recentred solve and preview frames. A design without material may fall back to a surface body. |
 | STEP inner surface | Full-domain ruled acoustic bore in millimetres. Exposed from the design menu for users who want to thicken/loft themselves. |
 | STL | Binary little-endian STL of physical-tag-1 horn-inner triangles from an authoritative densified Gmsh build. Coordinates are millimetres with solver `(x, vertical, axial)` mapped to `(x, -vertical, axial)` and winding reversed to preserve the mesher's normal side. |
 | Fusion curves | Two semicolon-delimited CRLF CSVs, profiles and slices, headed in centimetres as `x_cm;y_cm;z_cm`; uses the bare uniform-ring inner surface without vertical offset. |

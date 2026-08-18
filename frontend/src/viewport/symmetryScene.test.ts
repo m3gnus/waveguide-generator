@@ -49,22 +49,22 @@ describe('symmetry display geometry', () => {
     expect(marked.surfaces.find((item) => !item.solvedDomain)?.indices).toHaveLength(9);
   });
 
-  it('classifies quarter and horizontal-half domains around the placed vertical origin', () => {
-    const shifted = scene(surface(
+  it('splits the half domains on the origin cut planes the preview is built around', () => {
+    const full = scene(surface(
       [
-        1, 21, 0, 2, 21, 0, 1, 22, 0,
-        -1, 21, 0, -2, 21, 0, -1, 22, 0,
-        -1, 19, 0, -2, 19, 0, -1, 18, 0,
-        1, 19, 0, 2, 19, 0, 1, 18, 0,
+        1, 1, 0, 2, 1, 0, 1, 2, 0,
+        -1, 1, 0, -2, 1, 0, -1, 2, 0,
+        -1, -1, 0, -2, -1, 0, -1, -2, 0,
+        1, -1, 0, 2, -1, 0, 1, -2, 0,
       ],
       [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
     ));
 
-    const quarter = markParametricSolvedDomain(shifted, 1, 20);
-    const horizontalHalf = markParametricSolvedDomain(shifted, 12, 20);
+    const horizontalHalf = markParametricSolvedDomain(full, 12);
+    const verticalHalf = markParametricSolvedDomain(full, 14);
 
-    expect(quarter.surfaces.find((item) => item.solvedDomain)?.indices).toHaveLength(3);
     expect(horizontalHalf.surfaces.find((item) => item.solvedDomain)?.indices).toHaveLength(6);
+    expect(verticalHalf.surfaces.find((item) => item.solvedDomain)?.indices).toHaveLength(6);
   });
 
   it('maps UI solve modes to the physical domain masks', () => {

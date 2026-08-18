@@ -219,15 +219,11 @@ export function Viewport() {
     };
   }, [design.mesh.quadrants, preferences.tintSolvedRegion, previewScene, solveSymmetry, symmetryBody]);
   const solvedQuadrants = quadrantsForSolveMode(solveSymmetry, autoQuadrants);
-  // The preview applies the global design scale to every physical length,
-  // including Mesh.VerticalOffset. Use that placed origin when tinting the
-  // solver domain so quarter/half boundaries stay on the horn centreline.
-  const previewVerticalOffset = design.mesh.vertical_offset * design.scale;
   const scene = useMemo(
     () => previewScene && preferences.tintSolvedRegion
-      ? markParametricSolvedDomain(previewScene, solvedQuadrants, previewVerticalOffset)
+      ? markParametricSolvedDomain(previewScene, solvedQuadrants)
       : previewScene,
-    [preferences.tintSolvedRegion, previewScene, previewVerticalOffset, solvedQuadrants],
+    [preferences.tintSolvedRegion, previewScene, solvedQuadrants],
   );
   const [mode, setMode] = useState<DisplayMode>('clay');
   const [clipMode, setClipMode] = useState<ModelClipMode>('off');
