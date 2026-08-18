@@ -1,6 +1,63 @@
 export const REFERENCE_PRESSURE_PA = 2e-5;
 export const FIELD_PLANE_WINDOW_DB = 60;
+export const FIELD_PLANE_NORMALIZED_MIN_DB = -40;
+export const FIELD_PLANE_PHASE_LIMIT_DEGREES = 180;
+export const FIELD_PLANE_ISOLINE_STEP_DB = 6;
 export const FIELD_PLANE_LUT_SIZE = 256;
+
+export type FieldPlaneDisplayMode = 'spl' | 'normalized' | 'phase' | 'instantaneous';
+export type FieldPlaneWindowUnit = 'dB' | 'deg' | 'Pa';
+
+export interface FieldPlaneValueWindow {
+  minimum: number;
+  maximum: number;
+  unit: FieldPlaneWindowUnit;
+}
+
+export interface FieldPlaneDisplayOptions {
+  fieldMaxSplDb: number;
+  phaseRadians: number;
+}
+
+export const FIELD_PLANE_DISPLAY_MODES: ReadonlyArray<{
+  value: FieldPlaneDisplayMode;
+  label: string;
+}> = [
+  { value: 'spl', label: 'SPL' },
+  { value: 'normalized', label: 'Normalized' },
+  { value: 'phase', label: 'Phase' },
+  { value: 'instantaneous', label: 'Instantaneous' },
+];
+
+export const FIELD_PLANE_MODE_UNIFORM: Readonly<Record<FieldPlaneDisplayMode, number>> = {
+  spl: 0,
+  normalized: 1,
+  phase: 2,
+  instantaneous: 3,
+};
+
+/** The repeated endpoint makes interpolation across the phase seam cyclic. */
+export const FIELD_PLANE_PHASE_COLORMAP: readonly string[] = [
+  '#271858',
+  '#354a9f',
+  '#2389b7',
+  '#32b39a',
+  '#a9c45b',
+  '#e5a044',
+  '#d35c67',
+  '#80316f',
+  '#271858',
+];
+
+export const FIELD_PLANE_DIVERGING_COLORMAP: readonly string[] = [
+  '#243b8f',
+  '#4778bd',
+  '#91b5d2',
+  '#e7e4dc',
+  '#dc987c',
+  '#bd514d',
+  '#76233b',
+];
 
 export type Rgba8 = readonly [number, number, number, number];
 
@@ -10,9 +67,36 @@ export function splDb(real: number, imag: number): number {
   return 20 * Math.log10(Math.hypot(real, imag) / REFERENCE_PRESSURE_PA);
 }
 
-export function windowNormalize(spl: number, lo: number, hi: number): number {
-  if (!(hi > lo) || Number.isNaN(spl)) return 0;
-  return Math.max(0, Math.min(1, (spl - lo) / (hi - lo)));
+export function normalizedSplDb(real: number, imag: number, fieldMaxSplDb: number): number {
+  return splDb(real, imag) - fieldMaxSplDb;
+}
+
+export function phaseDegrees(real: number, imag: number): number {
+  return Math.atan2(imag, real) * 180 / Math.PI;
+}
+
+/** Instantaneous pressure for the solver's e^-iwt convention. */
+export function instantaneousPressure(real: number, imag: number, phaseRadians: number): number {
+  return real * Math.cos(phaseRadians) + imag * Math.sin(phaseRadians);
+}
+
+export function fieldPlaneDisplayValue(
+  mode: FieldPlaneDisplayMode,
+  real: number,
+  imag: number,
+  options: FieldPlaneDisplayOptions,
+): number {
+  switch (mode) {
+    case 'spl': return splDb(real, imag);
+    case 'normalized': return normalizedSplDb(real, imag, options.fieldMaxSplDb);
+    case 'phase': return phaseDegrees(real, imag);
+    case 'instantaneous': return instantaneousPressure(real, imag, options.phaseRadians);
+  }
+}
+
+export function windowNormalize(value: number, lo: number, hi: number): number {
+  if (!(hi > lo) || Number.isNaN(value)) return 0;
+  return Math.max(0, Math.min(1, (value - lo) / (hi - lo)));
 }
 
 export function lutIndex(normalized: number, size = FIELD_PLANE_LUT_SIZE): number {
@@ -41,7 +125,7 @@ function parseHexColor(value: string): Rgba8 {
   ];
 }
 
-/** Expand theme colour stops to the 256 texels sampled by the shader. */
+/** Expand colour stops to the 256 texels sampled by the shader. */
 export function buildLutRgba(colormap: readonly string[], size = FIELD_PLANE_LUT_SIZE): Uint8Array {
   if (colormap.length === 0) throw new Error('Colormap must contain at least one colour');
   if (!Number.isSafeInteger(size) || size < 2) throw new Error('LUT size must be an integer of at least 2');
@@ -61,6 +145,15 @@ export function buildLutRgba(colormap: readonly string[], size = FIELD_PLANE_LUT
   return output;
 }
 
+export function fieldPlaneColormap(
+  mode: FieldPlaneDisplayMode,
+  sequential: readonly string[],
+): readonly string[] {
+  if (mode === 'phase') return FIELD_PLANE_PHASE_COLORMAP;
+  if (mode === 'instantaneous') return FIELD_PLANE_DIVERGING_COLORMAP;
+  return sequential;
+}
+
 export function maxFieldSplDb(real: Float32Array, imag: Float32Array): number {
   if (real.length !== imag.length) throw new Error('Complex field components must have equal lengths');
   let maximum = -Infinity;
@@ -69,4 +162,69 @@ export function maxFieldSplDb(real: Float32Array, imag: Float32Array): number {
     if (Number.isFinite(value) && value > maximum) maximum = value;
   }
   return Number.isFinite(maximum) ? maximum : 0;
+}
+
+export function maxFieldMagnitudePa(real: Float32Array, imag: Float32Array): number {
+  if (real.length !== imag.length) throw new Error('Complex field components must have equal lengths');
+  let maximum = 0;
+  for (let index = 0; index < real.length; index += 1) {
+    const value = Math.hypot(real[index], imag[index]);
+    if (Number.isFinite(value) && value > maximum) maximum = value;
+  }
+  return maximum;
+}
+
+export function fieldPlaneWindowForMode(
+  mode: FieldPlaneDisplayMode,
+  real: Float32Array,
+  imag: Float32Array,
+): FieldPlaneValueWindow {
+  switch (mode) {
+    case 'spl': {
+      const maximum = maxFieldSplDb(real, imag);
+      return { minimum: maximum - FIELD_PLANE_WINDOW_DB, maximum, unit: 'dB' };
+    }
+    case 'normalized':
+      return { minimum: FIELD_PLANE_NORMALIZED_MIN_DB, maximum: 0, unit: 'dB' };
+    case 'phase':
+      return {
+        minimum: -FIELD_PLANE_PHASE_LIMIT_DEGREES,
+        maximum: FIELD_PLANE_PHASE_LIMIT_DEGREES,
+        unit: 'deg',
+      };
+    case 'instantaneous': {
+      const maximum = maxFieldMagnitudePa(real, imag);
+      return { minimum: -maximum, maximum, unit: 'Pa' };
+    }
+  }
+}
+
+export function defaultFieldPlaneWindow(mode: FieldPlaneDisplayMode): FieldPlaneValueWindow {
+  if (mode === 'normalized') {
+    return { minimum: FIELD_PLANE_NORMALIZED_MIN_DB, maximum: 0, unit: 'dB' };
+  }
+  if (mode === 'phase') {
+    return {
+      minimum: -FIELD_PLANE_PHASE_LIMIT_DEGREES,
+      maximum: FIELD_PLANE_PHASE_LIMIT_DEGREES,
+      unit: 'deg',
+    };
+  }
+  if (mode === 'instantaneous') return { minimum: -1, maximum: 1, unit: 'Pa' };
+  return { minimum: -FIELD_PLANE_WINDOW_DB, maximum: 0, unit: 'dB' };
+}
+
+export function isolineCoordinate(valueDb: number): number {
+  return valueDb / FIELD_PLANE_ISOLINE_STEP_DB;
+}
+
+export function isolineDistanceDb(valueDb: number): number {
+  const coordinate = isolineCoordinate(valueDb);
+  return Math.abs(coordinate - Math.round(coordinate)) * FIELD_PLANE_ISOLINE_STEP_DB;
+}
+
+export function advanceFieldPlanePhase(currentRadians: number, deltaSeconds: number, cyclesPerSecond: number): number {
+  const turn = 2 * Math.PI;
+  const next = currentRadians + deltaSeconds * cyclesPerSecond * turn;
+  return ((next % turn) + turn) % turn;
 }

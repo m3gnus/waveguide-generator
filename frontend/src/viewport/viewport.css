@@ -57,19 +57,39 @@
 .wg2-viewport .wg2-stats .surface-list { max-height: min(240px, 38vh); }
 .wg2-tool-divider { width: 1px; height: 19px; margin: 2px 2px; background: var(--hair-hi); }
 .wg2-stats-glyph { font: 600 12px var(--mono); }
-.field-plane-legend { position: absolute; right: 12px; bottom: 54px; display: flex; flex-direction: column; width: min(228px, calc(100% - 24px)); padding: 8px 10px; border: 1px solid var(--glass-bd); border-radius: var(--r3); background: var(--glass-bg); box-shadow: var(--glass-sh); color: var(--fg2); pointer-events: auto; backdrop-filter: blur(12px) saturate(1.2); }
+.field-plane-legend { position: absolute; right: 12px; bottom: 54px; display: flex; flex-direction: column; width: min(286px, calc(100% - 24px)); padding: 8px 10px; border: 1px solid var(--glass-bd); border-radius: var(--r3); background: var(--glass-bg); box-shadow: var(--glass-sh); color: var(--fg2); pointer-events: auto; backdrop-filter: blur(12px) saturate(1.2); }
 .field-plane-legend-title,
-.field-plane-range,
+.field-plane-mode-row,
+.field-plane-window,
 .field-plane-status { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .field-plane-note { margin-top: 6px; color: var(--fg3); font-size: var(--text-micro); line-height: 1.35; }
 .field-plane-legend-title { min-height: 20px; margin-bottom: 6px; }
 .field-plane-legend-title b { color: var(--fg1); font-size: var(--text-micro); font-weight: 680; letter-spacing: .08em; text-transform: uppercase; }
 .field-plane-legend-title span,
 .field-plane-legend-title select,
-.field-plane-range { font: var(--text-micro) var(--mono); }
+.field-plane-window,
+.field-plane-meta { font: var(--text-micro) var(--mono); }
 .field-plane-legend-title select { min-width: 0; max-width: 122px; height: 20px; padding: 0 18px 0 5px; border: 1px solid var(--hair-hi); border-radius: var(--r3); background: var(--surface-raised); color: var(--fg2); }
+.field-plane-mode-row { margin-bottom: 6px; }
+.field-plane-mode-row label { display: flex; flex: 1; align-items: center; justify-content: space-between; gap: 8px; color: var(--fg3); font-size: var(--text-micro); }
+.field-plane-mode-row select { width: 142px; height: 22px; padding: 0 18px 0 6px; border: 1px solid var(--hair-hi); border-radius: var(--r3); background: var(--surface-raised); color: var(--fg1); font: var(--text-micro) var(--mono); }
+.field-plane-mode-row button,
+.field-plane-window button,
+.field-plane-render-controls > button { min-height: 22px; padding: 2px 6px; border: 1px solid var(--hair-hi); border-radius: var(--r3); background: var(--ov1); color: var(--fg3); font: 650 var(--text-micro) var(--mono); }
+.field-plane-mode-row button { width: 28px; padding: 0; }
+.field-plane-mode-row button.on,
+.field-plane-window button.on,
+.field-plane-render-controls > button.on { border-color: rgba(var(--acc-rgb), .48); background: rgba(var(--acc-rgb), .14); color: var(--acc); }
+.field-plane-render-controls > button:disabled { color: var(--fg4); opacity: .45; }
 .field-plane-gradient { display: block; height: 10px; border: 1px solid rgba(255, 255, 255, .14); border-radius: 2px; background-repeat: no-repeat; background-size: 100% 100%; }
-.field-plane-range { margin-top: 3px; color: var(--fg3); }
+.field-plane-window { margin-top: 4px; color: var(--fg2); }
+.field-plane-window > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.field-plane-window button { flex: none; min-width: 42px; padding-inline: 5px; }
+.field-plane-meta { display: flex; justify-content: space-between; gap: 8px; margin-top: 3px; color: var(--fg3); }
+.field-plane-render-controls { display: flex; align-items: center; gap: 7px; margin-top: 7px; }
+.field-plane-animation-speed { display: grid; flex: 1; grid-template-columns: auto minmax(42px, 1fr) auto; align-items: center; gap: 5px; color: var(--fg3); font: var(--text-micro) var(--mono); }
+.field-plane-animation-speed input { width: 100%; min-width: 0; accent-color: var(--acc); }
+.field-plane-animation-speed output { min-width: 30px; color: var(--fg2); text-align: right; }
 .field-plane-legend:focus-visible { outline: 1px solid rgba(var(--acc-rgb), .65); outline-offset: 2px; }
 .field-plane-presets { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin-top: 8px; }
 .field-plane-presets button { min-width: 0; padding: 3px 4px; border: 1px solid var(--hair-hi); border-radius: var(--r3); background: var(--ov1); color: var(--fg2); font: 620 var(--text-micro) var(--ui); }

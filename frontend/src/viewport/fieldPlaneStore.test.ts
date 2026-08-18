@@ -8,6 +8,7 @@ import {
   type DecodedFieldPlane,
 } from '../api/fieldPlane';
 import type { FrameScene } from './frameScene';
+import { DEFAULT_VIEWER_PREFERENCES } from '../viewerprefs/viewerPreferences';
 import {
   createFieldPlaneStore,
   defaultFieldPlane,
@@ -58,6 +59,84 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 }
 
 describe('field-plane state', () => {
+  it('keeps display, lock, animation, and isoline state client-side', async () => {
+    const updatePreferences = vi.fn();
+    const fetchPlane = vi.fn(async (jobId: string, request: FieldPlaneRequest) => response(jobId, request));
+    const store = createFieldPlaneStore({
+      fetchPlane,
+      fetchResults: async () => ({ frequencies: [800] }),
+      preferences: {
+        getSnapshot: () => ({
+          ...DEFAULT_VIEWER_PREFERENCES,
+          fieldPlaneDisplayMode: 'phase',
+          fieldPlaneRangeLocked: true,
+          fieldPlaneAnimationSpeed: 1.8,
+        }),
+        update: updatePreferences,
+      },
+    });
+
+    expect(store.getState()).toMatchObject({
+      displayMode: 'phase',
+      rangeLocked: true,
+      animationSpeed: 1.8,
+      animating: false,
+      isolines: false,
+    });
+
+    store.getState().enable('job-1', plane);
+    await vi.waitFor(() => expect(store.getState().status).toBe('ready'));
+    store.getState().setIsolines(true);
+    store.getState().setAnimating(true);
+    store.getState().setAnimationSpeed(2.5);
+
+    expect(store.getState()).toMatchObject({
+      displayMode: 'instantaneous',
+      animating: true,
+      isolines: true,
+      animationSpeed: 2.5,
+    });
+    expect(fetchPlane).toHaveBeenCalledOnce();
+    expect(updatePreferences).toHaveBeenCalledWith({ fieldPlaneDisplayMode: 'instantaneous' });
+    expect(updatePreferences).toHaveBeenCalledWith({ fieldPlaneAnimationSpeed: 2.5 });
+
+    store.getState().setDisplayMode('spl');
+    expect(store.getState()).toMatchObject({ displayMode: 'spl', animating: false });
+    store.getState().disable();
+    expect(store.getState().animating).toBe(false);
+  });
+
+  it('freezes dynamic per-mode windows while locked and refreshes them on unlock', async () => {
+    const fetchPlane = vi.fn(async (jobId: string, request: FieldPlaneRequest) => {
+      const field = response(jobId, request);
+      field.real[0] = request.frequency_index === 1 ? 1 : 10;
+      return field;
+    });
+    const store = createFieldPlaneStore({
+      fetchPlane,
+      fetchResults: async () => ({ frequencies: [200, 800, 1_600] }),
+      preferences: {
+        getSnapshot: () => ({ ...DEFAULT_VIEWER_PREFERENCES }),
+        update: vi.fn(),
+      },
+    });
+
+    store.getState().enable('job-1', plane);
+    await vi.waitFor(() => expect(store.getState().status).toBe('ready'));
+    const splMaximum = store.getState().windows.spl?.maximum;
+    const pressureMaximum = store.getState().windows.instantaneous?.maximum;
+    store.getState().setRangeLocked(true);
+    store.getState().setFrequencyIndex(2);
+    await vi.waitFor(() => expect(store.getState().field?.header.frequency_index).toBe(2));
+
+    expect(store.getState().windows.spl?.maximum).toBe(splMaximum);
+    expect(store.getState().windows.instantaneous?.maximum).toBe(pressureMaximum);
+
+    store.getState().setRangeLocked(false);
+    expect(store.getState().windows.spl?.maximum).toBeGreaterThan(splMaximum ?? -Infinity);
+    expect(store.getState().windows.instantaneous?.maximum).toBe(10);
+  });
+
   it('chooses the solved frequency nearest 1 kHz and refetches on selection change', async () => {
     const fetchPlane = vi.fn(async (jobId: string, request: FieldPlaneRequest) => response(jobId, request));
     const store = createFieldPlaneStore({

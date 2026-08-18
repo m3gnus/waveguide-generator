@@ -9,10 +9,25 @@ import {
   type FieldPlaneSpec,
 } from '../api/fieldPlane';
 import { fetchJobResults, type JobResults } from '../api/results';
+import { viewerPreferences, type ViewerPreferences } from '../viewerprefs/viewerPreferences';
 import type { FrameScene } from './frameScene';
+import {
+  defaultFieldPlaneWindow,
+  fieldPlaneWindowForMode,
+  type FieldPlaneDisplayMode,
+  type FieldPlaneValueWindow,
+} from './fieldPlaneColor';
 import { fieldPlanePreset } from './fieldPlaneMath';
 
 export type FieldPlaneStatus = 'idle' | 'loading' | 'ready' | 'error';
+
+export type FieldPlaneWindows = Record<FieldPlaneDisplayMode, FieldPlaneValueWindow | null>;
+
+export interface FieldPlaneRenderingPreferences {
+  fieldPlaneDisplayMode: FieldPlaneDisplayMode;
+  fieldPlaneRangeLocked: boolean;
+  fieldPlaneAnimationSpeed: number;
+}
 
 export interface FieldPlaneStore {
   enabled: boolean;
@@ -27,6 +42,12 @@ export interface FieldPlaneStore {
   status: FieldPlaneStatus;
   error: string | null;
   field: DecodedFieldPlane | null;
+  displayMode: FieldPlaneDisplayMode;
+  rangeLocked: boolean;
+  animationSpeed: number;
+  animating: boolean;
+  isolines: boolean;
+  windows: FieldPlaneWindows;
   enable: (jobId: string, defaultPlane: FieldPlaneSpec) => void;
   selectJob: (jobId: string, defaultPlane: FieldPlaneSpec) => void;
   disable: () => void;
@@ -39,6 +60,12 @@ export interface FieldPlaneStore {
   resume: () => void;
   reportUnavailable: (reason: string) => void;
   retry: () => void;
+  setDisplayMode: (mode: FieldPlaneDisplayMode) => void;
+  setRangeLocked: (locked: boolean) => void;
+  setAnimationSpeed: (speed: number) => void;
+  setAnimating: (animating: boolean) => void;
+  setIsolines: (enabled: boolean) => void;
+  applyRenderingPreferences: (preferences: FieldPlaneRenderingPreferences) => void;
 }
 
 interface RememberedPlane {
@@ -50,6 +77,10 @@ interface FieldPlaneStoreDependencies {
   fetchPlane?: typeof fetchFieldPlane;
   fetchResults?: (jobId: string) => Promise<JobResults>;
   cacheCapacity?: number;
+  preferences?: {
+    getSnapshot: () => ViewerPreferences;
+    update: (patch: Partial<ViewerPreferences>) => void;
+  };
 }
 
 export interface FieldPlaneCacheKeyParts {
@@ -73,6 +104,32 @@ const TARGET_FREQUENCY_HZ = 1_000;
 const DRAG_GRID_SIZE = 48;
 const DEFAULT_CACHE_CAPACITY = 24;
 let requestCounter = 0;
+
+function initialFieldPlaneWindows(): FieldPlaneWindows {
+  return {
+    spl: null,
+    normalized: defaultFieldPlaneWindow('normalized'),
+    phase: defaultFieldPlaneWindow('phase'),
+    instantaneous: null,
+  };
+}
+
+export function updateFieldPlaneWindows(
+  windows: FieldPlaneWindows,
+  field: DecodedFieldPlane,
+  locked: boolean,
+): FieldPlaneWindows {
+  return {
+    spl: !locked || windows.spl === null
+      ? fieldPlaneWindowForMode('spl', field.real, field.imag)
+      : windows.spl,
+    normalized: defaultFieldPlaneWindow('normalized'),
+    phase: defaultFieldPlaneWindow('phase'),
+    instantaneous: !locked || windows.instantaneous === null
+      ? fieldPlaneWindowForMode('instantaneous', field.real, field.imag)
+      : windows.instantaneous,
+  };
+}
 
 function nextRequestId(): string {
   requestCounter += 1;
@@ -231,6 +288,8 @@ export function createFieldPlaneStore(
 ): UseBoundStore<StoreApi<FieldPlaneStore>> {
   const fetchPlane = dependencies.fetchPlane ?? fetchFieldPlane;
   const fetchResults = dependencies.fetchResults ?? fetchJobResults;
+  const preferenceStore = dependencies.preferences ?? viewerPreferences;
+  const renderingDefaults = preferenceStore.getSnapshot();
   const remembered = new Map<string, RememberedPlane>();
   const cache = new FieldPlaneLruCache<DecodedFieldPlane>(dependencies.cacheCapacity);
   const requestQueue = new LatestFieldPlaneRequestQueue<PendingFieldPlaneRequest>();
@@ -290,6 +349,7 @@ export function createFieldPlaneStore(
             status: 'ready',
             error: null,
             field,
+            windows: updateFieldPlaneWindows(current.windows, field, current.rangeLocked),
           });
         })
         .catch((reason: unknown) => {
@@ -332,6 +392,7 @@ export function createFieldPlaneStore(
             status: 'ready',
             error: null,
             field: cached,
+            windows: updateFieldPlaneWindows(get().windows, cached, get().rangeLocked),
           });
           return;
         }
@@ -424,6 +485,12 @@ export function createFieldPlaneStore(
       status: 'idle',
       error: null,
       field: null,
+      displayMode: renderingDefaults.fieldPlaneDisplayMode,
+      rangeLocked: renderingDefaults.fieldPlaneRangeLocked,
+      animationSpeed: renderingDefaults.fieldPlaneAnimationSpeed,
+      animating: false,
+      isolines: false,
+      windows: initialFieldPlaneWindows(),
       enable: activate,
       selectJob: (jobId, suppliedDefault) => {
         const current = get();
@@ -444,6 +511,7 @@ export function createFieldPlaneStore(
           status: 'idle',
           error: null,
           field: null,
+          animating: false,
         });
       },
       setFrequencyIndex: (frequencyIndex) => {
@@ -516,12 +584,64 @@ export function createFieldPlaneStore(
           status: 'error',
           error: reason,
           field: null,
+          animating: false,
         });
       },
       retry: () => {
         const current = get();
         if (!current.enabled || !current.jobId || !current.plane || !current.frequenciesHz.length) return;
         requestCurrentPlane(current, current.plane);
+      },
+      setDisplayMode: (displayMode) => {
+        const current = get();
+        if (displayMode === current.displayMode) return;
+        set({ displayMode, animating: displayMode === 'instantaneous' ? current.animating : false });
+        preferenceStore.update({ fieldPlaneDisplayMode: displayMode });
+      },
+      setRangeLocked: (rangeLocked) => {
+        const current = get();
+        if (rangeLocked === current.rangeLocked) return;
+        set({
+          rangeLocked,
+          windows: !rangeLocked && current.field
+            ? updateFieldPlaneWindows(current.windows, current.field, false)
+            : current.windows,
+        });
+        preferenceStore.update({ fieldPlaneRangeLocked: rangeLocked });
+      },
+      setAnimationSpeed: (animationSpeed) => {
+        if (!Number.isFinite(animationSpeed) || animationSpeed < 0.1 || animationSpeed > 4) return;
+        if (animationSpeed === get().animationSpeed) return;
+        set({ animationSpeed });
+        preferenceStore.update({ fieldPlaneAnimationSpeed: animationSpeed });
+      },
+      setAnimating: (animating) => {
+        const current = get();
+        if (!current.enabled || (animating === current.animating && (!animating || current.displayMode === 'instantaneous'))) return;
+        if (animating) {
+          set({ animating: true, displayMode: 'instantaneous' });
+          if (current.displayMode !== 'instantaneous') {
+            preferenceStore.update({ fieldPlaneDisplayMode: 'instantaneous' });
+          }
+          return;
+        }
+        set({ animating: false });
+      },
+      setIsolines: (isolines) => {
+        if (isolines !== get().isolines) set({ isolines });
+      },
+      applyRenderingPreferences: (preferences) => {
+        const current = get();
+        const unlocked = current.rangeLocked && !preferences.fieldPlaneRangeLocked;
+        set({
+          displayMode: preferences.fieldPlaneDisplayMode,
+          rangeLocked: preferences.fieldPlaneRangeLocked,
+          animationSpeed: preferences.fieldPlaneAnimationSpeed,
+          animating: preferences.fieldPlaneDisplayMode === 'instantaneous' ? current.animating : false,
+          windows: unlocked && current.field
+            ? updateFieldPlaneWindows(current.windows, current.field, false)
+            : current.windows,
+        });
       },
     };
   });
