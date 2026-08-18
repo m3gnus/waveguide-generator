@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   MAX_FREQUENCY_POINTS,
+  defaultPolarUi,
+  normalizePersistedSolveOptions,
+  normalizePolarUi,
   parseFrequencyList,
   polarConfigFromUi,
   resetSolveOptionsStore,
@@ -73,6 +76,105 @@ describe('solve and directivity options', () => {
     expect(() => polarConfigFromUi({ ...polar, angleStep: 0 })).toThrow(/step must be greater/);
     expect(() => polarConfigFromUi({ ...polar, distance: 0.05 })).toThrow(/at least 0.1/);
     expect(() => polarConfigFromUi({ ...polar, angleStart: 0, angleEnd: 180, angleStep: 0.1 })).toThrow(/at most 721/);
+  });
+});
+
+/**
+ * The durable copy of these settings is a JSON file in the application data
+ * directory. It can arrive hand-edited, half-written, or produced by a version
+ * that spelled a field differently, and it used to be spread into the store
+ * without a glance.
+ */
+describe('a corrupt stored payload cannot reach the store', () => {
+  beforeEach(() => { localStorage.clear(); resetSolveOptionsStore(); });
+
+  const rehydrateWith = async (state: unknown) => {
+    localStorage.setItem('waveguide-v2-solve-options', JSON.stringify({ state, version: 0 }));
+    await useSolveOptionsStore.persist.rehydrate();
+  };
+
+  /**
+   * The live bug this exists for. A non-array `enabledAxes` was spread in as
+   * it stood, and the first thing the Simulation rail does with it is
+   * `enabledAxes.map` -- so the whole panel threw out of render, with no way
+   * back except clearing the setting by hand.
+   */
+  it('survives a rig whose fields hold the wrong types entirely', async () => {
+    await rehydrateWith({
+      polar: {
+        enabledAxes: null,
+        angleStep: 'five',
+        distance: {},
+        normAngle: [],
+        diagonalAngle: 'NaN',
+        observationOrigin: 'ear',
+        sphericalSampling: 'yes',
+        fieldPlane: 1,
+      },
+      frequencyListText: 42,
+      engine: { name: 'metal' },
+      symmetry: 'sideways',
+      meshValidationMode: 'nonsense',
+      frequencySpacing: 'octave',
+      frequencyMode: 'sweep',
+      verbose: 'maybe',
+    });
+
+    const state = useSolveOptionsStore.getState();
+    expect(state.polar.enabledAxes).toEqual(defaultPolarUi.enabledAxes);
+    expect(state.polar).toEqual(defaultPolarUi);
+    expect(state).toMatchObject({
+      engine: 'auto',
+      symmetry: 'auto',
+      meshValidationMode: 'warn',
+      verbose: false,
+      frequencySpacing: 'log',
+      frequencyMode: 'range',
+      frequencyListText: '',
+    });
+    // The two calls the panel makes on every render, neither of which used to
+    // survive the payload above.
+    expect(state.polar.enabledAxes.map((axis) => axis).join('+')).toBe('horizontal+vertical+diagonal');
+    expect(state.frequencyListParse().error).toContain('at least one');
+    expect(() => state.options()).not.toThrow();
+  });
+
+  it('clamps a measurement distance the solve contract would refuse', async () => {
+    await rehydrateWith({ polar: { ...defaultPolarUi, distance: 0.001 } });
+    expect(useSolveOptionsStore.getState().polar.distance).toBe(0.1);
+    expect(() => useSolveOptionsStore.getState().options()).not.toThrow();
+  });
+
+  it('keeps the settings it can read and only replaces the ones it cannot', () => {
+    const normalized = normalizePersistedSolveOptions({
+      engine: 'metal',
+      symmetry: 'half_xz',
+      frequencyListText: '500 1000',
+      polar: { ...defaultPolarUi, distance: 3.5, enabledAxes: ['vertical', 'vertical', 'sideways'], angleStep: -1 },
+    });
+    expect(normalized.engine).toBe('metal');
+    expect(normalized.symmetry).toBe('half_xz');
+    expect(normalized.frequencyListText).toBe('500 1000');
+    expect(normalized.polar.distance).toBe(3.5);
+    // Deduplicated, filtered, and never emptied.
+    expect(normalized.polar.enabledAxes).toEqual(['vertical']);
+    // No clampable floor on the step, so an illegal one falls back.
+    expect(normalized.polar.angleStep).toBe(defaultPolarUi.angleStep);
+  });
+
+  it('falls back to the value being replaced rather than to the shipped default', () => {
+    const mine = { ...defaultPolarUi, distance: 4, observationOrigin: 'throat' as const };
+    const normalized = normalizePolarUi({ distance: Number.NaN }, mine);
+    expect(normalized.distance).toBe(4);
+    expect(normalized.observationOrigin).toBe('throat');
+  });
+
+  it('normalizes on the way out too, so one bad value does not outlive the session', () => {
+    useSolveOptionsStore.setState({ polar: { ...defaultPolarUi, distance: 0.001 } });
+    const stored = JSON.parse(localStorage.getItem('waveguide-v2-solve-options') ?? '{}') as {
+      state?: { polar?: { distance?: number } };
+    };
+    expect(stored.state?.polar?.distance).toBe(0.1);
   });
 });
 

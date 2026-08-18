@@ -3,7 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadReturnIngestRecord } from '../api/cadlink';
-import { defaultPolarUi, resetSolveOptionsStore } from '../stores/solveOptions';
+import { defaultPolarUi, resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { DirectivityMapControls, effectiveGridView, FrequencySweepControls, SolveOptionsControls } from './SolveOptionsSections';
 
 /**
@@ -121,5 +121,45 @@ describe('solve and directivity control help', () => {
     // directly under `.section-body`. Here that host is the test root.
     expect(host.querySelector('.axis-toggles')!.parentElement).toBe(host);
     expect(host.querySelector('.toggle-row')!.parentElement).toBe(host);
+  });
+});
+
+/**
+ * The rail reads the persisted directivity rig on every render, so a stored
+ * payload the store did not examine became a render-time exception rather than
+ * a wrong-looking field: `enabledAxes.includes` on a non-array threw, and the
+ * Simulation tab went blank with no route back through the interface.
+ */
+describe('a corrupt stored rig still renders the rail', () => {
+  let host: HTMLDivElement;
+  let root: Root;
+  let queryClient: QueryClient;
+  beforeEach(async () => {
+    (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    localStorage.clear();
+    resetSolveOptionsStore();
+    localStorage.setItem('waveguide-v2-solve-options', JSON.stringify({
+      state: { polar: { enabledAxes: null, distance: 'far', angleStep: 0 }, frequencyListText: null },
+      version: 0,
+    }));
+    await useSolveOptionsStore.persist.rehydrate();
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+  });
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+    queryClient.clear();
+    resetSolveOptionsStore();
+  });
+
+  it('falls back to the defaults instead of throwing out of render', () => {
+    act(() => root.render(<QueryClientProvider client={queryClient}><DirectivityMapControls /></QueryClientProvider>));
+    const checked = [...host.querySelectorAll<HTMLInputElement>('.axis-toggles input')].filter((box) => box.checked);
+    expect(checked).toHaveLength(defaultPolarUi.enabledAxes.length);
+    expect(host.querySelector<HTMLInputElement>('#polar-distance')!.value).toBe(String(defaultPolarUi.distance));
+    expect(host.querySelector<HTMLInputElement>('#polar-angle-step')!.value).toBe(String(defaultPolarUi.angleStep));
   });
 });
