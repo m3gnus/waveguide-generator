@@ -379,6 +379,42 @@ def _record_validated_evidence(environment: Path, fingerprint: str) -> None:
         pass
 
 
+def _warn_when_gui_unavailable(python: Path) -> None:
+    """Say so when the status window will not open, without failing the install.
+
+    Deliberately *not* part of :func:`_validate`. tkinter ships with the
+    interpreter rather than with pip, so a missing one can never be repaired by
+    reinstalling this environment: treating it as invalid would send every
+    launch into a reinstall that cannot help, and would block --no-gui mode,
+    which needs no Tk at all. Reporting it here instead means the installer
+    transcript names the real fault at install time, rather than leaving the
+    user to discover it as a status window that never appears.
+    """
+
+    if _run([str(python), "-c", "import tkinter"], quiet=True).returncode == 0:
+        return
+    if os.name == "nt":
+        remedy = (
+            "    Re-run the Python 3.13 installer, choose Modify, and tick\n"
+            '    "tcl/tk and IDLE".'
+        )
+    elif sys.platform == "darwin":
+        remedy = (
+            "    Use the python.org build of Python 3.13, or add Tk to the\n"
+            "    current one with: brew install python-tk@3.13"
+        )
+    else:
+        remedy = "    On Debian and Ubuntu: sudo apt install python3-tk"
+    print(
+        "\nWARNING: this Python has no working tkinter, so the Waveguide\n"
+        "         Generator status window cannot open. The application itself\n"
+        "         is installed and runs with the launcher's --no-gui option.\n"
+        "         tkinter belongs to the Python installation, not to Waveguide\n"
+        "         Generator, so reinstalling the application will not add it:\n"
+        f"{remedy}\n"
+    )
+
+
 def _require_supported_python() -> None:
     current = sys.version_info[:2]
     if current != PYTHON_SERIES:
@@ -414,12 +450,13 @@ def bootstrap(environment: Path, *, force: bool = False) -> None:
 def _bootstrap_locked(environment: Path, *, force: bool = False) -> None:
     _require_supported_python()
     fingerprint = _fingerprint()
+    python = _venv_python(environment)
     valid, reason = _validate(environment, fingerprint)
     if valid and not force:
         print(f"Waveguide Generator environment is already ready: {environment}")
+        _warn_when_gui_unavailable(python)
         return
 
-    python = _venv_python(environment)
     if environment.exists() and not python.is_file():
         raise RuntimeError(
             f"{environment} exists but is not a usable virtual environment. "
@@ -472,6 +509,7 @@ def _bootstrap_locked(environment: Path, *, force: bool = False) -> None:
         (environment / STAMP_NAME).unlink(missing_ok=True)
         raise RuntimeError(f"The environment was installed but validation failed: {reason}.")
     print(f"Waveguide Generator environment is ready: {environment}")
+    _warn_when_gui_unavailable(python)
 
 
 def build_parser() -> argparse.ArgumentParser:
