@@ -42,6 +42,8 @@ export interface FieldPlaneStore {
   lastAppliedGeneration: number;
   status: FieldPlaneStatus;
   error: string | null;
+  lastErrorCode: string | null;
+  lastSupersededBy: string | null;
   field: DecodedFieldPlane | null;
   frozenNormalizationDb: number | null;
   displayMode: FieldPlaneDisplayMode;
@@ -62,6 +64,7 @@ export interface FieldPlaneStore {
   resume: () => void;
   reportUnavailable: (reason: string) => void;
   retry: () => void;
+  retryIfBlocked: () => void;
   setDisplayMode: (mode: FieldPlaneDisplayMode) => void;
   setRangeLocked: (locked: boolean) => void;
   setAnimationSpeed: (speed: number) => void;
@@ -99,8 +102,14 @@ interface PendingFieldPlaneRequest {
   plane: FieldPlaneSpec;
   frequencyIndex: number;
   responseId: FieldPlaneResponseId;
+  coarsened: boolean;
   request: FieldPlaneRequest;
 }
+
+type DisplayedFieldPlaneRequest = Pick<
+  PendingFieldPlaneRequest,
+  'jobId' | 'plane' | 'frequencyIndex' | 'responseId' | 'coarsened'
+>;
 
 const TARGET_FREQUENCY_HZ = 1_000;
 const DRAG_GRID_SIZE = 48;
@@ -145,6 +154,14 @@ function clonePlane(plane: FieldPlaneSpec): FieldPlaneSpec {
     axis_u: [...plane.axis_u],
     axis_v: [...plane.axis_v],
   };
+}
+
+function samePlaneTransform(left: FieldPlaneSpec, right: FieldPlaneSpec): boolean {
+  return left.width_m === right.width_m
+    && left.height_m === right.height_m
+    && left.origin_m.every((value, index) => value === right.origin_m[index])
+    && left.axis_u.every((value, index) => value === right.axis_u[index])
+    && left.axis_v.every((value, index) => value === right.axis_v[index]);
 }
 
 function quantized(value: number): string {
@@ -200,6 +217,10 @@ export class FieldPlaneLruCache<Value> {
 export class LatestFieldPlaneRequestQueue<Value> {
   private active: Value | null = null;
   private queued: Value | null = null;
+
+  get hasWork(): boolean { return this.active !== null || this.queued !== null; }
+
+  isActive(value: Value): boolean { return this.active === value; }
 
   enqueue(value: Value): Value | null {
     if (this.active === null) {
@@ -301,6 +322,7 @@ export function createFieldPlaneStore(
   let requestController: AbortController | null = null;
   let cacheJobId: string | null = null;
   let cacheGeometrySha256: string | null = null;
+  let displayedRequest: DisplayedFieldPlaneRequest | null = null;
 
   return create<FieldPlaneStore>((set, get) => {
     const cancelRequests = (): void => {
@@ -313,6 +335,7 @@ export function createFieldPlaneStore(
         generation: requestGeneration,
         status: current.field ? 'ready' : current.enabled ? 'idle' : current.status,
         error: null,
+        lastErrorCode: null,
         frozenNormalizationDb: null,
       });
     };
@@ -320,12 +343,17 @@ export function createFieldPlaneStore(
     const startRequest = (pending: PendingFieldPlaneRequest): void => {
       const controller = new AbortController();
       requestController = controller;
-      set({ status: 'loading', error: null });
+      set({ status: 'loading', error: null, lastErrorCode: null });
       void fetchPlane(pending.jobId, pending.request, fetch, controller.signal)
         .then((field) => {
-          if (controller.signal.aborted || !shouldApplyFieldPlaneGeneration(pending.generation, lastAppliedGeneration)) return;
+          if (controller.signal.aborted) return;
           const current = get();
-          if (!current.enabled || current.jobId !== pending.jobId) return;
+          if (
+            !shouldApplyFieldPlaneGeneration(pending.generation, lastAppliedGeneration)
+            || !current.enabled
+            || current.jobId !== pending.jobId
+            || pending.generation < current.generation
+          ) return;
           if (
             field.header.request_id !== pending.request.request_id
             || field.header.job_id !== pending.jobId
@@ -346,11 +374,19 @@ export function createFieldPlaneStore(
             plane: pending.plane,
           }), field);
           lastAppliedGeneration = pending.generation;
+          displayedRequest = {
+            jobId: pending.jobId,
+            plane: clonePlane(pending.plane),
+            frequencyIndex: pending.frequencyIndex,
+            responseId: pending.responseId,
+            coarsened: pending.coarsened,
+          };
           set({
             geometrySha256: field.header.geometry_sha256,
             lastAppliedGeneration,
             status: 'ready',
             error: null,
+            lastErrorCode: null,
             field,
             windows: updateFieldPlaneWindows(current.windows, field, current.rangeLocked),
           });
@@ -358,25 +394,44 @@ export function createFieldPlaneStore(
         .catch((reason: unknown) => {
           if (controller.signal.aborted) return;
           const current = get();
-          if (!current.enabled || current.jobId !== pending.jobId || pending.generation < current.generation) return;
           if (reason instanceof FieldPlaneHttpError && reason.status === 429) {
-            set({ status: current.field ? 'ready' : 'idle', error: null });
+            set({ lastSupersededBy: reason.replacementRequestId });
+            if (!current.enabled || current.jobId !== pending.jobId || pending.generation < current.generation) return;
+            set({ status: current.field ? 'ready' : 'idle', error: null, lastErrorCode: null });
             return;
           }
-          set({ status: 'error', error: fieldPlaneErrorMessage(reason) });
+          if (!current.enabled || current.jobId !== pending.jobId || pending.generation < current.generation) return;
+          set({
+            status: 'error',
+            error: fieldPlaneErrorMessage(reason),
+            lastErrorCode: reason instanceof FieldPlaneHttpError ? reason.code : null,
+          });
         })
         .finally(() => {
           if (requestController === controller) requestController = null;
+          const wasActive = requestQueue.isActive(pending);
           const next = requestQueue.complete(pending);
-          if (next) startRequest(next);
+          if (next) {
+            startRequest(next);
+            return;
+          }
+          const current = get();
+          if (wasActive && !requestQueue.hasWork && current.status === 'loading') {
+            set({ status: current.field ? 'ready' : 'idle' });
+          }
         });
     };
 
-    const load = (jobId: string, plane: FieldPlaneSpec, frequencyIndex: number): void => {
+    const load = (
+      jobId: string,
+      plane: FieldPlaneSpec,
+      frequencyIndex: number,
+      coarsened = false,
+    ): void => {
       requestGeneration += 1;
       const generation = requestGeneration;
       const responseId: FieldPlaneResponseId = 'system';
-      set({ generation, status: 'loading', error: null });
+      set({ generation, status: 'loading', error: null, lastErrorCode: null });
 
       if (cacheJobId === jobId && cacheGeometrySha256 !== null) {
         const cached = cache.get(fieldPlaneCacheKey({
@@ -389,11 +444,19 @@ export function createFieldPlaneStore(
         if (cached) {
           requestQueue.dropQueued();
           lastAppliedGeneration = generation;
+          displayedRequest = {
+            jobId,
+            plane: clonePlane(plane),
+            frequencyIndex,
+            responseId,
+            coarsened,
+          };
           set({
             geometrySha256: cacheGeometrySha256,
             lastAppliedGeneration,
             status: 'ready',
             error: null,
+            lastErrorCode: null,
             field: cached,
             windows: updateFieldPlaneWindows(get().windows, cached, get().rangeLocked),
           });
@@ -410,20 +473,33 @@ export function createFieldPlaneStore(
           responseId,
         });
       } catch (reason) {
-        set({ status: 'error', error: fieldPlaneErrorMessage(reason) });
+        set({
+          status: 'error',
+          error: fieldPlaneErrorMessage(reason),
+          lastErrorCode: reason instanceof FieldPlaneHttpError ? reason.code : null,
+        });
         return;
       }
-      const pending = { generation, jobId, plane: clonePlane(plane), frequencyIndex, responseId, request };
+      const pending = {
+        generation,
+        jobId,
+        plane: clonePlane(plane),
+        frequencyIndex,
+        responseId,
+        coarsened,
+        request,
+      };
       const ready = requestQueue.enqueue(pending);
       if (ready) startRequest(ready);
     };
 
     const requestCurrentPlane = (current: FieldPlaneStore, plane: FieldPlaneSpec): void => {
       if (!current.jobId) return;
-      const requestPlane = current.dragging
+      const coarsened = current.dragging;
+      const requestPlane = coarsened
         ? { ...clonePlane(plane), nx: DRAG_GRID_SIZE, ny: DRAG_GRID_SIZE }
         : clonePlane(plane);
-      load(current.jobId, requestPlane, current.frequencyIndex);
+      load(current.jobId, requestPlane, current.frequencyIndex, coarsened);
     };
 
     const remember = (jobId: string, plane: FieldPlaneSpec, frequencyIndex: number): void => {
@@ -434,6 +510,7 @@ export function createFieldPlaneStore(
       activationGeneration += 1;
       const generation = activationGeneration;
       cancelRequests();
+      displayedRequest = null;
       if (cacheJobId !== jobId) {
         cache.clear();
         cacheJobId = jobId;
@@ -451,6 +528,8 @@ export function createFieldPlaneStore(
         frequenciesHz: [],
         status: 'loading',
         error: null,
+        lastErrorCode: null,
+        lastSupersededBy: null,
         field: null,
         frozenNormalizationDb: null,
       });
@@ -472,7 +551,11 @@ export function createFieldPlaneStore(
         .catch((reason: unknown) => {
           const current = get();
           if (generation !== activationGeneration || !current.enabled || current.jobId !== jobId) return;
-          set({ status: 'error', error: fieldPlaneErrorMessage(reason) });
+          set({
+            status: 'error',
+            error: fieldPlaneErrorMessage(reason),
+            lastErrorCode: reason instanceof FieldPlaneHttpError ? reason.code : null,
+          });
         });
     };
 
@@ -488,6 +571,8 @@ export function createFieldPlaneStore(
       lastAppliedGeneration: 0,
       status: 'idle',
       error: null,
+      lastErrorCode: null,
+      lastSupersededBy: null,
       field: null,
       frozenNormalizationDb: null,
       displayMode: renderingDefaults.fieldPlaneDisplayMode,
@@ -505,6 +590,7 @@ export function createFieldPlaneStore(
       disable: () => {
         activationGeneration += 1;
         cancelRequests();
+        displayedRequest = null;
         set({
           enabled: false,
           dragging: false,
@@ -515,6 +601,8 @@ export function createFieldPlaneStore(
           frequenciesHz: [],
           status: 'idle',
           error: null,
+          lastErrorCode: null,
+          lastSupersededBy: null,
           field: null,
           frozenNormalizationDb: null,
           animating: false,
@@ -567,6 +655,20 @@ export function createFieldPlaneStore(
         const next = clonePlane(plane ?? current.plane);
         remember(current.jobId, next, current.frequencyIndex);
         set({ plane: next, dragging: false, frozenNormalizationDb: null });
+        if (
+          current.field
+          && displayedRequest
+          && !requestQueue.hasWork
+          && !displayedRequest.coarsened
+          && displayedRequest.jobId === current.jobId
+          && displayedRequest.frequencyIndex === current.frequencyIndex
+          && displayedRequest.responseId === current.field.header.response_id
+          && displayedRequest.plane.nx === next.nx
+          && displayedRequest.plane.ny === next.ny
+          && current.field.header.nx === next.nx
+          && current.field.header.ny === next.ny
+          && samePlaneTransform(displayedRequest.plane, next)
+        ) return;
         requestCurrentPlane({ ...current, plane: next, dragging: false }, next);
       },
       cancelPending: () => {
@@ -586,6 +688,7 @@ export function createFieldPlaneStore(
       reportUnavailable: (reason) => {
         activationGeneration += 1;
         cancelRequests();
+        displayedRequest = null;
         set({
           enabled: false,
           dragging: false,
@@ -595,6 +698,8 @@ export function createFieldPlaneStore(
           frequenciesHz: [],
           status: 'error',
           error: reason,
+          lastErrorCode: null,
+          lastSupersededBy: null,
           field: null,
           frozenNormalizationDb: null,
           animating: false,
@@ -602,6 +707,12 @@ export function createFieldPlaneStore(
       },
       retry: () => {
         const current = get();
+        if (!current.enabled || !current.jobId || !current.plane || !current.frequenciesHz.length) return;
+        requestCurrentPlane(current, current.plane);
+      },
+      retryIfBlocked: () => {
+        const current = get();
+        if (current.status !== 'error' || current.lastErrorCode !== 'solve_running_or_queued') return;
         if (!current.enabled || !current.jobId || !current.plane || !current.frequenciesHz.length) return;
         requestCurrentPlane(current, current.plane);
       },

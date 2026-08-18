@@ -118,6 +118,7 @@ describe('Viewport preview errors', () => {
 
   afterEach(() => {
     act(() => root.unmount());
+    vi.restoreAllMocks();
     useDocumentStore.setState({ filename: 'tritonia_mk2.cfg' });
     compareSelection.clear();
     publishJobs([]);
@@ -205,6 +206,21 @@ describe('Viewport preview errors', () => {
     }));
     expect(host.querySelector('[aria-label="Clip model to field plane"]')).not.toBeNull();
     expect(host.querySelector('[aria-label="Invert field-plane clip side"]')).not.toBeNull();
+  });
+
+  it('retries a blocked field plane once per solve-busy transition', () => {
+    const retryIfBlocked = vi.spyOn(useFieldPlaneStore.getState(), 'retryIfBlocked')
+      .mockImplementation(() => undefined);
+    const running = { ...completeJob('running', false), status: 'running' as const };
+
+    act(() => publishJobs([running]));
+    expect(retryIfBlocked).not.toHaveBeenCalled();
+
+    act(() => publishJobs([]));
+    expect(retryIfBlocked).toHaveBeenCalledOnce();
+
+    act(() => publishJobs([]));
+    expect(retryIfBlocked).toHaveBeenCalledOnce();
   });
 
   it('resets overlay and clip when the selected job loses availability', () => {

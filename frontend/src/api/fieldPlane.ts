@@ -199,6 +199,7 @@ export function decodeFieldPlane(buffer: ArrayBuffer): DecodedFieldPlane {
 interface FieldPlaneErrorBody {
   code?: string;
   message?: string;
+  replacement_request_id?: string;
 }
 
 export class FieldPlaneHttpError extends Error {
@@ -206,6 +207,7 @@ export class FieldPlaneHttpError extends Error {
     readonly status: number,
     message: string,
     readonly code: string | null = null,
+    readonly replacementRequestId: string | null = null,
   ) {
     super(message);
     this.name = 'FieldPlaneHttpError';
@@ -215,17 +217,21 @@ export class FieldPlaneHttpError extends Error {
 async function fieldPlaneHttpError(response: Response): Promise<FieldPlaneHttpError> {
   let message = `${response.status} ${response.statusText}`.trim();
   let code: string | null = null;
+  let replacementRequestId: string | null = null;
   try {
     const body = await response.json() as { detail?: string | FieldPlaneErrorBody };
     if (typeof body.detail === 'string') message = body.detail;
     else if (isRecord(body.detail)) {
       if (typeof body.detail.message === 'string') message = body.detail.message;
       if (typeof body.detail.code === 'string') code = body.detail.code;
+      if (typeof body.detail.replacement_request_id === 'string') {
+        replacementRequestId = body.detail.replacement_request_id;
+      }
     }
   } catch {
     // The status remains actionable when an intermediary returned non-JSON.
   }
-  return new FieldPlaneHttpError(response.status, message, code);
+  return new FieldPlaneHttpError(response.status, message, code, replacementRequestId);
 }
 
 export async function fetchFieldPlane(

@@ -168,6 +168,7 @@ export function Viewport() {
   const preferences = useViewerPreferences();
   const cadApplication = cadApplicationName(usePreferences().cadApplication);
   const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
+  const solveRunningOrQueued = jobs.some((job) => job.status === 'running' || job.status === 'queued');
   const resultSelection = useSyncExternalStore(compareSelection.subscribe, compareSelection.getSnapshot, compareSelection.getSnapshot);
   const availableFieldJob = useMemo(() => fieldPlaneJob(jobs, resultSelection.primary), [jobs, resultSelection.primary]);
   const fieldEnabled = useFieldPlaneStore((state) => state.enabled);
@@ -187,6 +188,7 @@ export function Viewport() {
   const fieldIsolines = useFieldPlaneStore((state) => state.isolines);
   const storedFieldWindow = useFieldPlaneStore((state) => state.windows[state.displayMode]);
   const selectedRef = useRef<DecodedFrame | null>(null);
+  const solveWasRunningOrQueued = useRef(solveRunningOrQueued);
   const latencyClock = useRef(new ClientLatencyClock());
   const currentEpoch = useRef<number | null>(preview.epoch);
   const queuedFineRevision = useRef<number | null>(null);
@@ -386,6 +388,14 @@ export function Viewport() {
     if (!activeScene || fieldJobId === availableFieldJob.id) return;
     useFieldPlaneStore.getState().selectJob(availableFieldJob.id, defaultFieldPlane(activeScene));
   }, [activeScene, availableFieldJob, fieldEnabled, fieldJobId]);
+
+  useEffect(() => {
+    const wasRunningOrQueued = solveWasRunningOrQueued.current;
+    solveWasRunningOrQueued.current = solveRunningOrQueued;
+    if (wasRunningOrQueued && !solveRunningOrQueued) {
+      useFieldPlaneStore.getState().retryIfBlocked();
+    }
+  }, [solveRunningOrQueued]);
 
   useEffect(() => {
     if (availableFieldJob && fieldEnabled && fieldPlane) return;
