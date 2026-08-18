@@ -1,0 +1,29 @@
+{
+  "blocks": {
+    "ABEC.Polars:SPL_H": {
+      "items": {
+        "MapAngleRange": "0,720,721",
+        "Distance": "2",
+        "NormAngle": "5"
+      }
+    }
+  },
+  "expected": {
+    "engine": "auto",
+    "symmetry": "auto",
+    "mesh_validation_mode": "warn",
+    "verbose": false,
+    "frequency_spacing": "log",
+    "polar_config": {
+      "angle_range": [0, 720, 721],
+      "angle_step": 1,
+      "distance": 2,
+      "norm_angle": 5,
+      "inclination": 45,
+      "enabled_axes": ["horizontal"],
+      "observation_origin": "mouth",
+      "spherical_sampling": false,
+      "field_plane": true
+    }
+  }
+}

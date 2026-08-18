@@ -24,7 +24,7 @@ Simulation.F1 = 250
 Simulation.F2 = 8000
 Simulation.NumFrequencies = 7
 WG.Solve = {
-Engine = unavailable-on-purpose
+Engine = dryrun
 SweepSpacing = linear
 }
 """
@@ -53,6 +53,10 @@ def _corpus_design_or_fixture(tmp_path: Path) -> Path:
         if (
             parsed.dialect == "mwg"
             and parsed.design.root.simulation.solver_mode != "circsym"
+            and any(
+                name == "WG.Solve" or name.startswith("ABEC.Polars:")
+                for name in parsed.extra_blocks
+            )
         ):
             return path
     return _design_path(tmp_path)
@@ -101,10 +105,10 @@ def test_validate_real_corpus_mwg_emits_versioned_json(
     assert report["schemaVersion"] == 1
     assert report["file"] == str(path)
     assert report["dialect"] == "mwg"
-    assert report["settingsSource"] == "defaults"
+    assert report["settingsSource"] == "file"
     assert report["frequencies"]["count"] >= 1
     assert report["engine"] == {
-        "requested": "auto",
+        "requested": "dryrun",
         "resolved": "dryrun",
         "available": True,
         "reason": "test capability",
@@ -119,6 +123,64 @@ def test_validate_real_corpus_mwg_emits_versioned_json(
     }
     assert report["refusals"] == []
     assert lifecycle == ["prewarm", "mesh", "shutdown"]
+
+
+def test_validate_overlay_is_deep_merged_and_engine_flag_wins(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    path = _design_path(tmp_path)
+    overlay = tmp_path / "overlay.json"
+    overlay.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "options": {
+                    "engine": "metal",
+                    "polar_config": {"distance": 4, "field_plane": False},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "validate",
+            str(path),
+            "--json",
+            "--no-mesh",
+            "--overlay",
+            str(overlay),
+            "--engine",
+            "dryrun",
+        ],
+        engine_registry=_registry(),
+    )
+    report = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert report["settingsSource"] == "file+overlay"
+    assert report["engine"]["requested"] == "dryrun"
+
+
+def test_validate_overlay_typo_is_a_refusal(tmp_path: Path, capsys) -> None:
+    path = _design_path(tmp_path, source=VALID_MWG.replace("WG.Solve", "Other"))
+    overlay = tmp_path / "overlay.json"
+    overlay.write_text(
+        json.dumps({"schemaVersion": 1, "options": {"frequecy_spacing": "linear"}}),
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        ["validate", str(path), "--json", "--no-mesh", "--overlay", str(overlay)],
+        engine_registry=_registry(),
+    )
+    report = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 1
+    assert report["settingsSource"] == "defaults+overlay"
+    assert any("frequecy_spacing" in item for item in report["refusals"])
 
 
 def test_validate_unknown_engine_is_a_listed_refusal(

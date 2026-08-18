@@ -12,9 +12,10 @@ from typing import Any
 from pydantic import ValidationError
 
 from server.design.schema import Expr
+from server.design.solve_block import has_solve_blocks
 from server.design.textcfg import ParsedDesign, TextConfigError, parse
 from server.engines.registry import EngineInfo, EngineRegistry
-from server.jobs.models import ImportedGeometrySource, SolveOptions, SolveRequest
+from server.jobs.models import ImportedGeometrySource, SolveRequest
 from server.jobs.runtime import (
     EngineUnavailableError,
     ImportedSolveRefusal,
@@ -28,6 +29,7 @@ from server.solver.context import SolverContext
 from server.solver.metal import circsym_eligibility_reasons
 
 from .render import render_validation
+from .request import build_request
 
 
 MeshBuilder = Callable[..., Awaitable[dict[str, Any]]]
@@ -61,20 +63,6 @@ def _validation_messages(exc: ValidationError) -> list[str]:
         prefix = f"{location}: " if location else ""
         messages.append(prefix + str(error["msg"]))
     return messages
-
-
-def _request_from_design(parsed: ParsedDesign, engine: str | None) -> SolveRequest:
-    # Solve blocks are intentionally not consulted in this first CLI slice.
-    # Constructing the options model explicitly makes that omission visible in
-    # code and ensures a future settings reader cannot accidentally enter by
-    # way of ParsedDesign.extra_blocks while this report still claims defaults.
-    options = SolveOptions(engine=engine or "auto")
-    return SolveRequest.model_validate(
-        {
-            "design": parsed.semantic_data(),
-            "options": options.model_dump(mode="json"),
-        }
-    )
 
 
 def _frequency_summary(request: SolveRequest) -> dict[str, Any]:
@@ -170,6 +158,7 @@ async def validate_path(
     *,
     engine_registry: EngineRegistry,
     engine: str | None = None,
+    overlay: Path | None = None,
     no_mesh: bool = False,
     mesh_builder: MeshBuilder | None = None,
     prewarm_worker: WorkerLifecycle | None = None,
@@ -198,12 +187,26 @@ async def validate_path(
         {"name": application.name, "note": application.note}
         for application in parsed.migrations
     ]
+    file_settings = has_solve_blocks(parsed.extra_blocks)
+    if overlay is not None:
+        payload["settingsSource"] = (
+            "file+overlay" if file_settings else "defaults+overlay"
+        )
+    elif file_settings:
+        payload["settingsSource"] = "file"
 
     try:
-        request = _request_from_design(parsed, engine)
+        built = build_request(parsed, overlay=overlay, engine=engine)
+        request = built.request
+        payload["settingsSource"] = built.settings_source
     except ValidationError as exc:
         refusals.extend(_validation_messages(exc))
         return payload, 1
+    except (TypeError, ValueError) as exc:
+        refusals.append(str(exc))
+        return payload, 1
+    requested_engine = request.options.engine
+    payload["engine"]["requested"] = requested_engine
     if isinstance(request.geometry, ImportedGeometrySource):
         refusals.append("imported-geometry designs are not supported by the CLI yet")
         return payload, 1
@@ -323,6 +326,7 @@ def validate_command(
             args.file,
             engine_registry=engine_registry,
             engine=args.engine,
+            overlay=args.overlay,
             no_mesh=args.no_mesh,
         )
     )

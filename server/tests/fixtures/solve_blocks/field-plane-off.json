@@ -1,0 +1,28 @@
+{
+  "blocks": {
+    "WG.Solve": {
+      "items": {
+        "FieldPlane": "0",
+        "Verbose": "0"
+      }
+    }
+  },
+  "expected": {
+    "engine": "auto",
+    "symmetry": "auto",
+    "mesh_validation_mode": "warn",
+    "verbose": false,
+    "frequency_spacing": "log",
+    "polar_config": {
+      "angle_range": [0, 180, 37],
+      "angle_step": 5,
+      "distance": 2,
+      "norm_angle": 5,
+      "inclination": 45,
+      "enabled_axes": ["horizontal", "vertical", "diagonal"],
+      "observation_origin": "mouth",
+      "spherical_sampling": false,
+      "field_plane": false
+    }
+  }
+}

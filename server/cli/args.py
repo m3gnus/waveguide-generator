@@ -34,6 +34,53 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="NAME",
         help="override the default AUTO engine selection",
     )
+    validate_parser.add_argument(
+        "--overlay",
+        type=Path,
+        metavar="FILE",
+        help="apply a versioned JSON solve-options overlay",
+    )
+
+    solve_parser = subparsers.add_parser(
+        "solve",
+        help="solve a design through the persistent job runtime",
+    )
+    solve_parser.add_argument("design", type=Path, help="design .mwg or .cfg file")
+    event_group = solve_parser.add_mutually_exclusive_group()
+    event_group.add_argument(
+        "--json-events",
+        action="store_true",
+        help="stream the jobs protocol as newline-delimited JSON",
+    )
+    event_group.add_argument(
+        "--events",
+        choices=("ndjson", "text"),
+        default="text",
+        help="event stream format (default: text)",
+    )
+    solve_parser.add_argument(
+        "--output",
+        type=Path,
+        metavar="DIR",
+        help="write results and artifacts to a new directory",
+    )
+    solve_parser.add_argument(
+        "--data-dir",
+        type=Path,
+        metavar="DIR",
+        help="override the application data directory",
+    )
+    solve_parser.add_argument(
+        "--engine",
+        metavar="NAME",
+        help="override file and overlay engine selection",
+    )
+    solve_parser.add_argument(
+        "--overlay",
+        type=Path,
+        metavar="FILE",
+        help="apply a versioned JSON solve-options overlay",
+    )
     return parser
 
 
@@ -56,6 +103,10 @@ def main(
         from .validate import validate_command
 
         return validate_command(args, engine_registry=registry)
+    if args.command == "solve":
+        from .solve import solve_command
+
+        return solve_command(args, engine_registry=registry)
     raise AssertionError(f"unhandled command: {args.command}")
 
 
