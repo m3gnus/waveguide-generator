@@ -28,6 +28,7 @@ const result = (generation: number, value: number): FieldPlaneMaskResult => ({
   nx: 2,
   ny: 2,
   watertight: true,
+  snappedVertexCount: 4,
   mask: Uint8Array.of(value, 0, 0, 0).buffer,
 });
 
@@ -46,6 +47,7 @@ describe('field-plane mask generations', () => {
 
     useFieldPlaneMaskStore.getState().apply(result(2, 2));
     expect(useFieldPlaneMaskStore.getState().mask?.data[0]).toBe(2);
+    expect(useFieldPlaneMaskStore.getState().snappedVertexCount).toBe(4);
   });
 
   it('drops the mask and watertightness when the solved geometry identity changes', () => {
@@ -58,6 +60,7 @@ describe('field-plane mask generations', () => {
 
     expect(useFieldPlaneMaskStore.getState().mask).toBeNull();
     expect(useFieldPlaneMaskStore.getState().watertight).toBeNull();
+    expect(useFieldPlaneMaskStore.getState().snappedVertexCount).toBeNull();
   });
 
   it('treats symmetry synthesis as part of the mask geometry identity', () => {
@@ -72,6 +75,7 @@ describe('field-plane mask generations', () => {
       symmetryPlane: 'yz+xz',
       mask: null,
       watertight: null,
+      snappedVertexCount: null,
     });
     useFieldPlaneMaskStore.getState().apply(result(2, 2));
     expect(useFieldPlaneMaskStore.getState().mask).toBeNull();

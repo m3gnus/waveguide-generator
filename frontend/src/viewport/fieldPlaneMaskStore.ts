@@ -17,6 +17,7 @@ interface FieldPlaneMaskState {
   symmetryPlane: string | null;
   generation: number;
   watertight: boolean | null;
+  snappedVertexCount: number | null;
   mask: AppliedFieldPlaneMask | null;
   error: string | null;
   begin: (request: FieldPlaneMaskRequest) => void;
@@ -41,6 +42,7 @@ const emptyState = {
   symmetryPlane: null,
   generation: 0,
   watertight: null,
+  snappedVertexCount: null,
   mask: null,
   error: null,
 } as const;
@@ -57,12 +59,14 @@ export const useFieldPlaneMaskStore = create<FieldPlaneMaskState>((set) => ({
       symmetryPlane: request.symmetryPlane,
       generation: request.generation,
       watertight: sameGeometry ? state.watertight : null,
+      snappedVertexCount: sameGeometry ? state.snappedVertexCount : null,
       mask: sameGeometry ? state.mask : null,
       error: null,
     };
   }),
   apply: (result) => set((state) => matchesCurrent(state, result) ? {
     watertight: result.watertight,
+    snappedVertexCount: result.snappedVertexCount,
     mask: {
       jobId: result.jobId,
       geometrySha256: result.geometrySha256,

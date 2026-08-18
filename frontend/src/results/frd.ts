@@ -1,3 +1,4 @@
+import { ARTIFACT_CONVENTIONS, ENGINEERING_NPZ_PHASOR } from '../api/conventions';
 import type { Preferences } from '../prefs/preferences';
 import { applySmoothing, type SmoothingValue } from './smoothing';
 import { phaseSpatialSign, wrapPhaseDegrees } from './phaseConvention';
@@ -68,6 +69,46 @@ function patternDb(value: unknown): number | null {
 // raw is a quietly wrong measurement.
 function smoothingNote(smoothing: Preferences['smoothing']): string {
   return `Smoothing: ${smoothing === 'none' ? 'none' : smoothing}`;
+}
+
+const PHASE_CONVENTION_NOTES = [
+  `Phasor convention: solver and FRD pressure use ${ARTIFACT_CONVENTIONS.phasor}`,
+  `Phase sign: when present, Phase(degrees) = arg(p); engineering NPZ ${ENGINEERING_NPZ_PHASOR} phase has the opposite sign`,
+] as const;
+
+function record(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function text(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function observationNotes(result: ResultPayload): string[] {
+  const directivity = record(result.metadata?.directivity);
+  const observation = record(result.metadata?.observation);
+  const effective = directivity.effective_distance_m ?? observation.effective_distance_m;
+  const requested = directivity.requested_distance_m ?? observation.requested_distance_m;
+  const distanceM = finite(effective) ? effective : finite(requested) ? requested : null;
+  const distanceKind = finite(effective) ? 'effective' : finite(requested) ? 'requested' : null;
+  const requestedSuffix = finite(requested) && finite(effective) && requested !== effective
+    ? `; requested ${requested} m`
+    : '';
+  const origin = text(directivity.observation_origin) ?? text(observation.observation_origin);
+  return [
+    `Observation distance: ${distanceM === null ? 'unavailable' : `${distanceM} m ${distanceKind}${requestedSuffix}`}`,
+    `Observation origin: ${origin ?? 'unavailable'}`,
+  ];
+}
+
+function normalizationNote(result: ResultPayload, polar: boolean): string {
+  if (!polar) return 'Normalization: absolute SPL re 20 µPa; level normalization none';
+  const angle = record(result.metadata?.directivity).normalization_angle_degrees;
+  return finite(angle)
+    ? `Normalization: per-frequency polar level; 0 dB at ${angle} deg`
+    : 'Normalization: per-frequency polar level; reference angle unavailable';
 }
 
 function fileText(header: string[], rows: string[]): string {
@@ -153,6 +194,9 @@ export function buildOnAxisFrd(
 
   return fileText([
     'HornLab on-axis frequency response',
+    ...PHASE_CONVENTION_NOTES,
+    ...observationNotes(result),
+    normalizationNote(result, false),
     smoothingNote(preferences.smoothing),
     propagationNote(reference, result),
     ['Freq(Hz)', 'SPL(dB)', 'Phase(degrees)'].join(DELIMITER),
@@ -269,6 +313,9 @@ export function buildPolarFrdSet(
         text: fileText([
           ...(includesPhase ? ['HornLab polar frequency response'] : []),
           `Plane: ${plane}, angle ${angle} deg`,
+          ...PHASE_CONVENTION_NOTES,
+          ...observationNotes(result),
+          normalizationNote(result, true),
           smoothingNote(preferences.smoothing),
           ...phaseHeader,
         ], rows),

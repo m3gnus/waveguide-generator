@@ -500,6 +500,7 @@ describe('field-plane state', () => {
       nx: plane.nx,
       ny: plane.ny,
       watertight: true,
+      snappedVertexCount: 4,
       mask: new Uint8Array(plane.nx * plane.ny).buffer,
     });
     const maskState = useFieldPlaneMaskStore.getState();
@@ -524,6 +525,7 @@ describe('field-plane state', () => {
       geometrySha256: maskState.geometrySha256,
       generation: maskState.generation,
       watertight: maskState.watertight,
+      snappedVertexCount: maskState.snappedVertexCount,
     });
     expect(useFieldPlaneMaskStore.getState().mask).toBe(maskState.mask);
     useFieldPlaneMaskStore.getState().clear();

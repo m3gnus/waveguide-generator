@@ -18,6 +18,7 @@ export interface FieldPlaneMaskResult {
   nx: number;
   ny: number;
   watertight: boolean;
+  snappedVertexCount: number;
   mask: ArrayBuffer;
 }
 

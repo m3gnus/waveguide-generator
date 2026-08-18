@@ -50,6 +50,13 @@ function dataRows(text: string): string[][] {
     .map((line) => line.split('\t'));
 }
 
+function rewVituixCadRows(text: string): string[][] {
+  return text.trim().split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith('*'))
+    .map((line) => line.split(/[\t ;]+/));
+}
+
 describe('FRD builders', () => {
   it('accepts a channel scope without combining the flat wrapper', () => {
     const wrapped: ResultPayload = {
@@ -71,6 +78,44 @@ describe('FRD builders', () => {
     expect(rows.map((row) => Number(row[2]))).toEqual([-72.5, -31.25, 8.75, 46.5, 103.125]);
     expect(new Set(rows.map((row) => row[2])).size).toBeGreaterThan(1);
     expect(rows.some((row) => Number(row[2]) !== 0)).toBe(true);
+  });
+
+  it('keeps convention metadata in comments without changing REW/VituixCAD data rows', () => {
+    const documented: ResultPayload = {
+      ...withPolarPhase(),
+      metadata: {
+        phase_time_convention: 'exp(+ikr)',
+        observation: {
+          effective_distance_m: 1.5,
+          requested_distance_m: 2,
+          observation_origin: 'mouth',
+        },
+        directivity: { normalization_angle_degrees: 5 },
+      },
+    };
+    const onAxis = buildOnAxisFrd(documented, preferences());
+    const polar = buildPolarFrdSet(documented, preferences(), 'test_horn_7')[0].text;
+
+    expect(onAxis).toContain('* Phasor convention: solver and FRD pressure use exp(-i omega t)');
+    expect(onAxis).toContain('* Phase sign: when present, Phase(degrees) = arg(p); engineering NPZ exp(+j omega t) phase has the opposite sign');
+    expect(onAxis).toContain('* Observation distance: 1.5 m effective; requested 2 m');
+    expect(onAxis).toContain('* Observation origin: mouth');
+    expect(onAxis).toContain('* Normalization: absolute SPL re 20 µPa; level normalization none');
+    expect(polar).toContain('* Normalization: per-frequency polar level; 0 dB at 5 deg');
+    expect(rewVituixCadRows(onAxis)).toEqual([
+      ['100.000000', '89.2500', '-72.5000'],
+      ['200.000000', '91.5000', '-31.2500'],
+      ['400.000000', '90.1250', '8.7500'],
+      ['800.000000', '94.7500', '46.5000'],
+      ['1600.000000', '93.3750', '103.1250'],
+    ]);
+    expect(rewVituixCadRows(polar)).toEqual([
+      ['100.000000', '-12.0000', '-100.0000'],
+      ['200.000000', '-13.0000', '-99.0000'],
+      ['400.000000', '-14.0000', '-98.0000'],
+      ['800.000000', '-15.0000', '-97.0000'],
+      ['1600.000000', '-16.0000', '-96.0000'],
+    ]);
   });
 
   it('applies the smoothing preference to on-axis and polar SPL only', () => {

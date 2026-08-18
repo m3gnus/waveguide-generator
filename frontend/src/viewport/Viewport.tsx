@@ -663,6 +663,10 @@ export function Viewport() {
       {maskMatchesGeometry(fieldMaskState, fieldJobId, fieldGeometrySha256)
         && fieldMaskState.watertight === false
         && <div className="field-plane-note" role="note">open mesh: interior not masked</div>}
+      {maskMatchesGeometry(fieldMaskState, fieldJobId, fieldGeometrySha256)
+        && fieldMaskState.snappedVertexCount !== null
+        && fieldMaskState.snappedVertexCount > 0
+        && <div className="field-plane-note" role="note">{fieldMaskState.snappedVertexCount.toLocaleString()} vertices snapped to symmetry plane</div>}
       {fieldStatus !== 'ready' && <div className={`field-plane-status ${fieldStatus}`} role="status" aria-live="polite">
         <span>{fieldStatus === 'loading' ? 'loading field plane…' : fieldError ?? 'field plane idle'}</span>
         {fieldStatus === 'error' && fieldJobId && <button type="button" onClick={() => useFieldPlaneStore.getState().retry()}>Retry</button>}

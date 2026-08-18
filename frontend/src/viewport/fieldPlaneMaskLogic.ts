@@ -18,6 +18,14 @@ export interface FieldPlaneMaskMesh {
   geometry: BufferGeometry;
   bvh: MeshBVH;
   watertight: boolean;
+  snappedVertexCount: number;
+  snapToleranceM: number;
+}
+
+interface SnappedVertices {
+  vertices: Float32Array;
+  snappedVertexCount: number;
+  toleranceM: number;
 }
 
 function edgeKey(first: number, second: number): string {
@@ -56,9 +64,11 @@ function activeSymmetryAxes(symmetryPlane: string | null): CoordinateAxis[] {
 function snapSymmetryVertices(
   vertices: Float32Array,
   axes: readonly CoordinateAxis[],
-): Float32Array {
+): SnappedVertices {
   const snapped = vertices.slice();
-  if (axes.length === 0 || vertices.length === 0) return snapped;
+  if (vertices.length === 0) {
+    return { vertices: snapped, snappedVertexCount: 0, toleranceM: 1e-9 };
+  }
   const minimum = [Infinity, Infinity, Infinity];
   const maximum = [-Infinity, -Infinity, -Infinity];
   for (let offset = 0; offset < vertices.length; offset += 3) {
@@ -73,12 +83,19 @@ function snapSymmetryVertices(
     maximum[2] - minimum[2],
   );
   const tolerance = Math.max(1e-9, 1e-6 * diagonal);
+  let snappedVertexCount = 0;
   for (let offset = 0; offset < snapped.length; offset += 3) {
+    let changed = false;
     for (const axis of axes) {
-      if (Math.abs(snapped[offset + axis]) <= tolerance) snapped[offset + axis] = 0;
+      const value = snapped[offset + axis];
+      if (value !== 0 && Math.abs(value) <= tolerance) {
+        snapped[offset + axis] = 0;
+        changed = true;
+      }
     }
+    if (changed) snappedVertexCount += 1;
   }
-  return snapped;
+  return { vertices: snapped, snappedVertexCount, toleranceM: tolerance };
 }
 
 function mirrorTriangleMesh(
@@ -127,7 +144,8 @@ export function createFieldPlaneMaskMesh(
   symmetryPlane: string | null = null,
 ): FieldPlaneMaskMesh {
   const axes = activeSymmetryAxes(symmetryPlane);
-  let maskVertices = snapSymmetryVertices(vertices, axes);
+  const snapped = snapSymmetryVertices(vertices, axes);
+  let maskVertices = snapped.vertices;
   let maskIndices: Uint32Array = indices.slice();
   for (const axis of axes) {
     [maskVertices, maskIndices] = mirrorTriangleMesh(maskVertices, maskIndices, axis);
@@ -139,6 +157,8 @@ export function createFieldPlaneMaskMesh(
     geometry,
     bvh: new MeshBVH(geometry),
     watertight: isWatertightTriangleMesh(maskIndices),
+    snappedVertexCount: snapped.snappedVertexCount,
+    snapToleranceM: snapped.toleranceM,
   };
 }
 

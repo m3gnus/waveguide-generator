@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from fastapi import HTTPException
+from hornlab_mesher import read_wglink
 import pytest
 
 from server.cadlink.identity import SaveIdentity, design_hash
@@ -127,7 +128,27 @@ def test_wglink_export_writes_identity_hashes_and_retries_without_rebuilding(
     assert first["geometryHash"].startswith("sha256:")
     assert first["artifactSha256"] == "sha256:" + "a" * 64
     manifest = json.loads((Path(first["bundlePath"]) / "wglink.json").read_text())
+    assert read_wglink(first["bundlePath"], verify_checksums=False) == manifest
     assert manifest["bundle"]["id"] == second["bundleId"]
+    assert manifest["wglink_version"] == "1.0"
+    assert manifest["conventions"] == {
+        "frame": {
+            "axes": {
+                "x": "horizontal",
+                "y": "vertical",
+                "z": "axial (throat to mouth)",
+            },
+            "axis_remap_matrix": [[1, 0, 0], [0, -1, 0], [0, 0, 1]],
+            "winding": "reversed-on-remap",
+        },
+        "units": {
+            "solver_length": "m",
+            "cad_length": "mm",
+            "frequency": "Hz",
+            "phase": "degrees",
+        },
+        "phasor": "exp(-i omega t)",
+    }
     assert manifest["export"] == {
         "domain": "full",
         "geometry_hash": first["geometryHash"],
