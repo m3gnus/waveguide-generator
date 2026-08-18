@@ -15,6 +15,7 @@ export interface AthPolarUiState {
   enabledAxes: Array<(typeof AXIS_ORDER)[number]>;
   observationOrigin: 'mouth' | 'throat';
   sphericalSampling: boolean;
+  fieldPlane: boolean;
 }
 
 export const DEFAULT_ATH_POLAR_UI: AthPolarUiState = Object.freeze({
@@ -27,6 +28,7 @@ export const DEFAULT_ATH_POLAR_UI: AthPolarUiState = Object.freeze({
   enabledAxes: [...AXIS_ORDER],
   observationOrigin: 'mouth',
   sphericalSampling: false,
+  fieldPlane: true,
 });
 
 function isRecord(value: unknown): value is Record<string, unknown> {

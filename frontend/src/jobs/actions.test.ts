@@ -28,7 +28,7 @@ describe('solve submission', () => {
   it('submits every solve option and the G1 polar_config contract without forcing dryrun', async () => {
     const options: SolveOptions = {
       engine: 'auto', symmetry: 'quarter', mesh_validation_mode: 'strict', verbose: true, frequency_spacing: 'linear',
-      polar_config: { angle_range: [0, 90, 10], angle_step: 10, distance: 3, norm_angle: 7, inclination: 30, enabled_axes: ['horizontal', 'diagonal'], observation_origin: 'throat', spherical_sampling: true },
+      polar_config: { angle_range: [0, 90, 10], angle_step: 10, distance: 3, norm_angle: 7, inclination: 30, enabled_axes: ['horizontal', 'diagonal'], observation_origin: 'throat', spherical_sampling: true, field_plane: false },
     };
     let body: Record<string, unknown> | undefined;
     const fetcher = async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -57,7 +57,7 @@ describe('solve submission', () => {
       options: {
         engine: 'metal', symmetry: 'auto', mesh_validation_mode: 'warn', verbose: false, frequency_spacing: 'log',
         frequency_range: [200, 20_000], num_frequencies: 24,
-        polar_config: { angle_range: [0, 180, 37], angle_step: 5, distance: 2, norm_angle: 5, inclination: 45, enabled_axes: ['horizontal'], observation_origin: 'mouth', spherical_sampling: false },
+        polar_config: { angle_range: [0, 180, 37], angle_step: 5, distance: 2, norm_angle: 5, inclination: 45, enabled_axes: ['horizontal'], observation_origin: 'mouth', spherical_sampling: false, field_plane: true },
       },
     }, fetcher as typeof fetch, 'cad-run');
     expect(body).toMatchObject({ geometry: { type: 'imported', ingest_id: 'wgi_example' }, label: 'cad-run' });
@@ -79,7 +79,7 @@ describe('solve submission', () => {
     };
     const options: SolveOptions = {
       engine: 'auto', symmetry: 'auto', mesh_validation_mode: 'warn', verbose: false, frequency_spacing: 'log',
-      polar_config: { angle_range: [0, 180, 37], angle_step: 5, distance: 2, norm_angle: 5, inclination: 45, enabled_axes: ['horizontal'], observation_origin: 'mouth', spherical_sampling: false },
+      polar_config: { angle_range: [0, 180, 37], angle_step: 5, distance: 2, norm_angle: 5, inclination: 45, enabled_axes: ['horizontal'], observation_origin: 'mouth', spherical_sampling: false, field_plane: true },
     };
     await submitDesign(design, options, fetcher as typeof fetch);
 

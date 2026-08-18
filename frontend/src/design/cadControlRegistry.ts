@@ -71,7 +71,7 @@ export const CAD_CONTROLS = {
   ),
   directivityMap: control(
     'cad.directivity', 'Directivity Map', CAD_CONTROL_SECTIONS.directivityMap, 'simulation',
-    ['polar', 'angular step', 'measurement distance', 'normalization angle', 'directivity planes', 'measurement origin', '3D balloon'],
+    ['polar', 'angular step', 'measurement distance', 'normalization angle', 'directivity planes', 'measurement origin', '3D balloon', 'field plane'],
   ),
   driveChannels: control(
     'cad.drive-channels', 'Drive channels & drivers', CAD_CONTROL_SECTIONS.driveChannels, 'simulation',

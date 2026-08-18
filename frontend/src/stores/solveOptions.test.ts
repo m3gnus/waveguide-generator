@@ -27,8 +27,27 @@ describe('solve and directivity options', () => {
         enabled_axes: ['horizontal', 'vertical', 'diagonal'],
         observation_origin: 'mouth',
         spherical_sampling: false,
+        field_plane: true,
       },
     });
+  });
+
+  it('submits the explicit field-plane retention choice', () => {
+    useSolveOptionsStore.getState().updatePolar({ fieldPlane: false });
+    expect(useSolveOptionsStore.getState().options().polar_config.field_plane).toBe(false);
+  });
+
+  it('merges the enabled field-plane default into settings saved before the option existed', async () => {
+    const { fieldPlane: _fieldPlane, ...legacyPolar } = useSolveOptionsStore.getState().polar;
+    localStorage.setItem('waveguide-v2-solve-options', JSON.stringify({
+      state: { polar: legacyPolar },
+      version: 0,
+    }));
+
+    await useSolveOptionsStore.persist.rehydrate();
+
+    expect(useSolveOptionsStore.getState().polar.fieldPlane).toBe(true);
+    expect(useSolveOptionsStore.getState().options().polar_config.field_plane).toBe(true);
   });
 
   it('persists the symmetry mode with the other solve options', () => {

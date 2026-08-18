@@ -12,8 +12,10 @@ from server.solver.context import SolverContext
 from server.solver import bempp, circsym, metal
 
 
-def _context(*, axial: bool = False, sim_type: int = 2) -> SolverContext:
-    return SolverContext(
+def _context(
+    *, axial: bool = False, sim_type: int = 2, field_plane: bool = True
+) -> SolverContext:
+    context = SolverContext(
         design=DesignConfig.model_validate(
             {
                 "formula": "OSSE",
@@ -27,6 +29,8 @@ def _context(*, axial: bool = False, sim_type: int = 2) -> SolverContext:
         sim_type=sim_type,
         source_motion="axial" if axial else "normal",
     )
+    context.polar_config["field_plane"] = field_plane
+    return context
 
 
 def _result() -> SimpleNamespace:
@@ -279,6 +283,27 @@ def test_metal_trace_size_cap_skips_retention_before_mocked_solve(monkeypatch) -
     }
 
 
+def test_metal_field_plane_option_disables_trace_retention(monkeypatch) -> None:
+    captured = {}
+    monkeypatch.setattr(
+        metal,
+        "native_config",
+        lambda **kwargs: captured.update(kwargs) or _Config(**kwargs),
+    )
+    monkeypatch.setattr(metal, "native_solve", lambda _path, _config: _result())
+    monkeypatch.setattr(metal, "metal_status", lambda: {"available": True, "reason": "ok"})
+    monkeypatch.setattr(metal, "ObservationConfig", lambda **kwargs: SimpleNamespace(**kwargs))
+
+    response = metal.solve_metal_from_msh_text(
+        _cabinet_msh(), _context(field_plane=False)
+    )
+
+    assert captured["return_surface_traces"] is False
+    assert response["_field_traces"] is None
+    assert response["_field_trace_unavailable_reason"] == "disabled_by_option"
+    assert response["metadata"]["field_trace_retention"]["estimated_bytes"] is None
+
+
 def test_metal_infinite_baffle_requires_and_maps_aperture_tag(monkeypatch) -> None:
     captured = {}
     monkeypatch.setattr(metal, "native_config", lambda **kwargs: captured.update(kwargs) or _Config(**kwargs))
@@ -340,6 +365,32 @@ def test_bempp_adapter_is_cpu_fallback_and_rejects_infinite_baffle(monkeypatch) 
     assert response["_field_traces"].backend == "bempp"
     with pytest.raises(ValueError, match="cannot solve coupled infinite-baffle"):
         bempp.solve_bempp_from_msh_text("msh", _context(sim_type=1))
+
+
+def test_bempp_field_plane_option_disables_trace_retention(monkeypatch) -> None:
+    captured = {}
+    monkeypatch.setattr(
+        bempp,
+        "SolveConfig",
+        lambda **kwargs: captured.update(kwargs) or _Config(**kwargs),
+    )
+    monkeypatch.setattr(bempp, "bempp_solve", lambda _path, _config: _result())
+    monkeypatch.setattr(bempp, "BIEFormulation", SimpleNamespace(COMPLEX_K="complex_k"))
+    monkeypatch.setattr(bempp, "ObservationConfig", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(
+        bempp,
+        "bempp_status",
+        lambda: {"available": True, "reason": "mock CPU", "assembly_backend": "numba"},
+    )
+
+    response = bempp.solve_bempp_from_msh_text(
+        _cabinet_msh(), _context(field_plane=False)
+    )
+
+    assert captured["return_surface_traces"] is False
+    assert response["_field_traces"] is None
+    assert response["_field_trace_unavailable_reason"] == "disabled_by_option"
+    assert response["metadata"]["field_trace_retention"]["estimated_bytes"] is None
 
 
 def test_circsym_adapter_uses_meridian_cancellation_stages_and_coupled_ib(monkeypatch) -> None:

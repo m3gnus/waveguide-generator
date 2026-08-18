@@ -140,7 +140,7 @@ describe('design save requests', () => {
     }), 'polar.cfg', null, fetcher, {
       angle_range: [0, 120, 25], angle_step: 5, distance: 4, norm_angle: 8,
       inclination: 35, enabled_axes: ['horizontal', 'diagonal'],
-      observation_origin: 'throat', spherical_sampling: true,
+      observation_origin: 'throat', spherical_sampling: true, field_plane: true,
     });
 
     expect(payload).toMatchObject({ design: { extra_blocks: {

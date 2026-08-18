@@ -20,6 +20,7 @@ const CUSTOM_POLAR = {
   enabledAxes: ['horizontal'] as const,
   observationOrigin: 'throat' as const,
   sphericalSampling: true,
+  fieldPlane: false,
 };
 
 function response(body: unknown, ok = true): Response {
@@ -68,6 +69,7 @@ describe('opening a design does not discard remembered settings', () => {
     expect(polar.normAngle).toBe(10);
     expect(polar.observationOrigin).toBe('throat');
     expect(polar.sphericalSampling).toBe(true);
+    expect(polar.fieldPlane).toBe(false);
   });
 });
 
@@ -102,6 +104,7 @@ describe('WG.Solve config block', () => {
     });
     expect(state.polar.observationOrigin).toBe('throat');
     expect(state.polar.sphericalSampling).toBe(true);
+    expect(state.polar.fieldPlane).toBe(false);
   });
 
   it('leaves other blocks alone so imported ATH passthrough survives a save', () => {
@@ -142,7 +145,7 @@ describe('WG.Solve config block', () => {
       mesh_validation_mode: 'off',
       frequency_spacing: 'linear',
       frequencies_hz: [400, 800],
-      polar_config: { observation_origin: 'throat', spherical_sampling: true },
+      polar_config: { observation_origin: 'throat', spherical_sampling: true, field_plane: false },
     });
     expect(settings).toMatchObject({
       engine: 'bempp',
@@ -152,6 +155,7 @@ describe('WG.Solve config block', () => {
       frequencyListText: '400, 800',
       observationOrigin: 'throat',
       sphericalSampling: true,
+      fieldPlane: false,
     });
     expect(wgSolveSettingsFromSolveOptions(undefined)).toBeNull();
   });

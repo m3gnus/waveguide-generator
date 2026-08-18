@@ -41,6 +41,7 @@ def _design(**extra: Any) -> DesignConfig:
 
 def test_auto_is_the_contract_default_and_resolves_by_capability(monkeypatch) -> None:
     assert SolveOptions().engine == "auto"
+    assert SolveOptions().polar_config.field_plane is True
 
     capabilities = [
         EngineInfo("metal", False, "absent", None),

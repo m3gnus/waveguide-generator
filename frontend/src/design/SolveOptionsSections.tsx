@@ -167,6 +167,7 @@ const POLAR_FIELD_LABELS: Array<[keyof PolarUiState, string]> = [
   ['diagonalAngle', 'diagonal plane angle'],
   ['observationOrigin', 'measurement origin'],
   ['sphericalSampling', '3D balloon'],
+  ['fieldPlane', 'field plane'],
 ];
 
 /** Which directivity settings the selected run differs from on screen. */
@@ -246,7 +247,8 @@ export function DirectivityMapControls({ effectiveDerivation }: { effectiveDeriv
     {cardinalDiagonal && <p className="section-note" role="status">A diagonal at {Number(polar.diagonalAngle.toFixed(6))}° is the {Math.abs((polar.diagonalAngle % 180 + 180) % 180 - 90) < 1e-6 ? 'vertical' : 'horizontal'} plane, so it will be measured and plotted twice. Use an angle between the planes, such as 45°.</p>}
     <HelpTipRow className="select-row" text="The point the measurement angles pivot around. Mouth rotates about the mouth centre, which is what a measured polar set matches; Throat pivots at the driver instead."><label htmlFor="polar-observation-origin">Measurement origin</label><select id="polar-observation-origin" value={polar.observationOrigin} onChange={(event) => update({ observationOrigin: event.target.value as ObservationOrigin })}><option value="mouth">Mouth</option><option value="throat">Throat</option></select></HelpTipRow>
     <ToggleRow id="polar-spherical-sampling" label="Keep 3D balloon result" help="WG samples a spherical field for Directivity Index independently of the selected H/V/D display planes. Enable this to retain that grid for the 3D balloon and forward-beam views; availability depends on the backend." checked={polar.sphericalSampling} onChange={(sphericalSampling) => update({ sphericalSampling })} />
-    <p className="section-note">Directivity Index always uses the complete spherical field. This option controls whether WG also stores that field for 3D views.</p>
+    <ToggleRow id="polar-field-plane" label="Keep field plane data" help="Retains the surface data needed for acoustic field planes. This needs a full-3D solve (not axisymmetric) and adds ~0.1–1 MB per typical parametric job, with larger results for CAD-link imports." checked={polar.fieldPlane !== false} onChange={(fieldPlane) => update({ fieldPlane })} />
+    <p className="section-note">Directivity Index always uses the complete spherical field. “Keep 3D balloon result” controls whether WG also stores that field for 3D views.</p>
     {effective && <div className={`effective-grid-readout${effective.widened ? ' widened' : ''}`} role="status"><b>{effective.summary}</b><span>{effective.detail}</span><small>Display planes and angle range only; Directivity Index always uses the complete spherical field.</small></div>}
     <SolvedWithReadout/>
   </>;
