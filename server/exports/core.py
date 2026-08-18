@@ -6,6 +6,7 @@ import copy
 from dataclasses import dataclass
 import math
 from pathlib import Path
+import re
 import struct
 import tempfile
 from typing import TYPE_CHECKING, Any, Mapping
@@ -166,6 +167,29 @@ def _inner_grid(
     return points
 
 
+# ISO 10303-21 wants file_description before file_name; OpenCASCADE 7.7 and
+# later write them the other way round, so every gmsh from 4.12 on emits a
+# header that strict readers (CATIA) reject -- they take the product structure
+# and drop the shapes. hornlab_mesher.cad.normalise_step_header does the same
+# job for the solid export; this narrower swap is kept local because the mesher
+# is version-pinned and the header OCC hands us here is always these three
+# statements. Fold the two together at the next mesher pin bump.
+_HEADER_SWAP = re.compile(
+    r"(?P<name>FILE_NAME\s*\(.*?\);)(?P<gap>\s*)(?P<description>FILE_DESCRIPTION\s*\(.*?\);)",
+    re.DOTALL,
+)
+
+
+def _normalise_step_header(step_text: str) -> str:
+    header, separator, rest = step_text.partition("ENDSEC;")
+    if not separator:
+        return step_text
+    fixed, swapped = _HEADER_SWAP.subn(
+        lambda match: match["description"] + match["gap"] + match["name"], header, count=1
+    )
+    return fixed + separator + rest if swapped else step_text
+
+
 def _assert_step(step_text: str) -> None:
     required = (
         "ISO-10303-21",
@@ -175,6 +199,16 @@ def _assert_step(step_text: str) -> None:
     )
     if not step_text.strip() or any(token not in step_text for token in required):
         raise RuntimeError("STEP export did not contain valid surface geometry")
+    header = step_text.partition("HEADER;")[2].partition("ENDSEC;")[0]
+    positions = [
+        header.find(keyword)
+        for keyword in ("FILE_DESCRIPTION", "FILE_NAME", "FILE_SCHEMA")
+    ]
+    if any(position < 0 for position in positions) or positions != sorted(positions):
+        raise RuntimeError(
+            "STEP header is not in ISO 10303-21 order (file_description, "
+            "file_name, file_schema); strict CAD readers reject it"
+        )
 
 
 def _write_step(inner_points: np.ndarray) -> str:
@@ -210,7 +244,9 @@ def _write_step(inner_points: np.ndarray) -> str:
         with tempfile.NamedTemporaryFile(prefix="waveguide-inner-", suffix=".step", delete=False) as handle:
             step_path = Path(handle.name)
         gmsh.write(str(step_path))
-        text = step_path.read_text(encoding="utf-8", errors="replace")
+        text = _normalise_step_header(
+            step_path.read_text(encoding="utf-8", errors="replace")
+        )
         _assert_step(text)
         return text
     finally:
@@ -252,7 +288,12 @@ def _build_step_solid_sync(design_dump: dict[str, Any]) -> StepSolidResult:
         step_path = Path(handle.name)
     try:
         _, cad_info = write_step_from_config(config, step_path)
-        text = step_path.read_text(encoding="utf-8", errors="replace")
+        # Normalised here as well as in the mesher: the mesher is version-pinned,
+        # and a pin that predates its own header fix would otherwise hand CATIA
+        # a file it cannot read.
+        text = _normalise_step_header(
+            step_path.read_text(encoding="utf-8", errors="replace")
+        )
     finally:
         step_path.unlink(missing_ok=True)
     _assert_step(text)
