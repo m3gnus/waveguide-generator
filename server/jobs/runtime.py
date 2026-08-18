@@ -840,6 +840,9 @@ class JobRuntime:
             "symmetry": symmetry_metadata,
             "has_radiation_impedance_artifact": False,
             "radiation_impedance_artifact_bytes": None,
+            "field_plane_available": False,
+            "field_trace_bytes": None,
+            "unavailable_reason": None,
             "persistence_warnings": [],
         }
         if imported is not None:
@@ -1642,6 +1645,13 @@ class JobRuntime:
             result_metadata = results.setdefault("metadata", {})
             result_metadata.setdefault("solve_path", "full-3d")
             result_metadata.setdefault("axisymmetric_eligibility_reasons", [])
+            result_metadata.update(
+                {
+                    "field_plane_available": False,
+                    "field_trace_bytes": None,
+                    "unavailable_reason": "unsupported_solve_mode",
+                }
+            )
             result_metadata["solve_wall_time_seconds"] = (
                 time.perf_counter() - solve_started
             )
@@ -1840,7 +1850,6 @@ class JobRuntime:
         outcome_metadata.setdefault("solve_path", "full-3d")
         outcome_metadata.setdefault("axisymmetric_eligibility_reasons", [])
         outcome_metadata["solve_wall_time_seconds"] = time.perf_counter() - solve_started
-        self._record_execution_metadata(job_id, outcome_metadata)
         if outcome.msh_text and not artifact_persisted:
             try:
                 if outcome.mesh_stats is not None:
@@ -1851,6 +1860,48 @@ class JobRuntime:
                 # (``simulation_runner.py:451-466``).
                 logger.warning("Mesh artifact persistence failed for job %s: %s", job_id, exc)
                 self.store.update_job(job_id, has_mesh_artifact=False)
+        field_traces = getattr(outcome, "field_traces", None)
+        field_trace_reason = getattr(outcome, "field_trace_unavailable_reason", None)
+        if field_traces is not None:
+            try:
+                stored_field_traces = await asyncio.to_thread(
+                    self.store.store_field_traces,
+                    job_id,
+                    field_traces,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Field-trace persistence failed for job %s: %s",
+                    job_id,
+                    exc,
+                )
+                outcome_metadata.update(
+                    {
+                        "field_plane_available": False,
+                        "field_trace_bytes": None,
+                        "unavailable_reason": "artifact_persistence_failed",
+                    }
+                )
+            else:
+                if stored_field_traces is None:
+                    self._check_cancelled(job_id)
+                    raise JobNotFoundError(job_id)
+                outcome_metadata.update(
+                    {
+                        "field_plane_available": True,
+                        "field_trace_bytes": stored_field_traces.bytes,
+                        "unavailable_reason": None,
+                    }
+                )
+        else:
+            outcome_metadata.update(
+                {
+                    "field_plane_available": False,
+                    "field_trace_bytes": None,
+                    "unavailable_reason": field_trace_reason or "unsupported_solve_mode",
+                }
+            )
+        self._record_execution_metadata(job_id, outcome_metadata)
         channel_bases = getattr(outcome, "channel_bases", None)
         if channel_bases is not None:
             try:
@@ -2344,17 +2395,25 @@ class JobRuntime:
     def _record_execution_metadata(
         self, job_id: str, result_metadata: Mapping[str, Any]
     ) -> None:
+        changes: dict[str, Any] = {
+            "solve_path": result_metadata.get("solve_path", "full-3d"),
+            "axisymmetric_eligibility_reasons": list(
+                result_metadata.get("axisymmetric_eligibility_reasons") or []
+            ),
+            "solve_wall_time_seconds": float(
+                result_metadata.get("solve_wall_time_seconds") or 0.0
+            ),
+        }
+        for key in (
+            "field_plane_available",
+            "field_trace_bytes",
+            "unavailable_reason",
+        ):
+            if key in result_metadata:
+                changes[key] = result_metadata[key]
         self.store.mutate_job_metadata(
             job_id,
-            {
-                "solve_path": result_metadata.get("solve_path", "full-3d"),
-                "axisymmetric_eligibility_reasons": list(
-                    result_metadata.get("axisymmetric_eligibility_reasons") or []
-                ),
-                "solve_wall_time_seconds": float(
-                    result_metadata.get("solve_wall_time_seconds") or 0.0
-                ),
-            },
+            changes,
         )
 
     @staticmethod
@@ -2402,6 +2461,17 @@ class JobRuntime:
     @staticmethod
     def _serialize_job(row: Mapping[str, Any], *, detailed: bool = False) -> dict[str, Any]:
         metadata = row.get("task_metadata") if isinstance(row.get("task_metadata"), dict) else {}
+        field_metadata_present = any(
+            key in metadata
+            for key in ("field_plane_available", "field_trace_bytes", "unavailable_reason")
+        )
+        field_unavailable_reason = metadata.get("unavailable_reason")
+        if (
+            not field_metadata_present
+            and row.get("status") == "complete"
+            and bool(row.get("has_results"))
+        ):
+            field_unavailable_reason = "solve_predates_traces"
         stored_config = row.get("config_json") or {}
         # An imported v1 job reaches the client already translated, so reopen,
         # rerun, compare and export need no legacy branch; one that cannot be
@@ -2455,6 +2525,9 @@ class JobRuntime:
             "radiation_impedance_artifact_bytes": metadata.get(
                 "radiation_impedance_artifact_bytes"
             ),
+            "field_plane_available": bool(metadata.get("field_plane_available")),
+            "field_trace_bytes": metadata.get("field_trace_bytes"),
+            "unavailable_reason": field_unavailable_reason,
             "persistence_warnings": [
                 str(value) for value in metadata.get("persistence_warnings") or []
             ],

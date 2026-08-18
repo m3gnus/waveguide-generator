@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Migrate Waveguide Generator v1 solve history and workspace into v2.
 
-The v1 job schema was ported to v2 unchanged and doubles as the migration
-target (WG-REBUILD-PLAN §42): v1 databases are already at ``user_version = 4``
-with v2's exact column set, so this copies rows rather than transforming them.
+The v1 job tables were ported to v2 unchanged and remain the migration source
+(WG-REBUILD-PLAN §42): v1 databases are at ``user_version = 4``, while the
+current target adds only newer sidecar metadata tables, so this copies the v1
+rows rather than transforming them.
 What the tool actually owes you is the safety around that copy -- a backup taken
 before anything is written, an idempotent merge, and a verification pass that
 compares content hashes rather than trusting the copy.

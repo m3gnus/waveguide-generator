@@ -17,7 +17,7 @@ import logging
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 
@@ -40,6 +40,13 @@ from .context import SolverContext
 from .frequency_sweep import (
     live_execution_frequencies,
     sort_native_result_frequencies,
+)
+from .field_traces_store import (
+    FieldTraceArtifact,
+    FieldTraceChannel,
+    estimate_field_trace_retention_bytes,
+    field_trace_retention_cap_bytes,
+    mesh_trace_dof_counts,
 )
 from .formulation import DEFAULT_BEM_FORMULATION, DEFAULT_COMPLEX_K_SHIFT
 from .infinite_baffle import require_full_3d_aperture_tag
@@ -282,11 +289,88 @@ def _native_check_open_edges(context: SolverContext) -> bool:
     return enclosure_depth > 0.0 or wall > 0.0
 
 
+def _field_trace_retention_plan(
+    msh_text: str,
+    *,
+    mesh_stats: Mapping[str, Any] | None,
+    frequency_count: int,
+    channel_count: int,
+    supported: bool,
+    cap_bytes: int | None,
+) -> tuple[bool, str | None, int | None, int]:
+    cap = field_trace_retention_cap_bytes() if cap_bytes is None else int(cap_bytes)
+    if cap < 0:
+        raise ValueError("field trace retention cap must be non-negative")
+    if not supported:
+        return False, "unsupported_solve_mode", None, cap
+    try:
+        n_p1, n_dp0 = mesh_trace_dof_counts(msh_text, mesh_stats)
+    except ValueError:
+        return False, "trace_size_estimate_unavailable", None, cap
+    estimated = estimate_field_trace_retention_bytes(
+        frequency_count,
+        n_p1,
+        n_dp0,
+        channel_count,
+    )
+    if estimated > cap:
+        return False, "size_cap_exceeded", estimated, cap
+    return True, None, estimated, cap
+
+
+def _field_trace_artifact(
+    msh_text: str,
+    channel_results: Sequence[tuple[str, Any]],
+    config: Any,
+) -> FieldTraceArtifact | None:
+    channels: list[FieldTraceChannel] = []
+    frequencies: NDArray[np.float64] | None = None
+    for channel_id, result in channel_results:
+        pressure = getattr(result, "surface_pressure_complex", None)
+        neumann = getattr(result, "surface_neumann_complex", None)
+        if pressure is None or neumann is None:
+            return None
+        result_frequencies = np.asarray(result.frequencies_hz, dtype=np.float64).reshape(-1)
+        if frequencies is None:
+            frequencies = result_frequencies
+        elif not np.array_equal(result_frequencies, frequencies):
+            raise ValueError("retained field-trace channel frequency grids differ")
+        channels.append(
+            FieldTraceChannel(
+                channel_id=str(channel_id),
+                pressure_p1=np.asarray(pressure, dtype=np.complex128),
+                neumann_dp0=np.asarray(neumann, dtype=np.complex128),
+            )
+        )
+    if frequencies is None:
+        return None
+    sound_speed = solver_sound_speed_m_per_s("hornlab_metal_bem")
+    k_real_f32 = (2.0 * np.pi * frequencies / sound_speed).astype(np.float32)
+    if getattr(config, "formulation", DEFAULT_BEM_FORMULATION) == "complex_k":
+        k_imag_f32 = (
+            k_real_f32.astype(np.float64)
+            * float(getattr(config, "complex_k_shift", DEFAULT_COMPLEX_K_SHIFT))
+        ).astype(np.float32)
+    else:
+        k_imag_f32 = np.zeros_like(k_real_f32)
+    return FieldTraceArtifact(
+        mesh_text=msh_text,
+        frequencies_hz=frequencies,
+        k_real=k_real_f32.astype(np.float64),
+        k_imag=k_imag_f32.astype(np.float64),
+        symmetry_plane=getattr(config, "native_symmetry_plane", None),
+        solve_path="full-3d",
+        channels=tuple(channels),
+    )
+
+
 def solve_metal_from_msh_text(
     msh_text: str,
     context: SolverContext,
     *,
     mesh_metadata: dict[str, Any] | None = None,
+    mesh_stats: Mapping[str, Any] | None = None,
+    field_trace_cap_bytes: int | None = None,
     progress_callback: Any = None,
     stage_callback: StageCallback | None = None,
     cancellation_callback: CancelCallback | None = None,
@@ -344,6 +428,16 @@ def solve_metal_from_msh_text(
         return True
 
     aperture_tag = require_full_3d_aperture_tag(context, mesh_metadata)
+    retain_traces, trace_reason, trace_estimated_bytes, trace_cap_bytes = (
+        _field_trace_retention_plan(
+            msh_text,
+            mesh_stats=mesh_stats,
+            frequency_count=len(live_execution_frequencies(context)),
+            channel_count=1,
+            supported=aperture_tag is None,
+            cap_bytes=field_trace_cap_bytes,
+        )
+    )
     frame_override = native_observation_frame(
         context,
         msh_text,
@@ -367,6 +461,7 @@ def solve_metal_from_msh_text(
         "native_symmetry_plane": native_symmetry_plane(context),
         "native_check_open_edges": _native_check_open_edges(context),
         "mesh_validate": context.mesh_validation_mode != "off",
+        "return_surface_traces": retain_traces,
     }
     if result_callback is not None:
         kwargs["on_frequency_result"] = on_frequency_result
@@ -430,6 +525,10 @@ def solve_metal_from_msh_text(
             "solver_log": json_safe_native_value(response_solver_log(getattr(result, "solver_log", []))),
             "native_diagnostics": json_safe_native_value(list(getattr(result, "native_diagnostics", []) or [])),
         },
+        "field_trace_retention": {
+            "estimated_bytes": trace_estimated_bytes,
+            "cap_bytes": trace_cap_bytes,
+        },
     }
     if aperture_tag is not None:
         metadata["metal"]["aperture_tag"] = aperture_tag
@@ -438,7 +537,7 @@ def solve_metal_from_msh_text(
             "aperture_tag": aperture_tag,
             "source": "hornlab-waveguide-mesher",
         }
-    return build_solver_response(
+    response = build_solver_response(
         result=result,
         config=config,
         context=context,
@@ -446,6 +545,16 @@ def solve_metal_from_msh_text(
         metadata=metadata,
         sound_speed_m_per_s=solver_sound_speed_m_per_s("hornlab_metal_bem"),
     )
+    field_traces = (
+        _field_trace_artifact(msh_text, [("default", result)], config)
+        if retain_traces
+        else None
+    )
+    if retain_traces and field_traces is None:
+        trace_reason = "trace_output_missing"
+    response["_field_traces"] = field_traces
+    response["_field_trace_unavailable_reason"] = trace_reason
+    return response
 
 
 def _imported_frame(record: Mapping[str, Any], context: SolverContext) -> Any:
@@ -875,6 +984,16 @@ def _apply_channel_driver(
         result.sphere_pressure_complex = (
             np.asarray(sphere, dtype=np.complex128) * scale_raw[:, None]
         )
+    surface_pressure = getattr(result, "surface_pressure_complex", None)
+    if surface_pressure is not None:
+        result.surface_pressure_complex = (
+            np.asarray(surface_pressure, dtype=np.complex128) * scale_raw[:, None]
+        )
+    surface_neumann = getattr(result, "surface_neumann_complex", None)
+    if surface_neumann is not None:
+        result.surface_neumann_complex = (
+            np.asarray(surface_neumann, dtype=np.complex128) * scale_raw[:, None]
+        )
     payload["source_id"] = source_id
     payload["source_area_m2"] = area_m2
     return payload
@@ -1171,6 +1290,7 @@ def solve_imported_metal_from_msh_text(
     request: SolveRequest,
     record: Mapping[str, Any],
     *,
+    field_trace_cap_bytes: int | None = None,
     stage_callback: StageCallback | None = None,
     cancellation_callback: CancelCallback | None = None,
     result_callback: ResultCallback | None = None,
@@ -1208,6 +1328,22 @@ def solve_imported_metal_from_msh_text(
         request, quadrants=quadrants, source_motion=config_motion
     )
     context.validate()
+    mesh_record = record.get("mesh")
+    mesh_record = mesh_record if isinstance(mesh_record, Mapping) else {}
+    imported_mesh_stats = mesh_record.get("stats")
+    imported_mesh_stats = (
+        imported_mesh_stats if isinstance(imported_mesh_stats, Mapping) else None
+    )
+    retain_traces, trace_reason, trace_estimated_bytes, trace_cap_bytes = (
+        _field_trace_retention_plan(
+            msh_text,
+            mesh_stats=imported_mesh_stats,
+            frequency_count=len(live_execution_frequencies(context)),
+            channel_count=len(geometry.drive_channels),
+            supported=True,
+            cap_bytes=field_trace_cap_bytes,
+        )
+    )
 
     source_specs: list[dict[int, complex]] = []
     source_profiles: dict[int, Any] = {}
@@ -1315,6 +1451,7 @@ def solve_imported_metal_from_msh_text(
         "mesh_validate": context.mesh_validation_mode != "off",
         "frame_override": frame_override,
         "source_motion": config_motion,
+        "return_surface_traces": retain_traces,
     }
     if result_callback is not None:
         kwargs["on_frequency_result"] = on_frequency_result
@@ -1673,6 +1810,10 @@ def solve_imported_metal_from_msh_text(
             else {"excluded": False, "declared_volume_count": len(fem_volumes)}
         ),
         "performance": {"total_time_seconds": time.time() - started},
+        "field_trace_retention": {
+            "estimated_bytes": trace_estimated_bytes,
+            "cap_bytes": trace_cap_bytes,
+        },
     }
     if cardioid_campaign is not None:
         matrix_result = cardioid_campaign["result"]
@@ -1735,6 +1876,19 @@ def solve_imported_metal_from_msh_text(
         envelope["_channel_bases_npz"] = channel_bases_npz
     if cardioid_campaign is not None:
         envelope["_radiation_impedance_npz"] = cardioid_campaign["artifact"]
+    field_traces = (
+        _field_trace_artifact(
+            msh_text,
+            [(channel.id, sorted_results[channel.id]) for channel in geometry.drive_channels],
+            config,
+        )
+        if retain_traces
+        else None
+    )
+    if retain_traces and field_traces is None:
+        trace_reason = "trace_output_missing"
+    envelope["_field_traces"] = field_traces
+    envelope["_field_trace_unavailable_reason"] = trace_reason
     return envelope
 
 
@@ -1817,12 +1971,16 @@ class MetalEngine:
             results.setdefault("metadata", {})["mesh_stats"] = mesh_stats
             channel_bases = results.pop("_channel_bases_npz", None)
             radiation_matrix = results.pop("_radiation_impedance_npz", None)
+            field_traces = results.pop("_field_traces", None)
+            field_trace_reason = results.pop("_field_trace_unavailable_reason", None)
             return EngineRunResult(
                 results=results,
                 msh_text=msh_text,
                 mesh_stats=mesh_stats,
                 channel_bases=channel_bases,
                 radiation_impedance=radiation_matrix,
+                field_traces=field_traces,
+                field_trace_unavailable_reason=field_trace_reason,
             )
 
         mode = str(request.design.root.simulation.solver_mode or "auto").strip().lower()
@@ -1857,6 +2015,7 @@ class MetalEngine:
                     if mode == "circsym"
                     else "geometry is eligible for Metal's axisymmetric meridian fast path"
                 )
+                outcome.field_trace_unavailable_reason = "unsupported_solve_mode"
                 return outcome
 
         context = SolverContext.from_request(request, solver_mode="full_3d")
@@ -1874,6 +2033,7 @@ class MetalEngine:
             mesh["msh_text"],
             context,
             mesh_metadata=mesh["metadata"],
+            mesh_stats=mesh["stats"],
             stage_callback=stage_cb,
             cancellation_callback=cancel_cb,
             result_callback=result_cb,
@@ -1887,7 +2047,15 @@ class MetalEngine:
             if mode == "full_3d"
             else "axisymmetric-meridian eligibility was rejected"
         )
-        return EngineRunResult(results=results, msh_text=mesh["msh_text"], mesh_stats=mesh["stats"])
+        field_traces = results.pop("_field_traces", None)
+        field_trace_reason = results.pop("_field_trace_unavailable_reason", None)
+        return EngineRunResult(
+            results=results,
+            msh_text=mesh["msh_text"],
+            mesh_stats=mesh["stats"],
+            field_traces=field_traces,
+            field_trace_unavailable_reason=field_trace_reason,
+        )
 
 
 __all__ = [

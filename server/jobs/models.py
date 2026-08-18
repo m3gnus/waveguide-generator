@@ -807,6 +807,11 @@ class JobItem(JobModel):
     has_radiation_impedance_artifact: bool = False
     radiation_impedance_artifact_bytes: int | None = None
     persistence_warnings: list[str] = Field(default_factory=list)
+    # Field-plane readiness distinguishes retained traces from jobs that must
+    # be re-solved or use a solve mode unsupported by post-solve evaluation.
+    field_plane_available: bool = False
+    field_trace_bytes: int | None = None
+    unavailable_reason: str | None = None
     label: str | None = None
     error_message: str | None = None
     cancellation_requested: bool
