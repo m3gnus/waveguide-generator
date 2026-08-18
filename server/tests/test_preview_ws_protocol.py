@@ -208,6 +208,48 @@ def test_protocol_reuses_injected_builder_for_identical_geometry_requests() -> N
     asyncio.run(scenario())
 
 
+def test_placement_never_reaches_the_viewport_or_splits_its_cache() -> None:
+    """``mesh.vertical_offset`` is a CAD placement, not a viewport transform.
+
+    The preview shows the recentred frame the solver, the field planes and the
+    mesh artifacts live in, so two designs that differ only in their placement
+    are one build and one cache entry.
+    """
+
+    async def scenario() -> list[Mapping[str, Any]]:
+        configs: list[Mapping[str, Any]] = []
+
+        def builder(config: Mapping[str, Any], _options: Any):
+            configs.append(config)
+            return _small_geometry()
+
+        transport = FakeTransport()
+        protocol = PreviewProtocol(epoch=73, preview_builder=builder)
+        task = asyncio.create_task(protocol.run(transport))
+        await _wait_until(lambda: bool(transport.json))
+        for index, offset in enumerate((30, 0)):
+            await transport.incoming.put(
+                _request(
+                    73,
+                    index + 1,
+                    design={
+                        "formula": "OSSE",
+                        "L": 120,
+                        "a": 45,
+                        "mesh": {"vertical_offset": offset},
+                    },
+                )
+            )
+            await _wait_until(lambda: len(transport.binary) == index + 1)
+        await transport.incoming.put(None)
+        await task
+        return configs
+
+    configs = asyncio.run(scenario())
+    assert len(configs) == 1
+    assert configs[0]["mesh"]["verticalOffset"] == 0.0
+
+
 def test_only_a_viewport_on_the_curvature_heatmap_pays_for_curvature() -> None:
     """Analytic curvature is opt-in per request, not a property of fine LOD.
 

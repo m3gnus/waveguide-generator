@@ -81,11 +81,16 @@ def _progress(
         progress_cb(stage, float(progress), message)
 
 
-def _solver_mesher_config(design: DesignConfig) -> dict[str, Any]:
+def _solver_mesher_config(
+    design: DesignConfig, *, keep_placement: bool = False
+) -> dict[str, Any]:
     """Restore solver-domain controls hidden by preview translation.
 
     Preview always expands to 1234 quadrants; solve meshes preserve ATH's
     reduced-domain rules (v1 ``mesher_adapter.py:140-187,342-424``).
+
+    ``keep_placement`` is for the CAD exports only: they are the one consumer
+    that wants ``mesh.vertical_offset`` applied (see below).
     """
 
     root = design.root
@@ -111,12 +116,18 @@ def _solver_mesher_config(design: DesignConfig) -> dict[str, Any]:
     quadrants, _ = _resolve_quadrants(design)
     mesh["quadrants"] = quadrants
 
-    # A y-offset moves the y-cut rim away from its native symmetry plane.  V1
-    # preserves the requested domain but omits that unsafe placement
-    # (``mesher_adapter.py:147-156``).
-    if quadrants in {1, 12} and abs(
-        _strict_scalar(root.mesh.vertical_offset, 0.0, "mesh.vertical_offset")
-    ) > 0.0:
+    # ``mesh.vertical_offset`` is a rigid +y placement the mesher applies after
+    # every cut plane has run at the origin.  The solve mesh is always built in
+    # that recentred origin frame, whatever domain the resolver picked, so
+    # results, mesh artifacts and field traces cannot depend on the choice --
+    # and they could not follow the placement anyway, because the solver's
+    # symmetry images only support mirror planes through the origin, which pins
+    # a y-cut reduced mesh to y=0 forever.  A translation of the whole assembly
+    # is acoustically inert (the observation frame is derived from the solved
+    # mesh), so nothing is lost: the placement is applied only at the CAD
+    # boundary, by the solid STEP and the CAD-link exports.
+    _strict_scalar(root.mesh.vertical_offset, 0.0, "mesh.vertical_offset")
+    if not keep_placement:
         mesh["verticalOffset"] = 0.0
 
     # No sharp-edge fallback here.  V1 flattened the enclosure roundover to zero
