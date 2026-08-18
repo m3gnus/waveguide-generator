@@ -354,6 +354,14 @@ describe('results chart layouts', () => {
     const target = host.querySelector<HTMLElement>('.chart-placeholder')!;
     await act(async () => { target.append(document.createElement('canvas')); await Promise.resolve(); });
     await act(async () => { host.querySelector<HTMLButtonElement>('[aria-label="Copy panel 1 as PNG"]')!.click(); });
+    // Poll rather than count ticks. A rejected copy settles later than the
+    // resolved one above -- the throw has to unwind into the handler's catch
+    // before it can set the status -- and on a loaded machine that lands
+    // several turns after the click, which is why sampling immediately failed
+    // intermittently and only in the full suite.
+    for (let i = 0; i < 100 && !host.querySelector('.result-image-status'); i += 1) {
+      await act(async () => { await new Promise((resolve) => { setTimeout(resolve, 5); }); });
+    }
     expect(host.querySelector('.result-image-status')?.textContent).toBe('Copy failed');
     expect(host.querySelector('.result-card')).not.toBeNull();
   });

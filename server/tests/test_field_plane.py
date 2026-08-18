@@ -461,6 +461,65 @@ def test_artifact_backend_unavailable_returns_clear_error(
     asyncio.run(scenario())
 
 
+def test_degraded_assembly_backend_warns_once_not_per_request(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A field plane assembled on the slow backend must say so, exactly once.
+
+    Same rule the solve path follows: falling back to numba silently is how
+    someone spends a week wondering why re-evaluation is slow. But dragging the
+    plane re-evaluates continuously, so warning per request would bury the log
+    it is trying to write.
+    """
+
+    warning = "Falling back to the numba assembly backend because OpenCL is unusable: no device."
+    monkeypatch.setattr(
+        field_plane,
+        "_field_backend_status",
+        lambda _backend: {"available": True, "warning": warning},
+    )
+    monkeypatch.setattr(
+        field_plane.importlib,
+        "import_module",
+        lambda _name: SimpleNamespace(
+            load_mesh=lambda *_a, **_k: object(),
+            evaluate_exterior_from_traces=lambda *_a, **_k: None,
+        ),
+    )
+    monkeypatch.setattr(field_plane, "_WARNED_BACKENDS", set())
+
+    with caplog.at_level("WARNING", logger=field_plane.logger.name):
+        for _ in range(3):
+            field_plane._load_field_backend(BEMPP_FIELD_TRACE_BACKEND)
+
+    emitted = [r for r in caplog.records if warning in r.getMessage()]
+    assert len(emitted) == 1
+
+
+def test_healthy_assembly_backend_stays_quiet(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(
+        field_plane,
+        "_field_backend_status",
+        lambda _backend: {"available": True, "warning": None},
+    )
+    monkeypatch.setattr(
+        field_plane.importlib,
+        "import_module",
+        lambda _name: SimpleNamespace(
+            load_mesh=lambda *_a, **_k: object(),
+            evaluate_exterior_from_traces=lambda *_a, **_k: None,
+        ),
+    )
+    monkeypatch.setattr(field_plane, "_WARNED_BACKENDS", set())
+
+    with caplog.at_level("WARNING", logger=field_plane.logger.name):
+        field_plane._load_field_backend(BEMPP_FIELD_TRACE_BACKEND)
+
+    assert caplog.records == []
+
+
 def test_system_response_weights_both_traces_and_evaluates_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -729,7 +788,12 @@ def test_evaluation_timeout_returns_504_but_holds_permit_until_thread_finishes(
             "/api/results/timeout/field-plane",
             _body(),
         )
-        assert entered.is_set()
+        # Wait rather than sample: the 10 ms timeout is meant to expire before
+        # the evaluation finishes, not before the worker thread is scheduled at
+        # all, and a loaded machine loses that second race. What matters is that
+        # the work did start and outlived the response, not that it started
+        # within the timeout.
+        assert entered.wait(timeout=10.0)
         assert status == 504
         assert json.loads(raw)["detail"]["code"] == "evaluation_timeout"
         assert app.state.jobs_runtime.metal_permit.field_running is True

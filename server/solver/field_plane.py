@@ -8,6 +8,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 import importlib
 import json
+import logging
 import math
 import os
 from pathlib import Path
@@ -33,9 +34,15 @@ from .field_traces_store import (
 from .metal_permit import MetalLease, MetalPermit
 
 
+logger = logging.getLogger(__name__)
+
 FIELD_PLANE_ORDERING = "v-major-row-major"
 FIELD_PLANE_TIMEOUT_ENV = "WG2_FIELD_PLANE_TIMEOUT_SECONDS"
 DEFAULT_FIELD_PLANE_TIMEOUT_SECONDS = 120.0
+
+#: Backends whose degraded-assembly warning has already been logged. Dragging
+#: the plane re-evaluates continuously, so this must not warn per request.
+_WARNED_BACKENDS: set[str] = set()
 
 
 class FieldPlaneJobNotFound(LookupError):
@@ -93,6 +100,14 @@ def _load_field_backend(backend: FieldTraceBackend) -> _FieldBackendAPI:
             f"Field-trace artifact requires backend {backend!r}, but that "
             f"backend is unavailable: {reason}"
         )
+
+    warning = status.get("warning")
+    if warning and backend not in _WARNED_BACKENDS:
+        # Same rule the solve path follows: a degraded assembly backend is
+        # never silent. Field evaluation re-runs on every drag, so say it once
+        # per process rather than once per request.
+        _WARNED_BACKENDS.add(backend)
+        logger.warning("%s", warning)
 
     package_name = (
         "hornlab_metal_bem"

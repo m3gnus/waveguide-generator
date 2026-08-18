@@ -3,6 +3,14 @@ import type { JobItem } from '../api/jobsSocket';
 import { summaryGroups, summaryText, type SummaryGroup } from './summary';
 import type { ResultPayload } from './types';
 
+/** Group a count the way the summary does — in the runner's locale, not en-US.
+ *
+ * `toLocaleString()` takes its separator from the machine's region, so spelling
+ * the expectation out as '4,500' passes in the US and fails everywhere that
+ * groups with a space or a dot. The assertion is that the count is grouped at
+ * all, which is what this preserves; an ungrouped '4500' still fails. */
+const grouped = (value: number) => value.toLocaleString();
+
 function job(overrides: Partial<JobItem> = {}): JobItem {
   return {
     id: 'abcdef123456', run_number: 7, parent_job_id: null,
@@ -71,8 +79,8 @@ describe('simulation summary groups', () => {
     expect(row(groups, 'Sweep', 'Spacing')?.value).toBe('logarithmic');
     expect(row(groups, 'Solve', 'Path')).toEqual({ label: 'Path', value: 'full 3D', title: 'requested full solve' });
     expect(row(groups, 'Solve', 'Symmetry')?.value).toBe('quadrant 1 · quarter domain (server resolved)');
-    expect(row(groups, 'Mesh', 'Triangles')?.value).toBe('4,500');
-    expect(row(groups, 'Mesh', 'Full domain')?.value).toBe('18,000');
+    expect(row(groups, 'Mesh', 'Triangles')?.value).toBe(grouped(4_500));
+    expect(row(groups, 'Mesh', 'Full domain')?.value).toBe(grouped(18_000));
     expect(row(groups, 'Measurement', 'Distance')?.value).toBe('2.00 m from mouth (requested 1.50 m)');
     expect(row(groups, 'Measurement', 'Sampling')?.value).toBe('5° resolved (requested 10°), 37 samples');
     expect(row(groups, 'Measurement', 'Balloon')?.value).toBe('37 × 72 × 3 freq · hemisphere');
@@ -134,9 +142,9 @@ describe('simulation summary groups', () => {
     };
     const groups = summaryGroups({ result });
 
-    expect(row(groups, 'Mesh', 'Triangles')?.value).toBe('3,000');
+    expect(row(groups, 'Mesh', 'Triangles')?.value).toBe(grouped(3_000));
     expect(row(groups, 'Mesh', 'Full domain')).toEqual({
-      label: 'Full domain', value: '12,000', title: 'Symmetry-expanded equivalent of the solved mesh.',
+      label: 'Full domain', value: grouped(12_000), title: 'Symmetry-expanded equivalent of the solved mesh.',
     });
   });
 
