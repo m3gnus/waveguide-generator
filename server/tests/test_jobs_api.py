@@ -271,6 +271,58 @@ def test_discarded_mesh_is_regenerated_from_stored_design_for_each_download(
     asyncio.run(scenario())
 
 
+def test_discarded_mesh_regenerates_on_the_domain_the_job_solved(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A quarter-domain solve must not come back as a full-domain mesh.
+
+    ``mesh.quadrants`` in the snapshot is only what the user *declared*; symmetry
+    resolution is free to pick a smaller domain and the solve ran on that one, so
+    the rebuild has to replay the resolution the job recorded.
+    """
+
+    import server.mesh.builder as mesh_builder
+
+    body = _solve_body(delay_ms=0)
+    request = SolveRequest.model_validate(
+        {**body, "design": {**body["design"], "mesh": {"quadrants": 1234}}}
+    )
+    rebuilt_quadrants: list[float | None] = []
+
+    async def fake_build_solver_mesh(design, options, *, force_rebuild=False):
+        rebuilt_quadrants.append(design.root.mesh.quadrants.constant_value())
+        return {"msh_text": "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n"}
+
+    monkeypatch.setattr(mesh_builder, "build_solver_mesh", fake_build_solver_mesh)
+
+    async def scenario() -> None:
+        app = create_app(data_dir=tmp_path)
+        store = app.state.jobs_runtime.store
+        store.initialize()
+
+        reduced = _complete_job("reduced", request=request)
+        reduced["task_metadata"]["symmetry"] = {
+            "requested": "auto",
+            "resolved_quadrants": 1,
+        }
+        store.create_job(reduced)
+        # No recorded resolution: a v1 row, whose declared domain is the one v1
+        # meshed. Leave it alone rather than assuming a full domain for it.
+        store.create_job(_complete_job("unrecorded", request=request))
+
+        for job_id in ("reduced", "unrecorded"):
+            status, _raw, headers = await _request_with_headers(
+                app, "GET", f"/api/mesh-artifact/{job_id}"
+            )
+            assert status == 200
+            assert headers["x-wg2-mesh-regenerated"] == "1"
+
+        assert rebuilt_quadrants == [1.0, 1234.0]
+        await app.state.jobs_runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
 def test_discarded_mesh_without_stored_design_remains_gone(
     tmp_path: Path,
 ) -> None:
