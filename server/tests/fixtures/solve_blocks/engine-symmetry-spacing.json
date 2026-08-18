@@ -1,0 +1,32 @@
+{
+  "blocks": {
+    "WG.Solve": {
+      "items": {
+        "Engine": "MeTaL",
+        "Symmetry": "half_yz",
+        "MeshValidation": "strict",
+        "Verbose": "1",
+        "SweepSpacing": "linear",
+        "FutureSetting": "ignored"
+      }
+    }
+  },
+  "expected": {
+    "engine": "metal",
+    "symmetry": "half_yz",
+    "mesh_validation_mode": "strict",
+    "verbose": true,
+    "frequency_spacing": "linear",
+    "polar_config": {
+      "angle_range": [0, 180, 37],
+      "angle_step": 5,
+      "distance": 2,
+      "norm_angle": 5,
+      "inclination": 45,
+      "enabled_axes": ["horizontal", "vertical", "diagonal"],
+      "observation_origin": "mouth",
+      "spherical_sampling": false,
+      "field_plane": true
+    }
+  }
+}

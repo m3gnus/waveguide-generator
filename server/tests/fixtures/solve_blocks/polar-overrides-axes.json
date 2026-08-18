@@ -1,0 +1,41 @@
+{
+  "blocks": {
+    "ABEC.Polars:SPL_D": {
+      "items": {
+        "MapAngleRange": "0,0.3,4",
+        "Distance": "3.5",
+        "NormAngle": "0.1",
+        "Inclination": "30"
+      }
+    },
+    "ABEC.Polars:SPL_H": {
+      "items": {
+        "Inclination": "0"
+      }
+    },
+    "WG.Solve": {
+      "items": {
+        "ObservationOrigin": "throat",
+        "SphericalSampling": "1"
+      }
+    }
+  },
+  "expected": {
+    "engine": "auto",
+    "symmetry": "auto",
+    "mesh_validation_mode": "warn",
+    "verbose": false,
+    "frequency_spacing": "log",
+    "polar_config": {
+      "angle_range": [0, 0.3, 4],
+      "angle_step": 0.09999999999999999,
+      "distance": 3.5,
+      "norm_angle": 0.1,
+      "inclination": 30,
+      "enabled_axes": ["horizontal", "diagonal"],
+      "observation_origin": "throat",
+      "spherical_sampling": true,
+      "field_plane": true
+    }
+  }
+}
