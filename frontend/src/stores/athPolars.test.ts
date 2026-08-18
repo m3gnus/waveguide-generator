@@ -28,6 +28,7 @@ describe('ATH directivity config compatibility', () => {
       enabledAxes: ['horizontal', 'vertical'],
       observationOrigin: 'mouth',
       sphericalSampling: false,
+      fieldPlane: true,
     });
   });
 

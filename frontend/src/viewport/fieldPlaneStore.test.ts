@@ -178,6 +178,27 @@ describe('field-plane state', () => {
     expect(store.getState().plane?.width_m).toBe(plane.width_m);
   });
 
+  it('fully disables the overlay when its selected job becomes unavailable', async () => {
+    const store = createFieldPlaneStore({
+      fetchPlane: async (jobId, request) => response(jobId, request),
+      fetchResults: async () => ({ frequencies: [800] }),
+    });
+    store.getState().enable('job-1', plane);
+    await vi.waitFor(() => expect(store.getState().status).toBe('ready'));
+    store.getState().setAnimating(true);
+
+    store.getState().reportUnavailable('disabled by selected job');
+
+    expect(store.getState()).toMatchObject({
+      enabled: false,
+      jobId: null,
+      plane: null,
+      field: null,
+      animating: false,
+      error: 'disabled by selected job',
+    });
+  });
+
   it('keeps one drag request running and collapses pending transforms to the latest', async () => {
     const dragGate = deferred();
     const fetchPlane = vi.fn(async (jobId: string, request: FieldPlaneRequest) => {

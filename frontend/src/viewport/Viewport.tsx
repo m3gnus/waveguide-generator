@@ -134,10 +134,9 @@ function FieldPlaneOffsetInput() {
 }
 
 export function fieldPlaneJob(jobs: readonly JobItem[], selectedJobId: string | null): JobItem | null {
-  const eligible = (job: JobItem) => job.status === 'complete' && job.field_plane_available === true;
-  return jobs.find((job) => job.id === selectedJobId && eligible(job))
-    ?? jobs.find(eligible)
-    ?? null;
+  const selected = jobs.find((job) => job.id === selectedJobId && job.status === 'complete');
+  const candidate = selected ?? jobs.find((job) => job.status === 'complete');
+  return candidate?.field_plane_available === true ? candidate : null;
 }
 
 export function fieldPlaneUnavailableTooltip(jobs: readonly JobItem[]): string {
@@ -150,6 +149,7 @@ export function fieldPlaneUnavailableTooltip(jobs: readonly JobItem[]): string {
     case 'size_cap_exceeded': return 'Field plane unavailable — reduce the mesh or sweep size, then re-solve';
     case 'trace_output_missing': return 'Field plane unavailable — the solver returned no field traces; re-solve the design';
     case 'unsupported_solve_mode': return 'Field plane unavailable — use a full-3D Metal solve';
+    case 'disabled_by_option': return 'Field plane unavailable — enable Keep field plane data and re-solve';
     default: return 'Field plane unavailable — no completed run has retained field traces';
   }
 }
@@ -306,6 +306,7 @@ export function Viewport() {
   const toggleFieldPlane = () => {
     if (fieldEnabled) {
       if (clipMode === 'field-plane') setClipMode('off');
+      setInvertFieldClip(false);
       useFieldPlaneStore.getState().disable();
       return;
     }
@@ -375,18 +376,21 @@ export function Viewport() {
   }, [importedMesh]);
 
   useEffect(() => {
-    if (!fieldEnabled) return;
-    if (!availableFieldJob) {
-      useFieldPlaneStore.getState().reportUnavailable('re-solve to enable field planes');
-      return;
-    }
+    if (availableFieldJob || !fieldEnabled) return;
+    useFieldPlaneStore.getState().reportUnavailable('re-solve to enable field planes');
+  }, [availableFieldJob, fieldEnabled]);
+
+  useEffect(() => {
+    if (!fieldEnabled || !availableFieldJob) return;
     if (!activeScene || fieldJobId === availableFieldJob.id) return;
     useFieldPlaneStore.getState().selectJob(availableFieldJob.id, defaultFieldPlane(activeScene));
   }, [activeScene, availableFieldJob, fieldEnabled, fieldJobId]);
 
   useEffect(() => {
-    if (clipMode === 'field-plane' && (!fieldEnabled || !fieldPlane)) setClipMode('off');
-  }, [clipMode, fieldEnabled, fieldPlane]);
+    if (availableFieldJob && fieldEnabled && fieldPlane) return;
+    if (clipMode === 'field-plane') setClipMode('off');
+    if (!availableFieldJob && invertFieldClip) setInvertFieldClip(false);
+  }, [availableFieldJob, clipMode, fieldEnabled, fieldPlane, invertFieldClip]);
 
   useEffect(() => {
     useFieldPlaneStore.getState().applyRenderingPreferences({
@@ -667,19 +671,17 @@ export function Viewport() {
       <div className="viewport-tool-group">
         <button className={clipMode === 'section' ? 'on' : ''} title="Section cut at X=0" aria-label="Section cut at X=0" aria-pressed={clipMode === 'section'} onClick={() => setClipMode((value) => value === 'section' ? 'off' : 'section')}><Icon name="section"/></button>
       </div>
-      <div className="viewport-tool-group">
+      {availableFieldJob && <div className="viewport-tool-group">
         <button
           type="button"
           className={fieldEnabled ? 'on' : ''}
-          title={!availableFieldJob
-            ? fieldPlaneUnavailableTooltip(jobs)
-            : !activeScene ? 'Field plane unavailable — waiting for viewport geometry' : 'Toggle acoustic field plane'}
+          title={!activeScene ? 'Field plane unavailable — waiting for viewport geometry' : 'Toggle acoustic field plane'}
           aria-label="Acoustic field plane overlay"
           aria-pressed={fieldEnabled}
-          disabled={!fieldEnabled && (!availableFieldJob || !activeScene)}
+          disabled={!fieldEnabled && !activeScene}
           onClick={toggleFieldPlane}
         ><Icon name="field-plane"/></button>
-        <button
+        {fieldEnabled && <button
           type="button"
           className={clipMode === 'field-plane' ? 'on' : ''}
           title="Clip model to field plane"
@@ -687,8 +689,8 @@ export function Viewport() {
           aria-pressed={clipMode === 'field-plane'}
           disabled={!fieldEnabled || !fieldPlane}
           onClick={() => setClipMode((value) => value === 'field-plane' ? 'off' : 'field-plane')}
-        ><Icon name="section"/></button>
-        <button
+        ><Icon name="section"/></button>}
+        {fieldEnabled && <button
           type="button"
           className={invertFieldClip ? 'on' : ''}
           title="Invert field-plane clip side"
@@ -696,8 +698,8 @@ export function Viewport() {
           aria-pressed={invertFieldClip}
           disabled={clipMode !== 'field-plane'}
           onClick={() => setInvertFieldClip((value) => !value)}
-        ><span className="wg2-text-glyph">↔</span></button>
-      </div>
+        ><span className="wg2-text-glyph">↔</span></button>}
+      </div>}
       <i className="wg2-tool-divider" />
       <div className="viewport-tool-group viewport-tool-segment">
         <button className="viewport-tool-text projection-toggle" aria-label={`Switch to ${cameraProjection === 'perspective' ? 'orthographic' : 'perspective'} camera`} onClick={toggleProjection}>{cameraProjection === 'perspective' ? 'Persp' : 'Ortho'}</button>

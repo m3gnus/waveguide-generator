@@ -3,7 +3,9 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DecodedFrame } from '../api/frame';
 import type { CadReturnIngestRecord } from '../api/cadlink';
+import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
 import type { PreviewSnapshot } from '../api/previewSocket';
+import { compareSelection } from '../api/results';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetDesignStore } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
@@ -11,6 +13,7 @@ import { workspaceModeStore } from '../stores/workspaceMode';
 import { createImportedMeshScene } from './importedMesh';
 import { importedMeshStore } from './importedMeshStore';
 import { parseMSH } from './mshParser';
+import { useFieldPlaneStore } from './fieldPlaneStore';
 import meshFixture from './test-fixtures/tagged_sources-small.msh?raw';
 
 const frame: DecodedFrame = {
@@ -54,6 +57,33 @@ const previewSnapshot: PreviewSnapshot = {
 
 const refreshCalls: number[] = [];
 
+function completeJob(id: string, fieldPlaneAvailable: boolean): JobItem {
+  return {
+    id,
+    status: 'complete',
+    field_plane_available: fieldPlaneAvailable,
+  } as JobItem;
+}
+
+function publishJobs(jobs: JobItem[]): void {
+  const manager = jobsSocket as unknown as {
+    snapshot: JobsSnapshot;
+    listeners: Set<() => void>;
+  };
+  manager.snapshot = { connection: 'connected', epoch: 1, cursor: 1, jobs, error: null };
+  manager.listeners.forEach((listener) => listener());
+}
+
+const fieldPlane = {
+  origin_m: [0, 0, 0] as [number, number, number],
+  axis_u: [1, 0, 0] as [number, number, number],
+  axis_v: [0, 0, 1] as [number, number, number],
+  width_m: 0.2,
+  height_m: 0.4,
+  nx: 96,
+  ny: 96,
+};
+
 vi.mock('../api/previewSocket', () => ({
   PREVIEW_FINE_IDLE_MS: 140,
   previewSocket: {
@@ -74,6 +104,9 @@ describe('Viewport preview errors', () => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     resetDesignStore();
     resetCadReturnStore();
+    compareSelection.clear();
+    publishJobs([]);
+    useFieldPlaneStore.getState().disable();
     importedMeshStore.clear();
     workspaceModeStore.setMode('parametric');
     useDocumentStore.setState({ filename: 'loaded-design.cfg' });
@@ -86,6 +119,9 @@ describe('Viewport preview errors', () => {
   afterEach(() => {
     act(() => root.unmount());
     useDocumentStore.setState({ filename: 'tritonia_mk2.cfg' });
+    compareSelection.clear();
+    publishJobs([]);
+    useFieldPlaneStore.getState().disable();
     importedMeshStore.clear();
     workspaceModeStore.setMode('parametric');
     host.remove();
@@ -138,7 +174,7 @@ describe('Viewport preview errors', () => {
   it('cycles display modes from one compact toolbar control', () => {
     const mode = host.querySelector<HTMLButtonElement>('.display-mode-tools button');
     expect(host.querySelectorAll('.display-mode-tools button')).toHaveLength(1);
-    expect(host.querySelectorAll('.viewport-tools button')).toHaveLength(9);
+    expect(host.querySelectorAll('.viewport-tools button')).toHaveLength(6);
     expect(host.querySelector('.viewport-tools [aria-label="Import Gmsh 2.2 mesh"]')).toBeNull();
     expect(host.querySelector('.viewport-tools [aria-label="View presets"]')).toBeNull();
     expect(mode?.getAttribute('aria-label')).toContain('Display mode: Clay');
@@ -146,13 +182,54 @@ describe('Viewport preview errors', () => {
     expect(mode?.getAttribute('aria-label')).toContain('Display mode: Solid + wireframe');
   });
 
-  it('disables the field overlay with an actionable tooltip when no solve retained traces', () => {
-    const fieldPlane = host.querySelector<HTMLButtonElement>('[aria-label="Acoustic field plane overlay"]');
-    expect(fieldPlane?.disabled).toBe(true);
-    expect(fieldPlane?.title).toContain('complete a full-3D solve');
-    expect(host.querySelector<HTMLButtonElement>('[aria-label="Clip model to field plane"]')?.disabled).toBe(true);
-    expect(host.querySelector<HTMLButtonElement>('[aria-label="Invert field-plane clip side"]')?.disabled).toBe(true);
+  it('hides all field-plane controls when the selected/latest complete job has no data', () => {
+    act(() => publishJobs([completeJob('unavailable', false)]));
+    expect(host.querySelector('[aria-label="Acoustic field plane overlay"]')).toBeNull();
+    expect(host.querySelector('[aria-label="Clip model to field plane"]')).toBeNull();
+    expect(host.querySelector('[aria-label="Invert field-plane clip side"]')).toBeNull();
     expect(host.querySelector<HTMLButtonElement>('[aria-label="Section cut at X=0"]')).not.toBeNull();
+    expect(host.querySelectorAll('.viewport-tools .viewport-tool-group:empty')).toHaveLength(0);
+  });
+
+  it('shows overlay alone until enabled, then shows clip and invert', () => {
+    act(() => publishJobs([completeJob('available', true)]));
+    expect(host.querySelector('[aria-label="Acoustic field plane overlay"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="Clip model to field plane"]')).toBeNull();
+    expect(host.querySelector('[aria-label="Invert field-plane clip side"]')).toBeNull();
+
+    act(() => useFieldPlaneStore.setState({
+      enabled: true,
+      jobId: 'available',
+      plane: fieldPlane,
+      status: 'ready',
+    }));
+    expect(host.querySelector('[aria-label="Clip model to field plane"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="Invert field-plane clip side"]')).not.toBeNull();
+  });
+
+  it('resets overlay and clip when the selected job loses availability', () => {
+    act(() => {
+      publishJobs([completeJob('available', true), completeJob('unavailable', false)]);
+      compareSelection.setPrimary('available');
+      useFieldPlaneStore.setState({
+        enabled: true,
+        jobId: 'available',
+        plane: fieldPlane,
+        status: 'ready',
+      });
+    });
+    const clip = host.querySelector<HTMLButtonElement>('[aria-label="Clip model to field plane"]')!;
+    act(() => clip.click());
+    expect(clip.getAttribute('aria-pressed')).toBe('true');
+
+    act(() => compareSelection.setPrimary('unavailable'));
+    expect(host.querySelector('[aria-label="Acoustic field plane overlay"]')).toBeNull();
+    expect(useFieldPlaneStore.getState().enabled).toBe(false);
+
+    act(() => compareSelection.setPrimary('available'));
+    expect(host.querySelector('[aria-label="Acoustic field plane overlay"]')?.getAttribute('aria-pressed')).toBe('false');
+    expect(host.querySelector('[aria-label="Clip model to field plane"]')).toBeNull();
+    expect(host.querySelector('[aria-label="Invert field-plane clip side"]')).toBeNull();
   });
 
   it('keeps enclosure and frame stats in viewer preferences', () => {

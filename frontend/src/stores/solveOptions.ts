@@ -25,6 +25,7 @@ export interface PolarConfig {
   enabled_axes: PolarAxis[];
   observation_origin: ObservationOrigin;
   spherical_sampling: boolean;
+  field_plane: boolean;
 }
 
 export interface SolveOptions {
@@ -48,6 +49,7 @@ export interface PolarUiState {
   enabledAxes: PolarAxis[];
   observationOrigin: ObservationOrigin;
   sphericalSampling: boolean;
+  fieldPlane: boolean;
 }
 
 export const defaultPolarUi: PolarUiState = structuredClone(DEFAULT_ATH_POLAR_UI);
@@ -79,6 +81,7 @@ export function polarConfigFromUi(ui: PolarUiState): PolarConfig {
     enabled_axes: [...ui.enabledAxes],
     observation_origin: ui.observationOrigin,
     spherical_sampling: ui.sphericalSampling,
+    field_plane: ui.fieldPlane !== false,
   };
 }
 
@@ -118,6 +121,7 @@ export function polarUiFromConfig(config: unknown): PolarUiState | null {
     enabledAxes: axes.length ? axes : [...defaultPolarUi.enabledAxes],
     observationOrigin: source.observation_origin === 'throat' ? 'throat' : 'mouth',
     sphericalSampling: source.spherical_sampling === true,
+    fieldPlane: source.field_plane !== false,
   };
 }
 
@@ -209,6 +213,14 @@ export const useSolveOptionsStore = create<SolveOptionsStore>()(persist((set, ge
     frequencyListText: state.frequencyListText,
     polar: state.polar,
   }),
+  merge: (persisted, current) => {
+    const stored = persisted as Partial<SolveOptionsStore> | undefined;
+    return {
+      ...current,
+      ...stored,
+      polar: { ...current.polar, ...(stored?.polar ?? {}) },
+    };
+  },
 }));
 
 export function resetSolveOptionsStore(): void {
@@ -255,13 +267,14 @@ export function restoreSolveSettingsFromBlocks(blocks: unknown): void {
   restorePolarUiFromAthBlocks(blocks);
   const solve = wgSolveOverrides(blocks);
   if (!solve) return;
-  const { observationOrigin, sphericalSampling, ...flat } = solve;
+  const { observationOrigin, sphericalSampling, fieldPlane, ...flat } = solve;
   useSolveOptionsStore.setState((state) => ({
     ...flat,
     polar: {
       ...state.polar,
       ...(observationOrigin !== undefined ? { observationOrigin } : {}),
       ...(sphericalSampling !== undefined ? { sphericalSampling } : {}),
+      ...(fieldPlane !== undefined ? { fieldPlane } : {}),
     },
   }));
 }

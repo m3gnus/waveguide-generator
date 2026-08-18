@@ -149,8 +149,18 @@ $EndElements
         name = "metal"
 
         async def run(self, request, *, cancel_cb, stage_cb):
-            del request, stage_cb
+            del stage_cb
             cancel_cb()
+            if not request.options.polar_config.field_plane:
+                return EngineRunResult(
+                    results={
+                        "frequencies": [500.0],
+                        "metadata": {"engine": "fake-metal"},
+                    },
+                    msh_text=mesh_text,
+                    mesh_stats={"vertex_count": 3, "triangle_count": 1},
+                    field_trace_unavailable_reason="disabled_by_option",
+                )
             return EngineRunResult(
                 results={"frequencies": [500.0], "metadata": {"engine": "fake-metal"}},
                 msh_text=mesh_text,
@@ -202,6 +212,29 @@ $EndElements
         fresh_job = await runtime.get_job(fresh_id)
         assert fresh_job["field_plane_available"] is True
         assert fresh_job["field_trace_bytes"] == 32
+
+        disabled_request = SolveRequest.model_validate(
+            {
+                "design": {
+                    "formula": "OSSE",
+                    "simulation": {"f1": 500, "f2": 501, "num_frequencies": 1},
+                },
+                "options": {
+                    "engine": "metal",
+                    "stage_delay_ms": 0,
+                    "polar_config": {"field_plane": False},
+                },
+            }
+        )
+        disabled_id = await runtime.submit(disabled_request)
+        await runtime.wait_idle()
+        disabled = await runtime.get_results(disabled_id)
+        assert disabled["metadata"]["field_plane_available"] is False
+        assert disabled["metadata"]["field_trace_bytes"] is None
+        assert disabled["metadata"]["unavailable_reason"] == "disabled_by_option"
+        disabled_job = await runtime.get_job(disabled_id)
+        assert disabled_job["field_plane_available"] is False
+        assert disabled_job["unavailable_reason"] == "disabled_by_option"
 
         now = datetime.now().isoformat()
         store.create_job(

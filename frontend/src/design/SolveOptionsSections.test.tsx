@@ -106,7 +106,11 @@ describe('solve and directivity control help', () => {
       expect(hoverText(label).length, `${id} has no hover help`).toBeGreaterThan(40);
     }
     expect(hoverText(host.querySelector('.axis-toggles')!)).toContain('planes through the horn axis');
-    expect(hoverText(host.querySelector('.toggle-row')!)).toContain('balloon');
+    expect(hoverText(host.querySelector('#polar-spherical-sampling')!.closest('.toggle-row')!)).toContain('balloon');
+    const fieldPlaneHelp = hoverText(host.querySelector('#polar-field-plane')!.closest('.toggle-row')!);
+    expect(fieldPlaneHelp).toContain('full-3D solve');
+    expect(fieldPlaneHelp).toContain('0.1–1 MB');
+    expect(fieldPlaneHelp).toContain('CAD-link imports');
   });
 
   // `.section-body` is a container-query grid whose full-width exceptions select

@@ -38,6 +38,7 @@ export function wgSolveSettingsFromStore(
     frequencyListText: state.frequencyListText,
     observationOrigin: state.polar.observationOrigin,
     sphericalSampling: state.polar.sphericalSampling,
+    fieldPlane: state.polar.fieldPlane !== false,
   };
 }
 
@@ -69,6 +70,7 @@ export function wgSolveSettingsFromSolveOptions(options: unknown): WgSolveSettin
       ? polar.observation_origin
       : 'mouth') as ObservationOrigin,
     sphericalSampling: polar.spherical_sampling === true,
+    fieldPlane: polar.field_plane !== false,
   };
 }
 

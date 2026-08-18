@@ -175,6 +175,7 @@ def field_trace_retention_plan(
     mesh_stats: Mapping[str, Any] | None,
     frequency_count: int,
     channel_count: int,
+    enabled: bool,
     supported: bool,
     cap_bytes: int | None,
 ) -> tuple[bool, str | None, int | None, int]:
@@ -183,6 +184,8 @@ def field_trace_retention_plan(
     cap = field_trace_retention_cap_bytes() if cap_bytes is None else int(cap_bytes)
     if cap < 0:
         raise ValueError("field trace retention cap must be non-negative")
+    if not enabled:
+        return False, "disabled_by_option", None, cap
     if not supported:
         return False, "unsupported_solve_mode", None, cap
     try:

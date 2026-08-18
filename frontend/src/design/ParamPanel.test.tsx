@@ -593,7 +593,7 @@ describe('ParamPanel inventory UX', () => {
     act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
     expect(host.querySelector('[data-section="Solve options"]')).not.toBeNull();
     expect(host.querySelector('[data-section="Directivity Map"]')).not.toBeNull();
-    for (const id of ['solve-engine', 'mesh-validation-mode', 'design-solve-frequency-spacing', 'solve-verbose', 'polar-angle-start', 'polar-angle-end', 'polar-angle-step', 'polar-distance', 'polar-norm-angle', 'polar-diagonal-angle', 'polar-observation-origin', 'polar-spherical-sampling']) {
+    for (const id of ['solve-engine', 'mesh-validation-mode', 'design-solve-frequency-spacing', 'solve-verbose', 'polar-angle-start', 'polar-angle-end', 'polar-angle-step', 'polar-distance', 'polar-norm-angle', 'polar-diagonal-angle', 'polar-observation-origin', 'polar-spherical-sampling', 'polar-field-plane']) {
       expect(host.querySelector(`#${id}`), id).not.toBeNull();
     }
     act(() => {

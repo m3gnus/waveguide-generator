@@ -495,12 +495,16 @@ def solve_bempp_from_msh_text(
         raise BemppUnavailable(
             "Installed hornlab-bempp-bem does not support explicit frequency lists."
         )
+    field_plane_enabled = (
+        getattr(context, "polar_config", {}).get("field_plane", True) is True
+    )
     retain_traces, trace_reason, trace_estimated_bytes, trace_cap_bytes = (
         field_trace_retention_plan(
             msh_text,
             mesh_stats=mesh_stats,
             frequency_count=len(live_execution_frequencies(context)),
             channel_count=1,
+            enabled=field_plane_enabled,
             supported=True,
             cap_bytes=field_trace_cap_bytes,
         )

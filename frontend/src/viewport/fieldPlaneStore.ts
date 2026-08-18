@@ -576,6 +576,7 @@ export function createFieldPlaneStore(
         activationGeneration += 1;
         cancelRequests();
         set({
+          enabled: false,
           dragging: false,
           jobId: null,
           geometrySha256: null,

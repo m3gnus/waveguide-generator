@@ -36,6 +36,7 @@ export interface WgSolveSettings {
   frequencyListText: string;
   observationOrigin: ObservationOrigin;
   sphericalSampling: boolean;
+  fieldPlane: boolean;
 }
 
 const MESH_VALIDATION_MODES: MeshValidationMode[] = ['warn', 'strict', 'off'];
@@ -102,6 +103,9 @@ export function wgSolveOverrides(blocks: unknown): Partial<WgSolveSettings> | nu
   const spherical = bool(source.SphericalSampling);
   if (spherical !== undefined) overrides.sphericalSampling = spherical;
 
+  const fieldPlane = bool(source.FieldPlane);
+  if (fieldPlane !== undefined) overrides.fieldPlane = fieldPlane;
+
   // A stored list is adopted only when it parses exactly as typed. Restoring
   // list mode without a usable list would block every solve until the user
   // found the sweep panel, so the mode follows the list, not the other way.
@@ -136,6 +140,7 @@ export function withWgSolveBlock(
     SweepSpacing: settings.frequencySpacing,
     ObservationOrigin: settings.observationOrigin,
     SphericalSampling: settings.sphericalSampling ? '1' : '0',
+    FieldPlane: settings.fieldPlane ? '1' : '0',
   };
   // Only a usable list is written. Persisting a half-typed one would hand the
   // next reader a file that refuses to solve.

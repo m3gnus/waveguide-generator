@@ -31,6 +31,7 @@ class PolarConfig(JobModel):
     )
     observation_origin: Literal["mouth", "throat"] = "mouth"
     spherical_sampling: bool = False
+    field_plane: bool = True
     spherical_theta_count: int = Field(default=37, ge=5, le=121)
     spherical_phi_count: int = Field(default=72, ge=8, le=241)
 
