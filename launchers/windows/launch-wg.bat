@@ -67,6 +67,12 @@ call :gui_mode_requested %*
 if errorlevel 1 goto :start_terminal
 call :select_pythonw
 echo Starting the Waveguide Generator status window...
+rem `start` returns as soon as the process is created, so this catches only a
+rem spawn failure -- a missing or unrunnable interpreter -- and never a crash in
+rem the application itself. It cannot: this script has already exited by then,
+rem and pythonw.exe has no console to print to. The status window reports its
+rem own startup failures instead, through a dialog and statusapp.log; see
+rem launchers\statusapp\__main__.py.
 start "" "%PYTHONW%" -m launchers.statusapp %*
 if errorlevel 1 goto :statusapp_failed
 exit /b 0
@@ -237,7 +243,9 @@ exit /b 1
 
 :statusapp_failed
 echo.
-echo ERROR: The status window could not be started.
+echo ERROR: The status window could not be spawned. The interpreter below could
+echo        not be run at all:
+echo          %PYTHONW%
 echo        Run with --no-gui to see terminal diagnostics, or reinstall with:
 echo          installers\windows\install-and-update.bat
 call :pause_when_double_clicked
