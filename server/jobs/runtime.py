@@ -31,6 +31,7 @@ from server.engines.registry import EngineRegistry, create_engine as get_engine
 from server.jobs.legacy_design import resolve_job_design
 from server.jobs.models import (
     ChannelCombineSpec,
+    FieldPlaneRequest,
     ImportedGeometrySource,
     ParametricGeometrySource,
     SolveOptions,
@@ -46,6 +47,8 @@ from server.solver.imported import (
     verify_record_mesh_text,
 )
 from server.solver.symmetry import resolve_symmetry, validate_symmetry_mode
+from server.solver.field_plane import FieldPlaneEvaluation, FieldPlaneService
+from server.solver.metal_permit import MetalPermit, process_metal_permit
 
 
 logger = logging.getLogger(__name__)
@@ -634,6 +637,7 @@ class JobRuntime:
         engine_registry: EngineRegistry | None = None,
         cadlink_store: CadLinkStore | None = None,
         persistence_interval_seconds: float = RUNTIME_PERSIST_INTERVAL_SECONDS,
+        metal_permit: MetalPermit | None = None,
     ) -> None:
         self.store = store
         self.cadlink_store = cadlink_store
@@ -654,6 +658,12 @@ class JobRuntime:
         self._shutting_down = False
         self._start_lock = asyncio.Lock()
         self._ownership = _RuntimeOwnershipLock(store)
+        self.metal_permit = metal_permit or process_metal_permit()
+        self.field_plane_service = FieldPlaneService(
+            store,
+            self.metal_permit,
+            solve_queued=lambda: bool(self._queue or self._running),
+        )
 
     @property
     def background_tasks(self) -> frozenset[asyncio.Task[Any]]:
@@ -1244,6 +1254,14 @@ class JobRuntime:
         await asyncio.to_thread(self.store.store_results, job_id, updated)
         return updated
 
+    async def evaluate_field_plane(
+        self, job_id: str, request: FieldPlaneRequest
+    ) -> FieldPlaneEvaluation:
+        """Evaluate one retained exterior field without mutating job results."""
+
+        await self.start()
+        return await self.field_plane_service.evaluate(job_id, request)
+
     async def get_partial_results(self, job_id: str) -> dict[str, Any]:
         """Return the current process-local provisional result snapshot."""
 
@@ -1452,26 +1470,30 @@ class JobRuntime:
 
     async def _drain_scheduler(self) -> None:
         try:
-            while self._queue:
-                job_id = self._queue.popleft()
-                row = self.store.get_job_row(job_id)
-                if row is None or row["status"] != "queued":
-                    continue
-                self._running.add(job_id)
-                try:
-                    await self._run_job(job_id, row)
-                finally:
-                    self._running.discard(job_id)
+            # One lease spans the current FIFO drain. This lets already-pending
+            # field work resume only after every queued solve, rather than in
+            # the narrow hand-off between adjacent jobs.
+            async with self.metal_permit.solve():
+                while self._queue:
+                    job_id = self._queue.popleft()
+                    row = self.store.get_job_row(job_id)
+                    if row is None or row["status"] != "queued":
+                        continue
+                    self._running.add(job_id)
                     try:
-                        _removed_ids, prune_events = await asyncio.to_thread(
-                            self.store.prune_terminal_jobs_with_events,
-                            retention_days=30,
-                            max_terminal_jobs=1000,
-                        )
-                        for event in prune_events:
-                            self.events.publish(event)
-                    except Exception:
-                        logger.exception("Post-job retention pruning failed")
+                        await self._run_job(job_id, row)
+                    finally:
+                        self._running.discard(job_id)
+                        try:
+                            _removed_ids, prune_events = await asyncio.to_thread(
+                                self.store.prune_terminal_jobs_with_events,
+                                retention_days=30,
+                                max_terminal_jobs=1000,
+                            )
+                            for event in prune_events:
+                                self.events.publish(event)
+                        except Exception:
+                            logger.exception("Post-job retention pruning failed")
         finally:
             self._scheduler_task = None
             if self._queue and not self._shutting_down:

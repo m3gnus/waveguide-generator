@@ -370,6 +370,115 @@ class ChannelCombineSpec(JobModel):
         return self
 
 
+class FieldPlaneSpec(JobModel):
+    """A centred, orthonormal sampling plane in solver metres.
+
+    Samples are generated as v-major rows with u varying fastest within each
+    row. Both axes point in their positive grid directions.
+    """
+
+    origin_m: tuple[float, float, float]
+    axis_u: tuple[float, float, float]
+    axis_v: tuple[float, float, float]
+    width_m: float = Field(gt=0.0, le=100.0, allow_inf_nan=False)
+    height_m: float = Field(gt=0.0, le=100.0, allow_inf_nan=False)
+    nx: int = Field(ge=2, le=256)
+    ny: int = Field(ge=2, le=256)
+
+    @field_validator("origin_m", "axis_u", "axis_v", mode="before")
+    @classmethod
+    def validate_vector(cls, value: Any, info: Any) -> tuple[float, float, float]:
+        if not isinstance(value, (list, tuple)) or len(value) != 3:
+            raise ValueError(f"plane.{info.field_name} must contain exactly 3 numbers")
+        if any(
+            isinstance(component, bool)
+            or not isinstance(component, (int, float))
+            or not math.isfinite(float(component))
+            for component in value
+        ):
+            raise ValueError(f"plane.{info.field_name} must contain finite numbers")
+        return tuple(float(component) for component in value)
+
+    @field_validator("width_m", "height_m", mode="before")
+    @classmethod
+    def validate_extent(cls, value: Any, info: Any) -> Any:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(
+                f"plane.{info.field_name} must be a finite number in (0, 100]"
+            )
+        return value
+
+    @field_validator("nx", "ny", mode="before")
+    @classmethod
+    def validate_resolution(cls, value: Any, info: Any) -> Any:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"plane.{info.field_name} must be an integer")
+        return value
+
+    @model_validator(mode="after")
+    def validate_grid_and_axes(self) -> "FieldPlaneSpec":
+        if self.nx * self.ny > 65_536:
+            raise ValueError("plane grid may contain at most 65536 points")
+        norm_u = math.sqrt(sum(component * component for component in self.axis_u))
+        norm_v = math.sqrt(sum(component * component for component in self.axis_v))
+        dot = sum(
+            component_u * component_v
+            for component_u, component_v in zip(self.axis_u, self.axis_v, strict=True)
+        )
+        tolerance = 1.0e-6
+        if (
+            abs(norm_u - 1.0) > tolerance
+            or abs(norm_v - 1.0) > tolerance
+            or abs(dot) > tolerance
+        ):
+            raise ValueError("plane axes must be finite, unit length, and orthogonal")
+        return self
+
+
+class FieldPlaneResponseSpec(JobModel):
+    id: str = Field(min_length=1, max_length=256)
+
+    @field_validator("id")
+    @classmethod
+    def validate_response_id(cls, value: str) -> str:
+        normalized = value.strip()
+        if normalized == "system":
+            return normalized
+        if normalized.startswith("channel:") and normalized.removeprefix("channel:"):
+            return normalized
+        raise ValueError("response.id must be 'system' or 'channel:<id>'")
+
+
+class FieldPlaneRequest(JobModel):
+    version: Literal[1]
+    request_id: str = Field(min_length=1, max_length=256)
+    plane: FieldPlaneSpec
+    frequency_index: int = Field(ge=0)
+    response: FieldPlaneResponseSpec
+
+    @field_validator("version", mode="before")
+    @classmethod
+    def validate_version(cls, value: Any) -> Any:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError("version must be the integer 1")
+        return value
+
+    @field_validator("request_id")
+    @classmethod
+    def normalize_request_id(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("request_id must not be empty")
+        return normalized
+
+    @field_validator("frequency_index", mode="before")
+    @classmethod
+    def validate_frequency_index(cls, value: Any) -> Any:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError("frequency_index must be an integer")
+        return value
+
+
 class ImportedMeshSizes(JobModel):
     rigid_size_mm: float = Field(gt=0, allow_inf_nan=False)
     transition_mm: float = Field(gt=0, allow_inf_nan=False)
@@ -904,6 +1013,9 @@ __all__ = [
     "DesignAvailability",
     "DesignSnapshot",
     "DriveChannel",
+    "FieldPlaneRequest",
+    "FieldPlaneResponseSpec",
+    "FieldPlaneSpec",
     "ImportedGeometrySource",
     "ImportedMeshSizes",
     "JobItem",

@@ -17,6 +17,7 @@ from server.jobs.models import (
     ChannelCombineSpec,
     ClearFailedResponse,
     DeleteResponse,
+    FieldPlaneRequest,
     JobListResponse,
     JobMetadataPatch,
     JobStatusResponse,
@@ -26,6 +27,19 @@ from server.jobs.models import (
     StopResponse,
 )
 from server.solver.errors import RecombineError
+from server.solver.field_plane import (
+    FieldPlaneInvalidSelection,
+    FieldPlaneJobIncomplete,
+    FieldPlaneJobNotFound,
+    FieldPlaneTimedOut,
+    FieldPlaneUnsupported,
+    encode_field_plane_response,
+)
+from server.solver.field_traces_store import ArtifactCorrupt, ArtifactMissing
+from server.solver.metal_permit import (
+    FieldEvaluationBusy,
+    FieldEvaluationSuperseded,
+)
 from server.jobs.runtime import (
     EngineUnavailableError,
     ImportedSolveRefusal,
@@ -156,6 +170,53 @@ def create_jobs_router(
         return Response(
             content=json.dumps(updated, allow_nan=False),
             media_type="application/json",
+        )
+
+    @router.post("/api/results/{job_id}/field-plane", response_model=None)
+    async def field_plane(job_id: str, body: FieldPlaneRequest) -> Response:
+        """Evaluate one exterior complex-pressure grid from retained traces."""
+
+        try:
+            evaluated = await runtime.evaluate_field_plane(job_id, body)
+        except FieldPlaneJobNotFound as exc:
+            raise HTTPException(status_code=404, detail="Job not found") from exc
+        except FieldPlaneJobIncomplete as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ArtifactMissing as exc:
+            raise HTTPException(status_code=410, detail=str(exc)) from exc
+        except ArtifactCorrupt as exc:
+            raise HTTPException(
+                status_code=410,
+                detail=f"Field-trace artifact is corrupt: {exc}",
+            ) from exc
+        except (FieldPlaneUnsupported, FieldPlaneInvalidSelection) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except FieldEvaluationSuperseded as exc:
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "code": "superseded",
+                    "message": str(exc),
+                    "replacement_request_id": exc.replacement_request_id,
+                },
+            ) from exc
+        except FieldEvaluationBusy as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "solve_running_or_queued",
+                    "message": str(exc),
+                },
+            ) from exc
+        except FieldPlaneTimedOut as exc:
+            raise HTTPException(
+                status_code=504,
+                detail={"code": "evaluation_timeout", "message": str(exc)},
+            ) from exc
+        return Response(
+            content=encode_field_plane_response(job_id, body, evaluated),
+            media_type="application/octet-stream",
+            headers={"Cache-Control": "no-store"},
         )
 
     @router.get("/api/partial-results/{job_id}", response_model=None)
