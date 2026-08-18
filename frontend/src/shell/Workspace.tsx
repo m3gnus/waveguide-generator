@@ -14,6 +14,7 @@ import { CadLinkPanel } from './CadLinkPanel';
 import { JobsPanel } from './JobsPanel';
 import { ResultsPanel } from './ResultsPanel';
 import { ViewportPanel } from './ViewportPanel';
+import { dockviewPanelVisibility, PanelVisibilityContext } from './panelVisibility';
 import { workspaceModeStore, type WorkspaceMode } from '../stores/workspaceMode';
 import { namespaceStorage } from '../stores/durableSettings';
 import { bindWorkspaceNavigation, type WorkspacePanel } from './workspaceNavigation';
@@ -47,14 +48,17 @@ export class ReactPanelRenderer implements IContentRenderer {
     this.element.className = `dock-panel-content dock-panel-${name}`;
   }
 
-  init(_parameters: GroupPanelPartInitParameters): void {
+  init(parameters: GroupPanelPartInitParameters): void {
     const Component = components[this.name];
+    // The panel API is the only thing that knows this panel is behind a
+    // sibling tab; the element stays laid out and measurable either way.
+    const visibility = dockviewPanelVisibility(parameters.api);
     const generation = ++this.generation;
     void this.teardown.then(() => {
       if (generation !== this.generation) return;
       const root = createRoot(this.element);
       this.root = root;
-      root.render(<AppQueryProvider><Component /></AppQueryProvider>);
+      root.render(<AppQueryProvider><PanelVisibilityContext.Provider value={visibility}><Component /></PanelVisibilityContext.Provider></AppQueryProvider>);
     });
   }
 

@@ -125,12 +125,14 @@ describe('result comparison charts', () => {
       name: string; lineStyle: { color: string; type: string }; data: number[][];
     }>;
     expect(series.map(({ name }) => name)).toEqual(['Run A · Re', 'Run A · Im', 'Run B · Re', 'Run B · Im']);
-    expect(series.map(({ lineStyle }) => lineStyle)).toEqual([
-      expect.objectContaining({ color: '#0ff', type: 'solid' }),
-      expect.objectContaining({ color: '#0ff', type: 'dashed' }),
-      expect.objectContaining({ color: '#f90', type: 'solid' }),
-      expect.objectContaining({ color: '#f90', type: 'dashed' }),
-    ]);
+    expect(series.map(({ lineStyle }) => lineStyle.type)).toEqual(['solid', 'dashed', 'solid', 'dashed']);
+    // Which palette entry each run draws is its label's business (see
+    // seriesColors); what this chart owes is one colour per run, and two runs
+    // that never share one.
+    const [runA, runAImaginary, runB, runBImaginary] = series.map(({ lineStyle }) => lineStyle.color);
+    expect(runAImaginary).toBe(runA);
+    expect(runBImaginary).toBe(runB);
+    expect(runB).not.toBe(runA);
   });
 
 });

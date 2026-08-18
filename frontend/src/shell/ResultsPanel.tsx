@@ -17,8 +17,10 @@ import { exportStemForJob, exportTitleSlug } from '../jobs/exportNaming';
 import { CHART_TYPES, MAX_RESULT_PANELS, RESULT_PANEL_COUNTS, preferencesStore, runDisplayName, usePreferences, type ChartType } from '../prefs/preferences';
 import { ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
 import { directivityFrequencyTickLabels } from '../results/directivityFrequencyAxis';
+import { seriesColorsByLabel } from '../results/seriesColors';
 import { Icon } from './icons';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
+import { useVisibleRedraw } from './panelVisibility';
 import { trapDialogFocus } from './SettingsDialog';
 import { useSolveOptionsStore } from '../stores/solveOptions';
 
@@ -156,7 +158,11 @@ export function lineOption(series: EChartsOption['series'], tokens: ChartTokens,
 }
 
 function splOption(items: NamedResult[], tokens: ChartTokens, smoothing: ReturnType<typeof usePreferences>['smoothing'], density: ChartDensity): EChartsOption {
-  return lineOption(splSeries(items, smoothing).map((series, index) => ({ ...series, lineStyle: { width: index ? 1.2 : 2, type: index ? 'dashed' : 'solid' } })), tokens, 'dB SPL', density);
+  const colors = seriesColorsByLabel(items.map(({ label }) => label), tokens.series, tokens.accent);
+  return lineOption(splSeries(items, smoothing).map((series, index) => {
+    const color = colors.get(series.name) ?? tokens.accent;
+    return { ...series, lineStyle: { color, width: index ? 1.2 : 2, type: index ? 'dashed' : 'solid' }, itemStyle: { color } };
+  }), tokens, 'dB SPL', density);
 }
 
 export function heatmapFrequencyLabel(value: number): string {
@@ -473,6 +479,14 @@ export function heatmapOption(
     : interpolateDirectivityGrid(result, plane, 12, MAX_CONTOUR_CELLS);
   const floor = mapReference * 5;
   const comparing = Boolean(comparison?.references.length);
+  // The overlaid contours are the same runs the line charts draw, so they take
+  // their colour from the same label-keyed table rather than from their order
+  // in this particular map.
+  const comparisonColors = seriesColorsByLabel(
+    comparison ? [comparison.primaryLabel, ...comparison.references.map(({ label }) => label)] : [],
+    tokens.series,
+    tokens.accent,
+  );
   const baseInset = MAP_GRID[density];
   const inset = comparing && comparison?.showLegend !== false
     ? { ...baseInset, top: Math.max(baseInset.top, density === 'compact' ? 27 : 31) }
@@ -501,7 +515,7 @@ export function heatmapOption(
     const labelIndex = polylines.reduce((best, points, index) => points.length > polylines[best].length ? index : best, 0);
     const isComparisonContour = comparing && level === mapReference;
     const color = isComparisonContour
-      ? seriesColor(tokens, 0)
+      ? comparisonColors.get(comparison!.primaryLabel) ?? tokens.accent
       : level === -6 ? tokens.foreground : level === -3 ? tokens.accent : tokens.series[Math.min(contourIndex, tokens.series.length - 1)] ?? tokens.muted;
     return [{
       name: isComparisonContour ? comparison!.primaryLabel : `${level} dB contour`, type: 'custom', coordinateSystem: 'cartesian2d', silent: true, z: 6, clip: true,
@@ -518,13 +532,13 @@ export function heatmapOption(
     }];
   });
   const comparisonSeries = comparison?.references.flatMap((reference, referenceIndex) => {
+    const color = comparisonColors.get(reference.label) ?? tokens.accent;
     const referenceGrid = live
       ? interpolateDirectivityGrid(reference.result, plane, 2, MAX_LIVE_INTERPOLATED_CELLS)
       : interpolateDirectivityGrid(reference.result, plane, 12, MAX_CONTOUR_CELLS);
     const polylines = contourPolylines(contourSegments(referenceGrid.values, mapReference)).filter((points) => points.length > 1);
     if (!polylines.length) return [];
     const labelIndex = polylines.reduce((best, points, index) => points.length > polylines[best].length ? index : best, 0);
-    const color = seriesColor(tokens, referenceIndex + 1);
     return [{
       name: reference.label,
       type: 'custom',
@@ -592,15 +606,20 @@ export function heatmapOption(
   };
 }
 
-function seriesColor(tokens: ChartTokens, index: number): string {
-  return tokens.series[index % Math.max(1, tokens.series.length)] ?? tokens.accent;
-}
-
 export function directivityIndexOption(items: NamedResult[], tokens: ChartTokens, smoothing: ReturnType<typeof usePreferences>['smoothing'], density: ChartDensity): EChartsOption {
   const groups = items.map((item) => directivityIndexSeries(item.result as ResultPayload, smoothing));
   const oneMetricPerRun = groups.every((series) => series.length <= 1);
-  const series = groups.flatMap((runSeries, runIndex) => runSeries.map((entry, metricIndex) => {
-    const color = seriesColor(tokens, oneMetricPerRun ? runIndex : metricIndex);
+  // Colour separates the runs while each draws a single curve, and the metrics
+  // once any run draws several -- there, a run reads as one fan of dashes.
+  const colors = seriesColorsByLabel(
+    oneMetricPerRun
+      ? items.map(({ label }) => label)
+      : groups.flatMap((runSeries) => runSeries.map(({ name }) => name)),
+    tokens.series,
+    tokens.accent,
+  );
+  const series = groups.flatMap((runSeries, runIndex) => runSeries.map((entry) => {
+    const color = colors.get(oneMetricPerRun ? items[runIndex].label : entry.name) ?? tokens.accent;
     return {
       ...entry,
       name: runSeries.length === 1 ? items[runIndex].label : `${items[runIndex].label} · ${entry.name}`,
@@ -613,8 +632,9 @@ export function directivityIndexOption(items: NamedResult[], tokens: ChartTokens
 
 export function impedanceOption(items: NamedResult[], tokens: ChartTokens, smoothing: ReturnType<typeof usePreferences>['smoothing'], density: ChartDensity): EChartsOption {
   const comparable = items.filter(({ result }) => Boolean(result.impedance?.frequencies?.length));
-  const series = comparable.flatMap((item, runIndex) => {
-    const color = seriesColor(tokens, runIndex);
+  const colors = seriesColorsByLabel(comparable.map(({ label }) => label), tokens.series, tokens.accent);
+  const series = comparable.flatMap((item) => {
+    const color = colors.get(item.label) ?? tokens.accent;
     return impedanceSeries(item.result, 'cartesian', smoothing).map((entry, componentIndex) => ({
       ...entry,
       name: `${item.label} · ${entry.name}`,
@@ -1263,6 +1283,15 @@ export function ResultsPanel() {
     disabled: beamRerunSubmitting,
     busy: beamRerunSubmitting,
   } : undefined, [beamRerunSubmitting, enableBalloonAndRerun, selectedJobCanRerun]);
+  // Everything above keeps following the solve while this panel is covered --
+  // results are still fetched, combined and labelled, so the panel is never
+  // stale when it comes back. Only the drawing is held: a covered tab that is
+  // handed the same element keeps its whole chart subtree, so no ECharts option
+  // is rebuilt and no canvas is touched until the tab is in front again, and
+  // then exactly once from the newest snapshot.
+  const charts = useVisibleRedraw(shown
+    ? <ResultsChartGrid chartTypes={preferences.chartTypes} result={shown} named={named} tokens={tokens} live={primaryIsProvisional} beamShapeAction={beamShapeAction} wrapper={shownRaw} job={selectedJob} channelId={shownActiveChannel}/>
+    : null);
   const exportSelected = async () => {
     if (!primary || primaryIsProvisional) return;
     setExporting(true); setExportStatus(null);
@@ -1320,8 +1349,6 @@ export function ResultsPanel() {
     {preferencesOpen && <ResultsPreferencesSurface popover anchorRef={preferencesAnchor} onClose={() => setPreferencesOpen(false)}/>}
     {(error || exportStatus) && <div className={error ? 'job-error' : ''} role="status" style={{ margin: 7, color: error ? undefined : 'var(--fg2)', fontSize: 'var(--text-micro)' }}>{error ?? exportStatus}{error && <button type="button" onClick={() => { setFetchError(null); setFetchAttempt((value) => value + 1); }}>Retry</button>}</div>}
     {showingPrevious && <div className="job-warning" role="status" style={{ margin: 7 }}>Showing previous results while fetching the selected run…</div>}
-    {!shown
-      ? <div className="empty-state" role="status"><b>{error ? 'Results unavailable' : 'Loading results'}</b><span>{error ? 'Retry above, or select another run in the Jobs rail.' : 'Fetching the selected run…'}</span></div>
-      : <ResultsChartGrid chartTypes={preferences.chartTypes} result={shown} named={named} tokens={tokens} live={primaryIsProvisional} beamShapeAction={beamShapeAction} wrapper={shownRaw} job={selectedJob} channelId={shownActiveChannel}/>}
+    {charts ?? <div className="empty-state" role="status"><b>{error ? 'Results unavailable' : 'Loading results'}</b><span>{error ? 'Retry above, or select another run in the Jobs rail.' : 'Fetching the selected run…'}</span></div>}
   </div>;
 }
