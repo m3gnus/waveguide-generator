@@ -1,8 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   buildFieldPlaneRequest,
   decodeFieldPlane,
   FIELD_PLANE_ORDERING,
+  fetchFieldPlane,
+  FieldPlaneHttpError,
   type FieldPlaneHeader,
 } from './fieldPlane';
 
@@ -106,5 +108,36 @@ describe('field-plane request builder', () => {
       plane: { ...plane, axis_v: [1, 0, 0] },
       frequencyIndex: 0,
     })).toThrow(/unit length and orthogonal/);
+  });
+});
+
+describe('field-plane request errors', () => {
+  it('carries the replacement request id from a superseded response', async () => {
+    const request = buildFieldPlaneRequest({
+      requestId: 'request-5',
+      plane: {
+        origin_m: [0, 0, 0],
+        axis_u: [1, 0, 0],
+        axis_v: [0, 0, 1],
+        width_m: 1,
+        height_m: 1,
+        nx: 96,
+        ny: 96,
+      },
+      frequencyIndex: 0,
+    });
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      detail: {
+        code: 'superseded',
+        message: 'request was superseded',
+        replacement_request_id: 'request-6',
+      },
+    }), { status: 429, statusText: 'Too Many Requests' })) as typeof fetch;
+
+    await expect(fetchFieldPlane('job-1', request, fetcher)).rejects.toEqual(expect.objectContaining({
+      status: 429,
+      code: 'superseded',
+      replacementRequestId: 'request-6',
+    } satisfies Partial<FieldPlaneHttpError>));
   });
 });

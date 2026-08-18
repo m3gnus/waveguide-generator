@@ -200,6 +200,80 @@ describe('field-plane state', () => {
     });
   });
 
+  it('records the replacement request id without clearing the displayed field', async () => {
+    const fetchPlane = vi.fn(async (jobId: string, request: FieldPlaneRequest) => {
+      if (request.plane.origin_m[0] !== 0) {
+        throw new FieldPlaneHttpError(429, 'superseded', 'superseded', 'replacement-request');
+      }
+      return response(jobId, request);
+    });
+    const store = createFieldPlaneStore({
+      fetchPlane,
+      fetchResults: async () => ({ frequencies: [800] }),
+    });
+    store.getState().enable('job-1', plane);
+    await vi.waitFor(() => expect(store.getState().status).toBe('ready'));
+    const displayed = store.getState().field;
+
+    store.getState().setPlane({ ...plane, origin_m: [0.1, 0, 0] });
+    await vi.waitFor(() => expect(store.getState().lastSupersededBy).toBe('replacement-request'));
+
+    expect(store.getState()).toMatchObject({
+      status: 'ready',
+      error: null,
+      lastErrorCode: null,
+      field: displayed,
+    });
+  });
+
+  it('retries a solve-blocked request once it is still the current error', async () => {
+    let attempts = 0;
+    const fetchPlane = vi.fn(async (jobId: string, request: FieldPlaneRequest) => {
+      attempts += 1;
+      if (attempts === 1) {
+        throw new FieldPlaneHttpError(503, 'busy', 'solve_running_or_queued');
+      }
+      return response(jobId, request);
+    });
+    const store = createFieldPlaneStore({
+      fetchPlane,
+      fetchResults: async () => ({ frequencies: [800] }),
+    });
+    store.getState().enable('job-1', plane);
+    await vi.waitFor(() => expect(store.getState().status).toBe('error'));
+    expect(store.getState().lastErrorCode).toBe('solve_running_or_queued');
+
+    store.getState().retryIfBlocked();
+    await vi.waitFor(() => expect(store.getState().status).toBe('ready'));
+    store.getState().retryIfBlocked();
+
+    expect(fetchPlane).toHaveBeenCalledTimes(2);
+    expect(store.getState().lastErrorCode).toBeNull();
+  });
+
+  it('recovers from loading when a stale response empties the queue', async () => {
+    const staleGate = deferred();
+    const fetchPlane = vi.fn(async (jobId: string, request: FieldPlaneRequest) => {
+      if (request.plane.origin_m[0] !== 0) await staleGate.promise;
+      return response(jobId, request);
+    });
+    const store = createFieldPlaneStore({
+      fetchPlane,
+      fetchResults: async () => ({ frequencies: [800] }),
+    });
+    store.getState().enable('job-1', plane);
+    await vi.waitFor(() => expect(store.getState().status).toBe('ready'));
+    const displayed = store.getState().field;
+
+    store.getState().setPlane({ ...plane, origin_m: [0.1, 0, 0] });
+    await vi.waitFor(() => expect(fetchPlane).toHaveBeenCalledTimes(2));
+    store.setState({ jobId: 'job-2' });
+    staleGate.resolve();
+    await vi.waitFor(() => expect(store.getState().status).toBe('ready'));
+
+    expect(store.getState().field).toBe(displayed);
+  });
+
   it('keeps one drag request running and collapses pending transforms to the latest', async () => {
     const dragGate = deferred();
     const fetchPlane = vi.fn(async (jobId: string, request: FieldPlaneRequest) => {
@@ -232,6 +306,26 @@ describe('field-plane state', () => {
     await vi.waitFor(() => expect(fetchPlane).toHaveBeenCalledTimes(4));
     expect(fetchPlane.mock.calls[3][1].plane.origin_m).toEqual([0.3, 0, 0]);
     expect(fetchPlane.mock.calls[3][1].plane.nx).toBe(96);
+  });
+
+  it('does not request an unchanged full-resolution plane when a drag ends', async () => {
+    const fetchPlane = vi.fn(async (jobId: string, request: FieldPlaneRequest) => response(jobId, request));
+    const store = createFieldPlaneStore({
+      fetchPlane,
+      fetchResults: async () => ({ frequencies: [800] }),
+    });
+    store.getState().enable('job-1', plane);
+    await vi.waitFor(() => expect(store.getState().status).toBe('ready'));
+
+    store.getState().beginPlaneDrag();
+    store.getState().endPlaneDrag();
+
+    expect(fetchPlane).toHaveBeenCalledOnce();
+    expect(store.getState()).toMatchObject({
+      dragging: false,
+      frozenNormalizationDb: null,
+      status: 'ready',
+    });
   });
 
   it('freezes the normalized reference across drag fields and releases it on drag end', async () => {
