@@ -7,6 +7,7 @@ const request = (generation: number): FieldPlaneMaskRequest => ({
   generation,
   jobId: 'job-1',
   geometrySha256: 'geometry-a',
+  symmetryPlane: 'yz',
   plane: {
     origin_m: [0, 0, 0],
     axis_u: [1, 0, 0],
@@ -23,6 +24,7 @@ const result = (generation: number, value: number): FieldPlaneMaskResult => ({
   generation,
   jobId: 'job-1',
   geometrySha256: 'geometry-a',
+  symmetryPlane: 'yz',
   nx: 2,
   ny: 2,
   watertight: true,
@@ -56,5 +58,22 @@ describe('field-plane mask generations', () => {
 
     expect(useFieldPlaneMaskStore.getState().mask).toBeNull();
     expect(useFieldPlaneMaskStore.getState().watertight).toBeNull();
+  });
+
+  it('treats symmetry synthesis as part of the mask geometry identity', () => {
+    useFieldPlaneMaskStore.getState().begin(request(1));
+    useFieldPlaneMaskStore.getState().apply(result(1, 1));
+    useFieldPlaneMaskStore.getState().begin({
+      ...request(2),
+      symmetryPlane: 'yz+xz',
+    });
+
+    expect(useFieldPlaneMaskStore.getState()).toMatchObject({
+      symmetryPlane: 'yz+xz',
+      mask: null,
+      watertight: null,
+    });
+    useFieldPlaneMaskStore.getState().apply(result(2, 2));
+    expect(useFieldPlaneMaskStore.getState().mask).toBeNull();
   });
 });

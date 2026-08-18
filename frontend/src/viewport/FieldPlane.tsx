@@ -234,6 +234,7 @@ function FieldPlaneMaskController({ scheduler }: Pick<FieldPlaneProps, 'schedule
   const dragging = useFieldPlaneStore((state) => state.dragging);
   const jobId = useFieldPlaneStore((state) => state.jobId);
   const geometrySha256 = useFieldPlaneStore((state) => state.geometrySha256);
+  const symmetryPlane = useFieldPlaneStore((state) => state.field?.header.symmetry_plane);
   const plane = useFieldPlaneStore((state) => state.plane);
   const worker = useRef<Worker | null>(null);
   const generation = useRef(0);
@@ -260,18 +261,19 @@ function FieldPlaneMaskController({ scheduler }: Pick<FieldPlaneProps, 'schedule
   }, [enabled, scheduler]);
 
   useEffect(() => {
-    if (!enabled || dragging || !jobId || !geometrySha256 || !plane || !worker.current) return;
+    if (!enabled || dragging || !jobId || !geometrySha256 || symmetryPlane === undefined || !plane || !worker.current) return;
     generation.current += 1;
     const request: FieldPlaneMaskRequest = {
       type: 'classify',
       generation: generation.current,
       jobId,
       geometrySha256,
+      symmetryPlane,
       plane,
     };
     useFieldPlaneMaskStore.getState().begin(request);
     worker.current.postMessage(request);
-  }, [dragging, enabled, geometrySha256, jobId, plane]);
+  }, [dragging, enabled, geometrySha256, jobId, plane, symmetryPlane]);
 
   return null;
 }

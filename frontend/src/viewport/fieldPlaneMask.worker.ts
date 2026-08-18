@@ -10,12 +10,16 @@ interface WorkerScope {
 const scope = globalThis as unknown as WorkerScope;
 const meshes = new Map<string, Promise<FieldPlaneMaskMesh>>();
 
-function meshKey(jobId: string, geometrySha256: string): string {
-  return `${jobId}|${geometrySha256}`;
+function meshKey(jobId: string, geometrySha256: string, symmetryPlane: string | null): string {
+  return `${jobId}|${geometrySha256}|${symmetryPlane ?? 'none'}`;
 }
 
-function loadMesh(jobId: string, geometrySha256: string): Promise<FieldPlaneMaskMesh> {
-  const key = meshKey(jobId, geometrySha256);
+function loadMesh(
+  jobId: string,
+  geometrySha256: string,
+  symmetryPlane: string | null,
+): Promise<FieldPlaneMaskMesh> {
+  const key = meshKey(jobId, geometrySha256, symmetryPlane);
   const existing = meshes.get(key);
   if (existing) return existing;
   const pending = fetch(`/api/mesh-artifact/${encodeURIComponent(jobId)}`, {
@@ -23,7 +27,7 @@ function loadMesh(jobId: string, geometrySha256: string): Promise<FieldPlaneMask
   }).then(async (response) => {
     if (!response.ok) throw new Error(`mesh artifact request failed (${response.status})`);
     const parsed = parseMSH(await response.text());
-    return createFieldPlaneMaskMesh(parsed.vertices, parsed.indices);
+    return createFieldPlaneMaskMesh(parsed.vertices, parsed.indices, symmetryPlane);
   }).catch((reason: unknown) => {
     meshes.delete(key);
     throw reason;
@@ -35,7 +39,7 @@ function loadMesh(jobId: string, geometrySha256: string): Promise<FieldPlaneMask
 scope.onmessage = (event) => {
   const request = event.data;
   if (request.type !== 'classify') return;
-  void loadMesh(request.jobId, request.geometrySha256)
+  void loadMesh(request.jobId, request.geometrySha256, request.symmetryPlane)
     .then((mesh) => {
       const mask = classifyFieldPlaneMask(mesh, request.plane);
       const result: FieldPlaneMaskResponse = {
@@ -43,6 +47,7 @@ scope.onmessage = (event) => {
         generation: request.generation,
         jobId: request.jobId,
         geometrySha256: request.geometrySha256,
+        symmetryPlane: request.symmetryPlane,
         nx: request.plane.nx,
         ny: request.plane.ny,
         watertight: mesh.watertight,
@@ -56,6 +61,7 @@ scope.onmessage = (event) => {
         generation: request.generation,
         jobId: request.jobId,
         geometrySha256: request.geometrySha256,
+        symmetryPlane: request.symmetryPlane,
         message: reason instanceof Error ? reason.message : 'field-plane mask failed',
       });
     });

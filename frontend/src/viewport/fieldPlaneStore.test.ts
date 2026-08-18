@@ -50,6 +50,7 @@ function response(jobId: string, request: FieldPlaneRequest): DecodedFieldPlane 
       response_id: 'system',
       geometry_sha256: 'geometry',
       synthesis_revision: 'synthesis-a',
+      symmetry_plane: 'yz',
     },
     real: new Float32Array(count),
     imag: new Float32Array(count),
@@ -487,6 +488,7 @@ describe('field-plane state', () => {
       generation: 7,
       jobId: 'job-1',
       geometrySha256: 'geometry-a',
+      symmetryPlane: 'yz',
       plane,
     });
     useFieldPlaneMaskStore.getState().apply({
@@ -494,6 +496,7 @@ describe('field-plane state', () => {
       generation: 7,
       jobId: 'job-1',
       geometrySha256: 'geometry-a',
+      symmetryPlane: 'yz',
       nx: plane.nx,
       ny: plane.ny,
       watertight: true,

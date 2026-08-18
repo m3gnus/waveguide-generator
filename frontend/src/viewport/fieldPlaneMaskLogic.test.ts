@@ -28,6 +28,17 @@ const boxIndices = Uint32Array.of(
   1, 2, 6, 1, 6, 5,
 );
 
+const halfBoxIndices = Uint32Array.from([
+  ...boxIndices.slice(0, 24),
+  ...boxIndices.slice(30),
+]);
+
+function halfBoxVertices(seamX = 0): Float32Array {
+  const vertices = boxVertices.slice();
+  for (const index of [0, 3, 4, 7]) vertices[index * 3] = seamX;
+  return vertices;
+}
+
 const interiorPlane: FieldPlaneSpec = {
   origin_m: [0, 0, 0],
   axis_u: [1, 0, 0],
@@ -71,5 +82,43 @@ describe('field-plane worker mask logic', () => {
       .toBe(1e-4);
     closed.geometry.dispose();
     open.geometry.dispose();
+  });
+
+  it('closes a reduced half-box and classifies points in its mirrored half', () => {
+    const reduced = createFieldPlaneMaskMesh(halfBoxVertices(), halfBoxIndices);
+    const mirrored = createFieldPlaneMaskMesh(halfBoxVertices(), halfBoxIndices, 'yz');
+
+    expect(reduced.watertight).toBe(false);
+    expect(mirrored.watertight).toBe(true);
+    expect(isPointInsideMaskMesh(mirrored, [-0.5, 0, 0])).toBe(true);
+    expect(mirrored.geometry.index?.count).toBe(halfBoxIndices.length * 2);
+    reduced.geometry.dispose();
+    mirrored.geometry.dispose();
+  });
+
+  it('snaps near-plane vertices so mirrored seam indices weld exactly', () => {
+    const mirrored = createFieldPlaneMaskMesh(halfBoxVertices(1e-8), halfBoxIndices, 'yz');
+    const positions = mirrored.geometry.getAttribute('position');
+
+    expect(mirrored.watertight).toBe(true);
+    expect(positions.count).toBe(12);
+    for (const index of [0, 3, 4, 7]) expect(positions.getX(index)).toBe(0);
+    mirrored.geometry.dispose();
+  });
+
+  it('creates four consistently wound images for two active symmetry planes', () => {
+    const vertices = halfBoxVertices();
+    for (const index of [0, 1, 4, 5]) vertices[index * 3 + 1] = 0;
+    const quarterBoxIndices = Uint32Array.from([
+      ...boxIndices.slice(0, 12),
+      ...boxIndices.slice(18, 24),
+      ...boxIndices.slice(30),
+    ]);
+    const mirrored = createFieldPlaneMaskMesh(vertices, quarterBoxIndices, 'yz+xz');
+
+    expect(mirrored.watertight).toBe(true);
+    expect(mirrored.geometry.index?.count).toBe(quarterBoxIndices.length * 4);
+    expect(isPointInsideMaskMesh(mirrored, [-0.5, -0.5, 0])).toBe(true);
+    mirrored.geometry.dispose();
   });
 });

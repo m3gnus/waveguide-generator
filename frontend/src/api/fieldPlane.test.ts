@@ -23,6 +23,7 @@ const header: FieldPlaneHeader = {
   response_id: 'system',
   geometry_sha256: 'abc123',
   synthesis_revision: 'synthesis-1',
+  symmetry_plane: 'yz+xz',
 };
 
 function encoded(
@@ -47,13 +48,15 @@ describe('field-plane binary decoder', () => {
     expect([...decoded.imag]).toEqual([-1, -2, -3.5, -4.25]);
   });
 
-  it('defaults a legacy header without a synthesis revision to null', () => {
+  it('defaults absent legacy synthesis and symmetry metadata to null', () => {
     const decoded = decodeFieldPlane(encoded({
       version: 1,
       synthesis_revision: undefined,
+      symmetry_plane: undefined,
     }));
 
     expect(decoded.header.synthesis_revision).toBeNull();
+    expect(decoded.header.symmetry_plane).toBeNull();
   });
 
   it('rejects truncation before and inside the declared header', () => {
@@ -77,6 +80,12 @@ describe('field-plane binary decoder', () => {
 
   it('rejects a present non-string synthesis revision', () => {
     expect(() => decodeFieldPlane(encoded({ synthesis_revision: 42 }))).toThrow(/synthesis_revision must be a non-empty string/i);
+  });
+
+  it('accepts null symmetry and rejects invalid symmetry metadata', () => {
+    expect(decodeFieldPlane(encoded({ symmetry_plane: null })).header.symmetry_plane).toBeNull();
+    expect(() => decodeFieldPlane(encoded({ symmetry_plane: 42 }))).toThrow(/symmetry_plane must be null or a supported symmetry plane/i);
+    expect(() => decodeFieldPlane(encoded({ symmetry_plane: 'zx' }))).toThrow(/symmetry_plane must be null or a supported symmetry plane/i);
   });
 });
 

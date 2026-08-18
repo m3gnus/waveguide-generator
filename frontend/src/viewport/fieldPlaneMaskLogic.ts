@@ -12,6 +12,7 @@ import type { FieldPlaneSpec, Vector3Tuple } from '../api/fieldPlane';
 const PARITY_DIRECTION = new Vector3(1, 0.3713906763541037, 0.6949718377497182).normalize();
 const MIN_RAY_DISTANCE_M = 1e-9;
 const COINCIDENT_HIT_EPSILON_M = 1e-7;
+type CoordinateAxis = 0 | 1 | 2;
 
 export interface FieldPlaneMaskMesh {
   geometry: BufferGeometry;
@@ -41,17 +42,103 @@ export function isWatertightTriangleMesh(indices: Uint32Array): boolean {
   return [...edgeCounts.values()].every((count) => count === 2);
 }
 
+function activeSymmetryAxes(symmetryPlane: string | null): CoordinateAxis[] {
+  if (symmetryPlane === null) return [];
+  switch (symmetryPlane) {
+    case 'yz': return [0];
+    case 'xz': return [1];
+    case 'xy': return [2];
+    case 'yz+xz': return [0, 1];
+    default: throw new Error(`Unsupported field-plane mask symmetry: ${symmetryPlane}`);
+  }
+}
+
+function snapSymmetryVertices(
+  vertices: Float32Array,
+  axes: readonly CoordinateAxis[],
+): Float32Array {
+  const snapped = vertices.slice();
+  if (axes.length === 0 || vertices.length === 0) return snapped;
+  const minimum = [Infinity, Infinity, Infinity];
+  const maximum = [-Infinity, -Infinity, -Infinity];
+  for (let offset = 0; offset < vertices.length; offset += 3) {
+    for (let axis = 0; axis < 3; axis += 1) {
+      minimum[axis] = Math.min(minimum[axis], vertices[offset + axis]);
+      maximum[axis] = Math.max(maximum[axis], vertices[offset + axis]);
+    }
+  }
+  const diagonal = Math.hypot(
+    maximum[0] - minimum[0],
+    maximum[1] - minimum[1],
+    maximum[2] - minimum[2],
+  );
+  const tolerance = Math.max(1e-9, 1e-6 * diagonal);
+  for (let offset = 0; offset < snapped.length; offset += 3) {
+    for (const axis of axes) {
+      if (Math.abs(snapped[offset + axis]) <= tolerance) snapped[offset + axis] = 0;
+    }
+  }
+  return snapped;
+}
+
+function mirrorTriangleMesh(
+  vertices: Float32Array,
+  indices: Uint32Array,
+  axis: CoordinateAxis,
+): [Float32Array, Uint32Array] {
+  const vertexCount = vertices.length / 3;
+  let mirroredVertexCount = 0;
+  for (let index = 0; index < vertexCount; index += 1) {
+    if (vertices[index * 3 + axis] !== 0) mirroredVertexCount += 1;
+  }
+  const mirroredVertices = new Float32Array(vertices.length + mirroredVertexCount * 3);
+  mirroredVertices.set(vertices);
+  const mirroredVertexIndices = new Uint32Array(vertexCount);
+  let nextVertex = vertexCount;
+  for (let index = 0; index < vertexCount; index += 1) {
+    const offset = index * 3;
+    if (vertices[offset + axis] === 0) {
+      mirroredVertexIndices[index] = index;
+      continue;
+    }
+    mirroredVertexIndices[index] = nextVertex;
+    const target = nextVertex * 3;
+    mirroredVertices[target] = vertices[offset];
+    mirroredVertices[target + 1] = vertices[offset + 1];
+    mirroredVertices[target + 2] = vertices[offset + 2];
+    mirroredVertices[target + axis] *= -1;
+    nextVertex += 1;
+  }
+
+  const mirroredIndices = new Uint32Array(indices.length * 2);
+  mirroredIndices.set(indices);
+  for (let offset = 0; offset < indices.length; offset += 3) {
+    const target = indices.length + offset;
+    mirroredIndices[target] = mirroredVertexIndices[indices[offset]];
+    mirroredIndices[target + 1] = mirroredVertexIndices[indices[offset + 2]];
+    mirroredIndices[target + 2] = mirroredVertexIndices[indices[offset + 1]];
+  }
+  return [mirroredVertices, mirroredIndices];
+}
+
 export function createFieldPlaneMaskMesh(
   vertices: Float32Array,
   indices: Uint32Array,
+  symmetryPlane: string | null = null,
 ): FieldPlaneMaskMesh {
+  const axes = activeSymmetryAxes(symmetryPlane);
+  let maskVertices = snapSymmetryVertices(vertices, axes);
+  let maskIndices: Uint32Array = indices.slice();
+  for (const axis of axes) {
+    [maskVertices, maskIndices] = mirrorTriangleMesh(maskVertices, maskIndices, axis);
+  }
   const geometry = new BufferGeometry();
-  geometry.setAttribute('position', new BufferAttribute(vertices, 3));
-  geometry.setIndex(new BufferAttribute(indices, 1));
+  geometry.setAttribute('position', new BufferAttribute(maskVertices, 3));
+  geometry.setIndex(new BufferAttribute(maskIndices, 1));
   return {
     geometry,
     bvh: new MeshBVH(geometry),
-    watertight: isWatertightTriangleMesh(indices),
+    watertight: isWatertightTriangleMesh(maskIndices),
   };
 }
 

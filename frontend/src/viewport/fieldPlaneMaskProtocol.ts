@@ -5,6 +5,7 @@ export interface FieldPlaneMaskRequest {
   generation: number;
   jobId: string;
   geometrySha256: string;
+  symmetryPlane: string | null;
   plane: FieldPlaneSpec;
 }
 
@@ -13,6 +14,7 @@ export interface FieldPlaneMaskResult {
   generation: number;
   jobId: string;
   geometrySha256: string;
+  symmetryPlane: string | null;
   nx: number;
   ny: number;
   watertight: boolean;
@@ -24,6 +26,7 @@ export interface FieldPlaneMaskFailure {
   generation: number;
   jobId: string;
   geometrySha256: string;
+  symmetryPlane: string | null;
   message: string;
 }
 
