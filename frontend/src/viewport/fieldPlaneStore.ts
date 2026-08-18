@@ -4,19 +4,26 @@ import {
   fetchFieldPlane,
   FieldPlaneHttpError,
   type DecodedFieldPlane,
+  type FieldPlaneRequest,
+  type FieldPlaneResponseId,
   type FieldPlaneSpec,
 } from '../api/fieldPlane';
 import { fetchJobResults, type JobResults } from '../api/results';
 import type { FrameScene } from './frameScene';
+import { fieldPlanePreset } from './fieldPlaneMath';
 
 export type FieldPlaneStatus = 'idle' | 'loading' | 'ready' | 'error';
 
 export interface FieldPlaneStore {
   enabled: boolean;
+  dragging: boolean;
   jobId: string | null;
+  geometrySha256: string | null;
   plane: FieldPlaneSpec | null;
   frequencyIndex: number;
   frequenciesHz: number[];
+  generation: number;
+  lastAppliedGeneration: number;
   status: FieldPlaneStatus;
   error: string | null;
   field: DecodedFieldPlane | null;
@@ -24,6 +31,12 @@ export interface FieldPlaneStore {
   selectJob: (jobId: string, defaultPlane: FieldPlaneSpec) => void;
   disable: () => void;
   setFrequencyIndex: (frequencyIndex: number) => void;
+  setPlane: (plane: FieldPlaneSpec) => void;
+  beginPlaneDrag: () => void;
+  updatePlaneDrag: (plane: FieldPlaneSpec) => void;
+  endPlaneDrag: (plane?: FieldPlaneSpec) => void;
+  cancelPending: () => void;
+  resume: () => void;
   reportUnavailable: (reason: string) => void;
   retry: () => void;
 }
@@ -36,14 +49,126 @@ interface RememberedPlane {
 interface FieldPlaneStoreDependencies {
   fetchPlane?: typeof fetchFieldPlane;
   fetchResults?: (jobId: string) => Promise<JobResults>;
+  cacheCapacity?: number;
+}
+
+export interface FieldPlaneCacheKeyParts {
+  jobId: string;
+  geometrySha256: string;
+  responseId: FieldPlaneResponseId;
+  frequencyIndex: number;
+  plane: FieldPlaneSpec;
+}
+
+interface PendingFieldPlaneRequest {
+  generation: number;
+  jobId: string;
+  plane: FieldPlaneSpec;
+  frequencyIndex: number;
+  responseId: FieldPlaneResponseId;
+  request: FieldPlaneRequest;
 }
 
 const TARGET_FREQUENCY_HZ = 1_000;
+const DRAG_GRID_SIZE = 48;
+const DEFAULT_CACHE_CAPACITY = 24;
 let requestCounter = 0;
 
 function nextRequestId(): string {
   requestCounter += 1;
   return `field-plane-${Date.now().toString(36)}-${requestCounter.toString(36)}`;
+}
+
+function clonePlane(plane: FieldPlaneSpec): FieldPlaneSpec {
+  return {
+    ...plane,
+    origin_m: [...plane.origin_m],
+    axis_u: [...plane.axis_u],
+    axis_v: [...plane.axis_v],
+  };
+}
+
+function quantized(value: number): string {
+  const rounded = Math.round(value * 1e6) / 1e6;
+  return (Object.is(rounded, -0) ? 0 : rounded).toFixed(6);
+}
+
+export function fieldPlaneCacheKey({
+  jobId,
+  geometrySha256,
+  responseId,
+  frequencyIndex,
+  plane,
+}: FieldPlaneCacheKeyParts): string {
+  const transform = [...plane.origin_m, ...plane.axis_u, ...plane.axis_v, plane.width_m, plane.height_m]
+    .map(quantized)
+    .join(',');
+  return `${jobId}|${geometrySha256}|${responseId}|${frequencyIndex}|${transform}|${plane.nx}x${plane.ny}`;
+}
+
+export class FieldPlaneLruCache<Value> {
+  private readonly entries = new Map<string, Value>();
+
+  constructor(private readonly capacity = DEFAULT_CACHE_CAPACITY) {
+    if (!Number.isSafeInteger(capacity) || capacity < 1) throw new Error('Field-plane cache capacity must be positive');
+  }
+
+  get size(): number { return this.entries.size; }
+
+  get(key: string): Value | undefined {
+    const value = this.entries.get(key);
+    if (value === undefined) return undefined;
+    this.entries.delete(key);
+    this.entries.set(key, value);
+    return value;
+  }
+
+  set(key: string, value: Value): void {
+    this.entries.delete(key);
+    this.entries.set(key, value);
+    while (this.entries.size > this.capacity) {
+      const oldest = this.entries.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      this.entries.delete(oldest);
+    }
+  }
+
+  clear(): void { this.entries.clear(); }
+}
+
+/** Pure one-running/one-latest coordinator. Enqueue replaces only the pending
+ * item; completing an obsolete item cannot disturb a newer active request. */
+export class LatestFieldPlaneRequestQueue<Value> {
+  private active: Value | null = null;
+  private queued: Value | null = null;
+
+  enqueue(value: Value): Value | null {
+    if (this.active === null) {
+      this.active = value;
+      return value;
+    }
+    this.queued = value;
+    return null;
+  }
+
+  complete(value: Value): Value | null {
+    if (this.active !== value) return null;
+    const next = this.queued;
+    this.active = next;
+    this.queued = null;
+    return next;
+  }
+
+  dropQueued(): void { this.queued = null; }
+
+  clear(): void {
+    this.active = null;
+    this.queued = null;
+  }
+}
+
+export function shouldApplyFieldPlaneGeneration(generation: number, lastAppliedGeneration: number): boolean {
+  return generation >= lastAppliedGeneration;
 }
 
 export function nearestFieldPlaneFrequencyIndex(frequenciesHz: readonly number[], targetHz = TARGET_FREQUENCY_HZ): number {
@@ -60,25 +185,23 @@ export function nearestFieldPlaneFrequencyIndex(frequenciesHz: readonly number[]
   return nearest;
 }
 
-function planeSpan(minimum: number, maximum: number, unitsPerMetre: number): number {
-  const size = Math.max(0, maximum - minimum);
-  const extentFromOrigin = Math.max(Math.abs(minimum), Math.abs(maximum));
-  const sceneSpan = Math.max(size * 2, extentFromOrigin * 2, unitsPerMetre * 0.01);
-  return Math.min(100, sceneSpan / unitsPerMetre);
-}
-
 /** Default H-plane in solver metres. A FrameScene declares the only unit
  * conversion used here; the request itself never contains viewport units. */
 export function defaultFieldPlane(scene: FrameScene): FieldPlaneSpec {
-  return {
+  const seed: FieldPlaneSpec = {
     origin_m: [0, 0, 0],
     axis_u: [1, 0, 0],
     axis_v: [0, 0, 1],
-    width_m: planeSpan(scene.bounds.min.x, scene.bounds.max.x, scene.unitsPerMetre),
-    height_m: planeSpan(scene.bounds.min.z, scene.bounds.max.z, scene.unitsPerMetre),
+    width_m: 0.01,
+    height_m: 0.01,
     nx: 96,
     ny: 96,
   };
+  return fieldPlanePreset(seed, 'h', {
+    min: scene.bounds.min.toArray(),
+    max: scene.bounds.max.toArray(),
+    unitsPerMetre: scene.unitsPerMetre,
+  });
 }
 
 export function fieldPlaneErrorMessage(reason: unknown): string {
@@ -109,52 +232,156 @@ export function createFieldPlaneStore(
   const fetchPlane = dependencies.fetchPlane ?? fetchFieldPlane;
   const fetchResults = dependencies.fetchResults ?? fetchJobResults;
   const remembered = new Map<string, RememberedPlane>();
+  const cache = new FieldPlaneLruCache<DecodedFieldPlane>(dependencies.cacheCapacity);
+  const requestQueue = new LatestFieldPlaneRequestQueue<PendingFieldPlaneRequest>();
   let activationGeneration = 0;
+  let requestGeneration = 0;
+  let lastAppliedGeneration = 0;
   let requestController: AbortController | null = null;
+  let cacheJobId: string | null = null;
+  let cacheGeometrySha256: string | null = null;
 
   return create<FieldPlaneStore>((set, get) => {
-    const load = (jobId: string, plane: FieldPlaneSpec, frequencyIndex: number): void => {
+    const cancelRequests = (): void => {
+      requestGeneration += 1;
+      requestQueue.clear();
       requestController?.abort();
+      requestController = null;
+      const current = get();
+      set({
+        generation: requestGeneration,
+        status: current.field ? 'ready' : current.enabled ? 'idle' : current.status,
+        error: null,
+      });
+    };
+
+    const startRequest = (pending: PendingFieldPlaneRequest): void => {
       const controller = new AbortController();
       requestController = controller;
-      const request = buildFieldPlaneRequest({
-        requestId: nextRequestId(),
-        plane,
-        frequencyIndex,
-      });
-      set({ status: 'loading', error: null, field: null });
-      void fetchPlane(jobId, request, fetch, controller.signal)
+      set({ status: 'loading', error: null });
+      void fetchPlane(pending.jobId, pending.request, fetch, controller.signal)
         .then((field) => {
-          if (controller.signal.aborted) return;
+          if (controller.signal.aborted || !shouldApplyFieldPlaneGeneration(pending.generation, lastAppliedGeneration)) return;
           const current = get();
-          if (!current.enabled || current.jobId !== jobId || current.frequencyIndex !== frequencyIndex) return;
+          if (!current.enabled || current.jobId !== pending.jobId) return;
           if (
-            field.header.request_id !== request.request_id
-            || field.header.job_id !== jobId
-            || field.header.frequency_index !== frequencyIndex
-            || field.header.nx !== plane.nx
-            || field.header.ny !== plane.ny
+            field.header.request_id !== pending.request.request_id
+            || field.header.job_id !== pending.jobId
+            || field.header.frequency_index !== pending.frequencyIndex
+            || field.header.response_id !== pending.responseId
+            || field.header.nx !== pending.plane.nx
+            || field.header.ny !== pending.plane.ny
           ) throw new Error('response metadata does not match the field-plane request');
-          set({ status: 'ready', error: null, field });
+
+          if (cacheGeometrySha256 !== null && cacheGeometrySha256 !== field.header.geometry_sha256) cache.clear();
+          cacheGeometrySha256 = field.header.geometry_sha256;
+          cacheJobId = pending.jobId;
+          cache.set(fieldPlaneCacheKey({
+            jobId: pending.jobId,
+            geometrySha256: field.header.geometry_sha256,
+            responseId: pending.responseId,
+            frequencyIndex: pending.frequencyIndex,
+            plane: pending.plane,
+          }), field);
+          lastAppliedGeneration = pending.generation;
+          set({
+            geometrySha256: field.header.geometry_sha256,
+            lastAppliedGeneration,
+            status: 'ready',
+            error: null,
+            field,
+          });
         })
         .catch((reason: unknown) => {
           if (controller.signal.aborted) return;
           const current = get();
-          if (!current.enabled || current.jobId !== jobId || current.frequencyIndex !== frequencyIndex) return;
-          set({ status: 'error', error: fieldPlaneErrorMessage(reason), field: null });
+          if (!current.enabled || current.jobId !== pending.jobId || pending.generation < current.generation) return;
+          if (reason instanceof FieldPlaneHttpError && reason.status === 429) {
+            set({ status: current.field ? 'ready' : 'idle', error: null });
+            return;
+          }
+          set({ status: 'error', error: fieldPlaneErrorMessage(reason) });
+        })
+        .finally(() => {
+          if (requestController === controller) requestController = null;
+          const next = requestQueue.complete(pending);
+          if (next) startRequest(next);
         });
+    };
+
+    const load = (jobId: string, plane: FieldPlaneSpec, frequencyIndex: number): void => {
+      requestGeneration += 1;
+      const generation = requestGeneration;
+      const responseId: FieldPlaneResponseId = 'system';
+      set({ generation, status: 'loading', error: null });
+
+      if (cacheJobId === jobId && cacheGeometrySha256 !== null) {
+        const cached = cache.get(fieldPlaneCacheKey({
+          jobId,
+          geometrySha256: cacheGeometrySha256,
+          responseId,
+          frequencyIndex,
+          plane,
+        }));
+        if (cached) {
+          requestQueue.dropQueued();
+          lastAppliedGeneration = generation;
+          set({
+            geometrySha256: cacheGeometrySha256,
+            lastAppliedGeneration,
+            status: 'ready',
+            error: null,
+            field: cached,
+          });
+          return;
+        }
+      }
+
+      let request: FieldPlaneRequest;
+      try {
+        request = buildFieldPlaneRequest({
+          requestId: nextRequestId(),
+          plane,
+          frequencyIndex,
+          responseId,
+        });
+      } catch (reason) {
+        set({ status: 'error', error: fieldPlaneErrorMessage(reason) });
+        return;
+      }
+      const pending = { generation, jobId, plane: clonePlane(plane), frequencyIndex, responseId, request };
+      const ready = requestQueue.enqueue(pending);
+      if (ready) startRequest(ready);
+    };
+
+    const requestCurrentPlane = (current: FieldPlaneStore, plane: FieldPlaneSpec): void => {
+      if (!current.jobId) return;
+      const requestPlane = current.dragging
+        ? { ...clonePlane(plane), nx: DRAG_GRID_SIZE, ny: DRAG_GRID_SIZE }
+        : clonePlane(plane);
+      load(current.jobId, requestPlane, current.frequencyIndex);
+    };
+
+    const remember = (jobId: string, plane: FieldPlaneSpec, frequencyIndex: number): void => {
+      remembered.set(jobId, { plane: clonePlane(plane), frequencyIndex });
     };
 
     const activate = (jobId: string, suppliedDefault: FieldPlaneSpec): void => {
       activationGeneration += 1;
       const generation = activationGeneration;
-      requestController?.abort();
-      requestController = null;
+      cancelRequests();
+      if (cacheJobId !== jobId) {
+        cache.clear();
+        cacheJobId = jobId;
+        cacheGeometrySha256 = null;
+      }
       const saved = remembered.get(jobId);
-      const plane = saved?.plane ?? suppliedDefault;
+      const plane = clonePlane(saved?.plane ?? suppliedDefault);
       set({
         enabled: true,
+        dragging: false,
         jobId,
+        geometrySha256: cacheGeometrySha256,
         plane,
         frequencyIndex: saved?.frequencyIndex ?? 0,
         frequenciesHz: [],
@@ -173,23 +400,27 @@ export function createFieldPlaneStore(
           const frequencyIndex = saved?.frequencyIndex === null || saved?.frequencyIndex === undefined
             ? nearestFieldPlaneFrequencyIndex(frequenciesHz)
             : Math.max(0, Math.min(frequenciesHz.length - 1, saved.frequencyIndex));
-          remembered.set(jobId, { plane, frequencyIndex });
+          remember(jobId, plane, frequencyIndex);
           set({ frequenciesHz, frequencyIndex });
           load(jobId, plane, frequencyIndex);
         })
         .catch((reason: unknown) => {
           const current = get();
           if (generation !== activationGeneration || !current.enabled || current.jobId !== jobId) return;
-          set({ status: 'error', error: fieldPlaneErrorMessage(reason), field: null });
+          set({ status: 'error', error: fieldPlaneErrorMessage(reason) });
         });
     };
 
     return {
       enabled: false,
+      dragging: false,
       jobId: null,
+      geometrySha256: null,
       plane: null,
       frequencyIndex: 0,
       frequenciesHz: [],
+      generation: 0,
+      lastAppliedGeneration: 0,
       status: 'idle',
       error: null,
       field: null,
@@ -201,11 +432,12 @@ export function createFieldPlaneStore(
       },
       disable: () => {
         activationGeneration += 1;
-        requestController?.abort();
-        requestController = null;
+        cancelRequests();
         set({
           enabled: false,
+          dragging: false,
           jobId: null,
+          geometrySha256: null,
           plane: null,
           frequencyIndex: 0,
           frequenciesHz: [],
@@ -225,20 +457,71 @@ export function createFieldPlaneStore(
           || frequencyIndex >= current.frequenciesHz.length
           || frequencyIndex === current.frequencyIndex
         ) return;
-        remembered.set(current.jobId, { plane: current.plane, frequencyIndex });
+        remember(current.jobId, current.plane, frequencyIndex);
         set({ frequencyIndex });
-        load(current.jobId, current.plane, frequencyIndex);
+        requestCurrentPlane({ ...current, frequencyIndex }, current.plane);
+      },
+      setPlane: (plane) => {
+        const current = get();
+        if (!current.enabled || !current.jobId) return;
+        const next = clonePlane(plane);
+        remember(current.jobId, next, current.frequencyIndex);
+        set({ plane: next, dragging: false });
+        requestCurrentPlane({ ...current, plane: next, dragging: false }, next);
+      },
+      beginPlaneDrag: () => {
+        const current = get();
+        if (!current.enabled || !current.jobId || !current.plane) return;
+        set({ dragging: true });
+      },
+      updatePlaneDrag: (plane) => {
+        const current = get();
+        if (!current.enabled || !current.dragging || !current.jobId || !current.plane) return;
+        const next = { ...clonePlane(plane), nx: current.plane.nx, ny: current.plane.ny };
+        remember(current.jobId, next, current.frequencyIndex);
+        set({ plane: next });
+        requestCurrentPlane(current, next);
+      },
+      endPlaneDrag: (plane) => {
+        const current = get();
+        if (!current.enabled || !current.jobId || !current.plane) return;
+        const next = clonePlane(plane ?? current.plane);
+        remember(current.jobId, next, current.frequencyIndex);
+        set({ plane: next, dragging: false });
+        requestCurrentPlane({ ...current, plane: next, dragging: false }, next);
+      },
+      cancelPending: () => {
+        activationGeneration += 1;
+        cancelRequests();
+        set({ dragging: false });
+      },
+      resume: () => {
+        const current = get();
+        if (!current.enabled || !current.jobId || !current.plane) return;
+        if (!current.frequenciesHz.length) {
+          activate(current.jobId, current.plane);
+          return;
+        }
+        requestCurrentPlane(current, current.plane);
       },
       reportUnavailable: (reason) => {
         activationGeneration += 1;
-        requestController?.abort();
-        requestController = null;
-        set({ jobId: null, plane: null, frequenciesHz: [], status: 'error', error: reason, field: null });
+        cancelRequests();
+        set({
+          dragging: false,
+          jobId: null,
+          geometrySha256: null,
+          plane: null,
+          frequenciesHz: [],
+          status: 'error',
+          error: reason,
+          field: null,
+        });
       },
       retry: () => {
         const current = get();
         if (!current.enabled || !current.jobId || !current.plane || !current.frequenciesHz.length) return;
-        load(current.jobId, current.plane, current.frequencyIndex);
+        requestCurrentPlane(current, current.plane);
       },
     };
   });

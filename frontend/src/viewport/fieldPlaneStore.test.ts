@@ -11,8 +11,12 @@ import type { FrameScene } from './frameScene';
 import {
   createFieldPlaneStore,
   defaultFieldPlane,
+  fieldPlaneCacheKey,
   fieldPlaneErrorMessage,
+  FieldPlaneLruCache,
+  LatestFieldPlaneRequestQueue,
   nearestFieldPlaneFrequencyIndex,
+  shouldApplyFieldPlaneGeneration,
 } from './fieldPlaneStore';
 
 const plane: FieldPlaneSpec = {
@@ -47,6 +51,12 @@ function response(jobId: string, request: FieldPlaneRequest): DecodedFieldPlane 
   };
 }
 
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolvePromise: (() => void) | undefined;
+  const promise = new Promise<void>((resolve) => { resolvePromise = resolve; });
+  return { promise, resolve: () => resolvePromise?.() };
+}
+
 describe('field-plane state', () => {
   it('chooses the solved frequency nearest 1 kHz and refetches on selection change', async () => {
     const fetchPlane = vi.fn(async (jobId: string, request: FieldPlaneRequest) => response(jobId, request));
@@ -63,6 +73,10 @@ describe('field-plane state', () => {
     store.getState().setFrequencyIndex(2);
     await vi.waitFor(() => expect(store.getState().status).toBe('ready'));
     expect(store.getState().field?.header.frequency_index).toBe(2);
+    expect(fetchPlane).toHaveBeenCalledTimes(2);
+
+    store.getState().setFrequencyIndex(1);
+    expect(store.getState().field?.header.frequency_index).toBe(1);
     expect(fetchPlane).toHaveBeenCalledTimes(2);
   });
 
@@ -83,6 +97,130 @@ describe('field-plane state', () => {
 
     expect(store.getState().frequencyIndex).toBe(2);
     expect(store.getState().plane?.width_m).toBe(plane.width_m);
+  });
+
+  it('keeps one drag request running and collapses pending transforms to the latest', async () => {
+    const dragGate = deferred();
+    const fetchPlane = vi.fn(async (jobId: string, request: FieldPlaneRequest) => {
+      if (request.plane.nx === 48 && request.plane.origin_m[0] === 0.1) {
+        await dragGate.promise;
+      }
+      return response(jobId, request);
+    });
+    const store = createFieldPlaneStore({
+      fetchPlane,
+      fetchResults: async () => ({ frequencies: [800] }),
+    });
+    store.getState().enable('job-1', plane);
+    await vi.waitFor(() => expect(store.getState().status).toBe('ready'));
+
+    store.getState().beginPlaneDrag();
+    store.getState().updatePlaneDrag({ ...plane, origin_m: [0.1, 0, 0] });
+    await vi.waitFor(() => expect(fetchPlane).toHaveBeenCalledTimes(2));
+    store.getState().updatePlaneDrag({ ...plane, origin_m: [0.2, 0, 0] });
+    store.getState().updatePlaneDrag({ ...plane, origin_m: [0.3, 0, 0] });
+    expect(fetchPlane).toHaveBeenCalledTimes(2);
+
+    dragGate.resolve();
+    await vi.waitFor(() => expect(fetchPlane).toHaveBeenCalledTimes(3));
+    expect(fetchPlane.mock.calls[2][1].plane.origin_m).toEqual([0.3, 0, 0]);
+    expect(fetchPlane.mock.calls[2][1].plane.nx).toBe(48);
+
+    await vi.waitFor(() => expect(store.getState().status).toBe('ready'));
+    store.getState().endPlaneDrag();
+    await vi.waitFor(() => expect(fetchPlane).toHaveBeenCalledTimes(4));
+    expect(fetchPlane.mock.calls[3][1].plane.origin_m).toEqual([0.3, 0, 0]);
+    expect(fetchPlane.mock.calls[3][1].plane.nx).toBe(96);
+  });
+
+  it('does not let an older in-flight response replace a newer cached field', async () => {
+    const movedGate = deferred();
+    const fetchPlane = vi.fn(async (jobId: string, request: FieldPlaneRequest) => {
+      if (request.plane.nx === 48 && request.plane.origin_m[0] === 0.1) {
+        await movedGate.promise;
+      }
+      const field = response(jobId, request);
+      field.real[0] = request.plane.origin_m[0];
+      return field;
+    });
+    const store = createFieldPlaneStore({
+      fetchPlane,
+      fetchResults: async () => ({ frequencies: [800] }),
+    });
+    store.getState().enable('job-1', plane);
+    await vi.waitFor(() => expect(store.getState().status).toBe('ready'));
+    store.getState().beginPlaneDrag();
+    store.getState().updatePlaneDrag(plane);
+    await vi.waitFor(() => expect(store.getState().field?.header.nx).toBe(48));
+
+    store.getState().updatePlaneDrag({ ...plane, origin_m: [0.1, 0, 0] });
+    await vi.waitFor(() => expect(fetchPlane).toHaveBeenCalledTimes(3));
+    store.getState().updatePlaneDrag(plane);
+    const cachedGeneration = store.getState().lastAppliedGeneration;
+    expect(store.getState().field?.real[0]).toBe(0);
+
+    movedGate.resolve();
+    await vi.waitFor(() => expect(store.getState().status).toBe('ready'));
+    expect(store.getState().lastAppliedGeneration).toBe(cachedGeneration);
+    expect(store.getState().field?.real[0]).toBe(0);
+  });
+
+  it('clears cached transforms when the response geometry hash changes', async () => {
+    const fetchPlane = vi.fn(async (jobId: string, request: FieldPlaneRequest) => {
+      const field = response(jobId, request);
+      field.header.geometry_sha256 = request.plane.origin_m[0] === 0 ? 'geometry-a' : 'geometry-b';
+      return field;
+    });
+    const store = createFieldPlaneStore({
+      fetchPlane,
+      fetchResults: async () => ({ frequencies: [800] }),
+    });
+    store.getState().enable('job-1', plane);
+    await vi.waitFor(() => expect(store.getState().status).toBe('ready'));
+    store.getState().setPlane({ ...plane, origin_m: [0.1, 0, 0] });
+    await vi.waitFor(() => expect(store.getState().geometrySha256).toBe('geometry-b'));
+    store.getState().setPlane(plane);
+    await vi.waitFor(() => expect(fetchPlane).toHaveBeenCalledTimes(3));
+  });
+});
+
+describe('field-plane cache and request primitives', () => {
+  it('quantizes cache transforms to 1e-6 and separates geometry and grid identity', () => {
+    const parts = {
+      jobId: 'job-1',
+      geometrySha256: 'geometry-a',
+      responseId: 'system' as const,
+      frequencyIndex: 2,
+      plane,
+    };
+    const key = fieldPlaneCacheKey(parts);
+    expect(fieldPlaneCacheKey({
+      ...parts,
+      plane: { ...plane, origin_m: [0.0000004, 0, 0] },
+    })).toBe(key);
+    expect(fieldPlaneCacheKey({ ...parts, geometrySha256: 'geometry-b' })).not.toBe(key);
+    expect(fieldPlaneCacheKey({ ...parts, plane: { ...plane, nx: 48, ny: 48 } })).not.toBe(key);
+  });
+
+  it('evicts the least-recently-used decoded field', () => {
+    const cache = new FieldPlaneLruCache<number>(2);
+    cache.set('a', 1);
+    cache.set('b', 2);
+    expect(cache.get('a')).toBe(1);
+    cache.set('c', 3);
+    expect(cache.get('b')).toBeUndefined();
+    expect(cache.get('a')).toBe(1);
+    expect(cache.get('c')).toBe(3);
+  });
+
+  it('collapses queued work and rejects stale generations', () => {
+    const queue = new LatestFieldPlaneRequestQueue<string>();
+    expect(queue.enqueue('running')).toBe('running');
+    expect(queue.enqueue('old pending')).toBeNull();
+    expect(queue.enqueue('latest pending')).toBeNull();
+    expect(queue.complete('running')).toBe('latest pending');
+    expect(shouldApplyFieldPlaneGeneration(3, 4)).toBe(false);
+    expect(shouldApplyFieldPlaneGeneration(4, 4)).toBe(true);
   });
 });
 

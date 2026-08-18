@@ -17,6 +17,7 @@ import { useViewerPreferences, viewerPreferences, type CameraProjection } from '
 import { ViewerPreferencesPanel } from '../viewerprefs/ViewerPreferencesPanel';
 import { frameToScene, hasRenderableSurfaces, MAX_EDGE_TRIANGLES } from './frameScene';
 import { FIELD_PLANE_WINDOW_DB, maxFieldSplDb } from './fieldPlaneColor';
+import { fieldPlaneOffsetMetres, fieldPlanePreset, withFieldPlaneOffset } from './fieldPlaneMath';
 import { defaultFieldPlane, useFieldPlaneStore } from './fieldPlaneStore';
 import { importedMeshStore } from './importedMeshStore';
 import type { CameraDirection } from './cameraMath';
@@ -66,6 +67,41 @@ function useViewportTheme(): ViewportTheme {
   return theme;
 }
 
+function FieldPlaneOffsetInput() {
+  const plane = useFieldPlaneStore((state) => state.plane);
+  const offsetMm = plane ? fieldPlaneOffsetMetres(plane) * 1_000 : 0;
+  const [value, setValue] = useState(() => offsetMm.toFixed(2));
+  const focused = useRef(false);
+  useEffect(() => {
+    if (!focused.current) setValue(offsetMm.toFixed(2));
+  }, [offsetMm]);
+  const commit = () => {
+    focused.current = false;
+    const next = Number(value);
+    if (!plane || !Number.isFinite(next)) {
+      setValue(offsetMm.toFixed(2));
+      return;
+    }
+    useFieldPlaneStore.getState().setPlane(withFieldPlaneOffset(plane, next / 1_000));
+  };
+  return <label className="field-plane-offset">
+    <span>Offset</span>
+    <input
+      type="number"
+      aria-label="Field plane normal offset in millimetres"
+      step="0.1"
+      value={value}
+      onFocus={() => { focused.current = true; }}
+      onChange={(event) => setValue(event.target.value)}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') event.currentTarget.blur();
+      }}
+    />
+    <span>mm</span>
+  </label>;
+}
+
 export function fieldPlaneJob(jobs: readonly JobItem[], selectedJobId: string | null): JobItem | null {
   const eligible = (job: JobItem) => job.status === 'complete' && job.field_plane_available === true;
   return jobs.find((job) => job.id === selectedJobId && eligible(job))
@@ -107,6 +143,7 @@ export function Viewport() {
   const fieldStatus = useFieldPlaneStore((state) => state.status);
   const fieldError = useFieldPlaneStore((state) => state.error);
   const field = useFieldPlaneStore((state) => state.field);
+  const fieldPlane = useFieldPlaneStore((state) => state.plane);
   const fieldFrequencyIndex = useFieldPlaneStore((state) => state.frequencyIndex);
   const fieldFrequencies = useFieldPlaneStore((state) => state.frequenciesHz);
   const selectedRef = useRef<DecodedFrame | null>(null);
@@ -232,6 +269,15 @@ export function Viewport() {
     }
     if (!availableFieldJob || !activeScene) return;
     useFieldPlaneStore.getState().enable(availableFieldJob.id, defaultFieldPlane(activeScene));
+  };
+
+  const applyFieldPlanePreset = (preset: 'h' | 'v' | 'mouth') => {
+    if (!fieldPlane || !activeScene) return;
+    useFieldPlaneStore.getState().setPlane(fieldPlanePreset(fieldPlane, preset, {
+      min: activeScene.bounds.min.toArray(),
+      max: activeScene.bounds.max.toArray(),
+      unitsPerMetre: activeScene.unitsPerMetre,
+    }));
   };
 
   const showParametric = () => {
@@ -452,7 +498,18 @@ export function Viewport() {
       }) : <p>No rendered surfaces in this frame.</p>}</div>
     </div>}
 
-    {fieldEnabled && <div className="field-plane-legend" role="status" aria-live="polite">
+    {fieldEnabled && <div
+      className="field-plane-legend"
+      role="group"
+      aria-label="Field plane controls"
+      tabIndex={0}
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget || (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight')) return;
+        event.preventDefault();
+        const delta = event.key === 'ArrowLeft' ? -1 : 1;
+        useFieldPlaneStore.getState().setFrequencyIndex(fieldFrequencyIndex + delta);
+      }}
+    >
       <div className="field-plane-legend-title">
         <b>Field plane</b>
         {fieldFrequencies.length > 0
@@ -470,7 +527,13 @@ export function Viewport() {
         <span>{fieldWindow ? `${fieldWindow.minimum.toFixed(1)} dB` : '— dB'}</span>
         <span>{fieldWindow ? `${fieldWindow.maximum.toFixed(1)} dB` : '— dB'}</span>
       </div>
-      {fieldStatus !== 'ready' && <div className={`field-plane-status ${fieldStatus}`}>
+      <div className="field-plane-presets" aria-label="Field plane presets">
+        <button type="button" onClick={() => applyFieldPlanePreset('h')}>H-plane</button>
+        <button type="button" onClick={() => applyFieldPlanePreset('v')}>V-plane</button>
+        <button type="button" onClick={() => applyFieldPlanePreset('mouth')}>Mouth</button>
+      </div>
+      <FieldPlaneOffsetInput />
+      {fieldStatus !== 'ready' && <div className={`field-plane-status ${fieldStatus}`} role="status" aria-live="polite">
         <span>{fieldStatus === 'loading' ? 'loading field plane…' : fieldError ?? 'field plane idle'}</span>
         {fieldStatus === 'error' && fieldJobId && <button type="button" onClick={() => useFieldPlaneStore.getState().retry()}>Retry</button>}
       </div>}

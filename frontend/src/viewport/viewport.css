@@ -69,6 +69,12 @@
 .field-plane-legend-title select { min-width: 0; max-width: 122px; height: 20px; padding: 0 18px 0 5px; border: 1px solid var(--hair-hi); border-radius: var(--r3); background: var(--surface-raised); color: var(--fg2); }
 .field-plane-gradient { display: block; height: 10px; border: 1px solid rgba(255, 255, 255, .14); border-radius: 2px; background-repeat: no-repeat; background-size: 100% 100%; }
 .field-plane-range { margin-top: 3px; color: var(--fg3); }
+.field-plane-legend:focus-visible { outline: 1px solid rgba(var(--acc-rgb), .65); outline-offset: 2px; }
+.field-plane-presets { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin-top: 8px; }
+.field-plane-presets button { min-width: 0; padding: 3px 4px; border: 1px solid var(--hair-hi); border-radius: var(--r3); background: var(--ov1); color: var(--fg2); font: 620 var(--text-micro) var(--ui); }
+.field-plane-presets button:hover { border-color: rgba(var(--acc-rgb), .48); background: rgba(var(--acc-rgb), .1); color: var(--fg1); }
+.field-plane-offset { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 6px; margin-top: 6px; color: var(--fg3); font: var(--text-micro) var(--mono); }
+.field-plane-offset input { min-width: 0; height: 20px; padding: 0 4px; border: 1px solid var(--hair-hi); border-radius: var(--r3); background: var(--surface-raised); color: var(--fg1); font: inherit; text-align: right; }
 .field-plane-status { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--hair); color: var(--amber); font-size: var(--text-micro); line-height: 1.35; }
 .field-plane-status.error { color: var(--red); }
 .field-plane-status button { flex: none; padding: 2px 6px; border: 1px solid currentColor; border-radius: var(--r3); background: transparent; color: currentColor; font: 650 var(--text-micro) var(--mono); text-transform: uppercase; }
