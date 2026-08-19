@@ -27,7 +27,7 @@ import { workspaceModeStore } from '../stores/workspaceMode';
 import { createImportedMeshScene } from '../viewport/importedMesh';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { parseMSH } from '../viewport/mshParser';
-import { filenameStem } from '../viewport/presentation';
+import { designNameSlug } from '../stores/designName';
 import { fusionWorkflowView } from './cadWorkflowView';
 import { jobsCoordinatorBridge, SolveEngineUnavailableError } from './JobsCoordinator';
 import { workspaceNavigation } from './workspaceNavigation';
@@ -226,7 +226,7 @@ export function CadLinkCoordinator() {
   // touch the geometry revision, so freshness has to watch them separately.
   const documentSettings = useSolveOptionsStore(documentSettingsSignature);
   const identity = useDocumentStore((state) => state.identity);
-  const filename = useDocumentStore((state) => state.filename);
+  const designName = useDocumentStore((state) => state.designName);
   const setCadLink = useDocumentStore((state) => state.setCadLink);
   const selectedBundlePath = useCadReturnStore((state) => state.selectedBundle?.bundlePath ?? null);
   const [bundles, setBundles] = useState<CadReturnBundle[]>([]);
@@ -448,7 +448,7 @@ export function CadLinkCoordinator() {
       const result = await sendDesignToCad(
         design,
         designRevision,
-        filenameStem(filename),
+        designNameSlug(designName),
         identity,
         fetch,
         undefined,
@@ -472,7 +472,7 @@ export function CadLinkCoordinator() {
     } finally {
       if (request === fusionSendRequest.current && mounted.current) setSendingToFusion(false);
     }
-  }, [design, designRevision, filename, identity, refresh, setCadLink]);
+  }, [design, designRevision, designName, identity, refresh, setCadLink]);
 
   // The one Fusion outbound entry point (menu, rail, and panel). Deriving the
   // action and the expected-document guard here means no call site can send an

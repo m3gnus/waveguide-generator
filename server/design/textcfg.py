@@ -34,6 +34,8 @@ _BLOCK_START = re.compile(r"^([\w.:-]+)\s*=\s*\{$")
 _MWG_SNIFF = re.compile(r";\s*(?:Parameter|MWG) config", re.IGNORECASE)
 _LINE_BREAK = re.compile(r"[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]")
 _DESIGN_FORMAT = 2
+# ATH's report block, which carries the design's name in its ``Title``.
+_REPORT_BLOCK = "Report"
 _DESIGN_FORMAT_STAMP = re.compile(r"\bdesign-format\s*:\s*(\d+)\b", re.IGNORECASE)
 
 
@@ -824,6 +826,27 @@ def _serialize_enclosure(lines: list[str], config: Any) -> None:
     )
 
 
+def _emit_block(lines: list[str], name: str, block: ConfigBlock) -> None:
+    """Write one passthrough block, preferring its verbatim imported rows."""
+
+    if _BLOCK_START.fullmatch(f"{name} = {{") is None:
+        raise TextConfigError(f"unsafe config block name {name!r}")
+    lines.append(f"{name} = {{")
+    if block.entries:
+        for entry in block.entries:
+            _append_block_entry(lines, entry, block=name)
+    else:
+        for comment in block.comments:
+            if not comment.lstrip().startswith(";"):
+                raise TextConfigError(f"unsafe comment in block {name!r}")
+            _append_block_entry(lines, comment, block=name)
+        for row in block.lines:
+            _append_block_entry(lines, row, block=name)
+        for key, value in block.items.items():
+            _line(lines, key, value)
+    lines.append("}")
+
+
 def _serialize_canonical(
     design: DesignConfig,
     comments: list[str] | None = None,
@@ -841,6 +864,15 @@ def _serialize_canonical(
             lines.append(comment)
     if cadlink is not None:
         lines.extend(cadlink.block_lines())
+    # The design's name leads the file.
+    #
+    # ``Report`` is ATH's block and stays passthrough, but WG writes its
+    # ``Title`` from the design name, and a name buried under two hundred lines
+    # of geometry is a name nobody reads. It is emitted here rather than with
+    # the other extra blocks at the end; the trailing loop skips it.
+    report = config.extra_blocks.get(_REPORT_BLOCK)
+    if report is not None:
+        _emit_block(lines, _REPORT_BLOCK, report)
     _line(lines, "Scale", config.scale)
 
     if isinstance(config, FreeformConfig):
@@ -980,22 +1012,9 @@ def _serialize_canonical(
     for key, value in config.extra_keys.items():
         _line(lines, key, value)
     for name, block in config.extra_blocks.items():
-        if _BLOCK_START.fullmatch(f"{name} = {{") is None:
-            raise TextConfigError(f"unsafe config block name {name!r}")
-        lines.append(f"{name} = {{")
-        if block.entries:
-            for entry in block.entries:
-                _append_block_entry(lines, entry, block=name)
-        else:
-            for comment in block.comments:
-                if not comment.lstrip().startswith(";"):
-                    raise TextConfigError(f"unsafe comment in block {name!r}")
-                _append_block_entry(lines, comment, block=name)
-            for row in block.lines:
-                _append_block_entry(lines, row, block=name)
-            for key, value in block.items.items():
-                _line(lines, key, value)
-        lines.append("}")
+        if name == _REPORT_BLOCK:
+            continue
+        _emit_block(lines, name, block)
     return "\n".join(lines) + "\n"
 
 

@@ -1,9 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { projectSubmittedDesign } from '../jobs/submittedProjection';
 import { preferencesStore } from '../prefs/preferences';
-import { designForFamily } from '../stores/design';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
-import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
+import { resetSolveOptionsStore } from '../stores/solveOptions';
 import { currentJobLabel, jobAnnouncement } from './JobsCoordinator';
 
 describe('current job naming', () => {
@@ -13,36 +11,29 @@ describe('current job naming', () => {
     resetSolveOptionsStore();
   });
 
-  it('uses the current document filename before a name baseline exists', () => {
-    useDocumentStore.getState().setFilename('saved winner.cfg');
-    expect(currentJobLabel()).toBe('saved winner');
+  it('labels the run with the document design name', () => {
+    useDocumentStore.getState().setDesignName('saved winner');
+    expect(currentJobLabel()).toBe('saved winner1');
   });
 
-  it('uses a fresh name committed by the same keyboard-submit event', () => {
-    const design = designForFamily('R-OSSE');
-    const options = useSolveOptionsStore.getState().options();
-    const projection = projectSubmittedDesign(design, options);
-    preferencesStore.update({ outputName: 'horn', nameSourceProjection: projection });
-    const staleRenderPreferences = preferencesStore.getSnapshot();
-
-    // RunNameField commits before Ctrl/Cmd+Enter bubbles to the coordinator's
-    // window shortcut. The submit path must read this store
-    // update, not the preferences captured by the previous React render.
-    preferencesStore.update({ outputName: 'fresh', nameSourceProjection: projection });
-
-    expect(staleRenderPreferences).toMatchObject({ outputName: 'horn' });
-    expect(currentJobLabel(design, options)).toBe('fresh');
+  it('uses a rename committed by the same keyboard-submit event', () => {
+    useDocumentStore.getState().setDesignName('horn');
+    // The Design name field commits before Ctrl/Cmd+Enter bubbles to the
+    // coordinator's window shortcut. The submit path must read the store,
+    // not the value captured by the previous React render.
+    useDocumentStore.getState().setDesignName('fresh');
+    expect(currentJobLabel()).toBe('fresh1');
   });
 
-  it('decorates the submitted label without changing the stored core', () => {
+  it('decorates the submitted label without renaming the design', () => {
+    useDocumentStore.getState().setDesignName('horn');
     preferencesStore.update({
-      outputName: 'horn',
       runNameDatePosition: 'prefix',
       runNameDateFormat: 'yyyy-mm-dd',
+      runNameNumberPosition: 'off',
     });
-    expect(currentJobLabel(undefined, undefined, undefined, new Date(2026, 7, 12, 12)))
-      .toBe('2026-08-12_horn');
-    expect(preferencesStore.getSnapshot().outputName).toBe('horn');
+    expect(currentJobLabel(undefined, new Date(2026, 7, 12, 12))).toBe('2026-08-12_horn');
+    expect(useDocumentStore.getState().designName).toBe('horn');
   });
 });
 

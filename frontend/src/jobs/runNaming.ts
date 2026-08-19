@@ -1,43 +1,44 @@
-import { submittedProjectionsEqual, type SubmittedDesignProjection } from './submittedProjection';
-
-export const UNBOUND_RUN_NAME_SOURCE = 'unbound' as const;
-export type RunNameSourceProjection = SubmittedDesignProjection | typeof UNBOUND_RUN_NAME_SOURCE | null;
-
-export interface RunNamingState {
-  outputName: string;
-  nameSourceProjection: RunNameSourceProjection;
-  runNameNumberPosition?: RunNameNumberPosition;
-  runNameNumberFormat?: RunNameNumberFormat;
-}
+/**
+ * The label a solve is stored under.
+ *
+ * The run name used to be its own string -- a global `outputName` preference
+ * that WG rewrote on every submission by incrementing its trailing digits.
+ * That is why renaming a run never renamed the document: they were different
+ * names, and only one of them moved.
+ *
+ * The name is now the document's `designName`, and this module only decorates
+ * it. Nothing here writes the name back, so the sequence number and the date
+ * are labels on a run rather than edits to the design.
+ */
+import { UNTITLED_DESIGN } from '../stores/designName';
 
 export type RunNameDatePosition = 'off' | 'prefix' | 'suffix';
 export type RunNameDateFormat = 'yymmdd' | 'yyyy-mm-dd';
 export type RunNameNumberPosition = 'off' | 'suffix';
 export type RunNameNumberFormat = 'natural' | '2-digit' | '3-digit';
 
-export interface RunNameDateOptions {
+export interface RunNameOptions {
   runNameDatePosition: RunNameDatePosition;
   runNameDateFormat: RunNameDateFormat;
+  runNameNumberPosition: RunNameNumberPosition;
+  runNameNumberFormat: RunNameNumberFormat;
 }
 
-export function normalizeRunName(value: unknown, fallback = 'horn'): string {
+/**
+ * Which design the run counter belongs to, and the number the next run takes.
+ *
+ * Two fields rather than a map keyed by name: the counter only ever describes
+ * the design on screen, and a map would grow a row for every name ever typed.
+ * Renaming the design starts its numbering again at 1, which is what makes
+ * "Tritonia-M01" mean the first run of Tritonia-M.
+ */
+export interface RunSequenceState {
+  runSequenceName: string;
+  runSequenceNext: number;
+}
+
+export function normalizeRunName(value: unknown, fallback = UNTITLED_DESIGN): string {
   return String(value ?? '').trim() || fallback;
-}
-
-/** Extract a human run name without applying filesystem slug rules. */
-export function runNameFromFilename(filename: string): string {
-  const basename = String(filename).replace(/^.*[\\/]/, '');
-  return normalizeRunName(basename.replace(/\.(cfg|txt|mwg)$/i, ''));
-}
-
-/** Increment only the final digit run, retaining or applying its minimum width. */
-export function incrementTrailingDigits(name: string, minimumWidth = 1): string {
-  const normalized = normalizeRunName(name);
-  const match = /^(.*?)(\d+)$/.exec(normalized);
-  const width = Math.max(1, Math.floor(minimumWidth));
-  if (!match) return `${normalized}${String(2).padStart(width, '0')}`;
-  const incremented = (BigInt(match[2]) + 1n).toString().padStart(Math.max(match[2].length, width), '0');
-  return `${match[1]}${incremented}`;
 }
 
 function runNumberWidth(format: RunNameNumberFormat | undefined): number {
@@ -59,41 +60,46 @@ export function runNameDateFor(
   return format === 'yymmdd' ? `${year}${month}${day}` : `${year}-${month}-${day}`;
 }
 
-/** Decorate a computed core name only at the user-facing label boundary. */
+/** The number the next run of this design takes. */
+export function runSequenceFor(state: RunSequenceState, designName: string): number {
+  if (normalizeRunName(state.runSequenceName) !== normalizeRunName(designName)) return 1;
+  return Math.max(1, Math.floor(state.runSequenceNext) || 1);
+}
+
+/** The counter state to store once a submission under this name succeeded. */
+export function advanceRunSequence(state: RunSequenceState, designName: string): RunSequenceState {
+  return {
+    runSequenceName: normalizeRunName(designName),
+    runSequenceNext: runSequenceFor(state, designName) + 1,
+  };
+}
+
+/**
+ * Decorate a design name into a run label.
+ *
+ * The core is never modified: it is the document's name, and a run is an event
+ * in that document's life rather than a new document.
+ */
 export function decorateRunName(
-  coreName: string,
-  options: RunNameDateOptions,
+  designName: string,
+  options: RunNameOptions,
+  sequence = 1,
   now = new Date(),
 ): string {
-  const core = normalizeRunName(coreName);
-  if (options.runNameDatePosition === 'off') return core;
+  const core = normalizeRunName(designName);
+  const numbered = options.runNameNumberPosition === 'off'
+    ? core
+    : `${core}${String(Math.max(1, Math.floor(sequence) || 1)).padStart(runNumberWidth(options.runNameNumberFormat), '0')}`;
+  if (options.runNameDatePosition === 'off') return numbered;
   const date = runNameDateFor(now, options.runNameDateFormat);
-  return options.runNameDatePosition === 'prefix' ? `${date}_${core}` : `${core}_${date}`;
+  return options.runNameDatePosition === 'prefix' ? `${date}_${numbered}` : `${numbered}_${date}`;
 }
 
-/** The label a submission would receive without mutating its persisted state. */
-export function nextRunName(
-  naming: RunNamingState,
-  projection: SubmittedDesignProjection,
-  documentFilename = '',
-): string {
-  const current = normalizeRunName(naming.outputName);
-  // Null means no name has been chosen yet and retains the filename default.
-  // Unbound means the user committed this name while no valid solve projection
-  // existed; the first projection adopts that name instead of replacing it.
-  if (naming.nameSourceProjection === UNBOUND_RUN_NAME_SOURCE) return current;
-  if (naming.nameSourceProjection === null) return runNameFromFilename(documentFilename);
-  if (submittedProjectionsEqual(naming.nameSourceProjection, projection)) return current;
-  if (naming.runNameNumberPosition === 'off') return current;
-  return incrementTrailingDigits(current, runNumberWidth(naming.runNameNumberFormat));
-}
-
-/** The decorated label for a submission; nextRunName itself remains core-only. */
+/** The label the next submission of this design would receive. */
 export function nextRunLabel(
-  naming: RunNamingState & RunNameDateOptions,
-  projection: SubmittedDesignProjection,
-  documentFilename = '',
+  designName: string,
+  options: RunNameOptions & RunSequenceState,
   now = new Date(),
 ): string {
-  return decorateRunName(nextRunName(naming, projection, documentFilename), naming, now);
+  return decorateRunName(designName, options, runSequenceFor(options, designName), now);
 }

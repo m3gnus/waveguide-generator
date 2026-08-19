@@ -26,6 +26,36 @@ describe('CAD-link document identity', () => {
   });
 });
 
+describe('the design name owns the filename', () => {
+  beforeEach(() => resetDocumentStore());
+
+  it('derives the filename from every rename, so the two cannot drift', () => {
+    useDocumentStore.getState().setDesignName('  ATH Tritonia-M  ');
+    expect(useDocumentStore.getState()).toMatchObject({
+      designName: 'ATH Tritonia-M', filename: 'ATH_Tritonia-M.cfg',
+    });
+
+    useDocumentStore.getState().setDesignName('Tritonia mk2');
+    expect(useDocumentStore.getState().filename).toBe('Tritonia_mk2.cfg');
+  });
+
+  it('leaves an untitled document without a filename to claim', () => {
+    useDocumentStore.getState().setDesignName('');
+    expect(useDocumentStore.getState()).toMatchObject({ designName: '', filename: '' });
+  });
+
+  it('counts a rename as unsaved work and clears it on save', () => {
+    useDocumentStore.getState().setDesignName('winner');
+    const { designName, savedDesignName, savedRevision } = useDocumentStore.getState();
+    expect(documentIsUnsaved(savedRevision!, savedRevision, null, '', designName, savedDesignName)).toBe(true);
+
+    useDocumentStore.getState().markSaved(savedRevision!);
+    const saved = useDocumentStore.getState();
+    expect(saved.savedDesignName).toBe('winner');
+    expect(documentIsUnsaved(1, saved.savedRevision, null, '', saved.designName, saved.savedDesignName)).toBe(false);
+  });
+});
+
 describe('unsaved-changes accounting', () => {
   beforeEach(() => resetDocumentStore());
 

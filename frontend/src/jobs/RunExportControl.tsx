@@ -105,6 +105,7 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
     ...(needsResults(formats) ? { result: await fetchJobResults(job.id) as ResultPayload } : {}),
     ...resultExportSnapshot(job),
     jobStem: exportStemForJob(job),
+    designName: job.label ?? undefined,
     preferences,
   });
 

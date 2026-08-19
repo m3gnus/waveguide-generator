@@ -4,16 +4,10 @@ import { compareSelection } from '../api/results';
 import { DesignAvailabilityNotice, RerunButton } from '../jobs/DesignAvailability';
 import { canLoadJobDesign, replaceWithJobDesign } from '../jobs/jobDesign';
 import { canExportRun, RunExportControl } from '../jobs/RunExportControl';
-import { buildImportedSubmission } from '../jobs/importedSubmission';
-import { decorateRunName, nextRunName, runNameFromFilename, UNBOUND_RUN_NAME_SOURCE } from '../jobs/runNaming';
-import { projectSubmittedDesign, projectSubmittedImport, type SubmittedDesignProjection } from '../jobs/submittedProjection';
+import { nextRunLabel } from '../jobs/runNaming';
 import { applyJobPreferences, preferencesStore, runDisplayName, usePreferences } from '../prefs/preferences';
 import { JobsPreferencesSurface, ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
-import { useDesignStore } from '../stores/design';
-import { useCadReturnStore } from '../stores/cadReturn';
 import { useDocumentStore } from '../stores/document';
-import { useSolveOptionsStore } from '../stores/solveOptions';
-import { workspaceModeStore } from '../stores/workspaceMode';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { Icon } from './icons';
 import { middleEllipsis } from './ResultsPanel';
@@ -189,7 +183,10 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
           }
         }}
       /> : null}
-      {selected && !running && !editing && <button className="job-rename" aria-label={`Rename ${displayName}`} title="Rename run" onClick={() => { setRenameError(null); setEditing(true); }}>✎</button>}
+      {/* A run title is an annotation on history -- "the one with the deeper
+          throat" -- and deliberately does not rename the design. The Design
+          name field above does that. */}
+      {selected && !running && !editing && <button className="job-rename" aria-label={`Rename ${displayName}`} title="Rename this run (does not rename the design)" onClick={() => { setRenameError(null); setEditing(true); }}>✎</button>}
       <time>{running ? duration(secondsBetween(job.started_at ?? job.queued_at, null, now)) : clock(job.completed_at ?? job.created_at)}</time>
       {!running && <button className="job-remove" aria-label={`Remove ${displayName}`} title="Remove this job" onClick={() => onRemove(job)}><Icon name="close"/></button>}
     </header>
@@ -227,49 +224,31 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
 }, jobCardPropsEqual);
 
 /**
- * What the next solve will be called, and the one control that changes it.
+ * The design's name, and the label the next solve will be stored under.
  *
- * Naming used to live only in the preferences popover, which meant runs were
- * named by whatever was set there several sessions ago and nobody noticed until
- * the history read `horn_v09 … horn_v14`. The name belongs next to the runs it
- * names, showing the label it will actually store.
+ * This is the one editable name in WG. It renames the document, the file it
+ * saves as, the `Report.Title` inside that file, and every run and export made
+ * from it -- which is what stopped the run list, the file chip, and the `.cfg`
+ * from each answering to a different name.
  */
 function RunNameField({ actions, now = new Date() }: { actions?: ReactNode; now?: Date }) {
   const preferences = usePreferences();
-  const design = useDesignStore((state) => state.design);
-  const cadReturn = useCadReturnStore();
-  const solveOptions = useSolveOptionsStore();
-  const filename = useDocumentStore((state) => state.filename);
-  const workspaceMode = useSyncExternalStore(
-    workspaceModeStore.subscribe,
-    workspaceModeStore.getSnapshot,
-    workspaceModeStore.getSnapshot,
-  ).mode;
-  let projection: SubmittedDesignProjection | null = null;
-  try {
-    projection = workspaceMode === 'cad'
-      ? projectSubmittedImport(buildImportedSubmission(cadReturn))
-      : projectSubmittedDesign(design, solveOptions.options());
-  } catch { /* an invalid or absent submission cannot establish a naming baseline yet */ }
-  const displayedCore = projection
-    ? nextRunName(preferences, projection, filename)
-    : (preferences.nameSourceProjection !== null ? preferences.outputName : runNameFromFilename(filename));
-  const displayedLabel = decorateRunName(displayedCore, preferences, now);
-  const [draft, setDraft] = useState(displayedCore);
+  const designName = useDocumentStore((state) => state.designName);
+  const setDesignName = useDocumentStore((state) => state.setDesignName);
+  const displayedLabel = nextRunLabel(designName, preferences, now);
+  const [draft, setDraft] = useState(designName);
   const [editing, setEditing] = useState(false);
-  useEffect(() => { if (!editing) setDraft(displayedCore); }, [displayedCore, editing]);
+  useEffect(() => { if (!editing) setDraft(designName); }, [designName, editing]);
   const commit = (value: string) => {
-    preferencesStore.update({
-      outputName: value,
-      nameSourceProjection: projection ?? UNBOUND_RUN_NAME_SOURCE,
-    });
+    setDesignName(value);
     setEditing(false);
   };
   return <div className="run-name-field">
-    <label className="ui-field">Run name<input
-      aria-label="Run name"
+    <label className="ui-field">Design name<input
+      aria-label="Design name"
       value={draft}
-      placeholder="horn"
+      placeholder="Untitled"
+      title="Names the design, the file it saves as, and every run and export made from it"
       onChange={(event) => setDraft(event.target.value)}
       onFocus={() => setEditing(true)}
       onBlur={(event) => commit(event.target.value)}

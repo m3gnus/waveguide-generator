@@ -16,8 +16,12 @@ export function useUnsavedChanges(): boolean {
   const revision = useDesignStore((state) => state.designRevision);
   const savedRevision = useDocumentStore((state) => state.savedRevision);
   const savedSettings = useDocumentStore((state) => state.savedSettings);
+  // Renaming rewrites both the filename and the Report.Title inside the file,
+  // so it is a document change like any other and has to light the dot.
+  const designName = useDocumentStore((state) => state.designName);
+  const savedDesignName = useDocumentStore((state) => state.savedDesignName);
   // A string selector, so zustand's identity comparison is a value comparison
   // and a re-serialization that produces the same settings does not re-render.
   const settings = useSolveOptionsStore(documentSettingsSignature);
-  return documentIsUnsaved(revision, savedRevision, savedSettings, settings);
+  return documentIsUnsaved(revision, savedRevision, savedSettings, settings, designName, savedDesignName);
 }

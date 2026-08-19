@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
 import { preferencesStore } from '../prefs/preferences';
+import { useDocumentStore } from '../stores/document';
 import { designForFamily, resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
 import type { JobResults } from '../api/results';
 import { splSubtitle } from './ResultsPanel';
@@ -73,8 +74,8 @@ describe('frontend result and status labels', () => {
     expect(meshWarnings({ mesh_stats: { warnings: 'not an array' } })).toEqual([]);
   });
 
-  it('loads a selected run design without changing the next run name', () => {
-    preferencesStore.update({ outputName: 'keep-me' });
+  it('loads a selected run design without renaming the design', () => {
+    useDocumentStore.getState().setDesignName('keep-me');
     const solved = designForFamily('OSSE');
     solved.L = 321;
     const selected = selectableJob(
@@ -90,13 +91,11 @@ describe('frontend result and status labels', () => {
     selectJob(selected);
 
     expect(useDesignStore.getState().design.L).toBe(321);
-    expect(preferencesStore.getSnapshot()).toMatchObject({
-      outputName: 'keep-me',
-    });
+    expect(useDocumentStore.getState().designName).toBe('keep-me');
   });
 
-  it('leaves run naming unchanged when a selected snapshot is unreadable', () => {
-    preferencesStore.update({ outputName: 'keep-me' });
+  it('leaves the design name unchanged when a selected snapshot is unreadable', () => {
+    useDocumentStore.getState().setDesignName('keep-me');
     const unreadable = selectableJob(
       'unreadable',
       '260808_other_v99',
@@ -107,8 +106,6 @@ describe('frontend result and status labels', () => {
     selectJob(unreadable);
 
     expect(snapshotSpy).not.toHaveBeenCalled();
-    expect(preferencesStore.getSnapshot()).toMatchObject({
-      outputName: 'keep-me',
-    });
+    expect(useDocumentStore.getState().designName).toBe('keep-me');
   });
 });

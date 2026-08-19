@@ -65,9 +65,9 @@ describe('the classification says what it is meant to say', () => {
     expect(SOLVE_OPTION_EFFECTS.frequencyListText).toBe('solve-affecting');
     expect(SOLVE_OPTION_EFFECTS['polar.distance']).toBe('solve-affecting');
     expect(SOLVE_OPTION_EFFECTS['polar.enabledAxes']).toBe('solve-affecting');
-    // The run's label travels with the submission, so renaming changes it.
-    expect(preferenceEffect('outputName')).toBe('solve-affecting');
-    expect(preferenceEffect('counter')).toBe('solve-affecting');
+    // The run's label travels with the submission, so its decoration changes it.
+    expect(preferenceEffect('runNameNumberPosition')).toBe('solve-affecting');
+    expect(preferenceEffect('runSequenceNext')).toBe('solve-affecting');
   });
 
   it('treats chrome and deferred choices as inert', () => {

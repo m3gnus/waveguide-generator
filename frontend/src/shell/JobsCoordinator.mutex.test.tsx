@@ -7,6 +7,7 @@ import type { CadReturnIngestRecord } from '../api/cadlink';
 import type { ImportedSolveSubmission } from '../jobs/actions';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
+import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
@@ -101,6 +102,8 @@ describe('solve invocation mutex', () => {
   beforeEach(async () => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     preferencesStore.resetForTests();
+    resetDocumentStore();
+    useDocumentStore.getState().setDesignName('horn');
     resetDesignStore();
     resetCadReturnStore();
     resetSolveOptionsStore();
@@ -156,7 +159,7 @@ describe('solve invocation mutex', () => {
     await act(async () => { await jobsCoordinatorBridge.getSnapshot().run(design); });
 
     expect(mocks.submitDesign).toHaveBeenCalledTimes(2);
-    expect(mocks.submitDesign.mock.calls.map((call) => call[3].label)).toEqual(['horn', 'horn']);
+    expect(mocks.submitDesign.mock.calls.map((call) => call[3].label)).toEqual(['horn1', 'horn2']);
   });
 
   it('materializes the 5 mm ATH wall default before submitting to BEMPP', async () => {
@@ -183,7 +186,7 @@ describe('solve invocation mutex', () => {
     );
   });
 
-  it('increments the accepted name only when the submitted projection changes', async () => {
+  it('numbers each run of the design in sequence and never renames the design', async () => {
     mocks.submitDesign.mockResolvedValue('job');
     const design = designForFamily('OSSE');
 
@@ -193,10 +196,11 @@ describe('solve invocation mutex', () => {
     await act(async () => { await jobsCoordinatorBridge.getSnapshot().run(changed); });
     await act(async () => { await jobsCoordinatorBridge.getSnapshot().run(changed); });
 
-    expect(mocks.submitDesign.mock.calls.map((call) => call[3].label)).toEqual(['horn', 'horn2', 'horn2']);
+    expect(mocks.submitDesign.mock.calls.map((call) => call[3].label)).toEqual(['horn1', 'horn2', 'horn3']);
+    expect(useDocumentStore.getState().designName).toBe('horn');
   });
 
-  it('does not overwrite a newer manual run name when submission finishes', async () => {
+  it('does not overwrite a rename made while a submission was in flight', async () => {
     const pending = deferred<string>();
     mocks.submitDesign.mockReturnValue(pending.promise);
     let run!: Promise<void>;
@@ -204,17 +208,20 @@ describe('solve invocation mutex', () => {
       run = jobsCoordinatorBridge.getSnapshot().run(designForFamily('OSSE'));
       await Promise.resolve();
     });
-    act(() => preferencesStore.update({ outputName: 'user-choice' }));
+    act(() => useDocumentStore.getState().setDesignName('user-choice'));
 
     await act(async () => {
       pending.resolve('job-one');
       await run;
     });
 
-    expect(preferencesStore.getSnapshot().outputName).toBe('user-choice');
+    expect(useDocumentStore.getState().designName).toBe('user-choice');
+    // The completed run counted against the name it was submitted under, so
+    // the renamed design starts its own numbering at 1.
+    expect(preferencesStore.getSnapshot()).toMatchObject({ runSequenceName: 'horn', runSequenceNext: 2 });
   });
 
-  it('increments the core while suffix dates decorate only submitted labels', async () => {
+  it('numbers the core before the date suffix and leaves the design name alone', async () => {
     mocks.submitDesign.mockResolvedValue('job');
     preferencesStore.update({ runNameDatePosition: 'suffix' });
     const design = designForFamily('OSSE');
@@ -224,8 +231,8 @@ describe('solve invocation mutex', () => {
     changed.simulation.f2 += 1_000;
     await act(async () => { await jobsCoordinatorBridge.getSnapshot().run(changed); });
 
-    expect(mocks.submitDesign.mock.calls.map((call) => call[3].label)).toEqual(['horn_260812', 'horn2_260812']);
-    expect(preferencesStore.getSnapshot().outputName).toBe('horn2');
+    expect(mocks.submitDesign.mock.calls.map((call) => call[3].label)).toEqual(['horn1_260812', 'horn2_260812']);
+    expect(useDocumentStore.getState().designName).toBe('horn');
   });
 
   it('releases the guard after a rejected submission', async () => {
@@ -258,7 +265,7 @@ describe('solve invocation mutex', () => {
     await act(async () => { pending.resolve('job-imported'); await first; });
   });
 
-  it('increments CAD names after a new ingest but ignores parametric edits between identical solves', async () => {
+  it('names CAD solves from the same design name and numbers them in the same sequence', async () => {
     mocks.submitImported.mockResolvedValue('job-cad');
     const first = importedSubmission('wgi_first');
 
@@ -267,7 +274,7 @@ describe('solve invocation mutex', () => {
     await act(async () => { await jobsCoordinatorBridge.getSnapshot().runImported(structuredClone(first)); });
     await act(async () => { await jobsCoordinatorBridge.getSnapshot().runImported(importedSubmission('wgi_second')); });
 
-    expect(mocks.submitImported.mock.calls.map((call) => call[2])).toEqual(['horn', 'horn', 'horn2']);
+    expect(mocks.submitImported.mock.calls.map((call) => call[2])).toEqual(['horn1', 'horn2', 'horn3']);
   });
 
   it('submits a full CAD solve from the main control without mounting CadLinkPanel', async () => {

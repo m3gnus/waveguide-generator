@@ -1,8 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { JobItem } from '../api/jobsSocket';
-import { projectSubmittedDesign, type SubmittedImportedProjection } from '../jobs/submittedProjection';
-import { designForFamily } from '../stores/design';
-import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { applyJobPreferences, CHART_TYPES, EXPORT_FORMATS, loadPreferences, MAP_REFERENCES, preferencesStore, readPreferences, runDisplayName, STORAGE_VERSION } from './preferences';
 
 function job(id: string, rating: number | null, created: string, completed = created): JobItem {
@@ -11,16 +8,16 @@ function job(id: string, rating: number | null, created: string, completed = cre
 
 describe('client preferences', () => {
   beforeEach(() => { localStorage.clear(); preferencesStore.resetForTests(); });
-  it('persists the fifteen-format selection and export counter migration field', () => {
+  it('persists the fifteen-format selection and clamps the run sequence', () => {
     expect(EXPORT_FORMATS).toHaveLength(15);
     expect(CHART_TYPES).toHaveLength(11);
     expect(MAP_REFERENCES).toEqual([-3, -6, -9, -12]);
     preferencesStore.update({ exportFormats: [] });
     preferencesStore.toggleFormat('csv');
     preferencesStore.toggleFormat('stl');
-    preferencesStore.update({ outputName: ' horn / alpha ', counter: 2_000_000 });
+    preferencesStore.update({ runSequenceName: ' Tritonia-M ', runSequenceNext: 2_000_000 });
     expect(preferencesStore.getSnapshot().exportFormats).toEqual(['csv', 'stl']);
-    expect(preferencesStore.getSnapshot()).toMatchObject({ outputName: 'horn / alpha', counter: 999_999 });
+    expect(preferencesStore.getSnapshot()).toMatchObject({ runSequenceName: 'Tritonia-M', runSequenceNext: 999_999 });
     expect(JSON.parse(localStorage.getItem('waveguide-v2-g3-preferences') ?? '{}').version).toBe(STORAGE_VERSION);
   });
   it('uses useful manual defaults without opting into automatic file writing', () => {
@@ -54,7 +51,7 @@ describe('client preferences', () => {
       exportFormats: ['csv', 'not_a_format'],
       smoothing: '1/9',
       mapReference: -5,
-      counter: -3,
+      runSequenceNext: -3,
       minRating: 99,
       jobSort: 'oldest',
       cadApplication: 'solidworks',
@@ -65,7 +62,7 @@ describe('client preferences', () => {
       exportFormats: ['csv'],
       smoothing: 'none',
       mapReference: -6,
-      counter: 1,
+      runSequenceNext: 1,
       minRating: 5,
       jobSort: 'completed_desc',
       cadApplication: 'fusion360',
@@ -81,13 +78,22 @@ describe('client preferences', () => {
     } }));
     expect(migrated.migrated).toBe(true);
     expect(migrated.value).toMatchObject({
-      outputName: 'horn12',
-      nameSourceProjection: null,
       runNameDatePosition: 'off',
       runNameDateFormat: 'yymmdd',
       runNameNumberPosition: 'suffix',
       runNameNumberFormat: 'natural',
     });
+  });
+  it('drops the standalone run name, its projection, and the dead counter', () => {
+    const migrated = readPreferences(JSON.stringify({ version: 12, preferences: {
+      outputName: 'horn12', nameSourceProjection: { version: 1 }, counter: 7, minRating: 3,
+    } }));
+    expect(migrated.migrated).toBe(true);
+    expect(migrated.value).not.toHaveProperty('outputName');
+    expect(migrated.value).not.toHaveProperty('nameSourceProjection');
+    expect(migrated.value).not.toHaveProperty('counter');
+    // Unrelated settings are carried across untouched.
+    expect(migrated.value.minRating).toBe(3);
   });
   it('copies a pre-split selection to both lists when auto-export was enabled', () => {
     const stored = JSON.stringify({ version: 5, preferences: {
@@ -132,42 +138,13 @@ describe('client preferences', () => {
     expect(loadPreferences('{not json')).toMatchObject({ exportFormats: ['csv', 'png'], autoExportFormats: [] });
     expect(() => loadPreferences(JSON.stringify({ version: STORAGE_VERSION, preferences: null }))).not.toThrow();
   });
-  it('preserves a human Unicode run name without filesystem slugging', () => {
-    preferencesStore.update({ outputName: '  Þröstur – horn  ' });
-    expect(preferencesStore.getSnapshot().outputName).toBe('Þröstur – horn');
-  });
-  it('persists and reloads the projection assigned to the current run name', () => {
-    resetSolveOptionsStore();
-    const projection = projectSubmittedDesign(
-      designForFamily('R-OSSE'),
-      useSolveOptionsStore.getState().options(),
-    );
-    preferencesStore.update({ outputName: 'asro68', nameSourceProjection: projection });
-    const stored = localStorage.getItem('waveguide-v2-g3-preferences');
-    expect(loadPreferences(stored)).toMatchObject({ outputName: 'asro68', nameSourceProjection: projection });
-  });
-  it('round-trips imported naming projections including crossover alignment', () => {
-    const projection: SubmittedImportedProjection = {
-      version: 1,
-      kind: 'imported',
-      geometry: {
-        ingest_id: 'wgi_round_trip',
-        combine: { members: ['mf', 'hf'], crossovers_hz: [1_200], level_match: true, align: false },
-      },
-      solveOptions: { engine: 'metal', symmetry: 'auto' },
-    };
-    preferencesStore.update({ outputName: 'cad-run', nameSourceProjection: projection });
-
-    expect(loadPreferences(localStorage.getItem('waveguide-v2-g3-preferences')))
-      .toMatchObject({ outputName: 'cad-run', nameSourceProjection: projection });
-  });
   it('migrates old version/date naming state without keeping the retired fields', () => {
     const stored = JSON.stringify({ version: 4, preferences: {
       outputName: 'tritonia', jobVersion: 12, datePrefix: false,
     } });
     const migrated = loadPreferences(stored);
-    expect(migrated.outputName).toBe('tritonia');
-    expect(migrated.nameSourceProjection).toBeNull();
+    expect(migrated).not.toHaveProperty('outputName');
+    expect(migrated).not.toHaveProperty('nameSourceProjection');
     expect(migrated).not.toHaveProperty('jobVersion');
     expect(migrated).not.toHaveProperty('datePrefix');
   });
@@ -179,7 +156,6 @@ describe('client preferences', () => {
     const migrated = loadPreferences(stored);
     expect(migrated.chartTypes).not.toContain('balloon');
     expect(migrated.chartTypes).not.toContain('beam_map');
-    expect(migrated.outputName).toBe('tritonia');
     expect(migrated.exportFormats).toEqual(['csv']);
     expect(migrated.mapReference).toBe(-9);
   });
@@ -202,7 +178,7 @@ describe('client preferences', () => {
     const migrated = readPreferences(stored);
     expect(migrated.migrated).toBe(true);
     expect(migrated.value.chartTypes).toEqual(chartTypes);
-    expect(migrated.value).toMatchObject({ outputName: 'kept-name', exportFormats: ['csv', 'stl'], jobSort: 'name_asc', minRating: 4, mapReference: -12 });
+    expect(migrated.value).toMatchObject({ exportFormats: ['csv', 'stl'], jobSort: 'name_asc', minRating: 4, mapReference: -12 });
   });
   it('keeps an explicitly empty current chart list and can grow it again', () => {
     const stored = JSON.stringify({ version: STORAGE_VERSION, preferences: { chartTypes: [] } });

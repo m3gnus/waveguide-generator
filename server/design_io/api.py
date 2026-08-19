@@ -16,13 +16,20 @@ from server.design.textcfg import ParsedDesign, TextConfigError, parse, serializ
 
 
 _SAFE_STEM = re.compile(r"[^A-Za-z0-9._-]+")
+_UNTITLED_STEM = "untitled"
 _DIRECT_STORE = CadLinkStore(":memory:")
 
 
 def _suggested_filename(value: object = None) -> str:
-    raw = Path(str(value or "waveguide").replace("\\", "/")).name
-    stem = Path(raw).stem or "waveguide"
-    stem = _SAFE_STEM.sub("_", stem).strip("._") or "waveguide"
+    """Sanitize a requested filename, defaulting to the untitled stem.
+
+    The client derives this from the design's name and sends it, so the
+    fallback only covers a bare-design save from the API itself. It is the same
+    word the interface shows for a design nobody has named."""
+
+    raw = Path(str(value or _UNTITLED_STEM).replace("\\", "/")).name
+    stem = Path(raw).stem or _UNTITLED_STEM
+    stem = _SAFE_STEM.sub("_", stem).strip("._") or _UNTITLED_STEM
     return f"{stem}.cfg"
 
 

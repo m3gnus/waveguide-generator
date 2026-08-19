@@ -7,6 +7,7 @@ import {
   type ExprNumber,
 } from '../stores/design';
 import { designWireWithSolveSettings, wgSolveSettingsFromStore } from '../stores/designWire';
+import { designFilename } from '../stores/designName';
 import type { WgSolveSettings } from '../stores/wgSolveBlock';
 import type { PolarConfig } from '../stores/solveOptions';
 import type { CadLinkClassification, DesignIdentity } from '../stores/document';
@@ -95,9 +96,15 @@ export function inspectDesignText(text: string, fetcher: typeof fetch = fetch): 
   return postText('/api/design/import-report', text, fetcher);
 }
 
+/**
+ * Save under the design's name.
+ *
+ * The filename is derived here rather than passed in, so a `.cfg` cannot be
+ * written under a name the file's own `Report.Title` disagrees with.
+ */
 export async function saveDesignDocument(
   design: DesignDocument,
-  filename: string,
+  designName: string,
   identity: DesignIdentity | null = null,
   fetcher: typeof fetch = fetch,
   polarConfig?: PolarConfig,
@@ -107,8 +114,8 @@ export async function saveDesignDocument(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      design: designWireWithSolveSettings(serializeDesign(design), polarConfig, solveSettings),
-      filename,
+      design: designWireWithSolveSettings(serializeDesign(design), polarConfig, solveSettings, designName),
+      filename: designFilename(designName),
       identity,
     }),
   });
@@ -149,6 +156,9 @@ export async function sendDesignToCad(
       'Idempotency-Key': idempotencyKey,
     },
     body: JSON.stringify({
+      // `baseName` is the slug the bundle's files are named with; the Title
+      // written into the config keeps the name's own spelling, which the
+      // wire builder reads from the document.
       design: designWireWithSolveSettings(serializeDesign(design), polarConfig, solveSettings),
       designRevision,
       baseName,

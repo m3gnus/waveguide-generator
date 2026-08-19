@@ -42,14 +42,14 @@ export const PREFERENCE_EFFECTS: Record<keyof Preferences, PreferenceEffect> = {
   autoExportOnComplete: 'inert',
   autoDownloadMesh: 'inert',
   // The run-naming settings all decide the label a queued job is submitted
-  // under, so a change to any of them changes the next submission.
-  outputName: 'solve-affecting',
-  nameSourceProjection: 'solve-affecting',
+  // under, so a change to any of them changes the next submission. The name
+  // itself is not here: it belongs to the document, not to preferences.
   runNameDatePosition: 'solve-affecting',
   runNameDateFormat: 'solve-affecting',
   runNameNumberPosition: 'solve-affecting',
   runNameNumberFormat: 'solve-affecting',
-  counter: 'solve-affecting',
+  runSequenceName: 'solve-affecting',
+  runSequenceNext: 'solve-affecting',
   // Ordering and filtering of the run list: a redraw, never a resolve.
   jobSort: 'render-refreshing',
   minRating: 'render-refreshing',

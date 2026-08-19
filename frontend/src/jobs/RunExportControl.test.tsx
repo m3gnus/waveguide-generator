@@ -191,7 +191,7 @@ describe('RunExportControl', () => {
     expect(context.design).toEqual(hydrateJobDesign(job));
     expect(context.designRevision).toBe(42);
     expect(context.jobStem).toBe('1_stored_horn_v07');
-    expect(context.preferences.outputName).toBe('horn');
+    expect(context.designName).toBe('stored_horn_v07');
     expect(patchMetadata).toHaveBeenCalledWith(job.id, {
       exported_files: ['earlier.csv', 'C:/chosen/1_stored_horn_v07/1_stored_horn_v07.csv'],
     });
