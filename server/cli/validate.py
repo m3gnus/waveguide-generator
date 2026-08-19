@@ -13,7 +13,7 @@ from pydantic import ValidationError
 
 from server.design.schema import Expr
 from server.design.solve_block import has_solve_blocks
-from server.design.textcfg import ParsedDesign, TextConfigError, parse
+from server.design.textcfg import TextConfigError, parse
 from server.engines.registry import EngineInfo, EngineRegistry
 from server.jobs.models import ImportedGeometrySource, SolveRequest
 from server.jobs.runtime import (
