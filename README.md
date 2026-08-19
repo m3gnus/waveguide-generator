@@ -205,5 +205,10 @@ built as `v` + this string, and the installer and update check compare it.
 ## License
 
 AGPL-3.0-or-later. See [LICENSE](LICENSE). The pinned HornLab solver, mesher,
-and plotting modules are separate AGPL repositories referenced by commit SHA in
-[pins.json](pins.json).
+and plotting modules are separate repositories referenced by commit SHA in
+[pins.json](pins.json), and all are AGPL-3.0-or-later with one exception:
+`hornlab-beat-bem` is **GPL-3.0-or-later**, because it vendors the
+Burton-Miller Julia solver from [boundary-lab](https://github.com/m3gnus/boundary-lab).
+GPL-3 and AGPL-3 are mutually compatible, but the BEAT engine's terms are its
+own and stay with that repository — which is why it is pinned rather than
+vendored here.
