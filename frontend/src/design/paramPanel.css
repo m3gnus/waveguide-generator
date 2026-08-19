@@ -88,6 +88,9 @@
 .cad-mode-empty span { color: var(--fg3); font-size: var(--text-micro); }
 .cad-mode-empty button { justify-content: center; min-height: 30px; }
 .cad-solve-fact { display: flex; justify-content: space-between; gap: 8px; margin: 3px 0; padding: 6px 8px; border: 1px solid var(--hair-soft); background: var(--ov1); color: var(--fg2); font-size: var(--text-micro); }
+/* Metal is a hard requirement for imported solves, so on a host without it
+   this row reports a blocker rather than a setting. */
+.cad-solve-fact-unavailable { border-color: color-mix(in srgb, var(--amber) 55%, var(--hair)); border-left: 3px solid var(--amber); color: var(--amber); }
 .effective-grid-readout { display: grid; gap: 2px; margin-top: 6px; padding: 7px; border-left: 3px solid var(--green); background: var(--ov1); }
 .effective-grid-readout.widened { border-color: var(--amber); }
 .effective-grid-readout span, .effective-grid-readout small { color: var(--fg3); font-size: var(--text-micro); line-height: 1.4; }

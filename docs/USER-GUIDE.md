@@ -25,6 +25,37 @@ smoothed, rendered as response/directivity/impedance/beam plots, rated, reopened
 rerun while the retained snapshot is available. Partial solves keep usable samples and
 show their warnings and failed-frequency diagnostics.
 
+### What each backend can solve
+
+WG ships two solvers. **Metal** is the GPU backend and runs on Apple Silicon
+macOS only; **BEMPP** is the CPU backend and is what Windows and Linux use, with
+OpenCL doing the matrix assembly. Both solve the same free-standing problem to
+the same accuracy — BEMPP is slower, not less correct.
+
+Three things need Metal, and WG hides them where it cannot run them:
+
+- **Infinite baffle.** The mesh for a flush-mounted mouth is a coupled interior
+  cavity plus an aperture in the baffle plane, and only Metal couples that
+  aperture to the exterior half-space. Approximate it on BEMPP by solving
+  free-standing with an enclosure: give it a deep box and generous baffle
+  margins with a small edge radius. That is a real finite baffle, and it
+  approaches the infinite-baffle answer as the baffle grows.
+- **The axisymmetric meridian fast path.** BEMPP is always full 3-D.
+- **Solving imported CAD geometry.** The CAD round trip itself works anywhere;
+  only the solve on the returned model needs Metal.
+
+Everything else is the same on both: source shape, velocity convention, symmetry
+reduction, explicit frequency lists, enclosures, field planes and all exports.
+A design that selects a Metal-only option stays editable on a host without
+Metal — the option is shown with the reason attached rather than removed, so a
+file authored on a Mac or an ATH `.cfg` carrying `ABEC.SimType = 1` can be seen
+and changed rather than failing at solve with nothing on screen to explain it.
+
+Watch the mesh ceiling when substituting a large baffle: 22,000 triangles in the
+solved domain is a hard limit. Symmetry is the lever — a body of revolution or a
+biaxially symmetric waveguide solves on a quarter domain, which is four times
+the usable budget.
+
 ## Files and exports
 
 The design menu saves parameter files and exports the current design. STEP solid is

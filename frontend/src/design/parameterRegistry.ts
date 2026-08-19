@@ -1,5 +1,6 @@
 import type { DesignDocument, DesignFamily } from '../stores/design';
 import type { WorkspaceMode } from '../stores/workspaceMode';
+import { backendSupports, type BackendFeature } from './backendSupport';
 
 export type ParameterSection =
   | 'Profile Dimensions'
@@ -30,6 +31,20 @@ export type ParameterKind = 'number' | 'select' | 'text' | 'toggle' | 'table' | 
 export interface ParameterOption {
   value: string | number;
   label: string;
+  /**
+   * Hidden unless the active solver backend implements this feature.
+   *
+   * A design that already selects the option keeps it listed, warned rather
+   * than removed: a .wg file written on a Mac, or an ATH .cfg carrying
+   * `ABEC.SimType = 1`, must still be able to show what it is set to and let
+   * the user change it. Hiding the value out from under such a design would
+   * leave it failing at solve with nothing on screen to explain why.
+   */
+  requiresFeature?: BackendFeature;
+  /** Feature whose absence makes `label` misleading rather than impossible. */
+  degradedWithout?: BackendFeature;
+  /** Shown in place of `label` when `degradedWithout` is unsupported. */
+  degradedLabel?: string;
 }
 
 export interface ParameterDefinition {
@@ -225,7 +240,9 @@ export const PARAMETER_REGISTRY: ParameterDefinition[] = [
   number('mesh.mouth_resolution', 'mouthResolution', 'mesh.mouth_resolution', solveExportMesh, 'Mouth mesh resolution', { unit: 'mm', min: .01, max: 1_000, description: 'Target triangle edge length near the mouth in the solved and exported mesh. It has to resolve the shortest wavelength you solve: for 20 kHz, λ/6 is approximately 2.86 mm.' }),
   number('schema-gap.max_edge', 'maxEdge', 'mesh.max_edge', solveExportMesh, 'Maximum edge guard', { unit: 'mm', min: .01, max: 10_000, description: 'Optional post-build guard for the longest realized triangle edge.' }),
   number('mesh.rear_resolution', 'rearResolution', 'mesh.rear_resolution', solveExportMesh, 'Rear mesh resolution', { unit: 'mm', min: .01, max: 1_000, description: 'Target triangle edge length over the whole outside shell and rear throat closure of a free-standing thickened horn. Those surfaces radiate far less than the horn interior, so they can usually be coarser. Unused with an enclosure or in infinite baffle.' }),
-  number('mesh.aperture_resolution_scale', 'apertureResolutionScale', 'mesh.aperture_resolution_scale', solveExportMesh, 'Aperture mesh scale', { min: .01, max: 100, description: 'Multiplies the element size inside the infinite-baffle aperture cap relative to Mouth mesh resolution. Above 1 coarsens the cap to save solve time; anything below 1 is clamped back to 1, so it cannot refine it.' }),
+  // Sizes the infinite-baffle aperture cap and nothing else, so a free-standing
+  // design never reads it — on any backend, not just the ones without Metal.
+  number('mesh.aperture_resolution_scale', 'apertureResolutionScale', 'mesh.aperture_resolution_scale', solveExportMesh, 'Aperture mesh scale', { min: .01, max: 100, visibleWhen: (design) => design.simulation.sim_type === 'infinite-baffle', description: 'Multiplies the element size inside the infinite-baffle aperture cap relative to Mouth mesh resolution. Above 1 coarsens the cap to save solve time; anything below 1 is clamped back to 1, so it cannot refine it.' }),
   number('mesh.max_triangles', 'maxTriangles', 'mesh.max_triangles', solveExportMesh, 'Triangle warning threshold', { min: 1, max: 10_000_000, step: 1_000, precision: 0, description: 'Advisory warning threshold, in full-domain-equivalent triangles. Solves continue past it, but two hard ceilings you cannot raise from here will still stop one: 22,000 triangles in the actual solved domain, and the dense-solver memory limit.' }),
   // Kept in the registry solely for text/wire traceability. The old approval
   // control is intentionally absent from the panel because the threshold is
@@ -237,11 +254,11 @@ export const PARAMETER_REGISTRY: ParameterDefinition[] = [
   number('simulation.f1', 'freqStart', 'simulation.f1', frequencySweep, 'Sweep start', { unit: 'Hz', min: 20, max: 20_000, step: 10, precision: 0, description: 'Lowest frequency of the generated sweep. Ignored when Solve options is set to an explicit frequency list.' }),
   number('simulation.f2', 'freqEnd', 'simulation.f2', frequencySweep, 'Sweep end', { unit: 'Hz', min: 20, max: 20_000, step: 10, precision: 0, description: 'Highest frequency of the generated sweep; raising it may need a finer Mouth mesh resolution to resolve the shorter wavelength. Ignored when Solve options is set to an explicit frequency list.' }),
   number('simulation.num_frequencies', 'numFreqs', 'simulation.num_frequencies', frequencySweep, 'Frequency samples', { min: 10, max: 200, step: 1, precision: 0, description: 'How many frequencies are solved between the start and end. Every frequency costs about the same, so this sets solve time almost directly. Spacing is chosen under Solve options, which also overrides this entirely when an explicit list is used.' }),
-  select('simulation.sim_type', 'simType', 'simulation.sim_type', solveExportMesh, 'Simulation type', [{ value: 'freestanding', label: 'Free-standing' }, { value: 'infinite-baffle', label: 'Infinite baffle' }], { description: 'What the horn radiates into. Free-standing solves the whole body in open air, with the enclosure or wall shell you configured. Infinite baffle mounts the mouth flush in an unbounded rigid wall, ignoring both of those and removing all cabinet-edge diffraction; it requires the Metal backend.' }),
+  select('simulation.sim_type', 'simType', 'simulation.sim_type', solveExportMesh, 'Simulation type', [{ value: 'freestanding', label: 'Free-standing' }, { value: 'infinite-baffle', label: 'Infinite baffle', requiresFeature: 'infinite-baffle' }], { description: 'What the horn radiates into. Free-standing solves the whole body in open air, with the enclosure or wall shell you configured. Infinite baffle mounts the mouth flush in an unbounded rigid wall, ignoring both of those and removing all cabinet-edge diffraction; it requires the Metal backend.' }),
   // CircSym is not a backend, it is the axisymmetric meridian fast path: the
   // solver takes it automatically for a body of revolution. The stored values
   // stay as ATH spells them so designs round-trip; only the labels changed.
-  select('simulation.solver_mode', 'solverMode', 'simulation.solver_mode', solveExportMesh, 'Solver mode', [{ value: 'auto', label: 'Auto — meridian when eligible' }, { value: 'full_3d', label: 'Force full 3D' }, { value: 'circsym', label: 'Force axisymmetric meridian' }], { description: 'Controls the Metal backend\'s solve path. Auto solves a body of revolution on one rotated meridian slice — far faster — and everything else in full 3D. Eligibility depends on the observation settings as well as the geometry. Forcing the meridian path fails clearly when ineligible, and BEMPP is always full 3D.' }),
+  select('simulation.solver_mode', 'solverMode', 'simulation.solver_mode', solveExportMesh, 'Solver mode', [{ value: 'auto', label: 'Auto — meridian when eligible', degradedWithout: 'meridian-fast-path', degradedLabel: 'Auto — full 3D on this backend' }, { value: 'full_3d', label: 'Force full 3D' }, { value: 'circsym', label: 'Force axisymmetric meridian', requiresFeature: 'meridian-fast-path' }], { description: 'Controls the Metal backend\'s solve path. Auto solves a body of revolution on one rotated meridian slice — far faster — and everything else in full 3D. Eligibility depends on the observation settings as well as the geometry. Forcing the meridian path fails clearly when ineligible, and BEMPP is always full 3D.' }),
 
   // These saved fields remain in the document for ATH text fidelity, but none
   // is a solve-domain control. Runtime symmetry replaces Mesh.Quadrants before
@@ -393,6 +410,47 @@ export function findParameterByPath(
 
 export function fieldIsVisible(field: ParameterDefinition, design: DesignDocument): boolean {
   return fieldAppliesToFamily(field, design.formula) && (!field.visibleWhen || field.visibleWhen(design));
+}
+
+/**
+ * The options to offer for `field` on `backend`, with the current value kept.
+ *
+ * Two things happen here. An option the backend cannot run disappears, unless
+ * the design already holds it — a Mac-authored file or an ATH `SimType = 1`
+ * import must stay legible and editable rather than silently losing the value
+ * it is set to. And an option whose label promises a fast path this backend
+ * lacks is relabelled, so "Auto — meridian when eligible" stops claiming a
+ * meridian solve on a backend that is always full 3-D.
+ */
+export function fieldOptionsForBackend(
+  field: ParameterDefinition,
+  value: unknown,
+  backend: string | null,
+): ParameterOption[] {
+  return (field.options ?? [])
+    .filter((option) => !option.requiresFeature
+      || backendSupports(backend, option.requiresFeature)
+      || String(option.value) === String(value ?? ''))
+    .map((option) => (option.degradedWithout && option.degradedLabel
+      && !backendSupports(backend, option.degradedWithout)
+      ? { ...option, label: option.degradedLabel }
+      : option));
+}
+
+/**
+ * The feature the field's *current* value needs but this backend lacks.
+ *
+ * Drives the inline warning on a revealed-but-unsupported value; undefined
+ * whenever the selection is something the backend can actually solve.
+ */
+export function fieldUnsupportedFeature(
+  field: ParameterDefinition,
+  value: unknown,
+  backend: string | null,
+): BackendFeature | undefined {
+  const selected = (field.options ?? []).find((option) => String(option.value) === String(value ?? ''));
+  const feature = selected?.requiresFeature;
+  return feature && !backendSupports(backend, feature) ? feature : undefined;
 }
 
 export function fieldMatchesQuery(field: ParameterDefinition, query: string): boolean {

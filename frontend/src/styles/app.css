@@ -292,6 +292,10 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .solve-domain-control > .select-row label { flex: none; }
 .solve-domain-control > .select-row select { width: 100%; min-width: 0; }
 .field-error { padding: 1px 0 2px; color: var(--red); font-size: var(--text-micro); }
+/* A value the active backend cannot solve. Not an error — the design is valid
+   and portable, it just will not run here — so it takes the amber the rest of
+   the app already uses for "true, and you need to know". */
+.field-warning { padding: 3px 0 2px 7px; border-left: 2px solid var(--amber); color: var(--amber); font-size: var(--text-micro); line-height: 1.45; }
 /* Empty, loading, and failed states. A dashed border reads as "not built";
    these are built and simply have nothing to show yet, so they get the same
    hairline every other resting surface has. */
