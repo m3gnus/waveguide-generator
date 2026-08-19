@@ -8,11 +8,13 @@ import { importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { resetDesignStore, useDesignStore } from '../stores/design';
+import { parkedSolveCommandStore } from '../stores/solveCommand';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import meshFixture from '../viewport/test-fixtures/tagged_sources-small.msh?raw';
 import { buildImportedSubmission, CadLinkPanel, fusionWorkflowView, newestReturnArrival, onshapeWorkflowView, showIngestedMeshInViewport } from './CadLinkPanel';
 import { CadLinkCoordinator, cadLinkCoordinatorBridge } from './CadLinkCoordinator';
+import { jobsCoordinatorBridge } from './JobsCoordinator';
 
 const listing: CadReturnListing = {
   cadFolderConfigured: true,
@@ -77,6 +79,7 @@ describe('CadLinkPanel', () => {
   beforeEach(() => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     resetCadReturnStore(); resetSolveOptionsStore(); resetDocumentStore(); resetDesignStore(); preferencesStore.resetForTests();
+    parkedSolveCommandStore.clear();
     host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
@@ -85,7 +88,7 @@ describe('CadLinkPanel', () => {
       return json(record);
     }));
   });
-  afterEach(() => { act(() => root.unmount()); importedMeshStore.clear(); vi.unstubAllGlobals(); host.remove(); });
+  afterEach(() => { act(() => root.unmount()); importedMeshStore.clear(); parkedSolveCommandStore.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals(); host.remove(); });
 
   const renderAndSelect = async () => {
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
@@ -114,6 +117,39 @@ describe('CadLinkPanel', () => {
     expect(host.textContent).not.toContain('Explicit solve sweep');
     expect([...host.querySelectorAll<HTMLButtonElement>('button')].some((button) => button.textContent === 'Solve CAD import')).toBe(false);
     expect(host.querySelector('.cad-viewport-source-buttons')).toBeNull();
+  });
+
+  it('shows a parked Fusion solve request with its reasons, a resume, and a dismiss', async () => {
+    await renderAndSelect();
+    await clickIngest();
+    act(() => parkedSolveCommandStore.park({
+      commandId: 'cmd-1',
+      bundlePath: listing.items[0].bundlePath,
+      blockers: ['Acknowledge 1 blocking finding before solving.'],
+      parkedAt: '2026-08-18T12:00:00Z',
+    }));
+
+    const banner = host.querySelector('.cad-parked-command')!;
+    expect(banner.textContent).toContain('Fusion asked for a solve');
+    expect(banner.textContent).toContain('Waiting on: Acknowledge 1 blocking finding before solving.');
+    const buttons = [...banner.querySelectorAll<HTMLButtonElement>('button')].map((button) => button.textContent);
+    expect(buttons).toEqual(['Dismiss', 'Acknowledge all 1 & solve']);
+
+    // Resuming clears the gate the request is waiting on before it solves.
+    const solveCurrentCadImport = vi.fn(async () => 'submitted' as const);
+    vi.spyOn(jobsCoordinatorBridge, 'getSnapshot').mockReturnValue({
+      ...jobsCoordinatorBridge.getSnapshot(), solveCurrentCadImport,
+    });
+    const [dismiss, resume] = [...banner.querySelectorAll<HTMLButtonElement>('button')];
+    await act(async () => { resume.click(); await Promise.resolve(); await Promise.resolve(); });
+    expect(useCadReturnStore.getState().acknowledgedFindingIds).toEqual(['finding-a']);
+    expect(importedSubmissionBlocker()).toBeNull();
+    expect(solveCurrentCadImport).toHaveBeenCalledOnce();
+
+    // Dismissing retires the request instead of leaving it to replay.
+    await act(async () => { dismiss.click(); await Promise.resolve(); await Promise.resolve(); });
+    expect(parkedSolveCommandStore.getSnapshot().command).toBeNull();
+    expect(host.querySelector('.cad-parked-command')).toBeNull();
   });
 
   it('tries the full-domain viewport artifact before silently falling back on 404', async () => {

@@ -86,12 +86,25 @@ Once a design is linked, the round trip can be started from either side:
   palette and in the CAD Link panel.
 
 Both paths stop where a manual solve stops: an ingestion with unacknowledged
-blocking findings, missing drive channels, or an unavailable Metal engine is
-reported and left for you, never solved around. A Fusion-initiated solve is
-recorded as spent once, so a reconnect or a reopened window cannot replay it into
-a second run. Preparing a new return keeps the mesh sizing, channel mapping,
-drivers, combine settings and sweep from the previous one whenever the source
-inventory is unchanged; findings acknowledgements are always re-earned.
+blocking findings or missing drive channels is reported and left for you, never
+solved around. Anything arriving from CAD — a return, a preparation, a solve
+request — switches the workspace to CAD mode and focuses the CAD Link panel,
+because that panel is where the status, the findings and the request itself are
+shown.
+
+A Fusion request that stops at one of those gates is **parked** rather than
+discarded: the CAD Link panel shows "Fusion asked for a solve" with what it is
+waiting on, an action that acknowledges the findings and starts it, and a
+Dismiss. Solving that return — from the parked banner or with the ordinary
+Solve command — consumes the request and records the run against it, so it
+cannot later replay into a duplicate solve; dismissing it retires it just as
+finally. A machine with no Metal engine cannot run an imported solve at all, so
+a request that lands there is refused outright instead of being offered again on
+every reopen.
+
+Preparing a new return keeps the mesh sizing, channel mapping, drivers, combine
+settings and sweep from the previous one whenever the source inventory is
+unchanged; findings acknowledgements are always re-earned.
 
 The detailed CAD-link implementation plan is still active workspace material. Treat
 the UI and checked-in tests as the current behavior until that plan is closed and its

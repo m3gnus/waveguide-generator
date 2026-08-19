@@ -246,7 +246,7 @@ describe('solve invocation mutex', () => {
     const pending = deferred<string>();
     mocks.submitImported.mockReturnValue(pending.promise);
     const submission = importedSubmission('wgi_example');
-    let first!: Promise<void>;
+    let first!: Promise<string | null>;
     await act(async () => {
       const run = jobsCoordinatorBridge.getSnapshot().runImported;
       first = run(submission);

@@ -4,8 +4,10 @@ import { OnshapePublicConsentRequired, sendDesignToOnshape } from '../api/onshap
 import { cadApplicationName, usePreferences } from '../prefs/preferences';
 import {
   blockingFindings,
+  unacknowledgedBlocking,
   useCadReturnStore,
 } from '../stores/cadReturn';
+import { parkedSolveCommandStore } from '../stores/solveCommand';
 import { recordCommittedAthPolars, useDesignStore } from '../stores/design';
 import { polarConfigFromUi, useSolveOptionsStore } from '../stores/solveOptions';
 import { useDocumentStore } from '../stores/document';
@@ -111,6 +113,7 @@ export function CadLinkPanel() {
   const identity = useDocumentStore((current) => current.identity);
   const setCadLink = useDocumentStore((current) => current.setCadLink);
   const cadCoordinator = useSyncExternalStore(cadLinkCoordinatorBridge.subscribe, cadLinkCoordinatorBridge.getSnapshot, cadLinkCoordinatorBridge.getSnapshot);
+  const parkedCommand = useSyncExternalStore(parkedSolveCommandStore.subscribe, parkedSolveCommandStore.getSnapshot, parkedSolveCommandStore.getSnapshot).command;
   const [requestingReturn, setRequestingReturn] = useState(false);
   const [confirmPublicDocument, setConfirmPublicDocument] = useState<string | null>(null);
   const [sendingToOnshape, setSendingToOnshape] = useState(false);
@@ -198,6 +201,15 @@ export function CadLinkPanel() {
     fusionStatus?.running && fusionStatus.documentName && fusionStatus.documentId
     && fusionStatus.link && identity?.designId,
   );
+  // A Fusion solve request that stopped at a gate is held, not discarded, so it
+  // needs somewhere to be seen and acted on. Acknowledging is offered inline
+  // when it is the whole of what the request is waiting for.
+  const unacknowledged = unacknowledgedBlocking(state);
+  const parked = parkedCommand && parkedCommand.blockers.length > 0 ? parkedCommand : null;
+  const resumeParked = () => {
+    if (unacknowledged.length) state.acknowledgeAllBlocking();
+    void cadCoordinator.solveParkedCommand().catch(() => undefined);
+  };
   // Onshape's Free plan makes every document world-readable. Say so before the
   // user sends, not after -- and say it from the plan WG actually read.
   const publicOnly = onshapeConnection?.plan?.publicOnly === true;
@@ -251,6 +263,15 @@ export function CadLinkPanel() {
     <header className="cad-workflow-header no-step"><div><h3>FUSION → SIMULATION</h3><p>Bring Fusion geometry and source tags into WG.</p></div><button disabled={loading || ingesting} onClick={() => void cadCoordinator.refresh()}><Icon name="reset"/>{loading ? 'Loading…' : 'Refresh'}</button></header>
     {fusionStatus?.fusionChangesAvailable && <div className="cad-direction-alert"><div><b>Fusion geometry has changed</b><span>The active Fusion body or source setup differs from the last design returned to WG.</span></div><div className="cad-confirm-actions"><button disabled={!canRequestFusionReturn || requestingReturn} onClick={() => void bringFromFusion()}>{requestingReturn ? 'Requesting…' : 'Bring changes into WG'}</button><button className="primary" disabled={!canRequestFusionReturn || requestingReturn} onClick={() => { void cadCoordinator.pullAndSolve(); }}>Bring changes in & solve</button></div></div>}
     {!fusionStatus?.fusionChangesAvailable && canRequestFusionReturn && <button className="cad-secondary-action" disabled={requestingReturn} onClick={() => void bringFromFusion()}>{requestingReturn ? 'Requesting…' : 'Refresh geometry from Fusion'}</button>}
+    {parked && <div className="cad-direction-alert cad-parked-command" role="status">
+      <div><b>Fusion asked for a solve</b><span>Waiting on: {parked.blockers.join(' · ')}</span></div>
+      <div className="cad-confirm-actions">
+        <button onClick={() => void cadCoordinator.dismissSolveCommand().catch(() => undefined)}>Dismiss</button>
+        <button className="primary" onClick={resumeParked}>{unacknowledged.length
+          ? `Acknowledge all ${unacknowledged.length} & solve`
+          : 'Solve now'}</button>
+      </div>
+    </div>}
     {error && <div className="cad-alert" role="alert">{error}</div>}
     {state.ingestStaleReason && <div className="cad-alert" role="status">{state.ingestStaleReason} Re-ingest before solving.</div>}
     {viewportNotice && <div className="cad-alert" role="status">{viewportNotice}</div>}

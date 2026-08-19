@@ -15,6 +15,7 @@ import type { ResultPayload } from '../results/types';
 import { useDesignStore, type DesignDocument } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
 import { useCadReturnStore } from '../stores/cadReturn';
+import { consumeParkedSolveCommand } from '../stores/solveCommand';
 import { useSolveOptionsStore, type SolveOptions } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
@@ -27,9 +28,16 @@ interface SolveControl {
   title: string;
 }
 
+/** The imported path forces Metal, so an unavailable engine is not a gate the
+ * user can satisfy — it is a permanent refusal on this machine. Automatic
+ * callers need to tell that apart from a blocker to avoid parking forever. */
+export class SolveEngineUnavailableError extends Error {}
+
 interface CoordinatorBridgeSnapshot {
   run(design: DesignDocument, designRevision?: number): Promise<void>;
-  runImported(submission: ImportedSolveSubmission): Promise<void>;
+  /** Resolves with the submitted job id, or null when the submission mutex
+   * refused this call. */
+  runImported(submission: ImportedSolveSubmission): Promise<string | null>;
   /** The single CAD solve entry point: readiness gate, submission build, and
    * submit through runImported so every caller inherits the Metal capability
    * check, the submission mutex, run naming, and the job-list refresh.
@@ -229,11 +237,11 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   }, [capability, capabilityError, effectiveEngine, filename, now, preferences, revision, selectedEngine]);
 
   const runImported = useCallback(async (submission: ImportedSolveSubmission) => {
-    if (submissionInFlight.current) return;
+    if (submissionInFlight.current) return null;
     submissionInFlight.current = true;
     try {
       const metal = capabilities.find((engine) => engine.name.toLowerCase() === 'metal');
-      if (!metal?.available) throw new Error(metal?.reason ?? capabilityError ?? 'Metal engine is unavailable');
+      if (!metal?.available) throw new SolveEngineUnavailableError(metal?.reason ?? capabilityError ?? 'Metal engine is unavailable');
       setSubmitting(true);
       setActionError(null);
       const options: SolveOptions = { ...submission.options, engine: 'metal', symmetry: 'auto' };
@@ -244,13 +252,19 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       const naming = preferencesStore.getSnapshot();
       const coreName = nextRunName(naming, projection, filename);
       const label = decorateRunName(coreName, naming, now());
-      await submitImported(
+      const jobId = await submitImported(
         effectiveSubmission,
         fetch,
         label,
       );
       acceptSubmittedName(coreName, projection, naming);
+      // A Fusion-authored request is retired by its ledger entry, not by the
+      // marker on disk. Reporting the job from the one place every imported
+      // solve passes through is what makes a manual Solve consume the parked
+      // command instead of leaving it to replay into a duplicate run.
+      await consumeParkedSolveCommand(jobId);
       await jobsSocket.refresh();
+      return jobId;
     } finally {
       submissionInFlight.current = false;
       setSubmitting(false);
