@@ -14,6 +14,7 @@ import { createImportedMeshScene } from './importedMesh';
 import { importedMeshStore } from './importedMeshStore';
 import { parseMSH } from './mshParser';
 import { useFieldPlaneStore } from './fieldPlaneStore';
+import { useFieldPlaneProbeStore } from './fieldPlaneProbe';
 import meshFixture from './test-fixtures/tagged_sources-small.msh?raw';
 
 const frame: DecodedFrame = {
@@ -56,6 +57,10 @@ const previewSnapshot: PreviewSnapshot = {
 };
 
 const refreshCalls: number[] = [];
+
+function setInputValue(input: HTMLInputElement, value: string): void {
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, value);
+}
 
 function completeJob(id: string, fieldPlaneAvailable: boolean): JobItem {
   return {
@@ -206,6 +211,94 @@ describe('Viewport preview errors', () => {
     }));
     expect(host.querySelector('[aria-label="Clip model to field plane"]')).not.toBeNull();
     expect(host.querySelector('[aria-label="Invert field-plane clip side"]')).not.toBeNull();
+  });
+
+  it('scrubs solved frequencies with a slider instead of a dropdown', () => {
+    act(() => {
+      publishJobs([completeJob('available', true)]);
+      useFieldPlaneStore.setState({
+        enabled: true,
+        jobId: 'available',
+        plane: fieldPlane,
+        status: 'ready',
+        frequenciesHz: [500, 1_000, 2_000],
+        frequencyIndex: 1,
+      });
+    });
+    const slider = host.querySelector<HTMLInputElement>('[aria-label="Field plane frequency"]')!;
+    expect(slider.type).toBe('range');
+    expect(slider.max).toBe('2');
+    expect(slider.value).toBe('1');
+    expect(host.querySelector('.field-plane-legend-title span')?.textContent).toBe('1,000 Hz');
+
+    const setFrequencyIndex = vi.spyOn(useFieldPlaneStore.getState(), 'setFrequencyIndex');
+    act(() => {
+      setInputValue(slider, '2');
+      slider.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(setFrequencyIndex).toHaveBeenCalledWith(2);
+  });
+
+  it('moves and resizes the plane from the numeric transform inputs', () => {
+    act(() => {
+      publishJobs([completeJob('available', true)]);
+      useFieldPlaneStore.setState({
+        enabled: true,
+        jobId: 'available',
+        plane: fieldPlane,
+        status: 'ready',
+      });
+    });
+    const enter = (label: string, value: string) => {
+      const input = host.querySelector<HTMLInputElement>(`[aria-label="${label}"]`)!;
+      act(() => {
+        input.focus();
+        setInputValue(input, value);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      act(() => input.blur());
+    };
+
+    enter('Field plane centre Y in millimetres', '25');
+    expect(useFieldPlaneStore.getState().plane?.origin_m).toEqual([0, 0.025, 0]);
+
+    enter('Field plane width in millimetres', '600');
+    expect(useFieldPlaneStore.getState().plane?.width_m).toBeCloseTo(0.6);
+
+    // Below the request validator's floor, so the store keeps the clamp.
+    enter('Field plane height in millimetres', '0');
+    expect(useFieldPlaneStore.getState().plane?.height_m).toBeCloseTo(0.005);
+  });
+
+  it('labels the pressure under the pointer while the plane is shown', () => {
+    act(() => {
+      publishJobs([completeJob('available', true)]);
+      useFieldPlaneStore.setState({
+        enabled: true,
+        jobId: 'available',
+        plane: fieldPlane,
+        status: 'ready',
+      });
+      useFieldPlaneProbeStore.getState().show({
+        localX: 120,
+        localY: 90,
+        hostWidth: 900,
+        hostHeight: 700,
+        offsetU_m: 0.05,
+        offsetV_m: -0.02,
+        point_m: [0.05, 0, -0.02],
+        real: 2,
+        imag: 0,
+        masked: false,
+      });
+    });
+    const probe = host.querySelector('.field-plane-probe')!;
+    expect(probe.querySelector('b')?.textContent).toBe('100.0 dB');
+    expect(probe.textContent).toContain('0° phase');
+    expect(probe.textContent).toContain('u 50 · v -20 mm');
+
+    act(() => useFieldPlaneProbeStore.getState().hide());
+    expect(host.querySelector('.field-plane-probe')).toBeNull();
   });
 
   it('retries a blocked field plane once per solve-busy transition', () => {

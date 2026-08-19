@@ -2,6 +2,14 @@ import type { FieldPlaneSpec, Vector3Tuple } from '../api/fieldPlane';
 
 export type FieldPlanePreset = 'h' | 'v' | 'mouth';
 export type FieldPlaneRotationAxis = 'u' | 'v';
+export type FieldPlaneTranslationAxis = 'u' | 'v' | 'n';
+export type FieldPlaneResizeAxis = 'u' | 'v' | 'both';
+
+/** The request validator refuses extents outside (0, 100] metres, so the
+ * interactive handles clamp to a slightly narrower band that always survives
+ * the round trip. */
+export const FIELD_PLANE_MIN_EXTENT_M = 0.005;
+export const FIELD_PLANE_MAX_EXTENT_M = 100;
 
 export interface FieldPlaneBounds {
   min: Vector3Tuple;
@@ -12,6 +20,18 @@ export interface FieldPlaneBounds {
 export interface FieldPlaneRay {
   origin: Vector3Tuple;
   direction: Vector3Tuple;
+}
+
+export interface FieldPlaneProbeHit {
+  /** Normalised plane coordinates, (0,0) at the -u/-v corner, matching the
+   * texture coordinates the field shader samples with. */
+  u: number;
+  v: number;
+  /** Signed distance from the plane centre along each in-plane axis, metres. */
+  offsetU_m: number;
+  offsetV_m: number;
+  /** Hit point in solver metres. */
+  point_m: Vector3Tuple;
 }
 
 const SNAP_RADIANS = 5 * Math.PI / 180;
@@ -180,4 +200,86 @@ export function rotationAngleFromRays(
   const currentDirection = normalize(currentOffset);
   const axis = normalize(rotationAxis);
   return Math.atan2(dot(axis, cross(startDirection, currentDirection)), dot(startDirection, currentDirection));
+}
+
+export function fieldPlaneAxisVector(
+  plane: Pick<FieldPlaneSpec, 'axis_u' | 'axis_v'>,
+  axis: FieldPlaneTranslationAxis,
+): Vector3Tuple {
+  if (axis === 'u') return normalize(plane.axis_u);
+  if (axis === 'v') return normalize(plane.axis_v);
+  return fieldPlaneNormal(plane);
+}
+
+export function withFieldPlaneOrigin(plane: FieldPlaneSpec, origin: Vector3Tuple): FieldPlaneSpec {
+  if (origin.some((value) => !Number.isFinite(value))) return plane;
+  return { ...plane, origin_m: [origin[0], origin[1], origin[2]] };
+}
+
+/** Slides the plane bodily along one of its own axes. `u` and `v` keep the
+ * plane coplanar; `n` is the same motion the normal arrow already performed. */
+export function translateFieldPlane(
+  plane: FieldPlaneSpec,
+  axis: FieldPlaneTranslationAxis,
+  deltaMetres: number,
+): FieldPlaneSpec {
+  if (!Number.isFinite(deltaMetres) || deltaMetres === 0) return plane;
+  return { ...plane, origin_m: add(plane.origin_m, scale(fieldPlaneAxisVector(plane, axis), deltaMetres)) };
+}
+
+export function clampFieldPlaneExtent(extentMetres: number): number {
+  if (!Number.isFinite(extentMetres)) return FIELD_PLANE_MIN_EXTENT_M;
+  return Math.min(FIELD_PLANE_MAX_EXTENT_M, Math.max(FIELD_PLANE_MIN_EXTENT_M, extentMetres));
+}
+
+export function withFieldPlaneExtents(
+  plane: FieldPlaneSpec,
+  widthMetres: number,
+  heightMetres: number,
+): FieldPlaneSpec {
+  return {
+    ...plane,
+    width_m: clampFieldPlaneExtent(widthMetres),
+    height_m: clampFieldPlaneExtent(heightMetres),
+  };
+}
+
+/** Grows the plane symmetrically about its centre, so resizing never drags the
+ * observation origin off the model. Deltas are the extent change, not the
+ * handle travel — the caller doubles the handle motion. */
+export function resizeFieldPlane(
+  plane: FieldPlaneSpec,
+  widthDeltaMetres: number,
+  heightDeltaMetres: number,
+): FieldPlaneSpec {
+  return withFieldPlaneExtents(
+    plane,
+    plane.width_m + (Number.isFinite(widthDeltaMetres) ? widthDeltaMetres : 0),
+    plane.height_m + (Number.isFinite(heightDeltaMetres) ? heightDeltaMetres : 0),
+  );
+}
+
+/** Closest-line projection along an arbitrary plane axis, shared by the
+ * translate arrows and the resize grips. */
+export const translationDeltaAlongAxis = translationDeltaAlongNormal;
+
+/** Where a pointer ray meets the plane quad, in the same normalised
+ * coordinates the fragment shader samples with. `ray` is in viewport units;
+ * the plane is in solver metres. Returns null when the ray misses the quad. */
+export function probeFieldPlaneRay(
+  plane: FieldPlaneSpec,
+  ray: FieldPlaneRay,
+  unitsPerMetre: number,
+): FieldPlaneProbeHit | null {
+  if (!(unitsPerMetre > 0) || !Number.isFinite(unitsPerMetre)) return null;
+  const center = scale(plane.origin_m, unitsPerMetre);
+  const point = intersectRayPlane(ray, center, fieldPlaneNormal(plane));
+  if (!point) return null;
+  const offset = subtract(point, center);
+  const offsetU_m = dot(offset, normalize(plane.axis_u)) / unitsPerMetre;
+  const offsetV_m = dot(offset, normalize(plane.axis_v)) / unitsPerMetre;
+  const u = offsetU_m / plane.width_m + 0.5;
+  const v = offsetV_m / plane.height_m + 0.5;
+  if (u < 0 || u > 1 || v < 0 || v > 1) return null;
+  return { u, v, offsetU_m, offsetV_m, point_m: scale(point, 1 / unitsPerMetre) };
 }
