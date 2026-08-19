@@ -58,7 +58,10 @@ class WgLinkExportRequest(ExportRequest):
 
 router = APIRouter(prefix="/api/export", tags=["exports"])
 _UNSAFE_FILENAME = re.compile(r"[^A-Za-z0-9._-]+")
+_UNSAFE_SLUG = re.compile(r"[^a-z0-9_]+")
 _KNOWN_DESIGN_EXTENSIONS = frozenset({".cfg", ".txt", ".mwg"})
+_BUNDLE_SUFFIX = ".wglink"
+_THROAT_PARAMETER = "_throat_dia"
 
 
 def _base_name(value: str) -> str:
@@ -67,6 +70,84 @@ def _base_name(value: str) -> str:
     stem = path.stem if path.suffix.lower() in _KNOWN_DESIGN_EXTENSIONS else leaf
     stem = stem or "waveguide"
     return _UNSAFE_FILENAME.sub("_", stem).strip("._") or "waveguide"
+
+
+def _slug(value: str) -> str:
+    """The mesher's namespace rule, applied here so the record is canonical."""
+
+    return _UNSAFE_SLUG.sub("_", value.strip().lower()).strip("_")
+
+
+def _slug_from_manifest(manifest_json: str) -> str | None:
+    """Recover the namespace an earlier export baked into its parameter names.
+
+    ``wg_<slug>_throat_dia`` is in every supported solid build and is how the
+    add-in itself reads the namespace back off a bundle, so a link made before
+    the registry recorded slugs still resolves to exactly what its Fusion
+    expressions reference.
+    """
+
+    try:
+        parameters = (json.loads(manifest_json) or {}).get("parameters") or []
+    except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+    matches = {
+        str(entry["name"])[len("wg_") : -len(_THROAT_PARAMETER)]
+        for entry in parameters
+        if isinstance(entry, Mapping)
+        and entry.get("role") == "interface"
+        and str(entry.get("name") or "").startswith("wg_")
+        and str(entry.get("name") or "").endswith(_THROAT_PARAMETER)
+    }
+    if len(matches) != 1:
+        return None
+    return next(iter(matches)) or None
+
+
+def _instance_slug(store: CadLinkStore, lineage_id: str, design_name: str) -> str:
+    """The Fusion parameter namespace: minted once per lineage, never renamed.
+
+    Fusion's datum and enclosure expressions name ``wg_<slug>_*`` for the life
+    of the document and no update can retarget them, so a namespace that
+    followed the filename made Save As an unrecoverable link break.
+    """
+
+    recorded = store.get_lineage_cad_names(lineage_id) or {}
+    slug = str(recorded.get("parameter_slug") or "")
+    if slug:
+        return slug
+    previous = store.find_latest_export_for_lineage(lineage_id)
+    if previous is not None:
+        slug = _slug_from_manifest(str(previous["manifest_json"] or "")) or ""
+    slug = slug or _slug(design_name)
+    if not slug:
+        # A name with no letter or digit has no namespace to record; leave the
+        # mesher to say so rather than freezing an unusable one to the lineage.
+        return design_name
+    recorded = store.record_lineage_cad_names(lineage_id, parameter_slug=slug)
+    return str(recorded.get("parameter_slug") or slug)
+
+
+def _lineage_bundle_stem(
+    store: CadLinkStore, lineage_id: str, design_name: str
+) -> str:
+    """The bundle folder a lineage already owns, or its current name if none.
+
+    A renamed design used to strand its old ``.wglink`` folder and leave the
+    Fusion document's stored bundle path pointing into it. Following the
+    lineage keeps updating one folder in place; the readable name it earned on
+    its first export is the one that stays.
+    """
+
+    recorded = store.get_lineage_cad_names(lineage_id) or {}
+    stem = str(recorded.get("bundle_stem") or "")
+    if stem:
+        return stem
+    previous = store.find_latest_export_for_lineage(lineage_id)
+    stored_path = str((previous or {}).get("bundle_path") or "")
+    if stored_path.endswith(_BUNDLE_SUFFIX):
+        return Path(stored_path).name[: -len(_BUNDLE_SUFFIX)]
+    return design_name
 
 
 def _headers(request: ExportRequest, filename: str) -> dict[str, str]:
@@ -151,7 +232,7 @@ def _replace_bundle(staged: Path, destination: Path) -> None:
 
 
 def _bundle_destination(
-    wglink_root: Path, design_name: str, design_id: str
+    wglink_root: Path, bundle_stem: str, design_id: str
 ) -> Path:
     """Resolve a stable portable name without overwriting another design.
 
@@ -192,7 +273,7 @@ def _bundle_destination(
             return existing if existing_design_id == design_id else None
         return wglink_root / filename
 
-    requested = f"{design_name}.wglink"
+    requested = f"{bundle_stem}{_BUNDLE_SUFFIX}"
     destination = available(requested)
     if destination is not None:
         return destination
@@ -202,9 +283,9 @@ def _bundle_destination(
     # prefix collision.  Trim a maximal user stem so the filename remains a
     # valid 255-byte portable component after adding the suffix and extension.
     digest = hashlib.sha256(design_id.encode("utf-8")).hexdigest()
-    stem = design_name[:239].rstrip("._-") or "waveguide"
+    stem = bundle_stem[:239].rstrip("._-") or "waveguide"
     for length in (8, 12, 16, 32, 64):
-        candidate = f"{stem}-{digest[:length]}.wglink"
+        candidate = f"{stem}-{digest[:length]}{_BUNDLE_SUFFIX}"
         destination = available(candidate)
         if destination is not None:
             return destination
@@ -397,6 +478,8 @@ def _export_wglink_sync(
     identity = _commit_design_for_export(
         store, request.identity, request.design, current_design_hash, design_name
     )
+    instance_slug = _instance_slug(store, identity.lineage_id, design_name)
+    bundle_stem = _lineage_bundle_stem(store, identity.lineage_id, design_name)
 
     config = design_to_mesher_config(request.design)
     resolved = resolve_geometry(config)
@@ -419,7 +502,7 @@ def _export_wglink_sync(
             )
         try:
             destination = _bundle_destination(
-                wglink_root, design_name, identity.design_id
+                wglink_root, bundle_stem, identity.design_id
             )
         except ValueError as exc:
             raise _BundleNameConflict(str(exc)) from exc
@@ -462,7 +545,7 @@ def _export_wglink_sync(
                 resolved.geometry,
                 staged,
                 identity=bundle_identity,
-                instance_slug=design_name,
+                instance_slug=instance_slug,
                 open_throat=True,
                 # The current design schema owns exactly one horn throat. Give
                 # it an explicit acoustic identity at export time so the
@@ -517,6 +600,15 @@ def _export_wglink_sync(
         raise
     except Exception as exc:
         raise _export_error(exc) from exc
+
+    # Only now is the folder that survived disambiguation known, so the lineage
+    # claims the name it actually got rather than the one it asked for.
+    written = str(row.get("bundle_path") or "")
+    if written.endswith(_BUNDLE_SUFFIX):
+        store.record_lineage_cad_names(
+            identity.lineage_id,
+            bundle_stem=Path(written).name[: -len(_BUNDLE_SUFFIX)],
+        )
 
     return _wglink_response(row, identity)
 

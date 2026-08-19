@@ -51,12 +51,13 @@ def test_registry_schema_is_separate_versioned_and_snapshot_preserving(tmp_path:
     assert db_path.exists()
     assert not (tmp_path / "db" / "simulations.db").exists()
     conn = sqlite3.connect(db_path)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 7
     assert {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")} >= {
         "designs",
         "exports",
         "ingests",
         "onshape_links",
+        "lineage_cad_names",
     }
     snapshot = conn.execute("SELECT snapshot_text FROM designs").fetchone()[0]
     assert snapshot == first["text"]
@@ -90,7 +91,7 @@ def test_v2_registry_with_rows_migrates_to_current_without_data_loss(tmp_path: P
     migrated.close()
 
     connection = sqlite3.connect(db_path)
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 6
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == 7
     assert connection.execute("SELECT COUNT(*) FROM designs").fetchone()[0] == 1
     assert connection.execute("SELECT COUNT(*) FROM exports").fetchone()[0] == 1
     connection.close()
@@ -286,3 +287,47 @@ def test_concurrent_same_key_runs_exactly_one_export_builder(tmp_path: Path) -> 
 
     assert rows[0] == rows[1]
     assert calls == 1
+
+
+def test_lineage_cad_names_are_claimed_once_and_span_a_fork(tmp_path: Path) -> None:
+    """A linked CAD document depends on these names, so they never move."""
+
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    first = _save(store)
+    fork = _save(store, _request(first), marker="fork")
+    lineage_id = first["identity"].lineage_id  # type: ignore[union-attr]
+    assert fork["identity"].lineage_id == lineage_id  # type: ignore[union-attr]
+    assert store.get_lineage_cad_names(lineage_id) is None
+
+    claimed = store.record_lineage_cad_names(lineage_id, parameter_slug="demo_horn")
+    later = store.record_lineage_cad_names(
+        lineage_id, parameter_slug="tritonia", bundle_stem="demo_horn"
+    )
+
+    assert claimed["parameter_slug"] == "demo_horn"
+    assert claimed["bundle_stem"] is None
+    assert later["parameter_slug"] == "demo_horn"
+    assert later["bundle_stem"] == "demo_horn"
+
+
+def test_latest_lineage_export_reaches_across_designs(tmp_path: Path) -> None:
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    first = _save(store)
+    fork = _save(store, _request(first), marker="fork")
+    lineage_id = first["identity"].lineage_id  # type: ignore[union-attr]
+    assert store.find_latest_export_for_lineage(lineage_id) is None
+
+    for index, saved in enumerate((first, fork)):
+        store.allocate_export(
+            design_id=saved["identity"].design_id,  # type: ignore[union-attr]
+            geometry_hash="sha256:geometry",
+            artifact_sha256="sha256:artifact",
+            manifest_json=json.dumps({"n": index}),
+            idempotency_key=f"key-{index}",
+            created_at=f"2026-08-1{index}T00:00:00Z",
+        )
+
+    latest = store.find_latest_export_for_lineage(lineage_id)
+    assert latest is not None
+    assert latest["design_id"] == fork["identity"].design_id  # type: ignore[union-attr]
+    assert store.find_latest_export_for_lineage("wgl_absent") is None

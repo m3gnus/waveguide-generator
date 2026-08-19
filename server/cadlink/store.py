@@ -98,6 +98,22 @@ _SCHEMA = (
     )
     """,
     "CREATE INDEX IF NOT EXISTS onshape_links_by_document ON onshape_links(document_id)",
+    # Fusion bakes the parameter namespace into the datum and enclosure
+    # expressions of the linked document, and no update can retarget them, so
+    # the namespace has to outlive both a rename and the fork a conflicting
+    # save mints.  Lineage is the only key that survives both: a fork keeps its
+    # lineage_id, and a filename is not an identity at all.  The bundle folder
+    # name rides along for the same reason -- the document remembers the path
+    # it was last built from.
+    """
+    CREATE TABLE IF NOT EXISTS lineage_cad_names (
+      lineage_id TEXT PRIMARY KEY,
+      parameter_slug TEXT,
+      bundle_stem TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+    """,
 )
 
 
@@ -123,7 +139,7 @@ class CadLinkStore:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._lock, self._transaction() as conn:
             version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-            if version not in {0, 1, 2, 3, 4, 5, 6}:
+            if version not in {0, 1, 2, 3, 4, 5, 6, 7}:
                 raise RuntimeError(f"unsupported cadlink.db schema version {version}")
             for statement in _SCHEMA:
                 conn.execute(statement)
@@ -144,7 +160,7 @@ class CadLinkStore:
             ):
                 if column not in onshape_columns:
                     conn.execute(f"ALTER TABLE onshape_links ADD COLUMN {column} TEXT")
-            conn.execute("PRAGMA user_version = 6")
+            conn.execute("PRAGMA user_version = 7")
         self._initialized = True
 
     def get_design(self, design_id: str) -> dict[str, Any] | None:
@@ -174,6 +190,68 @@ class CadLinkStore:
         return self._read_one(
             "SELECT * FROM exports WHERE idempotency_key = ?", (idempotency_key,)
         )
+
+    def find_latest_export_for_lineage(self, lineage_id: str) -> dict[str, Any] | None:
+        """The newest export anywhere in one lineage, forks included.
+
+        The CAD names a lineage owns were only recorded from schema 7 onwards,
+        so links made before it recover them from what their last export
+        already published.
+        """
+
+        return self._read_one(
+            """
+            SELECT exports.* FROM exports
+            JOIN designs ON designs.design_id = exports.design_id
+            WHERE designs.lineage_id = ?
+            ORDER BY exports.created_at DESC, exports.sequence DESC LIMIT 1
+            """,
+            (lineage_id,),
+        )
+
+    def get_lineage_cad_names(self, lineage_id: str) -> dict[str, Any] | None:
+        return self._read_one(
+            "SELECT * FROM lineage_cad_names WHERE lineage_id = ?", (lineage_id,)
+        )
+
+    def record_lineage_cad_names(
+        self,
+        lineage_id: str,
+        *,
+        parameter_slug: str | None = None,
+        bundle_stem: str | None = None,
+        recorded_at: str | None = None,
+    ) -> dict[str, Any]:
+        """Claim a lineage's CAD names, first writer per column winning.
+
+        A recorded name is what an already-linked CAD document depends on, so
+        it is never overwritten -- ``COALESCE`` keeps the existing value and
+        makes a concurrent second export a no-op rather than a rename.
+        """
+
+        self.initialize()
+        now = recorded_at or utc_now()
+        with self._lock, self._transaction() as conn:
+            conn.execute(
+                """
+                INSERT INTO lineage_cad_names (
+                  lineage_id, parameter_slug, bundle_stem, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT (lineage_id) DO UPDATE SET
+                  parameter_slug = COALESCE(
+                    lineage_cad_names.parameter_slug, excluded.parameter_slug
+                  ),
+                  bundle_stem = COALESCE(
+                    lineage_cad_names.bundle_stem, excluded.bundle_stem
+                  ),
+                  updated_at = excluded.updated_at
+                """,
+                (lineage_id, parameter_slug, bundle_stem, now, now),
+            )
+            row = conn.execute(
+                "SELECT * FROM lineage_cad_names WHERE lineage_id = ?", (lineage_id,)
+            ).fetchone()
+        return self._row(row) or {}
 
     def get_ingest(self, ingest_id: str) -> dict[str, Any] | None:
         return self._read_one(
