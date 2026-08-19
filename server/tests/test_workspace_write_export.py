@@ -78,6 +78,7 @@ def test_cad_workspace_is_separate_and_requires_a_selection(tmp_path: Path) -> N
         "path": None,
         "proposed": str(proposed),
         "proposedExists": False,
+        "captureDocument": True,
     }
     assert not proposed.exists()
     with pytest.raises(ValueError, match="No WGLink folder"):
@@ -90,6 +91,7 @@ def test_cad_workspace_is_separate_and_requires_a_selection(tmp_path: Path) -> N
     assert json.loads((data / "cadlink_settings.json").read_text()) == {
         "schemaVersion": 1,
         "cadLinkPath": str(exchange.resolve()),
+        "captureDocument": True,
     }
 
 
@@ -575,3 +577,84 @@ def test_the_picker_only_starts_where_it_can_safely_be_pointed(tmp_path: Path) -
     # embedded in, and the root is not a useful place to open a dialog.
     assert workspace_api._picker_start_directory(tmp_path / "it's here") is None
     assert workspace_api._picker_start_directory(Path("/nonexistent/deep/path")) is None
+
+
+def capture_endpoint(state: workspace_api.CadWorkspaceState):
+    router = workspace_api.create_cad_workspace_router(state)
+    return next(
+        route.endpoint
+        for route in router.routes
+        if route.path == "/api/cad-workspace/capture-document"
+    )
+
+
+def test_capturing_the_cad_document_is_on_by_default_and_can_be_declined(
+    tmp_path: Path,
+) -> None:
+    data = tmp_path / "data"
+    state = workspace_api.CadWorkspaceState(data, proposed_path=tmp_path / "proposed")
+    assert state.capture_document is True
+
+    result = asyncio.run(
+        capture_endpoint(state)(workspace_api.CaptureDocumentRequest(enabled=False))
+    )
+
+    assert result == {"captureDocument": False}
+    # The Fusion add-in reads this same file, so the choice has to be in it.
+    assert json.loads((data / "cadlink_settings.json").read_text()) == {
+        "schemaVersion": 1,
+        "captureDocument": False,
+    }
+    assert workspace_api.CadWorkspaceState(data).capture_document is False
+
+
+def test_choosing_a_folder_does_not_erase_the_capture_choice(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    exchange = tmp_path / "exchange"
+    exchange.mkdir()
+    state = workspace_api.CadWorkspaceState(data)
+    state.set_capture_document(False)
+
+    # Selecting used to rewrite the whole file, which dropped the other setting.
+    state.select(exchange)
+
+    reloaded = workspace_api.CadWorkspaceState(data)
+    assert reloaded.selected_path() == exchange.resolve()
+    assert reloaded.capture_document is False
+
+
+def test_a_folder_chosen_before_the_setting_existed_still_captures(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    data.mkdir()
+    exchange = tmp_path / "exchange"
+    exchange.mkdir()
+    (data / "cadlink_settings.json").write_text(
+        json.dumps({"schemaVersion": 1, "cadLinkPath": str(exchange)}), encoding="utf-8"
+    )
+
+    state = workspace_api.CadWorkspaceState(data)
+
+    assert state.selected_path() == exchange.resolve()
+    assert state.capture_document is True
+
+
+def test_v1_task_scratch_is_never_adopted_as_an_export_folder(tmp_path: Path) -> None:
+    """The data directory's ``workspace`` is migrated v1 job scratch.
+
+    It holds one UUID folder per task, so the "has run folders" evidence test
+    matches it on hundreds of directories that are not exports at all. It is not
+    offered as a legacy default for that reason; this pins the reason.
+    """
+
+    data = tmp_path / "data"
+    scratch = data / "workspace" / "05446457-3c9d-4d53-9723-dc019ff9e4c3"
+    scratch.mkdir(parents=True)
+    (scratch / "task.manifest.json").write_text("{}", encoding="utf-8")
+    documents = tmp_path / "documents" / "runs"
+
+    application = app_module.create_app(
+        data_dir=data, workspace_dir=documents, solver_warmup=False
+    )
+
+    assert application.state.workspace.selected_path() is None
+    assert application.state.workspace.path() == documents.resolve()

@@ -76,6 +76,12 @@ class SelectCadWorkspaceRequest(BaseModel):
     path: str = Field(min_length=1, max_length=4096)
 
 
+class CaptureDocumentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+
+
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
     """Publish a small cross-process setting without exposing a torn file."""
 
@@ -335,6 +341,11 @@ class CadWorkspaceState(WorkspaceState):
 
     SETTINGS_NAME = "cadlink_settings.json"
     SETTINGS_KEY = "cadLinkPath"
+    #: Whether a return carries a copy of the CAD document it was taken from.
+    #: It lives beside the folder because the Fusion add-in reads this file
+    #: already: one setting, set in WG, read where the add-in was going to look
+    #: anyway, rather than the same switch offered in two applications.
+    CAPTURE_KEY = "captureDocument"
 
     def __init__(self, data_dir: Path, *, proposed_path: Path | None = None) -> None:
         super().__init__(data_dir, default_path=data_paths(data_dir).root / "cadlink")
@@ -343,6 +354,7 @@ class CadWorkspaceState(WorkspaceState):
             if proposed_path is not None
             else proposed_cadlink_dir()
         )
+        self._capture_document = True
         self.settings_path = (data_paths(data_dir).root / self.SETTINGS_NAME).resolve()
         self.legacy_settings_path = (
             data_paths(data_dir).root / "workspace_settings.json"
@@ -403,6 +415,7 @@ class CadWorkspaceState(WorkspaceState):
             return
         if not isinstance(payload, dict):
             return
+        self._capture_document = payload.get(self.CAPTURE_KEY) is not False
         raw_path = str(payload.get(self.SETTINGS_KEY) or "").strip()
         if not raw_path:
             return
@@ -416,12 +429,47 @@ class CadWorkspaceState(WorkspaceState):
         resolved = path.expanduser().resolve()
         if not resolved.is_dir():
             raise ValueError(f"Selected path is not a directory: {resolved}")
+        if not self._loaded:
+            self._load()
         self._selected = resolved
         self._loaded = True
-        _write_json_atomic(
-            self.settings_path,
-            {"schemaVersion": 1, self.SETTINGS_KEY: str(resolved)},
-        )
+        self._persist()
+
+    @property
+    def capture_document(self) -> bool:
+        """Whether a return carries a copy of the CAD document it came from.
+
+        Reading loads the settings file first: the stored value used to be
+        readable only after something else happened to trigger the lazy load,
+        so a fresh state answered with the default instead of the setting.
+        """
+
+        if not self._loaded:
+            self._load()
+        return self._capture_document
+
+    def set_capture_document(self, enabled: bool) -> None:
+        """Choose whether returns carry a copy of the CAD document."""
+
+        if not self._loaded:
+            self._load()
+        self._capture_document = bool(enabled)
+        self._persist()
+
+    def _persist(self) -> None:
+        """Write both settings together so neither erases the other.
+
+        Choosing a folder used to rewrite this file wholesale, which would drop
+        the capture choice the next time a folder was picked.
+        """
+
+        payload: dict[str, Any] = {
+            "schemaVersion": 1,
+            self.CAPTURE_KEY: self._capture_document,
+        }
+        if self._selected is not None:
+            payload[self.SETTINGS_KEY] = str(self._selected)
+        _write_json_atomic(self.settings_path, payload)
 
 
 def create_cad_workspace_router(state: CadWorkspaceState) -> APIRouter:
@@ -437,7 +485,20 @@ def create_cad_workspace_router(state: CadWorkspaceState) -> APIRouter:
             # accepts it, so an unselected CAD folder stays unselected.
             "proposed": str(state.proposed_path),
             "proposedExists": state.proposed_path.is_dir(),
+            "captureDocument": state.capture_document,
         }
+
+    @router.post("/capture-document")
+    async def cad_workspace_capture_document(
+        payload: CaptureDocumentRequest,
+    ) -> dict[str, Any]:
+        try:
+            state.set_capture_document(payload.enabled)
+        except OSError as exc:
+            raise HTTPException(
+                status_code=500, detail=f"Could not save the setting: {exc}"
+            ) from exc
+        return {"captureDocument": state.capture_document}
 
     @router.post("/select")
     async def cad_workspace_select(
@@ -656,6 +717,7 @@ def mount_workspace(
 __all__ = [
     "WorkspaceState",
     "CadWorkspaceState",
+    "CaptureDocumentRequest",
     "WriteExportRequest",
     "SelectCadWorkspaceRequest",
     "create_workspace_router",

@@ -1,6 +1,8 @@
 export interface CadWorkspacePath {
   selected: boolean;
   path: string | null;
+  /** Whether returns carry a copy of the CAD document they were taken from. */
+  captureDocument?: boolean;
 }
 
 async function errorMessage(response: Response): Promise<string> {
@@ -40,4 +42,24 @@ export async function openCadWorkspace(
   const response = await fetcher('/api/cad-workspace/open', { method: 'POST' });
   if (!response.ok) throw new Error(await errorMessage(response));
   return response.json() as Promise<CadWorkspacePath>;
+}
+
+/**
+ * Choose whether a return carries the CAD document with it.
+ *
+ * The setting is written where the Fusion add-in already reads WG's CAD-link
+ * configuration, so there is one switch rather than the same choice offered in
+ * both applications.
+ */
+export async function setCaptureDocument(
+  enabled: boolean,
+  fetcher: typeof fetch = fetch,
+): Promise<boolean> {
+  const response = await fetcher('/api/cad-workspace/capture-document', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  });
+  if (!response.ok) throw new Error(await errorMessage(response));
+  return ((await response.json()) as { captureDocument: boolean }).captureDocument;
 }

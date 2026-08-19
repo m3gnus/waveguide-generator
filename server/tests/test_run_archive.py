@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -108,3 +109,40 @@ def test_a_missing_document_file_is_not_an_error(tmp_path: Path) -> None:
 
     assert archive_cad_document(bundle, record_for(), runs, "Big Horn") is None
     assert not runs.exists()
+
+
+def test_the_stored_bundle_copy_leaves_the_captured_document_behind(tmp_path: Path) -> None:
+    """The content-addressed copy is deliberately not a byte copy.
+
+    A Fusion archive is tens of megabytes and is not geometry WG solves from, so
+    copying it into the application data directory as well would store every
+    captured document twice. The consequence is that the stored copy is no
+    longer a readable bundle -- ``read_wgreturn`` refuses a declared member that
+    is missing -- and nothing reads it back today. Anything that starts to must
+    read the user's own bundle instead.
+    """
+
+    from server.cadlink.ingest import _stage_bundle_cas, cad_document_member
+    from server.cadlink.wgreturn import read_wgreturn
+    from server.tests.test_cadlink_wgreturn import _manifest, write_bundle
+
+    step, document = b"STEP", b"fusion-archive-bytes"
+    manifest = _manifest(step)
+    manifest["files"]["document.f3d"] = {
+        "sha256": "sha256:" + hashlib.sha256(document).hexdigest(),
+        "size_bytes": len(document),
+        "media_type": "application/vnd.autodesk.fusion360",
+        "purpose": "cad-document",
+    }
+    bundle_path = write_bundle(tmp_path / "workspace", manifest, step=step)
+    (bundle_path / "document.f3d").write_bytes(document)
+    bundle = read_wgreturn(bundle_path)
+
+    assert cad_document_member(bundle.manifest) == "document.f3d"
+    _destination, staged, _temporary = _stage_bundle_cas(bundle, tmp_path / "imports")
+
+    assert staged is not None
+    assert (staged / "assembly.step").read_bytes() == step
+    assert not (staged / "document.f3d").exists()
+    # The user's own bundle is untouched: it is the copy that keeps the document.
+    assert (bundle_path / "document.f3d").read_bytes() == document
