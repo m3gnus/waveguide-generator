@@ -32,6 +32,21 @@ FIRST_SOURCE_TAG = 101
 AREA_REL_TOLERANCE = 0.01
 PLANE_DISTANCE_MM = 0.05
 NORMAL_ANGLE_DEG = 0.1
+# The native solvers mirror across YZ and XZ only (``server/solver/imported.py``
+# refuses anything else), so a z0 cut would halve the geometry here and be
+# refused three stages later, with the cached mesh, the viewport and the polar
+# derivation all disagreeing about the domain in between.
+SUPPORTED_CUT_PLANES = ("x0", "y0")
+# Cut-plane vertices are snapped exactly onto the plane by ``postprocess_mesh``
+# (``symmetry_snap_tolerance`` below), so the free-edge detector only needs a
+# band wide enough to absorb float noise.
+SYMMETRY_SNAP_TOLERANCE_MM = 1.0e-4
+# ``mesh.vertical_offset`` is recorded in the design config the CAD app echoes
+# back, but the geometry decides: a mirror plane at the recorded offset must at
+# least be the model's own y midpoint. The band matches the auto-cutter's own
+# mirror tolerance so a recentring can never be looser than the test it feeds.
+VERTICAL_OFFSET_MIDPOINT_TOLERANCE_REL = 5.0e-4
+VERTICAL_OFFSET_MIDPOINT_TOLERANCE_MM = 0.05
 # OCC's linear target size alone can leave tight fillets and curved imported
 # baffles visibly faceted. This asks Gmsh for 24 elements around a full circle,
 # while the floor below prevents tiny CAD details from exploding solve cost.
@@ -238,6 +253,12 @@ def rigid_inverse(matrix: Any, *, tolerance: float = 1.0e-6) -> np.ndarray:
     return inverse
 
 
+def _translation_matrix(dx: float, dy: float, dz: float) -> np.ndarray:
+    matrix = np.eye(4)
+    matrix[:3, 3] = (float(dx), float(dy), float(dz))
+    return matrix
+
+
 def _transform_point(matrix: np.ndarray, point: Iterable[float]) -> np.ndarray:
     homogeneous = np.append(np.asarray(tuple(point), dtype=float), 1.0)
     return (matrix @ homogeneous)[:3]
@@ -366,6 +387,184 @@ def resolve_user_source(
         "area_drift_overridden": drift > AREA_REL_TOLERANCE,
         "skipped": False,
     }
+
+
+def recorded_vertical_offset_mm(instance: Mapping[str, Any] | None) -> float | None:
+    """Read ``mesh.vertical_offset`` from the WG config the CAD app echoes back.
+
+    ``instances[].config`` is the exact design config WG shipped with the
+    export (``server/exports/api.py``), so the offset is recorded rather than
+    inferred. It is opaque to the return schema, so every level is tolerated
+    as missing and nothing here may raise.
+    """
+
+    if not isinstance(instance, Mapping):
+        return None
+    node: Any = instance.get("config")
+    for key in ("root", "mesh", "vertical_offset"):
+        if not isinstance(node, Mapping):
+            return None
+        node = node.get(key)
+    if isinstance(node, Mapping):
+        node = node.get("value")
+    if isinstance(node, bool) or not isinstance(node, (int, float)):
+        return None
+    value = float(node)
+    return value if math.isfinite(value) else None
+
+
+def resolve_vertical_recentre(
+    recorded_offset_mm: float | None,
+    *,
+    bounds_mm: tuple[float, ...],
+) -> dict[str, Any]:
+    """Decide whether to move a placed CAD return back onto its mirror plane.
+
+    ``mesh.vertical_offset`` is a rigid +y placement the CAD exports keep on
+    purpose (``server/exports/core.py``), and ingest normalisation is a rigid
+    re-anchor, so the returned model's horizontal mirror plane sits at
+    ``y = offset``. The native solvers can only mirror across coordinate
+    planes, so an offset return used to lose the quarter reduction outright --
+    the exact regression ``server/solver/symmetry.py`` was fixed for on the
+    parametric side. Folding ``-offset`` into the normalisation puts the solve
+    frame back at the origin, which is where the parametric solve frame has
+    always been (commit 3a3e803), and every frame derived from the same matrix
+    -- throat datum, observation origin, viewport -- moves with it.
+
+    The recorded value is preferred and the geometry is the gate: a mirror
+    plane at ``y = offset`` must be the model's own y midpoint, so a config
+    that does not describe this body cannot move it.
+    """
+
+    record: dict[str, Any] = {
+        "recorded_offset_mm": recorded_offset_mm,
+        "applied_offset_mm": 0.0,
+        "applied": False,
+    }
+    if recorded_offset_mm is None:
+        record["reason"] = "no mesh.vertical_offset in the returned design config"
+        return record
+    if recorded_offset_mm == 0.0:
+        record["reason"] = "design is not vertically offset"
+        return record
+    lower = np.asarray(bounds_mm[:3], dtype=float)
+    upper = np.asarray(bounds_mm[3:], dtype=float)
+    midpoint = 0.5 * float(lower[1] + upper[1])
+    diagonal = float(np.linalg.norm(upper - lower))
+    tolerance = max(
+        VERTICAL_OFFSET_MIDPOINT_TOLERANCE_MM,
+        VERTICAL_OFFSET_MIDPOINT_TOLERANCE_REL * diagonal,
+    )
+    residual = abs(midpoint - float(recorded_offset_mm))
+    record.update(
+        {
+            "model_y_midpoint_mm": midpoint,
+            "midpoint_residual_mm": residual,
+            "midpoint_tolerance_mm": tolerance,
+        }
+    )
+    if residual > tolerance:
+        record["reason"] = (
+            "recorded mesh.vertical_offset "
+            f"{float(recorded_offset_mm):.9g} mm is not the returned model's y "
+            f"midpoint {midpoint:.9g} mm"
+        )
+        return record
+    record.update(
+        {
+            "applied_offset_mm": float(recorded_offset_mm),
+            "applied": True,
+            "reason": "recorded placement confirmed by the returned model's y midpoint",
+        }
+    )
+    return record
+
+
+def verify_symmetry_cut(
+    points_mm: Any,
+    triangles: Any,
+    *,
+    cut_planes: Iterable[str],
+    topology: Mapping[str, Any],
+    tolerance_mm: float = SYMMETRY_SNAP_TOLERANCE_MM,
+) -> dict[str, Any]:
+    """Re-read the cut from the meshed boundary and refuse a cut it denies.
+
+    The cutter's verdict is a statement about OCC faces; this is a statement
+    about the mesh that was actually written, made by a detector that knows
+    nothing about what was cut (``hornlab_mesher.step_import``). Two ways a
+    reduced domain lies: a cut plane that comes back closed meshes as a rigid
+    baffle instead of a mirror, and an off-plane free edge is a hole the
+    mirrored solve radiates through. Both produce a wrong answer rather than
+    an error, so neither may pass silently. This is the policy the sibling CLI
+    already enforces (``prepare_step_for_wg_metal.py:1264-1276,1379-1385``).
+
+    Uncut returns are not judged: a full domain has no mirror to be wrong
+    about, and an imported open shell (a standalone source sheet, say) is a
+    legitimate acoustic surface whose rim is real.
+    """
+
+    from hornlab_mesher.step_import import detect_symmetry_planes
+
+    planes = tuple(str(plane) for plane in cut_planes)
+    off_plane_free_edges = int(topology.get("unexpected_free_edges") or 0)
+    record: dict[str, Any] = {
+        "cut_planes": list(planes),
+        "off_plane_free_edge_count": off_plane_free_edges,
+        "off_plane_free_edge_samples": list(
+            topology.get("unexpected_free_edge_midpoint_samples") or []
+        )[:5],
+        "free_edge_count": int(topology.get("free_edges") or 0),
+        "tolerance_mm": float(tolerance_mm),
+    }
+    if not planes:
+        record.update(
+            {
+                "verified": True,
+                "reason": "full domain: no cut plane to verify",
+                "detected_planes": [],
+                "capped_planes": [],
+            }
+        )
+        return record
+    detected, detection = detect_symmetry_planes(
+        np.asarray(points_mm, dtype=float),
+        np.asarray(triangles, dtype=np.int64),
+        tolerance=float(tolerance_mm),
+    )
+    capped = [plane for plane in planes if plane not in detected]
+    record.update(
+        {
+            "detected_planes": list(detected),
+            "capped_planes": capped,
+            "detection": detection,
+        }
+    )
+    if capped:
+        record.update(
+            {
+                "verified": False,
+                "reason": (
+                    "the reduced boundary is closed on "
+                    + ", ".join(capped)
+                    + "; the auto-cut plane is capped, not open"
+                ),
+            }
+        )
+        return record
+    if off_plane_free_edges:
+        record.update(
+            {
+                "verified": False,
+                "reason": (
+                    f"{off_plane_free_edges} free edges lie off the cut planes; "
+                    "the reduced domain leaks"
+                ),
+            }
+        )
+        return record
+    record.update({"verified": True, "reason": "every cut plane is open in the mesh"})
+    return record
 
 
 def polar_grid_from_symmetry(symmetry_report: Mapping[str, Any]) -> dict[str, Any]:
@@ -709,6 +908,11 @@ def build_imported_viewport_mesh(
     matrix = np.asarray(recipe.get("normalisation_matrix"), dtype=float)
     if matrix.shape != (4, 4) or not np.isfinite(matrix).all():
         raise ImportedMeshError("viewport meshing: normalization recipe is invalid")
+    recentre = np.asarray(
+        recipe.get("recentre_translation_mm") or (0.0, 0.0, 0.0), dtype=float
+    )
+    if recentre.shape != (3,) or not np.isfinite(recentre).all():
+        raise ImportedMeshError("viewport meshing: recentre recipe is invalid")
     reference = [
         (tuple(float(value) for value in item[0]), float(item[1]))
         for item in recipe.get("surface_order_reference", ())
@@ -733,6 +937,9 @@ def build_imported_viewport_mesh(
             raise ImportedMeshError("viewport meshing: assembly STEP contains no OCC geometry")
         if not np.allclose(matrix, np.eye(4)):
             gmsh.model.occ.affineTransform(imported, matrix.reshape(-1).tolist())
+            gmsh.model.occ.synchronize()
+        if recentre.any():
+            gmsh.model.occ.translate(imported, *(float(value) for value in recentre))
             gmsh.model.occ.synchronize()
 
         surfaces = gmsh_surface_tags()
@@ -945,6 +1152,9 @@ def build_imported_mesh(
     if anchor_id is None and len(instances) == 1:
         anchor_id = instances[0]["instance_id"]
     normalization = np.eye(4) if anchor_id is None else rigid_inverse(instance_by_id[str(anchor_id)]["assembly_from_link"])
+    recorded_offset_mm = recorded_vertical_offset_mm(
+        None if anchor_id is None else instance_by_id[str(anchor_id)]
+    )
     normalisation_record = {
         "anchor_instance_id": anchor_id,
         "assembly_frame_is_solver_frame": anchor_id is None,
@@ -959,6 +1169,7 @@ def build_imported_mesh(
         *,
         occ_healing_options: Iterable[str] = (),
         surface_order_reference: list[Any] | None = None,
+        allow_symmetry_reduction: bool = True,
     ) -> dict[str, Any]:
         gmsh.clear()
         gmsh.model.add("wgreturn-import")
@@ -978,6 +1189,28 @@ def build_imported_mesh(
         if not np.allclose(normalization, np.eye(4)):
             gmsh.model.occ.affineTransform(imported, transform_values)
             gmsh.model.occ.synchronize()
+        # The two transforms stay two operations, here and in the viewport
+        # rebuild, because the viewport verifies the geometry fingerprint of
+        # this model bit for bit: composing them into one matrix on one side
+        # only would round differently and fail that check.
+        recentre = resolve_vertical_recentre(
+            recorded_offset_mm,
+            bounds_mm=tuple(
+                float(value) for value in gmsh.model.getBoundingBox(-1, -1)
+            ),
+        )
+        solver_from_assembly = normalization
+        if recentre["applied"]:
+            gmsh.model.occ.translate(
+                imported, 0.0, -float(recentre["applied_offset_mm"]), 0.0
+            )
+            gmsh.model.occ.synchronize()
+            solver_from_assembly = (
+                _translation_matrix(0.0, -float(recentre["applied_offset_mm"]), 0.0)
+                @ normalization
+            )
+        normalisation_record["matrix"] = solver_from_assembly.tolist()
+        normalisation_record["vertical_recentre"] = recentre
         surfaces = gmsh_surface_tags()
         face_order = advanced_face_order(Path(assembly_path))
         if len(surfaces) != len(face_order):
@@ -1024,7 +1257,11 @@ def build_imported_mesh(
             if contract is None:
                 continue
             placement = np.asarray(instance["assembly_from_link"], dtype=float)
-            total = normalization @ placement
+            # Every datum rides the same matrix as the geometry, recentring
+            # included: the throat frame is the observation origin, so a datum
+            # left at the CAD placement would put the polar origin one vertical
+            # offset away from the throat it names.
+            total = solver_from_assembly @ placement
             plane = contract["throat_plane_link"]
             axis = contract["axis_link"]
             transformed = {
@@ -1315,7 +1552,15 @@ def build_imported_mesh(
                 },
             )
         else:
-            cut = auto_cut_occ_geometry(groups)
+            cut = auto_cut_occ_geometry(
+                groups,
+                planes=SUPPORTED_CUT_PLANES if allow_symmetry_reduction else (),
+            )
+            if not allow_symmetry_reduction:
+                cut.report["note"] = (
+                    "symmetry reduction disabled after the reduced domain "
+                    "failed post-mesh verification"
+                )
         cut_groups = {group.name: list(group.selector.surface_tags) for group in cut.groups}
         cut_area_provenance: dict[str, dict[str, float]] = {}
         for source in source_list:
@@ -1428,6 +1673,14 @@ def build_imported_mesh(
             "transformed_geometry_hash": transformed_geometry_hash,
             "viewport_recipe": {
                 "normalisation_matrix": normalization.tolist(),
+                # Replayed as a second operation, in this order, so the
+                # viewport model is bit-for-bit the model the fingerprint was
+                # taken from.
+                "recentre_translation_mm": [
+                    0.0,
+                    -float(recentre["applied_offset_mm"]) if recentre["applied"] else 0.0,
+                    0.0,
+                ],
                 "healing_options": list(healing_options),
                 "surface_order_reference": [
                     [list(center), float(area)]
@@ -1448,7 +1701,7 @@ def build_imported_mesh(
                 step_specs,
                 symmetry_planes=cut.planes,
                 tolerance=5.0e-3,
-                symmetry_snap_tolerance=1.0e-4,
+                symmetry_snap_tolerance=SYMMETRY_SNAP_TOLERANCE_MM,
             )
             points_mm, triangles, tags = _mesh_arrays(processed)
             frequency = mesh_frequency_validation(
@@ -1498,6 +1751,37 @@ def build_imported_mesh(
                 "meshing: postprocessed imported mesh failed topology integrity checks: "
                 f"{integrity}"
             )
+        # ``integrity`` deliberately excludes open edges from ``valid`` because
+        # an imported open shell is legal; the reduced domain is where an open
+        # edge stops being legal, and that is what this verifies.
+        verification = verify_symmetry_cut(
+            points_mm,
+            triangles,
+            cut_planes=cut.planes,
+            topology=topology,
+        )
+        # A second, independent count of the same thing, from the arrays the
+        # solver will read rather than from the postprocessor's report. It
+        # judges reduced domains only, for the same reason ``verify_symmetry_cut``
+        # does: an uncut import's rim is its own geometry.
+        verification["integrity_off_plane_open_edge_count"] = int(
+            integrity.get("off_plane_open_edge_count") or 0
+        )
+        if (
+            cut.planes
+            and verification["verified"]
+            and verification["integrity_off_plane_open_edge_count"]
+        ):
+            verification.update(
+                {
+                    "verified": False,
+                    "reason": (
+                        f"{verification['integrity_off_plane_open_edge_count']} open "
+                        "mesh edges lie off the cut planes; the reduced domain leaks"
+                    ),
+                }
+            )
+        state["symmetry_verification"] = verification
         bounds_min = np.min(points_mm, axis=0) * 1.0e-3
         bounds_max = np.max(points_mm, axis=0) * 1.0e-3
         unique_tags, counts = np.unique(tags, return_counts=True)
@@ -1541,26 +1825,28 @@ def build_imported_mesh(
         )
         return state
 
-    unhealed = attempt()
-    if unhealed.get("mesh_generation_error") is None:
-        result = unhealed
-        healing = {
-            "attempted": False,
-            "performed": False,
-            "mode": "none",
-            "trigger": "unhealed-mesh-succeeded",
-            "options": [],
-            "original_mesh_error": None,
-            "rejected_attempts": [],
-            "topology_before": unhealed["topology_occ"],
-            "topology_after": unhealed["topology_occ"],
-            "selector_reanchor": {"required": False, "matched_surfaces": len(unhealed["surface_order"]), "max_area_relative_error": 0.0, "max_centroid_distance_mm": 0.0, "residuals": [], "gates": {"area_rel": 0.02, "centroid_mm": 5.0}},
-            "roles_became_ambiguous": [],
-        }
-    else:
+    def build(*, allow_symmetry_reduction: bool) -> tuple[dict[str, Any], dict[str, Any]]:
+        def run(**kwargs: Any) -> dict[str, Any]:
+            return attempt(allow_symmetry_reduction=allow_symmetry_reduction, **kwargs)
+
+        unhealed = run()
+        if unhealed.get("mesh_generation_error") is None:
+            return unhealed, {
+                "attempted": False,
+                "performed": False,
+                "mode": "none",
+                "trigger": "unhealed-mesh-succeeded",
+                "options": [],
+                "original_mesh_error": None,
+                "rejected_attempts": [],
+                "topology_before": unhealed["topology_occ"],
+                "topology_after": unhealed["topology_occ"],
+                "selector_reanchor": {"required": False, "matched_surfaces": len(unhealed["surface_order"]), "max_area_relative_error": 0.0, "max_centroid_distance_mm": 0.0, "residuals": [], "gates": {"area_rel": 0.02, "centroid_mm": 5.0}},
+                "roles_became_ambiguous": [],
+            }
         original = unhealed["mesh_generation_error"]
-        result, mode, rejected_attempts = run_occ_healing_fallbacks(
-            attempt,
+        healed, mode, rejected_attempts = run_occ_healing_fallbacks(
+            run,
             original_mesh_error=original,
             original_traceback=original.__traceback__,
             surface_order_reference=unhealed["surface_order_reference"],
@@ -1569,7 +1855,7 @@ def build_imported_mesh(
             "sew": ["Geometry.OCCSewFaces"],
             "full": ["Geometry.OCCFixDegenerated", "Geometry.OCCFixSmallEdges", "Geometry.OCCFixSmallFaces", "Geometry.OCCSewFaces"],
         }[mode]
-        healing = {
+        return healed, {
             "attempted": True,
             "performed": True,
             "mode": mode,
@@ -1578,16 +1864,40 @@ def build_imported_mesh(
             "original_mesh_error": str(original),
             "rejected_attempts": rejected_attempts,
             "topology_before": unhealed["topology_occ"],
-            "topology_after": result["topology_occ"],
+            "topology_after": healed["topology_occ"],
             "selector_reanchor": {
                 "required": True,
-                "matched_surfaces": len(result["surface_order"]),
-                "max_area_relative_error": max((item["area_relative_error"] for item in result["reanchor_residuals"]), default=0.0),
-                "max_centroid_distance_mm": max((item["centroid_distance_mm"] for item in result["reanchor_residuals"]), default=0.0),
-                "residuals": result["reanchor_residuals"],
+                "matched_surfaces": len(healed["surface_order"]),
+                "max_area_relative_error": max((item["area_relative_error"] for item in healed["reanchor_residuals"]), default=0.0),
+                "max_centroid_distance_mm": max((item["centroid_distance_mm"] for item in healed["reanchor_residuals"]), default=0.0),
+                "residuals": healed["reanchor_residuals"],
                 "gates": {"area_rel": 0.02, "centroid_mm": 5.0},
             },
             "roles_became_ambiguous": [],
+        }
+
+    result, healing = build(allow_symmetry_reduction=True)
+    # A reduced domain the mesh does not confirm is re-meshed whole rather than
+    # refused: the full domain is always solvable and always right, it just
+    # costs the 2-4x the reduction was worth. Refusing instead would strand the
+    # user in CAD with nothing to try, so the return solves and the finding
+    # says what was given up and why (``server/cadlink/ingest.py``).
+    verification = result.get("symmetry_verification")
+    if isinstance(verification, Mapping) and not verification.get("verified", True):
+        rejected = dict(verification)
+        result, healing = build(allow_symmetry_reduction=False)
+        result["symmetry_verification"] = {
+            **result.get("symmetry_verification", {}),
+            "fallback": {
+                "reason": rejected.get("reason"),
+                "rejected_cut_planes": list(rejected.get("cut_planes") or []),
+                "detected_planes": list(rejected.get("detected_planes") or []),
+                "capped_planes": list(rejected.get("capped_planes") or []),
+                "off_plane_free_edge_count": rejected.get("off_plane_free_edge_count"),
+                "off_plane_free_edge_samples": list(
+                    rejected.get("off_plane_free_edge_samples") or []
+                ),
+            },
         }
     result.pop("mesh_generation_error", None)
     result.pop("surface_order_reference", None)

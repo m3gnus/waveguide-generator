@@ -1724,3 +1724,20 @@ def test_driver_channel_scales_fields_and_reports_electrical_impedance(
     bundle = deserialize_channel_bases(outcome.channel_bases)
     scaled = bundle["results_by_id"]["right"].pressure_complex
     assert not np.allclose(scaled, np.ones_like(scaled) * 20.0e-6)
+
+
+def test_imported_native_leak_check_follows_the_verified_ingest_record() -> None:
+    """The native rim check is enabled exactly where ingestion vouched for it.
+
+    It used to be hard-disabled for every imported solve, so a leaking reduced
+    domain was mirrored and solved in silence. It now follows the ingestion
+    record's own off-plane open-edge count, and stays off where an open rim is
+    real geometry or where the record predates the count.
+    """
+
+    check = metal._imported_check_open_edges
+    assert check({"mesh": {"integrity": {"off_plane_open_edge_count": 0}}}) is True
+    assert check({"mesh": {"integrity": {"off_plane_open_edge_count": 12}}}) is False
+    assert check({"mesh": {"integrity": {"valid": True}}}) is False
+    assert check({"mesh": {}}) is False
+    assert check({}) is False

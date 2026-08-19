@@ -28,7 +28,10 @@ from server.platform.paths import data_paths
 from .wgreturn import WgReturnBundle, read_wgreturn
 
 
-IMPORT_MESH_PIPELINE_CONTRACT = "wg-import-solve-v3"
+# v4 verifies the auto-cut against the meshed boundary and recentres a
+# vertically offset return onto its mirror plane, so a v3 mesh is a different
+# artifact for the same inputs and must not be served from the cache.
+IMPORT_MESH_PIPELINE_CONTRACT = "wg-import-solve-v4"
 IMPORT_VIEWPORT_PIPELINE_CONTRACT = "wg-import-viewport-v1"
 
 
@@ -672,6 +675,34 @@ def ingest_bundle(
                 "reason": degradation,
             }
         )
+    verification = built.get("symmetry_verification")
+    verification = verification if isinstance(verification, Mapping) else {}
+    fallback = verification.get("fallback")
+    if isinstance(fallback, Mapping):
+        # Blocking, like every other finding that changes what is solved: the
+        # solve is honest but slower than the design deserves, and the user is
+        # the only one who can decide whether to re-export or accept the cost.
+        planes = ", ".join(str(plane) for plane in fallback.get("rejected_cut_planes") or [])
+        findings.append(
+            {
+                "id": _finding_id(
+                    "symmetry-cut-unverified",
+                    {"cache_key": cache_key, "reason": fallback.get("reason")},
+                ),
+                "kind": "symmetry-cut-unverified",
+                "blocking": True,
+                "rejected_cut_planes": list(fallback.get("rejected_cut_planes") or []),
+                "detected_planes": list(fallback.get("detected_planes") or []),
+                "capped_planes": list(fallback.get("capped_planes") or []),
+                "off_plane_free_edge_count": fallback.get("off_plane_free_edge_count"),
+                "detail": (
+                    f"the {planes or 'symmetry'} reduction was discarded because "
+                    f"{fallback.get('reason')}. The full domain was meshed and will be "
+                    "solved instead, at 2-4x the cost. Re-export a stitched, watertight "
+                    "body to regain the reduction."
+                ),
+            }
+        )
     if built["healing"]["performed"]:
         findings.append({"id": _finding_id("healing-performed", {"mode": built["healing"]["mode"], "cache_key": cache_key}), "kind": "healing-performed", "blocking": True, "mode": built["healing"]["mode"]})
     for item in built.get("role_findings", []):
@@ -793,6 +824,11 @@ def ingest_bundle(
             "role_resolution": built["role_resolution"],
             "role_findings": built.get("role_findings", []),
             "symmetry": built["symmetry"],
+            "symmetry_verification": built.get("symmetry_verification"),
+            # What each source actually kept through the cut, measured rather
+            # than assumed. It was computed and dropped before, which left the
+            # reduction with no observable evidence at all outside the mesher.
+            "post_cut_source_areas": built.get("post_cut_source_areas") or {},
             "healing": built["healing"],
             "freshness": freshness,
             "polar_grid_derivation": built["polar_grid_derivation"],
