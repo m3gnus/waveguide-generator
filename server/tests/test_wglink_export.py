@@ -71,6 +71,16 @@ def _install_fake_write(monkeypatch) -> list[object]:
             "design": dict(identity.design or {}),
             "export": dict(identity.export or {}),
             "files": {"waveguide.step": {"sha256": step_hash, "size_bytes": 4}},
+            # The one parameter the namespace is read back from, named the way
+            # the mesher names it, so recovery from a stored manifest is real.
+            "parameters": [
+                {
+                    "name": f"wg_{kwargs['instance_slug']}_throat_dia",
+                    "value": 25.4,
+                    "unit": "mm",
+                    "role": "interface",
+                }
+            ],
         }
         (target / "waveguide.step").write_bytes(b"STEP")
         manifest_path = target / "wglink.json"
@@ -355,6 +365,149 @@ def test_wglink_identical_content_with_renamed_design_bumps_filename(
     assert head is not None
     assert head["filename"] == "renamed_horn.cfg"
     assert _design_count(store) == 1
+
+
+def _parameter_names(result: dict[str, object]) -> list[str]:
+    manifest = json.loads((Path(str(result["bundlePath"])) / "wglink.json").read_text())
+    return [str(entry["name"]) for entry in manifest["parameters"]]
+
+
+def test_parameter_namespace_and_bundle_folder_survive_a_rename(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    """Save As must not move the namespace Fusion's expressions reference.
+
+    The slug is minted once per lineage: the linked document's datums and
+    enclosure sketches name ``wg_<slug>_*`` forever, and no update can retarget
+    them, so following the filename made the first Save As an unrecoverable
+    break.
+    """
+
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    saved = _saved(store, _design())
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    writes = _install_fake_write(monkeypatch)
+
+    first = api._export_wglink_sync(_request(saved), store, workspace, "first-send")
+    renamed = api._export_wglink_sync(
+        _request(saved, base_name="tritonia.cfg"), store, workspace, "renamed-send"
+    )
+
+    assert [write["kwargs"]["instance_slug"] for write in writes] == [
+        "demo_horn",
+        "demo_horn",
+    ]
+    assert _parameter_names(first) == _parameter_names(renamed) == [
+        "wg_demo_horn_throat_dia"
+    ]
+    assert first["bundlePath"] == renamed["bundlePath"] == str(
+        workspace / "wglink" / "demo_horn.wglink"
+    )
+    assert list((workspace / "wglink").iterdir()) == [Path(str(first["bundlePath"]))]
+    # Only the namespace is frozen; the readable name still follows the file.
+    manifest = json.loads((Path(str(renamed["bundlePath"])) / "wglink.json").read_text())
+    assert manifest["design"]["name"] == "tritonia"
+    names = store.get_lineage_cad_names(str(renamed["identity"]["lineageId"]))
+    assert names is not None
+    assert names["parameter_slug"] == "demo_horn"
+    assert names["bundle_stem"] == "demo_horn"
+
+
+def test_parameter_namespace_survives_an_identity_fork(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    """A fork is one design to the user, and to the linked Fusion document."""
+
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    saved = _saved(store, _design())
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    writes = _install_fake_write(monkeypatch)
+
+    original = api._export_wglink_sync(_request(saved), store, workspace, "original")
+    advanced = DesignConfig.model_validate({"formula": "OSSE", "L": 122, "a": 45})
+    store.save(
+        requested=SaveIdentity.model_validate({
+            "designId": str(original["identity"]["designId"]),
+            "lineageId": str(original["identity"]["lineageId"]),
+            "baseEditVersion": int(original["identity"]["baseEditVersion"]),
+        }),
+        design_hash=design_hash(advanced),
+        filename="demo_horn.cfg",
+        snapshot_builder=lambda identity: serialize(advanced, cadlink=identity),
+    )
+
+    forked = api._export_wglink_sync(
+        _request(saved, base_name="tritonia.cfg"), store, workspace, "forked"
+    )
+
+    assert forked["identity"]["designId"] != original["identity"]["designId"]
+    assert forked["identity"]["lineageId"] == original["identity"]["lineageId"]
+    assert [write["kwargs"]["instance_slug"] for write in writes] == [
+        "demo_horn",
+        "demo_horn",
+    ]
+    assert _parameter_names(forked) == ["wg_demo_horn_throat_dia"]
+    # A fork is a second design in the lineage, so it cannot share the folder
+    # the first one owns -- but it keeps the readable stem the lineage earned.
+    assert forked["bundlePath"] != original["bundlePath"]
+    assert Path(str(forked["bundlePath"])).name.startswith("demo_horn-")
+
+
+def test_a_fresh_lineage_mints_its_namespace_from_the_current_name(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    writes = _install_fake_write(monkeypatch)
+
+    first = api._export_wglink_sync(
+        _request(_saved(store, _design()), base_name="demo horn.cfg"),
+        store,
+        workspace,
+        "first-lineage",
+    )
+    second = api._export_wglink_sync(
+        _request(_saved(store, _design()), base_name="tritonia mk2.cfg"),
+        store,
+        workspace,
+        "second-lineage",
+    )
+
+    assert [write["kwargs"]["instance_slug"] for write in writes] == [
+        "demo_horn",
+        "tritonia_mk2",
+    ]
+    assert _parameter_names(first) == ["wg_demo_horn_throat_dia"]
+    assert _parameter_names(second) == ["wg_tritonia_mk2_throat_dia"]
+
+
+def test_a_lineage_linked_before_the_registry_recovers_its_namespace(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    """Links made before schema 7 must keep updating, not mint a second slug."""
+
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    saved = _saved(store, _design())
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _install_fake_write(monkeypatch)
+
+    first = api._export_wglink_sync(_request(saved), store, workspace, "before")
+    with store._lock, store._transaction() as conn:
+        conn.execute("DELETE FROM lineage_cad_names")
+
+    renamed = api._export_wglink_sync(
+        _request(saved, base_name="tritonia.cfg"), store, workspace, "after"
+    )
+
+    assert _parameter_names(renamed) == ["wg_demo_horn_throat_dia"]
+    assert renamed["bundlePath"] == first["bundlePath"]
+    names = store.get_lineage_cad_names(str(renamed["identity"]["lineageId"]))
+    assert names is not None
+    assert names["parameter_slug"] == "demo_horn"
 
 
 def test_wglink_export_forks_a_stale_identity_and_adopts_an_unknown_one(
