@@ -11,7 +11,7 @@ import { parkedSolveCommandStore } from '../stores/solveCommand';
 import { recordCommittedAthPolars, useDesignStore } from '../stores/design';
 import { polarConfigFromUi, useSolveOptionsStore } from '../stores/solveOptions';
 import { useDocumentStore } from '../stores/document';
-import { filenameStem } from '../viewport/presentation';
+import { designNameSlug, UNTITLED_SLUG } from '../stores/designName';
 import { cadLinkCoordinatorBridge } from './CadLinkCoordinator';
 import { fusionWorkflowView, onshapeWorkflowView, type CadWorkflowView } from './cadWorkflowView';
 import { Icon } from './icons';
@@ -109,7 +109,7 @@ export function CadLinkPanel() {
   const preferences = usePreferences();
   const design = useDesignStore((current) => current.design);
   const designRevision = useDesignStore((current) => current.designRevision);
-  const filename = useDocumentStore((current) => current.filename);
+  const documentName = useDocumentStore((current) => current.designName);
   const identity = useDocumentStore((current) => current.identity);
   const setCadLink = useDocumentStore((current) => current.setCadLink);
   const cadCoordinator = useSyncExternalStore(cadLinkCoordinatorBridge.subscribe, cadLinkCoordinatorBridge.getSnapshot, cadLinkCoordinatorBridge.getSnapshot);
@@ -143,7 +143,7 @@ export function CadLinkPanel() {
       const wasLinked = onshapeStatus?.state === 'stale' || onshapeStatus?.state === 'current';
       const polarConfig = polarConfigFromUi(useSolveOptionsStore.getState().polar);
       const result = await sendDesignToOnshape(
-        design, designRevision, filenameStem(filename), identity, { allowPublic, polarConfig },
+        design, designRevision, designNameSlug(documentName), identity, { allowPublic, polarConfig },
       );
       if (request !== onshapeSendGeneration.current) return;
       setConfirmPublicDocument(null);
@@ -193,8 +193,8 @@ export function CadLinkPanel() {
 
   const workflow = onshape ? onshapeWorkflowView(onshapeStatus) : fusionWorkflowView(fusionStatus);
   const cadApplicationLabel = cadApplicationName(onshape ? 'onshape' : 'fusion360', 'full');
-  const designName = filenameStem(filename);
-  const shownName = designName === 'waveguide' ? 'waveguide' : designName;
+  const designName = designNameSlug(documentName);
+  const shownName = designName === UNTITLED_SLUG ? 'this design' : designName;
   const actionLabel = workflow.action === 'update' ? 'Send WG changes to Onshape' : `Create ${shownName} in Onshape`;
   const busy = sendingToOnshape;
   const canRequestFusionReturn = Boolean(

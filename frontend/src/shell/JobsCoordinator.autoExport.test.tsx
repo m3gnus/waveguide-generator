@@ -59,8 +59,8 @@ describe('completed-job auto-export naming', () => {
       autoExportOnComplete: true,
       exportFormats: ['png'],
       autoExportFormats: ['csv'],
-      outputName: 'horn',
-      counter: 7,
+      runSequenceName: 'horn',
+      runSequenceNext: 7,
     });
     mocks.fetchJobResults.mockResolvedValue({ frequencies: [100] });
     mocks.runWorkspaceExportBundle.mockImplementation(async (context: ExportContext) => ({
@@ -104,7 +104,8 @@ describe('completed-job auto-export naming', () => {
     expect(jobsSocket.patchMetadata).toHaveBeenCalledWith('job-two', expect.objectContaining({
       exported_files: ['102_260808_horn_v02.csv'],
     }));
-    expect(preferencesStore.getSnapshot().counter).toBe(7);
+    // Exporting finished runs is not a submission, so the run counter stands.
+    expect(preferencesStore.getSnapshot().runSequenceNext).toBe(7);
   });
 
   it('hands the multi-channel wrapper to auto-export and persists every channel file', async () => {

@@ -14,16 +14,14 @@ import { recordCommittedAthPolars, resetDesignStore, useDesignStore } from '../s
 import { documentSettingsSignature, wgSolveSettingsFromStore } from '../stores/designWire';
 import { resetDocumentStore, useDocumentStore, type CadLinkClassification, type DesignIdentity } from '../stores/document';
 import { useUnsavedChanges } from '../stores/unsavedChanges';
-import { projectSubmittedDesign } from '../jobs/submittedProjection';
-import { runNameFromFilename } from '../jobs/runNaming';
-import { preferencesStore, usePreferences } from '../prefs/preferences';
+import { designNameForOpenedFile, designNameSlug } from '../stores/designName';
+import { usePreferences } from '../prefs/preferences';
 import { Icon } from '../shell/icons';
 import {
   polarConfigFromUi,
   restoreSolveSettingsFromBlocks,
   useSolveOptionsStore,
 } from '../stores/solveOptions';
-import { documentDisplayName, filenameStem } from '../viewport/presentation';
 import { createImportedMeshScene } from '../viewport/importedMesh';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { parseMSH } from '../viewport/mshParser';
@@ -80,9 +78,9 @@ export function DesignFileMenu() {
   const design = useDesignStore((state) => state.design);
   const revision = useDesignStore((state) => state.designRevision);
   const replaceDesign = useDesignStore((state) => state.replaceDesign);
-  const filename = useDocumentStore((state) => state.filename);
+  const designName = useDocumentStore((state) => state.designName);
   const unsaved = useUnsavedChanges();
-  const setFilename = useDocumentStore((state) => state.setFilename);
+  const setDesignName = useDocumentStore((state) => state.setDesignName);
   const markSaved = useDocumentStore((state) => state.markSaved);
   const identity = useDocumentStore((state) => state.identity);
   const classification = useDocumentStore((state) => state.classification);
@@ -138,13 +136,10 @@ export function DesignFileMenu() {
       const openedDesign = hydrateDesignDocument(opened.design);
       replaceDesign(openedDesign);
       restoreSolveSettingsFromBlocks(openedDesign.extra_blocks);
-      setFilename(`${filenameStem(file.name)}.cfg`);
+      // One name for the whole document: the picked file's, unless the file's
+      // own Report.Title is that same name spelled more fully.
+      setDesignName(designNameForOpenedFile(file.name, openedDesign.extra_blocks));
       setCadLink(editableIdentity(opened.cadlink?.identity), opened.cadlink?.classification ?? 'missing');
-      let nameSourceProjection = null;
-      try {
-        nameSourceProjection = projectSubmittedDesign(openedDesign, useSolveOptionsStore.getState().options());
-      } catch { /* invalid solve-option drafts cannot make opening a design fail */ }
-      preferencesStore.update({ outputName: runNameFromFilename(file.name), nameSourceProjection });
       markSaved(useDesignStore.getState().designRevision, documentSettingsSignature());
       setMessage(reportText(opened));
       if (opened.cadlink?.classification === 'missing') setAdoptionCandidate(opened.cadlink.adoptionCandidate);
@@ -166,7 +161,7 @@ export function DesignFileMenu() {
   async function save() {
     await act(async () => {
       const savingRevision = revision;
-      const savedName = filenameStem(filename);
+      const savedName = designName || 'this design';
       // One snapshot for the file and for the saved-state baseline. Reading the
       // store again after the request would stamp settings the file does not
       // contain, and the document would read as saved while it was not.
@@ -174,11 +169,10 @@ export function DesignFileMenu() {
       const polarConfig = polarConfigFromUi(solveState.polar);
       const savingSettings = documentSettingsSignature(solveState);
       const response = await saveDesignDocument(
-        design, filename, identity, fetch, polarConfig, wgSolveSettingsFromStore(solveState),
+        design, designName, identity, fetch, polarConfig, wgSolveSettingsFromStore(solveState),
       );
-      downloadText(response.text, filename || response.suggestedFilename);
+      downloadText(response.text, response.suggestedFilename);
       recordCommittedAthPolars(polarConfig);
-      setFilename(response.suggestedFilename);
       adoptSavedIdentity(response.identity);
       markSaved(savingRevision, savingSettings);
       setMessage(response.forked
@@ -194,7 +188,6 @@ export function DesignFileMenu() {
     // how this user measures, not which horn is on screen, and resetting them
     // meant retyping the same measurement rig for every new design.
     resetDocumentStore();
-    preferencesStore.update({ outputName: 'horn', nameSourceProjection: null });
     setMessage('New design');
     setAdoptionCandidate(null);
     setOpen(false);
@@ -209,7 +202,7 @@ export function DesignFileMenu() {
 
   async function exportOne(kind: 'step' | 'stl', stepBody: StepBody = 'solid') {
     await act(async () => {
-      await downloadGeometryExport(kind, design, revision, filenameStem(filename), undefined, stepBody);
+      await downloadGeometryExport(kind, design, revision, designNameSlug(designName), undefined, stepBody);
       setMessage(`Exported ${kind.toUpperCase()} from revision ${revision}`);
     });
   }
@@ -217,7 +210,7 @@ export function DesignFileMenu() {
   async function exportProfiles() {
     await act(async () => {
       const result = await exportProfileArtifacts(
-        (kind) => downloadGeometryExport('profiles', design, revision, filenameStem(filename), kind),
+        (kind) => downloadGeometryExport('profiles', design, revision, designNameSlug(designName), kind),
         revision,
       );
       setMessage(result);
@@ -235,7 +228,7 @@ export function DesignFileMenu() {
 
   return <div ref={root} className="design-file-menu">
     <button className="file-chip" title={classification ? CLASSIFICATION_DISPLAY[classification].detail : 'Design file menu'} onClick={() => setOpen((value) => !value)} aria-expanded={open}>
-      <Icon name="folder"/><span>{documentDisplayName(filename) ? <>{documentDisplayName(filename)}<em>.cfg</em></> : <em>Untitled</em>}</span>
+      <Icon name="folder"/><span>{designName ? <>{designName}<em>.cfg</em></> : <em>Untitled</em>}</span>
       {classification && <small
         className="cadlink-badge"
         aria-label={`CAD link: ${CLASSIFICATION_DISPLAY[classification].label}`}

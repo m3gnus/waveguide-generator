@@ -100,7 +100,7 @@ describe('design save requests', () => {
       }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }) as typeof fetch;
 
-    await saveDesignDocument(hydrateDesignDocument({ formula: 'OSSE' }), 'horn.cfg', identity, fetcher);
+    await saveDesignDocument(hydrateDesignDocument({ formula: 'OSSE' }), 'horn', identity, fetcher);
     expect(payload).toMatchObject({ filename: 'horn.cfg', identity });
   });
 
@@ -116,7 +116,7 @@ describe('design save requests', () => {
     }) as typeof fetch;
 
     const imported = hydrateDesignDocument({ formula: 'OSSE', mesh: { quadrants: 14 } });
-    await saveDesignDocument(imported, 'half-y.cfg', null, fetcher);
+    await saveDesignDocument(imported, 'half-y', null, fetcher);
     expect(payload).toMatchObject({
       filename: 'half-y.cfg',
       design: { mesh: { quadrants: 14 } },
@@ -136,15 +136,17 @@ describe('design save requests', () => {
 
     await saveDesignDocument(hydrateDesignDocument({
       formula: 'OSSE',
-      extra_blocks: { Report: { items: { Title: '"kept"' }, lines: [] } },
-    }), 'polar.cfg', null, fetcher, {
+      extra_blocks: { Report: { items: { Title: '"stale ATH name"', PolarData: 'SPL_H' }, lines: [] } },
+    }), 'Polar Study', null, fetcher, {
       angle_range: [0, 120, 25], angle_step: 5, distance: 4, norm_angle: 8,
       inclination: 35, enabled_axes: ['horizontal', 'diagonal'],
       observation_origin: 'throat', spherical_sampling: true, field_plane: true,
     });
 
     expect(payload).toMatchObject({ design: { extra_blocks: {
-      Report: { items: { Title: '"kept"' } },
+      // The design's own name replaces whatever Title the file was imported
+      // with; every other Report key stays passthrough.
+      Report: { items: { Title: '"Polar Study"', PolarData: 'SPL_H' } },
       'ABEC.Polars:SPL_H': { items: { MapAngleRange: '0,120,25', Distance: '4', NormAngle: '8' } },
       'ABEC.Polars:SPL_D': { items: { MapAngleRange: '0,120,25', Distance: '4', NormAngle: '8', Inclination: '35' } },
     } } });

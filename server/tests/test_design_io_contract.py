@@ -47,7 +47,7 @@ def test_open_reuses_batch_a_round_trip_law_on_the_real_corpus(path: Path) -> No
 def test_save_bare_design_json_uses_cfg_and_v1_header() -> None:
     design = parse("OSSE = {\nL = 120\na = 45\n}\n").semantic_data()
     result = asyncio.run(save_design(design))
-    assert result["suggestedFilename"] == "waveguide.cfg"
+    assert result["suggestedFilename"] == "untitled.cfg"
     assert result["text"].startswith("; Parameter config\n")
     assert "Waveguide Generator design-format: 2" in result["text"]
 

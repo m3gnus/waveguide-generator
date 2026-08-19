@@ -45,10 +45,6 @@ export function staleReason(
   return 'Waiting for the preview engine to return this design. Refresh to ask again.';
 }
 
-export function filenameStem(filename: string): string {
-  return filename.replace(/\.(cfg|txt|mwg)$/i, '') || 'waveguide';
-}
-
 function finitePositive(value: number | undefined): value is number {
   return value !== undefined && Number.isFinite(value) && value > 0;
 }
@@ -109,18 +105,4 @@ export function previewMeshMetrics(frame: DecodedFrame | null): { vertices: numb
   }
   if (!vertices && !triangles) return null;
   return { vertices: Math.floor(vertices), triangles: Math.floor(triangles) };
-}
-
-/**
- * What to call the document on screen, as opposed to what to name a file.
- *
- * `filenameStem` falls back to "waveguide" because an export needs some stem
- * whatever the document is called. The chip and the viewport title were using
- * that same fallback as a *label*, so an untitled design was presented as
- * "waveguide.cfg" — a filename that does not exist — while the status rail
- * beside it said "untitled design". Two words for the same nothing, one of
- * them a claim.
- */
-export function documentDisplayName(filename: string): string | null {
-  return filename.trim() ? filenameStem(filename) : null;
 }

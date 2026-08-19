@@ -27,6 +27,27 @@ show their warnings and failed-frequency diagnostics.
 
 ## Files and exports
 
+### The design name
+
+A design has one name, typed in the **Design name** field above the run list. It is
+the only place a name is edited, and everything follows it: the title bar, the file
+chip, the viewport heading, the `.cfg` the design saves as, the `Report.Title` written
+at the top of that file, the label each solve is stored under, and every export stem.
+Renaming counts as unsaved work, and **Save As** is a rename — the file follows the
+name rather than the other way round.
+
+Opening a `.cfg` takes its name from the file, so a design renamed on disk keeps the
+name you gave it there. The exception is a file whose own `Report.Title` is the same
+name spelled more fully: `ATH_Tritonia-M.cfg` containing `Title = "ATH Tritonia-M"`
+reopens with the space intact.
+
+Run labels decorate that name rather than replacing it. **Settings → Jobs** chooses
+whether a sequence number and a date are appended, and shows the label the next solve
+will use. Renaming a run from its card (✎) annotates that one run in the history and
+deliberately does not rename the design.
+
+### Saving and exporting
+
 The design menu saves parameter files and exports the current design. STEP solid is
 the normal CAD/production export; STEP inner surface is available when a bare acoustic
 surface is wanted. STL is a tessellated inner surface for mesh-oriented workflows.

@@ -6,8 +6,7 @@ import { useCapabilities, useCapabilityRefreshOnReconnect } from '../jobs/useCap
 import { JobAutomation } from '../jobs/automation';
 import { exportStemForJob } from '../jobs/exportNaming';
 import { buildImportedSubmission, importedSubmissionBlocker } from '../jobs/importedSubmission';
-import { decorateRunName, nextRunName } from '../jobs/runNaming';
-import { projectSubmittedDesign, projectSubmittedImport, submittedProjectionsEqual, type SubmittedDesignProjection } from '../jobs/submittedProjection';
+import { advanceRunSequence, nextRunLabel } from '../jobs/runNaming';
 import { preferencesStore, usePreferences } from '../prefs/preferences';
 import { runWorkspaceExportBundle, saveMeshArtifactToWorkspace } from '../results/exporters';
 import { resultExportSnapshot } from '../results/exportContext';
@@ -84,39 +83,21 @@ export function useSolveControl(): SolveControl {
 
 /** Read naming at submission time, including a commit from the same key event. */
 export function currentJobLabel(
-  design = useDesignStore.getState().design,
-  options = useSolveOptionsStore.getState().options(),
-  filename = useDocumentStore.getState().filename,
+  designName = useDocumentStore.getState().designName,
   now = new Date(),
 ): string {
-  const preferences = preferencesStore.getSnapshot();
-  return decorateRunName(nextRunName(
-    preferences,
-    projectSubmittedDesign(design, options),
-    filename,
-  ), preferences, now);
+  return nextRunLabel(designName, preferencesStore.getSnapshot(), now);
 }
 
-function sameNamingIntent(
-  expected: Pick<ReturnType<typeof preferencesStore.getSnapshot>, 'outputName' | 'nameSourceProjection'>,
-): boolean {
-  const current = preferencesStore.getSnapshot();
-  if (current.outputName !== expected.outputName) return false;
-  if (current.nameSourceProjection === expected.nameSourceProjection) return true;
-  if (!current.nameSourceProjection || !expected.nameSourceProjection
-    || current.nameSourceProjection === 'unbound' || expected.nameSourceProjection === 'unbound') return false;
-  return submittedProjectionsEqual(current.nameSourceProjection, expected.nameSourceProjection);
-}
-
-function acceptSubmittedName(
-  coreName: string,
-  projection: SubmittedDesignProjection,
-  expected: Pick<ReturnType<typeof preferencesStore.getSnapshot>, 'outputName' | 'nameSourceProjection'>,
-): void {
-  // A submission owns the baseline it started from, but a later name edit is
-  // newer user intent and must not be rolled back when the request completes.
-  if (!sameNamingIntent(expected)) return;
-  preferencesStore.update({ outputName: coreName, nameSourceProjection: projection });
+/**
+ * Record that a run was stored under this design's next number.
+ *
+ * Only the counter moves. The name itself is the document's, so a submission
+ * can no longer rename the design out from under the user -- which is what the
+ * old increment-and-write-back did every time the geometry changed.
+ */
+function acceptSubmittedLabel(designName: string): void {
+  preferencesStore.update(advanceRunSequence(preferencesStore.getSnapshot(), designName));
 }
 
 const CAD_VIEWPORT_MISMATCH =
@@ -146,7 +127,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   useCapabilityRefreshOnReconnect(useSyncExternalStore(jobsSocket.subscribe, jobsConnection, jobsConnection));
   const design = useDesignStore((state) => state.design);
   const revision = useDesignStore((state) => state.designRevision);
-  const filename = useDocumentStore((state) => state.filename);
+  const designName = useDocumentStore((state) => state.designName);
   const solveOptions = useSolveOptionsStore();
   const selectedEngine = solveOptions.engine;
   const cadReturn = useCadReturnStore();
@@ -218,23 +199,21 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         submittedRevision = corrected.designRevision;
       }
       const options = useSolveOptionsStore.getState().options();
-      const projection = projectSubmittedDesign(submittedDesign, options);
-      const naming = preferencesStore.getSnapshot();
-      const coreName = nextRunName(naming, projection, filename);
-      const label = decorateRunName(coreName, naming, now());
+      const designName = useDocumentStore.getState().designName;
+      const label = nextRunLabel(designName, preferencesStore.getSnapshot(), now());
       await submitDesign(
         submittedDesign,
         options,
         fetch,
         { label, designRevision: submittedRevision },
       );
-      acceptSubmittedName(coreName, projection, naming);
+      acceptSubmittedLabel(designName);
       await jobsSocket.refresh();
     } finally {
       submissionInFlight.current = false;
       setSubmitting(false);
     }
-  }, [capability, capabilityError, effectiveEngine, filename, now, preferences, revision, selectedEngine]);
+  }, [capability, capabilityError, designName, effectiveEngine, now, preferences, revision, selectedEngine]);
 
   const runImported = useCallback(async (submission: ImportedSolveSubmission) => {
     if (submissionInFlight.current) return null;
@@ -246,18 +225,14 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       setActionError(null);
       const options: SolveOptions = { ...submission.options, engine: 'metal', symmetry: 'auto' };
       const effectiveSubmission = { ...submission, options };
-      // The ingested artifact is the solve truth. Parametric edits can request
-      // the next CAD rebuild, but they must not rename a byte-identical solve.
-      const projection = projectSubmittedImport(effectiveSubmission);
-      const naming = preferencesStore.getSnapshot();
-      const coreName = nextRunName(naming, projection, filename);
-      const label = decorateRunName(coreName, naming, now());
+      const designName = useDocumentStore.getState().designName;
+      const label = nextRunLabel(designName, preferencesStore.getSnapshot(), now());
       const jobId = await submitImported(
         effectiveSubmission,
         fetch,
         label,
       );
-      acceptSubmittedName(coreName, projection, naming);
+      acceptSubmittedLabel(designName);
       // A Fusion-authored request is retired by its ledger entry, not by the
       // marker on disk. Reporting the job from the one place every imported
       // solve passes through is what makes a manual Solve consume the parked
@@ -269,7 +244,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       submissionInFlight.current = false;
       setSubmitting(false);
     }
-  }, [capabilities, capabilityError, filename, now, preferences]);
+  }, [capabilities, capabilityError, designName, now, preferences]);
 
   // Nothing awaits between the mutex read and runImported's own claim of it,
   // so a busy report here cannot race a submission into existence.
@@ -315,6 +290,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         result: await fetchJobResults(job.id) as ResultPayload,
         ...resultExportSnapshot(job),
         jobStem: exportStemForJob(job),
+        designName: job.label ?? undefined,
         preferences,
       }, formats),
       markExported: async (job, files, formats, completedAt) => jobsSocket.patchMetadata(job.id, {

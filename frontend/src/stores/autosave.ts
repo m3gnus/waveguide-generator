@@ -1,5 +1,6 @@
 import { useDesignStore, type DesignDocument } from './design';
 import { durableSettings, namespaceStorage } from './durableSettings';
+import { designNameFromFilename } from './designName';
 import {
   useDocumentStore,
   type CadLinkClassification,
@@ -16,7 +17,11 @@ export const AUTOSAVE_DELAY_MS = 750;
 interface AutosaveRecord {
   version: 1;
   savedAt: string;
+  /** Derived from `designName`; retained so older drafts still validate. */
   filename: string;
+  /** Absent in drafts written before the design carried one name. */
+  designName?: string;
+  savedDesignName?: string;
   designRevision: number;
   savedRevision: number | null;
   /** Absent in drafts written before directivity edits counted as changes. */
@@ -72,11 +77,15 @@ function hasValidCadLink(record: AutosaveRecord): boolean {
 export function writeAutosave(storage: DraftStorage | null = defaultStorage()): boolean {
   if (!storage) return false;
   const { design, designRevision } = useDesignStore.getState();
-  const { filename, savedRevision, savedSettings, identity, classification } = useDocumentStore.getState();
+  const {
+    designName, filename, savedRevision, savedDesignName, savedSettings, identity, classification,
+  } = useDocumentStore.getState();
   const record: AutosaveRecord = {
     version: 1,
     savedAt: new Date().toISOString(),
     filename,
+    designName,
+    savedDesignName,
     designRevision,
     savedRevision,
     savedSettings,
@@ -112,7 +121,12 @@ export function restoreAutosave(storage: DraftStorage | null = defaultStorage())
     useDesignStore.temporal.getState().clear();
     useDesignStore.temporal.getState().resume();
     useDocumentStore.getState().restoreDocumentState({
-      filename: record.filename,
+      // A draft written before the rename unification only has the filename;
+      // its stem is the same name, one slugging away.
+      designName: typeof record.designName === 'string'
+        ? record.designName
+        : designNameFromFilename(record.filename),
+      savedDesignName: typeof record.savedDesignName === 'string' ? record.savedDesignName : undefined,
       savedRevision: record.savedRevision,
       savedSettings: typeof record.savedSettings === 'string' ? record.savedSettings : null,
       identity: record.identity ? { ...record.identity } : null,
@@ -161,7 +175,9 @@ export function startAutosave(
     if (state.designRevision !== previous.designRevision) schedule();
   });
   const unsubscribeDocument = useDocumentStore.subscribe((state, previous) => {
-    if (state.filename !== previous.filename
+    if (state.designName !== previous.designName
+      || state.savedDesignName !== previous.savedDesignName
+      || state.filename !== previous.filename
       || state.savedRevision !== previous.savedRevision
       || state.savedSettings !== previous.savedSettings
       || state.identity !== previous.identity

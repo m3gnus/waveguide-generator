@@ -32,7 +32,7 @@ import { importedMeshStore } from './importedMeshStore';
 import type { CameraDirection } from './cameraMath';
 import { ClientLatencyClock, formatClientLatency } from './clientLatency';
 import { selectPreferredFrame } from './lodPolicy';
-import { documentDisplayName, previewBadge, previewErrorMessage, staleReason, viewportSubtitle } from './presentation';
+import { previewBadge, previewErrorMessage, staleReason, viewportSubtitle } from './presentation';
 import { markParametricSolvedDomain, quadrantsForSolveMode, type DisplayQuadrants } from './symmetryScene';
 import type { DisplayMode, ViewportTheme } from './types';
 import { canRenderWebGL, resetWebGLProbe, type CameraRequest, type ZoomRequest, ViewportCanvas } from './ViewportCanvas';
@@ -160,7 +160,7 @@ export function Viewport() {
   const design = useDesignStore((state) => state.design);
   const designRevision = useDesignStore((state) => state.designRevision);
   const solveSymmetry = useSolveOptionsStore((state) => state.symmetry);
-  const filename = useDocumentStore((state) => state.filename);
+  const designName = useDocumentStore((state) => state.designName);
   const workspaceMode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
   const cadRecord = useCadReturnStore((state) => state.ingestRecord);
   const cadName = useCadReturnStore((state) => state.selectedBundle?.documentName ?? state.selectedBundle?.name ?? 'CAD Link');
@@ -491,7 +491,7 @@ export function Viewport() {
     />}
 
     <div className="viewport-title">
-      <b>{importedMesh?.name ?? (workspaceMode === 'cad' ? cadName : documentDisplayName(filename) ?? 'Untitled design')}</b>
+      <b>{importedMesh?.name ?? (workspaceMode === 'cad' ? cadName : designName || 'Untitled design')}</b>
       <span>{importedMesh
         ? `${importedMesh.triangleCount.toLocaleString()} display triangles${importedMesh.triangleCount !== importedMesh.solvedTriangleCount ? ` · ${importedMesh.solvedTriangleCount.toLocaleString()} solved` : ''} · ${importedMesh.physicalGroupCount} physical group${importedMesh.physicalGroupCount === 1 ? '' : 's'}`
         : workspaceMode === 'cad' ? 'No ingested CAD viewport mesh' : viewportSubtitle(design)}</span>

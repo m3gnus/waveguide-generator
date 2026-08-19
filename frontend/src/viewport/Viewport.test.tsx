@@ -109,7 +109,7 @@ describe('Viewport preview errors', () => {
     useFieldPlaneStore.getState().disable();
     importedMeshStore.clear();
     workspaceModeStore.setMode('parametric');
-    useDocumentStore.setState({ filename: 'loaded-design.cfg' });
+    useDocumentStore.setState({ designName: 'loaded-design', filename: 'loaded-design.cfg' });
     host = document.createElement('div');
     document.body.append(host);
     root = createRoot(host);

@@ -232,9 +232,11 @@ describe('design file export menu', () => {
     });
     await act(async () => { input.dispatchEvent(new Event('change', { bubbles: true })); });
 
-    expect(preferencesStore.getSnapshot()).toMatchObject({ outputName: '260701_horn_v13' });
-    expect(preferencesStore.getSnapshot().nameSourceProjection).not.toBeNull();
-    expect(useDocumentStore.getState().filename).toBe('260701_horn_v13.cfg');
+    // One name: the opened file names the design, and the design names the
+    // runs and the file it saves back as.
+    expect(useDocumentStore.getState()).toMatchObject({
+      designName: '260701_horn_v13', filename: '260701_horn_v13.cfg',
+    });
     expect(useDocumentStore.getState()).toMatchObject({ identity: {
       designId: identity.designId,
       lineageId: identity.lineageId,
@@ -279,7 +281,7 @@ describe('design file export menu', () => {
       baseEditVersion: 3,
     };
     const fork = { ...original, designId: 'wgd_01K00000000000000000000001', baseEditVersion: 1 };
-    useDocumentStore.getState().setFilename('copied-horn.cfg');
+    useDocumentStore.getState().setDesignName('copied-horn');
     useDocumentStore.getState().setCadLink(original, 'stale_copy');
     vi.mocked(fetch).mockImplementationOnce(async () => new Response(JSON.stringify({
       text: 'CadLink = {\n}\n',
@@ -334,8 +336,8 @@ describe('design file export menu', () => {
     }, classification: 'current' });
   });
 
-  it('does not change run naming when opening a config fails', async () => {
-    preferencesStore.update({ outputName: 'keep-me' });
+  it('does not rename the design when opening a config fails', async () => {
+    useDocumentStore.getState().setDesignName('keep-me');
     vi.mocked(fetch).mockImplementationOnce(async () => new Response(
       JSON.stringify({ detail: 'invalid config' }),
       { status: 422, headers: { 'Content-Type': 'application/json' } },
@@ -349,12 +351,15 @@ describe('design file export menu', () => {
     });
     await act(async () => { input.dispatchEvent(new Event('change', { bubbles: true })); });
 
-    expect(preferencesStore.getSnapshot()).toMatchObject({ outputName: 'keep-me' });
-    expect(useDocumentStore.getState().filename).not.toBe('should_not_replace_v99.cfg');
+    expect(useDocumentStore.getState()).toMatchObject({
+      designName: 'keep-me', filename: 'keep-me.cfg',
+    });
   });
 
   it('starts New without carrying the previous file identity', () => {
-    useDocumentStore.getState().setFilename('old.cfg');
+    useDocumentStore.getState().setDesignName('old');
+    // Renaming is unsaved work now, so New asks before discarding it.
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
     useDocumentStore.getState().setCadLink({
       designId: 'wgd_01K00000000000000000000000',
       lineageId: 'wgl_01K00000000000000000000000',
@@ -370,7 +375,7 @@ describe('design file export menu', () => {
     // named after someone's test fixture, and the tab, the file chip and the
     // viewport title all repeated it.
     expect(useDocumentStore.getState()).toMatchObject({
-      filename: '', identity: null, classification: null,
+      designName: '', filename: '', identity: null, classification: null,
     });
   });
 });

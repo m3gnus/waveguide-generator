@@ -11,9 +11,9 @@ describe('design autosave', () => {
     resetDocumentStore();
   });
 
-  it('round-trips the design, filename, revision, and explicit-save state', () => {
+  it('round-trips the design, name, revision, and explicit-save state', () => {
     useDesignStore.getState().updateField('R', 177);
-    useDocumentStore.getState().setFilename('recovered.cfg');
+    useDocumentStore.getState().setDesignName('Recovered Horn');
     useDocumentStore.getState().markSaved(1);
     expect(writeAutosave()).toBe(true);
 
@@ -21,7 +21,9 @@ describe('design autosave', () => {
     resetDocumentStore();
     expect(restoreAutosave()).toBe(true);
     expect(useDesignStore.getState()).toMatchObject({ designRevision: 2, design: { R: 177 } });
-    expect(useDocumentStore.getState()).toMatchObject({ filename: 'recovered.cfg', savedRevision: 1 });
+    expect(useDocumentStore.getState()).toMatchObject({
+      designName: 'Recovered Horn', filename: 'Recovered_Horn.cfg', savedRevision: 1,
+    });
     expect(useDesignStore.temporal.getState().pastStates).toEqual([]);
   });
 

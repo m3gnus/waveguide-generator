@@ -6,9 +6,15 @@
  * everything else a solve depends on goes into WG's own `WG.Solve` block, so
  * reopening a design restores the sweep, the mesh policy, and the measurement
  * origin it was saved with instead of whatever was last set on this machine.
+ *
+ * The design's name rides along in ATH's own `Report.Title`, so the file states
+ * what it is called and reopening it recovers the name rather than inheriting
+ * whatever the last file was called.
  */
 import { designWireWithAthPolars } from './athPolars';
 import type { ConfigBlock } from './design';
+import { blocksWithDesignTitle } from './designName';
+import { useDocumentStore } from './document';
 import {
   polarConfigFromUi,
   useSolveOptionsStore,
@@ -94,18 +100,22 @@ export function documentSettingsSignature(
   });
 }
 
-/** Overlay both the ATH polar blocks and WG's solver block on a design wire. */
+/** Overlay the design's name, the ATH polar blocks, and WG's solver block. */
 export function designWireWithSolveSettings(
   design: Record<string, unknown>,
   polarValue: unknown,
   solveSettings: WgSolveSettings | null,
+  designName: string = useDocumentStore.getState().designName,
 ): Record<string, unknown> {
   const withPolars = designWireWithAthPolars(design, polarValue);
-  if (!solveSettings) return withPolars;
   const existing = isRecord(withPolars.extra_blocks)
     ? withPolars.extra_blocks as Record<string, ConfigBlock>
     : {};
-  return { ...withPolars, extra_blocks: withWgSolveBlock(existing, solveSettings) };
+  const named = blocksWithDesignTitle(existing, designName);
+  return {
+    ...withPolars,
+    extra_blocks: solveSettings ? withWgSolveBlock(named, solveSettings) : named,
+  };
 }
 
 /**
@@ -120,10 +130,12 @@ export function designWireWithSolveSettings(
 export function currentDesignWire(
   design: Record<string, unknown>,
   state = useSolveOptionsStore.getState(),
+  designName: string = useDocumentStore.getState().designName,
 ): Record<string, unknown> {
   return designWireWithSolveSettings(
     design,
     polarConfigFromUi(state.polar),
     wgSolveSettingsFromStore(state),
+    designName,
   );
 }

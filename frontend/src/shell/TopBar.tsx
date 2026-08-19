@@ -238,12 +238,13 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
     requestAnimationFrame(() => [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
       .find((button) => button.querySelector('span')?.textContent === label)?.click());
   };
+  // "Save As" renames the design, and the file follows: the name is the one
+  // thing WG keeps, and the `.cfg` is derived from it. Typing an extension is
+  // therefore not part of the name -- it is stripped rather than stored.
   const saveAs = () => {
-    const current = useDocumentStore.getState().filename;
-    const requested = window.prompt('Save design as', current);
+    const requested = window.prompt('Save design as', useDocumentStore.getState().designName);
     if (!requested?.trim()) return;
-    const filename = requested.trim().toLocaleLowerCase().endsWith('.cfg') ? requested.trim() : `${requested.trim()}.cfg`;
-    useDocumentStore.getState().setFilename(filename);
+    useDocumentStore.getState().setDesignName(requested.trim().replace(/\.(cfg|txt|mwg)$/i, ''));
     requestAnimationFrame(() => fileAction('Save'));
   };
   const paletteEntries = useMemo<PaletteEntry[]>(() => {

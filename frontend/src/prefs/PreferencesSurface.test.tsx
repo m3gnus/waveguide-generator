@@ -2,11 +2,9 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadReturnIngestRecord } from '../api/cadlink';
-import { buildImportedSubmission } from '../jobs/importedSubmission';
-import { projectSubmittedImport } from '../jobs/submittedProjection';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
-import { resetDesignStore, useDesignStore } from '../stores/design';
-import { resetDocumentStore } from '../stores/document';
+import { resetDesignStore } from '../stores/design';
+import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { resetSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { JobsPreferencesSurface, ResultsPreferencesSurface } from './PreferencesSurface';
@@ -65,23 +63,26 @@ describe('preferences surfaces', () => {
     expect(host.querySelector('[role="alert"]')).toBeNull();
   });
 
-  it('renders design-tracking job naming, sort, and rating-filter controls', () => {
+  it('renders run-label decoration, sort, and rating-filter controls but no second name field', () => {
+    act(() => useDocumentStore.getState().setDesignName('horn'));
     act(() => root.render(<JobsPreferencesSurface now={new Date(2026, 7, 12, 12)}/>));
-    expect(host.querySelector('[aria-label="Job design name"]')).not.toBeNull();
+    // The design name is edited in one place, beside the runs it names.
+    expect(host.querySelector('[aria-label="Job design name"]')).toBeNull();
+    expect(host.querySelector('[aria-label="Design name"]')).toBeNull();
     expect(host.querySelector('[aria-label="Next job version"]')).toBeNull();
     expect(host.querySelector('[aria-label="Prefix job name with date"]')).toBeNull();
     expect(host.querySelector<HTMLSelectElement>('[aria-label="Run-name date position"]')?.value).toBe('off');
     expect(host.querySelector<HTMLSelectElement>('[aria-label="Run-name date format"]')?.disabled).toBe(true);
     expect(host.querySelector<HTMLSelectElement>('[aria-label="Run-name number position"]')?.value).toBe('suffix');
     expect(host.querySelector<HTMLSelectElement>('[aria-label="Run-name number format"]')?.value).toBe('natural');
-    expect(host.querySelector('.job-run-name-field')).not.toBeNull();
-    expect(host.textContent).toContain('next · horn');
+    expect(host.textContent).toContain('next · horn1');
     expect(host.querySelector<HTMLSelectElement>('[aria-label="Default task sort"]')?.options).toHaveLength(4);
     expect(host.querySelector<HTMLSelectElement>('[aria-label="Minimum rating filter"]')?.options).toHaveLength(6);
   });
 
-  it('previews the same decorated label while keeping the editable core undated', () => {
+  it('previews the decorated label the next submission will use', () => {
     const now = new Date(2026, 7, 12, 12);
+    act(() => useDocumentStore.getState().setDesignName('horn'));
     act(() => root.render(<JobsPreferencesSurface now={now}/>));
     const position = host.querySelector<HTMLSelectElement>('[aria-label="Run-name date position"]')!;
     const format = host.querySelector<HTMLSelectElement>('[aria-label="Run-name date format"]')!;
@@ -91,33 +92,31 @@ describe('preferences surfaces', () => {
       position.dispatchEvent(new Event('change', { bubbles: true }));
     });
 
-    expect(host.querySelector<HTMLInputElement>('[aria-label="Job design name"]')?.value).toBe('horn');
-    expect(host.querySelector('.job-name-preview')?.textContent).toContain('next · horn_260812');
-    expect(preferencesStore.getSnapshot()).toMatchObject({ outputName: 'horn', runNameDatePosition: 'suffix' });
+    expect(host.querySelector('.job-name-preview')?.textContent).toContain('next · horn1_260812');
+    expect(preferencesStore.getSnapshot()).toMatchObject({ runNameDatePosition: 'suffix' });
     expect(format.disabled).toBe(false);
 
     act(() => {
       format.value = 'yyyy-mm-dd';
       format.dispatchEvent(new Event('change', { bubbles: true }));
     });
-    expect(host.querySelector('.job-name-preview')?.textContent).toContain('next · horn_2026-08-12');
+    expect(host.querySelector('.job-name-preview')?.textContent).toContain('next · horn1_2026-08-12');
   });
 
-  it('uses the imported projection for the CAD naming preview', () => {
+  it('previews the design name in CAD mode too, and follows the run counter', () => {
     useCadReturnStore.setState({
       ingestRecord: readyCadRecord('wgi_first'), needsIngest: false,
       driveChannels: [{ id: 'drive', source_ids: ['source'], motion: 'normal' }],
       sourceSizesMm: { source: 2 }, rigidSizeMm: 5, transitionMm: 5,
     });
     workspaceModeStore.setMode('cad');
-    const baseline = projectSubmittedImport(buildImportedSubmission(useCadReturnStore.getState()));
-    preferencesStore.update({ outputName: 'cad-run', nameSourceProjection: baseline });
+    act(() => useDocumentStore.getState().setDesignName('cad-run'));
     act(() => root.render(<JobsPreferencesSurface/>));
 
-    expect(host.querySelector('.job-name-preview')?.textContent).toContain('next · cad-run');
-    act(() => useDesignStore.getState().updateField('R', 141));
-    expect(host.querySelector('.job-name-preview')?.textContent).toContain('next · cad-run');
-    act(() => useCadReturnStore.setState({ ingestRecord: readyCadRecord('wgi_second') }));
+    // One name across both workspace modes: a CAD solve is a run of this
+    // design, not a design of its own.
+    expect(host.querySelector('.job-name-preview')?.textContent).toContain('next · cad-run1');
+    act(() => preferencesStore.update({ runSequenceName: 'cad-run', runSequenceNext: 2 }));
     expect(host.querySelector('.job-name-preview')?.textContent).toContain('next · cad-run2');
   });
 

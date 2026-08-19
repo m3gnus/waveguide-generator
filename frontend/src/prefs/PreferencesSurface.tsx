@@ -1,12 +1,6 @@
-import { useEffect, useState, useSyncExternalStore, type RefObject } from 'react';
-import { buildImportedSubmission } from '../jobs/importedSubmission';
-import { decorateRunName, nextRunName, runNameFromFilename, UNBOUND_RUN_NAME_SOURCE, type RunNameDateFormat, type RunNameDatePosition, type RunNameNumberFormat, type RunNameNumberPosition } from '../jobs/runNaming';
-import { projectSubmittedDesign, projectSubmittedImport, type SubmittedDesignProjection } from '../jobs/submittedProjection';
-import { useCadReturnStore } from '../stores/cadReturn';
-import { useDesignStore } from '../stores/design';
+import { useEffect, useState, type RefObject } from 'react';
+import { nextRunLabel, type RunNameDateFormat, type RunNameDatePosition, type RunNameNumberFormat, type RunNameNumberPosition } from '../jobs/runNaming';
 import { useDocumentStore } from '../stores/document';
-import { useSolveOptionsStore } from '../stores/solveOptions';
-import { workspaceModeStore } from '../stores/workspaceMode';
 import { EXPORT_FORMATS, MAP_REFERENCES, MATCH_INTERFACE_THEME, RESULT_PANEL_COUNTS, preferencesStore, usePreferences, type JobSort, type MapReference } from './preferences';
 import { SMOOTHING_MODES, type SmoothingMode } from '../results/smoothing';
 import { Icon } from '../shell/icons';
@@ -93,40 +87,16 @@ export function ResultsPreferencesSurface({ expanded = false, popover = false, o
 
 function JobsPreferencesContent({ now = new Date() }: { now?: Date }) {
   const preferences = usePreferences();
-  const design = useDesignStore((state) => state.design);
-  const cadReturn = useCadReturnStore();
-  const solveOptions = useSolveOptionsStore();
-  const filename = useDocumentStore((state) => state.filename);
-  const workspaceMode = useSyncExternalStore(
-    workspaceModeStore.subscribe,
-    workspaceModeStore.getSnapshot,
-    workspaceModeStore.getSnapshot,
-  ).mode;
-  let projection: SubmittedDesignProjection | null = null;
-  try {
-    projection = workspaceMode === 'cad'
-      ? projectSubmittedImport(buildImportedSubmission(cadReturn))
-      : projectSubmittedDesign(design, solveOptions.options());
-  } catch { /* an invalid or absent submission cannot establish a naming baseline yet */ }
-  const displayedCore = projection
-    ? nextRunName(preferences, projection, filename)
-    : (preferences.nameSourceProjection !== null ? preferences.outputName : runNameFromFilename(filename));
-  const displayedLabel = decorateRunName(displayedCore, preferences, now);
-  const [nameDraft, setNameDraft] = useState(displayedCore);
-  const [editing, setEditing] = useState(false);
-  useEffect(() => { if (!editing) setNameDraft(displayedCore); }, [displayedCore, editing]);
-  const commitName = () => {
-    preferencesStore.update({
-      outputName: nameDraft,
-      nameSourceProjection: projection ?? UNBOUND_RUN_NAME_SOURCE,
-    });
-    setEditing(false);
-  };
+  // The name itself is not here. It belongs to the document, and is edited in
+  // the one Design name field beside the runs it names; duplicating the input
+  // in a popover is how a name last set several sessions ago used to end up on
+  // today's runs. What is left is how that name is decorated.
+  const designName = useDocumentStore((state) => state.designName);
+  const displayedLabel = nextRunLabel(designName, preferences, now);
   return <section className="preferences-section">
     <h3 className="preferences-section-title">Jobs</h3>
     <p className="preferences-section-copy">Naming, ordering, and visibility defaults for solve history.</p>
     <div className="job-naming-preferences">
-      <label className="ui-field job-run-name-field">Run name<input aria-label="Job design name" value={nameDraft} onFocus={() => setEditing(true)} onChange={(event) => setNameDraft(event.target.value)} onBlur={commitName} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}/></label>
       <label className="ui-field">Number<select aria-label="Run-name number position" value={preferences.runNameNumberPosition} onChange={(event) => preferencesStore.update({ runNameNumberPosition: event.target.value as RunNameNumberPosition })}><option value="off">Off</option><option value="suffix">After name</option></select></label>
       <label className="ui-field">Number format<select aria-label="Run-name number format" value={preferences.runNameNumberFormat} disabled={preferences.runNameNumberPosition === 'off'} onChange={(event) => preferencesStore.update({ runNameNumberFormat: event.target.value as RunNameNumberFormat })}><option value="natural">1, 2, 3</option><option value="2-digit">01, 02, 03</option><option value="3-digit">001, 002, 003</option></select></label>
       <label className="ui-field">Date<select aria-label="Run-name date position" value={preferences.runNameDatePosition} onChange={(event) => preferencesStore.update({ runNameDatePosition: event.target.value as RunNameDatePosition })}><option value="off">Off</option><option value="prefix">Before name</option><option value="suffix">After name</option></select></label>

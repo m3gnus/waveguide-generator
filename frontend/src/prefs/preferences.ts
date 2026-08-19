@@ -1,7 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import type { JobItem } from '../api/jobsSocket';
-import { isSubmittedDesignProjection } from '../jobs/submittedProjection';
-import { normalizeRunName, UNBOUND_RUN_NAME_SOURCE, type RunNameDateFormat, type RunNameDatePosition, type RunNameNumberFormat, type RunNameNumberPosition, type RunNameSourceProjection } from '../jobs/runNaming';
+import type { RunNameDateFormat, RunNameDatePosition, RunNameNumberFormat, RunNameNumberPosition } from '../jobs/runNaming';
 import type { SmoothingMode } from '../results/smoothing';
 import { durableSettings } from '../stores/durableSettings';
 
@@ -89,13 +88,17 @@ export interface Preferences {
   autoExportFormats: ExportFormat[];
   autoExportOnComplete: boolean;
   autoDownloadMesh: boolean;
-  outputName: string;
-  nameSourceProjection: RunNameSourceProjection;
   runNameDatePosition: RunNameDatePosition;
   runNameDateFormat: RunNameDateFormat;
   runNameNumberPosition: RunNameNumberPosition;
   runNameNumberFormat: RunNameNumberFormat;
-  counter: number;
+  /**
+   * The design name the run counter belongs to, and the number the next run
+   * of it takes. The name itself is the document's, not a preference: these
+   * two only decide the digits appended to it.
+   */
+  runSequenceName: string;
+  runSequenceNext: number;
   jobSort: JobSort;
   minRating: number;
 }
@@ -111,7 +114,7 @@ export interface Preferences {
 /** Degrees between graticule lines on a directivity map. */
 const GUIDE_INTERVAL_RANGE_DEG = [1, 180] as const;
 /** The run-number counter; six digits is what the naming formats can render. */
-const COUNTER_RANGE = [1, 999_999] as const;
+const RUN_SEQUENCE_RANGE = [1, 999_999] as const;
 /** Stars, matching the rating control in the run list. */
 const MIN_RATING_RANGE = [0, 5] as const;
 
@@ -134,13 +137,12 @@ const defaults: Preferences = {
   autoExportFormats: [],
   autoExportOnComplete: false,
   autoDownloadMesh: false,
-  outputName: 'horn',
-  nameSourceProjection: null,
   runNameDatePosition: 'off',
   runNameDateFormat: 'yymmdd',
   runNameNumberPosition: 'suffix',
   runNameNumberFormat: 'natural',
-  counter: 1,
+  runSequenceName: '',
+  runSequenceNext: 1,
   jobSort: 'completed_desc',
   minRating: 0,
 };
@@ -188,12 +190,6 @@ export function normalize(raw: Partial<Preferences> = {}): Preferences {
     autoExportFormats: autoFormats,
     autoExportOnComplete: raw.autoExportOnComplete === true,
     autoDownloadMesh: raw.autoDownloadMesh === true,
-    outputName: normalizeRunName(raw.outputName),
-    nameSourceProjection: raw.nameSourceProjection === UNBOUND_RUN_NAME_SOURCE
-      ? UNBOUND_RUN_NAME_SOURCE
-      : isSubmittedDesignProjection(raw.nameSourceProjection)
-        ? structuredClone(raw.nameSourceProjection)
-        : null,
     runNameDatePosition: runNameDatePositions.has(raw.runNameDatePosition as RunNameDatePosition)
       ? raw.runNameDatePosition as RunNameDatePosition
       : defaults.runNameDatePosition,
@@ -206,13 +202,14 @@ export function normalize(raw: Partial<Preferences> = {}): Preferences {
     runNameNumberFormat: runNameNumberFormats.has(raw.runNameNumberFormat as RunNameNumberFormat)
       ? raw.runNameNumberFormat as RunNameNumberFormat
       : defaults.runNameNumberFormat,
-    counter: clampInteger(raw.counter, COUNTER_RANGE, defaults.counter),
+    runSequenceName: typeof raw.runSequenceName === 'string' ? raw.runSequenceName.trim() : defaults.runSequenceName,
+    runSequenceNext: clampInteger(raw.runSequenceNext, RUN_SEQUENCE_RANGE, defaults.runSequenceNext),
     jobSort: jobSortIds.has(raw.jobSort as JobSort) ? raw.jobSort as JobSort : defaults.jobSort,
     minRating: clampInteger(raw.minRating, MIN_RATING_RANGE, defaults.minRating),
   };
 }
 
-export const STORAGE_VERSION = 12;
+export const STORAGE_VERSION = 13;
 
 function migrateV1ToV2(preferences: Partial<Preferences>): Partial<Preferences> {
   const { chartTypes: _replaced, ...carried } = preferences;
@@ -264,6 +261,23 @@ function migrateV8ToV9(preferences: Partial<Preferences>): Partial<Preferences> 
 }
 
 /**
+ * The run name is now the document's design name, so the preference that held
+ * it -- and the submitted-design projection that decided when to bump its
+ * trailing digits -- are dropped. The stored name is not carried onto any
+ * document: it was global, so it belonged to whichever design was open last
+ * and claiming it for the next one would reintroduce exactly the drift this
+ * replaces. `counter` went with them; nothing had read it since the server
+ * took over run numbers.
+ */
+function migrateV12ToV13(preferences: Partial<Preferences>): Partial<Preferences> {
+  const carried = { ...preferences } as Record<string, unknown>;
+  delete carried.outputName;
+  delete carried.nameSourceProjection;
+  delete carried.counter;
+  return carried as Partial<Preferences>;
+}
+
+/**
  * Migrations are intentionally sequential. v1→v2 replaced two unusable seeded
  * panels while preserving unrelated settings; v2→v3 makes the chart list's
  * stored length authoritative; v3→v4 adds independent job-version naming;
@@ -273,7 +287,8 @@ function migrateV8ToV9(preferences: Partial<Preferences>): Partial<Preferences> 
  * export-theme default onto the interface; v9→v10 exposes the existing
  * design-change number as a configurable suffix; v10→v11 adds the CAD
  * application choice; v11→v12 persists the user-definable directivity
- * guide interval. Each stored version runs every
+ * guide interval; v12->v13 retires the standalone run name for the document's
+ * design name. Each stored version runs every
  * step from its own onwards -- v3 used to run only its first step, so a v3
  * profile would have skipped v4→v5 entirely.
  */
@@ -289,6 +304,7 @@ const MIGRATIONS: Record<number, (preferences: Partial<Preferences>) => Partial<
   9: (preferences) => preferences,
   10: (preferences) => preferences,
   11: (preferences) => preferences,
+  12: migrateV12ToV13,
 };
 
 export function readPreferences(raw: string | null): { value: Preferences; migrated: boolean } {

@@ -20,6 +20,8 @@ export interface ExportContext {
   polarConfig?: unknown;
   solveSettings?: WgSolveSettings | null;
   jobStem: string;
+  /** The run's own name, written into the `.cfg` this run exports. */
+  designName?: string;
   preferences: Preferences;
   fetcher?: typeof fetch;
   saveBlob?: (blob: Blob, filename: string) => void;
@@ -441,6 +443,9 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
           serializeDesign(context.design),
           context.polarConfig,
           context.solveSettings ?? null,
+          // A config exported from run #42 is titled for run #42, not for
+          // whatever design happens to be on screen now.
+          context.designName ?? context.jobStem,
         ),
         filename: `${baseName}_config.cfg`,
       }),

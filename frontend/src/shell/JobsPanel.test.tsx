@@ -4,12 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
 import { compareSelection } from '../api/results';
 import type { CadReturnIngestRecord } from '../api/cadlink';
-import { buildImportedSubmission } from '../jobs/importedSubmission';
-import { projectSubmittedImport } from '../jobs/submittedProjection';
 import { preferencesStore } from '../prefs/preferences';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetDesignStore, useDesignStore } from '../stores/design';
-import { resetDocumentStore } from '../stores/document';
+import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { resetSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { jobCardPropsEqual, JobsPanel, selectJob, type JobCardProps } from './JobsPanel';
@@ -274,32 +272,36 @@ describe('jobs panel run list', () => {
     expect(host.textContent).toContain('Results were cleaned up to save space.');
   });
 
-  it('does not rewrite next-run naming when a run is selected', () => {
-    preferencesStore.update({ outputName: 'next-design' });
-    const before = preferencesStore.getSnapshot();
+  it('does not rename the design when an older run is selected', () => {
+    act(() => useDocumentStore.getState().setDesignName('next-design'));
     selectJob(job(9, '260808_old-design_v03'));
-    expect(preferencesStore.getSnapshot()).toMatchObject({ outputName: before.outputName });
+    expect(useDocumentStore.getState().designName).toBe('next-design');
     expect(designMocks.replaceWithJobDesign).toHaveBeenCalledOnce();
   });
 
-  it('shows a manual run-name baseline and increments it after a real design change', async () => {
+  it('renames the whole document from the one name field', async () => {
     publishJobs([]);
     await act(async () => root.render(<JobsPanel/>));
-    const input = host.querySelector<HTMLInputElement>('[aria-label="Run name"]')!;
+    const input = host.querySelector<HTMLInputElement>('[aria-label="Design name"]')!;
     act(() => input.focus());
     act(() => enter(input, 'winner'));
     act(() => input.blur());
-    expect(host.querySelector('.run-name-preview')?.textContent).toContain('winner');
 
+    expect(host.querySelector('.run-name-preview')?.textContent).toContain('next · winner1');
+    // The file the design saves as follows the same edit -- this is the whole
+    // point of the field.
+    expect(useDocumentStore.getState()).toMatchObject({ designName: 'winner', filename: 'winner.cfg' });
+
+    // Editing the geometry does not rename anything any more.
     act(() => useDesignStore.getState().updateField('R', 141));
-    expect(host.querySelector('.run-name-preview')?.textContent).toContain('winner2');
+    expect(host.querySelector('.run-name-preview')?.textContent).toContain('next · winner1');
   });
 
-  it('keeps a manually committed CAD run name when the first projection becomes available', async () => {
+  it('keeps the name typed in CAD mode when an ingest arrives', async () => {
     workspaceModeStore.setMode('cad');
     publishJobs([]);
     await act(async () => root.render(<JobsPanel/>));
-    const input = host.querySelector<HTMLInputElement>('[aria-label="Run name"]')!;
+    const input = host.querySelector<HTMLInputElement>('[aria-label="Design name"]')!;
     act(() => input.focus());
     act(() => enter(input, 'named-before-ingest'));
     act(() => input.blur());
@@ -310,36 +312,36 @@ describe('jobs panel run list', () => {
       sourceSizesMm: { source: 2 }, rigidSizeMm: 5, transitionMm: 5,
     }));
 
-    expect(host.querySelector('.run-name-preview')?.textContent).toContain('next · named-before-ingest');
+    expect(host.querySelector('.run-name-preview')?.textContent).toContain('next · named-before-ingest1');
   });
 
-  it('previews CAD naming from the ingest and ignores parametric edits', async () => {
+  it('previews the same design name in CAD mode, advancing only with the counter', async () => {
     useCadReturnStore.setState({
       ingestRecord: readyCadRecord('wgi_first'), needsIngest: false,
       driveChannels: [{ id: 'drive', source_ids: ['source'], motion: 'normal' }],
       sourceSizesMm: { source: 2 }, rigidSizeMm: 5, transitionMm: 5,
     });
     workspaceModeStore.setMode('cad');
-    const baseline = projectSubmittedImport(buildImportedSubmission(useCadReturnStore.getState()));
-    preferencesStore.update({ outputName: 'cad-run', nameSourceProjection: baseline });
+    act(() => useDocumentStore.getState().setDesignName('cad-run'));
     publishJobs([]);
     await act(async () => root.render(<JobsPanel/>));
 
-    expect(host.querySelector('.run-name-preview')?.textContent).toContain('next · cad-run');
+    expect(host.querySelector('.run-name-preview')?.textContent).toContain('next · cad-run1');
     act(() => useDesignStore.getState().updateField('R', 141));
-    expect(host.querySelector('.run-name-preview')?.textContent).toContain('next · cad-run');
+    expect(host.querySelector('.run-name-preview')?.textContent).toContain('next · cad-run1');
     act(() => useCadReturnStore.setState({ ingestRecord: readyCadRecord('wgi_second') }));
-    expect(host.querySelector('.run-name-preview')?.textContent).toContain('next · cad-run2');
+    expect(host.querySelector('.run-name-preview')?.textContent).toContain('next · cad-run1');
   });
 
-  it('shows the exact dated label that submission will use while editing only the core', async () => {
+  it('shows the exact dated label that submission will use while editing only the name', async () => {
     const now = new Date(2026, 7, 12, 12);
     preferencesStore.update({ runNameDatePosition: 'prefix' });
+    act(() => useDocumentStore.getState().setDesignName('horn'));
     publishJobs([]);
     await act(async () => root.render(<JobsPanel namingNow={now}/>));
 
-    expect(host.querySelector<HTMLInputElement>('[aria-label="Run name"]')?.value).toBe('horn');
+    expect(host.querySelector<HTMLInputElement>('[aria-label="Design name"]')?.value).toBe('horn');
     expect(host.querySelector('.run-name-preview')?.textContent)
-      .toBe(`next · ${currentJobLabel(undefined, undefined, undefined, now)}`);
+      .toBe(`next · ${currentJobLabel(undefined, now)}`);
   });
 });

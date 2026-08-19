@@ -1,15 +1,14 @@
 import type { JobItem } from '../api/jobsSocket';
+import { designNameSlug } from '../stores/designName';
 
-/** Convert a human job title to the portable slug used only in export paths. */
+/**
+ * Convert a human job title to the portable slug used only in export paths.
+ *
+ * One slug rule, shared with the `.cfg` filename: the two used to be separate
+ * implementations that could disagree about the same typed name.
+ */
 export function exportTitleSlug(value: unknown): string {
-  const slug = String(value ?? '')
-    .trim()
-    .normalize('NFKD')
-    .replace(/\p{Mark}+/gu, '')
-    .replace(/[^A-Za-z0-9._-]+/g, '_')
-    .replace(/_+/g, '_')
-    .replace(/^[._-]+|[._-]+$/g, '');
-  return slug || 'design';
+  return designNameSlug(value, 'design');
 }
 
 /** Stable stem shared by every export and mesh download for a stored job. */

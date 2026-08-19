@@ -428,3 +428,42 @@ Value = two
 last row
 }"""
     assert expected in emitted
+
+
+def test_report_block_leads_the_canonical_file_so_the_name_is_readable() -> None:
+    """The design's name is stated at the top, not two hundred lines down.
+
+    ``Report`` is ATH's block and stays passthrough, but WG writes its ``Title``
+    from the design name, and it used to be emitted with the other extra blocks
+    at the very end of the file.
+    """
+
+    source = """; Parameter config
+OSSE = {
+}
+Length = 120
+Coverage.Angle = 45
+Mesh.Quadrants = 4
+Report = {
+; a preserved note
+Title = "ATH Tritonia-M"
+PolarData = SPL_H
+}
+Other = {
+Kept = 1
+}
+"""
+    parsed = parse(source)
+    # An untouched file is still returned byte for byte.
+    assert serialize(parsed) == source
+
+    emitted = serialize(parsed.design)
+    assert emitted.index("Report = {") < emitted.index("Length = 120")
+    assert emitted.index("Report = {") < emitted.index("Other = {")
+    # Exactly once, with its own rows and every other Report key intact.
+    assert emitted.count("Report = {") == 1
+    assert '; a preserved note' in emitted
+    assert 'Title = "ATH Tritonia-M"' in emitted
+    assert "PolarData = SPL_H" in emitted
+    assert parse(emitted).extra_blocks["Report"].items["Title"] == '"ATH Tritonia-M"'
+    assert parse(emitted).extra_blocks["Other"].items == {"Kept": "1"}
