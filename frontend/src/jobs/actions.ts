@@ -95,7 +95,7 @@ export function resolveEngine(
 ): string {
   if (engine.toLowerCase() !== 'auto') return engine.toLowerCase();
   void solverMode;
-  const order = ['metal', 'bempp', 'dryrun'];
+  const order = ['metal', 'beat', 'bempp', 'dryrun'];
   const available = order.flatMap((name) => capabilities.engines.filter((item) => item.available && item.name.toLowerCase() === name))[0];
   if (!available) throw new Error('No solver backend is currently available');
   return available.name.toLowerCase();

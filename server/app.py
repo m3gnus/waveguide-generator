@@ -354,7 +354,7 @@ def create_app(
             if item.get("available") is True
         }
         resolved = next(
-            (name for name in ("metal", "bempp", "dryrun") if name in available),
+            (name for name in ("metal", "beat", "bempp", "dryrun") if name in available),
             None,
         )
         return {
@@ -362,7 +362,7 @@ def create_app(
             "engineSelection": {
                 "default": "auto",
                 "resolvedDefault": resolved,
-                "full3dOrder": ["metal", "bempp", "dryrun"],
+                "full3dOrder": ["metal", "beat", "bempp", "dryrun"],
                 "metalFastPath": "axisymmetric-meridian",
             },
         }

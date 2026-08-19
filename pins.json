@@ -1,5 +1,9 @@
 {
   "modules": {
+    "hornlab-beat-bem": {
+      "repo": "https://github.com/m3gnus/hornlab-beat-bem.git",
+      "sha": "c2071391374f0c8457cdec10a1fd4c04732a8b3f"
+    },
     "hornlab-bempp-bem": {
       "repo": "https://github.com/m3gnus/hornlab-bempp-bem.git",
       "sha": "1e7fe1b5c0946ec35dabf30b5b37eff6335e081f"

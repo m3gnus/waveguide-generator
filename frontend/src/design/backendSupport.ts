@@ -65,7 +65,7 @@ export function activeBackendName(
 ): string | null {
   const requested = engine.trim().toLowerCase();
   if (requested && requested !== 'auto') return requested;
-  const available = ['metal', 'bempp', 'dryrun']
+  const available = ['metal', 'beat', 'bempp', 'dryrun']
     .flatMap((name) => engines.filter((item) => item.available && item.name.toLowerCase() === name));
   return available[0]?.name.toLowerCase() ?? null;
 }
