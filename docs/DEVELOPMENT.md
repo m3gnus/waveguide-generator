@@ -52,9 +52,21 @@ a valid runtime dependency.
 Run checks in proportion to the change:
 
 ```bash
+.venv/bin/python -m ruff check server scripts shared launch launchers
 .venv/bin/python -m pytest server/tests scripts/tests -q
 node --test shared/js/frame.test.mjs
 cd frontend && npm test && npm run build
+```
+
+The lint line is first because it is the cheapest and the easiest to forget: it
+is the same command the **Generated-file drift** job runs, and that job has
+turned `main` red for a single unused import. `ruff` is in
+`server/requirements-dev.txt` for exactly this reason. The other two checks that
+job runs are worth the same habit before a release:
+
+```bash
+.venv/bin/python scripts/gen_requirements.py --check
+.venv/bin/python scripts/bump_version.py --check
 ```
 
 Geometry, solver, platform, or release work may also require the pinned sibling suites,
