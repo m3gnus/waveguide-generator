@@ -358,3 +358,48 @@ def test_the_degradation_reaches_ingestion_findings_not_just_the_bundle() -> Non
     source = Path(ingest.__file__).read_text(encoding="utf-8")
     assert "stale-detection-unavailable" in source
     assert "degradations" in source
+
+
+def test_a_captured_cad_document_is_a_valid_bundle_member(tmp_path: Path) -> None:
+    """The strict reader refuses undeclared members, so the capture must declare.
+
+    A Fusion archive travels beside the STEP and is not solver input; this is
+    the contract that lets WG file it in the run archive without the reader
+    rejecting the bundle it arrived in.
+    """
+
+    step = b"STEP"
+    document = b"fusion-archive-bytes"
+    manifest = _manifest(step)
+    manifest["files"]["document.f3d"] = {
+        "sha256": "sha256:" + hashlib.sha256(document).hexdigest(),
+        "size_bytes": len(document),
+        "media_type": "application/vnd.autodesk.fusion360",
+        "purpose": "cad-document",
+    }
+    bundle = write_bundle(tmp_path, manifest, step=step)
+    (bundle / "document.f3d").write_bytes(document)
+
+    result = read_wgreturn(bundle)
+
+    assert result.manifest["files"]["document.f3d"]["purpose"] == "cad-document"
+    # It is not geometry: the assembly the mesher reads is unchanged.
+    assert result.manifest["assembly"]["file"] == "assembly.step"
+
+
+def test_a_captured_document_whose_bytes_changed_is_refused_like_any_member(
+    tmp_path: Path,
+) -> None:
+    document = b"fusion-archive-bytes"
+    manifest = _manifest(b"STEP")
+    manifest["files"]["document.f3d"] = {
+        "sha256": "sha256:" + hashlib.sha256(document).hexdigest(),
+        "size_bytes": len(document),
+        "media_type": "application/vnd.autodesk.fusion360",
+        "purpose": "cad-document",
+    }
+    bundle = write_bundle(tmp_path, manifest)
+    (bundle / "document.f3d").write_bytes(document + b"tampered")
+
+    with pytest.raises(Exception, match="document.f3d"):
+        read_wgreturn(bundle)

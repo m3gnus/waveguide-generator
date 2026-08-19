@@ -383,10 +383,12 @@ def create_app(
     )
     if workspace_dir is not None:
         resolved_workspace_dir = Path(workspace_dir).expanduser().resolve()
-        legacy_workspace_dirs: tuple[Path, ...] = (
-            LEGACY_WORKSPACE_DIR,
-            resolved_data_dir / "workspace",
-        )
+        # Only the checkout's ``output`` is a former *export* destination. The
+        # data directory's ``workspace`` is v1 task scratch -- one UUID folder
+        # per migrated job, holding manifests and raw results -- and adopting
+        # that as somebody's export folder would bury their runs among hundreds
+        # of them, inside a directory Finder hides.
+        legacy_workspace_dirs: tuple[Path, ...] = (LEGACY_WORKSPACE_DIR,)
     elif data_dir is None:
         resolved_workspace_dir = default_runs_dir()
         legacy_workspace_dirs = (LEGACY_WORKSPACE_DIR,)

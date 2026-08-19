@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import { getOnshapeConnection, type OnshapeConnection } from '../api/onshape';
-import { getCadWorkspace, openCadWorkspace, selectCadWorkspace } from '../api/cadWorkspace';
+import { getCadWorkspace, openCadWorkspace, selectCadWorkspace, setCaptureDocument } from '../api/cadWorkspace';
 import { JobsPreferencesSurface, ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
 import { preferencesStore, usePreferences, type CadApplication } from '../prefs/preferences';
 import { Icon } from './icons';
@@ -84,6 +84,7 @@ function WorkspaceSettings() {
 
 function CadFolderSettings() {
   const [path, setPath] = useState<string | null>();
+  const [capture, setCapture] = useState(true);
   const [busy, setBusy] = useState<'open' | 'select'>();
   const [error, setError] = useState<string>();
   const [manualPath, setManualPath] = useState('');
@@ -92,7 +93,11 @@ function CadFolderSettings() {
   useEffect(() => {
     const request = ++requestGeneration.current;
     void getCadWorkspace().then(
-      (value) => { if (request === requestGeneration.current) setPath(value.path); },
+      (value) => {
+        if (request !== requestGeneration.current) return;
+        setPath(value.path);
+        setCapture(value.captureDocument !== false);
+      },
       (reason: unknown) => { if (request === requestGeneration.current) setError(String(reason)); },
     );
     return () => { requestGeneration.current += 1; };
@@ -114,6 +119,18 @@ function CadFolderSettings() {
     }
   };
 
+  const toggleCapture = async (enabled: boolean) => {
+    // Optimistic: the checkbox is the state, and a refused write puts it back
+    // rather than leaving the box disagreeing with the file the add-in reads.
+    setCapture(enabled); setError(undefined);
+    try {
+      setCapture(await setCaptureDocument(enabled));
+    } catch (reason) {
+      setCapture(!enabled);
+      setError(reason instanceof Error ? reason.message : String(reason));
+    }
+  };
+
   return <div className="cad-setup-folder" aria-busy={busy !== undefined}>
     <p className={`workspace-settings-path ${path ? '' : 'not-selected'}`} title={path ?? undefined}>{path ?? 'No WGLink folder selected'}</p>
     <p className="cad-settings-note">WG creates <code>wglink</code> and <code>wgreturn</code> inside this folder. Choose a stable local folder that both WG and the Fusion add-in can access.</p>
@@ -126,6 +143,15 @@ function CadFolderSettings() {
       <label>WGLink folder path<input value={manualPath} onChange={(event) => setManualPath(event.target.value)} placeholder="/path/to/WGLink exchange"/></label>
       <button disabled={!manualPath.trim() || busy !== undefined} onClick={() => void run('select', manualPath.trim())}>Use this path</button>
     </details>
+    <label className="ui-check cad-settings-capture">
+      <input
+        type="checkbox"
+        checked={capture}
+        onChange={(event) => void toggleCapture(event.target.checked)}
+      />
+      Keep a copy of the Fusion model with each return
+    </label>
+    <p className="cad-settings-note">Filed under <code>runs/&lt;design&gt;/cad/</code>, one copy per model state rather than one per solve, so a run can be reopened in Fusion later. A Fusion archive is tens of megabytes; turn this off if the space matters more.</p>
     {error && <p className="workspace-settings-error" role="status">{error}</p>}
   </div>;
 }

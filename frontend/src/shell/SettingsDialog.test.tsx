@@ -145,6 +145,41 @@ describe('SettingsDialog', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/cad-workspace/select', { method: 'POST' });
   });
 
+  it('lets the user decline the Fusion model copy and reflects a refused write', async () => {
+    let stored = true;
+    const failNext = { value: false };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path === '/api/cad-workspace/path') {
+        return new Response(JSON.stringify({ selected: true, path: '/cad/exchange', captureDocument: stored }));
+      }
+      if (path === '/api/cad-workspace/capture-document' && init?.method === 'POST') {
+        if (failNext.value) return new Response(JSON.stringify({ detail: 'disk is read-only' }), { status: 500 });
+        stored = (JSON.parse(String(init.body)) as { enabled: boolean }).enabled;
+        return new Response(JSON.stringify({ captureDocument: stored }));
+      }
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await act(async () => host.querySelector<HTMLButtonElement>('#open-settings')!.click());
+    const cad = host.querySelector<HTMLElement>('#settings-cad')!;
+    const capture = [...cad.querySelectorAll<HTMLInputElement>('input[type=checkbox]')]
+      .find((input) => input.closest('label')?.textContent?.includes('Fusion model'))!;
+    expect(capture.checked).toBe(true);
+
+    await act(async () => capture.click());
+    expect(stored).toBe(false);
+    expect(capture.checked).toBe(false);
+
+    // A refused write must not leave the box disagreeing with the file the
+    // Fusion add-in reads.
+    failNext.value = true;
+    await act(async () => capture.click());
+    expect(capture.checked).toBe(false);
+    expect(cad.textContent).toContain('disk is read-only');
+  });
+
   /** Open Settings with the CAD application switched to Onshape, serving one
    * canned connection reply. Returns the CAD section for assertions. */
   async function openOnshapeSettings(connection: Record<string, unknown>): Promise<HTMLElement> {
