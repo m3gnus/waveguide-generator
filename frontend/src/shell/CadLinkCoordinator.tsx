@@ -18,6 +18,10 @@ import { useCadReturnStore } from '../stores/cadReturn';
 import { recordCommittedAthPolars, subscribeRevision, useDesignStore } from '../stores/design';
 import { useDocumentStore, type DesignIdentity } from '../stores/document';
 import { documentSettingsSignature } from '../stores/designWire';
+import {
+  parkedSolveCommandStore,
+  refuseParkedSolveCommand,
+} from '../stores/solveCommand';
 import { polarConfigFromUi, useSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { createImportedMeshScene } from '../viewport/importedMesh';
@@ -25,7 +29,7 @@ import { importedMeshStore } from '../viewport/importedMeshStore';
 import { parseMSH } from '../viewport/mshParser';
 import { filenameStem } from '../viewport/presentation';
 import { fusionWorkflowView } from './cadWorkflowView';
-import { jobsCoordinatorBridge } from './JobsCoordinator';
+import { jobsCoordinatorBridge, SolveEngineUnavailableError } from './JobsCoordinator';
 import { workspaceNavigation } from './workspaceNavigation';
 
 interface RefreshOptions {
@@ -52,6 +56,10 @@ interface CadLinkCoordinatorSnapshot {
   ingestSelected(): Promise<CadReturnIngestRecord>;
   pullFromFusion(): Promise<CadReturnBundle>;
   pullAndSolve(): Promise<'solving' | 'blocked' | 'failed'>;
+  /** Start the parked Fusion solve request; blockers are re-reported into it. */
+  solveParkedCommand(): Promise<void>;
+  /** Refuse the parked Fusion solve request for good. */
+  dismissSolveCommand(): Promise<void>;
   /** The one Fusion outbound path: derives open-vs-update and the expected
    * document guard from the live status, and parks on the two-way conflict
    * (returning null) until the user confirms through the coordinator dialog. */
@@ -84,6 +92,8 @@ let bridgeSnapshot: CadLinkCoordinatorSnapshot = {
   ingestSelected: unavailable,
   pullFromFusion: unavailable,
   pullAndSolve: unavailable,
+  solveParkedCommand: unavailable,
+  dismissSolveCommand: unavailable,
   sendWgToFusion: unavailable,
   cancelFusionConflict: () => undefined,
   clearFeedback: () => undefined,
@@ -121,6 +131,18 @@ export function newestReturnArrival(
       ? previous.get(item.bundlePath) !== item.modifiedAt
       : Date.parse(item.modifiedAt) >= recentThreshold
   )) ?? null;
+}
+
+/** Show the CAD workspace and focus its panel.
+ *
+ * Every status line, error, finding and acknowledgement on the CAD return leg
+ * renders inside `CadLinkPanel`, which exists only in CAD mode — so a return
+ * that arrives while WG shows the parametric design is otherwise completely
+ * invisible. The mode store adds the dock panel synchronously, which is why
+ * the activation on the next line lands instead of returning false. */
+export function enterCadWorkspace(): void {
+  workspaceModeStore.setMode('cad');
+  workspaceNavigation.activate('cadlink');
 }
 
 /** Prefer the independently tessellated full CAD display artifact. Older
@@ -167,22 +189,32 @@ export async function showIngestedMeshInViewport(
   if (!importedMeshStore.isCurrentGeneration(generation)) return;
   try {
     const response = await fetcher(`/api/cadlink/ingest/${encodeURIComponent(ingestId)}/mesh`);
-    if (!response.ok || !importedMeshStore.isCurrentGeneration(generation)) return;
-    const meshText = await response.text();
-    if (!importedMeshStore.isCurrentGeneration(generation)) return;
-    importedMeshStore.setCad(createImportedMeshScene(
-      name,
-      parseMSH(meshText),
-      'cad',
-      ingestId,
-      record.symmetry.cut_planes ?? [],
-      {
-        solvedTriangleCount: record.mesh?.stats.triangle_count,
-        artifactToken: record.mesh_content_sha256 ?? `${ingestId}:solver`,
-      },
-    ), generation, workspaceModeStore.getSnapshot().mode === 'cad');
+    if (response.ok && importedMeshStore.isCurrentGeneration(generation)) {
+      const meshText = await response.text();
+      if (!importedMeshStore.isCurrentGeneration(generation)) return;
+      importedMeshStore.setCad(createImportedMeshScene(
+        name,
+        parseMSH(meshText),
+        'cad',
+        ingestId,
+        record.symmetry.cut_planes ?? [],
+        {
+          solvedTriangleCount: record.mesh?.stats.triangle_count,
+          artifactToken: record.mesh_content_sha256 ?? `${ingestId}:solver`,
+        },
+      ), generation, workspaceModeStore.getSnapshot().mode === 'cad');
+      return;
+    }
   } catch {
-    // The viewport keeps whatever it was showing if both artifacts fail.
+    // Neither artifact could be displayed; fall through to drop the old one.
+  }
+  // A scene left over from an earlier ingestion would keep claiming to be the
+  // geometry on screen — misleading on its own, and enough to refuse every
+  // later solve at the viewport-mismatch gate. An empty slot is honest.
+  if (importedMeshStore.isCurrentGeneration(generation)
+    && importedMeshStore.getSnapshot().cad !== null
+    && importedMeshStore.getSnapshot().cad?.ingestId !== ingestId) {
+    importedMeshStore.clear('cad');
   }
 }
 
@@ -384,7 +416,10 @@ export function CadLinkCoordinator() {
         setStatus(`Received ${arrived.documentName ?? arrived.name} from Fusion 360.${
           continuity === 'carried' ? ' Kept your mesh, channel, and solve settings.' : ''
         }`);
-        workspaceNavigation.activate('cadlink');
+        // An arrival is news the user has to be able to see, so it owns the
+        // workspace the same way an Onshape return does. A first listing does
+        // not: nothing arrived, and stealing the mode on load would be wrong.
+        enterCadWorkspace();
       } else if (!initial) {
         const selected = useCadReturnStore.getState().selectedBundle;
         if (!selected) return;
@@ -548,7 +583,14 @@ export function CadLinkCoordinator() {
       }
       if (request === ingestRequest.current && mounted.current) {
         setStatus(`Ingested ${record.ingest_id}. Review the verdicts before solving.`);
-        void showIngestedMeshInViewport(
+        // Before the display, so the viewport adopts the CAD slot rather than
+        // loading it invisibly behind the parametric design.
+        enterCadWorkspace();
+        // Awaited rather than fired and forgotten: the solve gate refuses an
+        // ingestion whose mesh is not the one on screen, so a composed
+        // pull/ingest/solve that raced this fetch failed on every return after
+        // the first with a viewport-mismatch the user could not act on.
+        await showIngestedMeshInViewport(
           record,
           current.selectedBundle.documentName || current.selectedBundle.name,
           reportViewportNotice,
@@ -622,9 +664,8 @@ export function CadLinkCoordinator() {
       setStatus(`Returned and ingested ${result.bundle.documentName ?? result.bundle.name} from Onshape.`);
       // The CAD Link panel only exists inside the CAD workspace, and the
       // ingested return is now the solve truth — enter the mode that owns it.
-      workspaceModeStore.setMode('cad');
-      workspaceNavigation.activate('cadlink');
-      void showIngestedMeshInViewport(
+      enterCadWorkspace();
+      await showIngestedMeshInViewport(
         result.ingest,
         result.bundle.documentName ?? result.bundle.name,
         reportViewportNotice,
@@ -654,7 +695,7 @@ export function CadLinkCoordinator() {
       setStatus('Prepared. Submitting the solve…');
       const outcome = await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport();
       if (outcome === 'busy') {
-        setStatus('Prepared the Fusion geometry. A solve is already running — start this one when it finishes.');
+        setStatus('Prepared the Fusion geometry. A solve is already running — press Solve when it finishes.');
         return 'blocked';
       }
       setStatus('Solving the current Fusion geometry.');
@@ -672,12 +713,44 @@ export function CadLinkCoordinator() {
     }
   }, [ingestSelected, pullFromFusion]);
 
+  /** Start the parked Fusion request from the panel, once its gate is clear. */
+  const solveParkedCommand = useCallback(async () => {
+    const parked = parkedSolveCommandStore.getSnapshot().command;
+    if (!parked) return;
+    setError(null);
+    try {
+      const outcome = await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport();
+      if (outcome === 'busy') {
+        parkedSolveCommandStore.setBlockers(parked.commandId, ['a solve is already running']);
+        setStatus('A solve is already running. Start the model Fusion sent when it finishes.');
+        return;
+      }
+      setStatus('Solving the model Fusion sent.');
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : String(reason);
+      parkedSolveCommandStore.setBlockers(parked.commandId, [message]);
+      if (mounted.current) setError(message);
+    }
+  }, []);
+
+  /** Give up on the parked Fusion request. Terminal on purpose: the ledger
+   * entry is what deletes the marker, so a dismissed command cannot come back
+   * on the next page load. */
+  const dismissSolveCommand = useCallback(async () => {
+    if (!parkedSolveCommandStore.getSnapshot().command) return;
+    await refuseParkedSolveCommand('Dismissed in Waveguide Generator without solving.');
+    if (mounted.current) {
+      setError(null);
+      setStatus('Dismissed the solve Fusion asked for. It will not be offered again.');
+    }
+  }, []);
+
   /** Run a Fusion-authored "solve in WG" command exactly once.
    *
    * Idempotency is the server's ledger, not this component: a coordinator
    * remount or a second poll must surface the existing job rather than submit
-   * again. A blocked gate is left pending on purpose — the user acknowledges
-   * the findings and presses Solve, which consumes the same request. */
+   * again. A blocked gate is parked, not discarded — the user acknowledges the
+   * findings and presses Solve, which consumes the same request. */
   const consumeSolveCommand = useCallback(async () => {
     if (solveCommandInFlight.current) return;
     solveCommandInFlight.current = true;
@@ -691,36 +764,63 @@ export function CadLinkCoordinator() {
       if (pending.outcome) {
         if (solveCommandSeen.current === command.commandId) return;
         solveCommandSeen.current = command.commandId;
-        if (pending.outcome.state === 'refused') setError(pending.outcome.reason ?? 'Fusion asked WG to solve a return it could not use.');
-        else setStatus('Fusion already asked WG to solve this geometry; its run is in the Jobs rail.');
+        if (pending.outcome.state === 'refused') {
+          // A refusal is the user's to see, and it renders only in CAD mode.
+          enterCadWorkspace();
+          setError(pending.outcome.reason ?? 'Fusion asked WG to solve a return it could not use.');
+        } else {
+          setStatus('Fusion already asked WG to solve this geometry; its run is in the Jobs rail.');
+        }
         return;
       }
       if (solveCommandSeen.current === command.commandId) return;
       solveCommandSeen.current = command.commandId;
       setStatus('Fusion asked WG to solve this model. Preparing…');
+      // The request is only actionable from the workspace that renders it.
+      enterCadWorkspace();
       const bundle = bundles.find((item) => item.bundlePath === command.bundlePath)
         ?? (await listReturns()).items.find((item) => item.bundlePath === command.bundlePath);
       if (!bundle?.readable) {
         const reason = 'Fusion asked WG to solve a return that is not readable in the workspace.';
         setError(reason);
-        await reportSolveCommandOutcome({ commandId: command.commandId, state: 'refused', reason });
+        await reportSolveCommandOutcome({ commandId: command.commandId, state: 'refused', jobId: null, reason });
         return;
       }
+      // Parked from here on. Everything below is either terminal or a gate the
+      // user can satisfy, and the marker survives a gate — so WG has to keep
+      // owning the request until a solve consumes it or the user dismisses it.
+      parkedSolveCommandStore.park({
+        commandId: command.commandId,
+        bundlePath: command.bundlePath,
+        blockers: [],
+        parkedAt: command.requestedAt || new Date().toISOString(),
+      });
       useCadReturnStore.getState().selectArrivedBundle(bundle);
       await ingestSelected();
       const outcome = await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport();
       if (outcome === 'busy') {
-        setStatus('Prepared the model Fusion sent. A solve is already running — start this one when it finishes.');
+        parkedSolveCommandStore.setBlockers(command.commandId, ['a solve is already running']);
+        setStatus('Prepared the model Fusion sent. A solve is already running — start it from the CAD Link panel when that one finishes.');
         return;
       }
       setStatus('Solving the model Fusion sent.');
-      await reportSolveCommandOutcome({ commandId: command.commandId, state: 'accepted' });
+      // The accepted outcome is reported by the solve path itself, which is
+      // the only place that knows the job id.
     } catch (reason) {
       if (reason instanceof SupersededError) return;
       const message = reason instanceof Error ? reason.message : String(reason);
       if (mounted.current) setError(`Fusion asked WG to solve this model, but: ${message}`);
-      // Deliberately not reported: a blocked gate or a transient failure is
-      // not terminal, so the command stays available once the user fixes it.
+      if (reason instanceof SolveEngineUnavailableError) {
+        // Imported geometry is solved on Metal by definition, so this command
+        // can never succeed here. Refusing it is the only terminal answer;
+        // parking it would replay the same failure on every page load.
+        await refuseParkedSolveCommand(message);
+        return;
+      }
+      // Not terminal: a gate or a transient failure keeps the request, and the
+      // panel offers it back once the user has dealt with the reason.
+      const parked = parkedSolveCommandStore.getSnapshot().command;
+      if (parked) parkedSolveCommandStore.setBlockers(parked.commandId, [message]);
     } finally {
       solveCommandInFlight.current = false;
     }
@@ -758,6 +858,8 @@ export function CadLinkCoordinator() {
       ingestSelected,
       pullFromFusion,
       pullAndSolve,
+      solveParkedCommand,
+      dismissSolveCommand,
       sendWgToFusion,
       cancelFusionConflict,
       clearFeedback,
@@ -785,6 +887,8 @@ export function CadLinkCoordinator() {
       ingestSelected: unavailable,
       pullFromFusion: unavailable,
       pullAndSolve: unavailable,
+      solveParkedCommand: unavailable,
+      dismissSolveCommand: unavailable,
       sendWgToFusion: unavailable,
       cancelFusionConflict: () => undefined,
       clearFeedback: () => undefined,
@@ -796,6 +900,7 @@ export function CadLinkCoordinator() {
     bundles,
     cancelFusionConflict,
     clearFeedback,
+    dismissSolveCommand,
     error,
     fusionStatus,
     ingest,
@@ -804,6 +909,7 @@ export function CadLinkCoordinator() {
     pullAndSolve,
     pullFromFusion,
     sendingToFusion,
+    solveParkedCommand,
     loading,
     onshapeConnection,
     onshapeStatus,

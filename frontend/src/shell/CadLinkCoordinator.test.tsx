@@ -7,10 +7,11 @@ import { preferencesStore } from '../prefs/preferences';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
+import { consumeParkedSolveCommand, parkedSolveCommandStore } from '../stores/solveCommand';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { CadLinkCoordinator, cadLinkCoordinatorBridge } from './CadLinkCoordinator';
-import { jobsCoordinatorBridge } from './JobsCoordinator';
+import { cadSolveBlockerNow, jobsCoordinatorBridge, SolveEngineUnavailableError } from './JobsCoordinator';
 import { workspaceNavigation } from './workspaceNavigation';
 
 const initialBundle: CadReturnBundle = {
@@ -76,6 +77,14 @@ const ingestRecord: CadReturnIngestRecord = {
   tag_map: {},
 };
 
+/** One triangle: enough for the viewport to hold a scene tagged with its
+ * ingest id, which is what the solve gate compares against. */
+const viewportMesh = [
+  '$MeshFormat', '2.2 0 8', '$EndMeshFormat',
+  '$Nodes', '3', '1 0 0 0', '2 1 0 0', '3 0 1 0', '$EndNodes',
+  '$Elements', '1', '1 2 2 1 1 1 2 3', '$EndElements', '',
+].join('\n');
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((settle) => { resolve = settle; });
@@ -95,6 +104,7 @@ describe('CadLinkCoordinator', () => {
     resetCadReturnStore();
     resetDesignStore();
     resetDocumentStore();
+    parkedSolveCommandStore.clear();
     workspaceModeStore.setMode('parametric');
     preferencesStore.resetForTests();
     host = document.createElement('div');
@@ -105,6 +115,7 @@ describe('CadLinkCoordinator', () => {
   afterEach(() => {
     act(() => root.unmount());
     importedMeshStore.clear();
+    parkedSolveCommandStore.clear();
     workspaceModeStore.setMode('parametric');
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
@@ -378,7 +389,11 @@ describe('CadLinkCoordinator', () => {
       if (path.endsWith('/ingest')) return json(ingestRecord);
       return json({}, 404);
     }));
-    const solveCurrentCadImport = vi.fn(async () => 'submitted' as const);
+    // The real solve path retires the parked command with the job it created.
+    const solveCurrentCadImport = vi.fn(async () => {
+      await consumeParkedSolveCommand('job-1');
+      return 'submitted' as const;
+    });
     vi.spyOn(jobsCoordinatorBridge, 'getSnapshot').mockReturnValue({
       ...jobsCoordinatorBridge.getSnapshot(), solveCurrentCadImport,
     });
@@ -387,14 +402,214 @@ describe('CadLinkCoordinator', () => {
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
 
     expect(solveCurrentCadImport).toHaveBeenCalledOnce();
-    expect(reported).toEqual([{ commandId: 'cmd-1', state: 'accepted' }]);
+    expect(reported).toEqual([{ commandId: 'cmd-1', state: 'accepted', jobId: 'job-1', reason: null }]);
     expect(cadLinkCoordinatorBridge.getSnapshot().status).toBe('Solving the model Fusion sent.');
+    expect(parkedSolveCommandStore.getSnapshot().command).toBeNull();
+    expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
 
     // A terminal command surfaces its existing job; it never submits again.
     outcome = { state: 'accepted', jobId: 'job-7', reason: null, at: '' };
     command = { ...command, commandId: 'cmd-2' };
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     expect(solveCurrentCadImport).toHaveBeenCalledOnce();
+  });
+
+  /** Everything a Fusion "Solve in WG" needs: a listing, a marker whose value
+   * the test controls, an ingest per command, and a viewport artifact — so the
+   * gate in `cadSolveBlockerNow` runs against real store state. */
+  const solveCommandHarness = (options: {
+    ingests: CadReturnIngestRecord[];
+    solve?: () => Promise<'submitted' | 'busy'>;
+  }) => {
+    const reported: Array<Record<string, unknown>> = [];
+    const submitted: string[] = [];
+    let pendingCommand: Record<string, unknown> | null = null;
+    let ingestIndex = 0;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json({ items: [initialBundle] });
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.endsWith('/solve-command/outcome')) {
+        reported.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        // The server retires the marker with a terminal outcome.
+        pendingCommand = null;
+        return json({ state: 'recorded', cleared: true });
+      }
+      if (path.endsWith('/solve-command')) return json({ command: pendingCommand, outcome: null });
+      if (path.endsWith('/ingest')) {
+        const record = options.ingests[Math.min(ingestIndex, options.ingests.length - 1)];
+        ingestIndex += 1;
+        return json(record);
+      }
+      if (path.includes('/viewport-mesh')) return new Response(viewportMesh, { status: 200 });
+      return json({}, 404);
+    }));
+    const solveCurrentCadImport = vi.fn(options.solve ?? (async () => {
+      // The production gate, not a stand-in: this is the assertion.
+      const blocker = cadSolveBlockerNow();
+      if (blocker) throw new Error(blocker);
+      const record = useCadReturnStore.getState().ingestRecord;
+      submitted.push(String(record?.ingest_id));
+      await consumeParkedSolveCommand(`job-${submitted.length}`);
+      return 'submitted' as const;
+    }));
+    vi.spyOn(jobsCoordinatorBridge, 'getSnapshot').mockReturnValue({
+      ...jobsCoordinatorBridge.getSnapshot(), solveCurrentCadImport,
+    });
+    return {
+      reported,
+      submitted,
+      solveCurrentCadImport,
+      issue(commandId: string) { pendingCommand = {
+        commandId, returnId: 'wgr_1', bundlePath: initialBundle.bundlePath,
+        manifestSha256: `sha256:${commandId}`, requestedAt: '2026-08-18T12:00:00Z',
+      }; },
+    };
+  };
+
+  it('solves consecutive Fusion-initiated commands instead of refusing on the previous mesh', async () => {
+    vi.useFakeTimers();
+    const harness = solveCommandHarness({
+      ingests: [
+        { ...ingestRecord, ingest_id: 'wgi_first' },
+        { ...ingestRecord, ingest_id: 'wgi_second' },
+      ],
+    });
+    await renderCoordinator();
+
+    harness.issue('cmd-1');
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_600); });
+    expect(harness.submitted).toEqual(['wgi_first']);
+    expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe('wgi_first');
+
+    // The second command ingests fresh geometry. Before the viewport display
+    // was awaited, the gate still saw the first ingest's mesh and refused.
+    harness.issue('cmd-2');
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_600); });
+    expect(harness.submitted).toEqual(['wgi_first', 'wgi_second']);
+    expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe('wgi_second');
+    expect(cadLinkCoordinatorBridge.getSnapshot().error).toBeNull();
+    expect(harness.reported).toEqual([
+      { commandId: 'cmd-1', state: 'accepted', jobId: 'job-1', reason: null },
+      { commandId: 'cmd-2', state: 'accepted', jobId: 'job-2', reason: null },
+    ]);
+  });
+
+  it('drops a viewport mesh it could not replace rather than blocking the next solve', async () => {
+    vi.useFakeTimers();
+    const harness = solveCommandHarness({
+      ingests: [
+        { ...ingestRecord, ingest_id: 'wgi_first' },
+        { ...ingestRecord, ingest_id: 'wgi_second' },
+      ],
+    });
+    await renderCoordinator();
+    harness.issue('cmd-1');
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_600); });
+    expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe('wgi_first');
+
+    // Both display artifacts fail for the second ingestion.
+    const failing = vi.mocked(fetch).getMockImplementation()!;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => (
+      String(input).includes('/viewport-mesh') || String(input).endsWith('/mesh')
+        ? json({}, 500)
+        : failing(input, init)
+    )));
+    harness.issue('cmd-2');
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_600); });
+
+    expect(importedMeshStore.getSnapshot().cad).toBeNull();
+    expect(harness.submitted).toEqual(['wgi_first', 'wgi_second']);
+  });
+
+  it('parks a gated Fusion command, consumes it on the next solve, and never replays it', async () => {
+    vi.useFakeTimers();
+    const blocking: CadReturnIngestRecord = {
+      ...ingestRecord,
+      ingest_id: 'wgi_blocked',
+      findings: [{ id: 'finding-a', kind: 'freshness', blocking: true, verdict: 'design_changed' }],
+    };
+    const harness = solveCommandHarness({ ingests: [blocking] });
+    await renderCoordinator();
+
+    harness.issue('cmd-1');
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_600); });
+
+    // Parked, not discarded: nothing was submitted and nothing was reported.
+    expect(harness.submitted).toEqual([]);
+    expect(harness.reported).toEqual([]);
+    expect(parkedSolveCommandStore.getSnapshot().command).toMatchObject({
+      commandId: 'cmd-1',
+      bundlePath: initialBundle.bundlePath,
+      blockers: ['Acknowledge 1 blocking finding before solving.'],
+    });
+    expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
+
+    // The command sits still while it is parked; polling never re-submits it.
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_200); });
+    expect(harness.solveCurrentCadImport).toHaveBeenCalledOnce();
+
+    // Acknowledging and solving consumes the very same request, with its job.
+    await act(async () => {
+      useCadReturnStore.getState().acknowledgeAllBlocking();
+      await cadLinkCoordinatorBridge.getSnapshot().solveParkedCommand();
+    });
+    expect(harness.submitted).toEqual(['wgi_blocked']);
+    expect(harness.reported).toEqual([
+      { commandId: 'cmd-1', state: 'accepted', jobId: 'job-1', reason: null },
+    ]);
+    expect(parkedSolveCommandStore.getSnapshot().command).toBeNull();
+
+    // Terminal on the server, so a later poll cannot solve it a second time.
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_200); });
+    expect(harness.submitted).toEqual(['wgi_blocked']);
+  });
+
+  it('reports a dismissed command as refused so it cannot come back', async () => {
+    vi.useFakeTimers();
+    const blocking: CadReturnIngestRecord = {
+      ...ingestRecord,
+      findings: [{ id: 'finding-a', kind: 'freshness', blocking: true }],
+    };
+    const harness = solveCommandHarness({ ingests: [blocking] });
+    await renderCoordinator();
+    harness.issue('cmd-1');
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_600); });
+    expect(parkedSolveCommandStore.getSnapshot().command?.commandId).toBe('cmd-1');
+
+    await act(async () => { await cadLinkCoordinatorBridge.getSnapshot().dismissSolveCommand(); });
+
+    expect(harness.reported).toEqual([{
+      commandId: 'cmd-1',
+      state: 'refused',
+      jobId: null,
+      reason: 'Dismissed in Waveguide Generator without solving.',
+    }]);
+    expect(parkedSolveCommandStore.getSnapshot().command).toBeNull();
+    expect(cadLinkCoordinatorBridge.getSnapshot().status).toContain('will not be offered again');
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_200); });
+    expect(harness.submitted).toEqual([]);
+  });
+
+  it('refuses a Fusion command outright when the machine has no Metal engine', async () => {
+    vi.useFakeTimers();
+    const harness = solveCommandHarness({
+      ingests: [ingestRecord],
+      solve: async () => { throw new SolveEngineUnavailableError('Metal engine is unavailable'); },
+    });
+    await renderCoordinator();
+    harness.issue('cmd-1');
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_600); });
+
+    expect(harness.reported).toEqual([{
+      commandId: 'cmd-1', state: 'refused', jobId: null, reason: 'Metal engine is unavailable',
+    }]);
+    expect(parkedSolveCommandStore.getSnapshot().command).toBeNull();
+    expect(cadLinkCoordinatorBridge.getSnapshot().error).toContain('Metal engine is unavailable');
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_200); });
+    expect(harness.solveCurrentCadImport).toHaveBeenCalledOnce();
   });
 
   it('detects and auto-selects a newly arrived return', async () => {
@@ -408,6 +623,9 @@ describe('CadLinkCoordinator', () => {
     const activate = vi.spyOn(workspaceNavigation, 'activate').mockReturnValue(true);
     await renderCoordinator();
     expect(useCadReturnStore.getState().selectedBundle).toEqual(initialBundle);
+    // A first listing is not an arrival: nothing new happened, so nothing may
+    // take the workspace away from the parametric design on screen.
+    expect(workspaceModeStore.getSnapshot().mode).toBe('parametric');
 
     const arrived = { ...initialBundle, modifiedAt: '2026-08-13T12:00:00Z', documentName: 'Speaker rebuilt' };
     listing = { items: [arrived] };
@@ -420,6 +638,9 @@ describe('CadLinkCoordinator', () => {
     expect(cadLinkCoordinatorBridge.getSnapshot().status).toBe(
       'Received Speaker rebuilt from Fusion 360. Kept your mesh, channel, and solve settings.',
     );
+    // The status above renders only inside the CAD Link panel, which exists
+    // only in CAD mode — so the arrival has to enter it to be visible at all.
+    expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
     expect(activate).toHaveBeenCalledWith('cadlink');
   });
 
