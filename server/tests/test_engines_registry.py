@@ -22,19 +22,35 @@ from server.solver.field_traces_store import (
 
 
 def test_detection_uses_honest_probe_reasons_and_dryrun_gate(monkeypatch) -> None:
-    from server.solver import bempp, circsym, metal
+    from server.solver import beat, bempp, circsym, metal
 
     monkeypatch.setattr(metal, "metal_status", lambda: {"available": True, "reason": "helper loadable", "version": "1"})
     monkeypatch.setattr(bempp, "bempp_status", lambda: {"available": False, "reason": "package absent", "version": None})
+    monkeypatch.setattr(beat, "beat_status", lambda: {"available": False, "reason": "no supported GPU", "version": None})
     monkeypatch.setattr(circsym, "circsym_status", lambda: {"available": True, "reason": "meridian ready", "version": "2"})
     detected = registry.detect_engines(environ={"WG2_ENABLE_DRYRUN": "1"})
     assert [(item.name, item.available, item.reason) for item in detected] == [
         ("dryrun", True, "Enabled explicitly by WG2_ENABLE_DRYRUN=1"),
         ("metal", True, "helper loadable"),
         ("bempp", False, "package absent"),
+        ("beat", False, "no supported GPU"),
     ]
     assert detected[1].fast_paths == ("axisymmetric-meridian",)
     assert all(item.name != "circsym" for item in detected)
+
+
+def test_auto_resolution_never_picks_the_gpu_beat_engine() -> None:
+    """BEAT is explicit-selection only until its GPU priority is measured."""
+
+    capabilities = [
+        registry.EngineInfo("metal", False, "no metal here", None),
+        registry.EngineInfo("bempp", False, "package absent", None),
+        registry.EngineInfo("beat", True, "CUDA functional", "0.1.0"),
+    ]
+    assert registry.resolve_auto_engine(capabilities=capabilities) is None
+    assert (
+        registry.get_engine("beat", capabilities=capabilities) is not None
+    )
 
 
 def test_capability_snapshot_is_reused_by_solve_submission(tmp_path: Path) -> None:

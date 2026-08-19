@@ -25,8 +25,8 @@ export type BackendFeature =
  *
  * All three are Metal-only today. The mesher emits a coupled ``MOUTH_APERTURE``
  * group for infinite baffle that only Metal knows how to couple to the exterior
- * half-space; BEMPP is always full 3-D and has no meridian path; and imported
- * geometry is refused outright on anything but Metal.
+ * half-space; BEMPP and BEAT are always full 3-D and have no meridian path; and
+ * imported geometry is refused outright on anything but Metal.
  */
 const FEATURE_BACKENDS: Record<BackendFeature, readonly string[]> = {
   'infinite-baffle': ['metal'],
@@ -75,7 +75,7 @@ export function backendSupports(backend: string | null, feature: BackendFeature)
   if (!backend) return true;
   const normalized = backend.trim().toLowerCase();
   const known = Object.values(FEATURE_BACKENDS).some((names) => names.includes(normalized))
-    || normalized === 'bempp' || normalized === 'dryrun';
+    || normalized === 'bempp' || normalized === 'dryrun' || normalized === 'beat';
   if (!known) return true;
   return FEATURE_BACKENDS[feature].includes(normalized);
 }
