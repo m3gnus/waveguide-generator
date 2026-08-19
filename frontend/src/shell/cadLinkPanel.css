@@ -20,6 +20,9 @@
 .cadlink-toolbar { min-height: 28px; border-bottom: 1px solid var(--hair); padding-bottom: 6px; }
 .cadlink-toolbar button, .cad-section button { display: inline-flex; align-items: center; gap: 4px; }
 .cad-alert, .cad-status-strip { margin: 7px 0; padding: 6px 7px; border: 1px solid var(--red); background: color-mix(in srgb, var(--red) 8%, transparent); }
+/* Not a failure, a boundary: the CAD round trip below still works and only
+   the solve is out of reach, so this reads amber rather than red. */
+.cad-alert.cad-solver-unavailable { border-color: var(--amber); background: color-mix(in srgb, var(--amber) 8%, transparent); }
 .cad-status-strip { border-color: var(--hair); background: var(--ov1); color: var(--fg2); }
 .cad-return-quick-action { display: grid; gap: 7px; margin: 7px 0; padding: 8px; border: 1px solid color-mix(in srgb, var(--acc) 45%, var(--hair)); background: color-mix(in srgb, var(--acc) 7%, var(--surface-panel)); }
 .cad-return-quick-action > div:first-child { display: grid; gap: 2px; }

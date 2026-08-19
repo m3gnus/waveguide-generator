@@ -1,5 +1,6 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadReturnIngestRecord, CadReturnListing, FusionCadStatus } from '../api/cadlink';
 import type { OnshapeLink } from '../api/onshape';
@@ -63,8 +64,12 @@ const currentFusion: FusionCadStatus = {
   realizedDimensions: { state: 'current', instanceId: 'instance-a', exportId: 'wge_2', parameters: [] },
 };
 
+/** The panel reads solver capabilities to report whether an imported model can
+ * be solved here at all, so it needs the same query client the app provides. */
+const capabilityClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
 function CadLinkTestSurface() {
-  return <><CadLinkCoordinator/><CadLinkPanel/></>;
+  return <QueryClientProvider client={capabilityClient}><CadLinkCoordinator/><CadLinkPanel/></QueryClientProvider>;
 }
 
 function json(body: unknown, status = 200): Response {
