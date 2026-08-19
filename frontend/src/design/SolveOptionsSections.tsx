@@ -2,6 +2,7 @@ import { useSyncExternalStore } from 'react';
 import { jobsSocket } from '../api/jobsSocket';
 import { compareSelection } from '../api/results';
 import { useCapabilities } from '../jobs/useCapabilities';
+import { backendSupports } from './backendSupport';
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import { widenPolarToDerivation } from '../jobs/importedSubmission';
 import { HelpTipRow, useHelpTip } from './HelpTip';
@@ -69,9 +70,11 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null 
   const { engines, error } = useCapabilities();
   const backendEngines = engines.filter((engine) => engine.name.toLowerCase() !== 'circsym');
   const selectedEngine = store.engine === 'auto'
-    ? ['metal', 'bempp', 'dryrun'].flatMap((name) => backendEngines.filter((engine) => engine.available && engine.name.toLowerCase() === name))[0]
+    ? ['metal', 'beat', 'bempp', 'dryrun'].flatMap((name) => backendEngines.filter((engine) => engine.available && engine.name.toLowerCase() === name))[0]
     : backendEngines.find((engine) => engine.name.toLowerCase() === store.engine);
   const fastPaths = selectedEngine?.fast_paths ?? [];
+  const meridianAvailable = backendSupports(selectedEngine?.name.toLowerCase() ?? null, 'meridian-fast-path');
+  const metalAvailable = engines.some((engine) => engine.name.toLowerCase() === 'metal' && engine.available);
   return <>
     {mode === 'parametric' ? <>
       <HelpTipRow className="select-row" text="Which BEM engine runs the solve. AUTO takes the first backend that is actually available on this machine. All backends solve the same problem; they differ in speed and in which fast paths they support."><label htmlFor="solve-engine">Solver backend</label><select id="solve-engine" value={store.engine} onChange={(event) => store.setEngine(event.target.value)}>
@@ -81,11 +84,16 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null 
       <p className="section-note">{selectedEngine?.name.toLowerCase() === 'metal' && fastPaths.includes('axisymmetric-meridian')
         ? 'Metal capability: automatic axisymmetric meridian fast path when the geometry is eligible.'
         : 'Selected backend capability: Full 3D.'}</p>
-      <p className="section-note">Solver mode labels: {solverModeLabels.auto}, {solverModeLabels.full_3d}, {solverModeLabels.circsym}.</p>
+      {/* Listing the axisymmetric label on a backend that refuses it advertises
+          a mode the user cannot reach; naming only what this backend runs keeps
+          the note a fact rather than a menu of two-thirds-available options. */}
+      <p className="section-note">Solver mode labels: {solverModeLabels.auto}, {solverModeLabels.full_3d}{meridianAvailable ? `, ${solverModeLabels.circsym}` : ''}.</p>
     </> : <>
       {/* Imported submissions force both values. Static facts keep the rail
-          honest without creating a second control that the submit path drops. */}
-      <p className="cad-solve-fact"><b>Solver</b><span>Metal · full 3-D · free space</span></p>
+          honest without creating a second control that the submit path drops.
+          "Metal" is a requirement, not an observation, so where there is no
+          Metal engine the rail has to report that rather than assert it. */}
+      <p className={`cad-solve-fact${metalAvailable ? '' : ' cad-solve-fact-unavailable'}`}><b>Solver</b><span>Metal · full 3-D · free space{metalAvailable ? '' : ' · unavailable on this machine'}</span></p>
       <p className="cad-solve-fact"><b>Ingested cut planes</b><span>{ingestRecord?.symmetry.cut_planes?.length ? ingestRecord.symmetry.cut_planes.join(', ') : 'none · full domain'}</span></p>
     </>}
     <HelpTipRow className="select-row" text="What happens when the solver mesh fails its topology check. Warn solves anyway and reports the problem; Strict refuses to solve a mesh that is not watertight; Off hides the warning entirely. Results from an invalid mesh cannot be trusted, so leave this on Warn unless you know why."><label htmlFor="mesh-validation-mode">Mesh validation policy</label><select id="mesh-validation-mode" value={store.meshValidationMode} onChange={(event) => store.setMeshValidationMode(event.target.value as MeshValidationMode)}><option value="warn">Warn</option><option value="strict">Strict</option><option value="off">Off</option></select></HelpTipRow>

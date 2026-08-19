@@ -40,6 +40,7 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
             )
         )
 
+    from server.solver.beat import beat_status
     from server.solver.bempp import bempp_status
     from server.solver.circsym import circsym_status
     from server.solver.metal import metal_status
@@ -53,7 +54,15 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
             "version": None,
         }
 
-    for name, probe in (("metal", metal_status), ("bempp", bempp_status)):
+    # "beat" is the GPU engine (hornlab-beat-bem). Its probe reports available
+    # only when a functional CUDA/ROCm path exists (or the internal force-CPU
+    # test switch is set), so on CPU-only hosts it shows up with an honest
+    # unavailable reason and BEMPP stays the CPU engine.
+    for name, probe in (
+        ("metal", metal_status),
+        ("bempp", bempp_status),
+        ("beat", beat_status),
+    ):
         try:
             status = probe()
         except Exception as exc:  # a broken optional stack is unavailable, not fatal
@@ -95,6 +104,10 @@ def create_engine(name: str) -> Any | None:
         from server.solver.bempp import BemppEngine
 
         return BemppEngine()
+    if normalized == "beat":
+        from server.solver.beat import BeatEngine
+
+        return BeatEngine()
     if normalized == "circsym":
         from server.solver.circsym import CircSymEngine
 
@@ -125,15 +138,22 @@ def resolve_auto_engine(
 ) -> str | None:
     """Resolve AUTO to the best engine this host can actually run.
 
-    Solver mode chooses a path inside a backend, not a backend. AUTO therefore
-    always prefers Metal, then BEMPP. The gated dry-run engine is only a final
-    development fallback when no physical solver is available.
+    Solver mode chooses a path inside a backend, not a backend. AUTO prefers
+    Metal, then the GPU BEAT engine, then BEMPP; the gated dry-run engine is
+    only a final development fallback when no physical solver is available.
+
+    The order is safe because availability already encodes the platform:
+    Metal exists only on macOS, and "beat" advertises available only when a
+    functional CUDA/ROCm device was probed (never for its internal CPU path),
+    so AUTO reaches beat exactly on GPU-equipped non-Mac hosts, where the
+    accelerated dense solve is the point of the backend. BEMPP remains the
+    universal CPU engine.
     """
 
     detected = list(capabilities) if capabilities is not None else detect_engines(environ=environ)
     available = {item.name for item in detected if item.available}
     del solver_mode
-    for candidate in ("metal", "bempp", "dryrun"):
+    for candidate in ("metal", "beat", "bempp", "dryrun"):
         if candidate in available:
             return candidate
     return None

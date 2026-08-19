@@ -12,6 +12,7 @@ import { recordCommittedAthPolars, useDesignStore } from '../stores/design';
 import { polarConfigFromUi, useSolveOptionsStore } from '../stores/solveOptions';
 import { useDocumentStore } from '../stores/document';
 import { designNameSlug, UNTITLED_SLUG } from '../stores/designName';
+import { useCapabilities } from '../jobs/useCapabilities';
 import { cadLinkCoordinatorBridge } from './CadLinkCoordinator';
 import { fusionWorkflowView, onshapeWorkflowView, type CadWorkflowView } from './cadWorkflowView';
 import { Icon } from './icons';
@@ -193,6 +194,14 @@ export function CadLinkPanel() {
 
   const workflow = onshape ? onshapeWorkflowView(onshapeStatus) : fusionWorkflowView(fusionStatus);
   const cadApplicationLabel = cadApplicationName(onshape ? 'onshape' : 'fusion360', 'full');
+  // Imported geometry is solved on Metal or not at all: runtime.py rewrites
+  // AUTO to metal and refuses bempp outright. Without Metal the whole round
+  // trip still works as a CAD workflow and only the solve is out of reach, so
+  // this states the boundary up front instead of hiding the panel or letting
+  // someone discover it after exporting, ingesting and acknowledging findings.
+  const { engines: solverEngines, isLoading: capabilitiesLoading } = useCapabilities();
+  const metalUnavailable = !capabilitiesLoading
+    && !solverEngines.some((engine) => engine.name.toLowerCase() === 'metal' && engine.available);
   const designName = designNameSlug(documentName);
   const shownName = designName === UNTITLED_SLUG ? 'this design' : designName;
   const actionLabel = workflow.action === 'update' ? 'Send WG changes to Onshape' : `Create ${shownName} in Onshape`;
@@ -216,6 +225,12 @@ export function CadLinkPanel() {
   const linkedDocument = onshapeStatus?.link ?? null;
 
   return <div className="cadlink-panel panel-scroll">
+    {metalUnavailable && <div className="cad-alert cad-solver-unavailable" role="status">
+      <b>Imported CAD geometry cannot be solved on this machine.</b> Solving an
+      ingested model needs the Metal backend, which is macOS-only; this host has
+      no Metal engine available. The round trip below still works for building
+      and exporting geometry, and the parametric workspace still solves here.
+    </div>}
     {/* Fusion's outbound leg lives in the design menu and the Geometry rail;
         this panel only reports the connection and owns the inbound leg. The
         Onshape workflow keeps its two numbered steps: the panel is its home. */}

@@ -39,6 +39,7 @@ REQUIREMENT_FILES = (
 REQUIRED_DISTRIBUTIONS = (
     "fastapi",
     "gmsh",
+    "hornlab-beat-bem",
     "hornlab-bempp-bem",
     "hornlab-metal-bem",
     "hornlab-plots",
@@ -445,6 +446,31 @@ def bootstrap(environment: Path, *, force: bool = False) -> None:
     environment = environment.expanduser().resolve()
     with _bootstrap_lock(environment):
         _bootstrap_locked(environment, force=force)
+    _provision_gpu_runtime(_venv_python(environment))
+
+
+def _provision_gpu_runtime(python: Path) -> None:
+    """Best-effort BEAT GPU runtime setup; a strict no-op without the hardware.
+
+    ``hornlab_beat_bem.provision --if-nvidia-gpu`` checks for an NVIDIA GPU
+    first and exits silently when there is none, so CPU-only machines never
+    download the ~200 MB Julia runtime or the multi-GB CUDA stack. Failures
+    (offline, low disk, old driver) are recorded by the provisioner and show
+    up as the engine's capability reason; they never fail the bootstrap --
+    every other engine keeps working. WG2_SKIP_GPU_PROVISION=1 opts out.
+    """
+
+    if os.environ.get("WG2_SKIP_GPU_PROVISION", "").strip() == "1":
+        return
+    importable = _run(
+        [str(python), "-c", "import hornlab_beat_bem.provision"], quiet=True
+    )
+    if importable.returncode != 0:
+        # The optional GPU engine is not installed in this environment.
+        return
+    # The provisioner announces its own download sizes once it decides to run;
+    # without a supported GPU it exits silently, so CPU-only launches stay quiet.
+    _run([str(python), "-m", "hornlab_beat_bem.provision", "--if-gpu"])
 
 
 def _bootstrap_locked(environment: Path, *, force: bool = False) -> None:
