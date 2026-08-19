@@ -94,8 +94,16 @@
 .field-plane-presets { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin-top: 8px; }
 .field-plane-presets button { min-width: 0; padding: 3px 4px; border: 1px solid var(--hair-hi); border-radius: var(--r3); background: var(--ov1); color: var(--fg2); font: 620 var(--text-micro) var(--ui); }
 .field-plane-presets button:hover { border-color: rgba(var(--acc-rgb), .48); background: rgba(var(--acc-rgb), .1); color: var(--fg1); }
-.field-plane-offset { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 6px; margin-top: 6px; color: var(--fg3); font: var(--text-micro) var(--mono); }
-.field-plane-offset input { min-width: 0; height: 20px; padding: 0 4px; border: 1px solid var(--hair-hi); border-radius: var(--r3); background: var(--surface-raised); color: var(--fg1); font: inherit; text-align: right; }
+.field-plane-frequency { display: flex; flex-direction: column; gap: 2px; margin-bottom: 7px; }
+.field-plane-frequency input { width: 100%; min-width: 0; accent-color: var(--acc); }
+.field-plane-frequency-scale { display: flex; justify-content: space-between; gap: 6px; color: var(--fg4); font: var(--text-micro) var(--mono); }
+.field-plane-transform { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.field-plane-transform-row { display: grid; grid-template-columns: 40px repeat(3, minmax(0, 1fr)); align-items: center; gap: 4px; color: var(--fg3); font: var(--text-micro) var(--mono); }
+.field-plane-number { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 3px; color: var(--fg4); font: var(--text-micro) var(--mono); }
+.field-plane-number input { min-width: 0; height: 20px; padding: 0 3px; border: 1px solid var(--hair-hi); border-radius: var(--r3); background: var(--surface-raised); color: var(--fg1); font: inherit; text-align: right; }
+.field-plane-probe { position: absolute; z-index: 6; display: flex; flex-direction: column; gap: 1px; padding: 5px 8px; border: 1px solid var(--glass-bd); border-radius: var(--r3); background: var(--glass-bg); box-shadow: var(--glass-sh); color: var(--fg2); font: var(--text-micro) var(--mono); white-space: nowrap; pointer-events: none; backdrop-filter: blur(10px) saturate(1.2); }
+.field-plane-probe b { color: var(--fg1); font-weight: 680; }
+.field-plane-probe-position { color: var(--fg4); }
 .field-plane-status { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--hair); color: var(--amber); font-size: var(--text-micro); line-height: 1.35; }
 .field-plane-status.error { color: var(--red); }
 .field-plane-status button { flex: none; padding: 2px 6px; border: 1px solid currentColor; border-radius: var(--r3); background: transparent; color: currentColor; font: 650 var(--text-micro) var(--mono); text-transform: uppercase; }

@@ -30,14 +30,23 @@ import {
   maxFieldSplDb,
 } from './fieldPlaneColor';
 import {
-  fieldPlaneNormal,
+  fieldPlaneAxisVector,
+  probeFieldPlaneRay,
+  resizeFieldPlane,
   rotateFieldPlane,
   rotationAngleFromRays,
   snapFieldPlaneRotation,
-  translationDeltaAlongNormal,
+  translateFieldPlane,
+  translationDeltaAlongAxis,
   type FieldPlaneRay,
   type FieldPlaneRotationAxis,
+  type FieldPlaneTranslationAxis,
 } from './fieldPlaneMath';
+import {
+  fieldPlaneMaskedAt,
+  sampleFieldPlaneBilinear,
+  useFieldPlaneProbeStore,
+} from './fieldPlaneProbe';
 import { FIELD_PLANE_FRAGMENT_SHADER, FIELD_PLANE_VERTEX_SHADER } from './fieldPlaneShader';
 import type { FieldPlaneMaskRequest, FieldPlaneMaskResponse } from './fieldPlaneMaskProtocol';
 import { maskMatchesGeometry, useFieldPlaneMaskStore, type AppliedFieldPlaneMask } from './fieldPlaneMaskStore';
@@ -56,7 +65,21 @@ interface ReadyFieldPlaneProps extends FieldPlaneProps {
   field: DecodedFieldPlane;
 }
 
-type FieldPlaneHandle = 'translate' | 'rotate-u' | 'rotate-v';
+type FieldPlaneHandle =
+  | 'translate-u'
+  | 'translate-v'
+  | 'translate-n'
+  | 'rotate-u'
+  | 'rotate-v'
+  | 'resize-u'
+  | 'resize-v'
+  | 'resize-uv';
+
+const TRANSLATION_AXIS: Readonly<Record<'translate-u' | 'translate-v' | 'translate-n', FieldPlaneTranslationAxis>> = {
+  'translate-u': 'u',
+  'translate-v': 'v',
+  'translate-n': 'n',
+};
 
 interface ActiveFieldPlaneDrag {
   pointerId: number;
@@ -316,16 +339,25 @@ function nearestHandle(
 function FieldPlaneHandles({ plane, unitsPerMetre, scheduler }: Pick<ReadyFieldPlaneProps, 'plane' | 'unitsPerMetre' | 'scheduler'>) {
   const gl = useThree((state) => state.gl);
   const camera = useThree((state) => state.camera);
-  const translateRef = useRef<Group>(null);
+  const translateURef = useRef<Group>(null);
+  const translateVRef = useRef<Group>(null);
+  const translateNRef = useRef<Group>(null);
   const rotateURef = useRef<Group>(null);
   const rotateVRef = useRef<Group>(null);
+  const resizeURef = useRef<Group>(null);
+  const resizeVRef = useRef<Group>(null);
+  const resizeUVRef = useRef<Group>(null);
   const drag = useRef<ActiveFieldPlaneDrag | null>(null);
   const transform = useMemo(() => fieldPlaneTransform(plane, unitsPerMetre), [plane, unitsPerMetre]);
+  const halfWidth = plane.width_m * unitsPerMetre / 2;
+  const halfHeight = plane.height_m * unitsPerMetre / 2;
   const smallerExtent = Math.max(Math.min(plane.width_m, plane.height_m) * unitsPerMetre, 1e-6);
   const handleLength = smallerExtent * 0.34;
   const ringRadius = smallerExtent * 0.24;
   const handleRadius = smallerExtent * 0.009;
   const pickRadius = smallerExtent * 0.035;
+  const gripSize = smallerExtent * 0.032;
+  const gripPick = gripSize * 2.4;
 
   useEffect(() => {
     const element = gl.domElement;
@@ -334,7 +366,12 @@ function FieldPlaneHandles({ plane, unitsPerMetre, scheduler }: Pick<ReadyFieldP
       if (event.button !== 0 || drag.current) return;
       const startRay = rayFromPointer(event, element, camera, raycaster);
       const handle = nearestHandle(raycaster, [
-        ['translate', translateRef.current],
+        ['resize-uv', resizeUVRef.current],
+        ['resize-u', resizeURef.current],
+        ['resize-v', resizeVRef.current],
+        ['translate-u', translateURef.current],
+        ['translate-v', translateVRef.current],
+        ['translate-n', translateNRef.current],
         ['rotate-u', rotateURef.current],
         ['rotate-v', rotateVRef.current],
       ]);
@@ -357,25 +394,48 @@ function FieldPlaneHandles({ plane, unitsPerMetre, scheduler }: Pick<ReadyFieldP
       event.preventDefault();
       event.stopPropagation();
       const currentRay = rayFromPointer(event, element, camera, raycaster);
+      const startPlane = active.startPlane;
+      const center = startPlane.origin_m.map((value) => value * unitsPerMetre) as [number, number, number];
+      const axisU = fieldPlaneAxisVector(startPlane, 'u');
+      const axisV = fieldPlaneAxisVector(startPlane, 'v');
+      const along = (axis: [number, number, number], gripOrigin: [number, number, number]) =>
+        translationDeltaAlongAxis(active.startRay, currentRay, gripOrigin, axis);
+      const offsetFrom = (
+        uUnits: number,
+        vUnits: number,
+      ): [number, number, number] => [
+        center[0] + axisU[0] * uUnits + axisV[0] * vUnits,
+        center[1] + axisU[1] * uUnits + axisV[1] * vUnits,
+        center[2] + axisU[2] * uUnits + axisV[2] * vUnits,
+      ];
+      const startHalfWidth = startPlane.width_m * unitsPerMetre / 2;
+      const startHalfHeight = startPlane.height_m * unitsPerMetre / 2;
       let next: FieldPlaneSpec | null = null;
-      if (active.handle === 'translate') {
-        const normal = fieldPlaneNormal(active.startPlane);
-        const origin = active.startPlane.origin_m.map((value) => value * unitsPerMetre) as [number, number, number];
-        const delta = translationDeltaAlongNormal(active.startRay, currentRay, origin, normal);
-        if (delta !== null) {
-          next = {
-            ...active.startPlane,
-            origin_m: active.startPlane.origin_m.map((value, index) => (
-              value + normal[index] * delta / unitsPerMetre
-            )) as [number, number, number],
-          };
-        }
-      } else {
+      if (active.handle === 'translate-u' || active.handle === 'translate-v' || active.handle === 'translate-n') {
+        const axis = TRANSLATION_AXIS[active.handle];
+        const delta = along(fieldPlaneAxisVector(startPlane, axis), center);
+        if (delta !== null) next = translateFieldPlane(startPlane, axis, delta / unitsPerMetre);
+      } else if (active.handle === 'rotate-u' || active.handle === 'rotate-v') {
         const rotationAxis: FieldPlaneRotationAxis = active.handle === 'rotate-u' ? 'u' : 'v';
-        const center = active.startPlane.origin_m.map((value) => value * unitsPerMetre) as [number, number, number];
-        const axis = rotationAxis === 'u' ? active.startPlane.axis_u : active.startPlane.axis_v;
+        const axis = rotationAxis === 'u' ? startPlane.axis_u : startPlane.axis_v;
         const angle = rotationAngleFromRays(active.startRay, currentRay, center, axis);
-        if (angle !== null) next = rotateFieldPlane(active.startPlane, rotationAxis, snapFieldPlaneRotation(angle, event.altKey));
+        if (angle !== null) next = rotateFieldPlane(startPlane, rotationAxis, snapFieldPlaneRotation(angle, event.altKey));
+      } else {
+        // Grips sit on the +u / +v edges; the plane grows symmetrically about
+        // its centre, so the extent changes by twice the handle travel.
+        const grip = offsetFrom(
+          active.handle === 'resize-v' ? 0 : startHalfWidth,
+          active.handle === 'resize-u' ? 0 : startHalfHeight,
+        );
+        const widthDelta = active.handle === 'resize-v' ? 0 : along(axisU, grip);
+        const heightDelta = active.handle === 'resize-u' ? 0 : along(axisV, grip);
+        if (widthDelta !== null && heightDelta !== null) {
+          next = resizeFieldPlane(
+            startPlane,
+            2 * widthDelta / unitsPerMetre,
+            2 * heightDelta / unitsPerMetre,
+          );
+        }
       }
       if (!next) return;
       useFieldPlaneStore.getState().updatePlaneDrag(next);
@@ -404,21 +464,46 @@ function FieldPlaneHandles({ plane, unitsPerMetre, scheduler }: Pick<ReadyFieldP
     };
   }, [camera, gl, plane, scheduler, unitsPerMetre]);
 
+  const arrow = (
+    reference: typeof translateURef,
+    color: string,
+    rotation: [number, number, number],
+  ) => <group ref={reference} rotation={rotation}>
+    <mesh position={[0, 0, handleLength / 2]} rotation={[Math.PI / 2, 0, 0]} renderOrder={1_100}>
+      <cylinderGeometry args={[handleRadius, handleRadius, handleLength, 12]}/>
+      <meshBasicMaterial color={color} transparent opacity={0.78} depthTest={false}/>
+    </mesh>
+    <mesh position={[0, 0, handleLength]} rotation={[Math.PI / 2, 0, 0]} renderOrder={1_100}>
+      <coneGeometry args={[handleRadius * 3, handleRadius * 7, 16]}/>
+      <meshBasicMaterial color={color} transparent opacity={0.88} depthTest={false}/>
+    </mesh>
+    <mesh position={[0, 0, handleLength / 2]} rotation={[Math.PI / 2, 0, 0]}>
+      <cylinderGeometry args={[pickRadius, pickRadius, handleLength * 1.3, 10]}/>
+      <meshBasicMaterial transparent opacity={0} depthWrite={false}/>
+    </mesh>
+  </group>;
+
+  const grip = (
+    reference: typeof resizeURef,
+    color: string,
+    position: [number, number, number],
+  ) => <group ref={reference} position={position}>
+    <mesh renderOrder={1_100}>
+      <boxGeometry args={[gripSize, gripSize, gripSize]}/>
+      <meshBasicMaterial color={color} transparent opacity={0.82} depthTest={false}/>
+    </mesh>
+    <mesh>
+      <boxGeometry args={[gripPick, gripPick, gripPick]}/>
+      <meshBasicMaterial transparent opacity={0} depthWrite={false}/>
+    </mesh>
+  </group>;
+
   return <group matrix={transform} matrixAutoUpdate={false} renderOrder={1_100}>
-    <group ref={translateRef}>
-      <mesh position={[0, 0, handleLength / 2]} rotation={[Math.PI / 2, 0, 0]} renderOrder={1_100}>
-        <cylinderGeometry args={[handleRadius, handleRadius, handleLength, 12]}/>
-        <meshBasicMaterial color="#f0a45d" transparent opacity={0.78} depthTest={false}/>
-      </mesh>
-      <mesh position={[0, 0, handleLength]} rotation={[Math.PI / 2, 0, 0]} renderOrder={1_100}>
-        <coneGeometry args={[handleRadius * 3, handleRadius * 7, 16]}/>
-        <meshBasicMaterial color="#f0a45d" transparent opacity={0.88} depthTest={false}/>
-      </mesh>
-      <mesh position={[0, 0, handleLength / 2]} rotation={[Math.PI / 2, 0, 0]}>
-        <cylinderGeometry args={[pickRadius, pickRadius, handleLength * 1.3, 10]}/>
-        <meshBasicMaterial transparent opacity={0} depthWrite={false}/>
-      </mesh>
-    </group>
+    {/* Local +z is the plane normal, so each arrow group is rotated to point
+        its shaft down the axis it drags along. */}
+    {arrow(translateNRef, '#f0a45d', [0, 0, 0])}
+    {arrow(translateURef, '#e4695e', [0, Math.PI / 2, 0])}
+    {arrow(translateVRef, '#8fd07a', [-Math.PI / 2, 0, 0])}
     <group ref={rotateURef} rotation={[0, Math.PI / 2, 0]}>
       <mesh renderOrder={1_100}>
         <torusGeometry args={[ringRadius, handleRadius, 8, 48]}/>
@@ -432,14 +517,83 @@ function FieldPlaneHandles({ plane, unitsPerMetre, scheduler }: Pick<ReadyFieldP
     <group ref={rotateVRef} rotation={[Math.PI / 2, 0, 0]}>
       <mesh renderOrder={1_100}>
         <torusGeometry args={[ringRadius, handleRadius, 8, 48]}/>
-        <meshBasicMaterial color="#83bd90" transparent opacity={0.68} depthTest={false}/>
+        <meshBasicMaterial color="#b58ad6" transparent opacity={0.68} depthTest={false}/>
       </mesh>
       <mesh>
         <torusGeometry args={[ringRadius, pickRadius, 8, 48]}/>
         <meshBasicMaterial transparent opacity={0} depthWrite={false}/>
       </mesh>
     </group>
+    {grip(resizeURef, '#e4695e', [halfWidth, 0, 0])}
+    {grip(resizeVRef, '#8fd07a', [0, halfHeight, 0])}
+    {grip(resizeUVRef, '#d6dae2', [halfWidth, halfHeight, 0])}
   </group>;
+}
+
+/** Reads the complex pressure under the pointer so the viewport can label the
+ * value the colormap is showing. Gizmo drags stop propagation on the capture
+ * phase, so this bubble-phase listener stays quiet while a handle is active. */
+function FieldPlaneProbe({ plane, field, unitsPerMetre }: Pick<ReadyFieldPlaneProps, 'plane' | 'field' | 'unitsPerMetre'>) {
+  const gl = useThree((state) => state.gl);
+  const camera = useThree((state) => state.camera);
+
+  useEffect(() => {
+    const element = gl.domElement;
+    const raycaster = new Raycaster();
+    const hide = () => useFieldPlaneProbeStore.getState().hide();
+    // A held button means the pointer is orbiting or dragging a handle, not
+    // asking what the colour under it means.
+    let pressed = false;
+    const onPointerDown = () => {
+      pressed = true;
+      hide();
+    };
+    const onPointerUp = () => { pressed = false; };
+    const onPointerMove = (event: PointerEvent) => {
+      if (pressed || useFieldPlaneStore.getState().dragging) {
+        hide();
+        return;
+      }
+      const bounds = element.getBoundingClientRect();
+      const hit = probeFieldPlaneRay(plane, rayFromPointer(event, element, camera, raycaster), unitsPerMetre);
+      const sample = hit ? sampleFieldPlaneBilinear(field, hit.u, hit.v) : null;
+      if (!hit || !sample) {
+        hide();
+        return;
+      }
+      const maskState = useFieldPlaneMaskStore.getState();
+      const mask = maskMatchesGeometry(maskState, field.header.job_id, field.header.geometry_sha256)
+        ? maskState.mask
+        : null;
+      useFieldPlaneProbeStore.getState().show({
+        localX: event.clientX - bounds.left,
+        localY: event.clientY - bounds.top,
+        hostWidth: bounds.width,
+        hostHeight: bounds.height,
+        offsetU_m: hit.offsetU_m,
+        offsetV_m: hit.offsetV_m,
+        point_m: hit.point_m,
+        real: sample.real,
+        imag: sample.imag,
+        masked: fieldPlaneMaskedAt(mask, hit.u, hit.v),
+      });
+    };
+    element.addEventListener('pointermove', onPointerMove);
+    element.addEventListener('pointerleave', hide);
+    element.addEventListener('pointerdown', onPointerDown);
+    element.addEventListener('pointerup', onPointerUp);
+    element.addEventListener('pointercancel', onPointerUp);
+    return () => {
+      element.removeEventListener('pointermove', onPointerMove);
+      element.removeEventListener('pointerleave', hide);
+      element.removeEventListener('pointerdown', onPointerDown);
+      element.removeEventListener('pointerup', onPointerUp);
+      element.removeEventListener('pointercancel', onPointerUp);
+      hide();
+    };
+  }, [camera, field, gl, plane, unitsPerMetre]);
+
+  return null;
 }
 
 export function FieldPlane(props: FieldPlaneProps) {
@@ -455,6 +609,7 @@ export function FieldPlane(props: FieldPlaneProps) {
     <FieldPlaneMaskController scheduler={props.scheduler}/>
     {enabled && plane && <>
       {field && <ReadyFieldPlane {...props} plane={plane} field={field}/>}
+      {field && <FieldPlaneProbe plane={plane} field={field} unitsPerMetre={props.unitsPerMetre}/>}
       <FieldPlaneHandles plane={plane} unitsPerMetre={props.unitsPerMetre} scheduler={props.scheduler}/>
     </>}
   </>;

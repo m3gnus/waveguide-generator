@@ -19,13 +19,24 @@ import { frameToScene, hasRenderableSurfaces, MAX_EDGE_TRIANGLES } from './frame
 import {
   defaultFieldPlaneWindow,
   fieldPlaneColormap,
+  maxFieldSplDb,
+  normalizedSplDb,
+  phaseDegrees,
+  splDb,
   FIELD_PLANE_DISPLAY_MODES,
   FIELD_PLANE_INSTANTANEOUS_PERCENTILE,
   type FieldPlaneDisplayMode,
   type FieldPlaneValueWindow,
 } from './fieldPlaneColor';
 import type { ModelClipMode } from './fieldPlaneClipping';
-import { fieldPlaneOffsetMetres, fieldPlanePreset, withFieldPlaneOffset } from './fieldPlaneMath';
+import {
+  fieldPlaneOffsetMetres,
+  fieldPlanePreset,
+  withFieldPlaneExtents,
+  withFieldPlaneOffset,
+  withFieldPlaneOrigin,
+} from './fieldPlaneMath';
+import { useFieldPlaneProbeStore } from './fieldPlaneProbe';
 import { maskMatchesGeometry, useFieldPlaneMaskStore } from './fieldPlaneMaskStore';
 import { defaultFieldPlane, useFieldPlaneStore } from './fieldPlaneStore';
 import { importedMeshStore } from './importedMeshStore';
@@ -99,39 +110,154 @@ function useViewportTheme(): ViewportTheme {
   return theme;
 }
 
-function FieldPlaneOffsetInput() {
-  const plane = useFieldPlaneStore((state) => state.plane);
-  const offsetMm = plane ? fieldPlaneOffsetMetres(plane) * 1_000 : 0;
-  const [value, setValue] = useState(() => offsetMm.toFixed(2));
+interface FieldPlaneNumberCellProps {
+  label?: string;
+  ariaLabel: string;
+  value: number;
+  step?: number;
+  min?: number;
+  decimals?: number;
+  onCommit: (value: number) => void;
+}
+
+/** Numeric cell for the plane transform. It shows the store's value except
+ * while it holds focus, and always resyncs on blur so a rejected or clamped
+ * entry snaps back to what the plane actually is. */
+function FieldPlaneNumberCell({
+  label,
+  ariaLabel,
+  value,
+  step = 0.1,
+  min,
+  decimals = 2,
+  onCommit,
+}: FieldPlaneNumberCellProps) {
+  const canonical = value.toFixed(decimals);
+  const [text, setText] = useState(canonical);
   const focused = useRef(false);
   useEffect(() => {
-    if (!focused.current) setValue(offsetMm.toFixed(2));
-  }, [offsetMm]);
+    if (!focused.current) setText(canonical);
+  }, [canonical]);
   const commit = () => {
     focused.current = false;
-    const next = Number(value);
-    if (!plane || !Number.isFinite(next)) {
-      setValue(offsetMm.toFixed(2));
-      return;
-    }
-    useFieldPlaneStore.getState().setPlane(withFieldPlaneOffset(plane, next / 1_000));
+    const next = Number(text);
+    setText(canonical);
+    if (Number.isFinite(next) && text.trim() !== '') onCommit(next);
   };
-  return <label className="field-plane-offset">
-    <span>Offset</span>
+  return <label className="field-plane-number">
+    {label !== undefined && <span>{label}</span>}
     <input
       type="number"
-      aria-label="Field plane normal offset in millimetres"
-      step="0.1"
-      value={value}
+      aria-label={ariaLabel}
+      step={step}
+      min={min}
+      value={text}
       onFocus={() => { focused.current = true; }}
-      onChange={(event) => setValue(event.target.value)}
+      onChange={(event) => setText(event.target.value)}
       onBlur={commit}
       onKeyDown={(event) => {
         if (event.key === 'Enter') event.currentTarget.blur();
       }}
     />
-    <span>mm</span>
   </label>;
+}
+
+const FIELD_PLANE_ORIGIN_AXES: ReadonlyArray<{ label: string; index: 0 | 1 | 2 }> = [
+  { label: 'X', index: 0 },
+  { label: 'Y', index: 1 },
+  { label: 'Z', index: 2 },
+];
+
+/** Absolute placement and extents in millimetres, the keyboard counterpart to
+ * the viewport gizmo's arrows and corner grips. */
+function FieldPlaneTransformInputs() {
+  const plane = useFieldPlaneStore((state) => state.plane);
+  const origin = plane?.origin_m ?? [0, 0, 0];
+  const offsetMm = plane ? fieldPlaneOffsetMetres(plane) * 1_000 : 0;
+  return <div className="field-plane-transform">
+    <div className="field-plane-transform-row">
+      <span>Centre</span>
+      {FIELD_PLANE_ORIGIN_AXES.map(({ label, index }) => <FieldPlaneNumberCell
+        key={label}
+        label={label}
+        ariaLabel={`Field plane centre ${label} in millimetres`}
+        value={origin[index] * 1_000}
+        onCommit={(next) => {
+          if (!plane) return;
+          const moved = [...plane.origin_m] as [number, number, number];
+          moved[index] = next / 1_000;
+          useFieldPlaneStore.getState().setPlane(withFieldPlaneOrigin(plane, moved));
+        }}
+      />)}
+    </div>
+    <div className="field-plane-transform-row">
+      <span>Size</span>
+      <FieldPlaneNumberCell
+        label="W"
+        ariaLabel="Field plane width in millimetres"
+        value={(plane?.width_m ?? 0) * 1_000}
+        step={1}
+        min={1}
+        decimals={1}
+        onCommit={(next) => {
+          if (plane) useFieldPlaneStore.getState().setPlane(withFieldPlaneExtents(plane, next / 1_000, plane.height_m));
+        }}
+      />
+      <FieldPlaneNumberCell
+        label="H"
+        ariaLabel="Field plane height in millimetres"
+        value={(plane?.height_m ?? 0) * 1_000}
+        step={1}
+        min={1}
+        decimals={1}
+        onCommit={(next) => {
+          if (plane) useFieldPlaneStore.getState().setPlane(withFieldPlaneExtents(plane, plane.width_m, next / 1_000));
+        }}
+      />
+      <FieldPlaneNumberCell
+        label="Off"
+        ariaLabel="Field plane normal offset in millimetres"
+        value={offsetMm}
+        onCommit={(next) => {
+          if (plane) useFieldPlaneStore.getState().setPlane(withFieldPlaneOffset(plane, next / 1_000));
+        }}
+      />
+    </div>
+  </div>;
+}
+
+/** Reads out the complex pressure under the pointer. The canvas host is
+ * pinned to the panel box, so the probe's canvas-local coordinates place the
+ * card directly. */
+function FieldPlaneProbeTooltip({ fieldMaxSplDb }: { fieldMaxSplDb: number | null }) {
+  const reading = useFieldPlaneProbeStore((state) => state.reading);
+  const displayMode = useFieldPlaneStore((state) => state.displayMode);
+  if (!reading) return null;
+  const flipX = reading.localX > reading.hostWidth - 150;
+  const flipY = reading.localY > reading.hostHeight - 96;
+  const style = {
+    left: `${reading.localX + (flipX ? -12 : 14)}px`,
+    top: `${reading.localY + (flipY ? -12 : 16)}px`,
+    transform: `translate(${flipX ? '-100%' : '0'}, ${flipY ? '-100%' : '0'})`,
+  };
+  if (reading.masked) {
+    return <div className="field-plane-probe" style={style} role="status">
+      <b>inside model</b>
+      <span>no exterior field here</span>
+    </div>;
+  }
+  const level = splDb(reading.real, reading.imag);
+  return <div className="field-plane-probe" style={style} role="status">
+    <b>{level.toFixed(1)} dB</b>
+    <span>{phaseDegrees(reading.real, reading.imag).toFixed(0)}° phase</span>
+    {displayMode === 'normalized' && fieldMaxSplDb !== null
+      && <span>{normalizedSplDb(reading.real, reading.imag, fieldMaxSplDb).toFixed(1)} dB re max</span>}
+    {displayMode === 'instantaneous'
+      && <span>{formatPressurePa(Math.hypot(reading.real, reading.imag))} Pa peak</span>}
+    <span className="field-plane-probe-position">
+      u {(reading.offsetU_m * 1_000).toFixed(0)} · v {(reading.offsetV_m * 1_000).toFixed(0)} mm
+    </span>
+  </div>;
 }
 
 export function fieldPlaneJob(jobs: readonly JobItem[], selectedJobId: string | null): JobItem | null {
@@ -268,6 +394,7 @@ export function Viewport() {
     [fieldColormap, fieldDisplayMode],
   );
   const fieldWindow = storedFieldWindow ?? defaultFieldPlaneWindow(fieldDisplayMode);
+  const fieldMaxSplDb = useMemo(() => (field ? maxFieldSplDb(field.real, field.imag) : null), [field]);
   const fieldFrequencyHz = fieldFrequencies[fieldFrequencyIndex] ?? field?.header.frequency_hz ?? null;
   const sceneMarker = importedMesh
     ? `msh:${importedMesh.artifactToken}`
@@ -582,16 +709,27 @@ export function Viewport() {
     >
       <div className="field-plane-legend-title">
         <b>Field plane</b>
-        {fieldFrequencies.length > 0
-          ? <select
-            aria-label="Field plane frequency"
-            value={fieldFrequencyIndex}
-            onChange={(event) => useFieldPlaneStore.getState().setFrequencyIndex(Number(event.target.value))}
-          >
-            {fieldFrequencies.map((frequency, index) => <option key={`${index}:${frequency}`} value={index}>{frequency.toLocaleString()} Hz</option>)}
-          </select>
-          : <span>{field?.header.frequency_hz.toLocaleString() ?? '—'} Hz</span>}
+        <span>{fieldFrequencyHz === null ? '—' : `${Math.round(fieldFrequencyHz).toLocaleString()} Hz`}</span>
       </div>
+      {fieldFrequencies.length > 1 && <div className="field-plane-frequency">
+        {/* The slider indexes solved frequencies, so it snaps to what the
+            solver actually evaluated rather than interpolating between them. */}
+        <input
+          type="range"
+          aria-label="Field plane frequency"
+          aria-valuetext={`${Math.round(fieldFrequencies[fieldFrequencyIndex] ?? 0).toLocaleString()} Hz`}
+          min={0}
+          max={fieldFrequencies.length - 1}
+          step={1}
+          value={fieldFrequencyIndex}
+          onChange={(event) => useFieldPlaneStore.getState().setFrequencyIndex(Number(event.target.value))}
+        />
+        <div className="field-plane-frequency-scale">
+          <span>{Math.round(fieldFrequencies[0]).toLocaleString()}</span>
+          <span>{fieldFrequencyIndex + 1}/{fieldFrequencies.length}</span>
+          <span>{Math.round(fieldFrequencies[fieldFrequencies.length - 1]).toLocaleString()} Hz</span>
+        </div>
+      </div>}
       <div className="field-plane-mode-row">
         <label>
           <span>Mode</span>
@@ -624,7 +762,7 @@ export function Viewport() {
         >{fieldRangeLocked ? 'Locked' : 'Auto'}</button>
       </div>
       <div className="field-plane-meta">
-        <span>frequency {fieldFrequencyHz === null ? '—' : `${fieldFrequencyHz.toLocaleString()} Hz`}</span>
+        <span>grid {field ? `${field.header.nx}×${field.header.ny}` : '—'}</span>
         <span>response {field?.header.response_id ?? 'system'}</span>
       </div>
       <div className="field-plane-render-controls">
@@ -655,7 +793,7 @@ export function Viewport() {
         <button type="button" onClick={() => applyFieldPlanePreset('v')}>V-plane</button>
         <button type="button" onClick={() => applyFieldPlanePreset('mouth')}>Mouth</button>
       </div>
-      <FieldPlaneOffsetInput />
+      <FieldPlaneTransformInputs />
       {maskMatchesGeometry(fieldMaskState, fieldJobId, fieldGeometrySha256)
         && fieldMaskState.watertight === false
         && <div className="field-plane-note" role="note">open mesh: interior not masked</div>}
@@ -668,6 +806,8 @@ export function Viewport() {
         {fieldStatus === 'error' && fieldJobId && <button type="button" onClick={() => useFieldPlaneStore.getState().retry()}>Retry</button>}
       </div>}
     </div>}
+
+    {fieldEnabled && <FieldPlaneProbeTooltip fieldMaxSplDb={fieldMaxSplDb}/>}
 
     <div className="viewport-tools">
       <div className="viewport-tool-group display-mode-tools">
