@@ -22,19 +22,41 @@ from server.solver.field_traces_store import (
 
 
 def test_detection_uses_honest_probe_reasons_and_dryrun_gate(monkeypatch) -> None:
-    from server.solver import bempp, circsym, metal
+    from server.solver import beat, bempp, circsym, metal
 
     monkeypatch.setattr(metal, "metal_status", lambda: {"available": True, "reason": "helper loadable", "version": "1"})
     monkeypatch.setattr(bempp, "bempp_status", lambda: {"available": False, "reason": "package absent", "version": None})
+    monkeypatch.setattr(beat, "beat_status", lambda: {"available": False, "reason": "no supported GPU", "version": None})
     monkeypatch.setattr(circsym, "circsym_status", lambda: {"available": True, "reason": "meridian ready", "version": "2"})
     detected = registry.detect_engines(environ={"WG2_ENABLE_DRYRUN": "1"})
     assert [(item.name, item.available, item.reason) for item in detected] == [
         ("dryrun", True, "Enabled explicitly by WG2_ENABLE_DRYRUN=1"),
         ("metal", True, "helper loadable"),
         ("bempp", False, "package absent"),
+        ("beat", False, "no supported GPU"),
     ]
     assert detected[1].fast_paths == ("axisymmetric-meridian",)
     assert all(item.name != "circsym" for item in detected)
+
+
+def test_auto_resolution_prefers_metal_then_beat_then_bempp() -> None:
+    """AUTO: metal > beat (GPU-only by its own probe) > bempp > dryrun.
+
+    Availability encodes the platform split: Metal is macOS-only and beat
+    advertises available only for a functional CUDA/ROCm device, never its
+    internal CPU path, so this order cannot route a CPU host onto beat.
+    """
+
+    def info(name: str, available: bool) -> registry.EngineInfo:
+        return registry.EngineInfo(name, available, "test", "1")
+
+    everything = [info("metal", True), info("beat", True), info("bempp", True)]
+    assert registry.resolve_auto_engine(capabilities=everything) == "metal"
+    gpu_windows = [info("metal", False), info("beat", True), info("bempp", True)]
+    assert registry.resolve_auto_engine(capabilities=gpu_windows) == "beat"
+    cpu_windows = [info("metal", False), info("beat", False), info("bempp", True)]
+    assert registry.resolve_auto_engine(capabilities=cpu_windows) == "bempp"
+    assert registry.get_engine("beat", capabilities=gpu_windows) is not None
 
 
 def test_capability_snapshot_is_reused_by_solve_submission(tmp_path: Path) -> None:

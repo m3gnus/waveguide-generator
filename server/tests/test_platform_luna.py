@@ -564,7 +564,7 @@ def test_capability_probe_runs_off_thread_and_is_cached(
             "engineSelection": {
                 "default": "auto",
                 "resolvedDefault": None,
-                "full3dOrder": ["metal", "bempp", "dryrun"],
+                "full3dOrder": ["metal", "beat", "bempp", "dryrun"],
                 "metalFastPath": "axisymmetric-meridian",
             },
         }

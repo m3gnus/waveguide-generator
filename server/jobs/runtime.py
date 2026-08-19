@@ -399,7 +399,7 @@ async def resolve_submission(
         )
 
     engine_name = request.options.engine
-    if engine_name not in {"auto", "dryrun", "metal", "bempp"}:
+    if engine_name not in {"auto", "dryrun", "metal", "bempp", "beat"}:
         raise UnknownEngineError(f"Unknown solve engine: {engine_name}")
 
     resolution = await asyncio.to_thread(resolve_symmetry, request.design)
@@ -870,10 +870,10 @@ class JobRuntime:
                     "imported_circsym_unsupported",
                     "imported geometry supports Metal full 3-D solves only; CircSym is unavailable",
                 )
-            if engine_name not in {"auto", "dryrun", "metal", "bempp"}:
+            if engine_name not in {"auto", "dryrun", "metal", "bempp", "beat"}:
                 raise UnknownEngineError(f"Unknown solve engine: {engine_name}")
             symmetry_metadata = imported.symmetry_metadata
-            if engine_name in {"bempp", "dryrun"}:
+            if engine_name in {"bempp", "dryrun", "beat"}:
                 raise ImportedSolveRefusal(
                     "imported_engine_unsupported",
                     f"imported geometry supports Metal only; engine {engine_name!r} is unavailable",

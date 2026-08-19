@@ -5,6 +5,8 @@ import { previewSocket } from '../api/previewSocket';
 import type { CadRealizedDimensions, CadRealizedParameter } from '../api/cadlink';
 import { importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { postSymmetry, toSolveDesign, type SymmetryResolution } from '../jobs/actions';
+import { useActiveBackend } from '../jobs/useCapabilities';
+import { backendLimitation } from './backendSupport';
 import { cadApplicationName, usePreferences } from '../prefs/preferences';
 import {
   channelAcceptsDriver,
@@ -33,6 +35,8 @@ import {
   fieldAcceptsExpression,
   fieldIsVisible,
   fieldMatchesQuery,
+  fieldOptionsForBackend,
+  fieldUnsupportedFeature,
   parameterSectionIsVisible,
   type ParameterDefinition,
   type ParameterSectionDefinition,
@@ -363,6 +367,7 @@ export function previewErrorForParameter(
 }
 
 function FieldControl({ field, design, serverError }: { field: ParameterDefinition; design: DesignDocument; serverError?: string }) {
+  const backend = useActiveBackend();
   const updateValue = useDesignStore((state) => state.updateValue);
   const updateValues = useDesignStore((state) => state.updateValues);
   const updateExpression = useDesignStore((state) => state.updateExpression);
@@ -398,15 +403,23 @@ function FieldControl({ field, design, serverError }: { field: ParameterDefiniti
     </div>;
   }
   if (field.kind === 'select' || field.kind === 'toggle') {
-    return <HelpTipRow className={`select-row${disabled ? ' field-disabled' : ''}`} text={field.description}>
-      <label htmlFor={`parameter-${field.id}`} title={disabledReason}>{field.label}</label>
-      <select id={`parameter-${field.id}`} value={String(value ?? '')} disabled={disabled} onChange={(event) => {
-        const option = field.options?.find((item) => String(item.value) === event.target.value);
-        commit(option?.value ?? event.target.value);
-      }}>
-        {(field.options ?? []).map((option) => <option key={String(option.value)} value={String(option.value)}>{option.label}</option>)}
-      </select>
-    </HelpTipRow>;
+    const options = fieldOptionsForBackend(field, value, backend);
+    const unsupported = fieldUnsupportedFeature(field, value, backend);
+    return <>
+      <HelpTipRow className={`select-row${disabled ? ' field-disabled' : ''}`} text={field.description}>
+        <label htmlFor={`parameter-${field.id}`} title={disabledReason}>{field.label}</label>
+        <select id={`parameter-${field.id}`} value={String(value ?? '')} disabled={disabled} onChange={(event) => {
+          const option = field.options?.find((item) => String(item.value) === event.target.value);
+          commit(option?.value ?? event.target.value);
+        }}>
+          {options.map((option) => <option key={String(option.value)} value={String(option.value)}>{option.label}</option>)}
+        </select>
+      </HelpTipRow>
+      {/* The value survived the filter only because the design already holds
+          it, so say plainly what will happen rather than leaving a control
+          that looks ordinary and then fails a minute into the solve. */}
+      {unsupported && <div className="field-warning" role="status">{backendLimitation(backend, unsupported)}</div>}
+    </>;
   }
   if (field.kind === 'text') return <TextField field={field} value={String(value ?? '')} disabled={disabled} onCommit={commit} />;
   const error = validationMessage(field, design);
