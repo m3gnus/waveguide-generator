@@ -67,8 +67,18 @@ one-time setup.
 
 For Fusion 360:
 
-1. Install WGLink, restart Fusion, and enable **Run on Startup** for WGLink under
-   **Utilities → Scripts and Add-Ins**.
+1. Install WGLink from the `hornlab-fusion-addin` repository. From that
+   repository's checkout: `python3 -m venv .venv`, then
+   `.venv/bin/pip install -r requirements.txt`, then
+   `.venv/bin/python scripts/install_fusion_wg_metal_addin.py --addin WGLink --symlink`.
+   Use the symlink install — Update resamples spline profiles with the
+   repository's own Python, which Fusion's embedded interpreter cannot do.
+   Restart Fusion and confirm **Run on Startup** is ticked for WGLink under
+   **Utilities → Scripts and Add-Ins**; Fusion's own record of that toggle
+   overrides the add-in manifest, so a copy once started by hand stays manual
+   until the box is ticked. Install from exactly one location — a second copy
+   loads a second module instance and the two fight over the panel. The
+   add-in's own guide is `docs/WGLINK-GUIDE.md` in that repository.
 2. Choose a stable local **WGLink folder** in WG. This is intentionally separate from
    the run-output folder. WG creates `wglink/` and `wgreturn/` beneath it, and the
    Fusion add-in reads the same setting automatically.
@@ -126,6 +136,31 @@ every reopen.
 Preparing a new return keeps the mesh sizing, channel mapping, drivers, combine
 settings and sweep from the previous one whenever the source inventory is
 unchanged; findings acknowledgements are always re-earned.
+
+### Starting from a model drawn in Fusion
+
+A model drawn from scratch in Fusion — never inserted from a WG design — can be
+sent and solved the same way. Three things make it a valid return:
+
+1. **Mark the drive face.** Use the WGLink panel's **Set WG Source…** to mark
+   the throat or diaphragm face as `LF`, `MF`, `HF`, or `PORT_EXIT` (it applies
+   a Fusion appearance with exactly that name, which is also accepted when
+   painted by hand). A model with no marked face cannot be exported, and the
+   Send/Solve dialog says so before OK.
+2. **Model closed solids.** An open surface body must be classified with
+   **Declare Body…** — `exterior-shell` to include it, `exclude` to leave it
+   out — or the export refuses it as unclassified.
+3. **Respect the solver frame.** With no WG link to anchor it, the solver
+   assumes the model radiates along **+Z** with the throat at the **origin**,
+   centred on the x = 0 and y = 0 planes so symmetry can be detected. The
+   dialog's pre-flight summary warns when the model appears to violate any of
+   this — fix the placement in Fusion rather than solving a mis-framed model.
+
+**Solve in WG** then works as for a linked design. The return arrives marked
+`unlinked` — one blocking finding acknowledges that WG has no design identity
+for it — and mesh sizing and drive channels are set in the CAD Link panel as
+for any import. Such a return is solved exactly as sent: there are no
+parametric formulas behind it to edit in WG.
 
 The detailed CAD-link implementation plan is still active workspace material. Treat
 the UI and checked-in tests as the current behavior until that plan is closed and its
