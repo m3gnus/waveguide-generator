@@ -77,6 +77,14 @@ whether a sequence number and a date are appended, and shows the label the next 
 will use. Renaming a run from its card (✎) annotates that one run in the history and
 deliberately does not rename the design.
 
+**In the CAD workspace the name comes from CAD.** A CAD Link solve is of geometry
+authored in Fusion, not of the parametric design that happens to be open behind it, so
+its runs are named by the Fusion document — the same name the CAD viewport heading
+shows. The field reports it read-only, because WG cannot write a name back into Fusion.
+Name the document in Fusion 360 before the first solve and every run of it carries that
+name; rename it there and send again to change it. Each document keeps its own run
+numbering, and the ✎ rename is still available per run.
+
 ### Saving and exporting
 
 The design menu saves parameter files and exports the current design. STEP solid is
@@ -90,6 +98,29 @@ job's stored snapshot, never the current editor. **Send to CAD** is the first ac
 in this menu and sends that same stored snapshot. Failed formats are reported
 individually so successful files are not hidden. The current parametric design can
 also be sent from the top-left design menu under **Export → Send to CAD**.
+
+### The run archive
+
+Files are written to the **Workspace folder** — `Documents/Waveguide Generator/runs`
+unless another is chosen — grouped by design rather than by how the run was produced:
+
+```
+Documents/Waveguide Generator/
+  runs/<design>/
+    design.json                 which design this folder belongs to
+    cad/<return-state>.f3d      the Fusion document a CAD return came from
+    <run>/                      run.json, results, and any exported formats
+```
+
+A design keeps one folder across a rename, and its parametric and CAD-link runs sit
+side by side, because they are the same design's history. `run.json` records what was
+solved, from which CAD document and return state, and with which settings.
+
+**Archive every completed run** is on by default, and it is the only thing that
+outlives the run list: results there are kept for 30 days, or until the run limit is
+passed, and rating a run exempts it. The Workspace folder is kept until you delete it.
+Archiving happens while the app is open, so a run solved through the CLI is not
+archived.
 
 ## CAD link
 
@@ -111,8 +142,11 @@ For Fusion 360:
    loads a second module instance and the two fight over the panel. The
    add-in's own guide is `docs/WGLINK-GUIDE.md` in that repository.
 2. Choose a stable local **WGLink folder** in WG. This is intentionally separate from
-   the run-output folder. WG creates `wglink/` and `wgreturn/` beneath it, and the
-   Fusion add-in reads the same setting automatically.
+   the run-output folder, so changing where runs are written cannot disconnect Fusion;
+   the picker offers `Documents/Waveguide Generator/cadlink` beside the runs folder.
+   WG creates `wglink/` and `wgreturn/` beneath it, and the Fusion add-in reads the
+   same setting automatically. Each return also carries a copy of the Fusion document
+   it was taken from, which WG files under `runs/<design>/cad/`.
 3. Choose **Send to CAD** in the design file menu (or **Open in Fusion 360** on the
    Geometry rail's linked-design card in CAD mode). WG writes the bundle, starts or
    raises Fusion, and the CAD Link panel reports when the add-in heartbeat is online.

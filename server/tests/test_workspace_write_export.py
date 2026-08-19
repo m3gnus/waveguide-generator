@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from server import app as app_module
+from server.platform import paths
 from server.workspace import api as workspace_api
 
 
@@ -68,10 +69,17 @@ def test_write_export_happy_path(tmp_path: Path) -> None:
 def test_cad_workspace_is_separate_and_requires_a_selection(tmp_path: Path) -> None:
     data = tmp_path / "data"
     output = workspace_api.WorkspaceState(data, default_path=tmp_path / "output")
-    cad = workspace_api.CadWorkspaceState(data)
+    proposed = tmp_path / "proposed" / "cadlink"
+    cad = workspace_api.CadWorkspaceState(data, proposed_path=proposed)
 
     assert output.path() == (tmp_path / "output").resolve()
-    assert asyncio.run(cad_path_endpoint(cad)()) == {"selected": False, "path": None}
+    assert asyncio.run(cad_path_endpoint(cad)()) == {
+        "selected": False,
+        "path": None,
+        "proposed": str(proposed),
+        "proposedExists": False,
+    }
+    assert not proposed.exists()
     with pytest.raises(ValueError, match="No WGLink folder"):
         cad.path()
 
@@ -446,3 +454,124 @@ def test_write_export_rejects_oversize_path_segment_before_writing(tmp_path: Pat
         call(state, request(f"parent/{'x' * 256}", [("a.frd", "bad")]))
 
     assert list(workspace.iterdir()) == []
+
+
+def test_run_exports_default_to_the_visible_documents_folder() -> None:
+    home = Path("/home/example")
+    root = paths.documents_root(system="Linux", environ={}, home=home)
+
+    assert root == home / "Documents" / "Waveguide Generator"
+    assert paths.default_runs_dir(system="Linux", environ={}, home=home) == root / "runs"
+    assert (
+        paths.proposed_cadlink_dir(system="Linux", environ={}, home=home)
+        == root / "cadlink"
+    )
+
+
+def test_documents_root_follows_the_platform_convention() -> None:
+    windows = paths.documents_root(
+        system="Windows", environ={"USERPROFILE": "C:\\Users\\example"}, home=Path("/ignored")
+    )
+    assert windows.parts[-2:] == ("Documents", "Waveguide Generator")
+
+    xdg = paths.documents_root(
+        system="Linux", environ={"XDG_DOCUMENTS_DIR": "/home/example/Documenten"}, home=Path("/home/example")
+    )
+    assert xdg == Path("/home/example/Documenten/Waveguide Generator")
+
+
+def test_a_legacy_default_holding_runs_is_adopted_not_abandoned(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    data.mkdir()
+    legacy = tmp_path / "checkout" / "output"
+    (legacy / "horn_1").mkdir(parents=True)
+
+    state = workspace_api.WorkspaceState(
+        data, default_path=tmp_path / "documents" / "runs", legacy_defaults=(legacy,)
+    )
+
+    assert state.selected_path() == legacy.resolve()
+    assert json.loads((data / "workspace_settings.json").read_text()) == {
+        "schemaVersion": 1,
+        "workspacePath": str(legacy.resolve()),
+    }
+
+
+def test_an_empty_legacy_default_is_left_behind(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    data.mkdir()
+    legacy = tmp_path / "checkout" / "output"
+    legacy.mkdir(parents=True)
+    (legacy / ".DS_Store").write_text("", encoding="utf-8")
+    documents = tmp_path / "documents" / "runs"
+
+    state = workspace_api.WorkspaceState(
+        data, default_path=documents, legacy_defaults=(legacy,)
+    )
+
+    assert state.selected_path() is None
+    assert state.path() == documents.resolve()
+    assert not (data / "workspace_settings.json").exists()
+
+
+def test_an_explicit_selection_survives_the_default_move(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    data.mkdir()
+    chosen = tmp_path / "chosen"
+    chosen.mkdir()
+    legacy = tmp_path / "checkout" / "output"
+    (legacy / "horn_1").mkdir(parents=True)
+    (data / "workspace_settings.json").write_text(
+        json.dumps({"schemaVersion": 1, "workspacePath": str(chosen)}), encoding="utf-8"
+    )
+
+    state = workspace_api.WorkspaceState(
+        data, default_path=tmp_path / "documents" / "runs", legacy_defaults=(legacy,)
+    )
+
+    assert state.path() == chosen.resolve()
+
+
+def test_accepting_the_proposed_cad_folder_creates_only_that_folder(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    proposed = tmp_path / "documents" / "Waveguide Generator" / "cadlink"
+    state = workspace_api.CadWorkspaceState(data, proposed_path=proposed)
+
+    result = asyncio.run(
+        cad_select_endpoint(state)(
+            workspace_api.SelectCadWorkspaceRequest(path=str(proposed))
+        )
+    )
+
+    assert result == {"selected": True, "path": str(proposed.resolve())}
+    assert proposed.is_dir()
+
+
+def test_a_mistyped_cad_folder_is_refused_rather_than_created(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    proposed = tmp_path / "documents" / "cadlink"
+    state = workspace_api.CadWorkspaceState(data, proposed_path=proposed)
+    typo = tmp_path / "documents" / "cadlnik"
+
+    with pytest.raises(HTTPException) as excinfo:
+        asyncio.run(
+            cad_select_endpoint(state)(
+                workspace_api.SelectCadWorkspaceRequest(path=str(typo))
+            )
+        )
+
+    assert excinfo.value.status_code == 400
+    assert not typo.exists()
+    assert state.selected_path() is None
+
+
+def test_the_picker_only_starts_where_it_can_safely_be_pointed(tmp_path: Path) -> None:
+    existing = tmp_path / "documents"
+    existing.mkdir()
+
+    assert workspace_api._picker_start_directory(existing / "runs") == existing
+    assert workspace_api._picker_start_directory(None) is None
+    # A quote would break the AppleScript and PowerShell strings the path is
+    # embedded in, and the root is not a useful place to open a dialog.
+    assert workspace_api._picker_start_directory(tmp_path / "it's here") is None
+    assert workspace_api._picker_start_directory(Path("/nonexistent/deep/path")) is None

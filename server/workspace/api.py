@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 import base64
 import binascii
 import json
@@ -20,7 +21,7 @@ import unicodedata
 from fastapi import APIRouter, FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from server.platform.paths import data_paths
+from server.platform.paths import data_paths, proposed_cadlink_dir
 from server.platform.process import background_process_kwargs
 
 
@@ -130,20 +131,56 @@ def _strictly_inside(path: Path, root: Path, label: str) -> None:
         raise ValueError(f"{label} resolves outside the selected workspace")
 
 
-def _select_workspace_folder(prompt: str = "Select output folder") -> str | None:
-    """Open a native folder picker and return its selection, if any."""
+def _picker_start_directory(start_in: Path | None) -> Path | None:
+    """The deepest part of a proposed location that actually exists.
+
+    The path is embedded in an AppleScript string and a PowerShell string, so a
+    quote or newline anywhere in it -- a home directory may legally contain one
+    -- would break the dialog rather than position it. Positioning is a
+    convenience; drop it instead of mangling the command.
+    """
+
+    if start_in is None or any(character in str(start_in) for character in "\"'\n\r"):
+        return None
+    for candidate in (start_in, *start_in.parents):
+        # The filesystem root is not a helpful place to open a picker, and it
+        # is what walking up an entirely absent path arrives at.
+        if candidate == candidate.parent:
+            return None
+        if candidate.is_dir():
+            return candidate
+    return None
+
+
+def _select_workspace_folder(
+    prompt: str = "Select output folder", start_in: Path | None = None
+) -> str | None:
+    """Open a native folder picker and return its selection, if any.
+
+    ``start_in`` only positions the dialog. Opening it on the folder the
+    application would suggest saves the user from navigating to a location they
+    are about to accept, and costs nothing when the location does not exist.
+    """
 
     system = platform.system()
+    opening = _picker_start_directory(start_in)
     commands: list[list[str]]
     if system == "Darwin":
+        location = (
+            f' default location POSIX file "{opening}"' if opening is not None else ""
+        )
         commands = [
             [
                 "osascript",
                 "-e",
-                f'set theFolder to POSIX path of (choose folder with prompt "{prompt}")',
+                "set theFolder to POSIX path of (choose folder with prompt "
+                f'"{prompt}"{location})',
             ]
         ]
     elif system == "Windows":
+        selected_path = (
+            f"$f.SelectedPath = '{opening}'; " if opening is not None else ""
+        )
         commands = [
             [
                 "powershell",
@@ -151,13 +188,17 @@ def _select_workspace_folder(prompt: str = "Select output folder") -> str | None
                 "Add-Type -AssemblyName System.Windows.Forms; "
                 "$f = New-Object System.Windows.Forms.FolderBrowserDialog; "
                 f"$f.Description = '{prompt}'; "
+                f"{selected_path}"
                 "if ($f.ShowDialog() -eq 'OK') { $f.SelectedPath }",
             ]
         ]
     else:
+        zenity = ["zenity", "--file-selection", "--directory", f"--title={prompt}"]
+        if opening is not None:
+            zenity.append(f"--filename={opening}/")
         commands = [
-            ["zenity", "--file-selection", "--directory", f"--title={prompt}"],
-            ["kdialog", "--getexistingdirectory", "."],
+            zenity,
+            ["kdialog", "--getexistingdirectory", str(opening or ".")],
         ]
     for command in commands:
         try:
@@ -179,7 +220,10 @@ def _select_workspace_folder(prompt: str = "Select output folder") -> str | None
         root = tk.Tk()
         root.withdraw()
         root.attributes("-topmost", True)
-        selected = filedialog.askdirectory(title=prompt)
+        selected = filedialog.askdirectory(
+            title=prompt,
+            **({"initialdir": str(opening)} if opening is not None else {}),
+        )
         root.destroy()
         return str(selected) if selected else None
     except Exception:
@@ -187,7 +231,13 @@ def _select_workspace_folder(prompt: str = "Select output folder") -> str | None
 
 
 class WorkspaceState:
-    def __init__(self, data_dir: Path, *, default_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        data_dir: Path,
+        *,
+        default_path: Path | None = None,
+        legacy_defaults: Sequence[Path] = (),
+    ) -> None:
         paths = data_paths(data_dir)
         self.default_path = (
             Path(default_path).expanduser().resolve()
@@ -195,8 +245,40 @@ class WorkspaceState:
             else paths.workspace.resolve()
         )
         self.settings_path = (paths.root / "workspace_settings.json").resolve()
+        self.legacy_defaults = tuple(
+            Path(candidate).expanduser().resolve() for candidate in legacy_defaults
+        )
         self._selected: Path | None = None
         self._loaded = False
+        self._adopt_legacy_default()
+
+    def _adopt_legacy_default(self) -> None:
+        """Keep an install writing where it already writes.
+
+        The default moved to the user's documents folder. An install that has
+        been exporting into one of the old defaults must not appear to have lost
+        its runs, and moving a user's files is not ours to do -- so a legacy
+        default that actually holds runs is adopted as an explicit selection
+        instead. Emptiness is the test: a directory the application created and
+        nothing was ever written to carries no history worth pinning.
+        """
+
+        if not self.legacy_defaults or self.settings_path.exists():
+            return
+        for candidate in self.legacy_defaults:
+            if candidate == self.default_path or not candidate.is_dir():
+                continue
+            if not any(
+                child.is_dir() and not child.name.startswith(".")
+                for child in candidate.iterdir()
+            ):
+                continue
+            _write_json_atomic(
+                self.settings_path,
+                {"schemaVersion": 1, "workspacePath": str(candidate)},
+            )
+            logger.info("Adopted the existing run-export folder %s", candidate)
+            return
 
     def path(self) -> Path:
         if not self._loaded:
@@ -254,8 +336,13 @@ class CadWorkspaceState(WorkspaceState):
     SETTINGS_NAME = "cadlink_settings.json"
     SETTINGS_KEY = "cadLinkPath"
 
-    def __init__(self, data_dir: Path) -> None:
+    def __init__(self, data_dir: Path, *, proposed_path: Path | None = None) -> None:
         super().__init__(data_dir, default_path=data_paths(data_dir).root / "cadlink")
+        self.proposed_path = (
+            Path(proposed_path).expanduser()
+            if proposed_path is not None
+            else proposed_cadlink_dir()
+        )
         self.settings_path = (data_paths(data_dir).root / self.SETTINGS_NAME).resolve()
         self.legacy_settings_path = (
             data_paths(data_dir).root / "workspace_settings.json"
@@ -288,6 +375,19 @@ class CadWorkspaceState(WorkspaceState):
             self.settings_path,
             {"schemaVersion": 1, self.SETTINGS_KEY: str(candidate)},
         )
+
+    def create_proposed_if_requested(self, path: Path) -> None:
+        """Create the folder this class proposed, and only that one.
+
+        Accepting the suggested location must not be a two-step chore in Finder,
+        but a select route that creates whatever path it is handed would turn a
+        typo into a new empty CAD exchange the add-in then cannot find.
+        """
+
+        resolved = path.expanduser()
+        if resolved.is_dir() or resolved != self.proposed_path:
+            return
+        resolved.mkdir(parents=True, exist_ok=True)
 
     def path(self) -> Path:
         selected = self.selected_path()
@@ -333,6 +433,10 @@ def create_cad_workspace_router(state: CadWorkspaceState) -> APIRouter:
         return {
             "path": str(selected) if selected is not None else None,
             "selected": selected is not None,
+            # The proposal is not a fallback: nothing reads it until the user
+            # accepts it, so an unselected CAD folder stays unselected.
+            "proposed": str(state.proposed_path),
+            "proposedExists": state.proposed_path.is_dir(),
         }
 
     @router.post("/select")
@@ -342,8 +446,18 @@ def create_cad_workspace_router(state: CadWorkspaceState) -> APIRouter:
         selected = (
             payload.path
             if payload is not None
-            else await asyncio.to_thread(_select_workspace_folder, "Select WGLink folder")
+            else await asyncio.to_thread(
+                _select_workspace_folder, "Select WGLink folder", state.proposed_path
+            )
         )
+        if selected:
+            try:
+                state.create_proposed_if_requested(Path(selected))
+            except OSError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Could not create the CAD Link folder: {exc}",
+                ) from exc
         if not selected:
             current = state.selected_path()
             return {
@@ -521,9 +635,16 @@ def create_workspace_router(state: WorkspaceState) -> APIRouter:
 
 
 def mount_workspace(
-    application: FastAPI, *, default_path: Path | None = None
+    application: FastAPI,
+    *,
+    default_path: Path | None = None,
+    legacy_defaults: Sequence[Path] = (),
 ) -> WorkspaceState:
-    state = WorkspaceState(Path(application.state.data_dir), default_path=default_path)
+    state = WorkspaceState(
+        Path(application.state.data_dir),
+        default_path=default_path,
+        legacy_defaults=legacy_defaults,
+    )
     application.state.workspace = state
     application.include_router(create_workspace_router(state))
     cad_state = CadWorkspaceState(Path(application.state.data_dir))

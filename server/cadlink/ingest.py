@@ -263,6 +263,21 @@ def _scope_findings(manifest: Mapping[str, Any]) -> list[dict[str, Any]]:
     return findings
 
 
+CAD_DOCUMENT_PURPOSE = "cad-document"
+
+
+def cad_document_member(manifest: Mapping[str, Any]) -> str | None:
+    """The captured native CAD file in a return bundle, if the add-in wrote one."""
+
+    files = manifest.get("files")
+    if not isinstance(files, Mapping):
+        return None
+    for name, record in files.items():
+        if isinstance(record, Mapping) and record.get("purpose") == CAD_DOCUMENT_PURPOSE:
+            return str(name)
+    return None
+
+
 def _stage_bundle_cas(
     bundle: WgReturnBundle, imports_root: Path
 ) -> tuple[Path, Path | None, Path | None]:
@@ -274,8 +289,18 @@ def _stage_bundle_cas(
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(prefix=".wg2-import-bundle-", dir=destination.parent))
     staged = temporary / destination.name
+    # A captured Fusion archive is tens of megabytes and is not geometry WG
+    # solves from -- it is there for the user's own archive. Copying it here too
+    # would put a second copy in the hidden data directory for every return.
+    document = cad_document_member(bundle.manifest)
+    excluded = {Path(document).name} if document else set()
     try:
-        shutil.copytree(bundle.path, staged, symlinks=False)
+        shutil.copytree(
+            bundle.path,
+            staged,
+            symlinks=False,
+            ignore=lambda _directory, names: [name for name in names if name in excluded],
+        )
     except Exception:
         shutil.rmtree(temporary, ignore_errors=True)
         raise
@@ -818,6 +843,18 @@ def ingest_bundle(
                     "throat_frame": None,
                 }
             ),
+            # The archive names a captured Fusion document by the return state
+            # it belongs to, and a run record has to say which document it came
+            # from. Both facts are in the manifest; neither survived into the
+            # record, so a solved run could not be traced back to its document.
+            "document": {
+                "name": str((manifest.get("document") or {}).get("name") or ""),
+                "native_id": (manifest.get("document") or {}).get("native_id"),
+                "return_state_hash": (manifest.get("assembly") or {}).get(
+                    "signature_hash"
+                ),
+                "file": cad_document_member(manifest),
+            },
             "sources": manifest["sources"],
             "mesh_sizes": effective_mesh,
             "skipped_source_ids": effective_skipped_source_ids,

@@ -45,7 +45,7 @@ function ResultsPreferencesContent() {
   const themes = useThemes();
   return <section className="preferences-section">
     <h3 className="preferences-section-title">Results & export</h3>
-    <p className="preferences-section-copy">Chart layout, processing, and automatic export defaults. Manual and automatic files are saved under the Workspace folder without browser download prompts; before a custom folder is selected, WG uses its local <code>output</code> folder.</p>
+    <p className="preferences-section-copy">Chart layout, processing, and automatic export defaults. Files are saved under the Workspace folder, grouped as <code>&lt;design&gt;/&lt;run&gt;</code>, without browser download prompts.</p>
     <div className="preferences-grid">
       <ResultPanelCountControl/>
       <label className="ui-field">Smoothing<select aria-label="Smoothing" value={preferences.smoothing} onChange={(event) => preferencesStore.update({ smoothing: event.target.value as SmoothingMode })}>{SMOOTHING_MODES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
@@ -57,9 +57,13 @@ function ResultsPreferencesContent() {
       <label className="ui-field">Export theme<select aria-label="Chart theme" value={preferences.chartTheme} onChange={(event) => preferencesStore.update({ chartTheme: event.target.value })}><option value={MATCH_INTERFACE_THEME}>Match interface</option>{[...new Set([preferences.chartTheme, ...themes])].filter((theme) => theme !== MATCH_INTERFACE_THEME).map((theme) => <option key={theme}>{theme}</option>)}</select></label>
     </div>
     <div className="preferences-checks">
+      <label className="ui-check"><input type="checkbox" checked={preferences.archiveRunsOnComplete} onChange={(event) => preferencesStore.update({ archiveRunsOnComplete: event.target.checked })}/>Archive every completed run</label>
       <label className="ui-check"><input type="checkbox" checked={preferences.autoExportOnComplete} onChange={(event) => preferencesStore.update({ autoExportOnComplete: event.target.checked })}/>Auto-export completed jobs</label>
       <label className="ui-check"><input type="checkbox" checked={preferences.autoDownloadMesh} onChange={(event) => preferencesStore.update({ autoDownloadMesh: event.target.checked })}/>Auto-save solve mesh to Workspace</label>
     </div>
+    {/* The two retentions must not be left to be discovered: results in the
+        run list are pruned, the Workspace folder is not. */}
+    <p className="preferences-section-copy">Results stay in the run list for 30 days, or until the run limit is passed — rating a run keeps it. Archived runs are written to the Workspace folder and are kept until you delete them.{!preferences.archiveRunsOnComplete && ' Archiving is off, so a solve you do not export leaves nothing behind.'}</p>
     <fieldset className="preferences-formats">
       <legend>Preferred manual export formats</legend>
       <p className="preferences-section-copy">Used by the Results toolbar Export button and each run’s primary Export action.</p>

@@ -1,6 +1,9 @@
 import { downloadBlob, downloadText } from '../api/designIo';
 import type { JobItem } from '../api/jobsSocket';
-import { exportStemForJob } from '../jobs/exportNaming';
+import { fetchJobResults } from '../api/results';
+import { archiveFolderForJob, exportStemForJob, exportSubdirectoryForJob } from '../jobs/exportNaming';
+import { buildDesignRecord, buildRunRecord } from '../jobs/runArchive';
+import { resultExportSnapshot } from './exportContext';
 import { serializeDesign, type DesignDocument } from '../stores/design';
 import { designWireWithSolveSettings } from '../stores/designWire';
 import type { WgSolveSettings } from '../stores/wgSolveBlock';
@@ -20,6 +23,11 @@ export interface ExportContext {
   polarConfig?: unknown;
   solveSettings?: WgSolveSettings | null;
   jobStem: string;
+  /**
+   * Where the bundle lands inside the workspace, `<design>/<run>` by default.
+   * File names still use `jobStem`, so only the folder shape moved.
+   */
+  workspaceSubdirectory?: string;
   /** The run's own name, written into the `.cfg` this run exports. */
   designName?: string;
   preferences: Preferences;
@@ -249,6 +257,11 @@ async function blobBase64(blob: Blob): Promise<string> {
  */
 export type ExistingFilePolicy = 'merge_identical' | 'overwrite';
 
+/** The folder a bundle is written to, which callers may group by design. */
+export function workspaceSubdirectory(context: ExportContext): string {
+  return context.workspaceSubdirectory?.trim() || context.jobStem;
+}
+
 export async function writeWorkspaceFiles(
   subdirectory: string,
   members: WorkspaceFile[],
@@ -421,7 +434,7 @@ async function writeManualPolarFrd(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      subdirectory: context.jobStem,
+      subdirectory: workspaceSubdirectory(context),
       members: files.map(({ filename, text }) => ({ relative_path: filename, text })),
     }),
   });
@@ -584,7 +597,7 @@ export async function runWorkspaceExportBundle(
   }, formats);
   if (!prepared.size) return { ...bundle, files: [] };
   const written = await writeWorkspaceFiles(
-    context.jobStem,
+    workspaceSubdirectory(context),
     [...prepared.values()],
     context.fetcher ?? fetch,
     existing,
@@ -605,13 +618,63 @@ export async function downloadMeshArtifact(
 }
 
 export async function saveMeshArtifactToWorkspace(
-  job: Pick<JobItem, 'id' | 'run_number' | 'label' | 'config_summary'>,
+  job: Pick<JobItem, 'id' | 'run_number' | 'label' | 'config_summary' | 'cad_source'>,
   fetcher: typeof fetch = fetch,
 ): Promise<string> {
   let prepared: WorkspaceFile | null = null;
   await downloadMeshArtifact(job, fetcher, (blob, filename) => { prepared = { blob, filename }; });
   if (!prepared) throw new Error('Mesh artifact returned no file.');
-  const written = await writeWorkspaceFiles(exportStemForJob(job), [prepared], fetcher);
+  const written = await writeWorkspaceFiles(exportSubdirectoryForJob(job), [prepared], fetcher);
   if (!written.files[0]) throw new Error('Workspace returned no saved mesh path.');
   return written.files[0];
+}
+
+
+/**
+ * The formats a run archive always contains, whatever the user exports.
+ *
+ * JSON carries the full result payload, so an archived run can be reread long
+ * after the job database has pruned it. CSV is there because a spreadsheet is
+ * how most people actually open a curve again.
+ */
+export const ARCHIVE_FORMATS: ExportFormat[] = ['json', 'csv'];
+
+function textFile({ filename, text }: { filename: string; text: string }): WorkspaceFile {
+  return { filename, blob: new Blob([text], { type: 'application/json' }) };
+}
+
+/**
+ * Write one completed run to its design's archive folder.
+ *
+ * The run record is written with `merge_identical` because it is evidence: it
+ * is derived only from the stored job, so re-archiving the same run is a
+ * byte-identical no-op rather than a rewrite. The design pointer file is
+ * derived state and follows a rename, so it is the one file allowed to
+ * replace itself.
+ */
+export async function archiveRunToWorkspace(
+  job: JobItem,
+  preferences: Preferences,
+  fetcher: typeof fetch = fetch,
+): Promise<string[]> {
+  const subdirectory = exportSubdirectoryForJob(job);
+  const bundle = await runWorkspaceExportBundle({
+    result: await fetchJobResults(job.id) as ResultPayload,
+    ...resultExportSnapshot(job),
+    jobStem: exportStemForJob(job),
+    workspaceSubdirectory: subdirectory,
+    designName: job.label ?? undefined,
+    preferences,
+    fetcher,
+  }, ARCHIVE_FORMATS);
+  if (bundle.failures.length) {
+    throw new Error(bundle.failures.map(({ format, reason }) => `${format} (${reason})`).join(', '));
+  }
+  const record = await writeWorkspaceFiles(
+    subdirectory, [textFile(buildRunRecord(job))], fetcher, 'merge_identical',
+  );
+  const pointer = await writeWorkspaceFiles(
+    archiveFolderForJob(job), [textFile(buildDesignRecord(job))], fetcher, 'overwrite',
+  );
+  return [...bundle.files, ...record.files, ...pointer.files];
 }

@@ -6,6 +6,7 @@ import asyncio
 from datetime import datetime, timezone
 import hashlib
 import json
+import logging
 import math
 from pathlib import Path
 import re
@@ -24,6 +25,7 @@ from server.mesh.artifact import (
 )
 from server.mesh.gmsh_worker import run_on_gmsh_worker
 from server.workspace.api import WorkspaceState, _path_segments, _strictly_inside
+from server.workspace.archive import archive_cad_document
 
 from .fusion_status import fusion_process_running, read_fusion_status
 from .fusion_return import publish_return_request
@@ -36,6 +38,9 @@ from .solve_command import (
 from .ingest import IngestRefusal, get_ingestion_record, ingest_bundle
 from .store import CadLinkStore
 from .wgreturn import WgReturnError
+
+
+logger = logging.getLogger(__name__)
 
 
 _INGEST_ID = re.compile(r"^wgi_[0-9A-HJKMNP-TV-Z]{26}$")
@@ -548,7 +553,7 @@ async def post_ingest(payload: CadReturnIngestRequest, request: Request) -> dict
         "source_size_mm": payload.mesh.source_size_mm,
     }
     try:
-        return await run_on_gmsh_worker(
+        record = await run_on_gmsh_worker(
             ingest_bundle,
             bundle_path,
             mesh,
@@ -561,6 +566,46 @@ async def post_ingest(payload: CadReturnIngestRequest, request: Request) -> dict
         raise
     except Exception as exc:
         raise _ingest_error(exc) from exc
+    await _archive_cad_document(request, store, bundle_path, record)
+    return record
+
+
+async def _archive_cad_document(
+    request: Request,
+    store: CadLinkStore,
+    bundle_path: Path,
+    record: Mapping[str, Any],
+) -> None:
+    """File a captured CAD document in the design's run archive, advisorily.
+
+    The document is the user's own copy of the geometry a run was solved from,
+    not evidence WG depends on, so a failure here must never cost them an
+    otherwise good ingestion.
+    """
+
+    runs: WorkspaceState | None = getattr(request.app.state, "workspace", None)
+    if runs is None:
+        return
+    anchor = record.get("anchor")
+    design_id = str((anchor or {}).get("design_id") or "") if isinstance(anchor, Mapping) else ""
+    stem = str((record.get("document") or {}).get("name") or "")
+    if design_id:
+        design_row = await asyncio.to_thread(store.get_design, design_id)
+        lineage_id = str((design_row or {}).get("lineage_id") or "")
+        if lineage_id:
+            names = await asyncio.to_thread(store.get_lineage_cad_names, lineage_id)
+            stem = str((names or {}).get("bundle_stem") or "") or stem
+    if not stem:
+        return
+    try:
+        relative = await asyncio.to_thread(
+            archive_cad_document, bundle_path, record, runs.path(), stem
+        )
+    except OSError as exc:
+        logger.warning("Could not archive the CAD document for %s: %s", bundle_path.name, exc)
+        return
+    if relative is not None:
+        logger.info("Archived the CAD document for %s as %s", stem, relative)
 
 
 @router.get("/ingest/{ingest_id}")

@@ -14,7 +14,7 @@ import {
 import type { ResultPayload } from '../results/types';
 import { EMPTY_RUN_EXPORT_STATE, useRunExportStore, type RunExportOutcome } from '../stores/runExports';
 import { canLoadJobDesign, hydrateJobDesign, jobDesignAvailability, jobRerunState } from './jobDesign';
-import { exportStemForJob } from './exportNaming';
+import { exportStemForJob, exportSubdirectoryForJob } from './exportNaming';
 import './RunExportControl.css';
 
 export interface RunExportControlProps {
@@ -105,6 +105,7 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
     ...(needsResults(formats) ? { result: await fetchJobResults(job.id) as ResultPayload } : {}),
     ...resultExportSnapshot(job),
     jobStem: exportStemForJob(job),
+    workspaceSubdirectory: exportSubdirectoryForJob(job),
     designName: job.label ?? undefined,
     preferences,
   });
