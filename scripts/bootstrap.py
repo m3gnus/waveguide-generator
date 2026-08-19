@@ -39,6 +39,7 @@ REQUIREMENT_FILES = (
 REQUIRED_DISTRIBUTIONS = (
     "fastapi",
     "gmsh",
+    "hornlab-beat-bem",
     "hornlab-bempp-bem",
     "hornlab-metal-bem",
     "hornlab-plots",
@@ -468,8 +469,8 @@ def _provision_gpu_runtime(python: Path) -> None:
         # The optional GPU engine is not installed in this environment.
         return
     # The provisioner announces its own download sizes once it decides to run;
-    # without an NVIDIA GPU it exits silently, so CPU-only launches stay quiet.
-    _run([str(python), "-m", "hornlab_beat_bem.provision", "--if-nvidia-gpu"])
+    # without a supported GPU it exits silently, so CPU-only launches stay quiet.
+    _run([str(python), "-m", "hornlab_beat_bem.provision", "--if-gpu"])
 
 
 def _bootstrap_locked(environment: Path, *, force: bool = False) -> None:

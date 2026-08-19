@@ -138,19 +138,22 @@ def resolve_auto_engine(
 ) -> str | None:
     """Resolve AUTO to the best engine this host can actually run.
 
-    Solver mode chooses a path inside a backend, not a backend. AUTO therefore
-    always prefers Metal, then BEMPP. The gated dry-run engine is only a final
-    development fallback when no physical solver is available.
+    Solver mode chooses a path inside a backend, not a backend. AUTO prefers
+    Metal, then the GPU BEAT engine, then BEMPP; the gated dry-run engine is
+    only a final development fallback when no physical solver is available.
 
-    The GPU "beat" engine is deliberately not in this order yet: it is
-    explicit-selection only until its priority against Metal/BEMPP has been
-    measured on real accelerator hardware.
+    The order is safe because availability already encodes the platform:
+    Metal exists only on macOS, and "beat" advertises available only when a
+    functional CUDA/ROCm device was probed (never for its internal CPU path),
+    so AUTO reaches beat exactly on GPU-equipped non-Mac hosts, where the
+    accelerated dense solve is the point of the backend. BEMPP remains the
+    universal CPU engine.
     """
 
     detected = list(capabilities) if capabilities is not None else detect_engines(environ=environ)
     available = {item.name for item in detected if item.available}
     del solver_mode
-    for candidate in ("metal", "bempp", "dryrun"):
+    for candidate in ("metal", "beat", "bempp", "dryrun"):
         if candidate in available:
             return candidate
     return None

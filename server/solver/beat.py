@@ -156,11 +156,6 @@ def solve_beat_from_msh_text(
     if not status["available"]:
         raise BeatUnavailable(status["reason"])
     backend = str(status.get("backend") or "cpu")
-    if context.source_motion != "normal":
-        raise BeatUnavailable(
-            "hornlab-beat-bem does not support axial source motion."
-        )
-
     field_plane_enabled = (
         getattr(context, "polar_config", {}).get("field_plane", True) is True
     )
@@ -244,6 +239,7 @@ def solve_beat_from_msh_text(
             native_symmetry_plane=native_symmetry_plane(context),
             mesh_scale=1.0,
             beat_backend=backend,
+            source_motion=context.source_motion,
             progress_callback=progress,
             on_frequency_result=(
                 on_frequency_result if result_callback is not None else None

@@ -70,7 +70,7 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null 
   const { engines, error } = useCapabilities();
   const backendEngines = engines.filter((engine) => engine.name.toLowerCase() !== 'circsym');
   const selectedEngine = store.engine === 'auto'
-    ? ['metal', 'bempp', 'dryrun'].flatMap((name) => backendEngines.filter((engine) => engine.available && engine.name.toLowerCase() === name))[0]
+    ? ['metal', 'beat', 'bempp', 'dryrun'].flatMap((name) => backendEngines.filter((engine) => engine.available && engine.name.toLowerCase() === name))[0]
     : backendEngines.find((engine) => engine.name.toLowerCase() === store.engine);
   const fastPaths = selectedEngine?.fast_paths ?? [];
   const meridianAvailable = backendSupports(selectedEngine?.name.toLowerCase() ?? null, 'meridian-fast-path');
