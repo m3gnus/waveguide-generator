@@ -1,6 +1,6 @@
 {
   "name": "waveguide-generator-frontend",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Waveguide Generator frontend: interactive 3D design and simulation for acoustic waveguides.",
   "license": "AGPL-3.0-or-later",
   "repository": {
