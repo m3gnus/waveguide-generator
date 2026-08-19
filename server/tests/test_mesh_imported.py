@@ -11,10 +11,13 @@ from server.mesh.imported import (
     allocate_imported_tags,
     imported_tessellation_settings,
     imported_viewport_tessellation_settings,
+    recorded_vertical_offset_mm,
     resolve_instance_source,
     resolve_user_source,
+    resolve_vertical_recentre,
     rigid_inverse,
     validate_imported_sizes,
+    verify_symmetry_cut,
     _advanced_face_identifier_surfaces,
     _assert_disjoint_source_claims,
     _lookup_faces,
@@ -247,3 +250,140 @@ def test_post_cut_source_area_refuses_a_silently_dead_channel() -> None:
         predicted_retained_fraction=0.5,
     )
     assert accepted["retained_fraction"] == 0.5
+
+
+def test_recorded_vertical_offset_reads_the_echoed_design_config() -> None:
+    assert (
+        recorded_vertical_offset_mm(
+            {"config": {"root": {"mesh": {"vertical_offset": {"value": 80.0, "raw": None}}}}}
+        )
+        == 80.0
+    )
+    # A bare number is accepted because the config is an opaque echo, not a
+    # schema WG can enforce on the return leg.
+    assert (
+        recorded_vertical_offset_mm({"config": {"root": {"mesh": {"vertical_offset": 12}}}})
+        == 12.0
+    )
+    assert recorded_vertical_offset_mm({}) is None
+    assert recorded_vertical_offset_mm({"config": {"root": {"mesh": {}}}}) is None
+    assert recorded_vertical_offset_mm(None) is None
+    assert (
+        recorded_vertical_offset_mm(
+            {"config": {"root": {"mesh": {"vertical_offset": {"value": None, "raw": "y"}}}}}
+        )
+        is None
+    )
+
+
+def test_vertical_recentre_needs_the_geometry_to_agree_with_the_config() -> None:
+    placed = resolve_vertical_recentre(80.0, bounds_mm=(-100.0, -20.0, 0.0, 100.0, 180.0, 300.0))
+    assert placed["applied"] is True
+    assert placed["applied_offset_mm"] == 80.0
+
+    # Same recorded offset, a body that is not centred on it: the config
+    # describes some other design and must not move this one.
+    wrong = resolve_vertical_recentre(80.0, bounds_mm=(-100.0, -20.0, 0.0, 100.0, 60.0, 300.0))
+    assert wrong["applied"] is False
+    assert wrong["applied_offset_mm"] == 0.0
+    assert "y midpoint" in wrong["reason"]
+
+    for absent in (
+        resolve_vertical_recentre(None, bounds_mm=(0.0,) * 6),
+        resolve_vertical_recentre(0.0, bounds_mm=(0.0,) * 6),
+    ):
+        assert absent["applied"] is False
+        assert absent["applied_offset_mm"] == 0.0
+
+
+_QUARTER_BOX_POINTS = np.asarray(
+    [
+        (0.0, 0.0, 1.0),
+        (1.0, 0.0, 1.0),
+        (1.0, 1.0, 1.0),
+        (0.0, 1.0, 1.0),
+        (0.0, 0.0, 2.0),
+        (1.0, 0.0, 2.0),
+        (1.0, 1.0, 2.0),
+        (0.0, 1.0, 2.0),
+    ],
+    dtype=float,
+)
+_QUARTER_BOX_FACES = {
+    "zlow": [(0, 1, 2), (0, 2, 3)],
+    "zhigh": [(4, 5, 6), (4, 6, 7)],
+    "y0": [(0, 1, 5), (0, 5, 4)],
+    "y1": [(3, 2, 6), (3, 6, 7)],
+    "x0": [(0, 3, 7), (0, 7, 4)],
+    "x1": [(1, 2, 6), (1, 6, 5)],
+}
+
+
+def _quarter_box(*open_faces: str) -> np.ndarray:
+    return np.asarray(
+        [
+            triangle
+            for name, face in _QUARTER_BOX_FACES.items()
+            if name not in open_faces
+            for triangle in face
+        ],
+        dtype=np.int64,
+    )
+
+
+def test_verify_symmetry_cut_confirms_an_open_quarter_domain() -> None:
+    verdict = verify_symmetry_cut(
+        _QUARTER_BOX_POINTS,
+        _quarter_box("x0", "y0"),
+        cut_planes=("x0", "y0"),
+        topology={"unexpected_free_edges": 0, "free_edges": 6},
+    )
+    assert verdict["verified"] is True
+    assert verdict["detected_planes"] == ["x0", "y0"]
+    assert verdict["capped_planes"] == []
+
+
+def test_verify_symmetry_cut_refuses_a_capped_cut_plane() -> None:
+    verdict = verify_symmetry_cut(
+        _QUARTER_BOX_POINTS,
+        _quarter_box("x0"),
+        cut_planes=("x0", "y0"),
+        topology={"unexpected_free_edges": 0, "free_edges": 4},
+    )
+    assert verdict["verified"] is False
+    assert verdict["capped_planes"] == ["y0"]
+    assert "capped" in verdict["reason"]
+
+
+def test_verify_symmetry_cut_refuses_an_off_plane_leak() -> None:
+    verdict = verify_symmetry_cut(
+        _QUARTER_BOX_POINTS,
+        _quarter_box("x0", "y0"),
+        cut_planes=("x0", "y0"),
+        topology={
+            "unexpected_free_edges": 3,
+            "free_edges": 9,
+            "unexpected_free_edge_midpoint_samples": [[0.5, 0.5, 2.0]],
+        },
+    )
+    assert verdict["verified"] is False
+    assert verdict["capped_planes"] == []
+    assert "leaks" in verdict["reason"]
+    assert verdict["off_plane_free_edge_samples"] == [[0.5, 0.5, 2.0]]
+
+
+def test_verify_symmetry_cut_does_not_judge_an_uncut_open_shell() -> None:
+    """An imported open shell's rim is real geometry, not a leak.
+
+    Without a cut plane there is no mirror to be wrong about, so the free
+    edges of a full-domain import are left alone.
+    """
+
+    verdict = verify_symmetry_cut(
+        _QUARTER_BOX_POINTS,
+        _quarter_box("zhigh"),
+        cut_planes=(),
+        topology={"unexpected_free_edges": 4, "free_edges": 4},
+    )
+    assert verdict["verified"] is True
+    assert verdict["detected_planes"] == []

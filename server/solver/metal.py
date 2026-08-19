@@ -252,6 +252,33 @@ def _observation(
     )
 
 
+def _imported_check_open_edges(record: Mapping[str, Any]) -> bool:
+    """Re-check a CAD return's rim natively when ingestion proved it closed.
+
+    The native check refuses a reduced mesh with any open edge off the mirror
+    planes. It was hard-disabled for every imported solve because an imported
+    open shell -- a standalone source sheet, say -- has a rim that is real
+    geometry, and the check cannot tell that from a leak. Ingestion now can:
+    it verifies the cut against the meshed boundary and re-meshes the full
+    domain when it cannot (``server/mesh/imported.py``), so a record that
+    reports no off-plane open edges is entitled to the second, independent
+    opinion -- which is worth having, because it reads the artifact the solver
+    is about to assemble rather than the report stored beside it. A record
+    that legitimately has an off-plane rim keeps the check off; so does a
+    record too old to carry the count, whose reduction this release cannot
+    vouch for either way.
+    """
+
+    mesh = record.get("mesh")
+    integrity = mesh.get("integrity") if isinstance(mesh, Mapping) else None
+    if not isinstance(integrity, Mapping):
+        return False
+    count = integrity.get("off_plane_open_edge_count")
+    if isinstance(count, bool) or not isinstance(count, int):
+        return False
+    return count == 0
+
+
 def _native_check_open_edges(context: SolverContext) -> bool:
     """Retain v1's reduced bare-shell exception (Metal lines 232-252)."""
 
@@ -1192,7 +1219,7 @@ def _combined_channel_response(
         "metal": {
             "solver_mode": "full_3d",
             "native_symmetry_plane": kwargs["native_symmetry_plane"],
-            "native_check_open_edges": False,
+            "native_check_open_edges": kwargs["native_check_open_edges"],
             "formulation": kwargs["formulation"],
             "complex_k_shift": kwargs["complex_k_shift"],
             "solver_log": json_safe_native_value(
@@ -1384,7 +1411,7 @@ def solve_imported_metal_from_msh_text(
         "progress_callback": progress,
         "mesh_scale": 1.0,
         "native_symmetry_plane": native_symmetry_plane(context),
-        "native_check_open_edges": False,
+        "native_check_open_edges": _imported_check_open_edges(record),
         "mesh_validate": context.mesh_validation_mode != "off",
         "frame_override": frame_override,
         "source_motion": config_motion,
@@ -1522,7 +1549,7 @@ def solve_imported_metal_from_msh_text(
                 "metal": {
                     "solver_mode": "full_3d",
                     "native_symmetry_plane": kwargs["native_symmetry_plane"],
-                    "native_check_open_edges": False,
+                    "native_check_open_edges": kwargs["native_check_open_edges"],
                     "formulation": kwargs["formulation"],
                     "complex_k_shift": kwargs["complex_k_shift"],
                     "solver_log": json_safe_native_value(
@@ -1620,7 +1647,7 @@ def solve_imported_metal_from_msh_text(
                 "metal": {
                     "solver_mode": "full_3d",
                     "native_symmetry_plane": kwargs["native_symmetry_plane"],
-                    "native_check_open_edges": False,
+                    "native_check_open_edges": kwargs["native_check_open_edges"],
                     "formulation": kwargs["formulation"],
                     "complex_k_shift": kwargs["complex_k_shift"],
                     "solver_log": [],
