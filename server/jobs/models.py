@@ -894,6 +894,24 @@ class StopResponse(JobModel):
 JobStatusName = Literal["queued", "running", "complete", "error", "cancelled"]
 
 
+class CadSource(JobModel):
+    """Where an imported run came from, kept for the run archive.
+
+    A CAD run used to be traceable only through the ingestion record, which is
+    addressed by content and says nothing about which document a person opened.
+    """
+
+    ingest_id: str | None = None
+    design_id: str | None = None
+    lineage_id: str | None = None
+    #: The folder this design's runs are archived under -- the name its
+    #: ``.wglink`` bundle already owns, so a rename does not start a second one.
+    archive_stem: str | None = None
+    manifest_sha256: str | None = None
+    document_name: str | None = None
+    return_state_hash: str | None = None
+
+
 class JobItem(JobModel):
     id: str
     run_number: int
@@ -934,6 +952,9 @@ class JobItem(JobModel):
     exported_files: list[str]
     auto_export_completed_at: str | None = None
     auto_export_formats: dict[str, Any]
+    #: When this run was written to the run archive. The job database prunes
+    #: results after 30 days; the archive folder is what survives that.
+    archived_at: str | None = None
     raw_results_file: str | None = None
     mesh_artifact_file: str | None = None
     results_discarded_at: str | None = None
@@ -943,6 +964,7 @@ class JobItem(JobModel):
     solve_path: Literal["full-3d", "axisymmetric-meridian"] | None = None
     axisymmetric_eligibility_reasons: list[str] = Field(default_factory=list)
     solve_wall_time_seconds: float | None = None
+    cad_source: CadSource | None = None
 
 
 class JobStatusResponse(JobItem):
@@ -981,6 +1003,7 @@ class JobMetadataPatch(JobModel):
     exported_files: list[str] | None = None
     auto_export_completed_at: str | None = None
     auto_export_formats: dict[str, Any] | None = None
+    archived_at: str | None = None
     raw_results_file: str | None = None
     mesh_artifact_file: str | None = None
 
@@ -999,7 +1022,9 @@ class JobMetadataPatch(JobModel):
             return None
         return list(dict.fromkeys(item.strip() for item in value if item.strip()))
 
-    @field_validator("auto_export_completed_at", "raw_results_file", "mesh_artifact_file")
+    @field_validator(
+        "auto_export_completed_at", "archived_at", "raw_results_file", "mesh_artifact_file"
+    )
     @classmethod
     def normalize_optional_text(cls, value: str | None) -> str | None:
         if value is None:

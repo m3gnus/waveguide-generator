@@ -61,6 +61,8 @@ export interface JobItem {
   exported_files: string[];
   auto_export_completed_at: string | null;
   auto_export_formats: Record<string, AutoExportFormatStatus>;
+  /** When this run was written to the run archive, if it has been. */
+  archived_at?: string | null;
   raw_results_file: string | null;
   mesh_artifact_file: string | null;
   results_discarded_at?: string | null;
@@ -77,6 +79,20 @@ export interface JobItem {
   solve_path?: 'full-3d' | 'axisymmetric-meridian' | null;
   axisymmetric_eligibility_reasons?: string[];
   solve_wall_time_seconds?: number | null;
+  /** Where an imported run came from. Absent on parametric runs. */
+  cad_source?: CadSource | null;
+}
+
+/** The CAD provenance a run keeps so its archive stays traceable. */
+export interface CadSource {
+  ingest_id: string | null;
+  design_id: string | null;
+  lineage_id: string | null;
+  /** The folder this design's runs are archived under. */
+  archive_stem: string | null;
+  manifest_sha256: string | null;
+  document_name: string | null;
+  return_state_hash: string | null;
 }
 
 export interface JobsSnapshot {
@@ -198,6 +214,12 @@ function isNullableTimestamp(value: unknown): value is string | null {
   return value === null || isTimestamp(value);
 }
 
+function isCadSource(value: unknown): value is CadSource {
+  return isRecord(value)
+    && (['ingest_id', 'design_id', 'lineage_id', 'archive_stem', 'manifest_sha256', 'document_name', 'return_state_hash'] as const)
+      .every((key) => !hasOwn(value, key) || isNullableString(value[key]));
+}
+
 function isAutoExportFormats(value: unknown): value is JobItem['auto_export_formats'] {
   // Older rows and future exporters may attach fields beyond the current
   // complete/failed UI projection. The UI treats unrecognised entries as not
@@ -240,6 +262,7 @@ function isJobItem(value: unknown): value is JobItem {
   if (!isStringArray(value.exported_files)) return false;
   if (!isNullableTimestamp(value.auto_export_completed_at)) return false;
   if (!isAutoExportFormats(value.auto_export_formats)) return false;
+  if (hasOwn(value, 'archived_at') && !isNullableTimestamp(value.archived_at)) return false;
   if (!isNullableString(value.raw_results_file) || !isNullableString(value.mesh_artifact_file)) return false;
   if (!isStringArray(value.log_tail)) return false;
   if (hasOwn(value, 'results_discarded_at') && !isNullableTimestamp(value.results_discarded_at)) return false;
@@ -252,6 +275,7 @@ function isJobItem(value: unknown): value is JobItem {
     value.solve_wall_time_seconds === null
     || (isFiniteNumber(value.solve_wall_time_seconds) && value.solve_wall_time_seconds >= 0)
   )) return false;
+  if (hasOwn(value, 'cad_source') && !(value.cad_source === null || isCadSource(value.cad_source))) return false;
   return true;
 }
 
@@ -370,6 +394,10 @@ function sanitizeMetadataChanges(value: unknown): Partial<JobItem> & JsonRecord 
   if (hasOwn(value, 'auto_export_completed_at')) {
     if (!isNullableTimestamp(value.auto_export_completed_at)) return null;
     patch.auto_export_completed_at = value.auto_export_completed_at;
+  }
+  if (hasOwn(value, 'archived_at')) {
+    if (!isNullableTimestamp(value.archived_at)) return null;
+    patch.archived_at = value.archived_at;
   }
   if (hasOwn(value, 'auto_export_formats')) {
     if (!isAutoExportFormats(value.auto_export_formats)) return null;

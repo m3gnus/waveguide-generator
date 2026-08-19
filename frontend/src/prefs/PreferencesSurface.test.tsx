@@ -174,4 +174,21 @@ describe('preferences surfaces', () => {
     act(() => { panel.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); });
     expect(close).not.toHaveBeenCalled();
   });
+  it('offers run archiving on by default and says what each retention keeps', async () => {
+    await act(async () => { root.render(<ResultsPreferencesSurface/>); await Promise.resolve(); });
+    const archive = [...host.querySelectorAll('label.ui-check')]
+      .find((label) => label.textContent?.includes('Archive every completed run'))!
+      .querySelector('input') as HTMLInputElement;
+
+    expect(archive.checked).toBe(true);
+    expect(host.textContent).toContain('30 days');
+    expect(host.textContent).toContain('kept until you delete them');
+    expect(host.textContent).not.toContain('leaves nothing behind');
+
+    await act(async () => { archive.click(); await Promise.resolve(); });
+
+    expect(preferencesStore.getSnapshot().archiveRunsOnComplete).toBe(false);
+    // Turning it off is allowed, but not quietly: the run list prunes.
+    expect(host.textContent).toContain('leaves nothing behind');
+  });
 });

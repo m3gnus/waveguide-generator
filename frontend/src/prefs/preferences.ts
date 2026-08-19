@@ -87,6 +87,12 @@ export interface Preferences {
   exportFormats: ExportFormat[];
   autoExportFormats: ExportFormat[];
   autoExportOnComplete: boolean;
+  /**
+   * Write a run record and its result curves to the workspace when a solve
+   * finishes. On by default: the job database prunes results after 30 days, so
+   * without this a solve leaves nothing behind that outlives that.
+   */
+  archiveRunsOnComplete: boolean;
   autoDownloadMesh: boolean;
   runNameDatePosition: RunNameDatePosition;
   runNameDateFormat: RunNameDateFormat;
@@ -136,6 +142,7 @@ const defaults: Preferences = {
   exportFormats: ['csv', 'png'],
   autoExportFormats: [],
   autoExportOnComplete: false,
+  archiveRunsOnComplete: true,
   autoDownloadMesh: false,
   runNameDatePosition: 'off',
   runNameDateFormat: 'yymmdd',
@@ -189,6 +196,7 @@ export function normalize(raw: Partial<Preferences> = {}): Preferences {
     exportFormats: formats,
     autoExportFormats: autoFormats,
     autoExportOnComplete: raw.autoExportOnComplete === true,
+    archiveRunsOnComplete: raw.archiveRunsOnComplete !== false,
     autoDownloadMesh: raw.autoDownloadMesh === true,
     runNameDatePosition: runNameDatePositions.has(raw.runNameDatePosition as RunNameDatePosition)
       ? raw.runNameDatePosition as RunNameDatePosition

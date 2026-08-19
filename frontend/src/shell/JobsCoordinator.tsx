@@ -4,11 +4,11 @@ import { fetchJobResults } from '../api/results';
 import { resolveEngine, submitDesign, submitImported, type ImportedSolveSubmission } from '../jobs/actions';
 import { useCapabilities, useCapabilityRefreshOnReconnect } from '../jobs/useCapabilities';
 import { JobAutomation } from '../jobs/automation';
-import { exportStemForJob } from '../jobs/exportNaming';
+import { exportStemForJob, exportSubdirectoryForJob } from '../jobs/exportNaming';
 import { buildImportedSubmission, importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { advanceRunSequence, nextRunLabel } from '../jobs/runNaming';
 import { preferencesStore, usePreferences } from '../prefs/preferences';
-import { runWorkspaceExportBundle, saveMeshArtifactToWorkspace } from '../results/exporters';
+import { archiveRunToWorkspace, runWorkspaceExportBundle, saveMeshArtifactToWorkspace } from '../results/exporters';
 import { resultExportSnapshot } from '../results/exportContext';
 import type { ResultPayload } from '../results/types';
 import { useDesignStore, type DesignDocument } from '../stores/design';
@@ -290,6 +290,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         result: await fetchJobResults(job.id) as ResultPayload,
         ...resultExportSnapshot(job),
         jobStem: exportStemForJob(job),
+        workspaceSubdirectory: exportSubdirectoryForJob(job),
         designName: job.label ?? undefined,
         preferences,
       }, formats),
@@ -298,6 +299,8 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         auto_export_formats: formats,
         auto_export_completed_at: completedAt,
       }),
+      archiveCompleted: async (job) => { await archiveRunToWorkspace(job, preferences); },
+      markArchived: (job, archivedAt) => jobsSocket.patchMetadata(job.id, { archived_at: archivedAt }),
       reportError,
     });
   }, [automation, jobs, preferences, reportError]);

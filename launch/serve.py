@@ -35,7 +35,7 @@ from server.platform.instance import (  # noqa: E402
     reserve_port,
 )
 from server.platform.logging_setup import flush_logs, setup_logging  # noqa: E402
-from server.platform.paths import ensure_data_layout  # noqa: E402
+from server.platform.paths import default_runs_dir, ensure_data_layout  # noqa: E402
 from server.platform.signal_rearm import (  # noqa: E402
     register_signal_rearm,
     unregister_signal_rearm,
@@ -312,7 +312,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         app = create_app(
             data_dir=paths.root,
-            workspace_dir=REPO_ROOT / "output",
+            workspace_dir=default_runs_dir(),
             solver_warmup=_solver_warmup_enabled(),
             update_request_path=(
                 args.status_control.with_name("update.json")

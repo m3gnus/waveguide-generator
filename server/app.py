@@ -34,6 +34,7 @@ from server.platform.paths import resolve_data_dir
 from server.preview.service import mount_preview
 from server.settings import mount_settings
 from server.solver.symmetry import resolve_symmetry
+from server.platform.paths import default_runs_dir
 from server.workspace import mount_workspace
 from server.workspace.api import MAX_EXPORT_REQUEST_BODY_BYTES
 from server.updates import mount_updates
@@ -47,7 +48,7 @@ VERSION = str(
     )["version"]
 )
 FRONTEND_DIST = Path(__file__).resolve().parents[1] / "frontend" / "dist"
-DEFAULT_WORKSPACE_DIR = Path(__file__).resolve().parents[1] / "output"
+LEGACY_WORKSPACE_DIR = Path(__file__).resolve().parents[1] / "output"
 request_log = logging.getLogger("wg.requests")
 DEFAULT_MAX_REQUEST_BODY_BYTES = 64 * 1024 * 1024
 MAX_REQUEST_BODY_BYTES = DEFAULT_MAX_REQUEST_BODY_BYTES
@@ -382,13 +383,23 @@ def create_app(
     )
     if workspace_dir is not None:
         resolved_workspace_dir = Path(workspace_dir).expanduser().resolve()
+        legacy_workspace_dirs: tuple[Path, ...] = (
+            LEGACY_WORKSPACE_DIR,
+            resolved_data_dir / "workspace",
+        )
     elif data_dir is None:
-        resolved_workspace_dir = DEFAULT_WORKSPACE_DIR
+        resolved_workspace_dir = default_runs_dir()
+        legacy_workspace_dirs = (LEGACY_WORKSPACE_DIR,)
     else:
         # Explicit data roots keep tests and embedded callers isolated unless
         # they also opt into a separate user-document workspace.
         resolved_workspace_dir = resolved_data_dir / "workspace"
-    mount_workspace(application, default_path=resolved_workspace_dir)
+        legacy_workspace_dirs = ()
+    mount_workspace(
+        application,
+        default_path=resolved_workspace_dir,
+        legacy_defaults=legacy_workspace_dirs,
+    )
     mount_cadlink(application)
     mount_onshape(application)
     mount_charts(application)

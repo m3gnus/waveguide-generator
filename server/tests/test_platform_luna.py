@@ -34,7 +34,7 @@ from server.platform.origin import (
     parse_extra_websocket_origins,
     websocket_request_allowed,
 )
-from server.platform.paths import ensure_data_layout
+from server.platform.paths import default_runs_dir, ensure_data_layout
 from server.platform.signal_rearm import (
     rearm_registered_signals,
     register_signal_rearm,
@@ -380,7 +380,10 @@ def test_launcher_aligns_websocket_transport_limits_with_frame_protocol(
     assert config_kwargs["ws_max_size"] == DEFAULT_MAX_FRAME_BYTES
     assert config_kwargs["ws_max_queue"] == 1
     assert app_kwargs["solver_warmup"] is False
-    assert app_kwargs["workspace_dir"] == serve.REPO_ROOT / "output"
+    # Runs default beside the user's documents, not inside the checkout: an
+    # install directory does not survive a reinstall and is not anywhere a
+    # user looks for their own output.
+    assert app_kwargs["workspace_dir"] == default_runs_dir()
     assert listener_closed is True
     assert lock_released is True
     assert migration_checked is True

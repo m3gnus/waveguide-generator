@@ -458,6 +458,9 @@ class _ImportedSubmission:
     mesh_stats: dict[str, Any]
     symmetry_metadata: dict[str, Any]
     anchor_design_id: str | None
+    anchor_lineage_id: str | None
+    archive_stem: str | None
+    document: dict[str, Any]
     anchor_snapshot: dict[str, Any] | None
 
 
@@ -924,6 +927,12 @@ class JobRuntime:
             task_metadata["imported_geometry"] = {
                 "ingest_id": request.geometry.ingest_id,
                 "anchor_design_id": imported.anchor_design_id,
+                # A run stays attributable to the design and the CAD document it
+                # was solved from long after both have moved on.
+                "anchor_lineage_id": imported.anchor_lineage_id,
+                "archive_stem": imported.archive_stem,
+                "manifest_sha256": request.geometry.manifest_sha256,
+                "document": imported.document,
             }
         job_record = {
             "id": job_id,
@@ -1148,6 +1157,8 @@ class JobRuntime:
             str(anchor["design_id"]) if anchor.get("design_id") else None
         )
         anchor_design_id: str | None = None
+        anchor_lineage_id: str | None = None
+        archive_stem: str | None = None
         anchor_snapshot: dict[str, Any] | None = None
         if record_anchor_design_id is not None:
             design_row = await asyncio.to_thread(
@@ -1155,6 +1166,15 @@ class JobRuntime:
             )
             if design_row is not None:
                 anchor_design_id = record_anchor_design_id
+                anchor_lineage_id = str(design_row["lineage_id"] or "") or None
+                if anchor_lineage_id is not None:
+                    # The archive folder is the name the lineage already owns in
+                    # ``wglink/``, so a renamed design keeps writing its history
+                    # to one folder instead of starting a second one.
+                    names = await asyncio.to_thread(
+                        self.cadlink_store.get_lineage_cad_names, anchor_lineage_id
+                    )
+                    archive_stem = str((names or {}).get("bundle_stem") or "") or None
                 try:
                     parsed = await asyncio.to_thread(
                         parse, str(design_row["snapshot_text"])
@@ -1174,6 +1194,9 @@ class JobRuntime:
             mesh_stats=mesh_stats,
             symmetry_metadata=symmetry_metadata,
             anchor_design_id=anchor_design_id,
+            anchor_lineage_id=anchor_lineage_id,
+            archive_stem=archive_stem,
+            document=dict(record.get("document") or {}),
             anchor_snapshot=anchor_snapshot,
         )
 
@@ -2601,6 +2624,23 @@ class JobRuntime:
             }
         else:
             design_availability = design.as_availability()
+        cad_source = None
+        if imported:
+            imported_metadata = metadata.get("imported_geometry")
+            imported_metadata = (
+                imported_metadata if isinstance(imported_metadata, Mapping) else {}
+            )
+            document = imported_metadata.get("document")
+            document = document if isinstance(document, Mapping) else {}
+            cad_source = {
+                "ingest_id": imported_metadata.get("ingest_id"),
+                "design_id": imported_metadata.get("anchor_design_id"),
+                "lineage_id": imported_metadata.get("anchor_lineage_id"),
+                "archive_stem": imported_metadata.get("archive_stem"),
+                "manifest_sha256": imported_metadata.get("manifest_sha256"),
+                "document_name": document.get("name") or None,
+                "return_state_hash": document.get("return_state_hash"),
+            }
         item = {
             "id": row.get("id"),
             "run_number": row.get("run_number"),
@@ -2642,6 +2682,7 @@ class JobRuntime:
             "rating": metadata.get("rating"),
             "exported_files": metadata.get("exported_files") or [],
             "auto_export_completed_at": metadata.get("auto_export_completed_at"),
+            "archived_at": metadata.get("archived_at"),
             "auto_export_formats": metadata.get("auto_export_formats") or {},
             "raw_results_file": metadata.get("raw_results_file"),
             "mesh_artifact_file": metadata.get("mesh_artifact_file"),
@@ -2654,6 +2695,7 @@ class JobRuntime:
                 "axisymmetric_eligibility_reasons"
             ) or [],
             "solve_wall_time_seconds": metadata.get("solve_wall_time_seconds"),
+            "cad_source": cad_source,
         }
         if detailed:
             item["updated_at"] = row.get("updated_at")

@@ -1,12 +1,16 @@
 import type { JobItem } from '../api/jobsSocket';
 import type { Preferences } from '../prefs/preferences';
 import type { ExportFormat } from '../prefs/preferences';
+import { needsArchiving } from './runArchive';
 
 export interface AutomationDependencies {
   downloadMesh(job: JobItem): Promise<string>;
   markMeshDownloaded(job: JobItem, filename: string): Promise<void>;
   exportCompleted(job: JobItem, formats: ExportFormat[]): Promise<{ files: string[]; failures: Array<{ format: ExportFormat; reason: string }> }>;
   markExported(job: JobItem, files: string[], formats: JobItem['auto_export_formats'], completedAt: string | null): Promise<void>;
+  /** Write the run record and its curves to the design's archive folder. */
+  archiveCompleted(job: JobItem): Promise<void>;
+  markArchived(job: JobItem, archivedAt: string): Promise<void>;
   reportError(message: string): void;
   now?(): string;
 }
@@ -14,6 +18,7 @@ export interface AutomationDependencies {
 export class JobAutomation {
   private readonly meshStarted = new Set<string>();
   private readonly exportStarted = new Set<string>();
+  private readonly archiveStarted = new Set<string>();
   private emptyAutoExportWarningShown = false;
 
   async process(jobs: JobItem[], preferences: Preferences, dependencies: AutomationDependencies): Promise<void> {
@@ -74,6 +79,32 @@ export class JobAutomation {
         // when a fresh JobAutomation is created after restart.
         dependencies.reportError(`Auto-export failed for ${job.id.slice(0, 6)}: ${error instanceof Error ? error.message : String(error)}`);
       }));
+    });
+    // Archiving is deliberately independent of auto-export: it writes the run
+    // record and results whatever export formats are selected, because its job
+    // is to outlive the 30-day result retention rather than to produce the
+    // files a person picked.
+    if (preferences.archiveRunsOnComplete) jobs.filter(needsArchiving).forEach((job) => {
+      if (this.archiveStarted.has(job.id)) return;
+      this.archiveStarted.add(job.id);
+      tasks.push((async () => {
+        try {
+          await dependencies.archiveCompleted(job);
+        } catch (error) {
+          // Nothing durable was written, so a later job event may retry.
+          this.archiveStarted.delete(job.id);
+          dependencies.reportError(`Run archive failed for ${job.id.slice(0, 6)}: ${error instanceof Error ? error.message : String(error)}`);
+          return;
+        }
+        try {
+          await dependencies.markArchived(job, dependencies.now?.() ?? new Date().toISOString());
+        } catch (error) {
+          // The files are on disk. Keep the session guard so a failed metadata
+          // write cannot archive twice; an unmarked job retries after a
+          // restart, when this in-memory guard intentionally resets.
+          dependencies.reportError(`Could not record the run archive for ${job.id.slice(0, 6)}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      })());
     });
     await Promise.all(tasks);
   }

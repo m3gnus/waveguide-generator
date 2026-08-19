@@ -19,3 +19,32 @@ export function exportStemForJob(
   const title = job.label?.trim() || job.config_summary.formula_type || 'design';
   return `${runNumber}_${exportTitleSlug(title)}`;
 }
+
+/**
+ * The design folder a run is archived under.
+ *
+ * Runs group by design rather than by pipeline: one design is edited
+ * parametrically, sent to CAD and solved from the return, and splitting that
+ * history across a `parametric/` and a `cadlink/` tree scatters the very thing
+ * a person opens the folder to read. A CAD run reuses the stem its `.wglink`
+ * bundle already owns, so a rename keeps writing to one folder.
+ */
+export function archiveFolderForJob(
+  job: Pick<JobItem, 'label' | 'config_summary' | 'cad_source'>,
+): string {
+  const stem = job.cad_source?.archive_stem?.trim();
+  if (stem) return exportTitleSlug(stem);
+  return exportTitleSlug(job.label?.trim() || job.config_summary.formula_type || 'design');
+}
+
+/** Where a run's files land inside the workspace: `<design>/<run>`. */
+export function exportSubdirectoryForJob(
+  job: Pick<JobItem, 'run_number' | 'label' | 'config_summary' | 'cad_source'>,
+): string {
+  return `${archiveFolderForJob(job)}/${exportStemForJob(job)}`;
+}
+
+/** Which side of the app produced a run, for the run record. */
+export function runSourceForJob(job: Pick<JobItem, 'config_summary'>): 'parametric' | 'cadlink' {
+  return job.config_summary.geometry_type === 'imported' ? 'cadlink' : 'parametric';
+}

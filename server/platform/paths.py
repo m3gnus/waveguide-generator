@@ -131,6 +131,56 @@ def log_data_dir_migration(result: DataDirectoryMigration) -> None:
         )
 
 
+DOCUMENTS_DIRECTORY = "Waveguide Generator"
+RUNS_SUBDIRECTORY = "runs"
+CADLINK_SUBDIRECTORY = "cadlink"
+
+
+def documents_root(
+    *,
+    system: str | None = None,
+    environ: Mapping[str, str] | None = None,
+    home: str | os.PathLike[str] | None = None,
+) -> Path:
+    """The user-visible parent folder, beside their other documents.
+
+    Runs and the CAD exchange used to default into the application checkout and
+    the application-data directory respectively: one of those does not survive a
+    reinstall, and neither is somewhere a user looks. They are the user's own
+    output, so they belong where the user keeps output.
+    """
+
+    env = os.environ if environ is None else environ
+    os_name = platform.system() if system is None else system
+    home_dir = Path(home) if home is not None else Path.home()
+
+    if os_name == "Windows":
+        profile = env.get("USERPROFILE")
+        documents = (Path(profile) if profile else home_dir) / "Documents"
+    else:
+        configured = env.get("XDG_DOCUMENTS_DIR")
+        documents = Path(configured) if configured else home_dir / "Documents"
+    return (documents / DOCUMENTS_DIRECTORY).expanduser().absolute()
+
+
+def default_runs_dir(**kwargs: object) -> Path:
+    """Where run exports land unless the user chooses somewhere else."""
+
+    return documents_root(**kwargs) / RUNS_SUBDIRECTORY  # type: ignore[arg-type]
+
+
+def proposed_cadlink_dir(**kwargs: object) -> Path:
+    """What the CAD-link folder picker starts on. Never an implicit fallback.
+
+    ``CadWorkspaceState`` deliberately has no default, because hiding the CAD
+    exchange somewhere implicit makes first-time setup impossible to understand
+    and lets an output-folder change disconnect Fusion. This only makes
+    accepting the obvious location one click instead of a decision.
+    """
+
+    return documents_root(**kwargs) / CADLINK_SUBDIRECTORY  # type: ignore[arg-type]
+
+
 def data_paths(data_dir: str | os.PathLike[str] | None = None, **kwargs: object) -> DataPaths:
     """Build the application path set without touching the filesystem."""
 
