@@ -6,6 +6,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
 import zipfile
 
 import pytest
@@ -13,10 +14,19 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 BUILDER = ROOT / "scripts" / "build_wglink_package.py"
+INSTALLER = ROOT / "scripts" / "install_wglink.py"
 
 
 def _load_builder():
     spec = importlib.util.spec_from_file_location("build_wglink_package_test", BUILDER)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_installer():
+    spec = importlib.util.spec_from_file_location("install_wglink_test", INSTALLER)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -51,6 +61,37 @@ def _spec(commit: str) -> dict[str, object]:
         "license": "AGPL-3.0-or-later",
         "addinVersion": "0.1.1",
     }
+
+
+def _wg_root(tmp_path: Path, commit: str, *, version: str = "9.8.7") -> Path:
+    root = tmp_path / "Waveguide Generator with spaces"
+    (root / "integrations" / "wglink").mkdir(parents=True)
+    (root / "shared").mkdir()
+    (root / "integrations" / "wglink" / "source.json").write_text(
+        json.dumps(_spec(commit)), encoding="utf-8"
+    )
+    (root / "shared" / "version.json").write_text(
+        json.dumps({"version": version}), encoding="utf-8"
+    )
+    python = root / ".venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.touch()
+    return root
+
+
+def _package(tmp_path: Path, commit: str) -> tuple[Path, Path]:
+    builder = _load_builder()
+    source = _source(tmp_path, commit)
+    root = _wg_root(tmp_path, commit)
+    archive = tmp_path / "wglink.zip"
+    builder.build_package(
+        source,
+        archive,
+        spec=_spec(commit),
+        version="9.8.7",
+        observed_commit=commit,
+    )
+    return root, archive
 
 
 def test_package_is_deterministic_and_records_every_source_hash(tmp_path: Path):
@@ -112,3 +153,169 @@ def test_package_refuses_wglink_without_the_managed_runtime_contract(tmp_path: P
             version="1.0.0",
             observed_commit=commit,
         )
+
+
+def test_default_fusion_addins_locations_cover_both_supported_platforms(tmp_path: Path):
+    installer = _load_installer()
+    home = tmp_path / "home"
+    appdata = tmp_path / "Roaming"
+    current = (
+        home
+        / "Library"
+        / "Application Support"
+        / "Autodesk"
+        / "Autodesk Fusion"
+        / "API"
+        / "AddIns"
+    )
+    assert installer.default_addins_dir("macos", home=home, environ={}) == current
+    legacy = current.parents[2] / "Autodesk Fusion 360" / "API" / "AddIns"
+    legacy.mkdir(parents=True)
+    assert installer.default_addins_dir("macos", home=home, environ={}) == legacy
+    assert installer.default_addins_dir(
+        "windows", home=home, environ={"APPDATA": str(appdata)}
+    ) == appdata / "Autodesk" / "Autodesk Fusion 360" / "API" / "AddIns"
+    assert installer.default_addins_dir("linux", home=home, environ={}) is None
+
+
+def test_installed_copy_points_to_wgs_existing_python_and_verified_resampler(
+    tmp_path: Path,
+):
+    installer = _load_installer()
+    commit = "a" * 40
+    root, archive = _package(tmp_path, commit)
+    addins = tmp_path / "Fusion profile" / "API" / "AddIns"
+
+    status, target = installer.install(
+        root=root,
+        platform="macos",
+        addins_dir=addins,
+        archive_path=archive,
+    )
+
+    assert status == "installed"
+    assert target == addins.resolve() / "WGLink"
+    runtime = json.loads((target / installer.RUNTIME_FILE).read_text(encoding="utf-8"))
+    marker = json.loads((target / installer.INSTALL_MARKER).read_text(encoding="utf-8"))
+    assert Path(runtime["python"]) == (root / ".venv" / "bin" / "python").resolve()
+    assert (Path(runtime["root"]) / "scripts" / "wglink_resample.py").is_file()
+    assert marker == {
+        "schema": 1,
+        "managedBy": "waveguide-generator",
+        "waveguideGeneratorRoot": str(root.resolve()),
+        "waveguideGeneratorVersion": "9.8.7",
+        "sourceCommit": commit,
+        "addinVersion": "0.1.1",
+    }
+    assert (Path(runtime["root"]) / "LICENSE").read_text(encoding="utf-8") == (
+        "AGPL test fixture\n"
+    )
+
+    second_status, second_target = installer.install(
+        root=root,
+        platform="macos",
+        addins_dir=addins,
+        archive_path=archive,
+    )
+    assert (second_status, second_target) == ("installed", target)
+
+
+def test_platform_install_preserves_a_developer_managed_copy(tmp_path: Path):
+    installer = _load_installer()
+    root = _wg_root(tmp_path, "a" * 40)
+    addins = tmp_path / "AddIns"
+    target = addins / "WGLink"
+    target.mkdir(parents=True)
+    developer_file = target / "developer.py"
+    developer_file.write_text("keep me\n", encoding="utf-8")
+
+    status, observed = installer.install(
+        root=root, platform="macos", addins_dir=addins
+    )
+
+    assert (status, observed) == ("preserved-external", target.resolve())
+    assert developer_file.read_text(encoding="utf-8") == "keep me\n"
+    assert not (root / "integrations" / "wglink" / "runtime").exists()
+
+
+def test_tampered_package_is_refused_before_an_existing_install_changes(tmp_path: Path):
+    installer = _load_installer()
+    commit = "a" * 40
+    root, archive = _package(tmp_path, commit)
+    addins = tmp_path / "AddIns"
+    installer.install(
+        root=root, platform="macos", addins_dir=addins, archive_path=archive
+    )
+    target = addins.resolve() / "WGLink"
+    before = (target / "WGLink.py").read_bytes()
+    tampered = tmp_path / "tampered.zip"
+    with zipfile.ZipFile(archive) as original, zipfile.ZipFile(tampered, "w") as changed:
+        for info in original.infolist():
+            data = original.read(info)
+            if info.filename.endswith("/WGLink.py"):
+                data += b"# tampered\n"
+            changed.writestr(info, data)
+
+    with pytest.raises(installer.InstallError, match="hash mismatch"):
+        installer.install(
+            root=root,
+            platform="macos",
+            addins_dir=addins,
+            archive_path=tampered,
+        )
+
+    assert (target / "WGLink.py").read_bytes() == before
+
+
+def test_uninstall_removes_only_the_copy_managed_by_this_wg_root(tmp_path: Path):
+    installer = _load_installer()
+    commit = "a" * 40
+    root, archive = _package(tmp_path, commit)
+    addins = tmp_path / "AddIns"
+    installer.install(
+        root=root, platform="macos", addins_dir=addins, archive_path=archive
+    )
+
+    status, target = installer.uninstall(
+        root=root, platform="macos", addins_dir=addins
+    )
+
+    assert status == "removed"
+    assert not target.exists()
+    assert not (root / "integrations" / "wglink" / "runtime").exists()
+
+
+def test_fetch_uses_a_disposable_checkout_of_the_exact_commit(tmp_path: Path):
+    installer = _load_installer()
+    source = _source(tmp_path, "unused")
+    subprocess_commands = (
+        ["git", "init", "--quiet"],
+        ["git", "config", "user.email", "test@example.invalid"],
+        ["git", "config", "user.name", "WGLink package test"],
+        ["git", "add", "."],
+        ["git", "commit", "--quiet", "-m", "fixture"],
+    )
+    for command in subprocess_commands:
+        assert subprocess.run(command, cwd=source).returncode == 0
+    commit = (
+        subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=source,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        .stdout.strip()
+    )
+    root = _wg_root(tmp_path / "wg", commit)
+    source_spec = _spec(commit)
+    source_spec["repository"] = str(source)
+    (root / "integrations" / "wglink" / "source.json").write_text(
+        json.dumps(source_spec), encoding="utf-8"
+    )
+
+    package = installer._fetch_package(root)
+
+    provenance, _payloads = installer.verify_package(package, root=root)
+    assert provenance["sourceCommit"] == commit
+    assert package.is_file()
