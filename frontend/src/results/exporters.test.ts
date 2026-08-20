@@ -96,6 +96,31 @@ describe('result exporters', () => {
     expect(toJSON).not.toHaveBeenCalled();
     expect(saveText).toHaveBeenCalledOnce();
   });
+  it('downloads a selected retained pressure basis and stages it by server filename', async () => {
+    const saveBlob = vi.fn();
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(
+      new Uint8Array([80, 75, 3, 4]),
+      {
+        status: 200,
+        headers: { 'Content-Disposition': 'attachment; filename="drive-mf_pressure_basis.npz"' },
+      },
+    ));
+
+    await expect(runExportFormat('pressure_basis', {
+      result: { frequencies: [], channel_order: ['drive-mf'], channels: { 'drive-mf': result } },
+      channelId: 'drive-mf',
+      jobId: 'job/basis',
+      jobStem: 'horn_1',
+      preferences: preferencesStore.getSnapshot(),
+      fetcher,
+      saveBlob,
+    })).resolves.toEqual(['drive-mf_pressure_basis.npz']);
+
+    expect(fetcher).toHaveBeenCalledWith('/api/pressure-basis/job%2Fbasis?channel_id=drive-mf');
+    expect(saveBlob.mock.calls[0][1]).toBe('drive-mf_pressure_basis.npz');
+    expect([...new Uint8Array(await (saveBlob.mock.calls[0][0] as Blob).arrayBuffer())])
+      .toEqual([80, 75, 3, 4]);
+  });
   it('exports only the selected CAD drive channel and refuses an ambiguous wrapper', async () => {
     const wrapped: ResultPayload = {
       frequencies: [],

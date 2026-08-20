@@ -294,6 +294,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       exportCompleted: async (job, formats) => runWorkspaceExportBundle({
         result: await fetchJobResults(job.id) as ResultPayload,
         ...resultExportSnapshot(job),
+        jobId: job.id,
         jobStem: exportStemForJob(job),
         workspaceSubdirectory: exportSubdirectoryForJob(job),
         designName: job.label ?? undefined,

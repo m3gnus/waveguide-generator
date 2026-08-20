@@ -31,6 +31,7 @@ interface CatalogItem {
   group: string;
   needsResult: boolean;
   needsDesign: boolean;
+  needsPressureBasis?: boolean;
 }
 
 const FORMAT_CATALOG: CatalogItem[] = [
@@ -41,6 +42,7 @@ const FORMAT_CATALOG: CatalogItem[] = [
   { id: 'vxp', format: 'vxp', label: 'VituixCAD project', trailing: '.vxp', group: 'Results', needsResult: true, needsDesign: false },
   { id: 'csv', format: 'csv', label: 'Frequency data', trailing: '.csv', group: 'Results', needsResult: true, needsDesign: false },
   { id: 'json', format: 'json', label: 'Full results', trailing: '.json', group: 'Results', needsResult: true, needsDesign: false },
+  { id: 'pressure_basis', format: 'pressure_basis', label: 'Complex pressure basis', trailing: '.npz', group: 'Results', needsResult: true, needsDesign: false, needsPressureBasis: true },
   { id: 'step', format: 'step', label: 'STEP solid', trailing: '.step', group: 'Geometry & design', needsResult: false, needsDesign: true },
   { id: 'mwg_config', format: 'mwg_config', label: 'Parameter config', trailing: '.cfg', group: 'Geometry & design', needsResult: false, needsDesign: true },
   { id: 'impedance_csv', format: 'impedance_csv', label: 'Impedance', trailing: '.csv', group: 'Advanced', needsResult: true, needsDesign: false },
@@ -77,6 +79,9 @@ function unavailableFormatReason(
     return 'This run has no directivity data for a polar FRD set.';
   }
   if (item.needsResult && !job.has_results) return 'This run\'s results were removed by retention.';
+  if (item.needsPressureBasis && !job.has_pressure_basis_artifact) {
+    return 'This run has no retained complex pressure basis. Re-solve an imported Metal run to create one.';
+  }
   if (item.needsDesign && !designExportable) return designUnavailableReason;
   return undefined;
 }
@@ -104,6 +109,7 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
   const buildContext = async (formats: readonly ExportFormat[]): Promise<ExportContext> => ({
     ...(needsResults(formats) ? { result: await fetchJobResults(job.id) as ResultPayload } : {}),
     ...resultExportSnapshot(job),
+    jobId: job.id,
     jobStem: exportStemForJob(job),
     workspaceSubdirectory: exportSubdirectoryForJob(job),
     designName: job.label ?? undefined,

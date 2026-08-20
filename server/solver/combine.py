@@ -16,6 +16,7 @@ complex conjugate. See CAD-LINK-PHASE3.md §2.
 from __future__ import annotations
 
 import io
+import json
 from types import SimpleNamespace
 from typing import Any, Mapping
 
@@ -30,7 +31,11 @@ CHANNEL_BASES_VERSION = 1
 _BASES_PHASE_CONVENTION = "solver_exp_plus_ikr"
 
 
-def serialize_channel_bases(results_by_id: Mapping[str, Any]) -> bytes:
+def serialize_channel_bases(
+    results_by_id: Mapping[str, Any],
+    *,
+    metadata_by_id: Mapping[str, Mapping[str, Any]] | None = None,
+) -> bytes:
     """Pack the frequency-sorted native channel results into a compressed NPZ."""
 
     channel_ids = list(results_by_id)
@@ -58,6 +63,11 @@ def serialize_channel_bases(results_by_id: Mapping[str, Any]) -> bytes:
         if spheres_present:
             arrays[f"sphere::{name}"] = np.asarray(
                 result.sphere_pressure_complex, dtype=np.complex128
+            )
+        metadata = (metadata_by_id or {}).get(name)
+        if metadata:
+            arrays[f"metadata::{name}"] = np.asarray(
+                json.dumps(dict(metadata), sort_keys=True, separators=(",", ":"))
             )
     buffer = io.BytesIO()
     np.savez_compressed(buffer, **arrays)

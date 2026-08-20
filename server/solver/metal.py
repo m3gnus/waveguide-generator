@@ -609,6 +609,39 @@ def _record_source_area_m2(record: Mapping[str, Any], source_id: str) -> float:
     )
 
 
+def _channel_basis_metadata(
+    geometry: ImportedGeometrySource,
+    record: Mapping[str, Any],
+    source_tags: Mapping[str, Any],
+    driver_payloads: Mapping[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """Describe the drive domain retained beside each complex channel basis."""
+
+    metadata: dict[str, dict[str, Any]] = {}
+    for channel in geometry.drive_channels:
+        source_ids = list(channel.source_ids)
+        entry: dict[str, Any] = {
+            "source_ids": source_ids,
+            "source_tags": [int(source_tags[source_id]) for source_id in source_ids],
+            "source_motion": str(channel.motion),
+            "source_normalization": (
+                "voltage_driven_driver_lem"
+                if channel.id in driver_payloads
+                else "unit_normal_acceleration"
+            ),
+        }
+        try:
+            entry["source_areas_m2"] = [
+                _record_source_area_m2(record, source_id) for source_id in source_ids
+            ]
+        except ValueError:
+            # Area is optional for pressure-grid postprocessing. Its absence
+            # must not turn a successful solve into an export failure.
+            pass
+        metadata[channel.id] = entry
+    return metadata
+
+
 def _passive_cardioid_apertures(
     source_tags: Mapping[str, Any],
     record: Mapping[str, Any],
@@ -1733,8 +1766,11 @@ def solve_imported_metal_from_msh_text(
         stage_callback("finalizing", 1.0, "Packaging imported drive-channel bases")
 
     per_source_validity = _imported_validity_metadata(record)
-    channel_bases_npz = (
-        serialize_channel_bases(sorted_results) if len(sorted_results) > 1 else None
+    channel_bases_npz = serialize_channel_bases(
+        sorted_results,
+        metadata_by_id=_channel_basis_metadata(
+            geometry, record, source_tags, driver_payloads
+        ),
     )
     if geometry.combine is not None:
         combined_response = _combined_channel_response(

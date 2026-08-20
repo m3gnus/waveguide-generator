@@ -2824,6 +2824,11 @@
             "title": "Has Mesh Artifact",
             "type": "boolean"
           },
+          "has_pressure_basis_artifact": {
+            "default": false,
+            "title": "Has Pressure Basis Artifact",
+            "type": "boolean"
+          },
           "has_radiation_impedance_artifact": {
             "default": false,
             "title": "Has Radiation Impedance Artifact",
@@ -2911,6 +2916,17 @@
             "additionalProperties": true,
             "title": "Polar Grid",
             "type": "object"
+          },
+          "pressure_basis_artifact_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pressure Basis Artifact Bytes"
           },
           "progress": {
             "title": "Progress",
@@ -3370,6 +3386,11 @@
             "title": "Has Mesh Artifact",
             "type": "boolean"
           },
+          "has_pressure_basis_artifact": {
+            "default": false,
+            "title": "Has Pressure Basis Artifact",
+            "type": "boolean"
+          },
           "has_radiation_impedance_artifact": {
             "default": false,
             "title": "Has Radiation Impedance Artifact",
@@ -3468,6 +3489,17 @@
             "additionalProperties": true,
             "title": "Polar Grid",
             "type": "object"
+          },
+          "pressure_basis_artifact_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pressure Basis Artifact Bytes"
           },
           "progress": {
             "title": "Progress",
@@ -7361,6 +7393,59 @@
           }
         },
         "summary": "Partial Job Results"
+      }
+    },
+    "/api/pressure-basis/{job_id}": {
+      "get": {
+        "operationId": "pressure_basis_artifact_api_pressure_basis__job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "channel_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Channel Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pressure Basis Artifact"
       }
     },
     "/api/radiation-impedance/{job_id}": {

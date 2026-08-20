@@ -932,6 +932,8 @@ class JobRuntime:
             "design_revision": request.design_revision,
             "polar_grid": polar_grid,
             "symmetry": symmetry_metadata,
+            "has_pressure_basis_artifact": False,
+            "pressure_basis_artifact_bytes": None,
             "has_radiation_impedance_artifact": False,
             "radiation_impedance_artifact_bytes": None,
             "field_plane_available": False,
@@ -1366,6 +1368,30 @@ class JobRuntime:
                 "This job has no passive-cardioid radiation-impedance artifact"
             )
         return artifact
+
+    async def get_pressure_basis(
+        self, job_id: str, channel_id: str | None = None
+    ) -> Any:
+        """Build one public engineering-convention basis from retained fields."""
+
+        from server.solver.pressure_basis import export_pressure_basis
+
+        await self.start()
+        row = self._require_job(job_id)
+        if row["status"] != "complete":
+            raise JobConflictError(f"Job not complete. Current status: {row['status']}")
+        bases = await asyncio.to_thread(self.store.get_channel_bases, job_id)
+        if bases is None:
+            raise JobResourceUnavailableError(
+                "This job has no retained pressure basis; re-solve an imported "
+                "Metal run to create one"
+            )
+        results_text = await asyncio.to_thread(self.store.get_results_text, job_id)
+        if results_text is None:
+            raise JobResourceUnavailableError("Results not available")
+        return await asyncio.to_thread(
+            export_pressure_basis, bases, json.loads(results_text), channel_id
+        )
 
     async def recombine_results(
         self, job_id: str, spec: ChannelCombineSpec
@@ -1895,6 +1921,7 @@ class JobRuntime:
 
     async def _cancel_job(self, job_id: str) -> None:
         self._partial_results.pop(job_id, None)
+        await self._discard_channel_bases(job_id)
         await self._discard_radiation_impedance(job_id)
         try:
             event = self._transition(
@@ -2095,6 +2122,26 @@ class JobRuntime:
                 # the solve itself must not fail over an optional artifact.
                 logger.warning(
                     "Channel-bases persistence failed for job %s: %s", job_id, exc
+                )
+                row = self.store.get_job_row(job_id)
+                task_metadata = (
+                    dict(row.get("task_metadata") or {})
+                    if row is not None
+                    else {}
+                )
+                warnings = [
+                    str(value)
+                    for value in task_metadata.get("persistence_warnings") or []
+                ]
+                warnings.append(f"Pressure-basis artifact could not be saved: {exc}")
+                await asyncio.to_thread(
+                    self.store.mutate_job_metadata,
+                    job_id,
+                    {
+                        "has_pressure_basis_artifact": False,
+                        "pressure_basis_artifact_bytes": None,
+                        "persistence_warnings": warnings,
+                    },
                 )
         radiation_matrix = getattr(outcome, "radiation_impedance", None)
         if radiation_matrix is not None:
@@ -2428,6 +2475,7 @@ class JobRuntime:
 
     async def _fail_job(self, job_id: str, message: str) -> None:
         self._partial_results.pop(job_id, None)
+        await self._discard_channel_bases(job_id)
         await self._discard_radiation_impedance(job_id)
         try:
             event = self._transition(
@@ -2459,6 +2507,14 @@ class JobRuntime:
             logger.exception(
                 "Could not clean up radiation-impedance artifact for job %s",
                 job_id,
+            )
+
+    async def _discard_channel_bases(self, job_id: str) -> None:
+        try:
+            await asyncio.to_thread(self.store.delete_channel_bases, job_id)
+        except Exception:
+            logger.exception(
+                "Could not clean up pressure-basis artifact for job %s", job_id
             )
 
     def _check_cancelled(self, job_id: str) -> None:
@@ -2726,6 +2782,12 @@ class JobRuntime:
             "solve_options": _stored_solve_options(stored_config).model_dump(mode="json"),
             "has_results": bool(row.get("has_results")),
             "has_mesh_artifact": bool(row.get("has_mesh_artifact")),
+            "has_pressure_basis_artifact": bool(
+                metadata.get("has_pressure_basis_artifact")
+            ),
+            "pressure_basis_artifact_bytes": metadata.get(
+                "pressure_basis_artifact_bytes"
+            ),
             "has_radiation_impedance_artifact": bool(
                 metadata.get("has_radiation_impedance_artifact")
             ),
