@@ -132,7 +132,13 @@ def test_health_and_placeholder_shell(tmp_path: Path) -> None:
     assert len(shell.text) > 100
 
 
-def test_explicit_workspace_default_is_separate_from_internal_data(tmp_path: Path) -> None:
+def test_explicit_workspace_default_is_separate_from_internal_data(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # A developer checkout may legitimately contain historical exports in its
+    # ignored output/ directory. Keep this default-path test independent from
+    # that migration input.
+    monkeypatch.setattr(app_module, "LEGACY_WORKSPACE_DIR", tmp_path / "legacy-output")
     data_dir = tmp_path / "app-data"
     workspace_dir = tmp_path / "waveguide-generator" / "output"
     client = TestClient(create_app(data_dir=data_dir, workspace_dir=workspace_dir))
