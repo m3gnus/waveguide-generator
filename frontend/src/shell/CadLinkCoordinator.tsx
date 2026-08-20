@@ -109,6 +109,10 @@ let bridgeSnapshot: CadLinkCoordinatorSnapshot = {
 };
 const bridgeListeners = new Set<() => void>();
 
+function pageIsVisible(): boolean {
+  return document.visibilityState !== 'hidden';
+}
+
 export const cadLinkCoordinatorBridge = {
   getSnapshot: () => bridgeSnapshot,
   subscribe(listener: () => void) {
@@ -444,8 +448,10 @@ export function CadLinkCoordinator() {
   useEffect(() => {
     setFusionStatus(null);
     if (preferences.cadApplication !== 'fusion360') return undefined;
-    void refreshFusionStatus();
-    const timer = window.setInterval(() => { void refreshFusionStatus(); }, 2_500);
+    if (pageIsVisible()) void refreshFusionStatus();
+    const timer = window.setInterval(() => {
+      if (pageIsVisible()) void refreshFusionStatus();
+    }, 2_500);
     return () => {
       window.clearInterval(timer);
       fusionStatusRequest.current += 1;
@@ -669,9 +675,10 @@ export function CadLinkCoordinator() {
   // lifecycle, so there is deliberately no returns poll in Onshape mode.
   useEffect(() => {
     if (onshape) { setLoading(false); return undefined; }
-    void refresh({ autoOpenNew: true });
+    if (pageIsVisible()) void refresh({ autoOpenNew: true });
+    else setLoading(false);
     const timer = window.setInterval(() => {
-      void refresh({ background: true, autoOpenNew: true });
+      if (pageIsVisible()) void refresh({ background: true, autoOpenNew: true });
     }, 2_500);
     return () => {
       window.clearInterval(timer);
@@ -1039,10 +1046,27 @@ export function CadLinkCoordinator() {
   // Same cadence as the returns poll, and Fusion-only: Onshape has no marker.
   useEffect(() => {
     if (onshape) return undefined;
-    void consumeSolveCommand();
-    const timer = window.setInterval(() => { void consumeSolveCommand(); }, 2_500);
+    if (pageIsVisible()) void consumeSolveCommand();
+    const timer = window.setInterval(() => {
+      if (pageIsVisible()) void consumeSolveCommand();
+    }, 2_500);
     return () => window.clearInterval(timer);
   }, [consumeSolveCommand, onshape]);
+
+  // Browsers heavily throttle timers in background tabs. Do no pointless I/O
+  // while hidden, then reconcile every Fusion-facing channel immediately when
+  // the user returns instead of waiting for the next timer slot.
+  useEffect(() => {
+    if (onshape) return undefined;
+    const resume = () => {
+      if (!pageIsVisible()) return;
+      void refresh({ background: true, autoOpenNew: true });
+      void refreshFusionStatus();
+      void consumeSolveCommand();
+    };
+    document.addEventListener('visibilitychange', resume);
+    return () => document.removeEventListener('visibilitychange', resume);
+  }, [consumeSolveCommand, onshape, refresh, refreshFusionStatus]);
 
   const clearFeedback = useCallback(() => { setError(null); setStatus(null); }, []);
   const reportError = useCallback((message: string) => setError(message), []);

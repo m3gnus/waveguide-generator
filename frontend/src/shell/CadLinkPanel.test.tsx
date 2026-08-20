@@ -725,6 +725,36 @@ describe('CadLinkPanel', () => {
     expect(scope.textContent).toContain('2 exported objects were skipped');
   });
 
+  it('does not mislabel native STEP-coordinate diagnostics as millimetres', async () => {
+    const stepUnitRecord = {
+      ...record,
+      symmetry: {
+        cut_planes: [],
+        planes: {
+          x0: {
+            accepted: false,
+            max_residual_step_units: 0.125,
+            worst_off_model_distance_step_units: 0.25,
+          },
+        },
+      },
+    } as CadReturnIngestRecord;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json(listing);
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.endsWith('/ingest')) return json(stepUnitRecord);
+      return json({}, 404);
+    }));
+
+    await renderAndSelect();
+    await clickIngest();
+
+    expect(host.textContent).toContain('max residual 0.125 STEP units');
+    expect(host.textContent).toContain('worst off-model 0.25 STEP units');
+    expect(host.textContent).not.toContain('max residual 0.125 mm');
+  });
+
   it('routes neutral notices separately from errors', async () => {
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
     act(() => useCadReturnStore.setState({ ingestStaleReason: 'The return changed after preparation.' }));

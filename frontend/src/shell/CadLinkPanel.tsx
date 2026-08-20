@@ -160,8 +160,8 @@ function RecordSummary({ record }: { record: CadReturnIngestRecord }) {
         const offModel = verdict.worst_off_model_distance_step_units;
         const details = [
           verdict.reason ? String(verdict.reason) : null,
-          residual === undefined ? null : `max residual ${compactValue(residual)} mm`,
-          offModel === undefined ? null : `worst off-model ${compactValue(offModel)} mm`,
+          residual === undefined ? null : `max residual ${compactValue(residual)} STEP units`,
+          offModel === undefined ? null : `worst off-model ${compactValue(offModel)} STEP units`,
         ].filter(Boolean).join(' · ');
         return <div className="cad-row" key={name}><b>{name}</b><span className={verdict.accepted ? 'ok-text' : 'warn-text'}>{verdict.accepted ? 'accepted' : 'rejected'}</span><small>{details}</small></div>;
       }) : <p>No coordinate plane verdicts were recorded.</p>}

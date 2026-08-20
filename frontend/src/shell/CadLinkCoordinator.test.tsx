@@ -163,6 +163,33 @@ describe('CadLinkCoordinator', () => {
     expect(calls.filter((path) => path.endsWith('/onshape/status'))).toHaveLength(1);
   });
 
+  it('pauses Fusion polling while hidden and reconciles immediately when visible', async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      calls.push(path);
+      if (path.endsWith('/returns')) return json({ items: [] });
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.endsWith('/solve-command')) return json({ command: null });
+      return json({}, 404);
+    }));
+
+    await renderCoordinator();
+    await act(async () => { await vi.advanceTimersByTimeAsync(7_500); });
+    expect(calls).toEqual([]);
+
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+      await Promise.resolve(); await Promise.resolve();
+    });
+    expect(calls.filter((path) => path.endsWith('/returns'))).toHaveLength(1);
+    expect(calls.filter((path) => path.endsWith('/fusion-status'))).toHaveLength(1);
+    expect(calls.filter((path) => path.endsWith('/solve-command')).length).toBeGreaterThanOrEqual(1);
+  });
+
   it('enters CAD mode when an Onshape return lands so the panel can own it', async () => {
     preferencesStore.update({ cadApplication: 'onshape' });
     useDocumentStore.getState().setCadLink({
