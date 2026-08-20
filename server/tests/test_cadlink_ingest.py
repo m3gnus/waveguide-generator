@@ -523,6 +523,12 @@ def test_ingestion_record_publishes_role_findings_and_numpy_metadata(
         {"kind": "source-paint-missing", "source_id": "source-hf"}
     ]
     assert any(item["kind"] == "source-paint-missing" for item in record["findings"])
+    unlinked = next(
+        item
+        for item in record["findings"]
+        if item["kind"] == "freshness" and item.get("verdict") == "unlinked"
+    )
+    assert unlinked["blocking"] is False
     assert record["mesh"]["metadata"]["numpy_array"] == [1, 2]
     assert record["viewport_mesh"]["available"] is True
     assert record["viewport_mesh"]["stats"]["triangle_count"] == 4

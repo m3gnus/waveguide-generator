@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
-import { buildImportedSubmission } from './importedSubmission';
+import { buildImportedSubmission, importedSubmissionBlocker } from './importedSubmission';
 
 const bundle = {
   name: 'three-way.wgreturn', bundlePath: 'wgreturn/three-way.wgreturn', modifiedAt: '2026-08-13T12:00:00Z', readable: true,
@@ -67,5 +67,21 @@ describe('imported solve submission wire', () => {
 
     useCadReturnStore.getState().setCombineAlign(false);
     expect(buildImportedSubmission(useCadReturnStore.getState()).geometry.combine?.align).toBe(false);
+  });
+
+  it('does not gate a solve on the informational unlinked finding', () => {
+    const unlinkedRecord = {
+      ...record,
+      freshness: { verdict: 'unlinked' as const, instances: [], finding_id: 'unlinked-mode' },
+      findings: [{
+        id: 'unlinked-mode', kind: 'freshness', blocking: false, verdict: 'unlinked',
+      }],
+    };
+    const store = useCadReturnStore.getState();
+    store.selectBundle({ ...bundle, instanceCount: 0 });
+    store.applyIngest(unlinkedRecord, store.beginIngestIntent());
+
+    expect(importedSubmissionBlocker(useCadReturnStore.getState())).toBeNull();
+    expect(buildImportedSubmission(useCadReturnStore.getState()).geometry.acknowledged_findings).toEqual([]);
   });
 });

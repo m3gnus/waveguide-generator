@@ -31,7 +31,7 @@ const FRESHNESS_COPY: Record<string, string> = {
   design_changed: 'The linked Waveguide Generator design has changed since this geometry was exported.',
   generator_changed: 'The same saved design would export differently with the current generator.',
   unknown: 'Freshness could not be established from the available evidence.',
-  unlinked: 'Unlinked return — no Waveguide Generator design identity was attached in CAD.',
+  unlinked: 'Imported CAD model — not linked to a Waveguide Generator design. The assembly frame is solved as-is: radiation along +Z with the throat at the origin.',
 };
 
 // The workflow views moved beside the coordinator's unified send path; the
@@ -69,7 +69,7 @@ function RecordSummary({ record }: { record: CadReturnIngestRecord }) {
     <section className="cad-section">
       <header><h3>Freshness</h3></header>
       {record.freshness.verdict === 'unlinked'
-        ? <p className="cad-verdict warn">{FRESHNESS_COPY.unlinked}</p>
+        ? <p className="cad-verdict neutral">{FRESHNESS_COPY.unlinked}</p>
         : record.freshness.instances.map((instance) => <div className={`cad-verdict ${instance.verdict === 'current' ? 'ok' : 'warn'}`} key={instance.instance_id}>
             <b>{instance.instance_id}</b><span>{FRESHNESS_COPY[instance.verdict] ?? instance.verdict}</span>
             {instance.error && <small>{instance.error}</small>}
