@@ -16,6 +16,17 @@
             "title": "Bundlepath",
             "type": "string"
           },
+          "expectedDesignId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expecteddesignid"
+          },
           "mesh": {
             "$ref": "#/components/schemas/ImportedMeshRequest"
           },
@@ -25,6 +36,15 @@
             },
             "title": "Skippedsourceids",
             "type": "array"
+          },
+          "symmetryMode": {
+            "default": "auto",
+            "enum": [
+              "auto",
+              "full"
+            ],
+            "title": "Symmetrymode",
+            "type": "string"
           }
         },
         "required": [
@@ -5870,6 +5890,75 @@
           }
         },
         "summary": "Cad Workspace Select",
+        "tags": [
+          "cadlink"
+        ]
+      }
+    },
+    "/api/cadlink/designs": {
+      "get": {
+        "description": "Expose recent CAD-linked design heads as a local project picker.",
+        "operationId": "list_designs_api_cadlink_designs_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Designs Api Cadlink Designs Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Designs",
+        "tags": [
+          "cadlink"
+        ]
+      }
+    },
+    "/api/cadlink/designs/{design_id}": {
+      "get": {
+        "description": "Return the registry's exact current snapshot for one linked design.",
+        "operationId": "get_design_api_cadlink_designs__design_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "design_id",
+            "required": true,
+            "schema": {
+              "title": "Design Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Design Api Cadlink Designs  Design Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Design",
         "tags": [
           "cadlink"
         ]
