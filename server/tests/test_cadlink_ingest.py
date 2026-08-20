@@ -172,7 +172,7 @@ def test_return_listing_reads_cheap_inventory_and_marks_bad_manifests(tmp_path: 
         json.dumps(
             {
                 "document": {"name": "Speaker v4", "request_id": "request-a"},
-                "instances": [{"instance_id": "instance-a"}],
+                "instances": [{"instance_id": "instance-a", "design_id": "wgd_speaker"}],
                 "sources": [
                     {
                         "id": "source-hf",
@@ -208,6 +208,7 @@ def test_return_listing_reads_cheap_inventory_and_marks_bad_manifests(tmp_path: 
         "requestId": "request-a",
         "sourceCount": 1,
         "instanceCount": 1,
+        "designIds": ["wgd_speaker"],
         "sources": [
             {
                 "id": "source-hf",
@@ -218,6 +219,29 @@ def test_return_listing_reads_cheap_inventory_and_marks_bad_manifests(tmp_path: 
             }
         ],
     }
+
+
+def test_ingest_refuses_a_return_from_another_active_project(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        "server.cadlink.ingest.read_wgreturn",
+        lambda _path: SimpleNamespace(
+            manifest={"instances": [{"design_id": "wgd_other"}]},
+        ),
+    )
+
+    with pytest.raises(IngestRefusal, match="another CAD-linked project") as refused:
+        ingest_bundle(
+            tmp_path / "other.wgreturn",
+            {},
+            [],
+            CadLinkStore(tmp_path / "cadlink.db"),
+            tmp_path / "data",
+            expected_design_id="wgd_current",
+        )
+
+    assert refused.value.stage == "stage 2 project gate"
 
 
 def test_design_registry_routes_list_heads_and_open_the_exact_snapshot(

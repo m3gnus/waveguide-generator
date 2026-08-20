@@ -639,6 +639,33 @@ describe('CadLinkPanel', () => {
     expect(options[1].textContent).toContain('2 sources · 2 linked instances');
   });
 
+  it('keeps another project out of the active return history', async () => {
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_current', lineageId: 'wgl_current', baseEditVersion: 1,
+    }, 'current');
+    const historyListing: CadReturnListing = {
+      cadFolderConfigured: true,
+      items: [
+        { ...listing.items[0], designIds: ['wgd_current'], documentName: 'Current project' },
+        {
+          ...listing.items[0], designIds: ['wgd_other'], documentName: 'Other project',
+          bundlePath: 'wgreturn/other.wgreturn', modifiedAt: '2026-08-12T00:00:00Z',
+        },
+      ],
+    };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/fusion-status')
+      ? json(closedFusion)
+      : json(historyListing)));
+
+    await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
+
+    expect(host.textContent).toContain('1 return hidden because it belongs to another CAD-linked project');
+    openHistory();
+    const history = host.querySelector('.cad-bundle-list')!;
+    expect(history.textContent).toContain('Current project');
+    expect(history.textContent).not.toContain('Other project');
+  });
+
   it('collapses all clean record details by default and preserves a semantic heading hierarchy', async () => {
     const cleanRecord: CadReturnIngestRecord = {
       ...record,

@@ -17,6 +17,7 @@ describe('CAD-link client', () => {
       mesh: { rigidSizeMm: 10, transitionMm: 12, sourceSizeMm: { source: 4 } },
       skippedSourceIds: [],
       areaDriftOverrides: [],
+      expectedDesignId: 'wgd_current',
     }, fetcher as typeof fetch);
     await getIngest('wgi_test', fetcher as typeof fetch);
     expect(fetcher.mock.calls.map(([path]) => String(path))).toEqual([
@@ -25,6 +26,7 @@ describe('CAD-link client', () => {
     expect(JSON.parse(String(fetcher.mock.calls[1][1]?.body))).toMatchObject({
       bundlePath: 'wgreturn/a.wgreturn',
       mesh: { rigidSizeMm: 10, sourceSizeMm: { source: 4 } },
+      expectedDesignId: 'wgd_current',
     });
   });
 
@@ -42,7 +44,7 @@ describe('CAD-link client', () => {
     const error = await ingestReturn({
       bundlePath: 'wgreturn/a.wgreturn',
       mesh: { rigidSizeMm: 10, transitionMm: 12, sourceSizeMm: { 'source-hf': 4 } },
-      skippedSourceIds: [], areaDriftOverrides: [],
+      skippedSourceIds: [], areaDriftOverrides: [], expectedDesignId: null,
     }, fetcher).catch((reason: unknown) => reason);
     expect(error).toBeInstanceOf(CadLinkApiError);
     expect((error as CadLinkApiError).areaDriftSources).toEqual(['source-hf']);

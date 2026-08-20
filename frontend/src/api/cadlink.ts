@@ -19,6 +19,8 @@ export interface CadReturnBundle {
   requestId: string | null;
   sourceCount: number | null;
   instanceCount: number | null;
+  /** Registry projects represented by linked instances in this return. */
+  designIds?: string[];
   sources: CadReturnSourceSummary[];
   reason?: string | null;
 }
@@ -125,6 +127,7 @@ export interface CadReturnIngestRequest {
   };
   skippedSourceIds: string[];
   areaDriftOverrides: string[];
+  expectedDesignId: string | null;
 }
 
 export interface CadReturnSource {

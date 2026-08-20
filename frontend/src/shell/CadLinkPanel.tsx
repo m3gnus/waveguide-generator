@@ -13,7 +13,7 @@ import { polarConfigFromUi, useSolveOptionsStore } from '../stores/solveOptions'
 import { useDocumentStore } from '../stores/document';
 import { designNameSlug, UNTITLED_SLUG } from '../stores/designName';
 import { useCapabilities } from '../jobs/useCapabilities';
-import { cadLinkCoordinatorBridge } from './CadLinkCoordinator';
+import { cadLinkCoordinatorBridge, returnBelongsToAnotherProject } from './CadLinkCoordinator';
 import { fusionWorkflowView, onshapeWorkflowView, type CadWorkflowView } from './cadWorkflowView';
 import { Icon } from './icons';
 import { requestSettings } from './settingsNavigation';
@@ -302,6 +302,10 @@ export function CadLinkPanel() {
     onshapeStatus,
     onshapeConnection,
   } = cadCoordinator;
+  const projectBundles = identity?.designId
+    ? bundles.filter((bundle) => !returnBelongsToAnotherProject(bundle, identity.designId))
+    : bundles;
+  const otherProjectReturns = bundles.length - projectBundles.length;
 
   useEffect(() => () => { onshapeSendGeneration.current += 1; }, []);
 
@@ -446,7 +450,7 @@ export function CadLinkPanel() {
         acknowledge={state.acknowledge}
         acknowledgeAllBlocking={state.acknowledgeAllBlocking}
       />}
-      {bundles.length > 0 && <CadHistory bundles={bundles} selectedPath={state.selectedBundle?.bundlePath ?? null} select={cadCoordinator.selectBundle}/>}
+      {projectBundles.length > 0 && <CadHistory bundles={projectBundles} selectedPath={state.selectedBundle?.bundlePath ?? null} select={cadCoordinator.selectBundle}/>}
     </section>}
     {!onshape && <section className="cad-workflow cad-return-workflow">
     <header className="cad-workflow-header no-step"><div><h3>FUSION → SIMULATION</h3><p>Bring Fusion geometry and source tags into WG.</p></div><button disabled={loading || ingesting} onClick={() => void cadCoordinator.refresh()}><Icon name="reset"/>{loading ? 'Loading…' : 'Refresh'}</button></header>
@@ -465,7 +469,8 @@ export function CadLinkPanel() {
     {state.ingestStaleReason && <div className="cad-alert cad-alert-notice" role="status">{state.ingestStaleReason} Re-ingest before solving.</div>}
     {viewportNotice && <div className="cad-alert cad-alert-notice" role="status">{viewportNotice}</div>}
     {status && <div className="cad-status-strip" role="status">{status}</div>}
-    {!loading && workflow.state !== 'not-configured' && !error && bundles.length === 0 && <div className="empty-state"><b>No CAD returns yet.</b><span>Send a design from Fusion 360 and it will appear here.</span></div>}
+    {otherProjectReturns > 0 && <div className="cad-alert cad-alert-notice" role="status">{pluralized(otherProjectReturns, 'return')} hidden because {otherProjectReturns === 1 ? 'it belongs' : 'they belong'} to another CAD-linked project. Open that project from File → CAD-linked designs to use {otherProjectReturns === 1 ? 'it' : 'them'}.</div>}
+    {!loading && workflow.state !== 'not-configured' && !error && projectBundles.length === 0 && otherProjectReturns === 0 && <div className="empty-state"><b>No CAD returns yet.</b><span>Send a design from Fusion 360 and it will appear here.</span></div>}
     {state.selectedBundle?.readable && <CadReturnReview
       bundle={state.selectedBundle}
       record={state.ingestRecord}
@@ -476,7 +481,7 @@ export function CadLinkPanel() {
       acknowledge={state.acknowledge}
       acknowledgeAllBlocking={state.acknowledgeAllBlocking}
     />}
-    {bundles.length > 0 && <CadHistory bundles={bundles} selectedPath={state.selectedBundle?.bundlePath ?? null} select={cadCoordinator.selectBundle}/>}
+    {projectBundles.length > 0 && <CadHistory bundles={projectBundles} selectedPath={state.selectedBundle?.bundlePath ?? null} select={cadCoordinator.selectBundle}/>}
     </section>}
   </div>;
 }

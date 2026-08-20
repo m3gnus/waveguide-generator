@@ -126,6 +126,14 @@ function publishBridge(snapshot: CadLinkCoordinatorSnapshot): void {
  * Its feedback is already on screen, so a composed action stops silently. */
 export class SupersededError extends Error {}
 
+export function returnBelongsToAnotherProject(
+  bundle: CadReturnBundle,
+  designId: string | null | undefined,
+): boolean {
+  const returned = bundle.designIds ?? [];
+  return Boolean(designId && returned.length > 0 && !returned.includes(designId));
+}
+
 export function newestReturnArrival(
   items: CadReturnBundle[],
   previous: Map<string, string> | null,
@@ -524,12 +532,18 @@ export function CadLinkCoordinator() {
           )
         : null;
       seenReturnRevisions.current = next;
+      const currentDesignId = useDocumentStore.getState().identity?.designId;
       const initial = previous === null
-        ? response.items.find((item) => item.readable) ?? null
+        ? response.items.find((item) => (
+            item.readable && !returnBelongsToAnotherProject(item, currentDesignId)
+          )) ?? null
         : null;
       const opened = arrived ?? initial;
+      const projectMismatch = Boolean(
+        opened && returnBelongsToAnotherProject(opened, currentDesignId),
+      );
       let continuity: 'initial' | 'carried' | 'reset' = 'initial';
-      if (opened) {
+      if (opened && !projectMismatch) {
         // A compatible current or saved source inventory keeps the user's solve
         // setup; a genuinely first listing starts clean without being a reset.
         continuity = arrived
@@ -540,6 +554,22 @@ export function CadLinkCoordinator() {
         importedMeshStore.beginIntent();
       }
       if (arrived) {
+        if (projectMismatch) {
+          const reason = `Received ${arrived.documentName ?? arrived.name}, but it belongs to another CAD-linked project. Open that project from File → CAD-linked designs.`;
+          if (arrived.requestId === pendingReturnRequestId.current) {
+            pendingReturnRequestId.current = null;
+            pendingReturnRequestedAt.current = null;
+          }
+          const waiter = pendingReturnWaiter.current;
+          if (waiter && arrived.requestId === waiter.requestId) {
+            pendingReturnWaiter.current = null;
+            waiter.fail(new Error(reason));
+          } else {
+            setError(reason);
+          }
+          enterCadWorkspace();
+          return;
+        }
         const parked = parkedSolveCommandStore.getSnapshot().command;
         if (parked && parked.bundlePath !== arrived.bundlePath) {
           await refuseParkedSolveCommand('Superseded by a newer return from Fusion.');
@@ -719,6 +749,7 @@ export function CadLinkCoordinator() {
         },
         skippedSourceIds: current.skippedSourceIds,
         areaDriftOverrides: current.areaDriftOverrides,
+        expectedDesignId: useDocumentStore.getState().identity?.designId ?? null,
       }, fetch, abortController.signal);
       if (!useCadReturnStore.getState().applyIngest(record, ingestGeneration)) {
         const superseded = 'Discarded a completed ingest because its selected return or design was superseded. Rebuild the mesh for the current state.';
@@ -774,6 +805,11 @@ export function CadLinkCoordinator() {
    * late fetch implementations that ignore abort are still rejected by the
    * store generation before they can publish a record or viewport scene. */
   const selectBundle = useCallback((bundle: CadReturnBundle) => {
+    if (returnBelongsToAnotherProject(bundle, useDocumentStore.getState().identity?.designId)) {
+      setError(`That return belongs to another CAD-linked project. Open it from File → CAD-linked designs first.`);
+      enterCadWorkspace();
+      return;
+    }
     useCadReturnStore.getState().selectBundle(bundle);
     importedMeshStore.beginIntent();
     enterCadWorkspace();
@@ -940,6 +976,12 @@ export function CadLinkCoordinator() {
         ?? (await listReturns()).items.find((item) => item.bundlePath === command.bundlePath);
       if (!bundle?.readable) {
         const reason = 'Fusion asked WG to solve a return that is not readable in the workspace.';
+        setError(reason);
+        await reportSolveCommandOutcome({ commandId: command.commandId, state: 'refused', jobId: null, reason });
+        return;
+      }
+      if (returnBelongsToAnotherProject(bundle, useDocumentStore.getState().identity?.designId)) {
+        const reason = 'Fusion asked WG to solve a return from another CAD-linked project. Open that project from File → CAD-linked designs, then send the solve again.';
         setError(reason);
         await reportSolveCommandOutcome({ commandId: command.commandId, state: 'refused', jobId: null, reason });
         return;

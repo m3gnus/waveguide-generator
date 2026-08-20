@@ -501,6 +501,7 @@ def ingest_bundle(
     data_dir: str | Path,
     *,
     prep_options: Mapping[str, Any] | None = None,
+    expected_design_id: str | None = None,
     recompute_freshness: Callable[[Mapping[str, Any]], str] | None = None,
 ) -> dict[str, Any]:
     """Run the nine ingestion stages and persist the immutable WG verdict."""
@@ -510,6 +511,17 @@ def ingest_bundle(
     except Exception as exc:
         raise IngestRefusal("stage 1 bundle validation", str(exc)) from exc
     manifest = bundle.manifest
+    returned_design_ids = {
+        str(instance["design_id"])
+        for instance in manifest["instances"]
+        if isinstance(instance, Mapping) and instance.get("design_id")
+    }
+    if expected_design_id is not None and returned_design_ids and expected_design_id not in returned_design_ids:
+        raise IngestRefusal(
+            "stage 2 project gate",
+            "the selected CAD return belongs to another CAD-linked project; "
+            "open that project from File → CAD-linked designs before preparing it",
+        )
     normalized_mesh = validate_imported_sizes(
         manifest["sources"], mesh, skipped_source_ids=skipped_source_ids
     )
