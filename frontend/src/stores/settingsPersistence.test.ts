@@ -293,6 +293,58 @@ describe('durable settings', () => {
     expect(seen).toEqual([]);
   });
 
+  it('preserves and retries a local setting after a non-OK upload and restart', async () => {
+    const failedUpload = vi.fn(async () => response({}, false)) as unknown as typeof fetch;
+    const first = new DurableSettings({ fetcher: failedUpload, writeDelayMs: () => 0 });
+
+    first.set('theme', 'local-newer');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(failedUpload).toHaveBeenCalledWith('/api/settings/theme', expect.objectContaining({
+      method: 'PUT',
+      body: JSON.stringify('local-newer'),
+    }));
+
+    // A new instance represents the next launch. Its GET sees the older server
+    // copy, but the persistent local-newer marker keeps the cache authoritative
+    // and makes hydration retry the failed PUT.
+    const retryCalls: Array<{ url: string; method?: string; body?: unknown }> = [];
+    const restarted = new DurableSettings({
+      writeDelayMs: () => 0,
+      fetcher: (async (input: RequestInfo | URL, init?: RequestInit) => {
+        retryCalls.push({ url: String(input), method: init?.method, body: init?.body });
+        if (!init?.method) {
+          return response({ schemaVersion: 1, namespaces: { theme: 'server-older' } });
+        }
+        return response({});
+      }) as unknown as typeof fetch,
+    });
+    const seen: Array<string | null> = [];
+    restarted.subscribe('theme', (raw) => seen.push(raw));
+
+    await restarted.hydrate();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(restarted.get('theme')).toBe('local-newer');
+    expect(seen).toEqual([]);
+    expect(retryCalls).toContainEqual({
+      url: '/api/settings/theme',
+      method: 'PUT',
+      body: JSON.stringify('local-newer'),
+    });
+
+    // The successful retry clears the marker, so a later launch can adopt a
+    // genuinely newer server copy normally.
+    const afterRetry = new DurableSettings({
+      writeDelayMs: () => 0,
+      fetcher: (async () => response({
+        schemaVersion: 1,
+        namespaces: { theme: 'server-newer' },
+      })) as unknown as typeof fetch,
+    });
+    await afterRetry.hydrate();
+    expect(afterRetry.get('theme')).toBe('server-newer');
+  });
+
   it('keeps working when the browser refuses to store anything', async () => {
     const settings = new DurableSettings({ storage: null, writeDelayMs: () => 0, fetcher: (async () => response({})) as unknown as typeof fetch });
     settings.set('theme', 'light');

@@ -39,6 +39,7 @@ export type SettingsNamespace = keyof typeof SETTINGS_NAMESPACES;
 /** The design draft changes on every edit; the rest change when a user acts. */
 const WRITE_DELAY_MS: Partial<Record<SettingsNamespace, number>> = { designDraft: 1_500 };
 const DEFAULT_WRITE_DELAY_MS = 400;
+const LOCAL_NEWER_SUFFIX = '.local-newer';
 
 export interface SettingsEnvelope {
   schemaVersion?: number;
@@ -67,6 +68,7 @@ export class DurableSettings {
   /** Serialises per namespace so a slow request cannot land after a newer one. */
   private readonly inFlight = new Map<SettingsNamespace, Promise<void>>();
   private readonly memory = new Map<SettingsNamespace, string | null>();
+  private readonly memoryLocalNewer = new Set<SettingsNamespace>();
   private hydrated = false;
 
   constructor({ storage, fetcher, writeDelayMs }: DurableSettingsOptions = {}) {
@@ -140,10 +142,17 @@ export class DurableSettings {
     envelope: SettingsEnvelope | null,
     cachedAtRequest: ReadonlyMap<SettingsNamespace, string | null>,
   ): void {
-    if (!envelope) return;
-    const stored = envelope.namespaces ?? {};
+    const stored = envelope?.namespaces ?? {};
     for (const namespace of Object.keys(SETTINGS_NAMESPACES) as SettingsNamespace[]) {
       const local = this.get(namespace);
+      // A prior publish failed or has not completed. This marker is stored next
+      // to the cache so it survives a restart: an older server answer may not
+      // replace the only newer copy, and hydration is the retry opportunity.
+      if (this.isLocalNewer(namespace)) {
+        this.scheduleUpload(namespace, 0);
+        continue;
+      }
+      if (!envelope) continue;
       // The request describes the server state from before any edits made
       // while it was in flight. A diverged cache is therefore newer and must
       // neither be overwritten nor reported to subscribers as server state.
@@ -179,7 +188,29 @@ export class DurableSettings {
     }
   }
 
+  private localNewerKey(namespace: SettingsNamespace): string {
+    return `${SETTINGS_NAMESPACES[namespace]}${LOCAL_NEWER_SUFFIX}`;
+  }
+
+  private isLocalNewer(namespace: SettingsNamespace): boolean {
+    try {
+      if (this.storage?.getItem(this.localNewerKey(namespace)) === '1') return true;
+    } catch { /* fall through to the in-memory marker */ }
+    return this.memoryLocalNewer.has(namespace);
+  }
+
+  private markLocalNewer(namespace: SettingsNamespace): void {
+    this.memoryLocalNewer.add(namespace);
+    try { this.storage?.setItem(this.localNewerKey(namespace), '1'); } catch { /* best effort */ }
+  }
+
+  private clearLocalNewer(namespace: SettingsNamespace): void {
+    this.memoryLocalNewer.delete(namespace);
+    try { this.storage?.removeItem(this.localNewerKey(namespace)); } catch { /* best effort */ }
+  }
+
   private scheduleUpload(namespace: SettingsNamespace, delayMs?: number, keepalive = false): void {
+    this.markLocalNewer(namespace);
     const timer = this.timers.get(namespace);
     if (timer !== undefined) clearTimeout(timer);
     const delay = delayMs ?? this.writeDelay(namespace);
@@ -202,13 +233,19 @@ export class DurableSettings {
       // when several changes collapsed into this one request.
       const raw = this.get(namespace);
       try {
-        await this.fetcher(`/api/settings/${namespace}`, {
+        const response = await this.fetcher(`/api/settings/${namespace}`, {
           method: raw === null ? 'DELETE' : 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: raw === null ? undefined : JSON.stringify(raw),
           keepalive,
         });
-      } catch { /* the cache still holds it; the next change retries */ }
+        // Non-OK responses are failed writes too. Clear only when the server
+        // accepted the value that is still current; a later local edit keeps
+        // its own marker and queued upload.
+        if (response.ok && this.get(namespace) === raw) {
+          this.clearLocalNewer(namespace);
+        }
+      } catch { /* the cache still holds it; the next change or hydration retries */ }
     }).finally(() => {
       if (this.inFlight.get(namespace) === next) this.inFlight.delete(namespace);
     });
