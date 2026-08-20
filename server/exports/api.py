@@ -51,6 +51,9 @@ class WgLinkExportRequest(ExportRequest):
     expected_fusion_document_id: str | None = Field(
         default=None, alias="expectedFusionDocumentId"
     )
+    expected_fusion_instance_id: str | None = Field(
+        default=None, alias="expectedFusionInstanceId", min_length=1
+    )
     expected_fusion_return_state_hash: str | None = Field(
         default=None, alias="expectedFusionReturnStateHash"
     )
@@ -707,6 +710,7 @@ async def export_wglink(
             selected.resolve(),
             result,
             expected_document_id=payload.expected_fusion_document_id,
+            expected_instance_id=payload.expected_fusion_instance_id,
             expected_return_state_hash=payload.expected_fusion_return_state_hash,
         )
         result["cadHandoff"] = "published"

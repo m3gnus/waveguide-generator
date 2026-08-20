@@ -93,8 +93,21 @@ def _fingerprint_hash(value: object) -> str | None:
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
-def _returned_fingerprint_hash(returned_bundle: Path | None, design_id: str | None) -> str | None:
-    if returned_bundle is None or design_id is None:
+def _returned_fingerprint_hash(
+    returned_bundle: Path | None,
+    *,
+    instance_id: str,
+    design_id: str | None,
+) -> str | None:
+    """Read body evidence for one exact CAD instance.
+
+    Older synthetic/preview manifests sometimes omitted ``instance_id``.  They
+    remain usable only when the return has one instance.  A repeated design is
+    never allowed to fall back to its first record: two placements can share
+    every design/export field while carrying different bodies.
+    """
+
+    if returned_bundle is None:
         return None
     try:
         resolved = returned_bundle.expanduser().resolve()
@@ -106,9 +119,25 @@ def _returned_fingerprint_hash(returned_bundle: Path | None, design_id: str | No
         return None
     if not isinstance(instances, list):
         return None
-    for instance in instances:
-        if not isinstance(instance, Mapping) or instance.get("design_id") != design_id:
-            continue
+    exact = [
+        instance
+        for instance in instances
+        if isinstance(instance, Mapping)
+        and instance.get("instance_id") == instance_id
+    ]
+    if len(exact) == 1:
+        candidates = exact
+    elif len(instances) == 1 and design_id is not None:
+        only = instances[0]
+        candidates = (
+            [only]
+            if isinstance(only, Mapping)
+            and only.get("design_id") == design_id
+            else []
+        )
+    else:
+        candidates = []
+    for instance in candidates:
         evidence = instance.get("body_evidence")
         if isinstance(evidence, Mapping):
             return _fingerprint_hash(evidence.get("observed_fingerprint"))
@@ -241,6 +270,7 @@ def read_fusion_status(
     current_design_hash: str,
     current_formula: str,
     design_id: str | None,
+    instance_id: str | None = None,
     process_running: bool = False,
     returned_bundle: Path | None = None,
     now: datetime | None = None,
@@ -262,6 +292,8 @@ def read_fusion_status(
         "currentFormula": current_formula,
         "fusionFormula": None,
         "link": None,
+        "matchingLinks": [],
+        "selectedInstanceId": None,
         "wgChangesAvailable": False,
         "fusionChangesAvailable": False,
         "documentChanged": False,
@@ -325,10 +357,29 @@ def read_fusion_status(
     if not matching:
         return {**base, "state": "not_linked"}
 
-    link = matching[0]
+    matching = sorted(matching, key=lambda candidate: str(candidate["instanceId"]))
+    base["matchingLinks"] = matching
+    selected = (
+        [link for link in matching if link.get("instanceId") == instance_id]
+        if instance_id is not None
+        else matching
+    )
+    # One link retains the original zero-configuration path.  Repeated
+    # instances of the same design require an exact choice, and a stale or
+    # duplicated instance id fails closed instead of silently selecting the
+    # first heartbeat record.
+    if len(selected) != 1 or (instance_id is None and len(matching) != 1):
+        return {**base, "state": "instance_selection_required"}
+
+    link = selected[0]
+    base["selectedInstanceId"] = link["instanceId"]
     fusion_hash = link.get("designHash")
     current_body_hash = link.get("bodyFingerprintHash")
-    returned_body_hash = _returned_fingerprint_hash(returned_bundle, design_id)
+    returned_body_hash = _returned_fingerprint_hash(
+        returned_bundle,
+        instance_id=str(link["instanceId"]),
+        design_id=design_id,
+    )
     current_document_hash = link.get("documentSignatureHash")
     returned_document_hash = _returned_document_signature_hash(returned_bundle)
     returned_scope_selection = _returned_scope_selection(returned_bundle)

@@ -4,7 +4,7 @@ import type { OnshapeStatus } from '../api/onshape';
 /** Shared by the CAD Link panel, the rail card, and the coordinator's send
  * path, so every surface derives the same outbound action from one status. */
 export interface CadWorkflowView {
-  state: 'checking' | 'closed' | 'addin-offline' | 'no-document' | 'not-linked' | 'current' | 'stale' | 'not-configured';
+  state: 'checking' | 'closed' | 'addin-offline' | 'no-document' | 'not-linked' | 'instance-selection' | 'current' | 'stale' | 'not-configured';
   headline: string;
   detail: string;
   action: 'open' | 'update' | null;
@@ -110,6 +110,12 @@ export function fusionWorkflowView(status: FusionCadStatus | null): CadWorkflowV
     headline: `Fusion 360 is open${status.documentName ? ` · ${status.documentName}` : ''}`,
     detail: 'This WG design is not linked in the active Fusion document yet.',
     action: 'open',
+  };
+  if (status.state === 'instance_selection_required') return {
+    state: 'instance-selection',
+    headline: `Choose a Fusion instance${status.documentName ? ` · ${status.documentName}` : ''}`,
+    detail: 'This design appears more than once in the active document. Choose the exact managed body before WG reads freshness, requests geometry, or sends an update.',
+    action: null,
   };
   const parameterCopy = status.link?.parameterCount
     ? `${status.link.parameterCount} managed CAD parameters`

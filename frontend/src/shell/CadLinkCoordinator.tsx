@@ -74,6 +74,7 @@ interface CadLinkCoordinatorSnapshot {
   reportError(message: string): void;
   reportStatus(message: string): void;
   reportViewportNotice(message: string | null): void;
+  selectFusionInstance(instanceId: string): void;
 }
 
 const unavailable = async () => { throw new Error('CAD Link coordinator is unavailable'); };
@@ -107,6 +108,7 @@ let bridgeSnapshot: CadLinkCoordinatorSnapshot = {
   reportError: () => undefined,
   reportStatus: () => undefined,
   reportViewportNotice: () => undefined,
+  selectFusionInstance: () => undefined,
 };
 const bridgeListeners = new Set<() => void>();
 
@@ -366,6 +368,7 @@ export function CadLinkCoordinator() {
   const [status, setStatus] = useState<string | null>(null);
   const [viewportNotice, setViewportNotice] = useState<string | null>(null);
   const [fusionStatus, setFusionStatus] = useState<FusionCadStatus | null>(null);
+  const [selectedFusionInstanceId, setSelectedFusionInstanceId] = useState<string | null>(null);
   const [onshapeStatus, setOnshapeStatus] = useState<OnshapeStatus | null>(null);
   const [onshapeConnection, setOnshapeConnection] = useState<OnshapeConnection | null>(null);
   const seenReturnRevisions = useRef<Map<string, string> | null>(null);
@@ -392,6 +395,10 @@ export function CadLinkCoordinator() {
     fail: (reason: Error) => void;
   } | null>(null);
   const onshape = preferences.cadApplication === 'onshape';
+
+  useEffect(() => {
+    setSelectedFusionInstanceId(null);
+  }, [identity?.designId]);
 
   useEffect(() => {
     mounted.current = true;
@@ -435,16 +442,27 @@ export function CadLinkCoordinator() {
     if (preferences.cadApplication !== 'fusion360') return;
     const request = ++fusionStatusRequest.current;
     try {
-      const next = await getFusionCadStatus(design, identity, selectedBundlePath);
+      const next = await getFusionCadStatus(
+        design,
+        identity,
+        selectedBundlePath,
+        fetch,
+        selectedFusionInstanceId,
+      );
       if (request === fusionStatusRequest.current
-        && ['closed', 'addin_offline', 'no_document', 'not_linked', 'current', 'stale'].includes(next.state)) {
+        && ['closed', 'addin_offline', 'no_document', 'not_linked', 'instance_selection_required', 'current', 'stale'].includes(next.state)) {
         setFusionStatus(next);
       }
     } catch {
       // Presence is advisory. Workspace and export errors are presented by the
       // actual action; a missed heartbeat must not hide CAD returns.
     }
-  }, [design, identity, preferences.cadApplication, selectedBundlePath]);
+  }, [design, identity, preferences.cadApplication, selectedBundlePath, selectedFusionInstanceId]);
+
+  const selectFusionInstance = useCallback((instanceId: string) => {
+    setSelectedFusionInstanceId(instanceId);
+    setFusionStatus(null);
+  }, []);
 
   useEffect(() => {
     setFusionStatus(null);
@@ -618,7 +636,7 @@ export function CadLinkCoordinator() {
   /** One outbound Fusion action for every surface. The rail card and CAD Link
    * panel both call this bridge so identity adoption, feedback, and return-list
    * refresh cannot drift into subtly different send paths. */
-  const sendToFusion = useCallback(async (target?: { documentId: string; returnStateHash: string | null }) => {
+  const sendToFusion = useCallback(async (target?: { documentId: string; instanceId: string; returnStateHash: string | null }) => {
     const request = ++fusionSendRequest.current;
     setSendingToFusion(true); setError(null); setStatus(null);
     try {
@@ -658,14 +676,19 @@ export function CadLinkCoordinator() {
   // conflict confirmation.
   const sendWgToFusion = useCallback(async (options?: { confirmed?: boolean }) => {
     const current = fusionStatus;
+    if (current?.state === 'instance_selection_required') {
+      const reason = new Error('Choose which linked Fusion instance to update.');
+      setError(reason.message);
+      throw reason;
+    }
     const action = fusionWorkflowView(current).action;
     if (action === 'update' && current?.fusionChangesAvailable && !options?.confirmed) {
       setPendingFusionConflict(true);
       return null;
     }
     setPendingFusionConflict(false);
-    return sendToFusion(action === 'update' && current?.documentId
-      ? { documentId: current.documentId, returnStateHash: current.link?.documentSignatureHash ?? null }
+    return sendToFusion(action === 'update' && current?.documentId && current.link
+      ? { documentId: current.documentId, instanceId: current.link.instanceId, returnStateHash: current.link.documentSignatureHash }
       : undefined);
   }, [fusionStatus, sendToFusion]);
 
@@ -758,6 +781,18 @@ export function CadLinkCoordinator() {
         skippedSourceIds: current.skippedSourceIds,
         areaDriftOverrides: current.areaDriftOverrides,
         expectedDesignId: useDocumentStore.getState().identity?.designId ?? null,
+        expectedInstanceId: (() => {
+          const bundle = current.selectedBundle;
+          const instances = bundle.instances ?? [];
+          const liveInstanceId = fusionStatus?.link?.instanceId ?? null;
+          if (liveInstanceId && instances.some((item) => item.instanceId === liveInstanceId)) {
+            return liveInstanceId;
+          }
+          const anchor = bundle.solverAnchorInstanceId ?? null;
+          return anchor && instances.some((item) => item.instanceId === anchor)
+            ? anchor
+            : null;
+        })(),
         symmetryMode: useCadPreparationStore.getState().symmetryMode,
       }, fetch, abortController.signal);
       if (!useCadReturnStore.getState().applyIngest(record, ingestGeneration)) {
@@ -806,7 +841,7 @@ export function CadLinkCoordinator() {
       if (ingestAbortController.current === abortController) ingestAbortController.current = null;
       if (request === ingestRequest.current && mounted.current) setIngesting(false);
     }
-  }, [reportViewportNotice]);
+  }, [fusionStatus?.link?.instanceId, reportViewportNotice]);
   ingestSelectedRef.current = ingestSelected;
 
   /** Manual list selection is preparation intent too. Selecting immediately
@@ -1104,6 +1139,7 @@ export function CadLinkCoordinator() {
       reportError,
       reportStatus,
       reportViewportNotice,
+      selectFusionInstance,
     });
     return () => publishBridge({
       ...bridgeSnapshot,
@@ -1135,6 +1171,7 @@ export function CadLinkCoordinator() {
       reportError: () => undefined,
       reportStatus: () => undefined,
       reportViewportNotice: () => undefined,
+      selectFusionInstance: () => undefined,
     });
   }, [
     bundles,
@@ -1159,6 +1196,7 @@ export function CadLinkCoordinator() {
     refreshOnshapeStatus,
     returnFromOnshape,
     selectBundle,
+    selectFusionInstance,
     reportError,
     reportStatus,
     reportViewportNotice,

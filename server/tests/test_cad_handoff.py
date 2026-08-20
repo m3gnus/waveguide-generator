@@ -31,6 +31,7 @@ def test_publish_fusion_handoff_announces_the_completed_bundle(tmp_path: Path) -
         workspace,
         _result(bundle),
         expected_document_id="fusion:doc-a",
+        expected_instance_id="instance-b",
         expected_return_state_hash="sha256:return-state",
     )
 
@@ -45,6 +46,7 @@ def test_publish_fusion_handoff_announces_the_completed_bundle(tmp_path: Path) -
         "sequence": 4,
         "designId": "wgd_01KZV700000000000000000000",
         "expectedDocumentId": "fusion:doc-a",
+        "expectedInstanceId": "instance-b",
         "expectedReturnStateHash": "sha256:return-state",
         "requestedAt": payload["requestedAt"],
     }

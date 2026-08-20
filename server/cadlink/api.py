@@ -64,6 +64,9 @@ class CadReturnIngestRequest(BaseModel):
         default_factory=list, alias="areaDriftOverrides"
     )
     expected_design_id: str | None = Field(default=None, alias="expectedDesignId")
+    expected_instance_id: str | None = Field(
+        default=None, alias="expectedInstanceId", min_length=1
+    )
     symmetry_mode: Literal["auto", "full"] = Field(
         default="auto", alias="symmetryMode"
     )
@@ -74,6 +77,7 @@ class FusionStatusRequest(BaseModel):
 
     design: DesignConfig
     identity: SaveIdentity | None = None
+    instance_id: str | None = Field(default=None, alias="instanceId", min_length=1)
     return_bundle_path: str | None = Field(default=None, alias="returnBundlePath")
 
 
@@ -215,6 +219,8 @@ def _return_listing(workspace_root: Path) -> list[dict[str, Any]]:
             "sourceCount": None,
             "instanceCount": None,
             "designIds": [],
+            "solverAnchorInstanceId": None,
+            "instances": [],
             "sources": [],
         }
         try:
@@ -222,8 +228,18 @@ def _return_listing(workspace_root: Path) -> list[dict[str, Any]]:
             document = manifest.get("document")
             sources = manifest.get("sources")
             instances = manifest.get("instances")
-            if not isinstance(document, dict) or not isinstance(sources, list) or not isinstance(instances, list):
+            coordinates = manifest.get("coordinate_system")
+            scope = manifest.get("scope")
+            if (
+                not isinstance(document, dict)
+                or not isinstance(sources, list)
+                or not isinstance(instances, list)
+            ):
                 raise ValueError("manifest inventory has the wrong shape")
+            coordinates = coordinates if isinstance(coordinates, dict) else {}
+            scope = scope if isinstance(scope, dict) else {}
+            included = scope.get("included")
+            included = included if isinstance(included, list) else []
             source_summaries = []
             for source in sources:
                 if not isinstance(source, dict):
@@ -243,10 +259,83 @@ def _return_listing(workspace_root: Path) -> list[dict[str, Any]]:
                     {
                         "id": str(source["id"]),
                         "role": str(source.get("role") or "source"),
+                        "instanceId": (
+                            str(source["instance_id"])
+                            if source.get("instance_id")
+                            else None
+                        ),
                         "required": bool(source.get("required", True)),
                         "suggestedResolutionMm": suggested_resolution,
                         "defaultDriveChannelId": str(
                             source["default_drive_channel_id"]
+                        ),
+                    }
+                )
+            instance_summaries = []
+            for instance in instances:
+                if not isinstance(instance, dict):
+                    raise ValueError("manifest instance has the wrong shape")
+                instance_id = str(instance["instance_id"])
+                body_evidence = instance.get("body_evidence")
+                observed = (
+                    body_evidence.get("observed_fingerprint")
+                    if isinstance(body_evidence, Mapping)
+                    else None
+                )
+                matrix = instance.get("assembly_from_link")
+                source_records = [
+                    source
+                    for source in source_summaries
+                    if source["instanceId"] == instance_id
+                ]
+                body_object_ids = sorted(
+                    str(body["object_id"])
+                    for body in included
+                    if isinstance(body, dict)
+                    and body.get("wglink_instance_id") == instance_id
+                    and body.get("object_id")
+                )
+                instance_summaries.append(
+                    {
+                        "instanceId": instance_id,
+                        "designId": str(instance.get("design_id") or "") or None,
+                        "occurrencePath": (
+                            str(instance["occurrence_path"])
+                            if instance.get("occurrence_path")
+                            else None
+                        ),
+                        "bodyObjectIds": body_object_ids,
+                        "bodyFingerprintHash": (
+                            "sha256:"
+                            + hashlib.sha256(
+                                json.dumps(
+                                    observed,
+                                    allow_nan=False,
+                                    sort_keys=True,
+                                    separators=(",", ":"),
+                                ).encode("utf-8")
+                            ).hexdigest()
+                            if isinstance(observed, Mapping)
+                            else None
+                        ),
+                        "transformHash": (
+                            "sha256:"
+                            + hashlib.sha256(
+                                json.dumps(
+                                    matrix,
+                                    allow_nan=False,
+                                    sort_keys=True,
+                                    separators=(",", ":"),
+                                ).encode("utf-8")
+                            ).hexdigest()
+                            if isinstance(matrix, list)
+                            else None
+                        ),
+                        "sourceIds": sorted(
+                            str(source["id"]) for source in source_records
+                        ),
+                        "driveChannelIds": sorted(
+                            {str(source["defaultDriveChannelId"]) for source in source_records}
                         ),
                     }
                 )
@@ -261,11 +350,19 @@ def _return_listing(workspace_root: Path) -> list[dict[str, Any]]:
                     ),
                     "sourceCount": len(sources),
                     "instanceCount": len(instances),
+                    "solverAnchorInstanceId": (
+                        str(coordinates["solver_anchor_instance_id"])
+                        if coordinates.get("solver_anchor_instance_id")
+                        else None
+                    ),
                     "designIds": sorted({
                         str(instance["design_id"])
                         for instance in instances
                         if isinstance(instance, dict) and instance.get("design_id")
                     }),
+                    "instances": sorted(
+                        instance_summaries, key=lambda value: value["instanceId"]
+                    ),
                     "sources": source_summaries,
                 }
             )
@@ -358,14 +455,27 @@ async def fusion_status(
                 (selected_return / "wgreturn.json").read_text(encoding="utf-8")
             )
             instances = manifest.get("instances")
-            if payload.identity is None or (
+            matches_design = payload.identity is None or (
                 isinstance(instances, list)
                 and any(
                     isinstance(instance, dict)
                     and instance.get("design_id") == payload.identity.design_id
                     for instance in instances
                 )
-            ):
+            )
+            matches_instance = payload.instance_id is None or (
+                isinstance(instances, list)
+                and any(
+                    isinstance(instance, dict)
+                    and instance.get("instance_id") == payload.instance_id
+                    and (
+                        payload.identity is None
+                        or instance.get("design_id") == payload.identity.design_id
+                    )
+                    for instance in instances
+                )
+            )
+            if matches_design and matches_instance:
                 returned_bundle = selected_return
         except (OSError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -384,6 +494,10 @@ async def fusion_status(
             if isinstance(instances, list) and any(
                 isinstance(instance, dict)
                 and instance.get("design_id") == payload.identity.design_id
+                and (
+                    payload.instance_id is None
+                    or instance.get("instance_id") == payload.instance_id
+                )
                 for instance in instances
             ):
                 returned_bundle = candidate_path
@@ -395,6 +509,7 @@ async def fusion_status(
         current_design_hash=current_hash,
         current_formula=payload.design.root.formula,
         design_id=payload.identity.design_id if payload.identity else None,
+        instance_id=payload.instance_id,
         process_running=await asyncio.to_thread(fusion_process_running),
         returned_bundle=returned_bundle,
     )
@@ -630,6 +745,7 @@ async def post_ingest(payload: CadReturnIngestRequest, request: Request) -> dict
                 "symmetry_mode": payload.symmetry_mode,
             },
             expected_design_id=payload.expected_design_id,
+            expected_instance_id=payload.expected_instance_id,
         )
     except HTTPException:
         raise

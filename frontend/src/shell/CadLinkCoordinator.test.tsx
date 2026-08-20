@@ -190,6 +190,66 @@ describe('CadLinkCoordinator', () => {
     expect(calls.filter((path) => path.endsWith('/solve-command')).length).toBeGreaterThanOrEqual(1);
   });
 
+  it('fails closed on repeated links and posts the chosen Fusion instance on refresh', async () => {
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_shared', lineageId: 'wgl_shared', baseEditVersion: 1,
+    }, 'current');
+    const link = (instanceId: string) => ({
+      instanceId, bundlePath: null, designId: 'wgd_shared', lineageId: 'wgl_shared',
+      editVersion: '1', designHash: 'sha256:design', designName: `Copy ${instanceId}`,
+      formula: 'OSSE', configPresent: true, parameterCount: 3, parameterDriftCount: 0,
+      localBodyState: 'unmodified' as const, bodyFingerprintHash: `sha256:body-${instanceId}`,
+      documentSignatureHash: 'sha256:document', documentBodyCount: 2,
+      sourceStateHash: 'sha256:sources', exportId: 'wge_shared', exportSequence: '1',
+    });
+    const requests: Array<Record<string, unknown>> = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json({ items: [] });
+      if (path.endsWith('/solve-command')) return json({ command: null });
+      if (path.endsWith('/fusion-status')) {
+        const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        requests.push(request);
+        const selected = request.instanceId === 'instance-b';
+        return json({
+          ...closedFusion,
+          state: selected ? 'current' : 'instance_selection_required',
+          processRunning: true,
+          running: true,
+          documentName: 'Repeated design',
+          documentId: 'fusion:doc-repeated',
+          link: selected ? link('instance-b') : null,
+          matchingLinks: [link('instance-a'), link('instance-b')],
+          selectedInstanceId: selected ? 'instance-b' : null,
+        });
+      }
+      return json({}, 404);
+    }));
+
+    await renderCoordinator();
+    expect(cadLinkCoordinatorBridge.getSnapshot().fusionStatus?.state)
+      .toBe('instance_selection_required');
+
+    let refusal: unknown;
+    await act(async () => {
+      refusal = await cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion()
+        .catch((reason: unknown) => reason);
+    });
+    expect(refusal).toBeInstanceOf(Error);
+    expect((refusal as Error).message).toContain('Choose which linked Fusion instance');
+
+    await act(async () => {
+      cadLinkCoordinatorBridge.getSnapshot().selectFusionInstance('instance-b');
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(requests.at(-1)?.instanceId).toBe('instance-b');
+    expect(cadLinkCoordinatorBridge.getSnapshot().fusionStatus?.link?.instanceId)
+      .toBe('instance-b');
+  });
+
   it('enters CAD mode when an Onshape return lands so the panel can own it', async () => {
     preferencesStore.update({ cadApplication: 'onshape' });
     useDocumentStore.getState().setCadLink({
@@ -1153,6 +1213,7 @@ describe('CadLinkCoordinator', () => {
     expect(exportBodies).toHaveLength(1);
     expect(exportBodies[0]).toMatchObject({
       expectedFusionDocumentId: 'fusion:doc-1',
+      expectedFusionInstanceId: 'wgi_1',
       expectedFusionReturnStateHash: 'sha256:doc-state',
     });
     expect(cadLinkCoordinatorBridge.getSnapshot().pendingFusionConflict).toBe(false);

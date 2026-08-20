@@ -242,6 +242,52 @@ def compute_freshness(
     return {"verdict": "per-instance", "instances": results}
 
 
+def instance_identity_inventory(
+    manifest: Mapping[str, Any], *, selected_instance_id: str | None
+) -> dict[str, Any]:
+    """Project the return's body/placement/source/channel addressing graph.
+
+    ``design_id`` and ``export_id`` intentionally do not appear as join keys:
+    repeated placements can share both.  Every downstream identity is rooted
+    at the CAD-authored ``instance_id`` and keeps the artifact's native body,
+    source, and default-channel addresses intact.
+    """
+
+    raw_sources = list(manifest["sources"])
+    included = list(manifest["scope"]["included"])
+    inventory = []
+    for instance in manifest["instances"]:
+        instance_id = str(instance["instance_id"])
+        sources = [
+            source
+            for source in raw_sources
+            if source.get("instance_id") == instance_id
+        ]
+        inventory.append(
+            {
+                "instance_id": instance_id,
+                "design_id": instance.get("design_id"),
+                "body_object_ids": sorted(
+                    str(body["object_id"])
+                    for body in included
+                    if body.get("wglink_instance_id") == instance_id
+                ),
+                "assembly_from_link": instance["assembly_from_link"],
+                "source_ids": sorted(str(source["id"]) for source in sources),
+                "default_drive_channel_ids": sorted(
+                    {str(source["default_drive_channel_id"]) for source in sources}
+                ),
+            }
+        )
+    return {
+        "selected_instance_id": selected_instance_id,
+        "solver_anchor_instance_id": manifest["coordinate_system"].get(
+            "solver_anchor_instance_id"
+        ),
+        "instances": sorted(inventory, key=lambda item: item["instance_id"]),
+    }
+
+
 def _scope_findings(manifest: Mapping[str, Any]) -> list[dict[str, Any]]:
     findings = []
     for index, skip in enumerate(manifest["scope"]["skipped"]):
@@ -505,6 +551,7 @@ def ingest_bundle(
     *,
     prep_options: Mapping[str, Any] | None = None,
     expected_design_id: str | None = None,
+    expected_instance_id: str | None = None,
     recompute_freshness: Callable[[Mapping[str, Any]], str] | None = None,
 ) -> dict[str, Any]:
     """Run the nine ingestion stages and persist the immutable WG verdict."""
@@ -525,6 +572,56 @@ def ingest_bundle(
             "the selected CAD return belongs to another CAD-linked project; "
             "open that project from File → CAD-linked designs before preparing it",
         )
+    matching_design_instances = [
+        instance
+        for instance in manifest["instances"]
+        if expected_design_id is not None
+        and instance.get("design_id") == expected_design_id
+    ]
+    if expected_instance_id is None and len(matching_design_instances) > 1:
+        raise IngestRefusal(
+            "stage 2 instance gate",
+            "the selected CAD return contains more than one instance of this "
+            "design; choose the linked instance before preparing it",
+        )
+    resolved_instance_id = expected_instance_id
+    if resolved_instance_id is None and len(matching_design_instances) == 1:
+        resolved_instance_id = str(matching_design_instances[0]["instance_id"])
+    elif (
+        resolved_instance_id is None
+        and expected_design_id is None
+        and len(manifest["instances"]) == 1
+    ):
+        resolved_instance_id = str(manifest["instances"][0]["instance_id"])
+    if resolved_instance_id is not None:
+        selected_instances = [
+            instance
+            for instance in manifest["instances"]
+            if instance.get("instance_id") == resolved_instance_id
+        ]
+        if len(selected_instances) != 1:
+            raise IngestRefusal(
+                "stage 2 instance gate",
+                f"selected instance {resolved_instance_id!r} is not present exactly once",
+            )
+        selected_instance = selected_instances[0]
+        if (
+            expected_design_id is not None
+            and selected_instance.get("design_id") != expected_design_id
+        ):
+            raise IngestRefusal(
+                "stage 2 instance gate",
+                f"selected instance {resolved_instance_id!r} belongs to another design",
+            )
+        anchor_instance_id = manifest["coordinate_system"].get(
+            "solver_anchor_instance_id"
+        )
+        if anchor_instance_id is not None and anchor_instance_id != resolved_instance_id:
+            raise IngestRefusal(
+                "stage 2 instance gate",
+                f"selected instance {resolved_instance_id!r} is not the return's "
+                f"solver anchor {anchor_instance_id!r}",
+            )
     normalized_mesh = validate_imported_sizes(
         manifest["sources"], mesh, skipped_source_ids=skipped_source_ids
     )
@@ -852,6 +949,9 @@ def ingest_bundle(
                 ],
                 "fem_air_volumes": manifest["scope"]["fem_air_volumes"],
             },
+            "identity": instance_identity_inventory(
+                manifest, selected_instance_id=resolved_instance_id
+            ),
             "consistency": {"status": "accepted", "checked_instances": len(manifest["instances"])},
             "normalisation": built["normalisation"],
             "anchor": (

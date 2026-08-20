@@ -18,6 +18,7 @@ describe('CAD-link client', () => {
       skippedSourceIds: [],
       areaDriftOverrides: [],
       expectedDesignId: 'wgd_current',
+      expectedInstanceId: 'instance-current',
       symmetryMode: 'full',
     }, fetcher as typeof fetch);
     await getIngest('wgi_test', fetcher as typeof fetch);
@@ -28,6 +29,7 @@ describe('CAD-link client', () => {
       bundlePath: 'wgreturn/a.wgreturn',
       mesh: { rigidSizeMm: 10, sourceSizeMm: { source: 4 } },
       expectedDesignId: 'wgd_current',
+      expectedInstanceId: 'instance-current',
       symmetryMode: 'full',
     });
   });
@@ -59,13 +61,20 @@ describe('CAD-link client', () => {
     }), { status: 200 }));
     const identity = { designId: 'wgd_a', lineageId: 'wgl_a', baseEditVersion: 4 };
 
-    await getFusionCadStatus(designForFamily('R-OSSE'), identity, 'wgreturn/a.wgreturn', fetcher as typeof fetch);
+    await getFusionCadStatus(
+      designForFamily('R-OSSE'),
+      identity,
+      'wgreturn/a.wgreturn',
+      fetcher as typeof fetch,
+      'instance-b',
+    );
 
     expect(fetcher).toHaveBeenCalledOnce();
     expect(fetcher.mock.calls[0][0]).toBe('/api/cadlink/fusion-status');
     expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).toMatchObject({
       design: { formula: 'R-OSSE' },
       identity,
+      instanceId: 'instance-b',
       returnBundlePath: 'wgreturn/a.wgreturn',
     });
   });

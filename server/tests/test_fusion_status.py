@@ -191,6 +191,96 @@ def test_active_document_reports_unlinked_current_and_stale_designs(tmp_path: Pa
     assert "driftedParameters" not in legacy["link"]
 
 
+def test_repeated_design_requires_an_exact_instance_and_never_uses_first_match(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    _write_status(
+        workspace,
+        links=[
+            _link(instanceId="instance-b", designName="Right"),
+            _link(instanceId="instance-a", designName="Left"),
+        ],
+    )
+
+    ambiguous = _read(workspace)
+
+    assert ambiguous["state"] == "instance_selection_required"
+    assert ambiguous["link"] is None
+    assert ambiguous["selectedInstanceId"] is None
+    assert [link["instanceId"] for link in ambiguous["matchingLinks"]] == [
+        "instance-a",
+        "instance-b",
+    ]
+
+    selected = _read(workspace, instance_id="instance-b")
+    assert selected["state"] == "current"
+    assert selected["selectedInstanceId"] == "instance-b"
+    assert selected["link"]["designName"] == "Right"
+
+    stale_choice = _read(workspace, instance_id="instance-was-detached")
+    assert stale_choice["state"] == "instance_selection_required"
+    assert stale_choice["link"] is None
+
+
+def test_returned_body_evidence_is_joined_by_instance_not_shared_design(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    fingerprints = {
+        "instance-a": {
+            "bbox_mm": [0, 0, 0, 1, 1, 1],
+            "is_solid": True,
+            "volume_mm3": 1.0,
+        },
+        "instance-b": {
+            "bbox_mm": [0, 0, 0, 2, 2, 2],
+            "is_solid": True,
+            "volume_mm3": 8.0,
+        },
+    }
+    body_hash = "sha256:" + hashlib.sha256(
+        json.dumps(
+            fingerprints["instance-b"], sort_keys=True, separators=(",", ":")
+        ).encode()
+    ).hexdigest()
+    _write_status(
+        workspace,
+        links=[
+            _link(instanceId="instance-a"),
+            _link(
+                instanceId="instance-b",
+                localBodyState="modified",
+                bodyFingerprintHash=body_hash,
+            ),
+        ],
+    )
+    returned = workspace / "speaker.wgreturn"
+    returned.mkdir()
+    (returned / "wgreturn.json").write_text(
+        json.dumps(
+            {
+                "instances": [
+                    {
+                        "instance_id": instance_id,
+                        "design_id": "wgd_tritonia",
+                        "body_evidence": {"observed_fingerprint": fingerprint},
+                    }
+                    for instance_id, fingerprint in fingerprints.items()
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    status = _read(
+        workspace, instance_id="instance-b", returned_bundle=returned
+    )
+
+    assert status["fusionChangesAvailable"] is False
+    assert status["link"]["instanceId"] == "instance-b"
+
+
 def test_parameter_drift_names_are_validated_and_define_the_aggregate(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     _write_status(workspace, links=[_link(
@@ -367,6 +457,8 @@ def test_status_endpoint_hashes_the_design_and_reports_wglink_folder_setup(
         "currentFormula": "OSSE",
         "fusionFormula": None,
         "link": None,
+        "matchingLinks": [],
+        "selectedInstanceId": None,
         "wgChangesAvailable": False,
         "fusionChangesAvailable": False,
         "documentChanged": False,

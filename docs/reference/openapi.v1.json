@@ -27,6 +27,18 @@
             ],
             "title": "Expecteddesignid"
           },
+          "expectedInstanceId": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expectedinstanceid"
+          },
           "mesh": {
             "$ref": "#/components/schemas/ImportedMeshRequest"
           },
@@ -2011,6 +2023,18 @@
                 "type": "null"
               }
             ]
+          },
+          "instanceId": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instanceid"
           },
           "returnBundlePath": {
             "anyOf": [
@@ -5862,6 +5886,18 @@
             ],
             "title": "Expectedfusiondocumentid"
           },
+          "expectedFusionInstanceId": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expectedfusioninstanceid"
+          },
           "expectedFusionReturnStateHash": {
             "anyOf": [
               {
@@ -5936,7 +5972,7 @@
   },
   "info": {
     "title": "Waveguide Generator",
-    "version": "0.2.3"
+    "version": "0.2.4"
   },
   "openapi": "3.1.0",
   "paths": {
