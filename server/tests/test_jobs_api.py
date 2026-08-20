@@ -142,6 +142,8 @@ def test_openapi_documents_complete_jobs_surface(tmp_path: Path) -> None:
         "/api/status/{job_id}",
         "/api/results/{job_id}",
         "/api/mesh-artifact/{job_id}",
+        "/api/radiation-impedance/{job_id}",
+        "/api/radiation-impedance/{job_id}/presentation",
         "/api/jobs",
         "/api/jobs/{job_id}/metadata",
         "/api/jobs/clear-failed",
@@ -165,6 +167,12 @@ def test_openapi_documents_complete_jobs_surface(tmp_path: Path) -> None:
         "headers"
     ]
     assert set(result_headers) == {"ETag", "X-WG-Results-SHA256"}
+    presentation_schema = paths[
+        "/api/radiation-impedance/{job_id}/presentation"
+    ]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+    assert presentation_schema == {
+        "$ref": "#/components/schemas/RadiationImpedancePresentation"
+    }
 
 
 def test_solve_body_validation_uses_versioned_error_envelope(tmp_path: Path) -> None:

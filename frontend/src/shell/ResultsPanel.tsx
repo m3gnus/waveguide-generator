@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, use
 import { createPortal } from 'react-dom';
 import type { EChartsOption } from 'echarts';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
-import { compareSelection, fetchJobResults, provisionalResults, recombineJobResults, type JobResults } from '../api/results';
+import { compareSelection, fetchJobResults, fetchRadiationImpedancePresentation, provisionalResults, recombineJobResults, type JobResults, type RadiationImpedancePresentation } from '../api/results';
 import { EChart, useChartTokens, type ChartTokens } from '../results/EChart';
 import { beamFitSeries, beamShapeSeries, directivityGrid, directivityIndexSeries, drivePowerChartSeries, excursionChartSeries, expandResultChannels, groupDelaySeries, impedanceComparable, impedanceSeries, impedanceSubtitle, nearestFrequencyIndex, phaseSeries, polarCut, splSeries, type NamedResult } from '../results/mappers';
 import { BalloonRenderer, ChartStub, ForwardBeamRenderer, hasBalloonData, type ChartStubAction } from '../results/balloon';
@@ -30,6 +30,7 @@ import { useSolveOptionsStore } from '../stores/solveOptions';
 import { MAX_MEASURED_OVERLAYS, useMeasuredOverlayStore, type MeasuredOverlay } from '../stores/measuredOverlays';
 import { useDesignStore } from '../stores/design';
 import { runContextMarker, runMatchesContext, useRunContext } from '../results/runCoherence';
+import { radiationImpedanceTraces } from '../results/radiationImpedance';
 
 export function splSubtitle(result: JobResults | undefined): string {
   const observation = result?.metadata?.observation;
@@ -755,6 +756,37 @@ export function impedanceOption(items: NamedResult[], tokens: ChartTokens, smoot
   return lineOption(series, tokens, units.axis, density, undefined, magnitudePhase ? 'Phase [°]' : undefined);
 }
 
+/** Engineering radiation load seen by each reduced passive-cardioid port. */
+export function radiationImpedanceOption(
+  presentation: RadiationImpedancePresentation,
+  tokens: ChartTokens,
+  density: ChartDensity,
+): EChartsOption {
+  const colors = seriesColorsByLabel(
+    presentation.in_phase_termination.aperture_names,
+    tokens.series,
+    tokens.accent,
+  );
+  const series = radiationImpedanceTraces(presentation).map((trace) => {
+    const aperture = trace.name.split(' · ')[0];
+    const color = colors.get(aperture) ?? tokens.accent;
+    return {
+      name: trace.name,
+      type: 'line' as const,
+      showSymbol: false,
+      connectNulls: false,
+      data: trace.data,
+      lineStyle: {
+        color,
+        width: trace.component === 'real' ? 2 : 1.35,
+        type: trace.component === 'real' ? 'solid' as const : 'dashed' as const,
+      },
+      itemStyle: { color },
+    };
+  });
+  return lineOption(series, tokens, 'Radiation Z [Pa·s/m³]', density);
+}
+
 /**
  * On-axis phase alone, for when it deserves a whole card.
  *
@@ -936,6 +968,7 @@ const CHART_BADGES: Record<ChartType, { short: string; long?: string; unit?: str
   group_delay: { short: 'GD', long: 'Group delay', unit: 'ms' },
   // The impedance unit depends on the result, not the chart: see chartUnit.
   impedance: { short: 'Impedance' },
+  radiation_impedance: { short: 'Rad Z', long: 'Radiation load', unit: 'Pa·s/m³' },
   drive_power: { short: 'Power', long: 'Power & current', unit: 'W' },
   excursion: { short: 'Excursion', long: 'Cone excursion', unit: 'mm' },
   summary: { short: 'Summary' },
@@ -1338,8 +1371,16 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
       const { units } = impedanceComparable(overlays);
       return Array.isArray(option.series) && option.series.length ? <EChart option={option} label={`Interactive HornLab ${units.spokenName} by frequency`} live={live}/> : <ChartStub reason="Impedance needs the optional impedance result block."/>;
     }
+    if (chartType === 'radiation_impedance') {
+      const presentation = wrapper?.radiation_impedance ?? result.radiation_impedance;
+      if (!presentation) return <ChartStub reason="Radiation Matrix Load needs a retained passive-cardioid radiation-impedance artifact."/>;
+      const option = radiationImpedanceOption(presentation, tokens, density);
+      return Array.isArray(option.series) && option.series.length
+        ? <EChart option={option} label="Interactive HornLab engineering-convention passive-cardioid radiation load by frequency" live={live}/>
+        : <ChartStub reason="The retained radiation matrix has no finite reduced load curves."/>;
+    }
     return null;
-  }, [beamShapeAction, chartType, density, live, measured, overlays, preferences.directivityGuideInterval, preferences.impedanceDisplay, preferences.mapReference, preferences.smoothing, preferences.splPhase, result, tokens]);
+  }, [beamShapeAction, chartType, density, live, measured, overlays, preferences.directivityGuideInterval, preferences.impedanceDisplay, preferences.mapReference, preferences.smoothing, preferences.splPhase, result, tokens, wrapper]);
   return plot ?? <Summary result={result} wrapper={wrapper} job={job} channelId={channelId} density={density}/>;
 }
 
@@ -1431,6 +1472,7 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
     ? `ref ${preferencesStore.getSnapshot().mapReference} dB${polarStep ? ` · ${polarStep}` : ''}`
     : chartType === 'frequency_response' ? splSubtitle(result)
     : impedanceItems ? impedanceSubtitle(impedanceItems)
+    : chartType === 'radiation_impedance' ? 'engineering · exp(+jωt) · in-phase ports'
     : null;
   const unit = chartUnit(chartType, result, impedanceItems);
   const activeLabel = named.find((item) => item.result === result)?.label ?? named[0]?.label ?? 'the primary run';
@@ -1687,7 +1729,7 @@ export function ResultsPanel() {
   const resultSourceKey = ids.map((id) => {
     const job = jobs.find((item) => item.id === id);
     const liveRevision = job && job.status !== 'complete' ? provisional.entries[id]?.revision ?? 0 : 0;
-    return `${id}:${job?.status ?? 'missing'}:${job?.has_results ? 1 : 0}:${liveRevision}`;
+    return `${id}:${job?.status ?? 'missing'}:${job?.has_results ? 1 : 0}:${job?.has_radiation_impedance_artifact ? 1 : 0}:${liveRevision}`;
   }).join('\u0000');
   useEffect(() => {
     let live = true;
@@ -1698,7 +1740,20 @@ export function ResultsPanel() {
       const job = jobs.find((item) => item.id === id);
       const provisionalEntry = job?.status !== 'complete' ? provisional.entries[id] : undefined;
       if (provisionalEntry) return [id, provisionalEntry.result as ResultPayload, true] as const;
-      return [id, await fetchJobResults(id) as ResultPayload, false] as const;
+      const result = await fetchJobResults(id) as ResultPayload;
+      if (!job?.has_radiation_impedance_artifact) return [id, result, false] as const;
+      try {
+        const presentation = await fetchRadiationImpedancePresentation(id);
+        return [
+          id,
+          presentation ? { ...result, radiation_impedance: presentation } : result,
+          false,
+        ] as const;
+      } catch {
+        // The matrix is optional. A corrupt or temporarily unavailable
+        // artifact must not make otherwise valid SPL/directivity disappear.
+        return [id, result, false] as const;
+      }
     }))
       .then((pairs) => {
         if (!live) return;
@@ -1851,7 +1906,7 @@ export function ResultsPanel() {
     try {
       const job = jobs.find(({ id }) => id === selection.primary);
       if (!job) throw new Error('The selected run is no longer available for export.');
-      const result = await runWorkspaceExportBundle({ result: primary, ...resultExportSnapshot(job), jobStem: exportStemForJob(job), preferences }, preferences.exportFormats);
+      const result = await runWorkspaceExportBundle({ result: primary, ...resultExportSnapshot(job), jobStem: exportStemForJob(job), jobId: job.id, hasRadiationImpedanceArtifact: job.has_radiation_impedance_artifact, preferences }, preferences.exportFormats);
       if (selection.primary && result.files.length) {
         await jobsSocket.patchMetadata(selection.primary, { exported_files: [...new Set([...(job?.exported_files ?? []), ...result.files])] });
       }

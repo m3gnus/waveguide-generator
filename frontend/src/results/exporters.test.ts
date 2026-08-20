@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { designForFamily } from '../stores/design';
 import { preferencesStore } from '../prefs/preferences';
 import type { ResultPayload } from './types';
-import { buildChartRenderPayload, buildFrequencyCsv, buildFullResultsJson, buildImpedanceCsv, buildPolarCsv, buildSummaryText, downloadMeshArtifact, runExportBundle, runExportFormat, runWorkspaceExportBundle, saveMeshArtifactToWorkspace } from './exporters';
+import type { RadiationImpedancePresentation } from '../api/results';
+import { archiveRunToWorkspace, buildChartRenderPayload, buildFrequencyCsv, buildFullResultsJson, buildImpedanceCsv, buildPolarCsv, buildRadiationImpedanceCsv, buildSummaryText, downloadMeshArtifact, runExportBundle, runExportFormat, runWorkspaceExportBundle, saveMeshArtifactToWorkspace } from './exporters';
+import type { JobItem } from '../api/jobsSocket';
 
 const result: ResultPayload = {
   frequencies: [100, 200],
@@ -10,6 +12,27 @@ const result: ResultPayload = {
   di: { frequencies: [100, 200], di: [3, 4] },
   impedance: { frequencies: [100, 200], real: [1, null], imaginary: [0, -.5] },
   directivity: { horizontal: [[[-90, -12], [0, 0]], [[-90, [0.1, 0]], [0, [1, 0]]]] },
+};
+
+const radiation: RadiationImpedancePresentation = {
+  schema_version: 1,
+  quantity: 'average_aperture_pressure_per_volume_velocity',
+  units: 'Pa*s/m^3',
+  phase_time_convention: 'engineering_exp_plus_jwt',
+  frequencies_hz: [100],
+  apertures: [
+    { name: 'PORT,L', area_m2: 0.01, tag: 31 },
+    { name: 'PORT_R', area_m2: 0.02, tag: 32 },
+  ],
+  engineering_matrix: {
+    real: [[[1, 2], [3, 4]]],
+    imaginary: [[[5, 6], [7, 8]]],
+  },
+  in_phase_termination: {
+    aperture_names: ['PORT,L', 'PORT_R'],
+    real: [[3, 7]],
+    imaginary: [[11, 15]],
+  },
 };
 
 describe('result exporters', () => {
@@ -21,6 +44,70 @@ describe('result exporters', () => {
     expect(buildSummaryText(result, preferences, new Date('2026-08-04T10:00:00Z'))).toContain('Average SPL: 90.00 dB');
     expect(buildPolarCsv(result)).toContain('200,horizontal,-90,-20');
     expect(buildImpedanceCsv(result)).toContain('200,,-0.5');
+  });
+  it('exports the engineering radiation matrix and reduced port loads with explicit semantics', () => {
+    const csv = buildRadiationImpedanceCsv(radiation);
+    expect(csv).toContain('# Units: Pa*s/m^3');
+    expect(csv).toContain('# Phase time convention: engineering_exp_plus_jwt');
+    expect(csv).toContain('100,engineering_matrix,"PORT,L",PORT_R,2,6');
+    expect(csv).toContain('100,in_phase_termination,"PORT,L","PORT,L+PORT_R",3,11');
+  });
+
+  it('integrates lossless NPZ and curve CSV as one non-channel export family', async () => {
+    const saveBlob = vi.fn();
+    const saveText = vi.fn();
+    const fetcher = vi.fn<typeof fetch>(async (input) => {
+      const path = String(input);
+      if (path.endsWith('/presentation')) {
+        return new Response(JSON.stringify(radiation), { status: 200 });
+      }
+      if (path === '/api/radiation-impedance/cardioid-job') {
+        return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+      }
+      return new Response('not found', { status: 404 });
+    });
+    const bundle = await runExportBundle({
+      result: {
+        frequencies: [],
+        channel_order: ['left', 'right'],
+        channels: { left: result, right: result },
+      },
+      jobId: 'cardioid-job',
+      hasRadiationImpedanceArtifact: true,
+      jobStem: 'cardioid_7',
+      preferences: preferencesStore.getSnapshot(),
+      fetcher,
+      saveBlob,
+      saveText,
+    }, ['radiation_impedance_npz', 'radiation_impedance_csv']);
+
+    expect(bundle).toEqual({
+      files: ['cardioid_7_radiation_impedance.npz', 'cardioid_7_radiation_impedance.csv'],
+      failures: [],
+    });
+    expect(fetcher.mock.calls.map(([input]) => String(input))).toEqual([
+      '/api/radiation-impedance/cardioid-job',
+      '/api/radiation-impedance/cardioid-job/presentation',
+    ]);
+    expect(saveBlob).toHaveBeenCalledOnce();
+    expect(saveText).toHaveBeenCalledOnce();
+  });
+
+  it('refuses the optional radiation export cleanly when the artifact is absent', async () => {
+    const bundle = await runExportBundle({
+      jobId: 'ordinary-job',
+      hasRadiationImpedanceArtifact: false,
+      jobStem: 'ordinary_1',
+      preferences: preferencesStore.getSnapshot(),
+      fetcher: vi.fn(),
+    }, ['radiation_impedance_npz', 'radiation_impedance_csv']);
+    expect(bundle).toEqual({
+      files: [],
+      failures: [
+        { format: 'radiation_impedance_npz', reason: 'This run has no retained radiation-impedance matrix.' },
+        { format: 'radiation_impedance_csv', reason: 'This run has no retained radiation-impedance matrix.' },
+      ],
+    });
   });
   it('joins DI and impedance onto their own frequencies instead of the SPL row index', () => {
     // DI and impedance may be solved on their own grids. Zipping them against the SPL
@@ -522,6 +609,43 @@ describe('result exporters', () => {
     expect(saved).toBe('C:/output/123_asro68/123_asro68.msh');
     expect(fetcher.mock.calls.map(([input]) => String(input))).toEqual([
       '/api/mesh-artifact/artifact-uuid', '/api/workspace/write-export',
+    ]);
+  });
+
+  it('adds both radiation artifacts to the permanent run archive only when retained', async () => {
+    const job: JobItem = {
+      id: 'archive-cardioid', run_number: 8, parent_job_id: null, status: 'complete', progress: 1,
+      stage: null, stage_message: null, created_at: '2026-08-20T10:00:00Z', queued_at: '2026-08-20T10:00:00Z',
+      started_at: '2026-08-20T10:00:01Z', completed_at: '2026-08-20T10:02:00Z', config_summary: {},
+      solve_options: {} as JobItem['solve_options'], has_results: true, has_mesh_artifact: false,
+      has_radiation_impedance_artifact: true, radiation_impedance_artifact_bytes: 3, persistence_warnings: [],
+      label: 'Cardioid', error_message: null, cancellation_requested: false, mesh_stats: null, script_snapshot: null,
+      design_revision: 1, polar_grid: {}, rating: null, exported_files: [], auto_export_completed_at: null,
+      auto_export_formats: {}, archived_at: null, raw_results_file: null, mesh_artifact_file: null, log_tail: [],
+    };
+    const writes: Array<{ subdirectory: string; members: Array<{ relative_path: string }> }> = [];
+    const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+      const path = String(input);
+      if (path === '/api/results/archive-cardioid') return new Response(JSON.stringify(result), { status: 200 });
+      if (path.endsWith('/presentation')) return new Response(JSON.stringify(radiation), { status: 200 });
+      if (path === '/api/radiation-impedance/archive-cardioid') return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+      if (path === '/api/workspace/write-export') {
+        const payload = JSON.parse(String(init?.body)) as { subdirectory: string; members: Array<{ relative_path: string }> };
+        writes.push(payload);
+        return new Response(JSON.stringify({
+          directory: `/workspace/${payload.subdirectory}`,
+          files: payload.members.map(({ relative_path }) => `/workspace/${payload.subdirectory}/${relative_path}`),
+        }), { status: 200 });
+      }
+      return new Response('not found', { status: 404 });
+    });
+
+    await archiveRunToWorkspace(job, preferencesStore.getSnapshot(), fetcher);
+    expect(writes[0].members.map(({ relative_path }) => relative_path)).toEqual([
+      '8_Cardioid.json',
+      '8_Cardioid.csv',
+      '8_Cardioid_radiation_impedance.npz',
+      '8_Cardioid_radiation_impedance.csv',
     ]);
   });
 });

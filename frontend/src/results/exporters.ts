@@ -1,6 +1,6 @@
 import { downloadBlob, downloadText } from '../api/designIo';
 import type { JobItem } from '../api/jobsSocket';
-import { fetchJobResults } from '../api/results';
+import { fetchJobResults, fetchRadiationImpedancePresentation, type RadiationImpedancePresentation } from '../api/results';
 import { archiveFolderForJob, exportStemForJob, exportSubdirectoryForJob } from '../jobs/exportNaming';
 import { buildDesignRecord, buildRunRecord } from '../jobs/runArchive';
 import { resultExportSnapshot } from './exportContext';
@@ -26,6 +26,7 @@ export interface ExportContext {
   polarConfig?: unknown;
   solveSettings?: WgSolveSettings | null;
   jobStem: string;
+  hasRadiationImpedanceArtifact?: boolean;
   /**
    * Where the bundle lands inside the workspace, `<design>/<run>` by default.
    * File names still use `jobStem`, so only the folder shape moved.
@@ -202,6 +203,54 @@ export function buildImpedanceCsv(result: ResultPayload): string {
   return `${rows.join('\n')}\n`;
 }
 
+function quotedCsv(value: unknown): string {
+  const text = String(value);
+  return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+}
+
+/** Lossless matrix interchange in a spreadsheet-friendly long form.
+ * Values are the archived engineering matrix, never the Metal solver
+ * convention; real/imaginary columns therefore retain the declared phase
+ * convention without wrapping or deriving a display-only phase angle. */
+export function buildRadiationImpedanceCsv(
+  presentation: RadiationImpedancePresentation,
+): string {
+  const rows = [
+    `# Quantity: ${presentation.quantity}`,
+    `# Units: ${presentation.units}`,
+    `# Phase time convention: ${presentation.phase_time_convention}`,
+    ...presentation.apertures.map(({ name, area_m2, tag }) => (
+      `# Aperture: ${quotedCsv(name)}, tag=${tag}, area_m2=${area_m2}`
+    )),
+    'Frequency_Hz,Curve,Receiver,Source_Set,Real_Pa_s_per_m3,Imaginary_Pa_s_per_m3',
+  ];
+  const names = presentation.apertures.map(({ name }) => name);
+  presentation.frequencies_hz.forEach((frequency, frequencyIndex) => {
+    names.forEach((receiver, receiverIndex) => names.forEach((source, sourceIndex) => {
+      rows.push([
+        frequency,
+        'engineering_matrix',
+        quotedCsv(receiver),
+        quotedCsv(source),
+        presentation.engineering_matrix.real[frequencyIndex]?.[receiverIndex]?.[sourceIndex] ?? '',
+        presentation.engineering_matrix.imaginary[frequencyIndex]?.[receiverIndex]?.[sourceIndex] ?? '',
+      ].join(','));
+    }));
+    const inPhase = presentation.in_phase_termination;
+    inPhase.aperture_names.forEach((receiver, receiverIndex) => {
+      rows.push([
+        frequency,
+        'in_phase_termination',
+        quotedCsv(receiver),
+        quotedCsv(inPhase.aperture_names.join('+')),
+        inPhase.real[frequencyIndex]?.[receiverIndex] ?? '',
+        inPhase.imaginary[frequencyIndex]?.[receiverIndex] ?? '',
+      ].join(','));
+    });
+  });
+  return `${rows.join('\n')}\n`;
+}
+
 export function buildVacs(result: ResultPayload, now = new Date()): string {
   const impedance = result.impedance;
   const plane = result.directivity?.horizontal ? 'horizontal' : Object.keys(result.directivity ?? {})[0];
@@ -305,6 +354,36 @@ async function postGeometry(context: ExportContext, kind: 'step' | 'stl' | 'prof
   const output = await fetchGeometry(context, kind, filename, profileKind);
   (context.saveBlob ?? downloadBlob)(output.blob, output.filename);
   return output.filename;
+}
+
+function requireArtifactJob(context: ExportContext): string {
+  if (!context.jobId) throw new Error('This export requires a completed job artifact.');
+  if (context.hasRadiationImpedanceArtifact === false) {
+    throw new Error('This run has no retained radiation-impedance matrix.');
+  }
+  return context.jobId;
+}
+
+async function radiationImpedancePresentation(
+  context: ExportContext,
+): Promise<RadiationImpedancePresentation> {
+  if (context.result?.radiation_impedance) return context.result.radiation_impedance;
+  const presentation = await fetchRadiationImpedancePresentation(
+    requireArtifactJob(context), context.fetcher ?? fetch,
+  );
+  if (!presentation) throw new Error('This run has no retained radiation-impedance matrix.');
+  return presentation;
+}
+
+async function radiationImpedanceNpz(context: ExportContext): Promise<string[]> {
+  const jobId = requireArtifactJob(context);
+  const response = await (context.fetcher ?? fetch)(
+    `/api/radiation-impedance/${encodeURIComponent(jobId)}`,
+  );
+  if (!response.ok) throw await responseError(response);
+  const filename = `${context.jobStem}_radiation_impedance.npz`;
+  (context.saveBlob ?? downloadBlob)(await response.blob(), filename);
+  return [filename];
 }
 
 function requireResult(context: ExportContext): ResultPayload {
@@ -540,6 +619,16 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
     (context.saveBlob ?? downloadBlob)(await response.blob(), filename);
     return [filename];
   }
+  if (format === 'radiation_impedance_npz') return radiationImpedanceNpz(context);
+  if (format === 'radiation_impedance_csv') {
+    const filename = `${context.jobStem}_radiation_impedance.csv`;
+    saveText(
+      buildRadiationImpedanceCsv(await radiationImpedancePresentation(context)),
+      filename,
+      'text/csv;charset=utf-8',
+    );
+    return [filename];
+  }
   if (format === 'on_axis_frd') {
     const result = requireResult(context);
     const filename = `${baseName}.frd`;
@@ -569,7 +658,7 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
     return files.map(({ filename }) => filename);
   }
   const result = requireResult(context);
-  const builders: Record<Exclude<ExportFormat, 'mwg_config' | 'step' | 'stl' | 'fusion_csv' | 'png' | 'pressure_basis' | 'on_axis_frd' | 'polar_frd' | 'vxp'>, () => [string, string, string]> = {
+  const builders: Record<Exclude<ExportFormat, 'mwg_config' | 'step' | 'stl' | 'fusion_csv' | 'png' | 'pressure_basis' | 'radiation_impedance_npz' | 'radiation_impedance_csv' | 'on_axis_frd' | 'polar_frd' | 'vxp'>, () => [string, string, string]> = {
     csv: () => [buildFrequencyCsv(result, context.preferences), `${baseName}.csv`, 'text/csv;charset=utf-8'],
     json: () => [buildFullResultsJson(result, context.preferences, now), `${baseName}.json`, 'application/json;charset=utf-8'],
     txt: () => [buildSummaryText(result, context.preferences, now), `${baseName}_summary.txt`, 'text/plain;charset=utf-8'],
@@ -694,6 +783,10 @@ export async function saveMeshArtifactToWorkspace(
  * how most people actually open a curve again.
  */
 export const ARCHIVE_FORMATS: ExportFormat[] = ['json', 'csv'];
+export const RADIATION_IMPEDANCE_ARCHIVE_FORMATS: ExportFormat[] = [
+  'radiation_impedance_npz',
+  'radiation_impedance_csv',
+];
 
 function textFile({ filename, text }: { filename: string; text: string }): WorkspaceFile {
   return { filename, blob: new Blob([text], { type: 'application/json' }) };
@@ -715,15 +808,18 @@ export async function archiveRunToWorkspace(
 ): Promise<string[]> {
   const subdirectory = exportSubdirectoryForJob(job);
   const bundle = await runWorkspaceExportBundle({
-    result: await fetchJobResults(job.id) as ResultPayload,
+    result: await fetchJobResults(job.id, fetcher) as ResultPayload,
     ...resultExportSnapshot(job),
     jobId: job.id,
     jobStem: exportStemForJob(job),
+    hasRadiationImpedanceArtifact: job.has_radiation_impedance_artifact,
     workspaceSubdirectory: subdirectory,
     designName: job.label ?? undefined,
     preferences,
     fetcher,
-  }, ARCHIVE_FORMATS);
+  }, job.has_radiation_impedance_artifact
+    ? [...ARCHIVE_FORMATS, ...RADIATION_IMPEDANCE_ARCHIVE_FORMATS]
+    : ARCHIVE_FORMATS);
   if (bundle.failures.length) {
     throw new Error(bundle.failures.map(({ format, reason }) => `${format} (${reason})`).join(', '));
   }

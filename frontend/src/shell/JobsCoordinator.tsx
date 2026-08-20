@@ -296,6 +296,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         ...resultExportSnapshot(job),
         jobId: job.id,
         jobStem: exportStemForJob(job),
+        hasRadiationImpedanceArtifact: job.has_radiation_impedance_artifact,
         workspaceSubdirectory: exportSubdirectoryForJob(job),
         designName: job.label ?? undefined,
         preferences,

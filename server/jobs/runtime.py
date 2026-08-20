@@ -1393,6 +1393,25 @@ class JobRuntime:
             export_pressure_basis, bases, json.loads(results_text), channel_id
         )
 
+    async def get_radiation_impedance_presentation(
+        self, job_id: str
+    ) -> dict[str, Any]:
+        """Read the stored matrix into its engineering presentation contract."""
+
+        from server.jobs.radiation_impedance import (
+            radiation_impedance_presentation,
+        )
+
+        artifact = await self.get_radiation_impedance(job_id)
+        try:
+            return await asyncio.to_thread(
+                radiation_impedance_presentation, artifact
+            )
+        except ValueError as exc:
+            raise JobResourceUnavailableError(
+                f"Radiation-impedance artifact could not be read: {exc}"
+            ) from exc
+
     async def recombine_results(
         self, job_id: str, spec: ChannelCombineSpec
     ) -> dict[str, Any]:

@@ -78,6 +78,15 @@ export function buildRunRecord(job: JobItem): WorkspaceTextFile {
         wallTimeSeconds: job.solve_wall_time_seconds ?? null,
       },
       mesh: job.mesh_stats ?? null,
+      artifacts: {
+        radiationImpedance: job.has_radiation_impedance_artifact ? {
+          matrix: `${exportStemForJob(job)}_radiation_impedance.npz`,
+          curves: `${exportStemForJob(job)}_radiation_impedance.csv`,
+          bytes: job.radiation_impedance_artifact_bytes ?? null,
+          units: 'Pa*s/m^3',
+          phaseTimeConvention: 'engineering_exp_plus_jwt',
+        } : null,
+      },
       configSummary: job.config_summary,
       timing: {
         createdAt: job.created_at,

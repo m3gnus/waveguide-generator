@@ -32,6 +32,7 @@ interface CatalogItem {
   needsResult: boolean;
   needsDesign: boolean;
   needsPressureBasis?: boolean;
+  needsRadiationArtifact?: boolean;
 }
 
 const FORMAT_CATALOG: CatalogItem[] = [
@@ -46,6 +47,8 @@ const FORMAT_CATALOG: CatalogItem[] = [
   { id: 'step', format: 'step', label: 'STEP solid', trailing: '.step', group: 'Geometry & design', needsResult: false, needsDesign: true },
   { id: 'mwg_config', format: 'mwg_config', label: 'Parameter config', trailing: '.cfg', group: 'Geometry & design', needsResult: false, needsDesign: true },
   { id: 'impedance_csv', format: 'impedance_csv', label: 'Impedance', trailing: '.csv', group: 'Advanced', needsResult: true, needsDesign: false },
+  { id: 'radiation_impedance_csv', format: 'radiation_impedance_csv', label: 'Radiation matrix curves', trailing: '.csv', group: 'Advanced', needsResult: false, needsDesign: false, needsRadiationArtifact: true },
+  { id: 'radiation_impedance_npz', format: 'radiation_impedance_npz', label: 'Lossless radiation matrix', trailing: '.npz', group: 'Advanced', needsResult: false, needsDesign: false, needsRadiationArtifact: true },
   { id: 'polar_csv', format: 'polar_csv', label: 'Polar directivity', trailing: '.csv', group: 'Advanced', needsResult: true, needsDesign: false },
   { id: 'txt', format: 'txt', label: 'Summary report', trailing: '.txt', group: 'Advanced', needsResult: true, needsDesign: false },
   { id: 'stl', format: 'stl', label: 'STL mesh', trailing: '.stl', group: 'Advanced', needsResult: false, needsDesign: true },
@@ -77,6 +80,9 @@ function unavailableFormatReason(
 ): string | undefined {
   if (item.id === 'polar_frd' && Object.keys(job.polar_grid ?? {}).length === 0) {
     return 'This run has no directivity data for a polar FRD set.';
+  }
+  if (item.needsRadiationArtifact && !job.has_radiation_impedance_artifact) {
+    return 'This run has no retained passive-cardioid radiation matrix.';
   }
   if (item.needsResult && !job.has_results) return 'This run\'s results were removed by retention.';
   if (item.needsPressureBasis && !job.has_pressure_basis_artifact) {
@@ -111,6 +117,7 @@ export function RunExportControl({ job, compact = false, onOpenExportSettings }:
     ...resultExportSnapshot(job),
     jobId: job.id,
     jobStem: exportStemForJob(job),
+    hasRadiationImpedanceArtifact: job.has_radiation_impedance_artifact,
     workspaceSubdirectory: exportSubdirectoryForJob(job),
     designName: job.label ?? undefined,
     preferences,

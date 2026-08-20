@@ -111,6 +111,36 @@ ResultEnvelope = Annotated[
 ]
 
 
+class RadiationImpedanceAperture(BaseModel):
+    name: str
+    area_m2: float
+    tag: int
+
+
+class RadiationImpedanceMatrix(BaseModel):
+    real: list[list[list[float]]]
+    imaginary: list[list[list[float]]]
+
+
+class RadiationImpedanceTermination(BaseModel):
+    aperture_names: list[str]
+    real: list[list[float]]
+    imaginary: list[list[float]]
+
+
+class RadiationImpedancePresentation(BaseModel):
+    """Plot/export view of the lossless NPZ, always in engineering convention."""
+
+    schema_version: Literal[1]
+    quantity: Literal["average_aperture_pressure_per_volume_velocity"]
+    units: Literal["Pa*s/m^3"]
+    phase_time_convention: Literal["engineering_exp_plus_jwt"]
+    frequencies_hz: list[float]
+    apertures: list[RadiationImpedanceAperture]
+    engineering_matrix: RadiationImpedanceMatrix
+    in_phase_termination: RadiationImpedanceTermination
+
+
 
 class _FastAPIJobsTransport:
     def __init__(self, websocket: WebSocket) -> None:
@@ -483,6 +513,23 @@ def create_jobs_router(
                 )
             },
         )
+
+    @router.get(
+        "/api/radiation-impedance/{job_id}/presentation",
+        response_model=RadiationImpedancePresentation,
+    )
+    async def radiation_impedance_presentation(
+        job_id: str,
+    ) -> RadiationImpedancePresentation:
+        try:
+            presentation = await runtime.get_radiation_impedance_presentation(job_id)
+        except JobNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Job not found") from exc
+        except JobConflictError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except JobResourceUnavailableError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return RadiationImpedancePresentation.model_validate(presentation)
 
     @router.get("/api/jobs/{job_id}/log", response_class=PlainTextResponse)
     async def job_log(job_id: str) -> PlainTextResponse:
