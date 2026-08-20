@@ -1051,6 +1051,8 @@ def test_multi_source_orchestration_uses_channel_bases_and_anchor_frame(
     assert isinstance(captured["config"]["source_velocity_profiles"][103], metal.AxialProfile)
     assert response["channel_order"] == ["left", "right"]
     assert set(response["channels"]) == {"left", "right"}
+    assert response["result_kind"] == "multi_channel"
+    assert response["result_contract_version"] == 2
     assert response["metadata"]["result_contract_version"] == 2
     assert "impedance" not in response["channels"]["left"]
     assert response["channels"]["left"]["metadata"]["impedance_omitted"] == (

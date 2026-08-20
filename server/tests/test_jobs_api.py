@@ -164,15 +164,21 @@ def test_dryrun_http_lifecycle_metadata_results_and_delete(
         app = create_app(data_dir=tmp_path)
         solve_body = _solve_body()
         solve_body["parent_job_id"] = "parent-job"
+        solve_body["client_request_id"] = "external-run-7"
+        solve_body["client_metadata"] = {"campaign": "api-contract"}
         status, raw = await _request(app, "POST", "/api/solve", body=solve_body)
         assert status == 200
-        job_id = json.loads(raw)["job_id"]
+        accepted = json.loads(raw)
+        job_id = accepted["job_id"]
+        assert accepted["client_request_id"] == "external-run-7"
         await app.state.jobs_runtime.wait_idle()
 
         status, raw = await _request(app, "GET", f"/api/status/{job_id}")
         assert status == 200
         detail = json.loads(raw)
         assert detail["status"] == "complete"
+        assert detail["client_request_id"] == "external-run-7"
+        assert detail["client_metadata"] == {"campaign": "api-contract"}
         assert detail["run_number"] == 1
         assert detail["parent_job_id"] == "parent-job"
         assert detail["solve_options"]["engine"] == "dryrun"
@@ -180,7 +186,12 @@ def test_dryrun_http_lifecycle_metadata_results_and_delete(
         assert detail["has_mesh_artifact"] is True
         status, raw = await _request(app, "GET", f"/api/results/{job_id}")
         assert status == 200
-        assert len(json.loads(raw)["frequencies"]) == 4
+        results = json.loads(raw)
+        assert len(results["frequencies"]) == 4
+        assert results["result_kind"] == "parametric"
+        assert results["client_request_id"] == "external-run-7"
+        assert results["client_metadata"] == {"campaign": "api-contract"}
+        assert results["provenance"]["request_sha256"]
         stored_mesh = app.state.jobs_runtime.store.get_mesh_artifact(job_id)
         assert stored_mesh is not None
         status, raw, headers = await _request_with_headers(

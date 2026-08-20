@@ -92,7 +92,11 @@ def create_jobs_router(
     router.add_event_handler("startup", runtime.start)
     router.add_event_handler("shutdown", runtime.shutdown)
 
-    @router.post("/api/solve", response_model=SolveAccepted)
+    @router.post(
+        "/api/solve",
+        response_model=SolveAccepted,
+        response_model_exclude_none=True,
+    )
     async def submit_solve(body: SolveRequest) -> SolveAccepted:
         try:
             job_id = await runtime.submit(body)
@@ -100,7 +104,10 @@ def create_jobs_router(
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except EngineUnavailableError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
-        return SolveAccepted(job_id=job_id)
+        return SolveAccepted(
+            job_id=job_id,
+            client_request_id=body.client_request_id,
+        )
 
     @router.post("/api/stop/{job_id}", response_model=StopResponse)
     async def stop_job(job_id: str) -> StopResponse:
