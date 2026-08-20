@@ -127,11 +127,16 @@ rem which the exit-10 relaunch depends on. PowerShell's Tee-Object preserves
 rem $LASTEXITCODE from the called script, and PowerShell ships with Windows, so
 rem this adds no dependency.
 rem
-rem Paths reach PowerShell through the environment, never interpolated by cmd:
-rem '%WG_ROOT%' would be substituted before PowerShell ever parsed the line, so
-rem a path containing a quote or an apostrophe would rewrite the script.
+rem Do not invoke the .bat directly from Windows PowerShell. On legacy Windows
+rem PowerShell that handoff can encode its path with the ANSI code page before
+rem cmd.exe reads it with the OEM code page. A TEMP path under a non-ASCII user
+rem name is then changed and fails with Windows error 3. Invoke ComSpec instead
+rem and give it an ASCII-only command containing environment
+rem references; cmd expands those references from its Unicode environment.
+rem Double %% survives this outer batch parse as one literal %% for the child.
+rem [char]34 supplies quotes without nesting them in cmd's -Command argument.
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$wgArgs = @(for ($i = 0; $i -lt [int]$env:WG_INSTALL_ARG_COUNT; $i++) { [Environment]::GetEnvironmentVariable('WG_INSTALL_ARG_' + $i) }); & $env:WG_TMP_INSTALLER --root $env:WG_ROOT --no-launch @wgArgs 2>&1 | Tee-Object -FilePath $env:WG_LOG -Append; exit $LASTEXITCODE"
+  "$q = [char]34; $cmdLine = 'call ' + $q + '%%WG_TMP_INSTALLER%%' + $q + ' --root ' + $q + '%%WG_ROOT%%' + $q + ' --no-launch'; for ($i = 0; $i -lt [int]$env:WG_INSTALL_ARG_COUNT; $i++) { $cmdLine += ' ' + $q + '%%WG_INSTALL_ARG_' + $i + '%%' + $q }; & $env:ComSpec /d /v:off /s /c $cmdLine 2>&1 | Tee-Object -FilePath $env:WG_LOG -Append; exit $LASTEXITCODE"
 set "RUN_RESULT=%ERRORLEVEL%"
 del "%WG_TMP_INSTALLER%" >nul 2>&1
 exit /b %RUN_RESULT%
