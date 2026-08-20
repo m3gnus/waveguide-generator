@@ -49,4 +49,10 @@ then
   fail "The selected Python environment cannot import FastAPI and Uvicorn."
 fi
 
+"$PYTHON" -m scripts.build_frontend_if_stale
+if [[ ! -f "$REPO_DIR/frontend/dist/index.html" ]]; then
+  fail "The interface has not been built yet: frontend/dist/index.html is missing.
+Run 'cd frontend && npm ci && npm run build' in the checkout, then run this launcher again."
+fi
+
 exec "$PYTHON" -m launchers.statusapp "$@"

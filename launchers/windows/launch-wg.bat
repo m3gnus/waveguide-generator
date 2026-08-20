@@ -63,6 +63,8 @@ call :python_can_serve
 if errorlevel 1 goto :unusable_environment
 
 :start_server
+"%PYTHON%" -m scripts.build_frontend_if_stale
+if not exist "frontend\dist\index.html" goto :missing_frontend
 call :gui_mode_requested %*
 if errorlevel 1 goto :start_terminal
 call :select_pythonw
@@ -248,6 +250,15 @@ echo        not be run at all:
 echo          %PYTHONW%
 echo        Run with --no-gui to see terminal diagnostics, or reinstall with:
 echo          installers\windows\install-and-update.bat
+call :pause_when_double_clicked
+exit /b 1
+
+:missing_frontend
+echo.
+echo ERROR: The interface has not been built yet:
+echo        frontend\dist\index.html is missing.
+echo        Run: cd frontend ^&^& npm ci ^&^& npm run build
+echo        Then run this launcher again.
 call :pause_when_double_clicked
 exit /b 1
 
