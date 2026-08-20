@@ -9,6 +9,7 @@ import { designWireWithSolveSettings } from '../stores/designWire';
 import type { WgSolveSettings } from '../stores/wgSolveBlock';
 import { resolveChartTheme, type ExportFormat, type Preferences } from '../prefs/preferences';
 import { applySmoothing, type SmoothingValue } from './smoothing';
+import { buildDerivedAcousticsCsv, buildDerivedAcousticsJson } from './derivedAcoustics';
 import { buildOnAxisFrd, buildPolarFrdSet } from './frd';
 import { complexToDb, impedanceUnits } from './mappers';
 import { propagationReference } from './phaseConvention';
@@ -629,6 +630,23 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
     );
     return [filename];
   }
+  if (format === 'derived_acoustics') {
+    const result = requireResult(context);
+    const files = [
+      {
+        content: buildDerivedAcousticsCsv(result),
+        filename: `${baseName}_derived_acoustics.csv`,
+        type: 'text/csv;charset=utf-8',
+      },
+      {
+        content: buildDerivedAcousticsJson(result),
+        filename: `${baseName}_derived_acoustics.json`,
+        type: 'application/json;charset=utf-8',
+      },
+    ];
+    files.forEach(({ content, filename, type }) => saveText(content, filename, type));
+    return files.map(({ filename }) => filename);
+  }
   if (format === 'on_axis_frd') {
     const result = requireResult(context);
     const filename = `${baseName}.frd`;
@@ -658,7 +676,7 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
     return files.map(({ filename }) => filename);
   }
   const result = requireResult(context);
-  const builders: Record<Exclude<ExportFormat, 'mwg_config' | 'step' | 'stl' | 'fusion_csv' | 'png' | 'pressure_basis' | 'radiation_impedance_npz' | 'radiation_impedance_csv' | 'on_axis_frd' | 'polar_frd' | 'vxp'>, () => [string, string, string]> = {
+  const builders: Record<Exclude<ExportFormat, 'mwg_config' | 'step' | 'stl' | 'fusion_csv' | 'png' | 'pressure_basis' | 'derived_acoustics' | 'radiation_impedance_npz' | 'radiation_impedance_csv' | 'on_axis_frd' | 'polar_frd' | 'vxp'>, () => [string, string, string]> = {
     csv: () => [buildFrequencyCsv(result, context.preferences), `${baseName}.csv`, 'text/csv;charset=utf-8'],
     json: () => [buildFullResultsJson(result, context.preferences, now), `${baseName}.json`, 'application/json;charset=utf-8'],
     txt: () => [buildSummaryText(result, context.preferences, now), `${baseName}_summary.txt`, 'text/plain;charset=utf-8'],
@@ -680,7 +698,7 @@ export async function runExportBundle(context: ExportContext, formats = context.
   const saveText = context.saveText ?? downloadText;
   // Polar FRD owns every channel as one set so its manual Workspace write stays
   // one request. The other result formats dispatch independently per channel.
-  const resultFormats = new Set<ExportFormat>(['png', 'pressure_basis', 'on_axis_frd', 'csv', 'json', 'txt', 'polar_csv', 'impedance_csv', 'zma', 'vacs']);
+  const resultFormats = new Set<ExportFormat>(['png', 'pressure_basis', 'derived_acoustics', 'on_axis_frd', 'csv', 'json', 'txt', 'polar_csv', 'impedance_csv', 'zma', 'vacs']);
   for (const format of formats) {
     const allChannels = context.result && !context.channelId && resultFormats.has(format)
       ? resultChannels(context.result) : [];
