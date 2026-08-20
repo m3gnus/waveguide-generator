@@ -20,6 +20,7 @@ import pytest
 
 from server.cadlink.ingest import ingest_bundle
 from server.cadlink.store import CadLinkStore
+from server.mesh.imported import build_imported_mesh
 
 
 def _horn_points(n_phi: int = 16, n_length: int = 4) -> tuple[np.ndarray, np.ndarray]:
@@ -406,6 +407,15 @@ def test_a_leaking_reduced_domain_falls_back_to_the_full_domain(
         )
 
     monkeypatch.setattr(step_import, "postprocess_mesh", puncture)
+    # Meshing an external return normally happens in a disposable child process
+    # (``docs/plans/STEP-PARSER-ISOLATION.md``), which imports its own fresh
+    # mesher and so cannot see the puncture injected here. This test is about
+    # what the *fallback* does with a leaking reduced domain, so it runs the
+    # builder in process; the boundary itself is covered by
+    # ``test_cadlink_isolation.py``.
+    monkeypatch.setattr(
+        "server.cadlink.ingest.build_imported_mesh_isolated", build_imported_mesh
+    )
     bundle = _horn_bundle(tmp_path, "capped")
     record = _ingest(tmp_path, bundle)
 
