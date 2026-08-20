@@ -181,6 +181,23 @@ describe('chart data mappers', () => {
     expect(expandResultChannels('job-13', 'Run 13', result())[0].result).toBeDefined();
   });
 
+  // The coupled campaign appends its derived output last in `channel_order`.
+  // It is a channel like any other here, which is the point: nothing about the
+  // chart list special-cases it, so it can only go missing if the ordering
+  // logic itself breaks.
+  it('lists the derived passive-cardioid channel alongside the drive channels', () => {
+    const payload: JobResults = {
+      frequencies: [],
+      channel_order: ['drive-mf', 'drive-port', 'passive_cardioid'],
+      channels: { 'drive-mf': result(1), 'drive-port': result(2), passive_cardioid: result(3) },
+    };
+    expect(expandResultChannels('job-77', 'Run 77', payload).map(({ id, label }) => ({ id, label }))).toEqual([
+      { id: 'job-77#drive-mf', label: 'Run 77 · drive-mf' },
+      { id: 'job-77#drive-port', label: 'Run 77 · drive-port' },
+      { id: 'job-77#passive_cardioid', label: 'Run 77 · passive_cardioid' },
+    ]);
+  });
+
   it('appends unordered channels and preserves an empty-channel wrapper', () => {
     const payload: JobResults = {
       frequencies: [],

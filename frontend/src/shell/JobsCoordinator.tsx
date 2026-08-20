@@ -5,6 +5,7 @@ import { resolveEngine, submitDesign, submitImported, type ImportedSolveSubmissi
 import { useCapabilities, useCapabilityRefreshOnReconnect } from '../jobs/useCapabilities';
 import { JobAutomation } from '../jobs/automation';
 import { exportStemForJob, exportSubdirectoryForJob } from '../jobs/exportNaming';
+import { explainImportedRefusal } from '../jobs/importedRefusals';
 import { buildImportedSubmission, importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { advanceRunSequence, nextRunLabel } from '../jobs/runNaming';
 import { currentRunNameSource } from '../jobs/runNameSource';
@@ -229,11 +230,13 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       // The CAD document names its own runs; see jobs/runNameSource.
       const designName = currentRunNameSource().name;
       const label = nextRunLabel(designName, preferencesStore.getSnapshot(), now());
-      const jobId = await submitImported(
-        effectiveSubmission,
-        fetch,
-        label,
-      );
+      // A typed refusal is the server naming a condition; the user needs the
+      // remedy. Translating here covers every imported entry point at once.
+      const jobId = await submitImported(effectiveSubmission, fetch, label).catch((error) => {
+        throw error instanceof Error
+          ? new Error(explainImportedRefusal(error.message))
+          : error;
+      });
       acceptSubmittedLabel(designName);
       // A Fusion-authored request is retired by its ledger entry, not by the
       // marker on disk. Reporting the job from the one place every imported
