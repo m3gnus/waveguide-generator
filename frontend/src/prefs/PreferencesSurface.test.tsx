@@ -35,8 +35,8 @@ describe('preferences surfaces', () => {
     expect(host.querySelector<HTMLInputElement>('[aria-label="Directivity angular guide interval"]')?.value).toBe('10');
     expect(host.querySelector<HTMLSelectElement>('[aria-label="Results layout count"]')?.options).toHaveLength(5);
     expect(host.querySelector('[aria-label="Export counter"]')).toBeNull();
-    expect(host.querySelectorAll('[aria-label^="Manual export:"]')).toHaveLength(18);
-    expect(host.querySelectorAll('[aria-label^="Automatic export:"]')).toHaveLength(18);
+    expect(host.querySelectorAll('[aria-label^="Manual export:"]')).toHaveLength(20);
+    expect(host.querySelectorAll('[aria-label^="Automatic export:"]')).toHaveLength(20);
     expect(host.textContent).toContain('Preferred manual export formats');
     expect(host.textContent).toContain('Automatic export formats');
     expect(host.textContent).toContain('Auto-export completed jobs');
