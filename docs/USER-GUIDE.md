@@ -110,14 +110,16 @@ silently overwritten.
 
 Each completed job has its own export menu. Current result formats include chart PNGs,
 on-axis FRD, a horizontal/vertical FRD polar set for VituixCAD, frequency CSV, full
-JSON, polar and impedance CSV, and a summary report. Geometry/design formats use the
-job's stored snapshot, never the current editor. Passive-cardioid jobs add a long-form
+JSON, per-channel derived-acoustics CSV/JSON, a self-contained HTML run report, polar
+and impedance CSV, and a summary report. Imported Metal runs also expose their retained
+complex pressure basis per drive channel. Geometry/design formats use the job's stored
+snapshot, never the current editor. Passive-cardioid jobs add a long-form
 radiation-matrix CSV and the lossless NPZ. The CSV uses Pa·s/m³ and engineering
 `exp(+jωt)` real/imaginary values; the NPZ also retains the raw solver-convention
-matrix for exact downstream work. **Send to CAD** is the first action
-in this menu and sends that same stored snapshot. Failed formats are reported
-individually so successful files are not hidden. The current parametric design can
-also be sent from the top-left design menu under **Export → Send to CAD**.
+matrix for exact downstream work. **Send to CAD** is the first action in this menu
+and sends that same stored snapshot. Failed formats are reported individually so
+successful files are not hidden. The current parametric design can also be sent from
+the top-left design menu under **Export → Send to CAD**.
 
 ### The run archive
 
@@ -129,7 +131,7 @@ Documents/Waveguide Generator/
   runs/<design>/
     design.json                 which design this folder belongs to
     cad/<return-state>.f3d      the Fusion document a CAD return came from
-    <run>/                      run.json, results, and any exported formats
+    <run>/                      run.json, results, derived sidecars, *_report.html
 ```
 
 A design keeps one folder across a rename, and its parametric and CAD-link runs sit
@@ -138,7 +140,8 @@ solved, from which CAD document and return state, and with which settings.
 When a run owns a radiation matrix, both its CSV presentation and lossless NPZ are
 archived beside the ordinary result JSON and frequency CSV.
 
-**Archive every completed run** is on by default. Results in the app's job database
+Every archive includes full JSON, frequency CSV, derived-acoustics sidecars, and a
+self-contained HTML report. **Archive every completed run** is on by default. Results in the app's job database
 are kept for 30 days, or until the run limit is passed, and rating a run exempts it;
 the Workspace archive is kept until you delete it. Archiving is frontend automation,
 so a run solved through the CLI is not automatically added to this design-grouped

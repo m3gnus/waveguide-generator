@@ -45,6 +45,7 @@ const FORMAT_CATALOG: CatalogItem[] = [
   { id: 'json', format: 'json', label: 'Full results', trailing: '.json', group: 'Results', needsResult: true, needsDesign: false },
   { id: 'pressure_basis', format: 'pressure_basis', label: 'Complex pressure basis', trailing: '.npz', group: 'Results', needsResult: true, needsDesign: false, needsPressureBasis: true },
   { id: 'derived_acoustics', format: 'derived_acoustics', label: 'Derived acoustics', trailing: '.csv + .json', group: 'Results', needsResult: true, needsDesign: false },
+  { id: 'html_report', format: 'html_report', label: 'Static run report', trailing: '.html', group: 'Results', needsResult: true, needsDesign: false },
   { id: 'step', format: 'step', label: 'STEP solid', trailing: '.step', group: 'Geometry & design', needsResult: false, needsDesign: true },
   { id: 'mwg_config', format: 'mwg_config', label: 'Parameter config', trailing: '.cfg', group: 'Geometry & design', needsResult: false, needsDesign: true },
   { id: 'impedance_csv', format: 'impedance_csv', label: 'Impedance', trailing: '.csv', group: 'Advanced', needsResult: true, needsDesign: false },

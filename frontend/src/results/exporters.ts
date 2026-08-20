@@ -14,6 +14,7 @@ import { buildOnAxisFrd, buildPolarFrdSet } from './frd';
 import { complexToDb, impedanceUnits } from './mappers';
 import { propagationReference } from './phaseConvention';
 import { resultChannelFileSuffix, resultChannels, scopeResultChannel, type ResultPayload } from './types';
+import { buildRunReportHtml } from './runReport';
 import { buildVituixCadProjectFiles, buildZma, hasElectricalImpedance } from './vituixcad';
 
 export interface ExportContext {
@@ -647,6 +648,15 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
     files.forEach(({ content, filename, type }) => saveText(content, filename, type));
     return files.map(({ filename }) => filename);
   }
+  if (format === 'html_report') {
+    if (!context.result) throw new Error('This export requires completed result data.');
+    const filename = `${context.jobStem}_report.html`;
+    saveText(buildRunReportHtml(context.result, {
+      title: context.designName ?? context.jobStem,
+      generatedAt: now,
+    }), filename, 'text/html;charset=utf-8');
+    return [filename];
+  }
   if (format === 'on_axis_frd') {
     const result = requireResult(context);
     const filename = `${baseName}.frd`;
@@ -676,7 +686,7 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
     return files.map(({ filename }) => filename);
   }
   const result = requireResult(context);
-  const builders: Record<Exclude<ExportFormat, 'mwg_config' | 'step' | 'stl' | 'fusion_csv' | 'png' | 'pressure_basis' | 'derived_acoustics' | 'radiation_impedance_npz' | 'radiation_impedance_csv' | 'on_axis_frd' | 'polar_frd' | 'vxp'>, () => [string, string, string]> = {
+  const builders: Record<Exclude<ExportFormat, 'mwg_config' | 'step' | 'stl' | 'fusion_csv' | 'png' | 'pressure_basis' | 'derived_acoustics' | 'html_report' | 'radiation_impedance_npz' | 'radiation_impedance_csv' | 'on_axis_frd' | 'polar_frd' | 'vxp'>, () => [string, string, string]> = {
     csv: () => [buildFrequencyCsv(result, context.preferences), `${baseName}.csv`, 'text/csv;charset=utf-8'],
     json: () => [buildFullResultsJson(result, context.preferences, now), `${baseName}.json`, 'application/json;charset=utf-8'],
     txt: () => [buildSummaryText(result, context.preferences, now), `${baseName}_summary.txt`, 'text/plain;charset=utf-8'],
@@ -800,7 +810,9 @@ export async function saveMeshArtifactToWorkspace(
  * after the job database has pruned it. CSV is there because a spreadsheet is
  * how most people actually open a curve again.
  */
-export const ARCHIVE_FORMATS: ExportFormat[] = ['json', 'csv'];
+export const ARCHIVE_FORMATS: ExportFormat[] = [
+  'json', 'csv', 'derived_acoustics', 'html_report',
+];
 export const RADIATION_IMPEDANCE_ARCHIVE_FORMATS: ExportFormat[] = [
   'radiation_impedance_npz',
   'radiation_impedance_csv',
@@ -835,6 +847,10 @@ export async function archiveRunToWorkspace(
     designName: job.label ?? undefined,
     preferences,
     fetcher,
+    // Archive retries must reproduce identical JSON/report bytes. A wall-clock
+    // timestamp makes a completed run differ every time the metadata write is
+    // retried after an app restart; the run's completion time is its timestamp.
+    now: new Date(job.completed_at ?? job.created_at),
   }, job.has_radiation_impedance_artifact
     ? [...ARCHIVE_FORMATS, ...RADIATION_IMPEDANCE_ARCHIVE_FORMATS]
     : ARCHIVE_FORMATS);

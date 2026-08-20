@@ -53,6 +53,7 @@ export const EXPORT_FORMATS = [
   { id: 'json', label: 'Full Results JSON' },
   { id: 'pressure_basis', label: 'Complex Pressure Basis (NPZ)' },
   { id: 'derived_acoustics', label: 'Derived Acoustics (CSV + JSON)' },
+  { id: 'html_report', label: 'Static Run Report (HTML)' },
   { id: 'txt', label: 'Summary Text Report' },
   { id: 'polar_csv', label: 'Polar Directivity CSV' },
   { id: 'impedance_csv', label: 'Impedance CSV' },
