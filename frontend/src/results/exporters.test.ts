@@ -4,7 +4,20 @@ import { preferencesStore } from '../prefs/preferences';
 import type { ResultPayload } from './types';
 import type { RadiationImpedancePresentation } from '../api/results';
 import { archiveRunToWorkspace, buildChartRenderPayload, buildFrequencyCsv, buildFullResultsJson, buildImpedanceCsv, buildPolarCsv, buildRadiationImpedanceCsv, buildSummaryText, downloadMeshArtifact, runExportBundle, runExportFormat, runWorkspaceExportBundle, saveMeshArtifactToWorkspace } from './exporters';
-import type { JobItem } from '../api/jobsSocket';
+import type { CadIdentityProvenance, JobItem } from '../api/jobsSocket';
+
+const cadIdentity: CadIdentityProvenance = {
+  schema_version: 1,
+  ingest_id: 'wgi_01J5A8QK3M9T2XVBH0RD7NWE6C',
+  selected_instance_id: 'instance-a',
+  solver_anchor_instance_id: 'instance-a',
+  instances: [{
+    instance_id: 'instance-a', design_id: 'wgd-shared', body_object_ids: ['body-a'],
+    assembly_from_link: [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]],
+    source_ids: ['source-a'], default_drive_channel_ids: ['left'],
+  }],
+  drive_channels: [{ drive_channel_id: 'left', source_ids: ['source-a'], instance_ids: ['instance-a'] }],
+};
 
 const result: ResultPayload = {
   frequencies: [100, 200],
@@ -44,6 +57,30 @@ describe('result exporters', () => {
     expect(buildSummaryText(result, preferences, new Date('2026-08-04T10:00:00Z'))).toContain('Average SPL: 90.00 dB');
     expect(buildPolarCsv(result)).toContain('200,horizontal,-90,-20');
     expect(buildImpedanceCsv(result)).toContain('200,,-0.5');
+  });
+
+  it('adds one versioned CAD identity sidecar to a manual result bundle', async () => {
+    const saveText = vi.fn();
+    const bundle = await runExportBundle({
+      result,
+      jobId: 'job-a',
+      jobStem: 'horn_1',
+      cadIdentity,
+      preferences: preferencesStore.getSnapshot(),
+      saveText,
+    }, ['csv']);
+
+    expect(bundle).toEqual({
+      files: ['horn_1.csv', 'horn_1_cad_identity.json'], failures: [],
+    });
+    const sidecar = JSON.parse(String(saveText.mock.calls[1][0]));
+    expect(saveText.mock.calls[1][1]).toBe('horn_1_cad_identity.json');
+    expect(sidecar).toEqual({
+      schema: 'waveguide-generator.cad-result-provenance',
+      schema_version: 1,
+      job_id: 'job-a',
+      identity: cadIdentity,
+    });
   });
   it('exports the engineering radiation matrix and reduced port loads with explicit semantics', () => {
     const csv = buildRadiationImpedanceCsv(radiation);

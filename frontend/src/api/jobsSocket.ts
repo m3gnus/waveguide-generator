@@ -91,6 +91,26 @@ export interface JobItem {
 }
 
 /** The CAD provenance a run keeps so its archive stays traceable. */
+export interface CadIdentityProvenance {
+  schema_version: 1;
+  ingest_id: string;
+  selected_instance_id: string | null;
+  solver_anchor_instance_id: string | null;
+  instances: Array<{
+    instance_id: string;
+    design_id: string | null;
+    body_object_ids: string[];
+    assembly_from_link: number[][];
+    source_ids: string[];
+    default_drive_channel_ids: string[];
+  }>;
+  drive_channels: Array<{
+    drive_channel_id: string;
+    source_ids: string[];
+    instance_ids: string[];
+  }>;
+}
+
 export interface CadSource {
   ingest_id: string | null;
   design_id: string | null;
@@ -100,6 +120,7 @@ export interface CadSource {
   manifest_sha256: string | null;
   document_name: string | null;
   return_state_hash: string | null;
+  identity?: CadIdentityProvenance | null;
 }
 
 export interface JobsSnapshot {
@@ -224,7 +245,16 @@ function isNullableTimestamp(value: unknown): value is string | null {
 function isCadSource(value: unknown): value is CadSource {
   return isRecord(value)
     && (['ingest_id', 'design_id', 'lineage_id', 'archive_stem', 'manifest_sha256', 'document_name', 'return_state_hash'] as const)
-      .every((key) => !hasOwn(value, key) || isNullableString(value[key]));
+      .every((key) => !hasOwn(value, key) || isNullableString(value[key]))
+    && (!hasOwn(value, 'identity') || value.identity === null || (
+      isRecord(value.identity)
+      && value.identity.schema_version === 1
+      && typeof value.identity.ingest_id === 'string'
+      && (value.identity.selected_instance_id === null || typeof value.identity.selected_instance_id === 'string')
+      && (value.identity.solver_anchor_instance_id === null || typeof value.identity.solver_anchor_instance_id === 'string')
+      && Array.isArray(value.identity.instances)
+      && Array.isArray(value.identity.drive_channels)
+    ));
 }
 
 function isAutoExportFormats(value: unknown): value is JobItem['auto_export_formats'] {

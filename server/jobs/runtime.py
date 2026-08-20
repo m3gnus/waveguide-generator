@@ -31,6 +31,7 @@ from server.design.textcfg import parse
 from server.engines.registry import EngineRegistry, create_engine as get_engine
 from server.jobs.legacy_design import resolve_job_design
 from server.jobs.models import (
+    CadIdentityProvenance,
     ChannelCombineSpec,
     FieldPlaneRequest,
     ImportedGeometrySource,
@@ -478,6 +479,7 @@ class _ImportedSubmission:
     anchor_lineage_id: str | None
     archive_stem: str | None
     document: dict[str, Any]
+    identity: dict[str, Any] | None
     anchor_snapshot: dict[str, Any] | None
 
 
@@ -491,6 +493,124 @@ def _imported_record_sources(record: Mapping[str, Any]) -> list[dict[str, Any]]:
             "the ingestion record has no authoritative source inventory; re-ingest the CAD return",
         )
     return [dict(source) for source in sources]
+
+
+def _cad_identity_provenance(
+    record: Mapping[str, Any], geometry: ImportedGeometrySource
+) -> dict[str, Any] | None:
+    """Resolve submitted drive addresses against the immutable CAD graph.
+
+    Old ingestion rows did not retain this graph and remain solvable, but a row
+    that claims to carry identity must be internally complete.  In particular,
+    WG never substitutes a design ID, body fingerprint, name, or source order
+    for the CAD-authored placement ID.
+    """
+
+    raw_identity = record.get("identity")
+    if raw_identity is None:
+        return None
+    if not isinstance(raw_identity, Mapping):
+        raise ImportedSolveRefusal(
+            "cad_identity_invalid",
+            "the ingestion record's CAD identity graph is unreadable; re-ingest the CAD return",
+        )
+    version = raw_identity.get("schema_version")
+    if version not in {None, 1}:
+        raise ImportedSolveRefusal(
+            "cad_identity_unsupported",
+            f"the ingestion record uses unsupported CAD identity schema {version!r}; upgrade WG",
+        )
+    raw_instances = raw_identity.get("instances")
+    if not isinstance(raw_instances, list) or not all(
+        isinstance(instance, Mapping) for instance in raw_instances
+    ):
+        raise ImportedSolveRefusal(
+            "cad_identity_invalid",
+            "the ingestion record has no authoritative CAD instance inventory; re-ingest the CAD return",
+        )
+
+    instance_ids = [str(instance.get("instance_id") or "") for instance in raw_instances]
+    if any(not instance_id for instance_id in instance_ids) or len(set(instance_ids)) != len(instance_ids):
+        raise ImportedSolveRefusal(
+            "cad_identity_invalid",
+            "the ingestion record's CAD instance IDs are empty or duplicated; re-ingest the CAD return",
+        )
+    known_instances = set(instance_ids)
+    for address in ("selected_instance_id", "solver_anchor_instance_id"):
+        value = raw_identity.get(address)
+        if value is not None and str(value) not in known_instances:
+            raise ImportedSolveRefusal(
+                "cad_identity_invalid",
+                f"the ingestion record's {address} does not address one retained instance; re-ingest the CAD return",
+            )
+
+    sources = _imported_record_sources(record)
+    source_by_id = {str(source.get("id") or ""): source for source in sources}
+    inventory_owner: dict[str, str] = {}
+    for instance in raw_instances:
+        instance_id = str(instance["instance_id"])
+        inventory_sources = instance.get("source_ids")
+        if not isinstance(inventory_sources, list):
+            raise ImportedSolveRefusal(
+                "cad_identity_invalid",
+                "the ingestion record's CAD source inventory is unreadable; re-ingest the CAD return",
+            )
+        for raw_source_id in inventory_sources:
+            source_id = str(raw_source_id)
+            if source_id not in source_by_id or source_id in inventory_owner:
+                raise ImportedSolveRefusal(
+                    "cad_identity_invalid",
+                    "the ingestion record's CAD sources are unknown or assigned to multiple instances; re-ingest the CAD return",
+                )
+            inventory_owner[source_id] = instance_id
+
+    drive_channels: list[dict[str, Any]] = []
+    for channel in geometry.drive_channels:
+        owners: set[str] = set()
+        for source_id in channel.source_ids:
+            source = source_by_id[source_id]
+            declared_owner = source.get("instance_id")
+            declared_owner = str(declared_owner) if declared_owner is not None else None
+            inventory_instance = inventory_owner.get(source_id)
+            if declared_owner is not None and declared_owner not in known_instances:
+                raise ImportedSolveRefusal(
+                    "cad_identity_invalid",
+                    f"source {source_id!r} names unknown CAD instance {declared_owner!r}; re-ingest the CAD return",
+                )
+            if declared_owner != inventory_instance and (
+                declared_owner is not None or inventory_instance is not None
+            ):
+                raise ImportedSolveRefusal(
+                    "cad_identity_invalid",
+                    f"source {source_id!r} contradicts the retained CAD instance inventory; re-ingest the CAD return",
+                )
+            owner = inventory_instance
+            if owner is not None:
+                owners.add(owner)
+        drive_channels.append(
+            {
+                "drive_channel_id": channel.id,
+                "source_ids": list(channel.source_ids),
+                "instance_ids": sorted(owners),
+            }
+        )
+
+    payload = {
+        "schema_version": 1,
+        "ingest_id": geometry.ingest_id,
+        "selected_instance_id": raw_identity.get("selected_instance_id"),
+        "solver_anchor_instance_id": raw_identity.get("solver_anchor_instance_id"),
+        "instances": [dict(instance) for instance in raw_instances],
+        "drive_channels": drive_channels,
+    }
+    try:
+        return CadIdentityProvenance.model_validate(payload).model_dump(mode="json")
+    except Exception as exc:
+        raise ImportedSolveRefusal(
+            "cad_identity_invalid",
+            "the ingestion record's CAD identity graph is incomplete; re-ingest the CAD return",
+            details={"validation_error": str(exc)},
+        ) from exc
 
 
 def _validate_passive_cardioid_topology(
@@ -952,6 +1072,7 @@ class JobRuntime:
                 "archive_stem": imported.archive_stem,
                 "manifest_sha256": request.geometry.manifest_sha256,
                 "document": imported.document,
+                "identity": imported.identity,
             }
         job_record = {
             "id": job_id,
@@ -1207,6 +1328,7 @@ class JobRuntime:
                         "Could not parse anchor design snapshot %s for imported job",
                         record_anchor_design_id,
                     )
+        identity = _cad_identity_provenance(record, geometry)
         return _ImportedSubmission(
             record=dict(record),
             msh_text=msh_text,
@@ -1216,6 +1338,7 @@ class JobRuntime:
             anchor_lineage_id=anchor_lineage_id,
             archive_stem=archive_stem,
             document=dict(record.get("document") or {}),
+            identity=identity,
             anchor_snapshot=anchor_snapshot,
         )
 
@@ -1782,6 +1905,12 @@ class JobRuntime:
                 if isinstance(row.get("task_metadata"), Mapping)
                 else {}
             )
+            imported_metadata = task_metadata.get("imported_geometry")
+            imported_metadata = (
+                imported_metadata if isinstance(imported_metadata, Mapping) else {}
+            )
+            cad_identity = imported_metadata.get("identity")
+            cad_identity = cad_identity if isinstance(cad_identity, Mapping) else None
             symmetry_metadata = dict(task_metadata.get("symmetry") or {})
             resolved_quadrants = int(
                 symmetry_metadata.get("resolved_quadrants", 1234)
@@ -1874,6 +2003,7 @@ class JobRuntime:
                     effective_request=effective_request,
                     symmetry_metadata=symmetry_metadata,
                     imported_record=imported_record,
+                    cad_identity=cad_identity,
                 )
                 return
             event = self.store.start_job(
@@ -2053,6 +2183,7 @@ class JobRuntime:
         effective_request: SolveRequest | None = None,
         symmetry_metadata: Mapping[str, Any] | None = None,
         imported_record: Mapping[str, Any] | None = None,
+        cad_identity: Mapping[str, Any] | None = None,
     ) -> None:
         """Run one real adapter while preserving Batch J's lifecycle seam.
 
@@ -2300,6 +2431,7 @@ class JobRuntime:
                     request,
                     effective_request=effective_request,
                     symmetry_metadata=symmetry_metadata,
+                    cad_identity=cad_identity,
                 ),
                 {
                     "status": "complete",
@@ -2715,6 +2847,7 @@ class JobRuntime:
         *,
         effective_request: SolveRequest | None = None,
         symmetry_metadata: Mapping[str, Any] | None = None,
+        cad_identity: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         enriched = dict(results)
         metadata = dict(enriched.get("metadata") or {})
@@ -2731,6 +2864,7 @@ class JobRuntime:
             enriched,
             request,
             effective_request=effective_request,
+            cad_identity=cad_identity,
         )
 
     def _record_execution_metadata(
@@ -2860,6 +2994,7 @@ class JobRuntime:
                 "manifest_sha256": imported_metadata.get("manifest_sha256"),
                 "document_name": document.get("name") or None,
                 "return_state_hash": document.get("return_state_hash"),
+                "identity": imported_metadata.get("identity"),
             }
         item = {
             "id": row.get("id"),

@@ -20,6 +20,7 @@ from starlette.websockets import WebSocketDisconnect, WebSocketState
 from server.jobs.events import CLOSE_ORIGIN_REJECTED, JobsProtocol
 from server.integration.contracts import ErrorEnvelope, error_envelope
 from server.jobs.models import (
+    CadIdentityProvenance,
     ChannelCombineSpec,
     ClearFailedResponse,
     DeleteResponse,
@@ -83,6 +84,7 @@ class ResultProvenance(BaseModel):
     effective_geometry_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     effective_solve_options_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     resolved_engine: str
+    cad_identity: CadIdentityProvenance | None = None
 
 
 class ParametricResultEnvelope(ExtensibleResultModel):

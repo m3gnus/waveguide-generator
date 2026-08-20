@@ -58,19 +58,39 @@ linked body owner to name an `instances[]` record, and refuse a default drive
 channel reused across different linked instances. Existing single-instance and
 unlinked returns keep their old behavior.
 
+## Solve, result, and export provenance
+
+New ingestion records mark the identity inventory as `schema_version: 1`.
+Imported-job submission resolves the immutable inventory against the submitted
+drive channels and persists a `cad_source.identity` graph with the job. The
+graph retains the selected and solver-anchor instance IDs, each instance's
+native body object IDs and placement matrix, source IDs, default drive-channel
+IDs, and the actual submitted drive-channel-to-source-to-instance mapping.
+
+An older ingestion with no identity inventory remains solvable and reports no
+identity; WG does not manufacture one from a design ID, name, body fingerprint,
+or source order. If an ingestion does claim identity but a source owner is
+unknown, duplicated, or contradictory, submission refuses it and requires a
+new ingest.
+
+Completed imported results expose the same graph at
+`provenance.cad_identity`, `metadata.cad_identity`, and in each result channel's
+metadata. Permanent `run.json` files retain it under `cad.identity`. Manual and
+automatic result bundles also contain `<run>_cad_identity.json`, a versioned
+sidecar that keeps non-JSON curve and image exports independently auditable.
+Existing run records and parametric results are byte-compatible: absent CAD
+identity is omitted rather than replaced with invented or null addresses.
+
 ## Remaining work
 
-This slice removes first-match behavior from WG's status/read/ingest/UI path,
-but it does not finish the workspace TODO by itself:
+The WG status/read/ingest/UI and downstream result/export paths no longer use
+first-match placement behavior. Exact-instance Fusion updates are also pinned
+in the packaged WGLink source. The workspace TODO still has these adapter gaps:
 
-1. The Fusion add-in must consume `expectedInstanceId` from the handoff marker
-   and update that exact link. Its current expected-document guard already
-   refuses an ambiguous update, so the gap fails closed rather than rewriting
-   the first copy.
-2. The add-in heartbeat should eventually publish native managed-body and live
+1. The add-in heartbeat should eventually publish native managed-body and live
    transform identities directly. Today WG receives body fingerprint state in
    the heartbeat and the full body/transform graph in `.wgreturn`.
-3. Onshape needs an equivalent instance-addressed status/update contract before
+2. Onshape needs an equivalent instance-addressed status/update contract before
    it can host repeated generated parts as independently selectable placements.
-4. A future cross-export body/entity identity, if needed, must be authored by
+3. A future cross-export body/entity identity, if needed, must be authored by
    CAD. WG must not derive it from names, face order, or fingerprints.

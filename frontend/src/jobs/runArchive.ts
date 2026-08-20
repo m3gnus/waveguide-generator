@@ -70,6 +70,7 @@ export function buildRunRecord(job: JobItem): WorkspaceTextFile {
         manifestSha256: cad.manifest_sha256,
         documentName: cad.document_name,
         returnStateHash: cad.return_state_hash,
+        ...(cad.identity ? { identity: cad.identity } : {}),
       },
       solve: {
         ...job.solve_options,
