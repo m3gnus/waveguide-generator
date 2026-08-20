@@ -26,7 +26,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_VENV = REPO_ROOT / ".venv"
 STAMP_NAME = ".wg2-bootstrap.json"
 LOCK_NAME_PREFIX = "wg2-bootstrap-"
-BOOTSTRAP_VERSION = 1
+BOOTSTRAP_VERSION = 2
 PYTHON_SERIES = (3, 13)
 PIP_VERSION = "26.1.2"
 REQUIREMENT_FILES = (
@@ -152,6 +152,50 @@ def _venv_python(environment: Path) -> Path:
     return environment / "bin" / "python"
 
 
+def _cli_entrypoint_files(environment: Path) -> dict[Path, str]:
+    """Exact repository-aware launchers installed into the local environment."""
+
+    root = str(REPO_ROOT)
+    python = _venv_python(environment)
+    body = (
+        "from __future__ import annotations\n"
+        "import sys\n"
+        f"sys.path.insert(0, {root!r})\n"
+        "from server.cli import main\n"
+        "raise SystemExit(main())\n"
+    )
+    if os.name == "nt":
+        script = environment / "Scripts" / "wg-script.py"
+        command = environment / "Scripts" / "wg.cmd"
+        return {
+            script: body,
+            command: '@"%~dp0python.exe" "%~dp0wg-script.py" %*\r\n',
+        }
+    command = environment / "bin" / "wg"
+    return {command: f"#!{python}\n{body}"}
+
+
+def _install_cli_entrypoint(environment: Path) -> None:
+    for path, content in _cli_entrypoint_files(environment).items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8", newline="")
+        if os.name != "nt":
+            path.chmod(0o755)
+
+
+def _validate_cli_entrypoint(environment: Path) -> tuple[bool, str]:
+    for path, expected in _cli_entrypoint_files(environment).items():
+        try:
+            actual = path.read_bytes().decode("utf-8")
+        except OSError:
+            return False, f"the installed wg command is missing: {path}"
+        if actual != expected:
+            return False, f"the installed wg command is stale: {path}"
+        if os.name != "nt" and not os.access(path, os.X_OK):
+            return False, f"the installed wg command is not executable: {path}"
+    return True, "ready"
+
+
 def _site_packages(environment: Path) -> Path | None:
     if os.name == "nt":
         candidate = environment / "Lib" / "site-packages"
@@ -221,12 +265,22 @@ def _venv_evidence(environment: Path) -> dict[str, object] | None:
         git_digest.update(b"\0")
         git_digest.update(direct_url)
         git_digest.update(b"\0")
+    cli_digest = hashlib.sha256()
+    try:
+        for path in sorted(_cli_entrypoint_files(environment), key=str):
+            cli_digest.update(path.name.encode("utf-8"))
+            cli_digest.update(b"\0")
+            cli_digest.update(path.read_bytes())
+            cli_digest.update(b"\0")
+    except OSError:
+        return None
     return {
         "pythonSize": stat.st_size,
         "pythonMtimeNs": stat.st_mtime_ns,
         "distributions": digest.hexdigest(),
         "distributionCount": len(names),
         "gitDirectUrls": git_digest.hexdigest(),
+        "cliEntrypoints": cli_digest.hexdigest(),
     }
 
 
@@ -313,6 +367,9 @@ def _validate(
         return False, f"{stamp_path} is missing or invalid"
     if stamp.get("fingerprint") != expected_fingerprint:
         return False, "the dependency manifests or bootstrap version changed"
+    cli_valid, cli_reason = _validate_cli_entrypoint(environment)
+    if not cli_valid:
+        return False, cli_reason
 
     # An environment this bootstrap itself installed, whose interpreter,
     # installed-distribution set, and pinned Git provenance are unchanged since,
@@ -529,6 +586,7 @@ def _bootstrap_locked(environment: Path, *, force: bool = False) -> None:
         if _run(command).returncode != 0:
             raise RuntimeError("Dependency installation failed; review the pip output above.")
 
+    _install_cli_entrypoint(environment)
     _write_stamp(environment, fingerprint)
     valid, reason = _validate(environment, fingerprint, False)
     if not valid:

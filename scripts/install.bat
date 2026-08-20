@@ -124,7 +124,7 @@ echo ===============================================================
 echo.
 echo Verifying the project folder...
 set "ROOT_INVALID="
-for %%f in (launch\serve.py launchers\statusapp\__main__.py launchers\windows\launch-wg.bat scripts\bootstrap.py scripts\fetch_spa.py shared\version.json server\requirements-lock.txt server\requirements-pins.txt) do if not exist "%%f" call :report_missing "%%f"
+for %%f in (launch\serve.py launchers\statusapp\__main__.py launchers\windows\launch-wg.bat scripts\bootstrap.py scripts\fetch_spa.py server\cli\__main__.py shared\version.json server\requirements-lock.txt server\requirements-pins.txt) do if not exist "%%f" call :report_missing "%%f"
 if defined ROOT_INVALID goto bad_project_folder
 echo   Looks good: %WG_ROOT%
 

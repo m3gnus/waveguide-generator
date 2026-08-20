@@ -114,6 +114,7 @@ for required in \
     launchers/linux/launch-wg.sh \
     scripts/bootstrap.py \
     scripts/fetch_spa.py \
+    server/cli/__main__.py \
     shared/version.json \
     server/requirements-lock.txt \
     server/requirements-pins.txt

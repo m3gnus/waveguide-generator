@@ -20,6 +20,7 @@ def test_failed_reinstall_invalidates_the_previous_stamp(tmp_path: Path, monkeyp
     python = bootstrap._venv_python(environment)
     python.parent.mkdir(parents=True)
     python.touch()
+    bootstrap._install_cli_entrypoint(environment)
     stamp = environment / bootstrap.STAMP_NAME
     stamp.write_text('{"fingerprint": "previous proof"}', encoding="utf-8")
 
@@ -173,6 +174,7 @@ def test_check_does_not_rewrite_validation_evidence(
     python = bootstrap._venv_python(environment)
     python.parent.mkdir(parents=True)
     python.touch()
+    bootstrap._install_cli_entrypoint(environment)
     stamp = environment / bootstrap.STAMP_NAME
     original = json.dumps({"fingerprint": "test-fingerprint"})
     stamp.write_text(original, encoding="utf-8")
