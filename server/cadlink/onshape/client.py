@@ -19,14 +19,18 @@ Two behaviours here are security choices rather than convenience:
 from __future__ import annotations
 
 import base64
+import contextlib
 from dataclasses import dataclass
+import io
 import json
 import logging
 import secrets
-from typing import Any, Callable, Mapping, Protocol, Sequence
+from typing import Any, Callable, Iterator, Mapping, Protocol, Sequence
 import urllib.error
 import urllib.parse
 import urllib.request
+
+from server.cadlink.limits import MAX_DOWNLOAD_BYTES
 
 from .credentials import OnshapeCredentials
 
@@ -36,6 +40,9 @@ logger = logging.getLogger(__name__)
 DEFAULT_TIMEOUT_S = 60.0
 UPLOAD_TIMEOUT_S = 300.0
 _MAX_ERROR_BODY = 600
+#: Chunk size for the streaming download. Small enough that the refusal fires
+#: within a chunk of the limit, large enough not to syscall per kilobyte.
+_STREAM_CHUNK_BYTES = 256 * 1024
 
 
 class OnshapeError(RuntimeError):
@@ -44,6 +51,29 @@ class OnshapeError(RuntimeError):
 
 class OnshapeTransportError(OnshapeError):
     """The request never produced an HTTP response."""
+
+
+class OnshapeDownloadTooLarge(OnshapeError):
+    """The response body exceeds the untrusted-download limit.
+
+    Raised either from a declared ``Content-Length`` before a single body byte
+    is read, or from the streaming loop the moment the running total passes the
+    limit.  Either way the complete body is never held in memory.
+    """
+
+    def __init__(self, limit_bytes: int, *, declared: int | None = None) -> None:
+        detail = (
+            f"declared {declared:,} bytes"
+            if declared is not None
+            else "kept sending past the limit"
+        )
+        super().__init__(
+            f"Onshape's download exceeds WG's {limit_bytes:,} byte limit for an "
+            f"untrusted CAD payload ({detail}). WG stopped reading rather than "
+            "buffer it."
+        )
+        self.limit_bytes = limit_bytes
+        self.declared_bytes = declared
 
 
 class OnshapeHttpError(OnshapeError):
@@ -103,6 +133,119 @@ class Transport(Protocol):
     ) -> tuple[int, Mapping[str, str], bytes]: ...
 
 
+class ByteStream(Protocol):
+    """The minimum a streamed body has to offer: bounded reads."""
+
+    def read(self, size: int, /) -> bytes: ...
+
+
+class StreamTransport(Protocol):
+    """The seam for a body that must never be read whole into memory.
+
+    Unlike :class:`Transport` this yields an open reader rather than ``bytes``,
+    so the caller decides how much it is willing to accept.  The context
+    manager owns the connection and closes it on the way out, which is what
+    makes an early refusal an actual abort rather than a discarded buffer.
+    """
+
+    def __call__(
+        self,
+        method: str,
+        url: str,
+        headers: Mapping[str, str],
+        body: bytes | None,
+        timeout: float,
+    ) -> contextlib.AbstractContextManager[tuple[int, Mapping[str, str], ByteStream]]: ...
+
+
+@contextlib.contextmanager
+def _urllib_stream_transport(
+    method: str,
+    url: str,
+    headers: Mapping[str, str],
+    body: bytes | None,
+    timeout: float,
+) -> Iterator[tuple[int, Mapping[str, str], ByteStream]]:
+    """Open one response and hand back the reader without draining it."""
+
+    request = urllib.request.Request(url, data=body, headers=dict(headers), method=method)
+    opener = urllib.request.build_opener(_NoRedirect)
+    try:
+        response = opener.open(request, timeout=timeout)
+    except urllib.error.HTTPError as exc:
+        # An error reply is still a readable stream; the caller bounds it.
+        with exc:
+            yield (
+                int(exc.code),
+                {key.lower(): value for key, value in exc.headers.items()} if exc.headers else {},
+                exc,
+            )
+        return
+    with response:
+        yield (
+            int(response.status),
+            {key.lower(): value for key, value in response.headers.items()},
+            response,
+        )
+
+
+def stream_from_transport(transport: Transport) -> StreamTransport:
+    """Adapt a whole-body :class:`Transport` to the streaming seam.
+
+    Test doubles and any caller that already holds the bytes keep working
+    through this, and the limit arithmetic still runs in exactly one place.
+    It is *not* how the network path works: real downloads go through
+    :func:`_urllib_stream_transport`, which never materialises the body.
+    """
+
+    @contextlib.contextmanager
+    def adapted(
+        method: str,
+        url: str,
+        headers: Mapping[str, str],
+        body: bytes | None,
+        timeout: float,
+    ) -> Iterator[tuple[int, Mapping[str, str], ByteStream]]:
+        status, response_headers, raw = transport(method, url, headers, body, timeout)
+        with io.BytesIO(raw) as reader:
+            yield status, response_headers, reader
+
+    return adapted
+
+
+def _read_bounded(stream: ByteStream, limit: int) -> bytes:
+    """Read at most ``limit`` bytes, refusing the moment the body exceeds it."""
+
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = stream.read(_STREAM_CHUNK_BYTES)
+        if not chunk:
+            return b"".join(chunks)
+        total += len(chunk)
+        if total > limit:
+            # Everything read so far is dropped unreferenced and the enclosing
+            # context manager closes the connection. Nothing further is read.
+            raise OnshapeDownloadTooLarge(limit)
+        chunks.append(chunk)
+
+
+def _declared_length(headers: Mapping[str, str], limit: int) -> None:
+    """Refuse an over-limit ``Content-Length`` before reading a single byte."""
+
+    raw = headers.get("content-length")
+    if raw is None:
+        return
+    try:
+        declared = int(str(raw).strip())
+    except ValueError:
+        # An unparseable length is not a licence to read without a bound; the
+        # streaming loop remains the enforcement of record.
+        return
+    if declared > limit:
+        raise OnshapeDownloadTooLarge(limit, declared=declared)
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     """Surface redirects rather than forwarding credentials to a new host."""
 
@@ -121,13 +264,14 @@ def _urllib_transport(
     opener = urllib.request.build_opener(_NoRedirect)
     try:
         with opener.open(request, timeout=timeout) as response:
-            return (
-                int(response.status),
-                {key.lower(): value for key, value in response.headers.items()},
-                response.read(),
-            )
+            headers_out = {key.lower(): value for key, value in response.headers.items()}
+            # Even a JSON reply is remote input. This path handles small API
+            # answers, but "small" is the server's claim, not a guarantee, so
+            # the same download ceiling is the backstop here too.
+            _declared_length(headers_out, MAX_DOWNLOAD_BYTES)
+            return (int(response.status), headers_out, _read_bounded(response, MAX_DOWNLOAD_BYTES))
     except urllib.error.HTTPError as exc:
-        payload = exc.read() if exc.fp is not None else b""
+        payload = _read_bounded(exc, MAX_DOWNLOAD_BYTES) if exc.fp is not None else b""
         return (
             int(exc.code),
             {key.lower(): value for key, value in exc.headers.items()}
@@ -218,11 +362,19 @@ class OnshapeClient:
         credentials: OnshapeCredentials,
         *,
         transport: Transport | None = None,
+        stream_transport: StreamTransport | None = None,
         timeout: float = DEFAULT_TIMEOUT_S,
         sleep: Callable[[float], None] | None = None,
     ) -> None:
         self._credentials = credentials
         self._transport: Transport = transport or _urllib_transport
+        # A caller that replaced only the whole-body seam still gets the
+        # streaming limit logic, applied to its canned bytes.
+        self._stream_transport: StreamTransport = (
+            stream_transport
+            or (stream_from_transport(transport) if transport is not None else None)
+            or _urllib_stream_transport
+        )
         self._timeout = timeout
         self._sleep = sleep
         token = base64.b64encode(
@@ -323,15 +475,23 @@ class OnshapeClient:
         expected: Sequence[int] = (200,),
         accept: str = "application/octet-stream",
         max_redirects: int = 3,
+        max_bytes: int = MAX_DOWNLOAD_BYTES,
     ) -> OnshapeResponse:
-        """Issue a binary request and follow redirects without leaking auth.
+        """Stream a binary body under a hard ceiling, without leaking auth.
 
         Onshape's download endpoints may redirect to an attachment host.  The
         API key is retained only for redirects that stay on the configured API
         origin; an HTTPS cross-origin attachment is fetched without it.  HTTP,
         user-info URLs, fragments, and redirect loops are refused.
+
+        The body is untrusted CAD: it is read in chunks and abandoned the
+        moment the running total passes ``max_bytes``, and a ``Content-Length``
+        already over the limit is refused before the first read
+        (``docs/plans/STEP-PARSER-ISOLATION.md``).
         """
 
+        if max_bytes <= 0:
+            raise ValueError("max_bytes must be positive")
         if max_redirects < 0:
             raise ValueError("max_redirects must be non-negative")
         initial = (
@@ -360,7 +520,7 @@ class OnshapeClient:
             if content_type is not None:
                 headers["Content-Type"] = content_type
             try:
-                status, response_headers, raw = self._transport(
+                opened = self._stream_transport(
                     method, current, headers, body, timeout or self._timeout
                 )
             except OnshapeError:
@@ -370,45 +530,67 @@ class OnshapeClient:
                     f"Could not retrieve Onshape download ({method} {path}): {exc}."
                 ) from exc
 
-            response_headers = {str(key).lower(): str(value) for key, value in response_headers.items()}
-            remaining = response_headers.get("x-rate-limit-remaining")
-            if remaining is not None:
-                try:
-                    self.last_rate_limit_remaining = int(remaining)
-                except ValueError:
-                    self.last_rate_limit_remaining = None
-            if 300 <= status < 400:
-                if redirects >= max_redirects:
-                    raise OnshapeHttpError(
-                        status,
-                        "Onshape download exceeded the redirect limit.",
-                        method=method,
-                        path=path,
-                    )
-                location = response_headers.get("location")
-                if not location:
-                    raise OnshapeHttpError(
-                        status,
-                        "Onshape download redirected without a Location header.",
-                        method=method,
-                        path=path,
-                    )
-                current = urllib.parse.urljoin(current, location)
+            redirect_to: str | None = None
+            try:
+                with opened as (raw_status, raw_headers, stream):
+                    status = int(raw_status)
+                    response_headers = {
+                        str(key).lower(): str(value) for key, value in raw_headers.items()
+                    }
+                    remaining = response_headers.get("x-rate-limit-remaining")
+                    if remaining is not None:
+                        try:
+                            self.last_rate_limit_remaining = int(remaining)
+                        except ValueError:
+                            self.last_rate_limit_remaining = None
+                    if 300 <= status < 400:
+                        if redirects >= max_redirects:
+                            raise OnshapeHttpError(
+                                status,
+                                "Onshape download exceeded the redirect limit.",
+                                method=method,
+                                path=path,
+                            )
+                        location = response_headers.get("location")
+                        if not location:
+                            raise OnshapeHttpError(
+                                status,
+                                "Onshape download redirected without a Location header.",
+                                method=method,
+                                path=path,
+                            )
+                        # The redirect body is never read; the connection is
+                        # dropped by leaving this block.
+                        redirect_to = urllib.parse.urljoin(current, location)
+                    elif status not in expected:
+                        # A diagnostic snippet, not a payload: truncate rather
+                        # than refuse, and never read past the snippet.
+                        text = stream.read(_MAX_ERROR_BODY).decode("utf-8", errors="replace")
+                        raise OnshapeHttpError(
+                            status,
+                            _describe(status, path, text),
+                            method=method,
+                            path=path,
+                            body=text,
+                        )
+                    else:
+                        _declared_length(response_headers, max_bytes)
+                        payload = _read_bounded(stream, max_bytes)
+            except OnshapeError:
+                raise
+            except Exception as exc:
+                raise OnshapeTransportError(
+                    f"Could not retrieve Onshape download ({method} {path}): {exc}."
+                ) from exc
+
+            if redirect_to is not None:
+                current = redirect_to
                 method = "GET"
                 body = None
                 content_type = None
                 redirects += 1
                 continue
-            if status not in expected:
-                text = raw.decode("utf-8", errors="replace")[:_MAX_ERROR_BODY]
-                raise OnshapeHttpError(
-                    status,
-                    _describe(status, path, text),
-                    method=method,
-                    path=path,
-                    body=text,
-                )
-            return OnshapeResponse(status=status, body=raw, headers=response_headers)
+            return OnshapeResponse(status=status, body=payload, headers=response_headers)
 
     def get(self, path: str, **kwargs: Any) -> OnshapeResponse:
         return self.request("GET", path, **kwargs)
@@ -482,11 +664,16 @@ class OnshapeClient:
 
 __all__ = [
     "DEFAULT_TIMEOUT_S",
+    "MAX_DOWNLOAD_BYTES",
+    "ByteStream",
     "OnshapeClient",
+    "OnshapeDownloadTooLarge",
     "OnshapeError",
     "OnshapeHttpError",
     "OnshapeResponse",
     "OnshapeTransportError",
+    "StreamTransport",
     "Transport",
     "UPLOAD_TIMEOUT_S",
+    "stream_from_transport",
 ]

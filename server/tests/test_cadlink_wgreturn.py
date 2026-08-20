@@ -358,3 +358,24 @@ def test_the_degradation_reaches_ingestion_findings_not_just_the_bundle() -> Non
     source = Path(ingest.__file__).read_text(encoding="utf-8")
     assert "stale-detection-unavailable" in source
     assert "degradations" in source
+
+
+def test_an_oversized_manifest_is_refused_before_it_is_parsed(tmp_path: Path) -> None:
+    """``docs/plans/STEP-PARSER-ISOLATION.md``: wgreturn.json is capped at 1 MiB.
+
+    The manifest is CAD-authored, so its size decides an allocation in this
+    process. It is checked from ``stat()`` -- the file is never read, let alone
+    handed to ``json.loads`` -- which is what makes the cap a refusal rather
+    than a report.
+    """
+
+    from server.cadlink.limits import MAX_WGRETURN_JSON_BYTES
+
+    assert MAX_WGRETURN_JSON_BYTES == 1024 * 1024
+    bundle = write_bundle(tmp_path)
+    manifest = json.loads((bundle / "wgreturn.json").read_text(encoding="utf-8"))
+    manifest["padding"] = "p" * (MAX_WGRETURN_JSON_BYTES + 1)
+    (bundle / "wgreturn.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(WgReturnError, match="byte limit for a return manifest"):
+        read_wgreturn(bundle)
