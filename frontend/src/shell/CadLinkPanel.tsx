@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import type { CadReturnFinding, CadReturnIngestRecord } from '../api/cadlink';
+import { useEffect, useId, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import type { CadReturnBundle, CadReturnFinding, CadReturnIngestRecord } from '../api/cadlink';
 import { OnshapePublicConsentRequired, sendDesignToOnshape } from '../api/onshape';
-import { cadApplicationName, usePreferences } from '../prefs/preferences';
+import { usePreferences } from '../prefs/preferences';
 import {
   blockingFindings,
   unacknowledgedBlocking,
@@ -53,30 +53,108 @@ function findingDetail(finding: CadReturnFinding): string {
   return details.join(' · ') || 'Recorded by CAD-return ingestion.';
 }
 
+function pluralized(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function relativeTime(value: string): string {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return 'time unavailable';
+  const elapsedSeconds = Math.max(0, Math.round((Date.now() - timestamp) / 1_000));
+  if (elapsedSeconds < 60) return 'just now';
+  const elapsedMinutes = Math.round(elapsedSeconds / 60);
+  if (elapsedMinutes < 60) return `${elapsedMinutes} min ago`;
+  const elapsedHours = Math.round(elapsedMinutes / 60);
+  if (elapsedHours < 24) return `${elapsedHours} hr ago`;
+  const elapsedDays = Math.round(elapsedHours / 24);
+  return `${elapsedDays} ${elapsedDays === 1 ? 'day' : 'days'} ago`;
+}
+
+function fullTime(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? 'Time unavailable' : date.toLocaleString();
+}
+
+function returnDisplayName(bundle: CadReturnBundle): string {
+  if (bundle.documentName) return bundle.documentName;
+  const date = new Date(bundle.modifiedAt);
+  if (Number.isNaN(date.getTime())) return 'Return';
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  return `Return · ${hours}:${minutes}`;
+}
+
+function bundleInventory(bundle: CadReturnBundle): string {
+  if (!bundle.readable) return bundle.reason ?? 'Manifest is unreadable';
+  const sources = pluralized(bundle.sourceCount ?? bundle.sources.length, 'source');
+  if (!bundle.instanceCount) return sources;
+  return `${sources} · ${pluralized(bundle.instanceCount, 'linked instance')}`;
+}
+
+interface CadDrawerProps {
+  title: string;
+  chip?: string;
+  defaultOpen?: boolean;
+  warning?: boolean;
+  className?: string;
+  children: ReactNode;
+}
+
+/** CAD diagnostics use the same heading/button/chevron disclosure pattern as
+ * the parameter rail, but keep their own compact card surface and state chip. */
+function CadDrawer({ title, chip, defaultOpen = false, warning = false, className = '', children }: CadDrawerProps) {
+  const [open, setOpen] = useState(defaultOpen);
+  const bodyId = useId();
+  return <section className={`cad-section cad-drawer${open ? '' : ' closed'}${warning ? ' degraded' : ''}${className ? ` ${className}` : ''}`}>
+    <h4 className="section-heading">
+      <button type="button" className="section-head" aria-expanded={open} aria-controls={bodyId} onClick={() => setOpen((value) => !value)}>
+        <span className="chevron" aria-hidden="true">⌄</span>
+        <span className="section-name">{title}</span>
+        <span className="spacer"/>
+        {chip && <span className={`cad-state-chip${warning ? ' warn' : ''}`}>{chip}</span>}
+      </button>
+    </h4>
+    {open && <div id={bodyId} className="section-body">{children}</div>}
+  </section>;
+}
+
 function RecordSummary({ record }: { record: CadReturnIngestRecord }) {
   const scopeFindings = record.findings.filter((finding) => finding.kind === 'scope-degradation');
   const planes = Object.entries(record.symmetry.planes ?? {});
-  return <>
-    <section className={`cad-section cad-scope ${record.scope.status === 'clean' ? '' : 'degraded'}`}>
-      <header><h3>Scope</h3><span className="cad-status">{record.scope.status}</span></header>
+  const freshnessState = record.freshness.verdict === 'unlinked'
+    ? 'unlinked'
+    : record.freshness.instances.length === 0
+      ? 'unknown'
+      : record.freshness.instances.every((instance) => instance.verdict === 'current')
+        ? 'current'
+        : record.freshness.instances.every((instance) => instance.verdict === record.freshness.instances[0]?.verdict)
+          ? record.freshness.instances[0].verdict.replaceAll('_', ' ')
+          : 'mixed';
+  const rejectedPlanes = planes.filter(([, verdict]) => !verdict.accepted).length;
+  const symmetryState = planes.length === 0
+    ? 'not recorded'
+    : rejectedPlanes === 0 ? 'accepted' : pluralized(rejectedPlanes, 'rejected plane');
+  const polarAxes = Object.values((record.polar_grid_derivation.axes ?? {}) as Record<string, { symmetry_accepted?: boolean }>);
+  const widenedAxes = polarAxes.filter((axis) => axis.symmetry_accepted === false).length;
+  const polarState = widenedAxes ? pluralized(widenedAxes, 'widened axis', 'widened axes') : 'accepted';
+  return <div className="cad-details">
+    <CadDrawer key={`${record.ingest_id}-scope`} title="Scope" chip={record.scope.status} defaultOpen={record.scope.status !== 'clean'} warning={record.scope.status !== 'clean'} className="cad-scope">
       <p>{record.scope.status === 'clean'
         ? 'The exported exterior scope was complete.'
         : `${record.scope.degraded_skip_count} exported object${record.scope.degraded_skip_count === 1 ? ' was' : 's were'} skipped. The solve is degraded.`}</p>
       {(record.scope.included ?? []).map((item, index) => <p key={`${String(item.object_id)}-${index}`} className="cad-detail"><b>Included · {String(item.name ?? item.object_id ?? 'Unnamed object')}</b>{item.body_kind ? ` — ${item.body_kind}` : ''}</p>)}
       {(record.scope.skipped ?? []).map((item, index) => <p key={`${String(item.object_id)}-${index}`} className={`cad-detail scope-skip-${item.severity ?? 'info'}`}><b>Skipped · {String(item.name ?? item.object_id ?? item.kind ?? 'Unnamed object')}</b> — {String(item.reason ?? item.kind ?? 'not included')} · {String(item.severity ?? 'info')}</p>)}
       {(record.scope.skipped?.length ?? 0) === 0 && scopeFindings.map((finding) => <p key={finding.id} className="cad-detail"><b>{String(finding.object_id ?? 'Unnamed object')}</b> — {findingDetail(finding)}</p>)}
-    </section>
-    <section className="cad-section">
-      <header><h3>Freshness</h3></header>
+    </CadDrawer>
+    <CadDrawer key={`${record.ingest_id}-freshness`} title="Freshness" chip={freshnessState} defaultOpen={freshnessState !== 'current'} warning={freshnessState !== 'current' && freshnessState !== 'unlinked'}>
       {record.freshness.verdict === 'unlinked'
         ? <p className="cad-verdict neutral">{FRESHNESS_COPY.unlinked}</p>
         : record.freshness.instances.map((instance) => <div className={`cad-verdict ${instance.verdict === 'current' ? 'ok' : 'warn'}`} key={instance.instance_id}>
             <b>{instance.instance_id}</b><span>{FRESHNESS_COPY[instance.verdict] ?? instance.verdict}</span>
             {instance.error && <small>{instance.error}</small>}
           </div>)}
-    </section>
-    <section className="cad-section">
-      <header><h3>Symmetry</h3></header>
+    </CadDrawer>
+    <CadDrawer key={`${record.ingest_id}-symmetry`} title="Symmetry" chip={symmetryState} defaultOpen={symmetryState !== 'accepted'} warning={symmetryState !== 'accepted'}>
       {planes.length ? planes.map(([name, verdict]) => {
         const residual = verdict.max_residual_step_units ?? verdict.residuals;
         const offModel = verdict.worst_off_model_distance_step_units;
@@ -88,21 +166,113 @@ function RecordSummary({ record }: { record: CadReturnIngestRecord }) {
         return <div className="cad-row" key={name}><b>{name}</b><span className={verdict.accepted ? 'ok-text' : 'warn-text'}>{verdict.accepted ? 'accepted' : 'rejected'}</span><small>{details}</small></div>;
       }) : <p>No coordinate plane verdicts were recorded.</p>}
       {(record.symmetry.cut_planes?.length ?? 0) > 0 && <p className="cad-detail">Applied cuts: {record.symmetry.cut_planes?.join(', ')}</p>}
-    </section>
-    {record.healing.performed && <section className="cad-section degraded">
-      <header><h3>Healing performed</h3><span className="cad-status">{record.healing.mode ?? 'healed'}</span></header>
-      <p>The exported CAD did not mesh unchanged. OCC healing was used; re-export stitched or imprinted CAD when possible.</p>
-      {'original_mesh_error' in record.healing && <p className="cad-detail">{compactValue(record.healing.original_mesh_error)}</p>}
-    </section>}
-    <section className="cad-section cad-pairs">
-      <header><h3>Sizing & cost</h3></header>
+    </CadDrawer>
+    <CadDrawer key={`${record.ingest_id}-healing`} title="Healing performed" chip={record.healing.performed ? record.healing.mode ?? 'healed' : 'clean'} defaultOpen={Boolean(record.healing.performed)} warning={Boolean(record.healing.performed)}>
+      {record.healing.performed
+        ? <><p>The exported CAD did not mesh unchanged. OCC healing was used; re-export stitched or imprinted CAD when possible.</p>
+          {'original_mesh_error' in record.healing && <p className="cad-detail">{compactValue(record.healing.original_mesh_error)}</p>}</>
+        : <p>No CAD healing was needed.</p>}
+    </CadDrawer>
+    <CadDrawer key={`${record.ingest_id}-sizing`} title="Sizing & cost" chip="current" className="cad-pairs">
       {Object.entries(record.sizing_estimate).map(([key, value]) => <div className="cad-row" key={key}><b>{key.replaceAll('_', ' ')}</b><span>{compactValue(value)}</span></div>)}
-    </section>
-    <section className="cad-section cad-pairs">
-      <header><h3>Polar derivation</h3></header>
+    </CadDrawer>
+    <CadDrawer key={`${record.ingest_id}-polar`} title="Polar derivation" chip={polarState} defaultOpen={polarState !== 'accepted'} warning={polarState !== 'accepted'} className="cad-pairs">
       {Object.entries(record.polar_grid_derivation).map(([key, value]) => <div className="cad-row" key={key}><b>{key.replaceAll('_', ' ')}</b><span>{compactValue(value)}</span></div>)}
-    </section>
+    </CadDrawer>
+  </div>;
+}
+
+interface FindingsProps {
+  record: CadReturnIngestRecord;
+  acknowledgedFindingIds: string[];
+  acknowledge: (findingId: string, value: boolean) => void;
+  acknowledgeAllBlocking: () => void;
+}
+
+function FindingRows({ record, acknowledgedFindingIds, acknowledge }: Omit<FindingsProps, 'acknowledgeAllBlocking'>) {
+  if (record.findings.length === 0) return <p>No findings. This ingestion needs no acknowledgements.</p>;
+  return <>{record.findings.map((finding) => <label key={finding.id} className={finding.blocking ? 'blocking' : ''}>
+    {finding.blocking && <input type="checkbox" checked={acknowledgedFindingIds.includes(finding.id)} onChange={(event) => acknowledge(finding.id, event.target.checked)}/>}
+    <span><b>{finding.kind.replaceAll('-', ' ')}{finding.blocking && <small className="cad-blocking-suffix"> · blocking</small>}</b><small>{findingDetail(finding)}</small></span>
+  </label>)}</>;
+}
+
+function Findings({ record, acknowledgedFindingIds, acknowledge, acknowledgeAllBlocking }: FindingsProps) {
+  const blocking = blockingFindings(record);
+  const unacknowledged = blocking.filter((finding) => !acknowledgedFindingIds.includes(finding.id));
+  if (unacknowledged.length === 0) {
+    const chip = blocking.length
+      ? `${blocking.length} acknowledged`
+      : record.findings.length ? `${record.findings.length} informational` : 'clean';
+    return <CadDrawer key={`${record.ingest_id}-findings`} title="Findings" chip={chip} className="cad-findings">
+      <FindingRows record={record} acknowledgedFindingIds={acknowledgedFindingIds} acknowledge={acknowledge}/>
+    </CadDrawer>;
+  }
+  return <section className="cad-section cad-findings degraded">
+    <header><h4>Findings</h4>{blocking.length > 1 && <button onClick={acknowledgeAllBlocking}>Acknowledge all {blocking.length}</button>}</header>
+    <FindingRows record={record} acknowledgedFindingIds={acknowledgedFindingIds} acknowledge={acknowledge}/>
+  </section>;
+}
+
+function returnStatus(record: CadReturnIngestRecord | null, acknowledgedFindingIds: string[], ingesting: boolean, ingestError: string | null): string {
+  if (ingesting) return 'Preparing…';
+  if (ingestError) return `Preparation failed — ${ingestError}`;
+  if (!record) return 'Ready to prepare';
+  const unacknowledged = blockingFindings(record).filter((finding) => !acknowledgedFindingIds.includes(finding.id)).length;
+  const findings = unacknowledged
+    ? `${pluralized(unacknowledged, 'finding')} ${unacknowledged === 1 ? 'needs' : 'need'} review`
+    : null;
+  const degraded = record.scope.status === 'clean'
+    ? null
+    : `Degraded: ${pluralized(record.scope.degraded_skip_count, 'object')} skipped`;
+  return [degraded, findings].filter(Boolean).join(' · ') || 'Ready to solve';
+}
+
+interface CadReturnReviewProps extends Omit<FindingsProps, 'record'> {
+  bundle: CadReturnBundle;
+  record: CadReturnIngestRecord | null;
+  ingesting: boolean;
+  ingestError: string | null;
+  prepare: () => void;
+}
+
+function CadReturnReview({ bundle, record, ingesting, ingestError, prepare, ...findingsProps }: CadReturnReviewProps) {
+  const titleId = useId();
+  const timestamp = record?.created_at || bundle.modifiedAt;
+  return <>
+    <article className={`cad-return-summary${record && record.scope.status !== 'clean' ? ' degraded' : ''}`} aria-labelledby={titleId}>
+      <div className="cad-return-summary-copy">
+        <h4 id={titleId}>{returnDisplayName(bundle)}</h4>
+        <time dateTime={timestamp} title={fullTime(timestamp)}>{relativeTime(timestamp)}</time>
+        <p>{returnStatus(record, findingsProps.acknowledgedFindingIds, ingesting, ingestError)}</p>
+      </div>
+      {(ingesting || ingestError || !record) && <button className="primary" disabled={ingesting} onClick={prepare}>{ingesting ? 'Preparing…' : 'Prepare simulation'}</button>}
+    </article>
+    {record && <><RecordSummary record={record}/><Findings record={record} {...findingsProps}/></>}
   </>;
+}
+
+interface CadHistoryProps {
+  bundles: CadReturnBundle[];
+  selectedPath: string | null;
+  select: (bundle: CadReturnBundle) => void;
+}
+
+function CadHistory({ bundles, selectedPath, select }: CadHistoryProps) {
+  return <CadDrawer title={`History (${bundles.length})`} className="cad-history">
+    <div className="cad-bundle-list" role="listbox" aria-label="CAD return history">
+      {bundles.map((bundle) => <button
+        type="button"
+        key={bundle.bundlePath}
+        role="option"
+        aria-selected={selectedPath === bundle.bundlePath}
+        className={selectedPath === bundle.bundlePath ? 'selected' : ''}
+        disabled={!bundle.readable}
+        onClick={() => select(bundle)}
+        title={!bundle.readable ? bundle.reason ?? 'Manifest is unreadable' : undefined}
+      ><b>{returnDisplayName(bundle)}</b><span>{bundleInventory(bundle)}</span><time dateTime={bundle.modifiedAt} title={fullTime(bundle.modifiedAt)}>{relativeTime(bundle.modifiedAt)}</time></button>)}
+    </div>
+  </CadDrawer>;
 }
 
 export function CadLinkPanel() {
@@ -194,7 +364,7 @@ export function CadLinkPanel() {
   };
 
   const workflow = onshape ? onshapeWorkflowView(onshapeStatus) : fusionWorkflowView(fusionStatus);
-  const cadApplicationLabel = cadApplicationName(onshape ? 'onshape' : 'fusion360', 'full');
+  const settingsLabel = onshape ? 'Onshape · Change' : 'Fusion 360 · Change';
   // Imported geometry is solved on Metal or not at all: runtime.py rewrites
   // AUTO to metal and refuses bempp outright. Without Metal the whole round
   // trip still works as a CAD workflow and only the solve is out of reach, so
@@ -226,7 +396,8 @@ export function CadLinkPanel() {
   const linkedDocument = onshapeStatus?.link ?? null;
 
   return <div className="cadlink-panel panel-scroll">
-    {metalUnavailable && <div className="cad-alert cad-solver-unavailable" role="status">
+    <h2 className="sr-only">CAD Link</h2>
+    {metalUnavailable && <div className="cad-alert cad-alert-notice cad-solver-unavailable" role="status">
       <b>Imported CAD geometry cannot be solved on this machine.</b> Solving an
       ingested model needs the Metal backend, which is macOS-only; this host has
       no Metal engine available. The round trip below still works for building
@@ -236,24 +407,24 @@ export function CadLinkPanel() {
         this panel only reports the connection and owns the inbound leg. The
         Onshape workflow keeps its two numbered steps: the panel is its home. */}
     {onshape && <section className="cad-workflow cad-send">
-      <header className="cad-workflow-header"><span className="cad-step">1</span><div><h3>WG → CAD</h3><p>Create or update this WG design in Onshape.</p></div><button className="link-button" onClick={() => requestSettings('cad')}>{cadApplicationLabel} · Change</button></header>
+      <header className="cad-workflow-header"><span className="cad-step">1</span><div><h3>WG → CAD</h3><p>Create or update this WG design in Onshape.</p></div><button className="link-button" onClick={() => requestSettings('cad')}>{settingsLabel}</button></header>
       <div className={`cad-connection cad-connection-${workflow.state}`}>
         <span className="cad-connection-dot" aria-hidden="true"/>
-        <div><h3>{workflow.headline}</h3><p>{workflow.detail}</p></div>
+        <div><h4>{workflow.headline}</h4><p>{workflow.detail}</p></div>
       </div>
       {linkedDocument?.documentUrl && <a className="cad-secondary-action cad-onshape-open" href={linkedDocument.documentUrl} target="_blank" rel="noreferrer noopener">Open {linkedDocument.documentName} in Onshape</a>}
-      {publicOnly && !confirmPublicDocument && <div className="cad-alert" role="status"><b>This Onshape plan creates public documents.</b> {onshapeConnection?.plan?.name ?? 'The Free plan'} makes every document world-readable — anyone with the link can view this waveguide. Confidential designs belong in Fusion 360 or on a paid Onshape plan.</div>}
-      {onshapeConnection?.insecureKeyFile && <div className="cad-alert" role="alert">The Onshape key file at {onshapeConnection.credentialsPath} is readable by other accounts on this machine. Restrict it with <code>chmod 600</code>.</div>}
+      {publicOnly && !confirmPublicDocument && <div className="cad-alert cad-alert-notice" role="status"><b>This Onshape plan creates public documents.</b> {onshapeConnection?.plan?.name ?? 'The Free plan'} makes every document world-readable — anyone with the link can view this waveguide. Confidential designs belong in Fusion 360 or on a paid Onshape plan.</div>}
+      {onshapeConnection?.insecureKeyFile && <div className="cad-alert cad-alert-error" role="alert">The Onshape key file at {onshapeConnection.credentialsPath} is readable by other accounts on this machine. Restrict it with <code>chmod 600</code>.</div>}
       {workflow.action && !confirmPublicDocument && <button className="primary cad-primary-action" disabled={busy} onClick={() => void send()}>{busy ? (workflow.action === 'update' ? 'Updating…' : 'Creating…') : actionLabel}</button>}
       {confirmPublicDocument && <div className="cad-direction-alert" role="alert"><div><b>This document will be public</b><span>{confirmPublicDocument}</span></div><div className="cad-confirm-actions"><button onClick={() => setConfirmPublicDocument(null)}>Cancel</button><button className="primary" disabled={sendingToOnshape} onClick={() => void sendToOnshape(true)}>Continue: create a public document</button></div></div>}
-      {error && <div className="cad-alert" role="alert">{error}</div>}
+      {error && <div className="cad-alert cad-alert-error" role="alert">{error}</div>}
       {status && <div className="cad-status-strip" role="status">{status}</div>}
     </section>}
     {!onshape && <section className="cad-workflow cad-send">
-      <header className="cad-workflow-header no-step"><div><h3>Fusion connection</h3><p>Sends live in the design menu and the Geometry rail.</p></div><button className="link-button" onClick={() => requestSettings('cad')}>{cadApplicationLabel} · Change</button></header>
+      <header className="cad-workflow-header no-step"><div><h3>Fusion connection</h3><p>Sends live in the design menu and the Geometry rail.</p></div><button className="link-button" onClick={() => requestSettings('cad')}>{settingsLabel}</button></header>
       <div className={`cad-connection cad-connection-${workflow.state}`}>
         <span className="cad-connection-dot" aria-hidden="true"/>
-        <div><h3>{workflow.headline}</h3><p>{workflow.detail}</p></div>
+        <div><h4>{workflow.headline}</h4><p>{workflow.detail}</p></div>
       </div>
       {workflow.state === 'not-configured' && <button className="primary cad-primary-action" onClick={() => requestSettings('cad')}>Set up Fusion connection</button>}
     </section>}
@@ -263,17 +434,19 @@ export function CadLinkPanel() {
         <div><b>{linkedDocument.documentName}</b><span>Export the current linked Part Studio to STEP, verify its source evidence, and prepare it for the viewport and solver.</span></div>
         <button className="primary" disabled={ingesting} onClick={() => { void cadCoordinator.returnFromOnshape().catch(() => undefined); }}>{ingesting ? 'Returning & preparing…' : 'Bring Onshape geometry into WG'}</button>
       </div> : <div className="empty-state"><b>No linked Onshape Part Studio</b><span>Send this WG design to Onshape first, then return its current geometry here.</span></div>}
-      {state.ingestStaleReason && <div className="cad-alert" role="status">{state.ingestStaleReason} Return the current Onshape geometry again before solving.</div>}
-      {viewportNotice && <div className="cad-alert" role="status">{viewportNotice}</div>}
-      {state.selectedBundle?.readable && state.ingestRecord && <>
-        <RecordSummary record={state.ingestRecord}/>
-        <section className="cad-section cad-findings">
-          <header><h3>Findings</h3>{blockingFindings(state.ingestRecord).length > 1 && <button onClick={state.acknowledgeAllBlocking}>Acknowledge all {blockingFindings(state.ingestRecord).length}</button>}</header>
-          {state.ingestRecord.findings.length === 0 ? <p>No findings. This ingestion needs no acknowledgements.</p> : state.ingestRecord.findings.map((finding) => <label key={finding.id} className={finding.blocking ? 'blocking' : ''}>
-            {finding.blocking && <input type="checkbox" checked={state.acknowledgedFindingIds.includes(finding.id)} onChange={(event) => state.acknowledge(finding.id, event.target.checked)}/>}<span><b>{finding.kind.replaceAll('-', ' ')}</b><small>{findingDetail(finding)}</small></span>
-          </label>)}
-        </section>
-      </>}
+      {state.ingestStaleReason && <div className="cad-alert cad-alert-notice" role="status">{state.ingestStaleReason} Return the current Onshape geometry again before solving.</div>}
+      {viewportNotice && <div className="cad-alert cad-alert-notice" role="status">{viewportNotice}</div>}
+      {state.selectedBundle?.readable && <CadReturnReview
+        bundle={state.selectedBundle}
+        record={state.ingestRecord}
+        ingesting={ingesting}
+        ingestError={ingestError}
+        prepare={() => { void cadCoordinator.ingest(); }}
+        acknowledgedFindingIds={state.acknowledgedFindingIds}
+        acknowledge={state.acknowledge}
+        acknowledgeAllBlocking={state.acknowledgeAllBlocking}
+      />}
+      {bundles.length > 0 && <CadHistory bundles={bundles} selectedPath={state.selectedBundle?.bundlePath ?? null} select={cadCoordinator.selectBundle}/>}
     </section>}
     {!onshape && <section className="cad-workflow cad-return-workflow">
     <header className="cad-workflow-header no-step"><div><h3>FUSION → SIMULATION</h3><p>Bring Fusion geometry and source tags into WG.</p></div><button disabled={loading || ingesting} onClick={() => void cadCoordinator.refresh()}><Icon name="reset"/>{loading ? 'Loading…' : 'Refresh'}</button></header>
@@ -288,38 +461,22 @@ export function CadLinkPanel() {
           : 'Solve now'}</button>
       </div>
     </div>}
-    {error && <div className="cad-alert" role="alert">{error}</div>}
-    {state.ingestStaleReason && <div className="cad-alert" role="status">{state.ingestStaleReason} Re-ingest before solving.</div>}
-    {viewportNotice && <div className="cad-alert" role="status">{viewportNotice}</div>}
+    {error && <div className="cad-alert cad-alert-error" role="alert">{error}</div>}
+    {state.ingestStaleReason && <div className="cad-alert cad-alert-notice" role="status">{state.ingestStaleReason} Re-ingest before solving.</div>}
+    {viewportNotice && <div className="cad-alert cad-alert-notice" role="status">{viewportNotice}</div>}
     {status && <div className="cad-status-strip" role="status">{status}</div>}
-    {state.selectedBundle?.readable && <div className="cad-return-quick-action">
-      <div><b>{state.selectedBundle.documentName ?? state.selectedBundle.name}</b><span>{state.ingestRecord
-        ? 'Prepared for the CAD workspace and solver.'
-          : ingesting ? 'Preparing this Fusion return for the viewport and solver.'
-          : ingestError ? 'Automatic preparation failed. Retry when ready.'
-            : 'Select this return below to prepare it automatically.'}</span></div>
-      {!state.ingestRecord && ingesting && <button className="primary" disabled>Preparing…</button>}
-      {!state.ingestRecord && !ingesting && ingestError && <button className="primary" onClick={() => void cadCoordinator.ingest()}>Prepare simulation</button>}
-    </div>}
-    {!loading && workflow.state !== 'not-configured' && !error && bundles.length === 0 && <div className="empty-state"><b>No CAD returns</b><span>Returned bundles appear under the selected WGLink folder’s wgreturn folder.</span></div>}
-    {bundles.length > 0 && <div className="cad-bundle-list" role="list" aria-label="Designs returned from CAD">{bundles.map((bundle) => <button
-      key={bundle.bundlePath}
-      role="listitem"
-      className={state.selectedBundle?.bundlePath === bundle.bundlePath ? 'selected' : ''}
-      disabled={!bundle.readable}
-      onClick={() => { cadCoordinator.selectBundle(bundle); }}
-      title={!bundle.readable ? bundle.reason ?? 'Manifest is unreadable' : undefined}
-    ><b>{bundle.documentName ?? bundle.name}</b><span>{bundle.readable ? `${bundle.sourceCount} sources · ${bundle.instanceCount} linked instances` : bundle.reason ?? 'Manifest is unreadable'}</span><time>{new Date(bundle.modifiedAt).toLocaleString()}</time></button>)}</div>}
-
-    {state.selectedBundle?.readable && state.ingestRecord && <>
-        <RecordSummary record={state.ingestRecord}/>
-        <section className="cad-section cad-findings">
-          <header><h3>Findings</h3>{blockingFindings(state.ingestRecord).length > 1 && <button onClick={state.acknowledgeAllBlocking}>Acknowledge all {blockingFindings(state.ingestRecord).length}</button>}</header>
-          {state.ingestRecord.findings.length === 0 ? <p>No findings. This ingestion needs no acknowledgements.</p> : state.ingestRecord.findings.map((finding) => <label key={finding.id} className={finding.blocking ? 'blocking' : ''}>
-            {finding.blocking && <input type="checkbox" checked={state.acknowledgedFindingIds.includes(finding.id)} onChange={(event) => state.acknowledge(finding.id, event.target.checked)}/>}<span><b>{finding.kind.replaceAll('-', ' ')}</b><small>{findingDetail(finding)}</small></span>
-          </label>)}
-        </section>
-      </>}
+    {!loading && workflow.state !== 'not-configured' && !error && bundles.length === 0 && <div className="empty-state"><b>No CAD returns yet.</b><span>Send a design from Fusion 360 and it will appear here.</span></div>}
+    {state.selectedBundle?.readable && <CadReturnReview
+      bundle={state.selectedBundle}
+      record={state.ingestRecord}
+      ingesting={ingesting}
+      ingestError={ingestError}
+      prepare={() => { void cadCoordinator.ingest(); }}
+      acknowledgedFindingIds={state.acknowledgedFindingIds}
+      acknowledge={state.acknowledge}
+      acknowledgeAllBlocking={state.acknowledgeAllBlocking}
+    />}
+    {bundles.length > 0 && <CadHistory bundles={bundles} selectedPath={state.selectedBundle?.bundlePath ?? null} select={cadCoordinator.selectBundle}/>}
     </section>}
   </div>;
 }
