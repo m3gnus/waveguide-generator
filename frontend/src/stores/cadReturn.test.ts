@@ -230,6 +230,37 @@ describe('CAD return store', () => {
     expect(state.areaDriftOverrides).toEqual([]);
   });
 
+  it('carries the cardioid form across sessions and tolerates a profile written before it existed', () => {
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 1,
+    }, 'current');
+    const store = useCadReturnStore.getState();
+    store.selectBundle(bundle);
+    store.setPassiveCardioid({
+      enabled: true, rearVolumeL: 6, portLengthMm: 25, modelPortAreaM2: 0.05,
+      bemPortAreaM2: 0.0094, foamResistancePaSM3: 10_000, coupled: true,
+    });
+
+    resetCadReturnStore();
+    useCadReturnStore.getState().selectBundle(bundle);
+    expect(useCadReturnStore.getState().passiveCardioid).toMatchObject({
+      enabled: true, rearVolumeL: 6, coupled: true, invertPort: true, portAreaSource: 'user',
+    });
+
+    // A profile from before this section shipped carries no key at all. Losing
+    // every stored mesh size over a feature nobody used would be the worse
+    // answer, so the missing form starts at its defaults instead.
+    const raw = JSON.parse(localStorage.getItem(solveProfileStorageKey)!);
+    delete raw.profiles[0].settings.passiveCardioid;
+    localStorage.setItem(solveProfileStorageKey, JSON.stringify(raw));
+    resetCadReturnStore();
+    useCadReturnStore.getState().selectBundle(bundle);
+    expect(useCadReturnStore.getState().passiveCardioid).toMatchObject({ enabled: false, rearVolumeL: null });
+    expect(useCadReturnStore.getState().sourceSizesMm).toEqual(
+      Object.fromEntries(bundle.sources.map((source) => [source.id, source.suggestedResolutionMm])),
+    );
+  });
+
   it('restores a compatible persisted solve profile across sessions', () => {
     useDocumentStore.getState().setCadLink({
       designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 3,

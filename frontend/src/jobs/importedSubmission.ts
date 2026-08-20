@@ -4,6 +4,8 @@ import {
   channelAcceptsDriver,
   channelDriverWire,
   combineWire,
+  passiveCardioidBlocker,
+  passiveCardioidWire,
   unacknowledgedBlocking,
   useCadReturnStore,
 } from '../stores/cadReturn';
@@ -78,6 +80,12 @@ export function importedSubmissionBlocker(
   }
   if (rangeInvalid || listInvalid) return 'Enter a valid explicit frequency sweep.';
   if (!state.driveChannels.length) return 'At least one drive channel is required.';
+  // A half-filled cardioid form is refused here rather than dropped silently.
+  // Dropping it would submit the pre-campaign solve under a rail that says a
+  // campaign is configured, which is the one failure mode this feature cannot
+  // afford: the curve would look plausible and be the wrong physics.
+  const cardioid = passiveCardioidBlocker(state);
+  if (cardioid) return cardioid;
   return null;
 }
 
@@ -102,6 +110,12 @@ export function buildImportedSubmission(
 ): ImportedSolveSubmission {
   const record = state.ingestRecord;
   if (!record) throw new Error('Ingest a CAD return before solving.');
+  // The readiness gate already refuses this, but the builder is the last thing
+  // between the rail and the wire and an enabled-yet-incomplete form must never
+  // become a silently pre-campaign submission.
+  const cardioidBlocker = passiveCardioidBlocker(state);
+  if (cardioidBlocker) throw new Error(cardioidBlocker);
+  const passiveCardioid = passiveCardioidWire(state.passiveCardioid);
   const solveStore = useSolveOptionsStore.getState();
   const options = solveStore.options() as ImportedSolveSubmission['options'];
   if (solveStore.frequencyMode === 'range') {
@@ -136,6 +150,7 @@ export function buildImportedSubmission(
       skipped_source_ids: [...state.skippedSourceIds],
       exterior_only: state.exteriorOnly,
       ...(combine ? { combine } : {}),
+      ...(passiveCardioid ?? {}),
     },
     options,
   };
