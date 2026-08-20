@@ -527,6 +527,17 @@ def validate_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     instance_ids = [_validate_instance(item, f"$.instances[{index}]") for index, item in enumerate(instances)]
     if len(set(instance_ids)) != len(instance_ids):
         _fail("$.instances", "instance_id values must be unique")
+    object_ids = [str(item["object_id"]) for item in included]
+    if len(set(object_ids)) != len(object_ids):
+        _fail("$.scope.included", "object_id values must be unique")
+    instance_id_set = set(instance_ids)
+    for index, item in enumerate(included):
+        owner = item.get("wglink_instance_id")
+        if owner is not None and owner not in instance_id_set:
+            _fail(
+                f"$.scope.included[{index}].wglink_instance_id",
+                f"does not name an instances[] record: {owner!r}",
+            )
     anchor = coordinates.get("solver_anchor_instance_id")
     if len(instances) == 1:
         if anchor is not None and anchor != instance_ids[0]:
@@ -543,6 +554,23 @@ def validate_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     source_ids = [_validate_source(item, f"$.sources[{index}]", set(instance_ids)) for index, item in enumerate(sources)]
     if len(set(source_ids)) != len(source_ids):
         _fail("$.sources", "source ids must be unique")
+    channel_owners: dict[str, set[str]] = {}
+    for source in sources:
+        source_record = _mapping(source, "$.sources")
+        owner = source_record.get("instance_id")
+        if not isinstance(owner, str) or not owner:
+            continue
+        channel = str(source_record["default_drive_channel_id"])
+        channel_owners.setdefault(channel, set()).add(owner)
+    reused_channels = sorted(
+        channel for channel, owners in channel_owners.items() if len(owners) > 1
+    )
+    if reused_channels:
+        _fail(
+            "$.sources",
+            "default_drive_channel_id values must not span linked instances: "
+            + ", ".join(reused_channels),
+        )
     if _required(manifest, "acoustics", "$") is not None:
         _fail("$.acoustics", "must be null in Phase 2")
     return manifest

@@ -61,6 +61,35 @@ def test_worked_example_shape_and_real_member_table_validate(tmp_path: Path) -> 
     )
 
 
+def test_multi_instance_identity_refuses_body_and_channel_aliases() -> None:
+    manifest = _manifest(b"STEP")
+    second = deepcopy(manifest["instances"][0])
+    second["instance_id"] = "instance-2"
+    second["occurrence_path"] = "Speaker/WGLink 2"
+    manifest["instances"].append(second)
+    manifest["scope"]["included"].append(
+        {
+            **manifest["scope"]["included"][0],
+            "wglink_instance_id": "instance-2",
+        }
+    )
+    source = deepcopy(manifest["sources"][0])
+    source["id"] = "source-hf-2"
+    source["instance_id"] = "instance-2"
+    source["selectors"]["linked_throat"]["instance_id"] = "instance-2"
+    manifest["sources"].append(source)
+
+    with pytest.raises(WgReturnError, match="object_id values must be unique"):
+        validate_manifest(deepcopy(manifest))
+
+    manifest["scope"]["included"][1]["object_id"] = "speaker-2"
+    with pytest.raises(
+        WgReturnError,
+        match="default_drive_channel_id values must not span linked instances",
+    ):
+        validate_manifest(manifest)
+
+
 def test_reader_streams_step_hashing_and_refuses_over_limit_before_hashing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

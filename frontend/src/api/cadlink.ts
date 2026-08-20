@@ -5,9 +5,21 @@ import type { DesignIdentity } from '../stores/document';
 export interface CadReturnSourceSummary {
   id: string;
   role: string;
+  instanceId?: string | null;
   required: boolean;
   suggestedResolutionMm: number;
   defaultDriveChannelId: string;
+}
+
+export interface CadReturnInstanceSummary {
+  instanceId: string;
+  designId: string | null;
+  occurrencePath: string | null;
+  bodyObjectIds: string[];
+  bodyFingerprintHash: string | null;
+  transformHash: string | null;
+  sourceIds: string[];
+  driveChannelIds: string[];
 }
 
 export interface CadReturnBundle {
@@ -21,6 +33,8 @@ export interface CadReturnBundle {
   instanceCount: number | null;
   /** Registry projects represented by linked instances in this return. */
   designIds?: string[];
+  solverAnchorInstanceId?: string | null;
+  instances?: CadReturnInstanceSummary[];
   sources: CadReturnSourceSummary[];
   reason?: string | null;
 }
@@ -50,7 +64,7 @@ export interface CadLinkedDesignSnapshot {
   text: string;
 }
 
-export type FusionCadState = 'closed' | 'addin_offline' | 'no_document' | 'not_linked' | 'current' | 'stale';
+export type FusionCadState = 'closed' | 'addin_offline' | 'no_document' | 'not_linked' | 'instance_selection_required' | 'current' | 'stale';
 
 export interface FusionCadLink {
   instanceId: string;
@@ -110,6 +124,9 @@ export interface FusionCadStatus {
   currentFormula: string;
   fusionFormula: string | null;
   link: FusionCadLink | null;
+  /** Every active-document link matching this design; repeated placements are not collapsed. */
+  matchingLinks?: FusionCadLink[];
+  selectedInstanceId?: string | null;
   wgChangesAvailable: boolean;
   fusionChangesAvailable: boolean;
   documentChanged: boolean;
@@ -128,6 +145,7 @@ export interface CadReturnIngestRequest {
   skippedSourceIds: string[];
   areaDriftOverrides: string[];
   expectedDesignId: string | null;
+  expectedInstanceId?: string | null;
   symmetryMode: 'auto' | 'full';
 }
 
@@ -197,6 +215,18 @@ export interface CadReturnIngestRecord {
     [key: string]: unknown;
   };
   evidence?: { instances?: unknown[]; fem_air_volumes?: unknown[]; [key: string]: unknown };
+  identity?: {
+    selected_instance_id: string | null;
+    solver_anchor_instance_id: string | null;
+    instances: Array<{
+      instance_id: string;
+      design_id: string | null;
+      body_object_ids: string[];
+      assembly_from_link: number[][];
+      source_ids: string[];
+      default_drive_channel_ids: string[];
+    }>;
+  };
   sources: CadReturnSource[];
   mesh_sizes: { rigid_size_mm: number; transition_mm: number; source_size_mm: Record<string, number> };
   mesh?: {
@@ -283,6 +313,7 @@ export function getFusionCadStatus(
   identity: DesignIdentity | null,
   returnBundlePath: string | null = null,
   fetcher: typeof fetch = fetch,
+  instanceId: string | null = null,
 ): Promise<FusionCadStatus> {
   return jsonRequest('/api/cadlink/fusion-status', {
     method: 'POST',
@@ -290,6 +321,7 @@ export function getFusionCadStatus(
     body: JSON.stringify({
       design: currentDesignWire(serializeDesign(design)),
       identity,
+      instanceId,
       returnBundlePath,
     }),
   }, fetcher);

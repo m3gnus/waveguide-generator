@@ -26,7 +26,15 @@ from server.cadlink.api import (
     list_returns,
     post_ingest,
 )
-from server.cadlink.ingest import IngestRefusal, _canonical, compute_freshness, evaluate_instance_freshness, ingest_bundle, validate_registry_echoes
+from server.cadlink.ingest import (
+    IngestRefusal,
+    _canonical,
+    compute_freshness,
+    evaluate_instance_freshness,
+    ingest_bundle,
+    instance_identity_inventory,
+    validate_registry_echoes,
+)
 from server.mesh.imported import ImportedMeshDependencyError, polar_grid_from_symmetry
 from server.mesh.artifact import mesh_text_sha256
 from server.cadlink.wgreturn import WgReturnBundle
@@ -139,6 +147,90 @@ def test_consistency_contradiction_is_corruption() -> None:
     assert caught.value.corruption is True
 
 
+def test_instance_inventory_keeps_body_transform_source_and_channel_addresses_distinct() -> None:
+    manifest = {
+        "coordinate_system": {"solver_anchor_instance_id": "instance-b"},
+        "scope": {
+            "included": [
+                {"object_id": "body-b", "wglink_instance_id": "instance-b"},
+                {"object_id": "body-a", "wglink_instance_id": "instance-a"},
+            ]
+        },
+        "instances": [
+            {"instance_id": "instance-b", "design_id": "wgd_shared", "assembly_from_link": [[2]]},
+            {"instance_id": "instance-a", "design_id": "wgd_shared", "assembly_from_link": [[1]]},
+        ],
+        "sources": [
+            {"id": "source-b", "instance_id": "instance-b", "default_drive_channel_id": "drive-b"},
+            {"id": "source-a", "instance_id": "instance-a", "default_drive_channel_id": "drive-a"},
+        ],
+    }
+
+    inventory = instance_identity_inventory(
+        manifest, selected_instance_id="instance-b"
+    )
+
+    assert inventory == {
+        "selected_instance_id": "instance-b",
+        "solver_anchor_instance_id": "instance-b",
+        "instances": [
+            {
+                "instance_id": "instance-a",
+                "design_id": "wgd_shared",
+                "body_object_ids": ["body-a"],
+                "assembly_from_link": [[1]],
+                "source_ids": ["source-a"],
+                "default_drive_channel_ids": ["drive-a"],
+            },
+            {
+                "instance_id": "instance-b",
+                "design_id": "wgd_shared",
+                "body_object_ids": ["body-b"],
+                "assembly_from_link": [[2]],
+                "source_ids": ["source-b"],
+                "default_drive_channel_ids": ["drive-b"],
+            },
+        ],
+    }
+
+
+def test_ingest_refuses_repeated_design_without_exact_anchor_instance(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    manifest = {
+        "coordinate_system": {"solver_anchor_instance_id": "instance-a"},
+        "instances": [
+            {"instance_id": "instance-a", "design_id": "wgd_shared"},
+            {"instance_id": "instance-b", "design_id": "wgd_shared"},
+        ],
+    }
+    monkeypatch.setattr(
+        "server.cadlink.ingest.read_wgreturn",
+        lambda _path: SimpleNamespace(manifest=manifest),
+    )
+    store = CadLinkStore(tmp_path / "cadlink.db")
+
+    with pytest.raises(IngestRefusal, match="choose the linked instance"):
+        ingest_bundle(
+            tmp_path,
+            {},
+            [],
+            store,
+            tmp_path,
+            expected_design_id="wgd_shared",
+        )
+    with pytest.raises(IngestRefusal, match="not the return's solver anchor"):
+        ingest_bundle(
+            tmp_path,
+            {},
+            [],
+            store,
+            tmp_path,
+            expected_design_id="wgd_shared",
+            expected_instance_id="instance-b",
+        )
+
+
 def test_ingest_store_round_trip(tmp_path: Path) -> None:
     store = CadLinkStore(tmp_path / "cadlink.db")
     row = store.allocate_ingest(manifest_sha256="sha256:m", artifact_sha256="sha256:a", record_builder=lambda ingest_id, created: json.dumps({"ingest_id": ingest_id, "created_at": created}))
@@ -153,10 +245,16 @@ def test_endpoint_validates_workspace_and_returns_pipeline_record(monkeypatch, t
     bundle.mkdir(parents=True)
     app.state.cad_workspace.select(workspace)
     expected = {"ingest_id": "wgi_01J5A8QK3M9T2XVBH0RD7NWE6C", "report_sha256": "sha256:test", "findings": []}
-    monkeypatch.setattr("server.cadlink.api.ingest_bundle", lambda *_args, **_kwargs: expected)
-    payload = CadReturnIngestRequest.model_validate({"bundlePath": "wgreturn/speaker.wgreturn", "mesh": {"rigidSizeMm": 20, "transitionMm": 40, "sourceSizeMm": {"source-hf": 4}}, "skippedSourceIds": [], "areaDriftOverrides": ["source-hf"]})
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        "server.cadlink.api.ingest_bundle",
+        lambda *_args, **kwargs: captured.update(kwargs) or expected,
+    )
+    payload = CadReturnIngestRequest.model_validate({"bundlePath": "wgreturn/speaker.wgreturn", "mesh": {"rigidSizeMm": 20, "transitionMm": 40, "sourceSizeMm": {"source-hf": 4}}, "skippedSourceIds": [], "areaDriftOverrides": ["source-hf"], "expectedDesignId": "wgd_speaker", "expectedInstanceId": "instance-a"})
     response = asyncio.run(post_ingest(payload, SimpleNamespace(app=app)))
     assert response == expected
+    assert captured["expected_design_id"] == "wgd_speaker"
+    assert captured["expected_instance_id"] == "instance-a"
     with pytest.raises(ValidationError, match="extra_forbidden"):
         CadReturnIngestRequest.model_validate({"bundlePath": "wgreturn/speaker.wgreturn", "mesh": {"rigidSizeMm": 20, "transitionMm": 40, "sourceSizeMm": {}}, "unexpected": True})
 
@@ -209,10 +307,24 @@ def test_return_listing_reads_cheap_inventory_and_marks_bad_manifests(tmp_path: 
         "sourceCount": 1,
         "instanceCount": 1,
         "designIds": ["wgd_speaker"],
+        "solverAnchorInstanceId": None,
+        "instances": [
+            {
+                "instanceId": "instance-a",
+                "designId": "wgd_speaker",
+                "occurrencePath": None,
+                "bodyObjectIds": [],
+                "bodyFingerprintHash": None,
+                "transformHash": None,
+                "sourceIds": [],
+                "driveChannelIds": [],
+            }
+        ],
         "sources": [
             {
                 "id": "source-hf",
                 "role": "HF",
+                "instanceId": None,
                 "required": True,
                 "suggestedResolutionMm": 3.5,
                 "defaultDriveChannelId": "drive-hf",

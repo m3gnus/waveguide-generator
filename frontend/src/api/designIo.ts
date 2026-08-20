@@ -130,6 +130,7 @@ export async function sendDesignToCad(
     ?? `wglink-${Date.now()}-${Math.random().toString(16).slice(2)}`,
   fusionTarget: {
     documentId: string;
+    instanceId: string;
     returnStateHash: string | null;
   } | null = null,
   polarConfig?: unknown,
@@ -161,6 +162,7 @@ export async function sendDesignToCad(
       baseName,
       identity,
       expectedFusionDocumentId: fusionTarget?.documentId ?? null,
+      expectedFusionInstanceId: fusionTarget?.instanceId ?? null,
       expectedFusionReturnStateHash: fusionTarget?.returnStateHash ?? null,
     }),
   });

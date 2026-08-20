@@ -183,6 +183,13 @@ For Fusion 360:
    Geometry rail's linked-design card in CAD mode). WG writes the bundle, starts or
    raises Fusion, and the CAD Link panel reports when the add-in heartbeat is online.
 
+If the active Fusion document contains more than one placement of the same WG
+design, the linked-design card asks which managed instance you mean. Choose the
+instance ID before checking its body freshness, requesting a return, or sending an
+update. WG never silently chooses the first copy. A returned multi-instance assembly
+also carries an explicit solver-anchor instance; preparation refuses a repeated
+design when that identity is missing or contradicts the selected instance.
+
 For Onshape:
 
 1. In Onshape, open **My account → Developer → API keys** and create a personal API

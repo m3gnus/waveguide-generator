@@ -331,6 +331,14 @@ describe('CadLinkPanel', () => {
     expect(fusionWorkflowView({ ...currentFusion, state: 'stale', wgChangesAvailable: true })).toMatchObject({
       state: 'stale', action: 'update',
     });
+    expect(fusionWorkflowView({
+      ...currentFusion,
+      state: 'instance_selection_required',
+      link: null,
+      matchingLinks: [currentFusion.link!, { ...currentFusion.link!, instanceId: 'instance-b' }],
+    })).toMatchObject({
+      state: 'instance-selection', action: null,
+    });
     const staleDetectionExplanation = 'Stale detection is limited for this returned bundle.';
     expect(fusionWorkflowView({
       ...currentFusion,

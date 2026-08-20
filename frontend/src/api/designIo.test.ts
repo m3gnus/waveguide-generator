@@ -170,6 +170,7 @@ describe('Send to CAD requests', () => {
 
     const result = await sendDesignToCad(
       hydrateDesignDocument({ formula: 'OSSE' }), 12, 'horn', identity, fetcher, 'attempt-1',
+      { documentId: 'fusion:doc-a', instanceId: 'instance-b', returnStateHash: 'sha256:return-a' },
     );
 
     expect(calls.map(({ url }) => url)).toEqual([
@@ -177,7 +178,12 @@ describe('Send to CAD requests', () => {
     ]);
     expect(new Headers(calls[1].init?.headers).get('Idempotency-Key')).toBe('attempt-1');
     expect(JSON.parse(String(calls[1].init?.body))).toMatchObject({
-      designRevision: 12, baseName: 'horn', identity,
+      designRevision: 12,
+      baseName: 'horn',
+      identity,
+      expectedFusionDocumentId: 'fusion:doc-a',
+      expectedFusionInstanceId: 'instance-b',
+      expectedFusionReturnStateHash: 'sha256:return-a',
     });
     expect(result).toMatchObject({ sequence: 4, bundlePath: '/cad/wglink/horn.wglink' });
   });

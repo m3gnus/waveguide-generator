@@ -633,6 +633,7 @@ function LinkedDesignCard({ forceOpen = false }: { forceOpen?: boolean }) {
   const actionLabel = onshape
     ? workflow.action === 'update' ? 'Send WG changes to Onshape' : 'Create in Onshape'
     : workflow.action === 'update' ? 'Send WG changes to Fusion' : 'Open in Fusion 360';
+  const matchingFusionLinks = cadCoordinator.fusionStatus?.matchingLinks ?? [];
   return <Section
     title={CAD_CONTROLS.linkedDesign.section}
     description="The CAD document linked to this design, its aggregate freshness, and the outbound rebuild action."
@@ -643,6 +644,20 @@ function LinkedDesignCard({ forceOpen = false }: { forceOpen?: boolean }) {
       <span className="cad-connection-dot" aria-hidden="true"/>
       <div><b>{workflow.headline}</b><span>{workflow.detail}</span></div>
     </div>
+    {!onshape && matchingFusionLinks.length > 1 && <label className="field-row linked-instance-selection">
+      <span>Managed Fusion instance</span>
+      <select
+        aria-label="Linked Fusion instance"
+        value={cadCoordinator.fusionStatus?.selectedInstanceId ?? ''}
+        onChange={(event) => cadCoordinator.selectFusionInstance(event.target.value)}
+      >
+        <option value="" disabled>Choose an instance</option>
+        {matchingFusionLinks.map((link) => <option value={link.instanceId} key={link.instanceId}>
+          {link.designName ? `${link.designName} · ` : ''}{link.instanceId}
+        </option>)}
+      </select>
+      <small>Body freshness and update/return actions are scoped to this instance ID. Placements of the same design are never merged.</small>
+    </label>}
     <FusionParameterDrift
       parameterDriftCount={driftCount}
       driftedParameters={cadCoordinator.fusionStatus?.link?.driftedParameters}

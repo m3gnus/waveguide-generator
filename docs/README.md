@@ -18,6 +18,7 @@ the exception in `validation/`: it is a blank form to copy, not evidence.
 | [Solve symmetry](reference/SYMMETRY-CONTRACT.md) | Solver and geometry developers | Canonical contract | `server/solver/symmetry.py` and its tests |
 | [Result contract](reference/RESULT-CONTRACTS.md) | Solver, chart, export, and integration developers | Canonical contracts v1/v2 | native and imported result mappers, 2026-08-20 |
 | [Export contract](reference/EXPORT-CONTRACTS.md) | UI, API, and CAD developers | Canonical contract | `server/exports/` and `frontend/src/results/`, 2026-08-13 |
+| [Multi-instance CAD identity](reference/MULTI-INSTANCE-CAD-IDENTITY.md) | CAD adapter, server, and UI developers | Implemented first-slice contract | Fusion status, return listing/ingest, and UI, 2026-08-20 |
 | [External STEP isolation](plans/STEP-PARSER-ISOLATION.md) | Security reviewers and CAD developers | Accepted design gate | Child-process boundary, 2026-08-13 |
 | [V1 compatibility](legacy/V1-COMPATIBILITY.md) | Maintainers and migration work | Maintained legacy summary | Current code plus archived v1 inventory |
 | [August 2026 rebuild](history/REBUILD-2026-08.md) | Maintainers | Historical summary | Git history; not an implementation brief |
