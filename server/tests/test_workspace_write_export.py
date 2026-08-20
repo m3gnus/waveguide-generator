@@ -701,7 +701,9 @@ def test_a_folder_chosen_before_the_setting_existed_still_captures(tmp_path: Pat
     assert state.capture_document is True
 
 
-def test_v1_task_scratch_is_never_adopted_as_an_export_folder(tmp_path: Path) -> None:
+def test_v1_task_scratch_is_never_adopted_as_an_export_folder(
+    tmp_path: Path, monkeypatch
+) -> None:
     """The data directory's ``workspace`` is migrated v1 job scratch.
 
     It holds one UUID folder per task, so the "has run folders" evidence test
@@ -709,6 +711,9 @@ def test_v1_task_scratch_is_never_adopted_as_an_export_folder(tmp_path: Path) ->
     offered as a legacy default for that reason; this pins the reason.
     """
 
+    # Whether the checkout's ignored legacy output/ happens to contain runs is
+    # unrelated to the v1 data-directory scratch classification under test.
+    monkeypatch.setattr(app_module, "LEGACY_WORKSPACE_DIR", tmp_path / "legacy-output")
     data = tmp_path / "data"
     scratch = data / "workspace" / "05446457-3c9d-4d53-9723-dc019ff9e4c3"
     scratch.mkdir(parents=True)
