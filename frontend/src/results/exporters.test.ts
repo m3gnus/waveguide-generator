@@ -208,6 +208,26 @@ describe('result exporters', () => {
     expect([...new Uint8Array(await (saveBlob.mock.calls[0][0] as Blob).arrayBuffer())])
       .toEqual([80, 75, 3, 4]);
   });
+  it('writes both derived-acoustics sidecars as one retryable format', async () => {
+    const saveText = vi.fn();
+
+    await expect(runExportFormat('derived_acoustics', {
+      result,
+      jobStem: 'horn_1',
+      preferences: preferencesStore.getSnapshot(),
+      saveText,
+    })).resolves.toEqual([
+      'horn_1_derived_acoustics.csv',
+      'horn_1_derived_acoustics.json',
+    ]);
+
+    expect(saveText).toHaveBeenCalledTimes(2);
+    expect(saveText.mock.calls[0][0]).toContain('power_response_db_spl_avg');
+    expect(JSON.parse(saveText.mock.calls[1][0]).rows[0]).toMatchObject({
+      frequency_hz: 100,
+      power_response_db_spl_avg: 87,
+    });
+  });
   it('exports only the selected CAD drive channel and refuses an ambiguous wrapper', async () => {
     const wrapped: ResultPayload = {
       frequencies: [],
