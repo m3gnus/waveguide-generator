@@ -49,13 +49,14 @@ def test_windows_performance_describes_serial_sweep_default() -> None:
 
 
 def test_release_docs_distinguish_current_workflow_from_dated_evidence() -> None:
-    readiness = _read("docs/plans/RELEASE-READINESS.md")
+    documentation_index = _read("docs/README.md")
     workflow = _read(".github/workflows/ci.yml")
     validation = _read("docs/validation/2026-08/WINDOWS-VALIDATION.md")
 
-    assert "Ubuntu, macOS, Windows, frontend, codec, and drift" in readiness
+    assert "workspace-local" in documentation_index
+    assert "Maintainer backlogs" in documentation_index
     assert "os: [ubuntu-latest, macos-latest, windows-latest]" in workflow
-    assert "Confirm the current GitHub Actions matrix is green" in readiness
+    assert "Current gates are maintained in the workspace-local" in validation
     assert "Windows CI leg is written but unexecuted" in validation
 
 

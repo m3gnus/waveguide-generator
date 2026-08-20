@@ -9,7 +9,7 @@ original application.
 ![Waveguide Generator interface](docs/assets/waveguide-generator-interface.png)
 
 The [documentation index](docs/README.md) separates the user and development guides,
-current contracts, active plans, legacy notes, and dated validation evidence.
+current contracts, accepted design gates, legacy notes, and dated validation evidence.
 
 ## Install
 

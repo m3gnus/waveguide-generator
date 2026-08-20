@@ -2,7 +2,7 @@
 
 > Historical evidence captured in August 2026. Statements such as “never” and
 > “not implemented” describe the captured revision, not the current release state.
-> See [release readiness](../../plans/RELEASE-READINESS.md) for current gates.
+> Current gates are maintained in the workspace-local maintainer backlog.
 
 **Status:** first native Windows run of v2, 2026-08-07.
 
@@ -662,8 +662,8 @@ Ordered by how much it matters.
    Nor has any release artifact been fetched over HTTPS, on any platform: no
    `v*` tag exists and `release.yml` has never fired, so the whole download is
    exercised against `file://` fixtures shaped like a release.
-   [Release readiness](../../plans/RELEASE-READINESS.md) now separates current
-   gates from what this report proved by execution versus what was only written.
+   The workspace-local release backlog now separates current gates from what this
+   report proved by execution versus what was only written.
 2. **Stop is prompt, not immediate.** Check 12. The first solve after a start
    still has a ~17 s window with no cancellation checkpoint in it. An explicit
    `WG2_SOLVER_WARMUP=1` experiment can move that cost earlier, but it is not a

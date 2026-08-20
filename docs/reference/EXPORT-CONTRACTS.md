@@ -68,5 +68,5 @@ CAD bundles use idempotency keys, stable identities, manifest hashes, and atomic
 publication. The release SPA archive is a separate distribution artifact and is verified
 against its published SHA-256 before extraction.
 
-Remaining archive/dispatcher/catalog work is intentionally isolated in
-[RUN-EXPORT-FOLLOWUPS.md](../plans/RUN-EXPORT-FOLLOWUPS.md).
+Remaining archive/dispatcher/catalog product work is tracked in the maintainer's
+workspace-local backlog, not as part of this public contract.

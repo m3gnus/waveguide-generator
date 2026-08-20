@@ -1,6 +1,6 @@
 # Waveguide Generator documentation
 
-This directory separates current product contracts from plans and dated evidence. A
+This directory separates current product contracts from design gates and dated evidence. A
 document under `history/`, `legacy/`, or a dated folder in `validation/` describes a past
 state; it is not an instruction to reimplement that state. The measurement template is
 the exception in `validation/`: it is a blank form to copy, not evidence.
@@ -18,15 +18,13 @@ the exception in `validation/`: it is a blank form to copy, not evidence.
 | [Solve symmetry](reference/SYMMETRY-CONTRACT.md) | Solver and geometry developers | Canonical contract | `server/solver/symmetry.py` and its tests |
 | [Result contract](reference/RESULT-CONTRACTS.md) | Solver, chart, export, and integration developers | Canonical contracts v1/v2 | native and imported result mappers, 2026-08-20 |
 | [Export contract](reference/EXPORT-CONTRACTS.md) | UI, API, and CAD developers | Canonical contract | `server/exports/` and `frontend/src/results/`, 2026-08-13 |
-| [Release readiness](plans/RELEASE-READINESS.md) | Maintainers | Active checklist | Local repository evidence, 2026-08-13 |
-| [Run-export follow-ups](plans/RUN-EXPORT-FOLLOWUPS.md) | Product and export developers | Active plan | Remaining work only, 2026-08-13 |
+| [External STEP isolation](plans/STEP-PARSER-ISOLATION.md) | Security reviewers and CAD developers | Accepted design gate | Child-process boundary, 2026-08-13 |
 | [V1 compatibility](legacy/V1-COMPATIBILITY.md) | Maintainers and migration work | Maintained legacy summary | Current code plus archived v1 inventory |
 | [August 2026 rebuild](history/REBUILD-2026-08.md) | Maintainers | Historical summary | Git history; not an implementation brief |
 | [Measurement template](validation/MEASUREMENT-TEMPLATE.md) | Anyone validating a build against a solve | Current template | Copy per case; pairs with the Results panel's measured overlay |
 | [Validation cases](validation/CASES.md) | Anyone judging solver accuracy | Living index | Measured-vs-simulated references; first entry is the published CAFMEH-P3 comparison |
 | [August 2026 validation](validation/2026-08/README.md) | Maintainers | Dated evidence | Captured machines and commits; not current release status |
 
-The active CAD-link plans intentionally remain at the workspace root while another
-task is editing them. When that plan closes, public-safe authoritative material will
-be curated into `plans/cad-link/`; private or superseded working notes belong in the
-workspace archive.
+Maintainer backlogs and working briefs are workspace-local and intentionally absent
+from the public repository. Stable contracts and accepted design decisions belong
+here; private or superseded working notes belong in the workspace archive.

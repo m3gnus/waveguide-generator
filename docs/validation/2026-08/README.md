@@ -12,4 +12,5 @@ constraints stated inside them; they are not a current release status dashboard.
 - [Apple Silicon performance](MACOS-PERFORMANCE.md) — regression validation and preview
   profiling after the Windows changes.
 
-Current release gates live in [RELEASE-READINESS.md](../../plans/RELEASE-READINESS.md).
+Current release gates are maintained in the workspace-local maintainer backlog, not in
+this dated evidence directory.

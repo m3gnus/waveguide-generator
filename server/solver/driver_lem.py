@@ -10,8 +10,8 @@ pinned ``hornlab-sim`` for the lumped physics:
   symmetry-reduced solve equals the full-domain average.
 - Basis scaling by cone **acceleration**, not velocity:
   ``p_V = (jω·U/S)·p_basis`` (using velocity here was the historical
-  −6 dB/oct + −90° bug, ``docs/plans/per-driver-lem-coupling.md`` in the
-  add-in repo).
+  −6 dB/oct + −90° bug recorded in the add-in's July 2026 implementation
+  history).
 
 Convention boundary: ``hornlab_sim`` speaks engineering ``e^{+jωt}``;
 solver fields are ``e^{-iωt}``. Engineering scale factors are applied to
