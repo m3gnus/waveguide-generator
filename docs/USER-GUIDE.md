@@ -140,9 +140,12 @@ solved, from which CAD document and return state, and with which settings.
 When a run owns a radiation matrix, both its CSV presentation and lossless NPZ are
 archived beside the ordinary result JSON and frequency CSV.
 
-Every archive includes full JSON, frequency CSV, derived-acoustics sidecars, and a
-self-contained HTML report. Imported Metal archives also keep each retained drive
-channel's complex pressure basis. **Archive every completed run** is on by default. Results in the app's job database
+Every archive includes full JSON, frequency CSV, derived-acoustics sidecars, a
+self-contained HTML report, and the exact retained solve mesh. Imported Metal archives
+also keep each retained drive channel's complex pressure basis. WG copies the results,
+mesh, pressure bases, and radiation matrix from one database snapshot before it starts
+building files, so result retention cannot leave a mixed or half-pruned archive.
+**Archive every completed run** is on by default. Results in the app's job database
 are kept for 30 days, or until the run limit is passed, and rating a run exempts it;
 the Workspace archive is kept until you delete it. Archiving is frontend automation,
 so a run solved through the CLI is not automatically added to this design-grouped

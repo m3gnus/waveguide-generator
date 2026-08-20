@@ -695,9 +695,14 @@ describe('result exporters', () => {
     const writes: Array<{ subdirectory: string; members: Array<{ relative_path: string }> }> = [];
     const fetcher = vi.fn<typeof fetch>(async (input, init) => {
       const path = String(input);
-      if (path === '/api/results/archive-cardioid') return new Response(JSON.stringify(result), { status: 200 });
-      if (path.endsWith('/presentation')) return new Response(JSON.stringify(radiation), { status: 200 });
-      if (path === '/api/radiation-impedance/archive-cardioid') return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+      if (path === '/api/jobs/archive-cardioid/archive-snapshot') return new Response(JSON.stringify({
+        schema_version: 1,
+        results: result,
+        results_sha256: 'a'.repeat(64),
+        mesh_artifact: null,
+        pressure_bases: [{ channel_id: 'mf drive', content_base64: 'BAUG' }],
+        radiation_impedance: { content_base64: 'AQID', presentation: radiation },
+      }), { status: 200 });
       if (path === '/api/workspace/write-export') {
         const payload = JSON.parse(String(init?.body)) as { subdirectory: string; members: Array<{ relative_path: string }> };
         writes.push(payload);
@@ -716,8 +721,46 @@ describe('result exporters', () => {
       '8_Cardioid_derived_acoustics.csv',
       '8_Cardioid_derived_acoustics.json',
       '8_Cardioid_report.html',
+      'mf-drive_pressure_basis.npz',
       '8_Cardioid_radiation_impedance.npz',
       '8_Cardioid_radiation_impedance.csv',
     ]);
+    expect(fetcher.mock.calls.map(([input]) => String(input)).filter((path) => (
+      path.includes('archive-cardioid')
+    ))).toEqual(['/api/jobs/archive-cardioid/archive-snapshot']);
+  });
+
+  it('writes the exact retained mesh copied into the archive snapshot', async () => {
+    const job = {
+      id: 'archive-mesh', run_number: 9, parent_job_id: null, status: 'complete', progress: 1,
+      stage: null, stage_message: null, created_at: '2026-08-20T10:00:00Z', queued_at: '2026-08-20T10:00:00Z',
+      started_at: '2026-08-20T10:00:01Z', completed_at: '2026-08-20T10:02:00Z', config_summary: {},
+      solve_options: {} as JobItem['solve_options'], has_results: true, has_mesh_artifact: false,
+      label: 'Mesh Run', error_message: null, cancellation_requested: false, mesh_stats: null, script_snapshot: null,
+      design_revision: 1, polar_grid: {}, rating: null, exported_files: [], auto_export_completed_at: null,
+      auto_export_formats: {}, archived_at: null, raw_results_file: null, mesh_artifact_file: null, log_tail: [],
+    } satisfies JobItem;
+    const writes: Array<{ subdirectory: string; members: Array<{ relative_path: string; content_base64: string }> }> = [];
+    const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+      if (String(input) === '/api/jobs/archive-mesh/archive-snapshot') return new Response(JSON.stringify({
+        schema_version: 1, results: result, results_sha256: 'b'.repeat(64),
+        mesh_artifact: 'exact mesh bytes', pressure_bases: [], radiation_impedance: null,
+      }), { status: 200 });
+      const payload = JSON.parse(String(init?.body));
+      writes.push(payload);
+      return new Response(JSON.stringify({
+        directory: `/workspace/${payload.subdirectory}`,
+        files: payload.members.map(({ relative_path }: { relative_path: string }) => `/workspace/${payload.subdirectory}/${relative_path}`),
+      }), { status: 200 });
+    });
+
+    await archiveRunToWorkspace(job, preferencesStore.getSnapshot(), fetcher);
+
+    expect(writes[1].members).toEqual([{
+      relative_path: '9_Mesh_Run.msh',
+      content_base64: 'ZXhhY3QgbWVzaCBieXRlcw==',
+    }]);
+    expect(JSON.parse(atob(writes[2].members[0].content_base64)).artifacts.mesh)
+      .toBe('9_Mesh_Run.msh');
   });
 });

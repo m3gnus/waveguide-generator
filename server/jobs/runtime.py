@@ -9,6 +9,7 @@ strong task references port v1 ``server/services/job_runtime.py:23-41,92-208,
 from __future__ import annotations
 
 import asyncio
+import base64
 from collections import deque
 import copy
 from dataclasses import dataclass, field
@@ -1352,6 +1353,83 @@ class JobRuntime:
         if payload is None:
             raise JobResourceUnavailableError("Results not available")
         return payload
+
+    async def get_archive_snapshot(self, job_id: str) -> dict[str, Any]:
+        """Copy every retained archive input before retention may resume.
+
+        The store read is deliberately one operation.  Expensive presentation
+        and public pressure-basis conversion happens afterwards from copied
+        bytes, so retention is neither blocked by NumPy work nor able to make a
+        multi-member archive observe a mixture of pre- and post-prune state.
+        """
+
+        from server.jobs.radiation_impedance import (
+            radiation_impedance_presentation,
+        )
+        from server.solver.combine import deserialize_channel_bases
+        from server.solver.pressure_basis import export_pressure_basis
+
+        await self.start()
+        snapshot = await asyncio.to_thread(self.store.get_archive_snapshot, job_id)
+        if snapshot is None:
+            raise JobNotFoundError(job_id)
+        job = snapshot["job"]
+        if job["status"] != "complete":
+            raise JobConflictError(f"Job not complete. Current status: {job['status']}")
+        results_text = snapshot["results_text"]
+        if results_text is None:
+            raise JobResourceUnavailableError("Results not available")
+        try:
+            results = json.loads(results_text)
+        except json.JSONDecodeError as exc:
+            raise JobResourceUnavailableError(
+                "Stored results are not readable JSON"
+            ) from exc
+
+        pressure_bases: list[dict[str, str]] = []
+        bases_npz = snapshot["channel_bases"]
+        if bases_npz is not None:
+            try:
+                channel_ids = list(deserialize_channel_bases(bases_npz)["channel_ids"])
+                for channel_id in channel_ids:
+                    artifact = export_pressure_basis(
+                        bases_npz, results, str(channel_id)
+                    )
+                    pressure_bases.append(
+                        {
+                            "channel_id": artifact.channel_id,
+                            "content_base64": base64.b64encode(
+                                artifact.content
+                            ).decode("ascii"),
+                        }
+                    )
+            except (KeyError, TypeError, ValueError) as exc:
+                raise JobResourceUnavailableError(
+                    f"Pressure-basis artifact could not be read: {exc}"
+                ) from exc
+
+        radiation: dict[str, Any] | None = None
+        radiation_npz = snapshot["radiation_impedance"]
+        if radiation_npz is not None:
+            try:
+                presentation = radiation_impedance_presentation(radiation_npz)
+            except ValueError as exc:
+                raise JobResourceUnavailableError(
+                    f"Radiation-impedance artifact could not be read: {exc}"
+                ) from exc
+            radiation = {
+                "content_base64": base64.b64encode(radiation_npz).decode("ascii"),
+                "presentation": presentation,
+            }
+
+        return {
+            "schema_version": 1,
+            "results": results,
+            "results_sha256": snapshot["results_sha256"],
+            "mesh_artifact": snapshot["mesh_text"],
+            "pressure_bases": pressure_bases,
+            "radiation_impedance": radiation,
+        }
 
     async def get_radiation_impedance(self, job_id: str) -> bytes:
         """Return the lossless passive-cardioid radiation matrix artifact."""

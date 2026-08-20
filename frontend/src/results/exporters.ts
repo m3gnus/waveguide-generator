@@ -1,6 +1,6 @@
 import { downloadBlob, downloadText } from '../api/designIo';
 import type { JobItem } from '../api/jobsSocket';
-import { fetchJobResults, fetchRadiationImpedancePresentation, type RadiationImpedancePresentation } from '../api/results';
+import { fetchJobArchiveSnapshot, fetchRadiationImpedancePresentation, type RadiationImpedancePresentation } from '../api/results';
 import { archiveFolderForJob, exportStemForJob, exportSubdirectoryForJob } from '../jobs/exportNaming';
 import { buildDesignRecord, buildRunRecord } from '../jobs/runArchive';
 import { resultExportSnapshot } from './exportContext';
@@ -42,6 +42,12 @@ export interface ExportContext {
   saveText?: (text: string, filename: string, type?: string) => void;
   now?: Date;
   destination?: 'manual' | 'workspace';
+  /** Retention-consistent artifacts copied by the permanent-archive endpoint. */
+  archiveSnapshot?: {
+    pressureBases: Record<string, { blob: Blob; filename: string }>;
+    radiationImpedance?: Blob;
+    radiationPresentation?: RadiationImpedancePresentation;
+  };
 }
 
 export interface ExportFailure { format: ExportFormat; reason: string }
@@ -305,6 +311,13 @@ async function blobBase64(blob: Blob): Promise<string> {
   return btoa(chunks.join(''));
 }
 
+function blobFromBase64(content: string, type = 'application/octet-stream'): Blob {
+  const decoded = atob(content);
+  const bytes = new Uint8Array(decoded.length);
+  for (let index = 0; index < decoded.length; index += 1) bytes[index] = decoded.charCodeAt(index);
+  return new Blob([bytes], { type });
+}
+
 /**
  * What to do about files a previous export already wrote.
  *
@@ -369,6 +382,9 @@ function requireArtifactJob(context: ExportContext): string {
 async function radiationImpedancePresentation(
   context: ExportContext,
 ): Promise<RadiationImpedancePresentation> {
+  if (context.archiveSnapshot?.radiationPresentation) {
+    return context.archiveSnapshot.radiationPresentation;
+  }
   if (context.result?.radiation_impedance) return context.result.radiation_impedance;
   const presentation = await fetchRadiationImpedancePresentation(
     requireArtifactJob(context), context.fetcher ?? fetch,
@@ -378,6 +394,11 @@ async function radiationImpedancePresentation(
 }
 
 async function radiationImpedanceNpz(context: ExportContext): Promise<string[]> {
+  if (context.archiveSnapshot?.radiationImpedance) {
+    const filename = `${context.jobStem}_radiation_impedance.npz`;
+    (context.saveBlob ?? downloadBlob)(context.archiveSnapshot.radiationImpedance, filename);
+    return [filename];
+  }
   const jobId = requireArtifactJob(context);
   const response = await (context.fetcher ?? fetch)(
     `/api/radiation-impedance/${encodeURIComponent(jobId)}`,
@@ -607,6 +628,18 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
   if (format === 'png') return chartPng(context);
   if (format === 'pressure_basis') {
     requireResult(context);
+    const retained = context.channelId
+      ? context.archiveSnapshot?.pressureBases[context.channelId]
+      : Object.values(context.archiveSnapshot?.pressureBases ?? {}).length === 1
+        ? Object.values(context.archiveSnapshot?.pressureBases ?? {})[0]
+        : undefined;
+    if (retained) {
+      (context.saveBlob ?? downloadBlob)(retained.blob, retained.filename);
+      return [retained.filename];
+    }
+    if (context.archiveSnapshot) {
+      throw new Error('This archive snapshot has no retained pressure basis for the selected channel.');
+    }
     if (!context.jobId) throw new Error('This export requires the completed job identity.');
     const query = context.channelId
       ? `?channel_id=${encodeURIComponent(context.channelId)}`
@@ -847,22 +880,47 @@ export async function archiveRunToWorkspace(
   preferences: Preferences,
   fetcher: typeof fetch = fetch,
 ): Promise<string[]> {
-  const subdirectory = exportSubdirectoryForJob(job);
+  const snapshot = await fetchJobArchiveSnapshot(job.id, fetcher);
+  const radiationImpedance = snapshot.radiation_impedance
+    ? blobFromBase64(snapshot.radiation_impedance.content_base64)
+    : undefined;
+  // Availability in the archive record must describe the transaction snapshot,
+  // not a jobs-socket item that may predate a retention event.
+  const archiveJob: JobItem = {
+    ...job,
+    has_mesh_artifact: Boolean(snapshot.mesh_artifact),
+    has_pressure_basis_artifact: snapshot.pressure_bases.length > 0,
+    has_radiation_impedance_artifact: Boolean(radiationImpedance),
+    radiation_impedance_artifact_bytes: radiationImpedance?.size,
+  };
+  const subdirectory = exportSubdirectoryForJob(archiveJob);
+  const pressureBases = Object.fromEntries(snapshot.pressure_bases.map(({ channel_id, content_base64 }) => {
+    const stem = channel_id.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[.-]+|[.-]+$/g, '') || 'channel';
+    return [channel_id, {
+      filename: `${stem}_pressure_basis.npz`,
+      blob: blobFromBase64(content_base64),
+    }];
+  }));
   const formats: ExportFormat[] = [
     ...ARCHIVE_FORMATS,
-    ...(job.has_pressure_basis_artifact ? ['pressure_basis' as const] : []),
-    ...(job.has_radiation_impedance_artifact
+    ...(snapshot.pressure_bases.length ? ['pressure_basis' as const] : []),
+    ...(snapshot.radiation_impedance
       ? RADIATION_IMPEDANCE_ARCHIVE_FORMATS
       : []),
   ];
   const bundle = await runWorkspaceExportBundle({
-    result: await fetchJobResults(job.id, fetcher) as ResultPayload,
-    ...resultExportSnapshot(job),
-    jobId: job.id,
-    jobStem: exportStemForJob(job),
-    hasRadiationImpedanceArtifact: job.has_radiation_impedance_artifact,
+    result: snapshot.results as ResultPayload,
+    ...resultExportSnapshot(archiveJob),
+    jobId: archiveJob.id,
+    jobStem: exportStemForJob(archiveJob),
+    hasRadiationImpedanceArtifact: Boolean(snapshot.radiation_impedance),
+    archiveSnapshot: {
+      pressureBases,
+      radiationImpedance,
+      radiationPresentation: snapshot.radiation_impedance?.presentation,
+    },
     workspaceSubdirectory: subdirectory,
-    designName: job.label ?? undefined,
+    designName: archiveJob.label ?? undefined,
     preferences,
     fetcher,
     // Archive retries must reproduce identical JSON/report bytes. A wall-clock
@@ -873,11 +931,17 @@ export async function archiveRunToWorkspace(
   if (bundle.failures.length) {
     throw new Error(bundle.failures.map(({ format, reason }) => `${format} (${reason})`).join(', '));
   }
+  const mesh = snapshot.mesh_artifact
+    ? await writeWorkspaceFiles(subdirectory, [{
+      filename: `${exportStemForJob(archiveJob)}.msh`,
+      blob: new Blob([snapshot.mesh_artifact], { type: 'text/plain;charset=utf-8' }),
+    }], fetcher, 'merge_identical')
+    : { files: [] };
   const record = await writeWorkspaceFiles(
-    subdirectory, [textFile(buildRunRecord(job))], fetcher, 'merge_identical',
+    subdirectory, [textFile(buildRunRecord(archiveJob))], fetcher, 'merge_identical',
   );
   const pointer = await writeWorkspaceFiles(
-    archiveFolderForJob(job), [textFile(buildDesignRecord(job))], fetcher, 'overwrite',
+    archiveFolderForJob(archiveJob), [textFile(buildDesignRecord(archiveJob))], fetcher, 'overwrite',
   );
-  return [...bundle.files, ...record.files, ...pointer.files];
+  return [...bundle.files, ...mesh.files, ...record.files, ...pointer.files];
 }

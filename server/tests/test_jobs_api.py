@@ -141,6 +141,7 @@ def test_openapi_documents_complete_jobs_surface(tmp_path: Path) -> None:
         "/api/jobs/{job_id}/retry",
         "/api/status/{job_id}",
         "/api/results/{job_id}",
+        "/api/jobs/{job_id}/archive-snapshot",
         "/api/mesh-artifact/{job_id}",
         "/api/radiation-impedance/{job_id}",
         "/api/radiation-impedance/{job_id}/presentation",
@@ -286,6 +287,21 @@ def test_dryrun_http_lifecycle_metadata_results_and_delete(
         )
         stored_mesh = app.state.jobs_runtime.store.get_mesh_artifact(job_id)
         assert stored_mesh is not None
+        status, raw, headers = await _request_with_headers(
+            app, "GET", f"/api/jobs/{job_id}/archive-snapshot"
+        )
+        assert status == 200
+        archive_snapshot = json.loads(raw)
+        assert archive_snapshot == {
+            "schema_version": 1,
+            "results": results,
+            "results_sha256": result_headers["x-wg-results-sha256"],
+            "mesh_artifact": stored_mesh,
+            "pressure_bases": [],
+            "radiation_impedance": None,
+        }
+        assert headers["cache-control"] == "no-store"
+        assert headers["x-wg-archive-snapshot-version"] == "1"
         status, raw, headers = await _request_with_headers(
             app, "GET", f"/api/mesh-artifact/{job_id}"
         )

@@ -881,6 +881,77 @@ class JobStore:
                 )
             return text, digest
 
+    def _load_archive_snapshot(
+        self, conn: sqlite3.Connection, job_id: str
+    ) -> dict[str, Any] | None:
+        """Copy every retention-managed archive input from one SQLite snapshot.
+
+        Keep this as one joined statement rather than composing the ordinary
+        artifact getters.  Those getters each own a separate read transaction,
+        which lets retention commit between (for example) the results and mesh
+        reads.  The returned strings/bytes are detached from SQLite before the
+        caller releases :attr:`_lock`, so later retention cannot invalidate an
+        archive already being assembled.
+        """
+
+        row = conn.execute(
+            """SELECT simulation_jobs.*,
+                      job_identity.run_number,
+                      job_identity.parent_job_id,
+                      simulation_results.results_json AS archive_results_json,
+                      simulation_results.results_sha256 AS archive_results_sha256,
+                      simulation_artifacts.msh_text AS archive_mesh_text,
+                      simulation_channel_bases.bases_npz AS archive_channel_bases,
+                      simulation_radiation_impedance.matrix_npz
+                        AS archive_radiation_impedance
+               FROM simulation_jobs
+               JOIN job_identity ON job_identity.job_id = simulation_jobs.id
+               LEFT JOIN simulation_results
+                 ON simulation_results.job_id = simulation_jobs.id
+               LEFT JOIN simulation_artifacts
+                 ON simulation_artifacts.job_id = simulation_jobs.id
+               LEFT JOIN simulation_channel_bases
+                 ON simulation_channel_bases.job_id = simulation_jobs.id
+               LEFT JOIN simulation_radiation_impedance
+                 ON simulation_radiation_impedance.job_id = simulation_jobs.id
+               WHERE simulation_jobs.id = ?""",
+            (job_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        results_text = row["archive_results_json"]
+        results_digest = row["archive_results_sha256"]
+        if results_text is not None and results_digest is None:
+            results_digest = sha256(str(results_text).encode("utf-8")).hexdigest()
+        return {
+            "job": self._row_to_job(row),
+            "results_text": str(results_text) if results_text is not None else None,
+            "results_sha256": (
+                str(results_digest) if results_digest is not None else None
+            ),
+            "mesh_text": (
+                str(row["archive_mesh_text"])
+                if row["archive_mesh_text"] is not None
+                else None
+            ),
+            "channel_bases": (
+                bytes(row["archive_channel_bases"])
+                if row["archive_channel_bases"] is not None
+                else None
+            ),
+            "radiation_impedance": (
+                bytes(row["archive_radiation_impedance"])
+                if row["archive_radiation_impedance"] is not None
+                else None
+            ),
+        }
+
+    def get_archive_snapshot(self, job_id: str) -> dict[str, Any] | None:
+        """Return immutable archive inputs behind one retention boundary."""
+
+        with self._lock, self._connection() as conn:
+            return self._load_archive_snapshot(conn, job_id)
+
     def store_mesh_artifact(self, job_id: str, msh_text: str) -> None:
         """Upsert original MSH text as in v1 ``server/db.py:233-253``."""
 
