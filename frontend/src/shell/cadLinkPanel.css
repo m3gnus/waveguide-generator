@@ -59,6 +59,7 @@
 .cad-status { margin-left: auto; color: var(--fg3); font-size: var(--text-micro); text-transform: uppercase; }
 .cad-verdict { display: grid; grid-template-columns: minmax(90px, auto) 1fr; gap: 3px 8px; margin: 4px 0; padding: 5px; border-left: 2px solid var(--amber); background: var(--ov1); }
 .cad-verdict.ok { border-color: var(--green); }
+.cad-verdict.neutral { border-color: var(--fg3); }
 .cad-verdict small { grid-column: 2; color: var(--fg3); }
 .cad-row { display: grid; grid-template-columns: minmax(90px, 1fr) auto; align-items: center; gap: 6px; padding: 4px 0; border-top: 1px solid var(--hair); }
 .cad-row small { grid-column: 1 / -1; color: var(--fg3); }

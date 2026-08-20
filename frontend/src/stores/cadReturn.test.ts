@@ -11,6 +11,7 @@ import { buildImportedSubmission } from '../jobs/importedSubmission';
 import { resetDocumentStore, useDocumentStore } from './document';
 
 const solveProfileStorageKey = 'waveguide-v2-g3-cad-solve-profiles';
+const acknowledgedFindingStorageKey = 'waveguide-v2-g3-cad-acknowledged-findings';
 
 const bundle: CadReturnBundle = {
   name: 'speaker.wgreturn', bundlePath: 'wgreturn/speaker.wgreturn', modifiedAt: '2026-08-11T00:00:00Z', readable: true,
@@ -71,7 +72,10 @@ describe('CAD return store', () => {
     expect(useCadReturnStore.getState().selectArrivedBundle(changedInventory)).toBe('reset');
   });
 
-  it('gates on every blocking finding and resets acknowledgements on re-ingest', () => {
+  it('pre-acknowledges the same finding id when it reappears after re-ingest', () => {
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 1,
+    }, 'current');
     useCadReturnStore.getState().selectBundle(bundle);
     useCadReturnStore.getState().applyIngest(record(), useCadReturnStore.getState().beginIngestIntent());
     expect(unacknowledgedBlocking(useCadReturnStore.getState())).toEqual(['finding-a']);
@@ -79,8 +83,76 @@ describe('CAD return store', () => {
     expect(unacknowledgedBlocking(useCadReturnStore.getState())).toEqual([]);
     expect(acknowledgedFindingWire(record(), ['finding-a'])).toEqual(['sha256:wgi_one:finding-a']);
     useCadReturnStore.getState().applyIngest(record('wgi_two'), useCadReturnStore.getState().beginIngestIntent());
+    expect(useCadReturnStore.getState().acknowledgedFindingIds).toEqual(['finding-a']);
+    expect(unacknowledgedBlocking(useCadReturnStore.getState())).toEqual([]);
+    expect(acknowledgedFindingWire(record('wgi_two'), useCadReturnStore.getState().acknowledgedFindingIds))
+      .toEqual(['sha256:wgi_two:finding-a']);
+  });
+
+  it('does not pre-acknowledge a new finding id after re-ingest', () => {
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 1,
+    }, 'current');
+    const store = useCadReturnStore.getState();
+    store.selectBundle(bundle);
+    store.applyIngest(record(), store.beginIngestIntent());
+    store.acknowledge('finding-a', true);
+
+    const changed = {
+      ...record('wgi_changed'),
+      findings: [{ id: 'finding-b', kind: 'healing-performed', blocking: true }],
+    };
+    store.applyIngest(changed, store.beginIngestIntent());
+
     expect(useCadReturnStore.getState().acknowledgedFindingIds).toEqual([]);
-    expect(unacknowledgedBlocking(useCadReturnStore.getState())).toEqual(['finding-a']);
+    expect(unacknowledgedBlocking(useCadReturnStore.getState())).toEqual(['finding-b']);
+  });
+
+  it('persists acknowledgements for an unlinked return by document name and source inventory', () => {
+    const unlinkedRecord = {
+      ...record(),
+      freshness: { verdict: 'unlinked' as const, instances: [], finding_id: 'unlinked-mode' },
+      findings: [
+        { id: 'unlinked-mode', kind: 'freshness', blocking: false, verdict: 'unlinked' },
+        { id: 'healing-a', kind: 'healing-performed', blocking: true },
+      ],
+    };
+    const unlinkedBundle = { ...bundle, instanceCount: 0 };
+    let store = useCadReturnStore.getState();
+    store.selectBundle(unlinkedBundle);
+    store.applyIngest(unlinkedRecord, store.beginIngestIntent());
+    store.acknowledge('healing-a', true);
+
+    resetCadReturnStore();
+    store = useCadReturnStore.getState();
+    store.selectBundle({ ...unlinkedBundle, modifiedAt: '2026-08-12T00:00:00Z' });
+    store.applyIngest({
+      ...unlinkedRecord,
+      ingest_id: 'wgi_reexport',
+      report_sha256: 'sha256:reexport',
+    }, store.beginIngestIntent());
+
+    expect(useCadReturnStore.getState().acknowledgedFindingIds).toEqual(['healing-a']);
+    expect(unacknowledgedBlocking(useCadReturnStore.getState())).toEqual([]);
+  });
+
+  it('drops a schema-invalid acknowledged-finding payload', () => {
+    localStorage.setItem(acknowledgedFindingStorageKey, JSON.stringify({
+      version: 1,
+      entries: [{
+        key: 'forged', identity: null, documentName: 'Speaker', inventory: [], findingIds: [42],
+      }],
+    }));
+    const unlinkedRecord = {
+      ...record(),
+      freshness: { verdict: 'unlinked' as const, instances: [], finding_id: 'unlinked-mode' },
+    };
+    const store = useCadReturnStore.getState();
+    store.selectBundle({ ...bundle, instanceCount: 0 });
+    expect(() => store.applyIngest(unlinkedRecord, store.beginIngestIntent())).not.toThrow();
+
+    expect(useCadReturnStore.getState().acknowledgedFindingIds).toEqual([]);
+    expect(localStorage.getItem(acknowledgedFindingStorageKey)).toBeNull();
   });
 
   it('supports explicit grouping and removes optional skipped sources from channels', () => {

@@ -682,7 +682,7 @@ def ingest_bundle(
     findings = list(scope_findings)
     freshness_records = freshness.get("instances") or []
     if freshness.get("verdict") == "unlinked":
-        findings.append({"id": freshness["finding_id"], "kind": "freshness", "blocking": True, "verdict": "unlinked"})
+        findings.append({"id": freshness["finding_id"], "kind": "freshness", "blocking": False, "verdict": "unlinked"})
     for item in freshness_records:
         if item["verdict"] != "current":
             findings.append({"id": item["finding_id"], "kind": "freshness", "blocking": True, "instance_id": item["instance_id"], "verdict": item["verdict"]})

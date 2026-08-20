@@ -781,10 +781,8 @@ describe('CadLinkPanel', () => {
     expect(row.title).toBe('suggested resolution must be positive');
   });
 
-  it.each([
-    ['unlinked', { verdict: 'unlinked', instances: [] }, 'Unlinked return'],
-    ['unknown', { verdict: 'per-instance', instances: [{ instance_id: 'instance-a', verdict: 'unknown' }] }, 'Freshness could not be established'],
-  ])('renders %s freshness copy', async (_name, freshness, copy) => {
+  it('renders unknown per-instance freshness copy', async () => {
+    const freshness = { verdict: 'per-instance', instances: [{ instance_id: 'instance-a', verdict: 'unknown' }] };
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
       if (path.endsWith('/returns')) return json(listing);
@@ -793,7 +791,37 @@ describe('CadLinkPanel', () => {
     }));
     await renderAndSelect();
     await clickIngest();
-    expect(host.textContent).toContain(copy);
+    expect(host.textContent).toContain('Freshness could not be established');
+  });
+
+  it('renders unlinked CAD as a neutral, solver-frame mode that does not gate', async () => {
+    const unlinked = {
+      ...record,
+      freshness: { verdict: 'unlinked' as const, instances: [], finding_id: 'unlinked-mode' },
+      findings: [{
+        id: 'unlinked-mode', kind: 'freshness', blocking: false, verdict: 'unlinked',
+      }],
+    };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json({
+        ...listing,
+        items: [{ ...listing.items[0], instanceCount: 0 }],
+      });
+      if (path.endsWith('/fusion-status')) return json(currentFusion);
+      return json(unlinked);
+    }));
+
+    await renderAndSelect();
+    await clickIngest();
+
+    const verdict = host.querySelector('.cad-verdict.neutral');
+    expect(verdict?.textContent).toContain('Imported CAD model — not linked to a Waveguide Generator design.');
+    expect(verdict?.textContent).toContain('radiation along +Z with the throat at the origin');
+    expect(host.querySelector('.cad-verdict.warn')).toBeNull();
+    expect(host.querySelector('.cad-findings input[type="checkbox"]')).toBeNull();
+    expect(importedSubmissionBlocker()).toBeNull();
+    expect([...host.querySelectorAll('button')].some((button) => button.textContent === 'Refresh geometry from Fusion')).toBe(false);
   });
 
   it('sends the design on screen to CAD and refreshes the returned bundles', async () => {

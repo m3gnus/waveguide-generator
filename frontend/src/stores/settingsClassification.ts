@@ -62,6 +62,7 @@ export const SETTINGS_NAMESPACE_EFFECTS: Record<SettingsNamespace, PreferenceEff
   paramHelp: 'inert',
   paramSections: 'inert',
   cadSolveProfiles: 'inert',
+  cadAcknowledgedFindings: 'inert',
   // Not a preference at all: the autosaved design. It is in this record
   // because the namespace list has to be answered exhaustively, and a design
   // change is the most solve-affecting thing there is.

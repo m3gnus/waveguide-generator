@@ -735,6 +735,35 @@ def test_current_report_acknowledgement_and_imported_retry(tmp_path: Path) -> No
     asyncio.run(scenario())
 
 
+def test_unlinked_freshness_finding_does_not_block_submission(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        runtime, ingest_id, _ = await _runtime_fixture(
+            tmp_path,
+            {
+                "freshness": {
+                    "verdict": "unlinked",
+                    "instances": [],
+                    "finding_id": "unlinked-mode",
+                },
+                "findings": [
+                    {
+                        "id": "unlinked-mode",
+                        "kind": "freshness",
+                        "blocking": False,
+                        "verdict": "unlinked",
+                    }
+                ],
+            },
+        )
+        try:
+            job_id = await runtime.submit(_request(ingest_id))
+            assert runtime.store.get_job_row(job_id) is not None
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
 def test_missing_ingestion_record_is_typed(tmp_path: Path) -> None:
     async def scenario() -> None:
         runtime = JobRuntime(

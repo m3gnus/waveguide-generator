@@ -31,6 +31,7 @@ export const SETTINGS_NAMESPACES = {
   paramHelp: 'wg-param-help-visible',
   paramSections: 'wg-param-sections',
   cadSolveProfiles: 'waveguide-v2-g3-cad-solve-profiles',
+  cadAcknowledgedFindings: 'waveguide-v2-g3-cad-acknowledged-findings',
   designDraft: 'wg2.autosave.v1',
 } as const;
 
