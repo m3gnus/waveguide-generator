@@ -330,6 +330,29 @@ describe('jobs panel run list', () => {
     expect(exports[0].ariaLabel).toBe('More export options for Second');
   });
 
+  it('identifies the run history and keeps current-row and button state aligned', async () => {
+    const first = job(1, 'First');
+    const second = job(2, 'Second');
+    publishJobs([first, second]);
+    compareSelection.setPrimary(first.id);
+    await act(async () => root.render(<JobsPanel/>));
+
+    const list = host.querySelector<HTMLElement>('[role="list"][aria-label="Run history"]')!;
+    const items = [...list.querySelectorAll<HTMLElement>('[role="listitem"]')];
+    const firstButton = list.querySelector<HTMLButtonElement>('[aria-label="Select #1 · First"]')!;
+    const secondButton = list.querySelector<HTMLButtonElement>('[aria-label="Select #2 · Second"]')!;
+    const firstItem = firstButton.closest<HTMLElement>('[role="listitem"]')!;
+    const secondItem = secondButton.closest<HTMLElement>('[role="listitem"]')!;
+    expect(items).toHaveLength(2);
+    expect([firstItem.getAttribute('aria-current'), secondItem.getAttribute('aria-current')]).toEqual(['true', null]);
+    expect([firstButton.getAttribute('aria-pressed'), secondButton.getAttribute('aria-pressed')]).toEqual(['true', 'false']);
+
+    act(() => secondButton.click());
+
+    expect([firstItem.getAttribute('aria-current'), secondItem.getAttribute('aria-current')]).toEqual([null, 'true']);
+    expect([firstButton.getAttribute('aria-pressed'), secondButton.getAttribute('aria-pressed')]).toEqual(['false', 'true']);
+  });
+
   it('restores the configured kept threshold and never hides active runs', async () => {
     preferencesStore.update({ minRating: 4 });
     const active = { ...job(3, 'Active'), status: 'running' as const, rating: 0 };

@@ -42,7 +42,7 @@
 
 .cad-bundle-list { display: grid; gap: 4px; margin: 0; }
 .cad-bundle-list > button { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1px 8px; width: 100%; min-width: 0; padding: 7px; text-align: left; border: 1px solid var(--hair); background: var(--surface-panel); }
-.cad-bundle-list > button.selected { border-color: var(--inv-bg); background: var(--ov2); }
+.cad-bundle-list > button[aria-selected="true"] { border-color: var(--selection-row-border); background: var(--selection-row-bg); color: var(--fg); }
 .cad-bundle-list b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cad-bundle-list span, .cad-bundle-list time, .cad-detail { color: var(--fg3); font-size: var(--text-micro); }
 .cad-bundle-list span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -100,7 +100,7 @@ export function CommandPalette({ entries }: { entries: PaletteEntry[] }) {
           {(['Parameters', 'Jobs', 'Commands'] as const).map((kind) => {
             const group = visible.filter((entry) => entry.kind === kind);
             if (!group.length) return null;
-            return <section key={kind} aria-label={kind}><h3>{kind}</h3>{group.map((entry) => {
+            return <section key={kind} role="group" aria-labelledby={`command-group-${kind.toLocaleLowerCase()}`}><h3 id={`command-group-${kind.toLocaleLowerCase()}`}>{kind}</h3>{group.map((entry) => {
               const index = visible.indexOf(entry);
               return <button id={`palette-${entry.id}`} key={entry.id} role="option" aria-selected={index === activeIndex} disabled={entry.disabled} onMouseMove={() => setActiveIndex(index)} onClick={() => run(entry)}><span>{entry.label}<small>{entry.detail}</small></span><em>{entry.kind === 'Parameters' ? 'Parameter' : entry.kind === 'Jobs' ? 'Result' : 'Run'}</em></button>;
             })}</section>;

@@ -271,7 +271,6 @@ function CadHistory({ bundles, selectedPath, select }: CadHistoryProps) {
         key={bundle.bundlePath}
         role="option"
         aria-selected={selectedPath === bundle.bundlePath}
-        className={selectedPath === bundle.bundlePath ? 'selected' : ''}
         disabled={!bundle.readable}
         onClick={() => select(bundle)}
         title={!bundle.readable ? bundle.reason ?? 'Manifest is unreadable' : undefined}

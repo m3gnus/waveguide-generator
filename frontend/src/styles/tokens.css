@@ -124,6 +124,11 @@
   --border-strong: #4a453d;
   --focus-ring: rgba(224,103,63,.85);
   --focus-halo: rgba(224,103,63,.20);
+  /* Selectable rows share one semantic treatment. These values are expressed
+     through the live accent tokens, so the same rule follows the dark/light
+     palette instead of freezing either theme's accent into component CSS. */
+  --selection-row-bg: rgba(var(--acc-rgb),.10);
+  --selection-row-border: var(--acc);
   /* One control column, not two. Every control on a parameter row -- number
      box, select, text field -- is this wide, so the rail has a single edge
      running down the left of its controls instead of a value box that stops
