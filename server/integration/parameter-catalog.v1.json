@@ -32,6 +32,12 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 1,
+        "OSSE": 1,
+        "ICW": 1,
+        "FREEFORM": 1
+      },
       "editor_bounds": {
         "minimum": 0.1,
         "maximum": 2
@@ -56,6 +62,9 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 140
+      },
       "editor_bounds": {
         "minimum": 0.1,
         "maximum": 1000
@@ -80,6 +89,9 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 25
+      },
       "editor_bounds": {
         "minimum": -180,
         "maximum": 180
@@ -104,6 +116,9 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 15.5
+      },
       "editor_bounds": {
         "minimum": -90,
         "maximum": 90
@@ -128,6 +143,9 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 12.7
+      },
       "editor_bounds": {
         "minimum": 0.1,
         "maximum": 200
@@ -152,6 +170,9 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 2
+      },
       "editor_bounds": {
         "minimum": 0.1,
         "maximum": 10
@@ -176,6 +197,9 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 0.85
+      },
       "editor_bounds": {
         "minimum": 0,
         "maximum": 1
@@ -200,6 +224,9 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 0.2
+      },
       "editor_bounds": {
         "minimum": -10,
         "maximum": 10
@@ -224,6 +251,9 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 0.4
+      },
       "editor_bounds": {
         "minimum": 0.01,
         "maximum": 2
@@ -248,6 +278,9 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 3.4
+      },
       "editor_bounds": {
         "minimum": 0.5,
         "maximum": 10
@@ -272,6 +305,9 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 1
+      },
       "editor_bounds": {
         "minimum": 0.5,
         "maximum": 1
@@ -296,6 +332,9 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "OSSE": 130
+      },
       "editor_bounds": {
         "minimum": 0.1,
         "maximum": 1000
@@ -320,6 +359,9 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "OSSE": 45
+      },
       "editor_bounds": {
         "minimum": -180,
         "maximum": 180
@@ -344,6 +386,9 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "OSSE": 10
+      },
       "editor_bounds": {
         "minimum": -90,
         "maximum": 90
@@ -368,6 +413,9 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "OSSE": 12.7
+      },
       "editor_bounds": {
         "minimum": 0.1,
         "maximum": 200
@@ -392,6 +440,9 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "OSSE": 7
+      },
       "editor_bounds": {
         "minimum": 0.1,
         "maximum": 15
@@ -416,6 +467,9 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "OSSE": 0.85
+      },
       "editor_bounds": {
         "minimum": -10,
         "maximum": 10
@@ -440,6 +494,9 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "OSSE": 4
+      },
       "editor_bounds": {
         "minimum": 1,
         "maximum": 10
@@ -464,6 +521,9 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "OSSE": 0.991
+      },
       "editor_bounds": {
         "minimum": 0.1,
         "maximum": 2
@@ -488,6 +548,9 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "OSSE": 0
+      },
       "editor_bounds": {
         "minimum": 0,
         "maximum": 10
@@ -512,6 +575,9 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "ICW": 12.7
+      },
       "editor_bounds": {
         "minimum": 0.1,
         "maximum": 200
@@ -536,6 +602,9 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "ICW": 15
+      },
       "editor_bounds": {
         "minimum": -90,
         "maximum": 90
@@ -560,6 +629,9 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "ICW": 120
+      },
       "editor_bounds": {
         "minimum": 1,
         "maximum": 1000
@@ -589,6 +661,9 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "ICW": 150
+      },
       "editor_bounds": {
         "minimum": 0.1,
         "maximum": 1000
@@ -619,6 +694,9 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "ICW": 0
+      },
       "editor_bounds": {
         "minimum": 0,
         "maximum": 80
@@ -649,6 +727,9 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "ICW": 0.3
+      },
       "editor_bounds": {
         "minimum": 0.05,
         "maximum": 0.9
@@ -678,6 +759,9 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "ICW": 0.7
+      },
       "editor_bounds": {
         "minimum": 0.1,
         "maximum": 0.95
@@ -707,6 +791,9 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "ICW": 6
+      },
       "editor_bounds": {
         "minimum": 5,
         "maximum": 24
@@ -731,6 +818,9 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "ICW": "flat_baffle"
+      },
       "editor_bounds": null,
       "step": null,
       "precision": null,
@@ -767,6 +857,9 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "ICW": 160
+      },
       "editor_bounds": {
         "minimum": 91,
         "maximum": 179
@@ -796,6 +889,9 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "ICW": 100
+      },
       "editor_bounds": {
         "minimum": 1,
         "maximum": 1000
@@ -825,6 +921,9 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "ICW": 0
+      },
       "editor_bounds": {
         "minimum": -180,
         "maximum": 180
@@ -849,6 +948,9 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "ICW": 0
+      },
       "editor_bounds": {
         "minimum": -100,
         "maximum": 100
@@ -873,6 +975,9 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "ICW": 0
+      },
       "editor_bounds": {
         "minimum": -100,
         "maximum": 100
@@ -897,6 +1002,9 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "ICW": 0
+      },
       "editor_bounds": {
         "minimum": -100,
         "maximum": 100
@@ -921,6 +1029,9 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "FREEFORM": 120
+      },
       "editor_bounds": {
         "minimum": 20,
         "maximum": 1000
@@ -947,6 +1058,9 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "FREEFORM": 12.7
+      },
       "editor_bounds": {
         "minimum": 0.1,
         "maximum": 200
@@ -973,6 +1087,9 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "FREEFORM": 15.5
+      },
       "editor_bounds": {
         "minimum": -90,
         "maximum": 90
@@ -997,6 +1114,7 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {},
       "editor_bounds": {
         "minimum": 0.1,
         "maximum": 1000
@@ -1021,6 +1139,9 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "FREEFORM": 60
+      },
       "editor_bounds": {
         "minimum": -90,
         "maximum": 90
@@ -1045,6 +1166,18 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "FREEFORM": [
+          {
+            "t": 0,
+            "r": 12.7
+          },
+          {
+            "t": 1,
+            "r": 140
+          }
+        ]
+      },
       "editor_bounds": null,
       "step": null,
       "precision": null,
@@ -1066,6 +1199,7 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {},
       "editor_bounds": {
         "minimum": 0.1,
         "maximum": 1000
@@ -1090,6 +1224,9 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "FREEFORM": 60
+      },
       "editor_bounds": {
         "minimum": -90,
         "maximum": 90
@@ -1114,6 +1251,18 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "FREEFORM": [
+          {
+            "t": 0,
+            "r": 12.7
+          },
+          {
+            "t": 1,
+            "r": 140
+          }
+        ]
+      },
       "editor_bounds": null,
       "step": null,
       "precision": null,
@@ -1135,6 +1284,18 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "FREEFORM": [
+          {
+            "t": 0,
+            "shape": "ellipse"
+          },
+          {
+            "t": 1,
+            "shape": "ellipse"
+          }
+        ]
+      },
       "editor_bounds": null,
       "step": null,
       "precision": null,
@@ -1156,6 +1317,9 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "FREEFORM": "warn"
+      },
       "editor_bounds": null,
       "step": null,
       "precision": null,
@@ -1193,6 +1357,10 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 0,
+        "OSSE": 0
+      },
       "editor_bounds": {
         "minimum": -90,
         "maximum": 90
@@ -1218,6 +1386,10 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 0,
+        "OSSE": 0
+      },
       "editor_bounds": {
         "minimum": 0,
         "maximum": 1000
@@ -1243,6 +1415,10 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 0,
+        "OSSE": 0
+      },
       "editor_bounds": {
         "minimum": 0,
         "maximum": 1000
@@ -1268,6 +1444,10 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": "profile",
+        "OSSE": "profile"
+      },
       "editor_bounds": null,
       "step": null,
       "precision": null,
@@ -1304,6 +1484,9 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "ICW": "auto"
+      },
       "editor_bounds": null,
       "step": null,
       "precision": null,
@@ -1328,6 +1511,12 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 0,
+        "OSSE": 0,
+        "ICW": 0,
+        "FREEFORM": 0
+      },
       "editor_bounds": null,
       "step": null,
       "precision": null,
@@ -1381,6 +1570,12 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 0,
+        "OSSE": 0,
+        "ICW": 0,
+        "FREEFORM": 0
+      },
       "editor_bounds": {
         "minimum": 0,
         "maximum": 2000
@@ -1408,6 +1603,12 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 0,
+        "OSSE": 0,
+        "ICW": 0,
+        "FREEFORM": 0
+      },
       "editor_bounds": {
         "minimum": 0,
         "maximum": 2000
@@ -1435,6 +1636,7 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {},
       "editor_bounds": {
         "minimum": 2,
         "maximum": 16
@@ -1467,6 +1669,12 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 0,
+        "OSSE": 0,
+        "ICW": 0,
+        "FREEFORM": 0
+      },
       "editor_bounds": {
         "minimum": 0,
         "maximum": 100
@@ -1494,6 +1702,12 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 3,
+        "OSSE": 3,
+        "ICW": 3,
+        "FREEFORM": 3
+      },
       "editor_bounds": {
         "minimum": 0,
         "maximum": 100
@@ -1521,6 +1735,12 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 0,
+        "OSSE": 0,
+        "ICW": 0,
+        "FREEFORM": 0
+      },
       "editor_bounds": {
         "minimum": 0,
         "maximum": 1
@@ -1548,6 +1768,12 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 0,
+        "OSSE": 0,
+        "ICW": 0,
+        "FREEFORM": 0
+      },
       "editor_bounds": null,
       "step": null,
       "precision": null,
@@ -1584,6 +1810,9 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "OSSE": 1
+      },
       "editor_bounds": null,
       "step": null,
       "precision": null,
@@ -1620,6 +1849,9 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "OSSE": 0
+      },
       "editor_bounds": {
         "minimum": -360,
         "maximum": 360
@@ -1644,6 +1876,9 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "OSSE": 0
+      },
       "editor_bounds": null,
       "step": null,
       "precision": null,
@@ -1687,6 +1922,9 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "OSSE": 0.5
+      },
       "editor_bounds": {
         "minimum": 0,
         "maximum": 10000
@@ -1711,6 +1949,9 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "OSSE": 0
+      },
       "editor_bounds": {
         "minimum": 0,
         "maximum": 2000
@@ -1735,6 +1976,9 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "OSSE": 1
+      },
       "editor_bounds": {
         "minimum": 0.01,
         "maximum": 100
@@ -1759,6 +2003,9 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "OSSE": 3
+      },
       "editor_bounds": {
         "minimum": 0.01,
         "maximum": 100
@@ -1788,6 +2035,9 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "OSSE": 0
+      },
       "editor_bounds": {
         "minimum": -1000,
         "maximum": 1000
@@ -1817,6 +2067,9 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "OSSE": 1
+      },
       "editor_bounds": {
         "minimum": -1000,
         "maximum": 1000
@@ -1846,6 +2099,9 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "OSSE": 1
+      },
       "editor_bounds": {
         "minimum": -1000,
         "maximum": 1000
@@ -1875,6 +2131,9 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "OSSE": 4
+      },
       "editor_bounds": {
         "minimum": -1000,
         "maximum": 1000
@@ -1904,6 +2163,9 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "OSSE": 4
+      },
       "editor_bounds": {
         "minimum": -1000,
         "maximum": 1000
@@ -1933,6 +2195,9 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "OSSE": 1
+      },
       "editor_bounds": {
         "minimum": -1000,
         "maximum": 1000
@@ -1962,6 +2227,9 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "OSSE": 1
+      },
       "editor_bounds": {
         "minimum": -1000,
         "maximum": 1000
@@ -1991,6 +2259,9 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "OSSE": 1
+      },
       "editor_bounds": {
         "minimum": -1000,
         "maximum": 1000
@@ -2020,6 +2291,9 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "OSSE": 0
+      },
       "editor_bounds": {
         "minimum": -360,
         "maximum": 360
@@ -2044,6 +2318,9 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "OSSE": 1
+      },
       "editor_bounds": {
         "minimum": -180,
         "maximum": 180
@@ -2073,6 +2350,9 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "OSSE": 0
+      },
       "editor_bounds": {
         "minimum": 0,
         "maximum": 10000
@@ -2105,6 +2385,12 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 1,
+        "OSSE": 1,
+        "ICW": 1,
+        "FREEFORM": 1
+      },
       "editor_bounds": null,
       "step": null,
       "precision": null,
@@ -2144,6 +2430,12 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": -1,
+        "OSSE": -1,
+        "ICW": -1,
+        "FREEFORM": -1
+      },
       "editor_bounds": {
         "minimum": -1,
         "maximum": 2000
@@ -2171,6 +2463,12 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 0,
+        "OSSE": 0,
+        "ICW": 0,
+        "FREEFORM": 0
+      },
       "editor_bounds": null,
       "step": null,
       "precision": null,
@@ -2217,6 +2515,12 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 1,
+        "OSSE": 1,
+        "ICW": 1,
+        "FREEFORM": 1
+      },
       "editor_bounds": {
         "minimum": 0,
         "maximum": 100
@@ -2244,6 +2548,12 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": "normal",
+        "OSSE": "normal",
+        "ICW": "normal",
+        "FREEFORM": "normal"
+      },
       "editor_bounds": null,
       "step": null,
       "precision": null,
@@ -2290,6 +2600,12 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": "",
+        "OSSE": "",
+        "ICW": "",
+        "FREEFORM": ""
+      },
       "editor_bounds": null,
       "step": null,
       "precision": null,
@@ -2314,6 +2630,12 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 0,
+        "OSSE": 0,
+        "ICW": 0,
+        "FREEFORM": 0
+      },
       "editor_bounds": {
         "minimum": 0,
         "maximum": 2000
@@ -2346,6 +2668,12 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 18,
+        "OSSE": 18,
+        "ICW": 18,
+        "FREEFORM": 18
+      },
       "editor_bounds": {
         "minimum": 0,
         "maximum": 1000
@@ -2378,6 +2706,12 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 1,
+        "OSSE": 1,
+        "ICW": 1,
+        "FREEFORM": 1
+      },
       "editor_bounds": null,
       "step": null,
       "precision": null,
@@ -2422,6 +2756,12 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 25,
+        "OSSE": 25,
+        "ICW": 25,
+        "FREEFORM": 25
+      },
       "editor_bounds": {
         "minimum": 0,
         "maximum": 2000
@@ -2454,6 +2794,12 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 25,
+        "OSSE": 25,
+        "ICW": 25,
+        "FREEFORM": 25
+      },
       "editor_bounds": {
         "minimum": 0,
         "maximum": 2000
@@ -2486,6 +2832,12 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 25,
+        "OSSE": 25,
+        "ICW": 25,
+        "FREEFORM": 25
+      },
       "editor_bounds": {
         "minimum": 0,
         "maximum": 2000
@@ -2518,6 +2870,12 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 25,
+        "OSSE": 25,
+        "ICW": 25,
+        "FREEFORM": 25
+      },
       "editor_bounds": {
         "minimum": 0,
         "maximum": 2000
@@ -2550,6 +2908,12 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 25,
+        "OSSE": 25,
+        "ICW": 25,
+        "FREEFORM": 25
+      },
       "editor_bounds": {
         "minimum": 0.01,
         "maximum": 1000
@@ -2577,6 +2941,12 @@
       ],
       "accepts_expression": true,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 40,
+        "OSSE": 40,
+        "ICW": 40,
+        "FREEFORM": 40
+      },
       "editor_bounds": {
         "minimum": 0.01,
         "maximum": 1000
@@ -2604,6 +2974,12 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 40,
+        "OSSE": 40,
+        "ICW": 40,
+        "FREEFORM": 40
+      },
       "editor_bounds": {
         "minimum": 0,
         "maximum": 4096
@@ -2631,6 +3007,12 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 20,
+        "OSSE": 20,
+        "ICW": 20,
+        "FREEFORM": 20
+      },
       "editor_bounds": {
         "minimum": 0,
         "maximum": 4096
@@ -2658,6 +3040,12 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 4,
+        "OSSE": 4,
+        "ICW": 4,
+        "FREEFORM": 4
+      },
       "editor_bounds": {
         "minimum": 0,
         "maximum": 1024
@@ -2685,6 +3073,12 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": "uniform",
+        "OSSE": "uniform",
+        "ICW": "uniform",
+        "FREEFORM": "uniform"
+      },
       "editor_bounds": null,
       "step": null,
       "precision": null,
@@ -2731,6 +3125,12 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": "",
+        "OSSE": "",
+        "ICW": "",
+        "FREEFORM": ""
+      },
       "editor_bounds": null,
       "step": null,
       "precision": null,
@@ -2760,6 +3160,12 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 6,
+        "OSSE": 6,
+        "ICW": 6,
+        "FREEFORM": 6
+      },
       "editor_bounds": {
         "minimum": 0.01,
         "maximum": 1000
@@ -2787,6 +3193,12 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 15,
+        "OSSE": 15,
+        "ICW": 15,
+        "FREEFORM": 15
+      },
       "editor_bounds": {
         "minimum": 0.01,
         "maximum": 1000
@@ -2814,6 +3226,7 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {},
       "editor_bounds": {
         "minimum": 0.01,
         "maximum": 10000
@@ -2841,6 +3254,12 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 40,
+        "OSSE": 40,
+        "ICW": 40,
+        "FREEFORM": 40
+      },
       "editor_bounds": {
         "minimum": 0.01,
         "maximum": 1000
@@ -2868,6 +3287,12 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 1.5,
+        "OSSE": 1.5,
+        "ICW": 1.5,
+        "FREEFORM": 1.5
+      },
       "editor_bounds": {
         "minimum": 0.01,
         "maximum": 100
@@ -2900,6 +3325,12 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 50000,
+        "OSSE": 50000,
+        "ICW": 50000,
+        "FREEFORM": 50000
+      },
       "editor_bounds": {
         "minimum": 1,
         "maximum": 10000000
@@ -2927,6 +3358,12 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 0,
+        "OSSE": 0,
+        "ICW": 0,
+        "FREEFORM": 0
+      },
       "editor_bounds": null,
       "step": null,
       "precision": null,
@@ -2969,6 +3406,12 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 0,
+        "OSSE": 0,
+        "ICW": 0,
+        "FREEFORM": 0
+      },
       "editor_bounds": {
         "minimum": -10000,
         "maximum": 10000
@@ -2996,6 +3439,12 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 5,
+        "OSSE": 5,
+        "ICW": 5,
+        "FREEFORM": 5
+      },
       "editor_bounds": {
         "minimum": 0,
         "maximum": 1000
@@ -3038,6 +3487,12 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 400,
+        "OSSE": 400,
+        "ICW": 400,
+        "FREEFORM": 400
+      },
       "editor_bounds": {
         "minimum": 20,
         "maximum": 20000
@@ -3065,6 +3520,12 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 16000,
+        "OSSE": 16000,
+        "ICW": 16000,
+        "FREEFORM": 16000
+      },
       "editor_bounds": {
         "minimum": 20,
         "maximum": 20000
@@ -3092,6 +3553,12 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 20,
+        "OSSE": 20,
+        "ICW": 20,
+        "FREEFORM": 20
+      },
       "editor_bounds": {
         "minimum": 10,
         "maximum": 200
@@ -3119,6 +3586,12 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": "freestanding",
+        "OSSE": "freestanding",
+        "ICW": "freestanding",
+        "FREEFORM": "freestanding"
+      },
       "editor_bounds": null,
       "step": null,
       "precision": null,
@@ -3158,6 +3631,12 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": "auto",
+        "OSSE": "auto",
+        "ICW": "auto",
+        "FREEFORM": "auto"
+      },
       "editor_bounds": null,
       "step": null,
       "precision": null,
@@ -3204,6 +3683,12 @@
       ],
       "accepts_expression": false,
       "writable": false,
+      "default_by_family": {
+        "R-OSSE": 1234,
+        "OSSE": 1234,
+        "ICW": 1234,
+        "FREEFORM": 1234
+      },
       "editor_bounds": null,
       "step": null,
       "precision": null,
@@ -3228,6 +3713,12 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 0,
+        "OSSE": 0,
+        "ICW": 0,
+        "FREEFORM": 0
+      },
       "editor_bounds": {
         "minimum": 0,
         "maximum": 4096
@@ -3255,6 +3746,12 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 0.5,
+        "OSSE": 0.5,
+        "ICW": 0.5,
+        "FREEFORM": 0.5
+      },
       "editor_bounds": {
         "minimum": 0.01,
         "maximum": 0.99
@@ -3282,6 +3779,12 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 0,
+        "OSSE": 0,
+        "ICW": 0,
+        "FREEFORM": 0
+      },
       "editor_bounds": null,
       "step": null,
       "precision": null,
@@ -3321,6 +3824,12 @@
       ],
       "accepts_expression": false,
       "writable": true,
+      "default_by_family": {
+        "R-OSSE": 0,
+        "OSSE": 0,
+        "ICW": 0,
+        "FREEFORM": 0
+      },
       "editor_bounds": null,
       "step": null,
       "precision": null,
@@ -3360,6 +3869,7 @@
       ],
       "accepts_expression": false,
       "writable": false,
+      "default_by_family": {},
       "editor_bounds": null,
       "step": null,
       "precision": null,
@@ -3384,6 +3894,7 @@
       ],
       "accepts_expression": false,
       "writable": false,
+      "default_by_family": {},
       "editor_bounds": null,
       "step": null,
       "precision": null,
@@ -3408,6 +3919,7 @@
       ],
       "accepts_expression": false,
       "writable": false,
+      "default_by_family": {},
       "editor_bounds": null,
       "step": null,
       "precision": null,
@@ -3432,6 +3944,7 @@
       ],
       "accepts_expression": false,
       "writable": false,
+      "default_by_family": {},
       "editor_bounds": null,
       "step": null,
       "precision": null,

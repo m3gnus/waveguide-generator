@@ -22,6 +22,7 @@ def test_parameter_catalog_is_versioned_unique_and_declarative() -> None:
     assert osse_length["path"] == "L"
     assert osse_length["unit"] == "mm"
     assert osse_length["families"] == ["OSSE"]
+    assert osse_length["default_by_family"] == {"OSSE": 130}
     assert osse_length["accepts_expression"] is True
     guide = next(
         field for field in catalog["parameters"] if field["id"] == "guide.superellipse_n"
