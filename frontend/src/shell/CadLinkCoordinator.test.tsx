@@ -495,6 +495,48 @@ describe('CadLinkCoordinator', () => {
     ]);
   });
 
+  it('parks a Fusion solve for settings review when its source inventory resets', async () => {
+    vi.useFakeTimers();
+    const resetIngest = { ...ingestRecord, ingest_id: 'wgi_reset_inventory' };
+    const harness = solveCommandHarness({ ingests: [resetIngest] });
+    await renderCoordinator();
+    useCadReturnStore.getState().selectBundle({
+      ...initialBundle,
+      name: 'previous.wgreturn',
+      bundlePath: 'wgreturn/previous.wgreturn',
+      sourceCount: 2,
+      sources: [
+        ...initialBundle.sources,
+        {
+          id: 'source-mf', role: 'MF', required: true,
+          suggestedResolutionMm: 8, defaultDriveChannelId: 'drive-mf',
+        },
+      ],
+    });
+
+    harness.issue('cmd-reset');
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_600); });
+
+    expect(harness.solveCurrentCadImport).not.toHaveBeenCalled();
+    expect(harness.submitted).toEqual([]);
+    expect(harness.reported).toEqual([]);
+    expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe('wgi_reset_inventory');
+    expect(parkedSolveCommandStore.getSnapshot().command).toMatchObject({
+      commandId: 'cmd-reset',
+      bundlePath: initialBundle.bundlePath,
+      blockers: ['Review the new source inventory and solve settings before solving.'],
+    });
+    expect(cadLinkCoordinatorBridge.getSnapshot().status).toContain('review mesh, channel, and solve settings');
+
+    // Clicking Solve after reviewing the reset settings consumes this request.
+    await act(async () => { await cadLinkCoordinatorBridge.getSnapshot().solveParkedCommand(); });
+    expect(harness.submitted).toEqual(['wgi_reset_inventory']);
+    expect(harness.reported).toEqual([
+      { commandId: 'cmd-reset', state: 'accepted', jobId: 'job-1', reason: null },
+    ]);
+    expect(parkedSolveCommandStore.getSnapshot().command).toBeNull();
+  });
+
   it('drops a viewport mesh it could not replace rather than blocking the next solve', async () => {
     vi.useFakeTimers();
     const harness = solveCommandHarness({
