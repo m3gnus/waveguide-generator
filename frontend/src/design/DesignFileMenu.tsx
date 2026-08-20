@@ -5,12 +5,12 @@ import {
   hydrateDesignDocument,
   inspectDesignText,
   openDesignText,
-  saveDesignDocument,
+  serializeDesignDocument,
   type ImportReport,
   type CadLinkOpenState,
   type StepBody,
 } from '../api/designIo';
-import { recordCommittedAthPolars, resetDesignStore, useDesignStore } from '../stores/design';
+import { resetDesignStore, useDesignStore } from '../stores/design';
 import { documentSettingsSignature, wgSolveSettingsFromStore } from '../stores/designWire';
 import { resetDocumentStore, useDocumentStore, type CadLinkClassification, type DesignIdentity } from '../stores/document';
 import { useUnsavedChanges } from '../stores/unsavedChanges';
@@ -33,10 +33,10 @@ const ACCEPT = '.cfg,.txt,.mwg,text/plain';
 
 const CLASSIFICATION_DISPLAY: Record<CadLinkClassification, { label: string; detail: string }> = {
   current: { label: 'current', detail: 'Current: this file matches the latest saved version in this machine’s CAD-link registry.' },
-  stale_copy: { label: 'stale copy', detail: 'Stale copy: this is an older saved version. Saving will preserve both versions by creating a fork.' },
+  stale_copy: { label: 'stale copy', detail: 'Stale copy: this is an older saved version. Sending it to CAD will preserve both versions by creating a fork.' },
   externally_edited: { label: 'edited elsewhere', detail: 'Edited elsewhere: the design text changed outside this Waveguide Generator session.' },
   foreign: { label: 'foreign', detail: 'Foreign: this identity is not yet known to this machine’s CAD-link registry.' },
-  missing: { label: 'unlinked', detail: 'Unlinked: this file has no CAD-link identity yet. Its first save will create one.' },
+  missing: { label: 'unlinked', detail: 'Unlinked: this file has no CAD-link identity yet. Its first CAD-linked export will create one.' },
 };
 
 function editableIdentity(identity: DesignIdentity | null | undefined): DesignIdentity | null {
@@ -82,10 +82,8 @@ export function DesignFileMenu() {
   const unsaved = useUnsavedChanges();
   const setDesignName = useDocumentStore((state) => state.setDesignName);
   const markSaved = useDocumentStore((state) => state.markSaved);
-  const identity = useDocumentStore((state) => state.identity);
   const classification = useDocumentStore((state) => state.classification);
   const setCadLink = useDocumentStore((state) => state.setCadLink);
-  const adoptSavedIdentity = useDocumentStore((state) => state.adoptSavedIdentity);
   const workspaceMode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
   const cadApplication = usePreferences().cadApplication;
   const [open, setOpen] = useState(false);
@@ -158,26 +156,15 @@ export function DesignFileMenu() {
     });
   }
 
-  async function save() {
+  async function downloadCopy() {
     await act(async () => {
-      const savingRevision = revision;
-      const savedName = designName || 'this design';
-      // One snapshot for the file and for the saved-state baseline. Reading the
-      // store again after the request would stamp settings the file does not
-      // contain, and the document would read as saved while it was not.
       const solveState = useSolveOptionsStore.getState();
       const polarConfig = polarConfigFromUi(solveState.polar);
-      const savingSettings = documentSettingsSignature(solveState);
-      const response = await saveDesignDocument(
-        design, designName, identity, fetch, polarConfig, wgSolveSettingsFromStore(solveState),
+      const response = await serializeDesignDocument(
+        design, designName, fetch, polarConfig, wgSolveSettingsFromStore(solveState),
       );
       downloadText(response.text, response.suggestedFilename);
-      recordCommittedAthPolars(polarConfig);
-      adoptSavedIdentity(response.identity);
-      markSaved(savingRevision, savingSettings);
-      setMessage(response.forked
-        ? `Saved as a new fork of ${savedName}`
-        : `Saved ${response.suggestedFilename}`);
+      setMessage(`Downloaded a copy as ${response.suggestedFilename}`);
     });
   }
 
@@ -244,7 +231,7 @@ export function DesignFileMenu() {
     {open && <div role="menu" aria-label="Design file menu" className="design-menu-popover">
       <button role="menuitem" className="design-menu-item" disabled={busy} onClick={newDesign}><span>New</span><kbd>cfg</kbd></button>
       <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => openInput.current?.click()}><span>Open…</span><kbd>cfg</kbd></button>
-      <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void save()}><span>Save</span><kbd>cfg</kbd></button>
+      <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void downloadCopy()}><span>Download a copy</span><kbd>cfg</kbd></button>
       <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => reportInput.current?.click()}><span>Import report…</span><span>›</span></button>
       <div className="design-menu-divider"/>
       <button

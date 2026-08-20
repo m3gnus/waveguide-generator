@@ -42,8 +42,8 @@ beforeEach(() => {
     });
   }));
   vi.stubGlobal('URL', Object.assign(globalThis.URL, {
-    createObjectURL: () => 'blob:step',
-    revokeObjectURL: () => undefined,
+    createObjectURL: vi.fn(() => 'blob:step'),
+    revokeObjectURL: vi.fn(() => undefined),
   }));
 });
 
@@ -52,6 +52,7 @@ afterEach(() => {
   container.remove();
   importedMeshStore.clear();
   workspaceModeStore.setMode('parametric');
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -243,7 +244,7 @@ describe('design file export menu', () => {
       baseEditVersion: 3,
     }, classification: 'stale_copy' });
     expect(container.querySelector('.cadlink-badge')?.textContent).toBe('stale copy');
-    expect(container.querySelector('.cadlink-badge')?.getAttribute('title')).toContain('Saving will preserve both versions');
+    expect(container.querySelector('.cadlink-badge')?.getAttribute('title')).toContain('Sending it to CAD will preserve both versions');
   });
 
   it('restores directivity controls from old ATH polar blocks on open', async () => {
@@ -274,33 +275,77 @@ describe('design file export menu', () => {
     });
   });
 
-  it('adopts an auto-fork identity and reports it with the existing non-blocking toast', async () => {
+  it('downloads a serialized copy without changing identity or the saved baseline', async () => {
     const original = {
       designId: 'wgd_01K00000000000000000000000',
       lineageId: 'wgl_01K00000000000000000000000',
       baseEditVersion: 3,
     };
-    const fork = { ...original, designId: 'wgd_01K00000000000000000000001', baseEditVersion: 1 };
     useDocumentStore.getState().setDesignName('copied-horn');
     useDocumentStore.getState().setCadLink(original, 'stale_copy');
+    useDocumentStore.getState().markSaved(2, 'saved-settings-baseline');
+    useDesignStore.setState({ designRevision: 3 });
+    const before = {
+      identity: useDocumentStore.getState().identity,
+      classification: useDocumentStore.getState().classification,
+      savedRevision: useDocumentStore.getState().savedRevision,
+      savedSettings: useDocumentStore.getState().savedSettings,
+      savedDesignName: useDocumentStore.getState().savedDesignName,
+    };
     vi.mocked(fetch).mockImplementationOnce(async () => new Response(JSON.stringify({
-      text: 'CadLink = {\n}\n',
+      text: 'serialized copy',
       suggestedFilename: 'copied-horn.cfg',
-      identity: fork,
-      forked: true,
-      from: { designId: original.designId, editVersion: 3, exportId: null },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
 
     act(() => root.render(<DesignFileMenu/>));
     act(() => container.querySelector<HTMLButtonElement>('button.file-chip')!.click());
-    const save = [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
-      .find((button) => button.textContent?.startsWith('Save'))!;
-    await act(async () => { save.click(); });
+    const download = [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+      .find((button) => button.textContent?.startsWith('Download a copy'))!;
+    await act(async () => { download.click(); });
 
     const request = vi.mocked(fetch).mock.calls[0];
-    expect(JSON.parse(String(request[1]?.body))).toMatchObject({ identity: original, filename: 'copied-horn.cfg' });
-    expect(useDocumentStore.getState()).toMatchObject({ identity: fork, classification: 'current' });
-    expect(container.querySelector('[role="status"]')?.textContent).toBe('Saved as a new fork of copied-horn');
+    expect(String(request[0])).toBe('/api/design/serialize');
+    expect(JSON.parse(String(request[1]?.body))).not.toHaveProperty('identity');
+    expect(useDocumentStore.getState()).toMatchObject(before);
+    expect(container.querySelector('[aria-label="Unsaved changes"]')).not.toBeNull();
+    expect(URL.createObjectURL).toHaveBeenCalledOnce();
+    expect(await (vi.mocked(URL.createObjectURL).mock.calls[0][0] as Blob).text()).toBe('serialized copy');
+    expect(click).toHaveBeenCalledOnce();
+    expect(container.querySelector('[role="status"]')?.textContent).toBe('Downloaded a copy as copied-horn.cfg');
+  });
+
+  it('reports serialization failure without downloading or changing saved state', async () => {
+    useDocumentStore.getState().setDesignName('keep-unsaved');
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_01K00000000000000000000000',
+      lineageId: 'wgl_01K00000000000000000000000',
+      baseEditVersion: 4,
+    }, 'current');
+    useDocumentStore.getState().markSaved(4, 'saved-settings-baseline');
+    useDesignStore.setState({ designRevision: 5 });
+    const before = useDocumentStore.getState();
+    vi.mocked(fetch).mockImplementationOnce(async () => new Response(
+      JSON.stringify({ detail: 'Could not serialize this design.' }),
+      { status: 422, headers: { 'Content-Type': 'application/json' } },
+    ));
+    act(() => root.render(<DesignFileMenu/>));
+    act(() => container.querySelector<HTMLButtonElement>('button.file-chip')!.click());
+    const download = [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+      .find((button) => button.textContent?.startsWith('Download a copy'))!;
+    await act(async () => { download.click(); });
+
+    expect(String(vi.mocked(fetch).mock.calls[0][0])).toBe('/api/design/serialize');
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+    expect(useDocumentStore.getState()).toMatchObject({
+      identity: before.identity,
+      classification: before.classification,
+      savedRevision: before.savedRevision,
+      savedSettings: before.savedSettings,
+      savedDesignName: before.savedDesignName,
+    });
+    expect(container.querySelector('[aria-label="Unsaved changes"]')).not.toBeNull();
+    expect(container.querySelector('[role="status"]')?.textContent).toBe('Could not serialize this design.');
   });
 
   it('offers hash-based identity re-adoption without blocking open', async () => {

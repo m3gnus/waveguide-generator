@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { downloadGeometryExport, hydrateDesignDocument, saveDesignDocument, sendDesignToCad } from './designIo';
+import { downloadGeometryExport, hydrateDesignDocument, sendDesignToCad, serializeDesignDocument } from './designIo';
 import { serializeDesign } from '../stores/design';
 
 describe('design hydration', () => {
@@ -85,38 +85,35 @@ describe('geometry export requests', () => {
   });
 });
 
-describe('design save requests', () => {
-  it('sends the document identity as the server CAS token', async () => {
-    const identity = {
-      designId: 'wgd_01K00000000000000000000000',
-      lineageId: 'wgl_01K00000000000000000000000',
-      baseEditVersion: 8,
-    };
+describe('design copy serialization requests', () => {
+  it('uses the non-mutating endpoint without a CadLink identity', async () => {
+    let url = '';
     let payload: Record<string, unknown> = {};
-    const fetcher = (async (_url: string, init?: RequestInit) => {
+    const fetcher = (async (requestedUrl: string, init?: RequestInit) => {
+      url = requestedUrl;
       payload = JSON.parse(String(init?.body));
       return new Response(JSON.stringify({
-        text: 'saved', suggestedFilename: 'horn.cfg', identity: { ...identity, baseEditVersion: 9 }, forked: false, from: null,
+        text: 'serialized', suggestedFilename: 'horn.cfg',
       }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }) as typeof fetch;
 
-    await saveDesignDocument(hydrateDesignDocument({ formula: 'OSSE' }), 'horn', identity, fetcher);
-    expect(payload).toMatchObject({ filename: 'horn.cfg', identity });
+    await serializeDesignDocument(hydrateDesignDocument({ formula: 'OSSE' }), 'horn', fetcher);
+    expect(url).toBe('/api/design/serialize');
+    expect(payload).toMatchObject({ filename: 'horn.cfg' });
+    expect(payload).not.toHaveProperty('identity');
   });
 
-  it('keeps an imported ATH Mesh.Quadrants value in the save payload', async () => {
+  it('keeps an imported ATH Mesh.Quadrants value in the serialized copy', async () => {
     let payload: Record<string, unknown> = {};
     const fetcher = (async (_url: string, init?: RequestInit) => {
       payload = JSON.parse(String(init?.body));
       return new Response(JSON.stringify({
         text: 'Mesh.Quadrants = 14\n', suggestedFilename: 'half-y.cfg',
-        identity: { designId: 'wgd_01K00000000000000000000000', lineageId: 'wgl_01K00000000000000000000000', baseEditVersion: 1 },
-        forked: false, from: null,
       }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }) as typeof fetch;
 
     const imported = hydrateDesignDocument({ formula: 'OSSE', mesh: { quadrants: 14 } });
-    await saveDesignDocument(imported, 'half-y', null, fetcher);
+    await serializeDesignDocument(imported, 'half-y', fetcher);
     expect(payload).toMatchObject({
       filename: 'half-y.cfg',
       design: { mesh: { quadrants: 14 } },
@@ -128,16 +125,14 @@ describe('design save requests', () => {
     const fetcher = (async (_url: string, init?: RequestInit) => {
       payload = JSON.parse(String(init?.body));
       return new Response(JSON.stringify({
-        text: 'saved', suggestedFilename: 'polar.cfg',
-        identity: { designId: 'wgd_01K00000000000000000000000', lineageId: 'wgl_01K00000000000000000000000', baseEditVersion: 1 },
-        forked: false, from: null,
+        text: 'serialized', suggestedFilename: 'polar.cfg',
       }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }) as typeof fetch;
 
-    await saveDesignDocument(hydrateDesignDocument({
+    await serializeDesignDocument(hydrateDesignDocument({
       formula: 'OSSE',
       extra_blocks: { Report: { items: { Title: '"stale ATH name"', PolarData: 'SPL_H' }, lines: [] } },
-    }), 'Polar Study', null, fetcher, {
+    }), 'Polar Study', fetcher, {
       angle_range: [0, 120, 25], angle_step: 5, distance: 4, norm_angle: 8,
       inclination: 35, enabled_axes: ['horizontal', 'diagonal'],
       observation_origin: 'throat', spherical_sampling: true, field_plane: true,
