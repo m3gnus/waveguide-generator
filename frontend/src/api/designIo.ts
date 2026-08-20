@@ -47,12 +47,9 @@ export interface OpenDesignResponse extends InspectDesignResponse {
   design: Record<string, unknown>;
 }
 
-export interface SaveDesignResponse {
+export interface SerializeDesignResponse {
   text: string;
   suggestedFilename: string;
-  identity: DesignIdentity;
-  forked: boolean;
-  from: { designId: string; editVersion: number; exportId: string | null } | null;
 }
 
 export interface WgLinkExportResponse {
@@ -97,30 +94,30 @@ export function inspectDesignText(text: string, fetcher: typeof fetch = fetch): 
 }
 
 /**
- * Save under the design's name.
+ * Serialize a downloadable copy under the design's name.
  *
  * The filename is derived here rather than passed in, so a `.cfg` cannot be
- * written under a name the file's own `Report.Title` disagrees with.
+ * written under a name the file's own `Report.Title` disagrees with. This path
+ * deliberately sends no CadLink identity: downloading a browser copy is not a
+ * durable save and must not create or advance registry state.
  */
-export async function saveDesignDocument(
+export async function serializeDesignDocument(
   design: DesignDocument,
   designName: string,
-  identity: DesignIdentity | null = null,
   fetcher: typeof fetch = fetch,
   polarConfig?: PolarConfig,
   solveSettings: WgSolveSettings | null = wgSolveSettingsFromStore(),
-): Promise<SaveDesignResponse> {
-  const response = await fetcher('/api/design/save', {
+): Promise<SerializeDesignResponse> {
+  const response = await fetcher('/api/design/serialize', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       design: designWireWithSolveSettings(serializeDesign(design), polarConfig, solveSettings, designName),
       filename: designFilename(designName),
-      identity,
     }),
   });
   if (!response.ok) throw new Error(await errorMessage(response));
-  return response.json() as Promise<SaveDesignResponse>;
+  return response.json() as Promise<SerializeDesignResponse>;
 }
 
 export async function sendDesignToCad(

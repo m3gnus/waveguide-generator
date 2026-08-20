@@ -232,20 +232,20 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
 
   const showSettings = useCallback(() => { setSettingsSection(undefined); setSettingsOpen(true); }, []);
   const closeSettings = useCallback(() => { setSettingsOpen(false); setSettingsSection(undefined); }, []);
-  const fileAction = (label: 'Open…' | 'Save') => {
+  const fileAction = (label: 'Open…' | 'Download a copy') => {
     const menu = document.querySelector<HTMLButtonElement>('.file-chip');
     if (menu?.getAttribute('aria-expanded') !== 'true') menu?.click();
     requestAnimationFrame(() => [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
       .find((button) => button.querySelector('span')?.textContent === label)?.click());
   };
-  // "Save As" renames the design, and the file follows: the name is the one
+  // Naming a copy renames the design, and the file follows: the name is the one
   // thing WG keeps, and the `.cfg` is derived from it. Typing an extension is
   // therefore not part of the name -- it is stripped rather than stored.
-  const saveAs = () => {
-    const requested = window.prompt('Save design as', useDocumentStore.getState().designName);
+  const downloadCopyAs = () => {
+    const requested = window.prompt('Download a copy as', useDocumentStore.getState().designName);
     if (!requested?.trim()) return;
     useDocumentStore.getState().setDesignName(requested.trim().replace(/\.(cfg|txt|mwg)$/i, ''));
-    requestAnimationFrame(() => fileAction('Save'));
+    requestAnimationFrame(() => fileAction('Download a copy'));
   };
   const paletteEntries = useMemo<PaletteEntry[]>(() => {
     const parameters = buildParameterPaletteEntries(family, { mode: workspaceMode, design, cadReturnReady });
@@ -280,8 +280,8 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
       { id: 'undo', kind: 'Commands', label: 'Undo', disabled: !canUndo, run: undo },
       { id: 'redo', kind: 'Commands', label: 'Redo', disabled: !canRedo, run: redo },
       { id: 'open', kind: 'Commands', label: 'Open', detail: 'Open a design file', run: () => fileAction('Open…') },
-      { id: 'save', kind: 'Commands', label: 'Save', detail: 'Download the current design', run: () => fileAction('Save') },
-      { id: 'save-as', kind: 'Commands', label: 'Save As', detail: 'Name and download a new copy', run: saveAs },
+      { id: 'save', kind: 'Commands', label: 'Download a copy', detail: 'Download without changing the editor’s saved state', run: () => fileAction('Download a copy') },
+      { id: 'save-as', kind: 'Commands', label: 'Download a copy as…', detail: 'Rename the current design and download a copy', run: downloadCopyAs },
       { id: 'reset-layout', kind: 'Commands', label: 'Reset layout', run: onResetLayout },
       { id: 'dark-theme', kind: 'Commands', label: 'Dark theme', run: () => setTheme('dark') },
       { id: 'light-theme', kind: 'Commands', label: 'Light theme', run: () => setTheme('light') },
