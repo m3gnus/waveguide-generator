@@ -17,6 +17,8 @@ import re
 from typing import Any, Iterable, Mapping
 import unicodedata
 
+from server.cadlink.limits import MAX_WGRETURN_JSON_BYTES
+
 
 SUPPORTED_MAJOR = 1
 SUPPORTED_VERSION = "1.1"
@@ -521,6 +523,15 @@ def read_wgreturn(path: str | Path) -> WgReturnBundle:
     manifest_path = bundle_path / "wgreturn.json"
     if manifest_path.is_symlink() or not manifest_path.is_file():
         raise WgReturnIntegrityError("wgreturn.json: missing or is a symlink")
+    # The manifest is CAD-authored, so its size is checked before it is read
+    # rather than after: ``json.loads`` on an arbitrarily large document is an
+    # allocation an attacker chooses (``docs/plans/STEP-PARSER-ISOLATION.md``).
+    manifest_size = manifest_path.stat().st_size
+    if manifest_size > MAX_WGRETURN_JSON_BYTES:
+        raise WgReturnValidationError(
+            f"wgreturn.json: {manifest_size:,} bytes exceeds the "
+            f"{MAX_WGRETURN_JSON_BYTES:,} byte limit for a return manifest"
+        )
     raw_manifest = manifest_path.read_bytes()
     manifest = validate_manifest(_parse_manifest(raw_manifest))
 
