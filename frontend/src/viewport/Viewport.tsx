@@ -3,6 +3,7 @@ import type { DecodedFrame } from '../api/frame';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { PREVIEW_FINE_IDLE_MS, previewSocket } from '../api/previewSocket';
 import { compareSelection } from '../api/results';
+import { runContext, runMatchesContext, useRunContext, type RunContext } from '../results/runCoherence';
 import { postSymmetry, toSolveDesign } from '../jobs/actions';
 import { cadApplicationName, usePreferences } from '../prefs/preferences';
 import { useCadReturnStore } from '../stores/cadReturn';
@@ -260,10 +261,15 @@ function FieldPlaneProbeTooltip({ fieldMaxSplDb }: { fieldMaxSplDb: number | nul
   </div>;
 }
 
-export function fieldPlaneJob(jobs: readonly JobItem[], selectedJobId: string | null): JobItem | null {
-  const selected = jobs.find((job) => job.id === selectedJobId && job.status === 'complete');
-  const candidate = selected ?? jobs.find((job) => job.status === 'complete');
-  return candidate?.field_plane_available === true ? candidate : null;
+export function fieldPlaneJob(
+  jobs: readonly JobItem[],
+  selectedJobId: string | null,
+  context: RunContext = runContext(),
+): JobItem | null {
+  const candidate = jobs.find((job) => job.id === selectedJobId && job.status === 'complete');
+  return candidate?.field_plane_available === true && runMatchesContext(candidate, context) === 'current'
+    ? candidate
+    : null;
 }
 
 export function fieldPlaneUnavailableTooltip(jobs: readonly JobItem[]): string {
@@ -337,7 +343,11 @@ export function Viewport() {
     cadApplication,
   });
   const resultSelection = useSyncExternalStore(compareSelection.subscribe, compareSelection.getSnapshot, compareSelection.getSnapshot);
-  const availableFieldJob = useMemo(() => fieldPlaneJob(jobs, resultSelection.primary), [jobs, resultSelection.primary]);
+  const coherenceContext = useRunContext();
+  const availableFieldJob = useMemo(
+    () => fieldPlaneJob(jobs, resultSelection.primary, coherenceContext),
+    [coherenceContext.designId, coherenceContext.designRevision, coherenceContext.ingestId, coherenceContext.mode, jobs, resultSelection.primary],
+  );
   const fieldEnabled = useFieldPlaneStore((state) => state.enabled);
   const fieldJobId = useFieldPlaneStore((state) => state.jobId);
   const fieldStatus = useFieldPlaneStore((state) => state.status);

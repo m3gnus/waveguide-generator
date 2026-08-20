@@ -12,7 +12,8 @@ export { resultExportSnapshot } from '../results/exportContext';
 import { copyChartPng, downloadChartPng } from '../results/chartImage';
 import { summaryGroups, summaryText, type SummaryGroup, type SummaryRow } from '../results/summary';
 import type { ResultPayload } from '../results/types';
-import { hydrateJobDesign } from '../jobs/jobDesign';
+import { hydrateJobDesign, replaceWithJobDesign } from '../jobs/jobDesign';
+import { showJobModel } from '../jobs/showJobModel';
 import { exportStemForJob, exportTitleSlug } from '../jobs/exportNaming';
 import { CHART_TYPES, MAX_RESULT_PANELS, POLAR_PLANES, RESULT_PANEL_COUNTS, preferencesStore, runDisplayName, usePreferences, type ChartType, type PolarPlane } from '../prefs/preferences';
 import { ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
@@ -27,6 +28,8 @@ import { useVisibleRedraw } from './panelVisibility';
 import { trapDialogFocus } from './SettingsDialog';
 import { useSolveOptionsStore } from '../stores/solveOptions';
 import { MAX_MEASURED_OVERLAYS, useMeasuredOverlayStore, type MeasuredOverlay } from '../stores/measuredOverlays';
+import { useDesignStore } from '../stores/design';
+import { runContextMarker, runMatchesContext, useRunContext } from '../results/runCoherence';
 
 export function splSubtitle(result: JobResults | undefined): string {
   const observation = result?.metadata?.observation;
@@ -1641,6 +1644,7 @@ export function ResultsPanel() {
   const provisional = useSyncExternalStore(provisionalResults.subscribe, provisionalResults.getSnapshot, provisionalResults.getSnapshot);
   const coordinator = useSyncExternalStore(jobsCoordinatorBridge.subscribe, jobsCoordinatorBridge.getSnapshot, jobsCoordinatorBridge.getSnapshot);
   const selection = useSyncExternalStore(compareSelection.subscribe, compareSelection.getSnapshot, compareSelection.getSnapshot);
+  const coherenceContext = useRunContext();
   const preferences = usePreferences();
   const tokens = useChartTokens();
   const [display, setDisplay] = useState<ResultDisplaySnapshot | null>(null);
@@ -1659,9 +1663,10 @@ export function ResultsPanel() {
   // Jobs arrive newest-first. A running solve becomes displayable as soon as
   // its first frequency arrives; before that, keep the last complete result.
   const latest = useMemo(() => jobs.find((job) => (
-    (job.status === 'complete' && job.has_results)
-    || ((job.status === 'running' || job.status === 'queued') && Boolean(provisional.entries[job.id]))
-  )) ?? null, [jobs, provisional]);
+    runMatchesContext(job, coherenceContext) !== 'other-model'
+    && ((job.status === 'complete' && job.has_results)
+      || ((job.status === 'running' || job.status === 'queued') && Boolean(provisional.entries[job.id])))
+  )) ?? null, [coherenceContext.designId, coherenceContext.designRevision, coherenceContext.ingestId, coherenceContext.mode, jobs, provisional]);
   useEffect(() => {
     // While following, every solve that finishes takes the primary slot as soon
     // as its results exist — the charts repaint without anyone selecting a job.
@@ -1760,6 +1765,8 @@ export function ResultsPanel() {
   const error = fetchError?.key === selectionKey ? fetchError.message : null;
   const showingPrevious = Boolean(selection.primary && display && display.key !== selectionKey && !error);
   const available = useMemo(() => jobs.filter((job) => job.status === 'complete' && job.has_results && !ids.includes(job.id)), [ids, jobs]);
+  const primaryJob = useMemo(() => jobs.find((job) => job.id === selection.primary) ?? null, [jobs, selection.primary]);
+  const primaryVerdict = primaryJob ? runMatchesContext(primaryJob, coherenceContext) : 'current';
   const selectedJob = useMemo(() => jobs.find((job) => job.id === display?.primaryId) ?? null, [display?.primaryId, jobs]);
   const primaryIsProvisional = Boolean(display?.provisionalIds.includes(display.primaryId));
   const provisionalMetadata = primaryRaw?.metadata?.provisional;
@@ -1798,6 +1805,18 @@ export function ResultsPanel() {
     disabled: beamRerunSubmitting,
     busy: beamRerunSubmitting,
   } : undefined, [beamRerunSubmitting, enableBalloonAndRerun, selectedJobCanRerun]);
+  const restorePrimaryDesign = useCallback(() => {
+    if (!primaryJob || replaceWithJobDesign(primaryJob, { keepHistory: true })) return;
+    coordinator.reportError('This result has no readable design snapshot, so its design cannot be restored.');
+  }, [coordinator, primaryJob]);
+  const solveCurrentDesign = useCallback(() => {
+    const current = useDesignStore.getState();
+    void coordinator.run(current.design, current.designRevision)
+      .catch((reason) => coordinator.reportError(reason instanceof Error ? reason.message : String(reason)));
+  }, [coordinator]);
+  const showPrimaryModel = useCallback(() => {
+    if (primaryJob) void showJobModel(primaryJob, coordinator.reportError);
+  }, [coordinator.reportError, primaryJob]);
   // Everything above keeps following the solve while this panel is covered --
   // results are still fetched, combined and labelled, so the panel is never
   // stale when it comes back. Only the drawing is held: a covered tab that is
@@ -1859,7 +1878,19 @@ export function ResultsPanel() {
         title={selection.following ? 'Following the latest solve — charts repaint when results land. Click to pin this result.' : 'Pinned to a chosen result. Click to follow the latest solve again.'}
         onClick={() => selection.following ? compareSelection.setPrimary(selection.primary) : compareSelection.followLatest(latest?.id ?? null)}
       ><i/>{selection.following ? 'Latest' : 'Pinned'}</button>
-      {ids.map((id, index) => <button key={id} className={`result-chip ${index ? 'muted' : ''}`} onClick={() => compareSelection.remove(id)} title={`${labelFor(id, jobs)} — remove from comparison`}><i/><span>{middleEllipsis(labelFor(id, jobs))}</span> ×</button>)}
+      {primaryJob && primaryVerdict !== 'current' && <span className={`result-coherence-notice ${primaryVerdict}`} role="status">
+        <span>{primaryVerdict === 'older-revision'
+          ? `Showing ${runDisplayName(primaryJob)} — the design has changed since this run.`
+          : `Showing ${runDisplayName(primaryJob)}${primaryJob.config_summary.geometry_type === 'imported' ? ' (CAD import)' : ''} — not the model in the viewport.`}</span>
+        {primaryVerdict === 'older-revision'
+          ? <><button type="button" onClick={restorePrimaryDesign}>Restore this run&apos;s design</button><button type="button" onClick={solveCurrentDesign}>Solve current design</button></>
+          : <><button type="button" onClick={showPrimaryModel}>Show this model</button><button type="button" onClick={() => compareSelection.followLatest(latest?.id ?? null)}>Back to latest</button></>}
+      </span>}
+      {ids.map((id, index) => {
+        const job = jobs.find((item) => item.id === id);
+        const marker = job ? runContextMarker(job, coherenceContext) : null;
+        return <button key={id} className={`result-chip ${index ? 'muted' : ''}`} onClick={() => compareSelection.remove(id)} title={`${labelFor(id, jobs)} — remove from comparison`}><i/><span>{middleEllipsis(labelFor(id, jobs))}</span>{marker && <span className="result-context-marker">{marker}</span>} ×</button>;
+      })}
       {channelIds.map((channel) => <button key={channel} className={`result-chip result-channel-chip${activeChannel === channel ? '' : ' muted'}`} aria-pressed={activeChannel === channel} title={`Show ${channel} in single-channel detail views and exports`} onClick={() => setPrimaryChannel(channel)}><span>{channel}</span></button>)}
       {/* How much of the dock is actually comparing. Five of the six default
           charts describe one run by nature, so a comparison that silently
@@ -1871,7 +1902,10 @@ export function ResultsPanel() {
         return <span className="result-single-run" title={`${comparing} of ${preferences.chartTypes.length} charts overlay every selected run. The rest describe one run at a time and show ${labelFor(ids[0], jobs)}.`}>{comparing}/{preferences.chartTypes.length} compare</span>;
       })()}
       {primaryIsProvisional && <span className="pill accent" role="status">Live · {liveCompleted}{liveExpected ? `/${liveExpected}` : ''} frequencies</span>}
-      <select className="result-compare-add" aria-label="Add comparison result" value="" onChange={(event) => { if (event.target.value) compareSelection.toggleOverlay(event.target.value); }}><option value="">+ compare</option>{available.map((job) => <option key={job.id} value={job.id}>{labelFor(job.id, jobs)}</option>)}</select>
+      <select className="result-compare-add" aria-label="Add comparison result" value="" onChange={(event) => { if (event.target.value) compareSelection.toggleOverlay(event.target.value); }}><option value="">+ compare</option>{available.map((job) => {
+        const marker = runContextMarker(job, coherenceContext);
+        return <option key={job.id} value={job.id}>{labelFor(job.id, jobs)}{marker ? ` · ${marker}` : ''}</option>;
+      })}</select>
       <span className="spacer"/>
       <label className="result-count-control" title="Number of chart panels">Charts<select aria-label="Results panel count" value={RESULT_PANEL_COUNTS.includes(preferences.chartTypes.length as never) ? preferences.chartTypes.length : ''} onChange={(event) => preferencesStore.setChartCount(Number(event.target.value))}><option value="" disabled>{preferences.chartTypes.length}</option>{RESULT_PANEL_COUNTS.map((count) => <option key={count} value={count}>{count}</option>)}</select></label>
       <button className="toolbar-icon" disabled={preferences.chartTypes.length >= MAX_RESULT_PANELS} aria-label="Add chart" title="Add chart panel" onClick={() => preferencesStore.addChart()}><Icon name="plus"/></button>

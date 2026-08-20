@@ -10,7 +10,9 @@ import { resetDesignStore, useDesignStore } from '../stores/design';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { resetSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
+import { importedMeshStore } from '../viewport/importedMeshStore';
 import { jobCardPropsEqual, JobsPanel, selectJob, type JobCardProps } from './JobsPanel';
+import { cadLinkCoordinatorBridge } from './CadLinkCoordinator';
 import { currentJobLabel } from './JobsCoordinator';
 
 const designMocks = vi.hoisted(() => ({ replaceWithJobDesign: vi.fn() }));
@@ -73,6 +75,7 @@ describe('jobs panel run list', () => {
     resetDesignStore();
     resetDocumentStore();
     resetSolveOptionsStore();
+    importedMeshStore.clear();
     compareSelection.setPrimary(null);
     workspaceModeStore.setMode('parametric');
     host = document.createElement('div');
@@ -86,6 +89,8 @@ describe('jobs panel run list', () => {
     act(() => publishJobs([]));
     vi.restoreAllMocks();
     vi.clearAllMocks();
+    vi.unstubAllGlobals();
+    importedMeshStore.clear();
     workspaceModeStore.setMode('parametric');
   });
 
@@ -149,6 +154,65 @@ describe('jobs panel run list', () => {
     await act(async () => root.render(<JobsPanel/>));
     expect(host.textContent).toContain('CAD import');
     expect(host.textContent).not.toContain('cad-import');
+  });
+
+  it('recalls a CAD run ingestion into the CAD workspace and viewport', async () => {
+    const imported = job(12, 'Returned speaker', 'cad-import');
+    imported.config_summary = { geometry_type: 'imported' };
+    imported.cad_source = {
+      ingest_id: 'wgi_archived', design_id: 'wgd_archived', lineage_id: 'wgl_archived',
+      archive_stem: 'returned-speaker', manifest_sha256: 'sha256:manifest',
+      document_name: 'Returned speaker', return_state_hash: null,
+    };
+    const record = {
+      ingest_id: 'wgi_archived', created_at: '2026-08-08T00:00:00Z', return_id: 'return-1',
+      manifest_sha256: 'sha256:manifest', artifact_sha256: 'sha256:artifact', report_sha256: 'sha256:report',
+      acoustic_domain: 'free-space', scope: { status: 'clean', degraded_skip_count: 0 },
+      sources: [{ id: 'source-hf', role: 'HF', required: true, instance_id: null, default_drive_channel_id: 'drive-hf', suggested_resolution_mm: 2 }],
+      mesh_sizes: { rigid_size_mm: 4, transition_mm: 3, source_size_mm: { 'source-hf': 2 } },
+      skipped_source_ids: [], freshness: { verdict: 'per-instance', instances: [] }, findings: [],
+      symmetry: { cut_planes: [], planes: {} }, healing: {}, sizing_estimate: {}, polar_grid_derivation: {}, tag_map: {},
+    } satisfies CadReturnIngestRecord;
+    const mesh = ['$MeshFormat', '2.2 0 8', '$EndMeshFormat', '$Nodes', '3', '1 0 0 0', '2 1 0 0', '3 0 1 0', '$EndNodes', '$Elements', '1', '1 2 2 1 1 1 2 3', '$EndElements', ''].join('\n');
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/viewport-mesh')
+      ? new Response(mesh, { status: 200 })
+      : new Response(JSON.stringify(record), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+    publishJobs([imported]);
+    await act(async () => root.render(<JobsPanel/>));
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('[aria-label="Select #12 · Returned speaker"]')!.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
+    expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe('wgi_archived');
+    expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe('wgi_archived');
+    expect(importedMeshStore.getSnapshot().cad?.name).toBe('Returned speaker');
+  });
+
+  it('reports when a selected CAD run no longer has archived ingestion artifacts', async () => {
+    const imported = job(13, 'Missing speaker', 'cad-import');
+    imported.config_summary = { geometry_type: 'imported' };
+    imported.cad_source = {
+      ingest_id: 'wgi_missing', design_id: null, lineage_id: null, archive_stem: null,
+      manifest_sha256: null, document_name: 'Missing speaker', return_state_hash: null,
+    };
+    const reportStatus = vi.spyOn(cadLinkCoordinatorBridge.getSnapshot(), 'reportStatus');
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      JSON.stringify({ detail: 'Unknown ingestion record wgi_missing' }),
+      { status: 404, headers: { 'Content-Type': 'application/json' } },
+    )));
+    publishJobs([imported]);
+    await act(async () => root.render(<JobsPanel/>));
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('[aria-label="Select #13 · Missing speaker"]')!.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
+    expect(reportStatus).toHaveBeenLastCalledWith(expect.stringContaining('archived CAD ingestion and mesh artifacts are no longer available'));
   });
 
   // Setting .value in a test replaces the whole string no matter where the

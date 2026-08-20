@@ -66,6 +66,8 @@ function completeJob(id: string, fieldPlaneAvailable: boolean): JobItem {
   return {
     id,
     status: 'complete',
+    config_summary: {},
+    design_revision: 1,
     field_plane_available: fieldPlaneAvailable,
   } as JobItem;
 }
@@ -219,7 +221,10 @@ describe('Viewport preview errors', () => {
   });
 
   it('shows overlay alone until enabled, then shows clip and invert', () => {
-    act(() => publishJobs([completeJob('available', true)]));
+    act(() => {
+      compareSelection.setPrimary('available');
+      publishJobs([completeJob('available', true)]);
+    });
     expect(host.querySelector('[aria-label="Acoustic field plane overlay"]')).not.toBeNull();
     expect(host.querySelector('[aria-label="Clip model to field plane"]')).toBeNull();
     expect(host.querySelector('[aria-label="Invert field-plane clip side"]')).toBeNull();
@@ -236,6 +241,7 @@ describe('Viewport preview errors', () => {
 
   it('scrubs solved frequencies with a slider instead of a dropdown', () => {
     act(() => {
+      compareSelection.setPrimary('available');
       publishJobs([completeJob('available', true)]);
       useFieldPlaneStore.setState({
         enabled: true,
@@ -262,6 +268,7 @@ describe('Viewport preview errors', () => {
 
   it('moves and resizes the plane from the numeric transform inputs', () => {
     act(() => {
+      compareSelection.setPrimary('available');
       publishJobs([completeJob('available', true)]);
       useFieldPlaneStore.setState({
         enabled: true,
@@ -293,6 +300,7 @@ describe('Viewport preview errors', () => {
 
   it('labels the pressure under the pointer while the plane is shown', () => {
     act(() => {
+      compareSelection.setPrimary('available');
       publishJobs([completeJob('available', true)]);
       useFieldPlaneStore.setState({
         enabled: true,
