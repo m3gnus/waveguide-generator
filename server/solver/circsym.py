@@ -149,6 +149,19 @@ def solve_circsym_design(
     meridian = meridian_build.as_metal_meridian(MeridianMesh)
     if cancellation_callback:
         cancellation_callback()
+    last_inner_cancel_check = time.monotonic()
+
+    def should_continue() -> bool:
+        """Poll durable cancellation inside a frequency without hammering SQLite."""
+        nonlocal last_inner_cancel_check
+        now = time.monotonic()
+        if (
+            cancellation_callback is not None
+            and now - last_inner_cancel_check >= 0.05
+        ):
+            last_inner_cancel_check = now
+            cancellation_callback()
+        return True
 
     def progress(index: int, total: int, frequency_hz: float) -> None:
         fraction = index / max(1, total)
@@ -201,6 +214,8 @@ def solve_circsym_design(
         kwargs["circsym_aperture_tag"] = aperture_tag
     if cancellation_callback is not None or result_callback is not None:
         kwargs["on_frequency_result"] = on_frequency_result
+    if cancellation_callback is not None:
+        kwargs["should_continue"] = should_continue
     if context.source_motion != "normal":
         kwargs["source_motion"] = context.source_motion
     try:
@@ -213,6 +228,10 @@ def solve_circsym_design(
             raise CircSymUnavailable("Installed Metal helper lacks axial CircSym source motion.") from exc
         if "on_frequency_result" in message:
             raise CircSymUnavailable("Installed Metal helper lacks cancellable CircSym sweeps.") from exc
+        if "should_continue" in message:
+            raise CircSymUnavailable(
+                "Installed Metal helper lacks intra-frequency CircSym cancellation."
+            ) from exc
         if "circsym_baffle_z" in message:
             raise CircSymUnavailable("Installed Metal helper lacks the required CircSym baffle position option.") from exc
         if "formulation" in message:
