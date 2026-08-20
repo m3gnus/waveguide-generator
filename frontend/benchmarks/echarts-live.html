@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ECharts live-update benchmark</title>
+    <style>
+      body { margin: 0; background: #0b0f15; color: #d8dde8; font: 13px ui-monospace, monospace; }
+      #charts { position: fixed; inset: 0; display: grid; grid-template-columns: 1fr 1fr; pointer-events: none; }
+      .chart { width: 480px; height: 300px; }
+      pre { position: relative; z-index: 2; margin: 12px; padding: 12px; background: rgba(0, 0, 0, .8); white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <pre id="result">Running…</pre>
+    <div id="charts"></div>
+    <script type="module" src="./echarts-live.ts"></script>
+  </body>
+</html>
