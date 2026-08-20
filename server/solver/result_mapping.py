@@ -633,8 +633,58 @@ def specific_impedance_z_over_rho_c(
     return output
 
 
+def _finite_number(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
+
+
+def _mesh_resolution_warning(
+    *,
+    suspect_frequencies: list[float],
+    diagnosed_count: int,
+    limit_hz: float | None,
+    max_edge_m: float | None,
+    min_elements_per_wavelength: float | None,
+) -> str:
+    """One aggregated line naming the mesh's validity ceiling and the band above it."""
+
+    finite = sorted(f for f in suspect_frequencies if math.isfinite(f))
+    count = len(suspect_frequencies)
+    scope = (
+        f"{count} of {diagnosed_count}" if diagnosed_count >= count else f"{count}"
+    )
+    frequency_noun = "frequency" if diagnosed_count == 1 else "frequencies"
+    band = f" ({finite[0]:.0f}-{finite[-1]:.0f} Hz)" if finite else ""
+    if limit_hz is not None:
+        rule = ""
+        if max_edge_m is not None and min_elements_per_wavelength is not None:
+            rule = (
+                f" ({min_elements_per_wavelength:g} elements per wavelength on the "
+                f"worst {max_edge_m * 1000.0:.1f} mm edge)"
+            )
+        head = (
+            "Mesh resolution supports this solve only up to about "
+            f"{limit_hz:.0f} Hz{rule}"
+        )
+    else:
+        head = "Mesh resolution is insufficient for part of this sweep"
+    return (
+        f"{head}; {scope} solved {frequency_noun}{band} exceed the limit and their "
+        "SPL/DI are unreliable. Refine the mesh's mm resolutions or lower the "
+        "sweep's upper frequency."
+    )
+
+
 def _apply_solver_log_warnings(metadata: dict[str, Any]) -> None:
-    """Surface GMRES/LAPACK failures without blanking usable arrays."""
+    """Surface GMRES/LAPACK failures without blanking usable arrays.
+
+    Per-frequency accuracy diagnostics are surfaced too. Mesh-resolution
+    suspects aggregate into a single warning: a wide sweep can exceed the
+    mesh's validity ceiling at dozens of frequencies, and one line per
+    frequency would bury that single finding in repetition.
+    """
 
     solver_log = None
     for backend_key in ("metal", "bempp"):
@@ -646,6 +696,11 @@ def _apply_solver_log_warnings(metadata: dict[str, Any]) -> None:
         return
     warnings = metadata.setdefault("warnings", [])
     unreliable = 0
+    resolution_diagnosed = 0
+    resolution_suspects: list[float] = []
+    resolution_limit_hz: float | None = None
+    resolution_edge_m: float | None = None
+    resolution_min_epw: float | None = None
     for entry in solver_log:
         if not isinstance(entry, dict):
             continue
@@ -662,11 +717,45 @@ def _apply_solver_log_warnings(metadata: dict[str, Any]) -> None:
             )
             unreliable += 1
         diagnostics = entry.get("native_diagnostics")
-        if isinstance(diagnostics, dict) and diagnostics.get("dense_solve_suspect") is True:
+        if not isinstance(diagnostics, dict):
+            continue
+        if diagnostics.get("dense_solve_suspect") is True:
             warnings.append(
                 f"Dense-solve conditioning is suspect at {label} (near a fictitious resonance); "
                 "compare against neighbouring frequencies."
             )
+        if "mesh_resolution_suspect" in diagnostics:
+            resolution_diagnosed += 1
+        if diagnostics.get("mesh_resolution_suspect") is True:
+            suspect_frequency = _finite_number(frequency)
+            resolution_suspects.append(
+                suspect_frequency if suspect_frequency is not None else math.nan
+            )
+            limit = _finite_number(diagnostics.get("mesh_max_valid_frequency_hz"))
+            if limit is not None:
+                resolution_limit_hz = (
+                    limit
+                    if resolution_limit_hz is None
+                    else min(resolution_limit_hz, limit)
+                )
+            edge = _finite_number(diagnostics.get("mesh_max_edge_m"))
+            if edge is not None:
+                resolution_edge_m = max(resolution_edge_m or 0.0, edge)
+            min_epw = _finite_number(
+                diagnostics.get("mesh_elements_per_wavelength_min")
+            )
+            if min_epw is not None:
+                resolution_min_epw = min_epw
+    if resolution_suspects:
+        warnings.append(
+            _mesh_resolution_warning(
+                suspect_frequencies=resolution_suspects,
+                diagnosed_count=resolution_diagnosed,
+                limit_hz=resolution_limit_hz,
+                max_edge_m=resolution_edge_m,
+                min_elements_per_wavelength=resolution_min_epw,
+            )
+        )
     metadata["warning_count"] = len(warnings)
     if unreliable:
         metadata["partial_success"] = True
