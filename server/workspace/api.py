@@ -19,6 +19,7 @@ from typing import Any, Literal
 import unicodedata
 
 from fastapi import APIRouter, FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from server.platform.paths import data_paths, proposed_cadlink_dir
@@ -80,6 +81,27 @@ class CaptureDocumentRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool
+
+
+class WorkspaceUnavailableError(OSError):
+    """An explicitly selected run folder is temporarily unavailable."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        super().__init__(f"The selected workspace folder is unavailable: {path}")
+
+
+def _workspace_unavailable_response(exc: WorkspaceUnavailableError) -> JSONResponse:
+    """Return a stable error shape without hiding the configured folder."""
+
+    return JSONResponse(
+        status_code=409,
+        content={
+            "code": "workspace_unavailable",
+            "detail": str(exc),
+            "path": str(exc.path),
+        },
+    )
 
 
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
@@ -289,7 +311,11 @@ class WorkspaceState:
     def path(self) -> Path:
         if not self._loaded:
             self._load()
-        path = self._selected or self.default_path
+        if self._selected is not None:
+            if not self._selected.is_dir():
+                raise WorkspaceUnavailableError(self._selected)
+            return self._selected
+        path = self.default_path
         path.mkdir(parents=True, exist_ok=True)
         return path
 
@@ -298,7 +324,7 @@ class WorkspaceState:
             self._load()
         if self._selected is not None and not self._selected.is_dir():
             logger.warning("Selected workspace path is unavailable: %s", self._selected)
-            self._selected = None
+            return None
         return self._selected
 
     def _load(self) -> None:
@@ -313,21 +339,20 @@ class WorkspaceState:
         if not raw_path:
             return
         candidate = Path(raw_path).expanduser().resolve()
-        if candidate.is_dir():
-            self._selected = candidate
-        else:
+        self._selected = candidate
+        if not candidate.is_dir():
             logger.warning("Persisted workspace path is unavailable: %s", candidate)
 
     def select(self, path: Path) -> None:
         resolved = path.expanduser().resolve()
         if not resolved.is_dir():
             raise ValueError(f"Selected path is not a directory: {resolved}")
-        self._selected = resolved
-        self._loaded = True
         _write_json_atomic(
             self.settings_path,
             {"schemaVersion": 1, "workspacePath": str(resolved)},
         )
+        self._selected = resolved
+        self._loaded = True
 
 
 class CadWorkspaceState(WorkspaceState):
@@ -558,25 +583,42 @@ def create_cad_workspace_router(state: CadWorkspaceState) -> APIRouter:
 def create_workspace_router(state: WorkspaceState) -> APIRouter:
     router = APIRouter(prefix="/api/workspace", tags=["workspace"])
 
+    def available_path() -> Path | JSONResponse:
+        try:
+            return state.path()
+        except WorkspaceUnavailableError as exc:
+            return _workspace_unavailable_response(exc)
+
     @router.get("/path")
-    async def workspace_path() -> dict[str, Any]:
+    async def workspace_path() -> Any:
+        path = available_path()
+        if isinstance(path, JSONResponse):
+            return path
         selected = state.selected_path()
-        return {"path": str(selected or state.path()), "selected": selected is not None}
+        return {"path": str(path), "selected": selected is not None}
 
     @router.post("/select")
-    async def workspace_select() -> dict[str, Any]:
+    async def workspace_select() -> Any:
         selected = await asyncio.to_thread(_select_workspace_folder)
         if not selected:
-            return {"selected": False, "path": str(state.path())}
+            path = available_path()
+            if isinstance(path, JSONResponse):
+                return path
+            return {"selected": False, "path": str(path)}
         try:
             state.select(Path(selected))
         except (OSError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"selected": True, "path": str(state.path())}
+        path = available_path()
+        if isinstance(path, JSONResponse):
+            return path
+        return {"selected": True, "path": str(path)}
 
     @router.post("/open")
-    async def workspace_open() -> dict[str, str]:
-        path = state.path()
+    async def workspace_open() -> Any:
+        path = available_path()
+        if isinstance(path, JSONResponse):
+            return path
         command = (
             ["open", str(path)]
             if platform.system() == "Darwin"
@@ -591,11 +633,14 @@ def create_workspace_router(state: WorkspaceState) -> APIRouter:
         return {"status": "opened", "path": str(path)}
 
     @router.post("/write-export")
-    async def workspace_write_export(request: WriteExportRequest) -> dict[str, Any]:
+    async def workspace_write_export(request: WriteExportRequest) -> Any:
         # Automatic exports must work on first launch without a native folder
         # picker. Production supplies ``<checkout>/output`` as this fallback;
         # an explicit selection still overrides it.
-        workspace_root = state.path().resolve()
+        workspace_path = available_path()
+        if isinstance(workspace_path, JSONResponse):
+            return workspace_path
+        workspace_root = workspace_path.resolve()
         try:
             subdirectory_segments = _path_segments(request.subdirectory, "subdirectory")
             export_directory = workspace_root.joinpath(*subdirectory_segments).resolve()

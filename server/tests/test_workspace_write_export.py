@@ -308,15 +308,78 @@ def test_write_export_uses_visible_default_without_folder_selection(tmp_path: Pa
     assert state.selected_path() is None
 
 
-def test_deleted_workspace_selection_is_stale_and_is_not_recreated(tmp_path: Path) -> None:
-    state, workspace = selected_state(tmp_path)
+def test_deleted_workspace_selection_refuses_exports_until_it_returns(
+    tmp_path: Path,
+) -> None:
+    data = tmp_path / "data"
+    default = tmp_path / "default"
+    state = workspace_api.WorkspaceState(data, default_path=default)
+    workspace = tmp_path / "chosen"
+    workspace.mkdir()
+    state.select(workspace)
+    workspace = workspace.resolve()
     workspace.rmdir()
+    # A restart while the selected volume is absent must retain the configured
+    # path, not silently adopt the default for the rest of that process.
+    state = workspace_api.WorkspaceState(data, default_path=default)
 
     response = asyncio.run(path_endpoint(state)())
 
-    assert response["selected"] is False
-    assert response["path"] != str(workspace)
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 409
+    assert json.loads(response.body) == {
+        "code": "workspace_unavailable",
+        "detail": f"The selected workspace folder is unavailable: {workspace}",
+        "path": str(workspace),
+    }
+    refused = call(state, request("horn_1", [("a.frd", "one")]))
+    assert isinstance(refused, JSONResponse)
+    assert refused.status_code == 409
+    assert json.loads(refused.body)["code"] == "workspace_unavailable"
     assert not workspace.exists()
+    assert not default.exists()
+    assert json.loads((data / "workspace_settings.json").read_text()) == {
+        "schemaVersion": 1,
+        "workspacePath": str(workspace),
+    }
+
+    workspace.mkdir()
+
+    assert asyncio.run(path_endpoint(state)()) == {
+        "path": str(workspace),
+        "selected": True,
+    }
+    assert call(state, request("horn_1", [("a.frd", "one")])) == {
+        "directory": str(workspace / "horn_1"),
+        "files": [str(workspace / "horn_1" / "a.frd")],
+    }
+    assert (workspace / "horn_1" / "a.frd").read_text() == "one"
+
+
+def test_failed_workspace_selection_keeps_the_previous_persisted_choice(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data = tmp_path / "data"
+    state = workspace_api.WorkspaceState(data)
+    previous = tmp_path / "previous"
+    replacement = tmp_path / "replacement"
+    previous.mkdir()
+    replacement.mkdir()
+    state.select(previous)
+    settings_before = (data / "workspace_settings.json").read_bytes()
+
+    def fail_write(_path: Path, _payload: dict[str, object]) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(workspace_api, "_write_json_atomic", fail_write)
+
+    with pytest.raises(OSError, match="disk full"):
+        state.select(replacement)
+
+    assert state.selected_path() == previous.resolve()
+    assert state.path() == previous.resolve()
+    assert (data / "workspace_settings.json").read_bytes() == settings_before
 
 
 @pytest.mark.parametrize("path", ["../escape.frd", "hor/../../escape.frd"])
