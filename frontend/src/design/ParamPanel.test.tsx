@@ -8,6 +8,7 @@ import { cadLinkCoordinatorBridge } from '../shell/CadLinkCoordinator';
 import { buildParameterPaletteEntries } from '../shell/TopBar';
 import { workspaceNavigation } from '../shell/workspaceNavigation';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
+import { resetCadPreparationStore, useCadPreparationStore } from '../stores/cadPreparation';
 import { designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
@@ -86,6 +87,7 @@ describe('ParamPanel inventory UX', () => {
     localStorage.clear();
     resetDesignStore();
     resetCadReturnStore();
+    resetCadPreparationStore();
     resetSolveOptionsStore();
     workspaceModeStore.setMode('parametric');
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -354,7 +356,7 @@ describe('ParamPanel inventory UX', () => {
       root.render(withQueryClient(<ParamPanel tab="simulation" />));
     });
 
-    for (const id of ['cad-combine', 'cad-combine-level', 'cad-combine-align', 'cad-exterior-only', 'skip-source-mf', 'drift-source-mf']) {
+    for (const id of ['cad-force-full-domain', 'cad-combine', 'cad-combine-level', 'cad-combine-align', 'cad-exterior-only', 'skip-source-mf', 'drift-source-mf']) {
       expect(host.querySelector(`#${id}`), id).not.toBeNull();
     }
     expect(host.querySelector('[aria-label="Drive channel for source-hf"]')).not.toBeNull();
@@ -371,6 +373,11 @@ describe('ParamPanel inventory UX', () => {
     expect(useCadReturnStore.getState().combineAlign).toBe(false);
     expect(buildImportedSubmission(useCadReturnStore.getState()).geometry.combine?.align).toBe(false);
     expect(importedSubmissionBlocker()).toBeNull();
+
+    const forceFull = host.querySelector<HTMLInputElement>('#cad-force-full-domain')!;
+    act(() => forceFull.click());
+    expect(useCadPreparationStore.getState().symmetryMode).toBe('full');
+    expect(useCadReturnStore.getState().ingestStaleReason).toContain('symmetry preparation mode changed');
 
     const rebuild = [...host.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Rebuild mesh')!;
     act(() => rebuild.click());

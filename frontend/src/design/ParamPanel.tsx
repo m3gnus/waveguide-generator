@@ -8,6 +8,7 @@ import { postSymmetry, toSolveDesign, type SymmetryResolution } from '../jobs/ac
 import { useActiveBackend } from '../jobs/useCapabilities';
 import { backendLimitation } from './backendSupport';
 import { cadApplicationName, usePreferences } from '../prefs/preferences';
+import { useCadPreparationStore } from '../stores/cadPreparation';
 import {
   channelAcceptsDriver,
   combineChain,
@@ -864,6 +865,8 @@ function CadCrossover() {
 
 function CadMeshDetail() {
   const state = useCadReturnStore();
+  const symmetryMode = useCadPreparationStore((current) => current.symmetryMode);
+  const setSymmetryMode = useCadPreparationStore((current) => current.setSymmetryMode);
   const cadCoordinator = useSyncExternalStore(
     cadLinkCoordinatorBridge.subscribe,
     cadLinkCoordinatorBridge.getSnapshot,
@@ -874,6 +877,10 @@ function CadMeshDetail() {
     .map((finding) => String(finding.source_id))]);
   return <>
     <div className="cad-mesh-intro"><p>Smaller values are finer. Curved CAD faces receive bounded extra refinement automatically.</p><button className="primary" disabled={cadCoordinator.ingesting || !state.selectedBundle?.readable} onClick={() => void cadCoordinator.ingest()}>{cadCoordinator.ingesting ? 'Preparing…' : 'Rebuild mesh'}</button></div>
+    <ToggleRow id="cad-force-full-domain" label="Force full domain" help="Disable automatic x=0/y=0 cutting for this preparation. Use this when a symmetry verdict is doubtful; it costs more memory and solve time but cannot remove a geometric half." checked={symmetryMode === 'full'} onChange={(enabled) => {
+      setSymmetryMode(enabled ? 'full' : 'auto');
+      state.markIngestStale('The CAD symmetry preparation mode changed.');
+    }}/>
     <NumberField label={CAD_CONTROLS.rigidSize.label} revealId={CAD_CONTROLS.rigidSize.reveal.id} unit="mm" value={state.rigidSizeMm} min={0.01} step={0.5} precision={2} description="Maximum target size for rigid CAD surfaces; tight curvature may be refined further." onCommit={state.setRigidSize}/>
     <NumberField label={CAD_CONTROLS.transitionSize.label} revealId={CAD_CONTROLS.transitionSize.reveal.id} unit="mm" value={state.transitionMm} min={0.01} step={0.5} precision={2} description="Maximum size transition between adjacent mesh regions." onCommit={state.setTransition}/>
     {(state.ingestRecord?.evidence?.fem_air_volumes?.length ?? 0) > 0 && <ToggleRow id="cad-exterior-only" label={CAD_CONTROLS.exteriorOnly.label} revealId={CAD_CONTROLS.exteriorOnly.reveal.id} help="Explicitly exclude the returned FEM air volumes. Phase 2 solves only the exterior Metal free-space problem." checked={state.exteriorOnly} onChange={state.setExteriorOnly}/>}

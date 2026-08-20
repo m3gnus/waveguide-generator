@@ -97,6 +97,7 @@ _RETURN_IDS = {
     "round": "wgr_01J5A8QK3M9T2XVBH0RD7NWEA0",
     "offset": "wgr_01J5A8QK3M9T2XVBH0RD7NWEB0",
     "capped": "wgr_01J5A8QK3M9T2XVBH0RD7NWEC0",
+    "full": "wgr_01J5A8QK3M9T2XVBH0RD7NWED0",
 }
 
 
@@ -246,7 +247,12 @@ _SIZES = {
 }
 
 
-def _ingest(tmp_path: Path, bundle: Path) -> dict[str, Any]:
+def _ingest(
+    tmp_path: Path,
+    bundle: Path,
+    *,
+    symmetry_mode: str = "auto",
+) -> dict[str, Any]:
     gmsh = pytest.importorskip("gmsh")
     data_dir = tmp_path / "data"
     store = CadLinkStore(data_dir / "cadlink.db")
@@ -255,7 +261,14 @@ def _ingest(tmp_path: Path, bundle: Path) -> dict[str, Any]:
         gmsh.initialize(interruptible=False)
     try:
         gmsh.option.setNumber("General.Terminal", 0)
-        return ingest_bundle(bundle, _SIZES, [], store, data_dir)
+        return ingest_bundle(
+            bundle,
+            _SIZES,
+            [],
+            store,
+            data_dir,
+            prep_options={"symmetry_mode": symmetry_mode},
+        )
     finally:
         if initialized_here and gmsh.isInitialized():
             gmsh.finalize()
@@ -326,6 +339,25 @@ def test_symmetric_return_is_cut_to_a_quarter_with_tags_and_areas_intact(
     derivation = record["polar_grid_derivation"]
     assert derivation["axes"]["horizontal"]["minimum_deg"] == 0.0
     assert derivation["axes"]["vertical"]["minimum_deg"] == 0.0
+
+
+def test_user_can_force_the_same_symmetric_return_to_remain_full_domain(
+    tmp_path: Path,
+) -> None:
+    pytest.importorskip("gmsh")
+    record = _ingest(
+        tmp_path,
+        _horn_bundle(tmp_path, "full"),
+        symmetry_mode="full",
+    )
+
+    assert record["symmetry"]["requested_mode"] == "full"
+    assert record["symmetry"]["cut_planes"] == []
+    assert record["mesh"]["stats"]["domain_multiplier"] == 1.0
+    assert record["mesh"]["stats"]["dense_solver_domain_multiplier"] == 1
+    bounds = record["mesh"]["stats"]["bounds_m"]
+    assert bounds["min_x"] < 0.0 < bounds["max_x"]
+    assert bounds["min_y"] < 0.0 < bounds["max_y"]
 
 
 def test_vertically_offset_return_keeps_the_quarter_reduction(tmp_path: Path) -> None:
