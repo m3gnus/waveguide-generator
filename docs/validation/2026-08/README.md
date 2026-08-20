@@ -11,6 +11,9 @@ constraints stated inside them; they are not a current release status dashboard.
   solve, and frontend work.
 - [Apple Silicon performance](MACOS-PERFORMANCE.md) — regression validation and preview
   profiling after the Windows changes.
+- [Live passive-cardioid CAD campaign](LIVE-PASSIVE-CARDIOID.md) — browser UI,
+  imported Metal solve, radiation matrices, downloads, and permanent archive on
+  2026-08-20.
 
 Current release gates are maintained in the workspace-local maintainer backlog, not in
 this dated evidence directory.
