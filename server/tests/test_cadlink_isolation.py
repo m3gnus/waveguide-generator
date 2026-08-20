@@ -588,15 +588,22 @@ def test_windows_child_waits_for_its_envelope_until_after_job_assignment(
     staging = tmp_path / "staging"
     for directory in (staging / "tmp", staging / "home"):
         directory.mkdir(parents=True)
-    process = subprocess.Popen(  # noqa: S603
+    # Launch through the production helper, not a hand-rolled Popen: a runner
+    # inside a job object refuses CREATE_BREAKAWAY_FROM_JOB, and reimplementing
+    # only the first attempt here made this test fail on hosted Windows CI while
+    # the product itself retried correctly.
+    process = isolation.start_child_process(
         [sys.executable, "-s", "-B", "-m", "server.cadlink.child_main"],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        cwd=staging / "tmp",
-        env=child_environment(staging),
-        close_fds=True,
-        creationflags=isolation._windows_creation_flags(),
+        {
+            "stdin": subprocess.PIPE,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.STDOUT,
+            "cwd": staging / "tmp",
+            "env": child_environment(staging),
+            "close_fds": True,
+            "creationflags": isolation._windows_creation_flags(),
+        },
+        stage="test",
     )
     started = time.monotonic()
     job = isolation._assign_windows_job(process, _budget())
