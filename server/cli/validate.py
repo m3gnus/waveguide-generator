@@ -29,16 +29,22 @@ from server.solver.context import SolverContext
 from server.solver.metal import circsym_eligibility_reasons
 
 from .render import render_validation
-from .request import build_request
+from .request import build_request, load_request_document
 
 
 MeshBuilder = Callable[..., Awaitable[dict[str, Any]]]
 WorkerLifecycle = Callable[[], Awaitable[None]]
 
 
-def _base_payload(path: Path, requested_engine: str) -> dict[str, Any]:
+def _base_payload(
+    path: Path,
+    requested_engine: str,
+    *,
+    request_document: bool,
+) -> dict[str, Any]:
     return {
         "schemaVersion": 1,
+        "inputKind": "solve_request" if request_document else "design_text",
         "file": str(path),
         "dialect": None,
         "migrationsApplied": [],
@@ -53,7 +59,31 @@ def _base_payload(path: Path, requested_engine: str) -> dict[str, Any]:
         "symmetry": None,
         "mesh": None,
         "refusals": [],
+        "errors": [],
     }
+
+
+def _refuse(
+    payload: dict[str, Any],
+    message: str,
+    *,
+    code: str = "invalid_request",
+    stage: str = "validation",
+    retryable: bool = False,
+    details: dict[str, Any] | None = None,
+) -> None:
+    payload["refusals"].append(message)
+    payload["errors"].append(
+        {
+            "schema_version": 1,
+            "code": code,
+            "stage": stage,
+            "message": message,
+            "retryable": retryable,
+            "details": details or {},
+            "client_request_id": None,
+        }
+    )
 
 
 def _validation_messages(exc: ValidationError) -> list[str]:
@@ -160,55 +190,83 @@ async def validate_path(
     engine: str | None = None,
     overlay: Path | None = None,
     no_mesh: bool = False,
+    request_document: bool = False,
     mesh_builder: MeshBuilder | None = None,
     prewarm_worker: WorkerLifecycle | None = None,
     shutdown_worker: WorkerLifecycle | None = None,
 ) -> tuple[dict[str, Any], int]:
     requested_engine = str(engine or "auto").strip().lower()
-    payload = _base_payload(path, requested_engine)
+    payload = _base_payload(
+        path,
+        requested_engine,
+        request_document=request_document,
+    )
     refusals: list[str] = payload["refusals"]
 
-    if path.suffix.lower() not in {".mwg", ".cfg"}:
-        refusals.append("design file must use the .mwg or .cfg extension")
-        return payload, 1
     try:
-        source = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        refusals.append(f"could not read design file: {exc}")
-        return payload, 1
-
-    try:
-        parsed = parse(source)
-    except (TextConfigError, TypeError, ValueError) as exc:
-        refusals.append(str(exc))
-        return payload, 1
-    payload["dialect"] = parsed.dialect
-    payload["migrationsApplied"] = [
-        {"name": application.name, "note": application.note}
-        for application in parsed.migrations
-    ]
-    file_settings = has_solve_blocks(parsed.extra_blocks)
-    if overlay is not None:
-        payload["settingsSource"] = (
-            "file+overlay" if file_settings else "defaults+overlay"
-        )
-    elif file_settings:
-        payload["settingsSource"] = "file"
-
-    try:
-        built = build_request(parsed, overlay=overlay, engine=engine)
+        if request_document:
+            payload["dialect"] = "solve-request-json"
+            built = load_request_document(path, overlay=overlay, engine=engine)
+        else:
+            if path.suffix.lower() not in {".mwg", ".cfg"}:
+                _refuse(
+                    payload,
+                    "design file must use the .mwg or .cfg extension",
+                    code="unsupported_input",
+                    stage="input",
+                )
+                return payload, 1
+            try:
+                source = path.read_text(encoding="utf-8")
+            except OSError as exc:
+                _refuse(
+                    payload,
+                    f"could not read design file: {exc}",
+                    code="input_read_failed",
+                    stage="input",
+                )
+                return payload, 1
+            try:
+                parsed = parse(source)
+            except (TextConfigError, TypeError, ValueError) as exc:
+                _refuse(
+                    payload,
+                    str(exc),
+                    code="invalid_design",
+                    stage="input",
+                )
+                return payload, 1
+            payload["dialect"] = parsed.dialect
+            payload["migrationsApplied"] = [
+                {"name": application.name, "note": application.note}
+                for application in parsed.migrations
+            ]
+            file_settings = has_solve_blocks(parsed.extra_blocks)
+            if overlay is not None:
+                payload["settingsSource"] = (
+                    "file+overlay" if file_settings else "defaults+overlay"
+                )
+            elif file_settings:
+                payload["settingsSource"] = "file"
+            built = build_request(parsed, overlay=overlay, engine=engine)
         request = built.request
         payload["settingsSource"] = built.settings_source
     except ValidationError as exc:
-        refusals.extend(_validation_messages(exc))
+        for message in _validation_messages(exc):
+            _refuse(payload, message)
         return payload, 1
     except (TypeError, ValueError) as exc:
-        refusals.append(str(exc))
+        _refuse(payload, str(exc), code="invalid_input", stage="input")
         return payload, 1
     requested_engine = request.options.engine
     payload["engine"]["requested"] = requested_engine
     if isinstance(request.geometry, ImportedGeometrySource):
-        refusals.append("imported-geometry designs are not supported by the CLI yet")
+        _refuse(
+            payload,
+            "imported-geometry designs are not supported by the CLI yet",
+            code="unsupported_geometry",
+            stage="submission",
+        )
         return payload, 1
 
     # Probe before resolving so even a refusal can tell an operator what this
@@ -219,7 +277,13 @@ async def validate_path(
     except Exception as exc:  # a broken injected/native probe is a validation refusal
         message = f"engine capability probe failed: {exc}"
         payload["engine"]["reason"] = message
-        refusals.append(message)
+        _refuse(
+            payload,
+            message,
+            code="capability_probe_failed",
+            stage="capabilities",
+            retryable=True,
+        )
         return payload, 1
     try:
         resolved = await resolve_submission(request, engine_registry)
@@ -239,18 +303,33 @@ async def validate_path(
             if selected is not None and not selected.available
             else str(exc)
         )
-        refusals.append(str(exc))
+        _refuse(
+            payload,
+            str(exc),
+            code=(
+                "engine_unavailable"
+                if isinstance(exc, EngineUnavailableError)
+                else "unknown_engine"
+            ),
+            stage="submission",
+        )
         return payload, 1
     except SymmetryValidationError as exc:
-        refusals.append(str(exc))
+        _refuse(payload, str(exc), code="invalid_symmetry", stage="submission")
         return payload, 1
     except ImportedSolveRefusal as exc:
-        refusals.append(str(exc))
+        _refuse(
+            payload,
+            str(exc),
+            code=exc.reason_code,
+            stage="submission",
+            details=exc.details,
+        )
         return payload, 1
     except Exception as exc:
         message = f"submission validation failed: {exc}"
         payload["engine"]["reason"] = message
-        refusals.append(message)
+        _refuse(payload, message, code="submission_failed", stage="submission")
         return payload, 1
 
     request = resolved.request
@@ -263,7 +342,12 @@ async def validate_path(
     try:
         payload["frequencies"] = _frequency_summary(request)
     except (TypeError, ValueError) as exc:
-        refusals.append(f"frequency validation failed: {exc}")
+        _refuse(
+            payload,
+            f"frequency validation failed: {exc}",
+            code="invalid_frequency_sweep",
+            stage="validation",
+        )
         return payload, 1
 
     # The persisted request keeps the user's design intact, then the job runner
@@ -281,9 +365,12 @@ async def validate_path(
         request.design.root.simulation.solver_mode == "circsym"
         and payload["solvePath"]["reasons"]
     ):
-        refusals.append(
+        _refuse(
+            payload,
             "Forced axisymmetric solver mode is not eligible: "
-            + "; ".join(payload["solvePath"]["reasons"])
+            + "; ".join(payload["solvePath"]["reasons"]),
+            code="solver_mode_ineligible",
+            stage="validation",
         )
         return payload, 1
 
@@ -307,12 +394,23 @@ async def validate_path(
             "warnings": list(stats.get("warnings") or []),
         }
     except Exception as exc:
-        refusals.append(f"solver mesh compilation failed: {exc}")
+        _refuse(
+            payload,
+            f"solver mesh compilation failed: {exc}",
+            code="mesh_refused",
+            stage="mesh",
+        )
     finally:
         try:
             await shutdown()
         except Exception as exc:
-            refusals.append(f"gmsh worker shutdown failed: {exc}")
+            _refuse(
+                payload,
+                f"gmsh worker shutdown failed: {exc}",
+                code="mesh_runtime_cleanup_failed",
+                stage="cleanup",
+                retryable=True,
+            )
     return payload, 1 if refusals else 0
 
 
@@ -323,11 +421,12 @@ def validate_command(
 ) -> int:
     payload, exit_code = asyncio.run(
         validate_path(
-            args.file,
+            args.request or args.file,
             engine_registry=engine_registry,
             engine=args.engine,
             overlay=args.overlay,
             no_mesh=args.no_mesh,
+            request_document=args.request is not None,
         )
     )
     render_validation(payload, json_output=args.json, stream=sys.stdout)

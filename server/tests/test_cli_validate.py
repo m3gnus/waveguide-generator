@@ -43,6 +43,24 @@ def _design_path(tmp_path: Path, *, source: str = VALID_MWG) -> Path:
     return path
 
 
+def _request_path(tmp_path: Path) -> Path:
+    path = tmp_path / "request.json"
+    path.write_text(
+        json.dumps(
+            {
+                "design": parse(VALID_MWG).semantic_data(),
+                "options": {
+                    "engine": "dryrun",
+                    "frequencies_hz": [500.0, 1000.0],
+                },
+                "client_request_id": "validate-7",
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
 def _corpus_design_or_fixture(tmp_path: Path) -> Path:
     for path in CORPUS_MWG:
         try:
@@ -122,7 +140,34 @@ def test_validate_real_corpus_mwg_emits_versioned_json(
         "warnings": ["representative mesh warning"],
     }
     assert report["refusals"] == []
+    assert report["errors"] == []
     assert lifecycle == ["prewarm", "mesh", "shutdown"]
+
+
+def test_validate_accepts_the_canonical_http_solve_request(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    path = _request_path(tmp_path)
+
+    exit_code = main(
+        ["validate", "--request", str(path), "--json", "--no-mesh"],
+        engine_registry=_registry(),
+    )
+    report = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert report["inputKind"] == "solve_request"
+    assert report["dialect"] == "solve-request-json"
+    assert report["settingsSource"] == "request"
+    assert report["frequencies"] == {
+        "start": 500.0,
+        "end": 1000.0,
+        "count": 2,
+        "spacing": "explicit",
+        "source": "flags",
+    }
+    assert report["errors"] == []
 
 
 def test_validate_overlay_is_deep_merged_and_engine_flag_wins(
@@ -181,6 +226,7 @@ def test_validate_overlay_typo_is_a_refusal(tmp_path: Path, capsys) -> None:
     assert exit_code == 1
     assert report["settingsSource"] == "defaults+overlay"
     assert any("frequecy_spacing" in item for item in report["refusals"])
+    assert report["errors"][0]["code"] == "invalid_request"
 
 
 def test_validate_unknown_engine_is_a_listed_refusal(

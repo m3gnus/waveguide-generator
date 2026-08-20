@@ -61,6 +61,45 @@ def _apply_overlay(options: SolveOptions, values: dict[str, Any]) -> SolveOption
     return SolveOptions.model_validate(merged)
 
 
+def load_request_document(
+    path: Path,
+    *,
+    overlay: Path | None = None,
+    engine: str | None = None,
+) -> RequestBuild:
+    """Load the same strict ``SolveRequest`` JSON accepted by ``POST /api/solve``."""
+
+    if path.suffix.lower() != ".json":
+        raise ValueError("solve request file must use the .json extension")
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ValueError(f"could not read solve request file: {exc}") from exc
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"solve request is not valid JSON at line {exc.lineno}, "
+            f"column {exc.colno}: {exc.msg}"
+        ) from exc
+    request = SolveRequest.model_validate(value)
+    options = request.options
+    if overlay is not None:
+        options = _apply_overlay(options, _overlay_options(overlay))
+    if engine is not None:
+        values = options.model_dump(mode="json")
+        values["engine"] = engine
+        options = SolveOptions.model_validate(values)
+    if options != request.options:
+        request_wire = request.model_dump(mode="json")
+        request_wire["options"] = options.model_dump(mode="json")
+        request = SolveRequest.model_validate(request_wire)
+    settings_source = "request+overlay" if overlay is not None else "request"
+    if engine is not None:
+        settings_source += "+engine"
+    return RequestBuild(request=request, settings_source=settings_source)
+
+
 def build_request(
     parsed: ParsedDesign,
     *,
@@ -91,4 +130,9 @@ def build_request(
     return RequestBuild(request=request, settings_source=settings_source)
 
 
-__all__ = ["OverlayDocument", "RequestBuild", "build_request"]
+__all__ = [
+    "OverlayDocument",
+    "RequestBuild",
+    "build_request",
+    "load_request_document",
+]

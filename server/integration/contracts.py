@@ -34,6 +34,25 @@ class ErrorEnvelope(IntegrationModel):
     error: ErrorDetail
 
 
+class CliOutcome(IntegrationModel):
+    """Terminal NDJSON record emitted after the jobs-protocol stream."""
+
+    kind: Literal["outcome"] = "outcome"
+    schema_version: Literal[1] = 1
+    status: Literal[
+        "complete",
+        "refused",
+        "failed",
+        "cancelled",
+        "interrupted",
+    ]
+    job_id: str | None = None
+    client_request_id: str | None = None
+    output_directory: str | None = None
+    result_sha256: str | None = None
+    error: ErrorDetail | None = None
+
+
 def error_envelope(
     *,
     code: str,
@@ -61,5 +80,6 @@ __all__ = [
     "PROVENANCE_CONTRACT_VERSION",
     "ErrorDetail",
     "ErrorEnvelope",
+    "CliOutcome",
     "error_envelope",
 ]
