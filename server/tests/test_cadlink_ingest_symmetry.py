@@ -286,8 +286,30 @@ def test_symmetric_return_is_cut_to_a_quarter_with_tags_and_areas_intact(
         '"wg-import-v1|tag=101|source_id=source-hf|instance_id=anchor|role=HF"'
         in mesh_text
     )
-    assert int(record["mesh"]["stats"]["tag_counts"]["101"]) > 0
-    assert record["mesh"]["stats"]["domain_multiplier"] == 4.0
+    stats = record["mesh"]["stats"]
+    assert int(stats["tag_counts"]["101"]) > 0
+    assert stats["domain_multiplier"] == 4.0
+
+    # Dense storage follows the verified quarter domain through the canonical
+    # imported-symmetry mapping, and exposes the same diagnostics as a
+    # parametric mesh. BEMPP mirrors four copies while Metal solves the retained
+    # P1 vertices directly.
+    assert stats["dense_solver_domain_multiplier"] == 4
+    assert stats["dense_solver_used_vertex_count"] > 0
+    assert stats["dense_solver_metal_dof_count"] == stats["dense_solver_used_vertex_count"]
+    assert stats["dense_solver_metal_bytes_per_dof_squared"] == 88
+    assert stats["dense_solver_bempp_bytes_per_vertex_squared"] == 96
+    assert stats["dense_solver_aperture_triangle_count"] == 0
+    assert stats["dense_solver_metal_estimate_bytes"] == (
+        88 * stats["dense_solver_metal_dof_count"] ** 2
+    )
+    assert stats["dense_solver_bempp_estimate_bytes"] == (
+        96 * stats["dense_solver_used_vertex_count"] ** 2
+    )
+    assert stats["dense_solver_memory_estimate_bytes"] == max(
+        stats["dense_solver_metal_estimate_bytes"],
+        stats["dense_solver_bempp_estimate_bytes"],
+    )
 
     # The throat disc straddles both cut planes, so a quarter of it is left.
     provenance = record["post_cut_source_areas"]["source-hf"]
