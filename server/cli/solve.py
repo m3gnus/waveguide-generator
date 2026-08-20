@@ -44,6 +44,12 @@ from .request import load_request_document
 
 _TERMINAL_STATUSES = {"complete", "error", "cancelled"}
 _TERMINAL_EVENTS = {"completed", "failed", "cancelled"}
+_DATABASE_ONLY_WARNING = (
+    "Warning: no --output directory was requested. Results are retained only in "
+    "the WG job database and are subject to its retention policy; this CLI solve "
+    "is not added to the GUI Workspace run archive. Use --output DIR for a "
+    "durable, caller-owned artifact bundle."
+)
 
 
 class _StreamTransport:
@@ -605,6 +611,8 @@ async def solve_path(
                     error_message=message,
                 )
             return 1
+        if args.output is None:
+            print(_DATABASE_ONLY_WARNING, file=stderr, flush=True)
         if ndjson:
             write_outcome(
                 stdout,

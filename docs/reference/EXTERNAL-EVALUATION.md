@@ -98,3 +98,7 @@ directories are isolation tools, not a resource-scheduling contract.
 
 The standard-library example at `examples/external_evaluator.py` exercises discovery,
 submission, polling, structured errors, result retrieval, and digest verification.
+
+CLI clients should always supply `--output` and own the resulting artifact directory;
+HTTP clients should persist the digest-verified response in their own study storage.
+Neither transport automatically adds a run to the GUI-managed Workspace archive.
