@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Collection
-import hashlib
 import json
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -319,8 +318,7 @@ def create_jobs_router(
         # walks of the data on the event loop before json.dumps does a third.
         # The database already holds exactly the bytes the client wants.
         try:
-            content = await runtime.get_results_text(job_id)
-            digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+            content, digest = await runtime.get_results_payload(job_id)
             return Response(
                 content=content,
                 media_type="application/json",

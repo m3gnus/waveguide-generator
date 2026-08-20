@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -60,12 +61,16 @@ def test_v1_schema_columns_are_exact_and_live_under_wg2_data_dir(tmp_path: Path)
     assert store.db_path == tmp_path / "db" / "simulations.db"
     with sqlite3.connect(store.db_path) as conn:
         columns = [row[1] for row in conn.execute("PRAGMA table_info(simulation_jobs)")]
+        result_columns = [
+            row[1] for row in conn.execute("PRAGMA table_info(simulation_results)")
+        ]
         tables = {
             row[0]
             for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
         version = conn.execute("PRAGMA user_version").fetchone()[0]
     assert columns == EXPECTED_JOB_COLUMNS
+    assert result_columns == ["job_id", "results_json", "results_sha256"]
     assert {
         "simulation_jobs",
         "simulation_results",
@@ -442,7 +447,69 @@ def test_results_text_is_the_stored_bytes_and_still_parses(tmp_path: Path) -> No
         text = store.get_results_text("textual")
         assert isinstance(text, str)
         assert json.loads(text) == store.get_results("textual")
+        payload = store.get_results_payload("textual")
+        assert payload == (text, hashlib.sha256(text.encode("utf-8")).hexdigest())
         assert store.get_results_text("absent") is None
+    finally:
+        store.close()
+
+
+def test_result_payload_reuses_the_persisted_digest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    store.create_job(_job("cached-digest"))
+    store.store_results(
+        "cached-digest",
+        {
+            "frequencies": [100.0],
+            "metadata": {"field_plane_available": False},
+        },
+    )
+
+    def unexpected_hash(_content: bytes):
+        raise AssertionError("result payload was hashed again")
+
+    monkeypatch.setattr("server.jobs.store.sha256", unexpected_hash)
+    try:
+        text, digest = store.get_results_payload("cached-digest") or ("", "")
+        assert json.loads(text)["frequencies"] == [100.0]
+        assert len(digest) == 64
+    finally:
+        store.close()
+
+
+def test_existing_result_rows_backfill_their_exact_digest_once(tmp_path: Path) -> None:
+    database = tmp_path / "jobs.db"
+    legacy_text = '{"frequencies": [100.0]}'
+    with sqlite3.connect(database) as conn:
+        conn.execute(
+            """CREATE TABLE simulation_results (
+                 job_id TEXT PRIMARY KEY,
+                 results_json TEXT NOT NULL)"""
+        )
+        conn.execute(
+            "INSERT INTO simulation_results (job_id, results_json) VALUES (?, ?)",
+            ("legacy", legacy_text),
+        )
+
+    store = JobStore(database)
+    store.initialize()
+    try:
+        text, digest = store.get_results_payload("legacy") or ("", "")
+        assert json.loads(text)["metadata"] == {
+            "field_plane_available": False,
+            "field_trace_bytes": None,
+            "unavailable_reason": "solve_predates_traces",
+        }
+        assert digest == hashlib.sha256(text.encode("utf-8")).hexdigest()
+        with sqlite3.connect(database) as conn:
+            stored = conn.execute(
+                "SELECT results_json, results_sha256 FROM simulation_results WHERE job_id = ?",
+                ("legacy",),
+            ).fetchone()
+        assert stored == (text, digest)
     finally:
         store.close()
 

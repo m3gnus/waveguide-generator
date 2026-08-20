@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import datetime, timedelta
+from hashlib import sha256
 import json
 import logging
 import os
@@ -133,6 +134,7 @@ _SCHEMA_STATEMENTS = (
     """CREATE TABLE IF NOT EXISTS simulation_results (
       job_id TEXT PRIMARY KEY,
       results_json TEXT NOT NULL,
+      results_sha256 TEXT,
       FOREIGN KEY(job_id) REFERENCES simulation_jobs(id) ON DELETE CASCADE
     )""",
     """CREATE TABLE IF NOT EXISTS simulation_artifacts (
@@ -265,6 +267,12 @@ class JobStore:
                 conn.execute("ALTER TABLE simulation_jobs ADD COLUMN script_snapshot_json TEXT")
             if "task_metadata_json" not in columns:
                 conn.execute("ALTER TABLE simulation_jobs ADD COLUMN task_metadata_json TEXT")
+            result_columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(simulation_results)").fetchall()
+            }
+            if "results_sha256" not in result_columns:
+                conn.execute("ALTER TABLE simulation_results ADD COLUMN results_sha256 TEXT")
             self._backfill_job_identity(conn)
             conn.execute(f"PRAGMA user_version = {SUPPORTED_SCHEMA_VERSION}")
 
@@ -816,6 +824,10 @@ class JobStore:
         return json.loads(text) if text is not None else None
 
     def get_results_text(self, job_id: str) -> str | None:
+        payload = self.get_results_payload(job_id)
+        return payload[0] if payload is not None else None
+
+    def get_results_payload(self, job_id: str) -> tuple[str, str] | None:
         """The stored results exactly as they were written, without parsing.
 
         A finished sweep's results run to megabytes, and the HTTP route only
@@ -826,32 +838,48 @@ class JobStore:
         events. The bytes in the database are already the answer.
         """
 
-        with self._lock, self._connection() as conn:
-            row = conn.execute(
-                "SELECT results_json FROM simulation_results WHERE job_id = ?", (job_id,)
-            ).fetchone()
+        with self._lock:
+            with self._connection() as conn:
+                row = conn.execute(
+                    """SELECT results_json, results_sha256
+                       FROM simulation_results WHERE job_id = ?""",
+                    (job_id,),
+                ).fetchone()
             if row is None:
                 return None
+
             text = str(row["results_json"])
-        if '"field_plane_available"' in text:
-            return text
-        try:
-            decoded = json.loads(text)
-        except json.JSONDecodeError:
-            return text
-        if not isinstance(decoded, dict):
-            return text
-        metadata = decoded.get("metadata")
-        metadata = dict(metadata) if isinstance(metadata, Mapping) else {}
-        metadata.update(
-            {
-                "field_plane_available": False,
-                "field_trace_bytes": None,
-                "unavailable_reason": "solve_predates_traces",
-            }
-        )
-        decoded["metadata"] = metadata
-        return json.dumps(decoded)
+            digest = row["results_sha256"]
+            if digest is not None and '"field_plane_available"' in text:
+                return text, str(digest)
+
+            if '"field_plane_available"' not in text:
+                try:
+                    decoded = json.loads(text)
+                except json.JSONDecodeError:
+                    decoded = None
+                if isinstance(decoded, dict):
+                    metadata = decoded.get("metadata")
+                    metadata = dict(metadata) if isinstance(metadata, Mapping) else {}
+                    metadata.update(
+                        {
+                            "field_plane_available": False,
+                            "field_trace_bytes": None,
+                            "unavailable_reason": "solve_predates_traces",
+                        }
+                    )
+                    decoded["metadata"] = metadata
+                    text = json.dumps(decoded)
+
+            digest = sha256(text.encode("utf-8")).hexdigest()
+            with self._transaction() as conn:
+                conn.execute(
+                    """UPDATE simulation_results
+                       SET results_json = ?, results_sha256 = ?
+                       WHERE job_id = ?""",
+                    (text, digest, job_id),
+                )
+            return text, digest
 
     def store_mesh_artifact(self, job_id: str, msh_text: str) -> None:
         """Upsert original MSH text as in v1 ``server/db.py:233-253``."""
@@ -1582,15 +1610,22 @@ class JobStore:
     def _upsert_results(
         self, conn: sqlite3.Connection, job_id: str, results: Mapping[str, Any]
     ) -> None:
+        # The HTTP response serves this exact text. Persist its digest alongside
+        # it so repeated downloads of a multi-megabyte result stay O(1) in CPU.
+        results_text = json.dumps(results, allow_nan=False)
+        results_sha256 = sha256(results_text.encode("utf-8")).hexdigest()
         conn.execute(
             """
-            INSERT INTO simulation_results (job_id, results_json) VALUES (?, ?)
-            ON CONFLICT(job_id) DO UPDATE SET results_json = excluded.results_json
+            INSERT INTO simulation_results (job_id, results_json, results_sha256)
+            VALUES (?, ?, ?)
+            ON CONFLICT(job_id) DO UPDATE SET
+              results_json = excluded.results_json,
+              results_sha256 = excluded.results_sha256
             """,
             # The HTTP route serves these bytes verbatim as application/json.
             # Python's default NaN/Infinity spelling is not valid JSON and makes
             # browser JSON.parse fail after an otherwise "complete" solve.
-            (job_id, json.dumps(results, allow_nan=False)),
+            (job_id, results_text, results_sha256),
         )
         conn.execute(
             "UPDATE simulation_jobs SET has_results = 1, updated_at = ? WHERE id = ?",

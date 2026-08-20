@@ -271,6 +271,11 @@ def test_dryrun_http_lifecycle_metadata_results_and_delete(
         assert result_headers["etag"] == (
             f'"sha256:{result_headers["x-wg-results-sha256"]}"'
         )
+        stored_result = app.state.jobs_runtime.store.get_results_payload(job_id)
+        assert stored_result == (
+            raw.decode("utf-8"),
+            result_headers["x-wg-results-sha256"],
+        )
         stored_mesh = app.state.jobs_runtime.store.get_mesh_artifact(job_id)
         assert stored_mesh is not None
         status, raw, headers = await _request_with_headers(
