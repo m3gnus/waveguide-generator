@@ -1385,6 +1385,8 @@ def solve_imported_metal_from_msh_text(
         result_callback(
             index,
             {
+                "result_kind": "multi_channel",
+                "result_contract_version": 2,
                 "frequencies": [float(frequency_hz)],
                 "channels": provisional_channels,
                 "channel_order": channel_order,
@@ -1635,6 +1637,15 @@ def solve_imported_metal_from_msh_text(
                 ],
                 "engine": "hornlab-metal-bem",
                 "phase_time_convention": "exp(+ikr)",
+                # The MF channel's driver owns the derived cardioid response.
+                # Keep its rating data on the derived channel too, so result
+                # consumers can compare the emitted excursion with Xmax instead
+                # of losing that reference when coupling is deferred.
+                "driver": {
+                    "spec": coupled_mf_channel.driver.model_dump(
+                        mode="json", exclude_none=True
+                    )
+                },
                 "passive_cardioid": {
                     key: json_safe_native_value(value)
                     for key, value in coupled_payload.items()
@@ -1840,6 +1851,8 @@ def solve_imported_metal_from_msh_text(
     elif cardioid_failure is not None:
         metadata["passive_cardioid"] = cardioid_failure
     envelope: dict[str, Any] = {
+        "result_kind": "multi_channel",
+        "result_contract_version": 2,
         "channels": channels,
         "channel_order": channel_order,
         "metadata": metadata,
