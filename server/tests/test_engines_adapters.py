@@ -396,6 +396,7 @@ def test_bempp_field_plane_option_disables_trace_retention(monkeypatch) -> None:
 def test_circsym_adapter_uses_meridian_cancellation_stages_and_coupled_ib(monkeypatch) -> None:
     captured = {}
     stages = []
+    monotonic_ticks = iter([0.0, 0.1])
 
     class MeridianBuild:
         baffle_z = 0.06
@@ -411,6 +412,7 @@ def test_circsym_adapter_uses_meridian_cancellation_stages_and_coupled_ib(monkey
 
     def solve(meridian, config):
         assert meridian == "native-meridian"
+        assert config.should_continue() is True
         config.progress_callback(0, 2, 500.0)
         config.on_frequency_result(0, 500.0, {})
         return _result()
@@ -423,6 +425,7 @@ def test_circsym_adapter_uses_meridian_cancellation_stages_and_coupled_ib(monkey
     monkeypatch.setattr(circsym, "solve_circsym", solve)
     monkeypatch.setattr(circsym, "circsym_status", lambda: {"available": True, "reason": "mock"})
     monkeypatch.setattr(circsym, "metal_status", lambda: {"available": True, "reason": "mock"})
+    monkeypatch.setattr(circsym.time, "monotonic", lambda: next(monotonic_ticks))
     cancellations = 0
 
     def cancel():
@@ -439,7 +442,7 @@ def test_circsym_adapter_uses_meridian_cancellation_stages_and_coupled_ib(monkey
     assert captured["circsym_baffle_z"] == 0.06
     assert captured["circsym_aperture_tag"] == 12
     assert captured["source_motion"] == "axial"
-    assert cancellations == 4
+    assert cancellations == 5
     assert [stage for stage, _, _ in stages] == [
         "mesh_prepare",
         "setup",
