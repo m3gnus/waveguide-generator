@@ -917,6 +917,32 @@ def _required_windows_job(
     return job
 
 
+def _configure_windows_job_api(kernel32: Any, ctypes: Any, wintypes: Any) -> None:
+    """Declare the pointer-sized Win32 ABI used by the job wrapper.
+
+    ``ctypes`` otherwise assumes ``c_int`` for every argument and return value.
+    That is not a safe approximation for ``HANDLE`` on 64-bit Windows: it can
+    truncate both the job returned by ``CreateJobObjectW`` and the process
+    handle passed to ``AssignProcessToJobObject``.
+    """
+
+    kernel32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+    kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+    kernel32.SetInformationJobObject.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+    ]
+    kernel32.SetInformationJobObject.restype = wintypes.BOOL
+    kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
+    kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+    kernel32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    kernel32.TerminateJobObject.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+
 def _assign_windows_job(process: subprocess.Popen[bytes], budget: ChildBudget) -> Any:
     """Create a memory-capped, kill-on-close job and put the child in it."""
 
@@ -966,6 +992,7 @@ def _assign_windows_job(process: subprocess.Popen[bytes], budget: ChildBudget) -
     extended_limit_information = 9
 
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+    _configure_windows_job_api(kernel32, ctypes, wintypes)
     handle = kernel32.CreateJobObjectW(None, None)
     if not handle:
         raise OSError(ctypes.get_last_error(), "CreateJobObjectW failed")
