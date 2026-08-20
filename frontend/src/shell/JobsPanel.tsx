@@ -69,6 +69,25 @@ export function selectJob(job: JobItem): void {
   replaceWithJobDesign(job, { keepHistory: true });
 }
 
+/** The stage the passive-cardioid radiation-impedance campaign reports under. */
+export const RADIATION_IMPEDANCE_STAGE = 'radiation_impedance';
+
+/**
+ * Download the port-exit radiation-impedance matrix this run produced.
+ *
+ * Gated on the server's own flag rather than on the run having been a cardioid
+ * solve: the archive is subject to retention, so a run that once had one may
+ * not have it now, and offering a download that 404s is worse than not
+ * offering it.
+ */
+export function RadiationImpedanceButton({ job }: { job: JobItem }) {
+  if (!job.has_radiation_impedance_artifact) return null;
+  return <button
+    title="Download the port-exit radiation-impedance matrix (NPZ) solved for this run's passive-cardioid campaign"
+    onClick={() => window.open(`/api/radiation-impedance/${encodeURIComponent(job.id)}`, '_blank')}
+  >Radiation Z</button>;
+}
+
 export interface JobCardProps {
   job: JobItem;
   now: number;
@@ -196,6 +215,10 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
       <p>{metrics(job, now)}</p>
       <div className="job-stage"><span>{job.stage_message ?? job.stage ?? 'waiting…'}</span><b>{Math.round(job.progress * 100)}%</b></div>
       <div className="progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(job.progress * 100)} aria-valuetext={`${Math.round(job.progress * 100)}% -- ${job.stage_message ?? job.stage ?? 'waiting'}`}><i style={{ width: `${Math.max(0, Math.min(100, job.progress * 100))}%` }}/></div>
+      {/* The stage message names the campaign; this says why the run has
+          stopped on it. Without that, a passive-cardioid solve looks like a
+          20-second stall in the middle of an otherwise familiar progress bar. */}
+      {job.stage === RADIATION_IMPEDANCE_STAGE && <p className="job-stage-note">Extra pass before the main solve: the passive-cardioid port needs its own radiation-impedance matrix over the port aperture.</p>}
       {job.log_tail.length > 0 && <p title={job.log_tail.at(-1)}>{job.log_tail.at(-1)}</p>}
       <footer><button disabled={job.cancellation_requested} onClick={() => void jobsSocket.stopJob(job.id).catch((error) => onError(String(error)))}>{job.cancellation_requested ? 'Stopping…' : 'Stop'}</button><button onClick={() => window.open(`/api/jobs/${encodeURIComponent(job.id)}/log`, '_blank')}>Log</button></footer>
     </> : failed ? <>
@@ -218,7 +241,7 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
           without a design Waveguide Generator can read, in which case rerunning it would
           silently run whatever is on screen instead, under its name. */}
       <DesignAvailabilityNotice job={job}/>
-      <footer><RerunButton job={job} onRerun={retry}/>{selected && canExportRun(job) && <RunExportControl job={job} onOpenExportSettings={onOpenExportSettings}/>}<button onClick={() => window.open(`/api/jobs/${encodeURIComponent(job.id)}/log`, '_blank')}>Log</button></footer>
+      <footer><RerunButton job={job} onRerun={retry}/>{selected && canExportRun(job) && <RunExportControl job={job} onOpenExportSettings={onOpenExportSettings}/>}<RadiationImpedanceButton job={job}/><button onClick={() => window.open(`/api/jobs/${encodeURIComponent(job.id)}/log`, '_blank')}>Log</button></footer>
     </>}
   </article>;
 }, jobCardPropsEqual);

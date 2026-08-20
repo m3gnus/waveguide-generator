@@ -47,6 +47,9 @@ export interface JobItem {
   };
   has_results: boolean;
   has_mesh_artifact: boolean;
+  /** Whether the run produced a port-exit radiation-impedance matrix, i.e. it
+   * ran the passive-cardioid campaign and the archive is still on disk. */
+  has_radiation_impedance_artifact?: boolean;
   field_plane_available?: boolean;
   field_trace_bytes?: number | null;
   unavailable_reason?: string | null;
@@ -224,6 +227,8 @@ function isJobItem(value: unknown): value is JobItem {
   if (!isNullableTimestamp(value.started_at) || !isNullableTimestamp(value.completed_at)) return false;
   if (!isRecord(value.config_summary) || !isRecord(value.solve_options)) return false;
   if (typeof value.has_results !== 'boolean' || typeof value.has_mesh_artifact !== 'boolean') return false;
+  if (hasOwn(value, 'has_radiation_impedance_artifact')
+    && typeof value.has_radiation_impedance_artifact !== 'boolean') return false;
   if (hasOwn(value, 'field_plane_available') && typeof value.field_plane_available !== 'boolean') return false;
   if (hasOwn(value, 'field_trace_bytes') && !(
     value.field_trace_bytes === null || isNonNegativeInteger(value.field_trace_bytes)
@@ -406,8 +411,9 @@ function sanitizeMetadataChanges(value: unknown): Partial<JobItem> & JsonRecord 
     if (!isNullableString(value.unavailable_reason)) return null;
     patch.unavailable_reason = value.unavailable_reason;
   }
-  // Retention metadata is intentionally delivered through this event type,
-  // even though these newer fields are not consumed by the current UI.
+  // Retention metadata delivered through this event type: the radiation
+  // artifact appears when the campaign finishes and disappears when retention
+  // cleans it up, and the run card's download action follows it either way.
   if (hasOwn(value, 'has_radiation_impedance_artifact')) {
     if (typeof value.has_radiation_impedance_artifact !== 'boolean') return null;
     patch.has_radiation_impedance_artifact = value.has_radiation_impedance_artifact;
