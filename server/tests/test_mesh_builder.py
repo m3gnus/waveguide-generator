@@ -593,7 +593,7 @@ def test_real_gmsh_session_preserves_native_windows_path(tmp_path: Path) -> None
     set_native_path(test_path)
     try:
         run_probe()
-        assert gmsh_worker._run_in_gmsh_session(lambda: "ok") == "ok"
+        assert gmsh_worker._run_in_gmsh_session(lambda: run_probe() or "ok") == "ok"
         run_probe()
     finally:
         set_native_path(native_path)

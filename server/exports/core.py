@@ -15,7 +15,7 @@ import numpy as np
 
 from server.design.schema import DesignConfig, Expr
 from server.mesh.builder import _solver_mesher_config, _triangles_and_tags
-from server.mesh.gmsh_worker import run_on_gmsh_worker
+from server.mesh.gmsh_worker import _preserve_native_windows_path, run_on_gmsh_worker
 from server.preview.translate import design_to_mesher_config
 
 if TYPE_CHECKING:
@@ -218,7 +218,8 @@ def _write_step(inner_points: np.ndarray) -> str:
     step_path: Path | None = None
     try:
         if not gmsh.isInitialized():
-            gmsh.initialize()
+            with _preserve_native_windows_path():
+                gmsh.initialize()
             initialized_here = True
         gmsh.option.setNumber("General.Terminal", 0)
         gmsh.option.setNumber("Geometry.Tolerance", 1e-8)
@@ -253,7 +254,8 @@ def _write_step(inner_points: np.ndarray) -> str:
         if step_path is not None:
             step_path.unlink(missing_ok=True)
         if initialized_here and gmsh.isInitialized():
-            gmsh.finalize()
+            with _preserve_native_windows_path():
+                gmsh.finalize()
 
 
 def _build_step_sync(design_dump: dict[str, Any]) -> str:
@@ -293,7 +295,11 @@ def _build_step_solid_sync(design_dump: dict[str, Any]) -> StepSolidResult:
     ) as handle:
         step_path = Path(handle.name)
     try:
-        _, cad_info = write_step_from_config(config, step_path)
+        # Public callers run this on the Gmsh worker. Keep the synchronous
+        # helper safe as well: contract tests and maintenance tools call it
+        # directly, allowing the pinned mesher to own a native session.
+        with _preserve_native_windows_path():
+            _, cad_info = write_step_from_config(config, step_path)
         # Normalised here as well as in the mesher: the mesher is version-pinned,
         # and a pin that predates its own header fix would otherwise hand CATIA
         # a file it cannot read.
@@ -409,7 +415,11 @@ def _build_stl_mesh_sync(design_dump: dict[str, Any]) -> dict[str, list[Any]]:
     )
     with tempfile.TemporaryDirectory(prefix="wg2-stl-mesh-") as temp_dir:
         mesh_path = Path(temp_dir) / "waveguide.msh"
-        build_from_config(config, mesh_path)
+        # Normally Gmsh is already open on the owner thread. Preserve the
+        # native environment when this synchronous seam is exercised directly
+        # and the pinned mesher opens and closes its own session instead.
+        with _preserve_native_windows_path():
+            build_from_config(config, mesh_path)
         parsed = meshio.read(mesh_path)
         triangles, tags = _triangles_and_tags(parsed)
         vertices = np.asarray(parsed.points, dtype=float)
