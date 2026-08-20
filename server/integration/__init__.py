@@ -3,6 +3,7 @@
 from .contracts import (
     ERROR_CONTRACT_VERSION,
     PROVENANCE_CONTRACT_VERSION,
+    CliOutcome,
     ErrorDetail,
     ErrorEnvelope,
     error_envelope,
@@ -20,6 +21,7 @@ def mount_integration(application):
 __all__ = [
     "ERROR_CONTRACT_VERSION",
     "PROVENANCE_CONTRACT_VERSION",
+    "CliOutcome",
     "ErrorDetail",
     "ErrorEnvelope",
     "enrich_result_contract",

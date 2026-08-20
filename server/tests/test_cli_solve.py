@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from io import StringIO
 import json
 from pathlib import Path
@@ -12,6 +13,7 @@ from server.cli.solve import solve_path
 from server.engines.registry import EngineInfo, EngineRegistry
 from server.jobs.runtime import JobRuntime
 from server.jobs.store import JobStore
+from server.design.textcfg import parse
 from server.solver.base import EngineRunResult
 
 
@@ -72,6 +74,22 @@ def _design(tmp_path: Path, source: str = VALID_MWG) -> Path:
     return path
 
 
+def _request(tmp_path: Path) -> Path:
+    path = tmp_path / "request.json"
+    path.write_text(
+        json.dumps(
+            {
+                "design": parse(VALID_MWG).semantic_data(),
+                "options": {"engine": "metal", "frequencies_hz": [500.0]},
+                "client_request_id": "external-candidate-9",
+                "client_metadata": {"campaign": "cli-contract"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
 def test_solve_happy_path_streams_completed_ndjson(tmp_path: Path, capsys) -> None:
     exit_code = main(
         [
@@ -93,6 +111,9 @@ def test_solve_happy_path_streams_completed_ndjson(tmp_path: Path, capsys) -> No
         message.get("kind") == "event" and message.get("type") == "completed"
         for message in messages
     )
+    assert messages[-1]["kind"] == "outcome"
+    assert messages[-1]["status"] == "complete"
+    assert len(messages[-1]["result_sha256"]) == 64
 
 
 def test_solve_output_writes_artifacts_and_refuses_existing_dir(
@@ -117,9 +138,16 @@ def test_solve_output_writes_artifacts_and_refuses_existing_dir(
     ]["engine"] == "tiny-metal"
     assert (output / "mesh.msh").read_text(encoding="utf-8") == MESH
     assert (output / "job.log").is_file()
+    assert (output / "request.json").is_file()
+    assert summary["schemaVersion"] == 1
     assert summary["status"] == "complete"
     assert summary["engine"] == "metal"
     assert summary["runNumber"] == 1
+    assert summary["resultKind"] == "parametric"
+    assert summary["resultContractVersion"] == 1
+    assert summary["artifacts"]["results.json"]["sha256"] == hashlib.sha256(
+        (output / "results.json").read_bytes()
+    ).hexdigest()
     assert summary["conventions"] == {
         "frame": {
             "axes": {
@@ -142,6 +170,62 @@ def test_solve_output_writes_artifacts_and_refuses_existing_dir(
     capsys.readouterr()
     assert main(argv, engine_registry=_registry()) == 1
     assert "already exists" in capsys.readouterr().err
+
+
+def test_solve_accepts_canonical_request_json_and_preserves_identity(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    output = tmp_path / "output"
+    exit_code = main(
+        [
+            "solve",
+            "--request",
+            str(_request(tmp_path)),
+            "--json-events",
+            "--data-dir",
+            str(tmp_path / "data"),
+            "--output",
+            str(output),
+        ],
+        engine_registry=_registry(),
+    )
+    captured = capsys.readouterr()
+    messages = [json.loads(line) for line in captured.out.splitlines()]
+    request = json.loads((output / "request.json").read_text(encoding="utf-8"))
+    results = json.loads((output / "results.json").read_text(encoding="utf-8"))
+    summary = json.loads((output / "summary.json").read_text(encoding="utf-8"))
+
+    assert exit_code == 0
+    assert captured.err == ""
+    assert request["client_request_id"] == "external-candidate-9"
+    assert request["client_metadata"] == {"campaign": "cli-contract"}
+    assert results["client_request_id"] == "external-candidate-9"
+    assert summary["clientRequestId"] == "external-candidate-9"
+    assert messages[-1]["status"] == "complete"
+    assert messages[-1]["client_request_id"] == "external-candidate-9"
+    assert messages[-1]["result_sha256"] == summary["artifacts"]["results.json"][
+        "sha256"
+    ]
+
+
+def test_solve_ndjson_refusal_has_a_stable_error_code(tmp_path: Path, capsys) -> None:
+    bad = tmp_path / "bad.json"
+    bad.write_text('{"design":', encoding="utf-8")
+
+    exit_code = main(
+        ["solve", "--request", str(bad), "--json-events"],
+        engine_registry=_registry(),
+    )
+    captured = capsys.readouterr()
+    outcome = json.loads(captured.out)
+
+    assert exit_code == 1
+    assert outcome["kind"] == "outcome"
+    assert outcome["status"] == "refused"
+    assert outcome["error"]["code"] == "invalid_input"
+    assert outcome["error"]["stage"] == "input"
+    assert "not valid JSON" in captured.err
 
 
 def test_solve_runtime_conflict_exits_two_with_recovery_hint(tmp_path: Path) -> None:

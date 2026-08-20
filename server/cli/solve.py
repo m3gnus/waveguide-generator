@@ -6,6 +6,7 @@ import argparse
 import asyncio
 from collections.abc import Coroutine, Mapping
 from contextlib import contextmanager
+import hashlib
 import json
 from pathlib import Path
 import signal
@@ -36,6 +37,8 @@ from server.platform.signal_rearm import (
 )
 
 from .request import build_request
+from .outcome import write_outcome
+from .request import load_request_document
 
 
 _TERMINAL_STATUSES = {"complete", "error", "cancelled"}
@@ -153,7 +156,14 @@ def _validation_messages(exc: ValidationError) -> list[str]:
 
 
 def _read_request(args: argparse.Namespace):
+    if args.request is not None:
+        return load_request_document(
+            args.request,
+            overlay=args.overlay,
+            engine=args.engine,
+        ).request
     path = args.design
+    assert path is not None
     if path.suffix.lower() not in {".mwg", ".cfg"}:
         raise ValueError("design file must use the .mwg or .cfg extension")
     try:
@@ -190,13 +200,29 @@ async def _wait_for_stream(
     await event_task
 
 
-def _summary(job: Mapping[str, Any]) -> dict[str, Any]:
+def _sha256_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _summary(
+    job: Mapping[str, Any],
+    *,
+    request: Mapping[str, Any],
+    results: Mapping[str, Any],
+    artifacts: Mapping[str, Any],
+) -> dict[str, Any]:
     solve_options = job.get("solve_options")
     solve_options = solve_options if isinstance(solve_options, Mapping) else {}
     summary: dict[str, Any] = {
+        "schemaVersion": 1,
         "jobId": job["id"],
         "status": job["status"],
         "engine": solve_options.get("engine"),
+        "clientRequestId": request.get("client_request_id"),
+        "resultKind": results.get("result_kind"),
+        "resultContractVersion": results.get("result_contract_version"),
+        "provenance": results.get("provenance") or {},
+        "artifacts": dict(artifacts),
         "conventions": artifact_conventions(),
         "timings": {
             "createdAt": job.get("created_at"),
@@ -217,25 +243,52 @@ async def _write_output(
     results: str,
     runtime: JobRuntime,
     job: Mapping[str, Any],
+    request: Any,
     stderr: TextIO,
-) -> None:
+) -> dict[str, Any]:
     output.mkdir(parents=True, exist_ok=False)
     job_id = str(job["id"])
+    results_content = results if results.endswith("\n") else results + "\n"
+    request_content = (
+        json.dumps(
+            request.model_dump(mode="json"),
+            indent=2,
+            sort_keys=True,
+            allow_nan=False,
+        )
+        + "\n"
+    )
     (output / "results.json").write_text(
-        results if results.endswith("\n") else results + "\n",
+        results_content,
         encoding="utf-8",
     )
+    (output / "request.json").write_text(request_content, encoding="utf-8")
+    artifacts: dict[str, dict[str, Any]] = {
+        "results.json": {"sha256": _sha256_text(results_content)},
+        "request.json": {"sha256": _sha256_text(request_content)},
+    }
     try:
         mesh = await runtime.get_mesh_artifact(job_id)
     except JobResourceUnavailableError:
         print("Mesh artifact is unavailable; skipped mesh.msh.", file=stderr)
     else:
         (output / "mesh.msh").write_text(mesh, encoding="utf-8")
-    (output / "job.log").write_text(await runtime.get_log(job_id), encoding="utf-8")
+        artifacts["mesh.msh"] = {"sha256": _sha256_text(mesh)}
+    log_content = await runtime.get_log(job_id)
+    (output / "job.log").write_text(log_content, encoding="utf-8")
+    artifacts["job.log"] = {"sha256": _sha256_text(log_content)}
+    results_document = json.loads(results)
+    summary = _summary(
+        job,
+        request=request.model_dump(mode="json"),
+        results=results_document,
+        artifacts=artifacts,
+    )
     (output / "summary.json").write_text(
-        json.dumps(_summary(job), indent=2, sort_keys=True, allow_nan=False) + "\n",
+        json.dumps(summary, indent=2, sort_keys=True, allow_nan=False) + "\n",
         encoding="utf-8",
     )
+    return summary
 
 
 def _print_summary(job: Mapping[str, Any], *, output: Path | None, stream: TextIO) -> None:
@@ -257,14 +310,33 @@ async def solve_path(
     stdout: TextIO,
     stderr: TextIO,
 ) -> int:
+    ndjson = args.json_events or args.events == "ndjson"
     try:
         request = _read_request(args)
     except ValidationError as exc:
-        for message in _validation_messages(exc):
+        messages = _validation_messages(exc)
+        for message in messages:
             print(f"Solve refused: {message}", file=stderr)
+        if ndjson:
+            write_outcome(
+                stdout,
+                status="refused",
+                error_code="invalid_request",
+                error_stage="input",
+                error_message="; ".join(messages),
+                error_details={"validation_messages": messages},
+            )
         return 1
     except (TypeError, ValueError) as exc:
         print(f"Solve refused: {exc}", file=stderr)
+        if ndjson:
+            write_outcome(
+                stdout,
+                status="refused",
+                error_code="invalid_input",
+                error_stage="input",
+                error_message=str(exc),
+            )
         return 1
 
     if args.output is not None and args.output.exists():
@@ -272,6 +344,16 @@ async def solve_path(
             f"Solve refused: output directory already exists: {args.output}",
             file=stderr,
         )
+        if ndjson:
+            write_outcome(
+                stdout,
+                status="refused",
+                client_request_id=request.client_request_id,
+                output_directory=str(args.output),
+                error_code="output_exists",
+                error_stage="output",
+                error_message=f"output directory already exists: {args.output}",
+            )
         return 1
 
     try:
@@ -285,12 +367,31 @@ async def solve_path(
             f"{exc}. Use --data-dir DIR or stop the running GUI server.",
             file=stderr,
         )
+        if ndjson:
+            write_outcome(
+                stdout,
+                status="refused",
+                client_request_id=request.client_request_id,
+                error_code="runtime_conflict",
+                error_stage="startup",
+                error_message=str(exc),
+                retryable=True,
+            )
         return 2
     except (OSError, RuntimeError, ValueError) as exc:
         print(f"Waveguide Generator could not start the job runtime: {exc}", file=stderr)
+        if ndjson:
+            write_outcome(
+                stdout,
+                status="failed",
+                client_request_id=request.client_request_id,
+                error_code="runtime_start_failed",
+                error_stage="startup",
+                error_message=str(exc),
+                retryable=True,
+            )
         return 1
 
-    ndjson = args.json_events or args.events == "ndjson"
     transport: _StreamTransport = (
         NdjsonTransport(stdout=stdout, stderr=stderr)
         if ndjson
@@ -304,14 +405,48 @@ async def solve_path(
         await _wait_for_stream(transport.wait_ready(), protocol_task)
         try:
             job_id = await runtime.submit(request)
-        except (
-            EngineUnavailableError,
-            ImportedSolveRefusal,
-            SymmetryValidationError,
-            UnknownEngineError,
-            ValueError,
-        ) as exc:
+        except EngineUnavailableError as exc:
             print(f"Solve refused: {exc}", file=stderr)
+            if ndjson:
+                write_outcome(
+                    stdout,
+                    status="refused",
+                    client_request_id=request.client_request_id,
+                    error_code="engine_unavailable",
+                    error_stage="submission",
+                    error_message=str(exc),
+                )
+            return 1
+        except ImportedSolveRefusal as exc:
+            print(f"Solve refused: {exc}", file=stderr)
+            if ndjson:
+                write_outcome(
+                    stdout,
+                    status="refused",
+                    client_request_id=request.client_request_id,
+                    error_code=exc.reason_code,
+                    error_stage="submission",
+                    error_message=str(exc),
+                    error_details=exc.details,
+                )
+            return 1
+        except (SymmetryValidationError, UnknownEngineError, ValueError) as exc:
+            print(f"Solve refused: {exc}", file=stderr)
+            if isinstance(exc, SymmetryValidationError):
+                code = "invalid_symmetry"
+            elif isinstance(exc, UnknownEngineError):
+                code = "unknown_engine"
+            else:
+                code = "invalid_request"
+            if ndjson:
+                write_outcome(
+                    stdout,
+                    status="refused",
+                    client_request_id=request.client_request_id,
+                    error_code=code,
+                    error_stage="submission",
+                    error_message=str(exc),
+                )
             return 1
 
         terminal_task = asyncio.create_task(_wait_for_terminal(runtime, job_id))
@@ -326,6 +461,16 @@ async def solve_path(
                 await asyncio.gather(terminal_task, return_exceptions=True)
                 await runtime.shutdown()
                 shutdown_done = True
+                if ndjson:
+                    write_outcome(
+                        stdout,
+                        status="interrupted",
+                        job_id=job_id,
+                        client_request_id=request.client_request_id,
+                        error_code="interrupted",
+                        error_stage="cancellation",
+                        error_message="Solve interrupted by SIGINT",
+                    )
                 return 130
             interrupt_task.cancel()
             await asyncio.gather(interrupt_task, return_exceptions=True)
@@ -333,19 +478,32 @@ async def solve_path(
 
         await _wait_for_stream(transport.wait_terminal(), protocol_task)
         results: str | None = None
+        output_summary: dict[str, Any] | None = None
         if job["status"] == "complete":
             try:
                 results = await runtime.get_results_text(job_id)
             except (JobConflictError, JobResourceUnavailableError) as exc:
                 print(f"Could not fetch solve results: {exc}", file=stderr)
+                if ndjson:
+                    write_outcome(
+                        stdout,
+                        status="failed",
+                        job_id=job_id,
+                        client_request_id=request.client_request_id,
+                        error_code="result_unavailable",
+                        error_stage="result",
+                        error_message=str(exc),
+                        retryable=True,
+                    )
                 return 1
         if results is not None and args.output is not None:
             try:
-                await _write_output(
+                output_summary = await _write_output(
                     args.output,
                     results=results,
                     runtime=runtime,
                     job=job,
+                    request=request,
                     stderr=stderr,
                 )
             except FileExistsError:
@@ -353,9 +511,32 @@ async def solve_path(
                     f"Solve refused: output directory already exists: {args.output}",
                     file=stderr,
                 )
+                if ndjson:
+                    write_outcome(
+                        stdout,
+                        status="failed",
+                        job_id=job_id,
+                        client_request_id=request.client_request_id,
+                        output_directory=str(args.output),
+                        error_code="output_exists",
+                        error_stage="output",
+                        error_message=f"output directory already exists: {args.output}",
+                    )
                 return 1
             except (OSError, ValueError) as exc:
                 print(f"Could not write solve output: {exc}", file=stderr)
+                if ndjson:
+                    write_outcome(
+                        stdout,
+                        status="failed",
+                        job_id=job_id,
+                        client_request_id=request.client_request_id,
+                        output_directory=str(args.output),
+                        error_code="output_write_failed",
+                        error_stage="output",
+                        error_message=str(exc),
+                        retryable=True,
+                    )
                 return 1
 
         if not ndjson:
@@ -363,7 +544,32 @@ async def solve_path(
         if job["status"] != "complete":
             message = job.get("error_message") or "solve did not complete"
             print(f"Solve failed: {message}", file=stderr)
+            if ndjson:
+                cancelled = job["status"] == "cancelled"
+                write_outcome(
+                    stdout,
+                    status="cancelled" if cancelled else "failed",
+                    job_id=job_id,
+                    client_request_id=request.client_request_id,
+                    error_code="cancelled" if cancelled else "solve_failed",
+                    error_stage=str(job.get("stage") or "solve"),
+                    error_message=message,
+                )
             return 1
+        if ndjson:
+            result_sha256 = (
+                output_summary["artifacts"]["results.json"]["sha256"]
+                if output_summary is not None
+                else _sha256_text(results or "")
+            )
+            write_outcome(
+                stdout,
+                status="complete",
+                job_id=job_id,
+                client_request_id=request.client_request_id,
+                output_directory=str(args.output) if args.output is not None else None,
+                result_sha256=result_sha256,
+            )
         return 0
     finally:
         await transport.close(1000)

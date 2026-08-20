@@ -20,7 +20,18 @@ def build_parser() -> argparse.ArgumentParser:
         "validate",
         help="validate a design and its local solve prerequisites",
     )
-    validate_parser.add_argument("file", type=Path, help="design .mwg or .cfg file")
+    validate_parser.add_argument(
+        "file",
+        type=Path,
+        nargs="?",
+        help="design .mwg or .cfg file",
+    )
+    validate_parser.add_argument(
+        "--request",
+        type=Path,
+        metavar="FILE",
+        help="validate a canonical JSON SolveRequest instead of a text design",
+    )
     validate_parser.add_argument(
         "--json", action="store_true", help="emit a versioned JSON report"
     )
@@ -45,7 +56,18 @@ def build_parser() -> argparse.ArgumentParser:
         "solve",
         help="solve a design through the persistent job runtime",
     )
-    solve_parser.add_argument("design", type=Path, help="design .mwg or .cfg file")
+    solve_parser.add_argument(
+        "design",
+        type=Path,
+        nargs="?",
+        help="design .mwg or .cfg file",
+    )
+    solve_parser.add_argument(
+        "--request",
+        type=Path,
+        metavar="FILE",
+        help="solve a canonical JSON SolveRequest instead of a text design",
+    )
     event_group = solve_parser.add_mutually_exclusive_group()
     event_group.add_argument(
         "--json-events",
@@ -118,7 +140,12 @@ def main(
     engine_registry: EngineRegistry | None = None,
     engine_detector: Callable[[], list[EngineInfo]] | None = None,
 ) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.command == "validate" and (args.file is None) == (args.request is None):
+        parser.error("validate requires exactly one design file or --request FILE")
+    if args.command == "solve" and (args.design is None) == (args.request is None):
+        parser.error("solve requires exactly one design file or --request FILE")
 
     # The registry is injectable at this outer boundary because capability
     # probes load optional native stacks and describe the current machine, not
