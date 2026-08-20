@@ -24,6 +24,7 @@ from server.mesh.builder import (
     _enforce_dense_solver_memory_ceiling,
 )
 from server.mesh.integrity import mesh_integrity_report
+from server.solver.imported import imported_symmetry_from_cut_planes
 
 
 TAG_NAMESPACE = "wg-import-v1"
@@ -1744,7 +1745,12 @@ def build_imported_mesh(
         if len(triangles) == 0:
             raise ImportedMeshError("meshing: imported mesh contains no triangles")
         _enforce_artifact_triangle_ceiling(int(len(triangles)))
-        dense = _enforce_dense_solver_memory_ceiling(triangles, 1234, tags=tags)
+        imported_symmetry = imported_symmetry_from_cut_planes(cut.planes)
+        dense = _enforce_dense_solver_memory_ceiling(
+            triangles,
+            imported_symmetry.quadrants,
+            tags=tags,
+        )
         integrity = mesh_integrity_report(points_mm * 1.0e-3, triangles, symmetry_plane_axes=tuple({"x0": 0, "y0": 1}[plane] for plane in cut.planes if plane in {"x0", "y0"}))
         if not integrity.get("valid"):
             raise ImportedMeshError(
@@ -1804,10 +1810,24 @@ def build_imported_mesh(
                     "source": "hornlab_waveguide_mesher_step_import",
                     "generated_by": "hornlab-waveguide-mesher",
                     "bounds_m": {"min_x": float(bounds_min[0]), "min_y": float(bounds_min[1]), "min_z": float(bounds_min[2]), "max_x": float(bounds_max[0]), "max_y": float(bounds_max[1]), "max_z": float(bounds_max[2])},
-                    "domain_multiplier": float(2 ** len(cut.planes)),
+                    "domain_multiplier": float(dense["domain_multiplier"]),
                     "artifact_actual_domain_triangle_limit": MAX_SOLVER_MESH_ARTIFACT_TRIANGLES,
                     "dense_solver_memory_limit_bytes": DENSE_SOLVER_MEMORY_LIMIT_BYTES,
                     "dense_solver_memory_estimate_bytes": dense["estimated_bytes"],
+                    "dense_solver_used_vertex_count": dense["used_vertex_count"],
+                    "dense_solver_metal_dof_count": dense["metal_dof_count"],
+                    "dense_solver_metal_estimate_bytes": dense["metal_bytes"],
+                    "dense_solver_bempp_estimate_bytes": dense["bempp_bytes"],
+                    "dense_solver_domain_multiplier": dense["domain_multiplier"],
+                    "dense_solver_metal_bytes_per_dof_squared": dense[
+                        "metal_bytes_per_dof_squared"
+                    ],
+                    "dense_solver_bempp_bytes_per_vertex_squared": dense[
+                        "bempp_bytes_per_vertex_squared"
+                    ],
+                    "dense_solver_aperture_triangle_count": dense[
+                        "aperture_triangle_count"
+                    ],
                     "warnings": list(frequency.get("warnings") or []),
                     "integrity": integrity,
                 },
