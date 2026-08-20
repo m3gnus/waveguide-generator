@@ -9,6 +9,14 @@ from .contracts import (
 )
 from .provenance import enrich_result_contract
 
+
+def mount_integration(application):
+    # Keep package import free of FastAPI/design-schema work for clients that
+    # only need the lightweight error or provenance helpers.
+    from .api import mount_integration as mount
+
+    return mount(application)
+
 __all__ = [
     "ERROR_CONTRACT_VERSION",
     "PROVENANCE_CONTRACT_VERSION",
@@ -16,4 +24,5 @@ __all__ = [
     "ErrorEnvelope",
     "enrich_result_contract",
     "error_envelope",
+    "mount_integration",
 ]

@@ -1,0 +1,3442 @@
+{
+  "schema_version": 1,
+  "catalog_version": 1,
+  "design_families": [
+    "R-OSSE",
+    "OSSE",
+    "ICW",
+    "FREEFORM"
+  ],
+  "validation_authority": {
+    "request_schema": "/openapi.json#/components/schemas/SolveRequest",
+    "design_schema": "/api/integration/v1/design-schema",
+    "validate_cli": "wg validate --request REQUEST.json",
+    "note": "editor_bounds describe the WG editor, not hard solver validity or recommended optimization bounds"
+  },
+  "parameters": [
+    {
+      "id": "common.scale",
+      "legacy_key": "scale",
+      "path": "scale",
+      "mirror_paths": [],
+      "label": "Scale",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0.1,
+        "maximum": 2
+      },
+      "step": 0.001,
+      "precision": 3,
+      "options": [],
+      "description": "Shrinks or enlarges the waveguide below and above 1, taking the source radius, wall thickness and horn mesh sizes with it. Enclosure dimensions are not scaled."
+    },
+    {
+      "id": "rosse.R",
+      "legacy_key": "R",
+      "path": "R",
+      "mirror_paths": [],
+      "label": "Mouth radius",
+      "section": "Profile Dimensions",
+      "symbol": "R",
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "R-OSSE"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0.1,
+        "maximum": 1000
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Target radius at the end of the curve. Truncation limit and morphing can both change the mouth you actually get. Accepts an expression in the azimuthal angle p, so the mouth need not be circular — for example \"140 - 20*sin(p)^2\"."
+    },
+    {
+      "id": "rosse.a",
+      "legacy_key": "a",
+      "path": "a",
+      "mirror_paths": [],
+      "label": "Mouth coverage angle",
+      "section": "Profile Dimensions",
+      "symbol": "a",
+      "kind": "number",
+      "unit": "°",
+      "families": [
+        "R-OSSE"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": -180,
+        "maximum": 180
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Sets how steeply the horn flares, which is what fixes its derived length — the mouth radius is pinned by R, not by this. Larger values give a shorter, steeper horn. Sign is ignored. Accepts an expression in p."
+    },
+    {
+      "id": "rosse.a0",
+      "legacy_key": "a0",
+      "path": "a0",
+      "mirror_paths": [],
+      "label": "Throat coverage angle",
+      "section": "Profile Dimensions",
+      "symbol": "a0",
+      "kind": "number",
+      "unit": "°",
+      "families": [
+        "R-OSSE"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": -90,
+        "maximum": 90
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Sets how fast the profile starts opening at the throat. It seeds the throat-side curve rather than fixing the finished tangent, which m, r and q also move. Matching it to Throat extension angle therefore does not guarantee a tangent join. Accepts an expression in p, such as \"15 + 2*sin(p)\"."
+    },
+    {
+      "id": "rosse.r0",
+      "legacy_key": "r0",
+      "path": "r0",
+      "mirror_paths": [],
+      "label": "Throat radius",
+      "section": "Profile Dimensions",
+      "symbol": "r0",
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "R-OSSE"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0.1,
+        "maximum": 200
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Radius where the main flare starts. With a throat extension the driver end is narrower — r0 minus the extension length times tan of its angle. Accepts an expression in p, such as \"12.7 + sin(p)\"."
+    },
+    {
+      "id": "rosse.k",
+      "legacy_key": "k",
+      "path": "k",
+      "mirror_paths": [],
+      "label": "Throat rounding",
+      "section": "Profile Dimensions",
+      "symbol": "k",
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "R-OSSE"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0.1,
+        "maximum": 10
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Rounds the transition out of the throat. Higher values blend the throat into the flare more gradually."
+    },
+    {
+      "id": "rosse.m",
+      "legacy_key": "m",
+      "path": "m",
+      "mirror_paths": [],
+      "label": "Apex shift",
+      "section": "Profile Dimensions",
+      "symbol": "m",
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "R-OSSE"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0,
+        "maximum": 1
+      },
+      "step": 0.01,
+      "precision": 2,
+      "options": [],
+      "description": "Where along the profile the virtual apex sits, from 0 at the throat to 1 at the mouth. The wall reaches its deepest point there, so values below 1 curl the mouth back on itself — that is how an R-OSSE rollback is made."
+    },
+    {
+      "id": "rosse.b",
+      "legacy_key": "b",
+      "path": "b",
+      "mirror_paths": [],
+      "label": "Bending",
+      "section": "Profile Dimensions",
+      "symbol": "b",
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "R-OSSE"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": -10,
+        "maximum": 10
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Bends the profile axially on top of the apex shape. Which way depends on Apex shift: above 0.5 positive b pulls the mouth back, below 0.5 it pushes it forward, and at exactly 0.5 b does nothing."
+    },
+    {
+      "id": "rosse.r",
+      "legacy_key": "r",
+      "path": "r",
+      "mirror_paths": [],
+      "label": "Apex radius",
+      "section": "Profile Dimensions",
+      "symbol": "r",
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "R-OSSE"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0.01,
+        "maximum": 2
+      },
+      "step": 0.01,
+      "precision": 2,
+      "options": [],
+      "description": "Size of the rounded region around the virtual apex. Smaller values give a tighter, more abrupt bend."
+    },
+    {
+      "id": "rosse.q",
+      "legacy_key": "q",
+      "path": "q",
+      "mirror_paths": [],
+      "label": "Shape factor",
+      "section": "Profile Dimensions",
+      "symbol": "q",
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "R-OSSE"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0.5,
+        "maximum": 10
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Sets how the profile crosses from the throat curve to the mouth curve. Higher values hold the throat shape longer and then open faster near the mouth."
+    },
+    {
+      "id": "rosse.tmax",
+      "legacy_key": "tmax",
+      "path": "tmax",
+      "mirror_paths": [],
+      "label": "Truncation limit",
+      "section": "Profile Dimensions",
+      "symbol": "tmax",
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "R-OSSE"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0.5,
+        "maximum": 1
+      },
+      "step": 0.01,
+      "precision": 2,
+      "options": [],
+      "description": "Cuts the profile short at this fraction of its computed curve. 1 keeps the whole thing."
+    },
+    {
+      "id": "osse.L",
+      "legacy_key": "L",
+      "path": "L",
+      "mirror_paths": [],
+      "label": "Horn length",
+      "section": "Profile Dimensions",
+      "symbol": "L",
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "OSSE"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0.1,
+        "maximum": 1000
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Axial length of the horn profile. Length mode decides whether the straight slot is carved out of it; the throat extension is always added on top. Accepts an expression in p."
+    },
+    {
+      "id": "osse.a",
+      "legacy_key": "a",
+      "path": "a",
+      "mirror_paths": [],
+      "label": "Mouth coverage angle",
+      "section": "Profile Dimensions",
+      "symbol": "a",
+      "kind": "number",
+      "unit": "°",
+      "families": [
+        "OSSE"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": -180,
+        "maximum": 180
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "The angle the OS-SE flare tends toward, rather than the exact tangent at the mouth. Larger values open the horn wider; sign is ignored. An active guiding curve replaces it, and Circular arc uses it as the endpoint angle instead."
+    },
+    {
+      "id": "osse.a0",
+      "legacy_key": "a0",
+      "path": "a0",
+      "mirror_paths": [],
+      "label": "Throat coverage angle",
+      "section": "Profile Dimensions",
+      "symbol": "a0",
+      "kind": "number",
+      "unit": "°",
+      "families": [
+        "OSSE"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": -90,
+        "maximum": 90
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Wall angle where the OS-SE curve leaves the throat, which sets how fast it starts opening. Matching it to Throat extension angle makes the conical extension and OS-SE wall meet tangentially. Ignored when Throat profile is Circular arc. Accepts an expression in p, such as \"15 + 2*sin(p)\"."
+    },
+    {
+      "id": "osse.r0",
+      "legacy_key": "r0",
+      "path": "r0",
+      "mirror_paths": [],
+      "label": "Throat radius",
+      "section": "Profile Dimensions",
+      "symbol": "r0",
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "OSSE"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0.1,
+        "maximum": 200
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Radius where the main flare starts. With a throat extension the driver end is narrower — r0 minus the extension length times tan of its angle. Accepts an expression in p, such as \"12.7 + sin(p)\"."
+    },
+    {
+      "id": "osse.k",
+      "legacy_key": "k",
+      "path": "k",
+      "mirror_paths": [],
+      "label": "Flare constant",
+      "section": "Profile Dimensions",
+      "symbol": "k",
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "OSSE"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0.1,
+        "maximum": 15
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "How gradually the profile leaves the throat. Higher values expand more slowly and blend the throat into the flare more smoothly, ending at a narrower mouth for the same length and angles."
+    },
+    {
+      "id": "osse.s",
+      "legacy_key": "s",
+      "path": "s",
+      "mirror_paths": [],
+      "label": "Termination shape",
+      "section": "Profile Dimensions",
+      "symbol": "s",
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "OSSE"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": -10,
+        "maximum": 10
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "How far the mouth end is pushed off the plain OS-SE curve: positive flares it outward, negative pulls it in, 0 leaves the curve alone. Ignored by the Circular arc profile."
+    },
+    {
+      "id": "osse.n",
+      "legacy_key": "n",
+      "path": "n",
+      "mirror_paths": [],
+      "label": "Termination curvature",
+      "section": "Profile Dimensions",
+      "symbol": "n",
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "OSSE"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 1,
+        "maximum": 10
+      },
+      "step": 0.001,
+      "precision": 3,
+      "options": [],
+      "description": "How abruptly the mouth-end offset comes in. Higher values hold the OS-SE shape longer and then turn sharply; the direction of the turn comes from Termination shape, not from here."
+    },
+    {
+      "id": "osse.q",
+      "legacy_key": "q",
+      "path": "q",
+      "mirror_paths": [],
+      "label": "Termination smoothness",
+      "section": "Profile Dimensions",
+      "symbol": "q",
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "OSSE"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0.1,
+        "maximum": 2
+      },
+      "step": 0.001,
+      "precision": 3,
+      "options": [],
+      "description": "Where the mouth-end offset finishes, at 1/q of the length: above 1 it completes before the mouth, below 1 not until past it. It also scales the offset, which reaches s×L/q."
+    },
+    {
+      "id": "osse.h",
+      "legacy_key": "h",
+      "path": "h",
+      "mirror_paths": [],
+      "label": "Shape factor",
+      "section": "Profile Dimensions",
+      "symbol": "h",
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "OSSE"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0,
+        "maximum": 10
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Adds a half-sine bulge in millimetres to the radius, peaking halfway and vanishing at both ends. It spans the whole driver-to-mouth path, including any extension and slot, and applies to the circular arc too. Scale does not multiply it."
+    },
+    {
+      "id": "icw.r0",
+      "legacy_key": "r0",
+      "path": "r0",
+      "mirror_paths": [],
+      "label": "Throat radius",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "ICW"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0.1,
+        "maximum": 200
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Radius at the throat, where the driver attaches. The curvature solver starts the wall here."
+    },
+    {
+      "id": "icw.a0",
+      "legacy_key": "a0",
+      "path": "a0",
+      "mirror_paths": [],
+      "label": "Throat half-angle",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "°",
+      "families": [
+        "ICW"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": -90,
+        "maximum": 90
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Wall angle where the curve leaves the throat, measured from the horn axis. This is the curve's starting angle, not a target."
+    },
+    {
+      "id": "icw.L",
+      "legacy_key": "L",
+      "path": "L",
+      "mirror_paths": [],
+      "label": "Horn length",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "ICW"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 1,
+        "maximum": 1000
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Target axial length. The curvature solver sizes the curve to reach it. Rollback terminations use Rollback depth instead.",
+      "visible_when": {
+        "path": "termination",
+        "operator": "not_equals",
+        "value": "rollback"
+      }
+    },
+    {
+      "id": "icw.R",
+      "legacy_key": "R",
+      "path": "R",
+      "mirror_paths": [],
+      "label": "Mouth radius",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "ICW"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0.1,
+        "maximum": 1000
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Target mouth radius the curvature solver sizes the curve to reach. On a rollback it is the aperture radius where the wall first turns through 90°, not the radius at the curled tip. Ignored while a coverage hold is enabled, which makes the mouth radius an output.",
+      "disabled_when": {
+        "path": "coverage_angle",
+        "operator": "greater_than",
+        "value": 0
+      },
+      "disabled_reason": "Emergent while coverage hold is enabled."
+    },
+    {
+      "id": "icw.coverage_angle",
+      "legacy_key": "coverage_angle",
+      "path": "coverage_angle",
+      "mirror_paths": [],
+      "label": "Coverage angle",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "°",
+      "families": [
+        "ICW"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0,
+        "maximum": 80
+      },
+      "step": 1,
+      "precision": 0,
+      "options": [],
+      "description": "Above 0 this holds a constant wall angle — the constant-directivity plateau — between the hold start and end, and Mouth radius becomes an emergent output rather than a target. 0 turns the hold off and sizes the curve from Horn length and Mouth radius alone. Flat baffle only.",
+      "disabled_when": {
+        "path": "termination",
+        "operator": "equals",
+        "value": "rollback"
+      },
+      "disabled_reason": "Coverage hold applies to flat-baffle termination only."
+    },
+    {
+      "id": "icw.hold_start",
+      "legacy_key": "hold_start",
+      "path": "hold_start",
+      "mirror_paths": [],
+      "label": "Coverage hold start",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "σ",
+      "families": [
+        "ICW"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0.05,
+        "maximum": 0.9
+      },
+      "step": 0.01,
+      "precision": 2,
+      "options": [],
+      "description": "Where the constant-angle plateau begins, as a fraction of arc length from throat (0) to mouth (1). Only used when Coverage angle is above 0.",
+      "visible_when": {
+        "path": "termination",
+        "operator": "not_equals",
+        "value": "rollback"
+      }
+    },
+    {
+      "id": "icw.hold_end",
+      "legacy_key": "hold_end",
+      "path": "hold_end",
+      "mirror_paths": [],
+      "label": "Coverage hold end",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "σ",
+      "families": [
+        "ICW"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0.1,
+        "maximum": 0.95
+      },
+      "step": 0.01,
+      "precision": 2,
+      "options": [],
+      "description": "Where the constant-angle plateau ends, as a fraction of arc length. Must be past the hold start. Only used when Coverage angle is above 0.",
+      "visible_when": {
+        "path": "termination",
+        "operator": "not_equals",
+        "value": "rollback"
+      }
+    },
+    {
+      "id": "icw.n_coeff",
+      "legacy_key": "n_coeff",
+      "path": "n_coeff",
+      "mirror_paths": [],
+      "label": "Curvature coefficients",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "ICW"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 5,
+        "maximum": 24
+      },
+      "step": 1,
+      "precision": 0,
+      "options": [],
+      "description": "How many spline coefficients describe the wall curvature. More gives the solver more freedom to shape the wall, and a slower solve. A coverage hold needs at least 9; values from 5 to 8 are dropped and the solver uses 16 instead."
+    },
+    {
+      "id": "icw.termination",
+      "legacy_key": "termination",
+      "path": "termination",
+      "mirror_paths": [],
+      "label": "Termination",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "select",
+      "unit": null,
+      "families": [
+        "ICW"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": null,
+      "step": null,
+      "precision": null,
+      "options": [
+        {
+          "value": "flat_baffle",
+          "label": "Flat baffle",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null
+        },
+        {
+          "value": "rollback",
+          "label": "Rollback",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null
+        }
+      ],
+      "description": "How the mouth ends. Flat baffle meets the baffle tangentially at 90° with continuous curvature; Rollback carries the lip past 90° so it curls back on itself."
+    },
+    {
+      "id": "icw.theta1_deg",
+      "legacy_key": "theta1_deg",
+      "path": "theta1_deg",
+      "mirror_paths": [],
+      "label": "Rollback curl angle",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "°",
+      "families": [
+        "ICW"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 91,
+        "maximum": 179
+      },
+      "step": 1,
+      "precision": 0,
+      "options": [],
+      "description": "Wall angle at the curled tip, measured from the forward horn axis. 90° points straight out sideways and larger values turn the tip further back. Rollback terminations only.",
+      "visible_when": {
+        "path": "termination",
+        "operator": "equals",
+        "value": "rollback"
+      }
+    },
+    {
+      "id": "icw.depth",
+      "legacy_key": "depth",
+      "path": "depth",
+      "mirror_paths": [],
+      "label": "Rollback depth",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "ICW"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 1,
+        "maximum": 1000
+      },
+      "step": 1,
+      "precision": 2,
+      "options": [],
+      "description": "Axial position of the curled tip, measured forward from the throat — not the frontmost point of the horn, since the 90° crossing sits further forward. A rollback is sized by this instead of Horn length, with Mouth radius setting the aperture.",
+      "visible_when": {
+        "path": "termination",
+        "operator": "equals",
+        "value": "rollback"
+      }
+    },
+    {
+      "id": "icw.a",
+      "legacy_key": "a",
+      "path": "a",
+      "mirror_paths": [],
+      "label": "Legacy coverage coefficient",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "°",
+      "families": [
+        "ICW"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": -180,
+        "maximum": 180
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Kept so an imported file round-trips unchanged. The ICW solver does not read it — the curve comes from the throat, size and coverage targets above."
+    },
+    {
+      "id": "icw.k",
+      "legacy_key": "k",
+      "path": "k",
+      "mirror_paths": [],
+      "label": "Legacy flare coefficient",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "ICW"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": -100,
+        "maximum": 100
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Kept so an imported file round-trips unchanged. The ICW solver does not read it — the curve comes from the throat, size and coverage targets above."
+    },
+    {
+      "id": "icw.q",
+      "legacy_key": "q",
+      "path": "q",
+      "mirror_paths": [],
+      "label": "Legacy smoothness coefficient",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "ICW"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": -100,
+        "maximum": 100
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Kept so an imported file round-trips unchanged. The ICW solver does not read it — the curve comes from the throat, size and coverage targets above."
+    },
+    {
+      "id": "icw.curl",
+      "legacy_key": "curl",
+      "path": "curl",
+      "mirror_paths": [],
+      "label": "Curl",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "ICW"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": -100,
+        "maximum": 100
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Kept so an imported file round-trips unchanged. The ICW solver does not read it — use Termination and Rollback curl angle to curl the mouth."
+    },
+    {
+      "id": "freeform.length",
+      "legacy_key": "length",
+      "path": "length",
+      "mirror_paths": [],
+      "label": "Length",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 20,
+        "maximum": 1000
+      },
+      "step": 1,
+      "precision": 2,
+      "options": [],
+      "description": "Axial length shared by the horizontal and vertical profiles, spanned by both splines from throat to mouth. Interior anchors are stored as fractions of it, so changing it moves them all proportionally."
+    },
+    {
+      "id": "freeform.throatRadius",
+      "legacy_key": "throatRadius",
+      "path": "profile_h.points.0.r",
+      "mirror_paths": [
+        "profile_v.points.0.r"
+      ],
+      "label": "Throat radius",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0.1,
+        "maximum": 200
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Radius at the throat. Shared by both profile planes, so the throat stays circular."
+    },
+    {
+      "id": "freeform.throatAngle",
+      "legacy_key": "throatAngle",
+      "path": "profile_h.throat_angle_deg",
+      "mirror_paths": [
+        "profile_v.throat_angle_deg"
+      ],
+      "label": "Throat angle",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "°",
+      "families": [
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": -90,
+        "maximum": 90
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Wall angle leaving the driver exit, shared by both profile planes, fixing the spline tangent at the throat. An angle set on the first point of a plane overrides it for that plane."
+    },
+    {
+      "id": "freeform.mouthRadiusH",
+      "legacy_key": "mouthRadiusH",
+      "path": "profile_h.points.$last.r",
+      "mirror_paths": [],
+      "label": "Horizontal mouth radius",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0.1,
+        "maximum": 1000
+      },
+      "step": 1,
+      "precision": 2,
+      "options": [],
+      "description": "Half-width of the mouth in the horizontal plane."
+    },
+    {
+      "id": "freeform.mouthAngleH",
+      "legacy_key": "mouthAngleH",
+      "path": "profile_h.mouth_angle_deg",
+      "mirror_paths": [],
+      "label": "Horizontal mouth angle",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "°",
+      "families": [
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": -90,
+        "maximum": 90
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Wall angle the horizontal spline arrives at the mouth with, fixing the spline tangent there. An angle set on the last horizontal point overrides it."
+    },
+    {
+      "id": "freeform.interiorH",
+      "legacy_key": "interiorH",
+      "path": "profile_h.points",
+      "mirror_paths": [],
+      "label": "Horizontal spline points",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "table",
+      "unit": null,
+      "families": [
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": null,
+      "step": null,
+      "precision": null,
+      "options": [],
+      "description": "Optional anchors the horizontal spline must pass through, placed strictly between throat and mouth. Give each a position and radius; set its angle to pin the wall direction there, or leave it blank for an automatic tangent."
+    },
+    {
+      "id": "freeform.mouthRadiusV",
+      "legacy_key": "mouthRadiusV",
+      "path": "profile_v.points.$last.r",
+      "mirror_paths": [],
+      "label": "Vertical mouth radius",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0.1,
+        "maximum": 1000
+      },
+      "step": 1,
+      "precision": 2,
+      "options": [],
+      "description": "Half-height of the mouth in the vertical plane."
+    },
+    {
+      "id": "freeform.mouthAngleV",
+      "legacy_key": "mouthAngleV",
+      "path": "profile_v.mouth_angle_deg",
+      "mirror_paths": [],
+      "label": "Vertical mouth angle",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "number",
+      "unit": "°",
+      "families": [
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": -90,
+        "maximum": 90
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Wall angle the vertical spline arrives at the mouth with, fixing the spline tangent there. An angle set on the last vertical point overrides it."
+    },
+    {
+      "id": "freeform.interiorV",
+      "legacy_key": "interiorV",
+      "path": "profile_v.points",
+      "mirror_paths": [],
+      "label": "Vertical spline points",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "table",
+      "unit": null,
+      "families": [
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": null,
+      "step": null,
+      "precision": null,
+      "options": [],
+      "description": "Optional anchors the vertical spline must pass through, placed strictly between throat and mouth. Give each a position and radius; set its angle to pin the wall direction there, or leave it blank for an automatic tangent."
+    },
+    {
+      "id": "freeform.crossSections",
+      "legacy_key": "crossSections",
+      "path": "cross_sections",
+      "mirror_paths": [],
+      "label": "Cross-section stations",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "table",
+      "unit": null,
+      "families": [
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": null,
+      "step": null,
+      "precision": null,
+      "options": [],
+      "description": "Cross-section outline at increasing positions along the throat-to-mouth axis, blended between the stations you list; the H and V splines still set each section's half-width and half-height. The station at 0 must be an ellipse. Superellipse exponents run 2 to 16, and a corner radius has to fit the local half-size."
+    },
+    {
+      "id": "freeform.inflectionPolicy",
+      "legacy_key": "inflectionPolicy",
+      "path": "inflection_policy",
+      "mirror_paths": [],
+      "label": "Curve direction",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "select",
+      "unit": null,
+      "families": [
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": null,
+      "step": null,
+      "precision": null,
+      "options": [
+        {
+          "value": "warn",
+          "label": "Warn on S-curves",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null
+        },
+        {
+          "value": "reject",
+          "label": "Enforce one-way",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null
+        }
+      ],
+      "description": "An S-curve is a stretch where the wall's outward angle falls back by more than a degree before opening again. Warn records it and builds anyway; Enforce one-way rejects the profile instead."
+    },
+    {
+      "id": "common.throat_ext_angle",
+      "legacy_key": "throatExtAngle",
+      "path": "throat_ext_angle",
+      "mirror_paths": [],
+      "label": "Throat extension angle",
+      "section": "Throat Extension",
+      "symbol": null,
+      "kind": "number",
+      "unit": "°",
+      "families": [
+        "R-OSSE",
+        "OSSE"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": -90,
+        "maximum": 90
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Taper of the separate conical adapter behind the main horn. The driver end works out as r0 minus the extension length times tan of this angle, so positive angles narrow it toward the driver and negative ones widen it; 0 makes a straight tube. This angle is independent of a0: equal values make a tangent OS-SE join, while R-OSSE's finished tangent also depends on m, r and q."
+    },
+    {
+      "id": "common.throat_ext_length",
+      "legacy_key": "throatExtLength",
+      "path": "throat_ext_length",
+      "mirror_paths": [],
+      "label": "Throat extension length",
+      "section": "Throat Extension",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "R-OSSE",
+        "OSSE"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0,
+        "maximum": 1000
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Length of the conical adapter added behind the throat, between the driver and the horn. 0 leaves it out. It does not change the computed OS-SE or R-OSSE flare; it increases the physical total length by this amount."
+    },
+    {
+      "id": "common.slot_length",
+      "legacy_key": "slotLength",
+      "path": "slot_length",
+      "mirror_paths": [],
+      "label": "Straight slot length",
+      "section": "Throat Extension",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "R-OSSE",
+        "OSSE"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0,
+        "maximum": 1000
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Length of a straight r0 section between the throat extension and the start of the flare; 0 leaves it out. Under OSSE Total length mode it is subtracted from Horn length rather than added. A non-zero Shape factor h bulges it too, so it is not perfectly straight."
+    },
+    {
+      "id": "common.length_mode",
+      "legacy_key": "lengthMode",
+      "path": "length_mode",
+      "mirror_paths": [],
+      "label": "Length mode",
+      "section": "Throat Extension",
+      "symbol": null,
+      "kind": "select",
+      "unit": null,
+      "families": [
+        "R-OSSE",
+        "OSSE"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": null,
+      "step": null,
+      "precision": null,
+      "options": [
+        {
+          "value": "profile",
+          "label": "Profile length",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null
+        },
+        {
+          "value": "total",
+          "label": "Total length",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null
+        }
+      ],
+      "description": "What Horn length measures. Profile length leaves all of it for the flare, so the slot makes the part longer; Total length subtracts the slot from it instead, shortening the flare. The throat extension is added on top either way. R-OSSE derives its own length and ignores this."
+    },
+    {
+      "id": "common.coverage_mode",
+      "legacy_key": "coverageMode",
+      "path": "coverage_mode",
+      "mirror_paths": [],
+      "label": "Coverage mode",
+      "section": "Profile Dimensions",
+      "symbol": null,
+      "kind": "text",
+      "unit": null,
+      "families": [
+        "ICW"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": null,
+      "step": null,
+      "precision": null,
+      "options": [],
+      "description": "Carried through from the imported file so it round-trips unchanged. Nothing in the solve reads it; the coverage hold is driven by Coverage angle above."
+    },
+    {
+      "id": "morph.target_shape",
+      "legacy_key": "morphTarget",
+      "path": "morph.target_shape",
+      "mirror_paths": [],
+      "label": "Morph target",
+      "section": "Morph Target",
+      "symbol": null,
+      "kind": "select",
+      "unit": null,
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": null,
+      "step": null,
+      "precision": null,
+      "options": [
+        {
+          "value": 0,
+          "label": "None",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null
+        },
+        {
+          "value": 1,
+          "label": "Rectangle",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null
+        },
+        {
+          "value": 2,
+          "label": "Circle",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null
+        },
+        {
+          "value": 3,
+          "label": "Superellipse",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null
+        }
+      ],
+      "description": "Outline the mouth is blended toward as it approaches the baffle. None keeps the outline the profile formula produces. A Circle takes half the larger target extent as its radius, so on an anisotropic mouth it expands the smaller axis and cannot preserve both mouth endpoints. Only Superellipse is shape-only; exponent 2 gives an ellipse."
+    },
+    {
+      "id": "morph.target_width",
+      "legacy_key": "morphWidth",
+      "path": "morph.target_width",
+      "mirror_paths": [],
+      "label": "Target width",
+      "section": "Morph Target",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0,
+        "maximum": 2000
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Full target width. For Rectangle and Circle, 0 derives it from the mouth by rounding the half-width up to a whole millimetre before doubling. For Superellipse, 0 uses the exact full mouth width. A Circle uses the larger of width and height as its diameter."
+    },
+    {
+      "id": "morph.target_height",
+      "legacy_key": "morphHeight",
+      "path": "morph.target_height",
+      "mirror_paths": [],
+      "label": "Target height",
+      "section": "Morph Target",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0,
+        "maximum": 2000
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Full target height. For Rectangle and Circle, 0 derives it from the mouth by rounding the half-height up to a whole millimetre before doubling. For Superellipse, 0 uses the exact full mouth height. A Circle uses the larger of width and height as its diameter."
+    },
+    {
+      "id": "morph.target_exponent",
+      "legacy_key": "morphExponent",
+      "path": "morph.target_exponent",
+      "mirror_paths": [],
+      "label": "Target exponent",
+      "section": "Morph Target",
+      "symbol": null,
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 2,
+        "maximum": 16
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Exponent of the Superellipse target. 2, the default, gives an ellipse; higher values square off the outline toward a rounded rectangle. An expression in the azimuthal angle p is evaluated around the mouth.",
+      "visible_when": {
+        "path": "morph.target_shape",
+        "operator": "equals",
+        "value": 3
+      }
+    },
+    {
+      "id": "morph.corner_radius",
+      "legacy_key": "morphCorner",
+      "path": "morph.corner_radius",
+      "mirror_paths": [],
+      "label": "Corner radius",
+      "section": "Morph Target",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0,
+        "maximum": 100
+      },
+      "step": 1,
+      "precision": 2,
+      "options": [],
+      "description": "Rounds the corners of a Rectangle target, clamped to the smaller half-dimension of that target. It has no effect on a Circle or Superellipse target. A genuinely sharp rectangle cannot be reached by morph because the intermediate outlines become non-convex and are rejected; on a measured 320 × 220 mm mouth, 10 mm or less was rejected and 15 mm or more accepted regardless of where morphing began. The mesher error reports the minimum feasible radius for the actual geometry. Use a cross-section station for a genuinely sharp rectangle."
+    },
+    {
+      "id": "morph.rate",
+      "legacy_key": "morphRate",
+      "path": "morph.rate",
+      "mirror_paths": [],
+      "label": "Morph rate",
+      "section": "Morph Target",
+      "symbol": null,
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0,
+        "maximum": 100
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Exponent on the blend once morphing starts. 1 is a straight ramp; higher values hold the formula shape longer and swing to the target near the mouth; 0 jumps straight to the target."
+    },
+    {
+      "id": "morph.fixed_part",
+      "legacy_key": "morphFixed",
+      "path": "morph.fixed_part",
+      "mirror_paths": [],
+      "label": "Fixed part",
+      "section": "Morph Target",
+      "symbol": null,
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0,
+        "maximum": 1
+      },
+      "step": 0.01,
+      "precision": 2,
+      "options": [],
+      "description": "Fraction of the profile from the throat left untouched before blending starts; 0 blends from the throat. 1 disables morphing altogether, as does any value at or above Truncation limit on R-OSSE. Throat extensions and slots are never morphed."
+    },
+    {
+      "id": "morph.allow_shrinkage",
+      "legacy_key": "morphAllowShrinkage",
+      "path": "morph.allow_shrinkage",
+      "mirror_paths": [],
+      "label": "Allow shrinkage",
+      "section": "Morph Target",
+      "symbol": null,
+      "kind": "select",
+      "unit": null,
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": null,
+      "step": null,
+      "precision": null,
+      "options": [
+        {
+          "value": 0,
+          "label": "No",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null
+        },
+        {
+          "value": 1,
+          "label": "Yes",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null
+        }
+      ],
+      "description": "Whether the target may be smaller than the mouth the formula produced. No raises the target width and height to at least the mouth bounds, so a smaller target is enlarged rather than honoured."
+    },
+    {
+      "id": "osse.throat_profile",
+      "legacy_key": "throatProfile",
+      "path": "throat_profile",
+      "mirror_paths": [],
+      "label": "Throat profile",
+      "section": "Guiding Curve",
+      "symbol": null,
+      "kind": "select",
+      "unit": null,
+      "families": [
+        "OSSE"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": null,
+      "step": null,
+      "precision": null,
+      "options": [
+        {
+          "value": 1,
+          "label": "OS-SE",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null
+        },
+        {
+          "value": 3,
+          "label": "Circular arc",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null
+        }
+      ],
+      "description": "Which curve carries the wall from throat to mouth: the OS-SE formula above, or a plain circular arc driven by the two arc controls at the bottom of this section. The arc ignores a0, k, s, n and q; Shape factor h and Profile rotation still apply."
+    },
+    {
+      "id": "osse.rotation",
+      "legacy_key": "rot",
+      "path": "rotation",
+      "mirror_paths": [],
+      "label": "Profile rotation",
+      "section": "Guiding Curve",
+      "symbol": null,
+      "kind": "number",
+      "unit": "°",
+      "families": [
+        "OSSE"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": -360,
+        "maximum": 360
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Rotates each meridian about the point [0, r0] before it is revolved, which reshapes the surface rather than tilting the finished horn rigidly. A p-dependent value turns each meridian differently and warps the mouth."
+    },
+    {
+      "id": "guide.curve_type",
+      "legacy_key": "gcurveType",
+      "path": "guiding_curve.curve_type",
+      "mirror_paths": [],
+      "label": "Guiding curve mode",
+      "section": "Guiding Curve",
+      "symbol": null,
+      "kind": "select",
+      "unit": null,
+      "families": [
+        "OSSE"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": null,
+      "step": null,
+      "precision": null,
+      "options": [
+        {
+          "value": 0,
+          "label": "Explicit coverage",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null
+        },
+        {
+          "value": 1,
+          "label": "Superellipse",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null
+        },
+        {
+          "value": 2,
+          "label": "Superformula",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null
+        }
+      ],
+      "description": "Where the mouth coverage angle comes from. Explicit uses the angle you typed; the other two solve, per azimuth, the coverage angle that puts the OS-SE radius on the guide shape at the guide distance, overriding that field. The solved angle is clamped to 0.5°–89°."
+    },
+    {
+      "id": "guide.distance",
+      "legacy_key": "gcurveDist",
+      "path": "guiding_curve.distance",
+      "mirror_paths": [],
+      "label": "Guiding curve distance",
+      "section": "Guiding Curve",
+      "symbol": null,
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "OSSE"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0,
+        "maximum": 10000
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Which station along the flare the guide shape is matched at. Above 0 through 1 is a fraction of the main length; above 1 is millimetres, clamped to the mouth. 0 means the mouth."
+    },
+    {
+      "id": "guide.width",
+      "legacy_key": "gcurveWidth",
+      "path": "guiding_curve.width",
+      "mirror_paths": [],
+      "label": "Guiding curve width",
+      "section": "Guiding Curve",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "OSSE"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0,
+        "maximum": 2000
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Horizontal size of the guide shape; 0 disables guiding and falls back to the explicit coverage angle. It is the exact full width for a Superellipse, but only a base scale for a Superformula, whose own terms change the real span."
+    },
+    {
+      "id": "guide.aspect_ratio",
+      "legacy_key": "gcurveAspectRatio",
+      "path": "guiding_curve.aspect_ratio",
+      "mirror_paths": [],
+      "label": "Guiding curve aspect ratio",
+      "section": "Guiding Curve",
+      "symbol": null,
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "OSSE"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0.01,
+        "maximum": 100
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Vertical scale of the guide shape divided by its horizontal scale. 1 makes the two equal — a circle at superellipse exponent 2, not a square — and below 1 makes it wider than tall."
+    },
+    {
+      "id": "guide.superellipse_n",
+      "legacy_key": "gcurveSeN",
+      "path": "guiding_curve.superellipse_n",
+      "mirror_paths": [],
+      "label": "Guiding superellipse exponent",
+      "section": "Guiding Curve",
+      "symbol": null,
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "OSSE"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0.01,
+        "maximum": 100
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Exponent of the superellipse guide shape. 2 gives an ellipse and higher values square it off toward a rounded rectangle. Anything below 2 is clamped up to 2.",
+      "visible_when": {
+        "path": "guiding_curve.curve_type",
+        "operator": "equals",
+        "value": 1
+      }
+    },
+    {
+      "id": "guide.superformula",
+      "legacy_key": "gcurveSf",
+      "path": "guiding_curve.superformula",
+      "mirror_paths": [],
+      "label": "Superformula tuple",
+      "section": "Guiding Curve",
+      "symbol": null,
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "OSSE"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": -1000,
+        "maximum": 1000
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "All six superformula terms as one comma-separated list, in the order a, b, m, n1, n2, n3. A complete six-value list overrides every individual field below and uses its single m for both m1 and m2; a shorter list is ignored.",
+      "visible_when": {
+        "path": "guiding_curve.curve_type",
+        "operator": "equals",
+        "value": 2
+      }
+    },
+    {
+      "id": "guide.sf_a",
+      "legacy_key": "gcurveSfA",
+      "path": "guiding_curve.sf_a",
+      "mirror_paths": [],
+      "label": "Superformula a",
+      "section": "Guiding Curve",
+      "symbol": null,
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "OSSE"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": -1000,
+        "maximum": 1000
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Scales the cosine term of the superformula, stretching the guide shape along the horizontal axis. Sign is ignored.",
+      "visible_when": {
+        "path": "guiding_curve.curve_type",
+        "operator": "equals",
+        "value": 2
+      }
+    },
+    {
+      "id": "guide.sf_b",
+      "legacy_key": "gcurveSfB",
+      "path": "guiding_curve.sf_b",
+      "mirror_paths": [],
+      "label": "Superformula b",
+      "section": "Guiding Curve",
+      "symbol": null,
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "OSSE"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": -1000,
+        "maximum": 1000
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Scales the sine term of the superformula, stretching the guide shape along the vertical axis. Sign is ignored.",
+      "visible_when": {
+        "path": "guiding_curve.curve_type",
+        "operator": "equals",
+        "value": 2
+      }
+    },
+    {
+      "id": "guide.sf_m1",
+      "legacy_key": "gcurveSfM1",
+      "path": "guiding_curve.sf_m1",
+      "mirror_paths": [],
+      "label": "Superformula m1",
+      "section": "Guiding Curve",
+      "symbol": null,
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "OSSE"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": -1000,
+        "maximum": 1000
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Angular frequency of the cosine term; sign is ignored. Match it to m2 for the usual symmetric outline, where the pair sets how many lobes it has — 4 gives the rounded-square family. When they differ, neither one alone is the lobe count.",
+      "visible_when": {
+        "path": "guiding_curve.curve_type",
+        "operator": "equals",
+        "value": 2
+      }
+    },
+    {
+      "id": "guide.sf_m2",
+      "legacy_key": "gcurveSfM2",
+      "path": "guiding_curve.sf_m2",
+      "mirror_paths": [],
+      "label": "Superformula m2",
+      "section": "Guiding Curve",
+      "symbol": null,
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "OSSE"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": -1000,
+        "maximum": 1000
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Angular frequency of the sine term; sign is ignored. Match it to m1 for a symmetric outline. A complete six-value tuple ignores this field and uses its single m for both terms.",
+      "visible_when": {
+        "path": "guiding_curve.curve_type",
+        "operator": "equals",
+        "value": 2
+      }
+    },
+    {
+      "id": "guide.sf_n1",
+      "legacy_key": "gcurveSfN1",
+      "path": "guiding_curve.sf_n1",
+      "mirror_paths": [],
+      "label": "Superformula n1",
+      "section": "Guiding Curve",
+      "symbol": null,
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "OSSE"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": -1000,
+        "maximum": 1000
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Overall exponent on the combined terms. Smaller values exaggerate the in-and-out variation, larger values flatten the outline toward a circle. Sign is ignored, and 0 gives extreme geometry.",
+      "visible_when": {
+        "path": "guiding_curve.curve_type",
+        "operator": "equals",
+        "value": 2
+      }
+    },
+    {
+      "id": "guide.sf_n2",
+      "legacy_key": "gcurveSfN2",
+      "path": "guiding_curve.sf_n2",
+      "mirror_paths": [],
+      "label": "Superformula n2",
+      "section": "Guiding Curve",
+      "symbol": null,
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "OSSE"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": -1000,
+        "maximum": 1000
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Exponent on the cosine term, setting how sharp or bulged the lobes are. Keep it at 0 or above — a negative value blows up wherever the cosine crosses zero and fails the build.",
+      "visible_when": {
+        "path": "guiding_curve.curve_type",
+        "operator": "equals",
+        "value": 2
+      }
+    },
+    {
+      "id": "guide.sf_n3",
+      "legacy_key": "gcurveSfN3",
+      "path": "guiding_curve.sf_n3",
+      "mirror_paths": [],
+      "label": "Superformula n3",
+      "section": "Guiding Curve",
+      "symbol": null,
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "OSSE"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": -1000,
+        "maximum": 1000
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Exponent on the sine term, setting how sharp or bulged the lobes are. Keep it at 0 or above — a negative value blows up wherever the sine crosses zero and fails the build.",
+      "visible_when": {
+        "path": "guiding_curve.curve_type",
+        "operator": "equals",
+        "value": 2
+      }
+    },
+    {
+      "id": "guide.rotation",
+      "legacy_key": "gcurveRot",
+      "path": "guiding_curve.rotation",
+      "mirror_paths": [],
+      "label": "Guiding curve rotation",
+      "section": "Guiding Curve",
+      "symbol": null,
+      "kind": "number",
+      "unit": "°",
+      "families": [
+        "OSSE"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": -360,
+        "maximum": 360
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Rotates the guide shape counterclockwise about the horn axis, turning the coverage pattern with it. A p-dependent expression is evaluated per azimuth and distorts the outline instead of turning it."
+    },
+    {
+      "id": "osse.circ_arc_term_angle",
+      "legacy_key": "circArcTermAngle",
+      "path": "circ_arc_term_angle",
+      "mirror_paths": [],
+      "label": "Circular arc terminal angle",
+      "section": "Guiding Curve",
+      "symbol": null,
+      "kind": "number",
+      "unit": "°",
+      "families": [
+        "OSSE"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": -180,
+        "maximum": 180
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Wall angle the arc reaches at the mouth. Used only when Throat profile is Circular arc and Radius override is not in play. An angle parallel to the throat-to-mouth chord has no solution and falls back to a constant mouth radius.",
+      "visible_when": {
+        "path": "throat_profile",
+        "operator": "equals",
+        "value": 3
+      }
+    },
+    {
+      "id": "osse.circ_arc_radius",
+      "legacy_key": "circArcRadius",
+      "path": "circ_arc_radius",
+      "mirror_paths": [],
+      "label": "Circular arc radius override",
+      "section": "Guiding Curve",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "OSSE"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0,
+        "maximum": 10000
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Forces the arc radius and takes precedence over Terminal angle. It is honoured only when positive and at least half the throat-to-mouth chord; 0 or an impossible radius silently falls back to Terminal angle. Circular arc only.",
+      "visible_when": {
+        "path": "throat_profile",
+        "operator": "equals",
+        "value": 3
+      }
+    },
+    {
+      "id": "source.shape",
+      "legacy_key": "sourceShape",
+      "path": "source.shape",
+      "mirror_paths": [],
+      "label": "Source surface",
+      "section": "Source Definition",
+      "symbol": null,
+      "kind": "select",
+      "unit": null,
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": null,
+      "step": null,
+      "precision": null,
+      "options": [
+        {
+          "value": 1,
+          "label": "Spherical cap",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null
+        },
+        {
+          "value": 2,
+          "label": "Flat disc",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null
+        }
+      ],
+      "description": "Shape of the driving surface placed at the throat. A spherical cap approximates a dome radiating into the horn; a flat disc models a flat piston."
+    },
+    {
+      "id": "source.radius",
+      "legacy_key": "sourceRadius",
+      "path": "source.radius",
+      "mirror_paths": [],
+      "label": "Source radius",
+      "section": "Source Definition",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": -1,
+        "maximum": 2000
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Sphere radius of a spherical-cap source; a flat disc ignores it. A value of 0 or below derives the radius from the throat radius and throat angle instead of setting it directly."
+    },
+    {
+      "id": "source.curvature",
+      "legacy_key": "sourceCurv",
+      "path": "source.curvature",
+      "mirror_paths": [],
+      "label": "Source curvature",
+      "section": "Source Definition",
+      "symbol": null,
+      "kind": "select",
+      "unit": null,
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": null,
+      "step": null,
+      "precision": null,
+      "options": [
+        {
+          "value": 0,
+          "label": "Auto",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null
+        },
+        {
+          "value": 1,
+          "label": "Convex",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null
+        },
+        {
+          "value": -1,
+          "label": "Concave",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null
+        }
+      ],
+      "description": "Which way a spherical-cap source bulges, seen from the horn. Auto picks the usual direction for the chosen surface."
+    },
+    {
+      "id": "source.velocity",
+      "legacy_key": "sourceAmplitude",
+      "path": "source.velocity",
+      "mirror_paths": [],
+      "label": "Source amplitude",
+      "section": "Source Definition",
+      "symbol": null,
+      "kind": "number",
+      "unit": "m/s",
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0,
+        "maximum": 100
+      },
+      "step": 0.01,
+      "precision": 3,
+      "options": [],
+      "description": "Despite the name this never scales the result: the solve always drives the source at unit velocity. It is read only under the Legacy convention, where it carries ATH's direction code and must be exactly 1 (normal) or 2 (axial)."
+    },
+    {
+      "id": "source.velocity_convention",
+      "legacy_key": "sourceVelocity",
+      "path": "source.velocity_convention",
+      "mirror_paths": [],
+      "label": "Velocity convention",
+      "section": "Source Definition",
+      "symbol": null,
+      "kind": "select",
+      "unit": null,
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": null,
+      "step": null,
+      "precision": null,
+      "options": [
+        {
+          "value": "normal",
+          "label": "Normal velocity",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null
+        },
+        {
+          "value": "axial",
+          "label": "Axial rigid-piston velocity",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null
+        },
+        {
+          "value": "legacy",
+          "label": "Legacy config value",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null
+        }
+      ],
+      "description": "Which way the source surface moves. Normal drives every point along its own surface normal; Axial drives it as a rigid piston along the horn axis. Legacy takes the same choice from the numeric code in Source amplitude instead."
+    },
+    {
+      "id": "source.contours",
+      "legacy_key": "sourceContours",
+      "path": "source.contours",
+      "mirror_paths": [],
+      "label": "Source contours",
+      "section": "Source Definition",
+      "symbol": null,
+      "kind": "text",
+      "unit": null,
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": null,
+      "step": null,
+      "precision": null,
+      "options": [],
+      "description": "Preserved for ATH round-trip only — custom source contours are not implemented here. Any non-empty value stops both the viewport preview and the solve from meshing."
+    },
+    {
+      "id": "enclosure.depth",
+      "legacy_key": "encDepth",
+      "path": "enclosure.depth",
+      "mirror_paths": [],
+      "label": "Enclosure depth",
+      "section": "Wall & Enclosure",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0,
+        "maximum": 2000
+      },
+      "step": 1,
+      "precision": 2,
+      "options": [],
+      "description": "Depth of the box behind the front baffle. A positive value is raised if needed to clear the horn — at least its axial span plus 1 mm. 0 means no box, leaving a free-standing horn shaped by Wall thickness. Infinite-baffle simulations ignore the enclosure entirely.",
+      "visible_when": {
+        "path": "enclosure.depth",
+        "operator": "greater_than",
+        "value": 0
+      }
+    },
+    {
+      "id": "enclosure.edge_radius",
+      "legacy_key": "encEdge",
+      "path": "enclosure.edge_radius",
+      "mirror_paths": [],
+      "label": "Edge radius",
+      "section": "Wall & Enclosure",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0,
+        "maximum": 1000
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Size of the roundover or bevel on the outer box edges, front and rear. The front edge is the main control over baffle diffraction. It is reduced automatically to fit the box and to leave the baffle margins intact.",
+      "visible_when": {
+        "path": "enclosure.depth",
+        "operator": "greater_than",
+        "value": 0
+      }
+    },
+    {
+      "id": "enclosure.edge_type",
+      "legacy_key": "encEdgeType",
+      "path": "enclosure.edge_type",
+      "mirror_paths": [],
+      "label": "Edge finish",
+      "section": "Wall & Enclosure",
+      "symbol": null,
+      "kind": "select",
+      "unit": null,
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": null,
+      "step": null,
+      "precision": null,
+      "options": [
+        {
+          "value": 1,
+          "label": "Rounded",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null
+        },
+        {
+          "value": 2,
+          "label": "Chamfered",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null
+        }
+      ],
+      "description": "Whether the front edges are cut as a circular roundover or a flat bevel. Both use Edge radius for their size.",
+      "visible_when": {
+        "path": "enclosure.depth",
+        "operator": "greater_than",
+        "value": 0
+      }
+    },
+    {
+      "id": "enclosure.space_l",
+      "legacy_key": "encSpaceL",
+      "path": "enclosure.space_l",
+      "mirror_paths": [],
+      "label": "Left margin",
+      "section": "Wall & Enclosure",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0,
+        "maximum": 2000
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Flat baffle left between the horn mouth and the left edge of the box, which is what sets the box size on that side. A positive margin is never eaten by Edge radius — the roundover shrinks instead.",
+      "visible_when": {
+        "path": "enclosure.depth",
+        "operator": "greater_than",
+        "value": 0
+      }
+    },
+    {
+      "id": "enclosure.space_t",
+      "legacy_key": "encSpaceT",
+      "path": "enclosure.space_t",
+      "mirror_paths": [],
+      "label": "Top margin",
+      "section": "Wall & Enclosure",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0,
+        "maximum": 2000
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Flat baffle left between the horn mouth and the top edge of the box, which is what sets the box size on that side. A positive margin is never eaten by Edge radius — the roundover shrinks instead.",
+      "visible_when": {
+        "path": "enclosure.depth",
+        "operator": "greater_than",
+        "value": 0
+      }
+    },
+    {
+      "id": "enclosure.space_r",
+      "legacy_key": "encSpaceR",
+      "path": "enclosure.space_r",
+      "mirror_paths": [],
+      "label": "Right margin",
+      "section": "Wall & Enclosure",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0,
+        "maximum": 2000
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Flat baffle left between the horn mouth and the right edge of the box, which is what sets the box size on that side. A positive margin is never eaten by Edge radius — the roundover shrinks instead.",
+      "visible_when": {
+        "path": "enclosure.depth",
+        "operator": "greater_than",
+        "value": 0
+      }
+    },
+    {
+      "id": "enclosure.space_b",
+      "legacy_key": "encSpaceB",
+      "path": "enclosure.space_b",
+      "mirror_paths": [],
+      "label": "Bottom margin",
+      "section": "Wall & Enclosure",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0,
+        "maximum": 2000
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Flat baffle left between the horn mouth and the bottom edge of the box, which is what sets the box size on that side. A positive margin is never eaten by Edge radius — the roundover shrinks instead.",
+      "visible_when": {
+        "path": "enclosure.depth",
+        "operator": "greater_than",
+        "value": 0
+      }
+    },
+    {
+      "id": "enclosure.front_resolution",
+      "legacy_key": "encFrontResolution",
+      "path": "enclosure.front_resolution",
+      "mirror_paths": [],
+      "label": "Front baffle mesh resolution",
+      "section": "Solve & export mesh",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0.01,
+        "maximum": 1000
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Target element size on the enclosure front baffle. A four-value ATH tuple round-trips unchanged, but only its first value is meshed — every quadrant gets that size."
+    },
+    {
+      "id": "enclosure.back_resolution",
+      "legacy_key": "encBackResolution",
+      "path": "enclosure.back_resolution",
+      "mirror_paths": [],
+      "label": "Rear baffle mesh resolution",
+      "section": "Solve & export mesh",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": true,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0.01,
+        "maximum": 1000
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Target element size on the enclosure rear panel. A four-value ATH tuple round-trips unchanged, but only its first value is meshed — every quadrant gets that size."
+    },
+    {
+      "id": "mesh.angular_segments",
+      "legacy_key": "angularSegments",
+      "path": "mesh.angular_segments",
+      "mirror_paths": [],
+      "label": "Surface angular samples",
+      "section": "Surface sampling",
+      "symbol": null,
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0,
+        "maximum": 4096
+      },
+      "step": 1,
+      "precision": 0,
+      "options": [],
+      "description": "Starting number of azimuthal samples around the horn for the exported and solved mesh; the mesher may raise it to hit the mm resolution targets. Values below 4 become 4 and others round up to a multiple of 4. The viewport uses its own adaptive count."
+    },
+    {
+      "id": "mesh.length_segments",
+      "legacy_key": "lengthSegments",
+      "path": "mesh.length_segments",
+      "mirror_paths": [],
+      "label": "Surface length samples",
+      "section": "Surface sampling",
+      "symbol": null,
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0,
+        "maximum": 4096
+      },
+      "step": 1,
+      "precision": 0,
+      "options": [],
+      "description": "Starting number of axial intervals along the profile for the exported and solved mesh — one more station than intervals. The mesher may raise it to hit the mm resolution targets, and the viewport uses its own adaptive count."
+    },
+    {
+      "id": "mesh.corner_segments",
+      "legacy_key": "cornerSegments",
+      "path": "mesh.corner_segments",
+      "mirror_paths": [],
+      "label": "Surface corner samples",
+      "section": "Surface sampling",
+      "symbol": null,
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0,
+        "maximum": 1024
+      },
+      "step": 1,
+      "precision": 0,
+      "options": [],
+      "description": "Extra azimuthal budget spent on the corners of an active Rectangle morph, giving (angular + corner) / 4 points per quadrant. It does nothing without that morph. Unlike the two counts above, it does reach the viewport."
+    },
+    {
+      "id": "mesh.sampling_mode",
+      "legacy_key": "samplingMode",
+      "path": "mesh.sampling_mode",
+      "mirror_paths": [],
+      "label": "Z-map sampling mode",
+      "section": "Surface sampling",
+      "symbol": null,
+      "kind": "select",
+      "unit": null,
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": null,
+      "step": null,
+      "precision": null,
+      "options": [
+        {
+          "value": "uniform",
+          "label": "Uniform",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null
+        },
+        {
+          "value": "ath-default-zmap",
+          "label": "ATH default Z-map",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null
+        },
+        {
+          "value": "zmap",
+          "label": "Custom Z-map points",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null
+        }
+      ],
+      "description": "How axial stations are spread along the profile. OSSE and R-OSSE take all three modes; FREEFORM takes Uniform or a custom map only, and ICW is always uniform in arc length and rejects a custom map. A custom map reaches the viewport as well as the export."
+    },
+    {
+      "id": "mesh.z_map_points",
+      "legacy_key": "zMapPoints",
+      "path": "mesh.z_map_points",
+      "mirror_paths": [],
+      "label": "Z-map points",
+      "section": "Surface sampling",
+      "symbol": null,
+      "kind": "text",
+      "unit": null,
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": null,
+      "step": null,
+      "precision": null,
+      "options": [],
+      "description": "The custom axial station map, as increasing interior x,y pairs inside 0–1 — the endpoints are added for you. Alternatively give one non-decreasing value per station, from 0 to 1. It is parsed and applied, not just stored.",
+      "visible_when": {
+        "path": "mesh.sampling_mode",
+        "operator": "equals",
+        "value": "zmap"
+      }
+    },
+    {
+      "id": "mesh.throat_resolution",
+      "legacy_key": "throatResolution",
+      "path": "mesh.throat_resolution",
+      "mirror_paths": [],
+      "label": "Throat mesh resolution",
+      "section": "Solve & export mesh",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0.01,
+        "maximum": 1000
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Target triangle edge length near the throat in the solved and exported mesh. The element size is blended from here to the mouth value. Smaller values cost solve time and memory."
+    },
+    {
+      "id": "mesh.mouth_resolution",
+      "legacy_key": "mouthResolution",
+      "path": "mesh.mouth_resolution",
+      "mirror_paths": [],
+      "label": "Mouth mesh resolution",
+      "section": "Solve & export mesh",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0.01,
+        "maximum": 1000
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Target triangle edge length near the mouth in the solved and exported mesh. It has to resolve the shortest wavelength you solve: for 20 kHz, λ/6 is approximately 2.86 mm."
+    },
+    {
+      "id": "schema-gap.max_edge",
+      "legacy_key": "maxEdge",
+      "path": "mesh.max_edge",
+      "mirror_paths": [],
+      "label": "Maximum edge guard",
+      "section": "Solve & export mesh",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0.01,
+        "maximum": 10000
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Optional post-build guard for the longest realized triangle edge."
+    },
+    {
+      "id": "mesh.rear_resolution",
+      "legacy_key": "rearResolution",
+      "path": "mesh.rear_resolution",
+      "mirror_paths": [],
+      "label": "Rear mesh resolution",
+      "section": "Solve & export mesh",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0.01,
+        "maximum": 1000
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Target triangle edge length over the whole outside shell and rear throat closure of a free-standing thickened horn. Those surfaces radiate far less than the horn interior, so they can usually be coarser. Unused with an enclosure or in infinite baffle."
+    },
+    {
+      "id": "mesh.aperture_resolution_scale",
+      "legacy_key": "apertureResolutionScale",
+      "path": "mesh.aperture_resolution_scale",
+      "mirror_paths": [],
+      "label": "Aperture mesh scale",
+      "section": "Solve & export mesh",
+      "symbol": null,
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0.01,
+        "maximum": 100
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Multiplies the element size inside the infinite-baffle aperture cap relative to Mouth mesh resolution. Above 1 coarsens the cap to save solve time; anything below 1 is clamped back to 1, so it cannot refine it.",
+      "visible_when": {
+        "path": "simulation.sim_type",
+        "operator": "equals",
+        "value": "infinite-baffle"
+      }
+    },
+    {
+      "id": "mesh.max_triangles",
+      "legacy_key": "maxTriangles",
+      "path": "mesh.max_triangles",
+      "mirror_paths": [],
+      "label": "Triangle warning threshold",
+      "section": "Solve & export mesh",
+      "symbol": null,
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 1,
+        "maximum": 10000000
+      },
+      "step": 1000,
+      "precision": 0,
+      "options": [],
+      "description": "Advisory warning threshold, in full-domain-equivalent triangles. Solves continue past it, but two hard ceilings you cannot raise from here will still stop one: 22,000 triangles in the actual solved domain, and the dense-solver memory limit."
+    },
+    {
+      "id": "mesh.allow_large_mesh",
+      "legacy_key": "allowLargeMesh",
+      "path": "mesh.allow_large_mesh",
+      "mirror_paths": [],
+      "label": "Legacy large-mesh approval",
+      "section": "Solve & export mesh",
+      "symbol": null,
+      "kind": "select",
+      "unit": null,
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": null,
+      "step": null,
+      "precision": null,
+      "options": [
+        {
+          "value": 0,
+          "label": "Ignored",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null
+        },
+        {
+          "value": 1,
+          "label": "Ignored",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null
+        }
+      ],
+      "description": "Compatibility-only imported value; it does not change solve limits.",
+      "visible_when": {
+        "operator": "never"
+      }
+    },
+    {
+      "id": "mesh.vertical_offset",
+      "legacy_key": "verticalOffset",
+      "path": "mesh.vertical_offset",
+      "mirror_paths": [],
+      "label": "Export vertical offset",
+      "section": "Solve & export mesh",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": -10000,
+        "maximum": 10000
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Shifts the exported design vertically, for placing a horn off-centre on its baffle. It applies only to the solid STEP and Send to CAD exports. The viewport, the solver mesh, every acoustic result and the recentred exports (STL, surface STEP, profile CSV) are all built in the recentred frame, so simulation results never depend on it."
+    },
+    {
+      "id": "mesh.wall_thickness",
+      "legacy_key": "wallThickness",
+      "path": "mesh.wall_thickness",
+      "mirror_paths": [],
+      "label": "Wall thickness",
+      "section": "Wall & Enclosure",
+      "symbol": null,
+      "kind": "number",
+      "unit": "mm",
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0,
+        "maximum": 1000
+      },
+      "step": 0.1,
+      "precision": 2,
+      "options": [],
+      "description": "Thickness of the shell built around a free-standing horn, offset from its surface and closed by a disc behind the throat. Used only when Enclosure depth is 0 and the simulation is free-standing; infinite baffle ignores it. Unset means ATH's 5 mm default free-standing, and 0 in infinite baffle.",
+      "visible_when": {
+        "operator": "all",
+        "conditions": [
+          {
+            "path": "enclosure.depth",
+            "operator": "less_than_or_equal",
+            "value": 0
+          },
+          {
+            "path": "mesh.wall_thickness",
+            "operator": "greater_than",
+            "value": 0
+          }
+        ]
+      }
+    },
+    {
+      "id": "simulation.f1",
+      "legacy_key": "freqStart",
+      "path": "simulation.f1",
+      "mirror_paths": [],
+      "label": "Sweep start",
+      "section": "Frequency Sweep",
+      "symbol": null,
+      "kind": "number",
+      "unit": "Hz",
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 20,
+        "maximum": 20000
+      },
+      "step": 10,
+      "precision": 0,
+      "options": [],
+      "description": "Lowest frequency of the generated sweep. Ignored when Solve options is set to an explicit frequency list."
+    },
+    {
+      "id": "simulation.f2",
+      "legacy_key": "freqEnd",
+      "path": "simulation.f2",
+      "mirror_paths": [],
+      "label": "Sweep end",
+      "section": "Frequency Sweep",
+      "symbol": null,
+      "kind": "number",
+      "unit": "Hz",
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 20,
+        "maximum": 20000
+      },
+      "step": 10,
+      "precision": 0,
+      "options": [],
+      "description": "Highest frequency of the generated sweep; raising it may need a finer Mouth mesh resolution to resolve the shorter wavelength. Ignored when Solve options is set to an explicit frequency list."
+    },
+    {
+      "id": "simulation.num_frequencies",
+      "legacy_key": "numFreqs",
+      "path": "simulation.num_frequencies",
+      "mirror_paths": [],
+      "label": "Frequency samples",
+      "section": "Frequency Sweep",
+      "symbol": null,
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 10,
+        "maximum": 200
+      },
+      "step": 1,
+      "precision": 0,
+      "options": [],
+      "description": "How many frequencies are solved between the start and end. Every frequency costs about the same, so this sets solve time almost directly. Spacing is chosen under Solve options, which also overrides this entirely when an explicit list is used."
+    },
+    {
+      "id": "simulation.sim_type",
+      "legacy_key": "simType",
+      "path": "simulation.sim_type",
+      "mirror_paths": [],
+      "label": "Simulation type",
+      "section": "Solve & export mesh",
+      "symbol": null,
+      "kind": "select",
+      "unit": null,
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": null,
+      "step": null,
+      "precision": null,
+      "options": [
+        {
+          "value": "freestanding",
+          "label": "Free-standing",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null
+        },
+        {
+          "value": "infinite-baffle",
+          "label": "Infinite baffle",
+          "requires_feature": "infinite-baffle",
+          "degraded_without": null,
+          "degraded_label": null
+        }
+      ],
+      "description": "What the horn radiates into. Free-standing solves the whole body in open air, with the enclosure or wall shell you configured. Infinite baffle mounts the mouth flush in an unbounded rigid wall, ignoring both of those and removing all cabinet-edge diffraction; it requires the Metal backend."
+    },
+    {
+      "id": "simulation.solver_mode",
+      "legacy_key": "solverMode",
+      "path": "simulation.solver_mode",
+      "mirror_paths": [],
+      "label": "Solver mode",
+      "section": "Solve & export mesh",
+      "symbol": null,
+      "kind": "select",
+      "unit": null,
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": null,
+      "step": null,
+      "precision": null,
+      "options": [
+        {
+          "value": "auto",
+          "label": "Auto — meridian when eligible",
+          "requires_feature": null,
+          "degraded_without": "meridian-fast-path",
+          "degraded_label": "Auto — full 3D on this backend"
+        },
+        {
+          "value": "full_3d",
+          "label": "Force full 3D",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null
+        },
+        {
+          "value": "circsym",
+          "label": "Force axisymmetric meridian",
+          "requires_feature": "meridian-fast-path",
+          "degraded_without": null,
+          "degraded_label": null
+        }
+      ],
+      "description": "Controls the Metal backend's solve path. Auto solves a body of revolution on one rotated meridian slice — far faster — and everything else in full 3D. Eligibility depends on the observation settings as well as the geometry. Forcing the meridian path fails clearly when ineligible, and BEMPP is always full 3D."
+    },
+    {
+      "id": "mesh.quadrants",
+      "legacy_key": "quadrants",
+      "path": "mesh.quadrants",
+      "mirror_paths": [],
+      "label": "Stored ATH Mesh.Quadrants",
+      "section": "Output & Passthrough",
+      "symbol": null,
+      "kind": "indicator",
+      "unit": null,
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": false,
+      "editor_bounds": null,
+      "step": null,
+      "precision": null,
+      "options": [],
+      "description": "Preserved for ATH round-trip only. WG overwrites this stored value from Solve domain before a parametric solve and ignores it for geometry export, which always restores the full part."
+    },
+    {
+      "id": "mesh.throat_segments",
+      "legacy_key": "throatSegments",
+      "path": "mesh.throat_segments",
+      "mirror_paths": [],
+      "label": "ATH throat slice samples",
+      "section": "Output & Passthrough",
+      "symbol": null,
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0,
+        "maximum": 4096
+      },
+      "step": 1,
+      "precision": 0,
+      "options": [],
+      "description": "Preserved for ATH round-trip only. Use Z-map sampling to bias axial stations toward the throat."
+    },
+    {
+      "id": "mesh.throat_slice_density",
+      "legacy_key": "throatSliceDensity",
+      "path": "mesh.throat_slice_density",
+      "mirror_paths": [],
+      "label": "ATH throat slice density",
+      "section": "Output & Passthrough",
+      "symbol": null,
+      "kind": "number",
+      "unit": null,
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": {
+        "minimum": 0.01,
+        "maximum": 0.99
+      },
+      "step": 0.01,
+      "precision": 2,
+      "options": [],
+      "description": "Preserved for ATH round-trip only; the HornLab mesher does not read it."
+    },
+    {
+      "id": "output.stl",
+      "legacy_key": "outputSTL",
+      "path": "output.stl",
+      "mirror_paths": [],
+      "label": "STL output flag",
+      "section": "Output & Passthrough",
+      "symbol": null,
+      "kind": "select",
+      "unit": null,
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": null,
+      "step": null,
+      "precision": null,
+      "options": [
+        {
+          "value": 0,
+          "label": "No",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null
+        },
+        {
+          "value": 1,
+          "label": "Yes",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null
+        }
+      ],
+      "description": "ATH's own Output.STL flag, kept so an imported file round-trips unchanged. It does not drive this app's exports — use the export menu for that."
+    },
+    {
+      "id": "output.msh",
+      "legacy_key": "outputMSH",
+      "path": "output.msh",
+      "mirror_paths": [],
+      "label": "MSH output flag",
+      "section": "Output & Passthrough",
+      "symbol": null,
+      "kind": "select",
+      "unit": null,
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "editor_bounds": null,
+      "step": null,
+      "precision": null,
+      "options": [
+        {
+          "value": 0,
+          "label": "No",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null
+        },
+        {
+          "value": 1,
+          "label": "Yes",
+          "requires_feature": null,
+          "degraded_without": null,
+          "degraded_label": null
+        }
+      ],
+      "description": "ATH's own Output.MSH flag, kept so an imported file round-trips unchanged. It does not drive this app's exports — use the export menu for that."
+    },
+    {
+      "id": "passthrough.abec",
+      "legacy_key": "ABEC",
+      "path": null,
+      "mirror_paths": [],
+      "label": "Other ABEC passthrough blocks",
+      "section": "Output & Passthrough",
+      "symbol": null,
+      "kind": "indicator",
+      "unit": null,
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": false,
+      "editor_bounds": null,
+      "step": null,
+      "precision": null,
+      "options": [],
+      "description": "Whether the imported file carried ABEC project blocks other than the polar blocks managed by Directivity Map. These remaining blocks are not edited here and are written back unchanged."
+    },
+    {
+      "id": "passthrough.report",
+      "legacy_key": "Report",
+      "path": null,
+      "mirror_paths": [],
+      "label": "Report passthrough block",
+      "section": "Output & Passthrough",
+      "symbol": null,
+      "kind": "indicator",
+      "unit": null,
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": false,
+      "editor_bounds": null,
+      "step": null,
+      "precision": null,
+      "options": [],
+      "description": "Whether the imported file carried ATH's Report block. It is written back out unchanged on export; this app's own plots are configured in the results dock instead."
+    },
+    {
+      "id": "passthrough.extra",
+      "legacy_key": "extraBlocks",
+      "path": null,
+      "mirror_paths": [],
+      "label": "Other passthrough blocks",
+      "section": "Output & Passthrough",
+      "symbol": null,
+      "kind": "indicator",
+      "unit": null,
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": false,
+      "editor_bounds": null,
+      "step": null,
+      "precision": null,
+      "options": [],
+      "description": "Any further named blocks in the imported file that this app does not model. They are preserved verbatim and written back out on export."
+    },
+    {
+      "id": "passthrough.keys",
+      "legacy_key": "extraKeys",
+      "path": null,
+      "mirror_paths": [],
+      "label": "Unknown flat keys",
+      "section": "Output & Passthrough",
+      "symbol": null,
+      "kind": "indicator",
+      "unit": null,
+      "families": [
+        "R-OSSE",
+        "OSSE",
+        "ICW",
+        "FREEFORM"
+      ],
+      "accepts_expression": false,
+      "writable": false,
+      "editor_bounds": null,
+      "step": null,
+      "precision": null,
+      "options": [],
+      "description": "Top-level settings in the imported file that this app does not model. They are preserved verbatim and written back out on export, so nothing is lost in a round-trip."
+    }
+  ]
+}
