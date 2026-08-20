@@ -1369,6 +1369,7 @@ def test_coupled_cardioid_adds_derived_channel_and_defers_mf_driver_once(
         "mmd_g": 12.0,
         "cms_m_per_n": 4.0e-4,
         "rms_kg_per_s": 1.2,
+        "xmax_mm": 5.0,
     }
     request = _request(
         "wgi_" + "0" * 26,
@@ -1458,6 +1459,7 @@ def test_coupled_cardioid_adds_derived_channel_and_defers_mf_driver_once(
         "engineering_exp_plus_jwt"
     )
     assert derived["metadata"]["passive_cardioid"]["port_area_source"] == "user"
+    assert derived["metadata"]["driver"]["spec"]["xmax_mm"] == 5.0
     assert len(derived["impedance"]["real"]) == 3
     assert response["metadata"]["passive_cardioid"]["coupled"] is True
     assert isinstance(response["_radiation_impedance_npz"], bytes)
