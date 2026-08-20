@@ -5,6 +5,7 @@ import { DesignAvailabilityNotice, RerunButton } from '../jobs/DesignAvailabilit
 import { canLoadJobDesign, replaceWithJobDesign } from '../jobs/jobDesign';
 import { canExportRun, RunExportControl } from '../jobs/RunExportControl';
 import { nextRunLabel } from '../jobs/runNaming';
+import { useRunNameSource } from '../jobs/runNameSource';
 import { applyJobPreferences, preferencesStore, runDisplayName, usePreferences } from '../prefs/preferences';
 import { JobsPreferencesSurface, ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
 import { useDocumentStore } from '../stores/document';
@@ -233,25 +234,31 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
  */
 function RunNameField({ actions, now = new Date() }: { actions?: ReactNode; now?: Date }) {
   const preferences = usePreferences();
-  const designName = useDocumentStore((state) => state.designName);
   const setDesignName = useDocumentStore((state) => state.setDesignName);
-  const displayedLabel = nextRunLabel(designName, preferences, now);
-  const [draft, setDraft] = useState(designName);
+  // In CAD mode the name belongs to the Fusion document, so the field reports
+  // it instead of offering an edit WG could not write back to CAD.
+  const { name, origin } = useRunNameSource();
+  const displayedLabel = nextRunLabel(name, preferences, now);
+  const [draft, setDraft] = useState(name);
   const [editing, setEditing] = useState(false);
-  useEffect(() => { if (!editing) setDraft(designName); }, [designName, editing]);
+  useEffect(() => { if (!editing) setDraft(name); }, [name, editing]);
   const commit = (value: string) => {
     setDesignName(value);
     setEditing(false);
   };
+  const fromCad = origin === 'cad';
   return <div className="run-name-field">
-    <label className="ui-field">Design name<input
-      aria-label="Design name"
-      value={draft}
-      placeholder="Untitled"
-      title="Names the design, the file it saves as, and every run and export made from it"
+    <label className="ui-field">{fromCad ? 'CAD document' : 'Design name'}<input
+      aria-label={fromCad ? 'CAD document name' : 'Design name'}
+      value={fromCad ? name : draft}
+      readOnly={fromCad}
+      placeholder={fromCad ? 'No CAD return selected' : 'Untitled'}
+      title={fromCad
+        ? 'CAD Link runs are named by the Fusion document. Rename the document in Fusion 360 and send it again to change it.'
+        : 'Names the design, its Download a copy file, and every run and export made from it'}
       onChange={(event) => setDraft(event.target.value)}
-      onFocus={() => setEditing(true)}
-      onBlur={(event) => commit(event.target.value)}
+      onFocus={() => { if (!fromCad) setEditing(true); }}
+      onBlur={(event) => { if (!fromCad) commit(event.target.value); }}
       onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
     /></label>
     <div className="run-name-actions">{actions}</div>

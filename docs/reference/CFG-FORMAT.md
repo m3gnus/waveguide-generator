@@ -72,11 +72,11 @@ Inclination = 45
 `MapAngleRange` is `startDeg,endDeg,sampleCount`. A block without `Inclination`
 is horizontal; inclinations equivalent to 90 degrees are vertical; every other
 inclination is diagonal. Enabled planes are represented by which blocks exist.
-Saving or exporting a run replaces only the managed `ABEC.Polars:*` blocks while
-retaining `Report` and unrelated ATH passthrough blocks.
+Downloading a design copy or exporting a run replaces only the managed
+`ABEC.Polars:*` blocks while retaining `Report` and unrelated ATH passthrough blocks.
 
 Opening a file applies **only the settings that file actually states**. A config
-with no `ABEC.Polars:*` blocks — every ATH file, and every WG design saved before
+with no `ABEC.Polars:*` blocks — every ATH file, and every WG design serialized before
 these blocks were written — leaves the current directivity settings alone. It
 must not be read as a request for the defaults: doing so silently reset
 measurement distance, angular step, normalization, planes, and origin, and then
@@ -211,7 +211,7 @@ reproducibility it cannot offer.
 
 ## CAD identity block
 
-Saved linked designs may carry exactly this schema-1 block:
+CAD-linked export snapshots may carry exactly this schema-1 block:
 
 ```cfg
 CadLink = {
@@ -224,8 +224,10 @@ Schema = 1
 }
 ```
 
-It is save-time identity only. Export history, bundle paths, and per-machine CAD state
-belong in the server-side CAD-link registry, not in the portable design file.
+It is CAD-linked commit identity only. Export history, bundle paths, and per-machine
+CAD state belong in the server-side CAD-link registry, not in the portable design
+file. The browser's **Download a copy** action intentionally serializes without this
+block and does not create or advance registry state.
 
 ## Serialization
 

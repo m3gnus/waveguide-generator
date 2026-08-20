@@ -1,7 +1,7 @@
 import { ARTIFACT_CONVENTIONS, ENGINEERING_NPZ_PHASOR } from '../api/conventions';
 import type { Preferences } from '../prefs/preferences';
 import { applySmoothing, type SmoothingValue } from './smoothing';
-import { phaseSpatialSign, wrapPhaseDegrees } from './phaseConvention';
+import { propagationReference, wrapPhaseDegrees, type PropagationReference } from './phaseConvention';
 import { resultChannelFileSuffix, scopeResultChannel, type ResultPayload } from './types';
 
 export interface PolarFrdFile {
@@ -113,23 +113,6 @@ function normalizationNote(result: ResultPayload, polar: boolean): string {
 
 function fileText(header: string[], rows: string[]): string {
   return `${header.map((line) => `${COMMENT} ${line}`).concat(rows).join('\n')}\n`;
-}
-
-interface PropagationReference {
-  distanceM: number;
-  speedOfSoundMps: number;
-  spatialSign: 1 | -1;
-}
-
-function propagationReference(result: ResultPayload): PropagationReference | null {
-  const metadata = result.metadata?.observation;
-  if (!metadata || typeof metadata !== 'object') return null;
-  const distanceM = metadata.effective_distance_m ?? metadata.requested_distance_m;
-  const speedOfSoundMps = metadata.sound_speed_m_per_s;
-  const spatialSign = phaseSpatialSign(result.metadata?.phase_time_convention);
-  return finite(distanceM) && finite(speedOfSoundMps) && distanceM >= 0 && speedOfSoundMps > 0 && spatialSign !== null
-    ? { distanceM, speedOfSoundMps, spatialSign }
-    : null;
 }
 
 function exportPhaseDegrees(

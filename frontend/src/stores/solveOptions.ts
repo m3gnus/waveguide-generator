@@ -343,7 +343,7 @@ durableSettings.subscribe('solveOptions', () => { void useSolveOptionsStore.pers
  * Only the values present in the file are applied. This used to replace the
  * whole polar state with `polarUiFromAthBlocks`, which returns defaults for a
  * file that carries no `ABEC.Polars` blocks -- so opening an ATH file, or any
- * design saved before WG wrote those blocks, silently reset measurement
+ * design serialized before WG wrote those blocks, silently reset measurement
  * distance, angular step, normalization, planes, and origin, and overwrote the
  * stored copy on the way out. A file now overrides what it describes and
  * nothing else.

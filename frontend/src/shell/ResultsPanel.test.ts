@@ -9,7 +9,7 @@ import type { SummaryContext, SummaryGroup } from '../results/summary';
 import type { ResultPayload } from '../results/types';
 import { resultFrequencyValidity } from '../results/validity';
 import { designForFamily, serializeDesign } from '../stores/design';
-import { beamShapeMissingReason, chartImageFilename, COMPARABLE_CHARTS, comparisonContourPointToPixels, directivityIndexOption, directivityMapPanels, heatmapOption, impedanceOption, ResultsChartGrid, resolvedPolarStepNotice, resultExportSnapshot, resultLayoutClass } from './ResultsPanel';
+import { beamShapeMissingReason, chartImageFilename, chartUnit, COMPARABLE_CHARTS, comparisonContourPointToPixels, directivityIndexOption, directivityMapPanels, driverChartMissingReason, drivePowerOption, groupDelayMissingReason, groupDelayOption, heatmapOption, impedanceOption, phaseOption, polarOption, ResultsChartGrid, resolvedPolarStepNotice, resultExportSnapshot, resultLayoutClass, splOption } from './ResultsPanel';
 
 const chartImageMocks = vi.hoisted(() => ({
   copy: vi.fn<() => Promise<void>>(),
@@ -57,10 +57,11 @@ describe('result comparison charts', () => {
   });
   const items = [primary, overlay];
 
-  it('enables comparison for SPL, every directivity map, DI, and impedance', () => {
+  it('enables comparison for SPL, every directivity map, DI, impedance, phase, group delay and polar', () => {
     expect([...COMPARABLE_CHARTS]).toEqual([
       'frequency_response', 'directivity_map_h', 'directivity_map_v',
       'directivity_map_d', 'directivity_map', 'directivity_index', 'impedance',
+      'phase_response', 'group_delay', 'polar_response',
     ]);
   });
 
@@ -135,6 +136,239 @@ describe('result comparison charts', () => {
     expect(runB).not.toBe(runA);
   });
 
+});
+
+describe('impedance is drawn in the unit the result declares', () => {
+  const acoustic = named('acoustic', 'Waveguide', {
+    frequencies: [500, 1_000],
+    impedance: { frequencies: [500, 1_000], real: [1, 2], imaginary: [.2, .4] },
+    metadata: { impedance_units: 'Z/(rho*c)', impedance_quantity: 'specific_acoustic_impedance' },
+  });
+  const electrical = named('electrical', 'Driver', {
+    frequencies: [500, 1_000],
+    impedance: { frequencies: [500, 1_000], real: [7, 12], imaginary: [1, -2] },
+    metadata: { impedance_units: 'ohms', impedance_quantity: 'electrical_input_impedance' },
+  });
+
+  it('labels a driver-coupled run in ohms rather than the acoustic Z/rho-c', () => {
+    const option = impedanceOption([electrical], tokens, 'none', 'full');
+    expect((option.yAxis as { name?: string }).name).toBe('Ω');
+    expect(chartUnit('impedance', electrical.result as ResultPayload)).toBe('Ω');
+  });
+
+  it('keeps the normalized acoustic label for an unloaded waveguide solve', () => {
+    const option = impedanceOption([acoustic], tokens, 'none', 'full');
+    expect((option.yAxis as { name?: string }).name).toBe('Z/ρc');
+    expect(chartUnit('impedance', acoustic.result as ResultPayload)).toBe('Z/ρc');
+  });
+
+  it('refuses to overlay ohms and Z/rho-c on one scale', () => {
+    // They are different quantities. Drawing both against one axis is exactly
+    // the misreading the unit label exists to prevent.
+    const series = impedanceOption([electrical, acoustic], tokens, 'none', 'full').series as Array<{ name: string }>;
+    expect(series.map(({ name }) => name)).toEqual(['Driver · Re', 'Driver · Im']);
+  });
+
+  it('takes the chip from the run that sets the axis, not from the primary', () => {
+    // A primary with no impedance block plus an electrical overlay used to put
+    // Ω on the axis and leave the chip blank -- the mislabelling at its
+    // quietest.
+    const bare = named('bare', 'Waveguide', { frequencies: [500, 1_000] });
+    expect(chartUnit('impedance', bare.result as ResultPayload)).toBeUndefined();
+    expect(chartUnit('impedance', bare.result as ResultPayload, [bare, electrical])).toBe('Ω');
+    expect((impedanceOption([bare, electrical], tokens, 'none', 'full').yAxis as { name?: string }).name).toBe('Ω');
+  });
+
+  it('switches to magnitude and phase on a second axis when asked', () => {
+    const option = impedanceOption([electrical], tokens, 'none', 'full', 'magnitude_phase');
+    const series = option.series as Array<{ name: string; yAxisIndex?: number }>;
+    expect(series.map(({ name }) => name)).toEqual(['Driver · |Z|', 'Driver · phase']);
+    expect(series[1].yAxisIndex).toBe(1);
+    expect((option.yAxis as Array<{ name?: string }>).map(({ name }) => name)).toEqual(['Ω', 'Phase [°]']);
+  });
+});
+
+describe('phase, group delay and polar charts', () => {
+  const sweep = Array.from({ length: 40 }, (_, index) => 300 * 1.06 ** index);
+  const withPhase = named('phased', 'Run A', {
+    frequencies: sweep,
+    spl_on_axis: {
+      frequencies: sweep,
+      spl: sweep.map(() => 90),
+      // A pure 0.3 ms excess delay on top of a 1 m path.
+      phase_degrees: sweep.map((frequency) => {
+        const radians = 2 * Math.PI * frequency * (1 / 343 + 0.0003);
+        return (((radians + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI) * 180 / Math.PI;
+      }),
+    },
+    directivity: { horizontal: sweep.map(() => [[-30, -6], [0, 0], [30, -6]]) },
+    metadata: {
+      phase_time_convention: 'exp(+ikr)',
+      observation: { effective_distance_m: 1, sound_speed_m_per_s: 343 },
+    },
+  });
+  const withoutPhase = named('bare', 'Run B', {
+    frequencies: [500, 1_000],
+    spl_on_axis: { frequencies: [500, 1_000], spl: [90, 90] },
+  });
+
+  it('draws the on-axis phase detrended flat for a constant delay', () => {
+    const series = phaseOption([withPhase], tokens, 'full').series as Array<{ data: number[][] }>;
+    expect(series).toHaveLength(1);
+    series[0].data.forEach(([, value]) => expect(Math.abs(value)).toBeLessThan(1e-6));
+  });
+
+  it('recovers the excess delay in milliseconds', () => {
+    const series = groupDelayOption([withPhase], tokens, 'full').series as Array<{ data: number[][] }>;
+    series[0].data.forEach(([, value]) => expect(value).toBeCloseTo(0.3, 6));
+  });
+
+  it('has nothing to draw for a result that carries no phase', () => {
+    expect(phaseOption([withoutPhase], tokens, 'full').series).toEqual([]);
+    expect(groupDelayOption([withoutPhase], tokens, 'full').series).toEqual([]);
+  });
+
+  it('adds a phase trace and a second axis to the SPL chart only when asked', () => {
+    const withoutTrace = splOption([withPhase], tokens, 'none', 'full', [], false);
+    expect((withoutTrace.series as unknown[])).toHaveLength(1);
+    expect(Array.isArray(withoutTrace.yAxis)).toBe(false);
+    const withTrace = splOption([withPhase], tokens, 'none', 'full', [], true);
+    const series = withTrace.series as Array<{ name: string; yAxisIndex?: number }>;
+    expect(series.map(({ name }) => name)).toEqual(['Run A', 'Run A · phase']);
+    expect(series[1].yAxisIndex).toBe(1);
+    expect((withTrace.yAxis as Array<{ name?: string }>).map(({ name }) => name)).toEqual(['dB SPL', 'Phase [°]']);
+  });
+
+  it('normalizes a polar cut to its own on-axis sample and floors the radius', () => {
+    const option = polarOption([withPhase], tokens, 'horizontal', 1_000, -30, 'full');
+    const series = option.series as Array<{ data: Array<Array<number | null>> }>;
+    // Radius first, angle second; on-axis sits at 0 dB and the -6 dB shoulders
+    // keep their relative level rather than an absolute SPL.
+    expect(series[0].data).toEqual([[-6, -30], [0, 0], [-6, 30]]);
+    expect((option.radiusAxis as { min?: number }).min).toBe(-30);
+  });
+
+  it('keeps one chart degree per pattern degree whatever was sampled', () => {
+    // Fitting the axis to the sampled span would draw a 0..180 half-space
+    // around the whole circle and halve every apparent beamwidth.
+    const option = polarOption([withPhase], tokens, 'horizontal', 1_000, -30, 'full');
+    const axis = option.angleAxis as { min?: number; max?: number; startAngle?: number };
+    expect([axis.min, axis.max]).toEqual([-180, 180]);
+    expect(axis.startAngle).toBe(270);
+  });
+});
+
+describe('driver-coupled chart stubs', () => {
+  it('says a unit-acceleration solve has no drive, rather than implying a failure', () => {
+    const acoustic = { frequencies: [100], metadata: { impedance_units: 'Z/(rho*c)' } } as ResultPayload;
+    expect(driverChartMissingReason(acoustic, 'Power & Current Draw'))
+      .toContain('unit-acceleration');
+    expect(drivePowerOption(acoustic, tokens, 'full').series).toEqual([]);
+  });
+
+  it('distinguishes a missing drive voltage from a missing driver model', () => {
+    const noVoltage = { frequencies: [100], metadata: { impedance_units: 'ohms' } } as ResultPayload;
+    expect(driverChartMissingReason(noVoltage, 'Cone Excursion')).toContain('drive voltage');
+  });
+
+  it('quotes the server reason rather than calling a combined channel unit-acceleration', () => {
+    // `_combined_channel_response` pops the impedance block but leaves
+    // `impedance_units: "Z/(rho*c)"` behind, so the tag check reads an
+    // LR4 combine -- which is voltage driven -- as an unloaded waveguide.
+    const combined = {
+      frequencies: [100],
+      metadata: {
+        impedance_units: 'Z/(rho*c)',
+        impedance_omitted: 'combined channel: member drives differ; no single impedance exists',
+      },
+    } as ResultPayload;
+    const reason = driverChartMissingReason(combined, 'Power & Current Draw');
+    expect(reason).toContain('member drives differ');
+    expect(reason).not.toContain('unit-acceleration');
+  });
+
+  it('does not claim excursion was derived from impedance samples', () => {
+    const driven = {
+      frequencies: [100],
+      metadata: { impedance_units: 'ohms', drive: { voltage_v: 2.83 } },
+    } as ResultPayload;
+    expect(driverChartMissingReason(driven, 'Cone Excursion')).toBe(
+      'Cone Excursion needs samples this driver-coupled result did not record.',
+    );
+  });
+});
+
+describe('group delay stub names the refusal it actually hit', () => {
+  const sweep = [400, 800, 1_600];
+  const phased = (metadata: Record<string, unknown>): ResultPayload => ({
+    frequencies: sweep,
+    spl_on_axis: { frequencies: sweep, spl: sweep.map(() => 90), phase_degrees: [0, 30, 60] },
+    metadata,
+  } as ResultPayload);
+
+  it('says the phase block is missing when there is no phase at all', () => {
+    expect(groupDelayMissingReason({ frequencies: sweep, spl_on_axis: { frequencies: sweep, spl: [] } } as ResultPayload))
+      .toContain('spl_on_axis phase samples');
+  });
+
+  it('names the missing observation metadata instead of blaming the sample count', () => {
+    // The old stub sent the user off to rerun a longer solve for a metadata
+    // field a longer solve would not add.
+    const reason = groupDelayMissingReason(phased({ phase_time_convention: 'exp(+ikr)' }));
+    expect(reason).toContain('metadata.observation');
+    expect(reason).not.toContain('at least three');
+  });
+
+  it('names an unrecognised phase convention as the thing it cannot read', () => {
+    const reason = groupDelayMissingReason(phased({
+      phase_time_convention: 'exp(+ikr) but sideways',
+      observation: { effective_distance_m: 1, sound_speed_m_per_s: 343 },
+    }));
+    expect(reason).toContain('exp(+ikr) but sideways');
+    expect(reason).toContain('spatial sign');
+  });
+
+  it('still asks for three samples when three is what is missing', () => {
+    const two = [400, 800];
+    expect(groupDelayMissingReason({
+      frequencies: two,
+      spl_on_axis: { frequencies: two, spl: [90, 90], phase_degrees: [0, 30] },
+      metadata: {
+        phase_time_convention: 'exp(+ikr)',
+        observation: { effective_distance_m: 1, sound_speed_m_per_s: 343 },
+      },
+    } as ResultPayload)).toContain('at least three');
+  });
+
+  it('blames the sweep spacing when the unwrap cannot pick a branch', () => {
+    // A 15.8 kHz gap carrying a ~63 us residual: the phase turns more than half
+    // a cycle across that step, so no branch choice is defensible. Distance 0
+    // keeps de-embedding out of it, leaving the spacing as the only refusal.
+    const coarse = [100, 200, 16_000];
+    const reason = groupDelayMissingReason({
+      frequencies: coarse,
+      spl_on_axis: { frequencies: coarse, spl: coarse.map(() => 90), phase_degrees: [0, 179, -2] },
+      metadata: {
+        phase_time_convention: 'exp(+ikr)',
+        observation: { effective_distance_m: 0, sound_speed_m_per_s: 343 },
+      },
+    } as ResultPayload);
+    expect(reason).toContain('finer frequency sweep');
+  });
+
+  it('puts power and current on separate axes for a driver-coupled run', () => {
+    const driven = {
+      frequencies: [100],
+      impedance: { frequencies: [100], real: [8], imaginary: [0] },
+      metadata: { impedance_units: 'ohms', drive: { voltage_v: 2.83, rg_ohm: 0 } },
+    } as ResultPayload;
+    const option = drivePowerOption(driven, tokens, 'full');
+    const series = option.series as Array<{ name: string; yAxisIndex?: number; data: number[][] }>;
+    expect(series.map(({ name }) => name)).toEqual(['Power', 'Current']);
+    expect(series[1].yAxisIndex).toBe(1);
+    expect(series[0].data[0][1]).toBeCloseTo(2.83 ** 2 / 8, 10);
+    expect((option.yAxis as Array<{ name?: string }>).map(({ name }) => name)).toEqual(['Power [W]', 'Current [A]']);
+  });
 });
 
 describe('result frequency validity joins', () => {

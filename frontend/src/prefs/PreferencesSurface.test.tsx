@@ -103,18 +103,22 @@ describe('preferences surfaces', () => {
     expect(host.querySelector('.job-name-preview')?.textContent).toContain('next · horn1_2026-08-12');
   });
 
-  it('previews the design name in CAD mode too, and follows the run counter', () => {
+  it('previews the CAD document name in CAD mode, and follows the run counter', () => {
     useCadReturnStore.setState({
+      selectedBundle: {
+        name: 'cad-run.wgreturn', bundlePath: '/cad/cad-run.wgreturn',
+        modifiedAt: '2026-08-19T12:00:00Z', readable: true, documentName: 'cad-run',
+        requestId: null, sourceCount: 1, instanceCount: 1, sources: [],
+      },
       ingestRecord: readyCadRecord('wgi_first'), needsIngest: false,
       driveChannels: [{ id: 'drive', source_ids: ['source'], motion: 'normal' }],
       sourceSizesMm: { source: 2 }, rigidSizeMm: 5, transitionMm: 5,
     });
     workspaceModeStore.setMode('cad');
-    act(() => useDocumentStore.getState().setDesignName('cad-run'));
+    // The parametric design open behind the CAD workspace does not name its runs.
+    act(() => useDocumentStore.getState().setDesignName('a leftover design'));
     act(() => root.render(<JobsPreferencesSurface/>));
 
-    // One name across both workspace modes: a CAD solve is a run of this
-    // design, not a design of its own.
     expect(host.querySelector('.job-name-preview')?.textContent).toContain('next · cad-run1');
     act(() => preferencesStore.update({ runSequenceName: 'cad-run', runSequenceNext: 2 }));
     expect(host.querySelector('.job-name-preview')?.textContent).toContain('next · cad-run2');

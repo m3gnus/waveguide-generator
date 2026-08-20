@@ -28,7 +28,7 @@ const MAX_DESIGN_NAME = 120;
  * Quotes would terminate `Title = "..."` early, a semicolon would turn the
  * rest of the line into an ATH comment, and braces would read as block syntax
  * -- the server rejects all three on the way out, so they are removed here
- * rather than allowed to fail a save.
+ * rather than allowed to fail serialization or a CAD-linked export.
  */
 export function normalizeDesignName(value: unknown): string {
   return String(value ?? '')
@@ -57,7 +57,7 @@ export function designNameSlug(name: unknown, fallback = UNTITLED_SLUG): string 
 }
 
 /**
- * The file this design saves as.
+ * The filename used when this design is downloaded as a copy.
  *
  * A name that already ends in a config extension loses it rather than gaining
  * a second one: "horn.cfg" typed into the name field is a filename the user
@@ -97,7 +97,7 @@ export function designTitleFromBlocks(blocks: Record<string, ConfigBlock> | unde
  * ATH is exactly the divergence this module exists to end. The one exception
  * is a `Title` that slugs to the same stem: then it is this same name in a
  * richer spelling -- "ATH Tritonia-M" for `ATH_Tritonia-M.cfg` -- and keeping
- * it is what makes the space survive a save-and-reopen.
+ * it is what makes the space survive a download-and-reopen round trip.
  */
 export function designNameForOpenedFile(
   filename: string,

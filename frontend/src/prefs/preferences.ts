@@ -12,9 +12,15 @@ export const CHART_TYPES = [
   { id: 'frequency_response', label: 'Frequency Response (SPL On-Axis)' },
   { id: 'directivity_index', label: 'Directivity Index' },
   { id: 'beam_shape', label: 'Forward Beam Shape' },
+  { id: 'beam_fit', label: 'Beam Shape Fit (aspect / exponent)' },
   { id: 'beam_map', label: 'Forward Beam Map' },
   { id: 'balloon', label: '3D Balloon' },
-  { id: 'impedance', label: 'Acoustic Impedance' },
+  { id: 'polar_response', label: 'Polar Response' },
+  { id: 'phase_response', label: 'On-Axis Phase' },
+  { id: 'group_delay', label: 'Group Delay' },
+  { id: 'impedance', label: 'Impedance' },
+  { id: 'drive_power', label: 'Power & Current Draw' },
+  { id: 'excursion', label: 'Cone Excursion' },
   { id: 'summary', label: 'Simulation Summary' },
 ] as const;
 export type ChartType = typeof CHART_TYPES[number]['id'];
@@ -55,6 +61,15 @@ export const EXPORT_FORMATS = [
 ] as const;
 export type ExportFormat = typeof EXPORT_FORMATS[number]['id'];
 export type MapReference = -3 | -6 | -9 | -12;
+/** Re/Im is conventional for horn throat impedance; |Z| and phase for a driver. */
+export type ImpedanceDisplay = 'real_imaginary' | 'magnitude_phase';
+export const IMPEDANCE_DISPLAYS: Array<[ImpedanceDisplay, string]> = [
+  ['real_imaginary', 'Real / Imaginary'],
+  ['magnitude_phase', 'Magnitude / Phase'],
+];
+/** Planes a polar plot can be cut in. */
+export const POLAR_PLANES = ['horizontal', 'vertical'] as const;
+export type PolarPlane = typeof POLAR_PLANES[number];
 export const MAP_REFERENCES: MapReference[] = [-3, -6, -9, -12];
 export const RESULT_PANEL_COUNTS = [1, 2, 3, 4, 6] as const;
 export type ResultPanelCount = typeof RESULT_PANEL_COUNTS[number];
@@ -84,6 +99,14 @@ export interface Preferences {
   directivityGuideInterval: number;
   chartTypes: ChartType[];
   chartTheme: string;
+  /**
+   * Draw the on-axis phase beside the SPL trace.
+   *
+   * On by default because the exported PNG has always drawn it: with this off
+   * the chart on screen and the chart in the file are not the same picture.
+   */
+  splPhase: boolean;
+  impedanceDisplay: ImpedanceDisplay;
   exportFormats: ExportFormat[];
   autoExportFormats: ExportFormat[];
   autoExportOnComplete: boolean;
@@ -139,6 +162,8 @@ const defaults: Preferences = {
   // defaulting to them left two of six panels permanently showing their stub.
   chartTypes: ['frequency_response', 'directivity_map_h', 'directivity_map_v', 'directivity_index', 'impedance', 'summary'],
   chartTheme: MATCH_INTERFACE_THEME,
+  splPhase: true,
+  impedanceDisplay: 'real_imaginary',
   exportFormats: ['csv', 'png'],
   autoExportFormats: [],
   autoExportOnComplete: false,
@@ -157,6 +182,7 @@ const defaults: Preferences = {
 const chartIds = new Set(CHART_TYPES.map(({ id }) => id));
 const exportIds = new Set(EXPORT_FORMATS.map(({ id }) => id));
 const smoothingIds = new Set(['none', '1/1', '1/2', '1/3', '1/6', '1/12', '1/24', '1/48', 'variable', 'psychoacoustic', 'erb']);
+const impedanceDisplayIds = new Set<ImpedanceDisplay>(['real_imaginary', 'magnitude_phase']);
 const jobSortIds = new Set<JobSort>(['completed_desc', 'created_desc', 'rating_desc', 'name_asc']);
 const cadApplicationIds = new Set<CadApplication>(['fusion360', 'onshape']);
 const runNameDatePositions = new Set<RunNameDatePosition>(['off', 'prefix', 'suffix']);
@@ -193,6 +219,10 @@ export function normalize(raw: Partial<Preferences> = {}): Preferences {
     // to be coerced with `String`, which turned a stored object into the
     // literal "[object Object]" and asked the exporter to render in it.
     chartTheme: typeof raw.chartTheme === 'string' && raw.chartTheme ? raw.chartTheme : defaults.chartTheme,
+    splPhase: raw.splPhase !== false,
+    impedanceDisplay: impedanceDisplayIds.has(raw.impedanceDisplay as ImpedanceDisplay)
+      ? raw.impedanceDisplay as ImpedanceDisplay
+      : defaults.impedanceDisplay,
     exportFormats: formats,
     autoExportFormats: autoFormats,
     autoExportOnComplete: raw.autoExportOnComplete === true,

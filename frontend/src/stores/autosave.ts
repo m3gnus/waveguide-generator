@@ -102,8 +102,8 @@ export function writeAutosave(storage: DraftStorage | null = defaultStorage()): 
 }
 
 /** Restore the most recent local draft before React mounts. Autosave is crash
- * recovery, not an explicit file save, so the stored savedRevision is retained
- * and the unsaved indicator remains accurate after restart. */
+ * recovery, not opening a new file baseline, so the stored savedRevision is
+ * retained and the unsaved indicator remains accurate after restart. */
 export function restoreAutosave(storage: DraftStorage | null = defaultStorage()): boolean {
   if (!storage) return false;
   let raw: string | null;

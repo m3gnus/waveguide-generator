@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CompareStore, fetchJobResults, mergeProvisionalResults, ProvisionalResultsStore, recombineJobResults, ResultsLruCache, resultsCache, type JobResults } from '../api/results';
-import { beamShapeSeries, complexToDb, directivityGrid, directivityIndexSeries, expandResultChannels, impedanceSeries, polarSeries, splSeries } from './mappers';
+import { beamShapeSeries, complexToDb, directivityGrid, directivityIndexSeries, excursionChartSeries, expandResultChannels, impedanceComparable, impedanceSeries, impedanceSubtitle, polarCut, polarMirrorsAcrossAxis, polarSeries, splSeries, type NamedResult } from './mappers';
+import type { ResultPayload } from './types';
 
 function result(offset = 0): JobResults {
   return {
@@ -270,5 +271,128 @@ describe('recombineJobResults', () => {
     await expect(recombineJobResults('job-9', { members: ['mf', 'hf'], crossovers_hz: [5000] }, failing as unknown as typeof fetch))
       .rejects.toThrow('outside the solved band');
     resultsCache.clear();
+  });
+});
+
+describe('polar cut mirroring', () => {
+  const cut = [[[0, 0], [45, -3], [90, -12]]];
+  const oneSided = (quadrants?: number) => ({
+    frequencies: [1_000],
+    directivity: { horizontal: cut, vertical: cut },
+    metadata: quadrants === undefined ? {} : { symmetry: { resolved_quadrants: quadrants } },
+  }) as unknown as ResultPayload;
+
+  // The whole table, both planes, because mirroring the wrong cut fabricates a
+  // radiation pattern the user cannot tell from computed data. The pairing is
+  // the server's: `_PLANE_BY_QUADRANTS` reduces 12 about y=0 and 14 about x=0,
+  // and the observation frame puts the vertical cut in the yz plane (crossing
+  // y=0) and the horizontal cut in the xz plane (crossing x=0). Only the cut
+  // that crosses the reduced plane inherits its symmetry.
+  it.each([
+    [1, 'horizontal', true],
+    [1, 'vertical', true],
+    [12, 'horizontal', false],
+    [12, 'vertical', true],
+    [14, 'horizontal', true],
+    [14, 'vertical', false],
+    [1234, 'horizontal', false],
+    [1234, 'vertical', false],
+  ] as const)('quadrants %i mirrors the %s cut: %s', (quadrants, plane, expected) => {
+    expect(polarMirrorsAcrossAxis(oneSided(quadrants), plane)).toBe(expected);
+    expect(polarCut(oneSided(quadrants), 0, plane)).toEqual(expected
+      ? [[-12, -90], [-3, -45], [0, 0], [-3, 45], [-12, 90]]
+      : [[0, 0], [-3, 45], [-12, 90]]);
+  });
+
+  it('mirrors nothing for an untagged or unrecognised symmetry', () => {
+    expect(polarMirrorsAcrossAxis(oneSided(), 'horizontal')).toBe(false);
+    expect(polarMirrorsAcrossAxis(oneSided(), 'vertical')).toBe(false);
+    // A quadrant value outside the table is a contract we have not verified;
+    // it must fall through to "do not mirror" rather than to a default plane.
+    expect(polarMirrorsAcrossAxis(oneSided(13), 'horizontal')).toBe(false);
+    expect(polarMirrorsAcrossAxis(oneSided(13), 'vertical')).toBe(false);
+  });
+
+  it('reads the solve symmetry off a CAD envelope when the channel does not repeat it', () => {
+    // An imported result records symmetry once on the wrapper; without this
+    // join every CAD-import polar stayed one-sided.
+    const channel = oneSided();
+    const wrapper = { frequencies: [], metadata: { symmetry: { resolved_quadrants: 12 } } } as unknown as ResultPayload;
+    expect(polarMirrorsAcrossAxis(channel, 'vertical', wrapper)).toBe(true);
+    expect(polarMirrorsAcrossAxis(channel, 'horizontal', wrapper)).toBe(false);
+    expect(polarCut(channel, 0, 'vertical', wrapper).map(([, angle]) => angle))
+      .toEqual([-90, -45, 0, 45, 90]);
+  });
+
+  it('does not mirror a cut that already spans both sides', () => {
+    const twoSided = {
+      frequencies: [1_000],
+      directivity: { horizontal: [[[-45, -3], [0, 0], [45, -3]]] },
+      metadata: { symmetry: { resolved_quadrants: 1 } },
+    } as unknown as ResultPayload;
+    expect(polarCut(twoSided, 0, 'horizontal')).toEqual([[-3, -45], [0, 0], [-3, 45]]);
+  });
+});
+
+describe('impedance comparison subtitle', () => {
+  const withImpedance = (id: string, electrical: boolean): NamedResult => ({
+    id,
+    label: id,
+    result: {
+      frequencies: [500],
+      impedance: { frequencies: [500], real: [8], imaginary: [1] },
+      metadata: electrical
+        ? { impedance_units: 'ohms', impedance_quantity: 'electrical_input_impedance' }
+        : { impedance_units: 'Z/(rho*c)', impedance_quantity: 'specific_acoustic_impedance' },
+    } as unknown as JobResults,
+  });
+
+  it('names the runs left off the axis and why', () => {
+    // Dropping them silently reads as a solve that failed rather than as two
+    // quantities that cannot share a scale.
+    expect(impedanceSubtitle([withImpedance('a', true), withImpedance('b', false), withImpedance('c', false)]))
+      .toBe('2 Z/ρc runs hidden · cannot share a Ω axis');
+    expect(impedanceSubtitle([withImpedance('a', false), withImpedance('b', true)]))
+      .toBe('1 Ω run hidden · cannot share a Z/ρc axis');
+  });
+
+  it('says nothing when every run shares the axis, or when there is no impedance at all', () => {
+    expect(impedanceSubtitle([withImpedance('a', false), withImpedance('b', false)])).toBeNull();
+    expect(impedanceSubtitle([{ id: 'x', label: 'x', result: { frequencies: [500] } as JobResults }])).toBeNull();
+  });
+
+  it('keeps legacy impedance samples that use the top-level frequency grid', () => {
+    const legacy = {
+      id: 'legacy',
+      label: 'legacy',
+      result: {
+        frequencies: [500],
+        impedance: { real: [8], imaginary: [1] },
+        metadata: { impedance_units: 'ohms' },
+      } as JobResults,
+    };
+    const empty = {
+      id: 'empty', label: 'empty',
+      result: { frequencies: [500], impedance: {} } as JobResults,
+    };
+
+    expect(impedanceComparable([legacy, empty])).toMatchObject({
+      items: [legacy], units: { electrical: true }, excluded: 0,
+    });
+  });
+});
+
+describe('excursion Xmax reference line', () => {
+  it('rounds the spec float instead of printing it verbatim', () => {
+    const traces = excursionChartSeries({
+      frequencies: [100, 200],
+      metadata: {
+        driver: {
+          spec: { xmax_mm: 4.500000000000001 },
+          cone_excursion_mm: { frequencies: [100, 200], values: [1, 2], peak_mm: 2 },
+        },
+      },
+    } as unknown as ResultPayload);
+    expect(traces.map(({ name }) => name)).toEqual(['Excursion', 'Xmax 4.5 mm']);
   });
 });

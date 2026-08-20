@@ -7,6 +7,7 @@ import { JobAutomation } from '../jobs/automation';
 import { exportStemForJob, exportSubdirectoryForJob } from '../jobs/exportNaming';
 import { buildImportedSubmission, importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { advanceRunSequence, nextRunLabel } from '../jobs/runNaming';
+import { currentRunNameSource } from '../jobs/runNameSource';
 import { preferencesStore, usePreferences } from '../prefs/preferences';
 import { archiveRunToWorkspace, runWorkspaceExportBundle, saveMeshArtifactToWorkspace } from '../results/exporters';
 import { resultExportSnapshot } from '../results/exportContext';
@@ -83,7 +84,7 @@ export function useSolveControl(): SolveControl {
 
 /** Read naming at submission time, including a commit from the same key event. */
 export function currentJobLabel(
-  designName = useDocumentStore.getState().designName,
+  designName = currentRunNameSource().name,
   now = new Date(),
 ): string {
   return nextRunLabel(designName, preferencesStore.getSnapshot(), now);
@@ -225,7 +226,8 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       setActionError(null);
       const options: SolveOptions = { ...submission.options, engine: 'metal', symmetry: 'auto' };
       const effectiveSubmission = { ...submission, options };
-      const designName = useDocumentStore.getState().designName;
+      // The CAD document names its own runs; see jobs/runNameSource.
+      const designName = currentRunNameSource().name;
       const label = nextRunLabel(designName, preferencesStore.getSnapshot(), now());
       const jobId = await submitImported(
         effectiveSubmission,
@@ -244,7 +246,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       submissionInFlight.current = false;
       setSubmitting(false);
     }
-  }, [capabilities, capabilityError, designName, now, preferences]);
+  }, [capabilities, capabilityError, now, preferences]);
 
   // Nothing awaits between the mutex read and runImported's own claim of it,
   // so a busy report here cannot race a submission into existence.

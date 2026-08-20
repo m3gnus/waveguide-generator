@@ -1,7 +1,7 @@
 import { useEffect, useState, type RefObject } from 'react';
 import { nextRunLabel, type RunNameDateFormat, type RunNameDatePosition, type RunNameNumberFormat, type RunNameNumberPosition } from '../jobs/runNaming';
-import { useDocumentStore } from '../stores/document';
-import { EXPORT_FORMATS, MAP_REFERENCES, MATCH_INTERFACE_THEME, RESULT_PANEL_COUNTS, preferencesStore, usePreferences, type JobSort, type MapReference } from './preferences';
+import { useRunNameSource } from '../jobs/runNameSource';
+import { EXPORT_FORMATS, IMPEDANCE_DISPLAYS, MAP_REFERENCES, MATCH_INTERFACE_THEME, RESULT_PANEL_COUNTS, preferencesStore, usePreferences, type ImpedanceDisplay, type JobSort, type MapReference } from './preferences';
 import { SMOOTHING_MODES, type SmoothingMode } from '../results/smoothing';
 import { Icon } from '../shell/icons';
 import { AnchoredPanel } from './AnchoredPanel';
@@ -51,12 +51,20 @@ function ResultsPreferencesContent() {
       <label className="ui-field">Smoothing<select aria-label="Smoothing" value={preferences.smoothing} onChange={(event) => preferencesStore.update({ smoothing: event.target.value as SmoothingMode })}>{SMOOTHING_MODES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
       <label className="ui-field">Map reference<select aria-label="Map reference" value={preferences.mapReference} onChange={(event) => preferencesStore.update({ mapReference: Number(event.target.value) as MapReference })}>{MAP_REFERENCES.map((value) => <option key={value} value={value}>{value} dB</option>)}</select></label>
       <label className="ui-field">Angular guides (°)<input aria-label="Directivity angular guide interval" type="number" min={1} max={180} step={1} value={preferences.directivityGuideInterval} onChange={(event) => { if (Number.isFinite(event.target.valueAsNumber)) preferencesStore.update({ directivityGuideInterval: event.target.valueAsNumber }); }}/></label>
+      {/* Re/Im is how horn throat impedance is conventionally read; |Z| and
+          phase is how a driver's electrical impedance is. The same chart draws
+          both, so which one is useful depends on the run. */}
+      <label className="ui-field">Impedance display<select aria-label="Impedance display" value={preferences.impedanceDisplay} onChange={(event) => preferencesStore.update({ impedanceDisplay: event.target.value as ImpedanceDisplay })}>{IMPEDANCE_DISPLAYS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
       {/* "Match interface" is not a server theme: it resolves to console or
           vellum at export time so a figure leaves on the same ground as the
           window it was taken from. The server never sees the sentinel. */}
       <label className="ui-field">Export theme<select aria-label="Chart theme" value={preferences.chartTheme} onChange={(event) => preferencesStore.update({ chartTheme: event.target.value })}><option value={MATCH_INTERFACE_THEME}>Match interface</option>{[...new Set([preferences.chartTheme, ...themes])].filter((theme) => theme !== MATCH_INTERFACE_THEME).map((theme) => <option key={theme}>{theme}</option>)}</select></label>
     </div>
     <div className="preferences-checks">
+      {/* On by default because the exported PNG has always drawn the phase:
+          with this off, the chart on screen and the chart in the file are not
+          the same picture. */}
+      <label className="ui-check"><input type="checkbox" checked={preferences.splPhase} onChange={(event) => preferencesStore.update({ splPhase: event.target.checked })}/>Show phase on the SPL chart</label>
       <label className="ui-check"><input type="checkbox" checked={preferences.archiveRunsOnComplete} onChange={(event) => preferencesStore.update({ archiveRunsOnComplete: event.target.checked })}/>Archive every completed run</label>
       <label className="ui-check"><input type="checkbox" checked={preferences.autoExportOnComplete} onChange={(event) => preferencesStore.update({ autoExportOnComplete: event.target.checked })}/>Auto-export completed jobs</label>
       <label className="ui-check"><input type="checkbox" checked={preferences.autoDownloadMesh} onChange={(event) => preferencesStore.update({ autoDownloadMesh: event.target.checked })}/>Auto-save solve mesh to Workspace</label>
@@ -95,8 +103,7 @@ function JobsPreferencesContent({ now = new Date() }: { now?: Date }) {
   // the one Design name field beside the runs it names; duplicating the input
   // in a popover is how a name last set several sessions ago used to end up on
   // today's runs. What is left is how that name is decorated.
-  const designName = useDocumentStore((state) => state.designName);
-  const displayedLabel = nextRunLabel(designName, preferences, now);
+  const displayedLabel = nextRunLabel(useRunNameSource().name, preferences, now);
   return <section className="preferences-section">
     <h3 className="preferences-section-title">Jobs</h3>
     <p className="preferences-section-copy">Naming, ordering, and visibility defaults for solve history.</p>

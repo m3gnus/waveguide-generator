@@ -60,6 +60,28 @@ describe('result exporters', () => {
       '',
     ].join('\n'));
   });
+  it('labels electrical impedance values as ohms in every text export', () => {
+    const electrical: ResultPayload = {
+      ...result,
+      metadata: { impedance_units: 'ohms', impedance_quantity: 'electrical_input_impedance' },
+    };
+    const preferences = preferencesStore.getSnapshot();
+
+    expect(buildFrequencyCsv(electrical, preferences).split('\n')[0])
+      .toBe('Frequency (Hz),SPL (dB),DI (dB),Impedance Real (ohms),Impedance Imag (ohms)');
+    expect(buildSummaryText(electrical, preferences)).toContain('Average Real Part ohms: 1.00');
+    expect(buildSummaryText(electrical, preferences)).toContain('Z_Re(ohms)  Z_Im(ohms)');
+    expect(buildImpedanceCsv(electrical).split('\n')[0]).toBe('Freq_Hz,Z_Real_Ohm,Z_Imag_Ohm');
+  });
+  it('preserves the normalized-acoustic labels for unloaded waveguide exports', () => {
+    const preferences = preferencesStore.getSnapshot();
+
+    expect(buildFrequencyCsv(result, preferences).split('\n')[0])
+      .toContain('Impedance Real (Z/(rho*c)),Impedance Imag (Z/(rho*c))');
+    expect(buildSummaryText(result, preferences)).toContain('Z_Re/(rho*c)  Z_Im/(rho*c)');
+    expect(buildImpedanceCsv(result).split('\n')[0])
+      .toBe('Freq_Hz,Z_Real_Z_over_rho_c,Z_Imag_Z_over_rho_c');
+  });
   it('builds only the selected client-side format', async () => {
     const toJSON = vi.fn(() => { throw new Error('unselected JSON builder ran'); });
     const saveText = vi.fn();
@@ -132,17 +154,18 @@ describe('result exporters', () => {
     expect(saveText.mock.calls[1][0]).toContain('100,70');
     expect(fetcher).toHaveBeenCalledOnce();
   });
-  it('posts config and geometry selectors to their existing endpoints', async () => {
+  it('posts config exports to the non-mutating serializer endpoint', async () => {
     const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input) => {
       const path = String(input);
-      if (path === '/api/design/save') return new Response(JSON.stringify({ text: 'cfg', suggestedFilename: 'horn_1_config.cfg' }), { status: 200 });
+      if (path === '/api/design/serialize') return new Response(JSON.stringify({ text: 'cfg', suggestedFilename: 'horn_1_config.cfg' }), { status: 200 });
       return new Response('geometry', { status: 200, headers: { 'Content-Disposition': `attachment; filename="file.${path.endsWith('step') ? 'step' : 'stl'}"` } });
     });
     const context = { jobStem: 'horn_1', preferences: preferencesStore.getSnapshot(), design: designForFamily('OSSE'), designRevision: 4, fetcher, saveText: vi.fn(), saveBlob: vi.fn() };
     await runExportFormat('mwg_config', context);
     await runExportFormat('step', context);
     await runExportFormat('stl', context);
-    expect(fetcher.mock.calls.map(([input]) => String(input))).toEqual(['/api/design/save', '/api/export/step', '/api/export/stl']);
+    expect(fetcher.mock.calls.map(([input]) => String(input))).toEqual(['/api/design/serialize', '/api/export/step', '/api/export/stl']);
+    expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).not.toHaveProperty('identity');
   });
   it('stages both Fusion CSV responses before downloading either file', async () => {
     const saveBlob = vi.fn();
@@ -176,8 +199,93 @@ describe('result exporters', () => {
     expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body)).angle_guide_step).toBe(10);
     expect(JSON.parse(String(fetcher.mock.calls[1][1]?.body)).theme).toBe('paper');
     expect(saveBlob.mock.calls.map(([, filename]) => filename)).toEqual(['horn_1_spl.png', 'horn_1_directivity_map.png']);
-    expect(buildChartRenderPayload({ ...result, metadata: { observation: { effective_distance_m: 1.5 }, phase_time_convention: 'e^-iwt' } }, context.preferences)).toMatchObject({ phase_reference_distance_m: 1.5, phase_time_convention: 'e^-iwt', impedance_units: 'Z/(rho*c)' });
+    expect(buildChartRenderPayload({
+      ...result,
+      metadata: {
+        observation: { effective_distance_m: 1.5, sound_speed_m_per_s: 343 },
+        phase_time_convention: 'exp(+ikr)',
+      },
+    }, context.preferences)).toMatchObject({
+      phase_reference_distance_m: 1.5,
+      phase_time_convention: 'exp(+ikr)',
+      sound_speed_m_per_s: 343,
+      impedance_units: 'Z/(rho*c)',
+    });
     expect(buildChartRenderPayload(result, context.preferences, { result, label: 'reference horn' })).toMatchObject({ reference: { label: 'reference horn', frequencies: [100, 200], spl: [90, null], impedance_normalization: 'rho_c' } });
+  });
+
+  it('preserves primary and reference sound speeds in rendered phase payloads', () => {
+    const primary: ResultPayload = {
+      ...result,
+      metadata: {
+        observation: { effective_distance_m: 2, sound_speed_m_per_s: 346 },
+        phase_time_convention: 'exp(+ikr)',
+      },
+    };
+    const reference: ResultPayload = {
+      ...result,
+      metadata: { observation: { sound_speed_m_per_s: 341 } },
+    };
+
+    expect(buildChartRenderPayload(
+      primary,
+      preferencesStore.getSnapshot(),
+      { result: reference, label: 'reference horn' },
+    )).toMatchObject({
+      sound_speed_m_per_s: 346,
+      reference: { sound_speed_m_per_s: 341 },
+    });
+  });
+
+  it('omits all PNG propagation fields when the shared reference is incomplete', () => {
+    const legacy: ResultPayload = {
+      ...result,
+      metadata: {
+        observation: { effective_distance_m: 2 },
+        phase_time_convention: 'exp(+ikr)',
+      },
+    };
+
+    expect(buildChartRenderPayload(legacy, preferencesStore.getSnapshot())).toMatchObject({
+      phase_reference_distance_m: null,
+      phase_time_convention: null,
+      sound_speed_m_per_s: null,
+    });
+  });
+
+  it('omits phase samples from the PNG payload when the SPL phase preference is off', () => {
+    expect(buildChartRenderPayload(result, {
+      ...preferencesStore.getSnapshot(), splPhase: false,
+    })).toMatchObject({ phase_degrees: [] });
+  });
+
+  describe('the rendered PNG is tagged with the unit the result declares', () => {
+    const electrical: ResultPayload = {
+      ...result,
+      metadata: { impedance_units: 'ohms', impedance_quantity: 'electrical_input_impedance' },
+    };
+
+    it('sends ohms for a driver-coupled run rather than the normalized pair', () => {
+      // Hardcoding Z/(rho*c) here put an ohms axis on screen and an acoustic
+      // label in the file -- the disagreement the on-screen unit fix removes.
+      expect(buildChartRenderPayload(electrical, preferencesStore.getSnapshot()))
+        .toMatchObject({ impedance_units: 'ohms', impedance_normalization: 'absolute' });
+    });
+
+    it('keeps the normalized pair for an unloaded waveguide solve', () => {
+      expect(buildChartRenderPayload(result, preferencesStore.getSnapshot()))
+        .toMatchObject({ impedance_units: 'Z/(rho*c)', impedance_normalization: 'rho_c' });
+    });
+
+    it('tags the reference from the reference, so hornlab-plots can refuse the overlay', () => {
+      // hornlab-plots skips a reference whose normalization differs. With both
+      // pinned to rho_c an ohms primary silently accepted a Z/rho-c curve onto
+      // its own scale, where it flatlines along the bottom and reads as a dead
+      // run.
+      const payload = buildChartRenderPayload(electrical, preferencesStore.getSnapshot(), { result, label: 'waveguide' });
+      expect(payload).toMatchObject({ impedance_normalization: 'absolute' });
+      expect(payload.reference).toMatchObject({ impedance_units: 'Z/(rho*c)', impedance_normalization: 'rho_c' });
+    });
   });
 
   it('dispatches one on-axis FRD download per result channel', async () => {

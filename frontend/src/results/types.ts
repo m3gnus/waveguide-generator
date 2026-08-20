@@ -42,6 +42,11 @@ export interface ResultPayload extends JobResults {
     distance_m?: number;
     hemisphere?: boolean;
   };
+  /** Present only on the passive-cardioid coupled channel. */
+  passive_cardioid?: {
+    cone_excursion_mm?: NullableNumber[];
+    [key: string]: unknown;
+  };
   beam_shape?: {
     frequencies?: number[];
     level_db?: number;

@@ -744,8 +744,8 @@ export function resetDesignStore(): void {
 /**
  * Record the ATH polar blocks that were actually committed without creating a
  * geometry revision. Directivity changes do not alter the preview mesh; this
- * sidecar update keeps CAD-link hashing and the next save aligned with the
- * committed `.cfg` while avoiding a pointless coarse/fine geometry rebuild.
+ * sidecar update keeps CAD-link hashing and the next CAD-linked export aligned
+ * with the committed `.cfg` while avoiding a pointless coarse/fine geometry rebuild.
  */
 export function recordCommittedAthPolars(polarConfig: unknown): void {
   const state = useDesignStore.getState();

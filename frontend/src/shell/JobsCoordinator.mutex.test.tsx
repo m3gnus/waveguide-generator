@@ -316,6 +316,44 @@ describe('solve invocation mutex', () => {
     expect(mocks.submitDesign).not.toHaveBeenCalled();
   });
 
+  it('labels a CAD Link run from the Fusion document rather than the design left open behind it', async () => {
+    // The parametric design is `horn` here, and it is not the geometry being
+    // solved. Naming CAD runs from it is how a Fusion return used to be filed
+    // under whichever `.cfg` the autosave draft restored.
+    const ingestId = 'wgi_01J5A8QK3M9T2XVBH0RD7NWE6C';
+    useCadReturnStore.setState({
+      selectedBundle: {
+        name: 'Tritonia V-req7.wgreturn', bundlePath: '/cad/Tritonia V-req7.wgreturn',
+        modifiedAt: '2026-08-19T12:00:00Z', readable: true, documentName: 'Tritonia V',
+        requestId: 'req7', sourceCount: 1, instanceCount: 1, sources: [],
+      },
+      ingestRecord: {
+        ingest_id: ingestId,
+        manifest_sha256: `sha256:${'1'.repeat(64)}`,
+        artifact_sha256: `sha256:${'2'.repeat(64)}`,
+        report_sha256: `sha256:${'3'.repeat(64)}`,
+        findings: [],
+        evidence: { fem_air_volumes: [] },
+        polar_grid_derivation: {},
+      } as unknown as CadReturnIngestRecord,
+      needsIngest: false,
+      driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }],
+      sourceSizesMm: { 'source-hf': 4 },
+      skippedSourceIds: [],
+      acknowledgedFindingIds: [],
+    });
+    mocks.submitImported.mockResolvedValue('job-cad');
+    act(() => workspaceModeStore.setMode('cad'));
+
+    await act(async () => { await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport(); });
+    await act(async () => { await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport(); });
+
+    expect(mocks.submitImported.mock.calls.map((call) => call[2]))
+      .toEqual(['Tritonia V1', 'Tritonia V2']);
+    // The design keeps its own name and its own numbering.
+    expect(useDocumentStore.getState().designName).toBe('horn');
+  });
+
   it('gates solveCurrentCadImport on readiness and reports a busy solve instead of dropping it', async () => {
     // Automatic callers (Pull & Solve, a Fusion solve command) use this action,
     // so its refusal has to be a thrown reason and never a silent no-op.

@@ -1,6 +1,7 @@
 import type { JobItem } from '../api/jobsSocket';
 import { runDisplayName } from '../prefs/preferences';
 import type { ResultPayload } from './types';
+import { excursionSeries } from './drivePower';
 import { formatValidityFrequency, resultCombineWarnings, resultFrequencyValidity } from './validity';
 
 /** One label/value line. `title` becomes the row's hover text when set. */
@@ -176,9 +177,46 @@ export function summaryGroups(_context: SummaryContext): SummaryGroup[] {
   }
   group(groups, 'Measurement', measurement);
 
+  // The drive is the only thing on this card the user chose rather than
+  // observed, and until now nothing displayed it: a run's voltage, its source
+  // resistance and how close the cone came to Xmax were all recorded and never
+  // shown, including the Xmax warning that fires inside the solver.
+  const drive: SummaryRow[] = [];
+  const driveMetadata = object(metadata('drive'));
+  const driveVoltage = finite(driveMetadata?.voltage_v)
+    ?? finite(object(metadata('passive_cardioid'))?.drive_voltage_v);
+  if (driveVoltage !== undefined) {
+    const rg = finite(driveMetadata?.rg_ohm) ?? finite(object(metadata('passive_cardioid'))?.rg_ohm);
+    row(drive, 'Voltage', `${Number(driveVoltage.toPrecision(4))} V rms${rg ? ` · Rg ${Number(rg.toPrecision(3))} Ω` : ''}`);
+  }
+  // No driver name row: `metadata.driver.spec` is a `DriverSpec.model_dump`,
+  // and DriverSpec is fourteen numeric Thiele-Small fields with `extra="forbid"`
+  // inherited from JobModel. There is no `model`, no `name`, and a payload
+  // carrying one is a validation error, so any such row could only ever be
+  // blank. Showing the driver by name needs a server-side spec field first.
+  const excursion = excursionSeries(result);
+  if (excursion?.peakMm !== undefined && excursion?.peakMm !== null) {
+    const xmax = excursion.xmaxMm;
+    const headroom = xmax !== null && xmax > 0
+      ? ` · ${(100 * excursion.peakMm / xmax).toFixed(0)}% of Xmax ${Number(xmax.toPrecision(3))} mm`
+      : '';
+    row(
+      drive,
+      'Peak excursion',
+      `${excursion.peakMm.toFixed(2)} mm${headroom}`,
+      'One-way peak displacement from the RMS swept-sine drive. Small-signal linear model; no thermal or suspension compression.',
+    );
+  }
+  group(groups, 'Drive', drive);
+
   const conventions: SummaryRow[] = [];
-  const impedanceUnits = string(metadata('impedance_units'));
-  if (result.impedance && impedanceUnits) row(conventions, 'Impedance', impedanceUnits);
+  const impedanceUnitsTag = string(metadata('impedance_units'));
+  const impedanceQuantity = string(metadata('impedance_quantity'));
+  if (result.impedance && impedanceUnitsTag) {
+    row(conventions, 'Impedance', impedanceQuantity
+      ? `${impedanceUnitsTag} · ${readableToken(impedanceQuantity)}`
+      : impedanceUnitsTag);
+  }
   const phaseConvention = string(metadata('phase_time_convention'));
   if (phaseConvention) row(conventions, 'Phase', phaseConvention);
   if (result.beam_shape) {
