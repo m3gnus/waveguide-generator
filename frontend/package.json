@@ -11,6 +11,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "benchmark:echarts": "vite --host 127.0.0.1 --open /benchmarks/echarts-live.html",
     "test": "vitest run"
   },
   "type": "module",
