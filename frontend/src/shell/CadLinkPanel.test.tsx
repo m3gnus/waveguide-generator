@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadReturnIngestRecord, CadReturnListing, FusionCadStatus } from '../api/cadlink';
+import { jobsSocket } from '../api/jobsSocket';
 import type { OnshapeLink } from '../api/onshape';
 import { preferencesStore } from '../prefs/preferences';
 import { importedSubmissionBlocker } from '../jobs/importedSubmission';
@@ -11,11 +12,19 @@ import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { resetDesignStore, useDesignStore } from '../stores/design';
 import { parkedSolveCommandStore } from '../stores/solveCommand';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
+import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import meshFixture from '../viewport/test-fixtures/tagged_sources-small.msh?raw';
 import { buildImportedSubmission, CadLinkPanel, fusionWorkflowView, newestReturnArrival, onshapeWorkflowView, showIngestedMeshInViewport } from './CadLinkPanel';
 import { CadLinkCoordinator, cadLinkCoordinatorBridge } from './CadLinkCoordinator';
-import { jobsCoordinatorBridge } from './JobsCoordinator';
+import { JobsCoordinator, jobsCoordinatorBridge } from './JobsCoordinator';
+
+const mocks = vi.hoisted(() => ({ submitImported: vi.fn() }));
+
+vi.mock('../jobs/actions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../jobs/actions')>();
+  return { ...actual, submitImported: mocks.submitImported };
+});
 
 const listing: CadReturnListing = {
   cadFolderConfigured: true,
@@ -74,6 +83,12 @@ function CadLinkTestSurface() {
   return <QueryClientProvider client={capabilityClient}><CadLinkCoordinator/><CadLinkPanel/></QueryClientProvider>;
 }
 
+function FullCadLinkTestSurface() {
+  return <QueryClientProvider client={capabilityClient}>
+    <JobsCoordinator><CadLinkCoordinator/><CadLinkPanel/></JobsCoordinator>
+  </QueryClientProvider>;
+}
+
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 }
@@ -84,7 +99,12 @@ describe('CadLinkPanel', () => {
   beforeEach(() => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     resetCadReturnStore(); resetSolveOptionsStore(); resetDocumentStore(); resetDesignStore(); preferencesStore.resetForTests();
+    capabilityClient.clear();
     parkedSolveCommandStore.clear();
+    workspaceModeStore.setMode('parametric');
+    vi.spyOn(jobsSocket, 'start').mockImplementation(() => undefined);
+    vi.spyOn(jobsSocket, 'stop').mockImplementation(() => undefined);
+    vi.spyOn(jobsSocket, 'refresh').mockResolvedValue(undefined);
     host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
@@ -93,7 +113,7 @@ describe('CadLinkPanel', () => {
       return json(record);
     }));
   });
-  afterEach(() => { act(() => root.unmount()); importedMeshStore.clear(); parkedSolveCommandStore.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals(); host.remove(); });
+  afterEach(() => { act(() => root.unmount()); importedMeshStore.clear(); parkedSolveCommandStore.clear(); workspaceModeStore.setMode('parametric'); vi.restoreAllMocks(); vi.clearAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); host.remove(); });
 
   const openHistory = () => {
     const disclosure = host.querySelector<HTMLButtonElement>('.cad-history > .section-heading button')!;
@@ -169,6 +189,65 @@ describe('CadLinkPanel', () => {
     await act(async () => { dismiss.click(); await Promise.resolve(); await Promise.resolve(); });
     expect(parkedSolveCommandStore.getSnapshot().command).toBeNull();
     expect(host.querySelector('.cad-parked-command')).toBeNull();
+  });
+
+  it('runs Fusion command, blocker acknowledgement, and submission through both real coordinators', async () => {
+    vi.useFakeTimers();
+    let command: Record<string, unknown> | null = null;
+    const outcomes: Array<Record<string, unknown>> = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json(listing);
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.endsWith('/solve-command/outcome')) {
+        outcomes.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        command = null;
+        return json({ state: 'recorded', cleared: true });
+      }
+      if (path.endsWith('/solve-command')) return json({ command, outcome: null });
+      if (path.endsWith('/ingest')) return json(record);
+      if (path.includes('/viewport-mesh')) return new Response(meshFixture, { status: 200 });
+      if (path.endsWith('/api/capabilities')) return json({
+        engines: [{ name: 'metal', available: true, reason: null, version: null, fast_paths: [] }],
+      });
+      return json({}, 404);
+    }));
+    mocks.submitImported.mockResolvedValue('job-fusion-1');
+
+    await act(async () => {
+      root.render(<FullCadLinkTestSurface/>);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    command = {
+      commandId: 'cmd-fusion-1',
+      returnId: 'wgr-fusion-1',
+      bundlePath: listing.items[0].bundlePath,
+      manifestSha256: `sha256:${'4'.repeat(64)}`,
+      requestedAt: '2026-08-20T12:00:00Z',
+    };
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_600); });
+
+    const banner = host.querySelector('.cad-parked-command')!;
+    expect(banner.textContent).toContain('Fusion asked for a solve');
+    expect(importedSubmissionBlocker()).toContain('Acknowledge 1 blocking finding');
+    expect(mocks.submitImported).not.toHaveBeenCalled();
+
+    const resume = [...banner.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent?.includes('Acknowledge all'))!;
+    await act(async () => {
+      resume.click();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mocks.submitImported).toHaveBeenCalledOnce();
+    expect(mocks.submitImported.mock.calls[0][0].geometry.ingest_id).toBe(record.ingest_id);
+    expect(outcomes).toEqual([{
+      commandId: 'cmd-fusion-1', state: 'accepted', jobId: 'job-fusion-1', reason: null,
+    }]);
+    expect(parkedSolveCommandStore.getSnapshot().command).toBeNull();
   });
 
   it('tries the full-domain viewport artifact before silently falling back on 404', async () => {
