@@ -63,6 +63,17 @@ def self_impedance_from_surface_average(
     return np.conjugate(-1j * omega * raw) / float(area_m2)
 
 
+def one_way_peak_excursion_mm(cone_excursion_m: np.ndarray) -> np.ndarray:
+    """Convert an RMS displacement phasor magnitude to one-way peak millimetres.
+
+    ``hornlab-sim`` solves from an RMS generator voltage, so the displacement
+    magnitude it returns is RMS too. Driver Xmax is a one-way peak rating;
+    comparing the two without this conversion overstates headroom by sqrt(2).
+    """
+
+    return np.asarray(cone_excursion_m, dtype=np.float64) * (1.0e3 * np.sqrt(2.0))
+
+
 def channel_drive_scaling(
     frequencies_hz: np.ndarray,
     surface_pressure_avg_raw: np.ndarray,
@@ -101,7 +112,7 @@ def channel_drive_scaling(
     scale_eng = 1j * omega * coupled.cone_volume_velocity / float(area_m2)
     scale_raw = np.conjugate(scale_eng)
 
-    excursion_mm = coupled.cone_excursion_m * 1.0e3
+    excursion_mm = one_way_peak_excursion_mm(coupled.cone_excursion_m)
     peak_excursion_mm = float(np.max(excursion_mm)) if excursion_mm.size else 0.0
     warnings: list[str] = []
     if spec.xmax_mm is not None and peak_excursion_mm > spec.xmax_mm:
@@ -128,6 +139,7 @@ def channel_drive_scaling(
             "frequencies": frequencies.tolist(),
             "peak_mm": peak_excursion_mm,
             "values": excursion_mm.tolist(),
+            "quantity": "one_way_peak_displacement",
         },
         "mmd_correction_g": float(mmd_correction_g),
         "warnings": warnings,

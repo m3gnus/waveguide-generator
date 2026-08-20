@@ -10,6 +10,7 @@ from server.jobs.models import DriveChannel, DriverSpec
 from server.solver.driver_lem import (
     channel_drive_scaling,
     hornlab_driver,
+    one_way_peak_excursion_mm,
     self_impedance_from_surface_average,
 )
 
@@ -100,6 +101,13 @@ def test_channel_scaling_produces_electrical_picture_and_warnings() -> None:
     # The deliberately tiny Xmax must surface as a warning, never silently.
     assert any("exceeds Xmax" in warning for warning in payload["warnings"])
     assert payload["cone_excursion_mm"]["peak_mm"] > 0.001
+    assert payload["cone_excursion_mm"]["quantity"] == "one_way_peak_displacement"
+
+
+def test_excursion_converts_rms_phasor_magnitude_to_one_way_peak_mm() -> None:
+    converted = one_way_peak_excursion_mm(np.asarray([0.001, 0.002]))
+
+    assert converted == pytest.approx([np.sqrt(2.0), 2.0 * np.sqrt(2.0)])
 
 
 def test_scaling_is_the_conjugated_engineering_acceleration() -> None:
