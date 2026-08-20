@@ -216,6 +216,7 @@ export interface CadReturnIngestRecord {
   };
   evidence?: { instances?: unknown[]; fem_air_volumes?: unknown[]; [key: string]: unknown };
   identity?: {
+    schema_version: 1;
     selected_instance_id: string | null;
     solver_anchor_instance_id: string | null;
     instances: Array<{

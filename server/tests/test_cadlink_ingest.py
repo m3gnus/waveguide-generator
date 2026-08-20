@@ -171,6 +171,7 @@ def test_instance_inventory_keeps_body_transform_source_and_channel_addresses_di
     )
 
     assert inventory == {
+        "schema_version": 1,
         "selected_instance_id": "instance-b",
         "solver_anchor_instance_id": "instance-b",
         "instances": [

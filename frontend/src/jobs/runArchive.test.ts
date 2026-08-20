@@ -88,6 +88,31 @@ describe('run archive layout', () => {
     });
   });
 
+  it('retains the exact versioned CAD placement graph in run.json', () => {
+    const identity = {
+      schema_version: 1 as const,
+      ingest_id: 'wgi_01J5A8QK3M9T2XVBH0RD7NWE6C',
+      selected_instance_id: 'instance-b',
+      solver_anchor_instance_id: 'instance-b',
+      instances: [{
+        instance_id: 'instance-b', design_id: 'd1', body_object_ids: ['body-native-7'],
+        assembly_from_link: [[1, 0, 0, 25], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]],
+        source_ids: ['source-b'], default_drive_channel_ids: ['drive-b'],
+      }],
+      drive_channels: [{ drive_channel_id: 'drive-b', source_ids: ['source-b'], instance_ids: ['instance-b'] }],
+    };
+    const record = JSON.parse(buildRunRecord(jobItem({
+      config_summary: { geometry_type: 'imported' },
+      cad_source: {
+        ingest_id: identity.ingest_id, design_id: 'd1', lineage_id: 'l1', archive_stem: 'Big Horn',
+        manifest_sha256: 'sha256:aa', document_name: 'Big Horn v7', return_state_hash: 'sha256:bb',
+        identity,
+      },
+    })).text);
+
+    expect(record.cad.identity).toEqual(identity);
+  });
+
   it('archives a completed run once', () => {
     expect(needsArchiving(jobItem())).toBe(true);
     expect(needsArchiving(jobItem({ archived_at: '2026-08-19T10:03:00Z' }))).toBe(false);

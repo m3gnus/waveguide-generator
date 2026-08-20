@@ -915,6 +915,36 @@ class StopResponse(JobModel):
 JobStatusName = Literal["queued", "running", "complete", "error", "cancelled"]
 
 
+class CadIdentityInstance(JobModel):
+    """CAD-authored addresses for one linked placement in an imported run."""
+
+    instance_id: str
+    design_id: str | None = None
+    body_object_ids: list[str] = Field(default_factory=list)
+    assembly_from_link: list[list[float]]
+    source_ids: list[str] = Field(default_factory=list)
+    default_drive_channel_ids: list[str] = Field(default_factory=list)
+
+
+class CadDriveChannelIdentity(JobModel):
+    """The submitted channel address resolved against immutable return sources."""
+
+    drive_channel_id: str
+    source_ids: list[str]
+    instance_ids: list[str] = Field(default_factory=list)
+
+
+class CadIdentityProvenance(JobModel):
+    """Versioned CAD placement/body/source/drive graph retained with a run."""
+
+    schema_version: Literal[1]
+    ingest_id: str
+    selected_instance_id: str | None = None
+    solver_anchor_instance_id: str | None = None
+    instances: list[CadIdentityInstance] = Field(default_factory=list)
+    drive_channels: list[CadDriveChannelIdentity]
+
+
 class CadSource(JobModel):
     """Where an imported run came from, kept for the run archive.
 
@@ -931,6 +961,7 @@ class CadSource(JobModel):
     manifest_sha256: str | None = None
     document_name: str | None = None
     return_state_hash: str | None = None
+    identity: CadIdentityProvenance | None = None
 
 
 class JobItem(JobModel):

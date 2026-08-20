@@ -1,5 +1,5 @@
 import { downloadBlob, downloadText } from '../api/designIo';
-import type { JobItem } from '../api/jobsSocket';
+import type { CadIdentityProvenance, JobItem } from '../api/jobsSocket';
 import { fetchJobArchiveSnapshot, fetchRadiationImpedancePresentation, type RadiationImpedancePresentation } from '../api/results';
 import { archiveFolderForJob, exportStemForJob, exportSubdirectoryForJob } from '../jobs/exportNaming';
 import { buildDesignRecord, buildRunRecord } from '../jobs/runArchive';
@@ -27,6 +27,8 @@ export interface ExportContext {
   /** The selected run's immutable directivity settings for ATH `.cfg` export. */
   polarConfig?: unknown;
   solveSettings?: WgSolveSettings | null;
+  /** Exact CAD-authored placement graph carried by this imported run. */
+  cadIdentity?: CadIdentityProvenance;
   jobStem: string;
   hasRadiationImpedanceArtifact?: boolean;
   /**
@@ -787,6 +789,17 @@ export async function runExportBundle(context: ExportContext, formats = context.
       }
       catch (error) { failures.push({ format, reason: error instanceof Error ? error.message : String(error) }); }
     }
+  }
+  if (context.cadIdentity && files.length) {
+    const filename = `${context.jobStem}_cad_identity.json`;
+    const payload = `${JSON.stringify({
+      schema: 'waveguide-generator.cad-result-provenance',
+      schema_version: 1,
+      job_id: context.jobId ?? null,
+      identity: context.cadIdentity,
+    }, null, 2)}\n`;
+    saveText(payload, filename, 'application/json;charset=utf-8');
+    if (!files.includes(filename)) files.push(filename);
   }
   return { files, failures };
 }

@@ -572,6 +572,46 @@ def _record(mesh_path: Path, *, findings: list[dict[str, Any]] | None = None) ->
     }
 
 
+def _identity_record_changes() -> dict[str, Any]:
+    matrix = [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ]
+    return {
+        "sources": [
+            {"id": "source-a", "required": True, "instance_id": "instance-a"},
+            {"id": "source-b", "required": True, "instance_id": "instance-a"},
+            {"id": "source-c", "required": False, "instance_id": "instance-b"},
+        ],
+        # Deliberately omit schema_version to prove that first-slice ingestion
+        # rows remain readable while downstream provenance is always versioned.
+        "identity": {
+            "selected_instance_id": "instance-a",
+            "solver_anchor_instance_id": "instance-a",
+            "instances": [
+                {
+                    "instance_id": "instance-a",
+                    "design_id": "wgd-shared",
+                    "body_object_ids": ["body-a"],
+                    "assembly_from_link": matrix,
+                    "source_ids": ["source-a", "source-b"],
+                    "default_drive_channel_ids": ["left"],
+                },
+                {
+                    "instance_id": "instance-b",
+                    "design_id": "wgd-shared",
+                    "body_object_ids": ["body-b"],
+                    "assembly_from_link": matrix,
+                    "source_ids": ["source-c"],
+                    "default_drive_channel_ids": ["right"],
+                },
+            ],
+        },
+    }
+
+
 class _PausedRegistry:
     def __init__(self) -> None:
         self.calls = 0
@@ -696,6 +736,79 @@ def test_submit_persists_ingestion_mesh_summary_and_availability(tmp_path: Path)
             assert _replay_request(row).model_dump(mode="json") == SolveRequest.model_validate(
                 row["config_json"]
             ).model_dump(mode="json")
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_imported_run_retains_versioned_instance_body_transform_source_and_drive_provenance(
+    tmp_path: Path,
+) -> None:
+    class IdentityEngine:
+        name = "metal"
+
+        async def run(self, *_args: Any, **_kwargs: Any) -> EngineRunResult:
+            return EngineRunResult(
+                results={
+                    "frequencies": [],
+                    "channels": {
+                        "left": {"frequencies": [], "metadata": {"drive_channel_id": "left"}},
+                        "right": {"frequencies": [], "metadata": {"drive_channel_id": "right"}},
+                    },
+                    "channel_order": ["left", "right"],
+                    "metadata": {},
+                }
+            )
+
+    async def scenario() -> None:
+        runtime, ingest_id, _ = await _runtime_fixture(
+            tmp_path, _identity_record_changes()
+        )
+        runtime.engine_registry = _AlwaysRegistry(IdentityEngine())  # type: ignore[assignment]
+        try:
+            job_id = await runtime.submit(_request(ingest_id))
+            await runtime.wait_idle()
+            row = runtime.store.get_job_row(job_id)
+            assert row["status"] == "complete", row.get("error_message")
+            identity = row["task_metadata"]["imported_geometry"]["identity"]
+            assert identity["schema_version"] == 1
+            assert identity["selected_instance_id"] == "instance-a"
+            assert identity["instances"][1]["body_object_ids"] == ["body-b"]
+            assert identity["instances"][1]["assembly_from_link"][3] == [0.0, 0.0, 0.0, 1.0]
+            assert identity["drive_channels"] == [
+                {
+                    "drive_channel_id": "left",
+                    "source_ids": ["source-a", "source-b"],
+                    "instance_ids": ["instance-a"],
+                },
+                {
+                    "drive_channel_id": "right",
+                    "source_ids": ["source-c"],
+                    "instance_ids": ["instance-b"],
+                },
+            ]
+            assert runtime._serialize_job(row)["cad_source"]["identity"] == identity
+            results = await runtime.get_results(job_id)
+            assert results["provenance"]["cad_identity"] == identity
+            assert results["channels"]["left"]["metadata"]["cad_identity"] == identity
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_submission_refuses_a_contradictory_cad_source_owner(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        changes = _identity_record_changes()
+        changes["sources"][0]["instance_id"] = "instance-b"
+        runtime, ingest_id, _ = await _runtime_fixture(tmp_path, changes)
+        try:
+            with pytest.raises(ImportedSolveRefusal) as caught:
+                await runtime.submit(_request(ingest_id))
+            assert caught.value.reason_code == "cad_identity_invalid"
+            assert "contradicts" in str(caught.value)
+            assert runtime.store.list_jobs()[1] == 0
         finally:
             await runtime.shutdown()
 

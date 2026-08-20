@@ -280,6 +280,7 @@ def instance_identity_inventory(
             }
         )
     return {
+        "schema_version": 1,
         "selected_instance_id": selected_instance_id,
         "solver_anchor_instance_id": manifest["coordinate_system"].get(
             "solver_anchor_instance_id"

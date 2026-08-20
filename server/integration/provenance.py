@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from functools import lru_cache
 import hashlib
 import json
@@ -53,6 +54,7 @@ def enrich_result_contract(
     request: "SolveRequest",
     *,
     effective_request: "SolveRequest | None" = None,
+    cad_identity: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Add only backward-compatible top-level integration fields.
 
@@ -87,7 +89,7 @@ def enrich_result_contract(
     enriched["result_contract_version"] = result_version
     enriched["client_request_id"] = request.client_request_id
     enriched["client_metadata"] = request.client_metadata
-    enriched["provenance"] = {
+    provenance = {
         "schema_version": PROVENANCE_CONTRACT_VERSION,
         "wg_version": wg_version,
         "dependency_shas": dependency_shas,
@@ -106,8 +108,26 @@ def enrich_result_contract(
         "solve_options_sha256": solve_options_sha256,
         "resolved_engine": request.options.engine,
     }
+    if cad_identity is not None:
+        provenance["cad_identity"] = deepcopy(dict(cad_identity))
+    enriched["provenance"] = provenance
     metadata = dict(enriched.get("metadata") or {})
     metadata.setdefault("result_contract_version", result_version)
+    if cad_identity is not None:
+        metadata["cad_identity"] = deepcopy(dict(cad_identity))
+        channels = enriched.get("channels")
+        if isinstance(channels, Mapping):
+            copied_channels: dict[str, Any] = {}
+            for channel_id, raw_channel in channels.items():
+                if not isinstance(raw_channel, Mapping):
+                    copied_channels[str(channel_id)] = raw_channel
+                    continue
+                channel = dict(raw_channel)
+                channel_metadata = dict(channel.get("metadata") or {})
+                channel_metadata["cad_identity"] = deepcopy(dict(cad_identity))
+                channel["metadata"] = channel_metadata
+                copied_channels[str(channel_id)] = channel
+            enriched["channels"] = copied_channels
     enriched["metadata"] = metadata
     return enriched
 

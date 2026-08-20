@@ -1,6 +1,152 @@
 {
   "components": {
     "schemas": {
+      "CadDriveChannelIdentity": {
+        "additionalProperties": false,
+        "description": "The submitted channel address resolved against immutable return sources.",
+        "properties": {
+          "drive_channel_id": {
+            "title": "Drive Channel Id",
+            "type": "string"
+          },
+          "instance_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Instance Ids",
+            "type": "array"
+          },
+          "source_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Source Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "drive_channel_id",
+          "source_ids"
+        ],
+        "title": "CadDriveChannelIdentity",
+        "type": "object"
+      },
+      "CadIdentityInstance": {
+        "additionalProperties": false,
+        "description": "CAD-authored addresses for one linked placement in an imported run.",
+        "properties": {
+          "assembly_from_link": {
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "title": "Assembly From Link",
+            "type": "array"
+          },
+          "body_object_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Body Object Ids",
+            "type": "array"
+          },
+          "default_drive_channel_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Default Drive Channel Ids",
+            "type": "array"
+          },
+          "design_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Design Id"
+          },
+          "instance_id": {
+            "title": "Instance Id",
+            "type": "string"
+          },
+          "source_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Source Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "instance_id",
+          "assembly_from_link"
+        ],
+        "title": "CadIdentityInstance",
+        "type": "object"
+      },
+      "CadIdentityProvenance": {
+        "additionalProperties": false,
+        "description": "Versioned CAD placement/body/source/drive graph retained with a run.",
+        "properties": {
+          "drive_channels": {
+            "items": {
+              "$ref": "#/components/schemas/CadDriveChannelIdentity"
+            },
+            "title": "Drive Channels",
+            "type": "array"
+          },
+          "ingest_id": {
+            "title": "Ingest Id",
+            "type": "string"
+          },
+          "instances": {
+            "items": {
+              "$ref": "#/components/schemas/CadIdentityInstance"
+            },
+            "title": "Instances",
+            "type": "array"
+          },
+          "schema_version": {
+            "const": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "selected_instance_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Instance Id"
+          },
+          "solver_anchor_instance_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Solver Anchor Instance Id"
+          }
+        },
+        "required": [
+          "schema_version",
+          "ingest_id",
+          "drive_channels"
+        ],
+        "title": "CadIdentityProvenance",
+        "type": "object"
+      },
       "CadReturnIngestRequest": {
         "additionalProperties": false,
         "properties": {
@@ -102,6 +248,16 @@
               }
             ],
             "title": "Document Name"
+          },
+          "identity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CadIdentityProvenance"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "ingest_id": {
             "anyOf": [
@@ -5290,6 +5446,16 @@
       "ResultProvenance": {
         "additionalProperties": true,
         "properties": {
+          "cad_identity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CadIdentityProvenance"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "dependency_shas": {
             "additionalProperties": {
               "type": "string"
