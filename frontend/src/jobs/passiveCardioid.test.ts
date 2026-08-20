@@ -11,6 +11,7 @@ import {
   useCadReturnStore,
   type PassiveCardioidForm,
 } from '../stores/cadReturn';
+import { CAD_CARDIOID_FIELD_CONTROLS } from '../design/cadControlRegistry';
 import { resetSolveOptionsStore } from '../stores/solveOptions';
 import { buildImportedSubmission, importedSubmissionBlocker } from './importedSubmission';
 import { explainImportedRefusal } from './importedRefusals';
@@ -94,6 +95,24 @@ describe('passive cardioid opt-in boundary', () => {
     const geometry = buildImportedSubmission(useCadReturnStore.getState()).geometry;
     expect(geometry.passive_cardioid_port_length_mm).toBe(0);
     expect(geometry.passive_cardioid_foam_resistance_pa_s_m3).toBe(0);
+  });
+
+  it('states a rear volume and never a compliance', () => {
+    // chamber_compliance_m3_per_pa is derived by the solver as V/(rho c^2).
+    // Offering it as an input would ask for a number the solve computes, and
+    // two ways to state the same chamber is one too many.
+    seedReturn(complete);
+    const keys = Object.keys(
+      buildImportedSubmission(useCadReturnStore.getState()).geometry as unknown as Record<string, unknown>,
+    );
+    expect(keys).toContain('passive_cardioid_rear_volume_l');
+    expect(keys.filter((key) => key.includes('complian'))).toEqual([]);
+    expect(Object.keys(PASSIVE_CARDIOID_DEFAULTS).filter((key) => /complian/i.test(key))).toEqual([]);
+    // The rail offers exactly these five numbers and no sixth way to say the
+    // same thing about the chamber.
+    expect(CAD_CARDIOID_FIELD_CONTROLS.map(({ formKey }) => formKey)).toEqual([
+      'rearVolumeL', 'portLengthMm', 'modelPortAreaM2', 'bemPortAreaM2', 'foamResistancePaSM3',
+    ]);
   });
 
   it('sends the complete set together once the whole form is filled', () => {
