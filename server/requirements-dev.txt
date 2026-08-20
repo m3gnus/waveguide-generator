@@ -1,2 +1,7 @@
 # Development and qualification tools for the v2-local environment.
 pytest==9.0.3
+# Deliberately unpinned, to match what CI installs: the drift job runs
+# `pip install ruff` and then `ruff check`, so a pinned copy here would let a
+# tree lint clean locally and still fail the gate. `ruff.toml` selects rules
+# explicitly, which is what stops a new ruff release from turning CI red.
+ruff
