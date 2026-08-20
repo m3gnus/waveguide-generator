@@ -4513,6 +4513,19 @@
             "minLength": 1,
             "title": "Designid",
             "type": "string"
+          },
+          "instanceId": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instanceid"
           }
         },
         "required": [
@@ -4561,6 +4574,19 @@
                 "type": "null"
               }
             ]
+          },
+          "instanceId": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instanceid"
           }
         },
         "required": [
@@ -4585,6 +4611,19 @@
                 "type": "null"
               }
             ]
+          },
+          "instanceId": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instanceid"
           }
         },
         "required": [
@@ -4601,6 +4640,19 @@
             "minLength": 1,
             "title": "Designid",
             "type": "string"
+          },
+          "instanceId": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instanceid"
           }
         },
         "required": [

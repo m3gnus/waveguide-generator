@@ -323,7 +323,11 @@ export function CadLinkPanel() {
       const wasLinked = onshapeStatus?.state === 'stale' || onshapeStatus?.state === 'current';
       const polarConfig = polarConfigFromUi(useSolveOptionsStore.getState().polar);
       const result = await sendDesignToOnshape(
-        design, designRevision, designNameSlug(documentName), identity, { allowPublic, polarConfig },
+        design, designRevision, designNameSlug(documentName), identity, {
+          allowPublic,
+          polarConfig,
+          instanceId: onshapeStatus?.selectedInstanceId ?? null,
+        },
       );
       if (request !== onshapeSendGeneration.current) return;
       setConfirmPublicDocument(null);
@@ -402,6 +406,7 @@ export function CadLinkPanel() {
   // user sends, not after -- and say it from the plan WG actually read.
   const publicOnly = onshapeConnection?.plan?.publicOnly === true;
   const linkedDocument = onshapeStatus?.link ?? null;
+  const matchingOnshapeLinks = onshapeStatus?.matchingLinks ?? [];
 
   return <div className="cadlink-panel panel-scroll">
     <h2 className="sr-only">CAD Link</h2>
@@ -420,6 +425,20 @@ export function CadLinkPanel() {
         <span className="cad-connection-dot" aria-hidden="true"/>
         <div><h4>{workflow.headline}</h4><p>{workflow.detail}</p></div>
       </div>
+      {matchingOnshapeLinks.length > 1 && <label className="field-row linked-instance-selection">
+        <span>Managed Onshape link</span>
+        <select
+          aria-label="Linked Onshape instance"
+          value={onshapeStatus?.selectedInstanceId ?? ''}
+          onChange={(event) => cadCoordinator.selectOnshapeInstance(event.target.value)}
+        >
+          <option value="" disabled>Choose a link</option>
+          {matchingOnshapeLinks.map((link) => <option value={link.instanceId} key={link.instanceId}>
+            {link.documentName} · {link.instanceId}
+          </option>)}
+        </select>
+        <small>Updates and returns use this exact managed Part Studio link. WG does not guess from the newest document.</small>
+      </label>}
       {linkedDocument?.documentUrl && <a className="cad-secondary-action cad-onshape-open" href={linkedDocument.documentUrl} target="_blank" rel="noreferrer noopener">Open {linkedDocument.documentName} in Onshape</a>}
       {publicOnly && !confirmPublicDocument && <div className="cad-alert cad-alert-notice" role="status"><b>This Onshape plan creates public documents.</b> {onshapeConnection?.plan?.name ?? 'The Free plan'} makes every document world-readable — anyone with the link can view this waveguide. Confidential designs belong in Fusion 360 or on a paid Onshape plan.</div>}
       {onshapeConnection?.insecureKeyFile && <div className="cad-alert cad-alert-error" role="alert">The Onshape key file at {onshapeConnection.credentialsPath} is readable by other accounts on this machine. Restrict it with <code>chmod 600</code>.</div>}

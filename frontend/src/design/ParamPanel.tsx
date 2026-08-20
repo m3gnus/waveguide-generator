@@ -634,6 +634,7 @@ function LinkedDesignCard({ forceOpen = false }: { forceOpen?: boolean }) {
     ? workflow.action === 'update' ? 'Send WG changes to Onshape' : 'Create in Onshape'
     : workflow.action === 'update' ? 'Send WG changes to Fusion' : 'Open in Fusion 360';
   const matchingFusionLinks = cadCoordinator.fusionStatus?.matchingLinks ?? [];
+  const matchingOnshapeLinks = cadCoordinator.onshapeStatus?.matchingLinks ?? [];
   return <Section
     title={CAD_CONTROLS.linkedDesign.section}
     description="The CAD document linked to this design, its aggregate freshness, and the outbound rebuild action."
@@ -657,6 +658,20 @@ function LinkedDesignCard({ forceOpen = false }: { forceOpen?: boolean }) {
         </option>)}
       </select>
       <small>Body freshness and update/return actions are scoped to this instance ID. Placements of the same design are never merged.</small>
+    </label>}
+    {onshape && matchingOnshapeLinks.length > 1 && <label className="field-row linked-instance-selection">
+      <span>Managed Onshape link</span>
+      <select
+        aria-label="Linked Onshape instance"
+        value={cadCoordinator.onshapeStatus?.selectedInstanceId ?? ''}
+        onChange={(event) => cadCoordinator.selectOnshapeInstance(event.target.value)}
+      >
+        <option value="" disabled>Choose a link</option>
+        {matchingOnshapeLinks.map((link) => <option value={link.instanceId} key={link.instanceId}>
+          {link.documentName} · {link.instanceId}
+        </option>)}
+      </select>
+      <small>WG scopes status, updates, and returns to this exact managed Part Studio link.</small>
     </label>}
     <FusionParameterDrift
       parameterDriftCount={driftCount}

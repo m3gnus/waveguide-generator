@@ -75,6 +75,7 @@ interface CadLinkCoordinatorSnapshot {
   reportStatus(message: string): void;
   reportViewportNotice(message: string | null): void;
   selectFusionInstance(instanceId: string): void;
+  selectOnshapeInstance(instanceId: string): void;
 }
 
 const unavailable = async () => { throw new Error('CAD Link coordinator is unavailable'); };
@@ -109,6 +110,7 @@ let bridgeSnapshot: CadLinkCoordinatorSnapshot = {
   reportStatus: () => undefined,
   reportViewportNotice: () => undefined,
   selectFusionInstance: () => undefined,
+  selectOnshapeInstance: () => undefined,
 };
 const bridgeListeners = new Set<() => void>();
 
@@ -370,6 +372,7 @@ export function CadLinkCoordinator() {
   const [fusionStatus, setFusionStatus] = useState<FusionCadStatus | null>(null);
   const [selectedFusionInstanceId, setSelectedFusionInstanceId] = useState<string | null>(null);
   const [onshapeStatus, setOnshapeStatus] = useState<OnshapeStatus | null>(null);
+  const [selectedOnshapeInstanceId, setSelectedOnshapeInstanceId] = useState<string | null>(null);
   const [onshapeConnection, setOnshapeConnection] = useState<OnshapeConnection | null>(null);
   const seenReturnRevisions = useRef<Map<string, string> | null>(null);
   const returnListRequest = useRef(0);
@@ -398,6 +401,7 @@ export function CadLinkCoordinator() {
 
   useEffect(() => {
     setSelectedFusionInstanceId(null);
+    setSelectedOnshapeInstanceId(null);
   }, [identity?.designId]);
 
   useEffect(() => {
@@ -484,12 +488,19 @@ export function CadLinkCoordinator() {
   const refreshOnshapeStatus = useCallback(async (committed?: DesignIdentity) => {
     const request = ++onshapeStatusRequest.current;
     try {
-      const next = await getOnshapeStatus(design, committed ?? identity);
+      const next = await getOnshapeStatus(
+        design, committed ?? identity, fetch, selectedOnshapeInstanceId,
+      );
       if (request === onshapeStatusRequest.current) setOnshapeStatus(next);
     } catch {
       // Advisory, like the Fusion heartbeat: the send itself reports failures.
     }
-  }, [design, identity]);
+  }, [design, identity, selectedOnshapeInstanceId]);
+
+  const selectOnshapeInstance = useCallback((instanceId: string) => {
+    setSelectedOnshapeInstanceId(instanceId);
+    setOnshapeStatus(null);
+  }, []);
 
   // No interval. This status is derived from WG's own registry and changes
   // only when the design or a send does, both of which re-run this effect.
@@ -871,7 +882,9 @@ export function CadLinkCoordinator() {
     const viewportGeneration = importedMeshStore.beginIntent();
     setIngesting(true); setError(null); setStatus(null); setViewportNotice(null);
     try {
-      const result = await returnOnshapeToWg(identity.designId);
+      const result = await returnOnshapeToWg(
+        identity.designId, fetch, selectedOnshapeInstanceId,
+      );
       const sources = result.ingest.sources.map((source) => ({
         id: source.id,
         role: source.role,
@@ -918,7 +931,7 @@ export function CadLinkCoordinator() {
     } finally {
       setIngesting(false);
     }
-  }, [identity?.designId, reportViewportNotice]);
+  }, [identity?.designId, reportViewportNotice, selectedOnshapeInstanceId]);
 
   /** Ask Fusion for its current geometry, prepare it, and start the solve.
    *
@@ -1140,6 +1153,7 @@ export function CadLinkCoordinator() {
       reportStatus,
       reportViewportNotice,
       selectFusionInstance,
+      selectOnshapeInstance,
     });
     return () => publishBridge({
       ...bridgeSnapshot,
@@ -1172,6 +1186,7 @@ export function CadLinkCoordinator() {
       reportStatus: () => undefined,
       reportViewportNotice: () => undefined,
       selectFusionInstance: () => undefined,
+      selectOnshapeInstance: () => undefined,
     });
   }, [
     bundles,
@@ -1197,6 +1212,7 @@ export function CadLinkCoordinator() {
     returnFromOnshape,
     selectBundle,
     selectFusionInstance,
+    selectOnshapeInstance,
     reportError,
     reportStatus,
     reportViewportNotice,

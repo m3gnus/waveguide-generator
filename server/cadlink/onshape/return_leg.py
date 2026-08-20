@@ -228,7 +228,12 @@ def write_return_bundle(
     root.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(prefix=".onshape-return-", dir=root))
     target = root / f"{return_id}.wgreturn"
-    instance_id = f"onshape-{_string(link.get('part_studio_element_id'), 'Part Studio identity')}"
+    # API-created links always carry WG's durable opaque identity. Direct unit
+    # callers and pre-v8 fixtures retain the old single-Part-Studio fallback;
+    # the registry migration assigns a durable id before any real API action.
+    instance_id = str(link.get("instance_id") or "") or (
+        f"onshape-{_string(link.get('part_studio_element_id'), 'Part Studio identity')}"
+    )
     try:
         assembly = temporary / "assembly.step"
         assembly.write_bytes(step_bytes)
@@ -391,7 +396,17 @@ def write_and_ingest_return(
             str(source_policy["id"]): float(source_policy["suggested_resolution_mm"])
         },
     }
-    record = ingest_bundle(bundle_path, mesh, [], store, data_dir)
+    design = _mapping(outbound.get("design"), "wglink.design")
+    instance_id = str(link.get("instance_id") or "") or None
+    record = ingest_bundle(
+        bundle_path,
+        mesh,
+        [],
+        store,
+        data_dir,
+        expected_design_id=_string(design.get("id"), "wglink.design.id"),
+        expected_instance_id=instance_id,
+    )
     return bundle_path, record
 
 

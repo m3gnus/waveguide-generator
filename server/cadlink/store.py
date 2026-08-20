@@ -76,6 +76,7 @@ _SCHEMA = (
     CREATE TABLE IF NOT EXISTS onshape_links (
       design_id TEXT NOT NULL REFERENCES designs(design_id),
       account_id TEXT NOT NULL,
+      instance_id TEXT NOT NULL,
       document_id TEXT NOT NULL,
       workspace_id TEXT NOT NULL,
       blob_element_id TEXT NOT NULL,
@@ -139,7 +140,7 @@ class CadLinkStore:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._lock, self._transaction() as conn:
             version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-            if version not in {0, 1, 2, 3, 4, 5, 6, 7}:
+            if version not in {0, 1, 2, 3, 4, 5, 6, 7, 8}:
                 raise RuntimeError(f"unsupported cadlink.db schema version {version}")
             for statement in _SCHEMA:
                 conn.execute(statement)
@@ -151,6 +152,8 @@ class CadLinkStore:
             onshape_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(onshape_links)")
             }
+            if "instance_id" not in onshape_columns:
+                conn.execute("ALTER TABLE onshape_links ADD COLUMN instance_id TEXT")
             for column in (
                 "feature_studio_element_id",
                 "native_feature_id",
@@ -160,7 +163,25 @@ class CadLinkStore:
             ):
                 if column not in onshape_columns:
                     conn.execute(f"ALTER TABLE onshape_links ADD COLUMN {column} TEXT")
-            conn.execute("PRAGMA user_version = 7")
+            # Versions through 7 addressed an Onshape link by design/account and
+            # therefore had no placement-like join key. Give each legacy row a
+            # durable opaque id exactly once; deriving it later from a document
+            # or element id would turn mutable/foreign addresses into identity.
+            missing_instances = conn.execute(
+                "SELECT design_id, account_id FROM onshape_links "
+                "WHERE instance_id IS NULL OR instance_id = ''"
+            ).fetchall()
+            for row in missing_instances:
+                conn.execute(
+                    "UPDATE onshape_links SET instance_id = ? "
+                    "WHERE design_id = ? AND account_id = ?",
+                    (mint_id("wgo_"), row["design_id"], row["account_id"]),
+                )
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS onshape_links_by_instance "
+                "ON onshape_links(instance_id)"
+            )
+            conn.execute("PRAGMA user_version = 8")
         self._initialized = True
 
     def get_design(self, design_id: str) -> dict[str, Any] | None:
@@ -555,6 +576,20 @@ class CadLinkStore:
             (design_id, account_id),
         )
 
+    def get_onshape_link_by_instance(
+        self, instance_id: str, account_id: str | None = None
+    ) -> dict[str, Any] | None:
+        """Resolve one explicit managed Onshape link identity."""
+
+        if account_id is None:
+            return self._read_one(
+                "SELECT * FROM onshape_links WHERE instance_id = ?", (instance_id,)
+            )
+        return self._read_one(
+            "SELECT * FROM onshape_links WHERE instance_id = ? AND account_id = ?",
+            (instance_id, account_id),
+        )
+
     def find_onshape_links_for_lineage(
         self, lineage_id: str, account_id: str | None = None
     ) -> list[dict[str, Any]]:
@@ -594,6 +629,7 @@ class CadLinkStore:
         *,
         design_id: str,
         account_id: str,
+        instance_id: str | None = None,
         document_id: str,
         workspace_id: str,
         blob_element_id: str,
@@ -618,21 +654,36 @@ class CadLinkStore:
         now = saved_at or utc_now()
         with self._lock, self._transaction() as conn:
             existing = conn.execute(
-                "SELECT created_at FROM onshape_links WHERE design_id = ? AND account_id = ?",
+                "SELECT created_at, instance_id FROM onshape_links "
+                "WHERE design_id = ? AND account_id = ?",
                 (design_id, account_id),
             ).fetchone()
             created_at = str(existing["created_at"]) if existing else now
+            resolved_instance_id = (
+                str(existing["instance_id"])
+                if existing and existing["instance_id"]
+                else instance_id or mint_id("wgo_")
+            )
+            if (
+                existing
+                and instance_id is not None
+                and instance_id != resolved_instance_id
+            ):
+                raise ValueError(
+                    "an existing Onshape link cannot be reassigned to another instance id"
+                )
             conn.execute(
                 """
                 INSERT INTO onshape_links (
-                  design_id, account_id, document_id, workspace_id, blob_element_id,
+                  design_id, account_id, instance_id, document_id, workspace_id, blob_element_id,
                   part_studio_element_id, variable_studio_element_id,
                   feature_studio_element_id, native_feature_id,
                   datum_feature_studio_element_id, datum_feature_id, build_mode,
                   document_name, is_public, last_export_id, last_sequence,
                   last_design_hash, last_geometry_hash, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (design_id, account_id) DO UPDATE SET
+                  instance_id = onshape_links.instance_id,
                   document_id = excluded.document_id,
                   workspace_id = excluded.workspace_id,
                   blob_element_id = excluded.blob_element_id,
@@ -654,6 +705,7 @@ class CadLinkStore:
                 (
                     design_id,
                     account_id,
+                    resolved_instance_id,
                     document_id,
                     workspace_id,
                     blob_element_id,

@@ -250,6 +250,60 @@ describe('CadLinkCoordinator', () => {
       .toBe('instance-b');
   });
 
+  it('posts the chosen Onshape link identity on every status refresh', async () => {
+    preferencesStore.update({ cadApplication: 'onshape' });
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_shared', lineageId: 'wgl_shared', baseEditVersion: 1,
+    }, 'current');
+    const link = (instanceId: string) => ({
+      instanceId,
+      designId: 'wgd_shared', accountId: 'ACC', documentId: `DID-${instanceId}`,
+      workspaceId: 'WID', documentName: `Copy ${instanceId}`, documentUrl: null,
+      isPublic: false, partStudioElementId: `PART-${instanceId}`,
+      variableStudioElementId: null, featureStudioElementId: null,
+      nativeFeatureId: null, datumFeatureStudioElementId: null, datumFeatureId: null,
+      buildMode: 'import' as const, lastSequence: 1, updatedAt: '2026-08-20T12:00:00Z',
+    });
+    const requests: Array<Record<string, unknown>> = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path.includes('/onshape/connection')) return json({
+        configured: true, reachable: true, credentialsPath: '/x/onshape.env', detail: null,
+        insecureKeyFile: false, account: { id: 'ACC', name: 'Owner' }, plan: null,
+      });
+      if (path.endsWith('/onshape/status')) {
+        const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        requests.push(request);
+        const selected = request.instanceId === 'wgo_b';
+        return json({
+          state: selected ? 'current' : 'instance_selection_required',
+          credentials: { configured: true, credentialsPath: '/x/onshape.env', detail: null, insecureKeyFile: false },
+          link: selected ? link('wgo_b') : null,
+          matchingLinks: [link('wgo_a'), link('wgo_b')],
+          selectedInstanceId: selected ? 'wgo_b' : null,
+          wgChangesAvailable: false,
+          currentFormula: 'osse',
+        });
+      }
+      return json({}, 404);
+    }));
+
+    await renderCoordinator();
+    expect(cadLinkCoordinatorBridge.getSnapshot().onshapeStatus?.state)
+      .toBe('instance_selection_required');
+
+    await act(async () => {
+      cadLinkCoordinatorBridge.getSnapshot().selectOnshapeInstance('wgo_b');
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(requests.at(-1)?.instanceId).toBe('wgo_b');
+    expect(cadLinkCoordinatorBridge.getSnapshot().onshapeStatus?.selectedInstanceId)
+      .toBe('wgo_b');
+  });
+
   it('enters CAD mode when an Onshape return lands so the panel can own it', async () => {
     preferencesStore.update({ cadApplication: 'onshape' });
     useDocumentStore.getState().setCadLink({
