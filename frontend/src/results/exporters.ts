@@ -713,6 +713,16 @@ export async function runExportBundle(context: ExportContext, formats = context.
     const allChannels = context.result && !context.channelId && resultFormats.has(format)
       ? resultChannels(context.result) : [];
     let channels = allChannels;
+    if (format === 'pressure_basis') {
+      // The retained artifact contains native drive bases. Solve-time derived
+      // channels (LR4 sums and passive-cardioid responses) are result products,
+      // not additional independently solved bases, so do not turn those into
+      // predictable 422s in an otherwise successful per-channel export.
+      const retainedDriveChannels = channels.filter(({ result }) => (
+        !Array.isArray(result.metadata?.derived_from_channels)
+      ));
+      if (retainedDriveChannels.length) channels = retainedDriveChannels;
+    }
     if (format === 'zma' && channels.some(({ result }) => hasElectricalImpedance(result))) {
       // A combined or unit-drive channel is not a failed electrical export; it
       // is deliberately outside the ZMA artifact family. If none are eligible,
@@ -808,7 +818,8 @@ export async function saveMeshArtifactToWorkspace(
  *
  * JSON carries the full result payload, so an archived run can be reread long
  * after the job database has pruned it. CSV is there because a spreadsheet is
- * how most people actually open a curve again.
+ * how most people actually open a curve again; derived sidecars and the static
+ * report make the permanent folder useful without reopening WG.
  */
 export const ARCHIVE_FORMATS: ExportFormat[] = [
   'json', 'csv', 'derived_acoustics', 'html_report',
@@ -837,6 +848,13 @@ export async function archiveRunToWorkspace(
   fetcher: typeof fetch = fetch,
 ): Promise<string[]> {
   const subdirectory = exportSubdirectoryForJob(job);
+  const formats: ExportFormat[] = [
+    ...ARCHIVE_FORMATS,
+    ...(job.has_pressure_basis_artifact ? ['pressure_basis' as const] : []),
+    ...(job.has_radiation_impedance_artifact
+      ? RADIATION_IMPEDANCE_ARCHIVE_FORMATS
+      : []),
+  ];
   const bundle = await runWorkspaceExportBundle({
     result: await fetchJobResults(job.id, fetcher) as ResultPayload,
     ...resultExportSnapshot(job),
@@ -851,9 +869,7 @@ export async function archiveRunToWorkspace(
     // timestamp makes a completed run differ every time the metadata write is
     // retried after an app restart; the run's completion time is its timestamp.
     now: new Date(job.completed_at ?? job.created_at),
-  }, job.has_radiation_impedance_artifact
-    ? [...ARCHIVE_FORMATS, ...RADIATION_IMPEDANCE_ARCHIVE_FORMATS]
-    : ARCHIVE_FORMATS);
+  }, formats);
   if (bundle.failures.length) {
     throw new Error(bundle.failures.map(({ format, reason }) => `${format} (${reason})`).join(', '));
   }

@@ -69,9 +69,11 @@ when the job's artifact flag is true; ordinary runs do not fail archiving over a
 artifact they never produced.
 
 The default run archive always writes full JSON, frequency CSV, derived-acoustics
-sidecars, and the static HTML report. Archive timestamps come from the run's recorded
-completion time, so retrying after an interrupted metadata update reproduces identical
-bytes under the archive's merge-identical policy.
+sidecars, and the static HTML report. Imported Metal archives also include every
+retained native drive-channel pressure basis; derived combined/cardioid channels are
+not misrepresented as independently solved bases. Archive timestamps come from the
+run's recorded completion time, so retrying after an interrupted metadata update
+reproduces identical bytes under the archive's merge-identical policy.
 
 ## Security and integrity
 
