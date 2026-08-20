@@ -41,6 +41,7 @@ interface CadLinkCoordinatorSnapshot {
   bundles: CadReturnBundle[];
   loading: boolean;
   ingesting: boolean;
+  ingestError: string | null;
   sendingToFusion: boolean;
   error: string | null;
   status: string | null;
@@ -52,6 +53,7 @@ interface CadLinkCoordinatorSnapshot {
   refresh(options?: RefreshOptions): Promise<void>;
   refreshOnshapeStatus(committed?: DesignIdentity): Promise<void>;
   returnFromOnshape(): Promise<void>;
+  selectBundle(bundle: CadReturnBundle): void;
   ingest(): Promise<void>;
   ingestSelected(): Promise<CadReturnIngestRecord>;
   pullFromFusion(): Promise<CadReturnBundle>;
@@ -77,6 +79,7 @@ let bridgeSnapshot: CadLinkCoordinatorSnapshot = {
   bundles: [],
   loading: true,
   ingesting: false,
+  ingestError: null,
   sendingToFusion: false,
   error: null,
   status: null,
@@ -88,6 +91,7 @@ let bridgeSnapshot: CadLinkCoordinatorSnapshot = {
   refresh: unavailable,
   refreshOnshapeStatus: unavailableRefreshOnshape,
   returnFromOnshape: unavailable,
+  selectBundle: () => undefined,
   ingest: unavailable,
   ingestSelected: unavailable,
   pullFromFusion: unavailable,
@@ -232,6 +236,7 @@ export function CadLinkCoordinator() {
   const [bundles, setBundles] = useState<CadReturnBundle[]>([]);
   const [loading, setLoading] = useState(true);
   const [ingesting, setIngesting] = useState(false);
+  const [ingestError, setIngestError] = useState<string | null>(null);
   const [sendingToFusion, setSendingToFusion] = useState(false);
   const [pendingFusionConflict, setPendingFusionConflict] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -244,6 +249,7 @@ export function CadLinkCoordinator() {
   const returnListRequest = useRef(0);
   const fusionSendRequest = useRef(0);
   const ingestRequest = useRef(0);
+  const ingestAbortController = useRef<AbortController | null>(null);
   const fusionStatusRequest = useRef(0);
   const onshapeStatusRequest = useRef(0);
   const onshapeConnectionRequested = useRef(false);
@@ -255,6 +261,8 @@ export function CadLinkCoordinator() {
   // (pull, then ingest, then solve) continue from that discovery.
   const solveCommandInFlight = useRef(false);
   const solveCommandSeen = useRef<string | null>(null);
+  const autoIngestPending = useRef(false);
+  const ingestSelectedRef = useRef<() => Promise<CadReturnIngestRecord>>(unavailable);
   const pendingReturnWaiter = useRef<{
     requestId: string;
     settle: (bundle: CadReturnBundle) => void;
@@ -268,7 +276,25 @@ export function CadLinkCoordinator() {
       mounted.current = false;
       fusionSendRequest.current += 1;
       ingestRequest.current += 1;
+      ingestAbortController.current?.abort();
     };
+  }, []);
+
+  /** Start automatic preparation only when no Fusion-authored solve command
+   * owns selection/ingestion. A returns poll can finish while the solve-command
+   * poll is merely checking; remember that arrival and retry after the check
+   * proves there is no command to consume. */
+  const autoIngestSelected = useCallback(() => {
+    if (parkedSolveCommandStore.getSnapshot().command) {
+      autoIngestPending.current = false;
+      return;
+    }
+    if (solveCommandInFlight.current) {
+      autoIngestPending.current = true;
+      return;
+    }
+    autoIngestPending.current = false;
+    void ingestSelectedRef.current().catch(() => undefined);
   }, []);
 
   useEffect(() => subscribeRevision((event) => {
@@ -404,6 +430,10 @@ export function CadLinkCoordinator() {
         importedMeshStore.beginIntent();
       }
       if (arrived) {
+        const parked = parkedSolveCommandStore.getSnapshot().command;
+        if (parked && parked.bundlePath !== arrived.bundlePath) {
+          await refuseParkedSolveCommand('Superseded by a newer return from Fusion.');
+        }
         if (arrived.requestId === pendingReturnRequestId.current) {
           pendingReturnRequestId.current = null;
           pendingReturnRequestedAt.current = null;
@@ -420,6 +450,7 @@ export function CadLinkCoordinator() {
         // workspace the same way an Onshape return does. A first listing does
         // not: nothing arrived, and stealing the mode on load would be wrong.
         enterCadWorkspace();
+        autoIngestSelected();
       } else if (!initial) {
         const selected = useCadReturnStore.getState().selectedBundle;
         if (!selected) return;
@@ -435,7 +466,7 @@ export function CadLinkCoordinator() {
       // latest completion owns the loading flag even when it did not raise it.
       if (request === returnListRequest.current) setLoading(false);
     }
-  }, []);
+  }, [autoIngestSelected]);
 
   /** One outbound Fusion action for every surface. The rail card and CAD Link
    * panel both call this bridge so identity adoption, feedback, and return-list
@@ -560,10 +591,13 @@ export function CadLinkCoordinator() {
     // token because its follow-up artifact fetch can be superseded independently.
     const ingestGeneration = current.beginIngestIntent();
     const request = ++ingestRequest.current;
+    ingestAbortController.current?.abort();
+    const abortController = new AbortController();
+    ingestAbortController.current = abortController;
     // Intent starts before the network request. A later viewport choice must
     // win even when this ingest's mesh fetch eventually completes.
     const viewportGeneration = importedMeshStore.beginIntent();
-    setIngesting(true); setError(null); setStatus(null); setViewportNotice(null);
+    setIngesting(true); setIngestError(null); setError(null); setStatus(null); setViewportNotice(null);
     try {
       const skipped = new Set(current.skippedSourceIds);
       const record = await ingestReturn({
@@ -575,7 +609,7 @@ export function CadLinkCoordinator() {
         },
         skippedSourceIds: current.skippedSourceIds,
         areaDriftOverrides: current.areaDriftOverrides,
-      });
+      }, fetch, abortController.signal);
       if (!useCadReturnStore.getState().applyIngest(record, ingestGeneration)) {
         const superseded = 'Discarded a completed ingest because its selected return or design was superseded. Rebuild the mesh for the current state.';
         if (request === ingestRequest.current && mounted.current) setStatus(superseded);
@@ -615,12 +649,26 @@ export function CadLinkCoordinator() {
           if (drift) current.flagAreaDrift(drift[1]);
         }
         setError(message);
+        setIngestError(message);
       }
       throw reason instanceof Error ? reason : new Error(message);
     } finally {
+      if (ingestAbortController.current === abortController) ingestAbortController.current = null;
       if (request === ingestRequest.current && mounted.current) setIngesting(false);
     }
   }, [reportViewportNotice]);
+  ingestSelectedRef.current = ingestSelected;
+
+  /** Manual list selection is preparation intent too. Selecting immediately
+   * advances both generations, then a fresh ingest aborts any older request;
+   * late fetch implementations that ignore abort are still rejected by the
+   * store generation before they can publish a record or viewport scene. */
+  const selectBundle = useCallback((bundle: CadReturnBundle) => {
+    useCadReturnStore.getState().selectBundle(bundle);
+    importedMeshStore.beginIntent();
+    enterCadWorkspace();
+    autoIngestSelected();
+  }, [autoIngestSelected]);
 
   // The panel's button: same work, feedback already presented, nothing thrown.
   const ingest = useCallback(async () => {
@@ -795,6 +843,7 @@ export function CadLinkCoordinator() {
         blockers: [],
         parkedAt: command.requestedAt || new Date().toISOString(),
       });
+      autoIngestPending.current = false;
       const continuity = useCadReturnStore.getState().selectArrivedBundle(bundle);
       await ingestSelected();
       if (continuity === 'reset') {
@@ -829,8 +878,11 @@ export function CadLinkCoordinator() {
       if (parked) parkedSolveCommandStore.setBlockers(parked.commandId, [message]);
     } finally {
       solveCommandInFlight.current = false;
+      if (autoIngestPending.current && !parkedSolveCommandStore.getSnapshot().command) {
+        autoIngestSelected();
+      }
     }
-  }, [bundles, ingestSelected]);
+  }, [autoIngestSelected, bundles, ingestSelected]);
 
   // Same cadence as the returns poll, and Fusion-only: Onshape has no marker.
   useEffect(() => {
@@ -849,6 +901,7 @@ export function CadLinkCoordinator() {
       bundles,
       loading,
       ingesting,
+      ingestError,
       sendingToFusion,
       error,
       status,
@@ -860,6 +913,7 @@ export function CadLinkCoordinator() {
       refresh,
       refreshOnshapeStatus,
       returnFromOnshape,
+      selectBundle,
       ingest,
       ingestSelected,
       pullFromFusion,
@@ -878,6 +932,7 @@ export function CadLinkCoordinator() {
       bundles: [],
       loading: true,
       ingesting: false,
+      ingestError: null,
       sendingToFusion: false,
       error: null,
       status: null,
@@ -889,6 +944,7 @@ export function CadLinkCoordinator() {
       refresh: unavailable,
       refreshOnshapeStatus: unavailableRefreshOnshape,
       returnFromOnshape: unavailable,
+      selectBundle: () => undefined,
       ingest: unavailable,
       ingestSelected: unavailable,
       pullFromFusion: unavailable,
@@ -911,6 +967,7 @@ export function CadLinkCoordinator() {
     fusionStatus,
     ingest,
     ingestSelected,
+    ingestError,
     ingesting,
     pullAndSolve,
     pullFromFusion,
@@ -923,6 +980,7 @@ export function CadLinkCoordinator() {
     refresh,
     refreshOnshapeStatus,
     returnFromOnshape,
+    selectBundle,
     reportError,
     reportStatus,
     reportViewportNotice,

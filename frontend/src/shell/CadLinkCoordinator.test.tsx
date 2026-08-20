@@ -654,12 +654,19 @@ describe('CadLinkCoordinator', () => {
     expect(harness.solveCurrentCadImport).toHaveBeenCalledOnce();
   });
 
-  it('detects and auto-selects a newly arrived return', async () => {
+  it('detects, selects, and automatically ingests a newly arrived return', async () => {
     let listing = { items: [initialBundle] };
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const ingestBodies: Array<Record<string, unknown>> = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
       if (path.endsWith('/returns')) return json(listing);
       if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.endsWith('/solve-command')) return json({ command: null });
+      if (path.endsWith('/ingest')) {
+        ingestBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return json(ingestRecord);
+      }
+      if (path.endsWith('/viewport-mesh')) return new Response(viewportMesh, { status: 200 });
       return json({}, 404);
     }));
     const activate = vi.spyOn(workspaceNavigation, 'activate').mockReturnValue(true);
@@ -673,17 +680,208 @@ describe('CadLinkCoordinator', () => {
     listing = { items: [arrived] };
     await act(async () => {
       await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
-      await Promise.resolve();
+      await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
     });
 
     expect(useCadReturnStore.getState().selectedBundle).toEqual(arrived);
-    expect(cadLinkCoordinatorBridge.getSnapshot().status).toBe(
-      'Received Speaker rebuilt from Fusion 360. Kept your mesh, channel, and solve settings.',
-    );
+    expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe(ingestRecord.ingest_id);
+    expect(ingestBodies).toHaveLength(1);
+    expect(cadLinkCoordinatorBridge.getSnapshot().status).toContain(ingestRecord.ingest_id);
     // The status above renders only inside the CAD Link panel, which exists
     // only in CAD mode — so the arrival has to enter it to be visible at all.
     expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
     expect(activate).toHaveBeenCalledWith('cadlink');
+  });
+
+  it('does not double-ingest an arrival while its solve command is being consumed', async () => {
+    const solveResponse = deferred<Response>();
+    let listing = { items: [initialBundle] };
+    let ingestCalls = 0;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json(listing);
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.endsWith('/solve-command')) return solveResponse.promise;
+      if (path.endsWith('/ingest')) { ingestCalls += 1; return json(ingestRecord); }
+      if (path.endsWith('/viewport-mesh')) return new Response(viewportMesh, { status: 200 });
+      return json({}, 404);
+    }));
+    const solveCurrentCadImport = vi.fn(async () => 'busy' as const);
+    vi.spyOn(jobsCoordinatorBridge, 'getSnapshot').mockReturnValue({
+      ...jobsCoordinatorBridge.getSnapshot(), solveCurrentCadImport,
+    });
+    await renderCoordinator();
+
+    const arrived = { ...initialBundle, modifiedAt: '2026-08-13T12:00:00Z', documentName: 'Command arrival' };
+    listing = { items: [arrived] };
+    await act(async () => {
+      await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
+      await Promise.resolve();
+    });
+    expect(ingestCalls).toBe(0);
+
+    solveResponse.resolve(json({
+      command: {
+        commandId: 'cmd-arrival', returnId: 'wgr_arrival', bundlePath: arrived.bundlePath,
+        manifestSha256: 'sha256:arrival', requestedAt: '2026-08-13T12:00:00Z',
+      },
+      outcome: null,
+    }));
+    await act(async () => {
+      await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    });
+
+    expect(ingestCalls).toBe(1);
+    expect(solveCurrentCadImport).toHaveBeenCalledOnce();
+    expect(parkedSolveCommandStore.getSnapshot().command?.commandId).toBe('cmd-arrival');
+  });
+
+  it('does not auto-ingest an arrival already owned by a parked solve command', async () => {
+    let listing = { items: [initialBundle] };
+    let ingestCalls = 0;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json(listing);
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.endsWith('/solve-command')) return json({ command: null });
+      if (path.endsWith('/ingest')) { ingestCalls += 1; return json(ingestRecord); }
+      return json({}, 404);
+    }));
+    await renderCoordinator();
+    const arrived = { ...initialBundle, modifiedAt: '2026-08-13T12:00:00Z' };
+    parkedSolveCommandStore.park({
+      commandId: 'cmd-parked', bundlePath: arrived.bundlePath, blockers: ['review settings'],
+      parkedAt: '2026-08-13T12:00:00Z',
+    });
+    listing = { items: [arrived] };
+
+    await act(async () => {
+      await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
+      await Promise.resolve();
+    });
+
+    expect(ingestCalls).toBe(0);
+    expect(parkedSolveCommandStore.getSnapshot().command?.commandId).toBe('cmd-parked');
+  });
+
+  it('retires a parked solve command when a different newer return arrives', async () => {
+    let listing = { items: [initialBundle] };
+    const reported: Array<Record<string, unknown>> = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json(listing);
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.endsWith('/solve-command/outcome')) {
+        reported.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return json({ state: 'refused', cleared: true });
+      }
+      if (path.endsWith('/solve-command')) return json({ command: null });
+      if (path.endsWith('/ingest')) return json({ ...ingestRecord, ingest_id: 'wgi_after_superseded_command' });
+      if (path.endsWith('/viewport-mesh')) return new Response(viewportMesh, { status: 200 });
+      return json({}, 404);
+    }));
+    await renderCoordinator();
+    parkedSolveCommandStore.park({
+      commandId: 'cmd-old', bundlePath: initialBundle.bundlePath, blockers: ['review settings'],
+      parkedAt: '2026-08-12T00:00:00Z',
+    });
+    const arrived = {
+      ...initialBundle,
+      name: 'newer.wgreturn', bundlePath: 'wgreturn/newer.wgreturn',
+      documentName: 'Newer return', modifiedAt: '2026-08-13T12:00:00Z',
+    };
+    listing = { items: [arrived, initialBundle] };
+
+    await act(async () => {
+      await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
+      await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    });
+
+    expect(reported).toEqual([{
+      commandId: 'cmd-old', state: 'refused', jobId: null,
+      reason: 'Superseded by a newer return from Fusion.',
+    }]);
+    expect(parkedSolveCommandStore.getSnapshot().command).toBeNull();
+    expect(useCadReturnStore.getState().selectedBundle).toEqual(arrived);
+    expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe('wgi_after_superseded_command');
+  });
+
+  it('automatically ingests a manually selected readable return', async () => {
+    const selected = {
+      ...initialBundle,
+      name: 'selected.wgreturn',
+      bundlePath: 'wgreturn/selected.wgreturn',
+      documentName: 'Selected speaker',
+    };
+    const ingested = { ...ingestRecord, ingest_id: 'wgi_selected' };
+    const ingestPaths: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json({ items: [initialBundle, selected] });
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.endsWith('/solve-command')) return json({ command: null });
+      if (path.endsWith('/ingest')) {
+        ingestPaths.push(JSON.parse(String(init?.body)).bundlePath);
+        return json(ingested);
+      }
+      if (path.endsWith('/viewport-mesh')) return new Response(viewportMesh, { status: 200 });
+      return json({}, 404);
+    }));
+    await renderCoordinator();
+
+    await act(async () => {
+      cadLinkCoordinatorBridge.getSnapshot().selectBundle(selected);
+      await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    });
+
+    expect(ingestPaths).toEqual([selected.bundlePath]);
+    expect(useCadReturnStore.getState().selectedBundle).toEqual(selected);
+    expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe('wgi_selected');
+  });
+
+  it('keeps the newest rapid selection and discards the superseded ingest result', async () => {
+    const olderResponse = deferred<Response>();
+    const newerResponse = deferred<Response>();
+    const older = {
+      ...initialBundle,
+      name: 'older.wgreturn', bundlePath: 'wgreturn/older.wgreturn', documentName: 'Older choice',
+    };
+    const newer = {
+      ...initialBundle,
+      name: 'newer.wgreturn', bundlePath: 'wgreturn/newer.wgreturn', documentName: 'Newest choice',
+    };
+    const ingestPaths: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json({ items: [initialBundle, older, newer] });
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.endsWith('/solve-command')) return json({ command: null });
+      if (path.endsWith('/ingest')) {
+        const bundlePath = JSON.parse(String(init?.body)).bundlePath as string;
+        ingestPaths.push(bundlePath);
+        return bundlePath === older.bundlePath ? olderResponse.promise : newerResponse.promise;
+      }
+      if (path.endsWith('/viewport-mesh')) return new Response(viewportMesh, { status: 200 });
+      return json({}, 404);
+    }));
+    await renderCoordinator();
+
+    act(() => cadLinkCoordinatorBridge.getSnapshot().selectBundle(older));
+    act(() => cadLinkCoordinatorBridge.getSnapshot().selectBundle(newer));
+    expect(ingestPaths).toEqual([older.bundlePath, newer.bundlePath]);
+
+    await act(async () => {
+      olderResponse.resolve(json({ ...ingestRecord, ingest_id: 'wgi_older_choice' }));
+      await Promise.resolve(); await Promise.resolve();
+    });
+    expect(useCadReturnStore.getState().ingestRecord).toBeNull();
+
+    await act(async () => {
+      newerResponse.resolve(json({ ...ingestRecord, ingest_id: 'wgi_newest_choice' }));
+      await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    });
+    expect(useCadReturnStore.getState().selectedBundle).toEqual(newer);
+    expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe('wgi_newest_choice');
   });
 
   it('ignores an older return listing that finishes after a newer refresh', async () => {
@@ -698,6 +896,9 @@ describe('CadLinkCoordinator', () => {
         return listingRequest === 2 ? olderResponse.promise : newerResponse.promise;
       }
       if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.endsWith('/solve-command')) return json({ command: null });
+      if (path.endsWith('/ingest')) return json({ ...ingestRecord, ingest_id: 'wgi_newest_listing' });
+      if (path.endsWith('/viewport-mesh')) return new Response(viewportMesh, { status: 200 });
       return json({}, 404);
     }));
     await renderCoordinator();
@@ -722,9 +923,7 @@ describe('CadLinkCoordinator', () => {
 
     expect(cadLinkCoordinatorBridge.getSnapshot().bundles).toEqual([newer]);
     expect(useCadReturnStore.getState().selectedBundle).toEqual(newer);
-    expect(cadLinkCoordinatorBridge.getSnapshot().status).toBe(
-      'Received Newest listing from Fusion 360. Kept your mesh, channel, and solve settings.',
-    );
+    expect(cadLinkCoordinatorBridge.getSnapshot().status).toContain('wgi_newest_listing');
   });
 
   it('marks an ingestion stale while the CAD Link panel is unmounted', async () => {
