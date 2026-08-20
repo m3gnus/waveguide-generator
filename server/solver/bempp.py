@@ -738,7 +738,7 @@ class BemppEngine:
         artifact_cb: ArtifactCallback | None = None,
         result_cb: ResultCallback | None = None,
     ) -> EngineRunResult:
-        if (request.design.root.simulation.solver_mode or "").strip().lower() == "circsym":
+        if (request.options.solver_mode or "").strip().lower() == "circsym":
             raise ValueError("BEMPP cannot run solver_mode='circsym'; select Metal or use full_3d")
         context = SolverContext.from_request(request, solver_mode="full_3d")
         reject_bempp_infinite_baffle(context)

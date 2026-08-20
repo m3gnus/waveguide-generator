@@ -440,7 +440,7 @@ async def resolve_submission(
 
     if engine_name == "auto":
         engine_name = await engine_registry.resolve(
-            "auto", solver_mode=request.design.root.simulation.solver_mode
+            "auto", solver_mode=request.options.solver_mode
         )
         if engine_name is None:
             raise EngineUnavailableError(

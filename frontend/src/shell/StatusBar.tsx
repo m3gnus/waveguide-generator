@@ -84,10 +84,11 @@ export function StatusBar() {
   const cadReturn = useCadReturnStore();
   const filename = useDocumentStore((state) => state.filename);
   const selectedEngine = useSolveOptionsStore((state) => state.engine);
+  const solverMode = useSolveOptionsStore((state) => state.solverMode);
   const frequencyMode = useSolveOptionsStore((state) => state.frequencyMode);
   const frequencyListText = useSolveOptionsStore((state) => state.frequencyListText);
   const preferences = usePreferences();
-  const engineLabel = engineStatusLabel(engines, mode === 'cad' ? 'metal' : selectedEngine, mode === 'cad' ? 'full_3d' : design.simulation.solver_mode, isLoading);
+  const engineLabel = engineStatusLabel(engines, mode === 'cad' ? 'metal' : selectedEngine, mode === 'cad' ? 'full_3d' : solverMode, isLoading);
   const previewError = preview.error ? previewErrorMessage(preview.error) : null;
   const meshMetrics = previewMeshMetrics(preview.frame);
   const cadTriangles = cadReturn.ingestRecord?.mesh?.stats.triangle_count;

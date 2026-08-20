@@ -389,8 +389,6 @@ def _write_shared(lines: list[str], params: Mapping[str, Any]) -> None:
             _line(lines, ath_key, params[param_key])
     if _defined(params, "simType"):
         _formatted_line(lines, "Simulation.SimType", params["simType"])
-    if _defined(params, "solverMode"):
-        _formatted_line(lines, "Simulation.SolverMode", params["solverMode"])
 
 
 def _write_passthrough_blocks(lines: list[str], params: Mapping[str, Any]) -> None:

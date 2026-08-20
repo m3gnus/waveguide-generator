@@ -132,6 +132,7 @@ def test_explicit_axisymmetric_path_matches_explicit_full_3d(tmp_path: Path) -> 
                 },
                 "options": {
                     "engine": "metal",
+                    "solver_mode": mode,
                     "frequency_range": [1000, 1001],
                     "num_frequencies": 1,
                     "frequency_spacing": "linear",

@@ -2012,7 +2012,7 @@ class MetalEngine:
                 field_trace_unavailable_reason=field_trace_reason,
             )
 
-        mode = str(request.design.root.simulation.solver_mode or "auto").strip().lower()
+        mode = str(request.options.solver_mode or "auto").strip().lower()
         if mode not in {"auto", "full_3d", "circsym"}:
             raise ValueError("solver_mode must be auto, full_3d, or circsym")
 

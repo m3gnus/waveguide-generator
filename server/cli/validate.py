@@ -97,7 +97,7 @@ def _validation_messages(exc: ValidationError) -> list[str]:
 
 
 def _frequency_summary(request: SolveRequest) -> dict[str, Any]:
-    solver_mode = request.design.root.simulation.solver_mode or "auto"
+    solver_mode = request.options.solver_mode or "auto"
     context = SolverContext.from_request(request, solver_mode=solver_mode)
     simulation = request.design.root.simulation
     if request.options.frequencies_hz is not None:
@@ -157,7 +157,15 @@ async def _solve_path_summary(request: SolveRequest, engine_name: str) -> dict[s
             ],
         }
 
-    mode = request.design.root.simulation.solver_mode or "auto"
+    mode = request.options.solver_mode or "auto"
+    if mode == "auto":
+        return {
+            "predicted": "full-3d",
+            "reasons": [
+                "solver_mode='auto' selects native full 3D; the CPU axisymmetric "
+                "meridian path requires explicit solver_mode='circsym'"
+            ],
+        }
     if mode == "full_3d":
         return {
             "predicted": "full-3d",
@@ -364,7 +372,7 @@ async def validate_path(
         execution_request, resolved.engine_name
     )
     if (
-        request.design.root.simulation.solver_mode == "circsym"
+        request.options.solver_mode == "circsym"
         and payload["solvePath"]["reasons"]
     ):
         _refuse(

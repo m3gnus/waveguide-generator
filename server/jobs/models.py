@@ -105,6 +105,7 @@ class SolveOptions(JobModel):
     """Execution choices kept separate from the authoritative v2 design."""
 
     engine: str = "auto"
+    solver_mode: Literal["auto", "full_3d", "circsym"] = "auto"
     symmetry: str = "auto"
     frequency_range: list[float] | None = None
     num_frequencies: int | None = Field(default=None, ge=1, le=401)
@@ -118,7 +119,7 @@ class SolveOptions(JobModel):
     polar_config: PolarConfig = Field(default_factory=PolarConfig)
     stage_delay_ms: int = Field(default=30, ge=0, le=2000)
 
-    @field_validator("engine", "symmetry")
+    @field_validator("engine", "solver_mode", "symmetry")
     @classmethod
     def normalize_named_option(cls, value: str, info: Any) -> str:
         normalized = value.strip().lower()
@@ -134,6 +135,12 @@ class SolveOptions(JobModel):
             raise ValueError(
                 "symmetry must be one of auto, full, half_xz, half_yz, or quarter"
             )
+        if info.field_name == "solver_mode" and normalized not in {
+            "auto",
+            "full_3d",
+            "circsym",
+        }:
+            raise ValueError("solver_mode must be one of auto, full_3d, or circsym")
         return normalized
 
     @field_validator("frequency_spacing", "mesh_validation_mode", mode="before")

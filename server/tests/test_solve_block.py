@@ -22,6 +22,7 @@ def _portable_dump(options: Any) -> dict[str, Any]:
         key: value[key]
         for key in (
             "engine",
+            "solver_mode",
             "symmetry",
             "mesh_validation_mode",
             "verbose",
@@ -86,3 +87,13 @@ def test_base_is_overridden_in_abec_then_wg_order() -> None:
 def test_explicit_base_is_unchanged_when_the_file_has_no_solve_blocks() -> None:
     base = SolveOptions()
     assert solve_options_from_blocks({}, base) == base
+
+
+def test_legacy_file_engine_cannot_replace_machine_execution_choice() -> None:
+    base = SolveOptions(engine="bempp", solver_mode="full_3d")
+    resolved = solve_options_from_blocks(
+        {"WG.Solve": {"items": {"Engine": "metal"}}},
+        base,
+    )
+    assert resolved.engine == "bempp"
+    assert resolved.solver_mode == "full_3d"

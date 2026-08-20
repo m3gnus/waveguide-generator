@@ -35,7 +35,6 @@ export function wgSolveSettingsFromStore(
   state = useSolveOptionsStore.getState(),
 ): WgSolveSettings {
   return {
-    engine: state.engine,
     symmetry: state.symmetry,
     meshValidationMode: state.meshValidationMode,
     verbose: state.verbose,
@@ -61,7 +60,6 @@ export function wgSolveSettingsFromSolveOptions(options: unknown): WgSolveSettin
     ? options.frequencies_hz.filter((value): value is number => Number.isFinite(value))
     : [];
   return {
-    engine: typeof options.engine === 'string' ? options.engine : 'auto',
     symmetry: (typeof options.symmetry === 'string' ? options.symmetry : 'auto') as SymmetryMode,
     meshValidationMode: (typeof options.mesh_validation_mode === 'string'
       ? options.mesh_validation_mode

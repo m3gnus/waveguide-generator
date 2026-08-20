@@ -5848,6 +5848,16 @@
           "polar_config": {
             "$ref": "#/components/schemas/PolarConfig"
           },
+          "solver_mode": {
+            "default": "auto",
+            "enum": [
+              "auto",
+              "full_3d",
+              "circsym"
+            ],
+            "title": "Solver Mode",
+            "type": "string"
+          },
           "stage_delay_ms": {
             "default": 30,
             "maximum": 2000.0,

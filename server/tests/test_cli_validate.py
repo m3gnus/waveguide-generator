@@ -125,8 +125,9 @@ def test_validate_real_corpus_mwg_emits_versioned_json(
     assert report["dialect"] == "mwg"
     assert report["settingsSource"] == "file"
     assert report["frequencies"]["count"] >= 1
+    # Legacy WG.Solve Engine is a machine hint and cannot force the host.
     assert report["engine"] == {
-        "requested": "dryrun",
+        "requested": "auto",
         "resolved": "dryrun",
         "available": True,
         "reason": "test capability",

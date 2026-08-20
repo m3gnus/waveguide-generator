@@ -18,7 +18,10 @@ export type FrequencySpacing = 'log' | 'linear';
 export type PolarAxis = 'horizontal' | 'vertical' | 'diagonal';
 export type ObservationOrigin = 'mouth' | 'throat';
 export type SymmetryMode = 'auto' | 'full' | 'half_xz' | 'half_yz' | 'quarter';
+export type SolverMode = 'auto' | 'full_3d' | 'circsym';
 export type FrequencyMode = 'range' | 'list';
+
+export const SOLVER_MODES: SolverMode[] = ['auto', 'full_3d', 'circsym'];
 
 export { MAX_FREQUENCY_POINTS, parseFrequencyList };
 export type { FrequencyListParse };
@@ -38,6 +41,7 @@ export interface PolarConfig {
 
 export interface SolveOptions {
   engine: string;
+  solver_mode?: SolverMode;
   symmetry: SymmetryMode;
   mesh_validation_mode: MeshValidationMode;
   verbose: boolean;
@@ -159,6 +163,7 @@ export function polarUiFromConfig(config: unknown): PolarUiState | null {
 /** Exactly the solve settings that are written to durable storage. */
 export interface PersistedSolveOptions {
   engine: string;
+  solverMode: SolverMode;
   symmetry: SymmetryMode;
   meshValidationMode: MeshValidationMode;
   verbose: boolean;
@@ -170,6 +175,7 @@ export interface PersistedSolveOptions {
 
 export const DEFAULT_SOLVE_OPTIONS: Readonly<PersistedSolveOptions> = Object.freeze({
   engine: 'auto',
+  solverMode: 'auto',
   symmetry: 'auto',
   meshValidationMode: 'warn',
   verbose: false,
@@ -248,6 +254,7 @@ export function normalizePersistedSolveOptions(
   const stored = isRecord(raw) ? raw : {};
   return {
     engine: typeof stored.engine === 'string' && ENGINE_PATTERN.test(stored.engine) ? stored.engine : fallback.engine,
+    solverMode: oneOf(stored.solverMode, SOLVER_MODES, fallback.solverMode),
     symmetry: oneOf(stored.symmetry, SYMMETRY_MODES, fallback.symmetry),
     meshValidationMode: oneOf(stored.meshValidationMode, MESH_VALIDATION_MODES, fallback.meshValidationMode),
     verbose: typeof stored.verbose === 'boolean' ? stored.verbose : fallback.verbose,
@@ -260,6 +267,7 @@ export function normalizePersistedSolveOptions(
 
 interface SolveOptionsStore extends PersistedSolveOptions {
   setEngine: (engine: string) => void;
+  setSolverMode: (solverMode: SolverMode) => void;
   setSymmetry: (symmetry: SymmetryMode) => void;
   setMeshValidationMode: (mode: MeshValidationMode) => void;
   setVerbose: (verbose: boolean) => void;
@@ -275,6 +283,7 @@ interface SolveOptionsStore extends PersistedSolveOptions {
 export const useSolveOptionsStore = create<SolveOptionsStore>()(persist((set, get) => ({
   ...defaultSolveOptions(),
   setEngine: (engine) => set({ engine }),
+  setSolverMode: (solverMode) => set({ solverMode }),
   setSymmetry: (symmetry) => set({ symmetry }),
   setMeshValidationMode: (meshValidationMode) => set({ meshValidationMode }),
   setVerbose: (verbose) => set({ verbose }),
@@ -298,6 +307,7 @@ export const useSolveOptionsStore = create<SolveOptionsStore>()(persist((set, ge
   options: () => {
     const base: SolveOptions = {
       engine: get().engine,
+      solver_mode: get().solverMode,
       symmetry: get().symmetry,
       mesh_validation_mode: get().meshValidationMode,
       verbose: get().verbose,

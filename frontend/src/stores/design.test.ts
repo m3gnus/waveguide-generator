@@ -181,6 +181,14 @@ describe('design store revision semantics', () => {
   });
 });
 
+describe('portable design serialization', () => {
+  it('omits legacy machine-local solver mode', () => {
+    const design = configuredDesign('OSSE');
+    design.simulation.solver_mode = 'circsym';
+    expect(serializeDesign(design)).not.toHaveProperty('simulation.solver_mode');
+  });
+});
+
 describe('family transitions', () => {
   beforeEach(() => resetDesignStore());
 

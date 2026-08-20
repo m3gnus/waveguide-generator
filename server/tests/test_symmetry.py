@@ -209,6 +209,7 @@ def _metal_request(mode: str = "auto", *, diagonal_angle: float = 45.0) -> Solve
             },
             "options": {
                 "engine": "metal",
+                "solver_mode": mode,
                 "polar_config": {"inclination": diagonal_angle},
             },
         }
@@ -247,8 +248,11 @@ def test_metal_auto_uses_native_full_3d_without_probing_circsym(monkeypatch) -> 
     )
 
     async def scenario() -> None:
+        request = _metal_request()
+        # A legacy portable value is inert; machine-local options remain AUTO.
+        request.design.root.simulation.solver_mode = "circsym"
         outcome = await MetalEngine().run(
-            _metal_request(), cancel_cb=lambda: None, stage_cb=lambda *_args: None
+            request, cancel_cb=lambda: None, stage_cb=lambda *_args: None
         )
         metadata = outcome.results["metadata"]
         assert metadata["solve_path"] == "full-3d"

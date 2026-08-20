@@ -64,18 +64,17 @@ describe('solver-backend parameter gating', () => {
     queryClient.clear();
   });
 
-  it('offers infinite baffle and the meridian mode where Metal is available', async () => {
+  it('offers infinite baffle where Metal is available', async () => {
     await mount(true);
     expect(optionsOf('simulation.sim_type')).toEqual(['Free-standing', 'Infinite baffle']);
-    expect(optionsOf('simulation.solver_mode'))
-      .toEqual(['Auto — full 3D', 'Full 3D', 'Axisymmetric meridian (CPU, force)']);
+    expect(host.querySelector('[data-parameter-id="simulation.solver_mode"]')).toBeNull();
     expect(host.querySelector('.field-warning')).toBeNull();
   });
 
-  it('hides both Metal-only choices on a host with only BEMPP', async () => {
+  it('hides the Metal-only simulation type on a host with only BEMPP', async () => {
     await mount(false);
     expect(optionsOf('simulation.sim_type')).toEqual(['Free-standing']);
-    expect(optionsOf('simulation.solver_mode')).toEqual(['Auto — full 3D', 'Full 3D']);
+    expect(host.querySelector('[data-parameter-id="simulation.solver_mode"]')).toBeNull();
     expect(host.querySelector('.field-warning')).toBeNull();
   });
 
