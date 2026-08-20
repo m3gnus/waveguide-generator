@@ -123,6 +123,21 @@ const jobsConnection = () => jobsSocket.getSnapshot().connection;
 
 const systemNow = () => new Date();
 
+/**
+ * Re-read a terminal job before creating its permanent archive.
+ *
+ * The completion event is intentionally small and can reach the browser just
+ * before the following metadata event advertises retained pressure bases,
+ * radiation impedance, final timings, and artifact byte counts. Archiving the
+ * event snapshot makes that ordering permanent: the archive is marked done
+ * without files that already exist on the server. A list refresh is the
+ * server's canonical, fully serialized job view and closes that race.
+ */
+export async function refreshedArchiveJob(job: JobItem): Promise<JobItem> {
+  await jobsSocket.refresh();
+  return jobsSocket.getSnapshot().jobs.find((candidate) => candidate.id === job.id) ?? job;
+}
+
 export function JobsCoordinator({ children, now = systemNow }: { children: ReactNode; now?: () => Date }) {
   const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
   // This component owns the jobs socket, so it is where a reconnect is visible.
@@ -306,7 +321,9 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         auto_export_formats: formats,
         auto_export_completed_at: completedAt,
       }),
-      archiveCompleted: async (job) => { await archiveRunToWorkspace(job, preferences); },
+      archiveCompleted: async (job) => {
+        await archiveRunToWorkspace(await refreshedArchiveJob(job), preferences);
+      },
       markArchived: (job, archivedAt) => jobsSocket.patchMetadata(job.id, { archived_at: archivedAt }),
       reportError,
     });
