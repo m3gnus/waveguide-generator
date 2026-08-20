@@ -3,6 +3,7 @@ import {
   fieldAcceptsExpression,
   type ParameterDefinition,
 } from './parameterRegistry';
+import { designForFamily, type DesignDocument, type DesignFamily } from '../stores/design';
 
 type Condition = {
   path?: string;
@@ -18,6 +19,22 @@ type FieldConditions = {
 };
 
 const ALL_FAMILIES = ['R-OSSE', 'OSSE', 'ICW', 'FREEFORM'] as const;
+
+function valueAtPath(design: DesignDocument, path: string | undefined): unknown {
+  if (!path) return undefined;
+  return path.split('.').reduce<unknown>((value, part) => {
+    if (value === null || typeof value !== 'object') return undefined;
+    return (value as Record<string, unknown>)[part];
+  }, design);
+}
+
+function defaultValues(field: ParameterDefinition): Partial<Record<DesignFamily, unknown>> {
+  const families = field.families ?? [...ALL_FAMILIES];
+  return Object.fromEntries(families.flatMap((family) => {
+    const value = valueAtPath(designForFamily(family), field.path);
+    return value === undefined ? [] : [[family, value]];
+  }));
+}
 
 const FIELD_CONDITIONS: Record<string, FieldConditions> = {
   'icw.L': { visible_when: { path: 'termination', operator: 'not_equals', value: 'rollback' } },
@@ -85,6 +102,7 @@ function serializeField(field: ParameterDefinition) {
     families: field.families ?? [...ALL_FAMILIES],
     accepts_expression: fieldAcceptsExpression(field),
     writable: field.kind !== 'indicator',
+    default_by_family: defaultValues(field),
     editor_bounds: field.min === undefined && field.max === undefined
       ? null
       : { minimum: field.min ?? null, maximum: field.max ?? null },

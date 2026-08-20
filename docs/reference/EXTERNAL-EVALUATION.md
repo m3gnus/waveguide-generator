@@ -13,7 +13,7 @@ software remains a peer client and does not import WG, mesher, or solver interna
 | Resource | Purpose |
 |---|---|
 | `GET /api/capabilities` | engines and fast paths available on this machine |
-| `GET /api/integration/v1/parameters` | stable parameter IDs, JSON paths, families, units, editor bounds, enums, expression support, and declarative conditions |
+| `GET /api/integration/v1/parameters` | stable parameter IDs, JSON paths, families, per-family defaults, units, editor bounds, enums, expression support, and declarative conditions |
 | `GET /api/integration/v1/design-schema` | JSON Schema for the discriminated design family |
 | `GET /openapi.json` | live HTTP schema |
 | `docs/reference/openapi.v1.json` | release snapshot checked for drift in the repository |
