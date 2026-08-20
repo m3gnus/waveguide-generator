@@ -219,9 +219,14 @@ finally. A machine with no Metal engine cannot run an imported solve at all, so
 a request that lands there is refused outright instead of being offered again on
 every reopen.
 
-Preparing a new return keeps the mesh sizing, channel mapping, drivers, combine
-settings and sweep from the previous one whenever the source inventory is
-unchanged; findings acknowledgements are always re-earned.
+A return arriving from Fusion — and a return selected from the History list —
+is prepared automatically; **Prepare simulation** appears only as the retry
+when a preparation fails. Preparing a new return keeps the mesh sizing,
+channel mapping, drivers, combine settings and sweep from the previous one
+whenever the source inventory is unchanged. Findings acknowledgements persist
+per design the same way: evidence you have already acknowledged stays
+acknowledged when it reappears unchanged, and only new or changed findings ask
+again.
 
 ### Starting from a model drawn in Fusion
 
@@ -243,9 +248,10 @@ sent and solved the same way. Three things make it a valid return:
    this — fix the placement in Fusion rather than solving a mis-framed model.
 
 **Solve in WG** then works as for a linked design. The return arrives marked
-`unlinked` — one blocking finding acknowledges that WG has no design identity
-for it — and mesh sizing and drive channels are set in the CAD Link panel as
-for any import. Such a return is solved exactly as sent: there are no
+as an imported CAD model — an informational note states that WG has no design
+identity for it and that the assembly frame is solved as-is — and mesh sizing
+and drive channels are set in the CAD Link panel as for any import. Nothing
+blocks the solve. Such a return is solved exactly as sent: there are no
 parametric formulas behind it to edit in WG.
 
 The detailed CAD-link implementation plan is still active workspace material. Treat
