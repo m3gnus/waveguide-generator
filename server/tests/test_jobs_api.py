@@ -184,7 +184,9 @@ def test_dryrun_http_lifecycle_metadata_results_and_delete(
         assert detail["solve_options"]["engine"] == "dryrun"
         assert detail["solve_options"]["stage_delay_ms"] == 1
         assert detail["has_mesh_artifact"] is True
-        status, raw = await _request(app, "GET", f"/api/results/{job_id}")
+        status, raw, result_headers = await _request_with_headers(
+            app, "GET", f"/api/results/{job_id}"
+        )
         assert status == 200
         results = json.loads(raw)
         assert len(results["frequencies"]) == 4
@@ -192,6 +194,10 @@ def test_dryrun_http_lifecycle_metadata_results_and_delete(
         assert results["client_request_id"] == "external-run-7"
         assert results["client_metadata"] == {"campaign": "api-contract"}
         assert results["provenance"]["request_sha256"]
+        assert len(result_headers["x-wg-results-sha256"]) == 64
+        assert result_headers["etag"] == (
+            f'"sha256:{result_headers["x-wg-results-sha256"]}"'
+        )
         stored_mesh = app.state.jobs_runtime.store.get_mesh_artifact(job_id)
         assert stored_mesh is not None
         status, raw, headers = await _request_with_headers(
@@ -362,7 +368,17 @@ def test_dryrun_submit_is_rejected_when_guard_is_off(tmp_path: Path, monkeypatch
         app = create_app(data_dir=tmp_path)
         status, raw = await _request(app, "POST", "/api/solve", body=_solve_body())
         assert status == 503
-        assert "WG2_ENABLE_DRYRUN=1" in json.loads(raw)["detail"]
+        failure = json.loads(raw)
+        assert "WG2_ENABLE_DRYRUN=1" in failure["detail"]
+        assert failure["error"] == {
+            "schema_version": 1,
+            "code": "engine_unavailable",
+            "stage": "submission",
+            "message": failure["detail"],
+            "retryable": False,
+            "details": {},
+            "client_request_id": None,
+        }
         await app.state.jobs_runtime.shutdown()
 
     asyncio.run(scenario())
