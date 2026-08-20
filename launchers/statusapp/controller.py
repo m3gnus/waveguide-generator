@@ -23,7 +23,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from scripts.frontend_freshness import frontend_freshness
-from server.platform.instance import PORT_SCAN_COUNT, requested_port, select_port
+from server.platform.instance import requested_port
 from .updater import UpdateHandoffError, consume_update_request, launch_update_handoff
 
 
@@ -64,17 +64,12 @@ class StatusSnapshot:
 
 
 RequestProbe = Callable[[str, float], tuple[int, bytes]]
-PortSelector = Callable[[int, str, int], int]
 
 
 def _http_get(url: str, timeout: float) -> tuple[int, bytes]:
     request = Request(url, headers={"User-Agent": "WaveguideGenerator-StatusApp"})
     with urlopen(request, timeout=timeout) as response:
         return int(response.status), response.read(4096)
-
-
-def _select_port(preferred: int, host: str, scan_count: int) -> int:
-    return select_port(preferred, host=host, scan_count=scan_count)
 
 
 def _probe_failure(exc: BaseException) -> str:
@@ -223,10 +218,8 @@ class StatusController:
         server_command: Sequence[str] | None = None,
         environ: dict[str, str] | None = None,
         request_probe: RequestProbe = _http_get,
-        port_selector: PortSelector = _select_port,
         request_timeout: float = 0.35,
         shutdown_timeout: float = 8.0,
-        port_scan_count: int = PORT_SCAN_COUNT,
     ) -> None:
         self.repo_root = Path(repo_root or Path(__file__).resolve().parents[2]).resolve()
         self.python_executable = Path(python_executable or sys.executable).resolve()
@@ -234,10 +227,8 @@ class StatusController:
         self.server_command = tuple(server_command) if server_command is not None else None
         self.environ = dict(os.environ if environ is None else environ)
         self.request_probe = request_probe
-        self.port_selector = port_selector
         self.request_timeout = request_timeout
         self.shutdown_timeout = shutdown_timeout
-        self.port_scan_count = port_scan_count
 
         self._lock = threading.RLock()
         self._process: subprocess.Popen[str] | None = None
@@ -354,19 +345,16 @@ class StatusController:
 
             try:
                 preferred = self._preferred_port()
-                port = self.port_selector(preferred, HOST, self.port_scan_count)
-            except (OSError, TypeError, ValueError) as exc:
+            except (TypeError, ValueError) as exc:
                 return self._set_error(
                     str(exc),
-                    "Frontend cannot be served because no local port is available",
+                    "Frontend cannot be served because the local port is invalid",
                 )
 
             self._temporary_directory = tempfile.TemporaryDirectory(prefix="wg2-statusapp-")
             self._control_path = Path(self._temporary_directory.name) / "stop"
             self._ready_path = Path(self._temporary_directory.name) / "ready.json"
             self._update_request_path = Path(self._temporary_directory.name) / "update.json"
-            self._port = port
-            url = f"http://{HOST}:{port}/"
             environment = dict(self.environ)
             environment["WG2_NO_BROWSER"] = "1"
             popen_options: dict[str, object] = {
@@ -386,7 +374,9 @@ class StatusController:
                 popen_options["start_new_session"] = True
 
             try:
-                process = subprocess.Popen(self._command(port, self._control_path), **popen_options)
+                process = subprocess.Popen(
+                    self._command(preferred, self._control_path), **popen_options
+                )
             except OSError as exc:
                 self._cleanup_temporary_directory()
                 return self._set_error(
@@ -412,7 +402,12 @@ class StatusController:
             self._snapshot = StatusSnapshot(
                 backend=LampStatus(ServiceState.STARTING, "Waiting for /health"),
                 frontend=LampStatus(ServiceState.STARTING, "Waiting for the SPA route"),
-                url=url,
+                # The child performs the authoritative instance-lock check and
+                # reserves the socket without a probe/bind race. Publishing a
+                # URL before its ready file arrives can advertise a fallback
+                # that will never be bound when an existing WG instance owns
+                # the preferred port.
+                url="",
                 pid=process.pid,
                 exit_code=None,
             )
@@ -489,6 +484,11 @@ class StatusController:
                 url = existing_url
             else:
                 url = self._snapshot.url
+                if not url:
+                    # The child has not yet published the socket it actually
+                    # reserved. Keep the startup lamps intact instead of
+                    # probing an invented or empty address.
+                    return self._snapshot
 
         try:
             status, body = self.request_probe(url + "health", self.request_timeout)
