@@ -23,6 +23,7 @@ from server.cadlink import mount_cadlink, mount_onshape
 from server.design_io import mount_design_io
 from server.exports import mount_exports
 from server.jobs import mount_jobs
+from server.integration import mount_integration
 from server.mesh.gmsh_worker import prewarm_gmsh_worker, shutdown_gmsh_worker
 from server.mesh.prewarm import prewarm_mesher, shutdown_mesher_prewarm
 from server.platform.origin import (
@@ -381,6 +382,7 @@ def create_app(
         engine_registry,
         extra_ws_origins=extra_ws_origins,
     )
+    mount_integration(application)
     if workspace_dir is not None:
         resolved_workspace_dir = Path(workspace_dir).expanduser().resolve()
         # Only the checkout's ``output`` is a former *export* destination. The
