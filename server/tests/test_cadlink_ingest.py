@@ -19,8 +19,10 @@ from pydantic import ValidationError
 from server.app import create_app
 from server.cadlink.api import (
     CadReturnIngestRequest,
+    get_design,
     get_ingest,
     get_ingest_viewport_mesh,
+    list_designs,
     list_returns,
     post_ingest,
 )
@@ -215,6 +217,51 @@ def test_return_listing_reads_cheap_inventory_and_marks_bad_manifests(tmp_path: 
                 "defaultDriveChannelId": "drive-hf",
             }
         ],
+    }
+
+
+def test_design_registry_routes_list_heads_and_open_the_exact_snapshot(
+    tmp_path: Path,
+) -> None:
+    app = create_app(data_dir=tmp_path / "data")
+    store = app.state.cadlink_store
+    stored_hash = "sha256:" + hashlib.sha256(b"design").hexdigest()
+    saved = store.save(
+        requested=None,
+        design_hash=stored_hash,
+        filename="speaker.cfg",
+        snapshot_builder=lambda identity: (
+            f"CadLink = {{\nDesignId = {identity.design_id}\n}}\n"
+        ),
+        saved_at="2026-08-20T12:00:00Z",
+    )
+    design_id = saved["identity"].design_id
+
+    listing = asyncio.run(list_designs(SimpleNamespace(app=app)))
+    snapshot = asyncio.run(get_design(design_id, SimpleNamespace(app=app)))
+
+    assert listing["items"] == [
+        {
+            "designId": design_id,
+            "lineageId": saved["identity"].lineage_id,
+            "editVersion": 1,
+            "designHash": stored_hash,
+            "filename": "speaker.cfg",
+            "branchedFromDesignId": None,
+            "branchedFromEditVersion": None,
+            "exportCount": 0,
+            "lastExportedAt": None,
+            "createdAt": "2026-08-20T12:00:00Z",
+            "updatedAt": "2026-08-20T12:00:00Z",
+        }
+    ]
+    assert snapshot == {
+        "designId": design_id,
+        "lineageId": saved["identity"].lineage_id,
+        "editVersion": 1,
+        "filename": "speaker.cfg",
+        "updatedAt": "2026-08-20T12:00:00Z",
+        "text": saved["text"],
     }
 
 

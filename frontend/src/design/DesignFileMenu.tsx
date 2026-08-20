@@ -27,6 +27,7 @@ import { importedMeshStore } from '../viewport/importedMeshStore';
 import { parseMSH } from '../viewport/mshParser';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { cadLinkCoordinatorBridge } from '../shell/CadLinkCoordinator';
+import { getCadLinkedDesign, listCadLinkedDesigns, type CadLinkedDesignSummary } from '../api/cadlink';
 import { sentToCadMessage } from './useSendToCad';
 
 const ACCEPT = '.cfg,.txt,.mwg,text/plain';
@@ -88,6 +89,8 @@ export function DesignFileMenu() {
   const cadApplication = usePreferences().cadApplication;
   const [open, setOpen] = useState(false);
   const [exportsOpen, setExportsOpen] = useState(false);
+  const [projectsOpen, setProjectsOpen] = useState(false);
+  const [projects, setProjects] = useState<CadLinkedDesignSummary[]>([]);
   const [message, setMessage] = useState<string | null>(null);
   const [adoptionCandidate, setAdoptionCandidate] = useState<CadLinkOpenState['adoptionCandidate']>(null);
   const [busy, setBusy] = useState(false);
@@ -130,17 +133,49 @@ export function DesignFileMenu() {
         setMessage(reportText(await inspectDesignText(text)));
         return;
       }
-      const opened = await openDesignText(text);
-      const openedDesign = hydrateDesignDocument(opened.design);
-      replaceDesign(openedDesign);
-      restoreSolveSettingsFromBlocks(openedDesign.extra_blocks);
-      // One name for the whole document: the picked file's, unless the file's
-      // own Report.Title is that same name spelled more fully.
-      setDesignName(designNameForOpenedFile(file.name, openedDesign.extra_blocks));
-      setCadLink(editableIdentity(opened.cadlink?.identity), opened.cadlink?.classification ?? 'missing');
-      markSaved(useDesignStore.getState().designRevision, documentSettingsSignature());
-      setMessage(reportText(opened));
-      if (opened.cadlink?.classification === 'missing') setAdoptionCandidate(opened.cadlink.adoptionCandidate);
+      applyOpenedDesign(await openDesignText(text), file.name);
+    });
+  }
+
+  function applyOpenedDesign(opened: Awaited<ReturnType<typeof openDesignText>>, filename: string) {
+    const openedDesign = hydrateDesignDocument(opened.design);
+    replaceDesign(openedDesign);
+    restoreSolveSettingsFromBlocks(openedDesign.extra_blocks);
+    // One name for the whole document: the picked file's, unless the file's
+    // own Report.Title is that same name spelled more fully.
+    setDesignName(designNameForOpenedFile(filename, openedDesign.extra_blocks));
+    setCadLink(editableIdentity(opened.cadlink?.identity), opened.cadlink?.classification ?? 'missing');
+    markSaved(useDesignStore.getState().designRevision, documentSettingsSignature());
+    setMessage(reportText(opened));
+    if (opened.cadlink?.classification === 'missing') setAdoptionCandidate(opened.cadlink.adoptionCandidate);
+  }
+
+  async function toggleProjects() {
+    if (projectsOpen) {
+      setProjectsOpen(false);
+      return;
+    }
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setBusy(true);
+    setMessage(null);
+    try {
+      setProjects((await listCadLinkedDesigns()).items);
+      setProjectsOpen(true);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  }
+
+  async function openProject(project: CadLinkedDesignSummary) {
+    if (unsaved && !window.confirm('Discard unsaved changes and open this CAD-linked design?')) return;
+    await act(async () => {
+      const snapshot = await getCadLinkedDesign(project.designId);
+      applyOpenedDesign(await openDesignText(snapshot.text), snapshot.filename);
+      setMessage(`Opened CAD-linked design ${snapshot.filename}`);
     });
   }
 
@@ -231,6 +266,14 @@ export function DesignFileMenu() {
     {open && <div role="menu" aria-label="Design file menu" className="design-menu-popover">
       <button role="menuitem" className="design-menu-item" disabled={busy} onClick={newDesign}><span>New</span><kbd>cfg</kbd></button>
       <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => openInput.current?.click()}><span>Open…</span><kbd>cfg</kbd></button>
+      <button role="menuitem" aria-expanded={projectsOpen} className="design-menu-item" disabled={busy} onClick={() => void toggleProjects()}><span>CAD-linked designs</span><span>{projectsOpen ? '⌄' : '›'}</span></button>
+      {projectsOpen && <div role="menu" aria-label="CAD-linked designs" className="design-menu-nested">
+        {projects.length === 0
+          ? <div className="design-menu-item" role="status"><span>No linked designs yet</span></div>
+          : projects.map((project) => <button key={project.designId} role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void openProject(project)} title={`Updated ${new Date(project.updatedAt).toLocaleString()}`}>
+            <span>{project.filename}</span><span>v{project.editVersion} · {project.exportCount} export{project.exportCount === 1 ? '' : 's'}</span>
+          </button>)}
+      </div>}
       <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void downloadCopy()}><span>Download a copy</span><kbd>cfg</kbd></button>
       <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => reportInput.current?.click()}><span>Import report…</span><span>›</span></button>
       <div className="design-menu-divider"/>

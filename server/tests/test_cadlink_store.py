@@ -118,6 +118,38 @@ def test_save_cas_updates_head_then_auto_forks_shared_lineage(tmp_path: Path) ->
     assert row["branched_from_edit_version"] == 1
 
 
+def test_project_listing_orders_heads_without_loading_snapshot_text(tmp_path: Path) -> None:
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    first = _save(store, marker="first")
+    first_id = first["identity"].design_id  # type: ignore[union-attr]
+    store.allocate_export(
+        design_id=first_id,
+        geometry_hash="sha256:geometry",
+        artifact_sha256="sha256:artifact",
+        manifest_json="{}",
+        idempotency_key="project-list-export",
+        created_at="2026-08-10T15:00:00Z",
+    )
+    second_hash = "sha256:" + hashlib.sha256(b"second").hexdigest()
+    second = store.save(
+        requested=None,
+        design_hash=second_hash,
+        filename="newer.cfg",
+        snapshot_builder=lambda identity: f"DesignId={identity.design_id};newer",
+        saved_at="2026-08-11T14:22:31Z",
+    )
+
+    rows = store.list_designs()
+
+    assert [row["design_id"] for row in rows] == [
+        second["identity"].design_id,  # type: ignore[union-attr]
+        first_id,
+    ]
+    assert "snapshot_text" not in rows[0]
+    assert rows[1]["export_count"] == 1
+    assert rows[1]["last_exported_at"] == "2026-08-10T15:00:00Z"
+
+
 def test_export_sequences_are_atomic_and_idempotent_across_store_instances(
     tmp_path: Path,
 ) -> None:
