@@ -235,7 +235,7 @@ describe('ParamPanel inventory UX', () => {
     expect(host.textContent).not.toContain('Surface sampling');
 
     act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
-    expect(titles()).toEqual(['Frequency Sweep', 'Directivity Map', 'Drive channels & drivers', 'Crossover', 'Solve options', 'Mesh detail']);
+    expect(titles()).toEqual(['Frequency Sweep', 'Directivity Map', 'Drive channels & drivers', 'Passive cardioid', 'Crossover', 'Solve options', 'Mesh detail']);
     for (const hidden of ['Source Definition', 'Solve & export mesh', 'Output & Passthrough']) expect(host.textContent).not.toContain(hidden);
     expect(host.querySelector('#solve-engine')).toBeNull();
     expect(host.querySelector('#solve-symmetry')).toBeNull();
@@ -374,6 +374,96 @@ describe('ParamPanel inventory UX', () => {
     const rebuild = [...host.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Rebuild mesh')!;
     act(() => rebuild.click());
     expect(ingest).toHaveBeenCalledOnce();
+  });
+
+  it('edits the passive-cardioid campaign in the rail, in cm² over an m² wire', () => {
+    act(() => {
+      setCadReady();
+      workspaceModeStore.setMode('cad');
+      root.render(withQueryClient(<ParamPanel tab="simulation" />));
+    });
+    const section = () => host.querySelector<HTMLElement>('[data-section="Passive cardioid"]')!;
+    const area = (label: string) => section().querySelector<HTMLInputElement>(`[aria-label="${label} in cm²"]`)!;
+    const type = (input: HTMLInputElement, value: string) => act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, value);
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
+    // Nothing but the switch until the campaign is asked for.
+    expect(section().querySelector('[aria-label="Rear volume in L"]')).toBeNull();
+    act(() => host.querySelector<HTMLInputElement>('#cad-passive-cardioid')!.click());
+    expect(section().textContent).toContain('roughly 20 seconds');
+    // Enabled but empty is a refusal, never a quiet pre-campaign submission.
+    expect(importedSubmissionBlocker()).toContain('Rear volume');
+
+    type(section().querySelector<HTMLInputElement>('[aria-label="Rear volume in L"]')!, '6');
+    type(section().querySelector<HTMLInputElement>('[aria-label="Port length in mm"]')!, '25');
+    type(area('Physical port area'), '500');
+    type(area('BEM port area'), '94.71859930646809');
+    type(section().querySelector<HTMLInputElement>('[aria-label="Foam resistance in Pa·s/m³"]')!, '10000');
+    expect(importedSubmissionBlocker()).toBeNull();
+    expect(buildImportedSubmission(useCadReturnStore.getState()).geometry).toMatchObject({
+      passive_cardioid_rear_volume_l: 6,
+      passive_cardioid_port_length_mm: 25,
+      model_port_area_m2: 0.05,
+      port_area_source: 'user',
+      passive_cardioid_foam_resistance_pa_s_m3: 10_000,
+      passive_cardioid_invert_port: true,
+      passive_cardioid_coupled: false,
+    });
+    expect(useCadReturnStore.getState().passiveCardioid.bemPortAreaM2).toBeCloseTo(0.009471859930646809, 15);
+    // Typed cm² must survive the m² round trip on screen: 0.00037 × 1e4 is
+    // 3.6999999999999997, and the measured aperture must keep every digit.
+    type(area('Physical port area'), '3.7');
+    expect(area('Physical port area').value).toBe('3.7');
+    expect(area('BEM port area').value).toBe('94.71859930646809');
+    type(area('Physical port area'), '500');
+
+    // Choosing the BEM provenance drives the physical area rather than letting
+    // the two drift into the server's rel_tol=1e-12 refusal.
+    const provenance = host.querySelector<HTMLSelectElement>('#cad-cardioid-port-area-source')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set?.call(provenance, 'bem_aperture');
+      provenance.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(area('Physical port area').disabled).toBe(true);
+    const geometry = buildImportedSubmission(useCadReturnStore.getState()).geometry;
+    expect(geometry.model_port_area_m2).toBe(geometry.bem_port_area_m2);
+  });
+
+  it('keeps the reserved coupled channel id out of the assignable drive channels', () => {
+    act(() => {
+      useCadReturnStore.setState({
+        selectedBundle: {
+          ...cadBundle,
+          sources: [
+            { id: 'source-mf', role: 'MF', required: true, suggestedResolutionMm: 4, defaultDriveChannelId: 'passive_cardioid' },
+            { id: 'source-port', role: 'MF', required: true, suggestedResolutionMm: 4, defaultDriveChannelId: 'drive-port' },
+          ],
+        },
+        ingestRecord: cadRecord,
+        needsIngest: false,
+        driveChannels: [
+          { id: 'passive_cardioid', source_ids: ['source-mf'], motion: 'normal' },
+          { id: 'drive-port', source_ids: ['source-port'], motion: 'normal' },
+        ],
+      });
+      workspaceModeStore.setMode('cad');
+      root.render(withQueryClient(<ParamPanel tab="simulation" />));
+    });
+    const options = () => [...host.querySelectorAll<HTMLOptionElement>('[aria-label="Drive channel for source-mf"] option')]
+      .map((option) => option.value);
+    expect(options()).toContain('passive_cardioid');
+
+    act(() => useCadReturnStore.getState().setPassiveCardioid({
+      enabled: true, coupled: true, rearVolumeL: 6, portLengthMm: 25,
+      modelPortAreaM2: 0.05, bemPortAreaM2: 0.0094, foamResistancePaSM3: 10_000,
+    }));
+    expect(options()).toEqual(['drive-port']);
+    // The channel that already claims the id predates the choice, so the
+    // prevention is backed by a refusal the user can act on.
+    expect(host.querySelector('[data-section="Passive cardioid"] [role="alert"]')?.textContent)
+      .toContain('Reassign that source');
   });
 
   it('shows the CAD simulation empty state without hiding formula editing on Geometry', () => {

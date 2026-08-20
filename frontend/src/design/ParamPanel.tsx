@@ -9,14 +9,18 @@ import { useActiveBackend } from '../jobs/useCapabilities';
 import { backendLimitation } from './backendSupport';
 import { cadApplicationName, usePreferences } from '../prefs/preferences';
 import {
+  assignableChannelIds,
   channelAcceptsDriver,
   combineChain,
   combineLevelMatchDefault,
   DRIVER_REQUIRED_KEYS,
+  PASSIVE_CARDIOID_CHANNEL_ID,
+  passiveCardioidBlocker,
   useCadReturnStore,
   type CadDriveChannel,
   type ChannelDriverForm,
   type DriverFieldKey,
+  type PortAreaSource,
 } from '../stores/cadReturn';
 import { useDesignStore, type DesignDocument, type DesignFamily, type DesignValue } from '../stores/design';
 import { namespaceStorage } from '../stores/durableSettings';
@@ -46,11 +50,13 @@ import { cadLinkCoordinatorBridge } from '../shell/CadLinkCoordinator';
 import { fusionWorkflowView, onshapeWorkflowView } from '../shell/CadLinkPanel';
 import { workspaceNavigation } from '../shell/workspaceNavigation';
 import {
+  CAD_CARDIOID_FIELD_CONTROLS,
   CAD_CONTROLS,
   CAD_CONTROL_DESCRIPTORS,
   CAD_DRIVER_FIELD_CONTROLS,
   cadControlIsAvailable,
   cadControlMatchesQuery,
+  cadDisplayValue,
   type CadControlSection,
 } from './cadControlRegistry';
 import {
@@ -825,7 +831,13 @@ function DriverFields({ channel, form, onField }: {
 function CadDriveChannels() {
   const state = useCadReturnStore();
   const activeSources = (state.selectedBundle?.sources ?? []).filter((source) => !state.skippedSourceIds.includes(source.id));
-  const channelIds = [...new Set((state.selectedBundle?.sources ?? []).map((source) => source.defaultDriveChannelId))];
+  // The coupled campaign writes its derived output to a reserved channel id.
+  // Withholding it from the assignable list is what turns a server refusal
+  // into a collision that cannot be made in the first place.
+  const channelIds = assignableChannelIds(
+    [...new Set((state.selectedBundle?.sources ?? []).map((source) => source.defaultDriveChannelId))],
+    state.passiveCardioid.enabled && state.passiveCardioid.coupled,
+  );
   return <>
     <p className="section-note">Assign two sources to the same channel to drive them together.</p>
     <div className="cad-channel-list">
@@ -845,6 +857,86 @@ function CadDriveChannels() {
     </div>
     {state.driveChannels.some((channel) => state.channelDrivers[channel.id]?.enabled)
       && <NumberField label={CAD_CONTROLS.driveVoltage.label} revealId={CAD_CONTROLS.driveVoltage.reveal.id} unit="V" value={state.driveVoltageV} min={0.01} step={0.1} precision={2} description="RMS voltage applied to every driver channel (2.83 V ≈ 1 W into 8 Ω)" onCommit={state.setDriveVoltage}/>}
+  </>;
+}
+
+/**
+ * Passive-cardioid campaign inputs.
+ *
+ * Turning the section on is the same act as setting a rear volume: the wire's
+ * opt-in boundary is `passive_cardioid_rear_volume_l`, and any other cardioid
+ * field sent without it is a refusal naming the strays. So the toggle reveals
+ * the whole set, the set is submitted together, and an incomplete set blocks
+ * Solve rather than quietly reverting to the pre-campaign path.
+ */
+function CadPassiveCardioid() {
+  const state = useCadReturnStore();
+  const form = state.passiveCardioid;
+  const blocker = passiveCardioidBlocker(state);
+  const bemDriven = form.portAreaSource === 'bem_aperture';
+  return <>
+    <ToggleRow
+      id="cad-passive-cardioid"
+      label={CAD_CONTROLS.cardioidEnabled.label}
+      revealId={CAD_CONTROLS.cardioidEnabled.reveal.id}
+      help="Model a sealed rear chamber vented through a damped port, so the back radiation cancels behind the box. WG solves a separate radiation-impedance matrix over the PORT_EXIT aperture before the chamber and port model can run."
+      checked={form.enabled}
+      onChange={(enabled) => state.setPassiveCardioid({ enabled })}
+    />
+    {form.enabled && <>
+      <p className="section-note">This adds a radiation-impedance campaign over the port aperture ahead of the main solve — roughly 20 seconds at the reference 160-point sweep. The run reports it as its own <b>radiation_impedance</b> stage.</p>
+      <div className="cad-driver-grid">
+        {CAD_CARDIOID_FIELD_CONTROLS.map(({ formKey, label, unit, step, displayScale, minimum, reveal, help }) => {
+          const stored = form[formKey];
+          const driven = bemDriven && formKey === 'modelPortAreaM2';
+          return <label key={formKey} className="cad-driver-field" data-control-reveal-id={reveal.id} title={help}>
+            <span>{label} ({unit}) *</span>
+            <input
+              type="number"
+              min={minimum.value}
+              step={step}
+              disabled={driven}
+              value={stored === null ? '' : cadDisplayValue(stored, displayScale)}
+              aria-label={`${label} in ${unit}`}
+              onChange={(event) => state.setPassiveCardioid({
+                [formKey]: event.target.value === '' ? null : Number(event.target.value) / displayScale,
+              })}
+            />
+          </label>;
+        })}
+      </div>
+      <div className="select-row" data-control-reveal-id={CAD_CONTROLS.cardioidPortAreaSource.reveal.id}>
+        <label htmlFor="cad-cardioid-port-area-source">{CAD_CONTROLS.cardioidPortAreaSource.label}</label>
+        <select
+          id="cad-cardioid-port-area-source"
+          value={form.portAreaSource}
+          onChange={(event) => state.setPassiveCardioid({ portAreaSource: event.target.value as PortAreaSource })}
+        >
+          <option value="user">User-stated physical area</option>
+          <option value="bem_aperture">Same as the BEM aperture</option>
+        </select>
+      </div>
+      <p className="section-note">{bemDriven
+        ? 'Physical port area follows the BEM aperture area exactly; the solve refuses any drift between them, so it is not separately editable here.'
+        : 'The physical area drives the chamber and port physics; the BEM area only identifies the meshed aperture. They are two different numbers unless the port exit is the whole port.'}</p>
+      <ToggleRow
+        id="cad-cardioid-invert"
+        label={CAD_CONTROLS.cardioidInvertPort.label}
+        revealId={CAD_CONTROLS.cardioidInvertPort.reveal.id}
+        help="Drive the port out of phase with the diaphragm (rear drive sign −1). This is the cardioid arrangement and is on by default; turning it off makes the port an in-phase vent."
+        checked={form.invertPort}
+        onChange={(invertPort) => state.setPassiveCardioid({ invertPort })}
+      />
+      <ToggleRow
+        id="cad-cardioid-coupled"
+        label={CAD_CONTROLS.cardioidCoupled.label}
+        revealId={CAD_CONTROLS.cardioidCoupled.reveal.id}
+        help={`Solve the driver, chamber and port as one system and append the result as a derived "${PASSIVE_CARDIOID_CHANNEL_ID}" channel with its own electrical input impedance. Requires the MF diaphragm on one driver-carrying channel and every PORT_EXIT patch on one other channel.`}
+        checked={form.coupled}
+        onChange={(coupled) => state.setPassiveCardioid({ coupled })}
+      />
+      {blocker && <div className="field-error" role="alert">{blocker}</div>}
+    </>}
   </>;
 }
 
@@ -1080,6 +1172,7 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
             {cadSectionMatches(CAD_CONTROLS.frequencySweep.section) && <Section title={CAD_CONTROLS.frequencySweep.section} description="The explicit range submitted with this imported CAD geometry." forceOpen={searching} revealId={CAD_CONTROLS.frequencySweep.reveal.id}><CadFrequencySweep/></Section>}
             {cadSectionMatches(CAD_CONTROLS.directivityMap.section) && <Section title={CAD_CONTROLS.directivityMap.section} description="Display-plane and angular sampling controls, including the effective imported-CAD grid." forceOpen={searching} revealId={CAD_CONTROLS.directivityMap.reveal.id}><DirectivityMapControls effectiveDerivation={ingestRecord.polar_grid_derivation}/></Section>}
             {cadSectionMatches(CAD_CONTROLS.driveChannels.section) && <Section title={CAD_CONTROLS.driveChannels.section} description="Source-to-channel assignment, motion, voltage drive, and per-channel Thiele-Small data." forceOpen={searching} revealId={CAD_CONTROLS.driveChannels.reveal.id}><CadDriveChannels/></Section>}
+            {cadSectionMatches(CAD_CONTROLS.passiveCardioid.section) && <Section title={CAD_CONTROLS.passiveCardioid.section} description="Sealed rear chamber vented through a damped port, and the extra radiation-impedance campaign it needs." forceOpen={searching} revealId={CAD_CONTROLS.passiveCardioid.reveal.id}><CadPassiveCardioid/></Section>}
             {cadSectionMatches(CAD_CONTROLS.crossover.section) && <Section title={CAD_CONTROLS.crossover.section} description="Optional LR4 combination of adjacent drive channels, including level and phase alignment choices." forceOpen={searching} revealId={CAD_CONTROLS.crossover.reveal.id}><CadCrossover/></Section>}
             {cadSectionMatches(CAD_CONTROLS.solveOptions.section) && <Section title={CAD_CONTROLS.solveOptions.section} description="Imported-CAD validation, frequency selection, and diagnostic controls. Geometry fixes the backend and domain." forceOpen={searching} revealId={CAD_CONTROLS.solveOptions.reveal.id}><SolveOptionsControls mode="cad" ingestRecord={ingestRecord}/></Section>}
             {cadSectionMatches(CAD_CONTROLS.meshDetail.section) && <Section title={CAD_CONTROLS.meshDetail.section} description="Imported-CAD surface sizing, optional-source policy, domain choice, and mesh regeneration." forceOpen={searching} revealId={CAD_CONTROLS.meshDetail.reveal.id}><CadMeshDetail/></Section>}
