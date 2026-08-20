@@ -255,10 +255,10 @@ export const PARAMETER_REGISTRY: ParameterDefinition[] = [
   number('simulation.f2', 'freqEnd', 'simulation.f2', frequencySweep, 'Sweep end', { unit: 'Hz', min: 20, max: 20_000, step: 10, precision: 0, description: 'Highest frequency of the generated sweep; raising it may need a finer Mouth mesh resolution to resolve the shorter wavelength. Ignored when Solve options is set to an explicit frequency list.' }),
   number('simulation.num_frequencies', 'numFreqs', 'simulation.num_frequencies', frequencySweep, 'Frequency samples', { min: 10, max: 200, step: 1, precision: 0, description: 'How many frequencies are solved between the start and end. Every frequency costs about the same, so this sets solve time almost directly. Spacing is chosen under Solve options, which also overrides this entirely when an explicit list is used.' }),
   select('simulation.sim_type', 'simType', 'simulation.sim_type', solveExportMesh, 'Simulation type', [{ value: 'freestanding', label: 'Free-standing' }, { value: 'infinite-baffle', label: 'Infinite baffle', requiresFeature: 'infinite-baffle' }], { description: 'What the horn radiates into. Free-standing solves the whole body in open air, with the enclosure or wall shell you configured. Infinite baffle mounts the mouth flush in an unbounded rigid wall, ignoring both of those and removing all cabinet-edge diffraction; it requires the Metal backend.' }),
-  // CircSym is not a backend, it is the axisymmetric meridian fast path: the
-  // solver takes it automatically for a body of revolution. The stored values
-  // stay as ATH spells them so designs round-trip; only the labels changed.
-  select('simulation.solver_mode', 'solverMode', 'simulation.solver_mode', solveExportMesh, 'Solver mode', [{ value: 'auto', label: 'Auto — meridian when eligible', degradedWithout: 'meridian-fast-path', degradedLabel: 'Auto — full 3D on this backend' }, { value: 'full_3d', label: 'Force full 3D' }, { value: 'circsym', label: 'Force axisymmetric meridian', requiresFeature: 'meridian-fast-path' }], { description: 'Controls the Metal backend\'s solve path. Auto solves a body of revolution on one rotated meridian slice — far faster — and everything else in full 3D. Eligibility depends on the observation settings as well as the geometry. Forcing the meridian path fails clearly when ineligible, and BEMPP is always full 3D.' }),
+  // CircSym is an explicit CPU implementation, not an automatic Metal/GPU
+  // optimization. Keep the imported values for compatibility, but never imply
+  // that AUTO may silently switch away from the native full-3D path.
+  select('simulation.solver_mode', 'solverMode', 'simulation.solver_mode', solveExportMesh, 'Solver mode', [{ value: 'auto', label: 'Auto — full 3D' }, { value: 'full_3d', label: 'Full 3D' }, { value: 'circsym', label: 'Axisymmetric meridian (CPU, force)', requiresFeature: 'meridian-fast-path' }], { description: 'Controls the Metal backend\'s solve path. Auto uses native full 3D. The axisymmetric meridian solver is a separate CPU path and is used only when explicitly selected; forcing it fails clearly when the geometry or observation settings are ineligible. BEMPP is always full 3D.' }),
 
   // These saved fields remain in the document for ATH text fidelity, but none
   // is a solve-domain control. Runtime symmetry replaces Mesh.Quadrants before
@@ -419,8 +419,7 @@ export function fieldIsVisible(field: ParameterDefinition, design: DesignDocumen
  * the design already holds it — a Mac-authored file or an ATH `SimType = 1`
  * import must stay legible and editable rather than silently losing the value
  * it is set to. And an option whose label promises a fast path this backend
- * lacks is relabelled, so "Auto — meridian when eligible" stops claiming a
- * meridian solve on a backend that is always full 3-D.
+ * lacks can be relabelled without silently discarding a legacy value.
  */
 export function fieldOptionsForBackend(
   field: ParameterDefinition,

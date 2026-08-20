@@ -90,17 +90,17 @@ describe('simulation type gating', () => {
 describe('solver mode gating', () => {
   it('offers all three modes on Metal with the meridian label intact', () => {
     expect(labels('simulation.solver_mode', 'auto', 'metal'))
-      .toEqual(['Auto — meridian when eligible', 'Force full 3D', 'Force axisymmetric meridian']);
+      .toEqual(['Auto — full 3D', 'Full 3D', 'Axisymmetric meridian (CPU, force)']);
   });
 
-  it('drops the forced meridian mode on BEMPP and stops promising the fast path', () => {
+  it('drops the forced meridian mode on BEMPP', () => {
     expect(labels('simulation.solver_mode', 'auto', 'bempp'))
-      .toEqual(['Auto — full 3D on this backend', 'Force full 3D']);
+      .toEqual(['Auto — full 3D', 'Full 3D']);
   });
 
   it('reveals and flags a forced meridian mode the design already carries', () => {
     expect(labels('simulation.solver_mode', 'circsym', 'bempp'))
-      .toEqual(['Auto — full 3D on this backend', 'Force full 3D', 'Force axisymmetric meridian']);
+      .toEqual(['Auto — full 3D', 'Full 3D', 'Axisymmetric meridian (CPU, force)']);
     expect(fieldUnsupportedFeature(field('simulation.solver_mode'), 'circsym', 'bempp'))
       .toBe('meridian-fast-path');
   });
