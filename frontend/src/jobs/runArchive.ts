@@ -79,6 +79,7 @@ export function buildRunRecord(job: JobItem): WorkspaceTextFile {
       },
       mesh: job.mesh_stats ?? null,
       artifacts: {
+        mesh: job.has_mesh_artifact ? `${exportStemForJob(job)}.msh` : null,
         radiationImpedance: job.has_radiation_impedance_artifact ? {
           matrix: `${exportStemForJob(job)}_radiation_impedance.npz`,
           curves: `${exportStemForJob(job)}_radiation_impedance.csv`,

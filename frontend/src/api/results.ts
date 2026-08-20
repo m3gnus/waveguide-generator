@@ -278,6 +278,43 @@ export async function fetchJobResults(jobId: string, fetcher: typeof fetch = fet
   }
 }
 
+export interface JobArchiveSnapshot {
+  schema_version: 1;
+  results: JobResults;
+  results_sha256: string;
+  mesh_artifact: string | null;
+  pressure_bases: Array<{ channel_id: string; content_base64: string }>;
+  radiation_impedance: {
+    content_base64: string;
+    presentation: RadiationImpedancePresentation;
+  } | null;
+}
+
+/**
+ * Fetch every retention-managed input for a permanent run archive at once.
+ *
+ * The server copies these members inside one store transaction.  Callers must
+ * not mix this payload with the ordinary per-artifact endpoints: doing so
+ * would reintroduce a window where retention can delete a later member.
+ */
+export async function fetchJobArchiveSnapshot(
+  jobId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<JobArchiveSnapshot> {
+  const response = await fetcher(`/api/jobs/${encodeURIComponent(jobId)}/archive-snapshot`);
+  if (!response.ok) {
+    let detail = `Archive snapshot request failed: ${response.status}`;
+    try {
+      const body = await response.json() as { detail?: string };
+      if (body.detail) detail = body.detail;
+    } catch { /* status is enough */ }
+    throw new Error(detail);
+  }
+  const snapshot = await response.json() as JobArchiveSnapshot;
+  resultsCache.set(jobId, snapshot.results);
+  return snapshot;
+}
+
 /** The optional matrix artifact is stored separately from the result JSON.
  * A 404 means the job simply has no retained matrix; other failures remain
  * visible to callers that are explicitly exporting it. */

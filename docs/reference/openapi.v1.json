@@ -7381,6 +7381,44 @@
         "summary": "Delete Job"
       }
     },
+    "/api/jobs/{job_id}/archive-snapshot": {
+      "get": {
+        "description": "Return one retention-consistent set of permanent-archive inputs.",
+        "operationId": "job_archive_snapshot_api_jobs__job_id__archive_snapshot_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Job Archive Snapshot"
+      }
+    },
     "/api/jobs/{job_id}/log": {
       "get": {
         "operationId": "job_log_api_jobs__job_id__log_get",

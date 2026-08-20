@@ -202,6 +202,65 @@ def test_retention_removes_failed_channel_bases_without_discarding_live_results(
     assert store.get_channel_bases("complete") == b"bases-complete"
 
 
+def test_archive_snapshot_holds_retention_until_every_payload_is_copied(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    record = _job("archive", "complete", created_at="2000-01-01T00:00:00")
+    record["completed_at"] = "2000-01-01T00:00:00"
+    store.create_job(record)
+    results = {
+        "frequencies": [1000.0],
+        "metadata": {"field_plane_available": False},
+    }
+    store.store_results("archive", results)
+    store.store_mesh_artifact("archive", "exact solve mesh")
+    store.store_channel_bases("archive", b"pressure bases")
+    store.store_radiation_impedance("archive", b"radiation matrix")
+
+    copied = threading.Event()
+    release_snapshot = threading.Event()
+    prune_started = threading.Event()
+    original = store._load_archive_snapshot
+
+    def paused_copy(conn: sqlite3.Connection, job_id: str) -> dict | None:
+        snapshot = original(conn, job_id)
+        copied.set()
+        assert release_snapshot.wait(timeout=5)
+        return snapshot
+
+    monkeypatch.setattr(store, "_load_archive_snapshot", paused_copy)
+
+    def prune() -> int:
+        prune_started.set()
+        return store.prune_terminal_jobs(
+            retention_days=0, max_terminal_jobs=1000, mesh_grace_minutes=0
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        snapshot_future = pool.submit(store.get_archive_snapshot, "archive")
+        assert copied.wait(timeout=5)
+        prune_future = pool.submit(prune)
+        assert prune_started.wait(timeout=5)
+        # The prune call has started, but the archive read still owns the one
+        # store lock shared by both operations.
+        assert not prune_future.done()
+        release_snapshot.set()
+        snapshot = snapshot_future.result(timeout=5)
+        assert prune_future.result(timeout=5) == 1
+
+    assert snapshot is not None
+    assert json.loads(snapshot["results_text"]) == results
+    assert snapshot["mesh_text"] == "exact solve mesh"
+    assert snapshot["channel_bases"] == b"pressure bases"
+    assert snapshot["radiation_impedance"] == b"radiation matrix"
+    assert store.get_results("archive") is None
+    assert store.get_mesh_artifact("archive") is None
+    assert store.get_channel_bases("archive") is None
+    assert store.get_radiation_impedance("archive") is None
+
+
 def test_run_numbers_are_not_reused_after_deleting_the_newest_job(tmp_path: Path) -> None:
     store = JobStore(tmp_path / "jobs.db")
     store.initialize()

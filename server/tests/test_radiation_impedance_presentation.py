@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
@@ -119,7 +120,12 @@ def test_presentation_endpoint_reads_the_retained_artifact_and_404s_when_absent(
                     "task_metadata": {},
                 }
             )
-        store.store_radiation_impedance("cardioid", artifact_bytes())
+        matrix = artifact_bytes()
+        store.store_radiation_impedance("cardioid", matrix)
+        store.store_results(
+            "cardioid",
+            {"frequencies": [100.0, 200.0], "metadata": {"field_plane_available": False}},
+        )
         runtime = JobRuntime(store)
         runtime._started = True
         endpoint = next(
@@ -132,6 +138,12 @@ def test_presentation_endpoint_reads_the_retained_artifact_and_404s_when_absent(
         response = await endpoint("cardioid")
         assert response.units == "Pa*s/m^3"
         assert response.in_phase_termination.aperture_names == ["PORT_L", "PORT_R"]
+        snapshot = await runtime.get_archive_snapshot("cardioid")
+        assert snapshot["radiation_impedance"]["presentation"]["units"] == "Pa*s/m^3"
+        assert (
+            base64.b64decode(snapshot["radiation_impedance"]["content_base64"])
+            == matrix
+        )
         with pytest.raises(HTTPException) as absent:
             await endpoint("ordinary")
         assert absent.value.status_code == 404

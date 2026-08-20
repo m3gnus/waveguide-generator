@@ -65,6 +65,12 @@ describe('run archive layout', () => {
     expect(JSON.parse(buildRunRecord(jobItem()).text).artifacts.radiationImpedance).toBeNull();
   });
 
+  it('records the exact retained solve mesh when the archive owns one', () => {
+    expect(JSON.parse(buildRunRecord(jobItem({ has_mesh_artifact: true })).text).artifacts.mesh)
+      .toBe('3_Big_Horn.msh');
+    expect(JSON.parse(buildRunRecord(jobItem()).text).artifacts.mesh).toBeNull();
+  });
+
   it('names the CAD document and return state a run was solved from', () => {
     const record = JSON.parse(buildRunRecord(jobItem({
       config_summary: { geometry_type: 'imported' },

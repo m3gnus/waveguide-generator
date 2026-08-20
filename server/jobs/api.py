@@ -365,6 +365,27 @@ def create_jobs_router(
         except JobResourceUnavailableError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    @router.get("/api/jobs/{job_id}/archive-snapshot", response_model=None)
+    async def job_archive_snapshot(job_id: str) -> Response:
+        """Return one retention-consistent set of permanent-archive inputs."""
+
+        try:
+            snapshot = await runtime.get_archive_snapshot(job_id)
+        except JobNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Job not found") from exc
+        except JobConflictError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except JobResourceUnavailableError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return Response(
+            content=json.dumps(snapshot, allow_nan=False),
+            media_type="application/json",
+            headers={
+                "Cache-Control": "no-store",
+                "X-WG-Archive-Snapshot-Version": "1",
+            },
+        )
+
     @router.post("/api/results/{job_id}/combine", response_model=None)
     async def recombine_job_results(job_id: str, body: ChannelCombineSpec) -> Response:
         """Recompute the combined channel from stored bases without re-solving."""
