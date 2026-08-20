@@ -982,6 +982,72 @@ def _native_result() -> SimpleNamespace:
     )
 
 
+@pytest.mark.parametrize(
+    "wrap_source_result",
+    [False, True],
+    ids=["single-source-fast-path", "multi-source-wrapper"],
+)
+def test_single_channel_imported_stream_accepts_metal_entry_shapes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    wrap_source_result: bool,
+) -> None:
+    streamed: list[tuple[int, dict[str, Any]]] = []
+    monkeypatch.setattr(metal, "metal_status", lambda: {"available": True, "reason": "ok"})
+    monkeypatch.setattr(metal, "ObservationConfig", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(metal, "native_config", lambda **kwargs: SimpleNamespace(**kwargs))
+
+    def solve_multi(
+        _mesh: str,
+        sources: list[dict[int, complex]],
+        config: Any,
+        frequencies_hz: list[float] | None = None,
+    ) -> list[SimpleNamespace]:
+        assert sources == [{101: 1.0 + 0.0j}]
+        assert frequencies_hz == [100.0, 200.0]
+        complete = _native_result()
+        source_entry = {
+            "observation_angles_deg": complete.observation_angles_deg,
+            "observation_planes": complete.observation_planes,
+            "observation_pressure_complex": complete.pressure_complex[0],
+            "observation_directivity_db": complete.directivity_db[0],
+            "impedance": complete.impedance[0],
+        }
+        entry = {"source_results": [source_entry]} if wrap_source_result else source_entry
+        assert config.on_frequency_result(0, 100.0, entry) is True
+        return [complete]
+
+    monkeypatch.setattr(metal, "native_solve_multi_source", solve_multi)
+    request = _request(
+        "wgi_" + "0" * 26,
+        drive_channels=[{"id": "left", "source_ids": ["source-a"]}],
+        mesh={
+            "rigid_size_mm": 8.0,
+            "transition_mm": 20.0,
+            "source_size_mm": {"source-a": 3.0},
+        },
+    )
+    request.options.frequencies_hz = [100.0, 200.0]
+    mesh_path = tmp_path / "imported.msh"
+    mesh_path.write_text("msh", encoding="utf-8")
+
+    response = metal.solve_imported_metal_from_msh_text(
+        "msh",
+        request,
+        _record(mesh_path),
+        result_callback=lambda index, result: streamed.append((index, result)),
+    )
+
+    assert response["result_kind"] == "multi_channel"
+    assert response["channel_order"] == ["left"]
+    assert len(streamed) == 1
+    assert streamed[0][0] == 0
+    provisional = streamed[0][1]
+    assert provisional["result_kind"] == "multi_channel"
+    assert provisional["channel_order"] == ["left"]
+    assert list(provisional["channels"]) == ["left"]
+
+
 def test_multi_source_orchestration_uses_channel_bases_and_anchor_frame(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

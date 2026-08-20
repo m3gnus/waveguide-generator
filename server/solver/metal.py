@@ -1353,6 +1353,9 @@ def solve_imported_metal_from_msh_text(
         if result_callback is None:
             return True
         source_entries = entry.get("source_results")
+        # metal-bem's single-source fast path omits the key; the entry is the result.
+        if source_entries is None and len(geometry.drive_channels) == 1:
+            source_entries = [entry]
         if not isinstance(source_entries, list) or len(source_entries) != len(
             geometry.drive_channels
         ):
