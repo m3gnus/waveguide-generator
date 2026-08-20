@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Collection
 import json
 from pathlib import Path
+import re
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request, WebSocket
@@ -453,6 +454,32 @@ def create_jobs_router(
             headers={
                 "Content-Disposition": (
                     'attachment; filename="port_exit_radiation_impedance_matrix.npz"'
+                )
+            },
+        )
+
+    @router.get("/api/pressure-basis/{job_id}", response_model=None)
+    async def pressure_basis_artifact(
+        job_id: str, channel_id: str | None = Query(default=None)
+    ) -> Response:
+        try:
+            artifact = await runtime.get_pressure_basis(job_id, channel_id)
+        except JobNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Job not found") from exc
+        except JobConflictError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except JobResourceUnavailableError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        stem = re.sub(r"[^A-Za-z0-9._-]+", "-", artifact.channel_id).strip("-.")
+        stem = stem or "channel"
+        return Response(
+            content=artifact.content,
+            media_type="application/octet-stream",
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="{stem}_pressure_basis.npz"'
                 )
             },
         )

@@ -17,6 +17,8 @@ import { buildVituixCadProjectFiles, buildZma, hasElectricalImpedance } from './
 
 export interface ExportContext {
   result?: ResultPayload;
+  /** Job owning server-retained artifacts such as complex pressure bases. */
+  jobId?: string;
   channelId?: string;
   design?: DesignDocument;
   designRevision?: number;
@@ -522,6 +524,22 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
     return outputs.map((output) => output.filename);
   }
   if (format === 'png') return chartPng(context);
+  if (format === 'pressure_basis') {
+    requireResult(context);
+    if (!context.jobId) throw new Error('This export requires the completed job identity.');
+    const query = context.channelId
+      ? `?channel_id=${encodeURIComponent(context.channelId)}`
+      : '';
+    const response = await (context.fetcher ?? fetch)(
+      `/api/pressure-basis/${encodeURIComponent(context.jobId)}${query}`,
+    );
+    if (!response.ok) throw await responseError(response);
+    const filename = filenameFromResponse(
+      response, `${baseName}_pressure_basis.npz`,
+    );
+    (context.saveBlob ?? downloadBlob)(await response.blob(), filename);
+    return [filename];
+  }
   if (format === 'on_axis_frd') {
     const result = requireResult(context);
     const filename = `${baseName}.frd`;
@@ -551,7 +569,7 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
     return files.map(({ filename }) => filename);
   }
   const result = requireResult(context);
-  const builders: Record<Exclude<ExportFormat, 'mwg_config' | 'step' | 'stl' | 'fusion_csv' | 'png' | 'on_axis_frd' | 'polar_frd' | 'vxp'>, () => [string, string, string]> = {
+  const builders: Record<Exclude<ExportFormat, 'mwg_config' | 'step' | 'stl' | 'fusion_csv' | 'png' | 'pressure_basis' | 'on_axis_frd' | 'polar_frd' | 'vxp'>, () => [string, string, string]> = {
     csv: () => [buildFrequencyCsv(result, context.preferences), `${baseName}.csv`, 'text/csv;charset=utf-8'],
     json: () => [buildFullResultsJson(result, context.preferences, now), `${baseName}.json`, 'application/json;charset=utf-8'],
     txt: () => [buildSummaryText(result, context.preferences, now), `${baseName}_summary.txt`, 'text/plain;charset=utf-8'],
@@ -573,7 +591,7 @@ export async function runExportBundle(context: ExportContext, formats = context.
   const saveText = context.saveText ?? downloadText;
   // Polar FRD owns every channel as one set so its manual Workspace write stays
   // one request. The other result formats dispatch independently per channel.
-  const resultFormats = new Set<ExportFormat>(['png', 'on_axis_frd', 'csv', 'json', 'txt', 'polar_csv', 'impedance_csv', 'zma', 'vacs']);
+  const resultFormats = new Set<ExportFormat>(['png', 'pressure_basis', 'on_axis_frd', 'csv', 'json', 'txt', 'polar_csv', 'impedance_csv', 'zma', 'vacs']);
   for (const format of formats) {
     const allChannels = context.result && !context.channelId && resultFormats.has(format)
       ? resultChannels(context.result) : [];
@@ -699,6 +717,7 @@ export async function archiveRunToWorkspace(
   const bundle = await runWorkspaceExportBundle({
     result: await fetchJobResults(job.id) as ResultPayload,
     ...resultExportSnapshot(job),
+    jobId: job.id,
     jobStem: exportStemForJob(job),
     workspaceSubdirectory: subdirectory,
     designName: job.label ?? undefined,

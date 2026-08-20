@@ -917,6 +917,17 @@ class JobStore:
                 """,
                 (job_id, bases_npz),
             )
+            conn.execute(
+                """UPDATE simulation_jobs
+                   SET task_metadata_json = json_set(
+                         COALESCE(task_metadata_json, '{}'),
+                         '$.has_pressure_basis_artifact', json('true'),
+                         '$.pressure_basis_artifact_bytes', ?
+                       ),
+                       updated_at = ?
+                   WHERE id = ?""",
+                (len(bases_npz), _now_iso(), job_id),
+            )
 
     def get_channel_bases(self, job_id: str) -> bytes | None:
         with self._lock, self._connection() as conn:
@@ -925,6 +936,27 @@ class JobStore:
                 (job_id,),
             ).fetchone()
             return bytes(row["bases_npz"]) if row else None
+
+    def delete_channel_bases(self, job_id: str) -> bool:
+        """Delete retained pressure bases and clear their advertised state."""
+
+        with self._lock, self._transaction() as conn:
+            deleted = conn.execute(
+                "DELETE FROM simulation_channel_bases WHERE job_id = ?",
+                (job_id,),
+            ).rowcount
+            conn.execute(
+                """UPDATE simulation_jobs
+                   SET task_metadata_json = json_set(
+                         COALESCE(task_metadata_json, '{}'),
+                         '$.has_pressure_basis_artifact', json('false'),
+                         '$.pressure_basis_artifact_bytes', json('null')
+                       ),
+                       updated_at = ?
+                   WHERE id = ?""",
+                (_now_iso(), job_id),
+            )
+            return bool(deleted)
 
     def store_radiation_impedance(self, job_id: str, matrix_npz: bytes) -> None:
         with self._lock, self._transaction() as conn:
@@ -1216,6 +1248,8 @@ class JobStore:
                     f"""UPDATE simulation_jobs
                         SET task_metadata_json = json_set(
                               COALESCE(task_metadata_json, '{{}}'),
+                              '$.has_pressure_basis_artifact', json('false'),
+                              '$.pressure_basis_artifact_bytes', json('null'),
                               '$.has_radiation_impedance_artifact', json('false'),
                               '$.radiation_impedance_artifact_bytes', json('null'),
                               '$.field_plane_available', json('false'),
@@ -1355,10 +1389,21 @@ class JobStore:
                      ON simulation_jobs.id = simulation_channel_bases.job_id
                    WHERE simulation_jobs.status IN ('error', 'cancelled')"""
             ).fetchall()
+            removed_channel_base_ids: list[str] = []
+            if removed_ids:
+                placeholders = ",".join("?" for _ in removed_ids)
+                removed_channel_base_ids = [
+                    str(row["job_id"])
+                    for row in conn.execute(
+                        f"SELECT job_id FROM simulation_channel_bases "
+                        f"WHERE job_id IN ({placeholders})",
+                        removed_ids,
+                    ).fetchall()
+                ]
             channel_base_ids = list(
                 dict.fromkeys(
                     [
-                        *removed_ids,
+                        *removed_channel_base_ids,
                         *(str(row["id"]) for row in failed_channel_base_rows),
                     ]
                 )
@@ -1464,6 +1509,16 @@ class JobStore:
                     f"WHERE job_id IN ({placeholders})",
                     channel_base_ids,
                 )
+                conn.execute(
+                    f"""UPDATE simulation_jobs
+                        SET task_metadata_json = json_set(
+                              COALESCE(task_metadata_json, '{{}}'),
+                              '$.has_pressure_basis_artifact', json('false'),
+                              '$.pressure_basis_artifact_bytes', json('null')
+                            )
+                        WHERE id IN ({placeholders})""",
+                    channel_base_ids,
+                )
             if radiation_ids:
                 placeholders = ",".join("?" for _ in radiation_ids)
                 conn.execute(
@@ -1513,7 +1568,15 @@ class JobStore:
                     [discarded_at, *mesh_ids],
                 )
             affected_ids = list(
-                dict.fromkeys([*removed_ids, *radiation_ids, *trace_ids, *mesh_ids])
+                dict.fromkeys(
+                    [
+                        *removed_ids,
+                        *channel_base_ids,
+                        *radiation_ids,
+                        *trace_ids,
+                        *mesh_ids,
+                    ]
+                )
             )
             if emit_events and affected_ids:
                 events = [
@@ -1524,6 +1587,11 @@ class JobStore:
                         {
                             "changed": {
                                 **({"has_results": False} if job_id in removed_ids else {}),
+                                **(
+                                    {"has_pressure_basis_artifact": False}
+                                    if job_id in channel_base_ids
+                                    else {}
+                                ),
                                 **(
                                     {"has_radiation_impedance_artifact": False}
                                     if job_id in radiation_ids

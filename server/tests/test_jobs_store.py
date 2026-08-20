@@ -127,6 +127,25 @@ def test_radiation_impedance_artifact_round_trip(tmp_path: Path) -> None:
     assert metadata["radiation_impedance_artifact_bytes"] is None
 
 
+def test_pressure_basis_artifact_round_trip(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    store.create_job(_job("basis"))
+
+    store.store_channel_bases("basis", b"pressure-basis-npz")
+
+    assert store.get_channel_bases("basis") == b"pressure-basis-npz"
+    metadata = store.get_job_row("basis")["task_metadata"]
+    assert metadata["has_pressure_basis_artifact"] is True
+    assert metadata["pressure_basis_artifact_bytes"] == len(b"pressure-basis-npz")
+
+    assert store.delete_channel_bases("basis") is True
+    assert store.get_channel_bases("basis") is None
+    metadata = store.get_job_row("basis")["task_metadata"]
+    assert metadata["has_pressure_basis_artifact"] is False
+    assert metadata["pressure_basis_artifact_bytes"] is None
+
+
 def test_retention_prunes_standalone_radiation_impedance_rows(tmp_path: Path) -> None:
     store = JobStore(tmp_path / "jobs.db")
     store.initialize()

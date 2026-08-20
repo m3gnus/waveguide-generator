@@ -951,6 +951,8 @@ class JobItem(JobModel):
     solve_options: SolveOptions
     has_results: bool
     has_mesh_artifact: bool
+    has_pressure_basis_artifact: bool = False
+    pressure_basis_artifact_bytes: int | None = None
     # A completed job could claim cardioid success and then 404 on the
     # download, because a storage failure was only a server log line. These
     # three carry the artifact's real state to the client: whether it exists,

@@ -50,6 +50,7 @@ export const EXPORT_FORMATS = [
   { id: 'polar_frd', label: 'Polar Set (VituixCAD FRD)' },
   { id: 'csv', label: 'Frequency Data CSV' },
   { id: 'json', label: 'Full Results JSON' },
+  { id: 'pressure_basis', label: 'Complex Pressure Basis (NPZ)' },
   { id: 'txt', label: 'Summary Text Report' },
   { id: 'polar_csv', label: 'Polar Directivity CSV' },
   { id: 'impedance_csv', label: 'Impedance CSV' },
