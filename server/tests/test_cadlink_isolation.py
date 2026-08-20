@@ -153,10 +153,121 @@ def _any_descendant_alive(marker: Path) -> bool:
 
     try:
         pid = int(marker.read_text(encoding="utf-8"))
-        os.kill(pid, 0)
     except (OSError, ValueError):
         return False
-    return True
+    return _pid_is_alive(pid)
+
+
+def _pid_is_alive(pid: int) -> bool:
+    if platform.system() != "Windows":
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return False
+        return True
+
+    import ctypes
+    from ctypes import wintypes
+
+    synchronize = 0x00100000
+    wait_timeout = 0x00000102
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel32.WaitForSingleObject.restype = wintypes.DWORD
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    handle = kernel32.OpenProcess(synchronize, False, pid)
+    if not handle:
+        return False
+    try:
+        return kernel32.WaitForSingleObject(handle, 0) == wait_timeout
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _wait_for_pid_markers(*markers: Path, timeout: float = 15.0) -> list[int]:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if all(marker.is_file() for marker in markers):
+            return [int(marker.read_text(encoding="utf-8")) for marker in markers]
+        time.sleep(0.05)
+    return []
+
+
+def _wait_for_pids_to_exit(pids: list[int], timeout: float = 10.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        alive = [pid for pid in pids if _pid_is_alive(pid)]
+        if not alive:
+            return True
+        time.sleep(0.1)
+    return False
+
+
+@pytest.mark.skipif(platform.system() != "Windows", reason="job objects are Windows-only")
+def test_windows_kill_on_job_close_removes_the_tree_when_the_parent_dies(
+    step_file: Path, tmp_path: Path
+) -> None:  # pragma: no cover - Windows only
+    """The child has no Windows parent watchdog; the job handle is the gate."""
+
+    child_marker = tmp_path / "child-pid.txt"
+    grandchild_marker = tmp_path / "grandchild-pid.txt"
+    repo_root = Path(__file__).resolve().parents[2]
+    probe = "\n".join(
+        [
+            "import sys",
+            "from server.cadlink.isolation import ChildBudget, isolated_step_task",
+            "with isolated_step_task(",
+            "    'mesh',",
+            "    {'misbehaviour': 'hang', 'child_marker': sys.argv[2], "
+            "'descendant_marker': sys.argv[3]},",
+            "    step_path=sys.argv[1],",
+            "    budget=ChildBudget(wall_time_s=600.0, memory_bytes=512 * 1024**2, "
+            "result_bytes=64 * 1024, artifact_bytes=64 * 1024),",
+            "    allowed_artifacts=('mesh.msh',),",
+            "    stage='stage 7 meshing',",
+            "    entrypoint='server.tests.isolation_doubles',",
+            "):",
+            "    pass",
+        ]
+    )
+    parent = subprocess.Popen(  # noqa: S603
+        [
+            sys.executable,
+            "-s",
+            "-B",
+            "-c",
+            probe,
+            str(step_file),
+            str(child_marker),
+            str(grandchild_marker),
+        ],
+        cwd=repo_root,
+        env={**os.environ, "PYTHONPATH": str(repo_root)},
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    pids: list[int] = []
+    try:
+        pids = _wait_for_pid_markers(child_marker, grandchild_marker)
+        assert len(pids) == 2, "the isolated child tree did not start"
+        assert all(_wait_for_pids_to_exit([pid], timeout=0.01) is False for pid in pids)
+
+        parent.kill()
+        parent.wait(timeout=10)
+        assert _wait_for_pids_to_exit(pids), "the parent's closed job left an orphan"
+    finally:
+        if parent.poll() is None:
+            parent.kill()
+            parent.wait(timeout=10)
+        for pid in pids:
+            try:
+                os.kill(pid, 9)
+            except OSError:
+                pass
 
 
 def test_a_normal_import_succeeds_after_a_deadline_kill(step_file: Path, tmp_path: Path) -> None:
@@ -280,6 +391,9 @@ def test_the_child_inherits_no_credentials_and_no_data_directory(
     monkeypatch.setenv("ONSHAPE_SECRET_KEY", "must-not-leak-either")
     monkeypatch.setenv("WG_DATA_DIR", "/somewhere/private")
     monkeypatch.setenv("DATABASE_URL", "postgres://nope")
+    monkeypatch.setenv("USERPROFILE", r"C:\Users\real-profile")
+    monkeypatch.setenv("APPDATA", r"C:\Users\real-profile\AppData\Roaming")
+    monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\real-profile\AppData\Local")
 
     outcome = _run(step_file, "report_environment")
     environment = outcome.result["environment"]
@@ -289,11 +403,28 @@ def test_the_child_inherits_no_credentials_and_no_data_directory(
     assert "WG_DATA_DIR" not in environment
     assert "DATABASE_URL" not in environment
     assert "must-not-leak" not in json.dumps(environment)
-    # HOME is re-pointed, so a library hunting for ~/.config/hornlab finds an
-    # empty directory rather than the user's key file.
-    assert environment.get("HOME", "").endswith("staging/home")
-    assert environment["TMPDIR"].endswith("staging/tmp")
-    assert outcome.result["cwd"].endswith("staging/tmp")
+    # A library hunting the platform's profile directories sees only the
+    # child's empty staging home, never the real user's credential store.
+    if platform.system() == "Windows":
+        assert Path(environment["USERPROFILE"]).parts[-2:] == ("staging", "home")
+        assert Path(environment["APPDATA"]).parts[-4:] == (
+            "staging",
+            "home",
+            "AppData",
+            "Roaming",
+        )
+        assert Path(environment["LOCALAPPDATA"]).parts[-4:] == (
+            "staging",
+            "home",
+            "AppData",
+            "Local",
+        )
+        assert "real-profile" not in json.dumps(environment)
+        assert Path(environment["TMPDIR"]).parts[-2:] == ("staging", "tmp")
+    else:
+        assert environment.get("HOME", "").endswith("staging/home")
+        assert environment["TMPDIR"].endswith("staging/tmp")
+    assert Path(outcome.result["cwd"]).parts[-2:] == ("staging", "tmp")
 
 
 def test_the_child_reads_the_checksum_bound_copy_not_the_original(
@@ -418,12 +549,101 @@ def test_resident_memory_is_sampled_and_over_budget_is_contained(step_file: Path
 
 @pytest.mark.skipif(platform.system() != "Windows", reason="job objects are Windows-only")
 def test_windows_contains_memory_with_a_job_object(step_file: Path) -> None:  # pragma: no cover
-    with pytest.raises(ChildRefusal):
+    started = time.monotonic()
+    with pytest.raises(ChildRefusal) as caught:
         _run(
             step_file,
             "memory_hog",
             budget=_budget(wall_time_s=60.0, memory_bytes=192 * 1024 * 1024),
         )
+    assert caught.value.stage == "stage 7 meshing"
+    assert time.monotonic() - started < 20.0, "the kernel memory cap did not stop the child"
+    assert _run(step_file, "ok").result == {"built": {"ok": True}}
+
+
+@pytest.mark.skipif(platform.system() != "Windows", reason="job objects are Windows-only")
+def test_windows_job_api_uses_pointer_sized_signatures() -> None:  # pragma: no cover
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+    isolation._configure_windows_job_api(kernel32, ctypes, wintypes)
+
+    assert kernel32.CreateJobObjectW.restype is wintypes.HANDLE
+    assert kernel32.CreateJobObjectW.argtypes == [ctypes.c_void_p, wintypes.LPCWSTR]
+    assert kernel32.SetInformationJobObject.argtypes[0] is wintypes.HANDLE
+    assert kernel32.SetInformationJobObject.argtypes[2] is ctypes.c_void_p
+    assert kernel32.AssignProcessToJobObject.argtypes == [
+        wintypes.HANDLE,
+        ctypes.c_void_p,
+    ]
+    assert kernel32.TerminateJobObject.argtypes[0] is wintypes.HANDLE
+    assert kernel32.CloseHandle.argtypes == [wintypes.HANDLE]
+
+
+@pytest.mark.skipif(platform.system() != "Windows", reason="job objects are Windows-only")
+def test_windows_child_waits_for_its_envelope_until_after_job_assignment(
+    tmp_path: Path,
+) -> None:  # pragma: no cover - Windows only
+    staging = tmp_path / "staging"
+    for directory in (staging / "tmp", staging / "home"):
+        directory.mkdir(parents=True)
+    process = subprocess.Popen(  # noqa: S603
+        [sys.executable, "-s", "-B", "-m", "server.cadlink.child_main"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        cwd=staging / "tmp",
+        env=child_environment(staging),
+        close_fds=True,
+        creationflags=isolation._windows_creation_flags(),
+    )
+    started = time.monotonic()
+    job = isolation._assign_windows_job(process, _budget())
+    assigned_in = time.monotonic() - started
+    try:
+        time.sleep(0.2)
+        assert process.poll() is None, "the child ran before it received an envelope"
+        assert int(job._handle) > 0
+        assert assigned_in < 2.0, "job assignment left a material unconfined window"
+    finally:
+        isolation.terminate_process_tree(process, job)
+        if process.stdin is not None:
+            process.stdin.close()
+        if process.stdout is not None:
+            process.stdout.close()
+        job.close()
+
+
+@pytest.mark.skipif(platform.system() != "Windows", reason="job objects are Windows-only")
+def test_windows_breakaway_failure_retries_and_remains_memory_contained(
+    step_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:  # pragma: no cover - Windows only
+    """The first launch failure is injected; the fallback child and job are real."""
+
+    real_popen = subprocess.Popen
+    attempts: list[int] = []
+
+    def popen_with_forbidden_breakaway(*args: object, **kwargs: object) -> object:
+        flags = int(kwargs.get("creationflags", 0))
+        attempts.append(flags)
+        if len(attempts) == 1 and flags & 0x01000000:
+            raise OSError(5, "the parent job forbids breakaway")
+        return real_popen(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(isolation.subprocess, "Popen", popen_with_forbidden_breakaway)
+    started = time.monotonic()
+    with pytest.raises(ChildRefusal) as caught:
+        _run(
+            step_file,
+            "memory_hog",
+            budget=_budget(wall_time_s=60.0, memory_bytes=192 * 1024 * 1024),
+        )
+    assert attempts[0] & 0x01000000
+    assert attempts[1] & 0x01000000 == 0
+    assert caught.value.stage == "stage 7 meshing"
+    assert "could not confine" not in str(caught.value)
+    assert time.monotonic() - started < 20.0
 
 
 def test_windows_job_assignment_failure_stops_the_uncontained_child(
