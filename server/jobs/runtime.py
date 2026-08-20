@@ -1336,14 +1336,20 @@ class JobRuntime:
     async def get_results_text(self, job_id: str) -> str:
         """The stored results JSON, read off the event loop and not re-parsed."""
 
+        content, _digest = await self.get_results_payload(job_id)
+        return content
+
+    async def get_results_payload(self, job_id: str) -> tuple[str, str]:
+        """Return exact result text and its persisted SHA-256 off the event loop."""
+
         await self.start()
         row = self._require_job(job_id)
         if row["status"] != "complete":
             raise JobConflictError(f"Job not complete. Current status: {row['status']}")
-        results = await asyncio.to_thread(self.store.get_results_text, job_id)
-        if results is None:
+        payload = await asyncio.to_thread(self.store.get_results_payload, job_id)
+        if payload is None:
             raise JobResourceUnavailableError("Results not available")
-        return results
+        return payload
 
     async def get_radiation_impedance(self, job_id: str) -> bytes:
         """Return the lossless passive-cardioid radiation matrix artifact."""
