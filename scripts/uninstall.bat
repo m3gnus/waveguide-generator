@@ -12,6 +12,9 @@ rem Delayed expansion off, flat control flow, every path quoted. See the header
 rem of install.bat for why.
 setlocal EnableExtensions DisableDelayedExpansion
 
+rem SHIFT changes %%0 as well as %%1..%%9. Capture this script's directory
+rem before parsing so --yes/--data cannot change which checkout is removed.
+set "SCRIPT_DIR=%~dp0"
 set "REMOVE_DATA="
 set "ASSUME_YES="
 set "DATA_DIR="
@@ -51,7 +54,7 @@ echo The checkout itself is left alone -- delete the folder yourself when done.
 exit /b 0
 
 :args_done
-cd /d "%~dp0.."
+cd /d "%SCRIPT_DIR%.."
 if errorlevel 1 goto bad_directory
 set "WG_ROOT=%CD%"
 

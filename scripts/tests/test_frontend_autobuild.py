@@ -60,6 +60,18 @@ def test_missing_node_keeps_the_previous_build_and_never_spawns(
     assert built.read_text(encoding="utf-8") == "old"
 
 
+def test_skip_variable_bypasses_even_the_freshness_probe(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        subject,
+        "frontend_freshness",
+        lambda _root: (_ for _ in ()).throw(AssertionError("freshness probed")),
+    )
+
+    assert subject.build_frontend_if_stale(
+        tmp_path, environ={"WG2_SKIP_FRONTEND_BUILD": "1"}
+    )
+
+
 def test_windows_batch_npm_uses_cmd_without_losing_arguments(monkeypatch) -> None:
     monkeypatch.setenv("COMSPEC", r"C:\Windows\System32\cmd.exe")
     command = subject._npm_command(Path(r"C:\Program Files\nodejs\npm.cmd"), windows=True)
