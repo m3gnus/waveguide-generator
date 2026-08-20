@@ -243,7 +243,8 @@ startup handler. Measured phases in a fresh interpreter here:
 When explicitly enabled, this does not make Stop *immediate*. It can move the
 unstoppable window off the user's first solve, but a solve started during the
 warmup can contend with it. Process-isolated solves remain the only way to make
-Stop immediate, and remain deferred in [release readiness](../../plans/RELEASE-READINESS.md).
+Stop immediate; process isolation remains deferred in the workspace-local maintainer
+backlog.
 
 ### 4.2 The capability probe is cached
 

@@ -1,5 +1,10 @@
 # Phase 0 viewport and chart spike
 
+> **Historical validation artifact (2026-08-03).** The adjacent v1 checkout and
+> interpreter used by these commands have since been retired, so this is not a
+> runnable development guide for the current application. The code and measured
+> results remain as evidence for the preview transport and charting decisions.
+
 This directory is self-contained apart from the adjacent read-only v1 checkout and its Python
 virtual environment. It has no build step and makes no browser requests to the internet. The
 committed `static/vendor/` files are Three.js from the v1 installation and ECharts 6.1.0 from this

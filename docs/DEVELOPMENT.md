@@ -6,7 +6,8 @@ Status: current contributor and agent orientation, verified 2026-08-13.
 
 1. Executable code and tests are the behavior authority.
 2. Documents under `reference/` state the intended stable boundary.
-3. `plans/` contains only work that is still open.
+3. `plans/` contains accepted design gates that constrain future implementation.
+   Maintainer task tracking is workspace-local and is not published with the repository.
 4. `legacy/`, `history/`, and the dated folders in `validation/` are evidence, not task
    instructions. `validation/MEASUREMENT-TEMPLATE.md` is the exception: a blank form to
    copy when validating a build against a solve.
@@ -63,6 +64,7 @@ runs real Metal or BEMPP solves.
 
 ## Documentation changes
 
-Every new document must state its audience or status, and current plans must list only
-unfinished work. Dated measurements include the machine and tested state. Moving a
-contract requires updating any test or docstring that reads it directly.
+Every new document must state its audience or status. Repository plans must record an
+accepted design decision, not a personal task list. Dated measurements include the
+machine and tested state. Moving a contract requires updating any test or docstring that
+reads it directly.
