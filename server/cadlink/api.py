@@ -452,6 +452,17 @@ def _pending_solve_command(data_dir: Path, workspace_root: Path) -> dict[str, An
             "command": command.payload(),
             "outcome": outcome,
         }
+    listing = _return_listing(workspace_root)
+    if listing and listing[0]["bundlePath"] != command.bundle_path:
+        reason = "Superseded by a newer return from Fusion."
+        outcome = record_outcome(
+            data_dir, command.command_id, state="refused", reason=reason,
+        )
+        clear_solve_command(data_dir, command.command_id)
+        return {
+            "command": command.payload(),
+            "outcome": outcome,
+        }
     observed = f"sha256:{hashlib.sha256(manifest).hexdigest()}"
     expected = command.manifest_sha256
     if not expected.startswith("sha256:"):

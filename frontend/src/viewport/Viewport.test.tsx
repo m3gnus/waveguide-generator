@@ -99,7 +99,28 @@ vi.mock('../api/previewSocket', () => ({
   },
 }));
 
-import { Viewport } from './Viewport';
+import { cadViewportEmptyCopy, Viewport } from './Viewport';
+
+describe('CAD viewport empty-state copy', () => {
+  it('reports automatic preparation progress with the selected bundle name', () => {
+    expect(cadViewportEmptyCopy({
+      bundleName: 'Speaker CAD', bundleReadable: true, ingesting: true,
+      ingestError: null, cadApplication: 'Fusion 360',
+    })).toEqual({
+      title: 'Preparing Speaker CAD…',
+      detail: 'CAD Link is building the viewport and solver mesh.',
+    });
+  });
+
+  it('points a failed preparation to the CAD Link retry', () => {
+    const copy = cadViewportEmptyCopy({
+      bundleName: 'Speaker CAD', bundleReadable: true, ingesting: false,
+      ingestError: 'meshing failed', cadApplication: 'Fusion 360',
+    });
+    expect(copy.title).toBe('CAD preparation failed');
+    expect(copy.detail).toContain('“Prepare simulation” to retry');
+  });
+});
 
 describe('Viewport preview errors', () => {
   let host: HTMLDivElement;

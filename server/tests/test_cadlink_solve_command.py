@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 
 from server.cadlink.api import _pending_solve_command
 from server.cadlink.solve_command import (
@@ -65,6 +66,25 @@ def test_a_bundle_that_changed_after_the_command_is_refused(tmp_path) -> None:
     assert result["outcome"]["state"] == "refused"
     assert "changed after Fusion asked" in result["outcome"]["reason"]
     # The marker is one-shot, while the ledger keeps the terminal answer.
+    assert ledger_entry(data_dir, "cmd-1")["state"] == "refused"
+    assert read_solve_command(data_dir) is None
+
+
+def test_a_command_for_an_older_return_is_refused_and_cleared(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    data_dir = tmp_path / "data"
+    digest = _write_bundle(workspace, name="older.wgreturn")
+    older = workspace / "wgreturn" / "older.wgreturn"
+    newer = workspace / "wgreturn" / "newer.wgreturn"
+    _write_bundle(workspace, name="newer.wgreturn")
+    os.utime(older, (1, 1))
+    os.utime(newer, (2, 2))
+    _write_command(data_dir, "wgreturn/older.wgreturn", digest)
+
+    result = _pending_solve_command(data_dir, workspace.resolve())
+
+    assert result["outcome"]["state"] == "refused"
+    assert result["outcome"]["reason"] == "Superseded by a newer return from Fusion."
     assert ledger_entry(data_dir, "cmd-1")["state"] == "refused"
     assert read_solve_command(data_dir) is None
 

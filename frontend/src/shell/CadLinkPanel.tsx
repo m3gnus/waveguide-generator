@@ -124,6 +124,7 @@ export function CadLinkPanel() {
     bundles,
     loading,
     ingesting,
+    ingestError,
     error,
     status,
     viewportNotice,
@@ -292,16 +293,21 @@ export function CadLinkPanel() {
     {viewportNotice && <div className="cad-alert" role="status">{viewportNotice}</div>}
     {status && <div className="cad-status-strip" role="status">{status}</div>}
     {state.selectedBundle?.readable && <div className="cad-return-quick-action">
-      <div><b>{state.selectedBundle.documentName ?? state.selectedBundle.name}</b><span>{state.ingestRecord ? 'Prepared for the CAD workspace and solver.' : 'Prepare this Fusion return for the viewport and solver.'}</span></div>
-      {!state.ingestRecord && <button className="primary" disabled={ingesting} onClick={() => void cadCoordinator.ingest()}>{ingesting ? 'Preparing…' : 'Prepare simulation'}</button>}
+      <div><b>{state.selectedBundle.documentName ?? state.selectedBundle.name}</b><span>{state.ingestRecord
+        ? 'Prepared for the CAD workspace and solver.'
+          : ingesting ? 'Preparing this Fusion return for the viewport and solver.'
+          : ingestError ? 'Automatic preparation failed. Retry when ready.'
+            : 'Select this return below to prepare it automatically.'}</span></div>
+      {!state.ingestRecord && ingesting && <button className="primary" disabled>Preparing…</button>}
+      {!state.ingestRecord && !ingesting && ingestError && <button className="primary" onClick={() => void cadCoordinator.ingest()}>Prepare simulation</button>}
     </div>}
     {!loading && workflow.state !== 'not-configured' && !error && bundles.length === 0 && <div className="empty-state"><b>No CAD returns</b><span>Returned bundles appear under the selected WGLink folder’s wgreturn folder.</span></div>}
     {bundles.length > 0 && <div className="cad-bundle-list" role="list" aria-label="Designs returned from CAD">{bundles.map((bundle) => <button
       key={bundle.bundlePath}
       role="listitem"
       className={state.selectedBundle?.bundlePath === bundle.bundlePath ? 'selected' : ''}
-      disabled={!bundle.readable || ingesting}
-      onClick={() => { state.selectBundle(bundle); }}
+      disabled={!bundle.readable}
+      onClick={() => { cadCoordinator.selectBundle(bundle); }}
       title={!bundle.readable ? bundle.reason ?? 'Manifest is unreadable' : undefined}
     ><b>{bundle.documentName ?? bundle.name}</b><span>{bundle.readable ? `${bundle.sourceCount} sources · ${bundle.instanceCount} linked instances` : bundle.reason ?? 'Manifest is unreadable'}</span><time>{new Date(bundle.modifiedAt).toLocaleString()}</time></button>)}</div>}
 

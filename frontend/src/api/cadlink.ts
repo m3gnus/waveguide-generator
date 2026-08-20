@@ -269,11 +269,16 @@ export function requestFusionReturn(
   }, fetcher);
 }
 
-export function ingestReturn(request: CadReturnIngestRequest, fetcher: typeof fetch = fetch): Promise<CadReturnIngestRecord> {
+export function ingestReturn(
+  request: CadReturnIngestRequest,
+  fetcher: typeof fetch = fetch,
+  signal?: AbortSignal,
+): Promise<CadReturnIngestRecord> {
   return jsonRequest('/api/cadlink/ingest', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),
+    signal,
   }, fetcher);
 }
 

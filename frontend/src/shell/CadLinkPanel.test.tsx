@@ -103,10 +103,12 @@ describe('CadLinkPanel', () => {
   };
 
   const clickIngest = async () => {
-    const ingest = [...host.querySelectorAll<HTMLButtonElement>('button')]
-      .find((button) => button.textContent === 'Prepare simulation')!;
-    await act(async () => { ingest.click(); await Promise.resolve(); await Promise.resolve(); });
-    return ingest;
+    // Selecting a readable row now starts preparation. This helper retains its
+    // old name so the workflow tests below stay compact, but only waits for the
+    // automatic ingest and its viewport follow-up to settle.
+    await act(async () => {
+      await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    });
   };
 
   it('runs listing → ingest → blocking acknowledgement without a duplicate local solve control', async () => {
@@ -534,7 +536,9 @@ describe('CadLinkPanel', () => {
   it('selects the newest readable return when CAD Link first mounts', async () => {
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
     expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(listing.items[0].bundlePath);
-    expect(host.textContent).toContain('Prepare this Fusion return for the viewport and solver.');
+    expect(host.textContent).toContain('Select this return below to prepare it automatically.');
+    expect([...host.querySelectorAll<HTMLButtonElement>('button')]
+      .some((button) => button.textContent === 'Prepare simulation')).toBe(false);
     expect(host.textContent).not.toContain('Mesh detail');
   });
 
@@ -848,6 +852,8 @@ describe('CadLinkPanel', () => {
     await renderAndSelect();
     await clickIngest();
     expect(useCadReturnStore.getState().areaDriftSourceIds).toContain('source-hf');
+    expect([...host.querySelectorAll<HTMLButtonElement>('button')]
+      .some((button) => button.textContent === 'Prepare simulation')).toBe(true);
     expect(host.textContent).not.toContain('Allow recorded area drift');
   });
 });

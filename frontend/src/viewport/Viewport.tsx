@@ -281,6 +281,38 @@ export function fieldPlaneUnavailableTooltip(jobs: readonly JobItem[]): string {
   }
 }
 
+export function cadViewportEmptyCopy(options: {
+  bundleName: string;
+  bundleReadable: boolean;
+  ingesting: boolean;
+  ingestError: string | null;
+  cadApplication: string;
+}): { title: string; detail: string } {
+  const { bundleName, bundleReadable, ingesting, ingestError, cadApplication } = options;
+  if (!bundleReadable) {
+    return {
+      title: 'No CAD geometry yet',
+      detail: `Bring a model back from ${cadApplication}; CAD Link will prepare it automatically.`,
+    };
+  }
+  if (ingesting) {
+    return {
+      title: `Preparing ${bundleName}…`,
+      detail: 'CAD Link is building the viewport and solver mesh.',
+    };
+  }
+  if (ingestError) {
+    return {
+      title: 'CAD preparation failed',
+      detail: 'Preparation failed. Open CAD Link and use “Prepare simulation” to retry.',
+    };
+  }
+  return {
+    title: 'CAD return selected',
+    detail: 'Select a return in CAD Link to prepare it automatically.',
+  };
+}
+
 export function Viewport() {
   const preview = useSyncExternalStore(previewSocket.subscribe, previewSocket.getSnapshot, previewSocket.getSnapshot);
   const design = useDesignStore((state) => state.design);
@@ -289,12 +321,21 @@ export function Viewport() {
   const designName = useDocumentStore((state) => state.designName);
   const workspaceMode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
   const cadRecord = useCadReturnStore((state) => state.ingestRecord);
+  const cadBundleReadable = useCadReturnStore((state) => state.selectedBundle?.readable === true);
   const cadName = useCadReturnStore((state) => state.selectedBundle?.documentName ?? state.selectedBundle?.name ?? 'CAD Link');
+  const cadCoordinator = useSyncExternalStore(cadLinkCoordinatorBridge.subscribe, cadLinkCoordinatorBridge.getSnapshot, cadLinkCoordinatorBridge.getSnapshot);
   const theme = useViewportTheme();
   const preferences = useViewerPreferences();
   const cadApplication = cadApplicationName(usePreferences().cadApplication);
   const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
   const solveRunningOrQueued = jobs.some((job) => job.status === 'running' || job.status === 'queued');
+  const cadEmpty = cadViewportEmptyCopy({
+    bundleName: cadName,
+    bundleReadable: cadBundleReadable,
+    ingesting: cadCoordinator.ingesting,
+    ingestError: cadCoordinator.ingestError,
+    cadApplication,
+  });
   const resultSelection = useSyncExternalStore(compareSelection.subscribe, compareSelection.getSnapshot, compareSelection.getSnapshot);
   const availableFieldJob = useMemo(() => fieldPlaneJob(jobs, resultSelection.primary), [jobs, resultSelection.primary]);
   const fieldEnabled = useFieldPlaneStore((state) => state.enabled);
@@ -621,7 +662,7 @@ export function Viewport() {
       <b>{importedMesh?.name ?? (workspaceMode === 'cad' ? cadName : designName || 'Untitled design')}</b>
       <span>{importedMesh
         ? `${importedMesh.triangleCount.toLocaleString()} display triangles${importedMesh.triangleCount !== importedMesh.solvedTriangleCount ? ` · ${importedMesh.solvedTriangleCount.toLocaleString()} solved` : ''} · ${importedMesh.physicalGroupCount} physical group${importedMesh.physicalGroupCount === 1 ? '' : 's'}`
-        : workspaceMode === 'cad' ? 'No ingested CAD viewport mesh' : viewportSubtitle(design)}</span>
+        : workspaceMode === 'cad' ? (cadCoordinator.ingesting && cadBundleReadable ? `Preparing ${cadName}…` : cadCoordinator.ingestError && cadBundleReadable ? 'CAD preparation failed' : 'No ingested CAD viewport mesh') : viewportSubtitle(design)}</span>
     </div>
     <div className="viewport-live">
       {workspaceMode === 'parametric' && availableFileMesh && <span className="imported-mesh-badge" aria-label="Standalone mesh display">
@@ -644,8 +685,8 @@ export function Viewport() {
 
     {!activeScene && <div className="viewport-empty" role="status" aria-live="polite">
       <i className="viewport-empty-mark"><i /></i>
-      <b>{workspaceMode === 'cad' ? 'No CAD geometry yet' : preferences.liveUpdate ? 'Waiting for geometry' : 'Live updates paused'}</b>
-      <span>{workspaceMode === 'cad' ? `Bring a model back from ${cadApplication} and prepare it in CAD Link.` : preview.error ?? (!preferences.liveUpdate ? 'Enable Live updates in viewer preferences, or import an ASCII Gmsh 2.2 mesh from the design file menu.' : connectionInterrupted ? `Preview engine ${preview.connection}. The viewport will resume automatically.` : 'Requesting a live FRAME-SPEC scene from the local preview engine.')}</span>
+      <b>{workspaceMode === 'cad' ? cadEmpty.title : preferences.liveUpdate ? 'Waiting for geometry' : 'Live updates paused'}</b>
+      <span>{workspaceMode === 'cad' ? cadEmpty.detail : preview.error ?? (!preferences.liveUpdate ? 'Enable Live updates in viewer preferences, or import an ASCII Gmsh 2.2 mesh from the design file menu.' : connectionInterrupted ? `Preview engine ${preview.connection}. The viewport will resume automatically.` : 'Requesting a live FRAME-SPEC scene from the local preview engine.')}</span>
     </div>}
     {showPreviewError && <div className="viewport-error-banner" role="alert">
       <span>{previewError}</span>
