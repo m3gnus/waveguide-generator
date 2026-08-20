@@ -19,6 +19,7 @@ import numpy as np
 import pytest
 
 from server.cadlink.ingest import ingest_bundle
+from server.cadlink.isolated import _inject_mesh_child_fault
 from server.cadlink.store import CadLinkStore
 
 
@@ -407,9 +408,7 @@ def test_vertically_offset_return_keeps_the_quarter_reduction(tmp_path: Path) ->
     ]
 
 
-def test_a_leaking_reduced_domain_falls_back_to_the_full_domain(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_leaking_reduced_domain_falls_back_to_the_full_domain(tmp_path: Path) -> None:
     """A hole in a reduced domain is a wrong answer, not a slower one.
 
     The boolean that cuts the model can drop a face it fails to intersect, so
@@ -420,50 +419,13 @@ def test_a_leaking_reduced_domain_falls_back_to_the_full_domain(
     """
 
     pytest.importorskip("gmsh")
-    import meshio
-    from hornlab_mesher import step_import
-
-    real_postprocess = step_import.postprocess_mesh
-    punctured = {"count": 0}
-
-    def puncture(mesh, source_specs, **kwargs):
-        processed, repair, topology = real_postprocess(mesh, source_specs, **kwargs)
-        if not kwargs.get("symmetry_planes"):
-            return processed, repair, topology
-        points = np.asarray(processed.points, dtype=float)
-        triangles = np.asarray(processed.cells_dict["triangle"], dtype=np.int64)
-        tags = np.asarray(
-            processed.cell_data_dict["gmsh:physical"]["triangle"], dtype=np.int32
-        )
-        interior = next(
-            index
-            for index, triangle in enumerate(triangles)
-            if tags[index] == 1
-            and np.all(points[triangle, 0] > 1.0)
-            and np.all(points[triangle, 1] > 1.0)
-        )
-        keep = np.ones(len(triangles), dtype=bool)
-        keep[interior] = False
-        punctured["count"] += 1
-        return (
-            meshio.Mesh(
-                points=points,
-                cells=[("triangle", triangles[keep])],
-                cell_data={
-                    "gmsh:physical": [tags[keep]],
-                    "gmsh:geometrical": [tags[keep]],
-                },
-                field_data=processed.field_data,
-            ),
-            repair,
-            topology,
-        )
-
-    monkeypatch.setattr(step_import, "postprocess_mesh", puncture)
     bundle = _horn_bundle(tmp_path, "capped")
-    record = _ingest(tmp_path, bundle)
+    # This private context adds one known fixture name to the real mesh-child
+    # envelope. The child installs it after confinement and the STEP scan, then
+    # runs the same isolated build production uses.
+    with _inject_mesh_child_fault("leaking-reduced-domain"):
+        record = _ingest(tmp_path, bundle)
 
-    assert punctured["count"] == 1
     assert record["symmetry"]["cut_planes"] == []
     assert "failed post-mesh verification" in record["symmetry"]["note"]
     verification = record["symmetry_verification"]
@@ -489,7 +451,6 @@ def test_a_leaking_reduced_domain_falls_back_to_the_full_domain(
     # The next ingest serves the fallback mesh from cache; the finding is part
     # of the artifact's record, not of the meshing run that produced it.
     again = _ingest(tmp_path, bundle)
-    assert punctured["count"] == 1
     assert again["mesh_cache_hit"] is True
     assert any(
         item["kind"] == "symmetry-cut-unverified" for item in again["findings"]

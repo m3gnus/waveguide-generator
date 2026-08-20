@@ -523,6 +523,7 @@ def test_ingestion_record_publishes_role_findings_and_numpy_metadata(
         manifest_sha256="sha256:" + "1" * 64,
         assembly_path=assembly_path,
         artifact_sha256="sha256:" + "2" * 64,
+        artifact_size_bytes=assembly_path.stat().st_size,
         members={"assembly.step": assembly_path},
     )
     built = {
@@ -576,8 +577,14 @@ def test_ingestion_record_publishes_role_findings_and_numpy_metadata(
         "integrity": {"valid": np.bool_(True)},
     }
     monkeypatch.setattr("server.cadlink.ingest.read_wgreturn", lambda _path: bundle)
+    isolated_integrity: dict[str, object] = {}
+
+    def build_isolated(*_args, **kwargs):
+        isolated_integrity.update(kwargs)
+        return built
+
     monkeypatch.setattr(
-        "server.cadlink.ingest.build_imported_mesh", lambda *_args, **_kwargs: built
+        "server.cadlink.ingest.build_imported_mesh_isolated", build_isolated
     )
     record = ingest_bundle(
         bundle_path,
@@ -606,6 +613,8 @@ def test_ingestion_record_publishes_role_findings_and_numpy_metadata(
     assert Path(record["viewport_mesh"]["store_path"]).read_text(encoding="utf-8").endswith(
         "$EndComments\n"
     )
+    assert isolated_integrity["expected_sha256"] == bundle.artifact_sha256
+    assert isolated_integrity["expected_size_bytes"] == bundle.artifact_size_bytes
 
 
 def test_visual_mesh_failure_is_advisory_and_does_not_create_healing_finding(
@@ -634,6 +643,7 @@ def test_visual_mesh_failure_is_advisory_and_does_not_create_healing_finding(
         manifest_sha256="sha256:" + "1" * 64,
         assembly_path=assembly_path,
         artifact_sha256="sha256:" + "2" * 64,
+        artifact_size_bytes=assembly_path.stat().st_size,
         members={"assembly.step": assembly_path},
     )
     symmetry = {
@@ -662,7 +672,7 @@ def test_visual_mesh_failure_is_advisory_and_does_not_create_healing_finding(
     }
     monkeypatch.setattr("server.cadlink.ingest.read_wgreturn", lambda _path: bundle)
     monkeypatch.setattr(
-        "server.cadlink.ingest.build_imported_mesh", lambda *_args, **_kwargs: built
+        "server.cadlink.ingest.build_imported_mesh_isolated", lambda *_args, **_kwargs: built
     )
     record = ingest_bundle(
         bundle_path,
@@ -1098,3 +1108,74 @@ def test_occ_ingest_end_to_end_writes_tag_names_reuses_cache_and_solves(
         "drive-hf-right",
     }
     assert results["metadata"]["observation_origin_effective"] == "throat"
+
+
+def test_an_isolated_mesh_refusal_publishes_nothing_and_poisons_no_cache(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The gate's failure policy, at the one place it could be violated.
+
+    A timeout or crash inside the mesh child must be an ordinary stage-labelled
+    refusal: no ingestion record, no half-written mesh in the store, and above
+    all no cache index entry, because a poisoned index would serve the failure
+    to the next import as though it were an artifact.
+    """
+
+    from server.cadlink.isolation import ChildRefusal
+
+    bundle_path = tmp_path / "fixture.wgreturn"
+    bundle_path.mkdir()
+    manifest_path = bundle_path / "wgreturn.json"
+    assembly_path = bundle_path / "assembly.step"
+    manifest_path.write_text("{}", encoding="utf-8")
+    assembly_path.write_text("STEP", encoding="utf-8")
+    manifest = {
+        "return": {"id": "wgr_01J5A8QK3M9T2XVBH0RD7NWE6C"},
+        "coordinate_system": {"solver_anchor_instance_id": None},
+        "assembly": {"n_bodies_expected": 1},
+        "scope": {"included": [{}], "skipped": [], "status": "clean", "fem_air_volumes": []},
+        "instances": [],
+        "sources": [{"id": "source-hf", "role": "HF", "instance_id": None}],
+    }
+    bundle = WgReturnBundle(
+        path=bundle_path,
+        manifest_path=manifest_path,
+        manifest=manifest,
+        manifest_sha256="sha256:" + "1" * 64,
+        assembly_path=assembly_path,
+        artifact_sha256="sha256:" + "2" * 64,
+        artifact_size_bytes=assembly_path.stat().st_size,
+        members={"assembly.step": assembly_path},
+    )
+
+    def refuse(*_args, **_kwargs):
+        raise ChildRefusal(
+            "stage 7 meshing",
+            "the isolated CAD child exceeded its 600 second deadline and was "
+            "stopped with its descendants",
+        )
+
+    monkeypatch.setattr("server.cadlink.ingest.read_wgreturn", lambda _path: bundle)
+    monkeypatch.setattr("server.cadlink.ingest.build_imported_mesh_isolated", refuse)
+
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    data_dir = tmp_path / "data"
+    with pytest.raises(IngestRefusal) as caught:
+        ingest_bundle(
+            bundle_path,
+            {"rigid_size_mm": 20, "transition_mm": 30, "source_size_mm": {"source-hf": 8}},
+            [],
+            store,
+            data_dir,
+        )
+
+    assert caught.value.stage == "stage 7 meshing"
+    assert "exceeded its 600 second deadline" in str(caught.value)
+
+    imports_root = data_dir / "imports"
+    written = sorted(path.name for path in imports_root.rglob("*") if path.is_file())
+    assert written == [], f"a refused ingest left artifacts behind: {written}"
+    store.initialize()
+    # The immutable record table is where a partial publication would show up.
+    rows = store._connect().execute("SELECT COUNT(*) FROM ingests").fetchone()
+    assert rows[0] == 0

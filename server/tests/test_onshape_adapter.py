@@ -25,8 +25,10 @@ from server.cadlink.onshape.adapter import (
     send_bundle,
     variable_params,
 )
+from server.cadlink.limits import MAX_DOWNLOAD_BYTES
 from server.cadlink.onshape.client import (
     OnshapeClient,
+    OnshapeDownloadTooLarge,
     OnshapeHttpError,
     OnshapeTransportError,
     _multipart,
@@ -203,6 +205,81 @@ def test_binary_download_refuses_plaintext_redirect() -> None:
     client = OnshapeClient(_credentials(), transport=redirecting)
     with pytest.raises(OnshapeTransportError, match="unsafe download URL"):
         client.request_bytes("GET", "/documents/d/D/externaldata/F")
+
+
+# -- the untrusted-download ceiling ------------------------------------------
+#
+# ``docs/plans/STEP-PARSER-ISOLATION.md``: the 64 MiB limit is enforced while
+# streaming, and an excessive ``Content-Length`` is refused before reading.
+# Reading the body into ``bytes`` and checking afterwards does not satisfy it,
+# so these tests count how much the transport was actually asked for.
+
+
+class _CountingStream:
+    """A body that reports how many bytes the client pulled out of it."""
+
+    def __init__(self, total: int, *, chunk: int = 64 * 1024) -> None:
+        self.total = total
+        self.chunk = chunk
+        self.produced = 0
+
+    def read(self, size: int) -> bytes:
+        remaining = self.total - self.produced
+        if remaining <= 0:
+            return b""
+        count = min(size, self.chunk, remaining)
+        self.produced += count
+        return b"s" * count
+
+
+def _streaming(status: int, headers: Mapping[str, str], stream: Any):
+    import contextlib
+
+    @contextlib.contextmanager
+    def transport(_method, _url, _headers, _body, _timeout):
+        yield status, dict(headers), stream
+
+    return transport
+
+
+def test_an_excessive_content_length_is_refused_before_the_body_is_read() -> None:
+    stream = _CountingStream(total=10 * 1024 * 1024)
+    client = OnshapeClient(
+        _credentials(),
+        stream_transport=_streaming(200, {"content-length": str(MAX_DOWNLOAD_BYTES + 1)}, stream),
+    )
+    with pytest.raises(OnshapeDownloadTooLarge) as caught:
+        client.request_bytes("GET", "/documents/d/D/externaldata/F")
+    assert caught.value.declared_bytes == MAX_DOWNLOAD_BYTES + 1
+    assert stream.produced == 0, "the body was read despite an over-limit Content-Length"
+
+
+def test_a_body_that_outgrows_the_limit_is_abandoned_mid_stream() -> None:
+    """No declared length at all: the running total is the enforcement."""
+
+    limit = 512 * 1024
+    stream = _CountingStream(total=64 * 1024 * 1024)
+    client = OnshapeClient(_credentials(), stream_transport=_streaming(200, {}, stream))
+    with pytest.raises(OnshapeDownloadTooLarge):
+        client.request_bytes("GET", "/documents/d/D/externaldata/F", max_bytes=limit)
+    # A chunk of slack over the limit, and nowhere near the whole body.
+    assert stream.produced <= limit + 512 * 1024
+    assert stream.produced < stream.total // 8
+
+
+def test_a_body_inside_the_limit_streams_through_intact() -> None:
+    stream = _CountingStream(total=300 * 1024)
+    client = OnshapeClient(
+        _credentials(),
+        stream_transport=_streaming(200, {"content-length": "307200"}, stream),
+    )
+    response = client.request_bytes("GET", "/documents/d/D/externaldata/F")
+    assert response.body == b"s" * (300 * 1024)
+    assert stream.produced == 300 * 1024
+
+
+def test_the_download_ceiling_is_the_gate_s_number() -> None:
+    assert MAX_DOWNLOAD_BYTES == 64 * 1024 * 1024
 
 
 def test_client_maps_an_unauthorised_reply_to_actionable_text() -> None:
