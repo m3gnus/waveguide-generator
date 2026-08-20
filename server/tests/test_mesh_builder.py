@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import ctypes
 import importlib.util
+import os
+from pathlib import Path
+import shutil
+import subprocess
 import sys
 import threading
 from types import ModuleType, SimpleNamespace
@@ -544,6 +549,54 @@ def test_worker_owned_gmsh_initializes_noninterruptible(monkeypatch) -> None:
     assert gmsh_worker._run_in_gmsh_session(lambda: "ok") == "ok"
     assert state["arguments"] == [{"interruptible": False}]
     assert state["finalized"] == 1
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows native PATH regression")
+def test_real_gmsh_session_preserves_native_windows_path(tmp_path: Path) -> None:
+    """A Gmsh session must not make PATH-only child executables disappear."""
+
+    from ctypes import wintypes
+
+    from server.mesh import gmsh_worker
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetEnvironmentVariableW.argtypes = (
+        wintypes.LPCWSTR,
+        wintypes.LPWSTR,
+        wintypes.DWORD,
+    )
+    kernel32.GetEnvironmentVariableW.restype = wintypes.DWORD
+    kernel32.SetEnvironmentVariableW.argtypes = (wintypes.LPCWSTR, wintypes.LPCWSTR)
+    kernel32.SetEnvironmentVariableW.restype = wintypes.BOOL
+
+    size = kernel32.GetEnvironmentVariableW("PATH", None, 0)
+    assert size > 0
+    buffer = ctypes.create_unicode_buffer(size)
+    assert kernel32.GetEnvironmentVariableW("PATH", buffer, size) < size
+    native_path = buffer.value
+
+    probe = tmp_path / "wg2-gmsh-path-probe.exe"
+    shutil.copy2(Path(os.environ["SystemRoot"]) / "System32" / "where.exe", probe)
+    test_path = f"{native_path}{os.pathsep}{tmp_path}"
+
+    def set_native_path(value: str) -> None:
+        assert kernel32.SetEnvironmentVariableW("PATH", value)
+
+    def run_probe() -> None:
+        subprocess.run(
+            [probe.name, "cmd.exe"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    set_native_path(test_path)
+    try:
+        run_probe()
+        assert gmsh_worker._run_in_gmsh_session(lambda: "ok") == "ok"
+        run_probe()
+    finally:
+        set_native_path(native_path)
 
 
 def test_mesh_build_cancellation_at_prebuild_checkpoint() -> None:
