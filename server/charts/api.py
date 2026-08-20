@@ -82,6 +82,7 @@ class ChartsReferencePayload(ChartModel):
     label: str | None = None
     frequencies: list[float] = Field(default_factory=list)
     spl: list[float | None] = Field(default_factory=list)
+    sound_speed_m_per_s: float | None = None
     di: list[float | None] | dict[str, Any] = Field(default_factory=list)
     di_frequencies: list[float] = Field(default_factory=list)
     impedance_frequencies: list[float] = Field(default_factory=list)

@@ -128,6 +128,22 @@ async def save_design(
     }
 
 
+async def serialize_design(payload: dict[str, Any]) -> dict[str, Any]:
+    """Serialize a typed design without creating or advancing CadLink identity."""
+
+    design_payload: object = payload.get("design", payload)
+    filename = payload.get("filename") if "design" in payload else None
+    suggested_filename = _suggested_filename(filename)
+    try:
+        design = DesignConfig.model_validate(design_payload)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors(include_url=False)) from exc
+    return {
+        "text": serialize(design),
+        "suggestedFilename": suggested_filename,
+    }
+
+
 async def open_design(
     text: str, *, store: CadLinkStore | None = None
 ) -> dict[str, Any]:
@@ -159,6 +175,10 @@ def create_design_io_router(store: CadLinkStore) -> APIRouter:
     @router.post("/save")
     async def save_endpoint(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
         return await save_design(payload, store=store)
+
+    @router.post("/serialize")
+    async def serialize_endpoint(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+        return await serialize_design(payload)
 
     @router.post("/open")
     async def open_endpoint(
@@ -193,4 +213,5 @@ __all__ = [
     "open_design",
     "router",
     "save_design",
+    "serialize_design",
 ]

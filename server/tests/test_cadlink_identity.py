@@ -13,7 +13,7 @@ from server.cadlink.identity import CadLink, mint_id
 from server.cadlink.store import CadLinkStore
 from server.design.schema import Expr
 from server.design.textcfg import TextConfigError, parse, serialize
-from server.design_io.api import open_design, save_design
+from server.design_io.api import create_design_io_router, open_design, save_design
 
 
 SOURCE = """; Parameter config
@@ -152,6 +152,38 @@ def test_no_block_first_save_mints_identity_at_version_one(tmp_path: Path) -> No
     parsed = parse(result["text"])
     assert parsed.cadlink is not None
     assert parsed.cadlink.design_id == result["identity"]["designId"]
+
+
+def test_serialize_endpoint_never_adds_or_advances_registry_rows(tmp_path: Path) -> None:
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    design = parse(SOURCE).semantic_data()
+    saved = asyncio.run(
+        save_design({"design": design, "filename": "registered.cfg"}, store=store)
+    )
+    before = store._read_one(
+        "SELECT COUNT(*) AS design_count, SUM(edit_version) AS version_total FROM designs",
+        (),
+    )
+    router = create_design_io_router(store)
+    endpoint = next(
+        route.endpoint for route in router.routes if route.path == "/api/design/serialize"
+    )
+
+    serialized = [
+        asyncio.run(endpoint({"design": design, "filename": "portable.cfg"}))
+        for _ in range(2)
+    ]
+
+    assert store._read_one(
+        "SELECT COUNT(*) AS design_count, SUM(edit_version) AS version_total FROM designs",
+        (),
+    ) == before == {"design_count": 1, "version_total": 1}
+    assert store.get_design(saved["identity"]["designId"])["edit_version"] == 1  # type: ignore[index]
+    assert [item["suggestedFilename"] for item in serialized] == [
+        "portable.cfg",
+        "portable.cfg",
+    ]
+    assert all(parse(item["text"]).cadlink is None for item in serialized)
 
 
 def test_open_without_registry_does_not_create_one(tmp_path: Path) -> None:
