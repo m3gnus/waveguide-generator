@@ -30,6 +30,7 @@ def test_validation_never_asks_for_tkinter(tmp_path: Path, monkeypatch: pytest.M
     python = bootstrap._venv_python(environment)
     python.parent.mkdir(parents=True)
     python.touch()
+    bootstrap._install_cli_entrypoint(environment)
     fingerprint = bootstrap._fingerprint()
     (environment / bootstrap.STAMP_NAME).write_text(
         json.dumps({"fingerprint": fingerprint}), encoding="utf-8"

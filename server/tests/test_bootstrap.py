@@ -27,6 +27,7 @@ def test_validation_checks_exact_installed_git_commits(tmp_path, monkeypatch) ->
     python = bootstrap._venv_python(environment)
     python.parent.mkdir(parents=True)
     python.touch()
+    bootstrap._install_cli_entrypoint(environment)
     fingerprint = bootstrap._fingerprint()
     (environment / bootstrap.STAMP_NAME).write_text(
         json.dumps({"fingerprint": fingerprint}), encoding="utf-8"
@@ -79,6 +80,7 @@ def _ready_environment(bootstrap, tmp_path) -> Path:
             ),
             encoding="utf-8",
         )
+    bootstrap._install_cli_entrypoint(environment)
     return environment
 
 
@@ -203,6 +205,25 @@ def test_the_stamp_records_the_evidence_the_fast_path_needs(tmp_path) -> None:
     assert evidence["pythonSize"] > 0
     assert evidence["distributions"]
     assert evidence["gitDirectUrls"]
+    assert evidence["cliEntrypoints"]
+
+
+def test_the_bootstrap_installs_a_repository_aware_wg_command(tmp_path) -> None:
+    bootstrap = _load_bootstrap()
+    environment = tmp_path / ".venv"
+    python = bootstrap._venv_python(environment)
+    python.parent.mkdir(parents=True)
+    python.touch()
+
+    bootstrap._install_cli_entrypoint(environment)
+
+    assert bootstrap._validate_cli_entrypoint(environment) == (True, "ready")
+    contents = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in bootstrap._cli_entrypoint_files(environment)
+    )
+    assert str(ROOT) in contents
+    assert "server.cli" in contents
 
 
 def test_check_restamps_an_environment_after_successful_slow_validation(
