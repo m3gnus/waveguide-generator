@@ -161,18 +161,18 @@ one-time setup.
 
 For Fusion 360:
 
-1. Install WGLink from the `hornlab-fusion-addin` repository. From that
-   repository's checkout: `python3 -m venv .venv`, then
-   `.venv/bin/pip install -r requirements.txt`, then
-   `.venv/bin/python scripts/install_fusion_wg_metal_addin.py --addin WGLink --symlink`.
-   Use the symlink install — Update resamples spline profiles with the
-   repository's own Python, which Fusion's embedded interpreter cannot do.
-   Restart Fusion and confirm **Run on Startup** is ticked for WGLink under
+1. On macOS and Windows, the Waveguide Generator platform installer also
+   installs WGLink. It verifies the exact compatible AGPL source revision and
+   connects Update to WG's existing pinned scientific environment, so no
+   `hornlab-fusion-addin` checkout or second Python environment is needed.
+   Restart Fusion after installing WG and confirm **Run on Startup** is ticked under
    **Utilities → Scripts and Add-Ins**; Fusion's own record of that toggle
    overrides the add-in manifest, so a copy once started by hand stays manual
    until the box is ticked. Install from exactly one location — a second copy
-   loads a second module instance and the two fight over the panel. The
-   add-in's own guide is `docs/WGLINK-GUIDE.md` in that repository.
+   loads a second module instance and the two fight over the panel. The installer
+   preserves a developer-managed copy instead of overwriting it. Its transcript
+   reports a retriable warning if the pinned source could not be fetched; rerun
+   the same platform installer after restoring the network connection.
 2. Choose a stable local **WGLink folder** in WG. This is intentionally separate from
    the run-output folder, so changing where runs are written cannot disconnect Fusion;
    the picker offers `Documents/Waveguide Generator/cadlink` beside the runs folder.

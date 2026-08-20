@@ -28,10 +28,13 @@ AFTER_PULL=0
 LAUNCH=1
 FORCE=0
 SKIP_SPA=0
+SKIP_WGLINK=0
 SPA_ARCHIVE=""
+WGLINK_ARCHIVE=""
 SPA_VERSION=""
 SPA_BASE_URL=""
 TAG=""
+REPLACE_WGLINK=0
 GIT_MIN_MAJOR=2
 GIT_MIN_MINOR=20
 PYTHON_SERIES="3.13"
@@ -41,6 +44,7 @@ BOOTSTRAP_PYTHON_VERSION=""
 DETECTED_PYTHON=""
 DETECTED_PYTHON_VERSION=""
 SPA_SUMMARY=""
+WGLINK_SUMMARY=""
 METAL_SUMMARY=""
 
 usage() {
@@ -52,6 +56,10 @@ Waveguide Generator installer.
   --spa-archive PATH  install a downloaded SPA archive instead of fetching one
   --spa-base-url URL  directory holding the SPA archive and its .sha256
   --skip-spa          leave frontend/dist alone (for interface development)
+  --wglink-archive PATH
+                      install this reviewed WGLink package instead of fetching it
+  --skip-wglink       leave Fusion's WGLink registration untouched
+  --replace-wglink    replace an existing non-WG developer install
   --force             rebuild the environment and reinstall the SPA
   --no-launch         finish without starting the application
   --help              this message
@@ -74,6 +82,13 @@ while [[ $# -gt 0 ]]; do
         --no-launch) LAUNCH=0 ;;
         --force) FORCE=1 ;;
         --skip-spa) SKIP_SPA=1 ;;
+        --skip-wglink) SKIP_WGLINK=1 ;;
+        --replace-wglink) REPLACE_WGLINK=1 ;;
+        --wglink-archive)
+            [[ -n "${2:-}" ]] || fail "--wglink-archive needs a value, for example --wglink-archive /path/to/wglink.zip"
+            WGLINK_ARCHIVE="$2"
+            shift
+            ;;
         --spa-archive)
             [[ -n "${2:-}" ]] || fail "--spa-archive needs a value, for example --spa-archive /path/to/interface.tar.gz"
             SPA_ARCHIVE="$2"
@@ -114,6 +129,9 @@ for required in \
     launchers/linux/launch-wg.sh \
     scripts/bootstrap.py \
     scripts/fetch_spa.py \
+    scripts/install_wglink.py \
+    scripts/build_wglink_package.py \
+    integrations/wglink/source.json \
     server/cli/__main__.py \
     shared/version.json \
     server/requirements-lock.txt \
@@ -373,12 +391,38 @@ if ! "$VENV_PYTHON" "$ROOT/scripts/check_backends.py"; then
        Fix the reason reported above, then run this script again."
 fi
 
+# ── Fusion 360 integration ───────────────────────────────────────────────────
+# The verified source payload uses this environment's already-pinned NumPy,
+# SciPy, and hornlab-waveguide-mesher. It never creates a second virtualenv.
+step "Installing WGLink for Fusion 360..."
+if [[ "$SKIP_WGLINK" -eq 1 ]]; then
+    WGLINK_SUMMARY="WGLink: left untouched (--skip-wglink)."
+    say "  Skipped by request."
+else
+    wglink_args=()
+    [[ -n "$WGLINK_ARCHIVE" ]] && wglink_args+=(--archive "$WGLINK_ARCHIVE")
+    [[ "$REPLACE_WGLINK" -eq 1 ]] && wglink_args+=(--replace-external)
+    if "$VENV_PYTHON" "$ROOT/scripts/install_wglink.py" \
+        "${wglink_args[@]+"${wglink_args[@]}"}"; then
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            WGLINK_SUMMARY="WGLink: installed or preserved; restart Fusion and enable Run on Startup."
+        else
+            WGLINK_SUMMARY="WGLink: skipped (Fusion 360 is not supported on Linux)."
+        fi
+    else
+        say "  WARNING: WGLink could not be installed; Waveguide Generator itself is ready."
+        say "           Review the reason above and re-run this installer."
+        WGLINK_SUMMARY="WGLink: not installed; see the warning above."
+    fi
+fi
+
 # ── Done ──────────────────────────────────────────────────────────────────────
 say ""
 say "==============================================================="
 say " Install complete."
 say "==============================================================="
 say "  $SPA_SUMMARY"
+say "  $WGLINK_SUMMARY"
 [[ -n "$METAL_SUMMARY" ]] && say "  $METAL_SUMMARY"
 say ""
 if [[ "$(uname -s)" == "Darwin" ]]; then

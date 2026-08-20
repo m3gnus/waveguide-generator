@@ -392,6 +392,23 @@ def test_the_solve_check_comes_after_the_environment_exists():
         assert invocation(source, "bootstrap.py") < invocation(source, "check_backends.py")
 
 
+def test_both_platform_installers_install_wglink_from_wgs_existing_environment():
+    for path in BOTH_INSTALLERS:
+        source = read(path)
+        assert invocation(source, "bootstrap.py") < invocation(source, "install_wglink.py")
+        assert "--skip-wglink" in source
+        assert "--replace-wglink" in source
+        assert "--wglink-archive" in source
+        assert re.search(r'\.venv[/\\](?:bin[/\\]python|Scripts[/\\]python\.exe)', source)
+
+
+def test_uninstallers_remove_only_the_wg_managed_fusion_registration():
+    for path in (SHELL_UNINSTALLER, BATCH_UNINSTALLER):
+        source = read(path)
+        assert "--print-managed-target" in source
+        assert "integrations" in source and "wglink" in source and "runtime" in source
+
+
 # ---------------------------------------------------------------------------
 # v1: "strict preflight failures are fatal before the completion banner"
 # ---------------------------------------------------------------------------
@@ -596,7 +613,8 @@ def test_the_windows_installer_skips_microsoft_store_python_aliases():
 # ---------------------------------------------------------------------------
 
 PATH_VARIABLES = ("WG_ROOT", "WG_LOG", "WG_LOG_DIR", "CD", "TEMP", "WG_TMP_INSTALLER",
-                  "BOOTSTRAP_PYTHON", "DATA_DIR", "SPA_ARCHIVE", "CANDIDATE", "APPDATA")
+                  "BOOTSTRAP_PYTHON", "DATA_DIR", "SPA_ARCHIVE", "WGLINK_ARCHIVE",
+                  "WGLINK_TARGET", "CANDIDATE", "APPDATA")
 
 
 def test_no_batch_file_expands_a_path_variable_bare_inside_a_block():
@@ -681,6 +699,7 @@ SHELL_PATH_VARIABLES = (
     "BOOTSTRAP_PYTHON",
     "VENV_PYTHON",
     "SPA_ARCHIVE",
+    "WGLINK_ARCHIVE",
     "DATA_DIR",
     "LEGACY_DATA_DIR",
     "LOG",
@@ -690,6 +709,7 @@ SHELL_PATH_VARIABLES = (
     "HERE",
     "PYTHON",
     "target",
+    "WGLINK_TARGET",
     "interpreter",
 )
 
