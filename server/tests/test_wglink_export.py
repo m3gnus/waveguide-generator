@@ -414,11 +414,9 @@ def test_parameter_namespace_and_bundle_folder_survive_a_rename(
     assert names["bundle_stem"] == "demo_horn"
 
 
-def test_parameter_namespace_survives_an_identity_fork(
+def test_stale_copy_cannot_silently_fork_the_linked_cad_project(
     monkeypatch, tmp_path: Path,
 ) -> None:
-    """A fork is one design to the user, and to the linked Fusion document."""
-
     store = CadLinkStore(tmp_path / "cadlink.db")
     saved = _saved(store, _design())
     workspace = tmp_path / "workspace"
@@ -438,21 +436,15 @@ def test_parameter_namespace_survives_an_identity_fork(
         snapshot_builder=lambda identity: serialize(advanced, cadlink=identity),
     )
 
-    forked = api._export_wglink_sync(
-        _request(saved, base_name="tritonia.cfg"), store, workspace, "forked"
-    )
+    with pytest.raises(HTTPException, match="older CAD-link registry version") as stale:
+        api._export_wglink_sync(
+            _request(saved, base_name="tritonia.cfg"), store, workspace, "stale"
+        )
 
-    assert forked["identity"]["designId"] != original["identity"]["designId"]
-    assert forked["identity"]["lineageId"] == original["identity"]["lineageId"]
-    assert [write["kwargs"]["instance_slug"] for write in writes] == [
-        "demo_horn",
-        "demo_horn",
-    ]
-    assert _parameter_names(forked) == ["wg_demo_horn_throat_dia"]
-    # A fork is a second design in the lineage, so it cannot share the folder
-    # the first one owns -- but it keeps the readable stem the lineage earned.
-    assert forked["bundlePath"] != original["bundlePath"]
-    assert Path(str(forked["bundlePath"])).name.startswith("demo_horn-")
+    assert stale.value.status_code == 409
+    assert len(writes) == 1
+    assert _design_count(store) == 1
+    assert store.find_export_by_idempotency_key("stale") is None
 
 
 def test_a_fresh_lineage_mints_its_namespace_from_the_current_name(
@@ -510,7 +502,7 @@ def test_a_lineage_linked_before_the_registry_recovers_its_namespace(
     assert names["parameter_slug"] == "demo_horn"
 
 
-def test_wglink_export_forks_a_stale_identity_and_adopts_an_unknown_one(
+def test_wglink_export_refuses_a_stale_identity_and_adopts_an_unknown_one(
     monkeypatch, tmp_path: Path,
 ) -> None:
     store = CadLinkStore(tmp_path / "cadlink.db")
@@ -531,12 +523,11 @@ def test_wglink_export_forks_a_stale_identity_and_adopts_an_unknown_one(
         snapshot_builder=lambda identity: serialize(advanced, cadlink=identity),
     )
 
-    # The head advanced past this editor's token: the store's CAS forks rather
-    # than overwriting someone else's work, and the export follows the fork.
-    stale = api._export_wglink_sync(_request(saved), store, workspace, "stale")
-    assert stale["identity"]["designId"] != original_identity.design_id
-    assert stale["identity"]["lineageId"] == original_identity.lineage_id
-    assert stale["identity"]["baseEditVersion"] == 1
+    # Exporting from an older copy must not silently orphan the existing CAD
+    # document by assigning this editor a second design ID in the lineage.
+    with pytest.raises(HTTPException, match="CAD-linked designs") as stale:
+        api._export_wglink_sync(_request(saved), store, workspace, "stale")
+    assert stale.value.status_code == 409
 
     unknown = _request(saved, base_name="adopted horn.cfg")
     unknown.identity = SaveIdentity.model_validate({

@@ -351,8 +351,16 @@ def _commit_design_for_export(
         and head is not None
         and str(head["lineage_id"]) == requested.lineage_id
         and int(head["edit_version"]) != requested.base_edit_version
-        and str(head["design_hash"]) == current_design_hash
     ):
+        if str(head["design_hash"]) != current_design_hash:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This design is based on an older CAD-link registry version. "
+                    "Open its current head from File → CAD-linked designs before "
+                    "sending it to CAD."
+                ),
+            )
         if str(head["filename"]) == filename:
             return SaveIdentity(
                 designId=str(head["design_id"]),

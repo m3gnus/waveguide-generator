@@ -34,7 +34,7 @@ const ACCEPT = '.cfg,.txt,.mwg,text/plain';
 
 const CLASSIFICATION_DISPLAY: Record<CadLinkClassification, { label: string; detail: string }> = {
   current: { label: 'current', detail: 'Current: this file matches the latest saved version in this machine’s CAD-link registry.' },
-  stale_copy: { label: 'stale copy', detail: 'Stale copy: this is an older saved version. Sending it to CAD will preserve both versions by creating a fork.' },
+  stale_copy: { label: 'stale copy', detail: 'Stale copy: this is an older saved version. Open the current head under CAD-linked designs before sending it to CAD.' },
   externally_edited: { label: 'edited elsewhere', detail: 'Edited elsewhere: the design text changed outside this Waveguide Generator session.' },
   foreign: { label: 'foreign', detail: 'Foreign: this identity is not yet known to this machine’s CAD-link registry.' },
   missing: { label: 'unlinked', detail: 'Unlinked: this file has no CAD-link identity yet. Its first CAD-linked export will create one.' },

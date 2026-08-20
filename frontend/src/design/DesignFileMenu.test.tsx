@@ -244,7 +244,7 @@ describe('design file export menu', () => {
       baseEditVersion: 3,
     }, classification: 'stale_copy' });
     expect(container.querySelector('.cadlink-badge')?.textContent).toBe('stale copy');
-    expect(container.querySelector('.cadlink-badge')?.getAttribute('title')).toContain('Sending it to CAD will preserve both versions');
+    expect(container.querySelector('.cadlink-badge')?.getAttribute('title')).toContain('Open the current head under CAD-linked designs');
   });
 
   it('restores directivity controls from old ATH polar blocks on open', async () => {
