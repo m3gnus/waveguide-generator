@@ -153,6 +153,79 @@ def test_openapi_documents_complete_jobs_surface(tmp_path: Path) -> None:
     assert "$ref" in solve_schema
     job_properties = schema["components"]["schemas"]["JobItem"]["properties"]
     assert {"run_number", "parent_job_id", "solve_options"} <= set(job_properties)
+    result_schema = paths["/api/results/{job_id}"]["get"]["responses"]["200"][
+        "content"
+    ]["application/json"]["schema"]
+    assert result_schema["discriminator"]["propertyName"] == "result_kind"
+    assert {item["$ref"] for item in result_schema["oneOf"]} == {
+        "#/components/schemas/ParametricResultEnvelope",
+        "#/components/schemas/MultiChannelResultEnvelope",
+    }
+    result_headers = paths["/api/results/{job_id}"]["get"]["responses"]["200"][
+        "headers"
+    ]
+    assert set(result_headers) == {"ETag", "X-WG-Results-SHA256"}
+
+
+def test_solve_body_validation_uses_versioned_error_envelope(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        app = create_app(data_dir=tmp_path)
+        status, raw = await _request(
+            app,
+            "POST",
+            "/api/solve",
+            body={"client_request_id": "  external-invalid-7  ", "options": {}},
+        )
+
+        assert status == 422
+        failure = json.loads(raw)
+        assert failure["detail"] == "Solve request body is invalid"
+        assert failure["error"] == {
+            "schema_version": 1,
+            "code": "invalid_request",
+            "stage": "input",
+            "message": "Solve request body is invalid",
+            "retryable": False,
+            "details": {
+                "validation_errors": [
+                    {
+                        "type": "missing",
+                        "loc": ["body", "geometry"],
+                        "msg": "Field required",
+                        "input": {
+                            "client_request_id": "  external-invalid-7  ",
+                            "options": {},
+                        },
+                    }
+                ]
+            },
+            "client_request_id": "external-invalid-7",
+        }
+
+        status, raw = await _request(
+            app,
+            "POST",
+            "/api/solve",
+            body={"client_request_id": 17, "options": {}},
+        )
+        assert status == 422
+        assert json.loads(raw)["error"]["client_request_id"] is None
+
+        # Validation behavior on every other jobs route remains FastAPI's default.
+        status, raw = await _request(
+            app,
+            "PATCH",
+            "/api/jobs/missing/metadata",
+            body={"rating": "not-an-integer"},
+        )
+        assert status == 422
+        unrelated = json.loads(raw)
+        assert isinstance(unrelated["detail"], list)
+        assert "error" not in unrelated
+
+        await app.state.jobs_runtime.shutdown()
+
+    asyncio.run(scenario())
 
 
 def test_dryrun_http_lifecycle_metadata_results_and_delete(

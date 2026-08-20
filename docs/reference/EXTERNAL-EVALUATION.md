@@ -14,7 +14,7 @@ software remains a peer client and does not import WG, mesher, or solver interna
 |---|---|
 | `GET /api/capabilities` | engines and fast paths available on this machine |
 | `GET /api/integration/v1/parameters` | stable parameter IDs, JSON paths, families, per-family defaults, units, editor bounds, enums, expression support, and declarative conditions |
-| `GET /api/integration/v1/design-schema` | JSON Schema for the discriminated design family |
+| `GET /api/integration/v1/design-schema` | Draft 2020-12 JSON Schema for the discriminated design family; `x-wg-schema-version` versions this discovery document |
 | `GET /openapi.json` | live HTTP schema |
 | `docs/reference/openapi.v1.json` | release snapshot checked for drift in the repository |
 
@@ -48,10 +48,20 @@ Every final result has top-level `result_kind` and `result_contract_version`:
 | `multi_channel` | `2` | `channels`, `channel_order`, and shared metadata |
 
 `provenance.schema_version: 1` contains the WG version, pinned dependency SHAs,
-resolved engine, and canonical SHA-256 hashes for the request, geometry, and solve
-options. `GET /api/results/{job_id}` adds `ETag` and `X-WG-Results-SHA256` for the exact
-stored result bytes. Clients should key caches with these identities rather than an
-engine name or a hand-built parameter string.
+resolved engine, and canonical SHA-256 hashes for both the effective request durably
+stored after AUTO resolution/backend defaults and the request shape actually passed to
+the solver after symmetry resolution. `request_identity: "execution"` and the explicit
+`execution_*` and `effective_*` fields make those scopes unambiguous; the original
+unqualified names remain aliases for the execution hashes. `GET /api/results/{job_id}` adds
+`ETag` and `X-WG-Results-SHA256` for the exact stored result bytes. Clients should key
+caches with these identities rather than an engine name or a hand-built parameter
+string.
+
+The reference client fails closed when that digest is absent or mismatched and when a
+result kind/version is unsupported. Its `result_sha256` is always the stored-byte
+identity, independent of `--output`. When output is requested, `artifacts` separately
+reports the exact-byte SHA-256 of each declared output artifact; `summary.json` is the
+self-describing container and does not hash itself.
 
 ## Errors and compatibility
 
@@ -72,7 +82,9 @@ Submission refusals preserve the human-readable `detail` string and add:
 ```
 
 HTTP status still expresses the broad class. Code and stage are the stable programmatic
-fields; message is explanatory text. Pydantic request-shape failures retain FastAPI's
+fields; message is explanatory text. Request-shape failures on `POST /api/solve` use
+the same envelope with code `invalid_request`, stage `input`, and the standard Pydantic
+error list under `error.details.validation_errors`. Other routes retain FastAPI's
 standard machine-readable 422 detail list.
 
 WG follows additive compatibility within a published contract version. A breaking

@@ -14,6 +14,12 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
+SUPPORTED_RESULT_CONTRACTS = {
+    ("parametric", 1),
+    ("multi_channel", 2),
+}
+
+
 class WgApiError(RuntimeError):
     def __init__(self, status: int, body: dict[str, Any]) -> None:
         self.status = status
@@ -84,11 +90,25 @@ class WaveguideGeneratorClient:
         raw, headers = self._request("GET", f"/api/results/{job_id}")
         digest = hashlib.sha256(raw).hexdigest()
         declared = headers.get("x-wg-results-sha256")
-        if declared is not None and declared != digest:
+        if declared is None:
+            raise RuntimeError("WG result response omitted X-WG-Results-SHA256")
+        if declared != digest:
             raise RuntimeError(
                 f"WG result digest mismatch: declared {declared}, received {digest}"
             )
-        return json.loads(raw), digest
+        results = json.loads(raw)
+        if not isinstance(results, dict):
+            raise RuntimeError("WG result response must be a JSON object")
+        contract = (
+            results.get("result_kind"),
+            results.get("result_contract_version"),
+        )
+        if contract not in SUPPORTED_RESULT_CONTRACTS:
+            raise RuntimeError(
+                "Unsupported WG result contract: "
+                f"kind={contract[0]!r}, version={contract[1]!r}"
+            )
+        return results, digest
 
     def evaluate(
         self,
@@ -123,21 +143,29 @@ def main(argv: list[str] | None = None) -> int:
 
     solve_request = json.loads(args.request.read_text(encoding="utf-8"))
     evaluation = WaveguideGeneratorClient(args.base_url).evaluate(solve_request)
+    summary = {
+        "job_id": evaluation.job_id,
+        "result_kind": evaluation.results.get("result_kind"),
+        "result_contract_version": evaluation.results.get(
+            "result_contract_version"
+        ),
+        "result_sha256": evaluation.result_sha256,
+    }
     if args.output is not None:
-        args.output.write_text(
-            json.dumps(evaluation.results, indent=2, sort_keys=True, allow_nan=False) + "\n",
-            encoding="utf-8",
-        )
+        output_bytes = (
+            json.dumps(
+                evaluation.results,
+                indent=2,
+                sort_keys=True,
+                allow_nan=False,
+            )
+            + "\n"
+        ).encode("utf-8")
+        args.output.write_bytes(output_bytes)
+        summary["output_sha256"] = hashlib.sha256(output_bytes).hexdigest()
     print(
         json.dumps(
-            {
-                "job_id": evaluation.job_id,
-                "result_kind": evaluation.results.get("result_kind"),
-                "result_contract_version": evaluation.results.get(
-                    "result_contract_version"
-                ),
-                "result_sha256": evaluation.result_sha256,
-            },
+            summary,
             sort_keys=True,
         )
     )

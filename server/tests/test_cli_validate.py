@@ -160,6 +160,7 @@ def test_validate_accepts_the_canonical_http_solve_request(
     assert report["inputKind"] == "solve_request"
     assert report["dialect"] == "solve-request-json"
     assert report["settingsSource"] == "request"
+    assert report["clientRequestId"] == "validate-7"
     assert report["frequencies"] == {
         "start": 500.0,
         "end": 1000.0,
@@ -168,6 +169,31 @@ def test_validate_accepts_the_canonical_http_solve_request(
         "source": "flags",
     }
     assert report["errors"] == []
+
+
+def test_validate_preserves_request_identity_on_post_load_refusal(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    path = _request_path(tmp_path)
+
+    exit_code = main(
+        [
+            "validate",
+            "--request",
+            str(path),
+            "--json",
+            "--no-mesh",
+            "--engine",
+            "quantum",
+        ],
+        engine_registry=_registry(),
+    )
+    report = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 1
+    assert report["clientRequestId"] == "validate-7"
+    assert report["errors"][0]["client_request_id"] == "validate-7"
 
 
 def test_validate_overlay_is_deep_merged_and_engine_flag_wins(

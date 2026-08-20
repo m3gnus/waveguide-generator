@@ -27,7 +27,9 @@ def _canonical_json(value: Any) -> bytes:
     ).encode("utf-8")
 
 
-def _sha256(value: Any) -> str:
+def canonical_json_sha256(value: Any) -> str:
+    """Hash one JSON value using the public request-identity encoding."""
+
     return hashlib.sha256(_canonical_json(value)).hexdigest()
 
 
@@ -49,16 +51,36 @@ def _release_identity() -> tuple[str, dict[str, str]]:
 def enrich_result_contract(
     results: Mapping[str, Any],
     request: "SolveRequest",
+    *,
+    effective_request: "SolveRequest | None" = None,
 ) -> dict[str, Any]:
-    """Add only backward-compatible top-level integration fields."""
+    """Add only backward-compatible top-level integration fields.
+
+    ``request`` is the execution-shaped request passed to the solver. Jobs may
+    additionally provide the normalized request they durably persisted before
+    symmetry resolution rewrote the execution mesh domain.
+    """
 
     enriched = dict(results)
+    effective_request = effective_request or request
     parametric = request.geometry.type == "parametric"
     result_kind = "parametric" if parametric else "multi_channel"
     result_version = 1 if parametric else 2
     request_wire = request.model_dump(mode="json")
     geometry_wire = request.geometry.model_dump(mode="json")
     options_wire = request.options.model_dump(mode="json")
+    request_sha256 = canonical_json_sha256(request_wire)
+    geometry_sha256 = canonical_json_sha256(geometry_wire)
+    solve_options_sha256 = canonical_json_sha256(options_wire)
+    effective_request_sha256 = canonical_json_sha256(
+        effective_request.model_dump(mode="json")
+    )
+    effective_geometry_sha256 = canonical_json_sha256(
+        effective_request.geometry.model_dump(mode="json")
+    )
+    effective_solve_options_sha256 = canonical_json_sha256(
+        effective_request.options.model_dump(mode="json")
+    )
     wg_version, dependency_shas = _release_identity()
 
     enriched["result_kind"] = result_kind
@@ -69,9 +91,19 @@ def enrich_result_contract(
         "schema_version": PROVENANCE_CONTRACT_VERSION,
         "wg_version": wg_version,
         "dependency_shas": dependency_shas,
-        "request_sha256": _sha256(request_wire),
-        "geometry_sha256": _sha256(geometry_wire),
-        "solve_options_sha256": _sha256(options_wire),
+        # The original v1 names hash the execution-shaped request, including
+        # the symmetry-resolved mesh domain. Keep those aliases stable while
+        # naming both that identity and the normalized, durably stored request.
+        "request_identity": "execution",
+        "execution_request_sha256": request_sha256,
+        "execution_geometry_sha256": geometry_sha256,
+        "execution_solve_options_sha256": solve_options_sha256,
+        "effective_request_sha256": effective_request_sha256,
+        "effective_geometry_sha256": effective_geometry_sha256,
+        "effective_solve_options_sha256": effective_solve_options_sha256,
+        "request_sha256": request_sha256,
+        "geometry_sha256": geometry_sha256,
+        "solve_options_sha256": solve_options_sha256,
         "resolved_engine": request.options.engine,
     }
     metadata = dict(enriched.get("metadata") or {})
@@ -80,4 +112,4 @@ def enrich_result_contract(
     return enriched
 
 
-__all__ = ["enrich_result_contract"]
+__all__ = ["canonical_json_sha256", "enrich_result_contract"]

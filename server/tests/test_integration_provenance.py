@@ -39,6 +39,7 @@ def test_parametric_result_has_stable_identity_and_provenance() -> None:
     provenance = first["provenance"]
     assert provenance["schema_version"] == 1
     assert provenance["wg_version"]
+    assert provenance["request_identity"] == "execution"
     assert provenance["resolved_engine"] == "metal"
     assert set(provenance["dependency_shas"]) >= {
         "hornlab-waveguide-mesher",
@@ -46,8 +47,25 @@ def test_parametric_result_has_stable_identity_and_provenance() -> None:
     }
     assert all(
         len(provenance[name]) == 64
-        for name in ("request_sha256", "geometry_sha256", "solve_options_sha256")
+        for name in (
+            "request_sha256",
+            "geometry_sha256",
+            "solve_options_sha256",
+            "execution_request_sha256",
+            "execution_geometry_sha256",
+            "execution_solve_options_sha256",
+            "effective_request_sha256",
+            "effective_geometry_sha256",
+            "effective_solve_options_sha256",
+        )
     )
+    assert provenance["request_sha256"] == provenance["execution_request_sha256"]
+    assert provenance["geometry_sha256"] == provenance["execution_geometry_sha256"]
+    assert (
+        provenance["solve_options_sha256"]
+        == provenance["execution_solve_options_sha256"]
+    )
+    assert provenance["request_sha256"] == provenance["effective_request_sha256"]
 
 
 @pytest.mark.parametrize(

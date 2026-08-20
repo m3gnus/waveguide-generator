@@ -34,6 +34,16 @@ class ErrorEnvelope(IntegrationModel):
     error: ErrorDetail
 
 
+class ArtifactDigest(IntegrationModel):
+    """Exact file bytes plus an optional canonical JSON-object identity."""
+
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    canonical_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+
+
 class CliOutcome(IntegrationModel):
     """Terminal NDJSON record emitted after the jobs-protocol stream."""
 
@@ -49,7 +59,11 @@ class CliOutcome(IntegrationModel):
     job_id: str | None = None
     client_request_id: str | None = None
     output_directory: str | None = None
-    result_sha256: str | None = None
+    result_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    artifacts: dict[str, ArtifactDigest] | None = None
     error: ErrorDetail | None = None
 
 
@@ -78,6 +92,7 @@ def error_envelope(
 __all__ = [
     "ERROR_CONTRACT_VERSION",
     "PROVENANCE_CONTRACT_VERSION",
+    "ArtifactDigest",
     "ErrorDetail",
     "ErrorEnvelope",
     "CliOutcome",

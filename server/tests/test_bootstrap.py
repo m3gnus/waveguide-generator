@@ -5,6 +5,8 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import subprocess
+import sys
 from contextlib import nullcontext
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -224,6 +226,29 @@ def test_the_bootstrap_installs_a_repository_aware_wg_command(tmp_path) -> None:
     )
     assert str(ROOT) in contents
     assert "server.cli" in contents
+
+
+def test_the_posix_wg_command_runs_when_the_environment_path_contains_spaces(
+    tmp_path,
+) -> None:
+    if os.name == "nt":
+        return
+    bootstrap = _load_bootstrap()
+    environment = tmp_path / "checkout with spaces" / ".venv"
+    python = bootstrap._venv_python(environment)
+    python.parent.mkdir(parents=True)
+    python.symlink_to(sys.executable)
+
+    bootstrap._install_cli_entrypoint(environment)
+
+    completed = subprocess.run(
+        [str(environment / "bin" / "wg"), "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "usage: wg" in completed.stdout
 
 
 def test_check_restamps_an_environment_after_successful_slow_validation(
