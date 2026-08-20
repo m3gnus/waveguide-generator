@@ -31,7 +31,8 @@ from server.mesh.gmsh_worker import _run_in_gmsh_session
 def _outbound(tmp_path: Path) -> tuple[dict, bytes]:
     design = DesignConfig.model_validate({"formula": "OSSE", "L": 70, "a": 45})
     resolved = resolve_geometry(design_to_mesher_config(design))
-    product = write_wglink(
+    product = _run_in_gmsh_session(
+        write_wglink,
         resolved.geometry,
         tmp_path / "outbound.wglink",
         identity=WgLinkIdentity(
