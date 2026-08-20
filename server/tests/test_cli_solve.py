@@ -106,7 +106,8 @@ def test_solve_happy_path_streams_completed_ndjson(tmp_path: Path, capsys) -> No
     messages = [json.loads(line) for line in captured.out.splitlines()]
 
     assert exit_code == 0
-    assert captured.err == ""
+    assert "retained only in the WG job database" in captured.err
+    assert "Use --output DIR" in captured.err
     assert messages[0]["kind"] == "hello"
     assert any(
         message.get("kind") == "event" and message.get("type") == "completed"
@@ -115,6 +116,7 @@ def test_solve_happy_path_streams_completed_ndjson(tmp_path: Path, capsys) -> No
     assert messages[-1]["kind"] == "outcome"
     assert messages[-1]["status"] == "complete"
     assert len(messages[-1]["result_sha256"]) == 64
+    assert "artifacts" not in messages[-1]
 
 
 def test_result_identity_is_independent_of_output_artifacts(

@@ -58,8 +58,9 @@ Process exits are:
 
 ## Solve output
 
-`--output DIR` creates a new directory and refuses to overwrite an existing one. A
-completed solve writes:
+`--output DIR` is the persistence boundary for headless automation. It creates a new,
+caller-owned directory and refuses to overwrite an existing one. A completed solve
+writes:
 
 | Artifact | Contract |
 |---|---|
@@ -83,6 +84,13 @@ explicit `effective_*` hashes match `effective-request.json`. The original unqua
 hash names remain backward-compatible aliases for the execution hashes. A caller can
 cache or audit an evaluation without guessing whether AUTO, a backend default, or
 symmetry resolution changed the request.
+
+This bundle is intentionally separate from the GUI's design-grouped Workspace run
+archive. The archive is frontend automation and adds `run.json`, `design.json`, and
+human-facing JSON/CSV exports. A CLI solve is not automatically added to it. If
+`--output` is omitted, results remain only in the WG job database and are subject to
+its retention policy; a successful command warns about that state on stderr. NDJSON
+stdout remains protocol-only.
 
 ## Scheduling boundary
 

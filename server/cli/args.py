@@ -84,7 +84,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--output",
         type=Path,
         metavar="DIR",
-        help="write results and artifacts to a new directory",
+        help="write a durable, caller-owned artifact bundle to a new directory",
     )
     solve_parser.add_argument(
         "--data-dir",

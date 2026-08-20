@@ -131,11 +131,17 @@ A design keeps one folder across a rename, and its parametric and CAD-link runs 
 side by side, because they are the same design's history. `run.json` records what was
 solved, from which CAD document and return state, and with which settings.
 
-**Archive every completed run** is on by default, and it is the only thing that
-outlives the run list: results there are kept for 30 days, or until the run limit is
-passed, and rating a run exempts it. The Workspace folder is kept until you delete it.
-Archiving happens while the app is open, so a run solved through the CLI is not
-archived.
+**Archive every completed run** is on by default. Results in the app's job database
+are kept for 30 days, or until the run limit is passed, and rating a run exempts it;
+the Workspace archive is kept until you delete it. Archiving is frontend automation,
+so a run solved through the CLI is not automatically added to this design-grouped
+Workspace history.
+
+That is separate from CLI output. `wg solve --output DIR` writes a durable,
+caller-owned artifact bundle containing the submitted, effective, and execution
+requests, versioned results, retained mesh, log, summary, provenance, and digests.
+Without `--output`, a successful CLI solve is retained only in the job database and
+the command prints a retention warning.
 
 ## CAD link
 
