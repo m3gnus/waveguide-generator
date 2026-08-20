@@ -14,8 +14,10 @@ is unchanged.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Iterator, Mapping
 
 from server.cadlink.isolation import (
     INSPECT_BUDGET,
@@ -37,6 +39,28 @@ VIEWPORT_ARTIFACTS = ("viewport.msh",)
 
 INSPECT_STAGE = "stage 3 STEP inspection"
 MESH_STAGE = "stage 7 meshing"
+
+# This is deliberately context-local and private: ordinary ingest callers have
+# no argument, request field, or environment variable that can select it. The
+# real-geometry regression uses the context manager below to ask the disposable
+# child to install one named fixture before importing the mesher's function.
+_MESH_CHILD_FAULT_FIXTURE: ContextVar[str | None] = ContextVar(
+    "mesh_child_fault_fixture", default=None
+)
+_KNOWN_MESH_CHILD_FAULT_FIXTURES = frozenset({"leaking-reduced-domain"})
+
+
+@contextmanager
+def _inject_mesh_child_fault(fixture: str) -> Iterator[None]:
+    """Enable one explicit test-only fault in the real mesh child."""
+
+    if fixture not in _KNOWN_MESH_CHILD_FAULT_FIXTURES:
+        raise ValueError(f"unknown mesh child fault fixture {fixture!r}")
+    token = _MESH_CHILD_FAULT_FIXTURE.set(fixture)
+    try:
+        yield
+    finally:
+        _MESH_CHILD_FAULT_FIXTURE.reset(token)
 
 
 def _reraise_typed(exc: ChildRefusal) -> None:
@@ -127,6 +151,9 @@ def build_imported_mesh_isolated(
         "options": dict(options or {}),
         "include_viewport_mesh": bool(include_viewport_mesh),
     }
+    fault_fixture = _MESH_CHILD_FAULT_FIXTURE.get()
+    if fault_fixture is not None:
+        payload["_test_fault_fixture"] = fault_fixture
     try:
         with isolated_step_task(
             "mesh",
