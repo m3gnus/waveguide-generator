@@ -99,7 +99,7 @@ function parseRange(value: unknown): Pick<AthPolarUiState, 'angleStart' | 'angle
  * Read only the directivity settings an ATH/v1 config actually states.
  *
  * `null` means the file says nothing about directivity, which is the case for
- * every ATH file and for every WG design saved before these blocks were
+ * every ATH file and for every WG design serialized before these blocks were
  * written. Callers must leave the user's settings alone in that case rather
  * than falling back to defaults: the file not mentioning a measurement
  * distance is not the file asking for 2 m.

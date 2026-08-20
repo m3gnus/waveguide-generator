@@ -260,6 +260,29 @@ describe('simulation summary groups', () => {
     expect(row(groups, 'Measurement', 'Balloon')?.value).not.toBe('0');
   });
 
+  it('shows the drive without a driver-name row the server cannot fill', () => {
+    // `metadata.driver.spec` is a DriverSpec dump: fourteen numeric Thiele-Small
+    // fields under `extra="forbid"`, no `model` and no `name`. A row reading
+    // either could only ever be blank, so the group carries what does exist.
+    const groups = summaryGroups({
+      result: {
+        frequencies: [100],
+        metadata: {
+          impedance_units: 'ohms',
+          drive: { voltage_v: 2.83, rg_ohm: 0.1 },
+          driver: {
+            spec: { sd_cm2: 55, bl_t_m: 6.2, re_ohm: 5.4, xmax_mm: 4.500000000000001 },
+            cone_excursion_mm: { frequencies: [100], values: [1.2], peak_mm: 1.2 },
+          },
+        },
+      },
+    });
+    expect(row(groups, 'Drive', 'Voltage')?.value).toBe('2.83 V rms · Rg 0.1 Ω');
+    expect(row(groups, 'Drive', 'Driver')).toBeUndefined();
+    expect(row(groups, 'Drive', 'Peak excursion')?.value).toBe('1.20 mm · 27% of Xmax 4.5 mm');
+    expect(row(groups, 'Drive', 'Peak excursion')?.title).toContain('One-way peak');
+  });
+
   it('retains count-only diagnostics from a partial legacy payload', () => {
     const groups = summaryGroups({ result: { frequencies: [], metadata: { warning_count: 2, failure_count: 1 } } });
     expect(groups.find(({ title }) => title === 'Diagnostics')).toMatchObject({

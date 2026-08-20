@@ -3,6 +3,7 @@ import {
   DataZoomComponent,
   GridComponent,
   LegendComponent,
+  PolarComponent,
   TooltipComponent,
   VisualMapComponent,
 } from 'echarts/components';
@@ -20,6 +21,9 @@ echarts.use([
   LegendComponent,
   DataZoomComponent,
   VisualMapComponent,
+  // The polar response chart is the only user; without it a polar option
+  // renders as an empty card rather than failing loudly.
+  PolarComponent,
   CanvasRenderer,
 ]);
 

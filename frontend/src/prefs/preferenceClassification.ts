@@ -36,6 +36,8 @@ export const PREFERENCE_EFFECTS: Record<keyof Preferences, PreferenceEffect> = {
   directivityGuideInterval: 'render-refreshing',
   chartTypes: 'render-refreshing',
   chartTheme: 'render-refreshing',
+  splPhase: 'render-refreshing',
+  impedanceDisplay: 'render-refreshing',
   // Export selections are read at export time and nothing displays them.
   exportFormats: 'inert',
   autoExportFormats: 'inert',

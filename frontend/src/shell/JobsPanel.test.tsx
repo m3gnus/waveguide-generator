@@ -3,7 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
 import { compareSelection } from '../api/results';
-import type { CadReturnIngestRecord } from '../api/cadlink';
+import type { CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
 import { preferencesStore } from '../prefs/preferences';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetDesignStore, useDesignStore } from '../stores/design';
@@ -44,6 +44,14 @@ function enter(input: HTMLInputElement, value: string): void {
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
   setter?.call(input, value);
   input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }));
+}
+
+function cadBundle(documentName: string): CadReturnBundle {
+  return {
+    name: `${documentName}.wgreturn`, bundlePath: `/cad/${documentName}.wgreturn`,
+    modifiedAt: '2026-08-19T12:00:00Z', readable: true, documentName,
+    requestId: null, sourceCount: 1, instanceCount: 1, sources: [],
+  };
 }
 
 function readyCadRecord(ingestId: string): CadReturnIngestRecord {
@@ -288,7 +296,9 @@ describe('jobs panel run list', () => {
     act(() => input.blur());
 
     expect(host.querySelector('.run-name-preview')?.textContent).toContain('next · winner1');
-    // The file the design saves as follows the same edit -- this is the whole
+    expect(input.title).toContain('Download a copy');
+    expect(input.title).not.toContain('saves as');
+    // The Download a copy filename follows the same edit -- this is the whole
     // point of the field.
     expect(useDocumentStore.getState()).toMatchObject({ designName: 'winner', filename: 'winner.cfg' });
 
@@ -297,32 +307,35 @@ describe('jobs panel run list', () => {
     expect(host.querySelector('.run-name-preview')?.textContent).toContain('next · winner1');
   });
 
-  it('keeps the name typed in CAD mode when an ingest arrives', async () => {
+  it('reports the CAD document name in CAD mode instead of offering an edit', async () => {
+    // The name of a CAD Link run belongs to the Fusion document, and WG cannot
+    // write a name back into Fusion -- so the field states it rather than
+    // pretending to own it.
+    useCadReturnStore.setState({ selectedBundle: cadBundle('Tritonia V') });
     workspaceModeStore.setMode('cad');
+    act(() => useDocumentStore.getState().setDesignName('a leftover design'));
     publishJobs([]);
     await act(async () => root.render(<JobsPanel/>));
-    const input = host.querySelector<HTMLInputElement>('[aria-label="Design name"]')!;
-    act(() => input.focus());
-    act(() => enter(input, 'named-before-ingest'));
-    act(() => input.blur());
 
-    act(() => useCadReturnStore.setState({
-      ingestRecord: readyCadRecord('wgi_first'), needsIngest: false,
-      driveChannels: [{ id: 'drive', source_ids: ['source'], motion: 'normal' }],
-      sourceSizesMm: { source: 2 }, rigidSizeMm: 5, transitionMm: 5,
-    }));
-
-    expect(host.querySelector('.run-name-preview')?.textContent).toContain('next · named-before-ingest1');
+    expect(host.querySelector<HTMLInputElement>('[aria-label="Design name"]')).toBeNull();
+    const input = host.querySelector<HTMLInputElement>('[aria-label="CAD document name"]')!;
+    expect(input.value).toBe('Tritonia V');
+    expect(input.readOnly).toBe(true);
+    expect(input.title).toContain('Rename the document in Fusion 360');
+    // Renaming in Fusion and sending again is what changes it.
+    act(() => useCadReturnStore.setState({ selectedBundle: cadBundle('Tritonia V2') }));
+    expect(host.querySelector<HTMLInputElement>('[aria-label="CAD document name"]')!.value).toBe('Tritonia V2');
   });
 
-  it('previews the same design name in CAD mode, advancing only with the counter', async () => {
+  it('previews the Fusion document name in CAD mode, advancing only with the counter', async () => {
     useCadReturnStore.setState({
+      selectedBundle: cadBundle('cad-run'),
       ingestRecord: readyCadRecord('wgi_first'), needsIngest: false,
       driveChannels: [{ id: 'drive', source_ids: ['source'], motion: 'normal' }],
       sourceSizesMm: { source: 2 }, rigidSizeMm: 5, transitionMm: 5,
     });
     workspaceModeStore.setMode('cad');
-    act(() => useDocumentStore.getState().setDesignName('cad-run'));
+    act(() => useDocumentStore.getState().setDesignName('a leftover design'));
     publishJobs([]);
     await act(async () => root.render(<JobsPanel/>));
 

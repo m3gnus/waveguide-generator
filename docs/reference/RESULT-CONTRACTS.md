@@ -1,7 +1,7 @@
 # Solver result contract
 
 Status: canonical current contract, version 1. Verified against
-`server/solver/result_mapping.py` and frontend result/export consumers on 2026-08-13.
+`server/solver/result_mapping.py` and frontend result/export consumers on 2026-08-20.
 The original v1-mining document remains in Git history at `f51a23c`.
 
 ## Envelope and axes
@@ -25,10 +25,12 @@ retaining valid values.
 | `spl_on_axis.phase_degrees` | raw wrapped complex-pressure phase in degrees; zero/invalid amplitude becomes `null` |
 | `directivity[plane]` | per-frequency `[angle_deg, normalized_level_db]` pairs; each row is shifted so the configured normalization angle is 0 dB |
 | `directivity_phase[plane]` | raw wrapped pressure phase with the same plane/frequency/angle shape as directivity; it is never level-normalized |
-| `impedance.real/imaginary` | dimensionless specific acoustic impedance `Z/(rho*c)`, mapped from unit-acceleration pressure with the solver medium's `rho*c` |
+| `impedance.real/imaginary` | either dimensionless specific acoustic impedance `Z/(rho*c)` from a unit-acceleration solve, or terminal electrical input impedance in ohms for a driver-coupled channel; `metadata.impedance_quantity` and `impedance_units` are authoritative |
 | `di.di` | full-sphere power directivity index integrated from a complete spherical pressure grid; `null` when the backend cannot supply one — display cuts are never substituted |
 | `balloon` | normalized spherical SPL grid with theta/phi axes, distance, and hemisphere flag when requested and supported |
 | `beam_shape` | fitted forward-beam diagnostics; nullable per frequency and accompanied by validity/residual metadata |
+| `metadata.driver.cone_excursion_mm` | direct-radiator one-way peak displacement in millimetres, converted from the RMS drive phasor before comparison with the driver's one-way peak Xmax rating |
+| `passive_cardioid.cone_excursion_mm` | passive-cardioid one-way peak displacement on the result frequency grid; `cone_excursion_quantity` states the same peak convention |
 
 Metadata declares `result_contract_version: 1`, `phase_quantity`, `phase_units`,
 `impedance_quantity`, `impedance_units`, `impedance_drive`, observation origin/distance,
@@ -47,6 +49,12 @@ when distance, sound speed, and a supported spatial-phase convention are all pre
 otherwise it emits raw phase and says so in the file header. Charts receive the same
 reference metadata. Smoothing applies to magnitude/DI/impedance series, never to raw
 phase.
+
+The interactive phase chart de-embeds the declared propagation term before unwrapping,
+then removes the residual output-weighted linear slope for display. Group delay is
+derived only when that same propagation reference is present and the retained sweep can
+resolve the residual unwrap; otherwise the card refuses to invent a curve and explains
+which metadata or sampling is missing.
 
 ## Directivity index and balloon
 

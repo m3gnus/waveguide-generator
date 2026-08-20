@@ -26,10 +26,10 @@ describe('the one design name', () => {
     expect(designNameSlug('Þröstur – horn')).toBe('rostur_horn');
   });
 
-  it('reads a name back out of a file it saved', () => {
+  it('reads a name back out of a downloaded file', () => {
     expect(designNameFromFilename('/tmp/260701_horn_v13.mwg')).toBe('260701_horn_v13');
     // The richer spelling wins when it is the same name: the space in
-    // "ATH Tritonia-M" survives a save-and-reopen through ATH_Tritonia-M.cfg.
+    // "ATH Tritonia-M" survives a download-and-reopen through ATH_Tritonia-M.cfg.
     const blocks = { Report: { items: { Title: '"ATH Tritonia-M"' }, lines: [] } };
     expect(designTitleFromBlocks(blocks)).toBe('ATH Tritonia-M');
     expect(designNameForOpenedFile('ATH_Tritonia-M.cfg', blocks)).toBe('ATH Tritonia-M');

@@ -40,7 +40,7 @@ An async action may mutate state after an `await` only when one of these owns th
 | `fetchJobResults` | per-job in-flight promise identity; cleanup deletes only its own promise |
 | Provisional results | per-job monotonic revisions reject old/duplicate deltas and request a snapshot on gaps |
 | Run exports | per-job promise mutex owns busy/outcome state; notice timer checks the exact notice before clearing |
-| Design save | captures the saved revision; `markSaved(revision)` leaves later edits dirty |
+| Browser design copy | serializes the captured click state without changing the opened-file baseline or CAD identity |
 | Design file open/new | serialized by `busyRef`; completion is the explicit document-replacement intent |
 | Export/download actions | output belongs to the captured click target; they do not write into a later selection |
 | Preferences theme loading | effect cleanup prevents an unmounted theme request from publishing |
@@ -49,7 +49,7 @@ An async action may mutate state after an `await` only when one of these owns th
 ## Reviewed without speculative changes
 
 - `ResultsPanel` export and beam/recombine flows use captured action identity; their feedback is action-level, while result mutation is job-keyed.
-- `DesignFileMenu` and `useSendToCad` are serialized by the menu's same-tick `busyRef`; edits made during save/export intentionally remain descendants of the committed base identity.
+- `DesignFileMenu` browser downloads and `useSendToCad` are serialized by the menu's same-tick `busyRef`; browser copies do not commit state, while edits made during a CAD-linked export remain descendants of its committed base identity.
 - `OnshapeConnectionStatus` disables manual refresh during its initial request. The always-mounted coordinator separately generations status refreshes and performs the rate-limited connection lookup once.
 - TanStack Query owns capability and update-query request lifetimes. No direct selection mutation occurs in those query functions.
 

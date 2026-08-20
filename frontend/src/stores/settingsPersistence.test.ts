@@ -36,7 +36,7 @@ describe('opening a design does not discard remembered settings', () => {
   });
 
   /**
-   * The regression this exists for: every ATH file, and every WG design saved
+   * The regression this exists for: every ATH file, and every WG design serialized
    * before WG wrote polar blocks, has no directivity section. Opening one used
    * to reset distance, step, normalization, planes and origin to defaults and
    * overwrite the stored copy, so the settings were gone for good.

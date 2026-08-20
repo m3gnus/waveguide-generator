@@ -118,7 +118,7 @@ describe('design file export menu', () => {
     expect(requested.filter((path) => path.startsWith('/api/export/'))).toEqual(['/api/export/step?body=surface']);
   });
 
-  it('sends a saved design to CAD and reports its sequence and destination', async () => {
+  it('sends a linked design to CAD and reports its sequence and destination', async () => {
     useDocumentStore.getState().setCadLink({
       designId: 'wgd_01K00000000000000000000000',
       lineageId: 'wgl_01K00000000000000000000000',
@@ -234,7 +234,7 @@ describe('design file export menu', () => {
     await act(async () => { input.dispatchEvent(new Event('change', { bubbles: true })); });
 
     // One name: the opened file names the design, and the design names the
-    // runs and the file it saves back as.
+    // runs and the filename used by Download a copy.
     expect(useDocumentStore.getState()).toMatchObject({
       designName: '260701_horn_v13', filename: '260701_horn_v13.cfg',
     });
@@ -313,6 +313,13 @@ describe('design file export menu', () => {
     expect(await (vi.mocked(URL.createObjectURL).mock.calls[0][0] as Blob).text()).toBe('serialized copy');
     expect(click).toHaveBeenCalledOnce();
     expect(container.querySelector('[role="status"]')?.textContent).toBe('Downloaded a copy as copied-horn.cfg');
+  });
+
+  it('labels browser serialization as Download a copy rather than Save', () => {
+    const labels = open().map((item) => item.querySelector('span')?.textContent ?? '');
+
+    expect(labels).toContain('Download a copy');
+    expect(labels).not.toContain('Save');
   });
 
   it('reports serialization failure without downloading or changing saved state', async () => {

@@ -5,7 +5,7 @@
  * directivity blocks ATH understands go through `designWireWithAthPolars`;
  * everything else a solve depends on goes into WG's own `WG.Solve` block, so
  * reopening a design restores the sweep, the mesh policy, and the measurement
- * origin it was saved with instead of whatever was last set on this machine.
+ * origin it was serialized with instead of whatever was last set on this machine.
  *
  * The design's name rides along in ATH's own `Report.Title`, so the file states
  * what it is called and reopening it recovers the name rather than inheriting
@@ -30,7 +30,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-/** The settings currently on screen, for saving the design being edited. */
+/** The settings currently on screen, for serializing or sending the edited design. */
 export function wgSolveSettingsFromStore(
   state = useSolveOptionsStore.getState(),
 ): WgSolveSettings {
@@ -81,14 +81,14 @@ export function wgSolveSettingsFromSolveOptions(options: unknown): WgSolveSettin
 }
 
 /**
- * Everything a saved `.cfg` carries that does not live in the design document.
+ * Everything a serialized `.cfg` carries that does not live in the design document.
  *
  * The design store's `designRevision` is a *geometry* revision: it drives the
  * preview rebuild, so directivity and solver edits deliberately do not bump it.
  * Those edits are still document changes -- they are written into the file and
  * sent to CAD -- which left the unsaved indicator and the CAD freshness check
  * blind to them. This signature is the thing those two compare instead, so a
- * measurement distance typed after a save reads as unsaved work without
+ * measurement distance typed after the opened-file baseline reads as unsaved work without
  * pretending the mesh needs rebuilding.
  */
 export function documentSettingsSignature(

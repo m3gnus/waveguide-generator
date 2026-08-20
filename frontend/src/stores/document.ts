@@ -28,11 +28,11 @@ export interface DocumentState {
    */
   filename: string;
   savedRevision: number | null;
-  /** The name the document last saved under; a rename is unsaved work. */
+  /** The name at the opened-file baseline; a rename is unsaved work. */
   savedDesignName: string;
   /**
-   * `documentSettingsSignature()` as of the last save or open, or null when
-   * nothing has been saved or opened yet.
+   * `documentSettingsSignature()` as of the last opened-file baseline, or null
+   * when no file has been opened yet.
    *
    * Directivity and solver settings are written into the `.cfg` but live in
    * `useSolveOptionsStore`, so `savedRevision` alone cannot see a change to

@@ -10,7 +10,8 @@ import type { WgSolveSettings } from '../stores/wgSolveBlock';
 import { resolveChartTheme, type ExportFormat, type Preferences } from '../prefs/preferences';
 import { applySmoothing, type SmoothingValue } from './smoothing';
 import { buildOnAxisFrd, buildPolarFrdSet } from './frd';
-import { complexToDb } from './mappers';
+import { complexToDb, impedanceUnits } from './mappers';
+import { propagationReference } from './phaseConvention';
 import { resultChannelFileSuffix, resultChannels, scopeResultChannel, type ResultPayload } from './types';
 import { buildVituixCadProjectFiles, buildZma, hasElectricalImpedance } from './vituixcad';
 
@@ -132,7 +133,8 @@ function joinSeries(series: ReturnType<typeof smoothedSeries>): JoinedRow[] {
 }
 
 export function buildFrequencyCsv(result: ResultPayload, preferences: Preferences): string {
-  const rows = ['Frequency (Hz),SPL (dB),DI (dB),Impedance Real (Z/(rho*c)),Impedance Imag (Z/(rho*c))'];
+  const unit = impedanceUnits(result).electrical ? 'ohms' : 'Z/(rho*c)';
+  const rows = [`Frequency (Hz),SPL (dB),DI (dB),Impedance Real (${unit}),Impedance Imag (${unit})`];
   joinSeries(smoothedSeries(result, preferences)).forEach((row) => rows.push([
     row.frequency, csvCell(row.spl), csvCell(row.di), csvCell(row.impedanceReal), csvCell(row.impedanceImaginary),
   ].join(',')));
@@ -156,13 +158,18 @@ export function buildSummaryText(result: ResultPayload, preferences: Preferences
   const impedance = stats(series.impedanceReal);
   const rows = joinSeries(series);
   const frequencies = rows.map((row) => row.frequency);
+  const electricalImpedance = impedanceUnits(result).electrical;
+  const impedanceUnit = electricalImpedance ? 'ohms' : 'Z/(rho*c)';
+  const impedanceColumns = electricalImpedance
+    ? 'Freq(Hz)  SPL(dB)  DI(dB)  Z_Re(ohms)  Z_Im(ohms)'
+    : 'Freq(Hz)  SPL(dB)  DI(dB)  Z_Re/(rho*c)  Z_Im/(rho*c)';
   const lines = ['BEM SIMULATION RESULTS', '=====================', '', `Generated: ${now.toISOString()}`, `Smoothing: ${preferences.smoothing}`];
   lines.push(frequencies.length ? `Frequency range: ${Math.min(...frequencies).toFixed(0)} - ${Math.max(...frequencies).toFixed(0)} Hz` : 'Frequency range: n/a');
   lines.push(`Number of points: ${frequencies.length}`, '');
   if (spl) lines.push('FREQUENCY RESPONSE SUMMARY', '--------------------------', `Average SPL: ${spl.average.toFixed(2)} dB`, `SPL Range: ${spl.min.toFixed(2)} to ${spl.max.toFixed(2)} dB`, `Variation: ${(spl.max - spl.min).toFixed(2)} dB`, '');
   if (di) lines.push('DIRECTIVITY INDEX SUMMARY', '-------------------------', `Average DI: ${di.average.toFixed(2)} dB`, `DI Range: ${di.min.toFixed(2)} to ${di.max.toFixed(2)} dB`, '');
-  if (impedance) lines.push('IMPEDANCE SUMMARY', '-----------------', `Average Real Part Z/(rho*c): ${impedance.average.toFixed(2)}`, '');
-  lines.push('DETAILED DATA', '=============', 'Freq(Hz)  SPL(dB)  DI(dB)  Z_Re/(rho*c)  Z_Im/(rho*c)');
+  if (impedance) lines.push('IMPEDANCE SUMMARY', '-----------------', `Average Real Part ${impedanceUnit}: ${impedance.average.toFixed(2)}`, '');
+  lines.push('DETAILED DATA', '=============', impedanceColumns);
   rows.forEach((row) => lines.push([row.frequency, row.spl, row.di, row.impedanceReal, row.impedanceImaginary].map((value) => finite(value)?.toFixed(2) ?? 'n/a').join('  ')));
   return `${lines.join('\n')}\n`;
 }
@@ -187,7 +194,8 @@ export function buildPolarCsv(result: ResultPayload): string {
 
 export function buildImpedanceCsv(result: ResultPayload): string {
   const frequencies = result.impedance?.frequencies ?? result.frequencies;
-  const rows = ['Freq_Hz,Z_Real_Z_over_rho_c,Z_Imag_Z_over_rho_c'];
+  const suffix = impedanceUnits(result).electrical ? 'Ohm' : 'Z_over_rho_c';
+  const rows = [`Freq_Hz,Z_Real_${suffix},Z_Imag_${suffix}`];
   frequencies.forEach((frequency, index) => rows.push(`${frequency},${csvCell(result.impedance?.real?.[index])},${csvCell(result.impedance?.imaginary?.[index])}`));
   return `${rows.join('\n')}\n`;
 }
@@ -346,19 +354,48 @@ export interface ChartReference {
   label?: string;
 }
 
+/**
+ * The impedance tags the renderer gets, in hornlab-plots' own vocabulary.
+ *
+ * Both were hardcoded to the normalized pair, so a driver-coupled run drew an Ω
+ * axis on screen and shipped a Z/ρc label in the PNG — the exact screen-against-
+ * file disagreement the on-screen unit fix exists to remove. The predicate is
+ * `impedanceUnits`, deliberately the same one the chart axis reads, because two
+ * predicates are how they drifted apart in the first place.
+ *
+ * `impedance_normalization` is the more consequential of the two: hornlab-plots
+ * compares it between primary and reference and *skips the overlay* on a
+ * mismatch. With both pinned to `rho_c` an ohms primary silently accepted a
+ * Z/ρc reference curve onto its own scale, where a 0..2 acoustic trace
+ * flatlines along the bottom of a 4..60 Ω axis and reads as a dead run.
+ *
+ * Known gap: `_impedance_ylabel` in hornlab-plots 0.1.1 has no ohms branch — it
+ * returns "Z / ρc" for anything mentioning rho and "Z [Pa·s/m]" otherwise — so
+ * the exported electrical PNG still carries an acoustic axis label, now the
+ * generic one rather than a positive claim of normalization. Closing that needs
+ * an Ω branch in hornlab-plots and a pin bump; it cannot be done from here.
+ */
+function impedanceRenderTags(result: ResultPayload): Record<string, string> {
+  return impedanceUnits(result).electrical
+    ? { impedance_units: 'ohms', impedance_normalization: 'absolute' }
+    : { impedance_units: 'Z/(rho*c)', impedance_normalization: 'rho_c' };
+}
+
 function buildChartReferencePayload(reference: ChartReference, preferences: Preferences): Record<string, unknown> {
   const series = smoothedSeries(reference.result, preferences);
+  const observation = reference.result.metadata?.observation;
+  const observationRecord = observation && typeof observation === 'object' ? observation as Record<string, unknown> : {};
   return {
     label: reference.label ?? null,
     frequencies: series.frequencies,
     spl: series.spl,
+    sound_speed_m_per_s: finite(observationRecord.sound_speed_m_per_s),
     di: series.di,
     di_frequencies: series.diFrequencies,
     impedance_frequencies: series.impedanceFrequencies,
     impedance_real: series.impedanceReal,
     impedance_imaginary: series.impedanceImaginary,
-    impedance_units: 'Z/(rho*c)',
-    impedance_normalization: 'rho_c',
+    ...impedanceRenderTags(reference.result),
     beam_shape: reference.result.beam_shape ?? null,
   };
 }
@@ -369,23 +406,24 @@ export function buildChartRenderPayload(
   reference?: ChartReference,
 ): Record<string, unknown> {
   const series = smoothedSeries(result, preferences);
-  const observation = result.metadata?.observation;
-  const observationRecord = observation && typeof observation === 'object' ? observation as Record<string, unknown> : {};
-  const distance = finite(observationRecord.effective_distance_m ?? observationRecord.requested_distance_m);
+  // Resolve these as one validity unit. Sending a distance with no sound speed
+  // makes hornlab-plots assume 343 m/s while the browser correctly declines to
+  // de-embed, so partially valid legacy metadata would produce two phase plots.
+  const phaseReference = propagationReference(result);
   const convention = result.metadata?.phase_time_convention ?? result.metadata?.time_convention ?? result.metadata?.spatial_phase_convention;
   return {
     frequencies: series.frequencies,
     spl: series.spl,
-    phase_degrees: series.phase,
-    phase_reference_distance_m: distance,
-    phase_time_convention: convention == null ? null : String(convention),
+    phase_degrees: preferences.splPhase ? series.phase : [],
+    phase_reference_distance_m: phaseReference?.distanceM ?? null,
+    phase_time_convention: phaseReference && convention != null ? String(convention) : null,
+    sound_speed_m_per_s: phaseReference?.speedOfSoundMps ?? null,
     di: series.di,
     di_frequencies: series.diFrequencies,
     impedance_frequencies: series.impedanceFrequencies,
     impedance_real: series.impedanceReal,
     impedance_imaginary: series.impedanceImaginary,
-    impedance_units: 'Z/(rho*c)',
-    impedance_normalization: 'rho_c',
+    ...impedanceRenderTags(result),
     directivity: result.directivity ?? {},
     beam_shape: result.beam_shape ?? null,
     reference: reference ? buildChartReferencePayload(reference, preferences) : null,
@@ -448,7 +486,7 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
   const now = context.now ?? new Date();
   if (format === 'mwg_config') {
     if (!context.design) throw new Error('This export requires a saved design snapshot.');
-    const response = await (context.fetcher ?? fetch)('/api/design/save', {
+    const response = await (context.fetcher ?? fetch)('/api/design/serialize', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

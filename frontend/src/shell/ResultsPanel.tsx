@@ -4,7 +4,7 @@ import type { EChartsOption } from 'echarts';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { compareSelection, fetchJobResults, provisionalResults, recombineJobResults, type JobResults } from '../api/results';
 import { EChart, useChartTokens, type ChartTokens } from '../results/EChart';
-import { beamShapeSeries, directivityGrid, directivityIndexSeries, expandResultChannels, impedanceSeries, splSeries, type NamedResult } from '../results/mappers';
+import { beamFitSeries, beamShapeSeries, directivityGrid, directivityIndexSeries, drivePowerChartSeries, excursionChartSeries, expandResultChannels, groupDelaySeries, impedanceComparable, impedanceSeries, impedanceSubtitle, nearestFrequencyIndex, phaseSeries, polarCut, splSeries, type NamedResult } from '../results/mappers';
 import { BalloonRenderer, ChartStub, ForwardBeamRenderer, hasBalloonData, type ChartStubAction } from '../results/balloon';
 import { runWorkspaceExportBundle } from '../results/exporters';
 import { resultExportSnapshot } from '../results/exportContext';
@@ -14,11 +14,13 @@ import { summaryGroups, summaryText, type SummaryGroup, type SummaryRow } from '
 import type { ResultPayload } from '../results/types';
 import { hydrateJobDesign } from '../jobs/jobDesign';
 import { exportStemForJob, exportTitleSlug } from '../jobs/exportNaming';
-import { CHART_TYPES, MAX_RESULT_PANELS, RESULT_PANEL_COUNTS, preferencesStore, runDisplayName, usePreferences, type ChartType } from '../prefs/preferences';
+import { CHART_TYPES, MAX_RESULT_PANELS, POLAR_PLANES, RESULT_PANEL_COUNTS, preferencesStore, runDisplayName, usePreferences, type ChartType, type PolarPlane } from '../prefs/preferences';
 import { ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
 import { directivityFrequencyTickLabels } from '../results/directivityFrequencyAxis';
 import { seriesColorsByLabel } from '../results/seriesColors';
 import { parseMeasuredTrace } from '../results/measuredTrace';
+import { electricalDrive, excursionSeries, hasElectricalImpedance } from '../results/drivePower';
+import { deEmbeddedPhaseRadians, hasOnAxisPhase, phaseSpatialSign, phaseUnwrapIsResolved, propagationReference } from '../results/phaseAnalysis';
 import { Icon } from './icons';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { useVisibleRedraw } from './panelVisibility';
@@ -69,6 +71,9 @@ export const COMPARABLE_CHARTS = new Set<ChartType>([
   'directivity_map',
   'directivity_index',
   'impedance',
+  'phase_response',
+  'group_delay',
+  'polar_response',
 ]);
 
 /**
@@ -130,9 +135,12 @@ export function frequencyBounds(series: EChartsOption['series']): [number, numbe
  * Only the measured-overlay caller needs it; everywhere else the series *are*
  * the domain.
  */
-export function lineOption(series: EChartsOption['series'], tokens: ChartTokens, yName: string, density: ChartDensity = 'regular', domain?: [number, number]): EChartsOption {
+export function lineOption(series: EChartsOption['series'], tokens: ChartTokens, yName: string, density: ChartDensity = 'regular', domain?: [number, number], secondaryName?: string): EChartsOption {
   const bounds = domain ?? frequencyBounds(series);
-  const inset = LINE_GRID[density];
+  const base = LINE_GRID[density];
+  // A rotated axis title on the right needs room the single-axis insets never
+  // reserved: label width plus the turned caption.
+  const inset = secondaryName ? { ...base, right: base.left + (density === 'full' ? 16 : 0) } : base;
   return {
     animationDuration: 180,
     backgroundColor: tokens.background,
@@ -158,7 +166,19 @@ export function lineOption(series: EChartsOption['series'], tokens: ChartTokens,
     xAxis: { type: 'log', logBase: 10, min: bounds?.[0], max: bounds?.[1], ...(density === 'full' ? { name: 'Frequency [Hz]', nameLocation: 'middle' as const, nameGap: 24, nameTextStyle: { color: tokens.muted, fontSize: 11 } } : {}), minorTick: { show: true }, ...axes(tokens, density) },
     // In-grid cards carry the unit in their title chip, which occupies exactly
     // the top-left corner an axis name would be drawn into.
-    yAxis: { type: 'value', ...(density === 'full' ? { name: yName, nameGap: 10, nameTextStyle: { color: tokens.muted, fontSize: 11, align: 'left' as const } } : {}), ...axes(tokens, density) },
+    // A second axis is for a companion quantity in different units (phase
+    // beside SPL, current beside power). Its split lines are suppressed:
+    // two independent graticules over one grid read as a moiré, and the
+    // primary axis is the one whose gridlines carry meaning.
+    yAxis: secondaryName
+      ? [
+        { type: 'value' as const, ...(density === 'full' ? { name: yName, nameGap: 10, nameTextStyle: { color: tokens.muted, fontSize: 11, align: 'left' as const } } : {}), ...axes(tokens, density) },
+        // Rotated along the right edge rather than sitting at the top of the
+        // axis, which is where ECharts puts an axis name by default and where
+        // this chart's legend already is -- the two overprinted each other.
+        { type: 'value' as const, ...(density === 'full' ? { name: secondaryName, nameLocation: 'middle' as const, nameRotate: -90, nameGap: 38, nameTextStyle: { color: tokens.muted, fontSize: 11 } } : {}), ...axes(tokens, density), splitLine: { show: false }, minorSplitLine: { show: false } },
+      ]
+      : { type: 'value', ...(density === 'full' ? { name: yName, nameGap: 10, nameTextStyle: { color: tokens.muted, fontSize: 11, align: 'left' as const } } : {}), ...axes(tokens, density) },
     dataZoom: [{ type: 'inside', xAxisIndex: 0, filterMode: 'none', zoomOnMouseWheel: 'ctrl', moveOnMouseWheel: true }],
     series,
   };
@@ -194,6 +214,7 @@ export function splOption(
   smoothing: ReturnType<typeof usePreferences>['smoothing'],
   density: ChartDensity,
   measured: MeasuredOverlay[] = [],
+  showPhase = false,
 ): EChartsOption {
   const measuredNames = measured.map(({ label }) => measuredSeriesName(label));
   const colors = seriesColorsByLabel([...items.map(({ label }) => label), ...measuredNames], tokens.series, tokens.accent);
@@ -213,7 +234,29 @@ export function splOption(
       data: overlay.points.map(({ frequencyHz, splDb }) => [frequencyHz, splDb + overlay.offsetDb]),
     };
   });
-  return lineOption([...simulated, ...measuredSeries], tokens, 'dB SPL', density, frequencyBounds(simulated));
+  const phase = showPhase ? phaseSeries(items).map(({ name, points }) => {
+    const color = colors.get(name) ?? tokens.accent;
+    return {
+      name: `${name} · phase`,
+      type: 'line' as const,
+      showSymbol: false,
+      connectNulls: false,
+      yAxisIndex: 1,
+      // Thin and dashed: the phase rides under the magnitude it belongs to and
+      // must never be mistaken for a second SPL trace.
+      lineStyle: { color, width: 1, type: [4, 3] as number[], opacity: .75 },
+      itemStyle: { color },
+      data: points,
+    };
+  }) : [];
+  return lineOption(
+    [...simulated, ...measuredSeries, ...phase],
+    tokens,
+    'dB SPL',
+    density,
+    frequencyBounds(simulated),
+    phase.length ? 'Phase [°]' : undefined,
+  );
 }
 
 export function heatmapFrequencyLabel(value: number): string {
@@ -681,19 +724,188 @@ export function directivityIndexOption(items: NamedResult[], tokens: ChartTokens
   return lineOption(series, tokens, 'DI [dB]', density);
 }
 
-export function impedanceOption(items: NamedResult[], tokens: ChartTokens, smoothing: ReturnType<typeof usePreferences>['smoothing'], density: ChartDensity): EChartsOption {
-  const comparable = items.filter(({ result }) => Boolean(result.impedance?.frequencies?.length));
+/**
+ * Impedance, in whatever quantity the result actually holds.
+ *
+ * A driver-modelled channel carries the driver's electrical terminal impedance
+ * in ohms here, not the normalized acoustic Z/ρc, and says so in
+ * `metadata.impedance_units`. This axis was hardcoded to Z/ρc, so a
+ * driver-coupled run drew ohms under an acoustic label -- the ZMA exporter has
+ * always read the tag and the chart was the last reader that did not. The two
+ * are different quantities and cannot share a scale, so a comparison run in the
+ * other unit is dropped rather than overlaid.
+ */
+export function impedanceOption(items: NamedResult[], tokens: ChartTokens, smoothing: ReturnType<typeof usePreferences>['smoothing'], density: ChartDensity, display: ReturnType<typeof usePreferences>['impedanceDisplay'] = 'real_imaginary'): EChartsOption {
+  const { items: comparable, units } = impedanceComparable(items);
+  const magnitudePhase = display === 'magnitude_phase';
   const colors = seriesColorsByLabel(comparable.map(({ label }) => label), tokens.series, tokens.accent);
   const series = comparable.flatMap((item) => {
     const color = colors.get(item.label) ?? tokens.accent;
-    return impedanceSeries(item.result, 'cartesian', smoothing).map((entry, componentIndex) => ({
+    return impedanceSeries(item.result, magnitudePhase ? 'polar' : 'cartesian', smoothing).map((entry, componentIndex) => ({
       ...entry,
       name: `${item.label} · ${entry.name}`,
       lineStyle: { color, width: componentIndex ? 1.35 : 2, type: componentIndex ? 'dashed' as const : 'solid' as const },
       itemStyle: { color },
     }));
   });
-  return lineOption(series, tokens, 'Z/ρc', density);
+  // impedanceSeries already assigns the phase trace to axis 1 in polar mode.
+  return lineOption(series, tokens, units.axis, density, undefined, magnitudePhase ? 'Phase [°]' : undefined);
+}
+
+/**
+ * On-axis phase alone, for when it deserves a whole card.
+ *
+ * Same detrending as the trace overlaid on the SPL chart and as the exported
+ * PNG: propagation removed so the unwrap can track, then the residual
+ * group-delay slope removed weighted by output level, so the curve sits flat
+ * where the speaker radiates and deviations stay visible.
+ */
+export function phaseOption(items: NamedResult[], tokens: ChartTokens, density: ChartDensity): EChartsOption {
+  const traces = phaseSeries(items);
+  const colors = seriesColorsByLabel(traces.map(({ name }) => name), tokens.series, tokens.accent);
+  const series = traces.map(({ name, points }, index) => {
+    const color = colors.get(name) ?? tokens.accent;
+    return {
+      name,
+      type: 'line' as const,
+      showSymbol: false,
+      connectNulls: false,
+      lineStyle: { color, width: index ? 1.2 : 2, type: index ? 'dashed' as const : 'solid' as const },
+      itemStyle: { color },
+      data: points,
+    };
+  });
+  return lineOption(series, tokens, 'Phase [°]', density);
+}
+
+/** Group delay in ms, with the common time-of-flight to the mic removed. */
+export function groupDelayOption(items: NamedResult[], tokens: ChartTokens, density: ChartDensity): EChartsOption {
+  const traces = groupDelaySeries(items);
+  const colors = seriesColorsByLabel(traces.map(({ name }) => name), tokens.series, tokens.accent);
+  const series = traces.map((trace, index) => {
+    const color = colors.get(trace.name) ?? tokens.accent;
+    return {
+      ...trace,
+      lineStyle: { color, width: index ? 1.2 : 2, type: index ? 'dashed' as const : 'solid' as const },
+      itemStyle: { color },
+    };
+  });
+  return lineOption(series, tokens, 'Group delay [ms]', density);
+}
+
+/**
+ * What the amplifier has to supply, per frequency.
+ *
+ * Power and current share a card because they peak in different places -- power
+ * follows the resistive part, current follows the impedance minimum -- and it
+ * is the pair, not either alone, that sizes an amplifier.
+ */
+export function drivePowerOption(result: ResultPayload, tokens: ChartTokens, density: ChartDensity): EChartsOption {
+  const series = drivePowerChartSeries(result).map((trace, index) => ({
+    ...trace,
+    lineStyle: { color: tokens.series[index] ?? tokens.accent, width: index ? 1.35 : 2, type: index ? 'dashed' as const : 'solid' as const },
+    itemStyle: { color: tokens.series[index] ?? tokens.accent },
+  }));
+  return lineOption(series, tokens, 'Power [W]', density, undefined, series.length > 1 ? 'Current [A]' : undefined);
+}
+
+/** Cone excursion, with Xmax drawn flat across the sweep when the spec states it. */
+export function excursionOption(result: ResultPayload, tokens: ChartTokens, density: ChartDensity): EChartsOption {
+  const series = excursionChartSeries(result).map((trace, index) => ({
+    ...trace,
+    // The Xmax line is a limit, not a measurement: dotted, and in the warning
+    // role rather than a series colour, so it cannot read as a second curve.
+    lineStyle: index ? { color: tokens.accent, width: 1, type: 'dotted' as const } : { color: tokens.series[0] ?? tokens.accent, width: 2 },
+    itemStyle: { color: index ? tokens.accent : tokens.series[0] ?? tokens.accent },
+  }));
+  // The server converts the RMS displacement phasor to one-way peak before it
+  // compares or transports it, so the curve and the Xmax limit share a scale.
+  return lineOption(series, tokens, 'Excursion [mm peak]', density);
+}
+
+/** Aspect ratio, superellipse exponent and the residual of the −6 dB fit. */
+export function beamFitOption(result: ResultPayload, tokens: ChartTokens, density: ChartDensity): EChartsOption {
+  const traces = beamFitSeries(result);
+  const series = traces.map((trace, index) => ({
+    ...trace,
+    lineStyle: { color: tokens.series[index] ?? tokens.accent, width: trace.yAxisIndex ? 1.2 : 2, type: trace.yAxisIndex ? 'dashed' as const : 'solid' as const },
+    itemStyle: { color: tokens.series[index] ?? tokens.accent },
+  }));
+  const hasResidual = traces.some((trace) => trace.yAxisIndex === 1);
+  return lineOption(series, tokens, 'Ratio / exponent', density, undefined, hasResidual ? 'Residual [%]' : undefined);
+}
+
+/**
+ * A conventional polar plot: level against angle at one frequency.
+ *
+ * Normalized per run to its own sample nearest the reference axis, which is
+ * what a polar plot means -- absolute SPL would put two runs at different
+ * levels on one radial scale and make the shapes incomparable, which is the
+ * only thing this chart is for.
+ */
+export function polarOption(items: NamedResult[], tokens: ChartTokens, plane: PolarPlane, frequencyHz: number, floorDb: number, density: ChartDensity): EChartsOption {
+  const colors = seriesColorsByLabel(items.map(({ label }) => label), tokens.series, tokens.accent);
+  const series = items.flatMap(({ label, result, wrapper }) => {
+    const index = nearestFrequencyIndex(result.frequencies, frequencyHz);
+    const points = polarCut(result, index, plane, wrapper as ResultPayload | undefined);
+    const onAxis = points.reduce<{ db: number | null; angle: number }>((best, [db, angle]) => (
+      db !== null && Math.abs(angle) < Math.abs(best.angle) ? { db, angle } : best
+    ), { db: null, angle: Infinity });
+    const reference = onAxis.db ?? Math.max(...points.map(([db]) => db ?? -Infinity));
+    if (!Number.isFinite(reference)) return [];
+    const color = colors.get(label) ?? tokens.accent;
+    return [{
+      name: label,
+      type: 'line' as const,
+      coordinateSystem: 'polar' as const,
+      showSymbol: false,
+      // Radius first, angle second: that is the polar series contract, and it
+      // is the order polarSeries already returns.
+      data: points.map(([db, angle]) => [db === null ? null : Math.max(floorDb, db - reference), angle]),
+      lineStyle: { color, width: 2 },
+      itemStyle: { color },
+    }];
+  });
+  const labelSize = LABEL_FONT[density];
+  return {
+    animationDuration: 180,
+    backgroundColor: tokens.background,
+    color: tokens.series,
+    textStyle: { color: tokens.foreground, fontFamily: 'Inter, system-ui, sans-serif' },
+    tooltip: { trigger: 'item', confine: true, backgroundColor: tokens.background, borderColor: tokens.spine ?? tokens.grid, textStyle: { color: tokens.foreground, fontSize: 11 } },
+    legend: { top: 1, right: LEGEND_INSET, textStyle: { color: tokens.muted, fontSize: density === 'compact' ? 10 : 11 }, formatter: (name: string) => middleEllipsis(name, density === 'compact' ? 12 : 22), itemWidth: density === 'compact' ? 10 : 14, itemHeight: 2 },
+    polar: { radius: density === 'compact' ? '68%' : '72%', center: ['50%', '54%'] },
+    angleAxis: {
+      type: 'value' as const,
+      // Fixed at a full turn so one degree of pattern is one degree of chart.
+      // Fitting the axis to the sampled span instead would stretch a 0..180
+      // half-space around the whole circle and draw a 30 degree beamwidth as
+      // 60 -- and the shape is the only thing this chart exists to show.
+      min: -180,
+      max: 180,
+      // On-axis points up and positive angles go to the right, which is what a
+      // polar response means everywhere else in loudspeaker work. ECharts
+      // places the axis minimum at startAngle and runs clockwise from there.
+      startAngle: 270,
+      clockwise: true,
+      interval: 30,
+      axisLine: { lineStyle: { color: tokens.spine ?? tokens.grid } },
+      axisLabel: { color: tokens.muted, fontSize: labelSize, formatter: (value: number) => `${value}°` },
+      splitLine: { lineStyle: { color: tokens.grid, width: .7 } },
+    },
+    radiusAxis: {
+      type: 'value' as const,
+      min: floorDb,
+      max: 0,
+      interval: Math.abs(floorDb) >= 30 ? 10 : 5,
+      // The ring labels sit over the plot, so they state their unit once and
+      // drop the outermost 0 dB, which the curve itself already marks.
+      axisLabel: { color: tokens.muted, fontSize: labelSize, showMinLabel: false, showMaxLabel: false, formatter: (value: number) => `${value} dB` },
+      axisLine: { show: false },
+      splitLine: { lineStyle: { color: tokens.grid, width: .7 } },
+    },
+    series,
+  };
 }
 
 function chartLabel(chartType: ChartType): string {
@@ -713,11 +925,40 @@ const CHART_BADGES: Record<ChartType, { short: string; long?: string; unit?: str
   directivity_map: { short: 'Dir', long: 'Directivity', unit: 'dB' },
   directivity_index: { short: 'DI', long: 'Directivity index', unit: 'dB' },
   beam_shape: { short: 'Beam', long: 'Beam width', unit: '°' },
+  beam_fit: { short: 'Beam fit', long: 'Beam shape fit' },
   beam_map: { short: 'Beam map' },
   balloon: { short: 'Balloon' },
-  impedance: { short: 'Impedance', unit: 'Z/ρc' },
+  polar_response: { short: 'Polar', long: 'Polar response', unit: 'dB' },
+  phase_response: { short: 'Phase', long: 'On-axis phase', unit: '°' },
+  group_delay: { short: 'GD', long: 'Group delay', unit: 'ms' },
+  // The impedance unit depends on the result, not the chart: see chartUnit.
+  impedance: { short: 'Impedance' },
+  drive_power: { short: 'Power', long: 'Power & current', unit: 'W' },
+  excursion: { short: 'Excursion', long: 'Cone excursion', unit: 'mm' },
   summary: { short: 'Summary' },
 };
+
+/**
+ * The unit for the title chip.
+ *
+ * Every chart but one has a fixed unit. Impedance does not: the same chart
+ * draws normalized Z/ρc for an unloaded waveguide and ohms for a
+ * driver-modelled channel, and printing one label over the other is how the
+ * chart came to claim a driver's ohms were acoustic.
+ *
+ * It reads `impedanceComparable`, not the primary result, because that is what
+ * sets the axis. Judging the chip on the primary alone disagreed whenever the
+ * primary had no impedance block: an electrical overlay then put Ω on the axis
+ * while the chip went blank, which is the mislabelling in its quietest form.
+ */
+export function chartUnit(chartType: ChartType, result?: ResultPayload, items?: NamedResult[]): string | undefined {
+  if (chartType === 'impedance') {
+    const candidates = items?.length ? items : result ? [{ id: 'primary', label: 'Primary', result }] : [];
+    const { items: comparable, units } = impedanceComparable(candidates);
+    return comparable.length ? units.axis : undefined;
+  }
+  return CHART_BADGES[chartType]?.unit;
+}
 
 /** Longer name when the card can carry it, short name when it cannot. */
 export function chartTitle(chartType: ChartType, wide: boolean): string {
@@ -891,6 +1132,132 @@ export function beamShapeMissingReason(result: ResultPayload): { reason: string;
   };
 }
 
+/** Radial span of the polar plot. −30 dB is where a waveguide's pattern lives. */
+const POLAR_FLOOR_DB = -30;
+
+/**
+ * Polar response with its own frequency and plane scrubbers.
+ *
+ * A polar plot is a slice, so the card has to carry the choice of slice. Both
+ * controls live in the same floating strip the balloon and beam-map cards
+ * already use, so a short card spends its height on the plot rather than on
+ * chrome.
+ */
+/** Where a polar card opens: mid-band, where a waveguide's pattern is settled. */
+const POLAR_SEEK_HZ = 1_000;
+
+function PolarResponseCard({ items, tokens, density, live }: { items: NamedResult[]; tokens: ChartTokens; density: ChartDensity; live: boolean }) {
+  const frequencies = items[0]?.result.frequencies ?? [];
+  const [index, setIndex] = useState(() => nearestFrequencyIndex(frequencies, POLAR_SEEK_HZ));
+  const [plane, setPlane] = useState<PolarPlane>('horizontal');
+  // Seeking 1 kHz once at mount lands on whatever the *provisional* grid held.
+  // A card opened mid-solve sees a handful of frequencies, picks the nearest,
+  // and then keeps that index as the sweep fills in behind it -- so the card
+  // settles on an arbitrary frequency and looks deliberate about it.
+  const chosen = useRef(false);
+  const seeded = useRef(frequencies.length);
+  useEffect(() => {
+    // Only while the user has not chosen: once they have scrubbed, a growing
+    // grid must not move the slider out from under them.
+    if (!chosen.current && frequencies.length > seeded.current) {
+      seeded.current = frequencies.length;
+      setIndex(nearestFrequencyIndex(frequencies, POLAR_SEEK_HZ));
+      return;
+    }
+    seeded.current = Math.min(seeded.current, frequencies.length);
+    // A new sweep can be shorter than the last one; an index held past its end
+    // would silently plot the final frequency while the readout claimed another.
+    setIndex((current) => Math.min(current, Math.max(0, frequencies.length - 1)));
+  }, [frequencies]);
+  const available = POLAR_PLANES.filter((candidate) => items.some(({ result }) => result.directivity?.[candidate]?.length));
+  const drawnPlane = available.includes(plane) ? plane : available[0];
+  const option = useMemo(
+    () => drawnPlane ? polarOption(items, tokens, drawnPlane, frequencies[index] ?? 0, POLAR_FLOOR_DB, density) : null,
+    [density, drawnPlane, frequencies, index, items, tokens],
+  );
+  if (!drawnPlane || !option) return <ChartStub reason="Polar Response needs sampled horizontal or vertical directivity."/>;
+  return <div className="frequency-canvas">
+    <EChart option={option} label={`Interactive HornLab ${drawnPlane} polar response`} live={live}/>
+    <label className="frequency-scrub">
+      <input aria-label="Polar frequency" type="range" min={0} max={Math.max(0, frequencies.length - 1)} value={index} onChange={(event) => { chosen.current = true; setIndex(Number(event.target.value)); }}/>
+      <span>{formatPolarFrequency(frequencies[index])}</span>
+      {available.length > 1 && <select aria-label="Polar plane" value={drawnPlane} onChange={(event) => setPlane(event.target.value as PolarPlane)}>
+        {available.map((candidate) => <option key={candidate} value={candidate}>{candidate === 'horizontal' ? 'H' : 'V'}</option>)}
+      </select>}
+    </label>
+  </div>;
+}
+
+export function formatPolarFrequency(value: number | undefined): string {
+  if (!Number.isFinite(value)) return '—';
+  return value! >= 1_000 ? `${(value! / 1_000).toFixed(value! >= 10_000 ? 1 : 2)} kHz` : `${Math.round(value!)} Hz`;
+}
+
+/**
+ * Why a driver-coupled chart has nothing to draw.
+ *
+ * Power, current and excursion all exist only when a driver model was part of
+ * the solve. The default waveguide solve is unit-acceleration -- no voltage, no
+ * ohms, no cone -- so the honest answer is that this result has no drive, not
+ * that something failed.
+ *
+ * `impedance_omitted` comes first because the unit-acceleration line is a lie
+ * for the case that hits users most: an LR4 combined channel *is* voltage
+ * driven, but `_combined_channel_response` pops its impedance block and leaves
+ * `impedance_units: "Z/(rho*c)"` behind from `build_solver_response`, so the
+ * tag check below reads it as an unloaded waveguide. The server already wrote
+ * the real reason in that field; nothing had read it.
+ */
+export function driverChartMissingReason(result: ResultPayload, chart: string): string {
+  const omitted = result.metadata?.impedance_omitted;
+  if (typeof omitted === 'string' && omitted.trim()) {
+    return `${chart} needs this channel's electrical impedance, which the solve did not produce -- ${omitted.trim()}.`;
+  }
+  if (!hasElectricalImpedance(result)) {
+    return `${chart} needs a driver-coupled solve. This result is unit-acceleration, so it has no drive voltage or electrical impedance.`;
+  }
+  if (!electricalDrive(result)) {
+    return `${chart} needs the drive voltage this result did not record alongside its electrical impedance.`;
+  }
+  // Deliberately not "from this result's impedance samples": excursion shares
+  // this branch and is read from the driver block, not derived from impedance.
+  return `${chart} needs samples this driver-coupled result did not record.`;
+}
+
+/**
+ * Why the group-delay chart has nothing to draw.
+ *
+ * `groupDelayMilliseconds` returns nothing for four different reasons and the
+ * stub used to name only one of them. The propagation-reference case is the one
+ * worth spelling out: it is a missing *metadata* field, not a missing sweep, so
+ * a user told to add samples would rerun a longer solve and get the same stub.
+ */
+export function groupDelayMissingReason(result: ResultPayload): string {
+  const samples = {
+    frequencies: result.spl_on_axis?.frequencies?.length ? result.spl_on_axis.frequencies : result.frequencies,
+    phaseDegrees: result.spl_on_axis?.phase_degrees ?? [],
+  };
+  if (!hasOnAxisPhase(samples.phaseDegrees)) {
+    return 'Group Delay needs the spl_on_axis phase samples from a completed solve.';
+  }
+  const reference = propagationReference(result);
+  if (!reference) {
+    const convention = result.metadata?.phase_time_convention;
+    if (convention != null && phaseSpatialSign(convention) === null) {
+      return `Group Delay cannot read the phase convention "${String(convention)}": without a known spatial sign the flight time to the microphone cannot be removed, and what is left is not a delay.`;
+    }
+    return 'Group Delay needs metadata.observation to carry a finite distance and sound speed, plus a recognised phase_time_convention. Without them the phase still holds the flight time to the microphone, which swamps the delay.';
+  }
+  const phase = deEmbeddedPhaseRadians(samples, reference);
+  if (phase.length < 3) {
+    return 'Group Delay needs at least three on-axis phase samples from a completed solve.';
+  }
+  if (!phaseUnwrapIsResolved(phase, reference)) {
+    return 'Group Delay needs a finer frequency sweep: the phase turns more than half a cycle between adjacent samples, so the unwrap cannot pick a branch and any curve drawn from it would be invented.';
+  }
+  return 'Group Delay could not be derived from this result.';
+}
+
 function ResultChart({ chartType, result, named, tokens, density, live, beamShapeAction, wrapper, job, channelId }: { chartType: ChartType; result: ResultPayload; named: NamedResult[]; tokens: ChartTokens; density: ChartDensity; live: boolean; beamShapeAction?: ChartStubAction } & SummarySourceProps) {
   const preferences = usePreferences();
   // Only comparable charts read the cross-job list. Keeping it in the
@@ -914,7 +1281,7 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
   // new progress percentage rebuilds and repaints every EChart even when its
   // result snapshot has not changed.
   const plot = useMemo(() => {
-    if (chartType === 'frequency_response') return result.spl_on_axis?.spl?.length ? <EChart option={splOption(overlays, tokens, preferences.smoothing, density, measured)} label="Interactive HornLab sound pressure frequency response" live={live}/> : <ChartStub reason="Frequency Response needs spl_on_axis data from a completed solve."/>;
+    if (chartType === 'frequency_response') return result.spl_on_axis?.spl?.length ? <EChart option={splOption(overlays, tokens, preferences.smoothing, density, measured, preferences.splPhase)} label="Interactive HornLab sound pressure frequency response" live={live}/> : <ChartStub reason="Frequency Response needs spl_on_axis data from a completed solve."/>;
     if (chartType === 'directivity_map_h' || chartType === 'directivity_map_v' || chartType === 'directivity_map_d' || chartType === 'directivity_map') return <DirectivityComparisonMaps chartType={chartType} items={overlays} tokens={tokens} mapReference={preferences.mapReference} angleGuideInterval={preferences.directivityGuideInterval} density={density} live={live}/>;
     if (chartType === 'directivity_index') {
       const option = directivityIndexOption(overlays, tokens, preferences.smoothing, density);
@@ -925,14 +1292,51 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
       const missing = beamShapeMissingReason(result);
       return <ChartStub reason={missing.reason} action={missing.canEnable ? beamShapeAction : undefined}/>;
     }
+    if (chartType === 'beam_fit') {
+      const series = beamFitOption(result, tokens, density);
+      return Array.isArray(series.series) && series.series.length
+        ? <EChart option={series} label="Interactive HornLab beam shape fit by frequency" live={live}/>
+        : <ChartStub reason={beamShapeMissingReason(result).reason}/>;
+    }
     if (chartType === 'beam_map') return <ForwardBeamRenderer result={result}/>;
+    if (chartType === 'polar_response') return <PolarResponseCard items={overlays} tokens={tokens} density={density} live={live}/>;
+    if (chartType === 'phase_response') {
+      const option = phaseOption(overlays, tokens, density);
+      return Array.isArray(option.series) && option.series.length
+        ? <EChart option={option} label="Interactive HornLab on-axis phase by frequency" live={live}/>
+        : <ChartStub reason="On-Axis Phase needs the spl_on_axis phase samples from a completed solve."/>;
+    }
+    if (chartType === 'group_delay') {
+      const option = groupDelayOption(overlays, tokens, density);
+      return Array.isArray(option.series) && option.series.length
+        ? <EChart option={option} label="Interactive HornLab on-axis group delay by frequency" live={live}/>
+        : <ChartStub reason={groupDelayMissingReason(result)}/>;
+    }
+    if (chartType === 'drive_power') {
+      const option = drivePowerOption(result, tokens, density);
+      return Array.isArray(option.series) && option.series.length
+        ? <EChart option={option} label="Interactive HornLab electrical power and current draw by frequency" live={live}/>
+        : <ChartStub reason={driverChartMissingReason(result, 'Power & Current Draw')}/>;
+    }
+    if (chartType === 'excursion') {
+      const option = excursionOption(result, tokens, density);
+      return Array.isArray(option.series) && option.series.length
+        ? <EChart option={option} label="Interactive HornLab cone excursion by frequency" live={live}/>
+        : <ChartStub reason={excursionSeries(result) ? 'Cone Excursion could not be read from this result.' : driverChartMissingReason(result, 'Cone Excursion')}/>;
+    }
     if (chartType === 'balloon') return <BalloonRenderer result={result}/>;
     if (chartType === 'impedance') {
-      const option = impedanceOption(overlays, tokens, preferences.smoothing, density);
-      return Array.isArray(option.series) && option.series.length ? <EChart option={option} label="Interactive HornLab normalized acoustic impedance by frequency" live={live}/> : <ChartStub reason="Acoustic Impedance needs the optional impedance result block."/>;
+      const option = impedanceOption(overlays, tokens, preferences.smoothing, density, preferences.impedanceDisplay);
+      // The spoken label follows the units for the same reason the axis does:
+      // a driver-coupled run's ohms announced as "acoustic impedance" is the
+      // screen-reader version of the mislabelled axis. The stub cannot follow
+      // them -- with no impedance block there is no unit to read -- so it uses
+      // the card's own unit-neutral name.
+      const { units } = impedanceComparable(overlays);
+      return Array.isArray(option.series) && option.series.length ? <EChart option={option} label={`Interactive HornLab ${units.spokenName} by frequency`} live={live}/> : <ChartStub reason="Impedance needs the optional impedance result block."/>;
     }
     return null;
-  }, [beamShapeAction, chartType, density, live, measured, overlays, preferences.directivityGuideInterval, preferences.mapReference, preferences.smoothing, result, tokens]);
+  }, [beamShapeAction, chartType, density, live, measured, overlays, preferences.directivityGuideInterval, preferences.impedanceDisplay, preferences.mapReference, preferences.smoothing, preferences.splPhase, result, tokens]);
   return plot ?? <Summary result={result} wrapper={wrapper} job={job} channelId={channelId} density={density}/>;
 }
 
@@ -1017,8 +1421,15 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
     };
   }, [expanded]);
   const polarStep = chartType.startsWith('directivity_map') ? resolvedPolarStepNotice(result) : null;
-  const subtitle = chartType.startsWith('directivity_map') ? `ref ${preferencesStore.getSnapshot().mapReference} dB${polarStep ? ` · ${polarStep}` : ''}` : chartType === 'frequency_response' ? splSubtitle(result) : null;
-  const unit = CHART_BADGES[chartType]?.unit;
+  // The same list ResultChart overlays, so the chip and the subtitle describe
+  // the chart that is actually drawn rather than the primary run alone.
+  const impedanceItems = chartType === 'impedance' ? (named.length ? named : [{ id: 'primary', label: 'Primary', result }]) : undefined;
+  const subtitle = chartType.startsWith('directivity_map')
+    ? `ref ${preferencesStore.getSnapshot().mapReference} dB${polarStep ? ` · ${polarStep}` : ''}`
+    : chartType === 'frequency_response' ? splSubtitle(result)
+    : impedanceItems ? impedanceSubtitle(impedanceItems)
+    : null;
+  const unit = chartUnit(chartType, result, impedanceItems);
   const activeLabel = named.find((item) => item.result === result)?.label ?? named[0]?.label ?? 'the primary run';
   const imageAction = useCallback(async (operation: 'copy' | 'download') => {
     const target = card.current?.querySelector<HTMLElement>('.chart-placeholder');

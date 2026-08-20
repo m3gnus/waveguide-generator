@@ -10,7 +10,7 @@ describe('client preferences', () => {
   beforeEach(() => { localStorage.clear(); preferencesStore.resetForTests(); });
   it('persists the fifteen-format selection and clamps the run sequence', () => {
     expect(EXPORT_FORMATS).toHaveLength(15);
-    expect(CHART_TYPES).toHaveLength(11);
+    expect(CHART_TYPES).toHaveLength(17);
     expect(MAP_REFERENCES).toEqual([-3, -6, -9, -12]);
     preferencesStore.update({ exportFormats: [] });
     preferencesStore.toggleFormat('csv');

@@ -44,7 +44,7 @@ describe('the design name owns the filename', () => {
     expect(useDocumentStore.getState()).toMatchObject({ designName: '', filename: '' });
   });
 
-  it('counts a rename as unsaved work and clears it on save', () => {
+  it('counts a rename as unsaved work until a new file baseline is established', () => {
     useDocumentStore.getState().setDesignName('winner');
     const { designName, savedDesignName, savedRevision } = useDocumentStore.getState();
     expect(documentIsUnsaved(savedRevision!, savedRevision, null, '', designName, savedDesignName)).toBe(true);
@@ -60,9 +60,9 @@ describe('unsaved-changes accounting', () => {
   beforeEach(() => resetDocumentStore());
 
   it('counts a settings change the geometry revision cannot see', () => {
-    // Saved: same revision, same settings.
+    // Opened-file baseline: same revision, same settings.
     expect(documentIsUnsaved(4, 4, '{"distance":2}', '{"distance":2}')).toBe(false);
-    // Directivity typed after the save. The revision still matches, because
+    // Directivity typed after that baseline. The revision still matches, because
     // these settings do not rebuild the mesh -- but the file is now stale.
     expect(documentIsUnsaved(4, 4, '{"distance":2}', '{"distance":3}')).toBe(true);
     expect(documentIsUnsaved(5, 4, '{"distance":2}', '{"distance":2}')).toBe(true);
@@ -75,7 +75,7 @@ describe('unsaved-changes accounting', () => {
     expect(documentIsUnsaved(1, 1, null, '{"distance":3}')).toBe(false);
   });
 
-  it('stamps a settings baseline only when a save supplies one', () => {
+  it('stamps a settings baseline only when the caller supplies one', () => {
     useDocumentStore.getState().markSaved(7, '{"distance":2}');
     expect(useDocumentStore.getState()).toMatchObject({ savedRevision: 7, savedSettings: '{"distance":2}' });
 
