@@ -13,6 +13,17 @@ def _clear_chart_cache() -> None:
         charts_api._cache.clear()
 
 
+def test_chart_request_accepts_primary_and_reference_sound_speeds() -> None:
+    request = charts_api.ChartsRenderRequest(
+        sound_speed_m_per_s=346.0,
+        reference={"sound_speed_m_per_s": 341.0},
+    )
+
+    assert request.sound_speed_m_per_s == 346.0
+    assert request.reference is not None
+    assert request.reference.sound_speed_m_per_s == 341.0
+
+
 def test_identical_concurrent_theme_previews_share_the_inflight_render(
     monkeypatch,
 ) -> None:
