@@ -1,10 +1,27 @@
 # Solver result contract
 
-Status: canonical current contract, version 1. Verified against
-`server/solver/result_mapping.py` and frontend result/export consumers on 2026-08-20.
+Status: canonical current contract family, parametric version 1 and multi-channel
+version 2. Verified against native/imported result mapping, job persistence, and
+frontend result/export consumers on 2026-08-20.
 The original v1-mining document remains in Git history at `f51a23c`.
 
-## Envelope and axes
+## Envelope identity
+
+Every final result declares `result_kind` and `result_contract_version` at the top
+level. The version remains duplicated in `metadata.result_contract_version` for older
+consumers.
+
+| `result_kind` | Version | Envelope |
+|---|---:|---|
+| `parametric` | 1 | quantities and axes described below live at the top level |
+| `multi_channel` | 2 | `channels[id]` contains the quantity envelope for each drive/derived channel; `channel_order` is the presentation order and top-level `metadata` is shared |
+
+Final results also echo `client_request_id` and bounded `client_metadata`. The
+top-level `provenance` contract version 1 declares WG version, dependency SHAs,
+resolved engine, and SHA-256 identities for the canonical request, geometry, and solve
+options. The result HTTP response supplies an ETag and exact stored-byte SHA-256.
+
+## Parametric envelope and axes
 
 Every completed native solve maps to one JSON shape before charts or exports consume
 it. `frequencies` is the requested/generated axis in hertz. Quantity objects may repeat
@@ -32,7 +49,7 @@ retaining valid values.
 | `metadata.driver.cone_excursion_mm` | direct-radiator one-way peak displacement in millimetres, converted from the RMS drive phasor before comparison with the driver's one-way peak Xmax rating |
 | `passive_cardioid.cone_excursion_mm` | passive-cardioid one-way peak displacement on the result frequency grid; `cone_excursion_quantity` states the same peak convention |
 
-Metadata declares `result_contract_version: 1`, `phase_quantity`, `phase_units`,
+Parametric metadata declares `result_contract_version: 1`, `phase_quantity`, `phase_units`,
 `impedance_quantity`, `impedance_units`, `impedance_drive`, observation origin/distance,
 sound speed, symmetry, frequency source, and backend diagnostics. Consumers must use
 these declarations rather than infer a convention from the backend name.
@@ -78,6 +95,11 @@ arrays. Solver logs exposed to the client omit duplicated raw sphere-pressure pa
 Live `partialResult` messages use the same quantity names and conventions as the final
 result. A revision gap is repaired from the authoritative partial-results snapshot; the
 completed stored result remains the durable artifact.
+
+Multi-channel partial results carry `result_kind: multi_channel`, contract version 2,
+`channels`, and `channel_order`. A channel may omit impedance when its source topology
+does not define one; its channel metadata explains the omission. Consumers must not
+substitute another channel's impedance.
 
 ## Export alignment
 

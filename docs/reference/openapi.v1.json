@@ -1,0 +1,7378 @@
+{
+  "components": {
+    "schemas": {
+      "CadReturnIngestRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "areaDriftOverrides": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Areadriftoverrides",
+            "type": "array"
+          },
+          "bundlePath": {
+            "minLength": 1,
+            "title": "Bundlepath",
+            "type": "string"
+          },
+          "mesh": {
+            "$ref": "#/components/schemas/ImportedMeshRequest"
+          },
+          "skippedSourceIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Skippedsourceids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "bundlePath",
+          "mesh"
+        ],
+        "title": "CadReturnIngestRequest",
+        "type": "object"
+      },
+      "CadSource": {
+        "additionalProperties": false,
+        "description": "Where an imported run came from, kept for the run archive.\n\nA CAD run used to be traceable only through the ingestion record, which is\naddressed by content and says nothing about which document a person opened.",
+        "properties": {
+          "archive_stem": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archive Stem"
+          },
+          "design_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Design Id"
+          },
+          "document_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Name"
+          },
+          "ingest_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ingest Id"
+          },
+          "lineage_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lineage Id"
+          },
+          "manifest_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Manifest Sha256"
+          },
+          "return_state_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Return State Hash"
+          }
+        },
+        "title": "CadSource",
+        "type": "object"
+      },
+      "CaptureDocumentRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "CaptureDocumentRequest",
+        "type": "object"
+      },
+      "ChannelCombineSpec": {
+        "additionalProperties": false,
+        "description": "LR4 time-aligned sum of drive-channel bases (CAD-LINK-PHASE3.md \u00a72).\n\n``members`` is the chain in band order, lowest first; ``crossovers_hz``\nsits between adjacent members. Structural defects refuse at submission;\nsolve-time observations become metadata warnings, never silent skips.",
+        "properties": {
+          "align": {
+            "default": true,
+            "title": "Align",
+            "type": "boolean"
+          },
+          "crossovers_hz": {
+            "items": {
+              "type": "number"
+            },
+            "minItems": 1,
+            "title": "Crossovers Hz",
+            "type": "array"
+          },
+          "id": {
+            "default": "combined",
+            "title": "Id",
+            "type": "string"
+          },
+          "level_match": {
+            "default": true,
+            "title": "Level Match",
+            "type": "boolean"
+          },
+          "members": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 2,
+            "title": "Members",
+            "type": "array"
+          }
+        },
+        "required": [
+          "members",
+          "crossovers_hz"
+        ],
+        "title": "ChannelCombineSpec",
+        "type": "object"
+      },
+      "ChartsReferencePayload": {
+        "additionalProperties": false,
+        "properties": {
+          "beam_shape": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Beam Shape"
+          },
+          "di": {
+            "anyOf": [
+              {
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              }
+            ],
+            "title": "Di"
+          },
+          "di_frequencies": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Di Frequencies",
+            "type": "array"
+          },
+          "frequencies": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Frequencies",
+            "type": "array"
+          },
+          "impedance_frequencies": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Impedance Frequencies",
+            "type": "array"
+          },
+          "impedance_imaginary": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Impedance Imaginary",
+            "type": "array"
+          },
+          "impedance_normalization": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Impedance Normalization"
+          },
+          "impedance_real": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Impedance Real",
+            "type": "array"
+          },
+          "impedance_units": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Impedance Units"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "sound_speed_m_per_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sound Speed M Per S"
+          },
+          "spl": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Spl",
+            "type": "array"
+          }
+        },
+        "title": "ChartsReferencePayload",
+        "type": "object"
+      },
+      "ChartsRenderRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "beam_shape": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Beam Shape"
+          },
+          "di": {
+            "anyOf": [
+              {
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              }
+            ],
+            "title": "Di"
+          },
+          "di_frequencies": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Di Frequencies",
+            "type": "array"
+          },
+          "directivity": {
+            "additionalProperties": true,
+            "title": "Directivity",
+            "type": "object"
+          },
+          "frequencies": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Frequencies",
+            "type": "array"
+          },
+          "impedance_frequencies": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Impedance Frequencies",
+            "type": "array"
+          },
+          "impedance_imaginary": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Impedance Imaginary",
+            "type": "array"
+          },
+          "impedance_normalization": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Impedance Normalization"
+          },
+          "impedance_real": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Impedance Real",
+            "type": "array"
+          },
+          "impedance_units": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Impedance Units"
+          },
+          "phase_degrees": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Phase Degrees",
+            "type": "array"
+          },
+          "phase_reference_distance_m": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phase Reference Distance M"
+          },
+          "phase_time_convention": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phase Time Convention"
+          },
+          "reference": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChartsReferencePayload"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sound_speed_m_per_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sound Speed M Per S"
+          },
+          "spl": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Spl",
+            "type": "array"
+          },
+          "theme": {
+            "default": "console",
+            "title": "Theme",
+            "type": "string"
+          }
+        },
+        "title": "ChartsRenderRequest",
+        "type": "object"
+      },
+      "ClearFailedResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "deleted": {
+            "title": "Deleted",
+            "type": "boolean"
+          },
+          "deleted_count": {
+            "title": "Deleted Count",
+            "type": "integer"
+          },
+          "deleted_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Deleted Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "deleted",
+          "deleted_count",
+          "deleted_ids"
+        ],
+        "title": "ClearFailedResponse",
+        "type": "object"
+      },
+      "ConfigBlock": {
+        "additionalProperties": false,
+        "description": "An unrecognized v1 block retained as ordered rows and item strings.",
+        "properties": {
+          "comments": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Comments",
+            "type": "array"
+          },
+          "entries": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "items": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Items",
+            "type": "object"
+          },
+          "lines": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Lines",
+            "type": "array"
+          }
+        },
+        "title": "ConfigBlock",
+        "type": "object"
+      },
+      "CornerGrid": {
+        "additionalProperties": false,
+        "description": "Optional per-ring corner samples used by advanced FREEFORM payloads.",
+        "properties": {
+          "t": {
+            "$ref": "#/components/schemas/Expr"
+          },
+          "values": {
+            "items": {
+              "items": {
+                "$ref": "#/components/schemas/Expr"
+              },
+              "type": "array"
+            },
+            "title": "Values",
+            "type": "array"
+          }
+        },
+        "required": [
+          "t",
+          "values"
+        ],
+        "title": "CornerGrid",
+        "type": "object"
+      },
+      "CrossSectionStation": {
+        "additionalProperties": false,
+        "properties": {
+          "corner_grid": {
+            "anyOf": [
+              {
+                "items": {
+                  "items": {
+                    "$ref": "#/components/schemas/Expr"
+                  },
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Corner Grid"
+          },
+          "corner_radius_mm": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "exponent": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "shape": {
+            "enum": [
+              "ellipse",
+              "superellipse",
+              "rounded_rectangle"
+            ],
+            "title": "Shape",
+            "type": "string"
+          },
+          "t": {
+            "$ref": "#/components/schemas/Expr"
+          }
+        },
+        "required": [
+          "t",
+          "shape"
+        ],
+        "title": "CrossSectionStation",
+        "type": "object"
+      },
+      "DeleteResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "deleted": {
+            "const": true,
+            "title": "Deleted",
+            "type": "boolean"
+          },
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deleted",
+          "job_id"
+        ],
+        "title": "DeleteResponse",
+        "type": "object"
+      },
+      "DesignAvailability": {
+        "additionalProperties": false,
+        "description": "Whether a job's stored design can be reopened, and if not, why not.\n\nJobs imported from v1 are the reason this exists. Most of them are\nrecovered into v2's own snapshot shape and are indistinguishable from a\nnatively solved job; the rest must say what is wrong in words the user can\nact on, because \"Rerun is greyed out\" is not a diagnosis.",
+        "properties": {
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "reason_code": {
+            "default": "ok",
+            "enum": [
+              "ok",
+              "recovered",
+              "imported_geometry",
+              "freeform_legacy_design",
+              "no_stored_design",
+              "unreadable_design"
+            ],
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "reopenable": {
+            "default": true,
+            "title": "Reopenable",
+            "type": "boolean"
+          },
+          "source": {
+            "default": "v2-snapshot",
+            "enum": [
+              "v2-snapshot",
+              "v1-design-state",
+              "v1-mesher-payload",
+              "cad-import",
+              "none"
+            ],
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "title": "DesignAvailability",
+        "type": "object"
+      },
+      "DesignConfig": {
+        "description": "Root discriminated design union, serialized as a flat API object.",
+        "discriminator": {
+          "mapping": {
+            "FREEFORM": "#/components/schemas/FreeformConfig",
+            "ICW": "#/components/schemas/ICWConfig",
+            "OSSE": "#/components/schemas/OSSEConfig",
+            "R-OSSE": "#/components/schemas/ROSSEConfig"
+          },
+          "propertyName": "formula"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/OSSEConfig"
+          },
+          {
+            "$ref": "#/components/schemas/ROSSEConfig"
+          },
+          {
+            "$ref": "#/components/schemas/ICWConfig"
+          },
+          {
+            "$ref": "#/components/schemas/FreeformConfig"
+          }
+        ],
+        "title": "DesignConfig"
+      },
+      "DesignSnapshot": {
+        "additionalProperties": false,
+        "properties": {
+          "design": {
+            "$ref": "#/components/schemas/DesignConfig"
+          },
+          "version": {
+            "const": 1,
+            "default": 1,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "design"
+        ],
+        "title": "DesignSnapshot",
+        "type": "object"
+      },
+      "DirectivityRenderRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "angle_guide_step": {
+            "default": 10.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 180.0,
+            "title": "Angle Guide Step",
+            "type": "number"
+          },
+          "directivity": {
+            "additionalProperties": true,
+            "title": "Directivity",
+            "type": "object"
+          },
+          "frequencies": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Frequencies",
+            "type": "array"
+          },
+          "reference_directivity": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference Directivity"
+          },
+          "reference_frequencies": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference Frequencies"
+          },
+          "reference_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference Label"
+          },
+          "reference_level": {
+            "default": -6.0,
+            "title": "Reference Level",
+            "type": "number"
+          },
+          "theme": {
+            "default": "console",
+            "title": "Theme",
+            "type": "string"
+          }
+        },
+        "required": [
+          "frequencies",
+          "directivity"
+        ],
+        "title": "DirectivityRenderRequest",
+        "type": "object"
+      },
+      "DriveChannel": {
+        "additionalProperties": false,
+        "properties": {
+          "driver": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DriverSpec"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "motion": {
+            "default": "normal",
+            "enum": [
+              "normal",
+              "axial"
+            ],
+            "title": "Motion",
+            "type": "string"
+          },
+          "source_ids": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Source Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "source_ids"
+        ],
+        "title": "DriveChannel",
+        "type": "object"
+      },
+      "DriverSpec": {
+        "additionalProperties": false,
+        "description": "Thiele-Small driver model for one drive channel, Hornresp units.\n\nThe wire keeps Hornresp's units (Sd cm\u00b2, Le mH, Mmd/Mms g, Cms m/N,\nVas L, Rms kg/s, Xmax mm) exactly as the Fusion add-in documents them;\nconversion to SI happens once, in ``server/solver/driver_lem.py``.",
+        "properties": {
+          "bl_t_m": {
+            "exclusiveMinimum": 0.0,
+            "title": "Bl T M",
+            "type": "number"
+          },
+          "cms_m_per_n": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cms M Per N"
+          },
+          "count": {
+            "default": 1,
+            "maximum": 64.0,
+            "minimum": 1.0,
+            "title": "Count",
+            "type": "integer"
+          },
+          "fs_hz": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fs Hz"
+          },
+          "le_mh": {
+            "default": 0.0,
+            "minimum": 0.0,
+            "title": "Le Mh",
+            "type": "number"
+          },
+          "mmd_g": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mmd G"
+          },
+          "mms_g": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mms G"
+          },
+          "qms": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Qms"
+          },
+          "re_ohm": {
+            "exclusiveMinimum": 0.0,
+            "title": "Re Ohm",
+            "type": "number"
+          },
+          "rear_volume_l": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rear Volume L"
+          },
+          "rms_kg_per_s": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rms Kg Per S"
+          },
+          "sd_cm2": {
+            "exclusiveMinimum": 0.0,
+            "title": "Sd Cm2",
+            "type": "number"
+          },
+          "vas_l": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vas L"
+          },
+          "xmax_mm": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Xmax Mm"
+          }
+        },
+        "required": [
+          "sd_cm2",
+          "bl_t_m",
+          "re_ohm"
+        ],
+        "title": "DriverSpec",
+        "type": "object"
+      },
+      "EnclosureConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "back_resolution": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "maxItems": 4,
+                "minItems": 4,
+                "prefixItems": [
+                  {
+                    "$ref": "#/components/schemas/Expr"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Expr"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Expr"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Expr"
+                  }
+                ],
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Back Resolution"
+          },
+          "depth": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "edge_radius": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "edge_type": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "front_resolution": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "maxItems": 4,
+                "minItems": 4,
+                "prefixItems": [
+                  {
+                    "$ref": "#/components/schemas/Expr"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Expr"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Expr"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Expr"
+                  }
+                ],
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Front Resolution"
+          },
+          "space_b": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "space_l": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "space_r": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "space_t": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "EnclosureConfig",
+        "type": "object"
+      },
+      "ErrorDetail": {
+        "additionalProperties": false,
+        "description": "Stable refusal/failure detail while the legacy ``detail`` string remains.",
+        "properties": {
+          "client_request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Request Id"
+          },
+          "code": {
+            "minLength": 1,
+            "title": "Code",
+            "type": "string"
+          },
+          "details": {
+            "additionalProperties": true,
+            "title": "Details",
+            "type": "object"
+          },
+          "message": {
+            "minLength": 1,
+            "title": "Message",
+            "type": "string"
+          },
+          "retryable": {
+            "default": false,
+            "title": "Retryable",
+            "type": "boolean"
+          },
+          "schema_version": {
+            "const": 1,
+            "default": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "stage": {
+            "minLength": 1,
+            "title": "Stage",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "stage",
+          "message"
+        ],
+        "title": "ErrorDetail",
+        "type": "object"
+      },
+      "ErrorEnvelope": {
+        "additionalProperties": false,
+        "description": "Backward-compatible HTTP/CLI error body.",
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "error": {
+            "$ref": "#/components/schemas/ErrorDetail"
+          }
+        },
+        "required": [
+          "detail",
+          "error"
+        ],
+        "title": "ErrorEnvelope",
+        "type": "object"
+      },
+      "ExportMember": {
+        "additionalProperties": false,
+        "properties": {
+          "content_base64": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Base64"
+          },
+          "relative_path": {
+            "minLength": 1,
+            "title": "Relative Path",
+            "type": "string"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          }
+        },
+        "required": [
+          "relative_path"
+        ],
+        "title": "ExportMember",
+        "type": "object"
+      },
+      "ExportRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "baseName": {
+            "default": "waveguide",
+            "maxLength": 240,
+            "title": "Basename",
+            "type": "string"
+          },
+          "design": {
+            "$ref": "#/components/schemas/DesignConfig"
+          },
+          "designRevision": {
+            "minimum": 0.0,
+            "title": "Designrevision",
+            "type": "integer"
+          },
+          "modelName": {
+            "default": "MWG Horn",
+            "maxLength": 240,
+            "title": "Modelname",
+            "type": "string"
+          }
+        },
+        "required": [
+          "design",
+          "designRevision"
+        ],
+        "title": "ExportRequest",
+        "type": "object"
+      },
+      "Expr": {
+        "additionalProperties": false,
+        "description": "A numeric value and its exact v1 source spelling.\n\nV1 retains strings in ``src/config/index.js:319-333``.  A value is ``None``\nwhen the expression depends on the angular variable ``p`` (or is otherwise\nnot a scalar); ``raw`` is always sufficient for lossless serialization.",
+        "properties": {
+          "raw": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Raw"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "title": "Expr",
+        "type": "object"
+      },
+      "FieldPlaneRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "frequency_index": {
+            "minimum": 0.0,
+            "title": "Frequency Index",
+            "type": "integer"
+          },
+          "plane": {
+            "$ref": "#/components/schemas/FieldPlaneSpec"
+          },
+          "request_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Request Id",
+            "type": "string"
+          },
+          "response": {
+            "$ref": "#/components/schemas/FieldPlaneResponseSpec"
+          },
+          "version": {
+            "const": 1,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "request_id",
+          "plane",
+          "frequency_index",
+          "response"
+        ],
+        "title": "FieldPlaneRequest",
+        "type": "object"
+      },
+      "FieldPlaneResponseSpec": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "FieldPlaneResponseSpec",
+        "type": "object"
+      },
+      "FieldPlaneSpec": {
+        "additionalProperties": false,
+        "description": "A centred, orthonormal sampling plane in solver metres.\n\nSamples are generated as v-major rows with u varying fastest within each\nrow. Both axes point in their positive grid directions.",
+        "properties": {
+          "axis_u": {
+            "maxItems": 3,
+            "minItems": 3,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "title": "Axis U",
+            "type": "array"
+          },
+          "axis_v": {
+            "maxItems": 3,
+            "minItems": 3,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "title": "Axis V",
+            "type": "array"
+          },
+          "height_m": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 100.0,
+            "title": "Height M",
+            "type": "number"
+          },
+          "nx": {
+            "maximum": 256.0,
+            "minimum": 2.0,
+            "title": "Nx",
+            "type": "integer"
+          },
+          "ny": {
+            "maximum": 256.0,
+            "minimum": 2.0,
+            "title": "Ny",
+            "type": "integer"
+          },
+          "origin_m": {
+            "maxItems": 3,
+            "minItems": 3,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "title": "Origin M",
+            "type": "array"
+          },
+          "width_m": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 100.0,
+            "title": "Width M",
+            "type": "number"
+          }
+        },
+        "required": [
+          "origin_m",
+          "axis_u",
+          "axis_v",
+          "width_m",
+          "height_m",
+          "nx",
+          "ny"
+        ],
+        "title": "FieldPlaneSpec",
+        "type": "object"
+      },
+      "FreeformConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "corner_grids": {
+            "items": {
+              "$ref": "#/components/schemas/CornerGrid"
+            },
+            "title": "Corner Grids",
+            "type": "array"
+          },
+          "coverage_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverage Mode"
+          },
+          "cross_sections": {
+            "items": {
+              "$ref": "#/components/schemas/CrossSectionStation"
+            },
+            "maxItems": 32,
+            "minItems": 2,
+            "title": "Cross Sections",
+            "type": "array"
+          },
+          "enclosure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EnclosureConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "extra_blocks": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ConfigBlock"
+            },
+            "title": "Extra Blocks",
+            "type": "object"
+          },
+          "extra_keys": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Extra Keys",
+            "type": "object"
+          },
+          "formula": {
+            "const": "FREEFORM",
+            "title": "Formula",
+            "type": "string"
+          },
+          "inflection_policy": {
+            "anyOf": [
+              {
+                "enum": [
+                  "reject",
+                  "warn"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inflection Policy"
+          },
+          "length": {
+            "$ref": "#/components/schemas/Expr"
+          },
+          "length_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "profile",
+                  "total"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Length Mode"
+          },
+          "mesh": {
+            "$ref": "#/components/schemas/MeshConfig"
+          },
+          "morph": {
+            "$ref": "#/components/schemas/MorphConfig"
+          },
+          "output": {
+            "$ref": "#/components/schemas/OutputConfig"
+          },
+          "profile_h": {
+            "$ref": "#/components/schemas/FreeformProfile"
+          },
+          "profile_v": {
+            "$ref": "#/components/schemas/FreeformProfile"
+          },
+          "scale": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "simulation": {
+            "$ref": "#/components/schemas/SimulationConfig"
+          },
+          "slot_length": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "$ref": "#/components/schemas/SourceConfig"
+          },
+          "throat_ext_angle": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "throat_ext_length": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "formula",
+          "length",
+          "profile_h",
+          "profile_v",
+          "cross_sections"
+        ],
+        "title": "FreeformConfig",
+        "type": "object"
+      },
+      "FreeformPoint": {
+        "additionalProperties": false,
+        "properties": {
+          "angle_deg": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "r": {
+            "$ref": "#/components/schemas/Expr"
+          },
+          "t": {
+            "$ref": "#/components/schemas/Expr"
+          }
+        },
+        "required": [
+          "t",
+          "r"
+        ],
+        "title": "FreeformPoint",
+        "type": "object"
+      },
+      "FreeformProfile": {
+        "additionalProperties": false,
+        "properties": {
+          "mouth_angle_deg": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/FreeformPoint"
+            },
+            "title": "Points",
+            "type": "array"
+          },
+          "throat_angle_deg": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "points"
+        ],
+        "title": "FreeformProfile",
+        "type": "object"
+      },
+      "FusionReturnRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "designId": {
+            "minLength": 1,
+            "title": "Designid",
+            "type": "string"
+          },
+          "documentId": {
+            "minLength": 1,
+            "title": "Documentid",
+            "type": "string"
+          },
+          "expectedReturnStateHash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expectedreturnstatehash"
+          },
+          "instanceId": {
+            "minLength": 1,
+            "title": "Instanceid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "designId",
+          "documentId",
+          "instanceId"
+        ],
+        "title": "FusionReturnRequest",
+        "type": "object"
+      },
+      "FusionStatusRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "design": {
+            "$ref": "#/components/schemas/DesignConfig"
+          },
+          "identity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SaveIdentity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "returnBundlePath": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Returnbundlepath"
+          }
+        },
+        "required": [
+          "design"
+        ],
+        "title": "FusionStatusRequest",
+        "type": "object"
+      },
+      "GuidingCurveConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "aspect_ratio": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "curve_type": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "distance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rotation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sf_a": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sf_b": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sf_m1": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sf_m2": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sf_n1": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sf_n2": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sf_n3": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "superellipse_n": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "superformula": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "width": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "GuidingCurveConfig",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "ICWConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "L": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "R": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "a": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "a0": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "coverage_angle": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "coverage_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverage Mode"
+          },
+          "curl": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "depth": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "enclosure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EnclosureConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "extra_blocks": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ConfigBlock"
+            },
+            "title": "Extra Blocks",
+            "type": "object"
+          },
+          "extra_keys": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Extra Keys",
+            "type": "object"
+          },
+          "formula": {
+            "const": "ICW",
+            "title": "Formula",
+            "type": "string"
+          },
+          "hold_end": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "hold_start": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "k": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "length_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "profile",
+                  "total"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Length Mode"
+          },
+          "mesh": {
+            "$ref": "#/components/schemas/MeshConfig"
+          },
+          "morph": {
+            "$ref": "#/components/schemas/MorphConfig"
+          },
+          "n_coeff": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "output": {
+            "$ref": "#/components/schemas/OutputConfig"
+          },
+          "q": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "r0": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "scale": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "simulation": {
+            "$ref": "#/components/schemas/SimulationConfig"
+          },
+          "slot_length": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "$ref": "#/components/schemas/SourceConfig"
+          },
+          "termination": {
+            "anyOf": [
+              {
+                "enum": [
+                  "flat_baffle",
+                  "rollback"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Termination"
+          },
+          "theta1_deg": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "throat_ext_angle": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "throat_ext_length": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "formula"
+        ],
+        "title": "ICWConfig",
+        "type": "object"
+      },
+      "ImportedGeometrySource": {
+        "additionalProperties": false,
+        "properties": {
+          "acknowledged_findings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Acknowledged Findings",
+            "type": "array"
+          },
+          "artifact_sha256": {
+            "title": "Artifact Sha256",
+            "type": "string"
+          },
+          "bem_port_area_m2": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bem Port Area M2"
+          },
+          "combine": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChannelCombineSpec"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "drive_channels": {
+            "items": {
+              "$ref": "#/components/schemas/DriveChannel"
+            },
+            "minItems": 1,
+            "title": "Drive Channels",
+            "type": "array"
+          },
+          "drive_voltage_v": {
+            "default": 2.83,
+            "exclusiveMinimum": 0.0,
+            "title": "Drive Voltage V",
+            "type": "number"
+          },
+          "exterior_only": {
+            "default": false,
+            "title": "Exterior Only",
+            "type": "boolean"
+          },
+          "ingest_id": {
+            "title": "Ingest Id",
+            "type": "string"
+          },
+          "manifest_sha256": {
+            "title": "Manifest Sha256",
+            "type": "string"
+          },
+          "mesh": {
+            "$ref": "#/components/schemas/ImportedMeshSizes"
+          },
+          "model_port_area_m2": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Port Area M2"
+          },
+          "passive_cardioid_coupled": {
+            "default": false,
+            "title": "Passive Cardioid Coupled",
+            "type": "boolean"
+          },
+          "passive_cardioid_foam_resistance_pa_s_m3": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Passive Cardioid Foam Resistance Pa S M3"
+          },
+          "passive_cardioid_invert_port": {
+            "default": true,
+            "title": "Passive Cardioid Invert Port",
+            "type": "boolean"
+          },
+          "passive_cardioid_port_length_mm": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Passive Cardioid Port Length Mm"
+          },
+          "passive_cardioid_rear_volume_l": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Passive Cardioid Rear Volume L"
+          },
+          "port_area_source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "user",
+                  "bem_aperture"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Port Area Source"
+          },
+          "rg_ohm": {
+            "default": 0.0,
+            "minimum": 0.0,
+            "title": "Rg Ohm",
+            "type": "number"
+          },
+          "skipped_source_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Skipped Source Ids",
+            "type": "array"
+          },
+          "type": {
+            "const": "imported",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "ingest_id",
+          "manifest_sha256",
+          "artifact_sha256",
+          "drive_channels",
+          "mesh"
+        ],
+        "title": "ImportedGeometrySource",
+        "type": "object"
+      },
+      "ImportedMeshRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "rigidSizeMm": {
+            "exclusiveMinimum": 0.0,
+            "title": "Rigidsizemm",
+            "type": "number"
+          },
+          "sourceSizeMm": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Sourcesizemm",
+            "type": "object"
+          },
+          "transitionMm": {
+            "exclusiveMinimum": 0.0,
+            "title": "Transitionmm",
+            "type": "number"
+          }
+        },
+        "required": [
+          "rigidSizeMm",
+          "transitionMm",
+          "sourceSizeMm"
+        ],
+        "title": "ImportedMeshRequest",
+        "type": "object"
+      },
+      "ImportedMeshSizes": {
+        "additionalProperties": false,
+        "properties": {
+          "rigid_size_mm": {
+            "exclusiveMinimum": 0.0,
+            "title": "Rigid Size Mm",
+            "type": "number"
+          },
+          "source_size_mm": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "title": "Source Size Mm",
+            "type": "object"
+          },
+          "transition_mm": {
+            "exclusiveMinimum": 0.0,
+            "title": "Transition Mm",
+            "type": "number"
+          }
+        },
+        "required": [
+          "rigid_size_mm",
+          "transition_mm",
+          "source_size_mm"
+        ],
+        "title": "ImportedMeshSizes",
+        "type": "object"
+      },
+      "JobItem": {
+        "additionalProperties": false,
+        "properties": {
+          "archived_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived At"
+          },
+          "auto_export_completed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auto Export Completed At"
+          },
+          "auto_export_formats": {
+            "additionalProperties": true,
+            "title": "Auto Export Formats",
+            "type": "object"
+          },
+          "axisymmetric_eligibility_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Axisymmetric Eligibility Reasons",
+            "type": "array"
+          },
+          "cad_source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CadSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cancellation_requested": {
+            "title": "Cancellation Requested",
+            "type": "boolean"
+          },
+          "client_metadata": {
+            "additionalProperties": true,
+            "title": "Client Metadata",
+            "type": "object"
+          },
+          "client_request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Request Id"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "config_summary": {
+            "additionalProperties": true,
+            "title": "Config Summary",
+            "type": "object"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "design_availability": {
+            "$ref": "#/components/schemas/DesignAvailability"
+          },
+          "design_revision": {
+            "title": "Design Revision",
+            "type": "integer"
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message"
+          },
+          "exported_files": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Exported Files",
+            "type": "array"
+          },
+          "field_plane_available": {
+            "default": false,
+            "title": "Field Plane Available",
+            "type": "boolean"
+          },
+          "field_trace_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Field Trace Bytes"
+          },
+          "has_mesh_artifact": {
+            "title": "Has Mesh Artifact",
+            "type": "boolean"
+          },
+          "has_radiation_impedance_artifact": {
+            "default": false,
+            "title": "Has Radiation Impedance Artifact",
+            "type": "boolean"
+          },
+          "has_results": {
+            "title": "Has Results",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "log_tail": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Log Tail",
+            "type": "array"
+          },
+          "mesh_artifact_file": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mesh Artifact File"
+          },
+          "mesh_discarded_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mesh Discarded At"
+          },
+          "mesh_stats": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mesh Stats"
+          },
+          "parent_job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Job Id"
+          },
+          "persistence_warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Persistence Warnings",
+            "type": "array"
+          },
+          "polar_grid": {
+            "additionalProperties": true,
+            "title": "Polar Grid",
+            "type": "object"
+          },
+          "progress": {
+            "title": "Progress",
+            "type": "number"
+          },
+          "queued_at": {
+            "title": "Queued At",
+            "type": "string"
+          },
+          "radiation_impedance_artifact_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Radiation Impedance Artifact Bytes"
+          },
+          "rating": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rating"
+          },
+          "raw_results_file": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Raw Results File"
+          },
+          "results_discarded_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Results Discarded At"
+          },
+          "run_number": {
+            "title": "Run Number",
+            "type": "integer"
+          },
+          "script_snapshot": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Script Snapshot"
+          },
+          "solve_options": {
+            "$ref": "#/components/schemas/SolveOptions"
+          },
+          "solve_path": {
+            "anyOf": [
+              {
+                "enum": [
+                  "full-3d",
+                  "axisymmetric-meridian"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Solve Path"
+          },
+          "solve_wall_time_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Solve Wall Time Seconds"
+          },
+          "stage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stage"
+          },
+          "stage_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stage Message"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "enum": [
+              "queued",
+              "running",
+              "complete",
+              "error",
+              "cancelled"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "symmetry": {
+            "additionalProperties": true,
+            "title": "Symmetry",
+            "type": "object"
+          },
+          "unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unavailable Reason"
+          }
+        },
+        "required": [
+          "id",
+          "run_number",
+          "parent_job_id",
+          "status",
+          "progress",
+          "created_at",
+          "queued_at",
+          "config_summary",
+          "solve_options",
+          "has_results",
+          "has_mesh_artifact",
+          "cancellation_requested",
+          "design_revision",
+          "polar_grid",
+          "exported_files",
+          "auto_export_formats",
+          "log_tail"
+        ],
+        "title": "JobItem",
+        "type": "object"
+      },
+      "JobListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/JobItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "JobListResponse",
+        "type": "object"
+      },
+      "JobMetadataPatch": {
+        "additionalProperties": false,
+        "description": "V1 task metadata retained by ``server/api/routes_simulation.py:253-277``.",
+        "properties": {
+          "archived_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived At"
+          },
+          "auto_export_completed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auto Export Completed At"
+          },
+          "auto_export_formats": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auto Export Formats"
+          },
+          "exported_files": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exported Files"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "mesh_artifact_file": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mesh Artifact File"
+          },
+          "rating": {
+            "anyOf": [
+              {
+                "maximum": 5.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rating"
+          },
+          "raw_results_file": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Raw Results File"
+          },
+          "script_snapshot": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Script Snapshot"
+          }
+        },
+        "title": "JobMetadataPatch",
+        "type": "object"
+      },
+      "JobStatusResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "archived_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived At"
+          },
+          "auto_export_completed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auto Export Completed At"
+          },
+          "auto_export_formats": {
+            "additionalProperties": true,
+            "title": "Auto Export Formats",
+            "type": "object"
+          },
+          "axisymmetric_eligibility_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Axisymmetric Eligibility Reasons",
+            "type": "array"
+          },
+          "cad_source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CadSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cancellation_requested": {
+            "title": "Cancellation Requested",
+            "type": "boolean"
+          },
+          "client_metadata": {
+            "additionalProperties": true,
+            "title": "Client Metadata",
+            "type": "object"
+          },
+          "client_request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Request Id"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "config_summary": {
+            "additionalProperties": true,
+            "title": "Config Summary",
+            "type": "object"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "design_availability": {
+            "$ref": "#/components/schemas/DesignAvailability"
+          },
+          "design_revision": {
+            "title": "Design Revision",
+            "type": "integer"
+          },
+          "error_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Message"
+          },
+          "exported_files": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Exported Files",
+            "type": "array"
+          },
+          "field_plane_available": {
+            "default": false,
+            "title": "Field Plane Available",
+            "type": "boolean"
+          },
+          "field_trace_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Field Trace Bytes"
+          },
+          "has_mesh_artifact": {
+            "title": "Has Mesh Artifact",
+            "type": "boolean"
+          },
+          "has_radiation_impedance_artifact": {
+            "default": false,
+            "title": "Has Radiation Impedance Artifact",
+            "type": "boolean"
+          },
+          "has_results": {
+            "title": "Has Results",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "log_tail": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Log Tail",
+            "type": "array"
+          },
+          "mesh_artifact_file": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mesh Artifact File"
+          },
+          "mesh_discarded_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mesh Discarded At"
+          },
+          "mesh_stats": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mesh Stats"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "parent_job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Job Id"
+          },
+          "persistence_warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Persistence Warnings",
+            "type": "array"
+          },
+          "polar_grid": {
+            "additionalProperties": true,
+            "title": "Polar Grid",
+            "type": "object"
+          },
+          "progress": {
+            "title": "Progress",
+            "type": "number"
+          },
+          "queued_at": {
+            "title": "Queued At",
+            "type": "string"
+          },
+          "radiation_impedance_artifact_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Radiation Impedance Artifact Bytes"
+          },
+          "rating": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rating"
+          },
+          "raw_results_file": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Raw Results File"
+          },
+          "results_discarded_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Results Discarded At"
+          },
+          "run_number": {
+            "title": "Run Number",
+            "type": "integer"
+          },
+          "script_snapshot": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Script Snapshot"
+          },
+          "solve_options": {
+            "$ref": "#/components/schemas/SolveOptions"
+          },
+          "solve_path": {
+            "anyOf": [
+              {
+                "enum": [
+                  "full-3d",
+                  "axisymmetric-meridian"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Solve Path"
+          },
+          "solve_wall_time_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Solve Wall Time Seconds"
+          },
+          "stage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stage"
+          },
+          "stage_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stage Message"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "enum": [
+              "queued",
+              "running",
+              "complete",
+              "error",
+              "cancelled"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "symmetry": {
+            "additionalProperties": true,
+            "title": "Symmetry",
+            "type": "object"
+          },
+          "unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unavailable Reason"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "run_number",
+          "parent_job_id",
+          "status",
+          "progress",
+          "created_at",
+          "queued_at",
+          "config_summary",
+          "solve_options",
+          "has_results",
+          "has_mesh_artifact",
+          "cancellation_requested",
+          "design_revision",
+          "polar_grid",
+          "exported_files",
+          "auto_export_formats",
+          "log_tail",
+          "updated_at"
+        ],
+        "title": "JobStatusResponse",
+        "type": "object"
+      },
+      "MeshConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "allow_large_mesh": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "angular_segments": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "aperture_resolution_scale": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "corner_segments": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "length_segments": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_edge": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_triangles": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mouth_resolution": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "quadrants": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rear_resolution": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sampling_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sampling Mode"
+          },
+          "throat_resolution": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "throat_segments": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "throat_slice_density": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "vertical_offset": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "wall_thickness": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "z_map_points": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Z Map Points"
+          }
+        },
+        "title": "MeshConfig",
+        "type": "object"
+      },
+      "MetadataResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "const": "ok",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "MetadataResponse",
+        "type": "object"
+      },
+      "MorphConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "allow_shrinkage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "corner_radius": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "fixed_part": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "target_exponent": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "target_height": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "target_shape": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "target_width": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "MorphConfig",
+        "type": "object"
+      },
+      "OSSEConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "L": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "a": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "a0": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "circ_arc_radius": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "circ_arc_term_angle": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "coverage_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverage Mode"
+          },
+          "enclosure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EnclosureConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "extra_blocks": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ConfigBlock"
+            },
+            "title": "Extra Blocks",
+            "type": "object"
+          },
+          "extra_keys": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Extra Keys",
+            "type": "object"
+          },
+          "formula": {
+            "const": "OSSE",
+            "title": "Formula",
+            "type": "string"
+          },
+          "guiding_curve": {
+            "$ref": "#/components/schemas/GuidingCurveConfig"
+          },
+          "h": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "k": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "length_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "profile",
+                  "total"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Length Mode"
+          },
+          "mesh": {
+            "$ref": "#/components/schemas/MeshConfig"
+          },
+          "morph": {
+            "$ref": "#/components/schemas/MorphConfig"
+          },
+          "n": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "output": {
+            "$ref": "#/components/schemas/OutputConfig"
+          },
+          "q": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "r0": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rotation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "s": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "scale": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "simulation": {
+            "$ref": "#/components/schemas/SimulationConfig"
+          },
+          "slot_length": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "$ref": "#/components/schemas/SourceConfig"
+          },
+          "throat_ext_angle": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "throat_ext_length": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "throat_profile": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "formula"
+        ],
+        "title": "OSSEConfig",
+        "type": "object"
+      },
+      "OnshapeReturnRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "designId": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Designid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "designId"
+        ],
+        "title": "OnshapeReturnRequest",
+        "type": "object"
+      },
+      "OnshapeSendRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "allowPublic": {
+            "default": false,
+            "title": "Allowpublic",
+            "type": "boolean"
+          },
+          "baseName": {
+            "default": "waveguide",
+            "maxLength": 240,
+            "title": "Basename",
+            "type": "string"
+          },
+          "buildMode": {
+            "default": "import",
+            "enum": [
+              "import",
+              "native"
+            ],
+            "title": "Buildmode",
+            "type": "string"
+          },
+          "design": {
+            "$ref": "#/components/schemas/DesignConfig"
+          },
+          "designRevision": {
+            "minimum": 0.0,
+            "title": "Designrevision",
+            "type": "integer"
+          },
+          "identity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SaveIdentity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "design",
+          "designRevision"
+        ],
+        "title": "OnshapeSendRequest",
+        "type": "object"
+      },
+      "OnshapeStatusRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "design": {
+            "$ref": "#/components/schemas/DesignConfig"
+          },
+          "identity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SaveIdentity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "design"
+        ],
+        "title": "OnshapeStatusRequest",
+        "type": "object"
+      },
+      "OnshapeUnlinkRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "designId": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Designid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "designId"
+        ],
+        "title": "OnshapeUnlinkRequest",
+        "type": "object"
+      },
+      "OutputConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "msh": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stl": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "OutputConfig",
+        "type": "object"
+      },
+      "ParametricGeometrySource": {
+        "additionalProperties": false,
+        "properties": {
+          "design": {
+            "$ref": "#/components/schemas/DesignConfig"
+          },
+          "design_revision": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Design Revision",
+            "type": "integer"
+          },
+          "design_snapshot": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DesignSnapshot"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "type": {
+            "const": "parametric",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "design"
+        ],
+        "title": "ParametricGeometrySource",
+        "type": "object"
+      },
+      "PolarConfig": {
+        "additionalProperties": false,
+        "description": "Directivity observation contract shared by every solve engine.",
+        "properties": {
+          "angle_range": {
+            "default": [
+              0.0,
+              180.0,
+              37
+            ],
+            "maxItems": 3,
+            "minItems": 3,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "title": "Angle Range",
+            "type": "array"
+          },
+          "angle_step": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Angle Step"
+          },
+          "distance": {
+            "default": 2.0,
+            "minimum": 0.1,
+            "title": "Distance",
+            "type": "number"
+          },
+          "enabled_axes": {
+            "items": {
+              "enum": [
+                "horizontal",
+                "vertical",
+                "diagonal"
+              ],
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Enabled Axes",
+            "type": "array"
+          },
+          "field_plane": {
+            "default": true,
+            "title": "Field Plane",
+            "type": "boolean"
+          },
+          "inclination": {
+            "default": 45.0,
+            "title": "Inclination",
+            "type": "number"
+          },
+          "norm_angle": {
+            "default": 10.0,
+            "title": "Norm Angle",
+            "type": "number"
+          },
+          "observation_origin": {
+            "default": "mouth",
+            "enum": [
+              "mouth",
+              "throat"
+            ],
+            "title": "Observation Origin",
+            "type": "string"
+          },
+          "spherical_phi_count": {
+            "default": 72,
+            "maximum": 241.0,
+            "minimum": 8.0,
+            "title": "Spherical Phi Count",
+            "type": "integer"
+          },
+          "spherical_sampling": {
+            "default": false,
+            "title": "Spherical Sampling",
+            "type": "boolean"
+          },
+          "spherical_theta_count": {
+            "default": 37,
+            "maximum": 121.0,
+            "minimum": 5.0,
+            "title": "Spherical Theta Count",
+            "type": "integer"
+          }
+        },
+        "title": "PolarConfig",
+        "type": "object"
+      },
+      "ROSSEConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "R": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "a": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "a0": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "b": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "coverage_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverage Mode"
+          },
+          "enclosure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EnclosureConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "extra_blocks": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ConfigBlock"
+            },
+            "title": "Extra Blocks",
+            "type": "object"
+          },
+          "extra_keys": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Extra Keys",
+            "type": "object"
+          },
+          "formula": {
+            "const": "R-OSSE",
+            "title": "Formula",
+            "type": "string"
+          },
+          "k": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "length_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "profile",
+                  "total"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Length Mode"
+          },
+          "m": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mesh": {
+            "$ref": "#/components/schemas/MeshConfig"
+          },
+          "morph": {
+            "$ref": "#/components/schemas/MorphConfig"
+          },
+          "output": {
+            "$ref": "#/components/schemas/OutputConfig"
+          },
+          "q": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "r": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "r0": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "scale": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "simulation": {
+            "$ref": "#/components/schemas/SimulationConfig"
+          },
+          "slot_length": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "$ref": "#/components/schemas/SourceConfig"
+          },
+          "throat_ext_angle": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "throat_ext_length": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tmax": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "formula"
+        ],
+        "title": "ROSSEConfig",
+        "type": "object"
+      },
+      "SaveIdentity": {
+        "additionalProperties": false,
+        "description": "The optimistic-concurrency token sent back by an open editor.",
+        "properties": {
+          "baseEditVersion": {
+            "minimum": 1.0,
+            "title": "Baseeditversion",
+            "type": "integer"
+          },
+          "designId": {
+            "title": "Designid",
+            "type": "string"
+          },
+          "lineageId": {
+            "title": "Lineageid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "designId",
+          "lineageId",
+          "baseEditVersion"
+        ],
+        "title": "SaveIdentity",
+        "type": "object"
+      },
+      "SelectCadWorkspaceRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "SelectCadWorkspaceRequest",
+        "type": "object"
+      },
+      "SimulationConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "f1": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "f2": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "num_frequencies": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sim_type": {
+            "anyOf": [
+              {
+                "enum": [
+                  "freestanding",
+                  "infinite-baffle"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sim Type"
+          },
+          "solver_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "auto",
+                  "full_3d",
+                  "circsym"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Solver Mode"
+          }
+        },
+        "title": "SimulationConfig",
+        "type": "object"
+      },
+      "SolveAccepted": {
+        "additionalProperties": false,
+        "properties": {
+          "client_request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Request Id"
+          },
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id"
+        ],
+        "title": "SolveAccepted",
+        "type": "object"
+      },
+      "SolveCommandOutcome": {
+        "additionalProperties": false,
+        "properties": {
+          "commandId": {
+            "minLength": 1,
+            "title": "Commandid",
+            "type": "string"
+          },
+          "jobId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Jobid"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "state": {
+            "pattern": "^(accepted|refused|blocked)$",
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "commandId",
+          "state"
+        ],
+        "title": "SolveCommandOutcome",
+        "type": "object"
+      },
+      "SolveOptions": {
+        "additionalProperties": false,
+        "description": "Execution choices kept separate from the authoritative v2 design.",
+        "properties": {
+          "engine": {
+            "default": "auto",
+            "title": "Engine",
+            "type": "string"
+          },
+          "frequencies_hz": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frequencies Hz"
+          },
+          "frequency_range": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frequency Range"
+          },
+          "frequency_spacing": {
+            "default": "log",
+            "enum": [
+              "log",
+              "linear"
+            ],
+            "title": "Frequency Spacing",
+            "type": "string"
+          },
+          "mesh_validation_mode": {
+            "default": "warn",
+            "enum": [
+              "warn",
+              "strict",
+              "off"
+            ],
+            "title": "Mesh Validation Mode",
+            "type": "string"
+          },
+          "num_frequencies": {
+            "anyOf": [
+              {
+                "maximum": 401.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Num Frequencies"
+          },
+          "polar_config": {
+            "$ref": "#/components/schemas/PolarConfig"
+          },
+          "stage_delay_ms": {
+            "default": 30,
+            "maximum": 2000.0,
+            "minimum": 0.0,
+            "title": "Stage Delay Ms",
+            "type": "integer"
+          },
+          "symmetry": {
+            "default": "auto",
+            "title": "Symmetry",
+            "type": "string"
+          },
+          "verbose": {
+            "default": false,
+            "title": "Verbose",
+            "type": "boolean"
+          }
+        },
+        "title": "SolveOptions",
+        "type": "object"
+      },
+      "SolveRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "client_metadata": {
+            "additionalProperties": true,
+            "title": "Client Metadata",
+            "type": "object"
+          },
+          "client_request_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Request Id"
+          },
+          "geometry": {
+            "discriminator": {
+              "mapping": {
+                "imported": "#/components/schemas/ImportedGeometrySource",
+                "parametric": "#/components/schemas/ParametricGeometrySource"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ParametricGeometrySource"
+              },
+              {
+                "$ref": "#/components/schemas/ImportedGeometrySource"
+              }
+            ],
+            "title": "Geometry"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "options": {
+            "$ref": "#/components/schemas/SolveOptions"
+          },
+          "parent_job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Job Id"
+          }
+        },
+        "required": [
+          "geometry"
+        ],
+        "title": "SolveRequest",
+        "type": "object"
+      },
+      "SourceConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "contours": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contours"
+          },
+          "curvature": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "radius": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "shape": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "velocity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Expr"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "velocity_convention": {
+            "anyOf": [
+              {
+                "enum": [
+                  "normal",
+                  "axial",
+                  "legacy"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Velocity Convention"
+          }
+        },
+        "title": "SourceConfig",
+        "type": "object"
+      },
+      "StopResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "cancelled",
+              "cancelling"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message",
+          "status"
+        ],
+        "title": "StopResponse",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      },
+      "WgLinkExportRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "baseName": {
+            "default": "waveguide",
+            "maxLength": 240,
+            "title": "Basename",
+            "type": "string"
+          },
+          "design": {
+            "$ref": "#/components/schemas/DesignConfig"
+          },
+          "designRevision": {
+            "minimum": 0.0,
+            "title": "Designrevision",
+            "type": "integer"
+          },
+          "expectedFusionDocumentId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expectedfusiondocumentid"
+          },
+          "expectedFusionReturnStateHash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expectedfusionreturnstatehash"
+          },
+          "identity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SaveIdentity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "modelName": {
+            "default": "MWG Horn",
+            "maxLength": 240,
+            "title": "Modelname",
+            "type": "string"
+          }
+        },
+        "required": [
+          "design",
+          "designRevision"
+        ],
+        "title": "WgLinkExportRequest",
+        "type": "object"
+      },
+      "WriteExportRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "existing": {
+            "default": "reject",
+            "enum": [
+              "reject",
+              "merge_identical",
+              "overwrite"
+            ],
+            "title": "Existing",
+            "type": "string"
+          },
+          "members": {
+            "items": {
+              "$ref": "#/components/schemas/ExportMember"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Members",
+            "type": "array"
+          },
+          "subdirectory": {
+            "minLength": 1,
+            "title": "Subdirectory",
+            "type": "string"
+          }
+        },
+        "required": [
+          "subdirectory",
+          "members"
+        ],
+        "title": "WriteExportRequest",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "Waveguide Generator",
+    "version": "0.2.3"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/cad-workspace/capture-document": {
+      "post": {
+        "operationId": "cad_workspace_capture_document_api_cad_workspace_capture_document_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CaptureDocumentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Cad Workspace Capture Document Api Cad Workspace Capture Document Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cad Workspace Capture Document",
+        "tags": [
+          "cadlink"
+        ]
+      }
+    },
+    "/api/cad-workspace/open": {
+      "post": {
+        "operationId": "cad_workspace_open_api_cad_workspace_open_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Cad Workspace Open Api Cad Workspace Open Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Cad Workspace Open",
+        "tags": [
+          "cadlink"
+        ]
+      }
+    },
+    "/api/cad-workspace/path": {
+      "get": {
+        "operationId": "cad_workspace_path_api_cad_workspace_path_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Cad Workspace Path Api Cad Workspace Path Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Cad Workspace Path",
+        "tags": [
+          "cadlink"
+        ]
+      }
+    },
+    "/api/cad-workspace/select": {
+      "post": {
+        "operationId": "cad_workspace_select_api_cad_workspace_select_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/SelectCadWorkspaceRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Cad Workspace Select Api Cad Workspace Select Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cad Workspace Select",
+        "tags": [
+          "cadlink"
+        ]
+      }
+    },
+    "/api/cadlink/fusion-status": {
+      "post": {
+        "description": "Report whether the design on screen is open and current in Fusion.",
+        "operationId": "fusion_status_api_cadlink_fusion_status_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FusionStatusRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Fusion Status Api Cadlink Fusion Status Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fusion Status",
+        "tags": [
+          "cadlink"
+        ]
+      }
+    },
+    "/api/cadlink/ingest": {
+      "post": {
+        "operationId": "post_ingest_api_cadlink_ingest_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CadReturnIngestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Ingest Api Cadlink Ingest Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Post Ingest",
+        "tags": [
+          "cadlink"
+        ]
+      }
+    },
+    "/api/cadlink/ingest/{ingest_id}": {
+      "get": {
+        "operationId": "get_ingest_api_cadlink_ingest__ingest_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ingest_id",
+            "required": true,
+            "schema": {
+              "title": "Ingest Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Ingest Api Cadlink Ingest  Ingest Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Ingest",
+        "tags": [
+          "cadlink"
+        ]
+      }
+    },
+    "/api/cadlink/ingest/{ingest_id}/mesh": {
+      "get": {
+        "description": "Serve the exact ingested solve mesh for diagnostics and fallback.",
+        "operationId": "get_ingest_mesh_api_cadlink_ingest__ingest_id__mesh_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ingest_id",
+            "required": true,
+            "schema": {
+              "title": "Ingest Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Ingest Mesh",
+        "tags": [
+          "cadlink"
+        ]
+      }
+    },
+    "/api/cadlink/ingest/{ingest_id}/viewport-mesh": {
+      "get": {
+        "description": "Serve the independently tessellated full-domain CAD display artifact.",
+        "operationId": "get_ingest_viewport_mesh_api_cadlink_ingest__ingest_id__viewport_mesh_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "ingest_id",
+            "required": true,
+            "schema": {
+              "title": "Ingest Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Ingest Viewport Mesh",
+        "tags": [
+          "cadlink"
+        ]
+      }
+    },
+    "/api/cadlink/onshape/connection": {
+      "get": {
+        "description": "Identify the account the key pair authenticates as, and its plan.\n\nCached, because this is the only route that spends rate limit on something\nthe user did not explicitly ask for.",
+        "operationId": "connection_api_cadlink_onshape_connection_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "refresh",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Refresh",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Connection Api Cadlink Onshape Connection Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Connection",
+        "tags": [
+          "cadlink"
+        ]
+      }
+    },
+    "/api/cadlink/onshape/return": {
+      "post": {
+        "description": "Export the linked Part Studio, create wgreturn 1.1, and ingest it.",
+        "operationId": "return_to_wg_api_cadlink_onshape_return_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OnshapeReturnRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Return To Wg Api Cadlink Onshape Return Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Return To Wg",
+        "tags": [
+          "cadlink"
+        ]
+      }
+    },
+    "/api/cadlink/onshape/send": {
+      "post": {
+        "description": "Export the design as a wglink bundle and materialise it in Onshape.",
+        "operationId": "send_api_cadlink_onshape_send_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 240,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OnshapeSendRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Send Api Cadlink Onshape Send Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Send",
+        "tags": [
+          "cadlink"
+        ]
+      }
+    },
+    "/api/cadlink/onshape/status": {
+      "post": {
+        "description": "Decide linked / current / stale for the design on screen. No network.",
+        "operationId": "status_api_cadlink_onshape_status_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OnshapeStatusRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Status Api Cadlink Onshape Status Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Status",
+        "tags": [
+          "cadlink"
+        ]
+      }
+    },
+    "/api/cadlink/onshape/unlink": {
+      "post": {
+        "description": "Forget a link. The Onshape document is left exactly as it is.",
+        "operationId": "unlink_api_cadlink_onshape_unlink_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OnshapeUnlinkRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Unlink Api Cadlink Onshape Unlink Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Unlink",
+        "tags": [
+          "cadlink"
+        ]
+      }
+    },
+    "/api/cadlink/request-fusion-return": {
+      "post": {
+        "description": "Ask the connected add-in to export the active Fusion document to WG.",
+        "operationId": "request_fusion_return_api_cadlink_request_fusion_return_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FusionReturnRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Request Fusion Return Api Cadlink Request Fusion Return Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Request Fusion Return",
+        "tags": [
+          "cadlink"
+        ]
+      }
+    },
+    "/api/cadlink/returns": {
+      "get": {
+        "operationId": "list_returns_api_cadlink_returns_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Returns Api Cadlink Returns Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Returns",
+        "tags": [
+          "cadlink"
+        ]
+      }
+    },
+    "/api/cadlink/solve-command": {
+      "get": {
+        "operationId": "get_solve_command_api_cadlink_solve_command_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Solve Command Api Cadlink Solve Command Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Solve Command",
+        "tags": [
+          "cadlink"
+        ]
+      }
+    },
+    "/api/cadlink/solve-command/outcome": {
+      "post": {
+        "description": "Record what happened to a CAD solve command and retire its marker.\n\nOnly terminal outcomes are recorded. A blocked command keeps its marker so\nthe user can satisfy the gate and run the same request.",
+        "operationId": "post_solve_command_outcome_api_cadlink_solve_command_outcome_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SolveCommandOutcome"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Post Solve Command Outcome Api Cadlink Solve Command Outcome Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Post Solve Command Outcome",
+        "tags": [
+          "cadlink"
+        ]
+      }
+    },
+    "/api/capabilities": {
+      "get": {
+        "operationId": "capabilities_api_capabilities_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Capabilities Api Capabilities Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Capabilities"
+      }
+    },
+    "/api/design/import-report": {
+      "post": {
+        "operationId": "import_report_endpoint_api_design_import_report_post",
+        "requestBody": {
+          "content": {
+            "text/plain": {
+              "schema": {
+                "title": "Text",
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Import Report Endpoint Api Design Import Report Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Import Report Endpoint",
+        "tags": [
+          "design-io"
+        ]
+      }
+    },
+    "/api/design/open": {
+      "post": {
+        "operationId": "open_endpoint_api_design_open_post",
+        "requestBody": {
+          "content": {
+            "text/plain": {
+              "schema": {
+                "title": "Text",
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Open Endpoint Api Design Open Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Open Endpoint",
+        "tags": [
+          "design-io"
+        ]
+      }
+    },
+    "/api/design/save": {
+      "post": {
+        "operationId": "save_endpoint_api_design_save_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Save Endpoint Api Design Save Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Save Endpoint",
+        "tags": [
+          "design-io"
+        ]
+      }
+    },
+    "/api/design/serialize": {
+      "post": {
+        "operationId": "serialize_endpoint_api_design_serialize_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Serialize Endpoint Api Design Serialize Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Serialize Endpoint",
+        "tags": [
+          "design-io"
+        ]
+      }
+    },
+    "/api/design/symmetry": {
+      "post": {
+        "operationId": "design_symmetry_api_design_symmetry_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DesignConfig"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Design Symmetry Api Design Symmetry Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Design Symmetry"
+      }
+    },
+    "/api/export/profiles": {
+      "post": {
+        "operationId": "export_profiles_api_export_profiles_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "default": "profiles",
+              "enum": [
+                "profiles",
+                "slices"
+              ],
+              "title": "Kind",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export Profiles",
+        "tags": [
+          "exports"
+        ]
+      }
+    },
+    "/api/export/step": {
+      "post": {
+        "description": "Export STEP. ``solid`` is the manufacturable part; ``surface`` the bore.",
+        "operationId": "export_step_api_export_step_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "body",
+            "required": false,
+            "schema": {
+              "default": "solid",
+              "enum": [
+                "solid",
+                "surface"
+              ],
+              "title": "Body",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export Step",
+        "tags": [
+          "exports"
+        ]
+      }
+    },
+    "/api/export/stl": {
+      "post": {
+        "operationId": "export_stl_api_export_stl_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export Stl",
+        "tags": [
+          "exports"
+        ]
+      }
+    },
+    "/api/export/wglink": {
+      "post": {
+        "description": "Write an identity-bearing CAD-link bundle into the selected workspace.",
+        "operationId": "export_wglink_api_export_wglink_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 240,
+              "minLength": 1,
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WgLinkExportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Export Wglink Api Export Wglink Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export Wglink",
+        "tags": [
+          "exports"
+        ]
+      }
+    },
+    "/api/integration/v1/design-schema": {
+      "get": {
+        "operationId": "design_schema_api_integration_v1_design_schema_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Design Schema"
+      }
+    },
+    "/api/integration/v1/parameters": {
+      "get": {
+        "operationId": "parameter_catalog_api_integration_v1_parameters_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Parameter Catalog"
+      }
+    },
+    "/api/jobs": {
+      "get": {
+        "operationId": "list_jobs_api_jobs_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Jobs"
+      }
+    },
+    "/api/jobs/clear-failed": {
+      "delete": {
+        "operationId": "clear_failed_api_jobs_clear_failed_delete",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClearFailedResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Clear Failed"
+      }
+    },
+    "/api/jobs/{job_id}": {
+      "delete": {
+        "operationId": "delete_job_api_jobs__job_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Job"
+      }
+    },
+    "/api/jobs/{job_id}/log": {
+      "get": {
+        "operationId": "job_log_api_jobs__job_id__log_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Job Log"
+      }
+    },
+    "/api/jobs/{job_id}/metadata": {
+      "patch": {
+        "operationId": "patch_job_metadata_api_jobs__job_id__metadata_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JobMetadataPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetadataResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Patch Job Metadata"
+      }
+    },
+    "/api/jobs/{job_id}/retry": {
+      "post": {
+        "operationId": "retry_job_api_jobs__job_id__retry_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SolveAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Retry Job"
+      }
+    },
+    "/api/mesh-artifact/{job_id}": {
+      "get": {
+        "operationId": "mesh_artifact_api_mesh_artifact__job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Mesh Artifact"
+      }
+    },
+    "/api/partial-results/{job_id}": {
+      "get": {
+        "description": "Process-local correctness path for a dropped live-result delta.",
+        "operationId": "partial_job_results_api_partial_results__job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Partial Job Results"
+      }
+    },
+    "/api/radiation-impedance/{job_id}": {
+      "get": {
+        "operationId": "radiation_impedance_artifact_api_radiation_impedance__job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Radiation Impedance Artifact"
+      }
+    },
+    "/api/render-charts": {
+      "post": {
+        "operationId": "render_charts_api_render_charts_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChartsRenderRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Render Charts Api Render Charts Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Render Charts",
+        "tags": [
+          "chart-export"
+        ]
+      }
+    },
+    "/api/render-directivity": {
+      "post": {
+        "operationId": "render_directivity_api_render_directivity_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DirectivityRenderRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Render Directivity Api Render Directivity Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Render Directivity",
+        "tags": [
+          "chart-export"
+        ]
+      }
+    },
+    "/api/results/{job_id}": {
+      "get": {
+        "operationId": "job_results_api_results__job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Job Results"
+      }
+    },
+    "/api/results/{job_id}/combine": {
+      "post": {
+        "description": "Recompute the combined channel from stored bases without re-solving.",
+        "operationId": "recombine_job_results_api_results__job_id__combine_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChannelCombineSpec"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Recombine Job Results"
+      }
+    },
+    "/api/results/{job_id}/field-plane": {
+      "post": {
+        "description": "Evaluate one exterior complex-pressure grid from retained traces.",
+        "operationId": "field_plane_api_results__job_id__field_plane_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FieldPlaneRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Field Plane"
+      }
+    },
+    "/api/settings": {
+      "get": {
+        "operationId": "read_settings_api_settings_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Read Settings Api Settings Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Read Settings",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/api/settings/{namespace}": {
+      "delete": {
+        "operationId": "delete_namespace_api_settings__namespace__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "title": "Namespace",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Delete Namespace Api Settings  Namespace  Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Namespace",
+        "tags": [
+          "settings"
+        ]
+      },
+      "put": {
+        "operationId": "write_namespace_api_settings__namespace__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "title": "Namespace",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Value"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Write Namespace Api Settings  Namespace  Put",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Write Namespace",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/api/solve": {
+      "post": {
+        "operationId": "submit_solve_api_solve_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SolveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SolveAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Solve request refused"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Engine unavailable"
+          }
+        },
+        "summary": "Submit Solve"
+      }
+    },
+    "/api/status/{job_id}": {
+      "get": {
+        "operationId": "job_status_api_status__job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Job Status"
+      }
+    },
+    "/api/stop/{job_id}": {
+      "post": {
+        "operationId": "stop_job_api_stop__job_id__post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StopResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stop Job"
+      }
+    },
+    "/api/theme-preview": {
+      "get": {
+        "operationId": "theme_preview_api_theme_preview_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "theme",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Theme"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Theme Preview Api Theme Preview Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Theme Preview",
+        "tags": [
+          "chart-export"
+        ]
+      }
+    },
+    "/api/themes": {
+      "get": {
+        "operationId": "themes_api_themes_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Themes Api Themes Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Themes",
+        "tags": [
+          "chart-export"
+        ]
+      }
+    },
+    "/api/updates/install": {
+      "post": {
+        "operationId": "install_update_api_updates_install_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-WG-Update",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Wg-Update"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Install Update Api Updates Install Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Install Update"
+      }
+    },
+    "/api/updates/status": {
+      "get": {
+        "operationId": "update_status_api_updates_status_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "refresh",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Refresh",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Update Status Api Updates Status Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Status"
+      }
+    },
+    "/api/workspace/open": {
+      "post": {
+        "operationId": "workspace_open_api_workspace_open_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Workspace Open Api Workspace Open Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Workspace Open",
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
+    "/api/workspace/path": {
+      "get": {
+        "operationId": "workspace_path_api_workspace_path_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Workspace Path Api Workspace Path Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Workspace Path",
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
+    "/api/workspace/select": {
+      "post": {
+        "operationId": "workspace_select_api_workspace_select_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Workspace Select Api Workspace Select Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Workspace Select",
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
+    "/api/workspace/write-export": {
+      "post": {
+        "operationId": "workspace_write_export_api_workspace_write_export_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WriteExportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Workspace Write Export Api Workspace Write Export Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Workspace Write Export",
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
+    "/health": {
+      "get": {
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Health Health Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health"
+      }
+    }
+  }
+}

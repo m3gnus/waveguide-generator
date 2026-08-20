@@ -15,8 +15,8 @@ def _request(**changes: object) -> SolveRequest:
     payload: dict[str, object] = {
         "design": {"formula": "OSSE", "L": 120, "a": 40},
         "options": {"engine": "metal", "frequencies_hz": [500.0]},
-        "client_request_id": "hes-so-candidate-17",
-        "client_metadata": {"campaign": "osse-target-a", "generation": 2},
+        "client_request_id": "hes-so-evaluation-17",
+        "client_metadata": {"study": "osse-target-a", "iteration": 2},
     }
     payload.update(changes)
     return SolveRequest.model_validate(payload)
@@ -31,10 +31,10 @@ def test_parametric_result_has_stable_identity_and_provenance() -> None:
     assert first["result_kind"] == "parametric"
     assert first["result_contract_version"] == 1
     assert first["metadata"]["result_contract_version"] == 1
-    assert first["client_request_id"] == "hes-so-candidate-17"
+    assert first["client_request_id"] == "hes-so-evaluation-17"
     assert first["client_metadata"] == {
-        "campaign": "osse-target-a",
-        "generation": 2,
+        "study": "osse-target-a",
+        "iteration": 2,
     }
     provenance = first["provenance"]
     assert provenance["schema_version"] == 1
