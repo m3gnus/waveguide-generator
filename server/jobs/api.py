@@ -4,15 +4,17 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Collection
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, FastAPI, HTTPException, Query, WebSocket
-from fastapi.responses import PlainTextResponse, Response
+from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from server.jobs.events import CLOSE_ORIGIN_REJECTED, JobsProtocol
+from server.integration.contracts import ErrorEnvelope, error_envelope
 from server.jobs.models import (
     ChannelCombineSpec,
     ClearFailedResponse,
@@ -80,6 +82,29 @@ class _FastAPIJobsTransport:
             await self.websocket.close(code=code)
 
 
+def _error_response(
+    status_code: int,
+    *,
+    code: str,
+    stage: str,
+    message: str,
+    retryable: bool = False,
+    details: dict[str, Any] | None = None,
+    client_request_id: str | None = None,
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content=error_envelope(
+            code=code,
+            stage=stage,
+            message=message,
+            retryable=retryable,
+            details=details,
+            client_request_id=client_request_id,
+        ),
+    )
+
+
 def create_jobs_router(
     runtime: JobRuntime, *, extra_ws_origins: Collection[str] = ()
 ) -> APIRouter:
@@ -96,14 +121,47 @@ def create_jobs_router(
         "/api/solve",
         response_model=SolveAccepted,
         response_model_exclude_none=True,
+        responses={
+            422: {"model": ErrorEnvelope, "description": "Solve request refused"},
+            503: {"model": ErrorEnvelope, "description": "Engine unavailable"},
+        },
     )
-    async def submit_solve(body: SolveRequest) -> SolveAccepted:
+    async def submit_solve(body: SolveRequest) -> SolveAccepted | JSONResponse:
         try:
             job_id = await runtime.submit(body)
-        except (UnknownEngineError, SymmetryValidationError, ImportedSolveRefusal) as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except UnknownEngineError as exc:
+            return _error_response(
+                422,
+                code="unknown_engine",
+                stage="submission",
+                message=str(exc),
+                client_request_id=body.client_request_id,
+            )
+        except SymmetryValidationError as exc:
+            return _error_response(
+                422,
+                code="invalid_symmetry",
+                stage="submission",
+                message=str(exc),
+                client_request_id=body.client_request_id,
+            )
+        except ImportedSolveRefusal as exc:
+            return _error_response(
+                422,
+                code=exc.reason_code,
+                stage="submission",
+                message=str(exc),
+                details=exc.details,
+                client_request_id=body.client_request_id,
+            )
         except EngineUnavailableError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
+            return _error_response(
+                503,
+                code="engine_unavailable",
+                stage="submission",
+                message=str(exc),
+                client_request_id=body.client_request_id,
+            )
         return SolveAccepted(
             job_id=job_id,
             client_request_id=body.client_request_id,
@@ -149,9 +207,15 @@ def create_jobs_router(
         # walks of the data on the event loop before json.dumps does a third.
         # The database already holds exactly the bytes the client wants.
         try:
+            content = await runtime.get_results_text(job_id)
+            digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
             return Response(
-                content=await runtime.get_results_text(job_id),
+                content=content,
                 media_type="application/json",
+                headers={
+                    "ETag": f'"sha256:{digest}"',
+                    "X-WG-Results-SHA256": digest,
+                },
             )
         except JobNotFoundError as exc:
             raise HTTPException(status_code=404, detail="Job not found") from exc
