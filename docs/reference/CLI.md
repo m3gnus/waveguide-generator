@@ -42,7 +42,10 @@ creating a durable job.
 `--json-events` stream Jobs Protocol v1 records followed by exactly one terminal
 `kind: "outcome"`, `schema_version: 1` record. The outcome status is `complete`,
 `refused`, `failed`, `cancelled`, or `interrupted`; failures carry the same structured
-error shape as the HTTP adapter.
+error shape as the HTTP adapter. On success, `result_sha256` identifies the exact
+stored result bytes returned by the HTTP results endpoint whether or not `--output`
+was requested. When output was written, `artifacts` separately reports each file's
+exact-byte SHA-256 (excluding the self-describing `summary.json`).
 
 Process exits are:
 
@@ -50,7 +53,7 @@ Process exits are:
 |---|---|
 | `0` | validation or solve completed successfully |
 | `1` | input refusal, unavailable engine, solve failure, or output failure |
-| `2` | the selected application data directory is owned by another WG runtime |
+| `2` | command-line usage error, or the selected application data directory is owned by another WG runtime |
 | `130` | interrupted by SIGINT after cooperative cancellation began |
 
 ## Solve output
@@ -61,13 +64,25 @@ completed solve writes:
 | Artifact | Contract |
 |---|---|
 | `request.json` | canonical submitted `SolveRequest` |
+| `effective-request.json` | normalized request durably stored after AUTO resolution and backend defaults |
+| `execution-request.json` | request shape passed to the solver, including the resolved symmetry domain |
 | `results.json` | the versioned solver result contract |
 | `mesh.msh` | retained solver mesh, when available |
 | `job.log` | complete job log |
 | `summary.json` | schema version, timings, result identity, provenance, conventions, and SHA-256 digests |
 
-The result payload also contains request, geometry, and solve-options hashes. A caller
-can therefore cache or audit an evaluation without interpreting filenames.
+JSON and text artifacts are written as explicit UTF-8 bytes, so every digest is
+platform-independent and hashes exactly the file on disk. The artifact entries for
+the three request documents also carry `canonical_sha256`, which hashes the parsed JSON
+rather than its pretty-printed bytes. `summary.json.requestIdentity` names all three
+stages.
+
+Result provenance has `request_identity: "execution"`; its explicit `execution_*`
+hashes match `execution-request.json`, including symmetry-domain resolution. The
+explicit `effective_*` hashes match `effective-request.json`. The original unqualified
+hash names remain backward-compatible aliases for the execution hashes. A caller can
+cache or audit an evaluation without guessing whether AUTO, a backend default, or
+symmetry resolution changed the request.
 
 ## Scheduling boundary
 

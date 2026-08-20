@@ -16,6 +16,7 @@ def write_outcome(
     client_request_id: str | None = None,
     output_directory: str | None = None,
     result_sha256: str | None = None,
+    artifacts: dict[str, dict[str, str]] | None = None,
     error_code: str | None = None,
     error_stage: str | None = None,
     error_message: str | None = None,
@@ -38,6 +39,7 @@ def write_outcome(
         client_request_id=client_request_id,
         output_directory=output_directory,
         result_sha256=result_sha256,
+        artifacts=artifacts,
         error=error,
     )
     print(

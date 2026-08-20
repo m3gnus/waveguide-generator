@@ -19,6 +19,7 @@ from pydantic import ValidationError
 from server.design.conventions import artifact_conventions
 from server.design.textcfg import TextConfigError, parse
 from server.engines.registry import EngineRegistry
+from server.integration.provenance import canonical_json_sha256
 from server.jobs.events import JobsProtocol
 from server.jobs.runtime import (
     EngineUnavailableError,
@@ -204,6 +205,33 @@ def _sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def _json_artifact_bytes(value: Mapping[str, Any]) -> bytes:
+    return (
+        json.dumps(
+            value,
+            indent=2,
+            sort_keys=True,
+            allow_nan=False,
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+def _write_artifact(
+    path: Path,
+    content: bytes,
+    *,
+    canonical_sha256: str | None = None,
+) -> dict[str, str]:
+    """Write and hash the same bytes on every supported platform."""
+
+    path.write_bytes(content)
+    digest = {"sha256": hashlib.sha256(content).hexdigest()}
+    if canonical_sha256 is not None:
+        digest["canonical_sha256"] = canonical_sha256
+    return digest
+
+
 def _summary(
     job: Mapping[str, Any],
     *,
@@ -223,6 +251,16 @@ def _summary(
         "resultContractVersion": results.get("result_contract_version"),
         "provenance": results.get("provenance") or {},
         "artifacts": dict(artifacts),
+        "requestIdentity": {
+            "submittedSha256": artifacts["request.json"]["canonical_sha256"],
+            "effectiveSha256": artifacts["effective-request.json"][
+                "canonical_sha256"
+            ],
+            "executionSha256": artifacts["execution-request.json"][
+                "canonical_sha256"
+            ],
+            "provenanceScope": "execution",
+        },
         "conventions": artifact_conventions(),
         "timings": {
             "createdAt": job.get("created_at"),
@@ -243,50 +281,61 @@ async def _write_output(
     results: str,
     runtime: JobRuntime,
     job: Mapping[str, Any],
-    request: Any,
+    submitted_request: Any,
     stderr: TextIO,
 ) -> dict[str, Any]:
     output.mkdir(parents=True, exist_ok=False)
     job_id = str(job["id"])
-    results_content = results if results.endswith("\n") else results + "\n"
-    request_content = (
-        json.dumps(
-            request.model_dump(mode="json"),
-            indent=2,
-            sort_keys=True,
-            allow_nan=False,
-        )
-        + "\n"
-    )
-    (output / "results.json").write_text(
-        results_content,
-        encoding="utf-8",
-    )
-    (output / "request.json").write_text(request_content, encoding="utf-8")
+    effective_request = await runtime.get_effective_request(job_id)
+    execution_request = await runtime.get_execution_request(job_id)
+    submitted_wire = submitted_request.model_dump(mode="json")
+    effective_wire = effective_request.model_dump(mode="json")
+    execution_wire = execution_request.model_dump(mode="json")
     artifacts: dict[str, dict[str, Any]] = {
-        "results.json": {"sha256": _sha256_text(results_content)},
-        "request.json": {"sha256": _sha256_text(request_content)},
+        "results.json": _write_artifact(
+            output / "results.json",
+            results.encode("utf-8"),
+        ),
+        "request.json": _write_artifact(
+            output / "request.json",
+            _json_artifact_bytes(submitted_wire),
+            canonical_sha256=canonical_json_sha256(submitted_wire),
+        ),
+        "effective-request.json": _write_artifact(
+            output / "effective-request.json",
+            _json_artifact_bytes(effective_wire),
+            canonical_sha256=canonical_json_sha256(effective_wire),
+        ),
+        "execution-request.json": _write_artifact(
+            output / "execution-request.json",
+            _json_artifact_bytes(execution_wire),
+            canonical_sha256=canonical_json_sha256(execution_wire),
+        ),
     }
     try:
         mesh = await runtime.get_mesh_artifact(job_id)
     except JobResourceUnavailableError:
         print("Mesh artifact is unavailable; skipped mesh.msh.", file=stderr)
     else:
-        (output / "mesh.msh").write_text(mesh, encoding="utf-8")
-        artifacts["mesh.msh"] = {"sha256": _sha256_text(mesh)}
+        artifacts["mesh.msh"] = _write_artifact(
+            output / "mesh.msh",
+            mesh.encode("utf-8"),
+        )
     log_content = await runtime.get_log(job_id)
-    (output / "job.log").write_text(log_content, encoding="utf-8")
-    artifacts["job.log"] = {"sha256": _sha256_text(log_content)}
+    artifacts["job.log"] = _write_artifact(
+        output / "job.log",
+        log_content.encode("utf-8"),
+    )
     results_document = json.loads(results)
     summary = _summary(
         job,
-        request=request.model_dump(mode="json"),
+        request=submitted_wire,
         results=results_document,
         artifacts=artifacts,
     )
-    (output / "summary.json").write_text(
-        json.dumps(summary, indent=2, sort_keys=True, allow_nan=False) + "\n",
-        encoding="utf-8",
+    _write_artifact(
+        output / "summary.json",
+        _json_artifact_bytes(summary),
     )
     return summary
 
@@ -503,7 +552,7 @@ async def solve_path(
                     results=results,
                     runtime=runtime,
                     job=job,
-                    request=request,
+                    submitted_request=request,
                     stderr=stderr,
                 )
             except FileExistsError:
@@ -557,18 +606,21 @@ async def solve_path(
                 )
             return 1
         if ndjson:
-            result_sha256 = (
-                output_summary["artifacts"]["results.json"]["sha256"]
-                if output_summary is not None
-                else _sha256_text(results or "")
-            )
             write_outcome(
                 stdout,
                 status="complete",
                 job_id=job_id,
                 client_request_id=request.client_request_id,
                 output_directory=str(args.output) if args.output is not None else None,
-                result_sha256=result_sha256,
+                # This is always the exact stored/API response body. Output
+                # formatting and optional artifacts must not change result
+                # identity.
+                result_sha256=_sha256_text(results or ""),
+                artifacts=(
+                    output_summary["artifacts"]
+                    if output_summary is not None
+                    else None
+                ),
             )
         return 0
     finally:

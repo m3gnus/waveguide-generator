@@ -3,12 +3,13 @@
 from .contracts import (
     ERROR_CONTRACT_VERSION,
     PROVENANCE_CONTRACT_VERSION,
+    ArtifactDigest,
     CliOutcome,
     ErrorDetail,
     ErrorEnvelope,
     error_envelope,
 )
-from .provenance import enrich_result_contract
+from .provenance import canonical_json_sha256, enrich_result_contract
 
 
 def mount_integration(application):
@@ -21,9 +22,11 @@ def mount_integration(application):
 __all__ = [
     "ERROR_CONTRACT_VERSION",
     "PROVENANCE_CONTRACT_VERSION",
+    "ArtifactDigest",
     "CliOutcome",
     "ErrorDetail",
     "ErrorEnvelope",
+    "canonical_json_sha256",
     "enrich_result_contract",
     "error_envelope",
     "mount_integration",

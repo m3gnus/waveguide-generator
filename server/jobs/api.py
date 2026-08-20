@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Collection
+from collections.abc import Awaitable, Callable, Collection
 import hashlib
 import json
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, FastAPI, HTTPException, Query, WebSocket
+from fastapi import APIRouter, FastAPI, HTTPException, Query, Request, WebSocket
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
+from fastapi.routing import APIRoute
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from server.jobs.events import CLOSE_ORIGIN_REJECTED, JobsProtocol
@@ -56,6 +60,55 @@ from server.jobs.runtime import (
 from server.jobs.store import JobStore
 from server.engines.registry import EngineRegistry
 from server.platform.origin import websocket_request_allowed
+
+
+class ExtensibleResultModel(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+
+class ResultProvenance(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    schema_version: Literal[1]
+    wg_version: str
+    dependency_shas: dict[str, str]
+    request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    geometry_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    solve_options_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    request_identity: Literal["execution"]
+    execution_request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    execution_geometry_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    execution_solve_options_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    effective_request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    effective_geometry_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    effective_solve_options_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    resolved_engine: str
+
+
+class ParametricResultEnvelope(ExtensibleResultModel):
+    result_kind: Literal["parametric"]
+    result_contract_version: Literal[1]
+    client_request_id: str | None
+    client_metadata: dict[str, JsonValue]
+    provenance: ResultProvenance
+    metadata: dict[str, Any]
+
+
+class MultiChannelResultEnvelope(ExtensibleResultModel):
+    result_kind: Literal["multi_channel"]
+    result_contract_version: Literal[2]
+    client_request_id: str | None
+    client_metadata: dict[str, JsonValue]
+    provenance: ResultProvenance
+    metadata: dict[str, Any]
+    channels: dict[str, dict[str, Any]]
+    channel_order: list[str]
+
+
+ResultEnvelope = Annotated[
+    ParametricResultEnvelope | MultiChannelResultEnvelope,
+    Field(discriminator="result_kind"),
+]
 
 
 
@@ -105,6 +158,44 @@ def _error_response(
     )
 
 
+def _recover_client_request_id(body: Any) -> str | None:
+    """Recover only an identifier that independently satisfies its wire contract."""
+
+    if not isinstance(body, dict):
+        return None
+    value = body.get("client_request_id")
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    if not normalized or len(normalized) > 200:
+        return None
+    return normalized
+
+
+class _JobsContractRoute(APIRoute):
+    """Use the public error envelope for request parsing on ``/api/solve`` only."""
+
+    def get_route_handler(self) -> Callable[[Request], Awaitable[Response]]:
+        route_handler = super().get_route_handler()
+        if self.path != "/api/solve":
+            return route_handler
+
+        async def solve_contract_handler(request: Request) -> Response:
+            try:
+                return await route_handler(request)
+            except RequestValidationError as exc:
+                return _error_response(
+                    422,
+                    code="invalid_request",
+                    stage="input",
+                    message="Solve request body is invalid",
+                    details={"validation_errors": jsonable_encoder(exc.errors())},
+                    client_request_id=_recover_client_request_id(exc.body),
+                )
+
+        return solve_contract_handler
+
+
 def create_jobs_router(
     runtime: JobRuntime, *, extra_ws_origins: Collection[str] = ()
 ) -> APIRouter:
@@ -113,7 +204,7 @@ def create_jobs_router(
     Route coverage follows v1 ``server/api/routes_simulation.py:69-297``.
     """
 
-    router = APIRouter()
+    router = APIRouter(route_class=_JobsContractRoute)
     router.add_event_handler("startup", runtime.start)
     router.add_event_handler("shutdown", runtime.shutdown)
 
@@ -199,7 +290,28 @@ def create_jobs_router(
         except JobNotFoundError as exc:
             raise HTTPException(status_code=404, detail="Job not found") from exc
 
-    @router.get("/api/results/{job_id}", response_model=None)
+    @router.get(
+        "/api/results/{job_id}",
+        response_model=ResultEnvelope,
+        responses={
+            200: {
+                "description": "Versioned solver result",
+                "headers": {
+                    "ETag": {
+                        "description": "SHA-256 identity of the exact stored bytes",
+                        "schema": {"type": "string"},
+                    },
+                    "X-WG-Results-SHA256": {
+                        "description": "Hex SHA-256 of the exact stored bytes",
+                        "schema": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{64}$",
+                        },
+                    },
+                },
+            }
+        },
+    )
     async def job_results(job_id: str) -> Response:
         # Returned as a pre-encoded body on purpose. A dict return value makes
         # FastAPI validate the response against the annotation and then

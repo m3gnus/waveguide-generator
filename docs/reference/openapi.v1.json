@@ -133,6 +133,150 @@
         "title": "CaptureDocumentRequest",
         "type": "object"
       },
+      "CatalogCondition": {
+        "additionalProperties": false,
+        "properties": {
+          "conditions": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogCondition"
+            },
+            "title": "Conditions",
+            "type": "array"
+          },
+          "operator": {
+            "title": "Operator",
+            "type": "string"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Path"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "operator"
+        ],
+        "title": "CatalogCondition",
+        "type": "object"
+      },
+      "CatalogEditorBounds": {
+        "additionalProperties": false,
+        "properties": {
+          "maximum": {
+            "title": "Maximum",
+            "type": "number"
+          },
+          "minimum": {
+            "title": "Minimum",
+            "type": "number"
+          }
+        },
+        "required": [
+          "minimum",
+          "maximum"
+        ],
+        "title": "CatalogEditorBounds",
+        "type": "object"
+      },
+      "CatalogOption": {
+        "additionalProperties": false,
+        "properties": {
+          "degraded_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Degraded Label"
+          },
+          "degraded_without": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Degraded Without"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "requires_feature": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requires Feature"
+          },
+          "value": {
+            "$ref": "#/components/schemas/JsonValue"
+          }
+        },
+        "required": [
+          "value",
+          "label",
+          "requires_feature",
+          "degraded_without",
+          "degraded_label"
+        ],
+        "title": "CatalogOption",
+        "type": "object"
+      },
+      "CatalogValidationAuthority": {
+        "additionalProperties": false,
+        "properties": {
+          "design_schema": {
+            "title": "Design Schema",
+            "type": "string"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "request_schema": {
+            "title": "Request Schema",
+            "type": "string"
+          },
+          "validate_cli": {
+            "title": "Validate Cli",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_schema",
+          "design_schema",
+          "validate_cli",
+          "note"
+        ],
+        "title": "CatalogValidationAuthority",
+        "type": "object"
+      },
       "ChannelCombineSpec": {
         "additionalProperties": false,
         "description": "LR4 time-aligned sum of drive-channel bases (CAD-LINK-PHASE3.md \u00a72).\n\n``members`` is the chain in band order, lowest first; ``crossovers_hz``\nsits between adjacent members. Structural defects refuse at submission;\nsolve-time observations become metadata warnings, never silent skips.",
@@ -771,6 +915,59 @@
           }
         ],
         "title": "DesignConfig"
+      },
+      "DesignSchemaDocument": {
+        "additionalProperties": false,
+        "description": "Discoverable root of WG's generated JSON Schema document.",
+        "properties": {
+          "$defs": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "$Defs",
+            "type": "object"
+          },
+          "$schema": {
+            "const": "https://json-schema.org/draft/2020-12/schema",
+            "title": "$Schema",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "discriminator": {
+            "$ref": "#/components/schemas/JsonSchemaDiscriminator"
+          },
+          "oneOf": {
+            "items": {
+              "$ref": "#/components/schemas/JsonSchemaReference"
+            },
+            "title": "Oneof",
+            "type": "array"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "x-wg-schema-version": {
+            "const": 1,
+            "title": "X-Wg-Schema-Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "$schema",
+          "$defs",
+          "x-wg-schema-version",
+          "description",
+          "discriminator",
+          "oneOf",
+          "title"
+        ],
+        "title": "DesignSchemaDocument",
+        "type": "object"
       },
       "DesignSnapshot": {
         "additionalProperties": false,
@@ -3437,6 +3634,43 @@
         "title": "JobStatusResponse",
         "type": "object"
       },
+      "JsonSchemaDiscriminator": {
+        "additionalProperties": false,
+        "properties": {
+          "mapping": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Mapping",
+            "type": "object"
+          },
+          "propertyName": {
+            "title": "Propertyname",
+            "type": "string"
+          }
+        },
+        "required": [
+          "propertyName",
+          "mapping"
+        ],
+        "title": "JsonSchemaDiscriminator",
+        "type": "object"
+      },
+      "JsonSchemaReference": {
+        "additionalProperties": false,
+        "properties": {
+          "$ref": {
+            "title": "$Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "$ref"
+        ],
+        "title": "JsonSchemaReference",
+        "type": "object"
+      },
+      "JsonValue": {},
       "MeshConfig": {
         "additionalProperties": false,
         "properties": {
@@ -3716,6 +3950,74 @@
           }
         },
         "title": "MorphConfig",
+        "type": "object"
+      },
+      "MultiChannelResultEnvelope": {
+        "additionalProperties": true,
+        "properties": {
+          "channel_order": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Channel Order",
+            "type": "array"
+          },
+          "channels": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Channels",
+            "type": "object"
+          },
+          "client_metadata": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Client Metadata",
+            "type": "object"
+          },
+          "client_request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Request Id"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/ResultProvenance"
+          },
+          "result_contract_version": {
+            "const": 2,
+            "title": "Result Contract Version",
+            "type": "integer"
+          },
+          "result_kind": {
+            "const": "multi_channel",
+            "title": "Result Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "result_kind",
+          "result_contract_version",
+          "client_request_id",
+          "client_metadata",
+          "provenance",
+          "metadata",
+          "channels",
+          "channel_order"
+        ],
+        "title": "MultiChannelResultEnvelope",
         "type": "object"
       },
       "OSSEConfig": {
@@ -4102,6 +4404,249 @@
         "title": "OutputConfig",
         "type": "object"
       },
+      "ParameterCatalog": {
+        "additionalProperties": false,
+        "properties": {
+          "catalog_version": {
+            "const": 1,
+            "title": "Catalog Version",
+            "type": "integer"
+          },
+          "design_families": {
+            "items": {
+              "enum": [
+                "R-OSSE",
+                "OSSE",
+                "ICW",
+                "FREEFORM"
+              ],
+              "type": "string"
+            },
+            "title": "Design Families",
+            "type": "array"
+          },
+          "parameters": {
+            "items": {
+              "$ref": "#/components/schemas/ParameterDescriptor"
+            },
+            "title": "Parameters",
+            "type": "array"
+          },
+          "schema_version": {
+            "const": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "validation_authority": {
+            "$ref": "#/components/schemas/CatalogValidationAuthority"
+          }
+        },
+        "required": [
+          "schema_version",
+          "catalog_version",
+          "design_families",
+          "validation_authority",
+          "parameters"
+        ],
+        "title": "ParameterCatalog",
+        "type": "object"
+      },
+      "ParameterDescriptor": {
+        "additionalProperties": false,
+        "properties": {
+          "accepts_expression": {
+            "title": "Accepts Expression",
+            "type": "boolean"
+          },
+          "default_by_family": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Default By Family",
+            "type": "object"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "disabled_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disabled Reason"
+          },
+          "disabled_when": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogCondition"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "editor_bounds": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogEditorBounds"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "families": {
+            "items": {
+              "enum": [
+                "R-OSSE",
+                "OSSE",
+                "ICW",
+                "FREEFORM"
+              ],
+              "type": "string"
+            },
+            "title": "Families",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "number",
+              "select",
+              "indicator",
+              "table",
+              "text"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "legacy_key": {
+            "title": "Legacy Key",
+            "type": "string"
+          },
+          "mirror_paths": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Mirror Paths",
+            "type": "array"
+          },
+          "options": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogOption"
+            },
+            "title": "Options",
+            "type": "array"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Path"
+          },
+          "precision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Precision"
+          },
+          "section": {
+            "title": "Section",
+            "type": "string"
+          },
+          "step": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step"
+          },
+          "symbol": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Symbol"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
+          },
+          "visible_when": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CatalogCondition"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "writable": {
+            "title": "Writable",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "legacy_key",
+          "path",
+          "mirror_paths",
+          "label",
+          "section",
+          "symbol",
+          "kind",
+          "unit",
+          "families",
+          "accepts_expression",
+          "writable",
+          "default_by_family",
+          "editor_bounds",
+          "step",
+          "precision",
+          "options",
+          "description"
+        ],
+        "title": "ParameterDescriptor",
+        "type": "object"
+      },
       "ParametricGeometrySource": {
         "additionalProperties": false,
         "properties": {
@@ -4135,6 +4680,57 @@
           "design"
         ],
         "title": "ParametricGeometrySource",
+        "type": "object"
+      },
+      "ParametricResultEnvelope": {
+        "additionalProperties": true,
+        "properties": {
+          "client_metadata": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "title": "Client Metadata",
+            "type": "object"
+          },
+          "client_request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Request Id"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/ResultProvenance"
+          },
+          "result_contract_version": {
+            "const": 1,
+            "title": "Result Contract Version",
+            "type": "integer"
+          },
+          "result_kind": {
+            "const": "parametric",
+            "title": "Result Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "result_kind",
+          "result_contract_version",
+          "client_request_id",
+          "client_metadata",
+          "provenance",
+          "metadata"
+        ],
+        "title": "ParametricResultEnvelope",
         "type": "object"
       },
       "PolarConfig": {
@@ -4459,6 +5055,99 @@
           "formula"
         ],
         "title": "ROSSEConfig",
+        "type": "object"
+      },
+      "ResultProvenance": {
+        "additionalProperties": true,
+        "properties": {
+          "dependency_shas": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Dependency Shas",
+            "type": "object"
+          },
+          "effective_geometry_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Effective Geometry Sha256",
+            "type": "string"
+          },
+          "effective_request_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Effective Request Sha256",
+            "type": "string"
+          },
+          "effective_solve_options_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Effective Solve Options Sha256",
+            "type": "string"
+          },
+          "execution_geometry_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Execution Geometry Sha256",
+            "type": "string"
+          },
+          "execution_request_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Execution Request Sha256",
+            "type": "string"
+          },
+          "execution_solve_options_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Execution Solve Options Sha256",
+            "type": "string"
+          },
+          "geometry_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Geometry Sha256",
+            "type": "string"
+          },
+          "request_identity": {
+            "const": "execution",
+            "title": "Request Identity",
+            "type": "string"
+          },
+          "request_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Request Sha256",
+            "type": "string"
+          },
+          "resolved_engine": {
+            "title": "Resolved Engine",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "solve_options_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Solve Options Sha256",
+            "type": "string"
+          },
+          "wg_version": {
+            "title": "Wg Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "wg_version",
+          "dependency_shas",
+          "request_sha256",
+          "geometry_sha256",
+          "solve_options_sha256",
+          "request_identity",
+          "execution_request_sha256",
+          "execution_geometry_sha256",
+          "execution_solve_options_sha256",
+          "effective_request_sha256",
+          "effective_geometry_sha256",
+          "effective_solve_options_sha256",
+          "resolved_engine"
+        ],
+        "title": "ResultProvenance",
         "type": "object"
       },
       "SaveIdentity": {
@@ -6225,8 +6914,10 @@
         "responses": {
           "200": {
             "content": {
-              "application/json": {
-                "schema": {}
+              "application/schema+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DesignSchemaDocument"
+                }
               }
             },
             "description": "Successful Response"
@@ -6242,7 +6933,9 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/ParameterCatalog"
+                }
               }
             },
             "description": "Successful Response"
@@ -6724,10 +7417,42 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "discriminator": {
+                    "mapping": {
+                      "multi_channel": "#/components/schemas/MultiChannelResultEnvelope",
+                      "parametric": "#/components/schemas/ParametricResultEnvelope"
+                    },
+                    "propertyName": "result_kind"
+                  },
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ParametricResultEnvelope"
+                    },
+                    {
+                      "$ref": "#/components/schemas/MultiChannelResultEnvelope"
+                    }
+                  ],
+                  "title": "Response Job Results Api Results  Job Id  Get"
+                }
               }
             },
-            "description": "Successful Response"
+            "description": "Versioned solver result",
+            "headers": {
+              "ETag": {
+                "description": "SHA-256 identity of the exact stored bytes",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-WG-Results-SHA256": {
+                "description": "Hex SHA-256 of the exact stored bytes",
+                "schema": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                }
+              }
+            }
           },
           "422": {
             "content": {

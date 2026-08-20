@@ -319,6 +319,21 @@ def _replay_request(row: Mapping[str, Any]) -> SolveRequest:
     )
 
 
+def _execution_request(
+    request: SolveRequest,
+    *,
+    resolved_quadrants: int,
+) -> SolveRequest:
+    """Shape a persisted request exactly as the solver receives it."""
+
+    execution_request = request.model_copy(deep=True)
+    if isinstance(execution_request.geometry, ParametricGeometrySource):
+        execution_request.design.root.mesh.quadrants = Expr(
+            value=float(resolved_quadrants)
+        )
+    return execution_request
+
+
 class JobNotFoundError(LookupError):
     """Requested job is absent from persistence."""
 
@@ -1270,6 +1285,37 @@ class JobRuntime:
 
         return await asyncio.to_thread(load)
 
+    async def get_effective_request(self, job_id: str) -> SolveRequest:
+        """Return the normalized request durably stored for one job."""
+
+        await self.start()
+
+        def load() -> SolveRequest:
+            return _replay_request(self._require_job(job_id))
+
+        return await asyncio.to_thread(load)
+
+    async def get_execution_request(self, job_id: str) -> SolveRequest:
+        """Return the request shape passed to the solver for one job."""
+
+        await self.start()
+
+        def load() -> SolveRequest:
+            row = self._require_job(job_id)
+            metadata = (
+                dict(row.get("task_metadata") or {})
+                if isinstance(row.get("task_metadata"), Mapping)
+                else {}
+            )
+            symmetry = dict(metadata.get("symmetry") or {})
+            resolved_quadrants = int(symmetry.get("resolved_quadrants", 1234))
+            return _execution_request(
+                _replay_request(row),
+                resolved_quadrants=resolved_quadrants,
+            )
+
+        return await asyncio.to_thread(load)
+
     async def list_jobs(
         self, *, status: str | None, limit: int, offset: int
     ) -> tuple[list[dict[str, Any]], int]:
@@ -1601,7 +1647,7 @@ class JobRuntime:
 
     async def _run_job(self, job_id: str, row: Mapping[str, Any]) -> None:
         try:
-            request = SolveRequest.model_validate(row["config_json"])
+            effective_request = SolveRequest.model_validate(row["config_json"])
             task_metadata = (
                 dict(row.get("task_metadata") or {})
                 if isinstance(row.get("task_metadata"), Mapping)
@@ -1611,11 +1657,12 @@ class JobRuntime:
             resolved_quadrants = int(
                 symmetry_metadata.get("resolved_quadrants", 1234)
             )
-            request = request.model_copy(deep=True)
+            request = _execution_request(
+                effective_request,
+                resolved_quadrants=resolved_quadrants,
+            )
             imported_record: dict[str, Any] | None = None
-            if isinstance(request.geometry, ParametricGeometrySource):
-                request.design.root.mesh.quadrants = Expr(value=float(resolved_quadrants))
-            else:
+            if not isinstance(request.geometry, ParametricGeometrySource):
                 if self.cadlink_store is None:
                     raise ImportedSolveRefusal(
                         "ingest_registry_unavailable",
@@ -1695,6 +1742,7 @@ class JobRuntime:
                     job_id,
                     request,
                     engine,
+                    effective_request=effective_request,
                     symmetry_metadata=symmetry_metadata,
                     imported_record=imported_record,
                 )
@@ -1779,7 +1827,10 @@ class JobRuntime:
             )
             self._record_execution_metadata(job_id, result_metadata)
             results = self._with_request_metadata(
-                results, request, symmetry_metadata=symmetry_metadata
+                results,
+                request,
+                effective_request=effective_request,
+                symmetry_metadata=symmetry_metadata,
             )
             self._check_cancelled(job_id)
             await self._stage(
@@ -1869,6 +1920,7 @@ class JobRuntime:
         request: SolveRequest,
         engine: Any,
         *,
+        effective_request: SolveRequest | None = None,
         symmetry_metadata: Mapping[str, Any] | None = None,
         imported_record: Mapping[str, Any] | None = None,
     ) -> None:
@@ -1879,6 +1931,8 @@ class JobRuntime:
         map to the same overall ranges as v1
         ``server/services/simulation_runner.py:263-294``.
         """
+
+        effective_request = effective_request or request
 
         await self._append_log(job_id, f"Initializing {engine.name} solver")
         if request.options.verbose:
@@ -2094,6 +2148,7 @@ class JobRuntime:
                 self._with_request_metadata(
                     outcome.results,
                     request,
+                    effective_request=effective_request,
                     symmetry_metadata=symmetry_metadata,
                 ),
                 {
@@ -2499,6 +2554,7 @@ class JobRuntime:
         results: Mapping[str, Any],
         request: SolveRequest,
         *,
+        effective_request: SolveRequest | None = None,
         symmetry_metadata: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         enriched = dict(results)
@@ -2512,7 +2568,11 @@ class JobRuntime:
         if symmetry_metadata is not None:
             metadata["symmetry"] = dict(symmetry_metadata)
         enriched["metadata"] = metadata
-        return enrich_result_contract(enriched, request)
+        return enrich_result_contract(
+            enriched,
+            request,
+            effective_request=effective_request,
+        )
 
     def _record_execution_metadata(
         self, job_id: str, result_metadata: Mapping[str, Any]

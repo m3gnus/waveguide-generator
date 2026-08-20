@@ -13,7 +13,7 @@ from pydantic import ValidationError
 
 from server.design.schema import Expr
 from server.design.solve_block import has_solve_blocks
-from server.design.textcfg import ParsedDesign, TextConfigError, parse
+from server.design.textcfg import TextConfigError, parse
 from server.engines.registry import EngineInfo, EngineRegistry
 from server.jobs.models import ImportedGeometrySource, SolveRequest
 from server.jobs.runtime import (
@@ -49,6 +49,7 @@ def _base_payload(
         "dialect": None,
         "migrationsApplied": [],
         "settingsSource": "defaults",
+        "clientRequestId": None,
         "frequencies": None,
         "engine": {
             "requested": requested_engine,
@@ -81,7 +82,7 @@ def _refuse(
             "message": message,
             "retryable": retryable,
             "details": details or {},
-            "client_request_id": None,
+            "client_request_id": payload["clientRequestId"],
         }
     )
 
@@ -251,6 +252,7 @@ async def validate_path(
             built = build_request(parsed, overlay=overlay, engine=engine)
         request = built.request
         payload["settingsSource"] = built.settings_source
+        payload["clientRequestId"] = request.client_request_id
     except ValidationError as exc:
         for message in _validation_messages(exc):
             _refuse(payload, message)

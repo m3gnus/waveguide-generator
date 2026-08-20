@@ -18,8 +18,12 @@ consumers.
 
 Final results also echo `client_request_id` and bounded `client_metadata`. The
 top-level `provenance` contract version 1 declares WG version, dependency SHAs,
-resolved engine, and SHA-256 identities for the canonical request, geometry, and solve
-options. The result HTTP response supplies an ETag and exact stored-byte SHA-256.
+resolved engine, and SHA-256 identities for two stages: the effective request durably
+stored after host-dependent submission decisions, and the execution request after
+symmetry-domain resolution. `request_identity: "execution"` and the explicit
+`execution_*_sha256` and `effective_*_sha256` names define those scopes; the original
+unqualified names remain aliases for the execution hashes. The result HTTP response
+supplies an ETag and exact stored-byte SHA-256.
 
 ## Parametric envelope and axes
 

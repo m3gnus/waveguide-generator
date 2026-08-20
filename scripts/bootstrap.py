@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -172,7 +173,12 @@ def _cli_entrypoint_files(environment: Path) -> dict[Path, str]:
             command: '@"%~dp0python.exe" "%~dp0wg-script.py" %*\r\n',
         }
     command = environment / "bin" / "wg"
-    return {command: f"#!{python}\n{body}"}
+    return {
+        command: (
+            "#!/bin/sh\n"
+            f"exec {shlex.quote(str(python))} -c {shlex.quote(body)} \"$@\"\n"
+        )
+    }
 
 
 def _install_cli_entrypoint(environment: Path) -> None:
