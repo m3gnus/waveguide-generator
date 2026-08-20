@@ -28,7 +28,11 @@ from server.mesh.builder import _solver_mesher_config, build_solver_mesh
 
 from .acoustics import solver_sound_speed_m_per_s
 from .combine import combine_drive_channels, serialize_channel_bases
-from .driver_lem import channel_drive_scaling, hornlab_driver
+from .driver_lem import (
+    channel_drive_scaling,
+    hornlab_driver,
+    one_way_peak_excursion_mm,
+)
 from .base import (
     ArtifactCallback,
     CancelCallback,
@@ -1148,7 +1152,8 @@ def _coupled_cardioid_result(
         "bem_port_area_m2": bem_port_area_m2,
         "port_area_source": geometry.port_area_source,
         "electrical_input_impedance_ohm": coupled.electrical_input_impedance,
-        "cone_excursion_mm": coupled.cone_excursion_m * 1.0e3,
+        "cone_excursion_mm": one_way_peak_excursion_mm(coupled.cone_excursion_m),
+        "cone_excursion_quantity": "one_way_peak_displacement",
         "cone_volume_velocity": coupled.cone_volume_velocity,
         "port_volume_velocity": coupled.port_volume_velocity,
         "port_to_cone_ratio": coupled.port_to_cone_ratio,
@@ -1684,6 +1689,9 @@ def solve_imported_metal_from_msh_text(
                 "cone_excursion_mm": json_safe_native_value(
                     coupled_payload["cone_excursion_mm"]
                 ),
+                "cone_excursion_quantity": coupled_payload[
+                    "cone_excursion_quantity"
+                ],
                 "cone_volume_velocity": json_safe_native_value(
                     coupled_payload["cone_volume_velocity"]
                 ),
