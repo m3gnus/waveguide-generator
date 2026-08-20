@@ -231,7 +231,8 @@ describe('ParamPanel inventory UX', () => {
       workspaceModeStore.setMode('cad');
     });
     const titles = () => [...host.querySelectorAll<HTMLElement>('[data-section]')].map((section) => section.dataset.section);
-    expect(titles()).toEqual(['Linked design', 'Model Type', 'Profile Dimensions', 'Throat Extension', 'Morph Target', 'Wall & Enclosure', 'Guiding Curve', 'Realized dimensions']);
+    expect(titles()).toEqual(['Linked design', 'Profile Dimensions', 'Throat Extension', 'Morph Target', 'Wall & Enclosure', 'Guiding Curve', 'Realized dimensions']);
+    expect(host.querySelector('[data-section="Model Type"]')).toBeNull();
     expect(host.textContent).not.toContain('Surface sampling');
 
     act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));

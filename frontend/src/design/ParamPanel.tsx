@@ -1066,7 +1066,7 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
         ><Icon name="info" /></button>
       </div>
       {workspaceMode === 'cad' && tab === 'geometry' && cadSectionMatches(CAD_CONTROLS.linkedDesign.section) && <LinkedDesignCard forceOpen={searching}/>}
-      {!searching && tab === 'geometry' && modelTypeSection}
+      {workspaceMode === 'parametric' && !searching && tab === 'geometry' && modelTypeSection}
       {workspaceMode === 'parametric' ? definitions.map((definition) => <div key={definition.title}>
           {renderRegistrySection(definition)}
           {!searching && definition.title === 'Frequency Sweep' && <Section title="Directivity Map" description="Polar planes and angular sampling used for directivity exports and plots." forceOpen={false}><DirectivityMapControls /></Section>}

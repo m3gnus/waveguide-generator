@@ -3,6 +3,7 @@ import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { compareSelection } from '../api/results';
 import { DesignAvailabilityNotice, RerunButton } from '../jobs/DesignAvailability';
 import { canLoadJobDesign, replaceWithJobDesign } from '../jobs/jobDesign';
+import { showJobModel } from '../jobs/showJobModel';
 import { canExportRun, RunExportControl } from '../jobs/RunExportControl';
 import { nextRunLabel } from '../jobs/runNaming';
 import { useRunNameSource } from '../jobs/runNameSource';
@@ -65,6 +66,10 @@ function Rating({ job, onError }: { job: JobItem; onError: (message: string) => 
  */
 export function selectJob(job: JobItem): void {
   if (job.has_results) compareSelection.setPrimary(job.id);
+  if (job.config_summary.geometry_type === 'imported') {
+    void showJobModel(job);
+    return;
+  }
   // Undoable: browsing runs must not be able to discard the working design.
   if (!canLoadDesign(job)) return;
   replaceWithJobDesign(job, { keepHistory: true });

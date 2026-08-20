@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   CadLinkApiError,
   getFusionCadStatus,
+  getIngest,
   ingestReturn,
   getSolveCommand,
   listReturns,
@@ -11,6 +12,7 @@ import {
   type CadReturnIngestRecord,
   type FusionCadStatus,
 } from '../api/cadlink';
+import type { JobItem } from '../api/jobsSocket';
 import { sendDesignToCad, type WgLinkExportResponse } from '../api/designIo';
 import { getOnshapeConnection, getOnshapeStatus, returnOnshapeToWg, type OnshapeConnection, type OnshapeStatus } from '../api/onshape';
 import { preferencesStore, usePreferences } from '../prefs/preferences';
@@ -219,6 +221,114 @@ export async function showIngestedMeshInViewport(
     && importedMeshStore.getSnapshot().cad !== null
     && importedMeshStore.getSnapshot().cad?.ingestId !== ingestId) {
     importedMeshStore.clear('cad');
+  }
+}
+
+/**
+ * Recall the immutable ingestion behind an archived CAD run.
+ *
+ * The job carries only provenance, so the ingestion record is fetched before
+ * it becomes the active CAD context. A synthetic, read-only bundle gives the
+ * CAD input surfaces the recalled document name and source inventory without
+ * pretending the original return bundle is still available for rebuilding.
+ */
+export async function showCadJobModel(
+  job: JobItem,
+  fetcher: typeof fetch = fetch,
+): Promise<boolean> {
+  if (job.config_summary.geometry_type !== 'imported') return false;
+  const ingestId = job.cad_source?.ingest_id;
+  const displayName = job.cad_source?.document_name || job.label || `run #${job.run_number}`;
+  enterCadWorkspace();
+  const coordinator = cadLinkCoordinatorBridge.getSnapshot();
+  coordinator.reportViewportNotice(null);
+  if (!ingestId) {
+    coordinator.reportStatus(`Cannot show ${displayName}: this CAD run has no ingestion identity.`);
+    return false;
+  }
+  coordinator.reportStatus(`Loading ${displayName} from run #${job.run_number}…`);
+  try {
+    const record = await getIngest(ingestId, fetcher);
+    const bundle: CadReturnBundle = {
+      name: `${displayName}.wgreturn`,
+      bundlePath: '',
+      modifiedAt: record.created_at,
+      readable: true,
+      documentName: displayName,
+      requestId: null,
+      sourceCount: record.sources.length,
+      instanceCount: null,
+      sources: record.sources.map((source) => ({
+        id: source.id,
+        role: source.role,
+        required: source.required,
+        suggestedResolutionMm: source.suggested_resolution_mm,
+        defaultDriveChannelId: source.default_drive_channel_id,
+      })),
+    };
+    useCadReturnStore.getState().beginIngestIntent();
+    const skipped = new Set(record.skipped_source_ids);
+    const channels = new Map<string, { id: string; source_ids: string[]; motion: 'normal' }>();
+    record.sources.filter((source) => !skipped.has(source.id)).forEach((source) => {
+      const channel = channels.get(source.default_drive_channel_id) ?? {
+        id: source.default_drive_channel_id, source_ids: [], motion: 'normal' as const,
+      };
+      channel.source_ids.push(source.id);
+      channels.set(channel.id, channel);
+    });
+    // Keep the archived source inventory visible, but disable actions that need
+    // the original return bundle path. Direct restoration deliberately avoids
+    // persisting this read-only history view as the current design's CAD profile.
+    useCadReturnStore.setState({
+      selectedBundle: {
+        ...bundle,
+        readable: false,
+        reason: 'Recalled from an archived run; the original return bundle is not active.',
+      },
+      ingestRecord: record,
+      acknowledgedFindingIds: [],
+      sourceSizesMm: { ...record.mesh_sizes.source_size_mm },
+      rigidSizeMm: record.mesh_sizes.rigid_size_mm,
+      transitionMm: record.mesh_sizes.transition_mm,
+      skippedSourceIds: [...record.skipped_source_ids],
+      driveChannels: [...channels.values()],
+      areaDriftOverrides: [],
+      areaDriftSourceIds: [...new Set((record.role_findings ?? [])
+        .filter((finding) => String(finding.kind).includes('area-drift'))
+        .map((finding) => String(finding.source_id)))],
+      exteriorOnly: false,
+      combineEnabled: false,
+      combineCrossoversHz: {},
+      combineLevelMatch: null,
+      combineAlign: null,
+      channelDrivers: {},
+      driveVoltageV: 2.83,
+      needsIngest: false,
+      ingestedBundleIdentity: null,
+      ingestStaleReason: null,
+      ...(Array.isArray(job.solve_options.frequency_range) && job.solve_options.frequency_range.length === 2
+        ? {
+            frequencyStartHz: Number(job.solve_options.frequency_range[0]),
+            frequencyEndHz: Number(job.solve_options.frequency_range[1]),
+            frequencyCount: Number(job.solve_options.num_frequencies) || 1,
+          }
+        : {}),
+    });
+    const viewportGeneration = importedMeshStore.beginIntent();
+    await showIngestedMeshInViewport(record, displayName, coordinator.reportViewportNotice, fetcher, viewportGeneration);
+    const shown = importedMeshStore.getSnapshot().cad?.ingestId === ingestId;
+    if (!shown) {
+      coordinator.reportStatus(`Cannot show ${displayName}: the archived CAD mesh artifacts are no longer available.`);
+      return false;
+    }
+    coordinator.reportStatus(`Showing ${displayName} from run #${job.run_number}.`);
+    return true;
+  } catch (reason) {
+    const missing = reason instanceof CadLinkApiError && reason.status === 404;
+    coordinator.reportStatus(missing
+      ? `Cannot show ${displayName}: the archived CAD ingestion and mesh artifacts are no longer available.`
+      : `Could not show ${displayName}: ${reason instanceof Error ? reason.message : String(reason)}`);
+    return false;
   }
 }
 

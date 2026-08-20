@@ -385,6 +385,9 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .result-follow i { width: 5px; height: 5px; border-radius: 50%; background: var(--fg4); }
 .results-toolbar .result-follow.on { border-color: rgba(var(--green-rgb), .38); background: rgba(var(--green-rgb), .1); color: var(--green); }
 .result-follow.on i { background: var(--green); box-shadow: 0 0 0 2px rgba(var(--green-rgb), .18); }
+.result-coherence-notice { display: inline-flex; flex: none; align-items: center; gap: 5px; max-width: min(660px, 52vw); padding: 2px 4px 2px 7px; border-left: 2px solid var(--amber); background: rgba(var(--amber-rgb), .09); color: var(--fg2); text-transform: none; white-space: nowrap; }
+.result-coherence-notice > span { overflow: hidden; text-overflow: ellipsis; }
+.results-toolbar .result-coherence-notice button { height: 19px; padding-inline: 5px; border-color: rgba(var(--amber-rgb), .32); background: rgba(var(--amber-rgb), .08); }
 /* The comparison chips and the compare picker are the elastic items: they
    shrink and ellipsize so the controls on the right are never clipped off a
    narrow dock. Everything else holds its size — note the chips are buttons, so
@@ -398,6 +401,7 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .result-compare-add { flex: 0 1 auto; min-width: 56px; }
 .result-chip i { width: 12px; flex: none; border-top: 2px solid var(--acc); }
 .result-chip > span { overflow: hidden; text-overflow: ellipsis; }
+.result-chip > .result-context-marker { flex: none; padding: 1px 3px; border: 1px solid rgba(var(--acc-rgb), .28); border-radius: var(--r3); background: rgba(var(--acc-rgb), .1); color: var(--acc); font: var(--text-micro) var(--mono); overflow: visible; }
 .result-chip.muted i { border-top: 1px dashed var(--fg2); }
 .result-count-control { display: flex; align-items: center; gap: 4px; color: var(--fg3); font-size: var(--text-micro); text-transform: none; }
 .result-count-control select { height: 19px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg1); font-size: var(--text-micro); }

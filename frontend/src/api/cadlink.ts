@@ -200,18 +200,20 @@ export interface CadReturnIngestRecord {
 
 export class CadLinkApiError extends Error {
   readonly areaDriftSources: string[];
+  readonly status: number | null;
 
-  constructor(message: string, areaDriftSources: string[] = []) {
+  constructor(message: string, areaDriftSources: string[] = [], status: number | null = null) {
     super(message);
     this.name = 'CadLinkApiError';
     this.areaDriftSources = areaDriftSources;
+    this.status = status;
   }
 }
 
 async function responseError(response: Response): Promise<CadLinkApiError> {
   try {
     const body = await response.json() as { detail?: unknown };
-    if (typeof body.detail === 'string') return new CadLinkApiError(body.detail);
+    if (typeof body.detail === 'string') return new CadLinkApiError(body.detail, [], response.status);
     if (body.detail && typeof body.detail === 'object') {
       const detail = body.detail as { message?: unknown; msg?: unknown; area_drift_sources?: unknown };
       const message = typeof detail.message === 'string'
@@ -220,10 +222,10 @@ async function responseError(response: Response): Promise<CadLinkApiError> {
       const sources = Array.isArray(detail.area_drift_sources)
         ? detail.area_drift_sources.filter((value): value is string => typeof value === 'string')
         : [];
-      if (message) return new CadLinkApiError(message, sources);
+      if (message) return new CadLinkApiError(message, sources, response.status);
     }
   } catch { /* status remains useful */ }
-  return new CadLinkApiError(`Request failed: ${response.status} ${response.statusText}`.trim());
+  return new CadLinkApiError(`Request failed: ${response.status} ${response.statusText}`.trim(), [], response.status);
 }
 
 async function jsonRequest<T>(path: string, init: RequestInit | undefined, fetcher: typeof fetch): Promise<T> {
