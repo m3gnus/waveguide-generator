@@ -63,6 +63,7 @@ class CadReturnIngestRequest(BaseModel):
     area_drift_overrides: list[str] = Field(
         default_factory=list, alias="areaDriftOverrides"
     )
+    expected_design_id: str | None = Field(default=None, alias="expectedDesignId")
 
 
 class FusionStatusRequest(BaseModel):
@@ -210,6 +211,7 @@ def _return_listing(workspace_root: Path) -> list[dict[str, Any]]:
             "requestId": None,
             "sourceCount": None,
             "instanceCount": None,
+            "designIds": [],
             "sources": [],
         }
         try:
@@ -256,6 +258,11 @@ def _return_listing(workspace_root: Path) -> list[dict[str, Any]]:
                     ),
                     "sourceCount": len(sources),
                     "instanceCount": len(instances),
+                    "designIds": sorted({
+                        str(instance["design_id"])
+                        for instance in instances
+                        if isinstance(instance, dict) and instance.get("design_id")
+                    }),
                     "sources": source_summaries,
                 }
             )
@@ -616,6 +623,7 @@ async def post_ingest(payload: CadReturnIngestRequest, request: Request) -> dict
             store,
             Path(request.app.state.data_dir),
             prep_options={"area_drift_overrides": payload.area_drift_overrides},
+            expected_design_id=payload.expected_design_id,
         )
     except HTTPException:
         raise

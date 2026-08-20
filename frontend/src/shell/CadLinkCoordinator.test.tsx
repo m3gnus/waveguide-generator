@@ -23,6 +23,7 @@ const initialBundle: CadReturnBundle = {
   requestId: null,
   sourceCount: 1,
   instanceCount: 1,
+  designIds: [],
   sources: [{
     id: 'source-hf',
     role: 'HF',
@@ -412,6 +413,41 @@ describe('CadLinkCoordinator', () => {
     command = { ...command, commandId: 'cmd-2' };
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     expect(solveCurrentCadImport).toHaveBeenCalledOnce();
+  });
+
+  it('refuses a Fusion solve command from another CAD-linked project before ingesting it', async () => {
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_current', lineageId: 'wgl_current', baseEditVersion: 2,
+    }, 'current');
+    const otherProject = { ...initialBundle, designIds: ['wgd_other'] };
+    const reported: Array<Record<string, unknown>> = [];
+    let ingestCalls = 0;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json({ items: [otherProject] });
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.endsWith('/solve-command/outcome')) {
+        reported.push(JSON.parse(String(init?.body)));
+        return json({ state: 'refused', cleared: true });
+      }
+      if (path.endsWith('/solve-command')) return json({ command: {
+        commandId: 'cmd-other', returnId: 'wgr_other', bundlePath: otherProject.bundlePath,
+        manifestSha256: 'sha256:m', requestedAt: '2026-08-20T12:00:00Z',
+      }, outcome: null });
+      if (path.endsWith('/ingest')) { ingestCalls += 1; return json(ingestRecord); }
+      return json({}, 404);
+    }));
+
+    await renderCoordinator();
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+    expect(ingestCalls).toBe(0);
+    expect(reported).toEqual([expect.objectContaining({
+      commandId: 'cmd-other', state: 'refused',
+      reason: expect.stringContaining('another CAD-linked project'),
+    })]);
+    expect(useCadReturnStore.getState().selectedBundle).toBeNull();
+    expect(cadLinkCoordinatorBridge.getSnapshot().error).toContain('another CAD-linked project');
   });
 
   /** Everything a Fusion "Solve in WG" needs: a listing, a marker whose value
