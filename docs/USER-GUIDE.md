@@ -141,7 +141,8 @@ When a run owns a radiation matrix, both its CSV presentation and lossless NPZ a
 archived beside the ordinary result JSON and frequency CSV.
 
 Every archive includes full JSON, frequency CSV, derived-acoustics sidecars, and a
-self-contained HTML report. **Archive every completed run** is on by default. Results in the app's job database
+self-contained HTML report. Imported Metal archives also keep each retained drive
+channel's complex pressure basis. **Archive every completed run** is on by default. Results in the app's job database
 are kept for 30 days, or until the run limit is passed, and rating a run exempts it;
 the Workspace archive is kept until you delete it. Archiving is frontend automation,
 so a run solved through the CLI is not automatically added to this design-grouped

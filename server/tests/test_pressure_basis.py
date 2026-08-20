@@ -45,6 +45,10 @@ def test_pressure_basis_export_conjugates_and_tags_retained_solver_fields() -> N
         artifact,
         {"channels": {"mf drive": {"metadata": {"impedance_drive": "voltage"}}}},
     )
+    assert exported.content == export_pressure_basis(
+        artifact,
+        {"channels": {"mf drive": {"metadata": {"impedance_drive": "voltage"}}}},
+    ).content
 
     assert exported.channel_id == "mf drive"
     with np.load(io.BytesIO(exported.content), allow_pickle=False) as data:
@@ -69,4 +73,3 @@ def test_pressure_basis_export_requires_a_channel_when_artifact_has_many() -> No
         export_pressure_basis(artifact, {"channels": {}})
     with pytest.raises(ValueError, match="not available"):
         export_pressure_basis(artifact, {"channels": {}}, "missing")
-

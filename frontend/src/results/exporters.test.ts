@@ -208,6 +208,33 @@ describe('result exporters', () => {
     expect([...new Uint8Array(await (saveBlob.mock.calls[0][0] as Blob).arrayBuffer())])
       .toEqual([80, 75, 3, 4]);
   });
+  it('exports retained drive bases without requesting solve-time derived channels', async () => {
+    const wrapped: ResultPayload = {
+      frequencies: [],
+      channel_order: ['drive-mf', 'combined'],
+      channels: {
+        'drive-mf': { ...result, metadata: { drive_channel_id: 'drive-mf' } },
+        combined: { ...result, metadata: { derived_from_channels: ['drive-mf'] } },
+      },
+    };
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(
+      new Uint8Array([80, 75]),
+      { status: 200, headers: { 'Content-Disposition': 'attachment; filename="drive-mf_pressure_basis.npz"' } },
+    ));
+
+    const bundle = await runExportBundle({
+      result: wrapped,
+      jobId: 'basis-job',
+      jobStem: 'horn_1',
+      preferences: preferencesStore.getSnapshot(),
+      fetcher,
+      saveBlob: vi.fn(),
+    }, ['pressure_basis']);
+
+    expect(bundle).toEqual({ files: ['drive-mf_pressure_basis.npz'], failures: [] });
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(fetcher).toHaveBeenCalledWith('/api/pressure-basis/basis-job?channel_id=drive-mf');
+  });
   it('writes both derived-acoustics sidecars as one retryable format', async () => {
     const saveText = vi.fn();
 
