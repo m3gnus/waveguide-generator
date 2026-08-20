@@ -5,7 +5,7 @@ import type { DesignIdentity } from '../stores/document';
 import type { WgLinkExportResponse } from './designIo';
 import type { CadReturnIngestRecord } from './cadlink';
 
-export type OnshapeState = 'not_configured' | 'not_linked' | 'current' | 'stale';
+export type OnshapeState = 'not_configured' | 'not_linked' | 'instance_selection_required' | 'current' | 'stale';
 
 export interface OnshapeCredentialsState {
   configured: boolean;
@@ -16,6 +16,7 @@ export interface OnshapeCredentialsState {
 }
 
 export interface OnshapeLink {
+  instanceId: string;
   designId: string;
   accountId: string;
   documentId: string;
@@ -38,6 +39,8 @@ export interface OnshapeStatus {
   state: OnshapeState;
   credentials: OnshapeCredentialsState;
   link: OnshapeLink | null;
+  matchingLinks: readonly OnshapeLink[];
+  selectedInstanceId: string | null;
   wgChangesAvailable: boolean;
   currentFormula: string;
 }
@@ -51,6 +54,7 @@ export interface OnshapeConnection extends OnshapeCredentialsState {
 
 export interface OnshapeSendResult extends WgLinkExportResponse {
   onshape: {
+    instanceId: string;
     documentId: string;
     workspaceId: string;
     documentName: string;
@@ -72,6 +76,7 @@ export interface OnshapeReturnResult {
     documentName: string | null;
     sourceCount: number;
     instanceCount: number;
+    instanceId: string;
   };
   ingest: CadReturnIngestRecord;
 }
@@ -104,11 +109,16 @@ export async function getOnshapeStatus(
   design: DesignDocument,
   identity: DesignIdentity | null,
   fetcher: typeof fetch = fetch,
+  instanceId: string | null = null,
 ): Promise<OnshapeStatus> {
   const response = await fetcher('/api/cadlink/onshape/status', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ design: currentDesignWire(serializeDesign(design)), identity }),
+    body: JSON.stringify({
+      design: currentDesignWire(serializeDesign(design)),
+      identity,
+      instanceId,
+    }),
   });
   if (!response.ok) throw new Error(await errorMessage(response));
   return response.json() as Promise<OnshapeStatus>;
@@ -119,7 +129,7 @@ export async function sendDesignToOnshape(
   designRevision: number,
   baseName: string,
   identity: DesignIdentity | null,
-  options: { allowPublic?: boolean; polarConfig?: unknown; solveSettings?: WgSolveSettings | null } = {},
+  options: { allowPublic?: boolean; polarConfig?: unknown; solveSettings?: WgSolveSettings | null; instanceId?: string | null } = {},
   fetcher: typeof fetch = fetch,
   idempotencyKey: string = globalThis.crypto?.randomUUID?.()
     ?? `onshape-${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -141,6 +151,7 @@ export async function sendDesignToOnshape(
       designRevision,
       baseName,
       identity,
+      instanceId: options.instanceId ?? null,
       allowPublic: options.allowPublic === true,
     }),
   });
@@ -152,11 +163,12 @@ export async function sendDesignToOnshape(
 export async function unlinkOnshapeDocument(
   designId: string,
   fetcher: typeof fetch = fetch,
+  instanceId: string | null = null,
 ): Promise<{ unlinked: boolean }> {
   const response = await fetcher('/api/cadlink/onshape/unlink', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ designId }),
+    body: JSON.stringify({ designId, instanceId }),
   });
   if (!response.ok) throw new Error(await errorMessage(response));
   return response.json() as Promise<{ unlinked: boolean }>;
@@ -165,11 +177,12 @@ export async function unlinkOnshapeDocument(
 export async function returnOnshapeToWg(
   designId: string,
   fetcher: typeof fetch = fetch,
+  instanceId: string | null = null,
 ): Promise<OnshapeReturnResult> {
   const response = await fetcher('/api/cadlink/onshape/return', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ designId }),
+    body: JSON.stringify({ designId, instanceId }),
   });
   if (!response.ok) throw new Error(await errorMessage(response));
   return response.json() as Promise<OnshapeReturnResult>;

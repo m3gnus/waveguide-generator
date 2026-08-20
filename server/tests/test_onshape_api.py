@@ -47,6 +47,52 @@ def _saved(store: CadLinkStore, design: DesignConfig):
     )
 
 
+def _forked(store: CadLinkStore) -> tuple[SaveIdentity, SaveIdentity]:
+    original = _saved(store, _design())["identity"]
+    at_version_one = SaveIdentity(
+        designId=original.design_id,
+        lineageId=original.lineage_id,
+        baseEditVersion=original.edit_version,
+    )
+    store.save(
+        requested=at_version_one,
+        design_hash=design_hash(_design(coverage=50.0)),
+        filename="demo-horn.cfg",
+        snapshot_builder=lambda identity: "text",
+    )
+    forked = store.save(
+        requested=at_version_one,
+        design_hash=design_hash(_design(coverage=57.0)),
+        filename="demo-horn.cfg",
+        snapshot_builder=lambda identity: "text",
+    )
+    return original, forked["identity"]
+
+
+def _save_test_link(
+    store: CadLinkStore,
+    identity: SaveIdentity,
+    *,
+    document_id: str,
+    account_id: str = "ACC",
+) -> dict[str, Any]:
+    return store.save_onshape_link(
+        design_id=identity.design_id,
+        account_id=account_id,
+        document_id=document_id,
+        workspace_id="WID",
+        blob_element_id=f"BLOB-{document_id}",
+        part_studio_element_id=f"PART-{document_id}",
+        variable_studio_element_id=None,
+        document_name=f"Demo {document_id}",
+        is_public=False,
+        last_export_id=None,
+        last_sequence=1,
+        last_design_hash="hash-1",
+        last_geometry_hash=None,
+    )
+
+
 def _request(store: CadLinkStore, tmp_path: Path, transport: Any = None) -> SimpleNamespace:
     return SimpleNamespace(
         app=SimpleNamespace(
@@ -99,6 +145,7 @@ def test_link_round_trips_and_updates_in_place(tmp_path: Path) -> None:
     assert first["datum_feature_studio_element_id"] == "DATUM-FEATURES"
     assert first["datum_feature_id"] == "DATUM-1"
     assert first["build_mode"] == "native"
+    assert str(first["instance_id"]).startswith("wgo_")
 
     second = store.save_onshape_link(
         design_id=identity.design_id,
@@ -123,6 +170,7 @@ def test_link_round_trips_and_updates_in_place(tmp_path: Path) -> None:
     )
     assert second["last_sequence"] == 2
     assert second["created_at"] == first["created_at"], "the link kept its identity"
+    assert second["instance_id"] == first["instance_id"]
     stored = store.get_onshape_link(identity.design_id, "ACC")
     assert stored["last_design_hash"] == "hash-2"
     assert stored["feature_studio_element_id"] == "FEATURES"
@@ -257,6 +305,73 @@ def test_status_reports_current_then_stale(tmp_path: Path, monkeypatch) -> None:
     changed = _status(_design(coverage=57.0))
     assert changed["state"] == "stale"
     assert changed["wgChangesAvailable"] is True
+
+
+def test_status_requires_exact_selection_for_multiple_lineage_links(
+    tmp_path: Path, monkeypatch
+) -> None:
+    store = _store(tmp_path)
+    design = _design()
+    identity = _saved(store, design)["identity"]
+    monkeypatch.setattr(
+        onshape_api,
+        "_credentials_state",
+        lambda: {"configured": True, "credentialsPath": "/x", "detail": None, "insecureKeyFile": False},
+    )
+    links = []
+    for account_id, document_id in (("ACC-A", "DID-A"), ("ACC-B", "DID-B")):
+        links.append(store.save_onshape_link(
+            design_id=identity.design_id,
+            account_id=account_id,
+            document_id=document_id,
+            workspace_id="WID",
+            blob_element_id=f"BLOB-{account_id}",
+            part_studio_element_id=f"PART-{account_id}",
+            variable_studio_element_id=None,
+            document_name=f"Demo {account_id}",
+            is_public=False,
+            last_export_id=None,
+            last_sequence=1,
+            last_design_hash=design_hash(design),
+            last_geometry_hash=None,
+        ))
+
+    base = {
+        "design": design.model_dump(mode="json"),
+        "identity": {
+            "designId": identity.design_id,
+            "lineageId": identity.lineage_id,
+            "baseEditVersion": identity.edit_version,
+        },
+    }
+    ambiguous = asyncio.run(onshape_api.status(
+        onshape_api.OnshapeStatusRequest.model_validate(base),
+        _request(store, tmp_path),
+    ))
+    assert ambiguous["state"] == "instance_selection_required"
+    assert ambiguous["link"] is None
+    assert {item["instanceId"] for item in ambiguous["matchingLinks"]} == {
+        link["instance_id"] for link in links
+    }
+
+    selected = asyncio.run(onshape_api.status(
+        onshape_api.OnshapeStatusRequest.model_validate({
+            **base, "instanceId": links[1]["instance_id"],
+        }),
+        _request(store, tmp_path),
+    ))
+    assert selected["state"] == "current"
+    assert selected["selectedInstanceId"] == links[1]["instance_id"]
+    assert selected["link"]["documentId"] == "DID-B"
+
+    stale = asyncio.run(onshape_api.status(
+        onshape_api.OnshapeStatusRequest.model_validate({
+            **base, "instanceId": "wgo_stale",
+        }),
+        _request(store, tmp_path),
+    ))
+    assert stale["state"] == "instance_selection_required"
+    assert stale["selectedInstanceId"] is None
 
 
 def test_status_never_calls_onshape(tmp_path: Path, monkeypatch) -> None:
@@ -439,6 +554,44 @@ def test_push_reuses_the_stored_document_on_the_second_send(tmp_path: Path) -> N
     assert store.get_onshape_link(identity.design_id, "ACC")["last_sequence"] == 2
 
 
+def test_push_refuses_ambiguous_or_stale_lineage_selection_before_mutation(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    original, forked = _forked(store)
+    first = _save_test_link(store, original, document_id="DID-A")
+    _save_test_link(store, forked, document_id="DID-B")
+    transport = FakeTransport()
+    transport.route("GET", "/users/sessioninfo", 200, {"id": "ACC", "name": "Tester"})
+    common = dict(
+        bundle_path=str(_bundle(tmp_path)),
+        design_id=forked.design_id,
+        lineage_id=forked.lineage_id,
+        document_name="Demo Horn",
+        step_filename="demo.step",
+        export_id="wge_new",
+        sequence=3,
+        design_hash_value="hash-3",
+        geometry_hash_value="geo-3",
+        allow_public=False,
+    )
+
+    with pytest.raises(onshape_api.OnshapeInstanceSelectionError, match="more than one"):
+        onshape_api._push(store, _client(transport), **common)
+    with pytest.raises(onshape_api.OnshapeInstanceSelectionError, match="stale"):
+        onshape_api._push(
+            store,
+            _client(transport),
+            expected_instance_id="wgo_removed",
+            **common,
+        )
+
+    # Both attempts stop after account resolution. No document, translation,
+    # or element endpoint was touched, and the original selection is intact.
+    assert {call["path"] for call in transport.calls} == {"/users/sessioninfo"}
+    assert store.get_onshape_link_by_instance(first["instance_id"])["document_id"] == "DID-A"
+
+
 def test_push_unlinks_a_document_that_no_longer_exists(tmp_path: Path) -> None:
     store = _store(tmp_path)
     identity = _saved(store, _design())["identity"]
@@ -505,6 +658,33 @@ def test_consent_is_required_before_a_public_document(tmp_path: Path) -> None:
 
 
 # -- unlink ----------------------------------------------------------------
+
+
+def test_return_refuses_ambiguous_lineage_before_starting_translation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    store = _store(tmp_path)
+    original, forked = _forked(store)
+    _save_test_link(store, original, document_id="DID-A")
+    _save_test_link(store, forked, document_id="DID-B")
+    monkeypatch.setattr(
+        onshape_api,
+        "load_credentials",
+        lambda: OnshapeCredentials(access_key="A", secret_key="B"),
+    )
+    transport = FakeTransport()
+    transport.route("GET", "/users/sessioninfo", 200, {"id": "ACC", "name": "Tester"})
+    payload = onshape_api.OnshapeReturnRequest.model_validate(
+        {"designId": forked.design_id}
+    )
+
+    with pytest.raises(Exception) as caught:
+        asyncio.run(onshape_api.return_to_wg(
+            payload, _request(store, tmp_path, transport)
+        ))
+    assert getattr(caught.value, "status_code", None) == 409
+    assert "more than one" in str(getattr(caught.value, "detail", ""))
+    assert [call["path"] for call in transport.calls] == ["/users/sessioninfo"]
 
 
 def test_unlink_forgets_the_link(tmp_path: Path) -> None:

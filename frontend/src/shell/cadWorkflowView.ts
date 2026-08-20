@@ -36,6 +36,12 @@ export function onshapeWorkflowView(status: OnshapeStatus | null): CadWorkflowVi
     detail: 'WG will create an Onshape document, import this waveguide as a part, and add its managed parameters as a Variable Studio.',
     action: 'open',
   };
+  if (status.state === 'instance_selection_required') return {
+    state: 'instance-selection',
+    headline: 'Choose an Onshape link',
+    detail: 'This design lineage has more than one managed Onshape Part Studio link. Choose the exact link before WG updates, returns, or unlinks it.',
+    action: null,
+  };
   const documentName = status.link?.documentName ?? 'the linked document';
   if (status.state === 'current') return {
     state: 'current',

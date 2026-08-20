@@ -68,6 +68,9 @@ class OnshapeStatusRequest(BaseModel):
 
     design: DesignConfig
     identity: SaveIdentity | None = None
+    instance_id: str | None = Field(
+        default=None, alias="instanceId", min_length=1, max_length=160
+    )
 
 
 class OnshapeSendRequest(BaseModel):
@@ -77,6 +80,9 @@ class OnshapeSendRequest(BaseModel):
     design_revision: int = Field(alias="designRevision", ge=0)
     base_name: str = Field(default="waveguide", alias="baseName", max_length=240)
     identity: SaveIdentity | None = None
+    instance_id: str | None = Field(
+        default=None, alias="instanceId", min_length=1, max_length=160
+    )
     # Explicit consent to create a world-readable document, which is the only
     # kind Onshape's Free plan allows. Never defaulted to true.
     allow_public: bool = Field(default=False, alias="allowPublic")
@@ -89,12 +95,22 @@ class OnshapeUnlinkRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     design_id: str = Field(alias="designId", min_length=1, max_length=120)
+    instance_id: str | None = Field(
+        default=None, alias="instanceId", min_length=1, max_length=160
+    )
 
 
 class OnshapeReturnRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     design_id: str = Field(alias="designId", min_length=1, max_length=120)
+    instance_id: str | None = Field(
+        default=None, alias="instanceId", min_length=1, max_length=160
+    )
+
+
+class OnshapeInstanceSelectionError(OnshapeAdapterError):
+    """An Onshape action did not resolve one exact managed link."""
 
 
 def _client(request: Request) -> OnshapeClient:
@@ -117,6 +133,8 @@ def _onshape_error(exc: Exception) -> HTTPException:
         if exc.is_rate_limited:
             return HTTPException(status_code=429, detail=str(exc))
         return HTTPException(status_code=502, detail=str(exc))
+    if isinstance(exc, OnshapeInstanceSelectionError):
+        return HTTPException(status_code=409, detail=str(exc))
     if isinstance(exc, OnshapeAdapterError):
         return HTTPException(status_code=502, detail=str(exc))
     if isinstance(exc, IngestRefusal):
@@ -134,6 +152,7 @@ def _link_payload(row: dict[str, Any] | None) -> dict[str, Any] | None:
     if row is None:
         return None
     return {
+        "instanceId": row.get("instance_id"),
         "designId": row.get("design_id"),
         "accountId": row.get("account_id"),
         "documentId": row.get("document_id"),
@@ -151,6 +170,50 @@ def _link_payload(row: dict[str, Any] | None) -> dict[str, Any] | None:
         "lastSequence": row.get("last_sequence"),
         "updatedAt": row.get("updated_at"),
     }
+
+
+def _lineage_links(
+    store: CadLinkStore,
+    design_id: str,
+    *,
+    lineage_id: str | None = None,
+    account_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return every local link that can honestly belong to this design."""
+
+    resolved_lineage = lineage_id
+    if resolved_lineage is None:
+        design = store.get_design(design_id)
+        resolved_lineage = str(design.get("lineage_id") or "") if design else ""
+    if resolved_lineage:
+        return store.find_onshape_links_for_lineage(resolved_lineage, account_id)
+    exact = store.get_onshape_link(design_id, account_id)
+    return [exact] if exact is not None else []
+
+
+def _select_link(
+    candidates: list[dict[str, Any]], expected_instance_id: str | None
+) -> dict[str, Any] | None:
+    """Resolve one managed link without using newest/first as identity."""
+
+    if expected_instance_id is not None:
+        selected = [
+            row
+            for row in candidates
+            if str(row.get("instance_id") or "") == expected_instance_id
+        ]
+        if len(selected) != 1:
+            raise OnshapeInstanceSelectionError(
+                f"The selected Onshape instance {expected_instance_id!r} is stale or "
+                "does not belong to this design and account. Refresh and choose the exact link again."
+            )
+        return selected[0]
+    if len(candidates) > 1:
+        raise OnshapeInstanceSelectionError(
+            "This design lineage has more than one managed Onshape link. "
+            "Choose an instance before updating, returning, or unlinking it."
+        )
+    return candidates[0] if candidates else None
 
 
 def _document_url(document_id: str, workspace_id: str) -> str | None:
@@ -258,17 +321,26 @@ async def status(payload: OnshapeStatusRequest, request: Request) -> dict[str, A
     store: CadLinkStore = request.app.state.cadlink_store
     current_hash = await asyncio.to_thread(design_hash, payload.design)
 
-    row: dict[str, Any] | None = None
+    candidates: list[dict[str, Any]] = []
     if payload.identity is not None:
-        row = await asyncio.to_thread(store.get_onshape_link, payload.identity.design_id)
-        if row is None:
-            candidates = await asyncio.to_thread(
-                store.find_onshape_links_for_lineage, payload.identity.lineage_id
-            )
-            row = candidates[0] if candidates else None
+        candidates = await asyncio.to_thread(
+            _lineage_links,
+            store,
+            payload.identity.design_id,
+            lineage_id=payload.identity.lineage_id,
+        )
+
+    selection_required = False
+    try:
+        row = _select_link(candidates, payload.instance_id)
+    except OnshapeInstanceSelectionError:
+        row = None
+        selection_required = True
 
     if not credentials["configured"]:
         state: str = "not_configured"
+    elif selection_required:
+        state = "instance_selection_required"
     elif row is None:
         state = "not_linked"
     elif str(row.get("last_design_hash") or "") == current_hash:
@@ -280,6 +352,8 @@ async def status(payload: OnshapeStatusRequest, request: Request) -> dict[str, A
         "state": state,
         "credentials": credentials,
         "link": _link_payload(row),
+        "matchingLinks": [_link_payload(candidate) for candidate in candidates],
+        "selectedInstanceId": row.get("instance_id") if row is not None else None,
         "wgChangesAvailable": state == "stale",
         "currentFormula": payload.design.root.formula.lower(),
     }
@@ -291,6 +365,8 @@ def _push(
     *,
     bundle_path: str,
     design_id: str,
+    lineage_id: str | None = None,
+    expected_instance_id: str | None = None,
     document_name: str,
     step_filename: str,
     export_id: str | None,
@@ -304,7 +380,10 @@ def _push(
 
     session = client.session_info()
     account_id = str(session.get("id") or "") or "unknown"
-    existing = store.get_onshape_link(design_id, account_id)
+    candidates = _lineage_links(
+        store, design_id, lineage_id=lineage_id, account_id=account_id
+    )
+    existing = _select_link(candidates, expected_instance_id)
     target = (
         OnshapeTarget(
             document_id=str(existing["document_id"]),
@@ -336,16 +415,23 @@ def _push(
         # changed). Forget the link so the next send starts clean rather than
         # failing forever against an id that no longer resolves.
         if exc.status == 404 and target is not None:
-            store.delete_onshape_link(design_id, account_id)
+            store.delete_onshape_link(str(existing["design_id"]), account_id)
             raise OnshapeAdapterError(
                 "The linked Onshape document no longer exists, so WG has "
                 "unlinked it. Send again to create a new document."
             ) from exc
         raise
 
-    store.save_onshape_link(
-        design_id=design_id,
+    stored = store.save_onshape_link(
+        # A conflicting save may fork design_id while retaining lineage. The
+        # selected link continues to own its original registry row; its latest
+        # immutable export carries the new design id. Moving the row would
+        # collapse two explicitly selectable lineage links into one PK.
+        design_id=str(existing["design_id"]) if existing is not None else design_id,
         account_id=account_id,
+        instance_id=(
+            str(existing["instance_id"]) if existing is not None else None
+        ),
         document_id=result.target.document_id,
         workspace_id=result.target.workspace_id,
         blob_element_id=result.target.blob_element_id,
@@ -364,6 +450,7 @@ def _push(
         last_geometry_hash=geometry_hash_value,
     )
     return {
+        "instanceId": stored["instance_id"],
         "documentId": result.target.document_id,
         "workspaceId": result.target.workspace_id,
         "documentName": result.document_name,
@@ -425,6 +512,7 @@ async def send(
     client = _client(request)
     identity = export.get("identity") or {}
     design_id = str(identity.get("designId") or "")
+    lineage_id = str(identity.get("lineageId") or "")
     if not design_id:
         raise HTTPException(
             status_code=409,
@@ -438,6 +526,8 @@ async def send(
             client,
             bundle_path=str(export["bundlePath"]),
             design_id=design_id,
+            lineage_id=lineage_id or None,
+            expected_instance_id=payload.instance_id,
             document_name=document_name,
             step_filename=f"{document_name}.step",
             export_id=str(export.get("exportId") or "") or None,
@@ -458,11 +548,19 @@ async def unlink(payload: OnshapeUnlinkRequest, request: Request) -> dict[str, A
     """Forget a link. The Onshape document is left exactly as it is."""
 
     store: CadLinkStore = request.app.state.cadlink_store
-    row = await asyncio.to_thread(store.get_onshape_link, payload.design_id)
+    candidates = await asyncio.to_thread(
+        _lineage_links, store, payload.design_id
+    )
+    try:
+        row = _select_link(candidates, payload.instance_id)
+    except Exception as exc:
+        raise _onshape_error(exc) from exc
     if row is None:
         return {"unlinked": False}
     removed = await asyncio.to_thread(
-        store.delete_onshape_link, payload.design_id, str(row.get("account_id") or "")
+        store.delete_onshape_link,
+        str(row.get("design_id") or ""),
+        str(row.get("account_id") or ""),
     )
     return {"unlinked": removed}
 
@@ -485,9 +583,13 @@ async def return_to_wg(
             raise OnshapeAdapterError(
                 "Onshape did not identify the authenticated account."
             )
-        link = await asyncio.to_thread(
-            store.get_onshape_link, payload.design_id, account_id
+        candidates = await asyncio.to_thread(
+            _lineage_links,
+            store,
+            payload.design_id,
+            account_id=account_id,
         )
+        link = _select_link(candidates, payload.instance_id)
         if link is None:
             raise OnshapeAdapterError(
                 "This design is not linked to an Onshape document for the authenticated account."
@@ -548,6 +650,7 @@ async def return_to_wg(
             "documentName": link.get("document_name"),
             "sourceCount": 1,
             "instanceCount": 1,
+            "instanceId": link.get("instance_id"),
         },
         "ingest": record,
     }

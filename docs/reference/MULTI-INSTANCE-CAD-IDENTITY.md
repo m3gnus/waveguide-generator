@@ -1,7 +1,8 @@
 # Multi-instance CAD identity
 
-Status: implemented first slice in the Waveguide Generator server and browser
-contract, 2026-08-20. The remaining cross-repository work is listed below.
+Status: implemented for Fusion placements, managed Onshape Part Studio links,
+WG ingestion, result provenance, and exports as of 2026-08-20. The remaining
+Assembly/cross-export boundaries are listed below.
 
 ## Addressing rule
 
@@ -81,16 +82,41 @@ sidecar that keeps non-JSON curve and image exports independently auditable.
 Existing run records and parametric results are byte-compatible: absent CAD
 identity is omitted rather than replaced with invented or null addresses.
 
+## Onshape managed-link selection
+
+WG assigns every registry-owned Onshape link a durable opaque `wgo_…`
+instance ID. Schema-7 links receive one during the schema-8 migration and keep
+it across updates. `POST /api/cadlink/onshape/status` accepts optional
+`instanceId` and returns `matchingLinks` plus `selectedInstanceId`; one lineage
+link remains automatic, while multiple links or a stale explicit ID produce
+`instance_selection_required` with no singular link or action.
+
+The same optional ID is carried by send, return, and unlink. Those actions
+resolve exactly one lineage/account link before an Onshape document mutation or
+STEP translation begins. The return writes that ID into its sole
+`instances[].instance_id`, source selector, and solver anchor, then passes it as
+the expected instance to ingestion.
+
+This identity currently names WG's managed Onshape **document/Part Studio
+link**, not an occurrence in an Onshape Assembly. The adapter does not read an
+Assembly, occurrence paths, or occurrence transforms, so it cannot honestly
+distinguish two Assembly placements of one generated Part Studio. Supporting
+those placements requires both an Onshape Assembly API implementation and a
+product decision about whether WG updates the shared Part Studio definition or
+one occurrence's independently copied definition. Until then, the dedicated
+Part Studio is the atomic Onshape link and WG does not infer placement identity
+from document names, element IDs, recency, or geometry fingerprints.
+
 ## Remaining work
 
 The WG status/read/ingest/UI and downstream result/export paths no longer use
-first-match placement behavior. Exact-instance Fusion updates are also pinned
-in the packaged WGLink source. The workspace TODO still has these adapter gaps:
+first-match placement behavior. Exact-instance Fusion updates and strict
+heartbeat body/transform/source/drive identity are pinned in the packaged
+WGLink source. Two deliberate boundaries remain:
 
-1. The add-in heartbeat should eventually publish native managed-body and live
-   transform identities directly. Today WG receives body fingerprint state in
-   the heartbeat and the full body/transform graph in `.wgreturn`.
-2. Onshape needs an equivalent instance-addressed status/update contract before
-   it can host repeated generated parts as independently selectable placements.
-3. A future cross-export body/entity identity, if needed, must be authored by
+1. Onshape's local status/update/return contract selects exact managed Part
+   Studio links. True repeated-placement parity remains blocked on Assembly
+   occurrence discovery/transform support and the shared-definition product
+   decision described above.
+2. A future cross-export body/entity identity, if needed, must be authored by
    CAD. WG must not derive it from names, face order, or fingerprints.

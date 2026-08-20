@@ -351,6 +351,7 @@ describe('CadLinkPanel', () => {
   it('maps Onshape link state to one explicit action', () => {
     const credentials = { configured: true, credentialsPath: '/home/x/.config/hornlab/onshape.env', detail: null, insecureKeyFile: false };
     const link: OnshapeLink = {
+      instanceId: 'wgo_demo',
       designId: 'wgd_1', accountId: 'ACC', documentId: 'DID', workspaceId: 'WID',
       documentName: 'Tritonia', documentUrl: 'https://cad.onshape.com/documents/DID/w/WID',
       isPublic: true, partStudioElementId: 'PART', variableStudioElementId: 'VARS',
@@ -358,7 +359,10 @@ describe('CadLinkPanel', () => {
       datumFeatureStudioElementId: null, datumFeatureId: null, buildMode: 'import',
       lastSequence: 3, updatedAt: '2026-08-13T09:00:00Z',
     };
-    const base = { credentials, link: null, wgChangesAvailable: false, currentFormula: 'osse' } as const;
+    const base = {
+      credentials, link: null, matchingLinks: [], selectedInstanceId: null,
+      wgChangesAvailable: false, currentFormula: 'osse',
+    } as const;
 
     expect(onshapeWorkflowView(null)).toMatchObject({ state: 'checking', action: null });
     expect(onshapeWorkflowView({ ...base, state: 'not_configured' })).toMatchObject({
@@ -370,6 +374,11 @@ describe('CadLinkPanel', () => {
     expect(onshapeWorkflowView({ ...base, state: 'not_linked' })).toMatchObject({
       state: 'not-linked', action: 'open',
     });
+    expect(onshapeWorkflowView({
+      ...base,
+      state: 'instance_selection_required',
+      matchingLinks: [link, { ...link, instanceId: 'wgo_other' }],
+    })).toMatchObject({ state: 'instance-selection', action: null });
     expect(onshapeWorkflowView({ ...base, state: 'current', link })).toMatchObject({
       state: 'current', headline: 'Onshape · Tritonia', action: null,
     });
@@ -414,6 +423,8 @@ describe('CadLinkPanel', () => {
     state: 'not_linked',
     credentials: { configured: true, credentialsPath: '/x/onshape.env', detail: null, insecureKeyFile: false },
     link: null,
+    matchingLinks: [],
+    selectedInstanceId: null,
     wgChangesAvailable: false,
     currentFormula: 'osse',
     ...overrides,
@@ -436,6 +447,27 @@ describe('CadLinkPanel', () => {
     await renderOnshape(onshapeStatus());
     expect(host.textContent).toContain('No linked Onshape Part Studio');
     expect(host.querySelector('.cad-bundle-list')).toBeNull();
+  });
+
+  it('shows exact Onshape link choices and offers no action while ambiguous', async () => {
+    const link = (instanceId: string, documentName: string) => ({
+      instanceId,
+      designId: 'wgd_a', accountId: 'ACC', documentId: `DID-${instanceId}`, workspaceId: 'WID',
+      documentName, documentUrl: null, isPublic: false, partStudioElementId: 'PART',
+      variableStudioElementId: null, featureStudioElementId: null, nativeFeatureId: null,
+      datumFeatureStudioElementId: null, datumFeatureId: null, buildMode: 'import',
+      lastSequence: 1, updatedAt: '2026-08-20T12:00:00Z',
+    });
+    await renderOnshape(onshapeStatus({
+      state: 'instance_selection_required',
+      matchingLinks: [link('wgo_a', 'Cabinet A'), link('wgo_b', 'Cabinet B')],
+    }));
+
+    expect(host.querySelector('.cad-connection')?.textContent).toContain('Choose an Onshape link');
+    expect(host.querySelector<HTMLSelectElement>('[aria-label="Linked Onshape instance"]')?.options)
+      .toHaveLength(3);
+    expect(host.querySelector('.cad-primary-action')).toBeNull();
+    expect(host.textContent).not.toContain('Bring Onshape geometry into WG');
   });
 
   it('returns a linked Onshape Part Studio, selects its ingest, and shows findings', async () => {
