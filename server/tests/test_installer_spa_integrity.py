@@ -56,6 +56,7 @@ raise SystemExit(2)
     _write(checkout / "launchers" / "linux" / "launch-wg.sh", "#!/bin/bash\nexit 0\n")
     _write(checkout / "server" / "requirements-lock.txt", "")
     _write(checkout / "server" / "requirements-pins.txt", "")
+    _write(checkout / "server" / "cli" / "__main__.py", "")
     _write(checkout / "scripts" / "check_backends.py", "raise SystemExit(0)\n")
     _write(
         checkout / "scripts" / "bootstrap.py",
