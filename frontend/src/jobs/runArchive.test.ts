@@ -50,6 +50,21 @@ describe('run archive layout', () => {
     expect(buildDesignRecord(job).text).toBe(buildDesignRecord(job).text);
   });
 
+  it('records the separately retained radiation artifacts and their convention', () => {
+    const record = JSON.parse(buildRunRecord(jobItem({
+      has_radiation_impedance_artifact: true,
+      radiation_impedance_artifact_bytes: 4096,
+    })).text);
+    expect(record.artifacts.radiationImpedance).toEqual({
+      matrix: '3_Big_Horn_radiation_impedance.npz',
+      curves: '3_Big_Horn_radiation_impedance.csv',
+      bytes: 4096,
+      units: 'Pa*s/m^3',
+      phaseTimeConvention: 'engineering_exp_plus_jwt',
+    });
+    expect(JSON.parse(buildRunRecord(jobItem()).text).artifacts.radiationImpedance).toBeNull();
+  });
+
   it('names the CAD document and return state a run was solved from', () => {
     const record = JSON.parse(buildRunRecord(jobItem({
       config_summary: { geometry_type: 'imported' },

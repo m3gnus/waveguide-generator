@@ -50,6 +50,8 @@ export interface JobItem {
   /** Whether the run produced a port-exit radiation-impedance matrix, i.e. it
    * ran the passive-cardioid campaign and the archive is still on disk. */
   has_radiation_impedance_artifact?: boolean;
+  radiation_impedance_artifact_bytes?: number | null;
+  persistence_warnings?: string[];
   has_pressure_basis_artifact?: boolean;
   pressure_basis_artifact_bytes?: number | null;
   field_plane_available?: boolean;
@@ -253,6 +255,10 @@ function isJobItem(value: unknown): value is JobItem {
   if (typeof value.has_results !== 'boolean' || typeof value.has_mesh_artifact !== 'boolean') return false;
   if (hasOwn(value, 'has_radiation_impedance_artifact')
     && typeof value.has_radiation_impedance_artifact !== 'boolean') return false;
+  if (hasOwn(value, 'radiation_impedance_artifact_bytes') && !(
+    value.radiation_impedance_artifact_bytes === null || isNonNegativeInteger(value.radiation_impedance_artifact_bytes)
+  )) return false;
+  if (hasOwn(value, 'persistence_warnings') && !isStringArray(value.persistence_warnings)) return false;
   if (hasOwn(value, 'has_pressure_basis_artifact') && typeof value.has_pressure_basis_artifact !== 'boolean') return false;
   if (hasOwn(value, 'pressure_basis_artifact_bytes') && !(
     value.pressure_basis_artifact_bytes === null || isNonNegativeInteger(value.pressure_basis_artifact_bytes)
@@ -459,6 +465,14 @@ function sanitizeMetadataChanges(value: unknown): Partial<JobItem> & JsonRecord 
   if (hasOwn(value, 'has_radiation_impedance_artifact')) {
     if (typeof value.has_radiation_impedance_artifact !== 'boolean') return null;
     patch.has_radiation_impedance_artifact = value.has_radiation_impedance_artifact;
+  }
+  if (hasOwn(value, 'radiation_impedance_artifact_bytes')) {
+    if (!(value.radiation_impedance_artifact_bytes === null || isNonNegativeInteger(value.radiation_impedance_artifact_bytes))) return null;
+    patch.radiation_impedance_artifact_bytes = value.radiation_impedance_artifact_bytes as number | null;
+  }
+  if (hasOwn(value, 'persistence_warnings')) {
+    if (!isStringArray(value.persistence_warnings)) return null;
+    patch.persistence_warnings = value.persistence_warnings;
   }
   return patch;
 }

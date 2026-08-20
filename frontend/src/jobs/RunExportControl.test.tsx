@@ -305,6 +305,33 @@ describe('RunExportControl', () => {
     );
   });
 
+  it('enables radiation exports only for a job with the retained artifact', async () => {
+    render();
+    openMenu();
+    expect(menuItem('Radiation matrix curves').getAttribute('aria-disabled')).toBe('true');
+    expect(menuItem('Lossless radiation matrix').textContent).toContain('no retained passive-cardioid');
+
+    act(() => host.querySelector<HTMLButtonElement>('.action-menu-chevron')!.click());
+    render(completeJob({
+      has_radiation_impedance_artifact: true,
+      radiation_impedance_artifact_bytes: 512,
+    }));
+    openMenu();
+    const item = menuItem('Lossless radiation matrix');
+    expect(item.getAttribute('aria-disabled')).toBeNull();
+    await act(async () => { item.click(); await settle(); });
+
+    expect(mocks.fetchJobResults).not.toHaveBeenCalled();
+    expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        jobId: 'job-export-1',
+        hasRadiationImpedanceArtifact: true,
+      }),
+      ['radiation_impedance_npz'],
+      'overwrite',
+    );
+  });
+
   it('writes exactly one on-axis FRD file to the Workspace', async () => {
     mocks.fetchJobResults.mockResolvedValue(directivityResult());
     mocks.runWorkspaceExportBundle.mockResolvedValue({

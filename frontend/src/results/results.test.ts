@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { CompareStore, fetchJobResults, mergeProvisionalResults, ProvisionalResultsStore, recombineJobResults, ResultsLruCache, resultsCache, type JobResults } from '../api/results';
+import { CompareStore, fetchJobResults, fetchRadiationImpedancePresentation, mergeProvisionalResults, ProvisionalResultsStore, recombineJobResults, ResultsLruCache, resultsCache, type JobResults } from '../api/results';
 import { beamShapeSeries, complexToDb, directivityGrid, directivityIndexSeries, excursionChartSeries, expandResultChannels, impedanceComparable, impedanceSeries, impedanceSubtitle, polarCut, polarMirrorsAcrossAxis, polarSeries, splSeries, type NamedResult } from './mappers';
 import type { ResultPayload } from './types';
 
@@ -49,6 +49,15 @@ describe('results LRU', () => {
     ]);
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(first).toBe(second);
+  });
+
+  it('treats an absent optional radiation artifact as no presentation', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(
+      JSON.stringify({ detail: 'This job has no passive-cardioid artifact' }),
+      { status: 404, headers: { 'Content-Type': 'application/json' } },
+    ));
+    await expect(fetchRadiationImpedancePresentation('ordinary', fetcher)).resolves.toBeNull();
+    expect(fetcher).toHaveBeenCalledWith('/api/radiation-impedance/ordinary/presentation');
   });
 
   it('prunes deleted primary and overlay job ids', () => {

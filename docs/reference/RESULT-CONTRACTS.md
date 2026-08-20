@@ -53,6 +53,27 @@ retaining valid values.
 | `metadata.driver.cone_excursion_mm` | direct-radiator one-way peak displacement in millimetres, converted from the RMS drive phasor before comparison with the driver's one-way peak Xmax rating |
 | `passive_cardioid.cone_excursion_mm` | passive-cardioid one-way peak displacement on the result frequency grid; `cone_excursion_quantity` states the same peak convention |
 
+## Radiation-impedance artifact view
+
+Passive-cardioid radiation impedance is a separately retained lossless NPZ, not a
+quantity silently inserted into each drive channel. `JobItem.has_radiation_impedance_artifact`
+is authoritative for availability. `GET /api/radiation-impedance/{job_id}` returns the
+exact NPZ; `GET /api/radiation-impedance/{job_id}/presentation` reads the following
+no-pickle fields into a bounded JSON view:
+
+- aperture name, physical tag, and area;
+- the full `engineering_impedance_matrix` mapping source volume velocity to receiver
+  average pressure; and
+- the stored in-phase port termination reductions used by the passive-cardioid model.
+
+The presentation quantity is `average_aperture_pressure_per_volume_velocity`, its unit
+is Pa·s/m³, and its phase-time convention is engineering `exp(+jωt)`. It deliberately
+does not expose the NPZ's solver-convention matrix as another display curve. The chart
+uses in-phase reductions first and falls back to engineering diagonal/self terms if a
+future compatible artifact has no reduction. It never applies result smoothing because
+smoothing a complex termination can change passivity. A missing or unreadable optional
+artifact does not hide the run's otherwise valid SPL/directivity results.
+
 Parametric metadata declares `result_contract_version: 1`, `phase_quantity`, `phase_units`,
 `impedance_quantity`, `impedance_units`, `impedance_drive`, observation origin/distance,
 sound speed, symmetry, frequency source, and backend diagnostics. Consumers must use

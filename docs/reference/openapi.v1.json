@@ -5109,6 +5109,160 @@
         "title": "ROSSEConfig",
         "type": "object"
       },
+      "RadiationImpedanceAperture": {
+        "properties": {
+          "area_m2": {
+            "title": "Area M2",
+            "type": "number"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "tag": {
+            "title": "Tag",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "area_m2",
+          "tag"
+        ],
+        "title": "RadiationImpedanceAperture",
+        "type": "object"
+      },
+      "RadiationImpedanceMatrix": {
+        "properties": {
+          "imaginary": {
+            "items": {
+              "items": {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "type": "array"
+            },
+            "title": "Imaginary",
+            "type": "array"
+          },
+          "real": {
+            "items": {
+              "items": {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "type": "array"
+            },
+            "title": "Real",
+            "type": "array"
+          }
+        },
+        "required": [
+          "real",
+          "imaginary"
+        ],
+        "title": "RadiationImpedanceMatrix",
+        "type": "object"
+      },
+      "RadiationImpedancePresentation": {
+        "description": "Plot/export view of the lossless NPZ, always in engineering convention.",
+        "properties": {
+          "apertures": {
+            "items": {
+              "$ref": "#/components/schemas/RadiationImpedanceAperture"
+            },
+            "title": "Apertures",
+            "type": "array"
+          },
+          "engineering_matrix": {
+            "$ref": "#/components/schemas/RadiationImpedanceMatrix"
+          },
+          "frequencies_hz": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Frequencies Hz",
+            "type": "array"
+          },
+          "in_phase_termination": {
+            "$ref": "#/components/schemas/RadiationImpedanceTermination"
+          },
+          "phase_time_convention": {
+            "const": "engineering_exp_plus_jwt",
+            "title": "Phase Time Convention",
+            "type": "string"
+          },
+          "quantity": {
+            "const": "average_aperture_pressure_per_volume_velocity",
+            "title": "Quantity",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "units": {
+            "const": "Pa*s/m^3",
+            "title": "Units",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "quantity",
+          "units",
+          "phase_time_convention",
+          "frequencies_hz",
+          "apertures",
+          "engineering_matrix",
+          "in_phase_termination"
+        ],
+        "title": "RadiationImpedancePresentation",
+        "type": "object"
+      },
+      "RadiationImpedanceTermination": {
+        "properties": {
+          "aperture_names": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Aperture Names",
+            "type": "array"
+          },
+          "imaginary": {
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "title": "Imaginary",
+            "type": "array"
+          },
+          "real": {
+            "items": {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            "title": "Real",
+            "type": "array"
+          }
+        },
+        "required": [
+          "aperture_names",
+          "real",
+          "imaginary"
+        ],
+        "title": "RadiationImpedanceTermination",
+        "type": "object"
+      },
       "ResultProvenance": {
         "additionalProperties": true,
         "properties": {
@@ -7483,6 +7637,45 @@
           }
         },
         "summary": "Radiation Impedance Artifact"
+      }
+    },
+    "/api/radiation-impedance/{job_id}/presentation": {
+      "get": {
+        "operationId": "radiation_impedance_presentation_api_radiation_impedance__job_id__presentation_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RadiationImpedancePresentation"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Radiation Impedance Presentation"
       }
     },
     "/api/render-charts": {

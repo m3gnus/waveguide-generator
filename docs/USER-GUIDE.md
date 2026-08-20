@@ -25,7 +25,9 @@ smoothed, rendered as response/directivity/impedance/beam plots, rated, reopened
 rerun while the retained snapshot is available. The result-card picker also exposes a
 frequency-scrubbable polar response, on-axis phase, group delay, beam-fit diagnostics,
 and—when a driver model was solved—electrical power/current and cone excursion against
-Xmax. Results settings choose real/imaginary versus magnitude/phase impedance and can
+Xmax. A completed passive-cardioid campaign also offers **Radiation Matrix Load**:
+the engineering-convention real/imaginary load seen by each port when the port set is
+driven in phase. Results settings choose real/imaginary versus magnitude/phase impedance and can
 show the same referenced phase trace over the on-axis SPL chart that appears in its PNG
 export. Partial solves keep usable samples and show their warnings and failed-frequency
 diagnostics.
@@ -109,7 +111,10 @@ silently overwritten.
 Each completed job has its own export menu. Current result formats include chart PNGs,
 on-axis FRD, a horizontal/vertical FRD polar set for VituixCAD, frequency CSV, full
 JSON, polar and impedance CSV, and a summary report. Geometry/design formats use the
-job's stored snapshot, never the current editor. **Send to CAD** is the first action
+job's stored snapshot, never the current editor. Passive-cardioid jobs add a long-form
+radiation-matrix CSV and the lossless NPZ. The CSV uses Pa·s/m³ and engineering
+`exp(+jωt)` real/imaginary values; the NPZ also retains the raw solver-convention
+matrix for exact downstream work. **Send to CAD** is the first action
 in this menu and sends that same stored snapshot. Failed formats are reported
 individually so successful files are not hidden. The current parametric design can
 also be sent from the top-left design menu under **Export → Send to CAD**.
@@ -130,6 +135,8 @@ Documents/Waveguide Generator/
 A design keeps one folder across a rename, and its parametric and CAD-link runs sit
 side by side, because they are the same design's history. `run.json` records what was
 solved, from which CAD document and return state, and with which settings.
+When a run owns a radiation matrix, both its CSV presentation and lossless NPZ are
+archived beside the ordinary result JSON and frequency CSV.
 
 **Archive every completed run** is on by default. Results in the app's job database
 are kept for 30 days, or until the run limit is passed, and rating a run exempts it;

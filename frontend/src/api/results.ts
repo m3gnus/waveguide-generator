@@ -23,6 +23,30 @@ export interface JobResults {
   channel_order?: string[];
 }
 
+export interface RadiationImpedanceAperture {
+  name: string;
+  area_m2: number;
+  tag: number;
+}
+
+export interface RadiationImpedancePresentation {
+  schema_version: 1;
+  quantity: 'average_aperture_pressure_per_volume_velocity';
+  units: 'Pa*s/m^3';
+  phase_time_convention: 'engineering_exp_plus_jwt';
+  frequencies_hz: number[];
+  apertures: RadiationImpedanceAperture[];
+  engineering_matrix: {
+    real: number[][][];
+    imaginary: number[][][];
+  };
+  in_phase_termination: {
+    aperture_names: string[];
+    real: number[][];
+    imaginary: number[][];
+  };
+}
+
 function sortFrequencyShapedRows(result: JobResults): JobResults {
   const record = result as JobResults & Record<string, unknown>;
   const frequencies = record.frequencies;
@@ -252,6 +276,26 @@ export async function fetchJobResults(jobId: string, fetcher: typeof fetch = fet
   } finally {
     if (inFlightResults.get(jobId) === request) inFlightResults.delete(jobId);
   }
+}
+
+/** The optional matrix artifact is stored separately from the result JSON.
+ * A 404 means the job simply has no retained matrix; other failures remain
+ * visible to callers that are explicitly exporting it. */
+export async function fetchRadiationImpedancePresentation(
+  jobId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<RadiationImpedancePresentation | null> {
+  const response = await fetcher(`/api/radiation-impedance/${encodeURIComponent(jobId)}/presentation`);
+  if (response.status === 404) return null;
+  if (!response.ok) {
+    let detail = `Radiation-impedance request failed: ${response.status}`;
+    try {
+      const body = await response.json() as { detail?: string };
+      if (body.detail) detail = body.detail;
+    } catch { /* status is enough */ }
+    throw new Error(detail);
+  }
+  return response.json() as Promise<RadiationImpedancePresentation>;
 }
 
 export interface RecombineSpec {
