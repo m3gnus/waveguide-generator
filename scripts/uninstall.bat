@@ -45,8 +45,9 @@ echo   --yes    do not ask for confirmation.
 echo   --help   this message
 echo.
 echo Without --data only the repository-local build products are removed:
-echo .venv and frontend\dist. The checkout itself is left alone -- delete the
-echo folder yourself when you no longer want it.
+echo .venv, frontend\dist, the packaged WGLink runtime, and the Fusion registration
+echo managed by this checkout. A developer-managed WGLink is never removed.
+echo The checkout itself is left alone -- delete the folder yourself when done.
 exit /b 0
 
 :args_done
@@ -67,11 +68,16 @@ goto data_dir_done
 if not exist "%DATA_DIR%\" set "DATA_DIR="
 :data_dir_done
 
+set "WGLINK_TARGET="
+call :resolve_wglink_target
+
 set "HAS_TARGETS="
 if exist ".venv\" set "HAS_TARGETS=1"
 if exist "frontend\dist\" set "HAS_TARGETS=1"
 if exist "frontend\.wg2-spa-staging\" set "HAS_TARGETS=1"
 if exist "frontend\.wg2-dist-previous\" set "HAS_TARGETS=1"
+if exist "integrations\wglink\runtime\" set "HAS_TARGETS=1"
+if defined WGLINK_TARGET set "HAS_TARGETS=1"
 if defined DATA_DIR set "HAS_TARGETS=1"
 if not defined HAS_TARGETS goto nothing_to_remove
 
@@ -80,6 +86,8 @@ if exist ".venv\" echo   %WG_ROOT%\.venv
 if exist "frontend\dist\" echo   %WG_ROOT%\frontend\dist
 if exist "frontend\.wg2-spa-staging\" echo   %WG_ROOT%\frontend\.wg2-spa-staging
 if exist "frontend\.wg2-dist-previous\" echo   %WG_ROOT%\frontend\.wg2-dist-previous
+if exist "integrations\wglink\runtime\" echo   %WG_ROOT%\integrations\wglink\runtime
+if defined WGLINK_TARGET echo   %WGLINK_TARGET%
 if defined DATA_DIR echo   %DATA_DIR%
 echo.
 echo The checkout itself is kept. Delete "%WG_ROOT%" yourself when you are done.
@@ -95,6 +103,8 @@ if exist ".venv\" call :remove_tree "%WG_ROOT%\.venv"
 if exist "frontend\dist\" call :remove_tree "%WG_ROOT%\frontend\dist"
 if exist "frontend\.wg2-spa-staging\" call :remove_tree "%WG_ROOT%\frontend\.wg2-spa-staging"
 if exist "frontend\.wg2-dist-previous\" call :remove_tree "%WG_ROOT%\frontend\.wg2-dist-previous"
+if defined WGLINK_TARGET call :remove_tree "%WGLINK_TARGET%"
+if exist "integrations\wglink\runtime\" call :remove_tree "%WG_ROOT%\integrations\wglink\runtime"
 if defined DATA_DIR call :remove_tree "%DATA_DIR%"
 if defined REMOVE_FAILED goto removal_incomplete
 echo.
@@ -168,6 +178,28 @@ exit /b 0
 :reject_data_dir
 set "DATA_DIR="
 set "DATA_DIR_UNSAFE=1"
+exit /b 0
+
+:resolve_wglink_target
+if exist ".venv\Scripts\python.exe" call :ask_venv_wglink
+if defined WGLINK_TARGET exit /b 0
+where py >nul 2>&1
+if not errorlevel 1 call :ask_py_wglink
+if defined WGLINK_TARGET exit /b 0
+where python >nul 2>&1
+if not errorlevel 1 call :ask_path_wglink
+exit /b 0
+
+:ask_venv_wglink
+for /f "delims=" %%d in ('.venv\Scripts\python.exe "%WG_ROOT%\scripts\install_wglink.py" --print-managed-target 2^>nul') do if not defined WGLINK_TARGET set "WGLINK_TARGET=%%d"
+exit /b 0
+
+:ask_py_wglink
+for /f "delims=" %%d in ('py -3.13 "%WG_ROOT%\scripts\install_wglink.py" --print-managed-target 2^>nul') do if not defined WGLINK_TARGET set "WGLINK_TARGET=%%d"
+exit /b 0
+
+:ask_path_wglink
+for /f "delims=" %%d in ('python "%WG_ROOT%\scripts\install_wglink.py" --print-managed-target 2^>nul') do if not defined WGLINK_TARGET set "WGLINK_TARGET=%%d"
 exit /b 0
 
 :unsafe_data_dir

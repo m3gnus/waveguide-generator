@@ -174,7 +174,14 @@ def test_default_fusion_addins_locations_cover_both_supported_platforms(tmp_path
     assert installer.default_addins_dir("macos", home=home, environ={}) == legacy
     assert installer.default_addins_dir(
         "windows", home=home, environ={"APPDATA": str(appdata)}
-    ) == appdata / "Autodesk" / "Autodesk Fusion 360" / "API" / "AddIns"
+    ) == appdata / "Autodesk" / "Autodesk Fusion" / "API" / "AddIns"
+    windows_legacy = (
+        appdata / "Autodesk" / "Autodesk Fusion 360" / "API" / "AddIns"
+    )
+    windows_legacy.mkdir(parents=True)
+    assert installer.default_addins_dir(
+        "windows", home=home, environ={"APPDATA": str(appdata)}
+    ) == windows_legacy
     assert installer.default_addins_dir("linux", home=home, environ={}) is None
 
 
@@ -211,6 +218,9 @@ def test_installed_copy_points_to_wgs_existing_python_and_verified_resampler(
         "AGPL test fixture\n"
     )
 
+    resampler = Path(runtime["root"]) / "scripts" / "wglink_resample.py"
+    resampler.write_text("# tampered after install\n", encoding="utf-8")
+
     second_status, second_target = installer.install(
         root=root,
         platform="macos",
@@ -218,6 +228,7 @@ def test_installed_copy_points_to_wgs_existing_python_and_verified_resampler(
         archive_path=archive,
     )
     assert (second_status, second_target) == ("installed", target)
+    assert resampler.read_text(encoding="utf-8") == "# exact resampler\n"
 
 
 def test_platform_install_preserves_a_developer_managed_copy(tmp_path: Path):

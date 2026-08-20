@@ -75,7 +75,10 @@ def default_addins_dir(
     if platform == "windows":
         appdata = environ.get("APPDATA")
         base = Path(appdata) if appdata else home / "AppData" / "Roaming"
-        return base / "Autodesk" / "Autodesk Fusion 360" / "API" / "AddIns"
+        base = base / "Autodesk"
+        legacy = base / "Autodesk Fusion 360" / "API" / "AddIns"
+        current = base / "Autodesk Fusion" / "API" / "AddIns"
+        return legacy if legacy.exists() else current
     if platform == "linux":
         return None
     raise InstallError(f"Unsupported platform {platform!r}")
@@ -211,6 +214,39 @@ def _runtime_id(provenance: dict[str, object]) -> str:
     return f"wg-{version}-source-{commit}"
 
 
+def _runtime_matches(
+    root: Path,
+    provenance: dict[str, object],
+    payloads: dict[str, bytes],
+) -> bool:
+    try:
+        installed = _read_json(root / "provenance.json", "installed WGLink provenance")
+        if installed != provenance:
+            return False
+        expected = set(payloads).difference({"wglink/provenance.json"})
+        all_paths = list(root.rglob("*"))
+        if any(path.is_symlink() for path in all_paths):
+            return False
+        actual = {
+            relative
+            for path in all_paths
+            if path.is_file()
+            and (relative := path.relative_to(root).as_posix()) != "provenance.json"
+        }
+        if actual != {name.removeprefix("wglink/") for name in expected}:
+            return False
+        return all(
+            hashlib.sha256(
+                (root / name.removeprefix("wglink/")).read_bytes()
+            ).hexdigest()
+            == hashlib.sha256(data).hexdigest()
+            for name, data in payloads.items()
+            if name != "wglink/provenance.json"
+        )
+    except (InstallError, OSError):
+        return False
+
+
 def _materialize_runtime(
     archive_path: Path,
     *,
@@ -219,9 +255,11 @@ def _materialize_runtime(
     provenance, payloads = verify_package(archive_path, root=root)
     parent = root / "integrations" / "wglink" / "runtime" / "payloads"
     destination = parent / _runtime_id(provenance)
-    if (destination / "wglink" / "provenance.json").is_file():
+    if _runtime_matches(destination / "wglink", provenance, payloads):
         return destination / "wglink", provenance
     parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists():
+        shutil.rmtree(destination)
     staging = Path(tempfile.mkdtemp(prefix=".wglink-payload-", dir=parent))
     try:
         for name, data in payloads.items():
@@ -362,6 +400,20 @@ def uninstall(
     return "removed", target
 
 
+def managed_target(
+    *,
+    root: Path = REPO_ROOT,
+    platform: str = "auto",
+    addins_dir: Path | None = None,
+) -> Path | None:
+    root = root.resolve()
+    addins_dir = addins_dir or default_addins_dir(_platform_name(platform))
+    if addins_dir is None:
+        return None
+    target = addins_dir.expanduser().resolve() / "WGLink"
+    return target if is_managed_target(target, root) else None
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--archive", type=Path, help="install a locally built package")
@@ -369,6 +421,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--platform", choices=("auto", "macos", "windows", "linux"), default="auto")
     parser.add_argument("--replace-external", action="store_true", help="replace a non-WG-managed WGLink")
     parser.add_argument("--uninstall", action="store_true", help="remove only this WG install's managed copy")
+    parser.add_argument("--print-managed-target", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--yes", action="store_true", help="confirm --uninstall")
     parser.add_argument("--root", type=Path, default=REPO_ROOT, help=argparse.SUPPRESS)
     parser.add_argument("--python", type=Path, help=argparse.SUPPRESS)
@@ -378,6 +431,14 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        if args.print_managed_target:
+            target = managed_target(
+                root=args.root, platform=args.platform, addins_dir=args.addins_dir
+            )
+            if target is None:
+                return 1
+            print(target)
+            return 0
         if args.uninstall:
             if not args.yes:
                 raise InstallError("--uninstall requires --yes")
@@ -393,7 +454,7 @@ def main(argv: list[str] | None = None) -> int:
                 python=args.python,
                 replace_external=args.replace_external,
             )
-    except (InstallError, OSError, subprocess.SubprocessError) as exc:
+    except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
         print(f"Could not install WGLink: {exc}", file=sys.stderr)
         return 2
     if status == "unsupported":

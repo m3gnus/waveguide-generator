@@ -26,8 +26,9 @@ Waveguide Generator uninstaller.
   --help   this message
 
 Without --data only the repository-local build products are removed:
-.venv and frontend/dist. The checkout itself is left alone -- delete the
-folder yourself when you no longer want it.
+.venv, frontend/dist, the packaged WGLink runtime, and the Fusion registration
+managed by this checkout. A developer-managed WGLink is never removed. The
+checkout itself is left alone -- delete the folder yourself when you no longer want it.
 USAGE
 }
 
@@ -64,8 +65,29 @@ resolve_data_dir() {
 }
 
 TARGETS=()
+
+resolve_wglink_target() {
+    local interpreter candidate
+    for interpreter in "$ROOT/.venv/bin/python" python3.13 python3; do
+        if [[ -x "$interpreter" ]] || command -v "$interpreter" >/dev/null 2>&1; then
+            if IFS= read -r candidate < <("$interpreter" \
+                "$ROOT/scripts/install_wglink.py" --print-managed-target 2>/dev/null) \
+                && [[ -n "$candidate" ]]; then
+                printf '%s\n' "$candidate"
+                return 0
+            fi
+        fi
+    done
+    return 1
+}
+
+WGLINK_TARGET=""
+if WGLINK_TARGET="$(resolve_wglink_target)" && [[ -n "$WGLINK_TARGET" ]]; then
+    TARGETS+=("$WGLINK_TARGET")
+fi
 [[ -d "$ROOT/.venv" ]] && TARGETS+=("$ROOT/.venv")
 [[ -d "$ROOT/frontend/dist" ]] && TARGETS+=("$ROOT/frontend/dist")
+[[ -d "$ROOT/integrations/wglink/runtime" ]] && TARGETS+=("$ROOT/integrations/wglink/runtime")
 # Leftovers from an interrupted SPA install. Harmless, but they are ours.
 [[ -d "$ROOT/frontend/.wg2-spa-staging" ]] && TARGETS+=("$ROOT/frontend/.wg2-spa-staging")
 [[ -d "$ROOT/frontend/.wg2-dist-previous" ]] && TARGETS+=("$ROOT/frontend/.wg2-dist-previous")

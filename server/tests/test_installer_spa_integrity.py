@@ -59,6 +59,12 @@ raise SystemExit(2)
     _write(checkout / "server" / "cli" / "__main__.py", "")
     _write(checkout / "scripts" / "check_backends.py", "raise SystemExit(0)\n")
     _write(
+        checkout / "scripts" / "install_wglink.py",
+        "print('WGLink: skipped in SPA integrity fixture')\n",
+    )
+    _write(checkout / "scripts" / "build_wglink_package.py", "")
+    _write(checkout / "integrations" / "wglink" / "source.json", "{}")
+    _write(
         checkout / "scripts" / "bootstrap.py",
         """from pathlib import Path
 import os

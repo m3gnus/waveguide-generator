@@ -26,8 +26,12 @@ Then run the installer for your platform:
 It fast-forwards the checkout, downloads that version's prebuilt interface from
 the GitHub release and **refuses to extract it unless it matches the published
 SHA-256**, creates `.venv` with CPython 3.13 and the locked dependency set,
-checks that a solve can actually run, and starts the app. Running it again is
-cheap: an unchanged install re-verifies in about a second and contacts no index.
+checks that a solve can actually run, and starts the app. On macOS and Windows
+it also installs the exact compatible WGLink source into Fusion 360 and reuses
+WG's environment for spline resampling; users need no add-in checkout or second
+virtual environment. Running the installer again updates WG's managed copy but
+preserves a developer-managed WGLink registration. The exact source, integrity,
+and takeover rules are in the [WGLink packaging contract](integrations/wglink/README.md).
 
 Prerequisites, all reported with the command that installs them: CPython 3.13
 (exactly — the dependency set is locked against one series), Git 2.20+, the
@@ -37,6 +41,9 @@ Tools on Apple Silicon for the Metal solver.
 Useful flags: `--tag vX.Y.Z` installs a specific release, `--skip-spa` leaves
 `frontend/dist` alone while you are working on the interface, `--no-launch`
 stops before starting the app, and `--force` rebuilds the environment.
+`--skip-wglink` leaves Fusion untouched; `--replace-wglink` deliberately
+replaces a developer-managed copy; and `--wglink-archive PATH` rehearses an
+already-built, provenance-checked package without fetching its source.
 
 To check the solve backends at any time without a full install:
 
@@ -47,9 +54,9 @@ To check the solve backends at any time without a full install:
 ### Uninstall
 
 ```
-bash installers/macos/uninstall.sh         # macOS: .venv and frontend/dist
+bash installers/macos/uninstall.sh         # macOS: also its managed WGLink copy
 bash installers/linux/uninstall.sh         # Linux: same options
-installers\windows\uninstall.bat            # Windows: same options
+installers\windows\uninstall.bat            # Windows: also its managed WGLink copy
 # Add --data to also remove designs, job history, meshes, and logs.
 ```
 
@@ -227,3 +234,9 @@ Burton-Miller Julia solver from [boundary-lab](https://github.com/m3gnus/boundar
 GPL-3 and AGPL-3 are mutually compatible, but the BEAT engine's terms are its
 own and stay with that repository — which is why it is pinned rather than
 vendored here.
+
+WGLink is packaged from the separate AGPL-3.0-or-later
+`hornlab-fusion-addin` repository at the full commit recorded in
+[`integrations/wglink/source.json`](integrations/wglink/source.json). Its
+upstream license and per-file source provenance travel in every installed
+package.

@@ -24,12 +24,16 @@ set "AFTER_PULL="
 set "LAUNCH=1"
 set "FORCE="
 set "SKIP_SPA="
+set "SKIP_WGLINK="
 set "SPA_ARCHIVE="
+set "WGLINK_ARCHIVE="
 set "SPA_BASE_URL="
 set "SPA_VERSION="
 set "TAG="
+set "REPLACE_WGLINK="
 set "GIT_VERSION="
 set "SPA_SUMMARY="
+set "WGLINK_SUMMARY="
 set "VCREDIST_SUMMARY="
 
 :parse_args
@@ -39,6 +43,9 @@ if /I "%~1"=="--root" goto arg_root
 if /I "%~1"=="--no-launch" goto arg_no_launch
 if /I "%~1"=="--force" goto arg_force
 if /I "%~1"=="--skip-spa" goto arg_skip_spa
+if /I "%~1"=="--skip-wglink" goto arg_skip_wglink
+if /I "%~1"=="--replace-wglink" goto arg_replace_wglink
+if /I "%~1"=="--wglink-archive" goto arg_wglink_archive
 if /I "%~1"=="--spa-archive" goto arg_spa_archive
 if /I "%~1"=="--spa-base-url" goto arg_spa_base_url
 if /I "%~1"=="--version" goto arg_version
@@ -70,6 +77,19 @@ goto parse_args
 set "SKIP_SPA=1"
 shift /1
 goto parse_args
+:arg_skip_wglink
+set "SKIP_WGLINK=1"
+shift /1
+goto parse_args
+:arg_replace_wglink
+set "REPLACE_WGLINK=1"
+shift /1
+goto parse_args
+:arg_wglink_archive
+set "WGLINK_ARCHIVE=%~2"
+shift /1
+shift /1
+goto parse_args
 :arg_spa_archive
 set "SPA_ARCHIVE=%~2"
 shift /1
@@ -99,6 +119,10 @@ echo   --version X.Y.Z     install the SPA for this version
 echo   --spa-archive PATH  install a downloaded SPA archive instead of fetching one
 echo   --spa-base-url URL  directory holding the SPA archive and its .sha256
 echo   --skip-spa          leave frontend\dist alone ^(for interface development^)
+echo   --wglink-archive PATH
+echo                       install this reviewed WGLink package instead of fetching it
+echo   --skip-wglink       leave Fusion's WGLink registration untouched
+echo   --replace-wglink    replace an existing non-WG developer install
 echo   --force             rebuild the environment and reinstall the SPA
 echo   --no-launch         finish without starting the application
 echo   --help              this message
@@ -124,7 +148,7 @@ echo ===============================================================
 echo.
 echo Verifying the project folder...
 set "ROOT_INVALID="
-for %%f in (launch\serve.py launchers\statusapp\__main__.py launchers\windows\launch-wg.bat scripts\bootstrap.py scripts\fetch_spa.py server\cli\__main__.py shared\version.json server\requirements-lock.txt server\requirements-pins.txt) do if not exist "%%f" call :report_missing "%%f"
+for %%f in (launch\serve.py launchers\statusapp\__main__.py launchers\windows\launch-wg.bat scripts\bootstrap.py scripts\fetch_spa.py scripts\install_wglink.py scripts\build_wglink_package.py integrations\wglink\source.json server\cli\__main__.py shared\version.json server\requirements-lock.txt server\requirements-pins.txt) do if not exist "%%f" call :report_missing "%%f"
 if defined ROOT_INVALID goto bad_project_folder
 echo   Looks good: %WG_ROOT%
 
@@ -210,10 +234,31 @@ echo Checking that a solve can run...
 if errorlevel 1 goto no_solve_backend
 
 echo.
+echo Installing WGLink for Fusion 360...
+if defined SKIP_WGLINK goto wglink_skipped
+set "WGLINK_ARGS="
+if defined WGLINK_ARCHIVE set WGLINK_ARGS=%WGLINK_ARGS% --archive "%WGLINK_ARCHIVE%"
+if defined REPLACE_WGLINK set WGLINK_ARGS=%WGLINK_ARGS% --replace-external
+".venv\Scripts\python.exe" "%WG_ROOT%\scripts\install_wglink.py" %WGLINK_ARGS%
+if errorlevel 1 goto wglink_failed
+set "WGLINK_SUMMARY=WGLink: installed or preserved; restart Fusion and enable Run on Startup."
+goto wglink_done
+:wglink_skipped
+echo   Skipped by request.
+set "WGLINK_SUMMARY=WGLink: left untouched (--skip-wglink)."
+goto wglink_done
+:wglink_failed
+echo   WARNING: WGLink could not be installed; Waveguide Generator itself is ready.
+echo            Review the reason above and re-run this installer.
+set "WGLINK_SUMMARY=WGLink: not installed; see the warning above."
+:wglink_done
+
+echo.
 echo ===============================================================
 echo  Install complete.
 echo ===============================================================
 echo   %SPA_SUMMARY%
+echo   %WGLINK_SUMMARY%
 if defined VCREDIST_SUMMARY echo   %VCREDIST_SUMMARY%
 echo.
 echo Start it any time with launchers\windows\launch-wg.bat.
