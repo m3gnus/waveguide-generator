@@ -23,9 +23,9 @@ import { runDisplayName } from '../prefs/preferences';
 import type { WorkspaceMode } from '../stores/workspaceMode';
 
 export const solverModeLabels = {
-  auto: 'Auto',
+  auto: 'Auto (full 3D)',
   full_3d: 'Full 3D',
-  circsym: 'Axisymmetric (force)',
+  circsym: 'Axisymmetric CPU (force)',
 } as const;
 
 /**
@@ -82,7 +82,7 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null 
         {backendEngines.map((engine) => <option key={engine.name} value={engine.name.toLowerCase()} disabled={!engine.available}>{engine.name}{engine.available ? engine.version ? ` · ${engine.version}` : '' : ` · unavailable${engine.reason ? `: ${engine.reason}` : ''}`}</option>)}
       </select></HelpTipRow>
       <p className="section-note">{selectedEngine?.name.toLowerCase() === 'metal' && fastPaths.includes('axisymmetric-meridian')
-        ? 'Metal capability: automatic axisymmetric meridian fast path when the geometry is eligible.'
+        ? 'Metal capability: optional axisymmetric CPU path when explicitly selected; AUTO stays on native full 3D.'
         : 'Selected backend capability: Full 3D.'}</p>
       {/* Listing the axisymmetric label on a backend that refuses it advertises
           a mode the user cannot reach; naming only what this backend runs keeps
