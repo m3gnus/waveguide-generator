@@ -228,6 +228,28 @@ describe('result exporters', () => {
       power_response_db_spl_avg: 87,
     });
   });
+  it('writes one self-contained report for the complete multi-channel run', async () => {
+    const saveText = vi.fn();
+    const wrapped: ResultPayload = {
+      frequencies: [], channel_order: ['HF', 'MF'], channels: { HF: result, MF: result },
+    };
+
+    await expect(runExportFormat('html_report', {
+      result: wrapped,
+      jobStem: 'horn_1',
+      designName: 'Horn One',
+      preferences: preferencesStore.getSnapshot(),
+      now: new Date('2026-08-20T12:00:00Z'),
+      saveText,
+    })).resolves.toEqual(['horn_1_report.html']);
+
+    expect(saveText).toHaveBeenCalledOnce();
+    expect(saveText.mock.calls[0][1]).toBe('horn_1_report.html');
+    expect(saveText.mock.calls[0][2]).toBe('text/html;charset=utf-8');
+    expect(saveText.mock.calls[0][0]).toContain('<h1>Horn One</h1>');
+    expect(saveText.mock.calls[0][0]).toContain('<h2>HF</h2>');
+    expect(saveText.mock.calls[0][0]).toContain('<h2>MF</h2>');
+  });
   it('exports only the selected CAD drive channel and refuses an ambiguous wrapper', async () => {
     const wrapped: ResultPayload = {
       frequencies: [],

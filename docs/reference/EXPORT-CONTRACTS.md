@@ -38,6 +38,9 @@ not alternate geometry authorities.
 | VituixCAD project | Version-2 `.vxp` project plus every referenced per-channel on-axis FRD and electrical ZMA. Uses the solved LR4 filters, gains, and delays when the eligible driver channels exactly match a combined result. |
 | Frequency CSV | Exact-key union of SPL, DI, and impedance frequency grids. Empty cells mean unavailable, never interpolated. |
 | Full JSON | Timestamp, smoothing selection, and the complete stored result contract. |
+| Complex pressure basis | One NPZ per imported Metal drive channel. `pressure_complex` and optional sphere pressure are lossless engineering `exp(+jωt)` phasors converted from the retained solver basis; the file tags its drive normalization, motion, source ids, and any retained tags/areas. Surface-average pressure is explicitly unavailable rather than reconstructed from result JSON. Jobs predating retention, parametric jobs, and unsupported engines refuse clearly. |
+| Derived acoustics | Per-channel CSV and schema-versioned JSON sidecars joining on-axis SPL, full-sphere DI, power-response level (`SPL - DI`), de-embedded excess group delay when the phase grid is resolvable, and the retained beam-shape/beamwidth metrics. Missing values remain empty/null and are never interpolated. |
+| Static HTML report | One self-contained run report across every channel, with inline CSS/SVG response and beamwidth plots, summaries, warnings, derived-data tables, and result metadata. It has no scripts or network dependencies and escapes result/user text before rendering. |
 | Summary text | Human summary and the same union-grid detailed rows as the frequency CSV. |
 | Polar CSV | Frequency, plane, measured theta, normalized SPL. |
 | Impedance CSV | Frequency plus real/imaginary `Z/(rho*c)`. |
@@ -64,6 +67,11 @@ only when every selected automatic format completed; failed formats remain retry
 The permanent Workspace run archive conditionally adds both radiation-matrix formats
 when the job's artifact flag is true; ordinary runs do not fail archiving over an
 artifact they never produced.
+
+The default run archive always writes full JSON, frequency CSV, derived-acoustics
+sidecars, and the static HTML report. Archive timestamps come from the run's recorded
+completion time, so retrying after an interrupted metadata update reproduces identical
+bytes under the archive's merge-identical policy.
 
 ## Security and integrity
 
