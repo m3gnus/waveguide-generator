@@ -36,6 +36,7 @@ from pathlib import Path
 import platform
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -50,6 +51,7 @@ from server.cadlink.limits import (
     MAX_CONCURRENT_STEP_CHILDREN,
     MAX_RETAINED_STDERR_BYTES,
     MAX_STAGED_ARTIFACT_BYTES,
+    MAX_STEP_INPUT_BYTES,
     MESH_MEMORY_BYTES,
     MESH_TIMEOUT_S,
 )
@@ -201,7 +203,36 @@ def _posix_process_group(process: subprocess.Popen[bytes]) -> int | None:
         return None
 
 
-def terminate_process_tree(process: subprocess.Popen[bytes], job: Any = None) -> None:
+def _process_group_alive(group: int) -> bool:
+    try:
+        os.killpg(group, 0)
+    except ProcessLookupError:
+        return False
+    except (PermissionError, OSError):
+        # A permission failure still proves that the group exists.
+        return True
+    return True
+
+
+def _wait_for_tree_exit(
+    process: subprocess.Popen[bytes], group: int | None, timeout: float
+) -> bool:
+    deadline = time.monotonic() + timeout
+    while True:
+        # poll() also reaps the direct child. Without that, its zombie keeps
+        # the process group looking alive even after every process was stopped.
+        process.poll()
+        alive = _process_group_alive(group) if group is not None else process.poll() is None
+        if not alive:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.02)
+
+
+def terminate_process_tree(
+    process: subprocess.Popen[bytes], job: Any = None, *, group: int | None = None
+) -> None:
     """Stop the child and everything it started.
 
     A child that spawned helpers and then hung must not leave them holding the
@@ -213,25 +244,23 @@ def terminate_process_tree(process: subprocess.Popen[bytes], job: Any = None) ->
     if job is not None:
         with contextlib.suppress(Exception):
             job.terminate()
-    group = _posix_process_group(process) if os.name == "posix" else None
-    if group is not None and group != os.getpgid(0):
+    resolved_group = (
+        group if group is not None else (_posix_process_group(process) if os.name == "posix" else None)
+    )
+    if resolved_group is not None and resolved_group != os.getpgid(0):
         with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
-            os.killpg(group, signal.SIGTERM)
-    else:
+            os.killpg(resolved_group, signal.SIGTERM)
+    elif process.poll() is None:
         with contextlib.suppress(Exception):
             process.terminate()
-    try:
-        process.wait(timeout=_TERMINATE_GRACE_S)
+    if _wait_for_tree_exit(process, resolved_group, _TERMINATE_GRACE_S):
         return
-    except subprocess.TimeoutExpired:
-        pass
-    if group is not None and group != os.getpgid(0):
+    if resolved_group is not None and resolved_group != os.getpgid(0):
         with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
-            os.killpg(group, signal.SIGKILL)
+            os.killpg(resolved_group, signal.SIGKILL)
     with contextlib.suppress(Exception):
         process.kill()
-    with contextlib.suppress(subprocess.TimeoutExpired):
-        process.wait(timeout=_TERMINATE_GRACE_S)
+    _wait_for_tree_exit(process, resolved_group, _TERMINATE_GRACE_S)
 
 
 def process_group_rss_bytes(group: int) -> int | None:
@@ -342,6 +371,92 @@ def _sha256_file(path: Path) -> str:
                 break
             digest.update(chunk)
     return "sha256:" + digest.hexdigest()
+
+
+def _stage_step_input(
+    source: Path,
+    destination: Path,
+    *,
+    stage: str,
+    expected_sha256: str | None,
+    expected_size_bytes: int | None,
+) -> tuple[str, int]:
+    """Copy and hash one opened STEP descriptor under the input ceiling.
+
+    The bundle reader's checksum is evidence about specific bytes. Reopening a
+    mutable CAD folder later without carrying that checksum across the process
+    boundary would turn path identity into byte identity. This routine binds
+    the child copy back to the verified size and digest while never allocating
+    more than one chunk in the parent.
+    """
+
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(source, flags)
+    except OSError as exc:
+        raise ChildRefusal(stage, f"could not open the STEP to inspect: {exc}") from exc
+
+    digest = hashlib.sha256()
+    copied = 0
+    try:
+        with os.fdopen(descriptor, "rb", closefd=True) as source_handle:
+            before = os.fstat(source_handle.fileno())
+            if not stat.S_ISREG(before.st_mode):
+                raise ChildRefusal(stage, f"the STEP to inspect is not a regular file: {source}")
+            if before.st_size > MAX_STEP_INPUT_BYTES:
+                raise ChildRefusal(
+                    stage,
+                    f"the STEP to inspect is {before.st_size:,} bytes, over the "
+                    f"{MAX_STEP_INPUT_BYTES:,} byte limit for one STEP input",
+                )
+            if expected_size_bytes is not None and before.st_size != expected_size_bytes:
+                raise ChildRefusal(
+                    stage,
+                    "the STEP changed after bundle verification: expected "
+                    f"{expected_size_bytes:,} bytes, found {before.st_size:,}",
+                )
+            with destination.open("xb") as destination_handle:
+                while True:
+                    chunk = source_handle.read(_COPY_CHUNK_BYTES)
+                    if not chunk:
+                        break
+                    copied += len(chunk)
+                    if copied > MAX_STEP_INPUT_BYTES:
+                        raise ChildRefusal(
+                            stage,
+                            f"the STEP grew beyond the {MAX_STEP_INPUT_BYTES:,} byte "
+                            "limit while it was being staged",
+                        )
+                    destination_handle.write(chunk)
+                    digest.update(chunk)
+            after = os.fstat(source_handle.fileno())
+    except ChildRefusal:
+        raise
+    except OSError as exc:
+        raise ChildRefusal(stage, f"could not stage the STEP for inspection: {exc}") from exc
+
+    if (
+        copied != before.st_size
+        or after.st_size != before.st_size
+        or after.st_mtime_ns != before.st_mtime_ns
+        or after.st_ctime_ns != before.st_ctime_ns
+    ):
+        raise ChildRefusal(stage, "the STEP changed while it was being staged")
+    if expected_size_bytes is not None and copied != expected_size_bytes:
+        raise ChildRefusal(
+            stage,
+            "the STEP changed after bundle verification: expected "
+            f"{expected_size_bytes:,} bytes, copied {copied:,}",
+        )
+    checksum = "sha256:" + digest.hexdigest()
+    if expected_sha256 is not None and checksum != expected_sha256:
+        raise ChildRefusal(
+            stage,
+            "the STEP checksum changed after bundle verification: expected "
+            f"{expected_sha256}, copied {checksum}",
+        )
+    return checksum, copied
 
 
 def _verify_artifacts(
@@ -493,6 +608,8 @@ def isolated_step_task(
     allowed_artifacts: Sequence[str] = (),
     stage: str,
     entrypoint: str = CHILD_ENTRYPOINT,
+    expected_sha256: str | None = None,
+    expected_size_bytes: int | None = None,
 ) -> Iterator[ChildOutcome]:
     """Run one task in a fresh child and yield its verified answer.
 
@@ -520,20 +637,25 @@ def isolated_step_task(
         for directory in (staged_input, out_dir, staging / "tmp", staging / "home"):
             directory.mkdir(parents=True, exist_ok=True)
         child_source = staged_input / "source.step"
-        shutil.copyfile(source, child_source)
+        checksum, staged_size = _stage_step_input(
+            source,
+            child_source,
+            stage=stage,
+            expected_sha256=expected_sha256,
+            expected_size_bytes=expected_size_bytes,
+        )
         with contextlib.suppress(OSError):
             # Read-only for the child. Advisory rather than enforced -- the
             # child runs as the same user -- but it turns an accidental
             # in-place edit into an error instead of a silent mutation.
             child_source.chmod(0o400)
-        checksum = _sha256_file(child_source)
         envelope = {
             "protocol": PROTOCOL_VERSION,
             "task": task,
             "source": {
                 "path": str(child_source),
                 "sha256": checksum,
-                "size_bytes": child_source.stat().st_size,
+                "size_bytes": staged_size,
             },
             "staging": str(staging),
             "out_dir": str(out_dir),
@@ -612,7 +734,22 @@ def _run_child(
                 stage, f"could not start the isolated CAD child: {retry_exc}"
             ) from retry_exc
 
-    job = _assign_windows_job(process, budget) if os.name == "nt" else None
+    process_group = _posix_process_group(process) if os.name == "posix" else None
+    job = None
+    if os.name == "nt":
+        try:
+            job = _required_windows_job(process, budget, stage=stage)
+        except ChildRefusal:
+            # The child is still blocked waiting for its stdin envelope. Stop
+            # it before surfacing the refusal: no uncontained process is ever
+            # allowed to continue merely because the job API failed.
+            with contextlib.suppress(Exception):
+                if process.stdin is not None:
+                    process.stdin.close()
+            with contextlib.suppress(Exception):
+                if process.stdout is not None:
+                    process.stdout.close()
+            raise
     drain = _BoundedDrain(process.stdout)
     killed_for: str | None = None
     try:
@@ -624,10 +761,12 @@ def _run_child(
             process.stdin.close()
         except (BrokenPipeError, OSError):
             pass
-        killed_for = _supervise(process, budget, job=job)
+        killed_for = _supervise(process, budget, job=job, group=process_group)
     finally:
-        if process.poll() is None:
-            terminate_process_tree(process, job)
+        # Do this even after a clean exit. The root may have returned a valid
+        # result while one of its native helpers still owns the process group
+        # and can mutate staging.
+        terminate_process_tree(process, job, group=process_group)
         # Drain first, close second: the tail is the only diagnostic there is.
         diagnostics = drain.text()
         with contextlib.suppress(Exception):
@@ -689,12 +828,17 @@ def _run_child(
 
 
 def _supervise(
-    process: subprocess.Popen[bytes], budget: ChildBudget, *, job: Any = None
+    process: subprocess.Popen[bytes],
+    budget: ChildBudget,
+    *,
+    job: Any = None,
+    group: int | None = None,
 ) -> str | None:
     """Poll the deadline and the resident memory; return why it was killed."""
 
     deadline = time.monotonic() + budget.wall_time_s
-    group = _posix_process_group(process) if os.name == "posix" else None
+    if group is None and os.name == "posix":
+        group = _posix_process_group(process)
     while True:
         try:
             process.wait(timeout=_WATCHDOG_INTERVAL_S)
@@ -702,7 +846,7 @@ def _supervise(
         except subprocess.TimeoutExpired:
             pass
         if time.monotonic() >= deadline:
-            terminate_process_tree(process, job)
+            terminate_process_tree(process, job, group=group)
             return (
                 f"the isolated CAD child exceeded its {budget.wall_time_s:g} second "
                 "deadline and was stopped with its descendants"
@@ -710,7 +854,7 @@ def _supervise(
         if group is not None:
             resident = process_group_rss_bytes(group)
             if resident is not None and resident > budget.memory_bytes:
-                terminate_process_tree(process, job)
+                terminate_process_tree(process, job, group=group)
                 return (
                     f"the isolated CAD child reached {resident:,} bytes resident, over "
                     f"its {budget.memory_bytes:,} byte budget, and was stopped"
@@ -751,14 +895,36 @@ class _WindowsJob:
         self._kernel32.CloseHandle(self._handle)
 
 
+def _required_windows_job(
+    process: subprocess.Popen[bytes], budget: ChildBudget, *, stage: str
+) -> Any:
+    """Return the containment job or refuse; Windows has no safe fallback."""
+
+    try:
+        job = _assign_windows_job(process, budget)
+    except Exception as exc:  # pragma: no cover - concrete failures are Windows-only
+        terminate_process_tree(process)
+        raise ChildRefusal(
+            stage, f"could not confine the isolated CAD child in a Windows job: {exc}"
+        ) from exc
+    if job is None:
+        # Retain the guard even though the production implementation now raises
+        # detailed errors. It makes future platform wrappers fail closed too.
+        terminate_process_tree(process)
+        raise ChildRefusal(
+            stage, "could not confine the isolated CAD child in a Windows job"
+        )
+    return job
+
+
 def _assign_windows_job(process: subprocess.Popen[bytes], budget: ChildBudget) -> Any:
     """Create a memory-capped, kill-on-close job and put the child in it."""
 
     try:
         import ctypes
         from ctypes import wintypes
-    except ImportError:  # pragma: no cover - Windows only
-        return None
+    except ImportError as exc:  # pragma: no cover - Windows only
+        raise RuntimeError("Windows job-object support is unavailable") from exc
 
     class _IoCounters(ctypes.Structure):
         _fields_ = [
@@ -802,7 +968,7 @@ def _assign_windows_job(process: subprocess.Popen[bytes], budget: ChildBudget) -
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
     handle = kernel32.CreateJobObjectW(None, None)
     if not handle:
-        return None
+        raise OSError(ctypes.get_last_error(), "CreateJobObjectW failed")
     limits = _ExtendedLimits()
     limits.BasicLimitInformation.LimitFlags = (
         limit_job_memory | limit_process_memory | limit_kill_on_job_close | limit_active_process
@@ -813,11 +979,13 @@ def _assign_windows_job(process: subprocess.Popen[bytes], budget: ChildBudget) -
     if not kernel32.SetInformationJobObject(
         handle, extended_limit_information, ctypes.byref(limits), ctypes.sizeof(limits)
     ):
+        error = ctypes.get_last_error()
         kernel32.CloseHandle(handle)
-        return None
+        raise OSError(error, "SetInformationJobObject failed")
     if not kernel32.AssignProcessToJobObject(handle, int(process._handle)):  # type: ignore[attr-defined]
+        error = ctypes.get_last_error()
         kernel32.CloseHandle(handle)
-        return None
+        raise OSError(error, "AssignProcessToJobObject failed")
     return _WindowsJob(handle, kernel32)
 
 

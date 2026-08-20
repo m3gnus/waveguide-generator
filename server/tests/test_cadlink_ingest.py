@@ -452,6 +452,7 @@ def test_ingestion_record_publishes_role_findings_and_numpy_metadata(
         manifest_sha256="sha256:" + "1" * 64,
         assembly_path=assembly_path,
         artifact_sha256="sha256:" + "2" * 64,
+        artifact_size_bytes=assembly_path.stat().st_size,
         members={"assembly.step": assembly_path},
     )
     built = {
@@ -505,8 +506,14 @@ def test_ingestion_record_publishes_role_findings_and_numpy_metadata(
         "integrity": {"valid": np.bool_(True)},
     }
     monkeypatch.setattr("server.cadlink.ingest.read_wgreturn", lambda _path: bundle)
+    isolated_integrity: dict[str, object] = {}
+
+    def build_isolated(*_args, **kwargs):
+        isolated_integrity.update(kwargs)
+        return built
+
     monkeypatch.setattr(
-        "server.cadlink.ingest.build_imported_mesh_isolated", lambda *_args, **_kwargs: built
+        "server.cadlink.ingest.build_imported_mesh_isolated", build_isolated
     )
     record = ingest_bundle(
         bundle_path,
@@ -529,6 +536,8 @@ def test_ingestion_record_publishes_role_findings_and_numpy_metadata(
     assert Path(record["viewport_mesh"]["store_path"]).read_text(encoding="utf-8").endswith(
         "$EndComments\n"
     )
+    assert isolated_integrity["expected_sha256"] == bundle.artifact_sha256
+    assert isolated_integrity["expected_size_bytes"] == bundle.artifact_size_bytes
 
 
 def test_visual_mesh_failure_is_advisory_and_does_not_create_healing_finding(
@@ -557,6 +566,7 @@ def test_visual_mesh_failure_is_advisory_and_does_not_create_healing_finding(
         manifest_sha256="sha256:" + "1" * 64,
         assembly_path=assembly_path,
         artifact_sha256="sha256:" + "2" * 64,
+        artifact_size_bytes=assembly_path.stat().st_size,
         members={"assembly.step": assembly_path},
     )
     symmetry = {
@@ -1057,6 +1067,7 @@ def test_an_isolated_mesh_refusal_publishes_nothing_and_poisons_no_cache(
         manifest_sha256="sha256:" + "1" * 64,
         assembly_path=assembly_path,
         artifact_sha256="sha256:" + "2" * 64,
+        artifact_size_bytes=assembly_path.stat().st_size,
         members={"assembly.step": assembly_path},
     )
 

@@ -17,7 +17,7 @@ import re
 from typing import Any, Iterable, Mapping
 import unicodedata
 
-from server.cadlink.limits import MAX_WGRETURN_JSON_BYTES
+from server.cadlink.limits import MAX_STEP_INPUT_BYTES, MAX_WGRETURN_JSON_BYTES
 
 
 SUPPORTED_MAJOR = 1
@@ -78,6 +78,7 @@ class WgReturnBundle:
     manifest_sha256: str
     assembly_path: Path
     artifact_sha256: str
+    artifact_size_bytes: int
     members: dict[str, Path]
     degradations: tuple[str, ...] = ()
 
@@ -119,6 +120,41 @@ def _parse_manifest(raw: bytes) -> dict[str, Any]:
     if not isinstance(value, dict):
         _fail("$", "must be an object")
     return value
+
+
+def _read_manifest_bytes(path: Path) -> bytes:
+    """Read the manifest under its limit even if it grows after ``stat``."""
+
+    raw = bytearray()
+    with path.open("rb") as handle:
+        while True:
+            chunk = handle.read(min(64 * 1024, MAX_WGRETURN_JSON_BYTES + 1 - len(raw)))
+            if not chunk:
+                break
+            raw.extend(chunk)
+            if len(raw) > MAX_WGRETURN_JSON_BYTES:
+                raise WgReturnValidationError(
+                    f"wgreturn.json: exceeds the {MAX_WGRETURN_JSON_BYTES:,} byte "
+                    "limit for a return manifest"
+                )
+    return bytes(raw)
+
+
+def _sha256_file(path: Path, *, maximum_bytes: int | None = None) -> tuple[str, int]:
+    """Hash a CAD-authored member with a bounded streaming allocation."""
+
+    digest = hashlib.sha256()
+    total = 0
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            total += len(chunk)
+            if maximum_bytes is not None and total > maximum_bytes:
+                raise WgReturnIntegrityError(
+                    f"bundle member {path.name!r} grew beyond its "
+                    f"{maximum_bytes:,} byte limit while it was being verified"
+                )
+            digest.update(chunk)
+    return "sha256:" + digest.hexdigest(), total
 
 
 def _walk(value: Any, path: str = "$") -> Iterable[tuple[str, Any]]:
@@ -532,7 +568,7 @@ def read_wgreturn(path: str | Path) -> WgReturnBundle:
             f"wgreturn.json: {manifest_size:,} bytes exceeds the "
             f"{MAX_WGRETURN_JSON_BYTES:,} byte limit for a return manifest"
         )
-    raw_manifest = manifest_path.read_bytes()
+    raw_manifest = _read_manifest_bytes(manifest_path)
     manifest = validate_manifest(_parse_manifest(raw_manifest))
 
     table = _mapping(_required(manifest, "files", "$"), "$.files")
@@ -578,7 +614,25 @@ def read_wgreturn(path: str | Path) -> WgReturnBundle:
             raise WgReturnIntegrityError(
                 f"bundle member {name!r} size mismatch: declared {expected_size}, actual {size}"
             )
-        digest = "sha256:" + hashlib.sha256(member_path.read_bytes()).hexdigest()
+        is_step = (
+            (
+                record.get("media_type") == "model/step"
+                or record.get("purpose") in {"exterior-assembly", "fem-air-volume"}
+            )
+        )
+        if is_step and size > MAX_STEP_INPUT_BYTES:
+            raise WgReturnIntegrityError(
+                f"bundle member {name!r} is {size:,} bytes, over the "
+                f"{MAX_STEP_INPUT_BYTES:,} byte limit for one STEP input"
+            )
+        digest, hashed_size = _sha256_file(
+            member_path,
+            maximum_bytes=MAX_STEP_INPUT_BYTES if is_step else expected_size,
+        )
+        if hashed_size != size:
+            raise WgReturnIntegrityError(
+                f"bundle member {name!r} changed size while it was being verified"
+            )
         if digest != record["sha256"]:
             raise WgReturnIntegrityError(
                 f"bundle member {name!r} checksum mismatch: declared {record['sha256']}, actual {digest}"
@@ -621,6 +675,7 @@ def read_wgreturn(path: str | Path) -> WgReturnBundle:
         manifest_sha256="sha256:" + hashlib.sha256(raw_manifest).hexdigest(),
         assembly_path=members[assembly_name].resolve(),
         artifact_sha256=str(table[assembly_name]["sha256"]),
+        artifact_size_bytes=int(table[assembly_name]["size_bytes"]),
         members={name: member.resolve() for name, member in members.items()},
         degradations=(
             (_LEGACY_SIGNATURE_DEGRADATION,)
