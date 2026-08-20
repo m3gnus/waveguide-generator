@@ -10,7 +10,7 @@ import logging
 import math
 from pathlib import Path
 import re
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.responses import PlainTextResponse
@@ -64,6 +64,9 @@ class CadReturnIngestRequest(BaseModel):
         default_factory=list, alias="areaDriftOverrides"
     )
     expected_design_id: str | None = Field(default=None, alias="expectedDesignId")
+    symmetry_mode: Literal["auto", "full"] = Field(
+        default="auto", alias="symmetryMode"
+    )
 
 
 class FusionStatusRequest(BaseModel):
@@ -622,7 +625,10 @@ async def post_ingest(payload: CadReturnIngestRequest, request: Request) -> dict
             payload.skipped_source_ids,
             store,
             Path(request.app.state.data_dir),
-            prep_options={"area_drift_overrides": payload.area_drift_overrides},
+            prep_options={
+                "area_drift_overrides": payload.area_drift_overrides,
+                "symmetry_mode": payload.symmetry_mode,
+            },
             expected_design_id=payload.expected_design_id,
         )
     except HTTPException:

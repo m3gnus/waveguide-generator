@@ -16,6 +16,7 @@ import type { JobItem } from '../api/jobsSocket';
 import { sendDesignToCad, type WgLinkExportResponse } from '../api/designIo';
 import { getOnshapeConnection, getOnshapeStatus, returnOnshapeToWg, type OnshapeConnection, type OnshapeStatus } from '../api/onshape';
 import { preferencesStore, usePreferences } from '../prefs/preferences';
+import { useCadPreparationStore } from '../stores/cadPreparation';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { recordCommittedAthPolars, subscribeRevision, useDesignStore } from '../stores/design';
 import { useDocumentStore, type DesignIdentity } from '../stores/document';
@@ -757,6 +758,7 @@ export function CadLinkCoordinator() {
         skippedSourceIds: current.skippedSourceIds,
         areaDriftOverrides: current.areaDriftOverrides,
         expectedDesignId: useDocumentStore.getState().identity?.designId ?? null,
+        symmetryMode: useCadPreparationStore.getState().symmetryMode,
       }, fetch, abortController.signal);
       if (!useCadReturnStore.getState().applyIngest(record, ingestGeneration)) {
         const superseded = 'Discarded a completed ingest because its selected return or design was superseded. Rebuild the mesh for the current state.';

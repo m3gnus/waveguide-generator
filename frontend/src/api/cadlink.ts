@@ -128,6 +128,7 @@ export interface CadReturnIngestRequest {
   skippedSourceIds: string[];
   areaDriftOverrides: string[];
   expectedDesignId: string | null;
+  symmetryMode: 'auto' | 'full';
 }
 
 export interface CadReturnSource {

@@ -1136,6 +1136,9 @@ def build_imported_mesh(
     tessellation = imported_tessellation_settings(normalized_sizes)
     allocation = allocate_imported_tags(source_list, skipped_source_ids=skipped)
     options = dict(options or {})
+    symmetry_mode = str(options.get("symmetry_mode") or "auto")
+    if symmetry_mode not in {"auto", "full"}:
+        raise ImportedMeshError("symmetry: symmetryMode must be 'auto' or 'full'")
     raw_area_drift_overrides = options.get("area_drift_overrides", ())
     if not isinstance(raw_area_drift_overrides, (list, tuple, set, frozenset)):
         raise ImportedMeshError("role resolution: areaDriftOverrides must be an array of source ids")
@@ -1896,14 +1899,18 @@ def build_imported_mesh(
             "roles_became_ambiguous": [],
         }
 
-    result, healing = build(allow_symmetry_reduction=True)
+    result, healing = build(allow_symmetry_reduction=symmetry_mode == "auto")
     # A reduced domain the mesh does not confirm is re-meshed whole rather than
     # refused: the full domain is always solvable and always right, it just
     # costs the 2-4x the reduction was worth. Refusing instead would strand the
     # user in CAD with nothing to try, so the return solves and the finding
     # says what was given up and why (``server/cadlink/ingest.py``).
     verification = result.get("symmetry_verification")
-    if isinstance(verification, Mapping) and not verification.get("verified", True):
+    if (
+        symmetry_mode == "auto"
+        and isinstance(verification, Mapping)
+        and not verification.get("verified", True)
+    ):
         rejected = dict(verification)
         result, healing = build(allow_symmetry_reduction=False)
         result["symmetry_verification"] = {
@@ -1919,6 +1926,7 @@ def build_imported_mesh(
                 ),
             },
         }
+    result["symmetry"]["requested_mode"] = symmetry_mode
     result.pop("mesh_generation_error", None)
     result.pop("surface_order_reference", None)
     result.pop("surface_order", None)
