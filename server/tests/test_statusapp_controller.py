@@ -13,6 +13,7 @@ from types import SimpleNamespace
 import pytest
 
 from launchers.statusapp.controller import ServiceState, StatusController
+from server.platform import instance
 
 
 FAKE_SERVER = r'''from __future__ import annotations
@@ -31,6 +32,7 @@ parser.add_argument("--parent-pid")
 parser.add_argument("--pid-file", type=Path)
 parser.add_argument("--child-pid-file", type=Path)
 parser.add_argument("--ready-port", type=int)
+parser.add_argument("--ready-delay", type=float, default=0)
 parser.add_argument("--no-browser", action="store_true")
 args, _unknown = parser.parse_known_args()
 
@@ -49,11 +51,12 @@ while True:
 """
     subprocess.Popen((sys.executable, "-c", child_code, str(args.child_pid_file)))
 
-if args.ready_port:
-    args.status_control.with_name("ready.json").write_text(
-        '{"host":"127.0.0.1","port":%d}\n' % args.ready_port,
-        encoding="utf-8",
-    )
+ready_port = args.ready_port or args.port
+time.sleep(args.ready_delay)
+args.status_control.with_name("ready.json").write_text(
+    '{"host":"127.0.0.1","port":%d}\n' % ready_port,
+    encoding="utf-8",
+)
 
 print("fake server ready", flush=True)
 while not args.status_control.is_file():
@@ -83,7 +86,6 @@ def _controller(tmp_path: Path, **kwargs: object) -> StatusController:
         "server_command": (sys.executable, str(fake_server)),
         "request_timeout": 0.2,
         "shutdown_timeout": 1.0,
-        "port_selector": lambda preferred, _host, _count: preferred,
         "request_probe": lambda url, _timeout: (
             (200, b'{"version":"test"}')
             if url.endswith("/health")
@@ -188,7 +190,7 @@ def test_status_owner_consumes_only_a_ready_valid_update_request(tmp_path: Path)
         controller.close()
 
 
-def test_child_ready_file_replaces_the_unreserved_preflight_port(tmp_path: Path) -> None:
+def test_child_ready_file_publishes_the_authoritatively_reserved_port(tmp_path: Path) -> None:
     probed: list[str] = []
     actual_port = 43124
 
@@ -205,7 +207,8 @@ def test_child_ready_file_replaces_the_unreserved_preflight_port(tmp_path: Path)
         server_args=("--ready-port", str(actual_port)),
         request_probe=probe,
     )
-    controller.start()
+    started = controller.start()
+    assert started.url == ""
     try:
         def ready_snapshot():
             snapshot = controller.poll()
@@ -218,27 +221,71 @@ def test_child_ready_file_replaces_the_unreserved_preflight_port(tmp_path: Path)
         controller.stop()
 
 
-def test_port_in_use_is_reported_before_a_process_is_started(tmp_path: Path) -> None:
-    port = 43123
-
-    def port_in_use(preferred: int, host: str, _scan_count: int) -> int:
-        raise OSError(
-            f"Ports {preferred} through {preferred} are all busy on {host}. "
-            "Stop an existing server or choose an available port."
-        )
-
+def test_poll_waits_for_the_child_to_publish_a_url_before_probing(tmp_path: Path) -> None:
+    probed: list[str] = []
     controller = _controller(
         tmp_path,
-        server_args=("--port", str(port)),
-        port_scan_count=0,
-        port_selector=port_in_use,
+        server_args=("--ready-delay", "0.3"),
+        request_probe=lambda url, _timeout: (probed.append(url), (200, b""))[1],
     )
+    try:
+        controller.start()
+        pending = controller.poll()
 
-    snapshot = controller.start()
+        assert pending.backend.state is ServiceState.STARTING
+        assert pending.frontend.state is ServiceState.STARTING
+        assert pending.url == ""
+        assert probed == []
+    finally:
+        controller.stop()
 
-    assert snapshot.backend.state is ServiceState.ERROR
-    assert f"Ports {port} through {port} are all busy" in snapshot.backend.reason
-    assert controller.process is None
+
+def test_busy_preferred_port_is_left_for_the_child_instance_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    port = 43123
+    monkeypatch.setattr(
+        instance,
+        "port_is_available",
+        lambda candidate, _host: candidate == port + 1,
+    )
+    checkout = _checkout(tmp_path)
+    existing = tmp_path / "existing.py"
+    existing.write_text(
+        "import argparse, sys\n"
+        "parser = argparse.ArgumentParser(add_help=False)\n"
+        "parser.add_argument('--port', type=int, action='append')\n"
+        "args, _ = parser.parse_known_args()\n"
+        f"assert args.port[-1] == {port}, args.port\n"
+        "print('already running; use it at http://127.0.0.1:3199/.', file=sys.stderr)\n"
+        "raise SystemExit(2)\n",
+        encoding="utf-8",
+    )
+    controller = StatusController(
+        repo_root=checkout,
+        server_command=(sys.executable, str(existing)),
+        server_args=("--port", str(port)),
+        request_probe=lambda url, _timeout: (
+            (200, b'{"version":"test"}')
+            if url.endswith("/health")
+            else (200, b"<!doctype html><html></html>")
+        ),
+    )
+    try:
+        started = controller.start()
+        assert started.url == ""
+
+        snapshot = _wait_for(
+            lambda: (
+                current
+                if (current := controller.poll()).backend.state is ServiceState.OK
+                else None
+            )
+        )
+        assert snapshot.url == "http://127.0.0.1:3199/"
+        assert "already-running instance" in snapshot.backend.reason
+    finally:
+        controller.close()
 
 
 def test_dist_missing_is_reported_with_the_platform_installer(tmp_path: Path) -> None:
@@ -287,7 +334,6 @@ def test_existing_instance_exit_two_keeps_its_real_url_healthy(tmp_path: Path) -
     controller = StatusController(
         repo_root=checkout,
         server_command=(sys.executable, str(already_running)),
-        port_selector=lambda preferred, _host, _count: preferred,
         request_probe=lambda url, _timeout: (
             (200, b'{"version":"test"}')
             if url.endswith("/health")
