@@ -18,6 +18,7 @@ import {
   type ObservationOrigin,
   type PolarAxis,
   type PolarUiState,
+  type SolverMode,
 } from '../stores/solveOptions';
 import { runDisplayName } from '../prefs/preferences';
 import type { WorkspaceMode } from '../stores/workspaceMode';
@@ -84,10 +85,11 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null 
       <p className="section-note">{selectedEngine?.name.toLowerCase() === 'metal' && fastPaths.includes('axisymmetric-meridian')
         ? 'Metal capability: optional axisymmetric CPU path when explicitly selected; AUTO stays on native full 3D.'
         : 'Selected backend capability: Full 3D.'}</p>
-      {/* Listing the axisymmetric label on a backend that refuses it advertises
-          a mode the user cannot reach; naming only what this backend runs keeps
-          the note a fact rather than a menu of two-thirds-available options. */}
-      <p className="section-note">Solver mode labels: {solverModeLabels.auto}, {solverModeLabels.full_3d}{meridianAvailable ? `, ${solverModeLabels.circsym}` : ''}.</p>
+      <HelpTipRow className="select-row" text="Machine-local execution path. AUTO and Full 3D use the native backend. The axisymmetric option is an explicit CPU path available only with Metal; it is never selected automatically and is not saved into design files."><label htmlFor="solve-mode">Solver path</label><select id="solve-mode" value={store.solverMode} onChange={(event) => store.setSolverMode(event.target.value as SolverMode)}>
+        <option value="auto">{solverModeLabels.auto}</option>
+        <option value="full_3d">{solverModeLabels.full_3d}</option>
+        {(meridianAvailable || store.solverMode === 'circsym') && <option value="circsym" disabled={!meridianAvailable}>{solverModeLabels.circsym}{meridianAvailable ? '' : ' · unavailable'}</option>}
+      </select></HelpTipRow>
     </> : <>
       {/* Imported submissions force both values. Static facts keep the rail
           honest without creating a second control that the submit path drops.

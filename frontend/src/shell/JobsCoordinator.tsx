@@ -169,7 +169,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
 
   let effectiveEngine = selectedEngine;
   if (selectedEngine === 'auto') {
-    try { effectiveEngine = resolveEngine('auto', { engines: capabilities }, design.simulation.solver_mode); } catch { /* surfaced below */ }
+    try { effectiveEngine = resolveEngine('auto', { engines: capabilities }, solveOptions.solverMode); } catch { /* surfaced below */ }
   }
   const capability = capabilities.find((engine) => engine.name.toLowerCase() === effectiveEngine.toLowerCase()) ?? null;
   const metalCapability = capabilities.find((engine) => engine.name.toLowerCase() === 'metal') ?? null;

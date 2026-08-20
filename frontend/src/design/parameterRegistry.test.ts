@@ -26,7 +26,7 @@ const TRACEABILITY_KEYS = {
     'gcurveSfA', 'gcurveSfB', 'gcurveSfM1', 'gcurveSfM2', 'gcurveSfN1', 'gcurveSfN2', 'gcurveSfN3', 'gcurveRot', 'circArcTermAngle', 'circArcRadius',
     'angularSegments', 'lengthSegments', 'cornerSegments', 'throatSegments', 'throatSliceDensity',
     'freqStart', 'freqEnd', 'numFreqs', 'sourceShape', 'sourceRadius', 'sourceCurv', 'sourceVelocity',
-    'simType', 'solverMode', 'throatResolution', 'mouthResolution', 'rearResolution', 'apertureResolutionScale',
+    'simType', 'throatResolution', 'mouthResolution', 'rearResolution', 'apertureResolutionScale',
     'maxTriangles', 'allowLargeMesh', 'verticalOffset', 'quadrants', 'encFrontResolution', 'encBackResolution',
   ],
 } as const;
@@ -34,8 +34,8 @@ const TRACEABILITY_KEYS = {
 describe('complete parameter registry', () => {
   it('covers every current family-qualified traceability entry with no deferrals', () => {
     const encodedCount = Object.values(TRACEABILITY_KEYS).reduce<number>((count, keys) => count + keys.length, 0);
-    expect(encodedCount).toBe(106);
-    expect(TRACEABILITY_PARAMETER_INVENTORY).toHaveLength(106);
+    expect(encodedCount).toBe(105);
+    expect(TRACEABILITY_PARAMETER_INVENTORY).toHaveLength(105);
     expect(TRACEABILITY_PARAMETER_INVENTORY.every(traceEntryIsRegistered)).toBe(true);
 
     for (const [family, keys] of Object.entries(TRACEABILITY_KEYS)) {

@@ -76,9 +76,10 @@ describe('opening a design does not discard remembered settings', () => {
 describe('WG.Solve config block', () => {
   beforeEach(() => { localStorage.clear(); resetSolveOptionsStore(); });
 
-  it('round-trips every solver setting that used to live only in the browser', () => {
+  it('round-trips portable solve settings without replacing machine execution choices', () => {
     useSolveOptionsStore.setState({
       engine: 'metal',
+      solverMode: 'circsym',
       symmetry: 'half_xz',
       meshValidationMode: 'strict',
       verbose: true,
@@ -88,13 +89,16 @@ describe('WG.Solve config block', () => {
       polar: { ...CUSTOM_POLAR, enabledAxes: ['horizontal'] },
     });
     const blocks = withWgSolveBlock({}, wgSolveSettingsFromStore());
+    blocks[WG_SOLVE_BLOCK].items.Engine = 'metal'; // legacy author hint
 
     resetSolveOptionsStore();
+    useSolveOptionsStore.setState({ engine: 'bempp', solverMode: 'full_3d' });
     restoreSolveSettingsFromBlocks(blocks);
 
     const state = useSolveOptionsStore.getState();
     expect(state).toMatchObject({
-      engine: 'metal',
+      engine: 'bempp',
+      solverMode: 'full_3d',
       symmetry: 'half_xz',
       meshValidationMode: 'strict',
       verbose: true,
@@ -113,7 +117,7 @@ describe('WG.Solve config block', () => {
       wgSolveSettingsFromStore(),
     );
     expect(blocks.Report.items).toEqual({ Title: 'kept' });
-    expect(blocks[WG_SOLVE_BLOCK].items.Engine).toBe('auto');
+    expect(blocks[WG_SOLVE_BLOCK].items.Engine).toBeUndefined();
   });
 
   it('drops values it cannot read rather than guessing at a different solve', () => {
@@ -128,7 +132,7 @@ describe('WG.Solve config block', () => {
         },
       },
     });
-    expect(overrides).toEqual({ engine: 'metal' });
+    expect(overrides).toEqual({});
   });
 
   it('will not restore list mode without a list that actually parses', () => {
@@ -148,7 +152,6 @@ describe('WG.Solve config block', () => {
       polar_config: { observation_origin: 'throat', spherical_sampling: true, field_plane: false },
     });
     expect(settings).toMatchObject({
-      engine: 'bempp',
       meshValidationMode: 'off',
       frequencySpacing: 'linear',
       frequencyMode: 'list',

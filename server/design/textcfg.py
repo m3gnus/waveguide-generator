@@ -36,6 +36,8 @@ _LINE_BREAK = re.compile(r"[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]")
 _DESIGN_FORMAT = 2
 # ATH's report block, which carries the design's name in its ``Title``.
 _REPORT_BLOCK = "Report"
+_WG_SOLVE_BLOCK = "WG.Solve"
+_MACHINE_SOLVE_KEYS = frozenset({"Engine", "SolverMode"})
 _DESIGN_FORMAT_STAMP = re.compile(r"\bdesign-format\s*:\s*(\d+)\b", re.IGNORECASE)
 
 
@@ -826,11 +828,36 @@ def _serialize_enclosure(lines: list[str], config: Any) -> None:
     )
 
 
+def _block_without_machine_solve_keys(name: str, block: ConfigBlock) -> ConfigBlock:
+    """Drop obsolete per-machine execution choices from canonical design files."""
+
+    if name != _WG_SOLVE_BLOCK:
+        return block
+
+    def portable_entry(entry: str) -> bool:
+        assignment = _without_comment(entry)
+        if "=" not in assignment:
+            return True
+        return assignment.split("=", 1)[0].strip() not in _MACHINE_SOLVE_KEYS
+
+    return block.model_copy(
+        update={
+            "items": {
+                key: value
+                for key, value in block.items.items()
+                if key not in _MACHINE_SOLVE_KEYS
+            },
+            "entries": [entry for entry in block.entries if portable_entry(entry)],
+        }
+    )
+
+
 def _emit_block(lines: list[str], name: str, block: ConfigBlock) -> None:
     """Write one passthrough block, preferring its verbatim imported rows."""
 
     if _BLOCK_START.fullmatch(f"{name} = {{") is None:
         raise TextConfigError(f"unsafe config block name {name!r}")
+    block = _block_without_machine_solve_keys(name, block)
     lines.append(f"{name} = {{")
     if block.entries:
         for entry in block.entries:
@@ -1005,7 +1032,6 @@ def _serialize_canonical(
         ("Simulation.F2", config.simulation.f2),
         ("Simulation.NumFrequencies", config.simulation.num_frequencies),
         ("Simulation.SimType", _sim_type_text(config.simulation.sim_type)),
-        ("Simulation.SolverMode", config.simulation.solver_mode),
     ):
         _line(lines, key, value)
 

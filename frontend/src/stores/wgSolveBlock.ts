@@ -25,9 +25,8 @@ import { MAX_FREQUENCY_POINTS, parseFrequencyList } from './frequencyList';
 
 export const WG_SOLVE_BLOCK = 'WG.Solve';
 
-/** Solver settings that belong to the design rather than to the machine. */
+/** Portable solve settings that belong to the design rather than to the machine. */
 export interface WgSolveSettings {
-  engine: string;
   symmetry: SymmetryMode;
   meshValidationMode: MeshValidationMode;
   verbose: boolean;
@@ -88,8 +87,9 @@ export function wgSolveOverrides(blocks: unknown): Partial<WgSolveSettings> | nu
   if (!source) return null;
   const overrides: Partial<WgSolveSettings> = {};
 
-  const engine = source.Engine;
-  if (typeof engine === 'string' && ENGINE_PATTERN.test(engine)) overrides.engine = engine.toLowerCase();
+  // Legacy blocks may contain Engine. It is intentionally ignored: backend
+  // selection belongs to this machine and must not be overwritten by opening
+  // somebody else's design.
 
   const symmetry = oneOf(source.Symmetry, SYMMETRY_MODES);
   if (symmetry) overrides.symmetry = symmetry;
@@ -138,7 +138,6 @@ export function withWgSolveBlock(
   settings: WgSolveSettings,
 ): Record<string, ConfigBlock> {
   const values: Record<string, string> = {
-    Engine: settings.engine,
     Symmetry: settings.symmetry,
     MeshValidation: settings.meshValidationMode,
     Verbose: settings.verbose ? '1' : '0',

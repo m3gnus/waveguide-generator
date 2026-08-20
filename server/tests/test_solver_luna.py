@@ -69,11 +69,11 @@ def test_circsym_infinite_baffle_requires_positive_aperture_tag(metadata: dict) 
     assert circsym._validated_aperture_tag({"apertureTag": 12}, 1) == 12
 
 
-def test_bempp_engine_rejects_design_circsym_before_meshing() -> None:
+def test_bempp_engine_rejects_machine_circsym_before_meshing() -> None:
     request = SolveRequest.model_validate(
         {
             "design": {"formula": "OSSE", "simulation": {"solver_mode": "circsym"}},
-            "options": {"engine": "bempp"},
+            "options": {"engine": "bempp", "solver_mode": "circsym"},
         }
     )
 

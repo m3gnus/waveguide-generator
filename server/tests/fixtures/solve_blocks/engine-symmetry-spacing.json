@@ -12,7 +12,8 @@
     }
   },
   "expected": {
-    "engine": "metal",
+    "engine": "auto",
+    "solver_mode": "auto",
     "symmetry": "half_yz",
     "mesh_validation_mode": "strict",
     "verbose": true,

@@ -19,7 +19,6 @@ from server.jobs.models import SolveOptions
 _ATH_POLAR_PREFIX = "ABEC.Polars:"
 _DIAGONAL_BLOCK = f"{_ATH_POLAR_PREFIX}SPL_D"
 _AXIS_ORDER = ("horizontal", "vertical", "diagonal")
-_ENGINE_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 _FREQUENCY_SPLIT = re.compile(r"[\s,;]+")
 _DECIMAL_NUMBER = re.compile(
     r"^[+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:[eE][+-]?\d+)?$"
@@ -228,9 +227,9 @@ def solve_options_from_blocks(
 
     solve_items = _items(blocks.get("WG.Solve"))
     if solve_items:
-        engine = solve_items.get("Engine")
-        if isinstance(engine, str) and _ENGINE_PATTERN.fullmatch(engine):
-            payload["engine"] = engine.lower()
+        # Engine is a machine execution preference. Older files may carry it,
+        # but opening or solving a portable design must not force the author's
+        # backend onto this host. An explicit ``base`` remains authoritative.
 
         symmetry = solve_items.get("Symmetry")
         if symmetry in {"auto", "full", "half_xz", "half_yz", "quarter"}:

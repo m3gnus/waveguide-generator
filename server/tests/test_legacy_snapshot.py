@@ -277,6 +277,7 @@ def test_inline_real_snapshots_validate_and_omit_timestamp() -> None:
         text = snapshot_to_ath_text(snapshot["params"])
         assert text.startswith("; Parameter config\n")
         assert "; Generated:" not in text
+        assert "Simulation.SolverMode" not in text
         assert isinstance(snapshot_to_design(snapshot), ParsedDesign)
 
 
@@ -285,11 +286,11 @@ def test_inline_real_snapshots_validate_and_omit_timestamp() -> None:
     [
         (
             INLINE_OSSE,
-            "062a24da5b1f559c54fbb29eef15bcde4d6db2646a1509064e10d62ee412435c",
+            "0a1632a672e1f07bbfe5a6044b710628c0d14c5cacb3f8b5635a02d919032ced",
         ),
         (
             INLINE_ROSSE,
-            "1ebb6d3c1eb60a0c4055e10c4379fb0c3a67e9dabecbddbf313a941084044c48",
+            "8df2c27f8a6054618d8261da81dd5c691961ee8a1c2c375a9583b52a91898fc1",
         ),
     ],
     ids=("OSSE", "R-OSSE"),

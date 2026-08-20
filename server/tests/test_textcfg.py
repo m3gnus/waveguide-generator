@@ -109,6 +109,47 @@ def test_new_design_uses_v1_header_v2_discriminator_and_writer_order() -> None:
     assert parse(text).design.formula == "OSSE"
 
 
+def test_new_design_does_not_serialize_machine_solver_path() -> None:
+    design = DesignConfig.model_validate(
+        {
+            "formula": "OSSE",
+            "simulation": {"solver_mode": "circsym"},
+            "extra_blocks": {
+                "WG.Solve": {
+                    "items": {
+                        "Engine": "metal",
+                        "SolverMode": "circsym",
+                        "Symmetry": "quarter",
+                    }
+                }
+            },
+        }
+    )
+    text = serialize(design)
+    assert "Simulation.SolverMode" not in text
+    assert "Engine =" not in text
+    assert "SolverMode =" not in text
+    assert "Symmetry = quarter" in text
+
+
+def test_modified_legacy_design_drops_machine_solver_path_from_ordered_block() -> None:
+    source = SOURCE + """WG.Solve = {
+; portable settings remain ordered
+Engine = bempp
+Symmetry = quarter
+SolverMode = circsym
+}
+"""
+    parsed = parse(source)
+    assert serialize(parsed) == source
+
+    parsed.design.root.L = Expr(value=121)  # type: ignore[union-attr]
+    emitted = serialize(parsed)
+    assert "Engine =" not in emitted
+    assert "SolverMode =" not in emitted
+    assert "; portable settings remain ordered\nSymmetry = quarter" in emitted
+
+
 def test_parse_rejects_design_format_from_a_future_writer() -> None:
     source = "; Parameter config\n; Waveguide Generator design-format: 3\nOSSE = {\n}\n"
 

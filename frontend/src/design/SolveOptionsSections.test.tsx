@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadReturnIngestRecord } from '../api/cadlink';
+import { CAPABILITIES_QUERY_KEY } from '../jobs/useCapabilities';
 import { defaultPolarUi, resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { DirectivityMapControls, effectiveGridView, FrequencySweepControls, SolveOptionsControls } from './SolveOptionsSections';
 
@@ -41,13 +42,30 @@ describe('solve and directivity control help', () => {
 
   it('documents every solve option', () => {
     render(<SolveOptionsControls />);
-    for (const id of ['solve-engine', 'mesh-validation-mode', 'design-solve-frequency-mode', 'solve-verbose']) {
+    for (const id of ['solve-engine', 'solve-mode', 'mesh-validation-mode', 'design-solve-frequency-mode', 'solve-verbose']) {
       const control = host.querySelector(`#${id}`)!;
       expect(control, id).not.toBeNull();
       // The hover target is the labelled row, not the input itself.
       const row = control.closest('.select-row, .toggle-row')!;
       expect(hoverText(row).length, `${id} has no hover help`).toBeGreaterThan(40);
     }
+  });
+
+  it('keeps the explicit CircSym path in machine-local solve options', () => {
+    queryClient.setQueryData(CAPABILITIES_QUERY_KEY, {
+      engines: [{ name: 'metal', available: true, reason: null, version: 'test', fast_paths: ['axisymmetric-meridian'] }],
+    });
+    render(<SolveOptionsControls />);
+    const control = host.querySelector<HTMLSelectElement>('#solve-mode')!;
+    expect([...control.options].map((option) => option.textContent)).toEqual([
+      'Auto (full 3D)', 'Full 3D', 'Axisymmetric CPU (force)',
+    ]);
+    act(() => {
+      control.value = 'circsym';
+      control.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(useSolveOptionsStore.getState().solverMode).toBe('circsym');
+    expect(useSolveOptionsStore.getState().options().solver_mode).toBe('circsym');
   });
 
   it('keeps design and CAD-import sweep ids unique with working labels', () => {

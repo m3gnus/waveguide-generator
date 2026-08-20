@@ -17,6 +17,7 @@ describe('solve and directivity options', () => {
     const options = useSolveOptionsStore.getState().options();
     expect(options).toEqual({
       engine: 'auto',
+      solver_mode: 'auto',
       symmetry: 'auto',
       mesh_validation_mode: 'warn',
       verbose: false,
@@ -58,6 +59,13 @@ describe('solve and directivity options', () => {
     const stored = JSON.parse(localStorage.getItem('waveguide-v2-solve-options') ?? '{}') as { state?: { symmetry?: string } };
     expect(stored.state?.symmetry).toBe('half_yz');
     expect(useSolveOptionsStore.getState().options().symmetry).toBe('half_yz');
+  });
+
+  it('persists solver path as a machine-local execution choice', () => {
+    useSolveOptionsStore.getState().setSolverMode('circsym');
+    const stored = JSON.parse(localStorage.getItem('waveguide-v2-solve-options') ?? '{}') as { state?: { solverMode?: string } };
+    expect(stored.state?.solverMode).toBe('circsym');
+    expect(useSolveOptionsStore.getState().options().solver_mode).toBe('circsym');
   });
 
   it('converts angular step to a sample count and never allows zero enabled planes', () => {

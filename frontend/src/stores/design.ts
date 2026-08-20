@@ -791,6 +791,13 @@ export function serializeDesign(design: DesignDocument): Record<string, unknown>
     setWirePath(payload, path, expression);
   });
   (_absent ?? []).forEach((path) => setWirePath(payload, path, null));
+  // Solver path is a machine execution preference. Legacy files are still
+  // parsed into the design model, but every outgoing portable design omits it;
+  // solve submission carries the current machine-local value in options.
+  const simulation = payload.simulation;
+  if (simulation && typeof simulation === 'object' && !Array.isArray(simulation)) {
+    delete (simulation as Record<string, unknown>).solver_mode;
+  }
   return payload;
 }
 

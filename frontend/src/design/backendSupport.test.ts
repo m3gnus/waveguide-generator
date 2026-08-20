@@ -87,25 +87,6 @@ describe('simulation type gating', () => {
   });
 });
 
-describe('solver mode gating', () => {
-  it('offers all three modes on Metal with the meridian label intact', () => {
-    expect(labels('simulation.solver_mode', 'auto', 'metal'))
-      .toEqual(['Auto — full 3D', 'Full 3D', 'Axisymmetric meridian (CPU, force)']);
-  });
-
-  it('drops the forced meridian mode on BEMPP', () => {
-    expect(labels('simulation.solver_mode', 'auto', 'bempp'))
-      .toEqual(['Auto — full 3D', 'Full 3D']);
-  });
-
-  it('reveals and flags a forced meridian mode the design already carries', () => {
-    expect(labels('simulation.solver_mode', 'circsym', 'bempp'))
-      .toEqual(['Auto — full 3D', 'Full 3D', 'Axisymmetric meridian (CPU, force)']);
-    expect(fieldUnsupportedFeature(field('simulation.solver_mode'), 'circsym', 'bempp'))
-      .toBe('meridian-fast-path');
-  });
-});
-
 describe('aperture mesh scale', () => {
   /* It sizes the infinite-baffle aperture cap and nothing else, so it is dead
    * on a free-standing design regardless of which backend runs it. */
