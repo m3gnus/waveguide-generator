@@ -85,6 +85,129 @@ def test_off_axis_grid_labels_the_sample_used_for_spl_and_phase() -> None:
     assert "10 degrees" in response["metadata"]["warnings"][0]
 
 
+def test_mesh_resolution_suspects_aggregate_into_one_warning() -> None:
+    result = _result(angles=[0.0, 90.0])
+    context = _context()
+    context.polar_config.update({"angle_range": (0.0, 90.0, 2), "norm_angle": 0.0})
+    metadata = {
+        "metal": {
+            "solver_log": [
+                {
+                    "frequency_hz": 100.0,
+                    "native_diagnostics": {
+                        "mesh_resolution_suspect": False,
+                        "mesh_max_valid_frequency_hz": 150.0,
+                        "mesh_max_edge_m": 0.05,
+                        "mesh_elements_per_wavelength_min": 6.0,
+                    },
+                },
+                {
+                    "frequency_hz": 200.0,
+                    "native_diagnostics": {
+                        "dense_solve_suspect": True,
+                        "mesh_resolution_suspect": True,
+                        "mesh_max_valid_frequency_hz": 150.0,
+                        "mesh_max_edge_m": 0.05,
+                        "mesh_elements_per_wavelength_min": 6.0,
+                    },
+                },
+            ]
+        }
+    }
+
+    response = build_solver_response(
+        result=result,
+        config=_config(),
+        context=context,
+        start_time=0.0,
+        metadata=metadata,
+        sound_speed_m_per_s=343.0,
+    )
+
+    warnings = response["metadata"]["warnings"]
+    mesh_warnings = [w for w in warnings if "Mesh resolution" in w]
+    assert len(mesh_warnings) == 1
+    assert "up to about 150 Hz" in mesh_warnings[0]
+    assert "6 elements per wavelength" in mesh_warnings[0]
+    assert "50.0 mm edge" in mesh_warnings[0]
+    assert "1 of 2 solved frequencies (200-200 Hz)" in mesh_warnings[0]
+    assert "Refine the mesh's mm resolutions" in mesh_warnings[0]
+    # The per-frequency conditioning warning still stands on its own.
+    assert any("Dense-solve conditioning is suspect at 200.0 Hz" in w for w in warnings)
+    assert response["metadata"]["warning_count"] == len(warnings)
+    # Accuracy suspects do not degrade the run to a partial success.
+    assert response["metadata"]["partial_success"] is False
+
+
+def test_mesh_resolution_all_clear_adds_no_warning() -> None:
+    result = _result(angles=[0.0, 90.0])
+    context = _context()
+    context.polar_config.update({"angle_range": (0.0, 90.0, 2), "norm_angle": 0.0})
+    metadata = {
+        "metal": {
+            "solver_log": [
+                {
+                    "frequency_hz": frequency,
+                    "native_diagnostics": {
+                        "mesh_resolution_suspect": False,
+                        "mesh_max_valid_frequency_hz": 1500.0,
+                    },
+                }
+                for frequency in (100.0, 200.0)
+            ]
+        }
+    }
+
+    response = build_solver_response(
+        result=result,
+        config=_config(),
+        context=context,
+        start_time=0.0,
+        metadata=metadata,
+        sound_speed_m_per_s=343.0,
+    )
+
+    assert not any("Mesh resolution" in w for w in response["metadata"]["warnings"])
+    assert response["metadata"]["warning_count"] == len(
+        response["metadata"]["warnings"]
+    )
+
+
+def test_mesh_resolution_warning_survives_missing_policy_fields() -> None:
+    # An older solver pin may flag the suspect without the companion numbers;
+    # the aggregate must still name the problem instead of crashing or hiding.
+    result = _result(angles=[0.0, 90.0])
+    context = _context()
+    context.polar_config.update({"angle_range": (0.0, 90.0, 2), "norm_angle": 0.0})
+    metadata = {
+        "metal": {
+            "solver_log": [
+                {"frequency_hz": 100.0, "native_diagnostics": {}},
+                {
+                    "frequency_hz": float("nan"),
+                    "native_diagnostics": {"mesh_resolution_suspect": True},
+                },
+            ]
+        }
+    }
+
+    response = build_solver_response(
+        result=result,
+        config=_config(),
+        context=context,
+        start_time=0.0,
+        metadata=metadata,
+        sound_speed_m_per_s=343.0,
+    )
+
+    mesh_warnings = [
+        w for w in response["metadata"]["warnings"] if "Mesh resolution" in w
+    ]
+    assert len(mesh_warnings) == 1
+    assert "insufficient for part of this sweep" in mesh_warnings[0]
+    assert "1 solved frequency" in mesh_warnings[0]
+
+
 def test_nonfinite_sphere_pressure_nulls_only_its_frequency() -> None:
     result = _result(angles=[0.0, 90.0])
     result.sphere_theta_deg = np.asarray([0, 0, 0, 90, 90, 90], dtype=float)
