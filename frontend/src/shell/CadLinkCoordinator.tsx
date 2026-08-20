@@ -392,13 +392,13 @@ export function CadLinkCoordinator() {
         ? response.items.find((item) => item.readable) ?? null
         : null;
       const opened = arrived ?? initial;
-      let continuity: 'carried' | 'reset' = 'reset';
+      let continuity: 'initial' | 'carried' | 'reset' = 'initial';
       if (opened) {
-        // An arrival for the same source inventory keeps the user's solve
-        // setup; a first listing or a different topology starts clean.
+        // A compatible current or saved source inventory keeps the user's solve
+        // setup; a genuinely first listing starts clean without being a reset.
         continuity = arrived
           ? useCadReturnStore.getState().selectArrivedBundle(arrived)
-          : (useCadReturnStore.getState().selectBundle(opened), 'reset');
+          : (useCadReturnStore.getState().selectBundle(opened), 'initial');
         // Selecting evidence invalidates a load for the previous return, but
         // mode—not return discovery—decides what the viewport displays.
         importedMeshStore.beginIntent();
@@ -795,8 +795,14 @@ export function CadLinkCoordinator() {
         blockers: [],
         parkedAt: command.requestedAt || new Date().toISOString(),
       });
-      useCadReturnStore.getState().selectArrivedBundle(bundle);
+      const continuity = useCadReturnStore.getState().selectArrivedBundle(bundle);
       await ingestSelected();
+      if (continuity === 'reset') {
+        const blocker = 'Review the new source inventory and solve settings before solving.';
+        parkedSolveCommandStore.setBlockers(command.commandId, [blocker]);
+        setStatus('Prepared the model Fusion sent. Its source inventory changed — review mesh, channel, and solve settings, then press Solve.');
+        return;
+      }
       const outcome = await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport();
       if (outcome === 'busy') {
         parkedSolveCommandStore.setBlockers(command.commandId, ['a solve is already running']);

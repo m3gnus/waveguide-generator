@@ -53,8 +53,9 @@ interface CadReturnState {
   /** Select a newly arrived return. When it correlates with the current
    * selection — same source inventory by id, role, and required flag — the
    * user's mesh sizes, channel mapping, drivers, combine, and sweep survive;
-   * finding acknowledgements never do. Otherwise falls back to a full reset. */
-  selectArrivedBundle: (bundle: CadReturnBundle) => 'carried' | 'reset';
+   * finding acknowledgements never do. `initial` means there was no current or
+   * saved setup, while `reset` means an existing setup fell back to defaults. */
+  selectArrivedBundle: (bundle: CadReturnBundle) => 'initial' | 'carried' | 'reset';
   refreshSelectedBundle: (bundle: CadReturnBundle | null) => void;
   markIngestStale: (reason: string) => void;
   applyIngest: (record: CadReturnIngestRecord, generation: number) => boolean;
@@ -339,6 +340,14 @@ function currentSolveProfileKey(bundle: CadReturnBundle): string | null {
   return identity?.designId && identity.lineageId ? solveProfileKey(identity, bundle) : null;
 }
 
+function hasSolveProfileForCurrentDesign(): boolean {
+  const identity = useDocumentStore.getState().identity;
+  if (!identity?.designId || !identity.lineageId) return false;
+  return readStoredSolveProfiles().some((profile) => (
+    profile.designId === identity.designId && profile.lineageId === identity.lineageId
+  ));
+}
+
 function persistedSolveSettings(state: CadReturnState): PersistedSolveSettings {
   return {
     sourceSizesMm: { ...state.sourceSizesMm },
@@ -558,7 +567,8 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
         ingestedBundleIdentity: null,
         ingestStaleReason: null,
       });
-      return restored ? 'carried' : 'reset';
+      if (restored) return 'carried';
+      return previous || hasSolveProfileForCurrentDesign() ? 'reset' : 'initial';
     }
     supersedeIngestIntent();
     set((state) => ({

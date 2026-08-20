@@ -59,6 +59,18 @@ describe('CAD return store', () => {
     expect(useCadReturnStore.getState().transitionMm).toBe(0.4);
   });
 
+  it('distinguishes a first arrival from resetting an existing solve setup', () => {
+    expect(useCadReturnStore.getState().selectArrivedBundle(bundle)).toBe('initial');
+
+    const changedInventory = {
+      ...bundle,
+      modifiedAt: '2026-08-11T02:00:00Z',
+      sourceCount: 1,
+      sources: [bundle.sources[0]],
+    };
+    expect(useCadReturnStore.getState().selectArrivedBundle(changedInventory)).toBe('reset');
+  });
+
   it('gates on every blocking finding and resets acknowledgements on re-ingest', () => {
     useCadReturnStore.getState().selectBundle(bundle);
     useCadReturnStore.getState().applyIngest(record(), useCadReturnStore.getState().beginIngestIntent());
