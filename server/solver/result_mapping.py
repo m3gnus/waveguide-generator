@@ -893,6 +893,8 @@ def build_solver_response(
     )
 
     response: dict[str, Any] = {
+        "result_kind": "parametric",
+        "result_contract_version": 1,
         "frequencies": frequency_values,
         "directivity": patterns,
         "directivity_phase": phase_patterns,

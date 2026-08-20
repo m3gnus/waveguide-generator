@@ -38,6 +38,7 @@ from server.jobs.models import (
     SolveRequest,
 )
 from server.jobs.store import ALLOWED_STATUSES, JobStore
+from server.integration.provenance import enrich_result_contract
 from server.platform.instance import LOCK_OPEN_FLAGS, lock_exclusive, unlock
 from server.solver.imported import (
     ImportedMeshArtifactError,
@@ -2511,7 +2512,7 @@ class JobRuntime:
         if symmetry_metadata is not None:
             metadata["symmetry"] = dict(symmetry_metadata)
         enriched["metadata"] = metadata
-        return enriched
+        return enrich_result_contract(enriched, request)
 
     def _record_execution_metadata(
         self, job_id: str, result_metadata: Mapping[str, Any]
@@ -2643,6 +2644,8 @@ class JobRuntime:
             }
         item = {
             "id": row.get("id"),
+            "client_request_id": stored_config.get("client_request_id"),
+            "client_metadata": stored_config.get("client_metadata") or {},
             "run_number": row.get("run_number"),
             "parent_job_id": row.get("parent_job_id"),
             "status": row.get("status"),

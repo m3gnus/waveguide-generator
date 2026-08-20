@@ -95,6 +95,8 @@ def test_golden_units_phase_nulls_impedance_di_and_partial_warning() -> None:
         },
         sound_speed_m_per_s=SOUND_SPEED_M_PER_S,
     )
+    assert response["result_kind"] == "parametric"
+    assert response["result_contract_version"] == 1
     assert response["frequencies"] == [100.0, 200.0]
     assert response["spl_on_axis"]["spl"][0] == pytest.approx(0.0)
     assert response["spl_on_axis"]["spl"][1] is None

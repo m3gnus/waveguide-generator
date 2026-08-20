@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import re
 from typing import Annotated, Any, Literal
@@ -733,6 +734,8 @@ class SolveRequest(JobModel):
     options: SolveOptions = Field(default_factory=SolveOptions)
     label: str | None = None
     parent_job_id: str | None = None
+    client_request_id: str | None = Field(default=None, max_length=200)
+    client_metadata: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="before")
     @classmethod
@@ -783,13 +786,30 @@ class SolveRequest(JobModel):
             )
         return self
 
-    @field_validator("label")
+    @field_validator("label", "client_request_id")
     @classmethod
     def normalize_label(cls, value: str | None) -> str | None:
         if value is None:
             return None
         normalized = value.strip()
         return normalized or None
+
+    @field_validator("client_metadata")
+    @classmethod
+    def validate_client_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        try:
+            encoded = json.dumps(
+                value,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            raise ValueError("client_metadata must contain finite JSON values") from exc
+        if len(encoded) > 16 * 1024:
+            raise ValueError("client_metadata must not exceed 16384 UTF-8 bytes")
+        return value
 
     @model_validator(mode="after")
     def validate_design_sweep_controls(self) -> "SolveRequest":
@@ -884,6 +904,7 @@ class SolveRequest(JobModel):
 
 class SolveAccepted(JobModel):
     job_id: str
+    client_request_id: str | None = None
 
 
 class StopResponse(JobModel):
@@ -914,6 +935,8 @@ class CadSource(JobModel):
 
 class JobItem(JobModel):
     id: str
+    client_request_id: str | None = None
+    client_metadata: dict[str, Any] = Field(default_factory=dict)
     run_number: int
     parent_job_id: str | None
     status: JobStatusName
