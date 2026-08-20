@@ -14,6 +14,9 @@ constraints stated inside them; they are not a current release status dashboard.
 - [Live passive-cardioid CAD campaign](LIVE-PASSIVE-CARDIOID.md) — browser UI,
   imported Metal solve, radiation matrices, downloads, and permanent archive on
   2026-08-20.
+- [Result and archive sizes](ARTIFACT-SIZES.md) — measured archive, retained
+  artifact, and snapshot-wire sizes across the available local corpus on
+  2026-08-20, with explicit evidence still required before hard limits.
 
 Current release gates are maintained in the workspace-local maintainer backlog, not in
 this dated evidence directory.
