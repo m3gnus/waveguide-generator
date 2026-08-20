@@ -66,6 +66,9 @@ def inspect_returned_step(
     step_path: str | Path,
     contract: Mapping[str, Any],
     baseline_fingerprint: Mapping[str, Any] | None = None,
+    *,
+    expected_sha256: str | None = None,
+    expected_size_bytes: int | None = None,
 ) -> dict[str, Any]:
     """Observe a returned STEP in a fresh child and return bounded evidence.
 
@@ -88,6 +91,8 @@ def inspect_returned_step(
         budget=INSPECT_BUDGET,
         allowed_artifacts=(),
         stage=INSPECT_STAGE,
+        expected_sha256=expected_sha256,
+        expected_size_bytes=expected_size_bytes,
     ) as outcome:
         evidence = outcome.result.get("evidence")
         if not isinstance(evidence, dict):
@@ -103,6 +108,8 @@ def build_imported_mesh_isolated(
     skipped_source_ids: Iterable[str] = (),
     options: Mapping[str, Any] | None = None,
     include_viewport_mesh: bool = True,
+    expected_sha256: str | None = None,
+    expected_size_bytes: int | None = None,
 ) -> dict[str, Any]:
     """Mesh a returned STEP in a fresh child, signature-compatible with the
     in-process :func:`server.mesh.imported.build_imported_mesh`.
@@ -128,6 +135,8 @@ def build_imported_mesh_isolated(
             budget=MESH_BUDGET,
             allowed_artifacts=MESH_ARTIFACTS,
             stage=MESH_STAGE,
+            expected_sha256=expected_sha256,
+            expected_size_bytes=expected_size_bytes,
         ) as outcome:
             result = outcome.result.get("built")
             if not isinstance(result, dict):
@@ -152,6 +161,8 @@ def build_imported_viewport_mesh_isolated(
     *,
     expected_geometry_hash: str,
     tag_allocation: Mapping[str, Any],
+    expected_sha256: str | None = None,
+    expected_size_bytes: int | None = None,
 ) -> dict[str, Any]:
     """Re-tessellate the display mesh in a fresh child.
 
@@ -174,6 +185,8 @@ def build_imported_viewport_mesh_isolated(
             budget=MESH_BUDGET,
             allowed_artifacts=VIEWPORT_ARTIFACTS,
             stage=MESH_STAGE,
+            expected_sha256=expected_sha256,
+            expected_size_bytes=expected_size_bytes,
         ) as outcome:
             viewport = outcome.result.get("viewport")
             artifact = outcome.artifacts.get("viewport.msh")

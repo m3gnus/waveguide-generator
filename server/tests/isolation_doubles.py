@@ -46,14 +46,30 @@ def main() -> int:
             [
                 sys.executable,
                 "-c",
-                "import sys,time,pathlib;"
-                "pathlib.Path(sys.argv[1]).write_text('alive');"
+                "import os,sys,time,pathlib;"
+                "pathlib.Path(sys.argv[1]).write_text(str(os.getpid()));"
                 "time.sleep(600)",
                 str(marker),
             ]
         )
         while True:
             time.sleep(1)
+
+    if behaviour == "clean_exit_with_descendant":
+        marker = Path(str(payload["descendant_marker"]))
+        subprocess.Popen(  # noqa: S603
+            [
+                sys.executable,
+                "-c",
+                "import os,sys,time,pathlib;"
+                "pathlib.Path(sys.argv[1]).write_text(str(os.getpid()));"
+                "time.sleep(600)",
+                str(marker),
+            ]
+        )
+        deadline = time.monotonic() + 5.0
+        while not marker.is_file() and time.monotonic() < deadline:
+            time.sleep(0.01)
 
     if behaviour == "crash":
         # SIGABRT, the shape a native OCC failure arrives in.

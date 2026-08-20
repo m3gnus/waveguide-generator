@@ -10,6 +10,7 @@ that is only unit-tested against a mock is not a gate.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -20,6 +21,7 @@ import time
 
 import pytest
 
+from server.cadlink import isolation
 from server.cadlink.isolation import (
     ChildBudget,
     ChildRefusal,
@@ -27,6 +29,7 @@ from server.cadlink.isolation import (
     isolated_step_task,
     process_group_rss_bytes,
 )
+from server.cadlink.limits import MAX_STEP_INPUT_BYTES
 
 
 DOUBLE = "server.tests.isolation_doubles"
@@ -131,13 +134,29 @@ def test_a_hanging_child_and_its_descendants_are_killed_at_the_deadline(
     assert not _any_descendant_alive(marker), "a descendant outlived the process-tree kill"
 
 
-def _any_descendant_alive(marker: Path) -> bool:
-    """True while a python process still holds the marker path in its argv."""
-
-    listing = subprocess.run(
-        ["ps", "-A", "-o", "args="], capture_output=True, text=True, check=False
+def test_descendants_are_killed_before_a_clean_child_result_is_trusted(
+    step_file: Path, tmp_path: Path
+) -> None:
+    marker = tmp_path / "clean-exit-descendant.txt"
+    outcome = _run(
+        step_file,
+        "clean_exit_with_descendant",
+        descendant_marker=str(marker),
     )
-    return any(str(marker) in line and "ps -A" not in line for line in listing.stdout.splitlines())
+    assert outcome.result == {"built": {"ok": True}}
+    assert marker.is_file(), "the double never started its descendant"
+    assert not _any_descendant_alive(marker), "a clean-exit descendant survived verification"
+
+
+def _any_descendant_alive(marker: Path) -> bool:
+    """True while the child PID recorded in the marker still exists."""
+
+    try:
+        pid = int(marker.read_text(encoding="utf-8"))
+        os.kill(pid, 0)
+    except (OSError, ValueError):
+        return False
+    return True
 
 
 def test_a_normal_import_succeeds_after_a_deadline_kill(step_file: Path, tmp_path: Path) -> None:
@@ -407,6 +426,25 @@ def test_windows_contains_memory_with_a_job_object(step_file: Path) -> None:  # 
         )
 
 
+def test_windows_job_assignment_failure_stops_the_uncontained_child(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process = object()
+    stopped: list[object] = []
+    monkeypatch.setattr(isolation, "_assign_windows_job", lambda *_args: None)
+    monkeypatch.setattr(
+        isolation,
+        "terminate_process_tree",
+        lambda child, _job=None, **_kwargs: stopped.append(child),
+    )
+
+    with pytest.raises(ChildRefusal, match="could not confine.*Windows job"):
+        isolation._required_windows_job(  # type: ignore[arg-type]
+            process, _budget(), stage="stage 7 meshing"
+        )
+    assert stopped == [process]
+
+
 # -- typed refusals survive the boundary -------------------------------------
 
 
@@ -427,6 +465,56 @@ def test_a_child_refusal_keeps_its_wording_and_its_remedy(step_file: Path) -> No
 def test_a_missing_source_step_is_refused_before_any_child_starts(tmp_path: Path) -> None:
     with pytest.raises(ChildRefusal, match="not a regular file"):
         _run(tmp_path / "absent.step", "ok")
+
+
+def test_step_staging_enforces_its_size_ceiling_before_starting_a_child(
+    tmp_path: Path,
+) -> None:
+    oversized = tmp_path / "oversized.step"
+    with oversized.open("wb") as handle:
+        handle.truncate(MAX_STEP_INPUT_BYTES + 1)
+    with pytest.raises(ChildRefusal, match="limit for one STEP input"):
+        _run(oversized, "ok")
+
+
+def test_verified_step_size_and_hash_are_rechecked_during_staging(
+    step_file: Path,
+) -> None:
+    verified = step_file.read_bytes()
+    expected_hash = "sha256:" + hashlib.sha256(verified).hexdigest()
+    expected_size = len(verified)
+
+    # A same-sized replacement defeats a stat-only check but not the verified
+    # digest carried from the bundle reader.
+    step_file.write_bytes(b"X" * expected_size)
+    with pytest.raises(ChildRefusal, match="checksum changed after bundle verification"):
+        with isolated_step_task(
+            "mesh",
+            {"misbehaviour": "ok"},
+            step_path=step_file,
+            budget=_budget(),
+            allowed_artifacts=("mesh.msh",),
+            stage="stage 7 meshing",
+            entrypoint=DOUBLE,
+            expected_sha256=expected_hash,
+            expected_size_bytes=expected_size,
+        ):
+            pass
+
+    step_file.write_bytes(verified + b"changed")
+    with pytest.raises(ChildRefusal, match="expected .* bytes, found"):
+        with isolated_step_task(
+            "mesh",
+            {"misbehaviour": "ok"},
+            step_path=step_file,
+            budget=_budget(),
+            allowed_artifacts=("mesh.msh",),
+            stage="stage 7 meshing",
+            entrypoint=DOUBLE,
+            expected_sha256=expected_hash,
+            expected_size_bytes=expected_size,
+        ):
+            pass
 
 
 def test_only_one_external_step_child_runs_at_a_time(step_file: Path) -> None:

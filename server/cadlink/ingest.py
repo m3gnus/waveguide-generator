@@ -559,6 +559,8 @@ def ingest_bundle(
                 skipped_source_ids=skipped_source_ids,
                 options=options,
                 include_viewport_mesh=viewport_artifact is None,
+                expected_sha256=bundle.artifact_sha256,
+                expected_size_bytes=bundle.artifact_size_bytes,
             )
         except ImportedMeshDependencyError:
             raise
@@ -621,6 +623,8 @@ def ingest_bundle(
                     built["viewport_recipe"],
                     expected_geometry_hash=str(built["transformed_geometry_hash"]),
                     tag_allocation=built["tag_allocation"],
+                    expected_sha256=bundle.artifact_sha256,
+                    expected_size_bytes=bundle.artifact_size_bytes,
                 )
             except Exception as exc:
                 viewport_failure_reason = f"{type(exc).__name__}: {exc}"

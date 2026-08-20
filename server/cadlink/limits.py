@@ -18,8 +18,14 @@ _KIB = 1024
 _MIB = 1024 * 1024
 _GIB = 1024 * 1024 * 1024
 
-#: One downloaded STEP body, enforced while streaming.
-MAX_DOWNLOAD_BYTES = 64 * _MIB
+#: One untrusted STEP body, enforced before and while streaming.  The same
+#: ceiling applies whether the bytes arrive from an HTTP response or a CAD
+#: return bundle: changing the transport must not change the parser's input
+#: budget.
+MAX_STEP_INPUT_BYTES = 64 * _MIB
+
+#: Backwards-compatible transport name used by the Onshape downloader.
+MAX_DOWNLOAD_BYTES = MAX_STEP_INPUT_BYTES
 
 #: One ``wgreturn.json`` manifest.
 MAX_WGRETURN_JSON_BYTES = 1 * _MIB
@@ -62,6 +68,7 @@ __all__ = [
     "MAX_DOWNLOAD_BYTES",
     "MAX_RETAINED_STDERR_BYTES",
     "MAX_STAGED_ARTIFACT_BYTES",
+    "MAX_STEP_INPUT_BYTES",
     "MAX_STEP_LABEL_CHARS",
     "MAX_STEP_RECORDS",
     "MAX_STEP_RECORD_BYTES",

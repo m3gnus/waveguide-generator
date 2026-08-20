@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from server.cadlink.fusion_status import FUSION_STATUS_FILENAME, read_fusion_status
+from server.cadlink.limits import MAX_STEP_INPUT_BYTES
 from server.cadlink.wgreturn import WgReturnError, read_wgreturn, validate_manifest
 
 
@@ -58,6 +59,35 @@ def test_worked_example_shape_and_real_member_table_validate(tmp_path: Path) -> 
         "stale detection unavailable: this returned bundle predates wgreturn 1.1 "
         "and carries no document signature",
     )
+
+
+def test_reader_streams_step_hashing_and_refuses_over_limit_before_hashing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle = write_bundle(tmp_path / "streamed")
+    original_read_bytes = Path.read_bytes
+
+    def guarded_read_bytes(path: Path) -> bytes:
+        if path.name == "assembly.step":
+            raise AssertionError("STEP hashing must not use Path.read_bytes()")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", guarded_read_bytes)
+    assert read_wgreturn(bundle).artifact_size_bytes == 4
+
+    oversized = write_bundle(tmp_path / "oversized")
+    assembly = oversized / "assembly.step"
+    with assembly.open("r+b") as handle:
+        handle.truncate(MAX_STEP_INPUT_BYTES + 1)
+    manifest_path = oversized / "wgreturn.json"
+    manifest = json.loads(original_read_bytes(manifest_path))
+    manifest["files"]["assembly.step"].update(
+        size_bytes=MAX_STEP_INPUT_BYTES + 1,
+        sha256="sha256:" + "0" * 64,
+    )
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(WgReturnError, match="limit for one STEP input"):
+        read_wgreturn(oversized)
 
 
 def test_signature_hash_contract_tracks_wgreturn_minor_version(tmp_path: Path) -> None:
