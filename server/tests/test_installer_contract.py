@@ -23,7 +23,9 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -499,7 +501,7 @@ def test_a_release_tag_can_be_installed_directly():
 
 # ---------------------------------------------------------------------------
 # v1: "windows entry point runs the installer from a copy outside the repo"
-#     "windows relauncher passes paths to PowerShell through the environment"
+#     "windows relauncher preserves Unicode paths through the PowerShell tee"
 # ---------------------------------------------------------------------------
 
 
@@ -510,16 +512,79 @@ def test_the_windows_entry_point_stages_the_installer_outside_the_repository():
     assert "--root" in source, "the staged copy needs the repository root passed explicitly"
 
 
-def test_the_windows_entry_point_passes_paths_to_powershell_through_the_environment():
+def test_the_windows_entry_point_preserves_unicode_paths_through_the_powershell_tee():
     source = batch_code(read(BATCH_ENTRY_POINT))
-    for name in ("WG_TMP_INSTALLER", "WG_ROOT", "WG_LOG"):
-        assert f"$env:{name}" in source, f"{name} must reach PowerShell as $env:{name}"
-        assert f"'%{name}%'" not in source, (
-            f"%{name}% would be substituted by cmd before PowerShell parsed the line"
+    command = re.search(
+        r"powershell\b[\s\S]*?(?=^set \"RUN_RESULT=)",
+        source,
+        re.IGNORECASE | re.MULTILINE,
+    )
+    assert command is not None, "the transcript PowerShell invocation is missing"
+    invocation = command.group()
+    assert "& $env:WG_TMP_INSTALLER" not in invocation, (
+        "Windows PowerShell can corrupt a non-ASCII .bat path while handing it "
+        "to cmd.exe when the ANSI and OEM code pages differ"
+    )
+    assert "& $env:ComSpec" in invocation
+    assert "/v:off" in invocation, "caller arguments containing ! must not be expanded"
+    for name in ("WG_TMP_INSTALLER", "WG_ROOT"):
+        assert f"%%{name}%%" in invocation, (
+            f"{name} must remain an ASCII environment reference until child cmd expands it"
         )
+    assert "$env:WG_LOG" in invocation
+    assert "$q = [char]34" in invocation, "runtime quotes keep paths with spaces grouped"
     # A plain cmd pipe takes ERRORLEVEL from the right-hand side, which would
     # destroy the exit code the exit-10 relaunch depends on.
-    assert re.search(r"Tee-Object[\s\S]*exit \$LASTEXITCODE", source)
+    assert re.search(r"Tee-Object[\s\S]*exit \$LASTEXITCODE", invocation)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="exercises cmd.exe and Windows PowerShell")
+def test_the_windows_entry_point_runs_from_non_ascii_user_paths(tmp_path: Path):
+    """Regression for the error-3 report from a user whose name contains an accent.
+
+    The real installer is replaced with a small probe, so this exercises the
+    public staging, PowerShell tee and child-cmd handoff without touching Git,
+    Python environments, the network, or the user's application data.
+    """
+
+    root = tmp_path / "André (installer test)" / "waveguide-generator"
+    entry = root / "installers" / "windows" / BATCH_ENTRY_POINT.name
+    entry.parent.mkdir(parents=True)
+    shutil.copy2(BATCH_ENTRY_POINT, entry)
+
+    scripts = root / "scripts"
+    scripts.mkdir()
+    sentinel = root / "unicode-handoff-ok"
+    (scripts / "install.bat").write_text(
+        "@echo off\n"
+        'if not exist "%~2\\scripts\\install.bat" exit /b 91\n'
+        'break > "%~2\\unicode-handoff-ok"\n'
+        "exit /b 0\n",
+        encoding="utf-8",
+        newline="\r\n",
+    )
+
+    environment = os.environ.copy()
+    environment["TEMP"] = str(tmp_path / "Têmp")
+    environment["APPDATA"] = str(tmp_path / "Dâtà")
+    Path(environment["TEMP"]).mkdir()
+    Path(environment["APPDATA"]).mkdir()
+    comspec = environment.get("COMSPEC", "cmd.exe")
+
+    completed = subprocess.run(
+        [comspec, "/d", "/c", str(entry), "--no-launch"],
+        cwd=root,
+        env=environment,
+        input="\n",  # satisfy the double-click pause heuristic under cmd /c
+        capture_output=True,
+        text=True,
+        errors="replace",
+        timeout=30,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert sentinel.is_file(), "the staged installer did not receive the Unicode repository path"
 
 
 def test_the_windows_entry_point_passes_forwarded_arguments_as_values():
@@ -527,9 +592,9 @@ def test_the_windows_entry_point_passes_forwarded_arguments_as_values():
 
     A quoted cmd argument such as ``--spa-archive "C:\\My Files\\spa.tar.gz"``
     loses those grouping quotes when nested in the outer ``-Command`` string.
-    PowerShell then sees two arguments; ``;``, ``$`` and backticks are worse,
-    because they are parsed as PowerShell syntax.  Store each cmd argument in
-    the environment and splat the reconstructed array instead.
+    ``;``, ``$`` and backticks are worse, because PowerShell parses them as
+    syntax. Store each cmd argument in the environment, then make the child cmd
+    expand only the resulting ASCII environment-variable references.
     """
 
     source = batch_code(read(BATCH_ENTRY_POINT))
@@ -545,9 +610,9 @@ def test_the_windows_entry_point_passes_forwarded_arguments_as_values():
     assert 'set "WG_INSTALL_ARG_%WG_INSTALL_ARG_COUNT%=%~1"' in source, (
         "cmd must preserve each caller argument in a separate environment value"
     )
-    assert "GetEnvironmentVariable('WG_INSTALL_ARG_' + $i)" in command.group()
-    assert "@wgArgs" in command.group(), (
-        "the reconstructed caller arguments must be splatted as an array"
+    assert "%%WG_INSTALL_ARG_" in command.group()
+    assert "$cmdLine +=" in command.group(), (
+        "the child cmd command must reconstruct every forwarded argument"
     )
 
 
