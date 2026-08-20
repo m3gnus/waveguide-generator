@@ -67,8 +67,25 @@ describe('CommandPalette', () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, query);
       input.dispatchEvent(new Event('input', { bubbles: true }));
     });
-    expect(host.querySelector(`section[aria-label="${group}"]`)?.textContent).toContain(label);
+    const section = host.querySelector<HTMLElement>('section[role="group"]');
+    expect(section?.getAttribute('aria-labelledby')).toBe(`command-group-${group.toLocaleLowerCase()}`);
+    expect(section?.querySelector('h3')?.textContent).toBe(group);
+    expect(section?.textContent).toContain(label);
     expect(host.querySelectorAll('[role="option"]')).toHaveLength(1);
+  });
+
+  it('keeps the visual option state aligned with the combobox active descendant', () => {
+    act(() => host.querySelector<HTMLButtonElement>('.command-affordance')!.click());
+    const input = host.querySelector<HTMLInputElement>('[role="combobox"]')!;
+    const options = [...host.querySelectorAll<HTMLButtonElement>('[role="option"]')];
+
+    expect(input.getAttribute('aria-activedescendant')).toBe(options[0].id);
+    expect(options.map((option) => option.getAttribute('aria-selected'))).toEqual(['true', 'false', 'false']);
+
+    act(() => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })));
+
+    expect(input.getAttribute('aria-activedescendant')).toBe(options[1].id);
+    expect(options.map((option) => option.getAttribute('aria-selected'))).toEqual(['false', 'true', 'false']);
   });
 
   it('routes a selected parameter to its owning dock panel', async () => {

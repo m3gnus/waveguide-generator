@@ -713,9 +713,14 @@ describe('CadLinkPanel', () => {
     const options = [...host.querySelectorAll<HTMLButtonElement>('[role="option"]')];
     expect(options).toHaveLength(2);
     expect(options[0].getAttribute('aria-selected')).toBe('true');
+    expect(options[1].getAttribute('aria-selected')).toBe('false');
     expect(options[0].textContent).toContain('1 source');
     expect(options[0].textContent).not.toContain('linked instance');
     expect(options[1].textContent).toContain('2 sources · 2 linked instances');
+
+    act(() => options[1].click());
+    expect(options[0].getAttribute('aria-selected')).toBe('false');
+    expect(options[1].getAttribute('aria-selected')).toBe('true');
   });
 
   it('keeps another project out of the active return history', async () => {

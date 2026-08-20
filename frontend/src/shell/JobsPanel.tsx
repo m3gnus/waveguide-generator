@@ -187,7 +187,7 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
     {/* Stars are a label here, shown only once a run has actually been rated. */}
     {!expanded && rating > 0 && <span className="job-stars" aria-label={`Kept, rated ${rating} of 5`} title="Kept: rated runs are never cleaned up">{'★'.repeat(rating)}</span>}
   </>;
-  return <article className={`job-card ${running ? 'running' : failed ? 'failed' : cancelled ? 'cancelled' : 'complete'}${selected ? ' selected' : ''}${expanded ? '' : ' collapsed'}`} aria-current={selected ? 'true' : undefined}>
+  return <article role="listitem" className={`job-card ${running ? 'running' : failed ? 'failed' : cancelled ? 'cancelled' : 'complete'}${selected ? ' selected' : ''}${expanded ? '' : ' collapsed'}`} aria-current={selected ? 'true' : undefined}>
     <header>
       {selectable
         ? <button className={`job-select${editing ? ' editing' : ''}`} aria-label={`Select ${displayName}`} aria-pressed={selected} title={selected ? 'Showing this run' : job.has_results ? 'Show this run in the viewport and charts' : 'Show this run design in the viewport'} onClick={() => selectJob(job)}>{heading}</button>
@@ -375,6 +375,8 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
     {(coordinator.actionError || snapshot.error) && <div className="job-error" role="alert" style={{ margin: 7 }}>{coordinator.actionError ?? snapshot.error}</div>}
     {snapshot.jobs.length === 0 && snapshot.connection === 'connected' && <div className="empty-state"><b>No runs yet</b><span>Solve the current design to start one. Every run is kept here with its results, so you can compare and re-run it later.</span></div>}
     {snapshot.jobs.length > 0 && visibleJobs.length === 0 && <div className="empty-state"><b>No runs match the filter</b><span>{query.trim() && preferences.minRating > 0 ? 'Clear the search or turn off the kept-only filter.' : query.trim() ? 'Clear the search to show runs.' : 'Turn off the kept-only filter to show more.'}</span></div>}
-    {visibleJobs.map((job) => <JobCard key={job.id} job={job} now={now} selected={job.id === selection.primary} retryJob={coordinator.retry} onError={coordinator.reportError} onRemove={remove} onOpenExportSettings={openExportSettings}/>)}
+    {visibleJobs.length > 0 && <div className="job-list" role="list" aria-label="Run history">
+      {visibleJobs.map((job) => <JobCard key={job.id} job={job} now={now} selected={job.id === selection.primary} retryJob={coordinator.retry} onError={coordinator.reportError} onRemove={remove} onOpenExportSettings={openExportSettings}/>)}
+    </div>}
   </div>;
 }
