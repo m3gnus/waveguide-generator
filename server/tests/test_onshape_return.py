@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 from pathlib import Path
 
@@ -10,12 +11,16 @@ import pytest
 from hornlab_mesher import WgLinkIdentity, WgLinkSourceInterface, write_wglink
 from hornlab_mesher.config_builder import resolve_geometry
 from server.cadlink.onshape.return_leg import (
-    _fingerprints_match,
-    _select_linked_root,
     write_and_ingest_return,
     write_return_bundle,
 )
-from server.cadlink.onshape.return_leg import OnshapeReturnError
+# The OCC observation moved behind the untrusted-CAD process boundary
+# (``docs/plans/STEP-PARSER-ISOLATION.md``); its identity helpers live with it.
+from server.cadlink.step_evidence import (
+    ReturnedStepError,
+    _fingerprints_match,
+    _select_linked_root,
+)
 from server.cadlink.store import CadLinkStore
 from server.cadlink.wgreturn import WgReturnIntegrityError, read_wgreturn
 from server.design.schema import DesignConfig
@@ -205,7 +210,7 @@ def test_two_matching_solids_are_ambiguous() -> None:
     }
     roots = [(3, 1), (3, 2)]
 
-    with pytest.raises(OnshapeReturnError, match="exactly one"):
+    with pytest.raises(ReturnedStepError, match="exactly one"):
         _select_linked_root(
             roots,
             {roots[0]: baseline, roots[1]: dict(baseline)},
@@ -227,7 +232,7 @@ def test_sole_same_bounds_near_copy_is_not_promoted_to_linked_identity() -> None
         "bbox_mm": [200.0, 200.0, 200.0, 210.0, 210.0, 210.0],
     }
 
-    with pytest.raises(OnshapeReturnError, match="exactly one"):
+    with pytest.raises(ReturnedStepError, match="exactly one"):
         _select_linked_root(
             roots,
             {roots[0]: near_copy, roots[1]: unrelated},
@@ -338,3 +343,66 @@ def test_shipping_o3_open_throat_refuses_instead_of_inventing_source_evidence(tm
             export_row={"manifest_json": json.dumps(outbound)},
             data_dir=tmp_path / "blocked-data",
         )
+
+
+def test_the_real_return_smoke_test_crosses_two_fresh_process_boundaries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The last line of the gate's acceptance list.
+
+    Part Studio -> STEP -> wgreturn -> ingest, with inspection and meshing each
+    in their own disposable child, and the evidence identical to what the same
+    STEP produces when observed in this process. Identical evidence is the
+    part that matters: a boundary that quietly changed the answer would be a
+    regression dressed as a security control.
+    """
+
+    import os
+
+    from server.cadlink import isolated
+    from server.cadlink.isolation import isolated_step_task as real_task
+    from server.cadlink.step_evidence import observe_returned_step
+
+    crossings: list[dict] = []
+
+    @contextlib.contextmanager
+    def recording(task, payload, **kwargs):
+        with real_task(task, payload, **kwargs) as outcome:
+            crossings.append({"task": task, "parent_pid": os.getpid()})
+            yield outcome
+
+    monkeypatch.setattr(isolated, "isolated_step_task", recording)
+
+    outbound, step = _outbound(tmp_path)
+    bundle_path, record = _run_in_gmsh_session(
+        write_and_ingest_return,
+        step,
+        link={
+            "document_id": "DID",
+            "workspace_id": "WID",
+            "part_studio_element_id": "PART",
+            "document_name": "Demo Horn",
+        },
+        export_row={"manifest_json": json.dumps(outbound)},
+        store=CadLinkStore(tmp_path / "cadlink.db"),
+        data_dir=tmp_path / "data",
+    )
+
+    assert [item["task"] for item in crossings] == ["inspect", "mesh"]
+    assert {item["parent_pid"] for item in crossings} == {os.getpid()}
+
+    manifest = read_wgreturn(bundle_path).manifest
+    contract = manifest["instances"][0]["source_contract"]
+    in_process = _run_in_gmsh_session(
+        observe_returned_step,
+        bundle_path / "assembly.step",
+        contract,
+        manifest["instances"][0]["body_evidence"]["baseline_fingerprint"],
+    )
+
+    assert manifest["assembly"]["signature_hash"] == in_process["signature_hash"]
+    assert manifest["assembly"]["n_bodies_expected"] == in_process["n_bodies"]
+    assert manifest["assembly"]["bbox_mm"] == in_process["bbox_mm"]
+    assert manifest["sources"][0]["observed"] == in_process["source_observed"]
+    assert manifest["sources"][0]["role"] == "HF"
+    assert record["sources"][0]["id"] == "source-hf"
