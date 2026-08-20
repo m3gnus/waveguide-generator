@@ -43,6 +43,7 @@ from server.engines.registry import EngineInfo, EngineRegistry
 from server.jobs.models import SolveRequest
 from server.jobs.runtime import JobRuntime
 from server.jobs.store import JobStore
+from server.mesh.gmsh_worker import _run_in_gmsh_session
 from server.solver import metal
 
 
@@ -835,44 +836,51 @@ def test_occ_ingest_end_to_end_writes_tag_names_reuses_cache_and_solves(
 
     bundle = tmp_path / "workspace" / "wgreturn" / "tiny.wgreturn"
     bundle.mkdir(parents=True)
-    step_path, info = write_step(geometry, bundle / "assembly.step", open_throat=False)
+    step_path, info = _run_in_gmsh_session(
+        write_step, geometry, bundle / "assembly.step", open_throat=False
+    )
     step = step_path.read_bytes()
     from hornlab_mesher.step_import import advanced_face_order, gmsh_surface_tags
 
-    initialized_here = not gmsh.isInitialized()
-    if initialized_here:
-        gmsh.initialize(interruptible=False)
-    gmsh.option.setNumber("General.Terminal", 0)
-    gmsh.clear()
-    gmsh.model.occ.importShapes(str(step_path), highestDimOnly=True)
-    gmsh.model.occ.synchronize()
-    surface_tags = gmsh_surface_tags()
-    face_ids = advanced_face_order(step_path)
-    source_surface = next(
-        surface
-        for surface in surface_tags
-        if str(gmsh.model.getType(2, surface)).casefold() == "plane"
-    )
-    source_face_id = face_ids[surface_tags.index(source_surface)]
-    area = float(gmsh.model.occ.getMass(2, source_surface))
-    second_surface = next(surface for surface in surface_tags if surface != source_surface)
-    second_face_id = face_ids[surface_tags.index(second_surface)]
-    second_area = float(gmsh.model.occ.getMass(2, second_surface))
-    second_center = np.asarray(gmsh.model.occ.getCenterOfMass(2, second_surface))
-    mirrored_surface = next(
-        surface
-        for surface in surface_tags
-        if surface not in {source_surface, second_surface}
-        and np.allclose(
-            gmsh.model.occ.getCenterOfMass(2, surface),
-            [-second_center[0], second_center[1], second_center[2]],
-            atol=1.0e-6,
+    def measure_surfaces() -> tuple[int, float, int, float, int]:
+        gmsh.option.setNumber("General.Terminal", 0)
+        gmsh.clear()
+        gmsh.model.occ.importShapes(str(step_path), highestDimOnly=True)
+        gmsh.model.occ.synchronize()
+        surface_tags = gmsh_surface_tags()
+        face_ids = advanced_face_order(step_path)
+        source_surface = next(
+            surface
+            for surface in surface_tags
+            if str(gmsh.model.getType(2, surface)).casefold() == "plane"
         )
-        and float(gmsh.model.occ.getMass(2, surface))
-        == pytest.approx(second_area, rel=1.0e-9)
+        source_face_id = face_ids[surface_tags.index(source_surface)]
+        area = float(gmsh.model.occ.getMass(2, source_surface))
+        second_surface = next(
+            surface for surface in surface_tags if surface != source_surface
+        )
+        second_face_id = face_ids[surface_tags.index(second_surface)]
+        second_area = float(gmsh.model.occ.getMass(2, second_surface))
+        second_center = np.asarray(gmsh.model.occ.getCenterOfMass(2, second_surface))
+        mirrored_surface = next(
+            surface
+            for surface in surface_tags
+            if surface not in {source_surface, second_surface}
+            and np.allclose(
+                gmsh.model.occ.getCenterOfMass(2, surface),
+                [-second_center[0], second_center[1], second_center[2]],
+                atol=1.0e-6,
+            )
+            and float(gmsh.model.occ.getMass(2, surface))
+            == pytest.approx(second_area, rel=1.0e-9)
+        )
+        mirrored_face_id = face_ids[surface_tags.index(mirrored_surface)]
+        gmsh.clear()
+        return source_face_id, area, second_face_id, second_area, mirrored_face_id
+
+    source_face_id, area, second_face_id, second_area, mirrored_face_id = (
+        _run_in_gmsh_session(measure_surfaces)
     )
-    mirrored_face_id = face_ids[surface_tags.index(mirrored_surface)]
-    gmsh.clear()
     manifest = {
         "wgreturn_version": "1.0",
         "required_features": [
@@ -996,16 +1004,16 @@ def test_occ_ingest_end_to_end_writes_tag_names_reuses_cache_and_solves(
     }
     data_dir = tmp_path / "data"
     store = CadLinkStore(data_dir / "cadlink.db")
-    try:
+    def ingest_three() -> tuple[dict, dict, dict]:
         gmsh.option.setNumber("General.Terminal", 0)
         first = ingest_bundle(bundle, sizes, [], store, data_dir)
         second = ingest_bundle(bundle, sizes, [], store, data_dir)
         changed_sizes = deepcopy(sizes)
         changed_sizes["rigid_size_mm"] = 18
         third = ingest_bundle(bundle, changed_sizes, [], store, data_dir)
-    finally:
-        if initialized_here and gmsh.isInitialized():
-            gmsh.finalize()
+        return first, second, third
+
+    first, second, third = _run_in_gmsh_session(ingest_three)
 
     assert first["mesh_cache_hit"] is False
     assert second["mesh_cache_hit"] is True
@@ -1102,26 +1110,22 @@ def test_occ_ingest_end_to_end_writes_tag_names_reuses_cache_and_solves(
     (bad_bundle / "wgreturn.json").write_text(
         json.dumps(bad_manifest, sort_keys=True), encoding="utf-8"
     )
-    bad_initialized_here = not gmsh.isInitialized()
-    if bad_initialized_here:
-        gmsh.initialize(interruptible=False)
-    try:
+    def ingest_bad_bundle() -> None:
         gmsh.option.setNumber("General.Terminal", 0)
-        with pytest.raises(IngestRefusal, match=r"anchor throat face.*residual 10"):
-            ingest_bundle(
-                bad_bundle,
-                {
-                    "rigid_size_mm": 20,
-                    "transition_mm": 30,
-                    "source_size_mm": {"source-hf": 8},
-                },
-                [],
-                store,
-                data_dir,
-            )
-    finally:
-        if bad_initialized_here and gmsh.isInitialized():
-            gmsh.finalize()
+        ingest_bundle(
+            bad_bundle,
+            {
+                "rigid_size_mm": 20,
+                "transition_mm": 30,
+                "source_size_mm": {"source-hf": 8},
+            },
+            [],
+            store,
+            data_dir,
+        )
+
+    with pytest.raises(IngestRefusal, match=r"anchor throat face.*residual 10"):
+        _run_in_gmsh_session(ingest_bad_bundle)
 
     monkeypatch.setattr(
         metal, "metal_status", lambda: {"available": True, "reason": "ok"}

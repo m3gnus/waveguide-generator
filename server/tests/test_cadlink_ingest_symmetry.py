@@ -21,6 +21,7 @@ import pytest
 from server.cadlink.ingest import ingest_bundle
 from server.cadlink.isolated import _inject_mesh_child_fault
 from server.cadlink.store import CadLinkStore
+from server.mesh.gmsh_worker import _run_in_gmsh_session
 
 
 def _horn_points(n_phi: int = 16, n_length: int = 4) -> tuple[np.ndarray, np.ndarray]:
@@ -56,7 +57,9 @@ def _write_horn_step(path: Path, *, vertical_offset_mm: float) -> Any:
         wall_thickness_mm=4.0,
         vertical_offset_mm=vertical_offset_mm,
     )
-    _step_path, info = write_step(geometry, path, open_throat=False)
+    _step_path, info = _run_in_gmsh_session(
+        write_step, geometry, path, open_throat=False
+    )
     return info
 
 
@@ -66,10 +69,7 @@ def _measure_throat(step_path: Path) -> dict[str, float]:
     import gmsh
     from hornlab_mesher.step_import import gmsh_surface_tags
 
-    initialized_here = not gmsh.isInitialized()
-    if initialized_here:
-        gmsh.initialize(interruptible=False)
-    try:
+    def measure() -> dict[str, float]:
         gmsh.option.setNumber("General.Terminal", 0)
         gmsh.clear()
         gmsh.model.occ.importShapes(str(step_path), highestDimOnly=True)
@@ -83,10 +83,9 @@ def _measure_throat(step_path: Path) -> dict[str, float]:
         centre = [float(value) for value in gmsh.model.occ.getCenterOfMass(2, planar[0])]
         area = float(gmsh.model.occ.getMass(2, planar[0]))
         gmsh.clear()
-    finally:
-        if initialized_here and gmsh.isInitialized():
-            gmsh.finalize()
-    return {"centre": centre, "area_mm2": area}
+        return {"centre": centre, "area_mm2": area}
+
+    return _run_in_gmsh_session(measure)
 
 
 def _fingerprint() -> dict[str, Any]:
@@ -254,25 +253,18 @@ def _ingest(
     *,
     symmetry_mode: str = "auto",
 ) -> dict[str, Any]:
-    gmsh = pytest.importorskip("gmsh")
+    pytest.importorskip("gmsh")
     data_dir = tmp_path / "data"
     store = CadLinkStore(data_dir / "cadlink.db")
-    initialized_here = not gmsh.isInitialized()
-    if initialized_here:
-        gmsh.initialize(interruptible=False)
-    try:
-        gmsh.option.setNumber("General.Terminal", 0)
-        return ingest_bundle(
-            bundle,
-            _SIZES,
-            [],
-            store,
-            data_dir,
-            prep_options={"symmetry_mode": symmetry_mode},
-        )
-    finally:
-        if initialized_here and gmsh.isInitialized():
-            gmsh.finalize()
+    return _run_in_gmsh_session(
+        ingest_bundle,
+        bundle,
+        _SIZES,
+        [],
+        store,
+        data_dir,
+        prep_options={"symmetry_mode": symmetry_mode},
+    )
 
 
 def test_symmetric_return_is_cut_to_a_quarter_with_tags_and_areas_intact(

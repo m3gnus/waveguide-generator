@@ -57,7 +57,7 @@ def build_frontend_if_stale(
     environment = dict(os.environ if environ is None else environ)
     if environment.get("WG2_SKIP_FRONTEND_BUILD") == "1":
         print("Skipping the frontend freshness check (WG2_SKIP_FRONTEND_BUILD=1).")
-        return frontend_freshness(repo_root)[0]
+        return True
 
     fresh, reason = frontend_freshness(repo_root)
     if fresh:
