@@ -247,6 +247,43 @@ describe('jobs panel run list', () => {
     expect(host.textContent).not.toContain('Stale draft');
   });
 
+  it('offers the radiation-impedance download only while the run still has one', async () => {
+    const radiationButton = () => [...host.querySelectorAll<HTMLButtonElement>('.job-card footer button')]
+      .find((button) => button.textContent === 'Radiation Z');
+    const plain = job(1, 'No campaign');
+    const withArtifact = { ...job(2, 'Cardioid'), has_radiation_impedance_artifact: true };
+    publishJobs([plain, withArtifact]);
+    compareSelection.setPrimary(plain.id);
+    await act(async () => root.render(<JobsPanel/>));
+    expect(radiationButton()).toBeUndefined();
+
+    act(() => compareSelection.setPrimary(withArtifact.id));
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    expect(radiationButton()).toBeDefined();
+    act(() => radiationButton()!.click());
+    expect(open).toHaveBeenCalledWith(`/api/radiation-impedance/${withArtifact.id}`, '_blank');
+
+    // Retention can clean the archive up under a run that once had one.
+    act(() => publishJobs([plain, { ...withArtifact, has_radiation_impedance_artifact: false }]));
+    expect(radiationButton()).toBeUndefined();
+    open.mockRestore();
+  });
+
+  it('says why a passive-cardioid run pauses on its extra campaign stage', async () => {
+    const running: JobItem = {
+      ...job(9, 'Cardioid'),
+      status: 'running', progress: 0.2, stage: 'radiation_impedance',
+      stage_message: 'Solving passive-cardioid radiation impedance 32/160 at 400 Hz',
+    };
+    publishJobs([running]);
+    await act(async () => root.render(<JobsPanel/>));
+    expect(host.textContent).toContain('Solving passive-cardioid radiation impedance 32/160 at 400 Hz');
+    expect(host.textContent).toContain('own radiation-impedance matrix');
+
+    act(() => publishJobs([{ ...running, stage: 'solve', stage_message: 'Solving 4/24' }]));
+    expect(host.textContent).not.toContain('own radiation-impedance matrix');
+  });
+
   it('filters by title, numbered handle, bare number, and formula with distinct empty states', async () => {
     publishJobs([job(123, 'Tritonia', 'OSSE'), job(456, 'Other', 'Le Cleac’h')]);
     await act(async () => root.render(<JobsPanel/>));

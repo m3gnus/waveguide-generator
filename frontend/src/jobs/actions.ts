@@ -35,6 +35,17 @@ export interface ImportedGeometrySubmission {
   acknowledged_findings: string[];
   skipped_source_ids: string[];
   exterior_only?: boolean;
+  // Passive-cardioid campaign inputs. Every one is optional on the wire and
+  // they travel as a set: `passive_cardioid_rear_volume_l` is the opt-in
+  // boundary, and any other field without it is refused by name.
+  passive_cardioid_rear_volume_l?: number;
+  passive_cardioid_port_length_mm?: number;
+  model_port_area_m2?: number;
+  bem_port_area_m2?: number;
+  port_area_source?: 'user' | 'bem_aperture';
+  passive_cardioid_foam_resistance_pa_s_m3?: number;
+  passive_cardioid_invert_port?: boolean;
+  passive_cardioid_coupled?: boolean;
 }
 export interface ImportedSolveSubmission {
   geometry: ImportedGeometrySubmission;

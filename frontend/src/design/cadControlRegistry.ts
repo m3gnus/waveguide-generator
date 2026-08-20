@@ -1,4 +1,4 @@
-import type { DriverFieldKey } from '../stores/cadReturn';
+import type { DriverFieldKey, PassiveCardioidNumberField } from '../stores/cadReturn';
 import type { ParameterTab } from './parameterRegistry';
 
 export const CAD_CONTROL_SECTIONS = {
@@ -7,6 +7,7 @@ export const CAD_CONTROL_SECTIONS = {
   frequencySweep: 'Frequency Sweep',
   directivityMap: 'Directivity Map',
   driveChannels: 'Drive channels & drivers',
+  passiveCardioid: 'Passive cardioid',
   crossover: 'Crossover',
   solveOptions: 'Solve options',
   meshDetail: 'Mesh detail',
@@ -92,6 +93,26 @@ export const CAD_CONTROLS = {
   driveVoltage: control(
     'cad.driver.voltage', 'Drive voltage', CAD_CONTROL_SECTIONS.driveChannels, 'simulation',
     ['RMS', 'volts', '2.83 V', 'driveVoltageV'], 'ingested-return', 'cad.drive-channels',
+  ),
+  passiveCardioid: control(
+    'cad.passive-cardioid', 'Passive cardioid', CAD_CONTROL_SECTIONS.passiveCardioid, 'simulation',
+    ['cardioid', 'rear chamber', 'port', 'foam', 'radiation impedance', 'aperture', 'back radiation'],
+  ),
+  cardioidEnabled: control(
+    'cad.passive-cardioid.enabled', 'Passive-cardioid campaign', CAD_CONTROL_SECTIONS.passiveCardioid, 'simulation',
+    ['cardioid', 'chamber', 'enable', 'rear volume'], 'ingested-return', 'cad.passive-cardioid',
+  ),
+  cardioidPortAreaSource: control(
+    'cad.passive-cardioid.port-area-source', 'Port area source', CAD_CONTROL_SECTIONS.passiveCardioid, 'simulation',
+    ['provenance', 'user', 'BEM aperture', 'port_area_source'], 'ingested-return', 'cad.passive-cardioid',
+  ),
+  cardioidInvertPort: control(
+    'cad.passive-cardioid.invert-port', 'Invert port', CAD_CONTROL_SECTIONS.passiveCardioid, 'simulation',
+    ['rear drive sign', 'polarity', 'passive_cardioid_invert_port'], 'ingested-return', 'cad.passive-cardioid',
+  ),
+  cardioidCoupled: control(
+    'cad.passive-cardioid.coupled', 'Coupled', CAD_CONTROL_SECTIONS.passiveCardioid, 'simulation',
+    ['derived channel', 'cone excursion', 'passive_cardioid_coupled'], 'ingested-return', 'cad.passive-cardioid',
   ),
   crossover: control(
     'cad.crossover', 'Crossover', CAD_CONTROL_SECTIONS.crossover, 'simulation',
@@ -181,9 +202,101 @@ export const CAD_DRIVER_FIELD_CONTROLS: readonly CadDriverFieldDescriptor[] = [
   driverField('rear_volume_l', 'Rear vol', 'L', 0.5),
 ];
 
+export interface CadCardioidFieldDescriptor extends CadControlDescriptor {
+  formKey: PassiveCardioidNumberField;
+  /** The unit the rail shows. Areas are typed in cm² and stored in m². */
+  unit: string;
+  step: number;
+  /** Displayed value = stored wire value × this. */
+  displayScale: number;
+  /** Exclusive when the server's bound is `gt`, inclusive when it is `ge`. */
+  minimum: { value: number; exclusive: boolean };
+  help: string;
+}
+
+const cardioidField = (
+  formKey: PassiveCardioidNumberField,
+  label: string,
+  unit: string,
+  step: number,
+  displayScale: number,
+  minimum: { value: number; exclusive: boolean },
+  help: string,
+  keywords: readonly string[],
+): CadCardioidFieldDescriptor => ({
+  ...control(
+    `cad.passive-cardioid.${formKey}`, label, CAD_CONTROL_SECTIONS.passiveCardioid, 'simulation',
+    ['cardioid', ...keywords], 'ingested-return', 'cad.passive-cardioid',
+  ),
+  formKey,
+  unit,
+  step,
+  displayScale,
+  minimum,
+  help,
+});
+
+/**
+ * The five numeric campaign inputs.
+ *
+ * The two port areas are separate entries deliberately: one drives the
+ * chamber/port physics and the other records the aperture the BEM matrix was
+ * solved over, and resolving both from a single "port area" box is a measured
+ * ~40% error on the volume-velocity ratio. There is no compliance entry —
+ * `chamber_compliance_m3_per_pa` is derived from the rear volume, not typed.
+ */
+export const CAD_CARDIOID_FIELD_CONTROLS: readonly CadCardioidFieldDescriptor[] = [
+  cardioidField(
+    'rearVolumeL', 'Rear volume', 'L', 0.5, 1, { value: 0, exclusive: true },
+    'Sealed volume behind the MF diaphragm. This is a volume; the chamber compliance in the run summary is derived from it as V/(rho c²), never typed here. Setting it is what turns the campaign on.',
+    ['rear volume', 'chamber', 'litres', 'passive_cardioid_rear_volume_l'],
+  ),
+  cardioidField(
+    'portLengthMm', 'Port length', 'mm', 1, 1, { value: 0, exclusive: false },
+    'Acoustic length of the port duct between the rear chamber and the port exit.',
+    ['port length', 'duct', 'passive_cardioid_port_length_mm'],
+  ),
+  cardioidField(
+    'modelPortAreaM2', 'Physical port area', 'cm²', 10, 1e4, { value: 0, exclusive: true },
+    'The port area the chamber/port physics uses. This is yours to state and is NOT the meshed aperture area: substituting the geometric area for it shifts the volume-velocity ratio by about 40%.',
+    ['model port area', 'physical area', 'model_port_area_m2'],
+  ),
+  cardioidField(
+    'bemPortAreaM2', 'BEM port area', 'cm²', 1, 1e4, { value: 0, exclusive: true },
+    'Geometric area of the PORT_EXIT faces in the mesh, which the radiation-impedance matrix is solved over. The solve refuses if it disagrees with the matrix it actually computed.',
+    ['BEM port area', 'aperture area', 'bem_port_area_m2'],
+  ),
+  cardioidField(
+    'foamResistancePaSM3', 'Foam resistance', 'Pa·s/m³', 1000, 1, { value: 0, exclusive: false },
+    'Acoustic resistance of the damping material in the port. Zero is an undamped port.',
+    ['foam', 'damping', 'resistance', 'passive_cardioid_foam_resistance_pa_s_m3'],
+  ),
+];
+
+/**
+ * The number to show for a stored value under a unit scale.
+ *
+ * Naive multiplication is not enough: 0.00037 m² × 1e4 is 3.6999999999999997,
+ * so a field the user typed 3.7 into would redraw as binary noise the moment
+ * anything else in the section re-rendered. Rounding blindly is not enough
+ * either — 12 significant digits would drop real precision from a BEM aperture
+ * area. So this takes the shortest rounding that still converts back to the
+ * exact stored value, which reproduces what the user typed when they typed it
+ * and preserves every digit of a measured area when they did not.
+ */
+export function cadDisplayValue(stored: number, scale: number): number {
+  const scaled = stored * scale;
+  for (let digits = 12; digits < 17; digits += 1) {
+    const candidate = Number(scaled.toPrecision(digits));
+    if (candidate / scale === stored) return candidate;
+  }
+  return scaled;
+}
+
 export const CAD_CONTROL_DESCRIPTORS: readonly CadControlDescriptor[] = [
   ...Object.values(CAD_CONTROLS),
   ...CAD_DRIVER_FIELD_CONTROLS,
+  ...CAD_CARDIOID_FIELD_CONTROLS,
 ];
 
 export function cadControlIsAvailable(descriptor: CadControlDescriptor, cadReturnReady: boolean): boolean {
