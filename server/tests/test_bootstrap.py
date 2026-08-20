@@ -224,7 +224,7 @@ def test_the_bootstrap_installs_a_repository_aware_wg_command(tmp_path) -> None:
         path.read_text(encoding="utf-8")
         for path in bootstrap._cli_entrypoint_files(environment)
     )
-    assert str(ROOT) in contents
+    assert repr(str(ROOT)) in contents
     assert "server.cli" in contents
 
 

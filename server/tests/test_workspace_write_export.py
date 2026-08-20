@@ -524,8 +524,9 @@ def test_write_export_rejects_oversize_path_segment_before_writing(tmp_path: Pat
 def test_run_exports_default_to_the_visible_documents_folder() -> None:
     home = Path("/home/example")
     root = paths.documents_root(system="Linux", environ={}, home=home)
+    expected_root = (home / "Documents" / "Waveguide Generator").absolute()
 
-    assert root == home / "Documents" / "Waveguide Generator"
+    assert root == expected_root
     assert paths.default_runs_dir(system="Linux", environ={}, home=home) == root / "runs"
     assert (
         paths.proposed_cadlink_dir(system="Linux", environ={}, home=home)
@@ -542,7 +543,7 @@ def test_documents_root_follows_the_platform_convention() -> None:
     xdg = paths.documents_root(
         system="Linux", environ={"XDG_DOCUMENTS_DIR": "/home/example/Documenten"}, home=Path("/home/example")
     )
-    assert xdg == Path("/home/example/Documenten/Waveguide Generator")
+    assert xdg == Path("/home/example/Documenten/Waveguide Generator").absolute()
 
 
 def test_a_legacy_default_holding_runs_is_adopted_not_abandoned(tmp_path: Path) -> None:
