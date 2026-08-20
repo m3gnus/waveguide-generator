@@ -81,8 +81,8 @@ def _request(tmp_path: Path) -> Path:
             {
                 "design": parse(VALID_MWG).semantic_data(),
                 "options": {"engine": "metal", "frequencies_hz": [500.0]},
-                "client_request_id": "external-candidate-9",
-                "client_metadata": {"campaign": "cli-contract"},
+                "client_request_id": "external-evaluation-9",
+                "client_metadata": {"study": "cli-contract"},
             }
         ),
         encoding="utf-8",
@@ -198,12 +198,12 @@ def test_solve_accepts_canonical_request_json_and_preserves_identity(
 
     assert exit_code == 0
     assert captured.err == ""
-    assert request["client_request_id"] == "external-candidate-9"
-    assert request["client_metadata"] == {"campaign": "cli-contract"}
-    assert results["client_request_id"] == "external-candidate-9"
-    assert summary["clientRequestId"] == "external-candidate-9"
+    assert request["client_request_id"] == "external-evaluation-9"
+    assert request["client_metadata"] == {"study": "cli-contract"}
+    assert results["client_request_id"] == "external-evaluation-9"
+    assert summary["clientRequestId"] == "external-evaluation-9"
     assert messages[-1]["status"] == "complete"
-    assert messages[-1]["client_request_id"] == "external-candidate-9"
+    assert messages[-1]["client_request_id"] == "external-evaluation-9"
     assert messages[-1]["result_sha256"] == summary["artifacts"]["results.json"][
         "sha256"
     ]

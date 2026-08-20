@@ -152,6 +152,21 @@ The bootstrap is idempotent: unchanged, valid environments do not contact the
 package index. Run `.venv/bin/python scripts/bootstrap.py --check` to validate
 without installing, or use `--force` to reinstall the locked dependency set.
 
+## Headless evaluation
+
+The installer also provisions a repository-aware `wg` command in `.venv/bin` on
+macOS/Linux and `.venv\Scripts` on Windows. It validates or solves `.mwg`/`.cfg`
+designs and accepts the same strict JSON `SolveRequest` as the HTTP API:
+
+```text
+.venv/bin/wg validate design.mwg --json
+.venv/bin/wg solve --request request.json --events ndjson --output run-001
+```
+
+See the canonical [CLI contract](docs/reference/CLI.md) and
+[external evaluation API](docs/reference/EXTERNAL-EVALUATION.md). A standard-library
+[reference client](examples/external_evaluator.py) demonstrates persistent HTTP use.
+
 Flags: `--no-browser`, `--data-dir` (or `WG2_DATA_DIR`); `WG2_ENABLE_DRYRUN=1` exposes the dry-run engine (dev/test only).
 
 ## Test commands

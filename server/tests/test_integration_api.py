@@ -31,7 +31,7 @@ def test_parameter_catalog_is_versioned_unique_and_declarative() -> None:
         "operator": "equals",
         "value": 1,
     }
-    assert "optimization bounds" in catalog["validation_authority"]["note"]
+    assert "recommended search ranges" in catalog["validation_authority"]["note"]
     assert response.headers["etag"].startswith('"sha256:')
 
 
