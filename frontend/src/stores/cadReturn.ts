@@ -23,6 +23,66 @@ export interface ChannelDriverForm {
   fields: Partial<Record<DriverFieldKey, number>>;
 }
 
+/**
+ * The channel id the coupled passive-cardioid solve writes its derived output
+ * to. The server refuses a submission whose own channels or combine claim it
+ * (`ImportedGeometrySource.validate_passive_cardioid`), so the rail keeps it
+ * out of the assignable ids instead of letting the refusal be the first the
+ * user hears of it.
+ */
+export const PASSIVE_CARDIOID_CHANNEL_ID = 'passive_cardioid';
+
+export type PortAreaSource = 'user' | 'bem_aperture';
+
+export const PASSIVE_CARDIOID_NUMBER_FIELDS = [
+  'rearVolumeL', 'portLengthMm', 'modelPortAreaM2', 'bemPortAreaM2', 'foamResistancePaSM3',
+] as const;
+export type PassiveCardioidNumberField = typeof PASSIVE_CARDIOID_NUMBER_FIELDS[number];
+
+/**
+ * The passive-cardioid campaign inputs, in the units the wire carries.
+ *
+ * Two things about this shape are load-bearing and neither is cosmetic.
+ *
+ * `rearVolumeL` is a **volume**, never a compliance: the summary's
+ * `chamber_compliance_m3_per_pa` is derived from it as V/(rho c^2), so
+ * offering compliance as an input would ask the user for a number the solver
+ * computes.
+ *
+ * The two port areas are separate on purpose. `modelPortAreaM2` is
+ * user-supplied and drives the chamber/port physics; `bemPortAreaM2` is the
+ * geometric area of the aperture the radiation matrix was solved over.
+ * Resolving both from one input is a measured ~40% error (0.397 relative on
+ * the volume-velocity ratio, 0.389 on the input impedance) that still looks
+ * like a plausible curve — see docs/reference/CARDIOID-INPUT-CONTRACT.md.
+ */
+export interface PassiveCardioidForm {
+  /** Mirrors the wire's opt-in boundary: off submits no cardioid field at all. */
+  enabled: boolean;
+  rearVolumeL: number | null;
+  portLengthMm: number | null;
+  modelPortAreaM2: number | null;
+  bemPortAreaM2: number | null;
+  portAreaSource: PortAreaSource;
+  foamResistancePaSM3: number | null;
+  invertPort: boolean;
+  coupled: boolean;
+}
+
+/** Server-side defaults for the two booleans, so an untouched form and a
+ * missing field mean the same thing. */
+export const PASSIVE_CARDIOID_DEFAULTS: PassiveCardioidForm = {
+  enabled: false,
+  rearVolumeL: null,
+  portLengthMm: null,
+  modelPortAreaM2: null,
+  bemPortAreaM2: null,
+  portAreaSource: 'user',
+  foamResistancePaSM3: null,
+  invertPort: true,
+  coupled: false,
+};
+
 interface CadReturnState {
   selectedBundle: CadReturnBundle | null;
   ingestRecord: CadReturnIngestRecord | null;
@@ -40,6 +100,7 @@ interface CadReturnState {
   combineLevelMatch: boolean | null;
   combineAlign: boolean | null;
   channelDrivers: Record<string, ChannelDriverForm>;
+  passiveCardioid: PassiveCardioidForm;
   driveVoltageV: number;
   frequencyStartHz: number;
   frequencyEndHz: number;
@@ -76,6 +137,7 @@ interface CadReturnState {
   setChannelDriverEnabled: (channelId: string, enabled: boolean) => void;
   setChannelDriverField: (channelId: string, field: DriverFieldKey, value: number | null) => void;
   setDriveVoltage: (value: number) => void;
+  setPassiveCardioid: (patch: Partial<PassiveCardioidForm>) => void;
   setSweep: (update: Partial<Pick<CadReturnState, 'frequencyStartHz' | 'frequencyEndHz' | 'frequencyCount'>>) => void;
 }
 
@@ -86,8 +148,8 @@ const MAX_SOLVE_PROFILES = 20;
 type PersistedSolveSettings = Pick<CadReturnState,
   'sourceSizesMm' | 'rigidSizeMm' | 'transitionMm' | 'skippedSourceIds' | 'driveChannels'
   | 'exteriorOnly' | 'combineEnabled' | 'combineCrossoversHz' | 'combineLevelMatch'
-  | 'combineAlign' | 'channelDrivers' | 'driveVoltageV' | 'frequencyStartHz'
-  | 'frequencyEndHz' | 'frequencyCount'>;
+  | 'combineAlign' | 'channelDrivers' | 'passiveCardioid' | 'driveVoltageV'
+  | 'frequencyStartHz' | 'frequencyEndHz' | 'frequencyCount'>;
 
 interface SourceInventoryEntry {
   id: string;
@@ -233,13 +295,51 @@ function parseChannelDrivers(value: unknown): Record<string, ChannelDriverForm> 
   return drivers;
 }
 
+/**
+ * A stored cardioid form, or the defaults when the profile predates the field.
+ *
+ * Absence is tolerated where every neighbouring parse is strict: profiles
+ * written before this section existed carry no key, and dropping every stored
+ * mesh size and driver over a feature the user has not used would be a worse
+ * answer than starting that one section off. Anything present is still parsed
+ * strictly, and a malformed form fails the whole profile as usual.
+ */
+function parsePassiveCardioid(value: unknown): PassiveCardioidForm | null | undefined {
+  if (value === undefined) return { ...PASSIVE_CARDIOID_DEFAULTS };
+  if (!isObject(value)) return null;
+  if (typeof value.enabled !== 'boolean'
+    || typeof value.invertPort !== 'boolean'
+    || typeof value.coupled !== 'boolean'
+    || (value.portAreaSource !== 'user' && value.portAreaSource !== 'bem_aperture')) return null;
+  const numbers: Partial<Record<PassiveCardioidNumberField, number | null>> = {};
+  for (const field of PASSIVE_CARDIOID_NUMBER_FIELDS) {
+    const item = value[field];
+    if (item === null || item === undefined) { numbers[field] = null; continue; }
+    if (typeof item !== 'number' || !Number.isFinite(item)) return null;
+    numbers[field] = item;
+  }
+  return normalizePassiveCardioid({
+    enabled: value.enabled,
+    rearVolumeL: numbers.rearVolumeL ?? null,
+    portLengthMm: numbers.portLengthMm ?? null,
+    modelPortAreaM2: numbers.modelPortAreaM2 ?? null,
+    bemPortAreaM2: numbers.bemPortAreaM2 ?? null,
+    portAreaSource: value.portAreaSource,
+    foamResistancePaSM3: numbers.foamResistancePaSM3 ?? null,
+    invertPort: value.invertPort,
+    coupled: value.coupled,
+  });
+}
+
 function parseSolveSettings(value: unknown, inventory: SourceInventoryEntry[]): PersistedSolveSettings | null {
   if (!isObject(value)) return null;
   const sourceSizesMm = finiteNumberRecord(value.sourceSizesMm);
   const combineCrossoversHz = finiteNumberRecord(value.combineCrossoversHz);
   const skippedSourceIds = stringArray(value.skippedSourceIds);
   const channelDrivers = parseChannelDrivers(value.channelDrivers);
-  if (!sourceSizesMm || !combineCrossoversHz || !skippedSourceIds || !channelDrivers) return null;
+  const passiveCardioid = parsePassiveCardioid(value.passiveCardioid);
+  if (!sourceSizesMm || !combineCrossoversHz || !skippedSourceIds || !channelDrivers
+    || !passiveCardioid) return null;
   const inventoryIds = new Set(inventory.map(({ id }) => id));
   if (Object.keys(sourceSizesMm).some((id) => !inventoryIds.has(id))
     || skippedSourceIds.some((id) => !inventoryIds.has(id))
@@ -268,6 +368,7 @@ function parseSolveSettings(value: unknown, inventory: SourceInventoryEntry[]): 
     combineLevelMatch: value.combineLevelMatch,
     combineAlign: value.combineAlign,
     channelDrivers,
+    passiveCardioid,
     driveVoltageV: value.driveVoltageV,
     frequencyStartHz: value.frequencyStartHz,
     frequencyEndHz: value.frequencyEndHz,
@@ -355,6 +456,7 @@ function persistedSolveSettings(state: CadReturnState): PersistedSolveSettings {
       channelId,
       { enabled: form.enabled, fields: { ...form.fields } },
     ])),
+    passiveCardioid: { ...state.passiveCardioid },
     driveVoltageV: state.driveVoltageV,
     frequencyStartHz: state.frequencyStartHz,
     frequencyEndHz: state.frequencyEndHz,
@@ -492,6 +594,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
   combineLevelMatch: null,
   combineAlign: null,
   channelDrivers: {},
+  passiveCardioid: { ...PASSIVE_CARDIOID_DEFAULTS },
   driveVoltageV: 2.83,
   frequencyStartHz: 200,
   frequencyEndHz: 20_000,
@@ -514,6 +617,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
       combineLevelMatch: null,
       combineAlign: null,
       channelDrivers: {},
+      passiveCardioid: { ...PASSIVE_CARDIOID_DEFAULTS },
       driveVoltageV: 2.83,
       frequencyStartHz: 200,
       frequencyEndHz: 20_000,
@@ -545,6 +649,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
         combineLevelMatch: null,
         combineAlign: null,
         channelDrivers: {},
+        passiveCardioid: { ...PASSIVE_CARDIOID_DEFAULTS },
         driveVoltageV: 2.83,
         frequencyStartHz: 200,
         frequencyEndHz: 20_000,
@@ -739,6 +844,10 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
     saveSolveProfile(get());
   },
   setDriveVoltage: (driveVoltageV) => { set({ driveVoltageV }); saveSolveProfile(get()); },
+  setPassiveCardioid: (patch) => {
+    set((state) => ({ passiveCardioid: normalizePassiveCardioid({ ...state.passiveCardioid, ...patch }) }));
+    saveSolveProfile(get());
+  },
   setSweep: (update) => { set(update); saveSolveProfile(get()); },
 }));
 
@@ -752,6 +861,101 @@ export function channelDriverWire(form: ChannelDriverForm | undefined): Record<s
     if (value !== undefined) wire[key] = value;
   }
   return wire;
+}
+
+export const PASSIVE_CARDIOID_FIELD_LABELS: Record<PassiveCardioidNumberField, string> = {
+  rearVolumeL: 'Rear volume',
+  portLengthMm: 'Port length',
+  modelPortAreaM2: 'Physical port area',
+  bemPortAreaM2: 'BEM port area',
+  foamResistancePaSM3: 'Foam resistance',
+};
+
+/**
+ * Hold the two port areas together when the user says they are the same face.
+ *
+ * `port_area_source: 'bem_aperture'` asserts that the area driving the physics
+ * *is* the aperture the radiation matrix was solved over, and the server
+ * enforces that with `math.isclose(..., rel_tol=1e-12)`. Two independently
+ * typed numbers cannot survive that, so the provenance choice drives the model
+ * area from the BEM area rather than asking the user to retype it. Switching
+ * back to `user` leaves the value alone: it is now theirs to change.
+ */
+export function normalizePassiveCardioid(form: PassiveCardioidForm): PassiveCardioidForm {
+  return form.portAreaSource === 'bem_aperture' && form.modelPortAreaM2 !== form.bemPortAreaM2
+    ? { ...form, modelPortAreaM2: form.bemPortAreaM2 }
+    : form;
+}
+
+/** Which required cardioid inputs are still missing or outside the server's
+ * bounds. Empty means the whole set can be submitted together. */
+export function passiveCardioidMissingFields(form: PassiveCardioidForm): PassiveCardioidNumberField[] {
+  const positive = (value: number | null): boolean => value !== null && Number.isFinite(value) && value > 0;
+  const nonNegative = (value: number | null): boolean => value !== null && Number.isFinite(value) && value >= 0;
+  return PASSIVE_CARDIOID_NUMBER_FIELDS.filter((field) => (
+    field === 'portLengthMm' || field === 'foamResistancePaSM3'
+      ? !nonNegative(form[field])
+      : !positive(form[field])
+  ));
+}
+
+export interface PassiveCardioidWire {
+  passive_cardioid_rear_volume_l: number;
+  passive_cardioid_port_length_mm: number;
+  model_port_area_m2: number;
+  bem_port_area_m2: number;
+  port_area_source: PortAreaSource;
+  passive_cardioid_foam_resistance_pa_s_m3: number;
+  passive_cardioid_invert_port: boolean;
+  passive_cardioid_coupled: boolean;
+}
+
+/**
+ * The whole cardioid field set, or null.
+ *
+ * All-or-nothing is the wire's own rule, not a convenience: a missing
+ * `passive_cardioid_rear_volume_l` puts the job on the exact pre-campaign
+ * solve path, and any other cardioid field sent without it — `coupled: true`
+ * and `invert_port: false` included — is a hard refusal naming the strays. So
+ * a disabled form contributes no keys whatsoever, and an incomplete one is
+ * caught by `passiveCardioidBlocker` before anything is built.
+ */
+export function passiveCardioidWire(form: PassiveCardioidForm): PassiveCardioidWire | null {
+  if (!form.enabled || passiveCardioidMissingFields(form).length) return null;
+  const normalized = normalizePassiveCardioid(form);
+  return {
+    passive_cardioid_rear_volume_l: normalized.rearVolumeL as number,
+    passive_cardioid_port_length_mm: normalized.portLengthMm as number,
+    model_port_area_m2: normalized.modelPortAreaM2 as number,
+    bem_port_area_m2: normalized.bemPortAreaM2 as number,
+    port_area_source: normalized.portAreaSource,
+    passive_cardioid_foam_resistance_pa_s_m3: normalized.foamResistancePaSM3 as number,
+    passive_cardioid_invert_port: normalized.invertPort,
+    passive_cardioid_coupled: normalized.coupled,
+  };
+}
+
+/** Why the cardioid section cannot be submitted yet, in the user's words. */
+export function passiveCardioidBlocker(
+  state: Pick<CadReturnState, 'passiveCardioid' | 'driveChannels'>,
+): string | null {
+  const form = state.passiveCardioid;
+  if (!form.enabled) return null;
+  const missing = passiveCardioidMissingFields(form);
+  if (missing.length) {
+    return `Passive cardioid needs ${missing.map((field) => PASSIVE_CARDIOID_FIELD_LABELS[field]).join(', ')}. `
+      + 'The campaign inputs are submitted as one set or not at all.';
+  }
+  if (form.coupled && state.driveChannels.some((channel) => channel.id === PASSIVE_CARDIOID_CHANNEL_ID)) {
+    return `A drive channel is already named "${PASSIVE_CARDIOID_CHANNEL_ID}", which the coupled solve reserves `
+      + 'for its derived output. Reassign that source to a different channel, or turn Coupled off.';
+  }
+  return null;
+}
+
+/** Drive-channel ids the rail may offer. The coupled campaign owns its own. */
+export function assignableChannelIds(ids: readonly string[], coupled: boolean): string[] {
+  return coupled ? ids.filter((id) => id !== PASSIVE_CARDIOID_CHANNEL_ID) : [...ids];
 }
 
 export interface CombinePair { key: string; lower: string; upper: string; hz: number }
@@ -851,6 +1055,7 @@ export function resetCadReturnStore(): void {
     combineLevelMatch: null,
     combineAlign: null,
     channelDrivers: {},
+    passiveCardioid: { ...PASSIVE_CARDIOID_DEFAULTS },
     driveVoltageV: 2.83,
     frequencyStartHz: 200,
     frequencyEndHz: 20_000,

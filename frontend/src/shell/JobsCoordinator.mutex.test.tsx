@@ -265,6 +265,24 @@ describe('solve invocation mutex', () => {
     await act(async () => { pending.resolve('job-imported'); await first; });
   });
 
+  // A typed refusal reaches the browser as "<reason_code>: <message>", which
+  // names the condition without naming the fix. Translating inside runImported
+  // means every imported entry point gets the advice, not just the one that
+  // happened to be wired up.
+  it('turns a passive-cardioid topology refusal into the CAD change that fixes it', async () => {
+    mocks.submitImported.mockRejectedValue(new Error(
+      'passive_cardioid_topology: coupled passive cardioid requires all PORT_EXIT patches in one drive channel',
+    ));
+    await act(async () => {
+      await expect(jobsCoordinatorBridge.getSnapshot().runImported(importedSubmission('wgi_refused')))
+        .rejects.toThrow(/same drive channel/);
+    });
+    await act(async () => {
+      await expect(jobsCoordinatorBridge.getSnapshot().runImported(importedSubmission('wgi_refused')))
+        .rejects.not.toThrow(/passive_cardioid_topology/);
+    });
+  });
+
   it('names CAD solves from the same design name and numbers them in the same sequence', async () => {
     mocks.submitImported.mockResolvedValue('job-cad');
     const first = importedSubmission('wgi_first');
