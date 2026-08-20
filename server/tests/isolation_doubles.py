@@ -41,6 +41,9 @@ def main() -> int:
 
     if behaviour == "hang":
         # A descendant that outlives a naive kill unless the whole tree goes.
+        child_marker = payload.get("child_marker")
+        if child_marker:
+            Path(str(child_marker)).write_text(str(os.getpid()), encoding="utf-8")
         marker = Path(str(payload["descendant_marker"]))
         subprocess.Popen(  # noqa: S603
             [
