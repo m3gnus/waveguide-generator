@@ -25,6 +25,29 @@ export interface CadReturnBundle {
 
 export interface CadReturnListing { items: CadReturnBundle[]; cadFolderConfigured: boolean }
 
+export interface CadLinkedDesignSummary {
+  designId: string;
+  lineageId: string;
+  editVersion: number;
+  designHash: string;
+  filename: string;
+  branchedFromDesignId: string | null;
+  branchedFromEditVersion: number | null;
+  exportCount: number;
+  lastExportedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CadLinkedDesignSnapshot {
+  designId: string;
+  lineageId: string;
+  editVersion: number;
+  filename: string;
+  updatedAt: string;
+  text: string;
+}
+
 export type FusionCadState = 'closed' | 'addin_offline' | 'no_document' | 'not_linked' | 'current' | 'stale';
 
 export interface FusionCadLink {
@@ -236,6 +259,19 @@ async function jsonRequest<T>(path: string, init: RequestInit | undefined, fetch
 
 export function listReturns(fetcher: typeof fetch = fetch): Promise<CadReturnListing> {
   return jsonRequest('/api/cadlink/returns', undefined, fetcher);
+}
+
+export function listCadLinkedDesigns(
+  fetcher: typeof fetch = fetch,
+): Promise<{ items: CadLinkedDesignSummary[] }> {
+  return jsonRequest('/api/cadlink/designs', undefined, fetcher);
+}
+
+export function getCadLinkedDesign(
+  designId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<CadLinkedDesignSnapshot> {
+  return jsonRequest(`/api/cadlink/designs/${encodeURIComponent(designId)}`, undefined, fetcher);
 }
 
 export function getFusionCadStatus(

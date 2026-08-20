@@ -278,6 +278,50 @@ async def list_returns(request: Request) -> dict[str, Any]:
     }
 
 
+@router.get("/designs")
+async def list_designs(request: Request) -> dict[str, Any]:
+    """Expose recent CAD-linked design heads as a local project picker."""
+
+    store: CadLinkStore = request.app.state.cadlink_store
+    rows = await asyncio.to_thread(store.list_designs)
+    return {
+        "items": [
+            {
+                "designId": str(row["design_id"]),
+                "lineageId": str(row["lineage_id"]),
+                "editVersion": int(row["edit_version"]),
+                "designHash": str(row["design_hash"]),
+                "filename": str(row["filename"]),
+                "branchedFromDesignId": row.get("branched_from_design_id"),
+                "branchedFromEditVersion": row.get("branched_from_edit_version"),
+                "exportCount": int(row.get("export_count") or 0),
+                "lastExportedAt": row.get("last_exported_at"),
+                "createdAt": str(row["created_at"]),
+                "updatedAt": str(row["updated_at"]),
+            }
+            for row in rows
+        ]
+    }
+
+
+@router.get("/designs/{design_id}")
+async def get_design(design_id: str, request: Request) -> dict[str, Any]:
+    """Return the registry's exact current snapshot for one linked design."""
+
+    store: CadLinkStore = request.app.state.cadlink_store
+    row = await asyncio.to_thread(store.get_design, design_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="CAD-linked design not found")
+    return {
+        "designId": str(row["design_id"]),
+        "lineageId": str(row["lineage_id"]),
+        "editVersion": int(row["edit_version"]),
+        "filename": str(row["filename"]),
+        "updatedAt": str(row["updated_at"]),
+        "text": str(row["snapshot_text"]),
+    }
+
+
 @router.post("/fusion-status")
 async def fusion_status(
     payload: FusionStatusRequest, request: Request

@@ -322,6 +322,63 @@ describe('design file export menu', () => {
     expect(labels).not.toContain('Save');
   });
 
+  it('opens the current registry head from the CAD-linked design picker', async () => {
+    const identity = {
+      designId: 'wgd_01K00000000000000000000000',
+      lineageId: 'wgl_01K00000000000000000000000',
+      baseEditVersion: 7,
+      editVersion: 7,
+      savedAt: '2026-08-20T12:00:00Z',
+      savedDesignHash: 'sha256:0123456789abcdef',
+      schema: 1,
+    };
+    vi.mocked(fetch).mockImplementation(async (url: string | URL | Request) => {
+      const path = String(url);
+      if (path === '/api/cadlink/designs') return new Response(JSON.stringify({ items: [{
+        designId: identity.designId, lineageId: identity.lineageId, editVersion: 7,
+        designHash: 'sha256:full', filename: 'registry-head.cfg',
+        branchedFromDesignId: null, branchedFromEditVersion: null,
+        exportCount: 3, lastExportedAt: '2026-08-20T11:00:00Z',
+        createdAt: '2026-08-19T10:00:00Z', updatedAt: '2026-08-20T12:00:00Z',
+      }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (path === `/api/cadlink/designs/${identity.designId}`) return new Response(JSON.stringify({
+        designId: identity.designId, lineageId: identity.lineageId, editVersion: 7,
+        filename: 'registry-head.cfg', updatedAt: '2026-08-20T12:00:00Z', text: 'registry snapshot',
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      if (path === '/api/design/open') return new Response(JSON.stringify({
+        dialect: 'ath', migrationsApplied: [],
+        passthrough: { keysPreserved: [], blocksPreserved: [], keyCount: 0, blockCount: 0 },
+        design: useDesignStore.getState().design,
+        cadlink: { identity, classification: 'current', adoptionCandidate: null },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      throw new Error(`Unexpected request ${path}`);
+    });
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    act(() => root.render(<DesignFileMenu/>));
+    act(() => container.querySelector<HTMLButtonElement>('button.file-chip')!.click());
+    const picker = [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+      .find((button) => button.textContent?.startsWith('CAD-linked designs'))!;
+    await act(async () => { picker.click(); await Promise.resolve(); });
+    const project = [...container.querySelectorAll<HTMLButtonElement>('[aria-label="CAD-linked designs"] button')][0];
+    expect(project.textContent).toContain('registry-head.cfg');
+    expect(project.textContent).toContain('v7 · 3 exports');
+
+    await act(async () => { project.click(); await Promise.resolve(); await Promise.resolve(); });
+
+    expect(useDocumentStore.getState()).toMatchObject({
+      designName: 'registry-head',
+      identity: {
+        designId: identity.designId,
+        lineageId: identity.lineageId,
+        baseEditVersion: 7,
+      },
+      classification: 'current',
+    });
+    expect(container.querySelector('[role="status"]')?.textContent)
+      .toContain('Opened CAD-linked design registry-head.cfg');
+  });
+
   it('reports serialization failure without downloading or changing saved state', async () => {
     useDocumentStore.getState().setDesignName('keep-unsaved');
     useDocumentStore.getState().setCadLink({
