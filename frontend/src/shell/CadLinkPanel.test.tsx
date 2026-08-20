@@ -95,8 +95,15 @@ describe('CadLinkPanel', () => {
   });
   afterEach(() => { act(() => root.unmount()); importedMeshStore.clear(); parkedSolveCommandStore.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals(); host.remove(); });
 
+  const openHistory = () => {
+    const disclosure = host.querySelector<HTMLButtonElement>('.cad-history > .section-heading button')!;
+    if (disclosure.getAttribute('aria-expanded') === 'false') act(() => disclosure.click());
+    return disclosure;
+  };
+
   const renderAndSelect = async () => {
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
+    openHistory();
     const bundle = host.querySelector<HTMLButtonElement>('.cad-bundle-list button')!;
     act(() => bundle.click());
     return bundle;
@@ -115,9 +122,14 @@ describe('CadLinkPanel', () => {
     await renderAndSelect();
     await clickIngest();
     expect(importedSubmissionBlocker()).toContain('Acknowledge 1 blocking finding');
+    expect(host.querySelector('.cad-return-summary')?.textContent).toContain('1 finding needs review');
+    expect(host.querySelector('.cad-blocking-suffix')?.textContent).toContain('blocking');
     const acknowledgement = host.querySelector<HTMLInputElement>('.cad-findings input[type="checkbox"]')!;
     act(() => { acknowledgement.click(); });
     expect(importedSubmissionBlocker()).toBeNull();
+    expect(host.querySelector('.cad-return-summary')?.textContent).toContain('Ready to solve');
+    expect(host.querySelector('.cad-findings .section-head')?.getAttribute('aria-expanded')).toBe('false');
+    expect(host.querySelector('.cad-blocking-suffix')).toBeNull();
     for (const moved of ['Mesh detail', 'Drive channels & drivers', 'Crossover', 'Rebuild mesh']) {
       expect(host.textContent).not.toContain(moved);
     }
@@ -326,6 +338,8 @@ describe('CadLinkPanel', () => {
     expect(host.querySelector<HTMLButtonElement>('.cad-primary-action')?.textContent)
       .toContain('in Onshape');
     expect(host.textContent).toContain('makes every document world-readable');
+    expect([...host.querySelectorAll('.cad-alert-notice[role="status"]')]
+      .some((notice) => notice.textContent?.includes('makes every document world-readable'))).toBe(true);
     // The Onshape leg needs no workspace folder and no Fusion heartbeat.
     expect(calls.some((path) => path.includes('/fusion-status'))).toBe(false);
     expect(calls.some((path) => path.includes('/returns'))).toBe(false);
@@ -486,6 +500,20 @@ describe('CadLinkPanel', () => {
     expect(host.querySelector('.cad-primary-action')).toBeNull();
   });
 
+  it('routes an insecure Onshape key file through the error treatment', async () => {
+    await renderOnshape(
+      onshapeStatus(),
+      () => json({}),
+      {
+        configured: true, reachable: true, credentialsPath: '/x/onshape.env', detail: null,
+        insecureKeyFile: true, account: { id: 'ACC', name: 'Owner' },
+        plan: { name: 'Professional', group: 'Professional', publicOnly: false },
+      },
+    );
+    expect(host.querySelector('.cad-alert-error[role="alert"]')?.textContent).toContain('chmod 600');
+    expect(host.querySelector('.cad-alert-notice[role="alert"]')).toBeNull();
+  });
+
   it('reports an Onshape send failure without claiming success', async () => {
     await renderOnshape(
       onshapeStatus(),
@@ -495,7 +523,7 @@ describe('CadLinkPanel', () => {
       host.querySelector<HTMLButtonElement>('.cad-primary-action')!.click();
       await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
     });
-    expect(host.querySelector('.cad-alert[role="alert"]')?.textContent).toContain('rate limit');
+    expect(host.querySelector('.cad-alert-error[role="alert"]')?.textContent).toContain('rate limit');
     expect(host.querySelector('.cad-status-strip')).toBeNull();
   });
 
@@ -536,15 +564,153 @@ describe('CadLinkPanel', () => {
   it('selects the newest readable return when CAD Link first mounts', async () => {
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
     expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(listing.items[0].bundlePath);
-    expect(host.textContent).toContain('Select this return below to prepare it automatically.');
+    expect(host.querySelector('.cad-return-summary')?.textContent).toContain('Ready to prepare');
     expect([...host.querySelectorAll<HTMLButtonElement>('button')]
-      .some((button) => button.textContent === 'Prepare simulation')).toBe(false);
+      .some((button) => button.textContent === 'Prepare simulation')).toBe(true);
+    expect(host.querySelector('.cad-history .section-head')?.getAttribute('aria-expanded')).toBe('false');
     expect(host.textContent).not.toContain('Mesh detail');
+  });
+
+  it('rolls the selected return summary into its preparing state', async () => {
+    let resolveIngest!: (response: Response) => void;
+    const pendingIngest = new Promise<Response>((resolve) => { resolveIngest = resolve; });
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith('/returns')) return json(listing);
+      if (String(input).endsWith('/fusion-status')) return json(closedFusion);
+      if (String(input).endsWith('/ingest')) return pendingIngest;
+      return json(record);
+    }));
+    await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
+
+    act(() => host.querySelector<HTMLButtonElement>('.cad-return-summary button')!.click());
+    expect(host.querySelector('.cad-return-summary')?.textContent).toContain('Preparing…');
+    expect(host.querySelector<HTMLButtonElement>('.cad-return-summary button')?.disabled).toBe(true);
+    await act(async () => {
+      resolveIngest(json(record));
+      await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    });
+  });
+
+  it('renders a relative-time summary and a collapsed, selectable history with correct plurality', async () => {
+    const now = Date.parse('2026-08-20T12:00:00Z');
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    const historyListing: CadReturnListing = {
+      cadFolderConfigured: true,
+      items: [
+        {
+          ...listing.items[0],
+          name: 'unlinked.wgreturn',
+          bundlePath: 'wgreturn/unlinked.wgreturn',
+          modifiedAt: '2026-08-20T11:58:00Z',
+          documentName: null,
+          instanceCount: 0,
+        },
+        {
+          ...listing.items[0],
+          name: 'speaker-two.wgreturn',
+          bundlePath: 'wgreturn/speaker-two.wgreturn',
+          modifiedAt: '2026-08-20T11:00:00Z',
+          documentName: 'Speaker two',
+          sourceCount: 2,
+          instanceCount: 2,
+        },
+      ],
+    };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/fusion-status')
+      ? json(closedFusion)
+      : json(historyListing)));
+
+    await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
+    const summary = host.querySelector('.cad-return-summary')!;
+    expect(summary.querySelector('h4')?.textContent).toMatch(/^Return · \d{2}:\d{2}$/);
+    expect(summary.querySelector('time')?.textContent).toBe('2 min ago');
+    expect(summary.querySelector('time')?.title).toBeTruthy();
+    const disclosure = host.querySelector<HTMLButtonElement>('.cad-history .section-head')!;
+    expect(disclosure.textContent).toContain('History (2)');
+    expect(disclosure.getAttribute('aria-expanded')).toBe('false');
+    expect(host.querySelector('.cad-bundle-list')).toBeNull();
+
+    openHistory();
+    const options = [...host.querySelectorAll<HTMLButtonElement>('[role="option"]')];
+    expect(options).toHaveLength(2);
+    expect(options[0].getAttribute('aria-selected')).toBe('true');
+    expect(options[0].textContent).toContain('1 source');
+    expect(options[0].textContent).not.toContain('linked instance');
+    expect(options[1].textContent).toContain('2 sources · 2 linked instances');
+  });
+
+  it('collapses all clean record details by default and preserves a semantic heading hierarchy', async () => {
+    const cleanRecord: CadReturnIngestRecord = {
+      ...record,
+      freshness: { verdict: 'per-instance', instances: [{ instance_id: 'instance-a', verdict: 'current' }] },
+      findings: [],
+      symmetry: { planes: { x0: { accepted: true }, y0: { accepted: true } }, cut_planes: ['x0', 'y0'] },
+      polar_grid_derivation: {
+        axes: {
+          horizontal: { symmetry_accepted: true },
+          vertical: { symmetry_accepted: true },
+        },
+        cut_planes: ['x0', 'y0'],
+      },
+    };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith('/returns')) return json(listing);
+      if (String(input).endsWith('/fusion-status')) return json(closedFusion);
+      return json(cleanRecord);
+    }));
+    await renderAndSelect();
+    await clickIngest();
+
+    const detailDrawers = [...host.querySelectorAll<HTMLElement>('.cad-details > .cad-drawer')];
+    expect(detailDrawers).toHaveLength(6);
+    expect(detailDrawers.map((drawer) => drawer.querySelector('button')?.getAttribute('aria-expanded')))
+      .toEqual(['false', 'false', 'false', 'false', 'false', 'false']);
+    expect(host.querySelector('.cad-findings .section-head')?.getAttribute('aria-expanded')).toBe('false');
+    expect(host.querySelector('h2')?.textContent).toBe('CAD Link');
+    expect(host.querySelector('.cad-workflow-header h3')).toBeTruthy();
+    expect(host.querySelector('.cad-details h4')).toBeTruthy();
+  });
+
+  it('auto-expands degraded scope and combines degradation with pending findings in the summary', async () => {
+    const degradedRecord: CadReturnIngestRecord = {
+      ...record,
+      scope: {
+        status: 'degraded',
+        degraded_skip_count: 2,
+        skipped: [
+          { object_id: 'body-a', name: 'Body A', severity: 'warning', reason: 'unsupported' },
+          { object_id: 'body-b', name: 'Body B', severity: 'warning', reason: 'suppressed' },
+        ],
+      },
+    };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith('/returns')) return json(listing);
+      if (String(input).endsWith('/fusion-status')) return json(closedFusion);
+      return json(degradedRecord);
+    }));
+    await renderAndSelect();
+    await clickIngest();
+
+    expect(host.querySelector('.cad-return-summary')?.textContent)
+      .toContain('Degraded: 2 objects skipped · 1 finding needs review');
+    const scope = host.querySelector('.cad-scope')!;
+    expect(scope.querySelector('button')?.getAttribute('aria-expanded')).toBe('true');
+    expect(scope.textContent).toContain('2 exported objects were skipped');
+  });
+
+  it('routes neutral notices separately from errors', async () => {
+    await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
+    act(() => useCadReturnStore.setState({ ingestStaleReason: 'The return changed after preparation.' }));
+    const staleNotice = [...host.querySelectorAll<HTMLElement>('.cad-alert-notice[role="status"]')]
+      .find((notice) => notice.textContent?.includes('return changed'));
+    expect(staleNotice).toBeTruthy();
+    expect(staleNotice?.classList.contains('cad-alert-error')).toBe(false);
+    expect(host.querySelector('.cad-solver-unavailable.cad-alert-notice[role="status"]')).toBeTruthy();
   });
 
   it('shows the selected CAD program, settings link, and connection state without an outbound button', async () => {
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
-    expect(host.querySelector('.cad-workflow-header')?.textContent).toContain('Autodesk Fusion 360');
+    expect(host.querySelector('.cad-workflow-header')?.textContent).toContain('Fusion 360 · Change');
     expect(host.querySelector<HTMLButtonElement>('.cad-workflow-header button')?.textContent).toContain('Change');
     expect(host.querySelector('.cad-connection')?.textContent).toContain('Fusion 360 is closed');
     // The Fusion outbound leg lives in the design menu and the Geometry rail.
@@ -775,6 +941,7 @@ describe('CadLinkPanel', () => {
       sources: [], reason: 'suggested resolution must be positive',
     }] })));
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
+    openHistory();
     const row = host.querySelector<HTMLButtonElement>('.cad-bundle-list button')!;
     expect(row.disabled).toBe(true);
     expect(row.textContent).toContain('suggested resolution must be positive');
@@ -866,7 +1033,7 @@ describe('CadLinkPanel', () => {
     });
 
     expect(host.querySelector('[role="alert"]')?.textContent).toContain('already used by another design');
-    expect(host.querySelector('.cad-bundle-list')).toBeTruthy();
+    expect(host.querySelector('.cad-history')).toBeTruthy();
   });
 
   it('discovers area-drift overrides from structured refusal data', async () => {
@@ -880,6 +1047,8 @@ describe('CadLinkPanel', () => {
     await renderAndSelect();
     await clickIngest();
     expect(useCadReturnStore.getState().areaDriftSourceIds).toContain('source-hf');
+    expect(host.querySelector('.cad-return-summary')?.textContent).toContain('Preparation failed');
+    expect(host.querySelector('.cad-alert-error[role="alert"]')?.textContent).toContain('Role resolution refused');
     expect([...host.querySelectorAll<HTMLButtonElement>('button')]
       .some((button) => button.textContent === 'Prepare simulation')).toBe(true);
     expect(host.textContent).not.toContain('Allow recorded area drift');
