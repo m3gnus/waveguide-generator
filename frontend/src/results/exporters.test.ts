@@ -713,6 +713,9 @@ describe('result exporters', () => {
     expect(writes[0].members.map(({ relative_path }) => relative_path)).toEqual([
       '8_Cardioid.json',
       '8_Cardioid.csv',
+      '8_Cardioid_derived_acoustics.csv',
+      '8_Cardioid_derived_acoustics.json',
+      '8_Cardioid_report.html',
       '8_Cardioid_radiation_impedance.npz',
       '8_Cardioid_radiation_impedance.csv',
     ]);
