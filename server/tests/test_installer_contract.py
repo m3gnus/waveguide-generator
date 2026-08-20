@@ -20,6 +20,7 @@ Behaviour that can be executed is tested in `test_fetch_spa.py`.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -831,6 +832,42 @@ def test_the_uninstallers_refuse_to_delete_without_being_asked_twice():
     batch = read(BATCH_UNINSTALLER)
     assert "--yes" in batch
     assert "set /p" in batch
+
+
+def test_batch_uninstaller_captures_its_root_before_shifting_arguments():
+    batch = batch_code(read(BATCH_UNINSTALLER))
+    capture = batch.index('set "SCRIPT_DIR=%~dp0"')
+    first_shift = batch.index("shift")
+
+    assert capture < first_shift
+    assert 'cd /d "%SCRIPT_DIR%.."' in batch
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires cmd.exe")
+def test_batch_uninstaller_yes_removes_the_invoked_checkout(tmp_path: Path):
+    checkout = tmp_path / "checkout with spaces"
+    launch_directory = tmp_path / "started elsewhere"
+    uninstaller = checkout / "scripts" / "uninstall.bat"
+    uninstaller.parent.mkdir(parents=True)
+    launch_directory.mkdir()
+    uninstaller.write_bytes(BATCH_UNINSTALLER.read_bytes())
+    (checkout / ".venv").mkdir()
+    (checkout / ".venv" / "sentinel.txt").write_text("keep checkout", encoding="utf-8")
+    (checkout / "frontend" / "dist").mkdir(parents=True)
+    (checkout / "frontend" / "dist" / "index.html").write_text("built", encoding="utf-8")
+
+    completed = subprocess.run(
+        ["cmd.exe", "/d", "/c", str(uninstaller), "--yes"],
+        cwd=launch_directory,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert checkout.is_dir()
+    assert not (checkout / ".venv").exists()
+    assert not (checkout / "frontend" / "dist").exists()
 
 
 def test_the_uninstallers_never_remove_the_checkout_or_v1():
