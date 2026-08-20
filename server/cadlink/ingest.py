@@ -12,14 +12,17 @@ import shutil
 import tempfile
 from typing import Any
 
+from server.cadlink.isolated import (
+    build_imported_mesh_isolated,
+    build_imported_viewport_mesh_isolated,
+)
+from server.cadlink.isolation import ChildRefusal
 from server.cadlink.store import CadLinkStore
 from server.design.textcfg import parse
 from server.exports.geometry_identity import geometry_hash_for_design, normalize_json_value
 from server.mesh.imported import (
     ImportedMeshDependencyError,
     RoleResolutionError,
-    build_imported_mesh,
-    build_imported_viewport_mesh,
     validate_imported_sizes,
 )
 from server.mesh.artifact import mesh_text_sha256
@@ -581,16 +584,25 @@ def ingest_bundle(
     cache_hit = built is not None
     if built is None:
         try:
-            built = build_imported_mesh(
+            # A returned bundle's assembly.step is external CAD, so it is
+            # opened in a disposable child with its own deadline and memory
+            # budget (``docs/plans/STEP-PARSER-ISOLATION.md``). A crash, hang,
+            # or over-budget parse in there is this refusal, and there is no
+            # in-process retry behind it.
+            built = build_imported_mesh_isolated(
                 bundle.assembly_path,
                 manifest,
                 normalized_mesh,
                 skipped_source_ids=skipped_source_ids,
                 options=options,
                 include_viewport_mesh=viewport_artifact is None,
+                expected_sha256=bundle.artifact_sha256,
+                expected_size_bytes=bundle.artifact_size_bytes,
             )
         except ImportedMeshDependencyError:
             raise
+        except ChildRefusal as exc:
+            raise IngestRefusal(exc.stage, exc.detail) from exc
         except Exception as exc:
             message = str(exc)
             stage = "stage 7 meshing"
@@ -642,12 +654,14 @@ def ingest_bundle(
             }
         elif cache_hit and isinstance(built.get("viewport_recipe"), Mapping):
             try:
-                generated_viewport = build_imported_viewport_mesh(
+                generated_viewport = build_imported_viewport_mesh_isolated(
                     bundle.assembly_path,
                     manifest,
                     built["viewport_recipe"],
                     expected_geometry_hash=str(built["transformed_geometry_hash"]),
                     tag_allocation=built["tag_allocation"],
+                    expected_sha256=bundle.artifact_sha256,
+                    expected_size_bytes=bundle.artifact_size_bytes,
                 )
             except Exception as exc:
                 viewport_failure_reason = f"{type(exc).__name__}: {exc}"

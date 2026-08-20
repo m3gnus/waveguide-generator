@@ -104,3 +104,53 @@ retention policy.
 Until those tests pass on all three operating systems, Onshape return can remain an
 explicit development path but must not become an automatic or broadly advertised ingest
 route.
+
+## Implementation status, 2026-08-20
+
+The boundary is built and the limits above are enforced in code. Where the
+implementation departs from the wording of this document, it says so here
+rather than quietly.
+
+| Limit | Enforced in |
+| --- | --- |
+| Downloaded STEP body, 64 MiB | `server/cadlink/onshape/client.py` — streamed, with `Content-Length` refused before the first read |
+| `wgreturn.json`, 1 MiB | `server/cadlink/wgreturn.py`, from `stat()` before the file is read |
+| Records, record length, decoded label | `server/cadlink/step_text.py`, one streaming scan, run in both children |
+| Wall time, resident memory, result and artifact size, concurrency | `server/cadlink/isolation.py` |
+
+Inspect runs `server/cadlink/step_evidence.py`; mesh and viewport run
+`server/mesh/imported.py`. Both go through `server/cadlink/child_main.py`,
+launched once per artifact by `server/cadlink/isolation.py` and never reused.
+The parent still owns the registry, the cache index, and every atomic move.
+
+Two deliberate departures:
+
+* **Resident memory is sampled by the parent, not capped with `RLIMIT_AS`.** A
+  Python process with gmsh imported reserves about 435 GB of address space on
+  macOS against 52 MB resident, so an address-space cap set at the resident
+  figure in the table would refuse every legitimate import. The parent samples
+  the child's process group with `ps` and kills the tree when it passes the
+  budget, which is the number this table actually names. Windows gets the same
+  containment from the job object's commit limit. The child still sets
+  `RLIMIT_CORE` and `RLIMIT_FSIZE`, where a limit means the same thing
+  everywhere.
+* **"No writable path outside its staging directory" is approximated.** The
+  child's cwd, `TMPDIR`, and `HOME` are inside staging, it inherits no data
+  directory, and anything it leaves outside `staging/out` is discarded and
+  refused rather than published. Genuinely revoking write access to the rest of
+  the filesystem needs the container or `seccomp` hardening this document
+  already lists as optional; the process boundary, which is the required part,
+  is in place. Network access is blocked at the Python layer only, for the same
+  reason.
+
+Acceptance tests live in `server/tests/test_cadlink_isolation.py` (harness,
+driven by a deliberately misbehaving child in `server/tests/isolation_doubles.py`),
+`server/tests/test_step_text.py` (text budgets),
+`server/tests/test_onshape_adapter.py` (streaming download), and
+`server/tests/test_onshape_return.py` (the real Part Studio → STEP → wgreturn →
+ingest smoke test, asserting both crossings and identical evidence).
+
+**Not yet demonstrated: macOS only.** The suite has been run on macOS. The
+Linux and Windows rows of "memory exhaustion is contained on Windows, macOS,
+and Linux" are unverified, and the Windows job-object path has never executed.
+Until it has, the enablement condition at the end of this document still holds.
