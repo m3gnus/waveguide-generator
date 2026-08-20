@@ -716,23 +716,7 @@ def _run_child(
     else:
         popen_kwargs["creationflags"] = _windows_creation_flags()
 
-    try:
-        process = subprocess.Popen(command, **popen_kwargs)  # noqa: S603
-    except OSError as exc:
-        if os.name != "nt" or "creationflags" not in popen_kwargs:
-            raise ChildRefusal(
-                stage, f"could not start the isolated CAD child: {exc}"
-            ) from exc
-        # A parent that is itself inside a job (CI agents often are) may forbid
-        # breakaway. Losing the breakaway costs a nested job, not the boundary,
-        # so it is worth one retry rather than refusing every import.
-        popen_kwargs["creationflags"] = _windows_creation_flags(breakaway=False)
-        try:
-            process = subprocess.Popen(command, **popen_kwargs)  # noqa: S603
-        except OSError as retry_exc:
-            raise ChildRefusal(
-                stage, f"could not start the isolated CAD child: {retry_exc}"
-            ) from retry_exc
+    process = start_child_process(command, popen_kwargs, stage=stage)
 
     process_group = _posix_process_group(process) if os.name == "posix" else None
     job = None
@@ -862,6 +846,39 @@ def _supervise(
 
 
 # -- Windows job objects ---------------------------------------------------
+
+
+def start_child_process(
+    command: list[str], popen_kwargs: dict[str, Any], *, stage: str
+) -> subprocess.Popen[bytes]:
+    """Launch one child, retrying once when Windows forbids job breakaway.
+
+    A parent that is itself inside a job object -- hosted CI runners are, and
+    that is where this path is naturally exercised -- refuses
+    ``CREATE_BREAKAWAY_FROM_JOB`` with ``ERROR_ACCESS_DENIED``. Losing the
+    breakaway costs a nested job, not the boundary, so it is worth one retry
+    rather than refusing every import.
+
+    Tests must launch children through this rather than calling ``Popen`` with
+    ``_windows_creation_flags()`` themselves: a test that reimplements the first
+    attempt without the retry passes on a developer machine and fails on any
+    runner that is inside a job.
+    """
+
+    try:
+        return subprocess.Popen(command, **popen_kwargs)  # noqa: S603
+    except OSError as exc:
+        if os.name != "nt" or "creationflags" not in popen_kwargs:
+            raise ChildRefusal(
+                stage, f"could not start the isolated CAD child: {exc}"
+            ) from exc
+        popen_kwargs["creationflags"] = _windows_creation_flags(breakaway=False)
+        try:
+            return subprocess.Popen(command, **popen_kwargs)  # noqa: S603
+        except OSError as retry_exc:
+            raise ChildRefusal(
+                stage, f"could not start the isolated CAD child: {retry_exc}"
+            ) from retry_exc
 
 
 def _windows_creation_flags(*, breakaway: bool = True) -> int:
