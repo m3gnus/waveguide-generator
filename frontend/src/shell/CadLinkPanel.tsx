@@ -131,6 +131,10 @@ function RecordSummary({ record }: { record: CadReturnIngestRecord }) {
           ? record.freshness.instances[0].verdict.replaceAll('_', ' ')
           : 'mixed';
   const rejectedPlanes = planes.filter(([, verdict]) => !verdict.accepted).length;
+  const appliedCuts = record.symmetry.cut_planes ?? [];
+  const cadDomain = appliedCuts.length >= 2
+    ? 'quarter domain'
+    : appliedCuts.length === 1 ? 'half domain' : 'full domain';
   const symmetryState = planes.length === 0
     ? 'not recorded'
     : rejectedPlanes === 0 ? 'accepted' : pluralized(rejectedPlanes, 'rejected plane');
@@ -155,6 +159,7 @@ function RecordSummary({ record }: { record: CadReturnIngestRecord }) {
           </div>)}
     </CadDrawer>
     <CadDrawer key={`${record.ingest_id}-symmetry`} title="Symmetry" chip={symmetryState} defaultOpen={symmetryState !== 'accepted'} warning={symmetryState !== 'accepted'}>
+      <p className="cad-detail cad-symmetry-context"><b>CAD prepared as {cadDomain}.</b> This is resolved independently from Parametric mode: WG re-tests the returned STEP after Fusion edits, bodies and source tags are applied. A rejected plane below means the CAD solve keeps the larger safe domain instead of inheriting the parametric reduction.</p>
       {planes.length ? planes.map(([name, verdict]) => {
         const residual = verdict.max_residual_step_units ?? verdict.residuals;
         const offModel = verdict.worst_off_model_distance_step_units;
@@ -165,7 +170,7 @@ function RecordSummary({ record }: { record: CadReturnIngestRecord }) {
         ].filter(Boolean).join(' · ');
         return <div className="cad-row" key={name}><b>{name}</b><span className={verdict.accepted ? 'ok-text' : 'warn-text'}>{verdict.accepted ? 'accepted' : 'rejected'}</span><small>{details}</small></div>;
       }) : <p>No coordinate plane verdicts were recorded.</p>}
-      {(record.symmetry.cut_planes?.length ?? 0) > 0 && <p className="cad-detail">Applied cuts: {record.symmetry.cut_planes?.join(', ')}</p>}
+      {appliedCuts.length > 0 && <p className="cad-detail">Applied cuts: {appliedCuts.join(', ')}</p>}
     </CadDrawer>
     <CadDrawer key={`${record.ingest_id}-healing`} title="Healing performed" chip={record.healing.performed ? record.healing.mode ?? 'healed' : 'clean'} defaultOpen={Boolean(record.healing.performed)} warning={Boolean(record.healing.performed)}>
       {record.healing.performed

@@ -832,6 +832,9 @@ describe('CadLinkPanel', () => {
     expect(host.textContent).toContain('max residual 0.125 STEP units');
     expect(host.textContent).toContain('worst off-model 0.25 STEP units');
     expect(host.textContent).not.toContain('max residual 0.125 mm');
+    expect(host.querySelector('.cad-symmetry-context')?.textContent).toContain('CAD prepared as full domain');
+    expect(host.querySelector('.cad-symmetry-context')?.textContent).toContain('resolved independently from Parametric mode');
+    expect(host.querySelector('.cad-symmetry-context')?.textContent).toContain('keeps the larger safe domain');
   });
 
   it('routes neutral notices separately from errors', async () => {
