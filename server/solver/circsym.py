@@ -9,6 +9,7 @@ cancellation, source motion, and coupled-IB aperture mapping port v1
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 import importlib.metadata
 import time
 from typing import Any
@@ -59,6 +60,55 @@ except (ImportError, OSError):
 
 class CircSymUnavailable(RuntimeError):
     """The mesher meridian capability or Metal CircSym runtime is absent."""
+
+
+_CIRCSYM_ELEMENTS_PER_WAVELENGTH = 6.0
+_CIRCSYM_DEFAULT_RESOLUTION_MM = {
+    "throatResolution": 3.0,
+    "mouthResolution": 12.0,
+    "rearResolution": 18.0,
+}
+
+
+def _frequency_refined_meridian_config(
+    config: dict[str, Any],
+    max_frequency_hz: float,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Clamp private CircSym segment targets to wavelength/6 at the sweep top."""
+
+    frequency = float(max_frequency_hz)
+    if not frequency > 0.0:
+        raise ValueError("CircSym maximum frequency must be positive")
+    sound_speed = solver_sound_speed_m_per_s("hornlab_metal_bem")
+    max_segment_mm = (
+        1000.0
+        * float(sound_speed)
+        / (frequency * _CIRCSYM_ELEMENTS_PER_WAVELENGTH)
+    )
+    refined = deepcopy(config)
+    mesh = refined.setdefault("mesh", {})
+    requested: dict[str, float] = {}
+    applied: dict[str, float] = {}
+    for key, default in _CIRCSYM_DEFAULT_RESOLUTION_MM.items():
+        value = float(mesh.get(key, default))
+        requested[key] = value
+        applied[key] = min(value, max_segment_mm)
+        mesh[key] = applied[key]
+
+    aperture_scale = float(mesh.get("apertureResolutionScale", 1.0))
+    requested["apertureResolutionScale"] = aperture_scale
+    max_aperture_scale = max(1.0, max_segment_mm / applied["mouthResolution"])
+    applied["apertureResolutionScale"] = min(aperture_scale, max_aperture_scale)
+    mesh["apertureResolutionScale"] = applied["apertureResolutionScale"]
+    return refined, {
+        "policy": "wavelength_over_6_max_segment",
+        "max_frequency_hz": frequency,
+        "sound_speed_m_per_s": float(sound_speed),
+        "max_segment_mm": max_segment_mm,
+        "requested": requested,
+        "applied": applied,
+        "refined": any(applied[key] < requested[key] for key in requested),
+    }
 
 
 def circsym_observation_rejection_reason(context: SolverContext) -> str | None:
@@ -121,7 +171,7 @@ def solve_circsym_design(
     cancellation_callback: CancelCallback | None = None,
     result_callback: ResultCallback | None = None,
 ) -> dict[str, Any]:
-    """Build a pure meridian and run the Metal axisymmetric sweep."""
+    """Build a meridian and run the adaptively Metal-accelerated sweep."""
 
     context.validate()
     if any(value is None for value in (build_meridian, MeridianMesh, ObservationConfig, native_config, solve_circsym)):
@@ -139,12 +189,16 @@ def solve_circsym_design(
     if cancellation_callback:
         cancellation_callback()
     started = time.time()
-    config_dict = _solver_mesher_config(context.design)
+    execution_frequencies = live_execution_frequencies(context)
+    config_dict, frequency_refinement = _frequency_refined_meridian_config(
+        _solver_mesher_config(context.design),
+        float(max(execution_frequencies)),
+    )
     reasons = list(circsym_rejection_reasons(config_dict))
     if reasons:
         raise ValueError("CircSym requires a circular waveguide: " + "; ".join(str(reason) for reason in reasons))
     if stage_callback:
-        stage_callback("mesh_prepare", 1.0, "Building CircSym meridian")
+        stage_callback("mesh_prepare", 1.0, "Building axisymmetric meridian")
     meridian_build = build_meridian(config_dict)
     meridian = meridian_build.as_metal_meridian(MeridianMesh)
     if cancellation_callback:
@@ -171,7 +225,7 @@ def solve_circsym_design(
             stage_callback(
                 "frequency_solve",
                 fraction,
-                f"Solving frequency {index + 1}/{total} with CircSym",
+                f"Solving frequency {index + 1}/{total} with Axisymmetric Metal",
             )
 
     def on_frequency_result(index: int, frequency_hz: float, entry: dict[str, Any]) -> bool:
@@ -195,7 +249,7 @@ def solve_circsym_design(
         return True
 
     if stage_callback:
-        stage_callback("setup", 0.0, "Configuring CircSym solve")
+        stage_callback("setup", 0.0, "Configuring Axisymmetric Metal solve")
     kwargs: dict[str, Any] = {
         "freq_min_hz": context.frequency_range[0],
         "freq_max_hz": context.frequency_range[1],
@@ -256,12 +310,33 @@ def solve_circsym_design(
         stage_callback("finalizing", 1.0, "Packaging CircSym solver results")
 
     metal = metal_status()
+    native_diagnostics = list(getattr(result, "native_diagnostics", []) or [])
+    compute_backends = {
+        "assembly": sorted(
+            {
+                str(entry.get("assembly_backend"))
+                for entry in native_diagnostics
+                if isinstance(entry, dict) and entry.get("assembly_backend")
+            }
+        ),
+        "field": sorted(
+            {
+                str(entry.get("field_backend"))
+                for entry in native_diagnostics
+                if isinstance(entry, dict) and entry.get("field_backend")
+            }
+        ),
+    }
     metadata: dict[str, Any] = {
         "solver_backend": "metal",
         "solver_mode": "circsym",
         "solve_path": "axisymmetric-meridian",
         "axisymmetric_eligibility_reasons": [],
-        "device_interface": {"selected": "metal", "metal": metal},
+        "device_interface": {
+            "selected": "metal",
+            "metal": metal,
+            "circsym_compute_backends": compute_backends,
+        },
         "engine": "hornlab-metal-bem",
         "phase_time_convention": "exp(+ikr)",
         "mesh_validation": {"mode": context.mesh_validation_mode, "backend": "hornlab-metal-bem-circsym"},
@@ -276,8 +351,10 @@ def solve_circsym_design(
             "formulation": getattr(config, "formulation", kwargs["formulation"]),
             "complex_k_shift": getattr(config, "complex_k_shift", kwargs["complex_k_shift"]),
             "solver_log": json_safe_native_value(response_solver_log(getattr(result, "solver_log", []))),
-            "native_diagnostics": json_safe_native_value(list(getattr(result, "native_diagnostics", []) or [])),
+            "native_diagnostics": json_safe_native_value(native_diagnostics),
+            "compute_backends": compute_backends,
             "meridian": json_safe_native_value(dict(getattr(meridian_build, "metadata", {}) or {})),
+            "meridian_frequency_refinement": frequency_refinement,
         },
     }
     if aperture_tag is not None:

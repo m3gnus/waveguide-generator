@@ -51,14 +51,14 @@ describe('solve and directivity control help', () => {
     }
   });
 
-  it('keeps the explicit CircSym path in machine-local solve options', () => {
+  it('keeps the Metal CircSym path in machine-local solve options', () => {
     queryClient.setQueryData(CAPABILITIES_QUERY_KEY, {
       engines: [{ name: 'metal', available: true, reason: null, version: 'test', fast_paths: ['axisymmetric-meridian'] }],
     });
     render(<SolveOptionsControls />);
     const control = host.querySelector<HTMLSelectElement>('#solve-mode')!;
     expect([...control.options].map((option) => option.textContent)).toEqual([
-      'Auto (full 3D)', 'Full 3D', 'Axisymmetric CPU (force)',
+      'Auto (fastest eligible)', 'Full 3D', 'Axisymmetric (Metal)',
     ]);
     act(() => {
       control.value = 'circsym';

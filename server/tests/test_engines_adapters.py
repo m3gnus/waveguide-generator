@@ -453,6 +453,34 @@ def test_circsym_adapter_uses_meridian_cancellation_stages_and_coupled_ib(monkey
     assert response["metadata"]["infinite_baffle"]["backend"] == "circsym_coupled"
 
 
+def test_circsym_meridian_resolution_is_refined_from_sweep_top(monkeypatch) -> None:
+    monkeypatch.setattr(circsym, "solver_sound_speed_m_per_s", lambda _name: 300.0)
+    original = {
+        "mesh": {
+            "throatResolution": 3.0,
+            "mouthResolution": 15.0,
+            "rearResolution": 40.0,
+            "apertureResolutionScale": 2.0,
+        }
+    }
+
+    refined, report = circsym._frequency_refined_meridian_config(
+        original,
+        10_000.0,
+    )
+
+    assert original["mesh"]["mouthResolution"] == 15.0
+    assert refined["mesh"] == {
+        "throatResolution": 3.0,
+        "mouthResolution": 5.0,
+        "rearResolution": 5.0,
+        "apertureResolutionScale": 1.0,
+    }
+    assert report["policy"] == "wavelength_over_6_max_segment"
+    assert report["max_segment_mm"] == pytest.approx(5.0)
+    assert report["refined"] is True
+
+
 def _explicit_context(frequencies: tuple[float, ...]) -> SolverContext:
     context = _context()
     context.frequencies_hz = frequencies

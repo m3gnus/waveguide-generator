@@ -24,9 +24,9 @@ import { runDisplayName } from '../prefs/preferences';
 import type { WorkspaceMode } from '../stores/workspaceMode';
 
 export const solverModeLabels = {
-  auto: 'Auto (full 3D)',
+  auto: 'Auto (fastest eligible)',
   full_3d: 'Full 3D',
-  circsym: 'Axisymmetric CPU (force)',
+  circsym: 'Axisymmetric (Metal)',
 } as const;
 
 /**
@@ -83,9 +83,9 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null 
         {backendEngines.map((engine) => <option key={engine.name} value={engine.name.toLowerCase()} disabled={!engine.available}>{engine.name}{engine.available ? engine.version ? ` · ${engine.version}` : '' : ` · unavailable${engine.reason ? `: ${engine.reason}` : ''}`}</option>)}
       </select></HelpTipRow>
       <p className="section-note">{selectedEngine?.name.toLowerCase() === 'metal' && fastPaths.includes('axisymmetric-meridian')
-        ? 'Metal capability: optional axisymmetric CPU path when explicitly selected; AUTO stays on native full 3D.'
+        ? 'Metal capability: AUTO uses the accelerated axisymmetric path for eligible circular designs, otherwise full 3D.'
         : 'Selected backend capability: Full 3D.'}</p>
-      <HelpTipRow className="select-row" text="Machine-local execution path. AUTO and Full 3D use the native backend. The axisymmetric option is an explicit CPU path available only with Metal; it is never selected automatically and is not saved into design files."><label htmlFor="solve-mode">Solver path</label><select id="solve-mode" value={store.solverMode} onChange={(event) => store.setSolverMode(event.target.value as SolverMode)}>
+      <HelpTipRow className="select-row" text="Machine-local execution path. AUTO chooses the accelerated Metal axisymmetric solver for eligible circular designs and Full 3D otherwise. The choice is not saved into design files."><label htmlFor="solve-mode">Solver path</label><select id="solve-mode" value={store.solverMode} onChange={(event) => store.setSolverMode(event.target.value as SolverMode)}>
         <option value="auto">{solverModeLabels.auto}</option>
         <option value="full_3d">{solverModeLabels.full_3d}</option>
         {(meridianAvailable || store.solverMode === 'circsym') && <option value="circsym" disabled={!meridianAvailable}>{solverModeLabels.circsym}{meridianAvailable ? '' : ' · unavailable'}</option>}

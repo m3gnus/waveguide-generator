@@ -2017,30 +2017,36 @@ class MetalEngine:
             raise ValueError("solver_mode must be auto, full_3d, or circsym")
 
         eligibility_reasons: list[str] = []
-        if mode == "circsym":
+        if mode in {"auto", "circsym"}:
             eligibility_reasons = await asyncio.to_thread(
                 _circsym_eligibility_reasons, request
             )
             from . import circsym as circsym_adapter
 
-            if eligibility_reasons:
+            if mode == "circsym" and eligibility_reasons:
                 raise ValueError(
                     "Forced axisymmetric solver mode is not eligible: "
                     + "; ".join(eligibility_reasons)
                 )
-            outcome = await circsym_adapter.CircSymEngine().run(
-                request,
-                cancel_cb=cancel_cb,
-                stage_cb=stage_cb,
-                artifact_cb=artifact_cb,
-                result_cb=result_cb,
-            )
-            metadata = outcome.results.setdefault("metadata", {})
-            metadata["solve_path"] = "axisymmetric-meridian"
-            metadata["axisymmetric_eligibility_reasons"] = []
-            metadata["solve_path_reason"] = "forced by solver_mode='circsym'"
-            outcome.field_trace_unavailable_reason = "unsupported_solve_mode"
-            return outcome
+            if not eligibility_reasons:
+                outcome = await circsym_adapter.CircSymEngine().run(
+                    request,
+                    cancel_cb=cancel_cb,
+                    stage_cb=stage_cb,
+                    artifact_cb=artifact_cb,
+                    result_cb=result_cb,
+                )
+                metadata = outcome.results.setdefault("metadata", {})
+                metadata["solve_path"] = "axisymmetric-meridian"
+                metadata["axisymmetric_eligibility_reasons"] = []
+                metadata["solve_path_reason"] = (
+                    "forced by solver_mode='circsym'"
+                    if mode == "circsym"
+                    else "solver_mode='auto' selected the eligible Metal "
+                    "axisymmetric meridian fast path"
+                )
+                outcome.field_trace_unavailable_reason = "unsupported_solve_mode"
+                return outcome
 
         context = SolverContext.from_request(request, solver_mode="full_3d")
         mesh = await build_solver_mesh(
@@ -2070,8 +2076,9 @@ class MetalEngine:
             "solver_mode='full_3d' explicitly opts out of the meridian fast path"
             if mode == "full_3d"
             else (
-                "solver_mode='auto' selects native full 3D; the CPU axisymmetric "
-                "meridian path requires explicit solver_mode='circsym'"
+                "solver_mode='auto' selected native full 3D because the "
+                "axisymmetric meridian fast path is not eligible: "
+                + "; ".join(eligibility_reasons)
             )
         )
         field_traces = results.pop("_field_traces", None)
