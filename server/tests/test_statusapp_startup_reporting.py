@@ -20,6 +20,10 @@ import pytest
 from launchers.statusapp import __main__ as entrypoint
 
 
+class _TclError(Exception):
+    """Stands in for tkinter.TclError, which CI may not be able to import."""
+
+
 def _import_of(name: str, error: str) -> ModuleType:
     """A stand-in module whose every ``from ... import`` raises ImportError.
 
@@ -52,9 +56,12 @@ def test_a_missing_tkinter_is_reported_rather_than_swallowed(
     assert entrypoint.main([]) == 1
 
     message = capsys.readouterr().err
-    assert "tkinter is unavailable" in message
     assert "_tkinter" in message, "the underlying import error is the actionable part"
-    assert entrypoint._tkinter_repair_hint() in message
+    # This particular error means the files are present and will not load, so
+    # the message must not be the install-it remedy. See
+    # test_statusapp_diagnostics for the separation of the causes.
+    assert "could not be loaded" in message
+    assert "Interpreter" in message, "which Python failed is half the answer"
     assert "--no-gui" in message, "the mode that still works belongs in the message"
 
 
@@ -141,3 +148,91 @@ def test_reporting_survives_a_log_directory_it_cannot_write(
     entrypoint._report_startup_failure("still reaches stderr")
 
     assert "still reaches stderr" in capsys.readouterr().err
+
+
+def test_the_dialog_is_short_and_the_log_carries_the_evidence(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A modal box cannot be scrolled, copied out of, or read beside the log.
+
+    So the evidence table goes to the log and the terminal, and the dialog gets
+    the cause, the remedy, and the path to the rest.
+    """
+
+    monkeypatch.setenv("WG2_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(sys, "stderr", None)
+    shown: list[str] = []
+    monkeypatch.setattr(entrypoint, "_show_startup_failure_dialog", shown.append)
+    monkeypatch.setitem(
+        sys.modules,
+        "launchers.statusapp.view",
+        _import_of("launchers.statusapp.view", "DLL load failed while importing _tkinter"),
+    )
+
+    assert entrypoint.main([]) == 1
+
+    dialog = shown[0]
+    logged = (tmp_path / "logs" / entrypoint.LOG_FILENAME).read_text(encoding="utf-8")
+    assert "What was found:" not in dialog, "an evidence table is unreadable in a dialog"
+    assert "What was found:" in logged
+    assert entrypoint.LOG_FILENAME in dialog, "the dialog has to say where the rest is"
+
+
+def test_the_log_is_named_by_path_rather_than_described(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """"The Waveguide Generator log folder" is a phrase, not an address."""
+
+    monkeypatch.setenv("WG2_DATA_DIR", str(tmp_path))
+
+    location = entrypoint._log_location()
+
+    assert str(tmp_path / "logs" / entrypoint.LOG_FILENAME) in location
+
+
+def test_a_non_tk_import_failure_does_not_get_the_tk_page(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """The view imports its siblings, so this branch catches more than tkinter."""
+
+    monkeypatch.setenv("WG2_DATA_DIR", str(tmp_path))
+    monkeypatch.setitem(
+        sys.modules,
+        "launchers.statusapp.view",
+        _import_of("launchers.statusapp.view", "No module named 'server.platform.instance'"),
+    )
+
+    assert entrypoint.main([]) == 1
+
+    message = capsys.readouterr().err
+    assert "server.platform.instance" in message
+    assert "tcl/tk" not in message, "a broken checkout is not a Tk problem"
+
+
+def test_a_window_that_never_opened_reports_the_tcl_error_beneath_it(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """tkinter is imported at view module scope, so this arrives from run().
+
+    It used to land in the generic branch and read as "an unexpected error"
+    over a TclError about init.tcl, naming neither Tk nor anything actionable.
+    """
+
+    from launchers.statusapp.diagnostics import WindowUnavailable
+
+    monkeypatch.setenv("WG2_DATA_DIR", str(tmp_path))
+    stub = ModuleType("launchers.statusapp.view")
+
+    def run(_controller: object) -> int:
+        raise WindowUnavailable("Can't find a usable init.tcl") from _TclError(
+            "Can't find a usable init.tcl"
+        )
+
+    stub.run = run
+    monkeypatch.setitem(sys.modules, "launchers.statusapp.view", stub)
+
+    assert entrypoint.main([]) == 1
+
+    message = capsys.readouterr().err
+    assert "failed to create a window" in message
+    assert "_TclError: Can" in message, "the wrapper is a marker; the cause carries the text"
