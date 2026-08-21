@@ -572,6 +572,23 @@ def _record(mesh_path: Path, *, findings: list[dict[str, Any]] | None = None) ->
     }
 
 
+def _roled_record(mesh_path: Path) -> dict[str, Any]:
+    """A record whose sources carry driver bands, a name, and a rigid role.
+
+    ``left`` drives source-a and source-b, ``right`` drives source-c, so this
+    exercises a multi-source channel taking the first band it finds beside a
+    structural role that names no driver.
+    """
+
+    record = _record(mesh_path)
+    record["sources"] = [
+        {"id": "source-a", "required": True, "role": "hf", "label": "HF throat"},
+        {"id": "source-b", "required": True, "role": "rigid"},
+        {"id": "source-c", "required": False, "role": "LF"},
+    ]
+    return record
+
+
 def _identity_record_changes() -> dict[str, Any]:
     matrix = [
         [1.0, 0.0, 0.0, 0.0],
@@ -1181,18 +1198,22 @@ def test_single_channel_imported_stream_accepts_metal_entry_shapes(
     response = metal.solve_imported_metal_from_msh_text(
         "msh",
         request,
-        _record(mesh_path),
+        _roled_record(mesh_path),
         result_callback=lambda index, result: streamed.append((index, result)),
     )
 
     assert response["result_kind"] == "multi_channel"
     assert response["channel_order"] == ["left"]
+    assert response["channels"]["left"]["metadata"]["role"] == "HF"
     assert len(streamed) == 1
     assert streamed[0][0] == 0
     provisional = streamed[0][1]
     assert provisional["result_kind"] == "multi_channel"
     assert provisional["channel_order"] == ["left"]
     assert list(provisional["channels"]) == ["left"]
+    # A live frame is labelled the same way the finished channel is.
+    assert provisional["channels"]["left"]["metadata"]["role"] == "HF"
+    assert provisional["channels"]["left"]["metadata"]["source_labels"] == ["HF throat"]
 
 
 def test_multi_source_orchestration_uses_channel_bases_and_anchor_frame(
@@ -1680,6 +1701,44 @@ def test_coupled_cardioid_adds_derived_channel_and_defers_mf_driver_once(
     assert isinstance(response["_radiation_impedance_npz"], bytes)
 
 
+def test_channels_carry_their_ingest_band_role_and_source_labels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(metal, "metal_status", lambda: {"available": True, "reason": "ok"})
+    monkeypatch.setattr(
+        metal, "ObservationConfig", lambda **kwargs: SimpleNamespace(**kwargs)
+    )
+    monkeypatch.setattr(metal, "native_config", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(
+        metal,
+        "native_solve_multi_source",
+        lambda _mesh, sources, _config, frequencies_hz=None: [
+            _native_result_3f() for _ in sources
+        ],
+    )
+    request = _request("wgi_" + "0" * 26)
+    mesh_path = tmp_path / "imported.msh"
+    mesh_path.write_text("msh", encoding="utf-8")
+
+    roled = metal.solve_imported_metal_from_msh_text(
+        "msh", request, _roled_record(mesh_path)
+    )
+    left = roled["channels"]["left"]["metadata"]
+    right = roled["channels"]["right"]["metadata"]
+    assert left["role"] == "HF"
+    assert left["source_ids"] == ["source-a", "source-b"]
+    assert left["source_labels"] == ["HF throat", "source-b"]
+    assert right["role"] == "LF"
+    assert "source_labels" not in right
+
+    unroled_record = _roled_record(mesh_path)
+    unroled_record["sources"][2] = {"id": "source-c", "required": False}
+    unroled = metal.solve_imported_metal_from_msh_text(
+        "msh", request, unroled_record
+    )
+    assert unroled["channels"]["right"]["metadata"]["role"] is None
+
+
 def test_combined_channel_is_appended_with_contract_metadata(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1707,7 +1766,7 @@ def test_combined_channel_is_appended_with_contract_metadata(
     )
     mesh_path = tmp_path / "imported.msh"
     mesh_path.write_text("msh", encoding="utf-8")
-    record = _record(mesh_path)
+    record = _roled_record(mesh_path)
 
     async def run() -> dict[str, Any]:
         outcome = await metal.MetalEngine().run(
@@ -1729,6 +1788,7 @@ def test_combined_channel_is_appended_with_contract_metadata(
     payload = combined["metadata"]["combine"]
     assert payload["type"] == "lr4_time_aligned_sum"
     assert payload["members"] == ["left", "right"]
+    assert payload["member_roles"] == ["HF", "LF"]
     assert payload["crossovers_hz"] == [500.0]
     assert combined["metadata"]["derived_from_channels"] == ["left", "right"]
     assert combined["metadata"]["drive_channel_id"] == "combined"
@@ -1806,7 +1866,7 @@ def test_recombine_from_stored_bases_updates_and_adds_channels(
     request = _request("wgi_" + "0" * 26)
     mesh_path = tmp_path / "imported.msh"
     mesh_path.write_text("msh", encoding="utf-8")
-    record = _record(mesh_path)
+    record = _roled_record(mesh_path)
 
     async def run() -> Any:
         return await metal.MetalEngine().run(
@@ -1827,7 +1887,15 @@ def test_recombine_from_stored_bases_updates_and_adds_channels(
     assert updated["channel_order"] == ["left", "right", "combined"]
     payload = updated["channels"]["combined"]["metadata"]["combine"]
     assert payload["crossovers_hz"] == [500.0]
+    assert payload["member_roles"] == ["HF", "LF"]
     assert updated["channels"]["combined"]["metadata"]["recombined"] is True
+    # The members keep the bands and names the solve stamped on them.
+    assert updated["channels"]["left"]["metadata"]["role"] == "HF"
+    assert updated["channels"]["left"]["metadata"]["source_labels"] == [
+        "HF throat",
+        "source-b",
+    ]
+    assert updated["channels"]["right"]["metadata"]["role"] == "LF"
     assert "impedance" not in updated["channels"]["combined"]
     # The original envelope is not mutated in place.
     assert outcome.results["channel_order"] == ["left", "right"]
