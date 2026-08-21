@@ -98,6 +98,44 @@ The committed app icon is reproducible with
 `python launchers/macos/generate_icon.py` on macOS; the generator uses only the
 standard library and validates the resulting ICNS container with `iconutil`.
 
+### When the status window does not open
+
+The application and the status window fail independently. The window is drawn
+with tkinter, which belongs to the Python installation rather than to Waveguide
+Generator, so a Python without a working Tk gives an application that runs
+perfectly under `--no-gui` and a window that never appears. Reinstalling
+Waveguide Generator cannot change that, in either direction.
+
+When the window cannot open, WG writes a full diagnosis to `statusapp.log` in
+the application log directory and, on Windows, shows the cause and the remedy in
+a dialog. The diagnosis names the interpreter it actually used, lists the Tk
+files it looked for, and distinguishes the three causes, which have three
+different fixes:
+
+| What the report says | What it means |
+|---|---|
+| does not include tkinter | that Python was installed without Tk, or the launcher is using a different Python from the one you added Tk to |
+| Tcl/Tk libraries could not be loaded | Tk is installed; something is stopping it loading. Re-ticking the installer option changes nothing |
+| Tk loaded but failed to create a window | usually `TCL_LIBRARY` or `TK_LIBRARY` set by other software, or no interactive desktop session |
+
+The same report can be produced on demand, which is the quickest thing to ask
+for from a machine you cannot reach:
+
+On Windows:
+
+```
+.venv\Scripts\python.exe launchers\statusapp\diagnostics.py
+```
+
+On macOS and Linux:
+
+```
+./.venv/bin/python launchers/statusapp/diagnostics.py
+```
+
+It exits 0 when the window can open. A machine with no graphical session at all
+is reported as such and is not treated as a fault.
+
 ### Application updates
 
 The version in the top-left corner checks GitHub's latest published full

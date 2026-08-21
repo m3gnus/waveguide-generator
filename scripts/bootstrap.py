@@ -26,6 +26,10 @@ else:
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_VENV = REPO_ROOT / ".venv"
 STAMP_NAME = ".wg2-bootstrap.json"
+# Run by path rather than as -m launchers.statusapp.diagnostics: the package
+# __init__ imports the controller, and therefore the whole server package,
+# which is exactly what a broken environment cannot do.
+GUI_DIAGNOSTICS = REPO_ROOT / "launchers" / "statusapp" / "diagnostics.py"
 LOCK_NAME_PREFIX = "wg2-bootstrap-"
 BOOTSTRAP_VERSION = 2
 PYTHON_SERIES = (3, 13)
@@ -443,6 +447,25 @@ def _record_validated_evidence(environment: Path, fingerprint: str) -> None:
         pass
 
 
+def _capture(command: list[str]) -> subprocess.CompletedProcess[str]:
+    """Run a command and keep its output, which :func:`_run` deliberately does not.
+
+    Separate from ``_run`` because ``_run`` exists to put pip's output in front
+    of the user as it happens. The GUI probe's output is a report this module
+    reformats before printing, so it has to come back rather than go straight to
+    the terminal.
+    """
+
+    return subprocess.run(
+        command,
+        cwd=REPO_ROOT,
+        env={**os.environ, "PIP_DISABLE_PIP_VERSION_CHECK": "1"},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
 def _warn_when_gui_unavailable(python: Path) -> None:
     """Say so when the status window will not open, without failing the install.
 
@@ -453,29 +476,37 @@ def _warn_when_gui_unavailable(python: Path) -> None:
     which needs no Tk at all. Reporting it here instead means the installer
     transcript names the real fault at install time, rather than leaving the
     user to discover it as a status window that never appears.
+
+    The probe opens a real Tk window rather than importing tkinter. An import
+    proves only that the files are on disk, so the import-only check this
+    replaced could pass on a machine where the window still never appeared. What
+    gets printed is the diagnosis itself -- which interpreter, which files, which
+    of the possible causes -- because the single canned remedy that used to be
+    printed here ("tick tcl/tk and IDLE") sends a user whose box is already
+    ticked to tick it again, and teaches them nothing when that fails.
     """
 
-    if _run([str(python), "-c", "import tkinter"], quiet=True).returncode == 0:
-        return
-    if os.name == "nt":
-        remedy = (
-            "    Re-run the Python 3.13 installer, choose Modify, and tick\n"
-            '    "tcl/tk and IDLE".'
-        )
-    elif sys.platform == "darwin":
-        remedy = (
-            "    Use the python.org build of Python 3.13, or add Tk to the\n"
-            "    current one with: brew install python-tk@3.13"
-        )
+    try:
+        completed = _capture([str(python), str(GUI_DIAGNOSTICS)])
+    except OSError as exc:
+        # A warning must never be able to fail an install. An interpreter that
+        # cannot be run at all is a larger problem than a status window, and one
+        # the dependency installation above has already had its say about.
+        report = f"The status window check could not run {python}: {exc}"
     else:
-        remedy = "    On Debian and Ubuntu: sudo apt install python3-tk"
+        if completed.returncode == 0:
+            return
+        report = (completed.stderr or completed.stdout).strip()
+    if not report:
+        report = (
+            "The status window cannot open with this Python, and the check could "
+            f"not say why. Run it directly to see: {python} {GUI_DIAGNOSTICS}"
+        )
+    indented = "\n".join(f"         {line}".rstrip() for line in report.splitlines())
     print(
-        "\nWARNING: this Python has no working tkinter, so the Waveguide\n"
-        "         Generator status window cannot open. The application itself\n"
-        "         is installed and runs with the launcher's --no-gui option.\n"
-        "         tkinter belongs to the Python installation, not to Waveguide\n"
-        "         Generator, so reinstalling the application will not add it:\n"
-        f"{remedy}\n"
+        "\nWARNING: the Waveguide Generator status window cannot open with this\n"
+        "         Python. The application itself is installed and works.\n\n"
+        f"{indented}\n"
     )
 
 
