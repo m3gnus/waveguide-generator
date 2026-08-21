@@ -29,7 +29,8 @@ import { trapDialogFocus } from './SettingsDialog';
 import { useSolveOptionsStore } from '../stores/solveOptions';
 import { MAX_MEASURED_OVERLAYS, useMeasuredOverlayStore, type MeasuredOverlay } from '../stores/measuredOverlays';
 import { useDesignStore } from '../stores/design';
-import { runContextMarker, runMatchesContext, useRunContext } from '../results/runCoherence';
+import { RUN_VERDICT_MARKER, RUN_VERDICT_SENTENCE, runContextMarker, runMatchesContext, useRunContext } from '../results/runCoherence';
+import { AnchoredPanel } from '../prefs/AnchoredPanel';
 import { radiationImpedanceTraces } from '../results/radiationImpedance';
 
 export function splSubtitle(result: JobResults | undefined): string {
@@ -1697,6 +1698,9 @@ export function ResultsPanel() {
   const [preferencesOpen, setPreferencesOpen] = useState(false);
   const preferencesAnchor = useRef<HTMLButtonElement | null>(null);
   const [beamRerunSubmitting, setBeamRerunSubmitting] = useState(false);
+  const [coherenceOpen, setCoherenceOpen] = useState(false);
+  const coherenceAnchor = useRef<HTMLButtonElement | null>(null);
+  const [dismissedNewRun, setDismissedNewRun] = useState<string | null>(null);
   const [primaryChannel, setPrimaryChannel] = useState<string | null>(null);
   const measuredOverlays = useMeasuredOverlayStore((state) => state.overlays);
   const [measuredError, setMeasuredError] = useState<string | null>(null);
@@ -1708,7 +1712,7 @@ export function ResultsPanel() {
     runMatchesContext(job, coherenceContext) !== 'other-model'
     && ((job.status === 'complete' && job.has_results)
       || ((job.status === 'running' || job.status === 'queued') && Boolean(provisional.entries[job.id])))
-  )) ?? null, [coherenceContext.designId, coherenceContext.designRevision, coherenceContext.ingestId, coherenceContext.mode, jobs, provisional]);
+  )) ?? null, [coherenceContext.designFingerprint, coherenceContext.designId, coherenceContext.ingestId, coherenceContext.mode, jobs, provisional]);
   useEffect(() => {
     // A solve the user started outranks a pinned comparison: the run submitted
     // for it takes the primary slot as soon as its results exist, and only
@@ -1726,19 +1730,23 @@ export function ResultsPanel() {
         return;
       }
     }
-    // While following, every solve that finishes takes the primary slot as soon
-    // as its results exist — the charts repaint without anyone selecting a job.
-    if (selection.following) {
-      if ((latest?.id ?? null) !== selection.primary) compareSelection.followLatest(latest?.id ?? null);
-      return;
-    }
-    // A pinned result that no longer exists falls back to following again.
-    if (selection.primary && jobs.some((job) => (
-      job.id === selection.primary
-      && (job.has_results || Boolean(provisional.entries[job.id]))
-    ))) return;
-    compareSelection.followLatest(latest?.id ?? null);
-  }, [jobs, latest, provisional, selection.awaiting, selection.following, selection.primary]);
+    // A run that finished without being asked for never replaces what is on
+    // screen; the toolbar offers it as `New · #NN` instead. The slot is only
+    // taken over when what it holds cannot be shown: nothing chosen yet at the
+    // start of a session, a run that has disappeared, or -- while no run has
+    // been chosen by hand -- a run belonging to the model family the workspace
+    // has just left.
+    const held = selection.primary ? jobs.find((job) => job.id === selection.primary) ?? null : null;
+    if (
+      held
+      && (held.has_results || Boolean(provisional.entries[held.id]))
+      && (!selection.following || runMatchesContext(held, coherenceContext) !== 'other-model')
+    ) return;
+    if ((latest?.id ?? null) !== selection.primary) compareSelection.followLatest(latest?.id ?? null);
+  }, [
+    coherenceContext.designFingerprint, coherenceContext.ingestId, coherenceContext.mode,
+    jobs, latest, provisional, selection.awaiting, selection.following, selection.primary,
+  ]);
 
   const ids = useMemo(() => [selection.primary, ...selection.overlays].filter((id): id is string => Boolean(id)), [selection]);
   const selectionKey = ids.join('\u0000');
@@ -1838,6 +1846,18 @@ export function ResultsPanel() {
   const available = useMemo(() => jobs.filter((job) => job.status === 'complete' && job.has_results && !ids.includes(job.id)), [ids, jobs]);
   const primaryJob = useMemo(() => jobs.find((job) => job.id === selection.primary) ?? null, [jobs, selection.primary]);
   const primaryVerdict = primaryJob ? runMatchesContext(primaryJob, coherenceContext) : 'current';
+  // The menu belongs to one run under one verdict; solving, restoring or
+  // switching runs answers it, so it must not stay open over its own answer.
+  useEffect(() => { setCoherenceOpen(false); }, [primaryVerdict, selection.primary]);
+  // A finished run nobody here asked for is offered, not imposed. Both orders
+  // are checked because run numbers restart with a fresh jobs database, and
+  // both are needed because two runs can share a timestamp to the second.
+  const newRun = useMemo(() => {
+    if (!latest || !primaryJob || latest.id === selection.primary || latest.id === dismissedNewRun) return null;
+    const newer = latest.run_number > primaryJob.run_number
+      || Date.parse(latest.created_at) > Date.parse(primaryJob.created_at);
+    return newer ? latest : null;
+  }, [dismissedNewRun, latest, primaryJob, selection.primary]);
   const selectedJob = useMemo(() => jobs.find((job) => job.id === display?.primaryId) ?? null, [display?.primaryId, jobs]);
   const primaryIsProvisional = Boolean(display?.provisionalIds.includes(display.primaryId));
   const provisionalMetadata = primaryRaw?.metadata?.provisional;
@@ -1943,24 +1963,34 @@ export function ResultsPanel() {
     data-result-set={shown ? display?.key : undefined}
   >
     <div className="results-toolbar">
-      <button
-        className={`result-follow${selection.following ? ' on' : ''}`}
-        aria-pressed={selection.following}
-        title={selection.following ? 'Following the latest solve — charts repaint when results land. Click to pin this result.' : 'Pinned to a chosen result. Click to follow the latest solve again.'}
-        onClick={() => selection.following ? compareSelection.setPrimary(selection.primary) : compareSelection.followLatest(latest?.id ?? null)}
-      ><i/>{selection.following ? 'Latest' : 'Pinned'}</button>
-      {primaryJob && primaryVerdict !== 'current' && <span className={`result-coherence-notice ${primaryVerdict}`} role="status">
-        <span>{primaryVerdict === 'older-revision'
-          ? `Showing ${runDisplayName(primaryJob)} — the design has changed since this run.`
-          : `Showing ${runDisplayName(primaryJob)}${primaryJob.config_summary.geometry_type === 'imported' ? ' (CAD import)' : ''} — not the model in the viewport.`}</span>
-        {primaryVerdict === 'older-revision'
-          ? <><button type="button" onClick={restorePrimaryDesign}>Restore this run&apos;s design</button><button type="button" onClick={solveCurrentDesign}>Solve current design</button></>
-          : <><button type="button" onClick={showPrimaryModel}>Show this model</button><button type="button" onClick={() => compareSelection.followLatest(latest?.id ?? null)}>Back to latest</button></>}
-      </span>}
       {ids.map((id, index) => {
         const job = jobs.find((item) => item.id === id);
-        const marker = job ? runContextMarker(job, coherenceContext) : null;
-        return <button key={id} className={`result-chip ${index ? 'muted' : ''}`} onClick={() => compareSelection.remove(id)} title={`${labelFor(id, jobs)} — remove from comparison`}><i/><span>{middleEllipsis(labelFor(id, jobs))}</span>{marker && <span className="result-context-marker">{marker}</span>} ×</button>;
+        // The shown run is the only one whose coherence is actionable, and its
+        // own chip is where it belongs: the banner this replaces spent the
+        // widest slot in the toolbar naming the run the chip beside it named.
+        const stale = index === 0 && Boolean(primaryJob) && primaryVerdict !== 'current';
+        const marker = job && !stale ? runContextMarker(job, coherenceContext) : null;
+        const chip = <button
+          key={id}
+          className={`result-chip ${index ? 'muted' : ''}${stale ? ' stale' : ''}`}
+          onClick={() => compareSelection.remove(id)}
+          title={stale
+            ? `${labelFor(id, jobs)} — ${RUN_VERDICT_SENTENCE[primaryVerdict]} Click to remove it from the comparison.`
+            : `${labelFor(id, jobs)} — remove from comparison`}
+        ><i/><span>{middleEllipsis(labelFor(id, jobs))}</span>{marker && <span className="result-context-marker">{marker}</span>} ×</button>;
+        if (!stale) return chip;
+        return <span key={id} className="result-chip-group">
+          {chip}
+          <button
+            ref={coherenceAnchor}
+            type="button"
+            className="result-context-marker stale"
+            aria-expanded={coherenceOpen}
+            aria-haspopup="dialog"
+            title={`${RUN_VERDICT_SENTENCE[primaryVerdict]} Click for what to do about it.`}
+            onClick={() => setCoherenceOpen((value) => !value)}
+          ><i/>{RUN_VERDICT_MARKER[primaryVerdict]}</button>
+        </span>;
       })}
       {channelIds.map((channel) => <button key={channel} className={`result-chip result-channel-chip${activeChannel === channel ? '' : ' muted'}`} aria-pressed={activeChannel === channel} title={`Show ${channel} in single-channel detail views and exports`} onClick={() => setPrimaryChannel(channel)}><span>{channel}</span></button>)}
       {/* How much of the dock is actually comparing. Five of the six default
@@ -1977,6 +2007,14 @@ export function ResultsPanel() {
         const marker = runContextMarker(job, coherenceContext);
         return <option key={job.id} value={job.id}>{labelFor(job.id, jobs)}{marker ? ` · ${marker}` : ''}</option>;
       })}</select>
+      {newRun && <button
+        type="button"
+        className="result-new-run"
+        title={`${runDisplayName(newRun)} finished. Click to show it; nothing else replaces the run on screen.`}
+        onClick={() => { setDismissedNewRun(newRun.id); compareSelection.followLatest(newRun.id); }}
+      ><i/>New · #{newRun.run_number} → Show</button>}
+      {/* Left of the spacer on purpose: this chip comes and goes on its own,
+          and the controls on the right must not move under the cursor. */}
       <span className="spacer"/>
       <label className="result-count-control" title="Number of chart panels">Charts<select aria-label="Results panel count" value={RESULT_PANEL_COUNTS.includes(preferences.chartTypes.length as never) ? preferences.chartTypes.length : ''} onChange={(event) => preferencesStore.setChartCount(Number(event.target.value))}><option value="" disabled>{preferences.chartTypes.length}</option>{RESULT_PANEL_COUNTS.map((count) => <option key={count} value={count}>{count}</option>)}</select></label>
       <button className="toolbar-icon" disabled={preferences.chartTypes.length >= MAX_RESULT_PANELS} aria-label="Add chart" title="Add chart panel" onClick={() => preferencesStore.addChart()}><Icon name="plus"/></button>
@@ -2004,6 +2042,17 @@ export function ResultsPanel() {
       <button disabled={exporting || !primary || primaryIsProvisional || !preferences.exportFormats.length} title={primaryIsProvisional ? 'Export is available when the solve finishes' : 'Export the current result using the formats enabled in Results preferences'} onClick={() => void exportSelected()}>{exporting ? 'Exporting…' : `Export (${preferences.exportFormats.length})`}</button>
       <button ref={preferencesAnchor} className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Results preferences" aria-expanded={preferencesOpen} title="Results & export preferences" onClick={() => setPreferencesOpen((value) => !value)}><Icon name="settings"/></button>
     </div>
+    {coherenceOpen && primaryJob && primaryVerdict !== 'current' && <AnchoredPanel
+      anchorRef={coherenceAnchor}
+      onClose={() => setCoherenceOpen(false)}
+      className="result-coherence-popover"
+      label={`${runDisplayName(primaryJob)} coherence`}
+    >
+      <p>{RUN_VERDICT_SENTENCE[primaryVerdict]}</p>
+      {primaryVerdict === 'older-revision'
+        ? <><button type="button" onClick={() => { setCoherenceOpen(false); restorePrimaryDesign(); }}>Restore this run&apos;s design</button><button type="button" onClick={() => { setCoherenceOpen(false); solveCurrentDesign(); }}>Solve current design</button></>
+        : <><button type="button" onClick={() => { setCoherenceOpen(false); showPrimaryModel(); }}>Show this model</button><button type="button" onClick={() => { setCoherenceOpen(false); compareSelection.followLatest(latest?.id ?? null); }}>Show newest run</button></>}
+    </AnchoredPanel>}
     {shownActiveChannel && shownCombine && display && selectedJob?.status === 'complete' && !primaryIsProvisional
       && <RecombineRow jobId={display.primaryId} channelId={shownActiveChannel} combine={shownCombine} onApplied={applyRecombined}/>}
     {(measuredOverlays.length > 0 || measuredError) && <div className="results-toolbar result-measured">

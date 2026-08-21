@@ -152,8 +152,13 @@ describe('jobs panel run list', () => {
     imported.config_summary = { geometry_type: 'imported', ingest_id: 'wgi_example' };
     publishJobs([imported]);
     await act(async () => root.render(<JobsPanel/>));
-    expect(host.textContent).toContain('CAD import');
+    expect(host.querySelector('.job-card .pill')?.textContent).toBe('CAD');
     expect(host.textContent).not.toContain('cad-import');
+
+    // In the CAD workspace every run in the rail is a CAD run, so the pill has
+    // nothing left to say: it marks the exception, not the rule.
+    await act(async () => { workspaceModeStore.setMode('cad'); });
+    expect(host.querySelector('.job-card .pill')).toBeNull();
   });
 
   it('recalls a CAD run ingestion into the CAD workspace and viewport', async () => {
