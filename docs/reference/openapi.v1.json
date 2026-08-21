@@ -5085,7 +5085,7 @@
             "type": "number"
           },
           "norm_angle": {
-            "default": 10.0,
+            "default": 5.0,
             "title": "Norm Angle",
             "type": "number"
           },
