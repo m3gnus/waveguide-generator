@@ -250,6 +250,10 @@ describe('atomic results display transitions', () => {
       solve_options: { num_frequencies: 2 } as JobItem['solve_options'],
     });
     await act(async () => {
+      // The claim a submitted solve leaves behind: nothing else may take the
+      // charts off the run on screen, so a streamed run has to be one this
+      // window asked for.
+      compareSelection.awaitRun('live');
       publishJobs([liveJob, job('old')]);
       provisionalResults.apply('live', 1, {
         frequencies: [200],

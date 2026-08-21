@@ -1,19 +1,25 @@
 import { describe, expect, it } from 'vitest';
 import type { JobItem } from '../api/jobsSocket';
-import type { RunContext } from '../results/runCoherence';
+import { designFingerprint, type RunContext } from '../results/runCoherence';
+import { designForFamily, serializeDesign, type DesignDocument } from '../stores/design';
 import { fieldPlaneJob, fieldPlaneUnavailableTooltip } from './Viewport';
 
-const context: RunContext = { mode: 'parametric', designRevision: 3, ingestId: null, designId: null };
+const solved = designForFamily('OSSE');
+const elsewhere = { ...structuredClone(solved), L: (solved.L ?? 0) + 5 };
+const context: RunContext = {
+  mode: 'parametric', designRevision: 3, designFingerprint: designFingerprint(solved), ingestId: null, designId: null,
+};
 
-function job(id: string, available: boolean, unavailableReason: string | null = null, revision = 3): JobItem {
+function job(id: string, available: boolean, unavailableReason: string | null = null, design: DesignDocument = solved): JobItem {
   return {
     id,
     status: 'complete',
     config_summary: {},
-    design_revision: revision,
+    design_revision: 3,
+    script_snapshot: { version: 1, design: serializeDesign(design) },
     field_plane_available: available,
     unavailable_reason: unavailableReason,
-  } as JobItem;
+  } as unknown as JobItem;
 }
 
 describe('viewport field-plane job selection', () => {
@@ -23,9 +29,9 @@ describe('viewport field-plane job selection', () => {
     expect(fieldPlaneJob(jobs, 'missing', context)).toBeNull();
   });
 
-  it('does not fall back across unavailable runs, revisions, or models', () => {
+  it('does not fall back across unavailable runs, edited designs, or models', () => {
     expect(fieldPlaneJob([job('newest', true), job('selected', false)], 'selected', context)).toBeNull();
-    expect(fieldPlaneJob([job('selected', true, null, 2)], 'selected', context)).toBeNull();
+    expect(fieldPlaneJob([job('selected', true, null, elsewhere)], 'selected', context)).toBeNull();
     expect(fieldPlaneJob([{
       ...job('cad', true),
       config_summary: { geometry_type: 'imported' },
