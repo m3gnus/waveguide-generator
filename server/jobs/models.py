@@ -24,7 +24,7 @@ class PolarConfig(JobModel):
     # requested step so non-divisible spans remain observable in metadata.
     angle_step: float | None = Field(default=None, gt=0)
     distance: float = Field(default=2.0, ge=0.1)
-    norm_angle: float = 10.0
+    norm_angle: float = 5.0
     inclination: float = 45.0
     enabled_axes: list[Literal["horizontal", "vertical", "diagonal"]] = Field(
         default_factory=lambda: ["horizontal", "vertical", "diagonal"],

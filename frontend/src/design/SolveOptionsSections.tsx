@@ -2,7 +2,6 @@ import { useSyncExternalStore } from 'react';
 import { jobsSocket } from '../api/jobsSocket';
 import { compareSelection } from '../api/results';
 import { useCapabilities } from '../jobs/useCapabilities';
-import { backendSupports } from './backendSupport';
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import { widenPolarToDerivation } from '../jobs/importedSubmission';
 import { HelpTipRow, useHelpTip } from './HelpTip';
@@ -26,7 +25,7 @@ import type { WorkspaceMode } from '../stores/workspaceMode';
 export const solverModeLabels = {
   auto: 'Auto (fastest eligible)',
   full_3d: 'Full 3D',
-  circsym: 'Axisymmetric (Metal)',
+  circsym: 'Axisymmetric (meridian)',
 } as const;
 
 /**
@@ -69,12 +68,9 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null 
 } = {}) {
   const store = useSolveOptionsStore();
   const { engines, error } = useCapabilities();
-  const backendEngines = engines.filter((engine) => engine.name.toLowerCase() !== 'circsym');
-  const selectedEngine = store.engine === 'auto'
-    ? ['metal', 'beat', 'bempp', 'dryrun'].flatMap((name) => backendEngines.filter((engine) => engine.available && engine.name.toLowerCase() === name))[0]
-    : backendEngines.find((engine) => engine.name.toLowerCase() === store.engine);
-  const fastPaths = selectedEngine?.fast_paths ?? [];
-  const meridianAvailable = backendSupports(selectedEngine?.name.toLowerCase() ?? null, 'meridian-fast-path');
+  const backendEngines = engines.filter((engine) => !['axisym', 'circsym'].includes(engine.name.toLowerCase()));
+  const axisymEngine = engines.find((engine) => engine.name.toLowerCase() === 'axisym');
+  const meridianAvailable = axisymEngine?.available === true;
   const metalAvailable = engines.some((engine) => engine.name.toLowerCase() === 'metal' && engine.available);
   return <>
     {mode === 'parametric' ? <>
@@ -82,10 +78,10 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null 
         <option value="auto">AUTO — first available</option>
         {backendEngines.map((engine) => <option key={engine.name} value={engine.name.toLowerCase()} disabled={!engine.available}>{engine.name}{engine.available ? engine.version ? ` · ${engine.version}` : '' : ` · unavailable${engine.reason ? `: ${engine.reason}` : ''}`}</option>)}
       </select></HelpTipRow>
-      <p className="section-note">{selectedEngine?.name.toLowerCase() === 'metal' && fastPaths.includes('axisymmetric-meridian')
-        ? 'Metal capability: AUTO uses the accelerated axisymmetric path for eligible circular designs, otherwise full 3D.'
-        : 'Selected backend capability: Full 3D.'}</p>
-      <HelpTipRow className="select-row" text="Machine-local execution path. AUTO chooses the accelerated Metal axisymmetric solver for eligible circular designs and Full 3D otherwise. The choice is not saved into design files."><label htmlFor="solve-mode">Solver path</label><select id="solve-mode" value={store.solverMode} onChange={(event) => store.setSolverMode(event.target.value as SolverMode)}>
+      <p className="section-note">{meridianAvailable
+        ? 'Axisymmetric meridian capability: AUTO uses it for eligible circular designs on any OS; the selected backend handles full 3D fallback.'
+        : 'Selected backend capability: Full 3D. The axisymmetric runner is unavailable.'}</p>
+      <HelpTipRow className="select-row" text="Machine-local formulation choice. AUTO uses the platform-neutral axisymmetric meridian solver for eligible circular designs and the selected full-3D backend otherwise. The choice is not saved into design files."><label htmlFor="solve-mode">Solver path</label><select id="solve-mode" value={store.solverMode} onChange={(event) => store.setSolverMode(event.target.value as SolverMode)}>
         <option value="auto">{solverModeLabels.auto}</option>
         <option value="full_3d">{solverModeLabels.full_3d}</option>
         {(meridianAvailable || store.solverMode === 'circsym') && <option value="circsym" disabled={!meridianAvailable}>{solverModeLabels.circsym}{meridianAvailable ? '' : ' · unavailable'}</option>}

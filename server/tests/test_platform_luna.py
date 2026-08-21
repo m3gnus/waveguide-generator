@@ -563,12 +563,26 @@ def test_capability_probe_runs_off_thread_and_is_cached(
     async def scenario() -> None:
         first, second = await asyncio.gather(endpoint(), endpoint())
         assert first == second == {
-            "engines": [{"name": "mock", "available": True, "reason": "ready", "version": "1", "fast_paths": ()}],
+            "engines": [
+                {
+                    "name": "mock",
+                    "available": True,
+                    "reason": "ready",
+                    "version": "1",
+                    "fast_paths": (),
+                    "formulations": (),
+                    "mountings": (),
+                    "symmetry_domains": (),
+                    "field_traces": False,
+                    "di_sphere": True,
+                    "cancellation_granularity": "between-frequencies",
+                }
+            ],
             "engineSelection": {
                 "default": "auto",
                 "resolvedDefault": None,
                 "full3dOrder": ["metal", "beat", "bempp", "dryrun"],
-                "metalFastPath": "axisymmetric-meridian",
+                "axisymmetricRunner": "axisym",
             },
         }
 

@@ -39,7 +39,7 @@ from .frequency_sweep import (
     live_execution_frequencies,
     sort_native_result_frequencies,
 )
-from .infinite_baffle import reject_bempp_infinite_baffle
+from .infinite_baffle import reject_beat_infinite_baffle
 from .result_mapping import (
     build_provisional_frequency_response,
     build_solver_response,
@@ -147,8 +147,8 @@ def solve_beat_from_msh_text(
     context.validate()
     del mesh_metadata
     if context.solver_mode == "circsym":
-        raise ValueError("BEAT cannot run solver_mode='circsym'; use full_3d or the Metal CircSym engine")
-    reject_bempp_infinite_baffle(context)
+        raise ValueError("BEAT cannot run solver_mode='circsym'; use the Axisymmetric runner or full_3d")
+    reject_beat_infinite_baffle(context)
     package = _load_api()
     if package is None:
         raise BeatUnavailable("hornlab-beat-bem is not installed.")
@@ -349,9 +349,9 @@ class BeatEngine:
         result_cb: ResultCallback | None = None,
     ) -> EngineRunResult:
         if (request.options.solver_mode or "").strip().lower() == "circsym":
-            raise ValueError("BEAT cannot run solver_mode='circsym'; select Metal or use full_3d")
+            raise ValueError("BEAT cannot run solver_mode='circsym'; select Axisymmetric or use full_3d")
         context = SolverContext.from_request(request, solver_mode="full_3d")
-        reject_bempp_infinite_baffle(context)
+        reject_beat_infinite_baffle(context)
         mesh = await build_solver_mesh(
             request.design,
             request.options,
@@ -374,7 +374,7 @@ class BeatEngine:
         results.setdefault("metadata", {})["mesh_stats"] = mesh["stats"]
         results.setdefault("metadata", {})["solve_path"] = "full-3d"
         results.setdefault("metadata", {})["axisymmetric_eligibility_reasons"] = [
-            "axisymmetric-meridian is a Metal-only fast path"
+            "the solve planner selected the full-3D BEAT formulation"
         ]
         field_traces = results.pop("_field_traces", None)
         field_trace_reason = results.pop("_field_trace_unavailable_reason", None)

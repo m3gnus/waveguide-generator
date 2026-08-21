@@ -58,6 +58,15 @@ def test_polar_normalization_angle_must_be_inside_the_sampled_domain() -> None:
     assert polar.angle_range == (10.0, 70.0, 7)
 
 
+def test_polar_normalization_default_is_canonical_five_degrees() -> None:
+    assert PolarConfig().norm_angle == 5.0
+    assert SolverContext(
+        design=DesignConfig.model_validate({"formula": "OSSE"}),
+        frequency_range=(100.0, 200.0),
+        num_frequencies=2,
+    ).polar_config["norm_angle"] == 5.0
+
+
 def test_off_axis_grid_labels_the_sample_used_for_spl_and_phase() -> None:
     result = _result(angles=[10.0, 20.0])
     result.pressure_complex[:, 0, 0] = np.asarray([40.0e-6j, -40.0e-6j])

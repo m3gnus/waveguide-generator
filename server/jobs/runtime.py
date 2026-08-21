@@ -67,7 +67,8 @@ BEMPP_DEFAULT_WALL_THICKNESS_MM = 5.0
 def _apply_bempp_wall_default(request: SolveRequest, engine_name: str) -> SolveRequest:
     """Materialize ATH's closed-wall default for BEMPP free-standing solves.
 
-    BEMPP has no CircSym path and its open-shell pressure space treats free-rim
+    BEMPP full 3D and the axisymmetric formulation are separate paths. BEMPP's
+    open-shell pressure space treats free-rim
     degrees of freedom differently from the closed-body formulation. Keep an
     inactive enclosure plus a missing/zero wall from silently entering that
     backend-specific topology. Revalidating the copied wire also keeps the
@@ -417,7 +418,7 @@ async def resolve_submission(
         )
 
     engine_name = request.options.engine
-    if engine_name not in {"auto", "dryrun", "metal", "bempp", "beat"}:
+    if engine_name not in {"auto", "axisym", "dryrun", "metal", "bempp", "beat"}:
         raise UnknownEngineError(f"Unknown solve engine: {engine_name}")
 
     resolution = await asyncio.to_thread(resolve_symmetry, request.design)
@@ -438,6 +439,87 @@ async def resolve_submission(
         ),
     }
 
+    # Formulation is planned before the full-3D backend. Axisymmetric geometry
+    # uses the platform-neutral meridian runner on every OS; Metal/BEMPP/BEAT
+    # remain interchangeable execution choices only for the full-3D branch.
+    solver_mode = str(request.options.solver_mode or "auto").strip().lower()
+    forced_axisym = engine_name == "axisym" or solver_mode == "circsym"
+    if engine_name == "axisym" and solver_mode == "full_3d":
+        raise ValueError("engine='axisym' cannot run solver_mode='full_3d'")
+    axisym_reasons: list[str] = []
+    probe_axisym = engine_name != "dryrun" and (
+        engine_name == "axisym" or solver_mode in {"auto", "circsym"}
+    )
+    axisym_registered = (
+        await engine_registry.get_engine("axisym") is not None
+        if probe_axisym
+        else False
+    )
+    if forced_axisym and not axisym_registered:
+        reason = await engine_registry.unavailable_reason("axisym")
+        raise EngineUnavailableError(
+            "The Axisymmetric runner is unavailable. "
+            + (reason or "No capability reason was reported.")
+        )
+    consider_axisym = (
+        axisym_registered
+        and (engine_name == "axisym" or solver_mode in {"auto", "circsym"})
+    )
+    if consider_axisym:
+        from server.solver.circsym import (
+            axisymmetric_eligibility_reasons,
+            axisymmetric_plan_cost,
+        )
+
+        axisym_reasons = await asyncio.to_thread(
+            axisymmetric_eligibility_reasons,
+            request,
+        )
+        if (engine_name == "axisym" or solver_mode == "circsym") and axisym_reasons:
+            raise ValueError(
+                "Forced axisymmetric solver mode is not eligible: "
+                + "; ".join(axisym_reasons)
+            )
+        if not axisym_reasons:
+            try:
+                plan_cost = await asyncio.to_thread(
+                    axisymmetric_plan_cost,
+                    request,
+                    full_3d_quadrants=resolved_quadrants,
+                )
+            except Exception as exc:
+                # Eligibility remains authoritative. A diagnostic cost model
+                # must never turn an otherwise valid solve into a refusal.
+                plan_cost = {
+                    "model": "unavailable",
+                    "reason": str(exc),
+                }
+            request = request.model_copy(deep=True)
+            request.options.engine = "axisym"
+            engine_name = "axisym"
+            symmetry_metadata["solver_plan"] = {
+                "formulation": "axisymmetric",
+                "engine": "axisym",
+                "reason": (
+                    "forced by solver_mode='circsym'"
+                    if forced_axisym
+                    else "AUTO selected the eligible platform-neutral axisymmetric runner"
+                ),
+                "eligibility_reasons": [],
+                "cost_evidence": plan_cost,
+            }
+    if engine_name != "axisym":
+        symmetry_metadata["solver_plan"] = {
+            "formulation": "full-3d",
+            "engine": engine_name,
+            "reason": (
+                "explicit solver_mode='full_3d'"
+                if solver_mode == "full_3d"
+                else "axisymmetric formulation was not eligible"
+            ),
+            "eligibility_reasons": axisym_reasons,
+        }
+
     if engine_name == "auto":
         engine_name = await engine_registry.resolve(
             "auto", solver_mode=request.options.solver_mode
@@ -445,11 +527,26 @@ async def resolve_submission(
         if engine_name is None:
             raise EngineUnavailableError(
                 "AUTO could not resolve a compatible solve engine from this host's "
-                "capabilities. Install/enable Metal or BEMPP; explicitly enable dry-run "
+                "capabilities. Install/enable Axisymmetric, Metal, BEAT, or BEMPP; explicitly enable dry-run "
                 "with WG2_ENABLE_DRYRUN=1 for synthetic development solves."
             )
         request = request.model_copy(deep=True)
         request.options.engine = engine_name
+        symmetry_metadata["solver_plan"]["engine"] = engine_name
+    if (
+        engine_name == "bempp"
+        and request.design.root.simulation.sim_type == "infinite-baffle"
+    ):
+        if request.options.symmetry != "auto" and resolved_quadrants != 1234:
+            raise SymmetryValidationError(
+                "BEMPP coupled infinite-baffle currently requires Full symmetry; "
+                "use Auto/Full or choose Metal for half/quarter domains"
+            )
+        resolved_quadrants = 1234
+        symmetry_metadata["resolved_quadrants"] = resolved_quadrants
+        symmetry_metadata["solver_plan"]["symmetry_reason"] = (
+            "BEMPP coupled infinite-baffle uses the validated full-domain formulation"
+        )
     if await engine_registry.get_engine(engine_name) is None:
         reason = await engine_registry.unavailable_reason(engine_name)
         fallback_reason = (
@@ -1005,12 +1102,16 @@ class JobRuntime:
             imported = await self._prepare_imported_submission(request)
         if imported is not None:
             engine_name = request.options.engine
-            if engine_name == "circsym":
+            if (
+                engine_name in {"axisym", "circsym"}
+                or request.options.solver_mode == "circsym"
+            ):
                 raise ImportedSolveRefusal(
                     "imported_circsym_unsupported",
-                    "imported geometry supports Metal full 3-D solves only; CircSym is unavailable",
+                    "imported geometry supports Metal full 3-D solves only; "
+                    "axisymmetric mode is unavailable",
                 )
-            if engine_name not in {"auto", "dryrun", "metal", "bempp", "beat"}:
+            if engine_name not in {"auto", "axisym", "dryrun", "metal", "bempp", "beat"}:
                 raise UnknownEngineError(f"Unknown solve engine: {engine_name}")
             symmetry_metadata = imported.symmetry_metadata
             if engine_name in {"bempp", "dryrun", "beat"}:

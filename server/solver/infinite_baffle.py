@@ -1,8 +1,9 @@
-"""Coupled infinite-baffle validation shared by Metal full-3D and CircSym.
+"""Coupled infinite-baffle validation shared by full-3D and axisymmetric paths.
 
 V1 rejects the tempting but incorrect free-field/image shortcut: full 3-D uses
-the mesher's aperture physical tag and native Rayleigh coupling, while CircSym
-uses its meridian aperture tag.  See v1 ``metal_solver.py:310-359,396-405`` and
+Metal/BEMPP use the mesher's aperture physical tag and native Rayleigh coupling,
+while Axisymmetric uses its meridian aperture tag. See v1
+``metal_solver.py:310-359,396-405`` and
 ``metal_solver.py:477-500,550-558``.
 """
 
@@ -42,16 +43,46 @@ def require_full_3d_aperture_tag(context: SolverContext, metadata: Any) -> int |
     return tag
 
 
+def require_coupled_aperture_tag(
+    context: SolverContext,
+    metadata: Any,
+    *,
+    backend: str,
+) -> int | None:
+    """Return the canonical aperture tag for any full-3D coupled backend."""
+    if context.sim_type != 1:
+        return None
+    tag = aperture_tag_from_metadata(metadata)
+    if tag is None:
+        raise RuntimeError(
+            f"Full-3D infinite-baffle {backend} solve requires the coupled "
+            "aperture tag, but hornlab-waveguide-mesher did not report "
+            "apertureTag/aperture_tag."
+        )
+    return tag
+
+
 def reject_bempp_infinite_baffle(context: SolverContext) -> None:
+    """Compatibility guard for callers pinned to a pre-coupling BEMPP package."""
     if context.sim_type == 1:
         raise ValueError(
-            "The BEMPP fallback cannot solve coupled infinite-baffle requests. "
-            "Use Metal full-3D aperture coupling or Metal CircSym."
+            "The installed BEMPP adapter has not enabled coupled infinite-baffle "
+            "support. Upgrade hornlab-bempp-bem or use Axisymmetric/Metal."
+        )
+
+
+def reject_beat_infinite_baffle(context: SolverContext) -> None:
+    if context.sim_type == 1:
+        raise ValueError(
+            "The BEAT backend cannot solve coupled infinite-baffle requests. "
+            "Use Axisymmetric, Metal full 3D, or BEMPP full 3D."
         )
 
 
 __all__ = [
     "aperture_tag_from_metadata",
+    "reject_beat_infinite_baffle",
     "reject_bempp_infinite_baffle",
+    "require_coupled_aperture_tag",
     "require_full_3d_aperture_tag",
 ]

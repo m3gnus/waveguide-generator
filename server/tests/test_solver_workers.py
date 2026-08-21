@@ -121,6 +121,7 @@ def test_explicit_frequency_lists_are_reported_as_the_serial_sweeps_they_are(
         source_motion = "normal"
         mesh_validation_mode = "warn"
         verbose = False
+        sim_type = 2
 
         @staticmethod
         def validate():
@@ -152,7 +153,6 @@ def test_explicit_frequency_lists_are_reported_as_the_serial_sweeps_they_are(
             "warning": None,
         },
     )
-    monkeypatch.setattr(bempp, "reject_bempp_infinite_baffle", lambda _context: None)
     monkeypatch.setattr(
         bempp,
         "observation_config",
@@ -170,8 +170,10 @@ def test_explicit_frequency_lists_are_reported_as_the_serial_sweeps_they_are(
         "msh",
         ExplicitContext(),
         stage_callback=lambda *values: stages.append(values),
+        force_serial=True,
     )
 
     assert native_workers == [1]
     assert response["metadata"]["bempp"]["workers"] == 1
     assert not any("splits this sweep" in message for _, _, message in stages)
+    assert any("Ignoring WG2_SOLVE_WORKERS=4" in message for _, _, message in stages)

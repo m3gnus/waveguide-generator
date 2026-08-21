@@ -325,7 +325,7 @@ def test_metal_infinite_baffle_requires_and_maps_aperture_tag(monkeypatch) -> No
     assert response["_field_trace_unavailable_reason"] == "unsupported_solve_mode"
 
 
-def test_bempp_adapter_is_cpu_fallback_and_rejects_infinite_baffle(monkeypatch) -> None:
+def test_bempp_adapter_is_cpu_fallback_and_supports_coupled_infinite_baffle(monkeypatch) -> None:
     captured = {}
     created = {}
 
@@ -347,7 +347,12 @@ def test_bempp_adapter_is_cpu_fallback_and_rejects_infinite_baffle(monkeypatch) 
     monkeypatch.setattr(
         bempp,
         "bempp_status",
-        lambda: {"available": True, "reason": "mock CPU", "assembly_backend": "numba"},
+        lambda: {
+            "available": True,
+            "reason": "mock CPU",
+            "assembly_backend": "numba",
+            "coupled_infinite_baffle": True,
+        },
     )
     response = bempp.solve_bempp_from_msh_text(_cabinet_msh(), _context(axial=True))
     assert captured["assembly_backend"] == "numba"
@@ -363,8 +368,20 @@ def test_bempp_adapter_is_cpu_fallback_and_rejects_infinite_baffle(monkeypatch) 
         "cap_bytes": 256 * 1024 * 1024,
     }
     assert response["_field_traces"].backend == "bempp"
-    with pytest.raises(ValueError, match="cannot solve coupled infinite-baffle"):
-        bempp.solve_bempp_from_msh_text("msh", _context(sim_type=1))
+    ib_response = bempp.solve_bempp_from_msh_text(
+        _cabinet_msh(aperture=True),
+        _context(sim_type=1),
+        mesh_metadata={"apertureTag": 12},
+    )
+    assert captured["aperture_tag"] == 12
+    assert captured["native_symmetry_plane"] is None
+    assert captured["return_surface_traces"] is False
+    assert ib_response["metadata"]["infinite_baffle"] == {
+        "backend": "full_3d_coupled",
+        "aperture_tag": 12,
+        "source": "hornlab-waveguide-mesher",
+    }
+    assert ib_response["_field_trace_unavailable_reason"] == "unsupported_solve_mode"
 
 
 def test_bempp_field_plane_option_disables_trace_retention(monkeypatch) -> None:
@@ -479,6 +496,24 @@ def test_circsym_meridian_resolution_is_refined_from_sweep_top(monkeypatch) -> N
     assert report["policy"] == "wavelength_over_6_max_segment"
     assert report["max_segment_mm"] == pytest.approx(5.0)
     assert report["refined"] is True
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        ("mouth_res * 0.5", "fixed numeric value"),
+        (0, "finite and positive"),
+        (float("inf"), "finite and positive"),
+    ],
+)
+def test_circsym_formula_or_invalid_resolution_is_a_clear_ineligibility(
+    value: object, message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        circsym._frequency_refined_meridian_config(
+            {"mesh": {"mouthResolution": value}},
+            10_000.0,
+        )
 
 
 def _explicit_context(frequencies: tuple[float, ...]) -> SolverContext:

@@ -26,7 +26,6 @@ from server.jobs.runtime import (
 from server.mesh.builder import build_solver_mesh
 from server.mesh.gmsh_worker import prewarm_gmsh_worker, shutdown_gmsh_worker
 from server.solver.context import SolverContext
-from server.solver.metal import circsym_eligibility_reasons
 
 from .render import render_validation
 from .request import build_request, load_request_document
@@ -148,29 +147,18 @@ def _symmetry_summary(metadata: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def _solve_path_summary(request: SolveRequest, engine_name: str) -> dict[str, Any]:
-    if engine_name != "metal":
-        return {
-            "predicted": "full-3d",
-            "reasons": [
-                f"engine '{engine_name}' does not use Metal's axisymmetric-meridian path"
-            ],
-        }
+def _solve_path_summary(symmetry_metadata: dict[str, Any]) -> dict[str, Any]:
+    """Render the formulation decision already made by the solve planner."""
 
-    mode = request.options.solver_mode or "auto"
-    if mode == "full_3d":
-        return {
-            "predicted": "full-3d",
-            "reasons": [
-                "solver_mode='full_3d' explicitly opts out of the meridian fast path"
-            ],
-        }
-    try:
-        reasons = await asyncio.to_thread(circsym_eligibility_reasons, request)
-    except Exception as exc:  # eligibility is advisory unless CircSym was forced
-        reasons = [f"axisymmetric-meridian eligibility check failed: {exc}"]
+    plan = symmetry_metadata.get("solver_plan")
+    plan = plan if isinstance(plan, dict) else {}
+    reasons = [str(reason) for reason in plan.get("eligibility_reasons") or []]
     return {
-        "predicted": "full-3d" if reasons else "axisymmetric-meridian",
+        "predicted": (
+            "axisymmetric-meridian"
+            if plan.get("formulation") == "axisymmetric"
+            else "full-3d"
+        ),
         "reasons": reasons,
     }
 
@@ -360,21 +348,7 @@ async def validate_path(
     execution_request.design.root.mesh.quadrants = Expr(
         value=float(resolved.symmetry_metadata["resolved_quadrants"])
     )
-    payload["solvePath"] = await _solve_path_summary(
-        execution_request, resolved.engine_name
-    )
-    if (
-        request.options.solver_mode == "circsym"
-        and payload["solvePath"]["reasons"]
-    ):
-        _refuse(
-            payload,
-            "Forced axisymmetric solver mode is not eligible: "
-            + "; ".join(payload["solvePath"]["reasons"]),
-            code="solver_mode_ineligible",
-            stage="validation",
-        )
-        return payload, 1
+    payload["solvePath"] = _solve_path_summary(resolved.symmetry_metadata)
 
     if no_mesh:
         return payload, 0
