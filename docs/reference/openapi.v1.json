@@ -4186,6 +4186,7 @@
       },
       "MultiChannelResultEnvelope": {
         "additionalProperties": true,
+        "description": "One solve, one channel per drive channel, addressed by ``channel_order``.\n\nEvery channel is a parametric-shaped result whose ``metadata`` names its\ndrive address: ``drive_channel_id``, the ``source_ids`` it drives, ``role``\n(the driver band ``HF``/``MF``/``LF``, null when the sources carry no band\nrole) and, when the ingestion record names its sources, ``source_labels``\nparallel to ``source_ids``. A combined channel adds ``derived_from_channels``\nand a ``combine`` payload whose ``members`` and ``member_roles`` are parallel\nlists, so a client can label a crossover pair without the ingestion record.",
         "properties": {
           "channel_order": {
             "items": {

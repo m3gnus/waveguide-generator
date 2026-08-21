@@ -97,6 +97,17 @@ class ParametricResultEnvelope(ExtensibleResultModel):
 
 
 class MultiChannelResultEnvelope(ExtensibleResultModel):
+    """One solve, one channel per drive channel, addressed by ``channel_order``.
+
+    Every channel is a parametric-shaped result whose ``metadata`` names its
+    drive address: ``drive_channel_id``, the ``source_ids`` it drives, ``role``
+    (the driver band ``HF``/``MF``/``LF``, null when the sources carry no band
+    role) and, when the ingestion record names its sources, ``source_labels``
+    parallel to ``source_ids``. A combined channel adds ``derived_from_channels``
+    and a ``combine`` payload whose ``members`` and ``member_roles`` are parallel
+    lists, so a client can label a crossover pair without the ingestion record.
+    """
+
     result_kind: Literal["multi_channel"]
     result_contract_version: Literal[2]
     client_request_id: str | None
