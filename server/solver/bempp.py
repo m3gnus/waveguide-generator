@@ -21,6 +21,7 @@ from typing import Any, Mapping
 
 from server.jobs.models import SolveRequest
 from server.mesh.builder import build_solver_mesh
+from server.preview.translate import has_closed_outer_body
 
 from .acoustics import solver_sound_speed_m_per_s
 from .base import (
@@ -453,28 +454,14 @@ bempp_status.cache_clear = _cached_successful_bempp_status.cache_clear  # type: 
 
 
 def _closed_mode(context: SolverContext) -> bool:
-    root = context.design.root
-    enclosure_value = (
-        root.enclosure.depth.constant_value()
-        if root.enclosure is not None and root.enclosure.depth is not None
-        else None
-    )
-    enclosure = (
-        float(enclosure_value)
-        if enclosure_value is not None
-        else 0.0
-    )
-    wall_value = (
-        root.mesh.wall_thickness.constant_value()
-        if root.mesh.wall_thickness is not None
-        else None
-    )
-    wall = (
-        float(wall_value)
-        if wall_value is not None
-        else 0.0
-    )
-    return enclosure > 0.0 or wall > 0.0
+    """Whether the mesh under validation is a closed body.
+
+    Resolved through the translation layer that built the mesh, so an omitted
+    wall thickness -- which the mesher turns into ATH's 5 mm shell -- is judged
+    closed rather than mistaken for a bare shell and let past the check.
+    """
+
+    return has_closed_outer_body(context.design.root)
 
 
 def solve_bempp_from_msh_text(

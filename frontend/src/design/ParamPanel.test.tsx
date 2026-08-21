@@ -9,7 +9,8 @@ import { buildParameterPaletteEntries } from '../shell/TopBar';
 import { workspaceNavigation } from '../shell/workspaceNavigation';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetCadPreparationStore, useCadPreparationStore } from '../stores/cadPreparation';
-import { designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
+import { hydrateDesignDocument } from '../api/designIo';
+import { designForFamily, resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { FusionParameterDrift, ParamPanel, RealizedDimensionsSection, domainName, parameterRevealRequest, requestParameterReveal, resolveOuterBodyMode, symmetrySummary } from './ParamPanel';
@@ -76,6 +77,21 @@ describe('outer-body precedence', () => {
     expect(resolveOuterBodyMode(design)).toBe('enclosure');
     design.simulation.sim_type = 'infinite-baffle';
     expect(resolveOuterBodyMode(design)).toBe('infinite-baffle');
+  });
+
+  // The server keeps the field nullable for lossless CFG round-trips, so a
+  // design opened from a .cfg with no Mesh.WallThickness arrives as null on the
+  // wire. Unset is not zero: it is ATH's 5 mm, and both sides must say so or a
+  // file that was never bare would open as "Bare shell".
+  // Counterpart: server/tests/test_outer_body_mode.py.
+  it('reads an omitted wall thickness as the 5 mm default, not as a bare shell', () => {
+    const hydrated = hydrateDesignDocument({
+      ...serializeDesign(designForFamily('OSSE')),
+      mesh: { ...serializeDesign(designForFamily('OSSE')).mesh as object, wall_thickness: null },
+    });
+    expect(hydrated._absent).toContain('mesh.wall_thickness');
+    expect(hydrated.mesh.wall_thickness).toBe(5);
+    expect(resolveOuterBodyMode(hydrated)).toBe('freestanding');
   });
 });
 

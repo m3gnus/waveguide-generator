@@ -201,28 +201,22 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       if (!capability?.available) throw new Error(capability?.reason ?? capabilityError ?? `${selectedEngine} engine is unavailable`);
       setSubmitting(true);
       setActionError(null);
-      let submittedDesign = nextDesign;
-      let submittedRevision = nextRevision;
-      const wallThickness = nextDesign.mesh.wall_thickness;
-      if (
-        effectiveEngine.toLowerCase() === 'bempp'
-        && nextDesign.simulation.sim_type !== 'infinite-baffle'
-        && nextDesign.enclosure.depth <= 0
-        && (wallThickness == null || wallThickness === 0)
-      ) {
-        useDesignStore.getState().updateValue('mesh.wall_thickness', 5);
-        const corrected = useDesignStore.getState();
-        submittedDesign = corrected.design;
-        submittedRevision = corrected.designRevision;
-      }
+      // Pressing Solve never edits the design. BEMPP's own closed-wall default
+      // for a bare free-standing horn is applied by the server, on the copy it
+      // stores as the run's design and snapshot (server/jobs/runtime.py's
+      // `_apply_bempp_wall_default`). Doing it here as well used to rewrite the
+      // live document: choosing "Bare shell" and pressing Solve flipped the
+      // Outer body control back to "Thickened waveguide (freestanding)",
+      // discarded any expression bound to the field, bumped the revision, and
+      // marked the file unsaved -- for a correction the run had already made.
       const options = useSolveOptionsStore.getState().options();
       const designName = useDocumentStore.getState().designName;
       const label = nextRunLabel(designName, preferencesStore.getSnapshot(), now());
       await submitDesign(
-        submittedDesign,
+        nextDesign,
         options,
         fetch,
-        { label, designRevision: submittedRevision },
+        { label, designRevision: nextRevision },
       );
       acceptSubmittedLabel(designName);
       await jobsSocket.refresh();
@@ -230,7 +224,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       submissionInFlight.current = false;
       setSubmitting(false);
     }
-  }, [capability, capabilityError, designName, effectiveEngine, now, preferences, revision, selectedEngine]);
+  }, [capability, capabilityError, designName, now, preferences, selectedEngine]);
 
   const runImported = useCallback(async (submission: ImportedSolveSubmission) => {
     if (submissionInFlight.current) return null;

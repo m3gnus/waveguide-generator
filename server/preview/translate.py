@@ -36,6 +36,64 @@ def _structural_number(value: Expr | None, field: str, fallback: float = 0.0) ->
     return float(number)
 
 
+def effective_wall_thickness(root: Any) -> float:
+    """Resolve ``mesh.wall_thickness`` the way the geometry is actually built.
+
+    An omitted wall thickness is not the same document state as an explicit
+    zero, and only one of them means "bare shell". ATH treats an omitted value
+    as 5 mm for a normal simulation and 0 mm for an infinite baffle; an explicit
+    0 always means no outer body at all. The document field stays nullable so a
+    CFG round-trip is lossless, so every consumer that has to know whether a
+    closed body exists must resolve the default through this one function --
+    reading ``root.mesh.wall_thickness or 0`` silently turns an unset field into
+    a bare shell and disagrees with the mesh that was generated.
+
+    The returned value is unscaled millimetres; ``design_to_mesher_config``
+    applies the waveguide ``scale`` on top of it.
+    """
+
+    default = 0.0 if root.simulation.sim_type == "infinite-baffle" else 5.0
+    return _structural_number(root.mesh.wall_thickness, "mesh.wall_thickness", default)
+
+
+def enclosure_depth_of(root: Any) -> float:
+    """Active enclosure depth in unscaled millimetres; 0 when preconfigured."""
+
+    return (
+        _structural_number(root.enclosure.depth, "enclosure.depth")
+        if root.enclosure is not None
+        else 0.0
+    )
+
+
+def outer_body_mode(root: Any) -> str:
+    """The mesher mode this design resolves to: the outer-body precedence rule.
+
+    Simulation type wins, then an active enclosure, then a wall. This is the
+    single definition of "bare shell"; ``frontend/src/design/ParamPanel.tsx``
+    (``resolveOuterBodyMode``) mirrors it for the Outer body control.
+    """
+
+    if root.simulation.sim_type == "infinite-baffle":
+        return "infinite-baffle"
+    if enclosure_depth_of(root) > 0.0:
+        return "enclosure"
+    if effective_wall_thickness(root) > 0.0:
+        return "freestanding"
+    return "bare"
+
+
+def has_closed_outer_body(root: Any) -> bool:
+    """Whether the meshed body is closed rather than an open shell.
+
+    Used by mesh validation, which asks about the surface the mesher produced,
+    not about the simulation domain -- so an infinite baffle is judged by the
+    same wall/enclosure question as anything else, with its own 0 mm default.
+    """
+
+    return enclosure_depth_of(root) > 0.0 or effective_wall_thickness(root) > 0.0
+
+
 def _scale_factor(value: Expr | None) -> float:
     scale = _structural_number(value, "scale", 1.0)
     if scale <= 0:
@@ -228,38 +286,16 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
         raise ValueError("source.contours is not supported by the HornLab mesher preview")
 
     scale = _scale_factor(root.scale)
-    enclosure_depth = (
-        _structural_number(root.enclosure.depth, "enclosure.depth")
-        if root.enclosure is not None
-        else 0.0
-    )
     # ATH treats an omitted wall thickness as 5 mm for normal simulations and
     # 0 mm for infinite-baffle simulations. Keep the document field nullable
     # for lossless CFG round-trips and apply that default only at translation.
-    default_wall_thickness = (
-        0.0 if root.simulation.sim_type == "infinite-baffle" else 5.0
-    )
-    wall_thickness = (
-        _structural_number(
-            root.mesh.wall_thickness,
-            "mesh.wall_thickness",
-            default_wall_thickness,
-        )
-        * scale
-    )
+    wall_thickness = effective_wall_thickness(root) * scale
     if root.mesh.quadrants is not None:
         _structural_number(root.mesh.quadrants, "mesh.quadrants")
     # Inactive enclosure values remain valid preconfiguration. Simulation mode
     # decides whether they are active, matching v1's editable-at-depth-zero and
     # preconfigured-enclosure behavior.
-    if root.simulation.sim_type == "infinite-baffle":
-        mode = "infinite-baffle"
-    elif enclosure_depth > 0.0:
-        mode = "enclosure"
-    elif wall_thickness > 0.0:
-        mode = "freestanding"
-    else:
-        mode = "bare"
+    mode = outer_body_mode(root)
 
     mesh = root.mesh
     morph = root.morph
@@ -353,7 +389,7 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
         enclosure = root.enclosure
         config["enclosure"] = _clean(
             {
-                "depth": enclosure_depth,
+                "depth": enclosure_depth_of(root),
                 "space_l": _expr(enclosure.space_l),
                 "space_t": _expr(enclosure.space_t),
                 "space_r": _expr(enclosure.space_r),
@@ -371,4 +407,11 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
 design_config_to_mesher_config = design_to_mesher_config
 
 
-__all__ = ["design_config_to_mesher_config", "design_to_mesher_config"]
+__all__ = [
+    "design_config_to_mesher_config",
+    "design_to_mesher_config",
+    "effective_wall_thickness",
+    "enclosure_depth_of",
+    "has_closed_outer_body",
+    "outer_body_mode",
+]
