@@ -85,6 +85,22 @@ python -m pytest \
 This gate covers the Airy pattern, aperture continuity, rear silence, and the
 absolute amplitude/phase convention shared with CircSym.
 
+## External axisymmetric reference status
+
+There is not yet a valid independent ABEC axisymmetric infinite-baffle fixture.
+Do not promote an archived result merely because its filename says circular or
+infinite baffle: the previously proposed waveguide artifact contains
+azimuth-dependent geometry, and the archived circular rolled-lip artifact has an
+unresolved mounting-plane intersection and is diagnostic-only. A future external
+gate must start from a demonstrably body-of-revolution, flush-mounted model with a
+valid interior/aperture interface and retain enough source geometry and solver
+metadata for independent reproduction.
+
+Until that fixture exists, report this as an explicit external-reference gap.
+The analytic piston/sphere gates and the three independent coupled formulations
+(Axisymmetric, full-3D Metal, and BEMPP) remain mandatory, but they must not be
+described as ABEC validation.
+
 ## Report checklist
 
 - Exact four repository SHAs and whether each worktree was clean.
