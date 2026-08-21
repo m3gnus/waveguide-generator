@@ -1,5 +1,7 @@
 import type { EngineCapability } from '../jobs/actions';
 
+export type BackendIdentity = string | EngineCapability | null;
+
 /**
  * Which solver capabilities the UI offers that not every backend implements.
  *
@@ -23,14 +25,13 @@ export type BackendFeature =
 /**
  * Backends that implement each feature, lower-cased to match ``EngineCapability``.
  *
- * All three are Metal-only today. The mesher emits a coupled ``MOUTH_APERTURE``
- * group for infinite baffle that only Metal knows how to couple to the exterior
- * half-space; BEMPP and BEAT are always full 3-D and have no meridian path; and
- * imported geometry is refused outright on anything but Metal.
+ * Axisymmetric execution is a platform-neutral runner rather than a full-3D
+ * backend. Metal and BEMPP both understand the coupled ``MOUTH_APERTURE``
+ * infinite-baffle contract; imported CAD remains Metal-only.
  */
 const FEATURE_BACKENDS: Record<BackendFeature, readonly string[]> = {
-  'infinite-baffle': ['metal'],
-  'meridian-fast-path': ['metal'],
+  'infinite-baffle': ['metal', 'bempp', 'axisym'],
+  'meridian-fast-path': ['axisym'],
   'imported-geometry': ['metal'],
 };
 
@@ -44,9 +45,9 @@ const FEATURE_LABELS: Record<BackendFeature, string> = {
 /** What to do instead, so a warning is actionable rather than just a refusal. */
 const FEATURE_REMEDIES: Record<BackendFeature, string> = {
   'infinite-baffle':
-    'Solve free-standing with an enclosure to approximate a baffle, or run this design on a Mac with the Metal backend.',
+    'Use Metal or BEMPP full 3D, or the Axisymmetric meridian path for eligible circular geometry.',
   'meridian-fast-path':
-    'Use Auto or Force full 3D; the meridian path needs the Metal backend.',
+    'Use Auto or Force full 3D; this geometry cannot use the platform-neutral meridian runner.',
   'imported-geometry':
     'Imported CAD solves need the Metal backend. The parametric workspace solves on this machine.',
 };
@@ -70,10 +71,35 @@ export function activeBackendName(
   return available[0]?.name.toLowerCase() ?? null;
 }
 
+/** The capability record for the selected/resolved full-3D backend. */
+export function activeBackendCapability(
+  engine: string,
+  engines: readonly EngineCapability[],
+): EngineCapability | null {
+  const name = activeBackendName(engine, engines);
+  return name === null
+    ? null
+    : engines.find((item) => item.name.toLowerCase() === name) ?? null;
+}
+
+function backendName(backend: BackendIdentity): string | null {
+  if (backend === null) return null;
+  return (typeof backend === 'string' ? backend : backend.name).trim().toLowerCase();
+}
+
 /** Whether `backend` can run `feature`. Unknown or unresolved backends pass. */
-export function backendSupports(backend: string | null, feature: BackendFeature): boolean {
+export function backendSupports(backend: BackendIdentity, feature: BackendFeature): boolean {
   if (!backend) return true;
-  const normalized = backend.trim().toLowerCase();
+  const normalized = backendName(backend);
+  if (!normalized) return true;
+  if (typeof backend !== 'string') {
+    if (feature === 'infinite-baffle' && backend.mountings) {
+      return backend.mountings.includes('infinite-baffle');
+    }
+    if (feature === 'meridian-fast-path' && backend.formulations) {
+      return backend.formulations.includes('axisymmetric');
+    }
+  }
   const known = Object.values(FEATURE_BACKENDS).some((names) => names.includes(normalized))
     || normalized === 'bempp' || normalized === 'dryrun' || normalized === 'beat';
   if (!known) return true;
@@ -85,10 +111,10 @@ export function backendSupports(backend: string | null, feature: BackendFeature)
  * undefined when the backend can run the feature after all.
  */
 export function backendLimitation(
-  backend: string | null,
+  backend: BackendIdentity,
   feature: BackendFeature,
 ): string | undefined {
   if (backendSupports(backend, feature)) return undefined;
-  const name = (backend ?? '').toUpperCase();
+  const name = (backendName(backend) ?? '').toUpperCase();
   return `${name} does not support ${FEATURE_LABELS[feature]}. ${FEATURE_REMEDIES[feature]}`;
 }

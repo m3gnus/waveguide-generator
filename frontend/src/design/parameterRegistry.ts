@@ -1,6 +1,6 @@
 import type { DesignDocument, DesignFamily } from '../stores/design';
 import type { WorkspaceMode } from '../stores/workspaceMode';
-import { backendSupports, type BackendFeature } from './backendSupport';
+import { backendSupports, type BackendFeature, type BackendIdentity } from './backendSupport';
 
 export type ParameterSection =
   | 'Profile Dimensions'
@@ -419,7 +419,7 @@ export function fieldIsVisible(field: ParameterDefinition, design: DesignDocumen
 export function fieldOptionsForBackend(
   field: ParameterDefinition,
   value: unknown,
-  backend: string | null,
+  backend: BackendIdentity,
 ): ParameterOption[] {
   return (field.options ?? [])
     .filter((option) => !option.requiresFeature
@@ -440,7 +440,7 @@ export function fieldOptionsForBackend(
 export function fieldUnsupportedFeature(
   field: ParameterDefinition,
   value: unknown,
-  backend: string | null,
+  backend: BackendIdentity,
 ): BackendFeature | undefined {
   const selected = (field.options ?? []).find((option) => String(option.value) === String(value ?? ''));
   const feature = selected?.requiresFeature;

@@ -10,18 +10,17 @@ import { workspaceModeStore } from '../stores/workspaceMode';
 import { ParamPanel } from './ParamPanel';
 
 /**
- * End-to-end cover for the Windows/BEMPP gate.
+ * End-to-end cover for portable Windows/BEMPP capabilities.
  *
  * `backendSupport.test.ts` pins the decision helpers; this pins the wiring —
- * that the panel actually consults the live capability probe, that a Metal-only
- * option leaves the select on a host without Metal, and that a design already
- * carrying that value still shows it with the reason attached rather than
- * failing silently a minute into a solve.
+   * that the panel actually consults the live capability probe and offers the
+   * coupled infinite-baffle workflow on a host without Metal.
  */
 const capabilities = (metalAvailable: boolean) => ({
   engines: [
     { name: 'metal', available: metalAvailable, reason: metalAvailable ? 'ok' : 'Metal requires macOS', version: null, fast_paths: metalAvailable ? ['axisymmetric-meridian'] : [] },
     { name: 'bempp', available: true, reason: 'CPU fallback', version: '0.1.0', fast_paths: [] },
+    { name: 'axisym', available: true, reason: 'Portable CPU', version: '0.1.0', fast_paths: ['axisymmetric-meridian'] },
   ],
 });
 
@@ -71,20 +70,18 @@ describe('solver-backend parameter gating', () => {
     expect(host.querySelector('.field-warning')).toBeNull();
   });
 
-  it('hides the Metal-only simulation type on a host with only BEMPP', async () => {
+  it('offers coupled infinite baffle on a host with BEMPP and no Metal', async () => {
     await mount(false);
-    expect(optionsOf('simulation.sim_type')).toEqual(['Free-standing']);
+    expect(optionsOf('simulation.sim_type')).toEqual(['Free-standing', 'Infinite baffle']);
     expect(host.querySelector('[data-parameter-id="simulation.solver_mode"]')).toBeNull();
     expect(host.querySelector('.field-warning')).toBeNull();
   });
 
-  it('reveals an imported infinite-baffle design and explains why it will not solve', async () => {
+  it('keeps an imported infinite-baffle design supported by BEMPP', async () => {
     useDesignStore.getState().updateValue('simulation.sim_type', 'infinite-baffle');
     await mount(false);
     expect(optionsOf('simulation.sim_type')).toEqual(['Free-standing', 'Infinite baffle']);
-    const warning = host.querySelector('[data-parameter-id="simulation.sim_type"] .field-warning');
-    expect(warning?.textContent).toContain('BEMPP does not support');
-    expect(warning?.textContent).toContain('free-standing');
+    expect(host.querySelector('[data-parameter-id="simulation.sim_type"] .field-warning')).toBeNull();
   });
 
   /* Aperture mesh scale sizes the infinite-baffle cap and nothing else, so it

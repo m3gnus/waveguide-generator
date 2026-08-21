@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { designForFamily } from '../stores/design';
-import { activeBackendName, backendLimitation, backendSupports } from './backendSupport';
+import { activeBackendName, backendLimitation, backendSupports, type BackendIdentity } from './backendSupport';
 import {
   PARAMETER_REGISTRY,
   fieldIsVisible,
@@ -18,7 +18,7 @@ const field = (id: string) => {
   return found;
 };
 
-const labels = (id: string, value: unknown, backend: string | null) =>
+const labels = (id: string, value: unknown, backend: BackendIdentity) =>
   fieldOptionsForBackend(field(id), value, backend).map((option) => option.label);
 
 describe('active backend resolution', () => {
@@ -38,16 +38,24 @@ describe('active backend resolution', () => {
 });
 
 describe('backend feature support', () => {
-  it('grants Metal every gated feature', () => {
+  it('grants Metal full-3D mounting/import features but keeps meridian separate', () => {
     expect(backendSupports('metal', 'infinite-baffle')).toBe(true);
-    expect(backendSupports('metal', 'meridian-fast-path')).toBe(true);
+    expect(backendSupports('metal', 'meridian-fast-path')).toBe(false);
     expect(backendSupports('metal', 'imported-geometry')).toBe(true);
   });
 
-  it('denies BEMPP the three features its server path refuses', () => {
-    expect(backendSupports('bempp', 'infinite-baffle')).toBe(false);
+  it('gives BEMPP coupled IB but not meridian or imported geometry', () => {
+    expect(backendSupports('bempp', 'infinite-baffle')).toBe(true);
     expect(backendSupports('bempp', 'meridian-fast-path')).toBe(false);
     expect(backendSupports('bempp', 'imported-geometry')).toBe(false);
+    expect(backendSupports('axisym', 'meridian-fast-path')).toBe(true);
+  });
+
+  it('uses the server capability payload for version-dependent BEMPP IB support', () => {
+    const oldBempp = { ...engine('bempp', true), formulations: ['full-3d'], mountings: ['free-standing'] };
+    const coupledBempp = { ...oldBempp, mountings: ['free-standing', 'infinite-baffle'] };
+    expect(backendSupports(oldBempp, 'infinite-baffle')).toBe(false);
+    expect(backendSupports(coupledBempp, 'infinite-baffle')).toBe(true);
   });
 
   /* A probe that has not landed must not hide controls: the pre-gating
@@ -59,10 +67,10 @@ describe('backend feature support', () => {
   });
 
   it('names both the limitation and the way around it', () => {
-    const message = backendLimitation('bempp', 'infinite-baffle');
+    const message = backendLimitation('bempp', 'imported-geometry');
     expect(message).toContain('BEMPP');
-    expect(message).toContain('infinite-baffle');
-    expect(message).toContain('free-standing');
+    expect(message).toContain('imported');
+    expect(message).toContain('Metal');
     expect(backendLimitation('metal', 'infinite-baffle')).toBeUndefined();
   });
 });
@@ -72,18 +80,18 @@ describe('simulation type gating', () => {
     expect(labels('simulation.sim_type', 'freestanding', 'metal')).toEqual(['Free-standing', 'Infinite baffle']);
   });
 
-  it('hides infinite baffle on BEMPP while the design is free-standing', () => {
-    expect(labels('simulation.sim_type', 'freestanding', 'bempp')).toEqual(['Free-standing']);
+  it('offers infinite baffle on BEMPP', () => {
+    expect(labels('simulation.sim_type', 'freestanding', 'bempp')).toEqual(['Free-standing', 'Infinite baffle']);
     expect(fieldUnsupportedFeature(field('simulation.sim_type'), 'freestanding', 'bempp')).toBeUndefined();
   });
 
   /* An ATH .cfg with `ABEC.SimType = 1`, or a .wg file authored on a Mac,
    * arrives already set to a value this host cannot solve. Removing the option
    * would leave the select blank and the design unfixable. */
-  it('reveals and flags infinite baffle when the design already selects it', () => {
+  it('keeps a selected BEMPP infinite baffle supported', () => {
     expect(labels('simulation.sim_type', 'infinite-baffle', 'bempp')).toEqual(['Free-standing', 'Infinite baffle']);
     expect(fieldUnsupportedFeature(field('simulation.sim_type'), 'infinite-baffle', 'bempp'))
-      .toBe('infinite-baffle');
+      .toBeUndefined();
   });
 });
 
