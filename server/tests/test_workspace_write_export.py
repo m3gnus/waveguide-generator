@@ -79,6 +79,7 @@ def test_cad_workspace_is_separate_and_requires_a_selection(tmp_path: Path) -> N
         "proposed": str(proposed),
         "proposedExists": False,
         "captureDocument": True,
+        "captureMode": "run",
     }
     assert not proposed.exists()
     with pytest.raises(ValueError, match="No WGLink folder"):
@@ -92,6 +93,7 @@ def test_cad_workspace_is_separate_and_requires_a_selection(tmp_path: Path) -> N
         "schemaVersion": 1,
         "cadLinkPath": str(exchange.resolve()),
         "captureDocument": True,
+        "captureMode": "run",
     }
 
 
@@ -658,18 +660,67 @@ def test_capturing_the_cad_document_is_on_by_default_and_can_be_declined(
     data = tmp_path / "data"
     state = workspace_api.CadWorkspaceState(data, proposed_path=tmp_path / "proposed")
     assert state.capture_document is True
+    assert state.capture_mode == "run"
 
     result = asyncio.run(
         capture_endpoint(state)(workspace_api.CaptureDocumentRequest(enabled=False))
     )
 
-    assert result == {"captureDocument": False}
+    assert result == {"captureDocument": False, "captureMode": "off"}
     # The Fusion add-in reads this same file, so the choice has to be in it.
     assert json.loads((data / "cadlink_settings.json").read_text()) == {
         "schemaVersion": 1,
         "captureDocument": False,
+        "captureMode": "off",
     }
     assert workspace_api.CadWorkspaceState(data).capture_document is False
+
+
+def test_filing_the_cad_document_per_project_still_asks_the_addin_to_capture(
+    tmp_path: Path,
+) -> None:
+    """The add-in's switch is the boolean; the mode is only where WG files it.
+
+    An add-in that predates the mode key reads ``captureDocument`` alone, so
+    every mode other than ``off`` must keep writing it true.
+    """
+
+    data = tmp_path / "data"
+    state = workspace_api.CadWorkspaceState(data, proposed_path=tmp_path / "proposed")
+
+    result = asyncio.run(
+        capture_endpoint(state)(workspace_api.CaptureDocumentRequest(mode="project"))
+    )
+
+    assert result == {"captureDocument": True, "captureMode": "project"}
+    assert json.loads((data / "cadlink_settings.json").read_text()) == {
+        "schemaVersion": 1,
+        "captureDocument": True,
+        "captureMode": "project",
+    }
+    assert workspace_api.CadWorkspaceState(data).capture_mode == "project"
+
+
+def test_a_settings_file_that_only_knew_the_boolean_reads_as_a_mode(
+    tmp_path: Path,
+) -> None:
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "cadlink_settings.json").write_text(
+        json.dumps({"schemaVersion": 1, "captureDocument": True}), encoding="utf-8"
+    )
+    assert workspace_api.CadWorkspaceState(data).capture_mode == "run"
+
+    (data / "cadlink_settings.json").write_text(
+        json.dumps({"schemaVersion": 1, "captureDocument": False}), encoding="utf-8"
+    )
+    assert workspace_api.CadWorkspaceState(data).capture_mode == "off"
+
+
+def test_an_unknown_capture_mode_is_refused(tmp_path: Path) -> None:
+    state = workspace_api.CadWorkspaceState(tmp_path / "data")
+    with pytest.raises(ValueError):
+        state.set_capture_mode("everywhere")  # type: ignore[arg-type]
 
 
 def test_choosing_a_folder_does_not_erase_the_capture_choice(tmp_path: Path) -> None:
@@ -677,7 +728,7 @@ def test_choosing_a_folder_does_not_erase_the_capture_choice(tmp_path: Path) -> 
     exchange = tmp_path / "exchange"
     exchange.mkdir()
     state = workspace_api.CadWorkspaceState(data)
-    state.set_capture_document(False)
+    state.set_capture_mode("off")
 
     # Selecting used to rewrite the whole file, which dropped the other setting.
     state.select(exchange)

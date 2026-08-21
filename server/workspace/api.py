@@ -77,10 +77,22 @@ class SelectCadWorkspaceRequest(BaseModel):
     path: str = Field(min_length=1, max_length=4096)
 
 
+#: Where a captured CAD document is filed in the run archive.
+#:
+#: ``project`` keeps one copy per model state under ``runs/<project>/cad/``;
+#: ``run`` additionally places that document beside the run that was solved
+#: from it, which is where people look for it; ``off`` asks the add-in not to
+#: carry the document at all.
+CaptureMode = Literal["off", "project", "run"]
+CAPTURE_MODES: tuple[str, ...] = ("off", "project", "run")
+
+
 class CaptureDocumentRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    enabled: bool
+    #: Superseded by ``mode``; still accepted so an older client keeps working.
+    enabled: bool | None = None
+    mode: CaptureMode | None = None
 
 
 class WorkspaceUnavailableError(OSError):
@@ -157,6 +169,16 @@ def _portable_path_key(segments: list[str]) -> tuple[str, ...]:
 def _strictly_inside(path: Path, root: Path, label: str) -> None:
     if path == root or root not in path.parents:
         raise ValueError(f"{label} resolves outside the selected workspace")
+
+
+def open_folder_command(path: Path) -> list[str]:
+    """The desktop file-manager command that reveals a folder on this platform."""
+
+    if platform.system() == "Darwin":
+        return ["open", str(path)]
+    if platform.system() == "Windows":
+        return ["explorer", str(path)]
+    return ["xdg-open", str(path)]
 
 
 def _picker_start_directory(start_in: Path | None) -> Path | None:
@@ -371,6 +393,10 @@ class CadWorkspaceState(WorkspaceState):
     #: already: one setting, set in WG, read where the add-in was going to look
     #: anyway, rather than the same switch offered in two applications.
     CAPTURE_KEY = "captureDocument"
+    #: Where WG files what the add-in captured. The boolean above stays the
+    #: add-in's switch -- it only decides whether to carry the document -- so an
+    #: add-in that predates this key keeps working unchanged.
+    CAPTURE_MODE_KEY = "captureMode"
 
     def __init__(self, data_dir: Path, *, proposed_path: Path | None = None) -> None:
         super().__init__(data_dir, default_path=data_paths(data_dir).root / "cadlink")
@@ -379,7 +405,7 @@ class CadWorkspaceState(WorkspaceState):
             if proposed_path is not None
             else proposed_cadlink_dir()
         )
-        self._capture_document = True
+        self._capture_mode: CaptureMode = "run"
         self.settings_path = (data_paths(data_dir).root / self.SETTINGS_NAME).resolve()
         self.legacy_settings_path = (
             data_paths(data_dir).root / "workspace_settings.json"
@@ -440,7 +466,14 @@ class CadWorkspaceState(WorkspaceState):
             return
         if not isinstance(payload, dict):
             return
-        self._capture_document = payload.get(self.CAPTURE_KEY) is not False
+        # One rule, so an existing install and a fresh one behave the same: the
+        # stored mode wins, and a settings file that only ever knew the boolean
+        # means "off" when it was switched off and the default otherwise.
+        stored_mode = str(payload.get(self.CAPTURE_MODE_KEY) or "").strip()
+        if stored_mode in CAPTURE_MODES:
+            self._capture_mode = stored_mode  # type: ignore[assignment]
+        else:
+            self._capture_mode = "off" if payload.get(self.CAPTURE_KEY) is False else "run"
         raw_path = str(payload.get(self.SETTINGS_KEY) or "").strip()
         if not raw_path:
             return
@@ -461,8 +494,8 @@ class CadWorkspaceState(WorkspaceState):
         self._persist()
 
     @property
-    def capture_document(self) -> bool:
-        """Whether a return carries a copy of the CAD document it came from.
+    def capture_mode(self) -> CaptureMode:
+        """Where a captured CAD document is filed, or ``off`` for not at all.
 
         Reading loads the settings file first: the stored value used to be
         readable only after something else happened to trigger the lazy load,
@@ -471,14 +504,26 @@ class CadWorkspaceState(WorkspaceState):
 
         if not self._loaded:
             self._load()
-        return self._capture_document
+        return self._capture_mode
 
-    def set_capture_document(self, enabled: bool) -> None:
-        """Choose whether returns carry a copy of the CAD document."""
+    @property
+    def capture_document(self) -> bool:
+        """Whether a return carries a copy of the CAD document it came from.
 
+        This is the add-in's half of the setting and stays a boolean: filing is
+        WG's business, carrying the document is the add-in's.
+        """
+
+        return self.capture_mode != "off"
+
+    def set_capture_mode(self, mode: CaptureMode) -> None:
+        """Choose whether returns carry a CAD document, and where it is filed."""
+
+        if mode not in CAPTURE_MODES:
+            raise ValueError(f"Unknown capture mode: {mode}")
         if not self._loaded:
             self._load()
-        self._capture_document = bool(enabled)
+        self._capture_mode = mode
         self._persist()
 
     def _persist(self) -> None:
@@ -490,7 +535,10 @@ class CadWorkspaceState(WorkspaceState):
 
         payload: dict[str, Any] = {
             "schemaVersion": 1,
-            self.CAPTURE_KEY: self._capture_document,
+            # Written together and always: the add-in reads only the boolean,
+            # so it must never be absent just because WG learned a third mode.
+            self.CAPTURE_KEY: self._capture_mode != "off",
+            self.CAPTURE_MODE_KEY: self._capture_mode,
         }
         if self._selected is not None:
             payload[self.SETTINGS_KEY] = str(self._selected)
@@ -511,19 +559,32 @@ def create_cad_workspace_router(state: CadWorkspaceState) -> APIRouter:
             "proposed": str(state.proposed_path),
             "proposedExists": state.proposed_path.is_dir(),
             "captureDocument": state.capture_document,
+            "captureMode": state.capture_mode,
         }
 
     @router.post("/capture-document")
     async def cad_workspace_capture_document(
         payload: CaptureDocumentRequest,
     ) -> dict[str, Any]:
+        mode = payload.mode
+        if mode is None:
+            if payload.enabled is None:
+                raise HTTPException(
+                    status_code=422, detail="Provide a capture mode."
+                )
+            mode = "run" if payload.enabled else "off"
         try:
-            state.set_capture_document(payload.enabled)
+            state.set_capture_mode(mode)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         except OSError as exc:
             raise HTTPException(
                 status_code=500, detail=f"Could not save the setting: {exc}"
             ) from exc
-        return {"captureDocument": state.capture_document}
+        return {
+            "captureDocument": state.capture_document,
+            "captureMode": state.capture_mode,
+        }
 
     @router.post("/select")
     async def cad_workspace_select(
@@ -562,15 +623,8 @@ def create_cad_workspace_router(state: CadWorkspaceState) -> APIRouter:
             path = state.path()
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        command = (
-            ["open", str(path)]
-            if platform.system() == "Darwin"
-            else ["explorer", str(path)]
-            if platform.system() == "Windows"
-            else ["xdg-open", str(path)]
-        )
         try:
-            subprocess.Popen(command, **background_process_kwargs())
+            subprocess.Popen(open_folder_command(path), **background_process_kwargs())
         except Exception as exc:
             raise HTTPException(
                 status_code=500, detail=f"Failed to open folder: {exc}"
@@ -619,15 +673,8 @@ def create_workspace_router(state: WorkspaceState) -> APIRouter:
         path = available_path()
         if isinstance(path, JSONResponse):
             return path
-        command = (
-            ["open", str(path)]
-            if platform.system() == "Darwin"
-            else ["explorer", str(path)]
-            if platform.system() == "Windows"
-            else ["xdg-open", str(path)]
-        )
         try:
-            subprocess.Popen(command, **background_process_kwargs())
+            subprocess.Popen(open_folder_command(path), **background_process_kwargs())
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Failed to open folder: {exc}") from exc
         return {"status": "opened", "path": str(path)}

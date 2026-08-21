@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
   downloadGeometryExport,
   downloadText,
-  hydrateDesignDocument,
   inspectDesignText,
   openDesignText,
   serializeDesignDocument,
@@ -11,23 +10,24 @@ import {
   type StepBody,
 } from '../api/designIo';
 import { resetDesignStore, useDesignStore } from '../stores/design';
-import { documentSettingsSignature, wgSolveSettingsFromStore } from '../stores/designWire';
-import { resetDocumentStore, useDocumentStore, type CadLinkClassification, type DesignIdentity } from '../stores/document';
+import { wgSolveSettingsFromStore } from '../stores/designWire';
+import { resetDocumentStore, useDocumentStore, type CadLinkClassification } from '../stores/document';
 import { useUnsavedChanges } from '../stores/unsavedChanges';
-import { designNameForOpenedFile, designNameSlug } from '../stores/designName';
+import { designNameSlug } from '../stores/designName';
 import { usePreferences } from '../prefs/preferences';
 import { Icon } from '../shell/icons';
-import {
-  polarConfigFromUi,
-  restoreSolveSettingsFromBlocks,
-  useSolveOptionsStore,
-} from '../stores/solveOptions';
+import { polarConfigFromUi, useSolveOptionsStore } from '../stores/solveOptions';
 import { createImportedMeshScene } from '../viewport/importedMesh';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { parseMSH } from '../viewport/mshParser';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { cadLinkCoordinatorBridge } from '../shell/CadLinkCoordinator';
-import { getCadLinkedDesign, listCadLinkedDesigns, type CadLinkedDesignSummary } from '../api/cadlink';
+import { listCadLinkedDesigns, type CadLinkedDesignSummary } from '../api/cadlink';
+import {
+  applyOpenedDesign as applyOpenedDocument,
+  editableIdentity,
+  openCadLinkedProject,
+} from './openCadProject';
 import { sentToCadMessage } from './useSendToCad';
 
 const ACCEPT = '.cfg,.txt,.mwg,text/plain';
@@ -39,14 +39,6 @@ const CLASSIFICATION_DISPLAY: Record<CadLinkClassification, { label: string; det
   foreign: { label: 'foreign', detail: 'Foreign: this identity is not yet known to this machine’s CAD-link registry.' },
   missing: { label: 'unlinked', detail: 'Unlinked: this file has no CAD-link identity yet. Its first CAD-linked export will create one.' },
 };
-
-function editableIdentity(identity: DesignIdentity | null | undefined): DesignIdentity | null {
-  return identity ? {
-    designId: identity.designId,
-    lineageId: identity.lineageId,
-    baseEditVersion: identity.baseEditVersion,
-  } : null;
-}
 
 function reportText(report: ImportReport): string {
   const migrations = report.migrationsApplied.length
@@ -78,11 +70,8 @@ export async function exportProfileArtifacts(
 export function DesignFileMenu() {
   const design = useDesignStore((state) => state.design);
   const revision = useDesignStore((state) => state.designRevision);
-  const replaceDesign = useDesignStore((state) => state.replaceDesign);
   const designName = useDocumentStore((state) => state.designName);
   const unsaved = useUnsavedChanges();
-  const setDesignName = useDocumentStore((state) => state.setDesignName);
-  const markSaved = useDocumentStore((state) => state.markSaved);
   const classification = useDocumentStore((state) => state.classification);
   const setCadLink = useDocumentStore((state) => state.setCadLink);
   const workspaceMode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
@@ -138,16 +127,9 @@ export function DesignFileMenu() {
   }
 
   function applyOpenedDesign(opened: Awaited<ReturnType<typeof openDesignText>>, filename: string) {
-    const openedDesign = hydrateDesignDocument(opened.design);
-    replaceDesign(openedDesign);
-    restoreSolveSettingsFromBlocks(openedDesign.extra_blocks);
-    // One name for the whole document: the picked file's, unless the file's
-    // own Report.Title is that same name spelled more fully.
-    setDesignName(designNameForOpenedFile(filename, openedDesign.extra_blocks));
-    setCadLink(editableIdentity(opened.cadlink?.identity), opened.cadlink?.classification ?? 'missing');
-    markSaved(useDesignStore.getState().designRevision, documentSettingsSignature());
+    const applied = applyOpenedDocument(opened, filename);
     setMessage(reportText(opened));
-    if (opened.cadlink?.classification === 'missing') setAdoptionCandidate(opened.cadlink.adoptionCandidate);
+    if (applied.adoptionCandidate) setAdoptionCandidate(applied.adoptionCandidate);
   }
 
   async function toggleProjects() {
@@ -173,9 +155,9 @@ export function DesignFileMenu() {
   async function openProject(project: CadLinkedDesignSummary) {
     if (unsaved && !window.confirm('Discard unsaved changes and open this CAD-linked design?')) return;
     await act(async () => {
-      const snapshot = await getCadLinkedDesign(project.designId);
-      applyOpenedDesign(await openDesignText(snapshot.text), snapshot.filename);
-      setMessage(`Opened CAD-linked design ${snapshot.filename}`);
+      const opened = await openCadLinkedProject(project.designId);
+      if (opened.adoptionCandidate) setAdoptionCandidate(opened.adoptionCandidate);
+      setMessage(`Opened CAD-linked design ${opened.filename}`);
     });
   }
 

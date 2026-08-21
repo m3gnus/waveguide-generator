@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import { getOnshapeConnection, type OnshapeConnection } from '../api/onshape';
-import { getCadWorkspace, openCadWorkspace, selectCadWorkspace, setCaptureDocument } from '../api/cadWorkspace';
+import {
+  getCadWorkspace,
+  openCadWorkspace,
+  selectCadWorkspace,
+  setCaptureMode,
+  type CadCaptureMode,
+} from '../api/cadWorkspace';
 import { JobsPreferencesSurface, ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
 import { preferencesStore, usePreferences, type CadApplication } from '../prefs/preferences';
 import { Icon } from './icons';
@@ -82,9 +88,28 @@ function WorkspaceSettings() {
   </section>;
 }
 
+/** The three places a returned Fusion model can end up, in plain terms. */
+const CAPTURE_CHOICES: Array<{ mode: CadCaptureMode; label: string; detail: string }> = [
+  {
+    mode: 'run',
+    label: 'With every run',
+    detail: 'In each run folder, beside the results it produced. Easiest to find; one copy per solve.',
+  },
+  {
+    mode: 'project',
+    label: 'Once per project',
+    detail: 'In runs/<project>/cad/, one copy per model state however many times it is solved. Saves space when sweeping one geometry.',
+  },
+  {
+    mode: 'off',
+    label: 'Don\u2019t keep one',
+    detail: 'Returns carry no model. Older runs cannot be reopened in Fusion from WG.',
+  },
+];
+
 function CadFolderSettings() {
   const [path, setPath] = useState<string | null>();
-  const [capture, setCapture] = useState(true);
+  const [capture, setCapture] = useState<CadCaptureMode>('run');
   const [busy, setBusy] = useState<'open' | 'select'>();
   const [error, setError] = useState<string>();
   const [manualPath, setManualPath] = useState('');
@@ -96,7 +121,7 @@ function CadFolderSettings() {
       (value) => {
         if (request !== requestGeneration.current) return;
         setPath(value.path);
-        setCapture(value.captureDocument !== false);
+        setCapture(value.captureMode ?? (value.captureDocument === false ? 'off' : 'run'));
       },
       (reason: unknown) => { if (request === requestGeneration.current) setError(String(reason)); },
     );
@@ -119,14 +144,16 @@ function CadFolderSettings() {
     }
   };
 
-  const toggleCapture = async (enabled: boolean) => {
-    // Optimistic: the checkbox is the state, and a refused write puts it back
-    // rather than leaving the box disagreeing with the file the add-in reads.
-    setCapture(enabled); setError(undefined);
+  const chooseCapture = async (mode: CadCaptureMode) => {
+    // Optimistic: the chosen option is the state, and a refused write puts the
+    // previous one back rather than leaving the radio disagreeing with the file
+    // the add-in reads.
+    const previous = capture;
+    setCapture(mode); setError(undefined);
     try {
-      setCapture(await setCaptureDocument(enabled));
+      setCapture(await setCaptureMode(mode));
     } catch (reason) {
-      setCapture(!enabled);
+      setCapture(previous);
       setError(reason instanceof Error ? reason.message : String(reason));
     }
   };
@@ -143,15 +170,19 @@ function CadFolderSettings() {
       <label>WGLink folder path<input value={manualPath} onChange={(event) => setManualPath(event.target.value)} placeholder="/path/to/WGLink exchange"/></label>
       <button disabled={!manualPath.trim() || busy !== undefined} onClick={() => void run('select', manualPath.trim())}>Use this path</button>
     </details>
-    <label className="ui-check cad-settings-capture">
-      <input
-        type="checkbox"
-        checked={capture}
-        onChange={(event) => void toggleCapture(event.target.checked)}
-      />
-      Keep a copy of the Fusion model with each return
-    </label>
-    <p className="cad-settings-note">Filed under <code>runs/&lt;design&gt;/cad/</code>, one copy per model state rather than one per solve, so a run can be reopened in Fusion later. A Fusion archive is tens of megabytes; turn this off if the space matters more.</p>
+    <fieldset className="cad-settings-capture">
+      <legend>Keep a copy of the Fusion model</legend>
+      {CAPTURE_CHOICES.map(({ mode, label, detail }) => <label key={mode} className="ui-check">
+        <input
+          type="radio"
+          name="cad-capture-mode"
+          value={mode}
+          checked={capture === mode}
+          onChange={() => void chooseCapture(mode)}
+        />
+        <span><b>{label}</b><small>{detail}</small></span>
+      </label>)}
+    </fieldset>
     {error && <p className="workspace-settings-error" role="status">{error}</p>}
   </div>;
 }
