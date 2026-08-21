@@ -348,7 +348,14 @@ def _self_intersection_warnings(report: Mapping[str, Any]) -> list[str]:
     """
 
     if not report.get("checked"):
-        return []
+        # "Not checked" is not "no intersections". Saying nothing here would let
+        # a mesh too large or too tangled to test pass strict validation in
+        # silence -- and that is the mesh most likely to be broken.
+        return [
+            f"{SELF_INTERSECTION_WARNING_PREFIX}: not checked. The mesh exceeded "
+            "the geometric self-intersection budget, so nothing verifies that its "
+            "surfaces stay out of each other."
+        ]
     crossings = int(report.get("proper_crossing_count", 0))
     coplanar = int(report.get("coplanar_overlap_count", 0))
     if crossings + coplanar == 0:
@@ -819,6 +826,7 @@ async def build_solver_mesh(
     crossings = int(self_intersection.get("proper_crossing_count", 0)) + int(
         self_intersection.get("coplanar_overlap_count", 0)
     )
+
     # Ahead of the topology check on purpose: both raise the same way, and a
     # crossing names a cause the user can act on where "failed topology
     # integrity validation" does not.
@@ -829,6 +837,14 @@ async def build_solver_mesh(
         )
     if validation_mode == "strict" and not result["integrity"]["valid"]:
         raise RuntimeError("Solver mesh failed strict topology integrity validation")
+    # Last, because it is the fallback: "could not check" is worth failing on,
+    # but never at the cost of hiding a concrete defect that was found.
+    if validation_mode == "strict" and not self_intersection.get("checked", False):
+        raise RuntimeError(
+            "Solver mesh failed strict validation: the geometric "
+            "self-intersection check could not run on this mesh, so it cannot be "
+            "confirmed free of surfaces passing through each other."
+        )
     if validation_mode == "off":
         result["stats"]["warnings"] = [
             warning

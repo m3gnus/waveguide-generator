@@ -34,7 +34,9 @@ from .wgreturn import WgReturnBundle, read_wgreturn
 # v4 verifies the auto-cut against the meshed boundary and recentres a
 # vertically offset return onto its mirror plane, so a v3 mesh is a different
 # artifact for the same inputs and must not be served from the cache.
-IMPORT_MESH_PIPELINE_CONTRACT = "wg-import-solve-v4"
+# v5: the meshing stage now records a geometric self-intersection report, so a
+# v4 sidecar would be reused without one and its mesh would go unchecked.
+IMPORT_MESH_PIPELINE_CONTRACT = "wg-import-solve-v5"
 IMPORT_VIEWPORT_PIPELINE_CONTRACT = "wg-import-viewport-v1"
 
 
