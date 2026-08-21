@@ -25,6 +25,17 @@ This single WG gate must solve and compare all three paths: Axisymmetric
 meridian, full-domain 3-D Metal, and quarter-domain 3-D Metal. It pins on-axis
 SPL/phase and the complete horizontal pattern. Do not drop the 90-degree sample.
 
+Run the closed-body high-frequency gate as well. It independently compares
+full-3D Metal and Axisymmetric against the analytic pulsating-sphere solution at
+1 kHz and 16 kHz, including un-normalized complex pressure and integrated DI:
+
+```bash
+cd hornlab-metal-bem
+python -m pytest \
+  tests/test_sphere_grid_native.py::test_native_full3d_pulsating_sphere_matches_circsym_through_16khz \
+  -q
+```
+
 Run the native coupled-baffle comparisons as well:
 
 ```bash
@@ -80,6 +91,8 @@ absolute amplitude/phase convention shared with CircSym.
 - Machine, OS/build, CPU/GPU/OpenCL device, RAM, and package versions.
 - Passed/failed/skipped totals with reasons for every skip.
 - Axisymmetric/full/quarter maximum SPL, phase, and pattern deltas.
+- Closed-body Axisymmetric/full-3D level, phase, pattern, and DI deltas at 1 and
+  16 kHz.
 - Coupled-baffle CircSym/3-D and BEMPP/CircSym maximum deltas.
 - CircSym benchmark JSON and compute-backend diagnostics.
 - Stop/cancellation result, including observed maximum response latency.
