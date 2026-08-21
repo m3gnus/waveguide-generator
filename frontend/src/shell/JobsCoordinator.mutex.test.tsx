@@ -6,6 +6,7 @@ import { preferencesStore } from '../prefs/preferences';
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import type { ImportedSolveSubmission } from '../jobs/actions';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
+import { resolveOuterBodyMode } from '../design/ParamPanel';
 import { designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
@@ -167,7 +168,13 @@ describe('solve invocation mutex', () => {
     expect(mocks.submitDesign.mock.calls.map((call) => call[3].label)).toEqual(['horn1', 'horn2']);
   });
 
-  it('materializes the 5 mm ATH wall default before submitting to BEMPP', async () => {
+  // Choosing "Bare shell" and pressing Solve used to flip the Outer body
+  // control straight back to "Thickened waveguide (freestanding)": the browser
+  // wrote BEMPP's 5 mm closed-wall default into the live document before
+  // submitting. The server applies that default to the run's own copy
+  // (server/jobs/runtime.py `_apply_bempp_wall_default`), so pressing Solve
+  // must leave the design exactly as the user left it -- on every engine.
+  it.each(['bempp', 'metal', 'auto'])('does not edit the design when solving a bare shell on %s', async (engine) => {
     mocks.submitDesign.mockResolvedValue('job');
     const design = designForFamily('OSSE');
     design.mesh.wall_thickness = 0;
@@ -175,20 +182,23 @@ describe('solve invocation mutex', () => {
     design.simulation.sim_type = 'freestanding';
     act(() => {
       useDesignStore.getState().loadDesign(design);
-      useSolveOptionsStore.getState().setEngine('bempp');
+      useSolveOptionsStore.getState().setEngine(engine);
     });
+    const revision = useDesignStore.getState().designRevision;
 
     await act(async () => {
       const state = useDesignStore.getState();
       await jobsCoordinatorBridge.getSnapshot().run(state.design, state.designRevision);
     });
 
-    expect(useDesignStore.getState().design.mesh.wall_thickness).toBe(5);
+    expect(useDesignStore.getState().design.mesh.wall_thickness).toBe(0);
+    expect(resolveOuterBodyMode(useDesignStore.getState().design)).toBe('bare');
+    // No revision bump means no unsaved-changes dot and no autosave rewrite
+    // for a solve that changed nothing.
+    expect(useDesignStore.getState().designRevision).toBe(revision);
     expect(mocks.submitDesign).toHaveBeenCalledOnce();
-    expect(mocks.submitDesign.mock.calls[0][0].mesh.wall_thickness).toBe(5);
-    expect(mocks.submitDesign.mock.calls[0][3].designRevision).toBe(
-      useDesignStore.getState().designRevision,
-    );
+    expect(mocks.submitDesign.mock.calls[0][0].mesh.wall_thickness).toBe(0);
+    expect(mocks.submitDesign.mock.calls[0][3].designRevision).toBe(revision);
   });
 
   it('numbers each run of the design in sequence and never renames the design', async () => {

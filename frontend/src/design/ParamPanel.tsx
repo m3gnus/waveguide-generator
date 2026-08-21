@@ -205,7 +205,16 @@ function Section({ title, summary, description, children, forceOpen, revealId }:
 export type OuterBodyMode = 'infinite-baffle' | 'enclosure' | 'freestanding' | 'bare';
 type SelectableOuterBodyMode = Exclude<OuterBodyMode, 'infinite-baffle'>;
 
-/** Mirrors server/preview/translate.py's outer-body precedence exactly. */
+/**
+ * Mirrors `outer_body_mode` in server/preview/translate.py exactly.
+ *
+ * The two implementations have to agree on "unset" as well as on a value. The
+ * server keeps `mesh.wall_thickness` nullable so a CFG round-trip is lossless
+ * and resolves an omitted one to ATH's 5 mm; the store never holds a null,
+ * because hydration keeps the family default of 5 for an absent wire field
+ * (api/designIo.ts `merge`) and only records the path in `_absent`. So both
+ * sides read 5 for an unset wall, and only an explicit 0 is a bare shell.
+ */
 export function resolveOuterBodyMode(design: DesignDocument): OuterBodyMode {
   if (design.simulation.sim_type === 'infinite-baffle') return 'infinite-baffle';
   if (design.enclosure.depth > 0) return 'enclosure';
