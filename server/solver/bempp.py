@@ -580,11 +580,21 @@ def solve_bempp_from_msh_text(
     formulation = DEFAULT_BEM_FORMULATION
     if BIEFormulation is not None:
         formulation = getattr(BIEFormulation, "COMPLEX_K", formulation)
+    requested_workers = _resolved_workers()
     workers = (
         1
         if force_serial or context.frequencies_hz is not None or aperture_tag is not None
-        else _resolved_workers()
+        else requested_workers
     )
+    if force_serial and requested_workers != 1:
+        message = (
+            f"Ignoring WG2_SOLVE_WORKERS={requested_workers} inside the killable "
+            "BEMPP worker. WG keeps one warm serial native process so Stop can "
+            "terminate the complete solve tree promptly."
+        )
+        logger.warning("%s", message)
+        if stage_callback:
+            stage_callback("setup", 0.0, message)
     config_kwargs: dict[str, Any] = {
         "freq_min_hz": context.frequency_range[0],
         "freq_max_hz": context.frequency_range[1],
