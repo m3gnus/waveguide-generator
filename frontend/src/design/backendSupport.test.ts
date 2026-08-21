@@ -51,6 +51,26 @@ describe('backend feature support', () => {
     expect(backendSupports('axisym', 'meridian-fast-path')).toBe(true);
   });
 
+  it('offers coupled IB when the host carries Axisym, whatever the full-3D backend', () => {
+    // The planner reaches for the meridian runner before any full-3D fallback,
+    // so a BEAT+Axisym host solves an eligible circular infinite-baffle design
+    // even though BEAT refuses one. Gating on the full-3D record alone removed
+    // the option from designs the server would have accepted.
+    const beat = { ...engine('beat', true), formulations: ['full-3d'], mountings: ['free-standing'] };
+    const axisym = { ...engine('axisym', true), formulations: ['axisymmetric'], mountings: ['free-standing', 'infinite-baffle'] };
+
+    expect(backendSupports(beat, 'infinite-baffle')).toBe(false);
+    expect(backendSupports(beat, 'infinite-baffle', [beat, axisym])).toBe(true);
+    expect(backendLimitation(beat, 'infinite-baffle', [beat, axisym])).toBeUndefined();
+
+    // An unavailable Axisym runner is not a capability, and the host list must
+    // not rescue a feature Axisym itself does not claim.
+    expect(backendSupports(beat, 'infinite-baffle', [beat, { ...axisym, available: false }])).toBe(false);
+    expect(backendSupports(beat, 'infinite-baffle', [beat, { ...axisym, mountings: ['free-standing'] }])).toBe(false);
+    // Unrelated features are unaffected by the host list.
+    expect(backendSupports(beat, 'imported-geometry', [beat, axisym])).toBe(false);
+  });
+
   it('uses the server capability payload for version-dependent BEMPP IB support', () => {
     const oldBempp = { ...engine('bempp', true), formulations: ['full-3d'], mountings: ['free-standing'] };
     const coupledBempp = { ...oldBempp, mountings: ['free-standing', 'infinite-baffle'] };

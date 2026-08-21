@@ -12,7 +12,12 @@ import pytest
 from server.engines import registry
 from server.engines.dryrun import DryRunEngine
 from server.jobs.models import SolveRequest
-from server.jobs.runtime import JobRuntime, SymmetryValidationError, resolve_submission
+from server.jobs.runtime import (
+    EngineUnavailableError,
+    JobRuntime,
+    SymmetryValidationError,
+    resolve_submission,
+)
 from server.jobs.store import JobStore
 from server.solver.base import EngineRunResult
 from server.solver.field_traces_store import (
@@ -537,3 +542,71 @@ def test_real_runtime_persists_advisory_mesh_warning_in_job_log(
         await runtime.shutdown()
 
     asyncio.run(scenario())
+
+
+def test_auto_skips_beat_for_a_coupled_infinite_baffle_solve() -> None:
+    """AUTO must resolve against the mounting, not just the host's engine list.
+
+    On a GPU host AUTO prefers beat over bempp. BeatEngine.run rejects every
+    coupled infinite-baffle request, so for such a design that preference
+    persisted a job which could only fail, while the coupling-capable BEMPP
+    sitting beside it on the same host could have solved it.
+    """
+
+    def gpu_host(*, coupled_bempp: bool) -> list[registry.EngineInfo]:
+        return [
+            registry.EngineInfo(
+                "beat",
+                True,
+                "CUDA",
+                "1",
+                formulations=("full-3d",),
+                mountings=("free-standing",),
+            ),
+            registry.EngineInfo(
+                "bempp",
+                True,
+                "CPU",
+                "1",
+                formulations=("full-3d",),
+                mountings=(
+                    ("free-standing", "infinite-baffle")
+                    if coupled_bempp
+                    else ("free-standing",)
+                ),
+            ),
+        ]
+
+    coupled = registry.EngineRegistry(
+        detector=lambda: gpu_host(coupled_bempp=True),
+        factory=lambda _name: object(),
+    )
+    resolution = asyncio.run(
+        resolve_submission(
+            _planner_request(solver_mode="full_3d", sim_type="infinite-baffle"),
+            coupled,
+        )
+    )
+    assert resolution.engine_name == "bempp"
+
+    # The GPU engine is still preferred for everything it can actually solve;
+    # note that sim_type spells this "freestanding" while EngineInfo.mountings
+    # says "free-standing", so the filter must not be a blind membership test.
+    free_standing = asyncio.run(
+        resolve_submission(_planner_request(solver_mode="full_3d"), coupled)
+    )
+    assert free_standing.engine_name == "beat"
+
+    # With a pre-coupling BEMPP nothing on the host can do it, and AUTO now
+    # says so at submission instead of persisting a doomed job.
+    uncoupled = registry.EngineRegistry(
+        detector=lambda: gpu_host(coupled_bempp=False),
+        factory=lambda _name: object(),
+    )
+    with pytest.raises(EngineUnavailableError, match="infinite-baffle"):
+        asyncio.run(
+            resolve_submission(
+                _planner_request(solver_mode="full_3d", sim_type="infinite-baffle"),
+                uncoupled,
+            )
+        )

@@ -1,6 +1,7 @@
 import type { DesignDocument, DesignFamily } from '../stores/design';
 import type { WorkspaceMode } from '../stores/workspaceMode';
 import { backendSupports, type BackendFeature, type BackendIdentity } from './backendSupport';
+import type { EngineCapability } from '../jobs/actions';
 
 export type ParameterSection =
   | 'Profile Dimensions'
@@ -420,13 +421,14 @@ export function fieldOptionsForBackend(
   field: ParameterDefinition,
   value: unknown,
   backend: BackendIdentity,
+  host: readonly EngineCapability[] = [],
 ): ParameterOption[] {
   return (field.options ?? [])
     .filter((option) => !option.requiresFeature
-      || backendSupports(backend, option.requiresFeature)
+      || backendSupports(backend, option.requiresFeature, host)
       || String(option.value) === String(value ?? ''))
     .map((option) => (option.degradedWithout && option.degradedLabel
-      && !backendSupports(backend, option.degradedWithout)
+      && !backendSupports(backend, option.degradedWithout, host)
       ? { ...option, label: option.degradedLabel }
       : option));
 }
@@ -441,10 +443,11 @@ export function fieldUnsupportedFeature(
   field: ParameterDefinition,
   value: unknown,
   backend: BackendIdentity,
+  host: readonly EngineCapability[] = [],
 ): BackendFeature | undefined {
   const selected = (field.options ?? []).find((option) => String(option.value) === String(value ?? ''));
   const feature = selected?.requiresFeature;
-  return feature && !backendSupports(backend, feature) ? feature : undefined;
+  return feature && !backendSupports(backend, feature, host) ? feature : undefined;
 }
 
 export function fieldMatchesQuery(field: ParameterDefinition, query: string): boolean {

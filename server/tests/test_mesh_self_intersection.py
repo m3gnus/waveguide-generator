@@ -478,3 +478,35 @@ def test_coplanar_severity_is_reported_as_a_length() -> None:
     assert report["coplanar_overlap_count"] == 1
     # The overlap is 0.5 m^2, so the equivalent side is sqrt(0.5).
     assert report["samples"][0]["extent_m"] == pytest.approx(math.sqrt(0.5))
+
+
+def test_a_crossing_is_located_from_the_low_end_whatever_the_winding() -> None:
+    """The reported place must not move when a triangle is wound the other way.
+
+    ``_edge_plane_crossings`` returns a chord in edge order, which follows the
+    winding rather than the dominant axis, so half of all chords run
+    high-to-low. Both overlap ratios are measured from the chord's low end, so
+    interpolating those from its first point mirrored the sampled segment about
+    the chord midpoint and sent the warning to the opposite end of the triangle.
+    """
+
+    # The first triangle lies in z=0 and straddles y=0; the second lies in y=0
+    # and straddles z=0, so their planes meet along x. One chord spans
+    # x=1.25..8.75 and the other x=0.5..1.5, making the true crossing
+    # x=1.25..1.5 -- a short segment at one end of a long chord, which is where
+    # a mirrored answer is unmistakable rather than merely slightly off.
+    points = [
+        [0.0, -1.0, 0.0],
+        [10.0, -1.0, 0.0],
+        [5.0, 3.0, 0.0],
+        [0.0, 0.0, -1.0],
+        [2.0, 0.0, -1.0],
+        [1.0, 0.0, 1.0],
+    ]
+    for first in ([0, 1, 2], [0, 2, 1]):
+        for second in ([3, 4, 5], [3, 5, 4]):
+            report = _report(points, [first, second])
+            assert report["proper_crossing_count"] == 1, (first, second)
+            sample = report["samples"][0]
+            assert sample["location_m"][0] == pytest.approx(1.375), (first, second)
+            assert sample["extent_m"] == pytest.approx(0.25), (first, second)
