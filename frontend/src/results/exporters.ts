@@ -1,5 +1,6 @@
 import { downloadBlob, downloadText } from '../api/designIo';
 import type { CadIdentityProvenance, JobItem } from '../api/jobsSocket';
+import { placeRunCadDocument } from '../api/cadProjects';
 import { fetchJobArchiveSnapshot, fetchRadiationImpedancePresentation, type RadiationImpedancePresentation } from '../api/results';
 import { archiveFolderForJob, exportStemForJob, exportSubdirectoryForJob } from '../jobs/exportNaming';
 import { buildDesignRecord, buildRunRecord } from '../jobs/runArchive';
@@ -956,5 +957,13 @@ export async function archiveRunToWorkspace(
   const pointer = await writeWorkspaceFiles(
     archiveFolderForJob(archiveJob), [textFile(buildDesignRecord(archiveJob))], fetcher, 'overwrite',
   );
+  // The captured Fusion model, when the capture setting files one per run. It
+  // is a convenience copy of something already archived at project level, so a
+  // failure here is reported and dropped rather than failing the archive.
+  try {
+    await placeRunCadDocument(archiveJob, subdirectory, exportStemForJob(archiveJob), fetcher);
+  } catch (error) {
+    console.warn('Could not file the run\u2019s CAD document', error);
+  }
   return [...bundle.files, ...mesh.files, ...record.files, ...pointer.files];
 }

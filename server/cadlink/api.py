@@ -10,10 +10,11 @@ import logging
 import math
 from pathlib import Path
 import re
+import subprocess
 from typing import Any, Literal, Mapping
 
-from fastapi import APIRouter, FastAPI, HTTPException, Request
-from fastapi.responses import PlainTextResponse
+from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
+from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from server.cadlink.identity import SaveIdentity, design_hash
@@ -24,8 +25,22 @@ from server.mesh.artifact import (
     read_verified_import_viewport_mesh,
 )
 from server.mesh.gmsh_worker import run_on_gmsh_worker
-from server.workspace.api import WorkspaceState, _path_segments, _strictly_inside
-from server.workspace.archive import archive_cad_document
+from server.platform.process import background_process_kwargs
+from server.workspace.api import (
+    CadWorkspaceState,
+    WorkspaceState,
+    _path_segments,
+    _strictly_inside,
+    open_folder_command,
+)
+from server.workspace.archive import (
+    CAD_SUBDIRECTORY,
+    archive_cad_document,
+    archive_folder_slug,
+    captured_cad_document,
+    design_archive_folder,
+    place_run_cad_document,
+)
 
 from .fusion_status import fusion_process_running, read_fusion_status
 from .fusion_return import publish_return_request
@@ -387,10 +402,23 @@ async def list_returns(request: Request) -> dict[str, Any]:
 
 @router.get("/designs")
 async def list_designs(request: Request) -> dict[str, Any]:
-    """Expose recent CAD-linked design heads as a local project picker."""
+    """Expose recent CAD-linked design heads as a local project picker.
+
+    Each head also reports the archive folder its runs and captured CAD
+    documents share, so a project can be opened, revealed and counted from one
+    listing rather than from three that could disagree.
+    """
 
     store: CadLinkStore = request.app.state.cadlink_store
     rows = await asyncio.to_thread(store.list_designs)
+    stems = await asyncio.to_thread(
+        lambda: {
+            str(row["lineage_id"]): _project_archive_stem(
+                store, str(row["lineage_id"]), str(row["filename"])
+            )
+            for row in rows
+        }
+    )
     return {
         "items": [
             {
@@ -399,6 +427,7 @@ async def list_designs(request: Request) -> dict[str, Any]:
                 "editVersion": int(row["edit_version"]),
                 "designHash": str(row["design_hash"]),
                 "filename": str(row["filename"]),
+                "archiveStem": stems.get(str(row["lineage_id"])) or None,
                 "branchedFromDesignId": row.get("branched_from_design_id"),
                 "branchedFromEditVersion": row.get("branched_from_edit_version"),
                 "exportCount": int(row.get("export_count") or 0),
@@ -771,6 +800,11 @@ async def _archive_cad_document(
     runs: WorkspaceState | None = getattr(request.app.state, "workspace", None)
     if runs is None:
         return
+    cad_workspace: CadWorkspaceState | None = getattr(
+        request.app.state, "cad_workspace", None
+    )
+    if cad_workspace is not None and cad_workspace.capture_mode == "off":
+        return
     anchor = record.get("anchor")
     design_id = str((anchor or {}).get("design_id") or "") if isinstance(anchor, Mapping) else ""
     stem = str((record.get("document") or {}).get("name") or "")
@@ -778,8 +812,11 @@ async def _archive_cad_document(
         design_row = await asyncio.to_thread(store.get_design, design_id)
         lineage_id = str((design_row or {}).get("lineage_id") or "")
         if lineage_id:
-            names = await asyncio.to_thread(store.get_lineage_cad_names, lineage_id)
-            stem = str((names or {}).get("bundle_stem") or "") or stem
+            # The same claim the run archive uses, so the document and the runs
+            # solved from it always land in one project folder.
+            stem = await asyncio.to_thread(
+                store.claim_archive_stem, lineage_id, preferred=stem
+            ) or stem
     if not stem:
         return
     try:
@@ -846,6 +883,219 @@ async def get_ingest_viewport_mesh(
     except ImportedMeshArtifactError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return PlainTextResponse(msh_text, media_type="text/plain; charset=utf-8")
+
+
+_RETURN_STATE_HASH = re.compile(r"[A-Za-z0-9:._-]{1,128}")
+
+
+def _project_archive_stem(store: CadLinkStore, lineage_id: str, filename: str) -> str:
+    """The archive folder a project owns, without claiming one.
+
+    Read-only on purpose: listing projects must not decide a name that the next
+    ingestion would then be stuck with. ``claim_archive_stem`` does the writing,
+    at the one moment a document actually has to be filed.
+    """
+
+    names = store.get_lineage_cad_names(lineage_id) or {}
+    return (
+        str(names.get("archive_stem") or "").strip()
+        or str(names.get("bundle_stem") or "").strip()
+        or Path(str(filename or "")).stem
+    )
+
+
+def _runs_root(request: Request) -> Path:
+    runs: WorkspaceState | None = getattr(request.app.state, "workspace", None)
+    if runs is None:
+        raise HTTPException(status_code=409, detail="No run archive folder is available.")
+    try:
+        return runs.path()
+    except Exception as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+async def _project_folder(request: Request, lineage_id: str) -> tuple[Path, str]:
+    """This project's archive folder, resolved and confined to the runs root."""
+
+    store: CadLinkStore = request.app.state.cadlink_store
+
+    def resolve() -> str:
+        rows = [
+            row
+            for row in store.list_designs(limit=500)
+            if str(row["lineage_id"]) == lineage_id
+        ]
+        if not rows:
+            raise HTTPException(status_code=404, detail="CAD-linked project not found")
+        return _project_archive_stem(store, lineage_id, str(rows[0]["filename"]))
+
+    stem = await asyncio.to_thread(resolve)
+    root = _runs_root(request).resolve()
+    folder = design_archive_folder(root, stem).resolve()
+    try:
+        _strictly_inside(folder, root, "project folder")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return folder, stem
+
+
+async def _project_documents(folder: Path) -> list[dict[str, Any]]:
+    """Every captured CAD document in one project, newest capture first."""
+
+    directory = folder / CAD_SUBDIRECTORY
+
+    def read() -> list[dict[str, Any]]:
+        if not directory.is_dir():
+            return []
+        items: list[dict[str, Any]] = []
+        for sidecar in directory.glob("*.json"):
+            if sidecar.is_symlink() or not sidecar.is_file():
+                continue
+            try:
+                payload = json.loads(sidecar.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(payload, Mapping):
+                continue
+            document = next(
+                (
+                    candidate
+                    for candidate in sorted(directory.glob(f"{sidecar.stem}.*"))
+                    if candidate.suffix != ".json"
+                    and candidate.is_file()
+                    and not candidate.is_symlink()
+                ),
+                None,
+            )
+            items.append(
+                {
+                    "returnStateHash": str(payload.get("returnStateHash") or ""),
+                    "documentName": payload.get("documentName"),
+                    "ingestId": payload.get("ingestId"),
+                    "returnId": payload.get("returnId"),
+                    "capturedAt": payload.get("capturedAt"),
+                    "filename": document.name if document else None,
+                    "bytes": document.stat().st_size if document else None,
+                }
+            )
+        items.sort(key=lambda item: str(item.get("capturedAt") or ""), reverse=True)
+        return items
+
+    return await asyncio.to_thread(read)
+
+
+@router.get("/projects/{lineage_id}/documents")
+async def list_project_documents(lineage_id: str, request: Request) -> dict[str, Any]:
+    """The captured CAD documents this project's runs were solved from."""
+
+    folder, stem = await _project_folder(request, lineage_id)
+    return {
+        "archiveStem": stem,
+        "folder": str(folder),
+        "items": await _project_documents(folder),
+    }
+
+
+@router.get("/projects/{lineage_id}/documents/{return_state_hash}", response_model=None)
+async def download_project_document(
+    lineage_id: str, return_state_hash: str, request: Request
+) -> Response:
+    """Hand back the Fusion document one geometry version was captured from."""
+
+    if _RETURN_STATE_HASH.fullmatch(return_state_hash) is None:
+        raise HTTPException(status_code=422, detail="Malformed return state hash")
+    folder, stem = await _project_folder(request, lineage_id)
+    document = await asyncio.to_thread(
+        captured_cad_document, folder.parent, stem, return_state_hash
+    )
+    if document is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "No CAD document was archived for this version. It was captured "
+                "before the setting was turned on, or the file has been removed."
+            ),
+        )
+    return FileResponse(
+        document,
+        media_type="application/octet-stream",
+        filename=f"{archive_folder_slug(stem, 'project')}{document.suffix}",
+    )
+
+
+@router.post("/projects/{lineage_id}/reveal")
+async def reveal_project_folder(lineage_id: str, request: Request) -> dict[str, str]:
+    """Open this project's archive folder in the desktop file manager."""
+
+    folder, _stem = await _project_folder(request, lineage_id)
+    if not folder.is_dir():
+        raise HTTPException(
+            status_code=404,
+            detail="This project has no archive folder yet. Solve a run to create one.",
+        )
+    try:
+        subprocess.Popen(open_folder_command(folder), **background_process_kwargs())
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to open folder: {exc}") from exc
+    return {"status": "opened", "path": str(folder)}
+
+
+class ArchiveRunDocumentRequest(BaseModel):
+    """Where the caller wrote the run folder this document belongs beside.
+
+    The run-folder naming rule lives in the frontend, which has just used it to
+    write the folder; asking the server to re-derive it would be a third
+    implementation of one name rule and a third chance for them to disagree.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: Relative to the run archive root, as passed to ``write-export``.
+    subdirectory: str = Field(min_length=1, max_length=512)
+    #: The run's file stem, shared by every export it produced.
+    runStem: str = Field(min_length=1, max_length=200)
+    archiveStem: str = Field(min_length=1, max_length=200)
+    returnStateHash: str = Field(min_length=1, max_length=128)
+
+
+@router.post("/runs/archive-document")
+async def archive_run_document(
+    payload: ArchiveRunDocumentRequest, request: Request
+) -> dict[str, Any]:
+    """File a run's CAD document beside the run, when the mode asks for it.
+
+    Advisory throughout: the run archive is already written by the time this is
+    called, and a missing convenience copy must never make a good run look
+    failed.
+    """
+
+    cad_workspace: CadWorkspaceState | None = getattr(
+        request.app.state, "cad_workspace", None
+    )
+    mode = cad_workspace.capture_mode if cad_workspace is not None else "run"
+    if mode != "run":
+        return {"placed": False, "reason": f"Capture mode is {mode}."}
+    if _RETURN_STATE_HASH.fullmatch(payload.returnStateHash) is None:
+        raise HTTPException(status_code=422, detail="Malformed return state hash")
+    root = _runs_root(request)
+    # The subdirectory is `<project>/<run>`; the placement helper takes the
+    # project from the stem, so only the run segment travels on from here.
+    segments = _path_segments(payload.subdirectory, "subdirectory")
+    try:
+        relative = await asyncio.to_thread(
+            place_run_cad_document,
+            root,
+            payload.archiveStem,
+            segments[-1],
+            payload.runStem,
+            payload.returnStateHash,
+        )
+    except OSError as exc:
+        logger.warning(
+            "Could not place the CAD document for %s: %s", payload.runStem, exc
+        )
+        return {"placed": False, "reason": str(exc)}
+    return {"placed": relative is not None, "relativePath": relative}
 
 
 def mount_cadlink(application: FastAPI) -> None:

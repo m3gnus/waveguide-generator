@@ -119,9 +119,86 @@ def archive_cad_document(
     return relative
 
 
+def captured_cad_document(runs_root: Path, stem: object, return_state_hash: str) -> Path | None:
+    """The archived CAD document for one return state, if it was captured."""
+
+    digest = str(return_state_hash or "").strip()
+    if not digest:
+        return None
+    directory = design_archive_folder(runs_root, stem) / CAD_SUBDIRECTORY
+    name = archive_folder_slug(digest, "return")
+    for candidate in sorted(directory.glob(f"{name}.*")):
+        if candidate.suffix == ".json" or candidate.is_symlink() or not candidate.is_file():
+            continue
+        return candidate
+    return None
+
+
+def place_run_cad_document(
+    runs_root: Path,
+    stem: object,
+    run_subdirectory: str,
+    run_stem: str,
+    return_state_hash: str,
+) -> str | None:
+    """Put the run's CAD document beside the run, for the ``run`` capture mode.
+
+    The project-level ``cad/`` copy stays the content-addressed original: a
+    return that is ingested and never solved still has to keep its document
+    somewhere. This adds the copy people actually look for -- open the folder
+    for run 14 and the model that produced it is in it.
+
+    A plain copy, deliberately. Hard-linking would make this free, but the
+    archive commonly lives in a cloud-synced folder, where a shared inode is
+    either desynchronised or silently propagates an edit of one file to the
+    other; these are archives, and an archive that changes underneath you is
+    worse than a second copy of a small file.
+
+    Refuses to overwrite a file that is already there with different content,
+    so re-archiving a run cannot clobber a document the user replaced. Returns
+    the path relative to the design folder, or ``None`` when there is nothing
+    to place.
+    """
+
+    source = captured_cad_document(runs_root, stem, return_state_hash)
+    if source is None:
+        return None
+    design_folder = design_archive_folder(runs_root, stem)
+    segments = [segment for segment in str(run_subdirectory).split("/") if segment]
+    if not segments or any(segment in {".", ".."} for segment in segments):
+        return None
+    destination_directory = design_folder.joinpath(*segments)
+    destination = destination_directory / f"{archive_folder_slug(run_stem, 'run')}{source.suffix}"
+    relative = f"{'/'.join(segments)}/{destination.name}"
+    resolved_root = design_folder.resolve()
+    if resolved_root not in destination_directory.resolve().parents and destination_directory.resolve() != resolved_root:
+        return None
+    if destination.is_symlink():
+        return None
+    if destination.is_file():
+        # Byte-identical means the archive already holds it: a retried archive
+        # after a restart must be a no-op, not a second write.
+        return relative if destination.read_bytes() == source.read_bytes() else None
+
+    destination_directory.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=".wg2-run-document-", dir=destination_directory))
+    try:
+        staged = staging / destination.name
+        shutil.copy2(source, staged)
+        os.replace(staged, destination)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    sidecar = source.with_suffix(".json")
+    if sidecar.is_file():
+        shutil.copy2(sidecar, destination.with_suffix(".json"))
+    return relative
+
+
 __all__ = [
     "CAD_SUBDIRECTORY",
     "archive_cad_document",
     "archive_folder_slug",
+    "captured_cad_document",
     "design_archive_folder",
+    "place_run_cad_document",
 ]

@@ -90,3 +90,47 @@
 .cad-findings small { color: var(--fg3); font-size: var(--text-micro); }
 .cad-blocking-suffix { display: inline; color: var(--amber); font-size: inherit; font-weight: 500; }
 .cadlink-panel .empty-state { min-height: 120px; }
+
+/* Project header and per-project run history.
+   The history caps its own height and scrolls inside the panel, so a project
+   with fifty runs never buries the round-trip controls underneath it. */
+/* This button lives in .cad-workflow, which has no icon rule of its own: an
+   unconstrained 16-viewBox svg stretches to the full width of a 100%-wide
+   button. */
+.cad-project .cad-secondary-action { display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
+.cad-project .cad-secondary-action svg { flex: none; width: 13px; height: 13px; }
+.cad-project .cad-project-name { overflow: hidden; font-size: var(--text-title); text-overflow: ellipsis; white-space: nowrap; text-transform: none; letter-spacing: 0; }
+.cad-project-switcher { position: relative; justify-self: end; }
+.cad-project-menu { position: absolute; z-index: 5; top: calc(100% + 4px); right: 0; display: grid; gap: 2px; width: max(210px, 100%); max-height: 260px; padding: 4px; overflow-y: auto; border: 1px solid var(--hair); background: var(--surface-raised); box-shadow: var(--shadow-popover, 0 6px 18px rgb(0 0 0 / .28)); }
+.cad-project-menu > button { display: grid; gap: 1px; width: 100%; padding: 6px 7px; text-align: left; background: none; border: 0; }
+.cad-project-menu > button:hover { background: var(--ov1); }
+.cad-project-menu > button[aria-current="true"] { background: var(--selection-row-bg); }
+.cad-project-menu b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cad-project-menu span { color: var(--fg3); font-size: var(--text-micro); }
+.cad-project-menu > div { padding: 6px 7px; }
+
+.cad-project-history .cad-run-list { max-height: 320px; margin-top: 7px; overflow-y: auto; }
+.cad-run-group { display: grid; gap: 3px; }
+.cad-run-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 6px; padding: 5px 7px; border: 1px solid var(--hair); background: var(--surface-panel); }
+.cad-run-row.selected { border-color: var(--selection-row-border); background: var(--selection-row-bg); }
+.cad-run-open { display: grid; gap: 1px; min-width: 0; padding: 0; text-align: left; background: none; border: 0; }
+.cad-run-open b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cad-run-open span { color: var(--fg3); font-size: var(--text-micro); }
+.cad-run-compare { padding: 2px 6px; font-size: var(--text-micro); }
+.cad-run-compare.on { border-color: var(--acc); color: var(--acc); }
+.cad-run-row .job-stars { color: var(--amber); font-size: var(--text-micro); }
+
+/* The break where the CAD model itself changed. It carries the download for
+   the model every run above it was solved from. */
+.cad-model-divider { display: flex; align-items: center; gap: 7px; margin: 5px 0 7px; padding-top: 5px; border-top: 1px dashed color-mix(in srgb, var(--fg3) 45%, transparent); }
+.cad-model-label { min-width: 0; overflow: hidden; color: var(--fg3); font-size: var(--text-micro); text-overflow: ellipsis; white-space: nowrap; }
+.cad-model-download, .cad-model-missing { margin-left: auto; font-size: var(--text-micro); white-space: nowrap; }
+.cad-model-download { color: var(--acc); }
+.cad-model-missing { color: var(--fg4); }
+.cad-history-foot { margin: 7px 0 0; }
+
+.cad-settings-capture { display: grid; gap: 5px; margin-top: 8px; padding: 0; border: 0; }
+.cad-settings-capture legend { padding: 0 0 4px; color: var(--fg2); font-size: var(--text-base); }
+.cad-settings-capture .ui-check { align-items: start; }
+.cad-settings-capture span { display: grid; gap: 1px; }
+.cad-settings-capture small { color: var(--fg3); font-size: var(--text-micro); }
