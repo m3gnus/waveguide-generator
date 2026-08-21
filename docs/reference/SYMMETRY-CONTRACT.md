@@ -39,12 +39,28 @@ On the development Mac in this batch, warm median time over seven calls with the
 
 FREEFORM is slower because its authoritative continuous cross-section reconstruction is substantially more expensive even at this coarse grid. Callers should debounce live edit requests and discard stale responses by design revision, just as they do for preview work.
 
-## Metal axisymmetric path
+## Axisymmetric formulation planner
 
-Symmetry-domain reduction and Metal's axisymmetric meridian path are independent decisions. After engine resolution, Metal interprets `simulation.solver_mode` as follows:
+Symmetry-domain reduction, formulation, and execution backend are independent
+decisions. The solve planner considers the machine-local `solver_mode` before it
+chooses a full-3D backend:
 
-- `auto`: run the meridian path when `circsym_rejection_reasons` is empty and the installed Metal/mesher capability is ready; otherwise run full 3D and record the reasons.
-- `full_3d`: always run full 3D.
-- `circsym`: force the meridian path and fail with the eligibility reasons if it cannot run.
+- `auto`: use the platform-neutral `axisym` meridian runner when the authoritative
+  mesher eligibility predicate succeeds; otherwise use the selected/AUTO full-3D
+  backend and record every rejection reason.
+- `full_3d`: always use Metal, BEAT, or BEMPP full 3D.
+- `circsym`: force the axisymmetric formulation and fail with the eligibility
+  reasons if it cannot run. `circsym` remains the compatibility wire spelling;
+  the product label is **Axisymmetric (meridian)**.
 
-CircSym remains an internal adapter and is not an engine advertised by `/api/capabilities`. Metal advertises `axisymmetric-meridian` in its `fast_paths` capability when it is available. Result and job metadata expose `solve_path`, `axisymmetric_eligibility_reasons`, and `solve_wall_time_seconds`.
+`axisym` is advertised independently by `/api/capabilities` and runs on CPU on
+all supported operating systems, with optional Metal acceleration where present.
+The backend selector therefore chooses the *full-3D fallback*, not the
+axisymmetric implementation. `Simulation.SolverMode` in legacy design text is a
+machine setting: import may recognize it for compatibility, but design export
+strips it. Result/job symmetry metadata records `solver_plan` with the chosen
+formulation, engine, reason, and eligibility reasons. Axisymmetric AUTO plans
+also include `cost_evidence`: deterministic counts from the frequency-refined
+meridian (unknowns, azimuthal quadrature work, matrix memory, and a revolved
+full-3D triangle scale for the requested symmetry domain). These are transparent
+complexity comparisons rather than machine-specific wall-clock promises.

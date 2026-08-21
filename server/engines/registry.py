@@ -23,6 +23,12 @@ class EngineInfo:
     reason: str
     version: str | None
     fast_paths: tuple[str, ...] = ()
+    formulations: tuple[str, ...] = ()
+    mountings: tuple[str, ...] = ()
+    symmetry_domains: tuple[str, ...] = ()
+    field_traces: bool = False
+    di_sphere: bool = True
+    cancellation_granularity: str = "between-frequencies"
 
 
 def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineInfo]:
@@ -37,6 +43,9 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
                 available=True,
                 reason="Enabled explicitly by WG2_ENABLE_DRYRUN=1",
                 version="builtin",
+                formulations=("full-3d",),
+                mountings=("free-standing", "infinite-baffle"),
+                symmetry_domains=("full",),
             )
         )
 
@@ -53,6 +62,29 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
             "reason": f"axisymmetric-meridian detection failed: {exc}",
             "version": None,
         }
+
+    engines.append(
+        EngineInfo(
+            name="axisym",
+            available=bool(meridian_status.get("available")),
+            reason=str(
+                meridian_status.get("reason")
+                or "axisymmetric capability probe returned no reason"
+            ),
+            version=(
+                str(meridian_status["version"])
+                if meridian_status.get("version") is not None
+                else None
+            ),
+            fast_paths=("axisymmetric-meridian",),
+            formulations=("axisymmetric",),
+            mountings=("free-standing", "infinite-baffle"),
+            symmetry_domains=("continuous-axisymmetric",),
+            field_traces=False,
+            di_sphere=True,
+            cancellation_granularity="intra-frequency",
+        )
+    )
 
     # "beat" is the GPU engine (hornlab-beat-bem). Its probe reports available
     # only when a functional CUDA/ROCm path exists (or the internal force-CPU
@@ -77,12 +109,23 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
                 available=bool(status.get("available")),
                 reason=str(status.get("reason") or f"{name} capability probe returned no reason"),
                 version=(str(status["version"]) if status.get("version") is not None else None),
-                fast_paths=(
-                    ("axisymmetric-meridian",)
-                    if name == "metal"
-                    and bool(status.get("available"))
-                    and bool(meridian_status.get("available"))
-                    else ()
+                formulations=("full-3d",),
+                mountings=(
+                    ("free-standing", "infinite-baffle")
+                    if name == "metal" or bool(status.get("coupled_infinite_baffle"))
+                    else ("free-standing",)
+                ),
+                symmetry_domains=(
+                    ("full", "half", "quarter")
+                    if name in {"metal", "bempp"}
+                    else ("full",)
+                ),
+                field_traces=name in {"metal", "bempp"},
+                di_sphere=name != "beat",
+                cancellation_granularity=(
+                    "intra-frequency"
+                    if name in {"metal", "bempp"}
+                    else "between-frequencies"
                 ),
             )
         )
@@ -109,9 +152,13 @@ def create_engine(name: str) -> Any | None:
 
         return BeatEngine()
     if normalized == "circsym":
-        from server.solver.circsym import CircSymEngine
+        from server.solver.circsym import AxisymmetricEngine
 
-        return CircSymEngine()
+        return AxisymmetricEngine()
+    if normalized == "axisym":
+        from server.solver.circsym import AxisymmetricEngine
+
+        return AxisymmetricEngine()
     return None
 
 

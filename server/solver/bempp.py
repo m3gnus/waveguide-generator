@@ -8,7 +8,6 @@ capability state and never gets faked.
 
 from __future__ import annotations
 
-import asyncio
 from functools import lru_cache
 import importlib
 import importlib.metadata
@@ -42,7 +41,7 @@ from .field_traces_store import (
     field_trace_retention_plan,
 )
 from .formulation import DEFAULT_BEM_FORMULATION, DEFAULT_COMPLEX_K_SHIFT
-from .infinite_baffle import reject_bempp_infinite_baffle
+from .infinite_baffle import require_coupled_aperture_tag
 from .result_mapping import (
     build_provisional_frequency_response,
     build_solver_response,
@@ -330,7 +329,9 @@ def numba_fallback_warning(opencl_reason: str) -> str:
         "Falling back to the numba assembly backend because OpenCL is unusable: "
         f"{opencl_reason} Until that is fixed, solves assemble on numba, which is "
         "slower, and the first solve after each start spends roughly a minute "
-        "compiling kernels during which Stop cannot take effect."
+        "compiling kernels. Stop remains prompt because WG runs native BEMPP in "
+        "an isolated worker; cancelling during compilation discards that worker "
+        "and the replacement must compile again on the next solve."
     )
 
 
@@ -402,12 +403,21 @@ def _probe_bempp_status() -> dict[str, Any]:
             "warning": None,
         }
     usable, reason, backend, warning = _assembly_backend_status()
+    coupled_infinite_baffle = False
+    if SolveConfig is not None:
+        try:
+            SolveConfig(aperture_tag=1)
+        except TypeError:
+            pass
+        else:
+            coupled_infinite_baffle = True
     return {
         "available": usable,
         "reason": reason,
         "version": _version(),
         "assembly_backend": backend,
         "warning": warning,
+        "coupled_infinite_baffle": coupled_infinite_baffle,
     }
 
 
@@ -478,19 +488,31 @@ def solve_bempp_from_msh_text(
     stage_callback: StageCallback | None = None,
     cancellation_callback: CancelCallback | None = None,
     result_callback: ResultCallback | None = None,
+    force_serial: bool = False,
 ) -> dict[str, Any]:
     """Solve one authoritative Gmsh artifact on the guarded CPU backend."""
 
     context.validate()
-    del mesh_metadata
     if context.solver_mode == "circsym":
-        raise ValueError("BEMPP cannot run solver_mode='circsym'; use full_3d or the Metal CircSym engine")
-    reject_bempp_infinite_baffle(context)
+        raise ValueError(
+            "BEMPP full 3D cannot execute the axisymmetric formulation; "
+            "the solve planner must route it to the Axisymmetric runner"
+        )
     if not _load_api() or SolveConfig is None or bempp_solve is None:
         raise BemppUnavailable("hornlab-bempp-bem is not installed.")
     status = bempp_status()
     if not status["available"]:
         raise BemppUnavailable(status["reason"])
+    aperture_tag = require_coupled_aperture_tag(
+        context,
+        mesh_metadata,
+        backend="BEMPP",
+    )
+    if aperture_tag is not None and not status.get("coupled_infinite_baffle"):
+        raise BemppUnavailable(
+            "Installed hornlab-bempp-bem does not support coupled "
+            "infinite-baffle aperture tags."
+        )
     if context.frequencies_hz is not None and bempp_solve_frequencies is None:
         raise BemppUnavailable(
             "Installed hornlab-bempp-bem does not support explicit frequency lists."
@@ -505,7 +527,7 @@ def solve_bempp_from_msh_text(
             frequency_count=len(live_execution_frequencies(context)),
             channel_count=1,
             enabled=field_plane_enabled,
-            supported=True,
+            supported=aperture_tag is None,
             cap_bytes=field_trace_cap_bytes,
         )
     )
@@ -558,7 +580,21 @@ def solve_bempp_from_msh_text(
     formulation = DEFAULT_BEM_FORMULATION
     if BIEFormulation is not None:
         formulation = getattr(BIEFormulation, "COMPLEX_K", formulation)
-    workers = 1 if context.frequencies_hz is not None else _resolved_workers()
+    requested_workers = _resolved_workers()
+    workers = (
+        1
+        if force_serial or context.frequencies_hz is not None or aperture_tag is not None
+        else requested_workers
+    )
+    if force_serial and requested_workers != 1:
+        message = (
+            f"Ignoring WG2_SOLVE_WORKERS={requested_workers} inside the killable "
+            "BEMPP worker. WG keeps one warm serial native process so Stop can "
+            "terminate the complete solve tree promptly."
+        )
+        logger.warning("%s", message)
+        if stage_callback:
+            stage_callback("setup", 0.0, message)
     config_kwargs: dict[str, Any] = {
         "freq_min_hz": context.frequency_range[0],
         "freq_max_hz": context.frequency_range[1],
@@ -580,12 +616,16 @@ def solve_bempp_from_msh_text(
         ),
         "progress_callback": progress,
         "mesh_scale": 1.0,
-        "native_symmetry_plane": native_symmetry_plane(context),
+        "native_symmetry_plane": (
+            None if aperture_tag is not None else native_symmetry_plane(context)
+        ),
         "assembly_backend": backend,
         "opencl_device": OPENCL_DEVICE_TYPE,
         "precision": "single",
         "return_surface_traces": retain_traces,
     }
+    if aperture_tag is not None:
+        config_kwargs["aperture_tag"] = aperture_tag
     # The BEMPP package's parallel sweep deliberately has no callback seam.
     # Keep an explicit multi-worker opt-in fast; the default serial/cancellable
     # path streams provisional rows just like Metal and Boundary Lab.
@@ -608,6 +648,11 @@ def solve_bempp_from_msh_text(
         if "return_surface_traces" in message:
             raise BemppUnavailable(
                 "Installed hornlab-bempp-bem does not support retained surface traces."
+            ) from exc
+        if "aperture_tag" in message:
+            raise BemppUnavailable(
+                "Installed hornlab-bempp-bem does not support coupled "
+                "infinite-baffle aperture tags."
             ) from exc
         raise
     if context.source_motion != "normal":
@@ -700,6 +745,13 @@ def solve_bempp_from_msh_text(
             "solver_log": json_safe_native_value(response_solver_log(getattr(result, "solver_log", []))),
         },
     }
+    if aperture_tag is not None:
+        metadata["infinite_baffle"] = {
+            "backend": "full_3d_coupled",
+            "aperture_tag": aperture_tag,
+            "source": "hornlab-waveguide-mesher",
+        }
+        metadata["bempp"]["aperture_tag"] = aperture_tag
     response = build_solver_response(
         result=result,
         config=config,
@@ -739,9 +791,16 @@ class BemppEngine:
         result_cb: ResultCallback | None = None,
     ) -> EngineRunResult:
         if (request.options.solver_mode or "").strip().lower() == "circsym":
-            raise ValueError("BEMPP cannot run solver_mode='circsym'; select Metal or use full_3d")
+            from .circsym import AxisymmetricEngine
+
+            return await AxisymmetricEngine().run(
+                request,
+                cancel_cb=cancel_cb,
+                stage_cb=stage_cb,
+                artifact_cb=artifact_cb,
+                result_cb=result_cb,
+            )
         context = SolverContext.from_request(request, solver_mode="full_3d")
-        reject_bempp_infinite_baffle(context)
         mesh = await build_solver_mesh(
             request.design,
             request.options,
@@ -751,20 +810,21 @@ class BemppEngine:
         if artifact_cb is not None:
             await artifact_cb(mesh["msh_text"], mesh["stats"])
         cancel_cb()
-        results = await asyncio.to_thread(
-            solve_bempp_from_msh_text,
+        from .bempp_process import solve_bempp_in_process
+
+        results = await solve_bempp_in_process(
             mesh["msh_text"],
             context,
             mesh_metadata=mesh["metadata"],
             mesh_stats=mesh["stats"],
-            stage_callback=stage_cb,
-            cancellation_callback=cancel_cb,
-            result_callback=result_cb,
+            cancel_cb=cancel_cb,
+            stage_cb=stage_cb,
+            result_cb=result_cb,
         )
         results.setdefault("metadata", {})["mesh_stats"] = mesh["stats"]
         results.setdefault("metadata", {})["solve_path"] = "full-3d"
         results.setdefault("metadata", {})["axisymmetric_eligibility_reasons"] = [
-            "axisymmetric-meridian is a Metal-only fast path"
+            "the solve planner selected the full-3D BEMPP formulation"
         ]
         field_traces = results.pop("_field_traces", None)
         field_trace_reason = results.pop("_field_trace_unavailable_reason", None)

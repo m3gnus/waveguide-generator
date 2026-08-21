@@ -69,7 +69,9 @@ def test_circsym_infinite_baffle_requires_positive_aperture_tag(metadata: dict) 
     assert circsym._validated_aperture_tag({"apertureTag": 12}, 1) == 12
 
 
-def test_bempp_engine_rejects_machine_circsym_before_meshing() -> None:
+def test_bempp_engine_delegates_axisymmetric_mode_to_portable_runner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     request = SolveRequest.model_validate(
         {
             "design": {"formula": "OSSE", "simulation": {"solver_mode": "circsym"}},
@@ -77,13 +79,25 @@ def test_bempp_engine_rejects_machine_circsym_before_meshing() -> None:
         }
     )
 
+    called = False
+
+    class FakeAxisymmetricEngine:
+        async def run(self, seen_request, **_kwargs):
+            nonlocal called
+            called = True
+            assert seen_request is request
+            return SimpleNamespace(results={"metadata": {"solver_backend": "axisym"}})
+
+    monkeypatch.setattr(circsym, "AxisymmetricEngine", FakeAxisymmetricEngine)
+
     async def scenario() -> None:
-        with pytest.raises(ValueError, match="cannot run solver_mode='circsym'"):
-            await bempp.BemppEngine().run(
-                request, cancel_cb=lambda: None, stage_cb=lambda *_args: None
-            )
+        outcome = await bempp.BemppEngine().run(
+            request, cancel_cb=lambda: None, stage_cb=lambda *_args: None
+        )
+        assert outcome.results["metadata"]["solver_backend"] == "axisym"
 
     asyncio.run(scenario())
+    assert called is True
 
 
 def test_old_native_helpers_get_explicit_unsupported_option_errors(

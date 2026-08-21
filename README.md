@@ -185,7 +185,9 @@ JS frame codec (explicit file path — directory mode trips the node runner): `n
 Frontend: `cd frontend && npm ci && npm test && npm run build`
 
 Real solves are never run in hosted CI; Metal and bempp parity run on owned
-qualification hardware, and their archived reports back the release gates.
+qualification hardware, and their archived reports back the release gates. Use
+the [solver release qualification checklist](docs/validation/SOLVER-QUALIFICATION.md)
+for the mandatory macOS, Windows, full/quarter, and cross-solver runs.
 
 ## Releasing
 

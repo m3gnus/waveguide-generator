@@ -106,7 +106,7 @@ Frequencies = 500, 1000, 2500, 8000
 | Key | Values | Notes |
 | --- | --- | --- |
 | `Engine` | backend name, or `auto` | Validated for shape only; the backend registry owns the names. |
-| `Symmetry` | `auto`, `full`, `half_xz`, `half_yz`, `quarter` | The solved domain. Distinct from `Simulation.SolverMode`, which selects the axisymmetric fast path. |
+| `Symmetry` | `auto`, `full`, `half_xz`, `half_yz`, `quarter` | The solved full-3D domain. Axisymmetric solves use exact continuous rotational symmetry. |
 | `MeshValidation` | `warn`, `strict`, `off` | |
 | `Verbose` | `0`, `1` | |
 | `SweepPoints` | `range`, `list` | |

@@ -38,13 +38,17 @@ def _report(label: str, status: dict[str, object]) -> bool:
 
 def main() -> int:
     from server.solver.bempp import _missing_windows_runtime_dlls, bempp_status
+    from server.solver.beat import beat_status
+    from server.solver.circsym import circsym_status
     from server.solver.metal import metal_status
 
     print("Solve backends:")
+    axisym = _report("Axisymmetric (portable CPU)", circsym_status())
     metal = _report("Metal (Apple Silicon)", metal_status())
+    beat = _report("BEAT (CUDA/ROCm)", beat_status())
     bempp = _report("bempp (cross-platform)", bempp_status())
 
-    if metal or bempp:
+    if axisym or metal or beat or bempp:
         return 0
 
     print()

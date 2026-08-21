@@ -996,6 +996,11 @@ def test_required_fem_volume_needs_exterior_only_override(tmp_path: Path) -> Non
             "imported_circsym_unsupported",
         ),
         (
+            lambda value, _record: value.options.__setattr__("solver_mode", "circsym"),
+            {},
+            "imported_circsym_unsupported",
+        ),
+        (
             lambda _value, _record: None,
             {"infinite_baffle": True},
             "imported_infinite_baffle_unsupported",
