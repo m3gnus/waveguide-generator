@@ -521,14 +521,25 @@ async def resolve_submission(
         }
 
     if engine_name == "auto":
+        # Resolve against the requested mounting, not just the host's engine
+        # list: BEAT advertises no coupled infinite-baffle support and rejects
+        # such a request outright, so picking it here would persist a job that
+        # a coupling-capable BEMPP on the same host could have solved.
+        mounting = request.design.root.simulation.sim_type
         engine_name = await engine_registry.resolve(
-            "auto", solver_mode=request.options.solver_mode
+            "auto", solver_mode=request.options.solver_mode, mounting=mounting
         )
         if engine_name is None:
+            unsupported = (
+                " that supports a coupled infinite-baffle mounting"
+                if mounting == "infinite-baffle"
+                else ""
+            )
             raise EngineUnavailableError(
-                "AUTO could not resolve a compatible solve engine from this host's "
-                "capabilities. Install/enable Axisymmetric, Metal, BEAT, or BEMPP; explicitly enable dry-run "
-                "with WG2_ENABLE_DRYRUN=1 for synthetic development solves."
+                f"AUTO could not resolve a compatible solve engine{unsupported} from "
+                "this host's capabilities. Install/enable Axisymmetric, Metal, BEAT, "
+                "or BEMPP; explicitly enable dry-run with WG2_ENABLE_DRYRUN=1 for "
+                "synthetic development solves."
             )
         request = request.model_copy(deep=True)
         request.options.engine = engine_name

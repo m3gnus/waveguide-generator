@@ -117,8 +117,16 @@ export function resolveEngine(
   }
   const order = ['metal', 'beat', 'bempp', 'dryrun'];
   const available = order.flatMap((name) => capabilities.engines.filter((item) => item.available && item.name.toLowerCase() === name))[0];
-  if (!available) throw new Error('No solver backend is currently available');
-  return available.name.toLowerCase();
+  if (available) return available.name.toLowerCase();
+  // An Axisym-only host is not a host without a solver. The server planner
+  // selects the meridian runner for an eligible circular design before any
+  // full-3D fallback, so throwing here left JobsCoordinator with no capability
+  // and Run blocked on a design the server would have solved -- escapable only
+  // by knowing to force the meridian mode by hand. Geometry eligibility is the
+  // planner's to judge, not this function's.
+  const axisym = capabilities.engines.find((item) => item.available && item.name.toLowerCase() === 'axisym');
+  if (axisym) return 'axisym';
+  throw new Error('No solver backend is currently available');
 }
 
 export async function fetchSymmetry(

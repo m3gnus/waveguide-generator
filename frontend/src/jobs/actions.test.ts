@@ -25,6 +25,27 @@ describe('solve submission', () => {
     expect(resolveEngine('auto', capabilities, 'circsym')).toBe('metal');
   });
 
+  it('resolves AUTO to Axisym when it is the only engine the host has', () => {
+    // The server planner routes an eligible circular design to the meridian
+    // runner before any full-3D fallback, so throwing here blocked Run on a
+    // design the server would have solved; the only escape was knowing to
+    // force the meridian mode by hand.
+    const axisymOnly = { engines: [
+      { name: 'axisym', available: true, reason: null, version: '1', fast_paths: ['axisymmetric-meridian'] },
+      { name: 'bempp', available: false, reason: 'not installed', version: null, fast_paths: [] },
+    ] };
+    expect(resolveEngine('auto', axisymOnly)).toBe('axisym');
+
+    // A full-3D backend still wins when the host has one, and a host with
+    // nothing available still refuses rather than inventing an engine.
+    const withBempp = { engines: [
+      ...axisymOnly.engines.slice(0, 1),
+      { name: 'bempp', available: true, reason: null, version: '1', fast_paths: [] },
+    ] };
+    expect(resolveEngine('auto', withBempp)).toBe('bempp');
+    expect(() => resolveEngine('auto', { engines: [] })).toThrow('No solver backend is currently available');
+  });
+
   it('submits every solve option and the G1 polar_config contract without forcing dryrun', async () => {
     const options: SolveOptions = {
       engine: 'auto', symmetry: 'quarter', mesh_validation_mode: 'strict', verbose: true, frequency_spacing: 'linear',
