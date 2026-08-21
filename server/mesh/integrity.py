@@ -7,6 +7,7 @@ see ``server/solver/metal_solver.py:232-252`` and
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import numpy as np
@@ -224,11 +225,17 @@ def mesh_integrity_report(
 # length the pair itself owns, never by an absolute millimetre figure: the same
 # mesh is checked in metres here and the geometry spans four orders of
 # magnitude between a throat facet and a mouth facet.
-SELF_INTERSECTION_PLANE_EPS = 1.0e-9
+# Matched to the modelling tolerance OCC itself works to. A tighter figure
+# reports sub-micron contact between surfaces that were authored as touching,
+# which is noise rather than a defect.
+SELF_INTERSECTION_PLANE_EPS = 1.0e-7
 SELF_INTERSECTION_SEGMENT_EPS = 1.0e-7
 # Candidate pairs are bounded so a pathological mesh degrades to "not checked"
-# instead of exhausting memory on the single Gmsh worker.
-SELF_INTERSECTION_MAX_CANDIDATE_PAIRS = 40_000_000
+# instead of exhausting memory on the single Gmsh worker. Each surviving pair
+# costs ~216 bytes in the adjacency difference alone, so the ceiling is set from
+# that budget rather than from an abstract large number.
+SELF_INTERSECTION_MAX_CANDIDATE_PAIRS = 4_000_000
+_SELF_INTERSECTION_CHUNK = 200_000
 
 
 def _sweep_and_prune(lower: np.ndarray, upper: np.ndarray) -> np.ndarray | None:
@@ -394,6 +401,31 @@ def _coplanar_overlap(first: np.ndarray, second: np.ndarray, axis: int) -> float
     return area(output)
 
 
+def _shared_edge_separates(
+    first: np.ndarray, second: np.ndarray, shared: np.ndarray, normal: np.ndarray
+) -> bool:
+    """True when two coplanar triangles merely tile across the edge they share."""
+
+    edge_points = first[shared]
+    if len(edge_points) < 2:
+        return False
+    start, end = edge_points[0], edge_points[1]
+    direction = end - start
+    if not np.any(direction):
+        return False
+    free_first = first[~shared]
+    # The partner's free corners are the ones not coincident with the edge.
+    offsets = second - start
+    along = np.linalg.norm(np.cross(np.broadcast_to(direction, offsets.shape), offsets), axis=1)
+    free_second = second[along > 0.0]
+    if not len(free_first) or not len(free_second):
+        return False
+
+    def side(point: np.ndarray) -> float:
+        return float(np.dot(np.cross(direction, point - start), normal))
+
+    return side(free_first[0]) * side(free_second[0]) < 0.0
+
 def mesh_self_intersection_report(
     vertices: Any, triangles: Any, *, max_samples: int = 20
 ) -> dict[str, Any]:
@@ -445,6 +477,20 @@ def mesh_self_intersection_report(
     normals = normals[usable]
     normal_length = normal_length[usable]
 
+    # Faces repeating the same three vertices are duplicates, counted already by
+    # mesh_integrity_report. Left in, they pair with each other combinatorially
+    # and can exhaust the candidate budget before a real crossing is reached.
+    _keys, unique_rows = np.unique(np.sort(faces, axis=1), axis=0, return_index=True)
+    if len(unique_rows) < len(faces):
+        unique_rows = np.sort(unique_rows)
+        usable = usable[unique_rows]
+        corners = corners[unique_rows]
+        faces = faces[unique_rows]
+        normals = normals[unique_rows]
+        normal_length = normal_length[unique_rows]
+    if len(faces) < 2:
+        return {**empty, "checked": True}
+
     lower = corners.min(axis=1)
     upper = corners.max(axis=1)
     pairs = _sweep_and_prune(lower, upper)
@@ -453,7 +499,13 @@ def mesh_self_intersection_report(
     if not len(pairs):
         return {**empty, "checked": True}
 
-    diagonal = float(np.linalg.norm(points.max(axis=0) - points.min(axis=0))) or 1.0
+    # Scale every tolerance by a length the PAIR owns, not by the model's
+    # bounding diagonal. A single far-away vertex -- another component, or a
+    # point no triangle even uses -- would otherwise inflate the weld tolerance
+    # until genuinely distinct corners counted as shared and a real crossing was
+    # discarded as adjacency. Measured: one unused vertex at 1e9 turned a
+    # crossing pair clean.
+    extent = np.maximum(upper - lower, 0.0).max(axis=1)
 
     left, right = pairs[:, 0], pairs[:, 1]
 
@@ -463,20 +515,32 @@ def mesh_self_intersection_report(
     # and an index-only test then reports their shared edge as a crossing. Going
     # through positions costs one 3x3 compare per pair and is correct for welded
     # and unwelded meshes alike.
-    weld = SELF_INTERSECTION_SEGMENT_EPS * diagonal
-    delta = corners[left][:, :, None, :] - corners[right][:, None, :, :]
-    coincident = np.einsum("ijkl,ijkl->ijk", delta, delta) <= weld * weld
-    shared = coincident.any(axis=2)
+    pair_scale = np.maximum(extent[left], extent[right])
+    weld = SELF_INTERSECTION_SEGMENT_EPS * pair_scale
+    # Chunked: the full (pairs, 3, 3, 3) difference is 216 bytes per pair, so a
+    # large candidate set would allocate gigabytes in one go.
+    shared = np.empty((len(left), 3), dtype=bool)
+    for begin in range(0, len(left), _SELF_INTERSECTION_CHUNK):
+        stop = min(begin + _SELF_INTERSECTION_CHUNK, len(left))
+        delta = (
+            corners[left[begin:stop]][:, :, None, :]
+            - corners[right[begin:stop]][:, None, :, :]
+        )
+        limit = np.square(weld[begin:stop])[:, None, None]
+        shared[begin:stop] = (
+            np.einsum("ijkl,ijkl->ijk", delta, delta) <= limit
+        ).any(axis=2)
     shared_count = shared.sum(axis=1)
     # Three coincident corners is a duplicate face, which mesh_integrity_report
     # already counts; it is not a crossing.
 
     alive = shared_count < 3
-    left, right, shared, shared_count = (
+    left, right, shared, shared_count, pair_scale = (
         left[alive],
         right[alive],
         shared[alive],
         shared_count[alive],
+        pair_scale[alive],
     )
     if not len(left):
         return {**empty, "checked": True}
@@ -485,31 +549,41 @@ def mesh_self_intersection_report(
         normal = normals[source]
         offset = -np.einsum("ij,ij->i", normal, corners[source][:, 0])
         distance = np.einsum("ij,ikj->ik", normal, corners[target]) + offset[:, None]
-        tolerance = SELF_INTERSECTION_PLANE_EPS * normal_length[source] * diagonal
+        tolerance = SELF_INTERSECTION_PLANE_EPS * normal_length[source] * pair_scale
+        on_plane = np.abs(distance) <= tolerance[:, None]
         sign = np.sign(distance)
-        sign[np.abs(distance) <= tolerance[:, None]] = 0.0
+        sign[on_plane] = 0.0
+        # The distance has to agree with the sign it was just given. Leaving a
+        # vertex classified as on-plane while its true offset still drives the
+        # edge interpolation produces a crossing parameter outside [0, 1] --
+        # a fabricated intersection well beyond the triangle that touched.
+        distance = np.where(on_plane, 0.0, distance)
         return distance, sign
 
     distance_right, sign_right = signed_distance(left, right)
     distance_left, sign_left = signed_distance(right, left)
 
-    separated = (np.abs(sign_right).sum(axis=1) == 3) & (
-        np.abs(sign_right.sum(axis=1)) == 3
+    coplanar = (np.abs(sign_right).sum(axis=1) == 0) & (
+        np.abs(sign_left).sum(axis=1) == 0
     )
-    separated |= (np.abs(sign_left).sum(axis=1) == 3) & (
-        np.abs(sign_left.sum(axis=1)) == 3
-    )
-    keep = ~separated
+    # A triangle that keeps to one closed side of the other's plane cannot pass
+    # through it; at most the two touch. Requiring every vertex to be strictly
+    # off the plane before separating them would miss that, and report an
+    # ordinary T-junction -- one triangle's edge lying along a longer edge of
+    # another, which is exactly what an imported mesh is full of -- as a
+    # crossing.
+    def straddles(sign: np.ndarray) -> np.ndarray:
+        return ~(np.all(sign >= 0.0, axis=1) | np.all(sign <= 0.0, axis=1))
+
+    keep = coplanar | (straddles(sign_right) & straddles(sign_left))
     if not np.any(keep):
         return {**empty, "checked": True}
     left, right = left[keep], right[keep]
     shared, shared_count = shared[keep], shared_count[keep]
+    pair_scale = pair_scale[keep]
     distance_right, sign_right = distance_right[keep], sign_right[keep]
     distance_left, sign_left = distance_left[keep], sign_left[keep]
-
-    coplanar = (np.abs(sign_right).sum(axis=1) == 0) & (
-        np.abs(sign_left).sum(axis=1) == 0
-    )
+    coplanar = coplanar[keep]
 
     crossing_pairs: list[tuple[float, int, int, np.ndarray]] = []
     crossing = np.flatnonzero(~coplanar)
@@ -539,7 +613,7 @@ def mesh_self_intersection_report(
         touching = shared[crossing]
         edge_low = np.where(touching, along, np.inf).min(axis=1)
         edge_high = np.where(touching, along, -np.inf).max(axis=1)
-        tolerance = SELF_INTERSECTION_SEGMENT_EPS * diagonal
+        tolerance = SELF_INTERSECTION_SEGMENT_EPS * pair_scale[crossing]
         beyond = (low < edge_low - tolerance) | (high > edge_high + tolerance)
         overlapping = (high > low + tolerance) & beyond
 
@@ -558,14 +632,27 @@ def mesh_self_intersection_report(
             )
 
     coplanar_pairs: list[tuple[float, int, int, np.ndarray]] = []
+    # A coplanar pair sharing an edge usually just tiles the plane, and a flat
+    # rear cap or baffle is thousands of such neighbours -- each one otherwise
+    # reaching the Python polygon clip. But sharing an edge does NOT by itself
+    # mean they are disjoint: a fold-over hinges on a shared edge and lands on
+    # top of its neighbour. They tile only when their free vertices fall on
+    # opposite sides of the edge they share, which is what is tested here.
     for row in np.flatnonzero(coplanar):
+        if shared_count[row] >= 2 and _shared_edge_separates(
+            corners[left[row]], corners[right[row]], shared[row], normals[left[row]]
+        ):
+            continue
         first, second = int(left[row]), int(right[row])
         axis = int(np.argmax(np.abs(normals[first])))
         overlap = _coplanar_overlap(corners[first], corners[second], axis)
         reference = 0.5 * float(normal_length[first])
         if overlap > reference * SELF_INTERSECTION_SEGMENT_EPS:
+            # Reported as the side of the equivalent square, so the sample's
+            # "extent" stays a length and can be ranked and printed alongside a
+            # crossing's segment length instead of being an area labelled mm.
             coplanar_pairs.append(
-                (overlap, first, second, corners[first].mean(axis=0))
+                (math.sqrt(overlap), first, second, corners[first].mean(axis=0))
             )
 
     involved: set[int] = set()

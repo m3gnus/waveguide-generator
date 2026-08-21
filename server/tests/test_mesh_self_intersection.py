@@ -191,8 +191,20 @@ def test_malformed_input_reports_unchecked_rather_than_clean(points, triangles) 
     assert report["proper_crossing_count"] == 0
 
 
+def test_unchecked_is_reported_not_silently_passed() -> None:
+    """"Could not check" must never read as "nothing wrong".
+
+    The budget exists so a pathological mesh degrades instead of exhausting
+    memory, and the mesh that trips it is the one most likely to be broken.
+    Saying nothing would let it through strict validation in silence.
+    """
+
+    (warning,) = _self_intersection_warnings({"checked": False})
+    assert warning.startswith(SELF_INTERSECTION_WARNING_PREFIX)
+    assert "not checked" in warning
+
+
 def test_warning_names_the_count_size_and_place() -> None:
-    assert _self_intersection_warnings({"checked": False}) == []
     assert (
         _self_intersection_warnings(
             {
@@ -362,3 +374,107 @@ def test_a_crossing_does_not_change_topology_validity() -> None:
     assert integrity["degenerate_triangle_count"] == 0
     assert integrity["nonmanifold_edge_count"] == 0
     assert _report(points, triangles)["proper_crossing_count"] > 0
+
+
+# --- regressions from the pre-push diff review -------------------------------
+
+
+def test_a_distant_point_cannot_hide_a_crossing() -> None:
+    """Tolerances must scale with the pair, not with the whole model.
+
+    Scaling by the bounding diagonal let one far-away vertex -- here not even
+    referenced by a triangle -- inflate the weld tolerance until both corners of
+    a genuinely crossing pair counted as shared, and the pair was discarded as
+    adjacency. A false negative is the worst failure this check can have.
+    """
+
+    corners = [[-1, 0, 0], [1, 0, 0], [0, 1, 0], [0, -0.5, -1], [0, -0.5, 1], [0, 0.5, 0]]
+    faces = [[0, 1, 2], [3, 4, 5]]
+    assert _report(corners, faces)["proper_crossing_count"] == 1
+    assert (
+        _report(corners + [[1.0e9, 1.0e9, 1.0e9]], faces)["proper_crossing_count"] == 1
+    )
+
+
+def test_a_touching_pair_is_not_a_metre_long_crossing() -> None:
+    """On-plane vertices must be on-plane for the interpolation too.
+
+    Zeroing a vertex's sign inside the tolerance while still interpolating with
+    its true offset put the crossing parameter outside [0, 1], inventing an
+    intersection far outside the triangles: two facets sharing a plane to within
+    a nanometre were reported as crossing over 1.5 m.
+    """
+
+    report = _report(
+        [[0, 0, 0], [2, 0, 0], [0, 2, 0], [0.5, 0.5, 0], [1.5, 0.5, 2e-9], [0.5, 1.5, 6e-9]],
+        [[0, 1, 2], [3, 4, 5]],
+    )
+    assert report["proper_crossing_count"] == 0
+    # It is a real coplanar overlap, and reported as one.
+    assert report["coplanar_overlap_count"] == 1
+    assert report["samples"][0]["extent_m"] < 2.0
+
+
+def test_a_t_junction_is_contact_not_a_crossing() -> None:
+    """One triangle's edge lying along a longer edge of another.
+
+    Imported CAD is full of these. Separating a pair only when every vertex is
+    strictly off the plane missed them, because two of the vertices sit exactly
+    on it -- so an ordinary T-junction was reported as a crossing.
+    """
+
+    assert (
+        _report(
+            [[0, 0, 0], [2, 0, 0], [0, 1, 0], [0.5, 0, 0], [1.5, 0, 0], [1, 0, 1]],
+            [[0, 1, 2], [3, 4, 5]],
+        )["proper_crossing_count"]
+        == 0
+    )
+
+
+def test_a_coplanar_foldover_survives_the_shared_edge_shortcut() -> None:
+    """Sharing an edge does not prove two coplanar triangles are disjoint.
+
+    Skipping every edge-sharing coplanar pair is tempting -- a flat cap is
+    thousands of them -- but a fold-over hinges on a shared edge and lands on
+    top of its neighbour. They tile only when their free corners fall on
+    opposite sides of the shared edge.
+    """
+
+    tiled = _report([[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0]], [[0, 1, 2], [1, 3, 2]])
+    assert tiled["coplanar_overlap_count"] == 0
+    folded = _report(
+        [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0.2, 0.2, 0]], [[0, 1, 2], [1, 3, 2]]
+    )
+    assert folded["coplanar_overlap_count"] == 1
+
+
+def test_duplicate_faces_do_not_exhaust_the_candidate_budget() -> None:
+    """Repeated faces pair combinatorially and would spend the whole budget.
+
+    They are already counted by mesh_integrity_report, and dropping them keeps
+    a mesh with a few thousand duplicates checkable instead of degrading it to
+    "not checked".
+    """
+
+    corners = np.asarray([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype=float)
+    faces = np.tile(np.asarray([[0, 1, 2]], dtype=np.int64), (5_000, 1))
+    report = mesh_self_intersection_report(corners, faces)
+    assert report["checked"] is True
+    assert report["proper_crossing_count"] == 0
+
+
+def test_coplanar_severity_is_reported_as_a_length() -> None:
+    """Samples are ranked together and printed in millimetres.
+
+    A coplanar overlap is an area; storing it raw next to a crossing's segment
+    length made a 0.5 m^2 overlap print as "spanning 499.0 mm".
+    """
+
+    report = _report(
+        [[0, 0, 0], [2, 0, 0], [0, 2, 0], [0.5, 0.5, 0], [2.5, 0.5, 0], [0.5, 2.5, 0]],
+        [[0, 1, 2], [3, 4, 5]],
+    )
+    assert report["coplanar_overlap_count"] == 1
+    # The overlap is 0.5 m^2, so the equivalent side is sqrt(0.5).
+    assert report["samples"][0]["extent_m"] == pytest.approx(math.sqrt(0.5))
