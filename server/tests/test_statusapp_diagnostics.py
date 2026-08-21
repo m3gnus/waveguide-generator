@@ -16,10 +16,21 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import sys
 
 import pytest
 
 from launchers.statusapp import diagnostics
+
+
+def _how_this_platform_installs_tk() -> str:
+    """The phrase that has to reach the user on the platform under test."""
+
+    if os.name == "nt":
+        return "tcl/tk and IDLE"
+    if sys.platform == "darwin":
+        return "python-tk@3.13"
+    return "python3-tk"
 
 
 def test_a_truly_absent_tkinter_is_the_install_it_case() -> None:
@@ -28,7 +39,7 @@ def test_a_truly_absent_tkinter_is_the_install_it_case() -> None:
     )
 
     assert failure.kind == "missing"
-    assert "tcl/tk and IDLE" in failure.summary() or "python3-tk" in failure.summary()
+    assert _how_this_platform_installs_tk() in failure.summary()
 
 
 def test_an_unloadable_tkinter_is_not_the_install_it_case() -> None:
@@ -161,12 +172,26 @@ def test_windows_is_never_treated_as_headless(monkeypatch: pytest.MonkeyPatch) -
     assert diagnostics.is_headless() is False
 
 
-@pytest.mark.skipif(os.name == "nt", reason="POSIX is where DISPLAY decides")
-def test_posix_without_a_display_is_headless(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.skipif(
+    os.name == "nt" or sys.platform == "darwin",
+    reason="X11 and Wayland are where DISPLAY decides; Aqua needs neither",
+)
+def test_x11_without_a_display_is_headless(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("DISPLAY", raising=False)
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
 
     assert diagnostics.is_headless() is True
+
+
+def test_macos_is_never_treated_as_headless(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Aqua has no DISPLAY, so the X11 rule would call every Mac headless."""
+
+    monkeypatch.setattr(diagnostics.os, "name", "posix")
+    monkeypatch.setattr(diagnostics.sys, "platform", "darwin")
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+
+    assert diagnostics.is_headless() is False
 
 
 def test_the_probe_opens_a_window_rather_than_importing(monkeypatch: pytest.MonkeyPatch) -> None:
