@@ -111,6 +111,7 @@ _SCHEMA = (
       lineage_id TEXT PRIMARY KEY,
       parameter_slug TEXT,
       bundle_stem TEXT,
+      archive_stem TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )
@@ -140,7 +141,7 @@ class CadLinkStore:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._lock, self._transaction() as conn:
             version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-            if version not in {0, 1, 2, 3, 4, 5, 6, 7, 8}:
+            if version not in {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}:
                 raise RuntimeError(f"unsupported cadlink.db schema version {version}")
             for statement in _SCHEMA:
                 conn.execute(statement)
@@ -181,7 +182,12 @@ class CadLinkStore:
                 "CREATE UNIQUE INDEX IF NOT EXISTS onshape_links_by_instance "
                 "ON onshape_links(instance_id)"
             )
-            conn.execute("PRAGMA user_version = 8")
+            lineage_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(lineage_cad_names)")
+            }
+            if "archive_stem" not in lineage_columns:
+                conn.execute("ALTER TABLE lineage_cad_names ADD COLUMN archive_stem TEXT")
+            conn.execute("PRAGMA user_version = 9")
         self._initialized = True
 
     def get_design(self, design_id: str) -> dict[str, Any] | None:
@@ -272,6 +278,7 @@ class CadLinkStore:
         *,
         parameter_slug: str | None = None,
         bundle_stem: str | None = None,
+        archive_stem: str | None = None,
         recorded_at: str | None = None,
     ) -> dict[str, Any]:
         """Claim a lineage's CAD names, first writer per column winning.
@@ -287,8 +294,9 @@ class CadLinkStore:
             conn.execute(
                 """
                 INSERT INTO lineage_cad_names (
-                  lineage_id, parameter_slug, bundle_stem, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?)
+                  lineage_id, parameter_slug, bundle_stem, archive_stem,
+                  created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT (lineage_id) DO UPDATE SET
                   parameter_slug = COALESCE(
                     lineage_cad_names.parameter_slug, excluded.parameter_slug
@@ -296,14 +304,56 @@ class CadLinkStore:
                   bundle_stem = COALESCE(
                     lineage_cad_names.bundle_stem, excluded.bundle_stem
                   ),
+                  archive_stem = COALESCE(
+                    lineage_cad_names.archive_stem, excluded.archive_stem
+                  ),
                   updated_at = excluded.updated_at
                 """,
-                (lineage_id, parameter_slug, bundle_stem, now, now),
+                (lineage_id, parameter_slug, bundle_stem, archive_stem, now, now),
             )
             row = conn.execute(
                 "SELECT * FROM lineage_cad_names WHERE lineage_id = ?", (lineage_id,)
             ).fetchone()
         return self._row(row) or {}
+
+    def claim_archive_stem(
+        self,
+        lineage_id: str,
+        *,
+        preferred: str | None = None,
+        recorded_at: str | None = None,
+    ) -> str | None:
+        """The single folder a lineage's runs and captured CAD documents share.
+
+        Two writers file into the run archive for one project: the ingest files
+        a captured Fusion document the moment a return arrives, and the run
+        archive files the solve afterwards. They used to derive the folder
+        independently -- the bundle stem or the document name on one side, the
+        job's own label on the other -- so renaming a run was enough to strand
+        its Fusion document in a folder the run never appeared in.
+
+        The name is therefore claimed once per lineage and never changed:
+        an already-claimed stem wins, then the ``.wglink`` folder the lineage
+        owns, then the caller's suggestion (in practice the CAD document name).
+        Returns ``None`` only when the lineage has no usable name yet, which
+        leaves the caller to fall back exactly as it did before.
+        """
+
+        recorded = self.get_lineage_cad_names(lineage_id) or {}
+        claimed = str(recorded.get("archive_stem") or "").strip()
+        if claimed:
+            return claimed
+        stem = (
+            str(recorded.get("bundle_stem") or "").strip()
+            or str(preferred or "").strip()
+        )
+        if not stem:
+            return None
+        written = self.record_lineage_cad_names(
+            lineage_id, archive_stem=stem, recorded_at=recorded_at
+        )
+        # A concurrent claimant may have won; its name is the answer for both.
+        return str(written.get("archive_stem") or "").strip() or stem
 
     def get_ingest(self, ingest_id: str) -> dict[str, Any] | None:
         return self._read_one(

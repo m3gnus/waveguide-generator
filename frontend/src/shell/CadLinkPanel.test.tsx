@@ -894,8 +894,10 @@ describe('CadLinkPanel', () => {
 
   it('shows the selected CAD program, settings link, and connection state without an outbound button', async () => {
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
-    expect(host.querySelector('.cad-workflow-header')?.textContent).toContain('Fusion 360 · Change');
-    expect(host.querySelector<HTMLButtonElement>('.cad-workflow-header button')?.textContent).toContain('Change');
+    // Scoped to the connection section: the project header is the panel's
+    // first workflow header now.
+    expect(host.querySelector('.cad-send .cad-workflow-header')?.textContent).toContain('Fusion 360 · Change');
+    expect(host.querySelector<HTMLButtonElement>('.cad-send .cad-workflow-header button')?.textContent).toContain('Change');
     expect(host.querySelector('.cad-connection')?.textContent).toContain('Fusion 360 is closed');
     // The Fusion outbound leg lives in the design menu and the Geometry rail.
     expect(host.querySelector('.cad-primary-action')).toBeNull();
