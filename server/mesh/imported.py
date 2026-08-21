@@ -22,8 +22,12 @@ from server.mesh.builder import (
     MAX_SOLVER_MESH_ARTIFACT_TRIANGLES,
     _enforce_artifact_triangle_ceiling,
     _enforce_dense_solver_memory_ceiling,
+    _self_intersection_warnings,
 )
-from server.mesh.integrity import mesh_integrity_report
+from server.mesh.integrity import (
+    mesh_integrity_report,
+    mesh_self_intersection_report,
+)
 from server.solver.imported import imported_symmetry_from_cut_planes
 
 
@@ -1790,6 +1794,14 @@ def build_imported_mesh(
                     ),
                 }
             )
+        # Imported geometry is where coincident or interpenetrating faces are
+        # most likely: nothing upstream guarantees the CAD was a clean solid.
+        # Reported, never fatal -- an import that is otherwise sound should not
+        # become unusable, and the same warning channel carries it as for a
+        # generated mesh.
+        integrity["self_intersection"] = mesh_self_intersection_report(
+            points_mm * 1.0e-3, triangles
+        )
         state["symmetry_verification"] = verification
         bounds_min = np.min(points_mm, axis=0) * 1.0e-3
         bounds_max = np.max(points_mm, axis=0) * 1.0e-3
@@ -1831,7 +1843,10 @@ def build_imported_mesh(
                     "dense_solver_aperture_triangle_count": dense[
                         "aperture_triangle_count"
                     ],
-                    "warnings": list(frequency.get("warnings") or []),
+                    "warnings": [
+                        *list(frequency.get("warnings") or []),
+                        *_self_intersection_warnings(integrity["self_intersection"]),
+                    ],
                     "integrity": integrity,
                 },
                 "integrity": integrity,

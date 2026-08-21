@@ -27,7 +27,11 @@ from server.solver.quadrants import FULL_DOMAIN_QUADRANTS, normalise_quadrants
 
 from .cache import SolverMeshArtifactCache, SolverMeshCacheInfo
 from .gmsh_worker import run_on_gmsh_worker
-from .integrity import mesh_integrity_report, mesh_semantic_orientation_report
+from .integrity import (
+    mesh_integrity_report,
+    mesh_self_intersection_report,
+    mesh_semantic_orientation_report,
+)
 
 
 if TYPE_CHECKING:  # pragma: no cover - meshio is imported where it is used
@@ -43,7 +47,8 @@ LARGE_MESH_WARNING_FULL_DOMAIN_TRIANGLES = 18_000
 # vertex/DOF guard below is the authoritative dense-memory safety limit.
 MAX_SOLVER_MESH_ARTIFACT_TRIANGLES = 22_000
 DENSE_SOLVER_MEMORY_LIMIT_BYTES = 8 * 1024**3
-SOLVER_MESH_CACHE_FORMAT_VERSION = 1
+# 2: integrity now carries a self_intersection report.
+SOLVER_MESH_CACHE_FORMAT_VERSION = 2
 
 _solver_mesh_cache = SolverMeshArtifactCache()
 
@@ -330,6 +335,44 @@ def _require_closed_acoustic_topology(
     )
 
 
+SELF_INTERSECTION_WARNING_PREFIX = "Solver mesh self-intersects"
+
+
+def _self_intersection_warnings(report: Mapping[str, Any]) -> list[str]:
+    """Describe overlapping triangles without guessing which surfaces they are.
+
+    The detector sees geometry, not roles: every rigid surface shares one
+    physical tag, so the message names the count, the size and the place, and
+    offers the free-standing thin-wall case as the usual cause rather than
+    asserting it.
+    """
+
+    if not report.get("checked"):
+        return []
+    crossings = int(report.get("proper_crossing_count", 0))
+    coplanar = int(report.get("coplanar_overlap_count", 0))
+    if crossings + coplanar == 0:
+        return []
+    samples = report.get("samples") or []
+    where = ""
+    if samples:
+        worst = samples[0]
+        x, y, z = (float(value) * 1000.0 for value in worst["location_m"])
+        where = (
+            f", the largest spanning {float(worst['extent_m']) * 1000.0:.1f} mm "
+            f"near (x {x:.1f}, y {y:.1f}, z {z:.1f}) mm"
+        )
+    overlaps = f"{crossings:,} triangle pairs cross"
+    if coplanar:
+        overlaps += f" and {coplanar:,} overlap in-plane"
+    return [
+        f"{SELF_INTERSECTION_WARNING_PREFIX}: {overlaps}{where}. Surfaces that "
+        "pass through each other are not the boundary the design describes, so "
+        "the solved field is not the field of the intended geometry. On a "
+        "free-standing waveguide this is usually a thin wall meshed at a coarse "
+        "rear resolution: increase Wall Thickness or reduce Rear Resolution."
+    ]
+
 def _large_mesh_warnings(
     *,
     triangle_count: int,
@@ -563,6 +606,15 @@ def _build_sync(
     )
     integrity["semantic_orientation"] = semantic_orientation
     integrity["valid"] = bool(integrity["valid"] and semantic_orientation["valid"])
+    # Deliberately NOT folded into integrity["valid"]. That flag means shape,
+    # degeneracy, manifoldness and orientation, it is consumed by the results UI
+    # and the render CLI, and -- decisively -- _require_closed_acoustic_topology
+    # below raises on it before mesh_validation_mode is ever read, so folding a
+    # crossing in here would hard-fail closed models with no escape hatch. The
+    # severity decision belongs to build_solver_mesh, where the mode is known.
+    integrity["self_intersection"] = mesh_self_intersection_report(
+        vertices, triangles
+    )
     _require_closed_acoustic_topology(config, integrity)
     tag_counts = {
         str(tag): tag_count_values.get(tag, 0) for tag in sorted(CANONICAL_SURFACE_TAGS)
@@ -636,6 +688,19 @@ def _build_sync(
     if not integrity["valid"]:
         warnings.append(
             "Solver mesh contains invalid, degenerate, or non-manifold triangles."
+        )
+    warnings.extend(_self_intersection_warnings(integrity["self_intersection"]))
+    fold = metadata.get("outerOffsetFold")
+    if fold:
+        # The mesher has always detected this and only logged it, on the
+        # grounds that the acoustic surface is unaffected. That is true of the
+        # analytic profile and false of the boundary the solver integrates
+        # over, and a log line reaches nobody reading a polar plot.
+        warnings.append(
+            f"Outer wall offset folds on itself: {fold}. The requested wall "
+            "thickness exceeds the throat's curvature radius there, so the "
+            "rear shell doubles back through itself. Reduce Wall Thickness or "
+            "open the throat curvature."
         )
     off_plane_open_edges = int(integrity.get("off_plane_open_edge_count", 0))
     # Only a bare horn owns an intentionally open mouth rim. Closed shell and
@@ -750,6 +815,18 @@ async def build_solver_mesh(
     result["stats"]["mesh_validation_mode"] = validation_mode
     if quadrants_warning is not None:
         result["stats"].setdefault("warnings", []).append(quadrants_warning)
+    self_intersection = result["integrity"].get("self_intersection") or {}
+    crossings = int(self_intersection.get("proper_crossing_count", 0)) + int(
+        self_intersection.get("coplanar_overlap_count", 0)
+    )
+    # Ahead of the topology check on purpose: both raise the same way, and a
+    # crossing names a cause the user can act on where "failed topology
+    # integrity validation" does not.
+    if validation_mode == "strict" and crossings:
+        raise RuntimeError(
+            f"Solver mesh failed strict validation: {crossings:,} self-intersecting "
+            "triangle pairs. Increase Wall Thickness or reduce Rear Resolution."
+        )
     if validation_mode == "strict" and not result["integrity"]["valid"]:
         raise RuntimeError("Solver mesh failed strict topology integrity validation")
     if validation_mode == "off":
@@ -757,6 +834,7 @@ async def build_solver_mesh(
             warning
             for warning in result["stats"]["warnings"]
             if not warning.startswith("Solver mesh contains invalid")
+            and not warning.startswith(SELF_INTERSECTION_WARNING_PREFIX)
         ]
     return result
 
@@ -767,6 +845,7 @@ __all__ = [
     "LARGE_MESH_WARNING_FULL_DOMAIN_TRIANGLES",
     "MAX_SOLVER_MESH_ARTIFACT_TRIANGLES",
     "MOUTH_APERTURE_SURFACE_TAG",
+    "SELF_INTERSECTION_WARNING_PREFIX",
     "SOLVER_MESH_CACHE_FORMAT_VERSION",
     "build_solver_mesh",
     "clear_solver_mesh_cache",
