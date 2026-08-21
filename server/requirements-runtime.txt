@@ -10,6 +10,8 @@ numpy==2.4.6
 # must not rest on matplotlib and pytest happening to require it.
 packaging==26.3
 pillow==12.2.0
+# Native desktop window around the loopback-served frontend on macOS and Windows.
+pywebview==6.2.1
 # bempp-cl assembles on an OpenCL *CPU* device, which is hornlab-bempp-bem's own
 # default and what it calls its production backend. That holds on Windows and
 # Linux. It does not hold on Apple Silicon, whose ICD exposes the GPU and no CPU

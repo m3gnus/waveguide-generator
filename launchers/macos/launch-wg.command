@@ -7,7 +7,7 @@
 # instance rather than failing: the lock owner's URL is opened and the status
 # window reports the running server.
 #
-# Pass --no-gui for the terminal-only launcher.
+# Pass --window for the native application window, or --no-gui for terminal mode.
 
 set -u
 
@@ -156,8 +156,8 @@ if [[ ! -f "$REPO_DIR/frontend/dist/index.html" ]]; then
 Run 'cd frontend && npm ci && npm run build' in the checkout, then open this launcher again."
 fi
 
-echo "Starting the Waveguide Generator status window..."
-echo "Quit the status window to stop the server."
+echo "Starting Waveguide Generator..."
+echo "Quit its window to stop the server."
 echo
 
 exec "$PYTHON" -m launchers.statusapp "$@"

@@ -12,6 +12,7 @@ import { JobsPreferencesSurface, ResultsPreferencesSurface } from '../prefs/Pref
 import { useDocumentStore } from '../stores/document';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { Icon } from './icons';
+import { LogDialog } from './LogDialog';
 import { middleEllipsis } from './ResultsPanel';
 
 function clock(iso: string | null): string {
@@ -88,10 +89,11 @@ export const RADIATION_IMPEDANCE_STAGE = 'radiation_impedance';
  */
 export function RadiationImpedanceButton({ job }: { job: JobItem }) {
   if (!job.has_radiation_impedance_artifact) return null;
-  return <button
+  return <a
     title="Download the port-exit radiation-impedance matrix (NPZ) solved for this run's passive-cardioid campaign"
-    onClick={() => window.open(`/api/radiation-impedance/${encodeURIComponent(job.id)}`, '_blank')}
-  >Radiation Z</button>;
+    href={`/api/radiation-impedance/${encodeURIComponent(job.id)}`}
+    download
+  >Radiation Z</a>;
 }
 
 export interface JobCardProps {
@@ -128,6 +130,7 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
   const [titleDraft, setTitleDraft] = useState(job.label ?? '');
   const [displayLabel, setDisplayLabel] = useState(job.label);
   const [renameError, setRenameError] = useState<string | null>(null);
+  const [logOpen, setLogOpen] = useState(false);
   const cancelRename = useRef(false);
   useEffect(() => {
     setDisplayLabel(job.label);
@@ -188,6 +191,7 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
     {!expanded && rating > 0 && <span className="job-stars" aria-label={`Kept, rated ${rating} of 5`} title="Kept: rated runs are never cleaned up">{'★'.repeat(rating)}</span>}
   </>;
   return <article role="listitem" className={`job-card ${running ? 'running' : failed ? 'failed' : cancelled ? 'cancelled' : 'complete'}${selected ? ' selected' : ''}${expanded ? '' : ' collapsed'}`} aria-current={selected ? 'true' : undefined}>
+    {logOpen && <LogDialog jobId={job.id} onClose={() => setLogOpen(false)}/>}
     <header>
       {selectable
         ? <button className={`job-select${editing ? ' editing' : ''}`} aria-label={`Select ${displayName}`} aria-pressed={selected} title={selected ? 'Showing this run' : job.has_results ? 'Show this run in the viewport and charts' : 'Show this run design in the viewport'} onClick={() => selectJob(job)}>{heading}</button>
@@ -226,15 +230,15 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
           20-second stall in the middle of an otherwise familiar progress bar. */}
       {job.stage === RADIATION_IMPEDANCE_STAGE && <p className="job-stage-note">Extra pass before the main solve: the passive-cardioid port needs its own radiation-impedance matrix over the port aperture.</p>}
       {job.log_tail.length > 0 && <p title={job.log_tail.at(-1)}>{job.log_tail.at(-1)}</p>}
-      <footer><button disabled={job.cancellation_requested} onClick={() => void jobsSocket.stopJob(job.id).catch((error) => onError(String(error)))}>{job.cancellation_requested ? 'Stopping…' : 'Stop'}</button><button onClick={() => window.open(`/api/jobs/${encodeURIComponent(job.id)}/log`, '_blank')}>Log</button></footer>
+      <footer><button disabled={job.cancellation_requested} onClick={() => void jobsSocket.stopJob(job.id).catch((error) => onError(String(error)))}>{job.cancellation_requested ? 'Stopping…' : 'Stop'}</button><button onClick={() => setLogOpen(true)}>Log</button></footer>
     </> : failed ? <>
       <p>failed after {duration(secondsBetween(job.started_at ?? job.queued_at, job.completed_at, now))} · {job.stage ?? 'solve'} stage</p>
       <div className="job-error" title={job.error_message ?? undefined}>{job.error_message ?? 'Simulation failed without a diagnostic.'}</div>
       <DesignAvailabilityNotice job={job}/>
-      <footer><RerunButton job={job} onRerun={retry} label="Retry" className=""/><button onClick={() => window.open(`/api/jobs/${encodeURIComponent(job.id)}/log`, '_blank')}>Open log</button></footer>
+      <footer><RerunButton job={job} onRerun={retry} label="Retry" className=""/><button onClick={() => setLogOpen(true)}>Open log</button></footer>
     </> : cancelled ? <>
       <p>cancelled after {duration(secondsBetween(job.started_at ?? job.queued_at, job.completed_at, now))}</p>
-      <footer><RerunButton job={job} onRerun={retry}/><button onClick={() => window.open(`/api/jobs/${encodeURIComponent(job.id)}/log`, '_blank')}>Log</button></footer>
+      <footer><RerunButton job={job} onRerun={retry}/><button onClick={() => setLogOpen(true)}>Log</button></footer>
     </> : expanded && <>
       <p>{metrics(job, now)}</p>
       {/* The mesh diagnoses that used to end the solve. The run finished, so
@@ -247,7 +251,7 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
           without a design Waveguide Generator can read, in which case rerunning it would
           silently run whatever is on screen instead, under its name. */}
       <DesignAvailabilityNotice job={job}/>
-      <footer><RerunButton job={job} onRerun={retry}/>{selected && canExportRun(job) && <RunExportControl job={job} onOpenExportSettings={onOpenExportSettings}/>}<RadiationImpedanceButton job={job}/><button onClick={() => window.open(`/api/jobs/${encodeURIComponent(job.id)}/log`, '_blank')}>Log</button></footer>
+      <footer><RerunButton job={job} onRerun={retry}/>{selected && canExportRun(job) && <RunExportControl job={job} onOpenExportSettings={onOpenExportSettings}/>}<RadiationImpedanceButton job={job}/><button onClick={() => setLogOpen(true)}>Log</button></footer>
     </>}
   </article>;
 }, jobCardPropsEqual);

@@ -84,6 +84,13 @@ The repository root intentionally has no duplicate install or launch scripts;
 use the platform folders above. On first launch the entry creates `.venv` with
 CPython 3.13 and installs the locked dependencies.
 
+On macOS and Windows, append `--window` to the command launcher to open the
+interface in one native desktop window instead of the tkinter status window.
+Closing that window stops the owned server. `--browser` explicitly keeps the
+normal status-window/browser workflow. Linux does not offer the native window
+in this release; `--window` reports that limitation and falls back to the
+status window.
+
 For the original plain-terminal behavior, append `--no-gui`:
 
 ```

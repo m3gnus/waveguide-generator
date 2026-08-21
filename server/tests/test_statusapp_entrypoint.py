@@ -11,6 +11,8 @@ Windows and Linux.
 from __future__ import annotations
 
 from pathlib import Path
+import sys
+from types import ModuleType
 
 from launchers.statusapp import __main__ as entrypoint
 from launchers.statusapp.controller import missing_frontend_reason
@@ -61,3 +63,42 @@ def test_the_guarded_path_points_at_the_file_the_server_serves() -> None:
     from server.app import FRONTEND_DIST
 
     assert entrypoint.FRONTEND_INDEX == FRONTEND_DIST / "index.html"
+
+
+def test_window_mode_is_delegated_without_forwarding_the_display_flag(monkeypatch) -> None:
+    seen: list[list[str]] = []
+    module = ModuleType("launchers.desktop")
+    module.main = lambda arguments: seen.append(arguments) or 7
+    monkeypatch.setitem(sys.modules, "launchers.desktop", module)
+
+    assert entrypoint.main(["--window", "--port", "3199"]) == 7
+    assert seen == [["--port", "3199"]]
+
+
+def test_browser_flag_keeps_the_status_window_default(monkeypatch) -> None:
+    controllers: list[tuple[str, ...]] = []
+    controller_module = ModuleType("launchers.statusapp.controller")
+
+    class Controller:
+        def __init__(self, *, server_args):
+            controllers.append(tuple(server_args))
+
+    controller_module.StatusController = Controller
+    view_module = ModuleType("launchers.statusapp.view")
+    view_module.run = lambda _controller: 0
+    monkeypatch.setitem(sys.modules, "launchers.statusapp.controller", controller_module)
+    monkeypatch.setitem(sys.modules, "launchers.statusapp.view", view_module)
+
+    assert entrypoint.main(["--browser", "--port", "3199"]) == 0
+    assert controllers == [("--port", "3199")]
+
+
+def test_no_gui_consumes_desktop_display_flags(monkeypatch, tmp_path: Path) -> None:
+    index = tmp_path / "index.html"
+    index.write_text("<html></html>", encoding="utf-8")
+    monkeypatch.setattr(entrypoint, "FRONTEND_INDEX", index)
+    seen: list[list[str]] = []
+    monkeypatch.setattr("launch.serve.main", lambda arguments: seen.append(arguments) or 0)
+
+    assert entrypoint.main(["--window", "--no-gui", "--port", "3199"]) == 0
+    assert seen == [["--port", "3199"]]
