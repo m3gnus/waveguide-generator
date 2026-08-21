@@ -850,9 +850,9 @@ def test_real_bempp_engine_traces_round_trip_through_field_plane_pipeline(
         }
 
     monkeypatch.setattr(bempp, "build_solver_mesh", build_tetrahedron)
-    # The synthetic full tetrahedron replaces a mesher output, so it has no
-    # reduced-domain cut even if request canonicalisation selects one.
-    monkeypatch.setattr(bempp, "native_symmetry_plane", lambda _context: None)
+    # The synthetic full tetrahedron replaces a mesher output, so explicitly
+    # request the full domain instead of relying on an in-process monkeypatch:
+    # native BEMPP now runs in a killable child process.
     request = SolveRequest.model_validate(
         {
             "design": {
@@ -877,6 +877,7 @@ def test_real_bempp_engine_traces_round_trip_through_field_plane_pipeline(
             },
             "options": {
                 "engine": "bempp",
+                "symmetry": "full",
                 "frequency_range": [320, 321],
                 "num_frequencies": 1,
                 "frequency_spacing": "linear",

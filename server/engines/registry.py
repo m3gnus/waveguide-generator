@@ -123,7 +123,9 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
                 field_traces=name in {"metal", "bempp"},
                 di_sphere=name != "beat",
                 cancellation_granularity=(
-                    "intra-frequency" if name == "metal" else "between-frequencies"
+                    "intra-frequency"
+                    if name in {"metal", "bempp"}
+                    else "between-frequencies"
                 ),
             )
         )
