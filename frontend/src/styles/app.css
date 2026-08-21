@@ -410,6 +410,15 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .result-chip > span { overflow: hidden; text-overflow: ellipsis; }
 .result-chip > .result-context-marker { flex: none; padding: 1px 3px; border: 1px solid rgba(var(--acc-rgb), .28); border-radius: var(--r3); background: rgba(var(--acc-rgb), .1); color: var(--acc); font: var(--text-micro) var(--mono); overflow: visible; }
 .result-chip.muted i { border-top: 1px dashed var(--fg2); }
+/* One segmented control, not a row of chips: the views are exclusive, and the
+   old independent-looking chips read as filters that could be combined. The
+   hairline between segments is a border on the group, so a selected segment
+   can paint edge to edge without the group's outline showing through it. */
+.result-view-switch { display: flex; flex: none; align-items: center; height: 19px; overflow: hidden; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); }
+.results-toolbar .result-view-switch button { height: 100%; min-width: 44px; padding: 0 8px; border: 0; border-left: 1px solid var(--hair); border-radius: 0; background: transparent; color: var(--fg2); font-size: var(--text-micro); text-transform: none; white-space: nowrap; }
+.results-toolbar .result-view-switch button:first-child { border-left: 0; }
+.results-toolbar .result-view-switch button:hover:not(.on) { background: var(--ov3); color: var(--fg1); }
+.results-toolbar .result-view-switch button.on { background: rgba(var(--acc-rgb), .16); color: var(--acc); }
 .result-count-control { display: flex; align-items: center; gap: 4px; color: var(--fg3); font-size: var(--text-micro); text-transform: none; }
 .result-count-control select { height: 19px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg1); font-size: var(--text-micro); }
 /* Charts get everything the dock can spare: the gutters are hairline-thin and
@@ -857,7 +866,8 @@ textarea:disabled { opacity: .48; }
 .result-chip,
 .result-compare-add { height: 21px; border-radius: var(--r3); font-size: var(--text-micro); }
 .results-toolbar button.result-context-marker,
-.results-toolbar .result-new-run { height: 21px; }
+.results-toolbar .result-new-run,
+.results-toolbar .result-view-switch { height: 21px; }
 .result-count-control,
 .result-count-control select { font-size: var(--text-micro); }
 .result-count-control select { height: 21px; }

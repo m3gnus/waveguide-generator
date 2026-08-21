@@ -1,6 +1,7 @@
 import type { JobItem } from '../api/jobsSocket';
 import { runDisplayName } from '../prefs/preferences';
-import type { ResultPayload } from './types';
+import { channelLabel } from './channelLabel';
+import { combineMetadataOf, type ResultPayload } from './types';
 import { excursionSeries } from './drivePower';
 import { formatValidityFrequency, resultCombineWarnings, resultFrequencyValidity } from './validity';
 
@@ -230,7 +231,12 @@ export function summaryGroups(_context: SummaryContext): SummaryGroup[] {
     row(importRows, 'Geometry', 'imported');
     const channels = channelIds(wrapper);
     if (channels.length > 1 && context.channelId) {
-      row(importRows, 'Channel', `${context.channelId} · ${channels.length.toLocaleString()} channels`);
+      // The band, with the authored id beside it when the two differ: the card
+      // is where a curve is traced back to a physical driver, so the name the
+      // user gave it in CAD cannot be dropped in favour of a label.
+      const label = channelLabel(wrapper, context.channelId);
+      const named = label === context.channelId ? label : `${label} (${context.channelId})`;
+      row(importRows, 'Channel', `${named} · ${channels.length.toLocaleString()} channels`);
     }
     const ingestId = string(wrapperMetadata.ingest_id);
     if (ingestId) row(importRows, 'Ingest', ingestId);
@@ -238,6 +244,30 @@ export function summaryGroups(_context: SummaryContext): SummaryGroup[] {
     if (manifest) row(importRows, 'Manifest', manifest.slice(0, 12), manifest);
   }
   group(groups, 'Import', importRows);
+
+  // What the combined view is actually showing. Without these two rows the sum
+  // is an unlabelled curve: the crossovers and the time alignment are the whole
+  // content of an LR4 sum, and both are already in the payload that produced it.
+  const combine = combineMetadataOf(result);
+  if (combine) {
+    const combineRows: SummaryRow[] = [];
+    const memberName = (index: number): string =>
+      string(combine.member_roles?.[index]) ?? channelLabel(wrapper, combine.members[index]);
+    const pairs = combine.members.slice(0, -1).flatMap((_member, index) => {
+      const hz = finite(combine.crossovers_hz[index]);
+      return hz === undefined ? [] : [`${memberName(index)} → ${memberName(index + 1)} ${frequency(hz)}`];
+    });
+    row(combineRows, 'Crossover', pairs.join(', '));
+    if (combine.align !== false && combine.delays_ms) {
+      const delays = combine.delays_ms;
+      const stated = combine.members.flatMap((member, index) => {
+        const delay = finite(delays[member]);
+        return delay === undefined ? [] : [`${memberName(index)} ${delay.toFixed(2)} ms`];
+      });
+      row(combineRows, 'Delays', stated.join(' · '));
+    }
+    group(groups, 'Combine', combineRows);
+  }
 
   const runWarnings = strings(metadata('warnings'));
   const combineWarnings = resultCombineWarnings(result);

@@ -1,7 +1,19 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CompareStore, fetchJobResults, fetchRadiationImpedancePresentation, mergeProvisionalResults, ProvisionalResultsStore, recombineJobResults, ResultsLruCache, resultsCache, type JobResults } from '../api/results';
-import { beamShapeSeries, complexToDb, directivityGrid, directivityIndexSeries, excursionChartSeries, expandResultChannels, impedanceComparable, impedanceSeries, impedanceSubtitle, polarCut, polarMirrorsAcrossAxis, polarSeries, splSeries, type NamedResult } from './mappers';
+import { beamShapeSeries, complexToDb, directivityGrid, directivityIndexSeries, excursionChartSeries, impedanceComparable, impedanceSeries, impedanceSubtitle, polarCut, polarMirrorsAcrossAxis, polarSeries, selectResultChannels, splSeries, type NamedResult } from './mappers';
 import type { ResultPayload } from './types';
+
+/** A channel as the server stamps it from the ingest record's source roles. */
+function roled(payload: JobResults, role: string): JobResults {
+  return { ...payload, metadata: { ...payload.metadata, role } };
+}
+
+function combinedChannel(payload: JobResults, members: string[]): JobResults {
+  return {
+    ...payload,
+    metadata: { ...payload.metadata, combine: { members, crossovers_hz: [1_000] } },
+  };
+}
 
 function result(offset = 0): JobResults {
   return {
@@ -202,48 +214,59 @@ describe('provisional frequency results', () => {
 });
 
 describe('chart data mappers', () => {
-  it('expands imported drive channels into named comparable results', () => {
+  it('contributes only the chosen channel of an imported run', () => {
     const payload: JobResults = {
       frequencies: [],
       channel_order: ['drive-hf', 'drive-mf'],
-      channels: { 'drive-mf': result(2), 'drive-hf': result(1) },
+      channels: { 'drive-mf': roled(result(2), 'MF'), 'drive-hf': roled(result(1), 'HF') },
     };
-    const expanded = expandResultChannels('job-12', 'Run 12', payload);
-    expect(expanded.map(({ id, label }) => ({ id, label }))).toEqual([
-      { id: 'job-12#drive-hf', label: 'Run 12 · drive-hf' },
-      { id: 'job-12#drive-mf', label: 'Run 12 · drive-mf' },
-    ]);
-    expect(expandResultChannels('job-13', 'Run 13', result())[0].result).toBeDefined();
+    expect(selectResultChannels('job-12', 'Run 12', payload, 'drive-mf').map(({ id, label }) => ({ id, label })))
+      .toEqual([{ id: 'job-12#drive-mf', label: 'Run 12 · MF' }]);
+    // No combined channel and no such view: the first channel stands in, and
+    // the label says which, so a comparison never draws an unnamed substitute.
+    expect(selectResultChannels('job-12', 'Run 12', payload, 'combined').map(({ label }) => label))
+      .toEqual(['Run 12 · HF']);
+    expect(selectResultChannels('job-13', 'Run 13', result(), 'combined'))
+      .toEqual([{ id: 'job-13', label: 'Run 13', result: result() }]);
+  });
+
+  it('appends the members of a combined sum as secondary entries', () => {
+    const payload: JobResults = {
+      frequencies: [],
+      channel_order: ['drive-mf', 'drive-hf', 'combined'],
+      channels: {
+        'drive-mf': roled(result(2), 'MF'),
+        'drive-hf': roled(result(1), 'HF'),
+        combined: combinedChannel(result(3), ['drive-mf', 'drive-hf']),
+      },
+    };
+    expect(selectResultChannels('job-9', 'Run 9', payload, 'combined').map(({ label, secondary }) => ({ label, secondary })))
+      .toEqual([
+        { label: 'Run 9 · Combined', secondary: undefined },
+        { label: 'Run 9 · MF', secondary: true },
+        { label: 'Run 9 · HF', secondary: true },
+      ]);
+    // A driver view is that driver alone: the sum is not a second opinion
+    // about it, and the members are not comparisons.
+    expect(selectResultChannels('job-9', 'Run 9', payload, 'drive-hf').map(({ label }) => label))
+      .toEqual(['Run 9 · HF']);
   });
 
   // The coupled campaign appends its derived output last in `channel_order`.
-  // It is a channel like any other here, which is the point: nothing about the
-  // chart list special-cases it, so it can only go missing if the ordering
-  // logic itself breaks.
-  it('lists the derived passive-cardioid channel alongside the drive channels', () => {
+  // Nothing here special-cases it, which is the point: it is reachable as a
+  // view like any other channel.
+  it('falls back to the first channel and preserves an empty-channel wrapper', () => {
     const payload: JobResults = {
       frequencies: [],
       channel_order: ['drive-mf', 'drive-port', 'passive_cardioid'],
       channels: { 'drive-mf': result(1), 'drive-port': result(2), passive_cardioid: result(3) },
     };
-    expect(expandResultChannels('job-77', 'Run 77', payload).map(({ id, label }) => ({ id, label }))).toEqual([
-      { id: 'job-77#drive-mf', label: 'Run 77 · drive-mf' },
-      { id: 'job-77#drive-port', label: 'Run 77 · drive-port' },
-      { id: 'job-77#passive_cardioid', label: 'Run 77 · passive_cardioid' },
-    ]);
-  });
-
-  it('appends unordered channels and preserves an empty-channel wrapper', () => {
-    const payload: JobResults = {
-      frequencies: [],
-      channel_order: ['drive-hf'],
-      channels: { 'drive-mf': result(2), 'drive-hf': result(1) },
-    };
-    expect(expandResultChannels('job', 'Run', payload).map(({ id }) => id)).toEqual([
-      'job#drive-hf', 'job#drive-mf',
-    ]);
+    expect(selectResultChannels('job-77', 'Run 77', payload, 'passive_cardioid').map(({ id, label }) => ({ id, label })))
+      .toEqual([{ id: 'job-77#passive_cardioid', label: 'Run 77 · Cardioid' }]);
+    expect(selectResultChannels('job-77', 'Run 77', payload, 'drive-lf').map(({ id }) => id))
+      .toEqual(['job-77#drive-mf']);
     const empty: JobResults = { frequencies: [123], channels: {} };
-    expect(expandResultChannels('empty', 'Empty', empty)).toEqual([{ id: 'empty', label: 'Empty', result: empty }]);
+    expect(selectResultChannels('empty', 'Empty', empty, 'combined')).toEqual([{ id: 'empty', label: 'Empty', result: empty }]);
   });
 
   it('maps independent frequency arrays into named SPL overlay series', () => {
