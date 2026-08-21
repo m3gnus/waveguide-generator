@@ -66,7 +66,7 @@ describe('results LRU', () => {
     selection.toggleOverlay('keep');
     selection.toggleOverlay('deleted');
     selection.prune(new Set(['keep']));
-    expect(selection.getSnapshot()).toEqual({ primary: null, overlays: ['keep'], following: true });
+    expect(selection.getSnapshot()).toEqual({ primary: null, overlays: ['keep'], following: true, awaiting: null });
   });
 
   it('follows the newest solve until a result is chosen by hand', () => {
@@ -96,7 +96,33 @@ describe('results LRU', () => {
     selection.setPrimary('pinned');
     selection.toggleOverlay('gone');
     selection.prune(new Set(['pinned']));
-    expect(selection.getSnapshot()).toEqual({ primary: 'pinned', overlays: [], following: false });
+    expect(selection.getSnapshot()).toEqual({ primary: 'pinned', overlays: [], following: false, awaiting: null });
+  });
+
+  // A pin taken at any point in the session used to outlive every solve that
+  // came after it: the run the user had just started finished into a rail that
+  // still showed the old result. The submission claims the slot instead, and
+  // the claim is only cashed in when that run has something to show.
+  it('hands the pinned slot to a submitted run once it has results', () => {
+    const selection = new CompareStore();
+    selection.setPrimary('pinned');
+    selection.awaitRun('fresh');
+    expect(selection.getSnapshot()).toMatchObject({ primary: 'pinned', following: false, awaiting: 'fresh' });
+
+    // Jobs messages arrive throughout the solve, and the claimed run is not in
+    // the list at all until the server has registered it.
+    selection.prune(new Set(['pinned']));
+    expect(selection.getSnapshot().awaiting).toBe('fresh');
+
+    selection.followLatest('fresh');
+    expect(selection.getSnapshot()).toMatchObject({ primary: 'fresh', following: true, awaiting: null });
+  });
+
+  it('drops a claim when a result is picked by hand after the solve started', () => {
+    const selection = new CompareStore();
+    selection.awaitRun('fresh');
+    selection.setPrimary('chosen');
+    expect(selection.getSnapshot()).toMatchObject({ primary: 'chosen', following: false, awaiting: null });
   });
 
   it('holds one snapshot identity while the selection is unchanged', () => {

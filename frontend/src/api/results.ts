@@ -215,6 +215,13 @@ export interface CompareSelection {
    * charts the moment its results land instead of waiting to be selected.
    */
   following: boolean;
+  /**
+   * The run a submission is waiting on: the solve the user just started, which
+   * takes the primary slot the moment its results exist even while another
+   * result is pinned. Pressing Solve is a request to see that solve, and a
+   * comparison pinned earlier must not swallow it silently.
+   */
+  awaiting: string | null;
 }
 
 export class ResultsLruCache {
@@ -369,7 +376,7 @@ export async function recombineJobResults(
 }
 
 export class CompareStore {
-  private value: CompareSelection = { primary: null, overlays: [], following: true };
+  private value: CompareSelection = { primary: null, overlays: [], following: true, awaiting: null };
   private readonly listeners = new Set<() => void>();
 
   getSnapshot = (): CompareSelection => this.value;
@@ -379,11 +386,23 @@ export class CompareStore {
   };
   /** Deliberate selection: pins the slot so later solves do not steal it. */
   setPrimary(jobId: string | null): void {
-    this.set({ primary: jobId, overlays: this.value.overlays.filter((id) => id !== jobId), following: false });
+    this.set({ primary: jobId, overlays: this.value.overlays.filter((id) => id !== jobId), following: false, awaiting: null });
   }
   /** Automatic selection of the newest finished solve; keeps tracking it. */
   followLatest(jobId: string | null): void {
-    this.set({ primary: jobId, overlays: this.value.overlays.filter((id) => id !== jobId), following: true });
+    this.set({ primary: jobId, overlays: this.value.overlays.filter((id) => id !== jobId), following: true, awaiting: null });
+  }
+  /**
+   * Claim the primary slot for a run that was just submitted.
+   *
+   * The slot is not taken now -- the run has no results yet, and yanking the
+   * charts to some other solve at submission time would be worse than what
+   * this fixes. It is taken by whoever resolves the claim once results exist
+   * (shell/ResultsPanel), so a pinned comparison stays on screen for the
+   * length of the solve and is replaced by the run the user asked for.
+   */
+  awaitRun(jobId: string | null): void {
+    this.set({ ...this.value, awaiting: jobId });
   }
   toggleOverlay(jobId: string): void {
     if (jobId === this.value.primary) return;
@@ -396,17 +415,19 @@ export class CompareStore {
     if (this.value.primary === jobId) {
       const [primary = null, ...overlays] = this.value.overlays;
       // Dropping the pinned result hands the slot back to the newest solve.
-      this.set({ primary, overlays, following: primary === null });
+      this.set({ primary, overlays, following: primary === null, awaiting: this.value.awaiting });
     } else {
       this.set({ ...this.value, overlays: this.value.overlays.filter((id) => id !== jobId) });
     }
   }
-  clear(): void { this.set({ primary: null, overlays: [], following: true }); }
+  clear(): void { this.set({ primary: null, overlays: [], following: true, awaiting: null }); }
   prune(validJobIds: ReadonlySet<string>): void {
     const primary = this.value.primary && validJobIds.has(this.value.primary) ? this.value.primary : null;
     const overlays = this.value.overlays.filter((id) => validJobIds.has(id) && id !== primary);
     if (primary === this.value.primary && overlays.length === this.value.overlays.length) return;
-    this.set({ primary, overlays, following: primary === null ? true : this.value.following });
+    // `awaiting` is deliberately not pruned: this runs on every jobs message,
+    // and a run claimed at submission time is routinely not in the list yet.
+    this.set({ primary, overlays, following: primary === null ? true : this.value.following, awaiting: this.value.awaiting });
   }
   private set(value: CompareSelection): void {
     // A selection that did not change must not get a new identity. This store
@@ -417,6 +438,7 @@ export class CompareStore {
     if (
       value.primary === this.value.primary
       && value.following === this.value.following
+      && value.awaiting === this.value.awaiting
       && value.overlays.length === this.value.overlays.length
       && value.overlays.every((id, index) => id === this.value.overlays[index])
     ) return;

@@ -1710,6 +1710,22 @@ export function ResultsPanel() {
       || ((job.status === 'running' || job.status === 'queued') && Boolean(provisional.entries[job.id])))
   )) ?? null, [coherenceContext.designId, coherenceContext.designRevision, coherenceContext.ingestId, coherenceContext.mode, jobs, provisional]);
   useEffect(() => {
+    // A solve the user started outranks a pinned comparison: the run submitted
+    // for it takes the primary slot as soon as its results exist, and only
+    // then, so the pinned result stays on screen while the solve runs. A run
+    // that ends without ever producing results releases the claim, leaving the
+    // pin where it was.
+    if (selection.awaiting) {
+      const awaited = jobs.find((job) => job.id === selection.awaiting) ?? null;
+      if (awaited && (awaited.has_results || Boolean(provisional.entries[awaited.id]))) {
+        compareSelection.followLatest(awaited.id);
+        return;
+      }
+      if (awaited && (awaited.status === 'error' || awaited.status === 'cancelled')) {
+        compareSelection.awaitRun(null);
+        return;
+      }
+    }
     // While following, every solve that finishes takes the primary slot as soon
     // as its results exist — the charts repaint without anyone selecting a job.
     if (selection.following) {
@@ -1722,7 +1738,7 @@ export function ResultsPanel() {
       && (job.has_results || Boolean(provisional.entries[job.id]))
     ))) return;
     compareSelection.followLatest(latest?.id ?? null);
-  }, [jobs, latest, provisional, selection.following, selection.primary]);
+  }, [jobs, latest, provisional, selection.awaiting, selection.following, selection.primary]);
 
   const ids = useMemo(() => [selection.primary, ...selection.overlays].filter((id): id is string => Boolean(id)), [selection]);
   const selectionKey = ids.join('\u0000');
