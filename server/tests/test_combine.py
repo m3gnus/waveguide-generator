@@ -98,6 +98,32 @@ def test_weights_are_conjugated_onto_raw_fields() -> None:
     assert np.allclose(combined.pressure_complex[:, 0, 1], expected_raw, atol=1e-12)
 
 
+def test_member_roles_are_reported_parallel_to_the_members() -> None:
+    ones = np.ones(_freqs().size, dtype=np.complex128)
+    results = {"low": _member(ones), "high": _member(ones)}
+    payload = combine_drive_channels(
+        results,
+        members=["low", "high"],
+        crossovers_hz=[1000.0],
+        member_roles={"low": "LF", "high": "HF"},
+    )[1]
+    assert payload["members"] == ["low", "high"]
+    assert payload["member_roles"] == ["LF", "HF"]
+
+    unroled = combine_drive_channels(
+        results, members=["low", "high"], crossovers_hz=[1000.0]
+    )[1]
+    assert unroled["member_roles"] == [None, None]
+
+    partial = combine_drive_channels(
+        results,
+        members=["low", "high"],
+        crossovers_hz=[1000.0],
+        member_roles={"high": "HF"},
+    )[1]
+    assert partial["member_roles"] == [None, "HF"]
+
+
 @pytest.mark.parametrize("delay_s", [100e-6, 600e-6])
 def test_alignment_recovers_a_known_arrival_offset(delay_s: float) -> None:
     # 600 us exceeds half a period at the 1.2 kHz crossover, so recovering it

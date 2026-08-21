@@ -102,6 +102,9 @@ class MetalUnavailable(RuntimeError):
 
 logger = logging.getLogger(__name__)
 
+# Ingest source roles that name a driver band on a result channel.
+_BAND_ROLES = frozenset({"HF", "MF", "LF"})
+
 
 def _native_config_or_unavailable(kwargs: Mapping[str, Any]) -> Any:
     """Apply one capability-error ladder to parametric and imported configs."""
@@ -590,6 +593,47 @@ def _record_source_area_m2(record: Mapping[str, Any], source_id: str) -> float:
     raise ValueError(
         f"driver coupling needs a recorded positive area for source {source_id!r}"
     )
+
+
+def _channel_source_identity(
+    geometry: ImportedGeometrySource, record: Mapping[str, Any]
+) -> dict[str, dict[str, Any]]:
+    """Name each drive channel's driver band and sources from the record.
+
+    Only band roles name a driver: the record also carries structural roles
+    (the rigid shell, port apertures) that no result may present as one. A
+    channel spanning several roles takes the first roled source's band.
+    """
+
+    roles: dict[str, str] = {}
+    labels: dict[str, str] = {}
+    for source in record.get("sources") or []:
+        if not isinstance(source, Mapping):
+            continue
+        source_id = str(source.get("id") or "")
+        if not source_id:
+            continue
+        role = str(source.get("role") or "").strip().upper()
+        if role in _BAND_ROLES:
+            roles[source_id] = role
+        label = source.get("label") or source.get("name")
+        if isinstance(label, str) and label.strip():
+            labels[source_id] = label.strip()
+    identity: dict[str, dict[str, Any]] = {}
+    for channel in geometry.drive_channels:
+        source_ids = list(channel.source_ids)
+        entry: dict[str, Any] = {
+            "role": next(
+                (roles[source_id] for source_id in source_ids if source_id in roles),
+                None,
+            )
+        }
+        if any(source_id in labels for source_id in source_ids):
+            entry["source_labels"] = [
+                labels.get(source_id, source_id) for source_id in source_ids
+            ]
+        identity[channel.id] = entry
+    return identity
 
 
 def _channel_basis_metadata(
@@ -1191,6 +1235,7 @@ def _combined_channel_response(
     status: Mapping[str, Any],
     kwargs: Mapping[str, Any],
     per_source_validity: Mapping[str, Any],
+    channel_identity: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, Any]:
     """Package the LR4 time-aligned sum as one more contract-shaped channel."""
 
@@ -1215,6 +1260,10 @@ def _combined_channel_response(
         level_match=spec.level_match,
         align=spec.align,
         member_validity_hz=member_validity_hz,
+        member_roles={
+            member: channel_identity.get(member, {}).get("role")
+            for member in spec.members
+        },
     )
     source_ids = [
         source_id
@@ -1330,6 +1379,8 @@ def solve_imported_metal_from_msh_text(
         )
     )
 
+    channel_identity = _channel_source_identity(geometry, record)
+
     source_specs: list[dict[int, complex]] = []
     source_profiles: dict[int, Any] = {}
     for channel in geometry.drive_channels:
@@ -1400,6 +1451,7 @@ def solve_imported_metal_from_msh_text(
             )
             if len(channel.source_ids) > 1:
                 channel_response.pop("impedance", None)
+            channel_response["metadata"].update(channel_identity[channel.id])
             provisional_channels[channel.id] = channel_response
         result_callback(
             index,
@@ -1559,6 +1611,7 @@ def solve_imported_metal_from_msh_text(
                 "geometry_type": "imported",
                 "drive_channel_id": channel.id,
                 "source_ids": list(channel.source_ids),
+                **channel_identity[channel.id],
                 "device_interface": {"selected": "metal", "metal": status},
                 "engine": "hornlab-metal-bem",
                 "phase_time_convention": "exp(+ikr)",
@@ -1767,6 +1820,7 @@ def solve_imported_metal_from_msh_text(
             status=status,
             kwargs=kwargs,
             per_source_validity=per_source_validity,
+            channel_identity=channel_identity,
         )
         channels[geometry.combine.id] = combined_response
         channel_order.append(geometry.combine.id)

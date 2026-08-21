@@ -277,6 +277,7 @@ def combine_drive_channels(
     level_match: bool = True,
     align: bool = True,
     member_validity_hz: Mapping[str, float] | None = None,
+    member_roles: Mapping[str, str | None] | None = None,
 ) -> tuple[Any, dict[str, Any]]:
     """Sum member channel results into one synthetic native-shaped result.
 
@@ -456,9 +457,11 @@ def combine_drive_channels(
         sphere_theta_deg=sphere_theta,
         sphere_phi_deg=sphere_phi,
     )
+    roles = member_roles or {}
     payload: dict[str, Any] = {
         "type": "lr4_time_aligned_sum",
         "members": list(members),
+        "member_roles": [roles.get(name) for name in members],
         "crossovers_hz": [float(value) for value in crossovers_hz],
         "level_match": {
             "enabled": bool(level_match),
