@@ -374,7 +374,7 @@ class BeatEngine:
         results.setdefault("metadata", {})["mesh_stats"] = mesh["stats"]
         results.setdefault("metadata", {})["solve_path"] = "full-3d"
         results.setdefault("metadata", {})["axisymmetric_eligibility_reasons"] = [
-            "axisymmetric-meridian is a Metal-only fast path"
+            "the solve planner selected the full-3D BEAT formulation"
         ]
         field_traces = results.pop("_field_traces", None)
         field_trace_reason = results.pop("_field_trace_unavailable_reason", None)

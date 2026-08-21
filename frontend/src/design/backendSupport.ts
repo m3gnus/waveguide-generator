@@ -8,7 +8,7 @@ export type BackendIdentity = string | EngineCapability | null;
  * WG has always let every host pick every option and then failed at solve time,
  * which on a Windows/BEMPP box meant meshing a design for a minute before being
  * told the backend cannot solve it at all. These names let the controls that
- * offer a Metal-only choice hide it up front instead.
+ * offer a backend-specific choice hide it up front instead.
  *
  * Each entry mirrors a real server-side refusal. Keep them in sync: a feature
  * listed here as supported that the server then rejects is worse than no gate,

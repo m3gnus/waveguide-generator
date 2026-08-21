@@ -34,29 +34,26 @@ diagnostics.
 
 ### What each backend can solve
 
-WG ships two solvers. **Metal** is the GPU backend and runs on Apple Silicon
-macOS only; **BEMPP** is the CPU backend and is what Windows and Linux use, with
-OpenCL doing the matrix assembly. Both solve the same free-standing problem to
-the same accuracy — BEMPP is slower, not less correct.
+WG plans the **formulation** separately from the full-3D backend. Eligible round
+designs use the portable **Axisymmetric (meridian)** runner on macOS, Windows,
+and Linux; it runs on CPU everywhere and can use Metal acceleration on Apple
+Silicon. Non-axisymmetric designs fall back to **Metal** (Apple GPU), **BEAT**
+(CUDA/ROCm GPU), or **BEMPP** (CPU/OpenCL), according to the host and the backend
+selected in Solve options.
 
-Three things need Metal, and WG hides them where it cannot run them:
+The infinite-baffle setting is design physics, not a solver choice. Axisymmetric,
+Metal full 3D, and current BEMPP full 3D all implement the coupled interior plus
+Rayleigh-aperture formulation. BEMPP currently uses a validated full-domain mesh
+for that formulation; Metal can also use half/quarter domains. BEAT does not yet
+support coupled infinite baffle. No backend substitutes an image/double-horn
+approximation for a flush-mounted waveguide.
 
-- **Infinite baffle.** The mesh for a flush-mounted mouth is a coupled interior
-  cavity plus an aperture in the baffle plane, and only Metal couples that
-  aperture to the exterior half-space. Approximate it on BEMPP by solving
-  free-standing with an enclosure: give it a deep box and generous baffle
-  margins with a small edge radius. That is a real finite baffle, and it
-  approaches the infinite-baffle answer as the baffle grows.
-- **The axisymmetric meridian fast path.** BEMPP is always full 3-D.
-- **Solving imported CAD geometry.** The CAD round trip itself works anywhere;
-  only the solve on the returned model needs Metal.
-
-Everything else is the same on both: source shape, velocity convention, symmetry
-reduction, explicit frequency lists, enclosures, field planes and all exports.
-A design that selects a Metal-only option stays editable on a host without
-Metal — the option is shown with the reason attached rather than removed, so a
-file authored on a Mac or an ATH `.cfg` carrying `ABEC.SimType = 1` can be seen
-and changed rather than failing at solve with nothing on screen to explain it.
+Imported CAD geometry still requires Metal. Field-plane traces are available
+from free-standing Metal and BEMPP full-3D solves; Axisymmetric and coupled-IB
+solves report that traces are unavailable. The capability response drives these
+controls, so an older optional solver package cannot advertise a feature it does
+not implement. Designs carrying an unavailable option remain editable and show
+an actionable reason instead of silently changing the physics.
 
 Watch the mesh ceiling when substituting a large baffle: 22,000 triangles in the
 solved domain is a hard limit. Symmetry is the lever — a body of revolution or a
