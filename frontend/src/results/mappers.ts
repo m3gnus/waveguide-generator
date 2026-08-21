@@ -1,6 +1,8 @@
 import type { JobResults, NullableNumber, PolarSample } from '../api/results';
 import { applySmoothing, type SmoothingMode } from './smoothing';
-import { resultChannels, type ResultPayload } from './types';
+import { channelLabel } from './channelLabel';
+import { combineMetadataOf, type ResultPayload } from './types';
+import { resolveResultView, type ResultView } from '../stores/resultView';
 import { drivePowerSeries, excursionSeries, hasElectricalImpedance } from './drivePower';
 import { displayPhaseDegrees, groupDelayMilliseconds, propagationReference } from './phaseAnalysis';
 
@@ -10,19 +12,46 @@ export interface NamedResult {
   result: JobResults;
   /** The CAD envelope owns per-source evidence that its channel does not repeat. */
   wrapper?: JobResults;
+  /**
+   * A member of the combined sum on screen, not a run being compared with it.
+   * Only the cards that are about the drivers themselves draw one; see
+   * `chartEntries`.
+   */
+  secondary?: boolean;
+  /** Which channel of `wrapper` this entry is, for export naming and labels. */
+  channelId?: string;
 }
 
-/** Expand an imported result's unit-drive bases into the same named flow as runs. */
-export function expandResultChannels(id: string, label: string, result: JobResults): NamedResult[] {
-  if (!result.channels) return [{ id, label, result }];
-  const channels = resultChannels(result as ResultPayload);
-  if (!channels.length) return [{ id, label, result }];
-  return channels.map(({ id: channel, result: channelResult }) => ({
+/**
+ * The channels one run contributes under the active view.
+ *
+ * The view selects the data for every chart, so this returns one entry per run
+ * rather than the flat list of every channel the dock used to overlay: the
+ * driver chips steered the single-run cards while the comparable charts drew
+ * all drivers at once, whichever chip was pressed.
+ *
+ * The Combined view is the one exception, and a deliberate one: the members are
+ * appended as `secondary`, because the classic crossover-sum plot needs them and
+ * because the sum itself has no impedance, no drive and no cone for the cards
+ * that measure those.
+ */
+export function selectResultChannels(id: string, label: string, result: JobResults, view: ResultView): NamedResult[] {
+  const payload = result as ResultPayload;
+  const active = resolveResultView(payload, view);
+  if (!active || !payload.channels) return [{ id, label, result }];
+  const entry = (channel: string, secondary: boolean): NamedResult => ({
     id: `${id}#${channel}`,
-    label: `${label} · ${channel}`,
-    result: channelResult,
+    label: `${label} · ${channelLabel(payload, channel)}`,
+    result: payload.channels![channel],
     wrapper: result,
-  }));
+    channelId: channel,
+    ...(secondary ? { secondary: true } : {}),
+  });
+  const combine = combineMetadataOf(payload.channels[active] as ResultPayload);
+  const members = combine
+    ? combine.members.filter((member) => member !== active && member in payload.channels!)
+    : [];
+  return [entry(active, false), ...members.map((member) => entry(member, true))];
 }
 
 function finite(value: unknown): value is number {
@@ -219,12 +248,18 @@ export function impedanceComparable(items: NamedResult[]): { items: NamedResult[
  * something to say. Naming the *other* unit is the point: "hidden" alone reads
  * as a failure, while "2 Ω runs hidden" says the runs are fine and the axis is
  * the constraint.
+ *
+ * The Combined view adds one word of its own: the sum has no impedance, so the
+ * curves on this card belong to its members, and a card that says "Impedance"
+ * over per-driver curves invites reading them as the run's.
  */
 export function impedanceSubtitle(items: NamedResult[]): string | null {
   const { units, excluded } = impedanceComparable(items);
-  if (!excluded) return null;
+  const perDriver = items.some(({ secondary }) => secondary) ? 'per driver' : null;
+  if (!excluded) return perDriver;
   const other = units.electrical ? NORMALIZED_ACOUSTIC_IMPEDANCE : ELECTRICAL_IMPEDANCE;
-  return `${excluded} ${other.axis} run${excluded === 1 ? '' : 's'} hidden · cannot share a ${units.axis} axis`;
+  const hidden = `${excluded} ${other.axis} run${excluded === 1 ? '' : 's'} hidden · cannot share a ${units.axis} axis`;
+  return perDriver ? `${perDriver} · ${hidden}` : hidden;
 }
 
 /** On-axis phase, referenced and detrended exactly as the exported PNG draws it. */
