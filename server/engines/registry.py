@@ -180,6 +180,7 @@ def get_engine(
 def resolve_auto_engine(
     *,
     solver_mode: str | None = None,
+    mounting: str | None = None,
     environ: Mapping[str, str] | None = None,
     capabilities: Sequence[EngineInfo] | None = None,
 ) -> str | None:
@@ -195,11 +196,24 @@ def resolve_auto_engine(
     so AUTO reaches beat exactly on GPU-equipped non-Mac hosts, where the
     accelerated dense solve is the point of the backend. BEMPP remains the
     universal CPU engine.
+
+    ``mounting`` drops candidates that cannot solve the requested mounting at
+    all. BEAT rejects every coupled infinite-baffle request, so without this
+    the order above handed such a solve to BEAT ahead of a coupling-capable
+    BEMPP on any GPU host -- persisting a job that could only ever fail.
     """
 
     detected = list(capabilities) if capabilities is not None else detect_engines(environ=environ)
     available = {item.name for item in detected if item.available}
     del solver_mode
+    if mounting == "infinite-baffle":
+        # Deliberately the only mounting tested. It is also the only value the
+        # two vocabularies spell alike: EngineInfo.mountings says
+        # "free-standing" while DesignConfig.sim_type says "freestanding", so a
+        # general membership test would reject every free-standing solve.
+        available &= {
+            item.name for item in detected if "infinite-baffle" in item.mountings
+        }
     for candidate in ("metal", "beat", "bempp", "dryrun"):
         if candidate in available:
             return candidate
@@ -241,11 +255,17 @@ class EngineRegistry:
                     self._cache = tuple(await asyncio.to_thread(self._detector))
         return self._cache
 
-    async def resolve(self, requested: str, *, solver_mode: str | None) -> str | None:
+    async def resolve(
+        self,
+        requested: str,
+        *,
+        solver_mode: str | None,
+        mounting: str | None = None,
+    ) -> str | None:
         capabilities = await self.capabilities()
         if requested == "auto":
             return resolve_auto_engine(
-                solver_mode=solver_mode, capabilities=capabilities
+                solver_mode=solver_mode, mounting=mounting, capabilities=capabilities
             )
         return requested if any(
             item.name == requested and item.available for item in capabilities
