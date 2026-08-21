@@ -59,6 +59,7 @@ def test_tiny_osse_freestanding_metal_full_pipeline(tmp_path: Path) -> None:
             },
             "options": {
                 "engine": "metal",
+                "solver_mode": "full_3d",
                 "frequency_range": [500, 1000],
                 "num_frequencies": 2,
                 "stage_delay_ms": 0,
