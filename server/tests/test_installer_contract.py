@@ -355,7 +355,9 @@ def test_the_backend_check_asks_the_capability_probes_not_an_import():
     # Counting OpenCL devices reported "ready" on hosts where every solve then
     # failed; importing the wrapper proves even less, because it is pure Python.
     source = read(ROOT / "scripts" / "check_backends.py")
+    assert "circsym_status" in source
     assert "bempp_status" in source
+    assert "beat_status" in source
     assert "metal_status" in source
     assert "import hornlab_bempp_bem" not in source
 
