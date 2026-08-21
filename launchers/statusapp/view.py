@@ -10,6 +10,7 @@ import time
 import webbrowser
 
 from .controller import ServiceState, StatusController, StatusSnapshot
+from .diagnostics import WindowUnavailable
 
 
 COLORS = {
@@ -165,7 +166,13 @@ class StatusView:
 
 
 def run(controller: StatusController) -> int:
-    root = tk.Tk()
+    try:
+        root = tk.Tk()
+    except tk.TclError as exc:
+        # Importing tkinter proves the files are present; only Tk() proves Tcl
+        # can initialise. Narrowed to this one call so that a TclError from a
+        # window that did open is not mistaken for one that never could.
+        raise WindowUnavailable(str(exc)) from exc
     StatusView(root, controller)
     try:
         root.mainloop()
