@@ -681,7 +681,19 @@ def test_solver_mesh_cache_key_ignores_solve_sampling_but_tracks_geometry(
         return {
             "msh_text": f"$MeshFormat\nartifact-{calls}",
             "stats": {"warnings": []},
-            "integrity": {"valid": True},
+            # _build_sync always emits a self-intersection report now, and a
+            # missing one must keep failing strict validation -- that is the
+            # silent-pass this double would otherwise reintroduce.
+            "integrity": {
+                "valid": True,
+                "self_intersection": {
+                    "checked": True,
+                    "proper_crossing_count": 0,
+                    "coplanar_overlap_count": 0,
+                    "intersecting_triangle_count": 0,
+                    "samples": [],
+                },
+            },
             "metadata": {},
         }
 
