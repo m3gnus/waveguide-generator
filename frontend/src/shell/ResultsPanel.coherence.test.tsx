@@ -3,7 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
 import { compareSelection, provisionalResults, resultsCache } from '../api/results';
-import { serializeDesign, designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
+import { serializeDesign, designForFamily, resetDesignStore, useDesignStore, type DesignDocument } from '../stores/design';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetDocumentStore } from '../stores/document';
 import { workspaceModeStore } from '../stores/workspaceMode';
@@ -14,7 +14,7 @@ import { ResultsPanel } from './ResultsPanel';
 const modelMocks = vi.hoisted(() => ({ showJobModel: vi.fn() }));
 vi.mock('../jobs/showJobModel', () => ({ showJobModel: modelMocks.showJobModel }));
 
-function job(id: string, runNumber: number, revision: number, imported = false): JobItem {
+function job(id: string, runNumber: number, design: DesignDocument | null, imported = false): JobItem {
   return {
     id,
     run_number: runNumber,
@@ -36,8 +36,8 @@ function job(id: string, runNumber: number, revision: number, imported = false):
     error_message: null,
     cancellation_requested: false,
     mesh_stats: null,
-    script_snapshot: null,
-    design_revision: revision,
+    script_snapshot: design ? { version: 1, design: serializeDesign(design) } : null,
+    design_revision: 1,
     polar_grid: {},
     rating: null,
     exported_files: [],
@@ -58,10 +58,19 @@ function job(id: string, runNumber: number, revision: number, imported = false):
   };
 }
 
+/** The design the editor is holding right now, as a run would have stored it. */
+function liveDesign(): DesignDocument {
+  return useDesignStore.getState().design;
+}
+
 function publishJobs(jobs: JobItem[]): void {
   const manager = jobsSocket as unknown as { snapshot: JobsSnapshot; listeners: Set<() => void> };
   manager.snapshot = { connection: 'connected', epoch: 1, cursor: 1, jobs, error: null };
   manager.listeners.forEach((listener) => listener());
+}
+
+function toolbarButton(host: HTMLElement, text: string): HTMLButtonElement | undefined {
+  return [...host.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === text);
 }
 
 describe('results run coherence', () => {
@@ -102,8 +111,8 @@ describe('results run coherence', () => {
   });
 
   it('auto-follows only runs from the active workspace model family', async () => {
-    const parametric = job('parametric', 1, useDesignStore.getState().designRevision);
-    const imported = job('cad', 2, 0, true);
+    const parametric = job('parametric', 1, liveDesign());
+    const imported = job('cad', 2, null, true);
     publishJobs([imported, parametric]);
     compareSelection.followLatest(null);
 
@@ -118,61 +127,105 @@ describe('results run coherence', () => {
     expect(compareSelection.getSnapshot()).toMatchObject({ primary: 'cad', following: true });
   });
 
-  it('names an older-revision mismatch and offers restore and solve actions', async () => {
-    useDesignStore.getState().updateField('R', 180);
-    const older = job('archive', 4, 1);
+  it('marks an edited-since run on its chip and offers restore and solve', async () => {
     const solved = designForFamily('OSSE');
     solved.L = 321;
-    older.script_snapshot = { version: 1, design: serializeDesign(solved) };
+    const older = job('archive', 4, solved);
+    useDesignStore.getState().updateField('R', 180);
     publishJobs([older]);
     compareSelection.setPrimary(older.id);
     const run = vi.fn().mockResolvedValue(undefined);
     (jobsCoordinatorBridge.getSnapshot() as unknown as { run: typeof run }).run = run;
 
     await act(async () => { root.render(<ResultsPanel/>); });
-    const notice = host.querySelector('.result-coherence-notice')!;
-    expect(notice.textContent).toContain('Showing #4 · archive — the design has changed since this run.');
+    const chip = host.querySelector('.result-chip.stale')!;
+    expect(chip.getAttribute('title')).toContain('The design has been edited since this run was solved.');
+    const marker = host.querySelector<HTMLButtonElement>('button.result-context-marker.stale')!;
+    expect(marker.textContent).toBe('edited since');
+    expect(document.querySelector('.result-coherence-popover')).toBeNull();
 
-    await act(async () => { [...notice.querySelectorAll('button')].find((button) => button.textContent === "Restore this run's design")!.click(); });
+    await act(async () => { marker.click(); });
+    const popover = document.querySelector<HTMLElement>('.result-coherence-popover')!;
+    expect(popover.textContent).toContain('The design has been edited since this run was solved.');
+
+    await act(async () => { toolbarButton(popover, "Restore this run's design")!.click(); });
     expect(useDesignStore.getState().design.L).toBe(321);
-    await act(async () => { [...host.querySelectorAll('button')].find((button) => button.textContent === 'Solve current design')!.click(); });
+    // Restoring the design answers the marker, so both it and its menu go.
+    expect(document.querySelector('.result-coherence-popover')).toBeNull();
+    expect(host.querySelector('button.result-context-marker.stale')).toBeNull();
+
+    await act(async () => { useDesignStore.getState().updateField('R', 181); });
+    await act(async () => { host.querySelector<HTMLButtonElement>('button.result-context-marker.stale')!.click(); });
+    await act(async () => { toolbarButton(document.body, 'Solve current design')!.click(); });
     expect(run).toHaveBeenCalledWith(useDesignStore.getState().design, useDesignStore.getState().designRevision);
   });
 
-  it('names an other-model mismatch and wires model recall and latest recovery', async () => {
-    const latest = job('live', 5, useDesignStore.getState().designRevision);
-    const imported = job('archive-cad', 6, 0, true);
+  it('marks an other-model run and wires model recall and newest-run recovery', async () => {
+    const latest = job('live', 5, liveDesign());
+    const imported = job('archive-cad', 6, null, true);
     publishJobs([imported, latest]);
     compareSelection.setPrimary(imported.id);
 
     await act(async () => { root.render(<ResultsPanel/>); });
-    const notice = host.querySelector('.result-coherence-notice')!;
-    expect(notice.textContent).toContain('Showing #6 · archive-cad (CAD import) — not the model in the viewport.');
+    const marker = host.querySelector<HTMLButtonElement>('button.result-context-marker.stale')!;
+    expect(marker.textContent).toBe('other model');
+    expect(marker.getAttribute('title')).toContain("This run's model is not the one in the viewport.");
 
-    await act(async () => { [...notice.querySelectorAll('button')].find((button) => button.textContent === 'Show this model')!.click(); });
+    await act(async () => { marker.click(); });
+    await act(async () => { toolbarButton(document.body, 'Show this model')!.click(); });
     expect(modelMocks.showJobModel).toHaveBeenCalledWith(imported, expect.any(Function));
 
-    await act(async () => { [...notice.querySelectorAll('button')].find((button) => button.textContent === 'Back to latest')!.click(); });
+    await act(async () => { host.querySelector<HTMLButtonElement>('button.result-context-marker.stale')!.click(); });
+    await act(async () => { toolbarButton(document.body, 'Show newest run')!.click(); });
     expect(compareSelection.getSnapshot()).toMatchObject({ primary: latest.id, following: true });
   });
 
-  it('marks imported and stale-revision chips and compare options', async () => {
+  it('states provenance only when it differs from the workspace mode', async () => {
+    const solved = designForFamily('OSSE');
+    const current = job('current', 7, liveDesign());
+    const stale = job('stale', 8, solved);
+    const imported = job('imported', 9, null, true);
+    const staleOption = job('stale-option', 10, solved);
+    const importedOption = job('imported-option', 11, null, true);
     useDesignStore.getState().updateField('R', 180);
-    const current = job('current', 7, useDesignStore.getState().designRevision);
-    const stale = job('stale', 8, 1);
-    const imported = job('imported', 9, 0, true);
-    const staleOption = job('stale-option', 10, 1);
-    const importedOption = job('imported-option', 11, 0, true);
     publishJobs([current, stale, imported, staleOption, importedOption]);
-    compareSelection.setPrimary(imported.id);
-    compareSelection.toggleOverlay(stale.id);
+    compareSelection.setPrimary(stale.id);
+    compareSelection.toggleOverlay(imported.id);
 
     await act(async () => { root.render(<ResultsPanel/>); });
-    const markers = [...host.querySelectorAll('.result-context-marker')].map((item) => item.textContent);
-    expect(markers).toEqual(expect.arrayContaining(['CAD import', 'rev 1']));
+    expect(host.querySelector('button.result-context-marker.stale')!.textContent).toBe('edited since');
+    const markers = [...host.querySelectorAll('.result-chip > .result-context-marker')].map((item) => item.textContent);
+    expect(markers).toEqual(['CAD']);
     const options = [...host.querySelectorAll<HTMLOptionElement>('.result-compare-add option')].map((option) => option.textContent);
-    expect(options).toContain('#7 · current');
-    expect(options).toContain('#10 · stale-option · rev 1');
-    expect(options).toContain('#11 · imported-option · CAD import');
+    expect(options).toContain('#10 · stale-option · edited since');
+    expect(options).toContain('#11 · imported-option · CAD');
+
+    // In CAD mode the pill would be on every run, so it moves to the exception.
+    await act(async () => {
+      useCadReturnStore.setState({ ingestRecord: { ingest_id: 'wgi_imported' } as never });
+      workspaceModeStore.setMode('cad');
+      await Promise.resolve();
+    });
+    const cadOptions = [...host.querySelectorAll<HTMLOptionElement>('.result-compare-add option')].map((option) => option.textContent);
+    expect(cadOptions).toContain('#11 · imported-option');
+    expect(cadOptions).toContain('#7 · current · Parametric');
+  });
+
+  it('offers a run this window did not ask for instead of showing it', async () => {
+    const shown = job('shown', 12, liveDesign());
+    publishJobs([shown]);
+    compareSelection.setPrimary(shown.id);
+    await act(async () => { root.render(<ResultsPanel/>); await Promise.resolve(); });
+    expect(toolbarButton(host, 'New · #13 → Show')).toBeUndefined();
+
+    const elsewhere = job('elsewhere', 13, liveDesign());
+    await act(async () => { publishJobs([elsewhere, shown]); await Promise.resolve(); });
+    expect(compareSelection.getSnapshot().primary).toBe('shown');
+    const offer = toolbarButton(host, 'New · #13 → Show')!;
+    expect(offer).toBeDefined();
+
+    await act(async () => { offer.click(); await Promise.resolve(); });
+    expect(compareSelection.getSnapshot()).toMatchObject({ primary: 'elsewhere' });
+    expect(toolbarButton(host, 'New · #13 → Show')).toBeUndefined();
   });
 });

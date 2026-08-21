@@ -7,7 +7,7 @@ import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
 import type { PreviewSnapshot } from '../api/previewSocket';
 import { compareSelection } from '../api/results';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
-import { resetDesignStore } from '../stores/design';
+import { resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { createImportedMeshScene } from './importedMesh';
@@ -62,14 +62,17 @@ function setInputValue(input: HTMLInputElement, value: string): void {
   Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, value);
 }
 
+// Run coherence is decided by the design a run stored, so a run that stands
+// for "the model in the viewport" has to carry the design that is on screen.
 function completeJob(id: string, fieldPlaneAvailable: boolean): JobItem {
   return {
     id,
     status: 'complete',
     config_summary: {},
     design_revision: 1,
+    script_snapshot: { version: 1, design: serializeDesign(useDesignStore.getState().design) },
     field_plane_available: fieldPlaneAvailable,
-  } as JobItem;
+  } as unknown as JobItem;
 }
 
 function publishJobs(jobs: JobItem[]): void {
