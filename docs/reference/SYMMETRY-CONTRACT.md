@@ -59,4 +59,8 @@ The backend selector therefore chooses the *full-3D fallback*, not the
 axisymmetric implementation. `Simulation.SolverMode` in legacy design text is a
 machine setting: import may recognize it for compatibility, but design export
 strips it. Result/job symmetry metadata records `solver_plan` with the chosen
-formulation, engine, reason, and eligibility reasons.
+formulation, engine, reason, and eligibility reasons. Axisymmetric AUTO plans
+also include `cost_evidence`: deterministic counts from the frequency-refined
+meridian (unknowns, azimuthal quadrature work, matrix memory, and a revolved
+full-3D triangle scale for the requested symmetry domain). These are transparent
+complexity comparisons rather than machine-specific wall-clock promises.

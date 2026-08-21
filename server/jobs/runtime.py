@@ -466,7 +466,10 @@ async def resolve_submission(
         and (engine_name == "axisym" or solver_mode in {"auto", "circsym"})
     )
     if consider_axisym:
-        from server.solver.circsym import axisymmetric_eligibility_reasons
+        from server.solver.circsym import (
+            axisymmetric_eligibility_reasons,
+            axisymmetric_plan_cost,
+        )
 
         axisym_reasons = await asyncio.to_thread(
             axisymmetric_eligibility_reasons,
@@ -478,6 +481,19 @@ async def resolve_submission(
                 + "; ".join(axisym_reasons)
             )
         if not axisym_reasons:
+            try:
+                plan_cost = await asyncio.to_thread(
+                    axisymmetric_plan_cost,
+                    request,
+                    full_3d_quadrants=resolved_quadrants,
+                )
+            except Exception as exc:
+                # Eligibility remains authoritative. A diagnostic cost model
+                # must never turn an otherwise valid solve into a refusal.
+                plan_cost = {
+                    "model": "unavailable",
+                    "reason": str(exc),
+                }
             request = request.model_copy(deep=True)
             request.options.engine = "axisym"
             engine_name = "axisym"
@@ -490,6 +506,7 @@ async def resolve_submission(
                     else "AUTO selected the eligible platform-neutral axisymmetric runner"
                 ),
                 "eligibility_reasons": [],
+                "cost_evidence": plan_cost,
             }
     if engine_name != "axisym":
         symmetry_metadata["solver_plan"] = {

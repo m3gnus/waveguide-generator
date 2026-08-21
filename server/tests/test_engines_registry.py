@@ -99,6 +99,14 @@ def test_formulation_planner_uses_portable_axisym_without_metal(
     from server.solver import circsym
 
     monkeypatch.setattr(circsym, "axisymmetric_eligibility_reasons", lambda _request: [])
+    monkeypatch.setattr(
+        circsym,
+        "axisymmetric_plan_cost",
+        lambda _request, *, full_3d_quadrants: {
+            "model": "test",
+            "full_3d_quadrants": full_3d_quadrants,
+        },
+    )
     engine_registry = registry.EngineRegistry(
         detector=lambda: [
             registry.EngineInfo("axisym", True, "portable CPU", "1"),
@@ -116,7 +124,30 @@ def test_formulation_planner_uses_portable_axisym_without_metal(
         "engine": "axisym",
         "reason": "AUTO selected the eligible platform-neutral axisymmetric runner",
         "eligibility_reasons": [],
+        "cost_evidence": {"model": "test", "full_3d_quadrants": 1},
     }
+
+
+def test_axisymmetric_cost_evidence_uses_refined_meridian_and_requested_domain() -> None:
+    from server.solver.circsym import axisymmetric_plan_cost
+
+    cost = axisymmetric_plan_cost(_planner_request(), full_3d_quadrants=1)
+
+    assert cost["model"] == "deterministic-reduced-vs-revolved-dense-v1"
+    assert cost["frequency_count"] == 3
+    assert cost["frequency_max_hz"] == 8000.0
+    assert cost["meridian_segments"] > 0
+    assert cost["azimuth_quadrature"]["maximum"] >= cost["azimuth_quadrature"][
+        "minimum"
+    ]
+    assert cost["axisymmetric"]["ring_quadrature_terms"] > 0
+    assert cost["full_3d_equivalent"]["requested_quadrants"] == 1
+    assert cost["full_3d_equivalent"]["domain_fraction"] == 0.25
+    assert cost["full_3d_equivalent"]["estimated_triangles"] >= cost[
+        "meridian_segments"
+    ]
+    assert cost["relative_dense_unknowns"] >= 1.0
+    assert cost["relative_dense_matrix_memory"] >= 1.0
 
 
 def test_formulation_planner_falls_back_to_selected_full_3d_backend(
