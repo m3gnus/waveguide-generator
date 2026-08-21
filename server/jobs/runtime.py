@@ -1085,10 +1085,14 @@ class JobRuntime:
             imported = await self._prepare_imported_submission(request)
         if imported is not None:
             engine_name = request.options.engine
-            if engine_name in {"axisym", "circsym"}:
+            if (
+                engine_name in {"axisym", "circsym"}
+                or request.options.solver_mode == "circsym"
+            ):
                 raise ImportedSolveRefusal(
                     "imported_circsym_unsupported",
-                    "imported geometry supports Metal full 3-D solves only; CircSym is unavailable",
+                    "imported geometry supports Metal full 3-D solves only; "
+                    "axisymmetric mode is unavailable",
                 )
             if engine_name not in {"auto", "axisym", "dryrun", "metal", "bempp", "beat"}:
                 raise UnknownEngineError(f"Unknown solve engine: {engine_name}")

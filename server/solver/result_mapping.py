@@ -380,7 +380,7 @@ def observation_config(
             native_inclination = True
             break
     if supports("normalization_angle_deg"):
-        kwargs["normalization_angle_deg"] = float(polar.get("norm_angle", 10.0))
+        kwargs["normalization_angle_deg"] = float(polar.get("norm_angle", 5.0))
     needs_custom_inclination = (
         not native_inclination
         and "diagonal" in kwargs["planes"]
@@ -875,7 +875,7 @@ def build_solver_response(
     # This is strictly a level/display normalization. Raw wrapped phase is an
     # independent payload and must never pass through this mutating function.
     _renormalize_directivity(
-        patterns, float(context.polar_config.get("norm_angle", 10.0))
+        patterns, float(context.polar_config.get("norm_angle", 5.0))
     )
 
     metadata.setdefault("warnings", [])
