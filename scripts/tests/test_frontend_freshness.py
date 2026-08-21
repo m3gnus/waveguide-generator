@@ -3,7 +3,14 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from scripts.frontend_freshness import STAMP_NAME, frontend_freshness, mark_fresh
+from scripts.frontend_freshness import (
+    STAMP_NAME,
+    frontend_freshness,
+    installer_hint,
+    mark_fresh,
+    refresh_hint,
+    vite_executable,
+)
 
 
 def _checkout(tmp_path: Path) -> tuple[Path, Path, Path]:
@@ -59,3 +66,22 @@ def test_malformed_local_stamp_becomes_a_warning_instead_of_crashing(tmp_path: P
     fresh, reason = frontend_freshness(root)
     assert not fresh
     assert "check failed" in reason
+
+
+def test_refresh_hint_sends_a_release_install_to_its_installer(tmp_path: Path) -> None:
+    # No node_modules: running v2 requires no Node, so a Vite build is a command
+    # this install does not have and does not need.
+    root, _source, _index = _checkout(tmp_path)
+
+    hint = refresh_hint(root)
+    assert installer_hint() in hint
+    assert "npm" not in hint
+
+
+def test_refresh_hint_sends_a_buildable_checkout_to_vite(tmp_path: Path) -> None:
+    root, _source, _index = _checkout(tmp_path)
+    vite = vite_executable(root)
+    vite.parent.mkdir(parents=True)
+    vite.write_text("", encoding="utf-8")
+
+    assert "npm run build" in refresh_hint(root)
