@@ -70,6 +70,10 @@ def metal_status() -> dict[str, Any]:
 
 
 _CIRCSYM_ELEMENTS_PER_WAVELENGTH = 6.0
+_CIRCSYM_AZIMUTH_POINTS_MIN = 64
+_CIRCSYM_AZIMUTH_POINTS_PER_KRHO = 4.0
+_CIRCSYM_LINE_QUADRATURE_ORDER = 4
+_COMPLEX128_BYTES = 16
 _CIRCSYM_DEFAULT_RESOLUTION_MM = {
     "throatResolution": 3.0,
     "mouthResolution": 12.0,
@@ -222,6 +226,144 @@ def axisymmetric_eligibility_reasons(request: SolveRequest) -> list[str]:
     if not status["available"] and not reasons:
         reasons.append(str(status["reason"]))
     return reasons
+
+
+def axisymmetric_plan_cost(
+    request: SolveRequest,
+    *,
+    full_3d_quadrants: int = 1234,
+) -> dict[str, Any]:
+    """Return transparent work/memory evidence for the formulation planner.
+
+    This is deliberately a complexity model, not a wall-clock promise. Native
+    Metal, BLAS, CPU generation, and thermal state make elapsed-time constants
+    host-specific. The counts below are deterministic properties of the exact
+    frequency-refined meridian and requested observations, so AUTO can explain
+    why it selected the reduced formulation without pretending one developer
+    machine is every user's hardware.
+    """
+
+    if build_meridian is None:
+        raise CircSymUnavailable("The installed mesher cannot build a meridian.")
+    context = SolverContext.from_request(request, solver_mode="circsym")
+    frequencies = [float(value) for value in live_execution_frequencies(context)]
+    refined, refinement = _frequency_refined_meridian_config(
+        _solver_mesher_config(request.design),
+        max(frequencies),
+    )
+    build = build_meridian(refined)
+    segment_count = int(build.segments.shape[0])
+    if segment_count <= 0:
+        raise ValueError("axisymmetric cost model requires a non-empty meridian")
+
+    rho_max = max(float(node[0]) for node in build.nodes)
+    sound_speed = solver_sound_speed_m_per_s("hornlab_metal_bem")
+    complex_k_scale = math.hypot(1.0, float(DEFAULT_COMPLEX_K_SHIFT))
+    azimuth_orders = [
+        max(
+            _CIRCSYM_AZIMUTH_POINTS_MIN,
+            int(
+                math.ceil(
+                    _CIRCSYM_AZIMUTH_POINTS_PER_KRHO
+                    * 2.0
+                    * math.pi
+                    * frequency
+                    * complex_k_scale
+                    * rho_max
+                    / sound_speed
+                )
+            ),
+        )
+        for frequency in frequencies
+    ]
+
+    polar_targets = int(context.polar_config["angle_range"][2])
+    sphere_targets = (
+        int(context.polar_config.get("spherical_theta_count", 37))
+        if context.polar_config.get("spherical_sampling")
+        else 0
+    )
+    # Every enabled plane and every azimuth at a given polar angle collapse to
+    # the same (rho,z) target for m=0. This mirrors the native exact-dedupe path.
+    unique_observation_targets = polar_targets + sphere_targets
+    azimuth_sum = sum(azimuth_orders)
+    assembly_terms = (
+        _CIRCSYM_LINE_QUADRATURE_ORDER
+        * segment_count
+        * segment_count
+        * azimuth_sum
+    )
+    field_terms = (
+        _CIRCSYM_LINE_QUADRATURE_ORDER
+        * segment_count
+        * unique_observation_targets
+        * azimuth_sum
+    )
+
+    # Estimate a corresponding triangle-of-revolution mesh at the meridian's
+    # actual local segment length. It is not a substitute for Gmsh's realized
+    # count, but it is a reproducible full-3D dense-matrix scale comparator.
+    full_revolution_triangles = 0
+    for raw_segment in build.segments:
+        start_index, end_index = (int(value) for value in raw_segment)
+        start = build.nodes[start_index]
+        end = build.nodes[end_index]
+        length = math.hypot(
+            float(end[0]) - float(start[0]),
+            float(end[1]) - float(start[1]),
+        )
+        rho_mid = 0.5 * (float(start[0]) + float(end[0]))
+        if length <= 0.0 or rho_mid <= 0.0:
+            continue
+        azimuth_segments = max(8, int(math.ceil(2.0 * math.pi * rho_mid / length)))
+        touches_axis = min(float(start[0]), float(end[0])) <= 1.0e-12
+        full_revolution_triangles += azimuth_segments * (1 if touches_axis else 2)
+
+    requested_quadrants = {
+        int(char) for char in str(int(full_3d_quadrants)) if char in "1234"
+    }
+    quadrant_fraction = max(1, len(requested_quadrants)) / 4.0
+    full_3d_triangles = max(
+        segment_count,
+        int(math.ceil(full_revolution_triangles * quadrant_fraction)),
+    )
+    full_3d_dense_entries = full_3d_triangles * full_3d_triangles * len(frequencies)
+    axisym_matrix_bytes = segment_count * segment_count * _COMPLEX128_BYTES
+    full_3d_matrix_bytes = full_3d_triangles * full_3d_triangles * _COMPLEX128_BYTES
+
+    return {
+        "model": "deterministic-reduced-vs-revolved-dense-v1",
+        "frequency_count": len(frequencies),
+        "frequency_max_hz": max(frequencies),
+        "meridian_segments": segment_count,
+        "rho_max_m": rho_max,
+        "azimuth_quadrature": {
+            "minimum": min(azimuth_orders),
+            "maximum": max(azimuth_orders),
+            "sum": azimuth_sum,
+        },
+        "unique_observation_targets_per_frequency": unique_observation_targets,
+        "axisymmetric": {
+            "matrix_bytes": axisym_matrix_bytes,
+            "ring_quadrature_terms": assembly_terms + field_terms,
+            "assembly_terms": assembly_terms,
+            "field_terms": field_terms,
+        },
+        "full_3d_equivalent": {
+            "requested_quadrants": int(full_3d_quadrants),
+            "domain_fraction": quadrant_fraction,
+            "estimated_triangles": full_3d_triangles,
+            "matrix_bytes": full_3d_matrix_bytes,
+            "dense_entries_across_sweep": full_3d_dense_entries,
+        },
+        "relative_dense_unknowns": full_3d_triangles / segment_count,
+        "relative_dense_matrix_memory": full_3d_matrix_bytes / axisym_matrix_bytes,
+        "meridian_frequency_refinement": refinement,
+        "selection": (
+            "axisymmetric preserves the requested m=0 physics while reducing "
+            "the dense boundary system; native timing remains host-dependent"
+        ),
+    }
 
 
 def solve_circsym_design(
@@ -490,5 +632,6 @@ __all__ = [
     "circsym_observation_rejection_reason",
     "circsym_status",
     "axisymmetric_eligibility_reasons",
+    "axisymmetric_plan_cost",
     "solve_circsym_design",
 ]
