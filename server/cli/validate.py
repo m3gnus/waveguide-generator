@@ -158,14 +158,6 @@ async def _solve_path_summary(request: SolveRequest, engine_name: str) -> dict[s
         }
 
     mode = request.options.solver_mode or "auto"
-    if mode == "auto":
-        return {
-            "predicted": "full-3d",
-            "reasons": [
-                "solver_mode='auto' selects native full 3D; the CPU axisymmetric "
-                "meridian path requires explicit solver_mode='circsym'"
-            ],
-        }
     if mode == "full_3d":
         return {
             "predicted": "full-3d",

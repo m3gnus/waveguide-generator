@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -170,6 +171,49 @@ def test_validate_accepts_the_canonical_http_solve_request(
         "source": "flags",
     }
     assert report["errors"] == []
+
+
+def test_metal_auto_path_prediction_uses_circsym_eligibility(monkeypatch) -> None:
+    from server.cli import validate
+
+    request = SolveRequest.model_validate(
+        {
+            "design": parse(VALID_MWG).semantic_data(),
+            "options": {"engine": "metal", "solver_mode": "auto"},
+        }
+    )
+    monkeypatch.setattr(
+        validate,
+        "circsym_eligibility_reasons",
+        lambda _request: [],
+    )
+
+    summary = asyncio.run(validate._solve_path_summary(request, "metal"))
+
+    assert summary == {"predicted": "axisymmetric-meridian", "reasons": []}
+
+
+def test_metal_auto_path_prediction_reports_full_3d_fallback(monkeypatch) -> None:
+    from server.cli import validate
+
+    request = SolveRequest.model_validate(
+        {
+            "design": parse(VALID_MWG).semantic_data(),
+            "options": {"engine": "metal", "solver_mode": "auto"},
+        }
+    )
+    monkeypatch.setattr(
+        validate,
+        "circsym_eligibility_reasons",
+        lambda _request: ["custom observation needs full 3D"],
+    )
+
+    summary = asyncio.run(validate._solve_path_summary(request, "metal"))
+
+    assert summary == {
+        "predicted": "full-3d",
+        "reasons": ["custom observation needs full 3D"],
+    }
 
 
 def test_validate_preserves_request_identity_on_post_load_refusal(
