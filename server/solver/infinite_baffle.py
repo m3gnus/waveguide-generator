@@ -1,8 +1,9 @@
-"""Coupled infinite-baffle validation shared by Metal full-3D and CircSym.
+"""Coupled infinite-baffle validation shared by full-3D and axisymmetric paths.
 
 V1 rejects the tempting but incorrect free-field/image shortcut: full 3-D uses
-the mesher's aperture physical tag and native Rayleigh coupling, while CircSym
-uses its meridian aperture tag.  See v1 ``metal_solver.py:310-359,396-405`` and
+Metal/BEMPP use the mesher's aperture physical tag and native Rayleigh coupling,
+while Axisymmetric uses its meridian aperture tag. See v1
+``metal_solver.py:310-359,396-405`` and
 ``metal_solver.py:477-500,550-558``.
 """
 

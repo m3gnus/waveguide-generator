@@ -67,7 +67,8 @@ BEMPP_DEFAULT_WALL_THICKNESS_MM = 5.0
 def _apply_bempp_wall_default(request: SolveRequest, engine_name: str) -> SolveRequest:
     """Materialize ATH's closed-wall default for BEMPP free-standing solves.
 
-    BEMPP has no CircSym path and its open-shell pressure space treats free-rim
+    BEMPP full 3D and the axisymmetric formulation are separate paths. BEMPP's
+    open-shell pressure space treats free-rim
     degrees of freedom differently from the closed-body formulation. Keep an
     inactive enclosure plus a missing/zero wall from silently entering that
     backend-specific topology. Revalidating the copied wire also keeps the
