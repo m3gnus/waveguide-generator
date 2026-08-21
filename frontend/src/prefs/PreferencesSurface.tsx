@@ -65,6 +65,10 @@ function ResultsPreferencesContent() {
           with this off, the chart on screen and the chart in the file are not
           the same picture. */}
       <label className="ui-check"><input type="checkbox" checked={preferences.splPhase} onChange={(event) => preferencesStore.update({ splPhase: event.target.checked })}/>Show phase on the SPL chart</label>
+      {/* The crossover-sum plot: the sum drawn over the branches it is made of.
+          Off leaves the sum alone on the chart, which is the right reading when
+          comparing runs rather than tuning a crossover. */}
+      <label className="ui-check"><input type="checkbox" checked={preferences.showMembersUnderCombined} onChange={(event) => preferencesStore.update({ showMembersUnderCombined: event.target.checked })}/>Show drivers under Combined</label>
       <label className="ui-check"><input type="checkbox" checked={preferences.archiveRunsOnComplete} onChange={(event) => preferencesStore.update({ archiveRunsOnComplete: event.target.checked })}/>Archive every completed run</label>
       <label className="ui-check"><input type="checkbox" checked={preferences.autoExportOnComplete} onChange={(event) => preferencesStore.update({ autoExportOnComplete: event.target.checked })}/>Auto-export completed jobs</label>
       <label className="ui-check"><input type="checkbox" checked={preferences.autoDownloadMesh} onChange={(event) => preferencesStore.update({ autoDownloadMesh: event.target.checked })}/>Auto-save solve mesh to Workspace</label>
