@@ -25,6 +25,7 @@ from hornlab_sim.methods import driver_coupling, radiation_impedance
 
 from server.jobs.models import ImportedGeometrySource, SolveRequest
 from server.mesh.builder import _solver_mesher_config, build_solver_mesh
+from server.preview.translate import has_closed_outer_body
 
 from .acoustics import solver_sound_speed_m_per_s
 from .combine import combine_drive_channels, serialize_channel_bases
@@ -294,28 +295,10 @@ def _native_check_open_edges(context: SolverContext) -> bool:
         return True
     if context.design is None:
         return False
-    root = context.design.root
-    enclosure_value = (
-        root.enclosure.depth.constant_value()
-        if root.enclosure is not None and root.enclosure.depth is not None
-        else None
-    )
-    enclosure_depth = (
-        float(enclosure_value)
-        if enclosure_value is not None
-        else 0.0
-    )
-    wall_value = (
-        root.mesh.wall_thickness.constant_value()
-        if root.mesh.wall_thickness is not None
-        else None
-    )
-    wall = (
-        float(wall_value)
-        if wall_value is not None
-        else 0.0
-    )
-    return enclosure_depth > 0.0 or wall > 0.0
+    # Resolved through the translation layer that built the mesh, so an omitted
+    # wall thickness -- ATH's 5 mm shell -- is checked as the closed body it is
+    # rather than excused as a bare shell.
+    return has_closed_outer_body(context.design.root)
 
 
 def solve_metal_from_msh_text(
