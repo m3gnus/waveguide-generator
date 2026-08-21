@@ -82,16 +82,44 @@ export function activeBackendCapability(
     : engines.find((item) => item.name.toLowerCase() === name) ?? null;
 }
 
+/**
+ * Whether the host can run `feature` regardless of the selected full-3D backend.
+ *
+ * The server planner routes an eligible circular design to the Axisym meridian
+ * runner *before* it reaches any full-3D fallback, so a host carrying Axisym
+ * solves a coupled infinite-baffle design even when the resolved backend --
+ * BEAT, say -- refuses one. Gating that option on the full-3D record alone
+ * removed it from designs the server would have solved, and the user had no
+ * way to discover that forcing the meridian mode brought it back.
+ *
+ * Geometry eligibility stays the planner's call. This only decides whether the
+ * option is worth offering at all.
+ */
+function hostCoversFeature(
+  host: readonly EngineCapability[],
+  feature: BackendFeature,
+): boolean {
+  if (feature !== 'infinite-baffle') return false;
+  return host.some((item) => item.available
+    && item.name.toLowerCase() === 'axisym'
+    && (item.mountings?.includes('infinite-baffle') ?? true));
+}
+
 function backendName(backend: BackendIdentity): string | null {
   if (backend === null) return null;
   return (typeof backend === 'string' ? backend : backend.name).trim().toLowerCase();
 }
 
 /** Whether `backend` can run `feature`. Unknown or unresolved backends pass. */
-export function backendSupports(backend: BackendIdentity, feature: BackendFeature): boolean {
+export function backendSupports(
+  backend: BackendIdentity,
+  feature: BackendFeature,
+  host: readonly EngineCapability[] = [],
+): boolean {
   if (!backend) return true;
   const normalized = backendName(backend);
   if (!normalized) return true;
+  if (hostCoversFeature(host, feature)) return true;
   if (typeof backend !== 'string') {
     if (feature === 'infinite-baffle' && backend.mountings) {
       return backend.mountings.includes('infinite-baffle');
@@ -113,8 +141,9 @@ export function backendSupports(backend: BackendIdentity, feature: BackendFeatur
 export function backendLimitation(
   backend: BackendIdentity,
   feature: BackendFeature,
+  host: readonly EngineCapability[] = [],
 ): string | undefined {
-  if (backendSupports(backend, feature)) return undefined;
+  if (backendSupports(backend, feature, host)) return undefined;
   const name = (backendName(backend) ?? '').toUpperCase();
   return `${name} does not support ${FEATURE_LABELS[feature]}. ${FEATURE_REMEDIES[feature]}`;
 }
