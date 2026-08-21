@@ -2,6 +2,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
+import { compareSelection } from '../api/results';
 import { preferencesStore } from '../prefs/preferences';
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import type { ImportedSolveSubmission } from '../jobs/actions';
@@ -115,6 +116,7 @@ describe('solve invocation mutex', () => {
     resetSolveOptionsStore();
     importedMeshStore.clear();
     workspaceModeStore.setMode('parametric');
+    compareSelection.clear();
     publishJobs([]);
     resetCadReturnStore();
     importedMeshStore.clear();
@@ -131,6 +133,7 @@ describe('solve invocation mutex', () => {
     act(() => root.unmount());
     host.remove();
     publishJobs([]);
+    compareSelection.clear();
     vi.restoreAllMocks();
     vi.clearAllMocks();
     workspaceModeStore.setMode('parametric');
@@ -154,6 +157,22 @@ describe('solve invocation mutex', () => {
     await act(async () => {
       pending.resolve('job-one');
       await first;
+    });
+  });
+
+  // A result picked by hand pins the primary slot, and pinning outlived the
+  // solve that came after it: every later run finished into a rail that still
+  // showed the old one. Pressing Solve is a request to see that solve, so the
+  // submission claims the slot for its own run; shell/ResultsPanel hands it
+  // over once that run has results.
+  it('claims the primary slot for the run it submits', async () => {
+    mocks.submitDesign.mockResolvedValue('fresh-run');
+    compareSelection.setPrimary('pinned-run');
+
+    await act(async () => { await jobsCoordinatorBridge.getSnapshot().run(designForFamily('OSSE')); });
+
+    expect(compareSelection.getSnapshot()).toMatchObject({
+      primary: 'pinned-run', following: false, awaiting: 'fresh-run',
     });
   });
 
