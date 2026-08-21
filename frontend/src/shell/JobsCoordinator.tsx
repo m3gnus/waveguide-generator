@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
-import { fetchJobResults } from '../api/results';
+import { compareSelection, fetchJobResults } from '../api/results';
 import { resolveEngine, submitDesign, submitImported, type ImportedSolveSubmission } from '../jobs/actions';
 import { useCapabilities, useCapabilityRefreshOnReconnect } from '../jobs/useCapabilities';
 import { JobAutomation } from '../jobs/automation';
@@ -212,12 +212,17 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       const options = useSolveOptionsStore.getState().options();
       const designName = useDocumentStore.getState().designName;
       const label = nextRunLabel(designName, preferencesStore.getSnapshot(), now());
-      await submitDesign(
+      const jobId = await submitDesign(
         nextDesign,
         options,
         fetch,
         { label, designRevision: nextRevision },
       );
+      // Pressing Solve is a request to see that solve. Claiming the primary
+      // slot for it here is what makes the finished run the one on screen even
+      // when a result had been pinned for comparison; without it, a pin taken
+      // at any point in the session quietly kept every later solve hidden.
+      compareSelection.awaitRun(jobId);
       acceptSubmittedLabel(designName);
       await jobsSocket.refresh();
     } finally {
@@ -252,6 +257,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       // solve passes through is what makes a manual Solve consume the parked
       // command instead of leaving it to replay into a duplicate run.
       await consumeParkedSolveCommand(jobId);
+      compareSelection.awaitRun(jobId);
       await jobsSocket.refresh();
       return jobId;
     } finally {
@@ -277,6 +283,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       setSubmitting(true);
       setActionError(null);
       await jobsSocket.retryJob(jobId);
+      compareSelection.awaitRun(jobId);
     } finally {
       submissionInFlight.current = false;
       setSubmitting(false);
