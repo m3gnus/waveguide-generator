@@ -623,9 +623,21 @@ def mesh_self_intersection_report(
                 continue
             ratio_low = float(np.clip((low[row] - low_left[row]) / width, 0.0, 1.0))
             ratio_high = float(np.clip((high[row] - low_left[row]) / width, 0.0, 1.0))
-            chord = end_left[row] - start_left[row]
-            begin = start_left[row] + chord * ratio_low
-            finish = start_left[row] + chord * ratio_high
+            # Both ratios are measured from low_left, so they have to be
+            # applied from the endpoint that *is* the low end. The crossings
+            # come back in edge order, which follows the triangle's winding
+            # rather than the axis, so half of all chords run high-to-low.
+            # Interpolating those from start_left mirrors the sampled segment
+            # about the chord's midpoint and sends the warning to the opposite
+            # end of the triangle.
+            if span_left[row, 0] <= span_left[row, 1]:
+                origin = start_left[row]
+                chord = end_left[row] - start_left[row]
+            else:
+                origin = end_left[row]
+                chord = start_left[row] - end_left[row]
+            begin = origin + chord * ratio_low
+            finish = origin + chord * ratio_high
             length = float(np.linalg.norm(finish - begin))
             crossing_pairs.append(
                 (length, int(first[row]), int(second[row]), (begin + finish) / 2.0)
