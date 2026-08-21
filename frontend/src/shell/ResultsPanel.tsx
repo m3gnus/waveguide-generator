@@ -4,14 +4,17 @@ import type { EChartsOption } from 'echarts';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { compareSelection, fetchJobResults, fetchRadiationImpedancePresentation, provisionalResults, recombineJobResults, type JobResults, type RadiationImpedancePresentation } from '../api/results';
 import { EChart, useChartTokens, type ChartTokens } from '../results/EChart';
-import { beamFitSeries, beamShapeSeries, directivityGrid, directivityIndexSeries, drivePowerChartSeries, excursionChartSeries, expandResultChannels, groupDelaySeries, impedanceComparable, impedanceSeries, impedanceSubtitle, nearestFrequencyIndex, phaseSeries, polarCut, splSeries, type NamedResult } from '../results/mappers';
+import { beamFitSeries, beamShapeSeries, directivityGrid, directivityIndexSeries, drivePowerChartSeries, excursionChartSeries, groupDelaySeries, impedanceComparable, impedanceSeries, impedanceSubtitle, nearestFrequencyIndex, phaseSeries, polarCut, selectResultChannels, splSeries, type NamedResult } from '../results/mappers';
 import { BalloonRenderer, ChartStub, ForwardBeamRenderer, hasBalloonData, type ChartStubAction } from '../results/balloon';
 import { runWorkspaceExportBundle } from '../results/exporters';
 import { resultExportSnapshot } from '../results/exportContext';
 export { resultExportSnapshot } from '../results/exportContext';
 import { copyChartPng, downloadChartPng } from '../results/chartImage';
 import { summaryGroups, summaryText, type SummaryGroup, type SummaryRow } from '../results/summary';
-import type { ResultPayload } from '../results/types';
+import { combineMetadataOf, type CombineMetadata, type ResultPayload } from '../results/types';
+import { ResultViewSwitch } from '../results/ResultViewSwitch';
+import { resolveResultView, resultViewStore, useResultView } from '../stores/resultView';
+import { useCadReturnStore } from '../stores/cadReturn';
 import { hydrateJobDesign, replaceWithJobDesign } from '../jobs/jobDesign';
 import { showJobModel } from '../jobs/showJobModel';
 import { exportStemForJob, exportTitleSlug } from '../jobs/exportNaming';
@@ -225,6 +228,12 @@ export function splOption(
   const colors = seriesColorsByLabel([...items.map(({ label }) => label), ...measuredNames], tokens.series, tokens.accent);
   const simulated = splSeries(items, smoothing).map((series, index) => {
     const color = colors.get(series.name) ?? tokens.accent;
+    // A member of the combined sum is drawn beneath the curve it adds up to,
+    // not beside it: thin, solid and faint, so the eye reads one response with
+    // its branches showing rather than several competing responses.
+    if (items[index]?.secondary) {
+      return { ...series, z: 1, lineStyle: { color, width: 1, type: 'solid' as const, opacity: .45 }, itemStyle: { color, opacity: .45 } };
+    }
     return { ...series, lineStyle: { color, width: index ? 1.2 : 2, type: index ? 'dashed' as const : 'solid' as const }, itemStyle: { color } };
   });
   const measuredSeries = measured.map((overlay, index) => {
@@ -845,6 +854,45 @@ export function drivePowerOption(result: ResultPayload, tokens: ChartTokens, den
   return lineOption(series, tokens, 'Power [W]', density, undefined, series.length > 1 ? 'Current [A]' : undefined);
 }
 
+/**
+ * Power and current for several channels at once.
+ *
+ * Only the Combined view reaches this: an LR4 sum has no electrical impedance
+ * and no cone, so the card that would otherwise be empty draws the members that
+ * do. Colour separates the channels and line weight separates the two
+ * quantities, the same split the single-channel card makes.
+ */
+export function drivePowerOverlayOption(items: NamedResult[], tokens: ChartTokens, density: ChartDensity): EChartsOption {
+  const colors = seriesColorsByLabel(items.map(({ label }) => label), tokens.series, tokens.accent);
+  const series = items.flatMap(({ label, result }) => {
+    const color = colors.get(label) ?? tokens.accent;
+    return drivePowerChartSeries(result as ResultPayload).map((trace) => ({
+      ...trace,
+      name: `${label} · ${trace.name}`,
+      lineStyle: { color, width: trace.yAxisIndex ? 1.35 : 2, type: trace.yAxisIndex ? 'dashed' as const : 'solid' as const },
+      itemStyle: { color },
+    }));
+  });
+  return lineOption(series, tokens, 'Power [W]', density, undefined, series.some((trace) => trace.yAxisIndex) ? 'Current [A]' : undefined);
+}
+
+/** Cone excursion for several channels at once, each against its own Xmax. */
+export function excursionOverlayOption(items: NamedResult[], tokens: ChartTokens, density: ChartDensity): EChartsOption {
+  const colors = seriesColorsByLabel(items.map(({ label }) => label), tokens.series, tokens.accent);
+  const series = items.flatMap(({ label, result }) => {
+    const color = colors.get(label) ?? tokens.accent;
+    return excursionChartSeries(result as ResultPayload).map((trace, index) => ({
+      ...trace,
+      name: `${label} · ${trace.name}`,
+      // The limit keeps its driver's colour so it cannot be read against the
+      // wrong cone, and stays dotted so it cannot be read as a response.
+      lineStyle: index ? { color, width: 1, type: 'dotted' as const } : { color, width: 2 },
+      itemStyle: { color },
+    }));
+  });
+  return lineOption(series, tokens, 'Excursion [mm peak]', density);
+}
+
 /** Cone excursion, with Xmax drawn flat across the sweep when the spec states it. */
 export function excursionOption(result: ResultPayload, tokens: ChartTokens, density: ChartDensity): EChartsOption {
   const series = excursionChartSeries(result).map((trace, index) => ({
@@ -1295,15 +1343,61 @@ export function groupDelayMissingReason(result: ResultPayload): string {
   return 'Group Delay could not be derived from this result.';
 }
 
+/**
+ * Cards about the drivers rather than about the radiated field.
+ *
+ * An LR4 sum has no electrical impedance, no drive and no cone, so in the
+ * Combined view these three would draw their empty-state over a run that is
+ * perfectly well driven. They show the members instead — which is also the more
+ * useful reading in a single-driver view, where the member list is that driver
+ * alone.
+ */
+const MEMBER_CHARTS = new Set<ChartType>(['impedance', 'drive_power', 'excursion']);
+
+/**
+ * The primary run's own entries: itself and, in the Combined view, its members.
+ *
+ * `named` is grouped by run in selection order and only a run's own channel is
+ * ever primary, so the group ends at the next non-member entry. Power and
+ * excursion are per-run cards; overlaying a comparison run's drivers on them
+ * would be a comparison the card does not claim to be making.
+ */
+function primaryRunEntries(named: NamedResult[]): NamedResult[] {
+  const next = named.findIndex((item, index) => index > 0 && !item.secondary);
+  return next === -1 ? named : named.slice(0, next);
+}
+
+/**
+ * Which of the selected entries a chart draws.
+ *
+ * The active view already chose one channel per run; what is left to decide is
+ * what a card does with the members of a combined sum. Only the SPL chart draws
+ * them beneath the sum (the classic crossover plot, and the one thing a
+ * preference turns off), and only the driver cards treat them as ordinary
+ * series. Everywhere else a member is a component of the curve on screen, not a
+ * second opinion about it, and overlaying it would be drawing the same sound
+ * twice.
+ */
+export function chartEntries(chartType: ChartType, named: NamedResult[], showMembers: boolean): NamedResult[] {
+  if (chartType === 'frequency_response') return showMembers ? named : named.filter(({ secondary }) => !secondary);
+  // Impedance is a comparable chart and overlays every selected run's drivers;
+  // power and excursion describe one run, so they take the shown run's alone.
+  if (chartType === 'impedance') return named;
+  if (MEMBER_CHARTS.has(chartType)) return primaryRunEntries(named);
+  return named.filter(({ secondary }) => !secondary);
+}
+
 function ResultChart({ chartType, result, named, tokens, density, live, beamShapeAction, wrapper, job, channelId }: { chartType: ChartType; result: ResultPayload; named: NamedResult[]; tokens: ChartTokens; density: ChartDensity; live: boolean; beamShapeAction?: ChartStubAction } & SummarySourceProps) {
   const preferences = usePreferences();
-  // Only comparable charts read the cross-job list. Keeping it in the
+  // Only comparable and driver charts read the cross-job list. Keeping it in the
   // dependency array for every chart would rebuild expensive single-run
   // surfaces whenever the comparison selection changes.
   const overlays = useMemo(() => {
-    if (!COMPARABLE_CHARTS.has(chartType)) return NO_NAMED_RESULTS;
-    return named.length ? named : [{ id: 'primary', label: 'Primary', result }];
-  }, [chartType, named, result]);
+    if (!COMPARABLE_CHARTS.has(chartType) && !MEMBER_CHARTS.has(chartType)) return NO_NAMED_RESULTS;
+    const entries = chartEntries(chartType, named, preferences.showMembersUnderCombined);
+    if (entries.length) return entries;
+    return COMPARABLE_CHARTS.has(chartType) ? [{ id: 'primary', label: 'Primary', result }] : NO_NAMED_RESULTS;
+  }, [chartType, named, preferences.showMembersUnderCombined, result]);
   // Only the on-axis SPL chart carries measurements, and it is the only card
   // that should rebuild when one is loaded, hidden or nudged in level.
   const loadedMeasurements = useMeasuredOverlayStore((state) => state.overlays);
@@ -1350,13 +1444,19 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
         : <ChartStub reason={groupDelayMissingReason(result)}/>;
     }
     if (chartType === 'drive_power') {
-      const option = drivePowerOption(result, tokens, density);
+      // One member left standing is drawn as itself, so a two-way whose sum is
+      // shown does not gain a legend entry it does not need.
+      const option = overlays.length > 1
+        ? drivePowerOverlayOption(overlays, tokens, density)
+        : drivePowerOption((overlays[0]?.result ?? result) as ResultPayload, tokens, density);
       return Array.isArray(option.series) && option.series.length
         ? <EChart option={option} label="Interactive HornLab electrical power and current draw by frequency" live={live}/>
         : <ChartStub reason={driverChartMissingReason(result, 'Power & Current Draw')}/>;
     }
     if (chartType === 'excursion') {
-      const option = excursionOption(result, tokens, density);
+      const option = overlays.length > 1
+        ? excursionOverlayOption(overlays, tokens, density)
+        : excursionOption((overlays[0]?.result ?? result) as ResultPayload, tokens, density);
       return Array.isArray(option.series) && option.series.length
         ? <EChart option={option} label="Interactive HornLab cone excursion by frequency" live={live}/>
         : <ChartStub reason={excursionSeries(result) ? 'Cone Excursion could not be read from this result.' : driverChartMissingReason(result, 'Cone Excursion')}/>;
@@ -1424,8 +1524,10 @@ export function useCardMetrics(target: React.RefObject<HTMLElement | null>): Car
 function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAction, wrapper, job, channelId }: { index: number; chartType: ChartType; result: ResultPayload; named: NamedResult[]; tokens: ChartTokens; live: boolean; beamShapeAction?: ChartStubAction } & SummarySourceProps) {
   // A comparison is active but this card cannot carry it. Saying so is the
   // whole point: silently drawing the primary run looks identical to drawing
-  // both, so the user believes they are comparing when they are not.
-  const comparisonIgnored = named.length > 1 && !COMPARABLE_CHARTS.has(chartType);
+  // both, so the user believes they are comparing when they are not. Members of
+  // a combined sum are not a comparison and are not counted here.
+  const compared = named.filter(({ secondary }) => !secondary);
+  const comparisonIgnored = compared.length > 1 && !COMPARABLE_CHARTS.has(chartType);
   const [expanded, setExpanded] = useState(false);
   const [imageReady, setImageReady] = useState(false);
   const [imageOperation, setImageOperation] = useState<'copy' | 'download' | null>(null);
@@ -1476,7 +1578,7 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
     : chartType === 'radiation_impedance' ? 'engineering · exp(+jωt) · in-phase ports'
     : null;
   const unit = chartUnit(chartType, result, impedanceItems);
-  const activeLabel = named.find((item) => item.result === result)?.label ?? named[0]?.label ?? 'the primary run';
+  const activeLabel = compared.find((item) => item.result === result)?.label ?? compared[0]?.label ?? 'the primary run';
   const imageAction = useCallback(async (operation: 'copy' | 'download') => {
     const target = card.current?.querySelector<HTMLElement>('.chart-placeholder');
     if (!target || imageOperation) return;
@@ -1509,7 +1611,7 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
           <select aria-label={`Panel ${index + 1} chart type`} value={chartType} onChange={(event) => preferencesStore.setChartType(index, event.target.value as ChartType)}>{CHART_TYPES.map(({ id, label }) => <option key={id} value={id}>{label}</option>)}</select>
         </span>
         {subtitle && density !== 'compact' && <span className="result-subtitle">{subtitle}</span>}
-        {comparisonIgnored && density !== 'compact' && <span className="result-single-run" title={`This chart shows one run at a time. Showing ${activeLabel}.`}>1 of {named.length}</span>}
+        {comparisonIgnored && density !== 'compact' && <span className="result-single-run" title={`This chart shows one run at a time. Showing ${activeLabel}.`}>1 of {compared.length}</span>}
         <span className="result-chrome-spacer"/>
         {imageReady && <>
           <button className="result-card-image-action" type="button" disabled={imageOperation !== null} aria-label={`Copy panel ${index + 1} as PNG`} title="Copy chart image" onClick={() => void imageAction('copy')}><Icon name="copy"/></button>
@@ -1562,23 +1664,10 @@ interface ResultFetchError {
   message: string;
 }
 
-interface CombineMetadata {
-  members: string[];
-  crossovers_hz: number[];
-  level_match?: { enabled?: boolean };
-  align?: boolean;
-}
-
-function combineMetadataOf(payload: ResultPayload | undefined): CombineMetadata | null {
-  const combine = (payload?.metadata as { combine?: unknown } | undefined)?.combine;
-  if (!combine || typeof combine !== 'object') return null;
-  const value = combine as CombineMetadata;
-  if (!Array.isArray(value.members) || !Array.isArray(value.crossovers_hz)) return null;
-  return value;
-}
-
 /** Crossover editor for a combined channel: recombines from the job's stored
- * complex bases server-side, so a change repaints without a re-solve. */
+ * complex bases server-side, so a change repaints without a re-solve. The
+ * applied frequencies are also written back to the CAD rail, so the dock and
+ * the pre-solve fields are one setting rather than two that disagree. */
 function RecombineRow({ jobId, channelId, combine, onApplied }: {
   jobId: string;
   channelId: string;
@@ -1615,6 +1704,7 @@ function RecombineRow({ jobId, channelId, combine, onApplied }: {
         align: combine.align ?? true,
       });
       onApplied(jobId, updated);
+      useCadReturnStore.getState().setCombineCrossoversFromResult(combine.members, crossovers);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -1624,8 +1714,11 @@ function RecombineRow({ jobId, channelId, combine, onApplied }: {
   return <form className="results-toolbar result-recombine" onSubmit={(event) => void submit(event)}>
     {combine.members.slice(0, -1).map((lower, index) => {
       const upper = combine.members[index + 1];
+      // Bands below, because that is how a crossover is spoken. The authored
+      // ids stay the fallback and remain the accessible name either way, so an
+      // unroled return still says which channels each field joins.
       return <label key={`${lower} ${upper}`} className="result-recombine-pair">
-        <span>{lower} → {upper}</span>
+        <span>{combine.member_roles?.[index] ?? lower} → {combine.member_roles?.[index + 1] ?? upper}</span>
         <input
           type="number"
           min={1}
@@ -1637,7 +1730,7 @@ function RecombineRow({ jobId, channelId, combine, onApplied }: {
         <span>Hz</span>
       </label>;
     })}
-    <button type="submit" disabled={busy || !dirty} title="Recompute the combined channel from the stored solve — no re-solve needed">{busy ? 'Recombining…' : 'Apply crossover'}</button>
+    <button type="submit" disabled={busy || !dirty} title="Recompute the combined channel from the stored solve — no re-solve needed">{busy ? 'Recombining…' : 'Apply'}</button>
     {error && <span className="result-recombine-error" role="alert">{error}</span>}
   </form>;
 }
@@ -1701,7 +1794,7 @@ export function ResultsPanel() {
   const [coherenceOpen, setCoherenceOpen] = useState(false);
   const coherenceAnchor = useRef<HTMLButtonElement | null>(null);
   const [dismissedNewRun, setDismissedNewRun] = useState<string | null>(null);
-  const [primaryChannel, setPrimaryChannel] = useState<string | null>(null);
+  const view = useResultView();
   const measuredOverlays = useMeasuredOverlayStore((state) => state.overlays);
   const [measuredError, setMeasuredError] = useState<string | null>(null);
   const measuredInput = useRef<HTMLInputElement | null>(null);
@@ -1808,24 +1901,24 @@ export function ResultsPanel() {
   const primaryRaw = selection.primary && currentDisplay
     ? currentDisplay.results[selection.primary]
     : undefined;
-  const primaryChannels = primaryRaw?.channels;
-  const channelIds = primaryChannels
-    ? [...(primaryRaw?.channel_order?.filter((id) => id in primaryChannels) ?? []), ...Object.keys(primaryChannels).filter((id) => !primaryRaw?.channel_order?.includes(id))]
-    : [];
-  const activeChannel = channelIds.includes(primaryChannel ?? '') ? primaryChannel : channelIds[0] ?? null;
-  const primary = activeChannel && primaryChannels ? primaryChannels[activeChannel] as ResultPayload : primaryRaw;
+  // One view for the whole dock: the chosen channel where the run has it, its
+  // combined sum otherwise, and its first channel when it has neither. The
+  // fallback is resolved per run so a comparison keeps drawing something and
+  // says on the label which channel it substituted.
+  const activeChannel = primaryRaw ? resolveResultView(primaryRaw, view) : null;
+  const primary = activeChannel && primaryRaw?.channels
+    ? primaryRaw.channels[activeChannel] as ResultPayload
+    : primaryRaw;
   // One keyed snapshot owns the primary and every overlay. During a transition
   // the complete outgoing set may remain visible, but no incoming result is
   // combined with it; the whole set swaps only after Promise.all succeeds.
   const shownRaw = selection.primary && display
     ? display.results[display.primaryId]
     : undefined;
-  const shownChannels = shownRaw?.channels;
-  const shownChannelIds = shownChannels
-    ? [...(shownRaw.channel_order?.filter((id) => id in shownChannels) ?? []), ...Object.keys(shownChannels).filter((id) => !shownRaw.channel_order?.includes(id))]
-    : [];
-  const shownActiveChannel = shownChannelIds.includes(primaryChannel ?? '') ? primaryChannel : shownChannelIds[0] ?? null;
-  const shown = shownActiveChannel && shownChannels ? shownChannels[shownActiveChannel] as ResultPayload : shownRaw;
+  const shownActiveChannel = shownRaw ? resolveResultView(shownRaw, view) : null;
+  const shown = shownActiveChannel && shownRaw?.channels
+    ? shownRaw.channels[shownActiveChannel] as ResultPayload
+    : shownRaw;
   const shownCombine = combineMetadataOf(shown);
   const applyRecombined = useCallback((jobId: string, updated: JobResults) => {
     setDisplay((current) => current && current.results[jobId]
@@ -1834,12 +1927,13 @@ export function ResultsPanel() {
   }, []);
   const displayLabels = display?.ids.map((id) => labelFor(id, jobs)).join('\u0000') ?? '';
   const named = useMemo(
-    () => display?.ids.flatMap((id, index) => expandResultChannels(
+    () => display?.ids.flatMap((id, index) => selectResultChannels(
       id,
       displayLabels.split('\u0000')[index],
       display.results[id],
+      view,
     )) ?? NO_NAMED_RESULTS,
-    [display, displayLabels],
+    [display, displayLabels, view],
   );
   const error = fetchError?.key === selectionKey ? fetchError.message : null;
   const showingPrevious = Boolean(selection.primary && display && display.key !== selectionKey && !error);
@@ -1942,7 +2036,20 @@ export function ResultsPanel() {
     try {
       const job = jobs.find(({ id }) => id === selection.primary);
       if (!job) throw new Error('The selected run is no longer available for export.');
-      const result = await runWorkspaceExportBundle({ result: primary, ...resultExportSnapshot(job), jobStem: exportStemForJob(job), jobId: job.id, hasRadiationImpedanceArtifact: job.has_radiation_impedance_artifact, preferences }, preferences.exportFormats);
+      // The envelope plus the active channel, not the channel alone: the file
+      // suffix is allocated from the channel id against its siblings, and the
+      // formats that fan out across members (VituixCAD) need the envelope to
+      // fan out from. Handing over the scoped payload left every CAD export
+      // named as if the run had one channel.
+      const result = await runWorkspaceExportBundle({
+        result: primaryRaw ?? primary,
+        ...(activeChannel ? { channelId: activeChannel } : {}),
+        ...resultExportSnapshot(job),
+        jobStem: exportStemForJob(job),
+        jobId: job.id,
+        hasRadiationImpedanceArtifact: job.has_radiation_impedance_artifact,
+        preferences,
+      }, preferences.exportFormats);
       if (selection.primary && result.files.length) {
         await jobsSocket.patchMetadata(selection.primary, { exported_files: [...new Set([...(job?.exported_files ?? []), ...result.files])] });
       }
@@ -1992,7 +2099,7 @@ export function ResultsPanel() {
           ><i/>{RUN_VERDICT_MARKER[primaryVerdict]}</button>
         </span>;
       })}
-      {channelIds.map((channel) => <button key={channel} className={`result-chip result-channel-chip${activeChannel === channel ? '' : ' muted'}`} aria-pressed={activeChannel === channel} title={`Show ${channel} in single-channel detail views and exports`} onClick={() => setPrimaryChannel(channel)}><span>{channel}</span></button>)}
+      {primaryRaw && <ResultViewSwitch result={primaryRaw} view={view} onSelect={(next) => resultViewStore.setView(next)}/>}
       {/* How much of the dock is actually comparing. Five of the six default
           charts describe one run by nature, so a comparison that silently
           applies to one card looked identical to one that applied to all six.
