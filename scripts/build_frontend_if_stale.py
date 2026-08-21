@@ -15,7 +15,12 @@ import shutil
 import subprocess
 from typing import Mapping
 
-from scripts.frontend_freshness import frontend_freshness, mark_fresh
+from scripts.frontend_freshness import (
+    frontend_freshness,
+    mark_fresh,
+    refresh_hint,
+    vite_executable,
+)
 
 
 def _newest_nvm_npm(home: Path) -> Path | None:
@@ -65,13 +70,18 @@ def build_frontend_if_stale(
 
     npm = _find_npm(environment)
     frontend = repo_root / "frontend"
-    vite = frontend / "node_modules" / ".bin" / (
-        "vite.cmd" if os.name == "nt" else "vite"
-    )
+    vite = vite_executable(repo_root)
     if npm is None or not vite.is_file():
         print(f"WARNING: {reason}.")
-        print("         This checkout cannot rebuild it; install Node.js and run")
-        print("         'cd frontend && npm ci'. Starting with the existing build.")
+        if npm is None:
+            print(f"         Run {refresh_hint(repo_root)}.")
+        else:
+            # Node is present, so this is a checkout whose dependencies were
+            # never installed rather than a release install, which has no local
+            # build to enable in the first place.
+            print("         Run 'cd frontend && npm ci' to enable local builds,")
+            print(f"         or {refresh_hint(repo_root)}.")
+        print("         Starting with the existing build.")
         return False
 
     print("Frontend sources changed; building the current local interface...")

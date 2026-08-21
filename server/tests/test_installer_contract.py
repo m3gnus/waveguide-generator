@@ -982,7 +982,12 @@ def test_the_installers_finish_by_starting_the_launcher():
 def test_the_launchers_point_at_the_installer_now_that_one_exists():
     # Before P6.2 these told the user to download and extract a tarball by hand,
     # which is exactly the unverified extraction the installer refuses to do.
-    source = read(ROOT / "launchers" / "statusapp" / "controller.py")
+    # The hint now lives beside the freshness check that raises it, so that the
+    # status window and the launchers' console path cannot drift apart.
+    source = read(ROOT / "scripts" / "frontend_freshness.py")
+    assert "installer_hint" in read(
+        ROOT / "launchers" / "statusapp" / "controller.py"
+    ), "the status window must still route its advice through that hint"
     for installer in (
         "installers/macos/install-wg.command",
         r"installers\windows\install-and-update.bat",

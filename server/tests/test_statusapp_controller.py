@@ -13,6 +13,7 @@ from types import SimpleNamespace
 import pytest
 
 from launchers.statusapp.controller import ServiceState, StatusController
+from scripts.frontend_freshness import installer_hint, vite_executable
 from server.platform import instance
 
 
@@ -135,8 +136,7 @@ def test_start_poll_quit_lifecycle_checks_health_and_spa_probes(tmp_path: Path) 
     assert process.poll() is not None
 
 
-def test_stale_local_frontend_is_served_with_an_amber_warning(tmp_path: Path) -> None:
-    controller = _controller(tmp_path)
+def _make_frontend_stale(controller: StatusController) -> None:
     dist_index = controller.repo_root / "frontend" / "dist" / "index.html"
     source = controller.repo_root / "frontend" / "src" / "main.tsx"
     source.parent.mkdir(parents=True)
@@ -147,19 +147,43 @@ def test_stale_local_frontend_is_served_with_an_amber_warning(tmp_path: Path) ->
     os.utime(dist_index, ns=(1_000_000_000, 1_000_000_000))
     os.utime(source, ns=(2_000_000_000, 2_000_000_000))
 
+
+def _amber_frontend_reason(controller: StatusController) -> str:
     controller.start()
     try:
         def warning_snapshot():
             snapshot = controller.poll()
             return snapshot if snapshot.frontend.state is ServiceState.WARNING else None
 
-        warning = _wait_for(warning_snapshot)
-        assert "npm run build" in warning.frontend.reason
-        assert "launch-wg-dev" not in warning.frontend.reason, (
-            "the retired dev launcher must not be advised any more"
-        )
+        return _wait_for(warning_snapshot).frontend.reason
     finally:
         controller.close()
+
+
+def test_stale_release_install_is_served_with_an_amber_installer_warning(
+    tmp_path: Path,
+) -> None:
+    # A release install carries no node_modules and needs no Node runtime, so a
+    # Vite build names a command it cannot run. Its dist is the installer's.
+    controller = _controller(tmp_path)
+    _make_frontend_stale(controller)
+
+    reason = _amber_frontend_reason(controller)
+    assert installer_hint() in reason
+    assert "npm" not in reason, "a release install has no npm to offer"
+    assert "launch-wg-dev" not in reason, (
+        "the retired dev launcher must not be advised any more"
+    )
+
+
+def test_stale_source_checkout_is_still_advised_to_rebuild(tmp_path: Path) -> None:
+    controller = _controller(tmp_path)
+    _make_frontend_stale(controller)
+    vite = vite_executable(controller.repo_root)
+    vite.parent.mkdir(parents=True)
+    vite.write_text("", encoding="utf-8")
+
+    assert "npm run build" in _amber_frontend_reason(controller)
 
 
 def test_status_owner_consumes_only_a_ready_valid_update_request(tmp_path: Path) -> None:

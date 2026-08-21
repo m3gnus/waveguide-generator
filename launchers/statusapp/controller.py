@@ -22,7 +22,11 @@ from typing import IO
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from scripts.frontend_freshness import frontend_freshness
+from scripts.frontend_freshness import (
+    frontend_freshness,
+    installer_hint,
+    refresh_hint,
+)
 from server.platform.instance import requested_port
 from .updater import UpdateHandoffError, consume_update_request, launch_update_handoff
 
@@ -82,14 +86,6 @@ def _probe_failure(exc: BaseException) -> str:
     return str(exc) or type(exc).__name__
 
 
-def _installer_hint() -> str:
-    if sys.platform == "darwin":
-        return "installers/macos/install-wg.command"
-    if os.name == "nt":
-        return r"installers\windows\install-and-update.bat"
-    return "installers/linux/install.sh"
-
-
 def missing_frontend_reason() -> str:
     """Why the interface is missing and what fixes it.
 
@@ -99,17 +95,7 @@ def missing_frontend_reason() -> str:
     starlette error from several frames deep.
     """
 
-    return f"frontend/dist missing — run {_installer_hint()} or scripts/fetch_spa.py"
-
-
-def _review_build_hint() -> str:
-    # macOS has a single launcher that rebuilds a stale frontend on the way up,
-    # so relaunching is the shortest correct advice. This warning is only
-    # reachable when that rebuild was skipped or could not run, in which case
-    # the manual build is the fallback either way.
-    if sys.platform == "darwin":
-        return "cd frontend && npm run build, or quit and reopen Waveguide Generator"
-    return "cd frontend && npm run build"
+    return f"frontend/dist missing — run {installer_hint()} or scripts/fetch_spa.py"
 
 
 def _windows_job_for(process: subprocess.Popen[str]) -> object | None:
@@ -518,7 +504,7 @@ class StatusController:
                     frontend = LampStatus(
                         ServiceState.WARNING,
                         "SPA is being served, but "
-                        f"{self._frontend_source_warning}. Run {_review_build_hint()}.",
+                        f"{self._frontend_source_warning}. Run {refresh_hint(self.repo_root)}.",
                     )
             except (OSError, RuntimeError, HTTPError, URLError) as exc:
                 frontend = LampStatus(ServiceState.ERROR, "SPA route failed: " + _probe_failure(exc))
