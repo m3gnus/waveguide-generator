@@ -581,7 +581,7 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
    has to be readable, so it opts out of the ellipsis the siblings want. */
 .job-card p.job-stage-note { color: var(--fg2); font: var(--text-micro) var(--ui); white-space: normal; }
 .progress { height: 3px; margin-top: 5px; overflow: hidden; border-radius: var(--r3); background: var(--track); }.progress i { display: block; width: 62%; height: 100%; background: linear-gradient(90deg, var(--acc-2), var(--acc)); }
-.job-card footer { display: flex; gap: 4px; margin-top: 7px; }.job-card footer button { padding: 2px 6px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg2); font-size: var(--text-micro); }.job-card footer .primary { border-color: rgba(var(--acc-rgb), .3); color: var(--acc); }
+.job-card footer { display: flex; gap: 4px; margin-top: 7px; }.job-card footer button, .job-card footer > a { padding: 2px 6px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg2); font-size: var(--text-micro); text-decoration: none; }.job-card footer .primary { border-color: rgba(var(--acc-rgb), .3); color: var(--acc); }
 .job-card footer .run-export-control { margin-inline: 0 auto; }
 .job-card footer .action-menu-split { height: 23px; border-radius: var(--r3); }
 .job-card footer .action-menu-primary { min-width: 58px; padding: 0 6px; border: 0; background: transparent; font-size: var(--text-micro); }
@@ -642,6 +642,10 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
 }
+.log-dialog { height: min(680px, calc(100dvh - 32px)); }
+.settings-scroll.log-dialog-body { display: grid; grid-template-rows: auto auto minmax(0, 1fr); gap: 10px; padding: 12px 16px 16px; }
+.log-dialog-actions { display: flex; align-items: center; gap: 6px; }.log-dialog-actions button { min-height: 30px; padding: 4px 10px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg1); }.log-dialog-actions span { color: var(--fg3); font-size: var(--text-micro); }
+.job-log-content { grid-row: 3; min-height: 0; margin: 0; overflow: auto; padding: 12px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--surface-panel); color: var(--fg2); font: var(--text-micro) var(--mono); line-height: 1.5; white-space: pre-wrap; }
 .settings-theme { padding: 12px 16px; border-bottom: 1px solid var(--hair-soft); }.settings-theme h3 { margin: 0 0 6px; color: var(--fg2); font-size: var(--text-micro); font-weight: 600; text-transform: uppercase; }.settings-theme-options { display: flex; gap: 6px; }.settings-theme-options button { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg2); }.settings-theme-options button.on { border-color: rgba(var(--acc-rgb), .45); color: var(--acc); }.settings-theme-options svg { width: 13px; }
 .workspace-settings-path { overflow: hidden; margin: 0 0 8px; color: var(--fg); font-family: var(--mono); font-size: var(--text-micro); text-overflow: ellipsis; white-space: nowrap; }.workspace-settings-error { margin: 6px 0 0; color: var(--red); font-size: var(--text-micro); }
 .cad-settings .ui-field { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(200px, 1fr); align-items: center; gap: 12px; color: var(--fg2); }

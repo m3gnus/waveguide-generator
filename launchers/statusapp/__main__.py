@@ -161,6 +161,12 @@ def _report_failure_with_evidence(failure: "TkFailure", *, detail: str | None = 
 
 def main(argv: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
+    window_requested = "--window" in arguments
+    browser_requested = "--browser" in arguments
+    arguments = [argument for argument in arguments if argument not in {"--window", "--browser"}]
+    if window_requested and browser_requested:
+        _report_startup_failure("Choose only one display mode: --window or --browser.")
+        return 2
     if "--no-gui" in arguments:
         arguments.remove("--no-gui")
         # The status window refuses to start the backend when the interface is
@@ -182,6 +188,11 @@ def main(argv: list[str] | None = None) -> int:
         from launch.serve import main as serve
 
         return serve(arguments)
+
+    if window_requested:
+        from launchers.desktop import main as desktop_main
+
+        return desktop_main(arguments)
 
     # Importing the controller pulls in the server package and the repository
     # scripts, so it fails for a broken checkout as readily as for a broken
