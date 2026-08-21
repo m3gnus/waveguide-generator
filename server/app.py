@@ -365,7 +365,7 @@ def create_app(
                 "default": "auto",
                 "resolvedDefault": resolved,
                 "full3dOrder": ["metal", "beat", "bempp", "dryrun"],
-                "metalFastPath": "axisymmetric-meridian",
+                "axisymmetricRunner": "axisym",
             },
         }
 

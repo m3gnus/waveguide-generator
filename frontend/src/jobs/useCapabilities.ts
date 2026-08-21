@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getCapabilities, type EngineCapability } from './actions';
-import { activeBackendName } from '../design/backendSupport';
+import { activeBackendCapability, activeBackendName } from '../design/backendSupport';
 import { useSolveOptionsStore } from '../stores/solveOptions';
 
 /**
@@ -66,6 +66,13 @@ export function useActiveBackend(): string | null {
   const engine = useSolveOptionsStore((state) => state.engine);
   const { engines } = useCapabilities();
   return activeBackendName(engine, engines);
+}
+
+/** Full capability record for controls whose support is version-dependent. */
+export function useActiveBackendCapability(): EngineCapability | null {
+  const engine = useSolveOptionsStore((state) => state.engine);
+  const { engines } = useCapabilities();
+  return activeBackendCapability(engine, engines);
 }
 
 /**

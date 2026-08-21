@@ -360,11 +360,10 @@ def test_solving_refuses_when_the_backend_cannot_run(monkeypatch):
     class _Context:
         solver_mode = "full_3d"
         frequencies_hz = None
+        sim_type = 2
 
         def validate(self):
             return None
-
-    monkeypatch.setattr(bempp, "reject_bempp_infinite_baffle", lambda _context: None)
 
     with pytest.raises(bempp.BemppUnavailable, match="numba cannot load"):
         bempp.solve_bempp_from_msh_text("mesh", _Context())

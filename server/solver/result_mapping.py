@@ -687,7 +687,7 @@ def _apply_solver_log_warnings(metadata: dict[str, Any]) -> None:
     """
 
     solver_log = None
-    for backend_key in ("metal", "bempp"):
+    for backend_key in ("metal", "bempp", "axisym"):
         backend = metadata.get(backend_key)
         if isinstance(backend, dict) and isinstance(backend.get("solver_log"), list):
             solver_log = backend["solver_log"]

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 from pathlib import Path
 
@@ -173,42 +172,32 @@ def test_validate_accepts_the_canonical_http_solve_request(
     assert report["errors"] == []
 
 
-def test_metal_auto_path_prediction_uses_circsym_eligibility(monkeypatch) -> None:
+def test_path_prediction_uses_planner_axisymmetric_decision() -> None:
     from server.cli import validate
 
-    request = SolveRequest.model_validate(
+    summary = validate._solve_path_summary(
         {
-            "design": parse(VALID_MWG).semantic_data(),
-            "options": {"engine": "metal", "solver_mode": "auto"},
+            "solver_plan": {
+                "formulation": "axisymmetric",
+                "eligibility_reasons": [],
+            }
         }
     )
-    monkeypatch.setattr(
-        validate,
-        "circsym_eligibility_reasons",
-        lambda _request: [],
-    )
-
-    summary = asyncio.run(validate._solve_path_summary(request, "metal"))
 
     assert summary == {"predicted": "axisymmetric-meridian", "reasons": []}
 
 
-def test_metal_auto_path_prediction_reports_full_3d_fallback(monkeypatch) -> None:
+def test_path_prediction_reports_planner_full_3d_fallback() -> None:
     from server.cli import validate
 
-    request = SolveRequest.model_validate(
+    summary = validate._solve_path_summary(
         {
-            "design": parse(VALID_MWG).semantic_data(),
-            "options": {"engine": "metal", "solver_mode": "auto"},
+            "solver_plan": {
+                "formulation": "full-3d",
+                "eligibility_reasons": ["custom observation needs full 3D"],
+            }
         }
     )
-    monkeypatch.setattr(
-        validate,
-        "circsym_eligibility_reasons",
-        lambda _request: ["custom observation needs full 3D"],
-    )
-
-    summary = asyncio.run(validate._solve_path_summary(request, "metal"))
 
     assert summary == {
         "predicted": "full-3d",

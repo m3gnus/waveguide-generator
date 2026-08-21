@@ -7,6 +7,12 @@ export interface EngineCapability {
   reason: string | null;
   version: string | null;
   fast_paths: string[];
+  formulations?: string[];
+  mountings?: string[];
+  symmetry_domains?: string[];
+  field_traces?: boolean;
+  di_sphere?: boolean;
+  cancellation_granularity?: string;
 }
 
 export interface Capabilities { engines: EngineCapability[] }
@@ -105,7 +111,10 @@ export function resolveEngine(
   solverMode = 'auto',
 ): string {
   if (engine.toLowerCase() !== 'auto') return engine.toLowerCase();
-  void solverMode;
+  if (solverMode === 'circsym') {
+    const axisym = capabilities.engines.find((item) => item.available && item.name.toLowerCase() === 'axisym');
+    if (axisym) return 'axisym';
+  }
   const order = ['metal', 'beat', 'bempp', 'dryrun'];
   const available = order.flatMap((name) => capabilities.engines.filter((item) => item.available && item.name.toLowerCase() === name))[0];
   if (!available) throw new Error('No solver backend is currently available');

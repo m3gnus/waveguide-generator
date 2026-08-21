@@ -121,6 +121,7 @@ def test_explicit_frequency_lists_are_reported_as_the_serial_sweeps_they_are(
         source_motion = "normal"
         mesh_validation_mode = "warn"
         verbose = False
+        sim_type = 2
 
         @staticmethod
         def validate():
@@ -152,7 +153,6 @@ def test_explicit_frequency_lists_are_reported_as_the_serial_sweeps_they_are(
             "warning": None,
         },
     )
-    monkeypatch.setattr(bempp, "reject_bempp_infinite_baffle", lambda _context: None)
     monkeypatch.setattr(
         bempp,
         "observation_config",

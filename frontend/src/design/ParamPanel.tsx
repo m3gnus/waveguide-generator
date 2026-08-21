@@ -5,7 +5,7 @@ import { previewSocket } from '../api/previewSocket';
 import type { CadRealizedDimensions, CadRealizedParameter } from '../api/cadlink';
 import { importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { postSymmetry, toSolveDesign, type SymmetryResolution } from '../jobs/actions';
-import { useActiveBackend } from '../jobs/useCapabilities';
+import { useActiveBackendCapability } from '../jobs/useCapabilities';
 import { backendLimitation } from './backendSupport';
 import { cadApplicationName, usePreferences } from '../prefs/preferences';
 import { useCadPreparationStore } from '../stores/cadPreparation';
@@ -374,7 +374,7 @@ export function previewErrorForParameter(
 }
 
 function FieldControl({ field, design, serverError }: { field: ParameterDefinition; design: DesignDocument; serverError?: string }) {
-  const backend = useActiveBackend();
+  const backend = useActiveBackendCapability();
   const updateValue = useDesignStore((state) => state.updateValue);
   const updateValues = useDesignStore((state) => state.updateValues);
   const updateExpression = useDesignStore((state) => state.updateExpression);

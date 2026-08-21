@@ -7,11 +7,12 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from server.engines import registry
 from server.engines.dryrun import DryRunEngine
 from server.jobs.models import SolveRequest
-from server.jobs.runtime import JobRuntime
+from server.jobs.runtime import JobRuntime, SymmetryValidationError, resolve_submission
 from server.jobs.store import JobStore
 from server.solver.base import EngineRunResult
 from server.solver.field_traces_store import (
@@ -31,11 +32,15 @@ def test_detection_uses_honest_probe_reasons_and_dryrun_gate(monkeypatch) -> Non
     detected = registry.detect_engines(environ={"WG2_ENABLE_DRYRUN": "1"})
     assert [(item.name, item.available, item.reason) for item in detected] == [
         ("dryrun", True, "Enabled explicitly by WG2_ENABLE_DRYRUN=1"),
+        ("axisym", True, "meridian ready"),
         ("metal", True, "helper loadable"),
         ("bempp", False, "package absent"),
         ("beat", False, "no supported GPU"),
     ]
-    assert detected[1].fast_paths == ("axisymmetric-meridian",)
+    assert detected[1].formulations == ("axisymmetric",)
+    assert detected[1].mountings == ("free-standing", "infinite-baffle")
+    assert detected[1].cancellation_granularity == "intra-frequency"
+    assert detected[2].fast_paths == ()
     assert all(item.name != "circsym" for item in detected)
 
 
@@ -57,6 +62,128 @@ def test_auto_resolution_prefers_metal_then_beat_then_bempp() -> None:
     cpu_windows = [info("metal", False), info("beat", False), info("bempp", True)]
     assert registry.resolve_auto_engine(capabilities=cpu_windows) == "bempp"
     assert registry.get_engine("beat", capabilities=gpu_windows) is not None
+
+
+def _planner_request(
+    *,
+    engine: str = "auto",
+    solver_mode: str = "auto",
+    sim_type: str = "freestanding",
+    symmetry: str = "auto",
+) -> SolveRequest:
+    return SolveRequest.model_validate(
+        {
+            "design": {
+                "formula": "OSSE",
+                "L": 120,
+                "a": 45,
+                "simulation": {
+                    "f1": 500,
+                    "f2": 8000,
+                    "num_frequencies": 3,
+                    "sim_type": sim_type,
+                },
+            },
+            "options": {
+                "engine": engine,
+                "solver_mode": solver_mode,
+                "symmetry": symmetry,
+            },
+        }
+    )
+
+
+def test_formulation_planner_uses_portable_axisym_without_metal(
+    monkeypatch,
+) -> None:
+    from server.solver import circsym
+
+    monkeypatch.setattr(circsym, "axisymmetric_eligibility_reasons", lambda _request: [])
+    engine_registry = registry.EngineRegistry(
+        detector=lambda: [
+            registry.EngineInfo("axisym", True, "portable CPU", "1"),
+            registry.EngineInfo("bempp", True, "Windows CPU fallback", "1"),
+        ],
+        factory=lambda name: object() if name in {"axisym", "bempp"} else None,
+    )
+
+    resolution = asyncio.run(resolve_submission(_planner_request(), engine_registry))
+
+    assert resolution.engine_name == "axisym"
+    assert resolution.request.options.engine == "axisym"
+    assert resolution.symmetry_metadata["solver_plan"] == {
+        "formulation": "axisymmetric",
+        "engine": "axisym",
+        "reason": "AUTO selected the eligible platform-neutral axisymmetric runner",
+        "eligibility_reasons": [],
+    }
+
+
+def test_formulation_planner_falls_back_to_selected_full_3d_backend(
+    monkeypatch,
+) -> None:
+    from server.solver import circsym
+
+    monkeypatch.setattr(
+        circsym,
+        "axisymmetric_eligibility_reasons",
+        lambda _request: ["mouth is not circular"],
+    )
+    engine_registry = registry.EngineRegistry(
+        detector=lambda: [
+            registry.EngineInfo("axisym", True, "portable CPU", "1"),
+            registry.EngineInfo("bempp", True, "CPU", "1"),
+        ],
+        factory=lambda name: object() if name in {"axisym", "bempp"} else None,
+    )
+
+    resolution = asyncio.run(
+        resolve_submission(_planner_request(engine="bempp"), engine_registry)
+    )
+
+    assert resolution.engine_name == "bempp"
+    assert resolution.symmetry_metadata["solver_plan"] == {
+        "formulation": "full-3d",
+        "engine": "bempp",
+        "reason": "axisymmetric formulation was not eligible",
+        "eligibility_reasons": ["mouth is not circular"],
+    }
+
+
+def test_bempp_coupled_infinite_baffle_planner_requires_full_domain() -> None:
+    engine_registry = registry.EngineRegistry(
+        detector=lambda: [registry.EngineInfo("bempp", True, "CPU", "1")],
+        factory=lambda name: object() if name == "bempp" else None,
+    )
+
+    resolution = asyncio.run(
+        resolve_submission(
+            _planner_request(
+                engine="bempp",
+                solver_mode="full_3d",
+                sim_type="infinite-baffle",
+            ),
+            engine_registry,
+        )
+    )
+    assert resolution.engine_name == "bempp"
+    assert resolution.symmetry_metadata["resolved_quadrants"] == 1234
+    assert "validated full-domain" in resolution.symmetry_metadata["solver_plan"][
+        "symmetry_reason"
+    ]
+
+    with pytest.raises(SymmetryValidationError, match="requires Full symmetry"):
+        asyncio.run(
+            resolve_submission(
+                _planner_request(
+                    engine="bempp",
+                    solver_mode="full_3d",
+                    sim_type="infinite-baffle",
+                    symmetry="quarter",
+                ),
+                engine_registry,
+            )
+        )
 
 
 def test_capability_snapshot_is_reused_by_solve_submission(tmp_path: Path) -> None:
