@@ -8,7 +8,6 @@ capability state and never gets faked.
 
 from __future__ import annotations
 
-import asyncio
 from functools import lru_cache
 import importlib
 import importlib.metadata
@@ -330,7 +329,9 @@ def numba_fallback_warning(opencl_reason: str) -> str:
         "Falling back to the numba assembly backend because OpenCL is unusable: "
         f"{opencl_reason} Until that is fixed, solves assemble on numba, which is "
         "slower, and the first solve after each start spends roughly a minute "
-        "compiling kernels during which Stop cannot take effect."
+        "compiling kernels. Stop remains prompt because WG runs native BEMPP in "
+        "an isolated worker; cancelling during compilation discards that worker "
+        "and the replacement must compile again on the next solve."
     )
 
 
@@ -487,6 +488,7 @@ def solve_bempp_from_msh_text(
     stage_callback: StageCallback | None = None,
     cancellation_callback: CancelCallback | None = None,
     result_callback: ResultCallback | None = None,
+    force_serial: bool = False,
 ) -> dict[str, Any]:
     """Solve one authoritative Gmsh artifact on the guarded CPU backend."""
 
@@ -580,7 +582,7 @@ def solve_bempp_from_msh_text(
         formulation = getattr(BIEFormulation, "COMPLEX_K", formulation)
     workers = (
         1
-        if context.frequencies_hz is not None or aperture_tag is not None
+        if force_serial or context.frequencies_hz is not None or aperture_tag is not None
         else _resolved_workers()
     )
     config_kwargs: dict[str, Any] = {
@@ -798,15 +800,16 @@ class BemppEngine:
         if artifact_cb is not None:
             await artifact_cb(mesh["msh_text"], mesh["stats"])
         cancel_cb()
-        results = await asyncio.to_thread(
-            solve_bempp_from_msh_text,
+        from .bempp_process import solve_bempp_in_process
+
+        results = await solve_bempp_in_process(
             mesh["msh_text"],
             context,
             mesh_metadata=mesh["metadata"],
             mesh_stats=mesh["stats"],
-            stage_callback=stage_cb,
-            cancellation_callback=cancel_cb,
-            result_callback=result_cb,
+            cancel_cb=cancel_cb,
+            stage_cb=stage_cb,
+            result_cb=result_cb,
         )
         results.setdefault("metadata", {})["mesh_stats"] = mesh["stats"]
         results.setdefault("metadata", {})["solve_path"] = "full-3d"
