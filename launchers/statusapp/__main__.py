@@ -6,6 +6,10 @@ from datetime import datetime
 from pathlib import Path
 import sys
 import traceback
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover - import cost is why it is deferred at runtime
+    from .diagnostics import TkFailure
 
 #: Checked before terminal mode hands over to the server. This is the same file
 #: ``server.app.FRONTEND_DIST`` is built from, resolved from this module so the
@@ -17,35 +21,34 @@ FRONTEND_INDEX = Path(__file__).resolve().parents[2] / "frontend" / "dist" / "in
 LOG_FILENAME = "statusapp.log"
 
 
-def _tkinter_repair_hint() -> str:
-    """How to obtain tkinter on this platform.
+def _log_directory() -> Path | None:
+    """The application log directory, or None when it cannot be determined.
 
-    Worth spelling out: tkinter ships with the interpreter rather than with
-    this application's packages, so the obvious remedy -- reinstalling
-    Waveguide Generator -- cannot supply it, and a user who tries that learns
-    nothing except that the installer succeeds again.
+    Resolved through the server package because that is what owns the platform
+    rules; a broken checkout that cannot answer simply gets no path in the
+    message, which is better than a wrong one.
     """
 
-    if sys.platform == "win32":
-        return (
-            "tkinter is part of the Python installation, not of Waveguide "
-            "Generator, so reinstalling the application cannot add it. Re-run "
-            "the Python 3.13 installer, choose Modify, and tick "
-            '"tcl/tk and IDLE".'
-        )
-    if sys.platform == "darwin":
-        return (
-            "tkinter is part of the Python installation, not of Waveguide "
-            "Generator, so reinstalling the application cannot add it. Use the "
-            "python.org build of Python 3.13, or add Tk to the current one "
-            "with: brew install python-tk@3.13"
-        )
-    return (
-        "tkinter is part of the Python installation, not of Waveguide "
-        "Generator, so reinstalling the application cannot add it. Install the "
-        "distribution package instead -- on Debian and Ubuntu: "
-        "sudo apt install python3-tk"
-    )
+    try:
+        from server.platform.paths import data_paths
+
+        return data_paths().logs
+    except Exception:  # noqa: BLE001 - a missing path must not replace the real failure
+        return None
+
+
+def _log_location() -> str:
+    """Where to find the log, named in full rather than described.
+
+    "the Waveguide Generator log folder" is a phrase, not an address, and a
+    user who has just been told their application will not start should not
+    have to work out where that folder lives on their platform.
+    """
+
+    directory = _log_directory()
+    if directory is None:
+        return f"The full details are in {LOG_FILENAME} in the Waveguide Generator log folder."
+    return f"The full details are in: {directory / LOG_FILENAME}"
 
 
 def _log_startup_failure(message: str) -> None:
@@ -57,9 +60,9 @@ def _log_startup_failure(message: str) -> None:
     """
 
     try:
-        from server.platform.paths import data_paths
-
-        directory = data_paths().logs
+        directory = _log_directory()
+        if directory is None:
+            return
         directory.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().isoformat(timespec="seconds")
         with (directory / LOG_FILENAME).open("a", encoding="utf-8") as handle:
@@ -110,7 +113,9 @@ def _show_startup_failure_dialog(message: str) -> None:
         pass
 
 
-def _report_startup_failure(message: str, *, detail: str | None = None) -> None:
+def _report_startup_failure(
+    message: str, *, detail: str | None = None, dialog: str | None = None
+) -> None:
     """Deliver a failure that happens before the status window exists.
 
     The Windows launcher starts this module through ``start "" pythonw.exe``,
@@ -125,13 +130,33 @@ def _report_startup_failure(message: str, *, detail: str | None = None) -> None:
     So write to each channel that can survive that: stderr when there is one,
     the log directory always, and a dialog when there is no console to read.
     ``detail`` carries a traceback to the log without putting it in a dialog.
+    ``dialog`` shortens what the dialog shows when ``message`` is a full
+    diagnostic report: a modal box cannot be scrolled, copied out of, or read
+    beside the thing it describes, so the evidence goes to the log and the
+    terminal while only the cause and the remedy go on screen.
     """
 
     if sys.stderr is not None:
         print(message, file=sys.stderr)
     _log_startup_failure(message if detail is None else f"{message}\n{detail}")
     if sys.stderr is None:
-        _show_startup_failure_dialog(message)
+        _show_startup_failure_dialog(message if dialog is None else dialog)
+
+
+def _report_failure_with_evidence(failure: "TkFailure", *, detail: str | None = None) -> None:
+    """Deliver a diagnosed Tk failure to each channel at the right length.
+
+    The evidence table is what makes a report from an unreachable machine
+    actionable, so it goes to the terminal and to the log. It is also unreadable
+    in a modal dialog that cannot be scrolled or copied out of, so the dialog
+    gets the cause, the remedy, and the path to the log instead.
+    """
+
+    _report_startup_failure(
+        failure.report(),
+        detail=detail,
+        dialog=f"{failure.summary()}\n\n{_log_location()}",
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -170,8 +195,8 @@ def main(argv: list[str] | None = None) -> int:
         _report_startup_failure(
             "Waveguide Generator could not start because one of its own modules "
             f"failed to load: {type(exc).__name__}: {exc}\n\n"
-            "The full traceback is in statusapp.log in the Waveguide Generator "
-            "log folder. Run the launcher with --no-gui to see it in a terminal.",
+            f"{_log_location()}\n\n"
+            "Run the launcher with --no-gui to see this in a terminal.",
             detail=traceback.format_exc(),
         )
         return 1
@@ -179,12 +204,25 @@ def main(argv: list[str] | None = None) -> int:
     try:
         from .view import run
     except ImportError as exc:
-        _report_startup_failure(
-            "Waveguide Generator could not open its status window because "
-            f"tkinter is unavailable: {exc}\n\n"
-            f"{_tkinter_repair_hint()}\n\n"
-            "Until then the launcher still works with --no-gui for terminal mode."
-        )
+        # One canned remedy used to be printed for every ImportError here: "tick
+        # tcl/tk and IDLE". It is right for exactly one cause, and a user whose
+        # box was already ticked was sent to re-do the thing they had done.
+        # diagnostics separates the causes and names the interpreter that failed.
+        from .diagnostics import concerns_tk, diagnose_import_error
+
+        # The view imports its siblings too, so not every ImportError here is a
+        # Tk problem. Answering a broken checkout with a page about tcl/tk would
+        # repeat the same mistake in a new direction.
+        if concerns_tk(exc):
+            _report_failure_with_evidence(diagnose_import_error(exc))
+        else:
+            _report_startup_failure(
+                "Waveguide Generator could not open its status window because one "
+                f"of its own modules failed to load: {type(exc).__name__}: {exc}\n\n"
+                f"{_log_location()}\n\n"
+                "Run the launcher with --no-gui to see this in a terminal.",
+                detail=traceback.format_exc(),
+            )
         return 1
 
     try:
@@ -197,11 +235,24 @@ def main(argv: list[str] | None = None) -> int:
             controller.close()
         except Exception:  # noqa: BLE001 - the original failure is the one to report
             pass
+        # tkinter is imported at view module scope, so a Tk that loaded and then
+        # refused to open a window arrives here rather than above. Left to the
+        # generic branch it reads as "an unexpected error" over a TclError about
+        # init.tcl, which names neither Tk nor anything the user can act on.
+        from .diagnostics import WindowUnavailable, diagnose_display_failure
+
+        if isinstance(exc, WindowUnavailable):
+            # The TclError underneath is what carries the useful text;
+            # the wrapper exists only to mark where it was raised.
+            cause = exc.__cause__ or exc
+            _report_failure_with_evidence(
+                diagnose_display_failure(f"{type(cause).__name__}: {cause}"),
+                detail=traceback.format_exc(),
+            )
+            return 1
         _report_startup_failure(
             "Waveguide Generator stopped with an unexpected error: "
-            f"{type(exc).__name__}: {exc}\n\n"
-            "The full traceback is in statusapp.log in the Waveguide Generator "
-            "log folder.",
+            f"{type(exc).__name__}: {exc}\n\n{_log_location()}",
             detail=traceback.format_exc(),
         )
         return 1
