@@ -98,7 +98,7 @@ def test_tiny_osse_freestanding_metal_full_pipeline(tmp_path: Path) -> None:
     reason="set WG2_RUN_LIVE=1 and select -m live for native Metal qualification",
 )
 def test_explicit_axisymmetric_path_matches_explicit_full_3d(tmp_path: Path) -> None:
-    def request_for(mode: str) -> SolveRequest:
+    def request_for(mode: str, symmetry: str) -> SolveRequest:
         return SolveRequest.model_validate(
             {
                 "design": {
@@ -134,6 +134,7 @@ def test_explicit_axisymmetric_path_matches_explicit_full_3d(tmp_path: Path) -> 
                 "options": {
                     "engine": "metal",
                     "solver_mode": mode,
+                    "symmetry": symmetry,
                     "frequency_range": [1000, 1001],
                     "num_frequencies": 1,
                     "frequency_spacing": "linear",
@@ -149,38 +150,65 @@ def test_explicit_axisymmetric_path_matches_explicit_full_3d(tmp_path: Path) -> 
 
     async def scenario() -> None:
         runtime = JobRuntime(JobStore(tmp_path / "parity-jobs.db"))
-        results = []
-        for mode in ("circsym", "full_3d"):
-            job_id = await runtime.submit(request_for(mode))
+        results = {}
+        variants = {
+            "axisymmetric": ("circsym", "full"),
+            "full_3d": ("full_3d", "full"),
+            "quarter_3d": ("full_3d", "quarter"),
+        }
+        for label, (mode, symmetry) in variants.items():
+            job_id = await runtime.submit(request_for(mode, symmetry))
             await runtime.wait_idle(timeout=120.0)
             job = await runtime.get_job(job_id)
             assert job["status"] == "complete", job["error_message"]
-            results.append(await runtime.get_results(job_id))
-        axisymmetric, full = results
+            results[label] = await runtime.get_results(job_id)
+        axisymmetric = results["axisymmetric"]
+        full = results["full_3d"]
+        quarter = results["quarter_3d"]
         assert axisymmetric["metadata"]["solve_path"] == "axisymmetric-meridian"
         assert full["metadata"]["solve_path"] == "full-3d"
+        assert quarter["metadata"]["solve_path"] == "full-3d"
+        assert full["metadata"]["symmetry"]["resolved_quadrants"] == 1234
+        assert quarter["metadata"]["symmetry"]["resolved_quadrants"] == 1
 
-        auto_spl = axisymmetric["spl_on_axis"]["spl"][0]
-        full_spl = full["spl_on_axis"]["spl"][0]
-        assert auto_spl is not None and full_spl is not None
-        assert abs(auto_spl - full_spl) < 1.0
+        def assert_response_close(left, right, *, spl_db, phase_deg, pattern_db):
+            left_spl = left["spl_on_axis"]["spl"][0]
+            right_spl = right["spl_on_axis"]["spl"][0]
+            assert left_spl is not None and right_spl is not None
+            assert abs(left_spl - right_spl) < spl_db
 
-        auto_phase = axisymmetric["spl_on_axis"]["phase_degrees"][0]
-        full_phase = full["spl_on_axis"]["phase_degrees"][0]
-        assert auto_phase is not None and full_phase is not None
-        phase_delta = abs((auto_phase - full_phase + 180.0) % 360.0 - 180.0)
-        assert phase_delta < 5.0
+            left_phase = left["spl_on_axis"]["phase_degrees"][0]
+            right_phase = right["spl_on_axis"]["phase_degrees"][0]
+            assert left_phase is not None and right_phase is not None
+            phase_delta = abs(
+                (left_phase - right_phase + 180.0) % 360.0 - 180.0
+            )
+            assert phase_delta < phase_deg
 
-        for plane in ("horizontal",):
-            auto_pattern = axisymmetric["directivity"][plane][0][0]
-            full_pattern = full["directivity"][plane][0][0]
+            left_pattern = left["directivity"]["horizontal"][0][0]
+            right_pattern = right["directivity"]["horizontal"][0][0]
             pairs = [
                 (left, right)
-                for left, right in zip(auto_pattern, full_pattern, strict=True)
+                for left, right in zip(left_pattern, right_pattern, strict=True)
                 if left is not None and right is not None
             ]
             assert pairs
-            assert max(abs(left - right) for left, right in pairs) < 1.0
+            assert max(abs(left - right) for left, right in pairs) < pattern_db
+
+        assert_response_close(
+            axisymmetric,
+            full,
+            spl_db=1.0,
+            phase_deg=5.0,
+            pattern_db=1.0,
+        )
+        assert_response_close(
+            full,
+            quarter,
+            spl_db=0.2,
+            phase_deg=1.0,
+            pattern_db=0.2,
+        )
         await runtime.shutdown()
 
     asyncio.run(scenario())
