@@ -5,13 +5,19 @@ Release installs intentionally carry no local-build stamp.  For those, source
 and build mtimes provide a conservative warning.  The macOS review launcher
 writes a content digest after a successful local build, so subsequent checks
 remain correct even when Git restores an older timestamp.
+
+:func:`refresh_hint` lives here too, so that every caller that reports a stale
+interface offers the one remedy the install in front of it can actually carry
+out.
 """
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 from pathlib import Path
+import sys
 
 
 STAMP_NAME = ".wg-local-source.sha256"
@@ -94,6 +100,46 @@ def mark_fresh(repo_root: Path) -> Path:
     temporary.write_text(source_digest(repo_root) + "\n", encoding="ascii")
     temporary.replace(stamp)
     return stamp
+
+
+def installer_hint() -> str:
+    """The platform installer, spelled the way the user would type it."""
+
+    if sys.platform == "darwin":
+        return "installers/macos/install-wg.command"
+    if os.name == "nt":
+        return r"installers\windows\install-and-update.bat"
+    return "installers/linux/install.sh"
+
+
+def vite_executable(repo_root: Path) -> Path:
+    """The Vite binary that ``npm run build`` in this checkout would run."""
+
+    name = "vite.cmd" if os.name == "nt" else "vite"
+    return repo_root / "frontend" / "node_modules" / ".bin" / name
+
+
+def refresh_hint(repo_root: Path) -> str:
+    """How *this* install can replace a stale ``frontend/dist``.
+
+    Running v2 deliberately requires no Node runtime: a release install obtains
+    ``frontend/dist`` as a checksum-verified download and carries neither
+    node_modules nor npm.  Advising a Vite build there names a command that
+    cannot run, and sends the user to install a whole toolchain to fix what
+    re-running the installer fixes -- which, for the mtime fallback above, is
+    usually not even a real staleness.  So only a checkout that could actually
+    perform the build is told to perform it.
+    """
+
+    if not vite_executable(repo_root).is_file():
+        return f"{installer_hint()} to reinstall the matching interface"
+    if sys.platform == "darwin":
+        # The macOS launcher rebuilds a stale frontend on the way up, so
+        # relaunching is the shortest correct advice. This warning is only
+        # reachable when that rebuild was skipped or could not run, in which
+        # case the manual build is the fallback either way.
+        return "cd frontend && npm run build, or quit and reopen Waveguide Generator"
+    return "cd frontend && npm run build"
 
 
 def _parser() -> argparse.ArgumentParser:
