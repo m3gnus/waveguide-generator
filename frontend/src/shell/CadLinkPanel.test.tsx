@@ -1000,7 +1000,7 @@ describe('CadLinkPanel', () => {
     expect(() => buildImportedSubmission(useCadReturnStore.getState())).toThrow('Ingest a CAD return');
   });
 
-  it('emits the combine wire only when enabled, chained by role band order', () => {
+  it('emits the combine wire unless switched off, chained by role band order', () => {
     useCadReturnStore.getState().selectBundle(listing.items[0]);
     useCadReturnStore.getState().applyIngest(record, useCadReturnStore.getState().beginIngestIntent());
     useCadReturnStore.setState({
@@ -1019,13 +1019,15 @@ describe('CadLinkPanel', () => {
     });
     useCadReturnStore.getState().setSweep({ frequencyStartHz: 200, frequencyEndHz: 5_000, frequencyCount: 24 });
 
+    // Two drive channels combine without being asked to; the MF -> HF role
+    // default is 1000 Hz and the 200 Hz - 5 kHz sweep carries it.
+    expect(buildImportedSubmission(useCadReturnStore.getState()).geometry.combine)
+      .toEqual({ members: ['drive-mf', 'drive-hf'], crossovers_hz: [1_000], level_match: true, align: true });
+
+    useCadReturnStore.getState().setCombineEnabled(false);
     expect(buildImportedSubmission(useCadReturnStore.getState()).geometry).not.toHaveProperty('combine');
 
     useCadReturnStore.getState().setCombineEnabled(true);
-    // Untouched pair input: log-spaced default inside the sweep,
-    // round(sqrt(200 * 5000)) = 1000.
-    expect(buildImportedSubmission(useCadReturnStore.getState()).geometry.combine)
-      .toEqual({ members: ['drive-mf', 'drive-hf'], crossovers_hz: [1_000], level_match: true, align: true });
 
     useCadReturnStore.getState().setCombineCrossover('drive-mf\u2192drive-hf', 1_200);
     expect(buildImportedSubmission(useCadReturnStore.getState()).geometry.combine)

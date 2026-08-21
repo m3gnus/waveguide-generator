@@ -314,7 +314,7 @@ export async function showCadJobModel(
         .filter((finding) => String(finding.kind).includes('area-drift'))
         .map((finding) => String(finding.source_id)))],
       exteriorOnly: false,
-      combineEnabled: false,
+      combineEnabled: null,
       combineCrossoversHz: {},
       combineLevelMatch: null,
       combineAlign: null,

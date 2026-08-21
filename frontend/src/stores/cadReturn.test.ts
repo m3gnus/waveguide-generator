@@ -2,6 +2,10 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
 import {
   acknowledgedFindingWire,
+  combineChain,
+  combineDefaultHz,
+  combineEnabledEffective,
+  combineWire,
   DRIVER_REQUIRED_KEYS,
   resetCadReturnStore,
   unacknowledgedBlocking,
@@ -278,7 +282,8 @@ describe('CAD return store', () => {
     expect(useCadReturnStore.getState().selectArrivedBundle(arrived)).toBe('reset');
     const state = useCadReturnStore.getState();
     expect(state.sourceSizesMm).toEqual({ 'source-mf': 8 });
-    expect(state.combineEnabled).toBe(false);
+    // The combine choice resets to "none made yet", not to off.
+    expect(state.combineEnabled).toBeNull();
   });
 
   it('refuses ingestion evidence smuggled into a stored profile', () => {
@@ -427,7 +432,7 @@ describe('CAD return store', () => {
       sourceSizesMm: { 'source-mf': 8, 'source-hf': 5 },
       rigidSizeMm: 8,
       transitionMm: 8,
-      combineEnabled: false,
+      combineEnabled: null,
     });
   });
 
@@ -510,5 +515,137 @@ describe('CAD return store', () => {
     expect(state.ingestStaleReason).toContain('source inventory or source sizing suggestions changed');
     expect(state.sourceSizesMm['source-hf']).toBe(2.25);
     expect(state.acknowledgedFindingIds).toEqual([]);
+  });
+});
+
+describe('combined output', () => {
+  const rebanded = (roles: Record<string, string>): CadReturnBundle => ({
+    ...bundle,
+    sources: bundle.sources.map((source) => ({ ...source, role: roles[source.id] ?? source.role })),
+  });
+
+  beforeEach(() => {
+    localStorage.clear();
+    resetDocumentStore();
+    resetCadReturnStore();
+  });
+
+  it('is on by default for two or more drive channels and off for one', () => {
+    useCadReturnStore.getState().selectBundle(bundle);
+    const state = useCadReturnStore.getState();
+    expect(state.combineEnabled).toBeNull();
+    expect(combineEnabledEffective(state)).toBe(true);
+    expect(combineWire(state)?.members).toEqual(['drive-mf', 'drive-hf']);
+
+    useCadReturnStore.getState().setSourceChannel('source-hf', 'drive-mf');
+    const single = useCadReturnStore.getState();
+    expect(combineEnabledEffective(single)).toBe(false);
+    expect(combineWire(single)).toBeUndefined();
+  });
+
+  it('keeps an explicit off, and forgets it when another return is selected', () => {
+    useCadReturnStore.getState().selectBundle(bundle);
+    useCadReturnStore.getState().setCombineEnabled(false);
+    expect(combineEnabledEffective(useCadReturnStore.getState())).toBe(false);
+    expect(combineWire(useCadReturnStore.getState())).toBeUndefined();
+
+    // An unrelated edit must not talk the user back into the default.
+    useCadReturnStore.getState().setSourceSize('source-hf', 2.25);
+    expect(combineEnabledEffective(useCadReturnStore.getState())).toBe(false);
+
+    useCadReturnStore.getState().selectBundle({ ...bundle, name: 'other.wgreturn', bundlePath: 'wgreturn/other.wgreturn' });
+    expect(useCadReturnStore.getState().combineEnabled).toBeNull();
+    expect(combineEnabledEffective(useCadReturnStore.getState())).toBe(true);
+  });
+
+  it('defaults each crossover from the two bands it joins', () => {
+    expect(combineDefaultHz('LF', 'MF')).toBe(100);
+    expect(combineDefaultHz('MF', 'HF')).toBe(1_000);
+    expect(combineDefaultHz('LF', 'HF')).toBe(1_000);
+    expect(combineDefaultHz('MF', 'MF')).toBeUndefined();
+    expect(combineDefaultHz(undefined, 'HF')).toBeUndefined();
+
+    useCadReturnStore.getState().selectBundle(bundle);
+    expect(combineChain(useCadReturnStore.getState())).toEqual([{
+      key: 'drive-mf→drive-hf',
+      lower: 'drive-mf',
+      upper: 'drive-hf',
+      hz: 1_000,
+      lowerRole: 'MF',
+      upperRole: 'HF',
+      defaultHz: 1_000,
+      outsideSweep: false,
+    }]);
+  });
+
+  it('falls back inside the sweep when the role default lies outside it', () => {
+    useCadReturnStore.getState().selectBundle(rebanded({ 'source-mf': 'LF', 'source-hf': 'MF' }));
+    // 100 Hz would be refused by the server's own band check on a 200 Hz sweep,
+    // so the log-spaced sqrt(200 * 20000) = 2000 Hz is used instead.
+    const [pair] = combineChain(useCadReturnStore.getState());
+    expect(pair).toMatchObject({ defaultHz: 100, outsideSweep: true, hz: 2_000 });
+    expect(combineWire(useCadReturnStore.getState())?.crossovers_hz).toEqual([2_000]);
+
+    useCadReturnStore.getState().setSweep({ frequencyStartHz: 50, frequencyEndHz: 20_000, frequencyCount: 24 });
+    expect(combineChain(useCadReturnStore.getState())[0]).toMatchObject({ outsideSweep: false, hz: 100 });
+  });
+
+  it('keeps the log-spaced fallback and listing order for an unroled return', () => {
+    useCadReturnStore.getState().selectBundle(rebanded({ 'source-mf': 'AUX', 'source-hf': 'AUX' }));
+    expect(combineChain(useCadReturnStore.getState())).toEqual([{
+      key: 'drive-mf→drive-hf',
+      lower: 'drive-mf',
+      upper: 'drive-hf',
+      hz: 2_000,
+      lowerRole: undefined,
+      upperRole: undefined,
+      defaultHz: undefined,
+      outsideSweep: false,
+    }]);
+  });
+
+  it('adopts the crossovers a recombine was computed with, ignoring foreign members', () => {
+    useCadReturnStore.getState().selectBundle(bundle);
+    useCadReturnStore.getState().setCombineCrossoversFromResult(['drive-mf', 'drive-hf'], [1_450]);
+    expect(useCadReturnStore.getState().combineCrossoversHz).toEqual({ 'drive-mf→drive-hf': 1_450 });
+    expect(combineChain(useCadReturnStore.getState())[0].hz).toBe(1_450);
+
+    // A run from another return names channels this one has not got.
+    useCadReturnStore.getState().setCombineCrossoversFromResult(['drive-lf', 'drive-mf', 'drive-hf'], [90, 900]);
+    expect(useCadReturnStore.getState().combineCrossoversHz).toEqual({ 'drive-mf→drive-hf': 900 });
+
+    useCadReturnStore.getState().setCombineCrossoversFromResult(['drive-mf', 'drive-hf'], []);
+    expect(useCadReturnStore.getState().combineCrossoversHz).toEqual({ 'drive-mf→drive-hf': 900 });
+  });
+
+  it('restores a profile written before the combined output defaulted on as no choice', () => {
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 1,
+    }, 'current');
+    useCadReturnStore.getState().selectBundle(bundle);
+    useCadReturnStore.getState().setCombineEnabled(false);
+
+    const raw = JSON.parse(localStorage.getItem(solveProfileStorageKey)!);
+    raw.version = 1;
+    raw.profiles[0].settings.combineEnabled = false;
+    localStorage.setItem(solveProfileStorageKey, JSON.stringify(raw));
+
+    resetCadReturnStore();
+    useCadReturnStore.getState().selectBundle(bundle);
+    expect(useCadReturnStore.getState().combineEnabled).toBeNull();
+    expect(combineEnabledEffective(useCadReturnStore.getState())).toBe(true);
+  });
+
+  it('restores an explicit off from a current profile', () => {
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 1,
+    }, 'current');
+    useCadReturnStore.getState().selectBundle(bundle);
+    useCadReturnStore.getState().setCombineEnabled(false);
+
+    resetCadReturnStore();
+    useCadReturnStore.getState().selectBundle(bundle);
+    expect(useCadReturnStore.getState().combineEnabled).toBe(false);
+    expect(combineEnabledEffective(useCadReturnStore.getState())).toBe(false);
   });
 });

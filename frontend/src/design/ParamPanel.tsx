@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { convertDesignToFreeform } from '../api/designIo';
 import { previewSocket } from '../api/previewSocket';
@@ -13,6 +13,7 @@ import {
   assignableChannelIds,
   channelAcceptsDriver,
   combineChain,
+  combineEnabledEffective,
   combineLevelMatchDefault,
   DRIVER_REQUIRED_KEYS,
   PASSIVE_CARDIOID_CHANNEL_ID,
@@ -20,6 +21,7 @@ import {
   useCadReturnStore,
   type CadDriveChannel,
   type ChannelDriverForm,
+  type CombinePair,
   type DriverFieldKey,
   type PortAreaSource,
 } from '../stores/cadReturn';
@@ -983,14 +985,34 @@ function CadPassiveCardioid() {
   </>;
 }
 
+/** The bands a pair joins, in the words a designer uses for them. Unroled ends
+ * fall back to the authored channel ids, which is all the return says. */
+function combinePairLabel(pair: CombinePair): string {
+  return pair.lowerRole && pair.upperRole
+    ? `${pair.lowerRole} → ${pair.upperRole}`
+    : `${pair.lower} → ${pair.upper}`;
+}
+
+/** What an untouched field would hold and why, stated per pair rather than as
+ * one note for the whole section: the pairs no longer share a rule. */
+function combinePairHint(pair: CombinePair): string {
+  if (pair.defaultHz === undefined) return 'Default follows the current Frequency Sweep.';
+  return pair.outsideSweep
+    ? `${pair.defaultHz} Hz default is outside the sweep; using ${pair.hz} Hz.`
+    : `${pair.defaultHz} Hz default.`;
+}
+
 function CadCrossover() {
   const state = useCadReturnStore();
   if (state.driveChannels.length < 2) return <p className="section-note">Two or more drive channels are required for a combined output.</p>;
+  const enabled = combineEnabledEffective(state);
   return <>
-    <ToggleRow id="cad-combine" label={CAD_CONTROLS.combinedOutput.label} revealId={CAD_CONTROLS.combinedOutput.reveal.id} help="Append an LR4 crossover sum of the drive channels as one more result channel. The chain runs lowest band first, ordered by the sources' return roles (LF → MF → HF)." checked={state.combineEnabled} onChange={state.setCombineEnabled}/>
-    {state.combineEnabled && <>
-      <p className="section-note">Untouched crossover defaults follow the current Frequency Sweep.</p>
-      {combineChain(state).map((pair) => <NumberField key={pair.key} label={`${pair.lower} → ${pair.upper}`} revealId={CAD_CONTROLS.crossoverFrequency.reveal.id} unit="Hz" value={pair.hz} min={1} step={50} precision={0} description={CAD_CONTROLS.crossoverFrequency.label} onCommit={(value) => state.setCombineCrossover(pair.key, value)}/>)}
+    <ToggleRow id="cad-combine" label={CAD_CONTROLS.combinedOutput.label} revealId={CAD_CONTROLS.combinedOutput.reveal.id} help="Append an LR4 crossover sum of the drive channels as one more result channel. On by default for a return with two or more drive channels; the chain runs lowest band first, ordered by the sources' return roles (LF → MF → HF)." checked={enabled} onChange={state.setCombineEnabled}/>
+    {enabled && <>
+      {combineChain(state).map((pair) => <Fragment key={pair.key}>
+        <NumberField label={combinePairLabel(pair)} revealId={CAD_CONTROLS.crossoverFrequency.reveal.id} unit="Hz" value={pair.hz} min={1} step={50} precision={0} description={`${CAD_CONTROLS.crossoverFrequency.label} · ${pair.lower} → ${pair.upper}`} onCommit={(value) => state.setCombineCrossover(pair.key, value)}/>
+        <p className="section-note">{combinePairHint(pair)}</p>
+      </Fragment>)}
       <ToggleRow id="cad-combine-level" label={CAD_CONTROLS.levelMatch.label} revealId={CAD_CONTROLS.levelMatch.reveal.id} help="Equalise member band levels before summing. Defaults off when every member carries a driver model — real voltage-driven levels should not be re-equalised." checked={state.combineLevelMatch ?? combineLevelMatchDefault(state)} onChange={state.setCombineLevelMatch}/>
       <ToggleRow id="cad-combine-align" label={CAD_CONTROLS.timeAlign.label} revealId={CAD_CONTROLS.timeAlign.reveal.id} help="Delay each member so the crossover sums coherently, from the phase of the solved fields at each crossover frequency. Off sums the members as solved." checked={state.combineAlign ?? true} onChange={state.setCombineAlign}/>
     </>}
