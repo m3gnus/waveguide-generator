@@ -54,7 +54,8 @@ function setCadReady(): void {
     ],
     channelDrivers: { 'drive-hf': { enabled: true, fields: {} } },
     exteriorOnly: true,
-    combineEnabled: true,
+    // Left unset on purpose: a multi-driver return combines by default.
+    combineEnabled: null,
   });
 }
 
@@ -398,6 +399,40 @@ describe('ParamPanel inventory UX', () => {
     const rebuild = [...host.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Rebuild mesh')!;
     act(() => rebuild.click());
     expect(ingest).toHaveBeenCalledOnce();
+  });
+
+  it('combines by default, labelled by band, and says which default each field would use', () => {
+    act(() => {
+      setCadReady();
+      workspaceModeStore.setMode('cad');
+      root.render(withQueryClient(<ParamPanel tab="simulation" />));
+    });
+
+    const combine = host.querySelector<HTMLInputElement>('#cad-combine')!;
+    expect(useCadReturnStore.getState().combineEnabled).toBeNull();
+    expect(combine.checked).toBe(true);
+    expect(host.textContent).toContain('MF → HF');
+    expect(host.textContent).toContain('1000 Hz default.');
+    expect(host.textContent).not.toContain('Untouched crossover defaults');
+    expect(buildImportedSubmission(useCadReturnStore.getState()).geometry.combine?.crossovers_hz).toEqual([1_000]);
+
+    // A default the sweep cannot carry says so rather than blocking the solve:
+    // the server refuses a crossover outside the solved band.
+    act(() => useCadReturnStore.setState({
+      selectedBundle: {
+        ...cadBundle,
+        sources: cadBundle.sources.map((source) => (
+          source.id === 'source-mf' ? { ...source, role: 'LF' } : { ...source, role: 'MF' }
+        )),
+      },
+    }));
+    expect(host.textContent).toContain('LF → MF');
+    expect(host.textContent).toContain('100 Hz default is outside the sweep; using 2000 Hz.');
+
+    act(() => combine.click());
+    expect(useCadReturnStore.getState().combineEnabled).toBe(false);
+    expect(host.querySelector('#cad-combine-align')).toBeNull();
+    expect(buildImportedSubmission(useCadReturnStore.getState()).geometry).not.toHaveProperty('combine');
   });
 
   it('edits the passive-cardioid campaign in the rail, in cm² over an m² wire', () => {
