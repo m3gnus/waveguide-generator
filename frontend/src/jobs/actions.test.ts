@@ -42,6 +42,19 @@ describe('solve submission', () => {
     expect(plannedEngineNames('auto', capabilities, 'full_3d')).toEqual(['metal', 'dryrun']);
     expect(plannedEngineNames('metal', capabilities, 'circsym')).toEqual(['axisym']);
     expect(plannedEngineNames('dryrun', capabilities, 'auto')).toEqual(['dryrun']);
+
+    const staleBeat = {
+      engines: [
+        { name: 'beat', available: false, reason: 'GPU offline', version: null, fast_paths: [], formulations: ['full-3d'] },
+        { name: 'axisym', available: true, reason: null, version: '1', fast_paths: [], formulations: ['axisymmetric'] },
+      ],
+      engineSelection: {
+        default: 'auto', resolvedDefault: null, full3dOrder: ['beat'], axisymmetricRunner: 'axisym',
+      },
+    };
+    expect(resolveEngine('beat', staleBeat, 'auto')).toBe('beat');
+    expect(plannedEngineNames('beat', staleBeat, 'auto')).toEqual(['axisym', 'beat']);
+    expect(resolveEngine('beat', staleBeat, 'full_3d')).toBe('beat');
   });
 
   it('resolves AUTO to Axisym when it is the only engine the host has', () => {

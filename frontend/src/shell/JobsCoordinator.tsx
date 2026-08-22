@@ -7,6 +7,7 @@ import { JobAutomation } from '../jobs/automation';
 import { exportStemForJob, exportSubdirectoryForJob } from '../jobs/exportNaming';
 import { explainImportedRefusal } from '../jobs/importedRefusals';
 import { buildImportedSubmission, importedSubmissionBlocker } from '../jobs/importedSubmission';
+import { plannedBackendCapabilities } from '../design/backendSupport';
 import { advanceRunSequence, nextRunLabel } from '../jobs/runNaming';
 import { currentRunNameSource } from '../jobs/runNameSource';
 import { preferencesStore, usePreferences } from '../prefs/preferences';
@@ -185,6 +186,15 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     }
   }
   const capability = capabilities.find((engine) => engine.name.toLowerCase() === effectiveEngine.toLowerCase()) ?? null;
+  const plannedCapabilities = plannedBackendCapabilities(
+    selectedEngine,
+    capabilities,
+    engineSelection,
+    solveOptions.solverMode,
+  );
+  const runCapability = solveOptions.solverMode === 'auto'
+    ? plannedCapabilities[0] ?? null
+    : capability;
   const metalCapability = capabilities.find((engine) => engine.name.toLowerCase() === 'metal') ?? null;
   const visibleImported = viewportGeometry.showing === 'cad'
     ? viewportGeometry.cad
@@ -212,7 +222,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     submissionInFlight.current = true;
     try {
       if (engineResolutionError) throw new Error(engineResolutionError);
-      if (!capability?.available) throw new Error(engineResolutionError ?? capability?.reason ?? capabilityError ?? `${selectedEngine} engine is unavailable`);
+      if (!runCapability?.available) throw new Error(capability?.reason ?? capabilityError ?? `${selectedEngine} engine is unavailable`);
       setSubmitting(true);
       setActionError(null);
       // Pressing Solve never edits the design. BEMPP's own closed-wall default
@@ -238,7 +248,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       submissionInFlight.current = false;
       setSubmitting(false);
     }
-  }, [capability, capabilityError, designName, engineResolutionError, now, preferences, selectedEngine]);
+  }, [capability?.reason, capabilityError, designName, engineResolutionError, now, preferences, runCapability, selectedEngine]);
 
   const runImported = useCallback(async (submission: ImportedSolveSubmission) => {
     if (submissionInFlight.current) return null;
@@ -341,7 +351,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   const activeCapability = cadGeometryActive
     ? metalCapability
     : engineResolutionError === null
-      ? capability
+      ? runCapability
       : null;
   const solve = useCallback(() => {
     const action = async () => {
@@ -381,11 +391,15 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
           : cadGeometryActive && activeCapability?.available
             ? 'Solve the displayed CAD Link model with Metal'
             : activeCapability?.available
-              ? `Solve current design with ${selectedEngine === 'auto' ? `AUTO (${activeCapability.name})` : activeCapability.name}`
+              ? selectedEngine === 'auto'
+                ? `Solve current design with AUTO (${capability?.name ?? activeCapability.name})`
+                : solveOptions.solverMode === 'auto' && capability?.available === false
+                  ? `Solve current design with AUTO formulation planning (${activeCapability.name.toUpperCase()} available; requested ${capability.name.toUpperCase()} fallback is offline)`
+                  : `Solve current design with ${capability?.name ?? activeCapability.name}`
               : cadGeometryActive
                 ? metalCapability?.reason ?? capabilityError ?? 'Metal engine is unavailable'
                 : unavailable,
-  }), [activeCapability, cadGeometryActive, cadSolveBlocker, capabilityError, fileGeometryActive, metalCapability?.reason, selectedEngine, solve, submitting, unavailable]);
+  }), [activeCapability, cadGeometryActive, cadSolveBlocker, capability?.available, capability?.name, capabilityError, fileGeometryActive, metalCapability?.reason, selectedEngine, solve, solveOptions.solverMode, submitting, unavailable]);
 
   return <SolveContext.Provider value={control}>{children}<JobAnnouncer jobs={jobs}/></SolveContext.Provider>;
 }
