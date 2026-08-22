@@ -347,28 +347,39 @@ def test_a_stale_frontend_still_counts_as_a_healthy_start_for_cleanup(
     assert not (data / "updates").exists()
 
 
-def test_a_backend_that_is_not_healthy_does_not_trigger_cleanup(
+def test_the_cleanup_guard_is_never_stricter_than_the_loop_that_calls_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """_wait_for_frontend calls this on the snapshot that ended its loop.
+
+    Any condition here that the loop does not also enforce is one the caller
+    never promised, and skipping is silent: no log line, no dialog, just a
+    gigabyte that never comes back.
+    """
+
     bundle = tmp_path / "Waveguide Generator"
     data = tmp_path / "data"
     for name in ("app", "runtime", "app.previous"):
         (bundle / name).mkdir(parents=True)
     (data / "logs").mkdir(parents=True)
 
-    unhealthy = StatusSnapshot(
-        backend=LampStatus(ServiceState.ERROR, "/health failed"),
+    # Backend still reporting ERROR while the SPA is already being served is a
+    # real ordering during start-up, and it must not block the sweep.
+    serving = StatusSnapshot(
+        backend=LampStatus(ServiceState.ERROR, "/health failed: timed out"),
         frontend=LampStatus(ServiceState.WARNING, "SPA is being served, but stale"),
         url="http://127.0.0.1:3199/",
         pid=123,
         exit_code=None,
     )
-    window = desktop.DesktopWindow(StubController(poll_snapshot=unhealthy))  # type: ignore[arg-type]
+    window = desktop.DesktopWindow(StubController(poll_snapshot=serving))  # type: ignore[arg-type]
+    assert window._frontend_ready(serving) is True
     monkeypatch.setattr(window, "_bundle_paths", lambda: (bundle, bundle, data))
+    monkeypatch.setattr(desktop, "repair_bundle", lambda *a, **k: None)
 
-    window._finish_healthy_bundle_update(unhealthy)
+    window._finish_healthy_bundle_update(serving)
 
-    assert (bundle / "app.previous").exists()
+    assert not (bundle / "app.previous").exists()
 
 
 def test_a_server_that_never_answers_is_reported_instead_of_waited_on_forever(
