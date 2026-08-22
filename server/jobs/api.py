@@ -7,20 +7,19 @@ from collections.abc import Awaitable, Callable, Collection, Iterator, Mapping
 import json
 from pathlib import Path
 import re
-from typing import Annotated, Any, Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request, WebSocket
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.routing import APIRoute
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from server.jobs.events import CLOSE_ORIGIN_REJECTED, JobsProtocol
 from server.integration.contracts import ErrorEnvelope, error_envelope
 from server.jobs.models import (
-    CadIdentityProvenance,
     ChannelCombineSpec,
     ClearFailedResponse,
     DeleteResponse,
@@ -33,6 +32,7 @@ from server.jobs.models import (
     SolveRequest,
     StopResponse,
 )
+from server.jobs.result_contracts import ResultEnvelope
 from server.solver.errors import RecombineError
 from server.solver.field_plane import (
     FieldPlaneInvalidSelection,
@@ -58,13 +58,9 @@ from server.jobs.runtime import (
     SymmetryValidationError,
     UnknownEngineError,
 )
-from server.jobs.store import JobStore
+from server.jobs.store import JobStore, SubmissionConflictError
 from server.engines.registry import EngineRegistry
 from server.platform.origin import websocket_request_allowed
-
-
-class ExtensibleResultModel(BaseModel):
-    model_config = ConfigDict(extra="allow")
 
 
 def _json_tokens(value: Any) -> Iterator[str]:
@@ -110,63 +106,6 @@ def _json_chunks(value: Any) -> Iterator[bytes]:
             buffered_characters = 0
     if buffered:
         yield "".join(buffered).encode("utf-8")
-
-
-class ResultProvenance(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
-    schema_version: Literal[1]
-    wg_version: str
-    dependency_shas: dict[str, str]
-    request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    geometry_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    solve_options_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    request_identity: Literal["execution"]
-    execution_request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    execution_geometry_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    execution_solve_options_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    effective_request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    effective_geometry_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    effective_solve_options_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    resolved_engine: str
-    cad_identity: CadIdentityProvenance | None = None
-
-
-class ParametricResultEnvelope(ExtensibleResultModel):
-    result_kind: Literal["parametric"]
-    result_contract_version: Literal[1]
-    client_request_id: str | None
-    client_metadata: dict[str, JsonValue]
-    provenance: ResultProvenance
-    metadata: dict[str, Any]
-
-
-class MultiChannelResultEnvelope(ExtensibleResultModel):
-    """One solve, one channel per drive channel, addressed by ``channel_order``.
-
-    Every channel is a parametric-shaped result whose ``metadata`` names its
-    drive address: ``drive_channel_id``, the ``source_ids`` it drives, ``role``
-    (the driver band ``HF``/``MF``/``LF``, null when the sources carry no band
-    role) and, when the ingestion record names its sources, ``source_labels``
-    parallel to ``source_ids``. A combined channel adds ``derived_from_channels``
-    and a ``combine`` payload whose ``members`` and ``member_roles`` are parallel
-    lists, so a client can label a crossover pair without the ingestion record.
-    """
-
-    result_kind: Literal["multi_channel"]
-    result_contract_version: Literal[2]
-    client_request_id: str | None
-    client_metadata: dict[str, JsonValue]
-    provenance: ResultProvenance
-    metadata: dict[str, Any]
-    channels: dict[str, dict[str, Any]]
-    channel_order: list[str]
-
-
-ResultEnvelope = Annotated[
-    ParametricResultEnvelope | MultiChannelResultEnvelope,
-    Field(discriminator="result_kind"),
-]
 
 
 class RadiationImpedanceAperture(BaseModel):
@@ -301,6 +240,7 @@ def create_jobs_router(
         response_model=SolveAccepted,
         response_model_exclude_none=True,
         responses={
+            409: {"model": ErrorEnvelope, "description": "Submission key conflict"},
             422: {"model": ErrorEnvelope, "description": "Solve request refused"},
             503: {"model": ErrorEnvelope, "description": "Engine unavailable"},
         },
@@ -337,6 +277,14 @@ def create_jobs_router(
             return _error_response(
                 503,
                 code="engine_unavailable",
+                stage="submission",
+                message=str(exc),
+                client_request_id=body.client_request_id,
+            )
+        except SubmissionConflictError as exc:
+            return _error_response(
+                409,
+                code="submission_key_conflict",
                 stage="submission",
                 message=str(exc),
                 client_request_id=body.client_request_id,

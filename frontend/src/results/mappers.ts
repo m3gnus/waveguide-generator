@@ -1,4 +1,4 @@
-import type { JobResults, NullableNumber, PolarSample } from '../api/results';
+import type { NullableNumber, PolarSample, ResultData } from '../api/results';
 import { applySmoothing, type SmoothingMode } from './smoothing';
 import { channelLabel } from './channelLabel';
 import { combineMetadataOf, type ResultPayload } from './types';
@@ -9,9 +9,9 @@ import { displayPhaseDegrees, groupDelayMilliseconds, propagationReference } fro
 export interface NamedResult {
   id: string;
   label: string;
-  result: JobResults;
+  result: ResultData;
   /** The CAD envelope owns per-source evidence that its channel does not repeat. */
-  wrapper?: JobResults;
+  wrapper?: ResultData;
   /**
    * A member of the combined sum on screen, not a run being compared with it.
    * Only the cards that are about the drivers themselves draw one; see
@@ -35,7 +35,7 @@ export interface NamedResult {
  * because the sum itself has no impedance, no drive and no cone for the cards
  * that measure those.
  */
-export function selectResultChannels(id: string, label: string, result: JobResults, view: ResultView): NamedResult[] {
+export function selectResultChannels(id: string, label: string, result: ResultData, view: ResultView): NamedResult[] {
   const payload = result as ResultPayload;
   const active = resolveResultView(payload, view);
   if (!active || !payload.channels) return [{ id, label, result }];
@@ -69,7 +69,7 @@ function patternDb(value: NullableNumber | [number, number]): number | null {
   return finite(value) ? value : null;
 }
 
-function frequencyAxis(result: JobResults, nested?: number[]): number[] {
+function frequencyAxis(result: ResultData, nested?: number[]): number[] {
   return nested?.length ? nested : result.frequencies;
 }
 
@@ -95,7 +95,7 @@ export interface DirectivityGrid {
   maxDb: number;
 }
 
-export function directivityGrid(result: JobResults, plane = 'horizontal'): DirectivityGrid {
+export function directivityGrid(result: ResultData, plane = 'horizontal'): DirectivityGrid {
   const frequencies = result.frequencies;
   const patterns = (result.directivity as Record<string, PolarSample[][]> | undefined)?.[plane] ?? [];
   const angles = [...new Set(patterns.flatMap((row) => row.map((sample) => Number(sample[0]))))]
@@ -123,14 +123,14 @@ export function nearestFrequencyIndex(frequencies: number[], target: number): nu
   ), 0);
 }
 
-export function polarSeries(result: JobResults, frequencyIndex: number, plane: 'horizontal' | 'vertical') {
+export function polarSeries(result: ResultData, frequencyIndex: number, plane: 'horizontal' | 'vertical') {
   const row = result.directivity?.[plane]?.[frequencyIndex] ?? [];
   // Radius first, angle second: the polar chart's series contract, and the
   // tuple type keeps the null-able level distinguishable from the angle.
   return row.map(([angle, value]) => [patternDb(value), angle] as [number | null, number]);
 }
 
-export function impedanceSeries(result: JobResults, mode: 'cartesian' | 'polar', smoothing: SmoothingMode = 'none') {
+export function impedanceSeries(result: ResultData, mode: 'cartesian' | 'polar', smoothing: SmoothingMode = 'none') {
   const frequencies = frequencyAxis(result, result.impedance?.frequencies);
   const real = applySmoothing(frequencies, result.impedance?.real ?? [], smoothing);
   const imaginary = applySmoothing(frequencies, result.impedance?.imaginary ?? [], smoothing);

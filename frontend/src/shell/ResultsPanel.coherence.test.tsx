@@ -73,6 +73,35 @@ function toolbarButton(host: HTMLElement, text: string): HTMLButtonElement | und
   return [...host.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === text);
 }
 
+function finalResult(overrides: Record<string, unknown> = {}) {
+  const digest = 'a'.repeat(64);
+  return {
+    result_kind: 'parametric',
+    result_contract_version: 1,
+    client_request_id: null,
+    client_metadata: {},
+    provenance: {
+      schema_version: 1,
+      wg_version: 'test',
+      dependency_shas: {},
+      request_sha256: digest,
+      geometry_sha256: digest,
+      solve_options_sha256: digest,
+      request_identity: 'execution',
+      execution_request_sha256: digest,
+      execution_geometry_sha256: digest,
+      execution_solve_options_sha256: digest,
+      effective_request_sha256: digest,
+      effective_geometry_sha256: digest,
+      effective_solve_options_sha256: digest,
+      resolved_engine: 'test',
+    },
+    frequencies: [1_000],
+    metadata: {},
+    ...overrides,
+  };
+}
+
 describe('results run coherence', () => {
   let host: HTMLDivElement;
   let root: Root;
@@ -90,7 +119,7 @@ describe('results run coherence', () => {
     preferencesStore.update({ chartTypes: ['summary'] });
     modelMocks.showJobModel.mockReset().mockResolvedValue(true);
     vi.stubGlobal('fetch', vi.fn(async () => new Response(
-      JSON.stringify({ frequencies: [1_000], metadata: {} }),
+      JSON.stringify(finalResult()),
       { status: 200, headers: { 'Content-Type': 'application/json' } },
     )));
     host = document.createElement('div');
@@ -233,7 +262,7 @@ describe('results run coherence', () => {
     const solved = job('power-check', 14, liveDesign());
     publishJobs([solved]);
     compareSelection.setPrimary(solved.id);
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(finalResult({
       frequencies: [100, 1_000, 10_000],
       metadata: {
         source_ids: ['driver'],
@@ -248,7 +277,7 @@ describe('results run coherence', () => {
           agreement_db: [0.04, -0.6, 2.4],
         },
       },
-    }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+    })), { status: 200, headers: { 'Content-Type': 'application/json' } })));
 
     await act(async () => { root.render(<ResultsPanel/>); await Promise.resolve(); });
     const hint = host.querySelector<HTMLElement>('.result-power-check')!;
@@ -276,7 +305,7 @@ describe('results run coherence', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
       paths.push(path);
-      if (path === '/api/results/cardioid') return new Response(JSON.stringify({ frequencies: [1_000], metadata: {} }), { status: 200 });
+      if (path === '/api/results/cardioid') return new Response(JSON.stringify(finalResult()), { status: 200 });
       if (path === '/api/radiation-impedance/cardioid/presentation') {
         matrixAttempt += 1;
         if (matrixAttempt === 1) return new Response(JSON.stringify({ detail: 'matrix store temporarily unavailable' }), { status: 500, headers: { 'Content-Type': 'application/json' } });
