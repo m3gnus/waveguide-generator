@@ -26,6 +26,7 @@ from server.cadlink.api import (
     list_returns,
     post_ingest,
 )
+from server.cadlink.identity import SaveIdentity
 from server.cadlink.ingest import (
     IngestRefusal,
     _canonical,
@@ -402,6 +403,49 @@ def test_design_registry_routes_list_heads_and_open_the_exact_snapshot(
         "updatedAt": "2026-08-20T12:00:00Z",
         "text": saved["text"],
     }
+
+
+def test_design_registry_lists_one_project_using_its_newest_lineage_head(
+    tmp_path: Path,
+) -> None:
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    app = SimpleNamespace(state=SimpleNamespace(cadlink_store=store))
+    first = store.save(
+        requested=None,
+        design_hash="sha256:" + hashlib.sha256(b"first").hexdigest(),
+        filename="first-name.cfg",
+        snapshot_builder=lambda identity: f"DesignId={identity.design_id};first",
+        saved_at="2026-08-20T10:00:00Z",
+    )
+    stale = SaveIdentity.model_validate(
+        {
+            "designId": first["identity"].design_id,
+            "lineageId": first["identity"].lineage_id,
+            "baseEditVersion": 1,
+        }
+    )
+    store.save(
+        requested=stale,
+        design_hash="sha256:" + hashlib.sha256(b"updated").hexdigest(),
+        filename="older-head-name.cfg",
+        snapshot_builder=lambda identity: f"DesignId={identity.design_id};updated",
+        saved_at="2026-08-21T10:00:00Z",
+    )
+    fork = store.save(
+        requested=stale,
+        design_hash="sha256:" + hashlib.sha256(b"fork").hexdigest(),
+        filename="canonical-name.cfg",
+        snapshot_builder=lambda identity: f"DesignId={identity.design_id};fork",
+        saved_at="2026-08-22T10:00:00Z",
+    )
+
+    listing = asyncio.run(list_designs(SimpleNamespace(app=app)))
+
+    assert len(listing["items"]) == 1
+    assert listing["items"][0]["designId"] == fork["identity"].design_id
+    assert listing["items"][0]["lineageId"] == first["identity"].lineage_id
+    assert listing["items"][0]["filename"] == "canonical-name.cfg"
+    assert listing["items"][0]["archiveStem"] == "canonical-name"
 
 
 def test_return_listing_allows_an_omitted_source_resolution_suggestion(

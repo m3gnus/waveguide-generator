@@ -9,6 +9,7 @@ folder -- the two used to be derived independently and could disagree.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -17,13 +18,14 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from server.app import create_app
 from server.cadlink.api import (
     ArchiveRunDocumentRequest,
     archive_run_document,
     download_project_document,
     list_project_documents,
 )
+from server.cadlink.store import CadLinkStore
+from server.workspace.api import CadWorkspaceState, WorkspaceState
 from server.workspace.archive import archive_cad_document
 
 
@@ -63,10 +65,18 @@ def capture(runs: Path, tmp_path: Path, stem: str, digest: str, *, at: str) -> N
 
 
 def app_with_runs(tmp_path: Path):
-    app = create_app(data_dir=tmp_path / "data")
     runs = tmp_path / "runs"
     runs.mkdir()
-    app.state.workspace.select(runs)
+    data = tmp_path / "data"
+    workspace = WorkspaceState(data, default_path=runs)
+    workspace.select(runs)
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            cadlink_store=CadLinkStore(tmp_path / "cadlink.db"),
+            workspace=workspace,
+            cad_workspace=CadWorkspaceState(data),
+        )
+    )
     return app, runs
 
 
@@ -163,6 +173,32 @@ def test_an_unknown_project_is_not_found(tmp_path: Path) -> None:
         asyncio.run(list_project_documents("wgl_nope", SimpleNamespace(app=app)))
 
     assert refused.value.status_code == 404
+
+
+def test_an_older_project_is_found_beyond_the_recent_design_head_cap(
+    tmp_path: Path,
+) -> None:
+    app, _runs = app_with_runs(tmp_path)
+    _design_id, lineage_id = project(app, filename="Older Project.cfg")
+    store = app.state.cadlink_store
+    start = datetime(2026, 8, 21, tzinfo=timezone.utc)
+    for index in range(500):
+        saved_at = (start + timedelta(seconds=index)).isoformat().replace("+00:00", "Z")
+        store.save(
+            requested=None,
+            design_hash="sha256:" + hashlib.sha256(f"newer-{index}".encode()).hexdigest(),
+            filename=f"newer-{index}.cfg",
+            snapshot_builder=lambda identity: f"DesignId={identity.design_id}",
+            saved_at=saved_at,
+        )
+    assert lineage_id not in {
+        str(row["lineage_id"]) for row in store.list_designs(limit=500)
+    }
+
+    listing = asyncio.run(list_project_documents(lineage_id, SimpleNamespace(app=app)))
+
+    assert listing["archiveStem"] == "Older Project"
+    assert listing["items"] == []
 
 
 def test_the_run_copy_is_filed_only_in_run_mode(tmp_path: Path) -> None:

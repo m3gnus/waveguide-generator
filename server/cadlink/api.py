@@ -402,22 +402,24 @@ async def list_returns(request: Request) -> dict[str, Any]:
 
 @router.get("/designs")
 async def list_designs(request: Request) -> dict[str, Any]:
-    """Expose recent CAD-linked design heads as a local project picker.
+    """Expose recent CAD-linked projects as a local project picker.
 
-    Each head also reports the archive folder its runs and captured CAD
+    Each lineage contributes only its newest head and reports the archive folder its runs and captured CAD
     documents share, so a project can be opened, revealed and counted from one
     listing rather than from three that could disagree.
     """
 
     store: CadLinkStore = request.app.state.cadlink_store
-    rows = await asyncio.to_thread(store.list_designs)
-    stems = await asyncio.to_thread(
-        lambda: {
-            str(row["lineage_id"]): _project_archive_stem(
-                store, str(row["lineage_id"]), str(row["filename"])
+    projects = await asyncio.to_thread(
+        lambda: [
+            (
+                row,
+                _project_archive_stem(
+                    store, str(row["lineage_id"]), str(row["filename"])
+                ),
             )
-            for row in rows
-        }
+            for row in store.list_projects()
+        ]
     )
     return {
         "items": [
@@ -427,7 +429,7 @@ async def list_designs(request: Request) -> dict[str, Any]:
                 "editVersion": int(row["edit_version"]),
                 "designHash": str(row["design_hash"]),
                 "filename": str(row["filename"]),
-                "archiveStem": stems.get(str(row["lineage_id"])) or None,
+                "archiveStem": stem or None,
                 "branchedFromDesignId": row.get("branched_from_design_id"),
                 "branchedFromEditVersion": row.get("branched_from_edit_version"),
                 "exportCount": int(row.get("export_count") or 0),
@@ -435,7 +437,7 @@ async def list_designs(request: Request) -> dict[str, Any]:
                 "createdAt": str(row["created_at"]),
                 "updatedAt": str(row["updated_at"]),
             }
-            for row in rows
+            for row, stem in projects
         ]
     }
 
@@ -920,14 +922,10 @@ async def _project_folder(request: Request, lineage_id: str) -> tuple[Path, str]
     store: CadLinkStore = request.app.state.cadlink_store
 
     def resolve() -> str:
-        rows = [
-            row
-            for row in store.list_designs(limit=500)
-            if str(row["lineage_id"]) == lineage_id
-        ]
-        if not rows:
+        row = store.find_latest_design_for_lineage(lineage_id)
+        if row is None:
             raise HTTPException(status_code=404, detail="CAD-linked project not found")
-        return _project_archive_stem(store, lineage_id, str(rows[0]["filename"]))
+        return _project_archive_stem(store, lineage_id, str(row["filename"]))
 
     stem = await asyncio.to_thread(resolve)
     root = _runs_root(request).resolve()

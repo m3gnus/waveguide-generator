@@ -1,5 +1,5 @@
 import type { JobItem } from './jobsSocket';
-import { listCadLinkedDesigns, type CadLinkedDesignSummary } from './cadlink';
+import type { CadLinkedDesignSummary } from './cadlink';
 
 /**
  * One captured CAD document: the model state a set of runs was solved from.
@@ -30,6 +30,11 @@ export interface CadProject extends CadLinkedDesignSummary {
   archiveStem: string | null;
 }
 
+interface CadProjectListing {
+  /** The server returns one canonical, newest design head per lineage. */
+  items: CadProject[];
+}
+
 async function failure(response: Response): Promise<Error> {
   try {
     const body = await response.json() as { detail?: unknown };
@@ -39,7 +44,9 @@ async function failure(response: Response): Promise<Error> {
 }
 
 export async function listCadProjects(fetcher: typeof fetch = fetch): Promise<CadProject[]> {
-  return (await listCadLinkedDesigns(fetcher)).items as CadProject[];
+  const response = await fetcher('/api/cadlink/designs');
+  if (!response.ok) throw await failure(response);
+  return ((await response.json()) as CadProjectListing).items;
 }
 
 export async function listProjectDocuments(
