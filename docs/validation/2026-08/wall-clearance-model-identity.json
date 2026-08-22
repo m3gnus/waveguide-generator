@@ -1,9 +1,9 @@
 {
-  "schema_version": 1,
-  "normalization_schema": "wg-design-physical-source-v1",
-  "canonicalization": "json-sort-keys-compact-utf8-ascii-v1",
+  "schema_version": 2,
+  "normalization_schema": "wg-design-physical-source-v2",
+  "canonicalization": "json-domain-envelope-sort-keys-compact-utf8-ascii-v2",
   "leaf_count": 40,
-  "sha256": "2667d10f72e3f5cf209d9fe1e8ac77ea9aa75c9cd5b4ad74e883abe5e474ccb8",
+  "sha256": "2dfeb34b1a0e0dd111fd6b81a883ba9eca0ce37da6cfc6b84e55ad42d81fd2b8",
   "payload": {
     "geometry": {
       "enclosure": {
