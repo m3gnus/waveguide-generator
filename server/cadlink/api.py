@@ -51,6 +51,7 @@ from .solve_command import (
     record_outcome,
 )
 from .ingest import IngestRefusal, get_ingestion_record, ingest_bundle
+from .roles import canonical_source_role
 from .store import CadLinkStore
 from .wgreturn import WgReturnError
 
@@ -273,7 +274,9 @@ def _return_listing(workspace_root: Path) -> list[dict[str, Any]]:
                 source_summaries.append(
                     {
                         "id": str(source["id"]),
-                        "role": str(source.get("role") or "source"),
+                        "role": canonical_source_role(
+                            str(source.get("role") or "source")
+                        ),
                         "instanceId": (
                             str(source["instance_id"])
                             if source.get("instance_id")

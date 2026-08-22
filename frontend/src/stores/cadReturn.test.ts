@@ -6,6 +6,7 @@ import {
   combineChannelRole,
   combineDefaultHz,
   combineEnabledEffective,
+  combineMembers,
   combineWire,
   DRIVER_REQUIRED_KEYS,
   resetCadReturnStore,
@@ -583,8 +584,8 @@ describe('combined output', () => {
     const mixed = {
       ...bundle,
       sources: [
-        { ...bundle.sources[1], id: 'source-hf', role: 'HF' },
-        { ...bundle.sources[0], id: 'source-lf', role: 'LF' },
+        { ...bundle.sources[1], id: 'source-hf', role: 'hf' },
+        { ...bundle.sources[0], id: 'source-lf', role: ' LF ' },
       ],
     };
     useCadReturnStore.setState({
@@ -593,6 +594,34 @@ describe('combined output', () => {
     });
 
     expect(combineChannelRole(useCadReturnStore.getState(), 'mixed')).toBe('LF');
+  });
+
+  it('canonicalizes returned band roles before ordering and defaulting the chain', () => {
+    const mixedCase = {
+      ...bundle,
+      sources: [
+        { ...bundle.sources[1], id: 'source-hf', role: 'hf' },
+        { ...bundle.sources[0], id: 'source-lf', role: ' LF ' },
+      ],
+    };
+    useCadReturnStore.setState({
+      selectedBundle: mixedCase,
+      driveChannels: [
+        { id: 'high', source_ids: ['source-hf'], motion: 'normal' },
+        { id: 'low', source_ids: ['source-lf'], motion: 'normal' },
+      ],
+    });
+
+    const state = useCadReturnStore.getState();
+    expect(combineMembers(state)).toEqual(['low', 'high']);
+    expect(combineChain(state)[0]).toMatchObject({
+      lower: 'low',
+      upper: 'high',
+      lowerRole: 'LF',
+      upperRole: 'HF',
+      defaultHz: 1_000,
+      hz: 1_000,
+    });
   });
 
   it('falls back inside the sweep when the role default lies outside it', () => {

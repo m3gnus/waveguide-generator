@@ -1189,6 +1189,13 @@ export interface CombinePair {
 // Keep this ranking in sync with _BAND_ROLE_RANK in server/solver/metal.py.
 const ROLE_BAND_RANK: Record<string, number> = { LF: 0, MF: 1, HF: 2 };
 
+/** Canonicalize band roles without rewriting structural CAD roles. */
+function canonicalSourceRole(role: string | undefined): string {
+  const rawRole = role ?? '';
+  const bandRole = rawRole.trim().toUpperCase();
+  return ROLE_BAND_RANK[bandRole] !== undefined ? bandRole : rawRole;
+}
+
 /** What a speaker designer expects to see in the field before touching it.
  * Keyed lowest band first, matching the chain's own order. */
 const ROLE_DEFAULT_HZ: Record<string, number> = {
@@ -1216,7 +1223,7 @@ export function combineChannelRole(
   const sources = state.selectedBundle?.sources ?? [];
   const channel = state.driveChannels.find((item) => item.id === channelId);
   return (channel?.source_ids ?? [])
-    .map((id) => sources.find((source) => source.id === id)?.role ?? '')
+    .map((id) => canonicalSourceRole(sources.find((source) => source.id === id)?.role))
     .filter((role) => ROLE_BAND_RANK[role] !== undefined)
     .sort((a, b) => ROLE_BAND_RANK[a] - ROLE_BAND_RANK[b])[0];
 }
@@ -1240,7 +1247,7 @@ export function combineMembers(
   return [...state.driveChannels]
     .map((channel, index) => {
       const ranks = channel.source_ids
-        .map((id) => ROLE_BAND_RANK[sources.find((source) => source.id === id)?.role ?? ''])
+        .map((id) => ROLE_BAND_RANK[canonicalSourceRole(sources.find((source) => source.id === id)?.role)])
         .filter((rank): rank is number => rank !== undefined);
       return { id: channel.id, index, rank: ranks.length ? Math.min(...ranks) : Number.POSITIVE_INFINITY };
     })
