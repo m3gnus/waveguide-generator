@@ -1,4 +1,4 @@
-import type { JobResults, NullableNumber, RadiationImpedancePresentation } from '../api/results';
+import type { NullableNumber, RadiationImpedancePresentation, ResultData } from '../api/results';
 
 export interface ObservationMetadata {
   requested_distance_m?: number;
@@ -55,7 +55,7 @@ export interface ResultMetadata extends Record<string, unknown> {
   combine?: Partial<CombineMetadata> & Record<string, unknown>;
 }
 
-export interface ResultPayload extends JobResults {
+export interface ResultPayload extends ResultData {
   /** Stored separately from result JSON and joined by the Results surface. */
   radiation_impedance?: RadiationImpedancePresentation;
   directivity_phase?: {

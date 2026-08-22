@@ -40,7 +40,32 @@ function publishJobs(jobs: JobItem[]): void {
 }
 
 function response(frequencies: number[], ok = true): Response {
-  return new Response(JSON.stringify(ok ? { frequencies, metadata: {} } : { detail: 'result vanished' }), {
+  const digest = 'a'.repeat(64);
+  const result = {
+    result_kind: 'parametric',
+    result_contract_version: 1,
+    client_request_id: null,
+    client_metadata: {},
+    provenance: {
+      schema_version: 1,
+      wg_version: 'test',
+      dependency_shas: {},
+      request_sha256: digest,
+      geometry_sha256: digest,
+      solve_options_sha256: digest,
+      request_identity: 'execution',
+      execution_request_sha256: digest,
+      execution_geometry_sha256: digest,
+      execution_solve_options_sha256: digest,
+      effective_request_sha256: digest,
+      effective_geometry_sha256: digest,
+      effective_solve_options_sha256: digest,
+      resolved_engine: 'test',
+    },
+    frequencies,
+    metadata: {},
+  };
+  return new Response(JSON.stringify(ok ? result : { detail: 'result vanished' }), {
     status: ok ? 200 : 500,
     headers: { 'Content-Type': 'application/json' },
   });

@@ -27,6 +27,31 @@ const result: ResultPayload = {
   directivity: { horizontal: [[[-90, -12], [0, 0]], [[-90, [0.1, 0]], [0, [1, 0]]]] },
 };
 
+const finalResult = {
+  ...result,
+  result_kind: 'parametric' as const,
+  result_contract_version: 1 as const,
+  client_request_id: null,
+  client_metadata: {},
+  provenance: {
+    schema_version: 1,
+    wg_version: 'test',
+    dependency_shas: {},
+    request_sha256: 'a'.repeat(64),
+    geometry_sha256: 'a'.repeat(64),
+    solve_options_sha256: 'a'.repeat(64),
+    request_identity: 'execution',
+    execution_request_sha256: 'a'.repeat(64),
+    execution_geometry_sha256: 'a'.repeat(64),
+    execution_solve_options_sha256: 'a'.repeat(64),
+    effective_request_sha256: 'a'.repeat(64),
+    effective_geometry_sha256: 'a'.repeat(64),
+    effective_solve_options_sha256: 'a'.repeat(64),
+    resolved_engine: 'test',
+  },
+  metadata: {},
+};
+
 const radiation: RadiationImpedancePresentation = {
   schema_version: 1,
   quantity: 'average_aperture_pressure_per_volume_velocity',
@@ -750,7 +775,7 @@ describe('result exporters', () => {
       const path = String(input);
       if (path === '/api/jobs/archive-cardioid/archive-snapshot') return new Response(JSON.stringify({
         schema_version: 1,
-        results: result,
+        results: finalResult,
         results_sha256: 'a'.repeat(64),
         mesh_artifact: null,
         pressure_bases: [{ channel_id: 'mf drive', content_base64: 'BAUG' }],
@@ -796,7 +821,7 @@ describe('result exporters', () => {
     const writes: ReturnType<typeof workspacePayload>[] = [];
     const fetcher = vi.fn<typeof fetch>(async (input, init) => {
       if (String(input) === '/api/jobs/archive-mesh/archive-snapshot') return new Response(JSON.stringify({
-        schema_version: 1, results: result, results_sha256: 'b'.repeat(64),
+        schema_version: 1, results: finalResult, results_sha256: 'b'.repeat(64),
         mesh_artifact: 'exact mesh bytes', pressure_bases: [], radiation_impedance: null,
       }), { status: 200 });
       const payload = workspacePayload(init);

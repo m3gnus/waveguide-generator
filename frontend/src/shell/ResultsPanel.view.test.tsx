@@ -3,7 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EChartsOption } from 'echarts';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
-import { compareSelection, provisionalResults, resultsCache, type JobResults } from '../api/results';
+import { compareSelection, provisionalResults, resultsCache, type JobResults, type ResultData } from '../api/results';
 import { preferencesStore } from '../prefs/preferences';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetDesignStore } from '../stores/design';
@@ -46,7 +46,7 @@ function seriesNames(label: string): string[] {
   return series(label).map((entry) => entry.name ?? '');
 }
 
-function channel(splDb: number, role?: string, combine?: Record<string, unknown>): JobResults {
+function channel(splDb: number, role?: string, combine?: Record<string, unknown>): ResultData {
   return {
     frequencies: [1_000],
     spl_on_axis: { frequencies: [1_000], spl: [splDb], phase_degrees: [0] },
@@ -56,9 +56,36 @@ function channel(splDb: number, role?: string, combine?: Record<string, unknown>
   };
 }
 
+function finalIdentity(kind: 'parametric' | 'multi_channel') {
+  const digest = 'a'.repeat(64);
+  return {
+    result_kind: kind,
+    result_contract_version: kind === 'parametric' ? 1 as const : 2 as const,
+    client_request_id: null,
+    client_metadata: {},
+    provenance: {
+      schema_version: 1,
+      wg_version: 'test',
+      dependency_shas: {},
+      request_sha256: digest,
+      geometry_sha256: digest,
+      solve_options_sha256: digest,
+      request_identity: 'execution',
+      execution_request_sha256: digest,
+      execution_geometry_sha256: digest,
+      execution_solve_options_sha256: digest,
+      effective_request_sha256: digest,
+      effective_geometry_sha256: digest,
+      effective_solve_options_sha256: digest,
+      resolved_engine: 'test',
+    },
+  };
+}
+
 /** A three-way CAD return: two drivers and the LR4 sum of them. */
 function threeWay(): JobResults {
   return {
+    ...finalIdentity('multi_channel'),
     frequencies: [1_000],
     channel_order: ['drive-mf', 'drive-hf', 'combined'],
     channels: {
@@ -78,6 +105,7 @@ function threeWay(): JobResults {
 /** A two-way return with no MF driver, for the substitution rule. */
 function highOnly(): JobResults {
   return {
+    ...finalIdentity('multi_channel'),
     frequencies: [1_000],
     channel_order: ['drive-hf', 'drive-sub'],
     channels: { 'drive-hf': channel(88, 'HF'), 'drive-sub': channel(80, 'LF') },
@@ -87,6 +115,7 @@ function highOnly(): JobResults {
 
 function singleChannel(): JobResults {
   return {
+    ...finalIdentity('multi_channel'),
     frequencies: [1_000],
     channel_order: ['drive-hf'],
     channels: { 'drive-hf': channel(91, 'HF') },
@@ -188,7 +217,9 @@ describe('results dock view switch', () => {
     payloads = { primary: threeWay(), other: highOnly() };
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const id = String(input).replace('/api/results/', '');
-      return new Response(JSON.stringify(payloads[id] ?? { frequencies: [1_000], metadata: {} }), {
+      return new Response(JSON.stringify(payloads[id] ?? {
+        ...finalIdentity('parametric'), frequencies: [1_000], metadata: {},
+      }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       });

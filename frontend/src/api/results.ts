@@ -1,7 +1,13 @@
 export type NullableNumber = number | null;
 export type PolarSample = [number, NullableNumber | [number, number]];
 
-export interface JobResults {
+/** Quantity payload shared by final envelopes, live deltas, and nested channels. */
+export interface ResultData {
+  result_kind?: 'parametric' | 'multi_channel';
+  result_contract_version?: number;
+  client_request_id?: string | null;
+  client_metadata?: Record<string, unknown>;
+  provenance?: Record<string, unknown>;
   frequencies: number[];
   directivity?: {
     horizontal?: PolarSample[][];
@@ -19,8 +25,14 @@ export interface JobResults {
     imaginary?: NullableNumber[];
   };
   metadata?: Record<string, unknown>;
-  channels?: Record<string, JobResults>;
+  channels?: Record<string, ResultData>;
   channel_order?: string[];
+}
+
+/** A durable result returned by the final-result HTTP endpoints. */
+export interface JobResults extends ResultData {
+  result_kind: 'parametric' | 'multi_channel';
+  result_contract_version: 1 | 2;
 }
 
 export interface RadiationImpedanceAperture {
@@ -47,8 +59,83 @@ export interface RadiationImpedancePresentation {
   };
 }
 
-function sortFrequencyShapedRows(result: JobResults): JobResults {
-  const record = result as JobResults & Record<string, unknown>;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isSafeJson(value: unknown, depth = 0): boolean {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return true;
+  if (isFiniteNumber(value)) return true;
+  if (depth >= 40) return false;
+  if (Array.isArray(value)) return value.every((item) => isSafeJson(item, depth + 1));
+  if (!isRecord(value)) return false;
+  return Object.entries(value).every(([key, item]) => (
+    key !== '__proto__' && key !== 'constructor' && key !== 'prototype' && isSafeJson(item, depth + 1)
+  ));
+}
+
+function isResultData(value: unknown, depth = 0): value is ResultData {
+  if (depth >= 8 || !isRecord(value) || !isSafeJson(value)) return false;
+  if (!Array.isArray(value.frequencies) || !value.frequencies.every(isFiniteNumber)) return false;
+  if ('metadata' in value && !isRecord(value.metadata)) return false;
+  if ('channel_order' in value && !(
+    Array.isArray(value.channel_order) && value.channel_order.every((item) => typeof item === 'string')
+  )) return false;
+  if ('channels' in value && !(
+    isRecord(value.channels) && Object.values(value.channels).every((channel) => isResultData(channel, depth + 1))
+  )) return false;
+  return true;
+}
+
+function isResultProvenance(value: unknown): boolean {
+  if (!isRecord(value) || !isSafeJson(value)) return false;
+  const shaFields = [
+    'request_sha256', 'geometry_sha256', 'solve_options_sha256',
+    'execution_request_sha256', 'execution_geometry_sha256', 'execution_solve_options_sha256',
+    'effective_request_sha256', 'effective_geometry_sha256', 'effective_solve_options_sha256',
+  ];
+  return value.schema_version === 1
+    && typeof value.wg_version === 'string'
+    && isRecord(value.dependency_shas)
+    && Object.values(value.dependency_shas).every((sha) => typeof sha === 'string')
+    && value.request_identity === 'execution'
+    && typeof value.resolved_engine === 'string'
+    && shaFields.every((key) => typeof value[key] === 'string' && /^[0-9a-f]{64}$/.test(value[key]));
+}
+
+/** Validate the OpenAPI result union before a durable response can enter UI state. */
+export function parseFinalResultEnvelope(value: unknown): JobResults {
+  if (!isRecord(value)) throw new Error('invalid final result envelope');
+  if (!('result_contract_version' in value)) {
+    throw new Error('final result is missing result_contract_version');
+  }
+  const version = value.result_contract_version;
+  if (version !== 1 && version !== 2) {
+    throw new Error(`unsupported result version ${String(version)}`);
+  }
+  if (!('result_kind' in value)) throw new Error('final result is missing result_kind');
+  const supportedIdentity = (value.result_kind === 'parametric' && version === 1)
+    || (value.result_kind === 'multi_channel' && version === 2);
+  if (!supportedIdentity) throw new Error(`unsupported result version ${String(version)}`);
+  if (!isResultData(value)
+    || !(value.client_request_id === null || typeof value.client_request_id === 'string')
+    || !isRecord(value.client_metadata) || !isSafeJson(value.client_metadata)
+    || !isRecord(value.metadata)
+    || !isResultProvenance(value.provenance)) {
+    throw new Error('invalid final result envelope');
+  }
+  if (value.result_kind === 'multi_channel' && !(
+    isRecord(value.channels) && Array.isArray(value.channel_order)
+  )) throw new Error('invalid final result envelope');
+  return value as unknown as JobResults;
+}
+
+function sortFrequencyShapedRows(result: ResultData): ResultData {
+  const record = result as ResultData & Record<string, unknown>;
   const frequencies = record.frequencies;
   if (Array.isArray(frequencies) && frequencies.length > 1) {
     const order = frequencies.map((_, index) => index).sort((left, right) => Number(frequencies[left]) - Number(frequencies[right]));
@@ -75,13 +162,13 @@ function sortFrequencyShapedRows(result: JobResults): JobResults {
   return result;
 }
 
-export function mergeProvisionalResults(current: JobResults | undefined, delta: JobResults): JobResults {
+export function mergeProvisionalResults(current: ResultData | undefined, delta: ResultData): ResultData {
   if (!current) return sortFrequencyShapedRows(structuredClone(delta));
   // Copy only the branches receiving a new row. Deep-cloning the accumulated
   // sweep for every frequency makes a 401-point solve quadratic in payload
   // size before ECharts even sees it.
-  const merged = { ...current } as JobResults & Record<string, unknown>;
-  const incoming = delta as JobResults & Record<string, unknown>;
+  const merged = { ...current } as ResultData & Record<string, unknown>;
+  const incoming = delta as ResultData & Record<string, unknown>;
   const append = (target: Record<string, unknown>, source: Record<string, unknown>, key: string) => {
     if (!Array.isArray(source[key])) return;
     target[key] = [...(Array.isArray(target[key]) ? target[key] as unknown[] : []), ...structuredClone(source[key] as unknown[])];
@@ -111,7 +198,7 @@ export function mergeProvisionalResults(current: JobResults | undefined, delta: 
   }
   if (incoming.channels && typeof incoming.channels === 'object') {
     const channels = { ...(merged.channels ?? {}) };
-    Object.entries(incoming.channels as Record<string, JobResults>).forEach(([id, result]) => {
+    Object.entries(incoming.channels as Record<string, ResultData>).forEach(([id, result]) => {
       channels[id] = mergeProvisionalResults(channels[id], result);
     });
     merged.channels = channels;
@@ -123,7 +210,7 @@ export function mergeProvisionalResults(current: JobResults | undefined, delta: 
 
 export interface ProvisionalResultEntry {
   revision: number;
-  result: JobResults;
+  result: ResultData;
 }
 
 export interface ProvisionalResultsSnapshot {
@@ -147,7 +234,7 @@ export class ProvisionalResultsStore {
   get(jobId: string): ProvisionalResultEntry | undefined { return this.entries[jobId]; }
 
   /** False means a delta gap; the caller should fetch the process-local snapshot. */
-  apply(jobId: string, revision: number, result: JobResults, snapshot = false): boolean {
+  apply(jobId: string, revision: number, result: ResultData, snapshot = false): boolean {
     const current = this.entries[jobId];
     if (!Number.isInteger(revision) || revision < 1) return true;
     if (current && revision <= current.revision) return true;
@@ -273,7 +360,7 @@ export async function fetchJobResults(jobId: string, fetcher: typeof fetch = fet
       } catch { /* status is enough */ }
       throw new Error(detail);
     }
-    const result = await response.json() as JobResults;
+    const result = parseFinalResultEnvelope(await response.json());
     resultsCache.set(jobId, result);
     return result;
   })();
@@ -317,7 +404,9 @@ export async function fetchJobArchiveSnapshot(
     } catch { /* status is enough */ }
     throw new Error(detail);
   }
-  const snapshot = await response.json() as JobArchiveSnapshot;
+  const value = await response.json();
+  if (!isRecord(value)) throw new Error('invalid archive snapshot');
+  const snapshot = { ...value, results: parseFinalResultEnvelope(value.results) } as unknown as JobArchiveSnapshot;
   resultsCache.set(jobId, snapshot.results);
   return snapshot;
 }
@@ -370,7 +459,7 @@ export async function recombineJobResults(
     } catch { /* status is enough */ }
     throw new Error(detail);
   }
-  const result = await response.json() as JobResults;
+  const result = parseFinalResultEnvelope(await response.json());
   resultsCache.set(jobId, result);
   return result;
 }

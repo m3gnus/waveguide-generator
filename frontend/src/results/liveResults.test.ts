@@ -1,19 +1,19 @@
 import { describe, expect, it, vi } from 'vitest';
-import { mergeProvisionalResults, ProvisionalResultsStore, type JobResults } from '../api/results';
+import { mergeProvisionalResults, ProvisionalResultsStore, type ResultData } from '../api/results';
 
 describe('progressive live result presentation', () => {
   it('keeps frequency-shaped chart rows sorted during progressive solves', () => {
-    const low: JobResults = {
+    const low: ResultData = {
       frequencies: [100],
       spl_on_axis: { frequencies: [100], spl: [1] },
       directivity: { horizontal: [[[0, -1]]] },
     };
-    const high: JobResults = {
+    const high: ResultData = {
       frequencies: [700],
       spl_on_axis: { frequencies: [700], spl: [7] },
       directivity: { horizontal: [[[0, -7]]] },
     };
-    const middle: JobResults = {
+    const middle: ResultData = {
       frequencies: [400],
       spl_on_axis: { frequencies: [400], spl: [4] },
       directivity: { horizontal: [[[0, -4]]] },

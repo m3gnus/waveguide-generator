@@ -3,7 +3,7 @@ import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
 import { preferencesStore } from '../prefs/preferences';
 import { useDocumentStore } from '../stores/document';
 import { designForFamily, resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
-import type { JobResults } from '../api/results';
+import type { ResultData } from '../api/results';
 import { splSubtitle } from './ResultsPanel';
 import { documentLabel, engineStatusLabel, solveSummary } from './StatusBar';
 import { canLoadDesign, meshWarnings, selectJob } from './JobsPanel';
@@ -30,7 +30,7 @@ describe('frontend result and status labels', () => {
   });
   afterEach(() => vi.restoreAllMocks());
   it('labels SPL as absolute at the effective observation distance', () => {
-    const result: JobResults = {
+    const result: ResultData = {
       frequencies: [], metadata: { observation: { requested_distance_m: 2, effective_distance_m: 1.75 } },
     };
     expect(splSubtitle(result)).toBe('absolute · 1.75 m');
