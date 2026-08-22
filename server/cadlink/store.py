@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
+import hashlib
 from pathlib import Path
 import sqlite3
 import threading
 from typing import Any
 
 from server.platform.paths import data_paths
+from server.workspace.archive import archive_folder_slug
 
 from .identity import (
     CadLink,
@@ -119,6 +121,86 @@ _SCHEMA = (
 )
 
 
+def _archive_stem_candidate(value: object) -> str:
+    """Return the server-owned portable folder spelling for a CAD lineage."""
+
+    return archive_folder_slug(value, "design")
+
+
+def _suffixed_archive_stem(base: str, lineage_id: str, used: set[str]) -> str:
+    """Disambiguate a portable/case-fold collision from durable identity."""
+
+    digest = hashlib.sha256(lineage_id.encode("utf-8")).hexdigest()
+    for length in range(12, len(digest) + 1, 4):
+        candidate = f"{base}-{digest[:length]}"
+        if candidate.casefold() not in used:
+            return candidate
+    # A natural filename could theoretically contain the entire digest. Keep
+    # the lineage-derived suffix and add a deterministic final discriminator.
+    discriminator = 2
+    while f"{base}-{digest}-{discriminator}".casefold() in used:
+        discriminator += 1
+    return f"{base}-{digest}-{discriminator}"
+
+
+def _migrate_archive_stems(conn: sqlite3.Connection) -> None:
+    """Normalize legacy names and resolve their portable collisions stably."""
+
+    conn.execute(
+        "UPDATE lineage_cad_names SET archive_stem = NULL "
+        "WHERE archive_stem IS NOT NULL AND TRIM(archive_stem) = ''"
+    )
+    rows = conn.execute(
+        "SELECT lineage_id, archive_stem FROM lineage_cad_names "
+        "WHERE archive_stem IS NOT NULL AND TRIM(archive_stem) != ''"
+    ).fetchall()
+    groups: dict[str, list[tuple[str, str]]] = {}
+    for row in rows:
+        lineage_id = str(row["lineage_id"])
+        base = _archive_stem_candidate(row["archive_stem"])
+        groups.setdefault(base.casefold(), []).append((lineage_id, base))
+
+    allocated: dict[str, str] = {}
+    used: set[str] = set()
+    collisions: list[tuple[str, str]] = []
+    # The lexicographically first lineage keeps each readable base. Sorting
+    # makes the migration independent of SQLite row order and repeatable from
+    # the same v9 database image.
+    for portable_key in sorted(groups):
+        members = sorted(groups[portable_key])
+        winner_lineage, winner_base = members[0]
+        allocated[winner_lineage] = winner_base
+        used.add(winner_base.casefold())
+        collisions.extend((lineage_id, base) for lineage_id, base in members[1:])
+    for lineage_id, base in sorted(collisions, key=lambda item: (item[1].casefold(), item[0])):
+        candidate = _suffixed_archive_stem(base, lineage_id, used)
+        allocated[lineage_id] = candidate
+        used.add(candidate.casefold())
+
+    for lineage_id, archive_stem in allocated.items():
+        conn.execute(
+            "UPDATE lineage_cad_names SET archive_stem = ? WHERE lineage_id = ?",
+            (archive_stem, lineage_id),
+        )
+
+
+def _allocate_archive_stem(
+    conn: sqlite3.Connection, lineage_id: str, preferred: object
+) -> str:
+    base = _archive_stem_candidate(preferred)
+    used = {
+        str(row["archive_stem"]).casefold()
+        for row in conn.execute(
+            "SELECT archive_stem FROM lineage_cad_names "
+            "WHERE lineage_id != ? AND archive_stem IS NOT NULL AND archive_stem != ''",
+            (lineage_id,),
+        )
+    }
+    if base.casefold() not in used:
+        return base
+    return _suffixed_archive_stem(base, lineage_id, used)
+
+
 class CadLinkStore:
     """Thread-safe, transaction-per-write CAD-link registry."""
 
@@ -141,7 +223,7 @@ class CadLinkStore:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._lock, self._transaction() as conn:
             version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-            if version not in {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}:
+            if version not in {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10}:
                 raise RuntimeError(f"unsupported cadlink.db schema version {version}")
             for statement in _SCHEMA:
                 conn.execute(statement)
@@ -187,7 +269,17 @@ class CadLinkStore:
             }
             if "archive_stem" not in lineage_columns:
                 conn.execute("ALTER TABLE lineage_cad_names ADD COLUMN archive_stem TEXT")
-            conn.execute("PRAGMA user_version = 9")
+            if version < 10:
+                _migrate_archive_stems(conn)
+            # archive_stem is an ASCII portable folder key from schema 10 on.
+            # NOCASE therefore matches the case-insensitive filesystems this
+            # key must survive, while BEGIN IMMEDIATE serializes allocation.
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS lineage_cad_names_by_archive_stem "
+                "ON lineage_cad_names(archive_stem COLLATE NOCASE) "
+                "WHERE archive_stem IS NOT NULL AND archive_stem != ''"
+            )
+            conn.execute("PRAGMA user_version = 10")
         self._initialized = True
 
     def get_design(self, design_id: str) -> dict[str, Any] | None:
@@ -342,6 +434,17 @@ class CadLinkStore:
         self.initialize()
         now = recorded_at or utc_now()
         with self._lock, self._transaction() as conn:
+            existing = conn.execute(
+                "SELECT archive_stem FROM lineage_cad_names WHERE lineage_id = ?",
+                (lineage_id,),
+            ).fetchone()
+            claimed_archive_stem = (
+                str(existing["archive_stem"] or "").strip() if existing else ""
+            )
+            if not claimed_archive_stem and str(archive_stem or "").strip():
+                claimed_archive_stem = _allocate_archive_stem(
+                    conn, lineage_id, archive_stem
+                )
             conn.execute(
                 """
                 INSERT INTO lineage_cad_names (
@@ -355,12 +458,22 @@ class CadLinkStore:
                   bundle_stem = COALESCE(
                     lineage_cad_names.bundle_stem, excluded.bundle_stem
                   ),
-                  archive_stem = COALESCE(
-                    lineage_cad_names.archive_stem, excluded.archive_stem
-                  ),
+                  archive_stem = CASE
+                    WHEN lineage_cad_names.archive_stem IS NULL
+                      OR TRIM(lineage_cad_names.archive_stem) = ''
+                    THEN excluded.archive_stem
+                    ELSE lineage_cad_names.archive_stem
+                  END,
                   updated_at = excluded.updated_at
                 """,
-                (lineage_id, parameter_slug, bundle_stem, archive_stem, now, now),
+                (
+                    lineage_id,
+                    parameter_slug,
+                    bundle_stem,
+                    claimed_archive_stem or None,
+                    now,
+                    now,
+                ),
             )
             row = conn.execute(
                 "SELECT * FROM lineage_cad_names WHERE lineage_id = ?", (lineage_id,)

@@ -6,9 +6,10 @@ by design rather than by pipeline, so one design's parametric and CAD history
 read as one story.
 
 The folder slug here mirrors ``designNameSlug`` in
-``frontend/src/stores/designName.ts``. Two implementations of one name rule can
-disagree, so ``test_run_archive.py`` and ``runArchive.test.ts`` assert the same
-table of names; change both or neither.
+``frontend/src/stores/designName.ts`` for ordinary parametric archives. For CAD
+lineages this server function is the authority: ``CadLinkStore`` persists its
+ASCII result under a case-insensitive uniqueness constraint, and
+``frontend/src/jobs/exportNaming.ts`` consumes that allocated key verbatim.
 """
 
 from __future__ import annotations

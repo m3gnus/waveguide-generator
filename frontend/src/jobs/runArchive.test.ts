@@ -27,7 +27,7 @@ describe('run archive layout', () => {
       label: 'Big Horn Mk2',
       config_summary: { geometry_type: 'imported' },
       cad_source: {
-        ingest_id: 'i1', design_id: 'd1', lineage_id: 'l1', archive_stem: 'Big Horn',
+        ingest_id: 'i1', design_id: 'd1', lineage_id: 'l1', archive_stem: 'Big_Horn',
         manifest_sha256: 'sha256:aa', document_name: 'Big Horn.f3d', return_state_hash: 'sha256:bb',
       },
     });
@@ -75,7 +75,7 @@ describe('run archive layout', () => {
     const record = JSON.parse(buildRunRecord(jobItem({
       config_summary: { geometry_type: 'imported' },
       cad_source: {
-        ingest_id: 'i1', design_id: 'd1', lineage_id: 'l1', archive_stem: 'Big Horn',
+        ingest_id: 'i1', design_id: 'd1', lineage_id: 'l1', archive_stem: 'Big_Horn',
         manifest_sha256: 'sha256:aa', document_name: 'Big Horn v7', return_state_hash: 'sha256:bb',
       },
     })).text);
@@ -104,7 +104,7 @@ describe('run archive layout', () => {
     const record = JSON.parse(buildRunRecord(jobItem({
       config_summary: { geometry_type: 'imported' },
       cad_source: {
-        ingest_id: identity.ingest_id, design_id: 'd1', lineage_id: 'l1', archive_stem: 'Big Horn',
+        ingest_id: identity.ingest_id, design_id: 'd1', lineage_id: 'l1', archive_stem: 'Big_Horn',
         manifest_sha256: 'sha256:aa', document_name: 'Big Horn v7', return_state_hash: 'sha256:bb',
         identity,
       },

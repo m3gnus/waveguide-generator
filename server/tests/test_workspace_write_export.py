@@ -246,6 +246,37 @@ def test_repeat_manual_export_replaces_changed_files(tmp_path: Path) -> None:
     assert (workspace / "horn_1/horn_1_summary.txt").read_text() == "new file"
 
 
+def test_archive_pointer_refuses_to_overwrite_another_lineage(tmp_path: Path) -> None:
+    state, workspace = selected_state(tmp_path)
+    original = json.dumps(
+        {"schemaVersion": 1, "folder": "Horn_A", "lineageId": "wgl_first"}
+    )
+    replacement = json.dumps(
+        {"schemaVersion": 1, "folder": "Horn_A", "lineageId": "wgl_second"}
+    )
+    call(
+        state,
+        workspace_api.WriteExportRequest(
+            subdirectory="Horn_A",
+            existing="merge_identical",
+            members=[{"relative_path": "design.json", "text": original}],
+        ),
+    )
+
+    with pytest.raises(HTTPException, match="another lineage") as caught:
+        call(
+            state,
+            workspace_api.WriteExportRequest(
+                subdirectory="Horn_A",
+                existing="overwrite",
+                members=[{"relative_path": "design.json", "text": replacement}],
+            ),
+        )
+
+    assert caught.value.status_code == 409
+    assert (workspace / "Horn_A/design.json").read_text() == original
+
+
 def test_overwrite_refuses_to_replace_a_directory_with_a_file(tmp_path: Path) -> None:
     state, workspace = selected_state(tmp_path)
     (workspace / "horn_1/horn_1.json").mkdir(parents=True)
