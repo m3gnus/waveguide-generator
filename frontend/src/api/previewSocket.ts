@@ -299,7 +299,7 @@ export class PreviewSocketManager {
       || frameRevision < this.barrierRevision
       || frameRevision < (this.snapshot.displayedRevision ?? 0)
     ) {
-      this.update({ stale: true });
+      this.update({ stale: this.snapshot.displayedRevision !== revision });
       return;
     }
     // An error belongs to the revision that produced it. A frame older than
