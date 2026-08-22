@@ -517,14 +517,29 @@ Not required to make anything start, fixed because leaving it would be a
 landmine in a module being made portable.
 
 **Correction (2026-08-22).** This section previously claimed that
-`os.kill(pid, 0)` terminates the process it is asked about, because CPython
-implements `os.kill` on Windows as `OpenProcess` + `TerminateProcess`. That
-claim is **false** and the "demonstrated directly" evidence behind it did not
-survive re-measurement: two independent Windows sessions, on CPython 3.13.3 and
-on the bundled 3.13.12, measured a live process still running afterwards,
-confirmed by both `poll()` and `tasklist`. The claim was repeated in a source
-comment in `server/platform/instance.py`, where it was read and reasoned from in
-good faith months later; both have been corrected. Do not restore it.
+`os.kill(pid, 0)` terminates the process it is asked about. That is **false for
+signal 0 and true for every other signal**, and the distinction is the whole
+point -- getting it wrong in either direction misleads the next reader.
+
+Measured on Windows, CPython 3.13.3, and reproduced on the bundled 3.13.12:
+
+| call | result |
+|---|---|
+| `os.kill(pid, 0)` | no exception; the process is **still alive** |
+| `os.kill(pid, signal.SIGTERM)` | no exception; the process is **dead**, exit code 15 |
+
+Exit code 15 is the signal number handed straight to `TerminateProcess(handle,
+sig)`, so CPython special-cases signal 0 alone. `os.kill` on Windows is
+therefore genuinely destructive for `SIGTERM` and friends -- see §4.2's note on
+graceful shutdown, which depends on that being true -- and is merely a poor
+liveness probe for signal 0.
+
+The "demonstrated directly" evidence for the original claim did not survive
+re-measurement by two independent Windows sessions. The claim was repeated in a
+source comment in `server/platform/instance.py`, where it was read and reasoned
+from in good faith months later; both have been corrected. Do not restore it,
+and do not over-correct it into "os.kill is not destructive on Windows", which
+is equally wrong.
 
 The real defect is narrower and still worth the change. `os.kill(pid, 0)` raises
 a plain `OSError` (WinError 87) for a pid that no longer exists, which is neither
