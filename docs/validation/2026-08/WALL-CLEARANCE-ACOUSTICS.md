@@ -51,7 +51,7 @@ labels, paths, raw requests or mesh. Reproduce the published identity from a
 clean checkout with:
 
 ```console
-python scripts/verify_model_identity.py docs/validation/2026-08/wall-clearance-model-identity.json
+python3 scripts/verify_model_identity.py docs/validation/2026-08/wall-clearance-model-identity.json
 ```
 
 The verifier serializes the payload as UTF-8 JSON with sorted keys, compact
