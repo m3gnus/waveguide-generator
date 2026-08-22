@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, use
 import { createPortal } from 'react-dom';
 import type { EChartsOption } from 'echarts';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
-import { compareSelection, fetchJobResults, fetchRadiationImpedancePresentation, provisionalResults, recombineJobResults, type JobResults, type RadiationImpedancePresentation } from '../api/results';
+import { compareSelection, fetchJobResults, fetchRadiationImpedancePresentation, provisionalResults, recombineJobResults, type JobResults, type RadiationImpedancePresentation, type ResultData } from '../api/results';
 import { EChart, useChartTokens, type ChartTokens } from '../results/EChart';
 import { beamFitSeries, beamShapeSeries, directivityGrid, directivityIndexSeries, drivePowerChartSeries, excursionChartSeries, groupDelaySeries, impedanceComparable, impedanceSeries, impedanceSubtitle, nearestFrequencyIndex, phaseSeries, polarCut, powerResponseMethodCaption, powerResponseSeries, selectResultChannels, splSeries, type NamedResult } from '../results/mappers';
 import { BalloonRenderer, ChartStub, ForwardBeamRenderer, hasBalloonData, type ChartStubAction } from '../results/balloon';
@@ -37,7 +37,7 @@ import { AnchoredPanel } from '../prefs/AnchoredPanel';
 import { radiationImpedanceTraces } from '../results/radiationImpedance';
 import { powerAgreementHealth } from '../results/radiatedPower';
 
-export function splSubtitle(result: JobResults | undefined): string {
+export function splSubtitle(result: ResultData | undefined): string {
   const observation = result?.metadata?.observation;
   const record = observation && typeof observation === 'object' ? observation as Record<string, unknown> : {};
   const distance = Number(record.effective_distance_m ?? record.requested_distance_m);
@@ -1075,7 +1075,7 @@ export function chartImageFilename(chartType: ChartType, job?: JobItem | null, c
   return `${stem}${channel}_${chartType}.png`;
 }
 
-export function resolvedPolarStepNotice(result: JobResults): string | null {
+export function resolvedPolarStepNotice(result: ResultData): string | null {
   const grid = result.metadata?.polar_grid;
   if (!grid || typeof grid !== 'object') return null;
   const record = grid as Record<string, unknown>;
@@ -1754,7 +1754,7 @@ function RecombineRow({ jobId, channelId, resultIngestId, combine, onApplied }: 
       // Bands below, because that is how a crossover is spoken. The authored
       // ids stay the fallback and remain the accessible name either way, so an
       // unroled return still says which channels each field joins.
-      return <label key={`${lower} ${upper}`} className="result-recombine-pair">
+      return <label key={`${lower}\u0000${upper}`} className="result-recombine-pair">
         <span>{combine.member_roles?.[index] ?? lower} → {combine.member_roles?.[index + 1] ?? upper}</span>
         <input
           type="number"
