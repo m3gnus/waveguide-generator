@@ -45,9 +45,11 @@ else:
 # This script must stay runnable on its own: the shell installers call it in a
 # checkout whose application packages may be absent or broken (the installer
 # integrity tests stage exactly that), so the shared root helper is optional.
-_IMPORT_ROOT = Path(
-    os.environ.get("WG2_APP_ROOT") or Path(__file__).resolve().parents[1]
-).expanduser().resolve()
+_IMPORT_ROOT = (
+    Path(os.environ.get("WG2_APP_ROOT") or Path(__file__).resolve().parents[1])
+    .expanduser()
+    .resolve()
+)
 if (_IMPORT_ROOT / "server" / "platform" / "paths.py").is_file():
     if str(_IMPORT_ROOT) not in sys.path:
         sys.path.insert(0, str(_IMPORT_ROOT))
@@ -547,7 +549,9 @@ def run(args: argparse.Namespace) -> int:
                 # Checksum first: it is a few dozen bytes, and fetching it before the
                 # archive means a release that was published without one fails before
                 # anything large is transferred.
-                checksum_text = _read_url(f"{source}.sha256", args.timeout).decode("utf-8", "replace")
+                checksum_text = _read_url(f"{source}.sha256", args.timeout).decode(
+                    "utf-8", "replace"
+                )
                 digest = expected_digest(checksum_text, name)
                 archive = Path(scratch) / name
                 archive.write_bytes(_read_url(source, args.timeout))
@@ -568,14 +572,28 @@ def run(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--version", help="release version to install (default: shared/version.json)")
-    parser.add_argument("--repo", default=DEFAULT_REPO, help="GitHub owner/name holding the release")
+    parser.add_argument(
+        "--version", help="release version to install (default: shared/version.json)"
+    )
+    parser.add_argument(
+        "--repo", default=DEFAULT_REPO, help="GitHub owner/name holding the release"
+    )
     parser.add_argument("--base-url", help="directory URL holding the asset and its .sha256")
-    parser.add_argument("--archive", type=Path, help="install this local archive instead of downloading")
-    parser.add_argument("--sha256", help="expected digest, or a path to a .sha256 file, for --archive")
-    parser.add_argument("--force", action="store_true", help="reinstall even when the version matches")
-    parser.add_argument("--check", action="store_true", help="report what is installed; install nothing")
-    parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT, help="per-request timeout")
+    parser.add_argument(
+        "--archive", type=Path, help="install this local archive instead of downloading"
+    )
+    parser.add_argument(
+        "--sha256", help="expected digest, or a path to a .sha256 file, for --archive"
+    )
+    parser.add_argument(
+        "--force", action="store_true", help="reinstall even when the version matches"
+    )
+    parser.add_argument(
+        "--check", action="store_true", help="report what is installed; install nothing"
+    )
+    parser.add_argument(
+        "--timeout", type=float, default=DEFAULT_TIMEOUT, help="per-request timeout"
+    )
     parser.add_argument("--root", type=Path, default=REPO_ROOT, help=argparse.SUPPRESS)
     return parser
 
