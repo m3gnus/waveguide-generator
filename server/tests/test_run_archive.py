@@ -167,12 +167,49 @@ def test_the_run_copy_lands_beside_the_run_that_produced_it(tmp_path: Path) -> N
     assert placed.read_bytes() == b"f3d-bytes"
     # The sidecar travels with it: a bare .f3d in a run folder says nothing
     # about which model state it is.
-    assert json.loads(placed.with_suffix(".json").read_text(encoding="utf-8"))[
+    assert json.loads(placed.with_suffix(".cad.json").read_text(encoding="utf-8"))[
         "returnStateHash"
     ] == "sha256:abc123"
     # The project-level original stays: a return that is never solved still has
     # to keep its document somewhere.
     assert (runs / "Big_Horn" / "cad" / "sha256_abc123.f3d").is_file()
+
+
+def test_the_run_sidecar_does_not_replace_the_solver_result_json(tmp_path: Path) -> None:
+    bundle = bundle_with_document(tmp_path)
+    runs = tmp_path / "runs"
+    archive_cad_document(bundle, record_for(), runs, "Big Horn")
+    run_directory = runs / "Big_Horn" / "14_Big_Horn"
+    run_directory.mkdir()
+    result = run_directory / "14_Big_Horn.json"
+    result_bytes = b'{"channels":{"left":{"spl":[91.5]}}}\n'
+    result.write_bytes(result_bytes)
+
+    relative = place_run_cad_document(
+        runs, "Big Horn", "14_Big_Horn", "14_Big_Horn", "sha256:abc123"
+    )
+
+    assert relative == "14_Big_Horn/14_Big_Horn.f3d"
+    assert result.read_bytes() == result_bytes
+    assert json.loads(
+        (run_directory / "14_Big_Horn.cad.json").read_text(encoding="utf-8")
+    )["returnStateHash"] == "sha256:abc123"
+
+
+def test_an_existing_different_run_sidecar_is_never_clobbered(tmp_path: Path) -> None:
+    bundle = bundle_with_document(tmp_path)
+    runs = tmp_path / "runs"
+    archive_cad_document(bundle, record_for(), runs, "Big Horn")
+    run_directory = runs / "Big_Horn" / "14_Big_Horn"
+    run_directory.mkdir()
+    sidecar = run_directory / "14_Big_Horn.cad.json"
+    sidecar.write_bytes(b'{"user":"metadata"}\n')
+
+    assert place_run_cad_document(
+        runs, "Big Horn", "14_Big_Horn", "14_Big_Horn", "sha256:abc123"
+    ) is None
+    assert sidecar.read_bytes() == b'{"user":"metadata"}\n'
+    assert not (run_directory / "14_Big_Horn.f3d").exists()
 
 
 def test_placing_the_run_copy_again_is_a_no_op(tmp_path: Path) -> None:
