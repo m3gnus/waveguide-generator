@@ -1819,6 +1819,10 @@ def test_combined_channel_is_appended_with_contract_metadata(
     mesh_path = tmp_path / "imported.msh"
     mesh_path.write_text("msh", encoding="utf-8")
     record = _roled_record(mesh_path)
+    # ``left`` deliberately lists HF before LF. Source order is authored CAD
+    # order, not crossover order, so its identity must still be the lower band.
+    record["sources"][1]["role"] = "LF"
+    record["sources"][2]["role"] = "HF"
 
     async def run() -> dict[str, Any]:
         outcome = await metal.MetalEngine().run(
@@ -1840,7 +1844,8 @@ def test_combined_channel_is_appended_with_contract_metadata(
     payload = combined["metadata"]["combine"]
     assert payload["type"] == "lr4_time_aligned_sum"
     assert payload["members"] == ["left", "right"]
-    assert payload["member_roles"] == ["HF", "LF"]
+    assert response["channels"]["left"]["metadata"]["role"] == "LF"
+    assert payload["member_roles"] == ["LF", "HF"]
     assert payload["crossovers_hz"] == [500.0]
     assert combined["metadata"]["derived_from_channels"] == ["left", "right"]
     assert combined["metadata"]["drive_channel_id"] == "combined"
