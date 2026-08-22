@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { designForFamily } from '../stores/design';
-import { activeBackendName, backendLimitation, backendSupports, type BackendIdentity } from './backendSupport';
+import {
+  activeBackendName,
+  backendLimitation,
+  backendSupports,
+  plannedBackendCapabilities,
+  type BackendIdentity,
+} from './backendSupport';
 import type { EngineCapability, EngineSelection } from '../jobs/actions';
 import {
   PARAMETER_REGISTRY,
@@ -64,7 +70,7 @@ describe('backend feature support', () => {
     expect(backendSupports(engine('axisym', true), 'meridian-fast-path')).toBe(true);
   });
 
-  it('offers coupled IB when the host carries Axisym, whatever the full-3D backend', () => {
+  it('offers coupled IB in AUTO when a planned Axisym candidate supports it', () => {
     // The planner reaches for the meridian runner before any full-3D fallback,
     // so a BEAT+Axisym host solves an eligible circular infinite-baffle design
     // even though BEAT refuses one. Gating on the full-3D record alone removed
@@ -72,16 +78,30 @@ describe('backend feature support', () => {
     const beat = { ...engine('beat', true), formulations: ['full-3d'], mountings: ['free-standing'] };
     const axisym = { ...engine('axisym', true), formulations: ['axisymmetric'], mountings: ['free-standing', 'infinite-baffle'] };
 
+    const autoPlan = plannedBackendCapabilities('auto', [beat, axisym], {
+      ...selection, resolvedDefault: 'beat', full3dOrder: ['beat'],
+    });
     expect(backendSupports(beat, 'infinite-baffle')).toBe(false);
-    expect(backendSupports(beat, 'infinite-baffle', [beat, axisym])).toBe(true);
-    expect(backendLimitation(beat, 'infinite-baffle', [beat, axisym])).toBeUndefined();
+    expect(backendSupports(beat, 'infinite-baffle', autoPlan)).toBe(true);
+    expect(backendLimitation(beat, 'infinite-baffle', autoPlan)).toBeUndefined();
 
-    // An unavailable Axisym runner is not a capability, and the host list must
-    // not rescue a feature Axisym itself does not claim.
-    expect(backendSupports(beat, 'infinite-baffle', [beat, { ...axisym, available: false }])).toBe(false);
-    expect(backendSupports(beat, 'infinite-baffle', [beat, { ...axisym, mountings: ['free-standing'] }])).toBe(false);
-    // Unrelated features are unaffected by the host list.
-    expect(backendSupports(beat, 'imported-geometry', [beat, axisym])).toBe(false);
+    // Explicit BEAT is not rescued by some other capability on the host.
+    const explicitPlan = plannedBackendCapabilities('beat', [beat, axisym], selection);
+    expect(backendSupports(beat, 'infinite-baffle', explicitPlan)).toBe(false);
+  });
+
+  it('lets AUTO skip BEAT for a coupled IB-capable BEMPP without Axisym', () => {
+    const beat = { ...engine('beat', true), mountings: ['free-standing'] };
+    const bempp = { ...engine('bempp', true), mountings: ['free-standing', 'infinite-baffle'] };
+    const axisym = { ...engine('axisym', false), mountings: ['free-standing', 'infinite-baffle'] };
+    const advertised = {
+      ...selection, resolvedDefault: 'beat', full3dOrder: ['metal', 'beat', 'bempp'],
+    };
+
+    const autoPlan = plannedBackendCapabilities('auto', [beat, bempp, axisym], advertised);
+    expect(autoPlan.map((item) => item.name)).toEqual(['beat', 'bempp']);
+    expect(backendSupports(beat, 'infinite-baffle', autoPlan)).toBe(true);
+    expect(backendSupports(beat, 'infinite-baffle', plannedBackendCapabilities('beat', [beat, bempp], advertised))).toBe(false);
   });
 
   it('uses the server capability payload for version-dependent BEMPP IB support', () => {

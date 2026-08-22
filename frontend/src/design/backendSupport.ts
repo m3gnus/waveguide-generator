@@ -77,26 +77,38 @@ export function activeBackendCapability(
 }
 
 /**
- * Whether the host can run `feature` regardless of the selected full-3D backend.
+ * Available capabilities the server may plan for the requested engine.
  *
- * The server planner routes an eligible circular design to the Axisym meridian
- * runner *before* it reaches any full-3D fallback, so a host carrying Axisym
- * solves a coupled infinite-baffle design even when the resolved backend --
- * BEAT, say -- refuses one. Gating that option on the full-3D record alone
- * removed it from designs the server would have solved, and the user had no
- * way to discover that forcing the meridian mode brought it back.
+ * Explicit selection has exactly one candidate. AUTO can first select the
+ * advertised meridian runner for eligible geometry and otherwise walks the
+ * server-advertised full-3D order, skipping candidates whose capability does
+ * not cover the requested mounting. Keeping the whole plan matters on a GPU
+ * host: BEAT can be the resolved free-standing default while BEMPP later in
+ * the plan handles coupled infinite-baffle solves.
  *
- * Geometry eligibility stays the planner's call. This only decides whether the
- * option is worth offering at all.
+ * Geometry eligibility and final routing stay the server planner's call. This
+ * list only prevents the frontend from hiding an option no planned candidate
+ * could run.
  */
-function hostCoversFeature(
-  host: readonly EngineCapability[],
-  feature: BackendFeature,
-): boolean {
-  if (feature !== 'infinite-baffle') return false;
-  return host.some((item) => item.available
-    && item.formulations?.includes('axisymmetric')
-    && (item.mountings?.includes('infinite-baffle') ?? true));
+export function plannedBackendCapabilities(
+  engine: string,
+  engines: readonly EngineCapability[],
+  selection?: Readonly<EngineSelection>,
+): readonly EngineCapability[] {
+  const requested = engine.trim().toLowerCase();
+  if (requested && requested !== 'auto') {
+    return engines.filter((item) => item.available && item.name.toLowerCase() === requested);
+  }
+  const advertised = [
+    selection?.axisymmetricRunner,
+    ...(selection?.full3dOrder ?? engines.map((item) => item.name)),
+  ].map((name) => name?.trim().toLowerCase()).filter((name): name is string => Boolean(name));
+  const planned: EngineCapability[] = [];
+  for (const name of advertised) {
+    const capability = engines.find((item) => item.available && item.name.toLowerCase() === name);
+    if (capability && !planned.includes(capability)) planned.push(capability);
+  }
+  return planned;
 }
 
 function backendName(backend: BackendIdentity): string | null {
@@ -108,20 +120,24 @@ function backendName(backend: BackendIdentity): string | null {
 export function backendSupports(
   backend: BackendIdentity,
   feature: BackendFeature,
-  host: readonly EngineCapability[] = [],
+  plan: readonly EngineCapability[] = [],
 ): boolean {
   if (!backend) return true;
   const normalized = backendName(backend);
   if (!normalized) return true;
-  if (hostCoversFeature(host, feature)) return true;
+  if (plan.some((item) => capabilitySupports(item, feature))) return true;
   if (typeof backend !== 'string') {
-    if (feature === 'infinite-baffle') return backend.mountings?.includes('infinite-baffle') ?? true;
-    if (feature === 'meridian-fast-path') return backend.formulations?.includes('axisymmetric') ?? true;
-    if (feature === 'imported-geometry') return backend.geometry_sources?.includes('imported') ?? true;
+    return capabilitySupports(backend, feature);
   }
   // A bare name has no capability payload. Preserve the pre-gating behaviour
   // instead of hiding a control based on client-side engine knowledge.
   return true;
+}
+
+function capabilitySupports(backend: EngineCapability, feature: BackendFeature): boolean {
+  if (feature === 'infinite-baffle') return backend.mountings?.includes('infinite-baffle') ?? true;
+  if (feature === 'meridian-fast-path') return backend.formulations?.includes('axisymmetric') ?? true;
+  return backend.geometry_sources?.includes('imported') ?? true;
 }
 
 /**
@@ -131,9 +147,9 @@ export function backendSupports(
 export function backendLimitation(
   backend: BackendIdentity,
   feature: BackendFeature,
-  host: readonly EngineCapability[] = [],
+  plan: readonly EngineCapability[] = [],
 ): string | undefined {
-  if (backendSupports(backend, feature, host)) return undefined;
+  if (backendSupports(backend, feature, plan)) return undefined;
   const name = (backendName(backend) ?? '').toUpperCase();
   return `${name} does not support ${FEATURE_LABELS[feature]}. ${FEATURE_REMEDIES[feature]}`;
 }

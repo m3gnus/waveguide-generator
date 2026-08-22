@@ -5,7 +5,7 @@ import { previewSocket } from '../api/previewSocket';
 import type { CadRealizedDimensions, CadRealizedParameter } from '../api/cadlink';
 import { importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { postSymmetry, toSolveDesign, type SymmetryResolution } from '../jobs/actions';
-import { useActiveBackendCapability, useCapabilities } from '../jobs/useCapabilities';
+import { useActiveBackendCapability, usePlannedBackendCapabilities } from '../jobs/useCapabilities';
 import { backendLimitation } from './backendSupport';
 import { cadApplicationName, usePreferences } from '../prefs/preferences';
 import { useCadPreparationStore } from '../stores/cadPreparation';
@@ -384,9 +384,9 @@ export function previewErrorForParameter(
 
 function FieldControl({ field, design, serverError }: { field: ParameterDefinition; design: DesignDocument; serverError?: string }) {
   const backend = useActiveBackendCapability();
-  // The gate is a question about the host, not only about the resolved full-3D
-  // backend: the planner may reach for the Axisym runner on its own.
-  const { engines } = useCapabilities();
+  // AUTO can skip a mounting-incompatible default and use another advertised
+  // candidate; an explicit selection remains limited to that one backend.
+  const backendPlan = usePlannedBackendCapabilities();
   const updateValue = useDesignStore((state) => state.updateValue);
   const updateValues = useDesignStore((state) => state.updateValues);
   const updateExpression = useDesignStore((state) => state.updateExpression);
@@ -422,8 +422,8 @@ function FieldControl({ field, design, serverError }: { field: ParameterDefiniti
     </div>;
   }
   if (field.kind === 'select' || field.kind === 'toggle') {
-    const options = fieldOptionsForBackend(field, value, backend, engines);
-    const unsupported = fieldUnsupportedFeature(field, value, backend, engines);
+    const options = fieldOptionsForBackend(field, value, backend, backendPlan);
+    const unsupported = fieldUnsupportedFeature(field, value, backend, backendPlan);
     return <>
       <HelpTipRow className={`select-row${disabled ? ' field-disabled' : ''}`} text={field.description}>
         <label htmlFor={`parameter-${field.id}`} title={disabledReason}>{field.label}</label>
@@ -437,7 +437,7 @@ function FieldControl({ field, design, serverError }: { field: ParameterDefiniti
       {/* The value survived the filter only because the design already holds
           it, so say plainly what will happen rather than leaving a control
           that looks ordinary and then fails a minute into the solve. */}
-      {unsupported && <div className="field-warning" role="status">{backendLimitation(backend, unsupported, engines)}</div>}
+      {unsupported && <div className="field-warning" role="status">{backendLimitation(backend, unsupported, backendPlan)}</div>}
     </>;
   }
   if (field.kind === 'text') return <TextField field={field} value={String(value ?? '')} disabled={disabled} onCommit={commit} />;
