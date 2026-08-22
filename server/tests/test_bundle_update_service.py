@@ -43,8 +43,9 @@ def _manifest(version: str = "2.0.1", runtime_id: str = NEW_RUNTIME) -> bytes:
 def _release(
     *,
     include_runtime: bool,
-    include_dmg: bool = True,
+    include_installer: bool = True,
     runtime_id: str = NEW_RUNTIME,
+    platform: str = "macos-arm64",
 ) -> tuple[dict[str, Any], dict[str, bytes]]:
     version = "2.0.1"
     app_name = f"waveguide-generator-app-{version}.zip"
@@ -52,11 +53,10 @@ def _release(
     manifest = _manifest(version, runtime_id)
     assets = [*_pair(app_name, 1_500), *_pair(manifest_name, len(manifest))]
     if include_runtime:
-        assets += _pair(
-            f"waveguide-generator-runtime-macos-arm64-{runtime_id}.zip", 7_500
-        )
-    if include_dmg:
-        assets += _pair(f"Waveguide.Generator-{version}-macos-arm64.dmg", 9_000)
+        assets += _pair(f"waveguide-generator-runtime-{platform}-{runtime_id}.zip", 7_500)
+    if include_installer:
+        extension = "dmg" if platform == "macos-arm64" else "zip"
+        assets += _pair(f"Waveguide.Generator-{version}-{platform}.{extension}", 9_000)
     checksum = f"{hashlib.sha256(manifest).hexdigest()}  {manifest_name}\n".encode()
     return (
         {
@@ -88,6 +88,7 @@ def _service(
     tmp_path: Path,
     payload: dict[str, Any],
     fetched: dict[str, bytes],
+    platform_name: str = "darwin",
     **kwargs: Any,
 ) -> UpdateService:
     def fetch_asset(url: str, limit: int) -> bytes:
@@ -102,7 +103,7 @@ def _service(
         fetcher=lambda _etag: ReleaseResponse(payload, '"bundle"'),
         asset_fetcher=fetch_asset,
         clock=lambda: 1_700_000_000.0,
-        platform_name="darwin",
+        platform_name=platform_name,
         checkout_probe=lambda _root, _version: _bundle_checkout(),
         update_request_path=tmp_path / "control" / "update.json",
         **kwargs,
@@ -148,6 +149,47 @@ def test_bundle_checkout_reads_installed_app_and_runtime_manifests(
     assert result["runtimeId"] == OLD_RUNTIME
 
 
+def test_windows_bundle_checkout_reads_manifests_beside_the_executable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    folder = tmp_path / "Waveguide Generator"
+    app = folder / "app"
+    runtime = folder / "runtime"
+    app.mkdir(parents=True)
+    runtime.mkdir()
+    (folder / "Waveguide Generator.exe").write_bytes(b"launcher")
+    (app / "APP-MANIFEST.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "version": "2.0.0",
+                "commit": "a" * 40,
+                "runtimeId": OLD_RUNTIME,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (runtime / "RUNTIME-MANIFEST.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "runtimeId": OLD_RUNTIME,
+                "python": "3.13.12",
+                "platform": "windows-x86_64",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("WG2_BUNDLE", "1")
+
+    result = checkout_status(app, "9.9.9")
+
+    assert result["kind"] == "bundle"
+    assert result["updateSupported"] is True
+    assert result["installedVersion"] == "2.0.0"
+    assert result["runtimeId"] == OLD_RUNTIME
+
+
 def test_current_release_records_all_bundle_assets_and_downloads_both_layers(
     tmp_path: Path,
 ) -> None:
@@ -159,9 +201,7 @@ def test_current_release_records_all_bundle_assets_and_downloads_both_layers(
         recent_calls += 1
         return []
 
-    result = _service(
-        tmp_path, payload, fetched, recent_releases_fetcher=recent
-    ).get_status()
+    result = _service(tmp_path, payload, fetched, recent_releases_fetcher=recent).get_status()
 
     assert result["availability"] == "available"
     assert result["release"]["runtimeId"] == NEW_RUNTIME
@@ -233,16 +273,12 @@ def test_runtime_is_selected_from_an_earlier_release_and_the_list_is_cached(
         recent_calls += 1
         return [{"assets": _pair(runtime_name, 7_500)}]
 
-    update = _service(
-        tmp_path, payload, fetched, recent_releases_fetcher=recent
-    )
+    update = _service(tmp_path, payload, fetched, recent_releases_fetcher=recent)
 
     first = update.get_status()
     second = update.get_status()
 
-    runtime = next(
-        asset for asset in first["action"]["assets"] if asset["layer"] == "runtime"
-    )
+    runtime = next(asset for asset in first["action"]["assets"] if asset["layer"] == "runtime")
     assert runtime["name"] == runtime_name
     assert first["release"]["assetsReady"] is True
     assert second["action"] == first["action"]
@@ -259,3 +295,27 @@ def test_bad_release_manifest_digest_is_a_guarded_update_error(tmp_path: Path) -
     assert result["availability"] == "unknown"
     assert "does not match" in result["lastError"]
     assert result["action"] is None
+
+
+def test_windows_release_uses_windows_runtime_and_full_zip_asset_names(
+    tmp_path: Path,
+) -> None:
+    payload, fetched = _release(
+        include_runtime=True,
+        platform="windows-x86_64",
+    )
+
+    result = _service(
+        tmp_path,
+        payload,
+        fetched,
+        platform_name="win32",
+        recent_releases_fetcher=lambda: [],
+    ).get_status()
+
+    names = {asset["name"] for asset in result["release"]["bundleAssets"]}
+    assert f"waveguide-generator-runtime-windows-x86_64-{NEW_RUNTIME}.zip" in names
+    assert "Waveguide.Generator-2.0.1-windows-x86_64.zip" in names
+    assert result["action"]["assets"][1]["name"] == (
+        f"waveguide-generator-runtime-windows-x86_64-{NEW_RUNTIME}.zip"
+    )

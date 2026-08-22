@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build relocatable Waveguide Generator release layers and a macOS app."""
+"""Build relocatable Waveguide Generator release layers and desktop bundles."""
 
 from __future__ import annotations
 
@@ -24,13 +24,16 @@ import urllib.request
 import zipfile
 
 
-_IMPORT_ROOT = Path(
-    os.environ.get("WG2_APP_ROOT") or Path(__file__).resolve().parents[1]
-).expanduser().resolve()
+_IMPORT_ROOT = (
+    Path(os.environ.get("WG2_APP_ROOT") or Path(__file__).resolve().parents[1])
+    .expanduser()
+    .resolve()
+)
 if str(_IMPORT_ROOT) not in sys.path:
     sys.path.insert(0, str(_IMPORT_ROOT))
 
 from scripts import fetch_spa  # noqa: E402
+from launchers.macos import generate_icon  # noqa: E402
 from server.platform.paths import app_root  # noqa: E402
 from shared.runtime_id import runtime_id_from_files  # noqa: E402
 
@@ -42,6 +45,8 @@ REPO_ROOT = app_root()
 PYTHON_VERSION = "3.13.12"
 PYTHON_SERIES = "3.13"
 MACOS_PLATFORM = "macos-arm64"
+WINDOWS_PLATFORM = "windows-x86_64"
+WINDOWS_TARGET = "x86_64-pc-windows-msvc"
 APP_TEMPLATE = Path("launchers/macos/Waveguide Generator.app")
 APP_SOURCE_DIRECTORIES = (
     "server",
@@ -60,7 +65,32 @@ PRUNE_RELATIVE_PATHS = (
     "lib/python3.13/ensurepip",
     "lib/python3.13/site-packages/pip",
 )
-PRUNE_LIBRARY_GLOBS = ("lib/tcl*", "lib/tk*", "lib/itcl*", "lib/python3.13/site-packages/pip-*.dist-info")
+PRUNE_LIBRARY_GLOBS = (
+    "lib/tcl*",
+    "lib/tk*",
+    "lib/itcl*",
+    "lib/python3.13/site-packages/pip-*.dist-info",
+)
+WINDOWS_PRUNE_RELATIVE_PATHS = (
+    "Lib/idlelib",
+    "Lib/tkinter",
+    "Lib/turtledemo",
+    "Lib/ensurepip",
+    "Lib/site-packages/pip",
+    "Scripts",
+)
+WINDOWS_PRUNE_LIBRARY_GLOBS = (
+    "tcl*",
+    "tk*",
+    "itcl*",
+    "Lib/tcl*",
+    "Lib/tk*",
+    "Lib/itcl*",
+    "DLLs/_tkinter.pyd",
+    "DLLs/tcl*.dll",
+    "DLLs/tk*.dll",
+    "Lib/site-packages/pip-*.dist-info",
+)
 # The interpreter entries in bin/. Every other file there is a console-script
 # wrapper whose shebang names the temporary build prefix; the bundle runs
 # modules through python3.13 directly, so the wrappers would only ship a dead
@@ -75,6 +105,16 @@ METAL_HELPER = Path(
     "lib/python3.13/site-packages/hornlab_metal_bem/metal/native_helper/"
     ".build/release/HornlabMetalBemNative"
 )
+MSVC_RUNTIME_DLLS = (
+    "vcruntime140.dll",
+    "vcruntime140_1.dll",
+    "msvcp140.dll",
+)
+WINDOWS_LAUNCHER_NAME = "Waveguide Generator.exe"
+WINDOWS_PTH_NAME = "Waveguide Generator._pth"
+WINDOWS_ICON_NAME = "WaveguideGenerator.ico"
+WINDOWS_CREATE_NEW_PROCESS_GROUP = 0x00000200
+WINDOWS_CREATE_NO_WINDOW = 0x08000000
 
 RunCallable = Callable[..., subprocess.CompletedProcess[Any]]
 ProcessFactory = Callable[..., subprocess.Popen[str]]
@@ -103,6 +143,26 @@ def write_json(path: Path, payload: dict[str, object]) -> None:
     )
 
 
+def windows_launcher_files(python_series: str = PYTHON_SERIES) -> tuple[tuple[str, str], ...]:
+    """Name the runtime files that must sit beside the renamed ``pythonw.exe``.
+
+    Windows has no bundle format, so the launcher and the interpreter DLLs it
+    loads live in the application folder rather than inside the swappable
+    ``runtime`` directory. One definition therefore serves two owners: the
+    builder copies these files out of a fresh runtime, and the updater refreshes
+    them from a newly installed runtime, which is what keeps a launcher from
+    outliving the interpreter it was taken from.
+    """
+
+    tag = python_series.replace(".", "")
+    return (
+        ("pythonw.exe", WINDOWS_LAUNCHER_NAME),
+        (f"python{tag}.dll", f"python{tag}.dll"),
+        ("python3.dll", "python3.dll"),
+        *((name, name) for name in MSVC_RUNTIME_DLLS),
+    )
+
+
 def write_runtime_manifest(
     runtime_root: Path,
     *,
@@ -110,15 +170,26 @@ def write_runtime_manifest(
     runtime_id: str,
     requirements: bytes,
     pins: bytes,
+    platform_name: str = MACOS_PLATFORM,
 ) -> dict[str, object]:
     payload: dict[str, object] = {
         "schemaVersion": 1,
         "python": python_version,
-        "platform": MACOS_PLATFORM,
+        "platform": platform_name,
         "requirementsSha256": sha256_bytes(requirements),
         "pinsSha256": sha256_bytes(pins),
         "runtimeId": runtime_id,
     }
+    if platform_name == WINDOWS_PLATFORM:
+        # The runtime describes its own launcher files so that an update can
+        # refresh them without the updater carrying a second, driftable copy of
+        # this list: a runtime built for a later Python names its own DLLs.
+        payload["launcherFiles"] = [
+            {"source": source, "destination": destination}
+            for source, destination in windows_launcher_files(
+                python_version.rsplit(".", 1)[0] if python_version.count(".") > 1 else PYTHON_SERIES
+            )
+        ]
     write_json(runtime_root / "RUNTIME-MANIFEST.json", payload)
     return payload
 
@@ -147,21 +218,28 @@ def _remove(path: Path) -> None:
         shutil.rmtree(path)
 
 
-def prune_runtime(runtime_root: Path) -> list[str]:
+def prune_runtime(runtime_root: Path, *, platform_name: str = MACOS_PLATFORM) -> list[str]:
     """Remove development-only runtime content and return removed relative paths."""
 
     candidates: set[Path] = set()
-    for pattern in PRUNE_LIBRARY_GLOBS:
+    windows = platform_name == WINDOWS_PLATFORM
+    prune_globs = WINDOWS_PRUNE_LIBRARY_GLOBS if windows else PRUNE_LIBRARY_GLOBS
+    prune_paths = WINDOWS_PRUNE_RELATIVE_PATHS if windows else PRUNE_RELATIVE_PATHS
+    for pattern in prune_globs:
         candidates.update(runtime_root.glob(pattern))
-    candidates.update(runtime_root / relative for relative in PRUNE_RELATIVE_PATHS)
+    candidates.update(runtime_root / relative for relative in prune_paths)
 
     bin_dir = runtime_root / "bin"
-    if bin_dir.is_dir():
+    if not windows and bin_dir.is_dir():
         candidates.update(
             entry for entry in bin_dir.iterdir() if entry.name not in RUNTIME_BIN_KEEP
         )
 
-    site_packages = runtime_root / "lib" / f"python{PYTHON_SERIES}" / "site-packages"
+    site_packages = (
+        runtime_root / "Lib" / "site-packages"
+        if windows
+        else runtime_root / "lib" / f"python{PYTHON_SERIES}" / "site-packages"
+    )
     if site_packages.is_dir():
         for base, directories, _files in os.walk(site_packages, topdown=True):
             for name in list(directories):
@@ -207,9 +285,7 @@ def git_tracked_app_files(
         raise BundleError(f"git ls-files failed: {stderr or f'exit {result.returncode}'}")
     stdout = result.stdout
     encoded = stdout if isinstance(stdout, bytes) else stdout.encode()
-    paths = tuple(
-        PurePosixPath(os.fsdecode(item)) for item in encoded.split(b"\0") if item
-    )
+    paths = tuple(PurePosixPath(os.fsdecode(item)) for item in encoded.split(b"\0") if item)
     refused = [path.as_posix() for path in paths if not _allowed_app_path(path)]
     if refused:
         raise BundleError(f"git ls-files returned paths outside the app filter: {refused}")
@@ -342,7 +418,135 @@ def write_launcher_stub(path: Path) -> None:
     path.chmod(0o755)
 
 
-def _iter_zip_entries(root: Path) -> Iterable[tuple[Path, str]]:
+def windows_pth() -> str:
+    """Return the isolated import path used by the renamed ``pythonw.exe``."""
+
+    return "runtime\\Lib\nruntime\\DLLs\nruntime\\Lib\\site-packages\napp\nimport site\n"
+
+
+def windows_desktop_bootstrap() -> str:
+    """Start the desktop only for a direct launch of the renamed GUI executable.
+
+    The same executable is deliberately usable as ``sys.executable`` by server
+    workers.  For a script, ``-m`` or ``-c`` invocation, ``sys.argv[0]`` is not
+    the launcher filename and importing this module only establishes the path.
+    """
+
+    return '''"""Bootstrap the double-clickable Windows executable."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import sys
+import traceback
+
+
+def _is_direct_launch() -> bool:
+    return Path(sys.argv[0]).name.casefold() == "waveguide generator.exe"
+
+
+if _is_direct_launch():
+    bundle_root = Path(sys.executable).resolve().parent
+    app_root = bundle_root / "app"
+    os.environ["WG2_BUNDLE"] = "1"
+    os.environ["WG2_APP_ROOT"] = str(app_root)
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        cache_root = Path(local_app_data) / "WaveguideGenerator" / "cache"
+        os.environ.setdefault("PYTHONPYCACHEPREFIX", str(cache_root / "pycache"))
+        os.environ.setdefault("NUMBA_CACHE_DIR", str(cache_root / "numba"))
+    try:
+        os.chdir(app_root)
+        from launchers.desktop import main
+
+        result = main(sys.argv[1:])
+    except Exception as exc:
+        from launchers.statusapp.__main__ import _report_startup_failure
+
+        _report_startup_failure(
+            "Waveguide Generator could not start: "
+            f"{type(exc).__name__}: {exc}",
+            detail=traceback.format_exc(),
+        )
+        result = 1
+    raise SystemExit(result)
+'''
+
+
+def write_windows_bootstrap(app_root: Path) -> None:
+    (app_root / "wg_desktop_bootstrap.py").write_text(
+        windows_desktop_bootstrap(), encoding="utf-8", newline="\n"
+    )
+    # CPython permits only ``import site`` in an isolated ._pth file. The site
+    # hook is the supported one-line bridge to the real bootstrap module.
+    (app_root / "sitecustomize.py").write_text(
+        "import wg_desktop_bootstrap\n", encoding="utf-8", newline="\n"
+    )
+
+
+def _where_candidates(
+    filename: str,
+    *,
+    runner: RunCallable,
+    environ: dict[str, str],
+) -> tuple[Path, ...]:
+    try:
+        result = runner(
+            ["where.exe", filename],
+            env=environ,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return ()
+    if result.returncode != 0:
+        return ()
+    return tuple(
+        Path(line.strip()) for line in str(result.stdout or "").splitlines() if line.strip()
+    )
+
+
+def locate_msvc_runtime_dlls(
+    *,
+    runner: RunCallable = subprocess.run,
+    environ: dict[str, str] | None = None,
+) -> dict[str, Path]:
+    """Find the x64 MSVC redistributable DLLs in the documented priority order."""
+
+    env = dict(os.environ if environ is None else environ)
+    system_root = Path(env.get("SystemRoot", r"C:\Windows"))
+    program_files = Path(env.get("ProgramFiles", r"C:\Program Files"))
+    visual_studio = program_files / "Microsoft Visual Studio"
+    located: dict[str, Path] = {}
+    for filename in MSVC_RUNTIME_DLLS:
+        candidates = list(_where_candidates(filename, runner=runner, environ=env))
+        candidates.append(system_root / "System32" / filename)
+        if visual_studio.is_dir():
+            visual_studio_matches = sorted(
+                (
+                    path
+                    for path in visual_studio.rglob(filename)
+                    if "x64" in {part.casefold() for part in path.parts}
+                ),
+                key=lambda path: path.as_posix().casefold(),
+                reverse=True,
+            )
+            candidates.extend(visual_studio_matches)
+        found = next((candidate.resolve() for candidate in candidates if candidate.is_file()), None)
+        if found is None:
+            raise BundleError(
+                f"Required MSVC runtime DLL {filename} was not found via where.exe, "
+                f"{system_root / 'System32'}, or the Visual Studio x64 redistributables "
+                f"under {visual_studio}. Install the Microsoft Visual C++ x64 "
+                "Redistributable and rebuild."
+            )
+        located[filename] = found
+    return located
+
+
+def _iter_zip_entries(root: Path, *, archive_root: str | None = None) -> Iterable[tuple[Path, str]]:
     discovered: list[tuple[Path, str]] = []
 
     def visit(directory: Path, prefix: str) -> None:
@@ -359,11 +563,23 @@ def _iter_zip_entries(root: Path) -> Iterable[tuple[Path, str]]:
             else:
                 discovered.append((path, member))
 
-    visit(root, "")
+    if archive_root is None:
+        visit(root, "")
+    else:
+        prefix = archive_root.rstrip("/") + "/"
+        discovered.append((root, prefix))
+        visit(root, prefix)
     return sorted(discovered, key=lambda item: item[1])
 
 
-def deterministic_zip(source: Path, output: Path) -> None:
+def deterministic_zip(
+    source: Path,
+    output: Path,
+    *,
+    canonical_modes: bool = False,
+    compression: int = zipfile.ZIP_DEFLATED,
+    archive_root: str | None = None,
+) -> None:
     """Archive a layer in stable path order without unsafe link members."""
 
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -371,10 +587,10 @@ def deterministic_zip(source: Path, output: Path) -> None:
     with zipfile.ZipFile(
         output,
         "w",
-        compression=zipfile.ZIP_DEFLATED,
+        compression=compression,
         compresslevel=9,
     ) as archive:
-        for path, member in _iter_zip_entries(source):
+        for path, member in _iter_zip_entries(source, archive_root=archive_root):
             if path.is_symlink():
                 resolved = path.resolve()
                 if not resolved.is_relative_to(source_root) or not resolved.is_file():
@@ -386,8 +602,11 @@ def deterministic_zip(source: Path, output: Path) -> None:
                 metadata = path.lstat()
             info = zipfile.ZipInfo(member, ZIP_TIMESTAMP)
             info.create_system = 3
-            info.compress_type = zipfile.ZIP_DEFLATED
-            info.external_attr = (metadata.st_mode & 0xFFFF) << 16
+            info.compress_type = compression
+            mode = metadata.st_mode & 0xFFFF
+            if canonical_modes:
+                mode = 0o40755 if member.endswith("/") else 0o100644
+            info.external_attr = mode << 16
             if member.endswith("/"):
                 info.external_attr |= 0x10
                 archive.writestr(info, b"")
@@ -404,9 +623,9 @@ def write_checksum(asset: Path) -> Path:
 
 def declared_version(repo_root: Path) -> str:
     try:
-        value = json.loads(
-            (repo_root / "shared" / "version.json").read_text(encoding="utf-8")
-        )["version"]
+        value = json.loads((repo_root / "shared" / "version.json").read_text(encoding="utf-8"))[
+            "version"
+        ]
     except (OSError, ValueError, KeyError) as exc:
         raise BundleError(f"Could not read shared/version.json: {exc}") from exc
     if not isinstance(value, str) or not value:
@@ -422,11 +641,13 @@ class BundleBuilder:
         runner: RunCallable = subprocess.run,
         process_factory: ProcessFactory = subprocess.Popen,
         machine: Callable[[], str] = platform.machine,
+        system: Callable[[], str] = platform.system,
     ) -> None:
         self.repo_root = repo_root.resolve()
         self.runner = runner
         self.process_factory = process_factory
         self.machine = machine
+        self.system = system
         self.command_environment = dict(os.environ)
         self.command_environment["COPYFILE_DISABLE"] = "1"
         # uv-managed python-build-standalone installations carry PEP 668's
@@ -461,9 +682,7 @@ class BundleBuilder:
         return result
 
     def git_commit(self) -> str:
-        result = self.run_command(
-            ["git", "rev-parse", "HEAD"], cwd=self.repo_root, capture=True
-        )
+        result = self.run_command(["git", "rev-parse", "HEAD"], cwd=self.repo_root, capture=True)
         commit = str(result.stdout).strip()
         if len(commit) != 40 or any(character not in "0123456789abcdef" for character in commit):
             raise BundleError(f"git rev-parse returned an invalid commit: {commit!r}")
@@ -475,33 +694,50 @@ class BundleBuilder:
         *,
         python_version: str,
         runtime_id: str,
+        platform_name: str = MACOS_PLATFORM,
     ) -> None:
         install_parent = destination.parent / "python-install"
         install_parent.mkdir()
+        python_request = python_version
+        if platform_name == WINDOWS_PLATFORM:
+            python_request = f"cpython-{python_version}-windows-x86_64-none"
         install_command = [
             "uv",
             "python",
             "install",
             "--install-dir",
             str(install_parent),
-            python_version,
+            "--no-bin",
+            python_request,
         ]
         self.run_command(install_command)
+        relative_python = (
+            Path("python.exe") if platform_name == WINDOWS_PLATFORM else Path("bin") / "python3.13"
+        )
         candidates = {
             candidate.resolve()
-            for candidate in install_parent.glob("*/bin/python3.13")
+            for pattern in (
+                f"*/{relative_python.as_posix()}",
+                f"*/install/{relative_python.as_posix()}",
+            )
+            for candidate in install_parent.glob(pattern)
             if candidate.is_file()
         }
         if len(candidates) != 1:
             raise BundleError(
-                "uv did not install exactly one relocatable python3.13 tree under "
+                f"uv did not install exactly one relocatable {relative_python} tree under "
                 f"{install_parent}: {sorted(map(str, candidates))}"
             )
-        installed_root = next(iter(candidates)).parents[1]
+        installed_python = next(iter(candidates))
+        installed_root = (
+            installed_python.parent
+            if platform_name == WINDOWS_PLATFORM
+            else installed_python.parents[1]
+        )
         if not installed_root.is_relative_to(install_parent.resolve()):
             raise BundleError(f"uv resolved the installed Python outside {install_parent}")
         shutil.move(str(installed_root), destination)
-        runtime_python = destination / "bin" / "python3.13"
+        runtime_python = destination / relative_python
         self.run_command(
             [
                 "uv",
@@ -517,12 +753,17 @@ class BundleBuilder:
             ]
         )
         helper = destination / METAL_HELPER
-        if self.machine() == "arm64" and not helper.is_file():
+        if platform_name == MACOS_PLATFORM and self.machine() == "arm64" and not helper.is_file():
             raise BundleError(
                 "The Apple Silicon Metal native helper is missing after installation: "
                 f"{helper}. Ensure Swift is available and rebuild the runtime."
             )
-        removed = prune_runtime(destination)
+        if platform_name == WINDOWS_PLATFORM:
+            for filename, source in locate_msvc_runtime_dlls(
+                runner=self.runner, environ=self.command_environment
+            ).items():
+                shutil.copy2(source, destination / filename)
+        removed = prune_runtime(destination, platform_name=platform_name)
         print(f"Pruned {len(removed)} runtime directories.")
         write_runtime_manifest(
             destination,
@@ -530,6 +771,7 @@ class BundleBuilder:
             runtime_id=runtime_id,
             requirements=(self.repo_root / "server" / "requirements-runtime.txt").read_bytes(),
             pins=(self.repo_root / "server" / "requirements-pins.txt").read_bytes(),
+            platform_name=platform_name,
         )
 
     def build_app(
@@ -541,9 +783,7 @@ class BundleBuilder:
         spa: Path | None,
     ) -> dict[str, object]:
         destination.mkdir()
-        tracked = copy_tracked_app_files(
-            self.repo_root, destination, runner=self.runner
-        )
+        tracked = copy_tracked_app_files(self.repo_root, destination, runner=self.runner)
         print(f"Copied {len(tracked)} tracked app files.")
         install_spa_layer(
             destination,
@@ -551,6 +791,9 @@ class BundleBuilder:
             archive=spa,
             repo_root=self.repo_root,
         )
+        # This module is part of the platform-neutral app layer. It is inert on
+        # macOS, and the top-level Windows executable imports it from its _pth.
+        write_windows_bootstrap(destination)
         return write_app_manifest(
             destination,
             version=version,
@@ -580,9 +823,34 @@ class BundleBuilder:
         shutil.copytree(runtime_root, resources / "runtime", symlinks=True)
         shutil.copytree(app_root, resources / "app", symlinks=True)
         write_launcher_stub(contents / "MacOS" / "Waveguide Generator")
-        self.run_command(
-            ["codesign", "--force", "--deep", "--sign", "-", str(destination)]
-        )
+        self.run_command(["codesign", "--force", "--deep", "--sign", "-", str(destination)])
+
+    def assemble_windows_bundle(
+        self,
+        destination: Path,
+        *,
+        runtime_root: Path,
+        app_root: Path,
+        icon_writer: Callable[[Path], None] = generate_icon.build_ico,
+    ) -> None:
+        """Assemble the folder users extract and launch from Explorer."""
+
+        destination.mkdir()
+        shutil.copytree(runtime_root, destination / "runtime", symlinks=True)
+        shutil.copytree(app_root, destination / "app", symlinks=True)
+        launcher_files = windows_launcher_files()
+        missing = [
+            source for source, _ in launcher_files if not (runtime_root / source).is_file()
+        ]
+        if missing:
+            raise BundleError(
+                "The Windows runtime is missing files required beside the renamed "
+                f"pythonw launcher: {', '.join(missing)}"
+            )
+        for source, target in launcher_files:
+            shutil.copy2(runtime_root / source, destination / target)
+        (destination / WINDOWS_PTH_NAME).write_text(windows_pth(), encoding="utf-8", newline="\n")
+        icon_writer(destination / WINDOWS_ICON_NAME)
 
     def create_dmg(self, bundle: Path, output: Path, staging: Path) -> None:
         staging.mkdir()
@@ -616,12 +884,26 @@ class BundleBuilder:
         except (OSError, urllib.error.URLError):
             return None
 
-    def verify_bundle(self, bundle: Path, scratch: Path) -> None:
+    def verify_bundle(
+        self,
+        bundle: Path,
+        scratch: Path,
+        *,
+        platform_name: str = MACOS_PLATFORM,
+    ) -> None:
         copied_bundle = scratch / bundle.name
         shutil.copytree(bundle, copied_bundle, symlinks=True)
-        resources = copied_bundle / "Contents" / "Resources"
+        resources = (
+            copied_bundle / "Contents" / "Resources"
+            if platform_name == MACOS_PLATFORM
+            else copied_bundle
+        )
         app = resources / "app"
-        python = resources / "runtime" / "bin" / "python3.13"
+        python = (
+            resources / "runtime" / "bin" / "python3.13"
+            if platform_name == MACOS_PLATFORM
+            else resources / "runtime" / "python.exe"
+        )
         environment = dict(self.command_environment)
         environment.pop("PYTHONHOME", None)
         environment.pop("PYTHONPATH", None)
@@ -631,6 +913,27 @@ class BundleBuilder:
         # check below proves the bundle can run without modifying itself.
         for name in CACHE_ENVIRONMENT:
             environment[name] = str(scratch / "caches" / name.lower())
+
+        if platform_name == WINDOWS_PLATFORM:
+            launcher = copied_bundle / WINDOWS_LAUNCHER_NAME
+            sentinel = scratch / "windows-launcher-probe.txt"
+            probe = (
+                "from pathlib import Path; "
+                f"Path({str(sentinel)!r}).write_text('ready', encoding='utf-8')"
+            )
+            print("+ " + shlex.join([str(launcher), "-c", probe]), flush=True)
+            launcher_result = self.runner(
+                [str(launcher), "-c", probe],
+                cwd=app,
+                env=environment,
+                check=False,
+            )
+            if launcher_result.returncode != 0 or not sentinel.is_file():
+                raise BundleError(
+                    "The renamed pythonw.exe launcher could not load its adjacent "
+                    "Python/MSVC DLLs and isolated _pth."
+                )
+            print("Windows launcher verification: adjacent DLLs and _pth loaded.")
 
         print("+ " + shlex.join([str(python), "scripts/check_backends.py"]), flush=True)
         backends = self.runner(
@@ -645,8 +948,12 @@ class BundleBuilder:
         print(output)
         if backends.returncode != 0:
             raise BundleError("Bundled backend verification failed")
-        if self.machine() == "arm64" and "Metal (Apple Silicon): ready" not in output:
+        if platform_name == MACOS_PLATFORM and "Metal (Apple Silicon): ready" not in output:
             raise BundleError("Bundled backend verification did not report Metal ready")
+        if platform_name == WINDOWS_PLATFORM and "bempp (cross-platform): ready" not in output:
+            raise BundleError(
+                "Bundled backend verification did not report the Windows bempp/numba backend ready"
+            )
 
         port = self._free_port()
         data_dir = scratch / "data"
@@ -662,16 +969,27 @@ class BundleBuilder:
         ]
         print("+ " + shlex.join(command), flush=True)
         with log_path.open("w+", encoding="utf-8") as log_handle:
-            process = self.process_factory(
-                command,
-                cwd=app,
-                env=environment,
-                stdin=subprocess.DEVNULL,
-                stdout=log_handle,
-                stderr=subprocess.STDOUT,
-                text=True,
-                start_new_session=True,
-            )
+            process_options: dict[str, object] = {
+                "cwd": app,
+                "env": environment,
+                "stdin": subprocess.DEVNULL,
+                "stdout": log_handle,
+                "stderr": subprocess.STDOUT,
+                "text": True,
+            }
+            if platform_name == WINDOWS_PLATFORM:
+                process_options["creationflags"] = getattr(
+                    subprocess,
+                    "CREATE_NEW_PROCESS_GROUP",
+                    WINDOWS_CREATE_NEW_PROCESS_GROUP,
+                ) | getattr(
+                    subprocess,
+                    "CREATE_NO_WINDOW",
+                    WINDOWS_CREATE_NO_WINDOW,
+                )
+            else:
+                process_options["start_new_session"] = True
+            process = self.process_factory(command, **process_options)
             root_status: int | None = None
             health_status: int | None = None
             deadline = time.monotonic() + 120.0
@@ -680,9 +998,7 @@ class BundleBuilder:
                     if process.poll() is not None:
                         break
                     root_status = self._http_status(f"http://127.0.0.1:{port}/")
-                    health_status = self._http_status(
-                        f"http://127.0.0.1:{port}/health"
-                    )
+                    health_status = self._http_status(f"http://127.0.0.1:{port}/health")
                     if root_status == 200 and health_status == 200:
                         break
                     time.sleep(0.25)
@@ -704,13 +1020,14 @@ class BundleBuilder:
                         process.kill()
                         process.wait(timeout=5.0)
 
-        # Running the bundle must not have written into it: a Gatekeeper
-        # assessment of a modified bundle fails on every launch after the first.
-        self.run_command(
-            ["codesign", "--verify", "--deep", "--strict", str(copied_bundle)],
-            capture=True,
-        )
-        print("Seal verification: the bundle is unchanged after running.")
+        if platform_name == MACOS_PLATFORM:
+            # Running the bundle must not have written into it: a Gatekeeper
+            # assessment of a modified bundle fails on every launch after the first.
+            self.run_command(
+                ["codesign", "--verify", "--deep", "--strict", str(copied_bundle)],
+                capture=True,
+            )
+            print("Seal verification: the bundle is unchanged after running.")
 
 
 def _format_size(size: int) -> str:
@@ -735,17 +1052,33 @@ def print_asset_sizes(assets: Iterable[Path]) -> None:
 
 
 def build(args: argparse.Namespace, *, builder: BundleBuilder | None = None) -> list[Path]:
-    if args.platform != "macos":
-        raise BundleError("Choose --platform macos on a supported macOS host")
-    if sys.platform != "darwin":
-        raise BundleError("The macOS bundle must be built on macOS")
-
     builder = builder or BundleBuilder(REPO_ROOT)
-    if builder.machine() != "arm64":
-        raise BundleError("This step builds only the macos-arm64 runtime and app bundle")
+    if args.platform == "macos":
+        platform_name = MACOS_PLATFORM
+        if builder.system() != "Darwin":
+            raise BundleError(
+                "The macOS bundle must be built on macOS; uv cannot cross-install "
+                "the macos-arm64 python-build-standalone runtime."
+            )
+        if builder.machine().casefold() != "arm64":
+            raise BundleError("This step builds only the macos-arm64 runtime and app bundle")
+    elif args.platform == "windows":
+        platform_name = WINDOWS_PLATFORM
+        if builder.system() != "Windows":
+            raise BundleError(
+                "The Windows bundle must be built on a Windows host; uv cannot "
+                f"cross-install the {WINDOWS_TARGET} runtime. Run this build on "
+                "windows-latest or another x86-64 Windows machine."
+            )
+        if builder.machine().casefold() not in {"amd64", "x86_64"}:
+            raise BundleError(
+                "This step builds only the windows-x86_64 runtime and application folder"
+            )
+    else:
+        raise BundleError("Choose --platform macos or --platform windows")
     if not args.python_version.startswith(PYTHON_SERIES + "."):
         raise BundleError(
-            f"The macOS layout requires a {PYTHON_SERIES}.x Python version, "
+            f"The desktop layout requires a {PYTHON_SERIES}.x Python version, "
             f"not {args.python_version!r}"
         )
 
@@ -773,9 +1106,10 @@ def build(args: argparse.Namespace, *, builder: BundleBuilder | None = None) -> 
                 runtime_root,
                 python_version=args.python_version,
                 runtime_id=runtime_id,
+                platform_name=platform_name,
             )
             runtime_asset = output / (
-                f"waveguide-generator-runtime-macos-arm64-{runtime_id}.zip"
+                f"waveguide-generator-runtime-{platform_name}-{runtime_id}.zip"
             )
             deterministic_zip(runtime_root, runtime_asset)
             _register_asset(assets, runtime_asset)
@@ -788,32 +1122,59 @@ def build(args: argparse.Namespace, *, builder: BundleBuilder | None = None) -> 
                 spa=args.spa,
             )
             app_asset = output / f"waveguide-generator-app-{version}.zip"
-            deterministic_zip(app_root, app_asset)
-            _register_asset(assets, app_asset)
-            manifest_asset = output / (
-                f"waveguide-generator-app-{version}.manifest.json"
+            # Canonical modes avoid NTFS/POSIX checkout differences. Both CI
+            # jobs run the same pinned CPython/zlib and file bytes are never
+            # transformed; the Windows job compares this archive byte-for-byte.
+            deterministic_zip(
+                app_root,
+                app_asset,
+                canonical_modes=True,
             )
+            _register_asset(assets, app_asset)
+            manifest_asset = output / (f"waveguide-generator-app-{version}.manifest.json")
             shutil.copy2(app_root / "APP-MANIFEST.json", manifest_asset)
             _register_asset(assets, manifest_asset)
 
         if not args.runtime_only and not args.app_only:
-            bundle = scratch / "Waveguide Generator.app"
-            builder.assemble_bundle(
-                bundle,
-                runtime_root=runtime_root,
-                app_root=app_root,
-                version=version,
-            )
-            dmg_asset = output / f"Waveguide Generator-{version}-macos-arm64.dmg"
-            if dmg_asset.exists():
-                dmg_asset.unlink()
-            builder.create_dmg(bundle, dmg_asset, scratch / "dmg-staging")
-            _register_asset(assets, dmg_asset)
+            if platform_name == MACOS_PLATFORM:
+                bundle = scratch / "Waveguide Generator.app"
+                builder.assemble_bundle(
+                    bundle,
+                    runtime_root=runtime_root,
+                    app_root=app_root,
+                    version=version,
+                )
+                installer_asset = output / (f"Waveguide Generator-{version}-macos-arm64.dmg")
+                if installer_asset.exists():
+                    installer_asset.unlink()
+                builder.create_dmg(bundle, installer_asset, scratch / "dmg-staging")
+            else:
+                bundle = scratch / "Waveguide Generator"
+                builder.assemble_windows_bundle(
+                    bundle,
+                    runtime_root=runtime_root,
+                    app_root=app_root,
+                )
+                installer_asset = output / (f"Waveguide Generator-{version}-windows-x86_64.zip")
+                deterministic_zip(
+                    bundle,
+                    installer_asset,
+                    archive_root=bundle.name,
+                )
+                output_bundle = output / bundle.name
+                if output_bundle.exists() or output_bundle.is_symlink():
+                    _remove(output_bundle)
+                shutil.copytree(bundle, output_bundle, symlinks=True)
+            _register_asset(assets, installer_asset)
             if args.skip_verify:
                 print("Verification skipped by --skip-verify.")
             else:
                 try:
-                    builder.verify_bundle(bundle, scratch / "verification")
+                    builder.verify_bundle(
+                        bundle,
+                        scratch / "verification",
+                        platform_name=platform_name,
+                    )
                 except (BundleError, OSError):
                     print_asset_sizes(assets)
                     raise
@@ -829,9 +1190,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--platform",
-        choices=("macos",),
-        default="macos" if sys.platform == "darwin" else None,
-        help="bundle platform (defaults to macos on Darwin)",
+        choices=("macos", "windows"),
+        default={"darwin": "macos", "win32": "windows"}.get(sys.platform),
+        help="bundle platform (defaults to the current macOS or Windows host)",
     )
     parser.add_argument("--output", type=Path, default=Path("build/bundle"))
     parser.add_argument("--spa", type=Path, help="verified release SPA tarball to install")
@@ -847,7 +1208,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.platform is None:
-        parser.error("--platform is required outside macOS")
+        parser.error("--platform is required outside macOS and Windows")
     if args.runtime_only and args.spa is not None:
         parser.error("--spa cannot be used with --runtime-only")
     try:

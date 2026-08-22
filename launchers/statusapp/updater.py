@@ -20,6 +20,8 @@ from launchers.apply_update import bundle_from_app_layer
 
 TAG_RE = re.compile(r"^v\d+\.\d+\.\d+$")
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
+WINDOWS_CREATE_NEW_PROCESS_GROUP = 0x00000200
+WINDOWS_DETACHED_PROCESS = 0x00000008
 
 
 class UpdateHandoffError(RuntimeError):
@@ -69,9 +71,7 @@ def consume_update_request(
         root = data_dir.resolve() if data_dir is not None else None
         try:
             staged_app = Path(raw_app).resolve() if isinstance(raw_app, str) else None
-            staged_runtime = (
-                Path(raw_runtime).resolve() if isinstance(raw_runtime, str) else None
-            )
+            staged_runtime = Path(raw_runtime).resolve() if isinstance(raw_runtime, str) else None
             inside = (
                 root is not None
                 and staged_app is not None
@@ -108,9 +108,7 @@ def consume_update_request(
             except FileNotFoundError:
                 return None
             except OSError as exc:
-                raise UpdateHandoffError(
-                    f"Could not consume the update request: {exc}"
-                ) from exc
+                raise UpdateHandoffError(f"Could not consume the update request: {exc}") from exc
             return BundleUpdateRequest(version, staged_app, staged_runtime)
         tag = ""
         ready_at = 0.0
@@ -157,9 +155,7 @@ def _data_dir_override(server_args: Sequence[str]) -> str | None:
     return None
 
 
-def _posix_helper(
-    installer: Path, tag: str, parent_pid: int, platform_name: str
-) -> Path:
+def _posix_helper(installer: Path, tag: str, parent_pid: int, platform_name: str) -> Path:
     suffix = ".command" if platform_name == "darwin" else ".sh"
     descriptor, raw_path = tempfile.mkstemp(prefix="wg-install-update-", suffix=suffix)
     path = Path(raw_path)
@@ -273,9 +269,7 @@ def launch_update_handoff(
         # does not receive the status window's original CLI arguments. Carry a
         # custom data directory through the equivalent supported environment
         # variable so the restarted app opens the same designs and job store.
-        environment["WG2_DATA_DIR"] = str(
-            resolve_data_dir(data_dir_override, environ=environment)
-        )
+        environment["WG2_DATA_DIR"] = str(resolve_data_dir(data_dir_override, environ=environment))
     try:
         if selected_platform == "win32":
             helper = _windows_helper()
@@ -421,10 +415,11 @@ def launch_bundle_update_handoff(
         "close_fds": True,
     }
     if selected_platform == "win32":
-        options["creationflags"] = (
-            getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-            | getattr(subprocess, "DETACHED_PROCESS", 0)
-        )
+        options["creationflags"] = getattr(
+            subprocess,
+            "CREATE_NEW_PROCESS_GROUP",
+            WINDOWS_CREATE_NEW_PROCESS_GROUP,
+        ) | getattr(subprocess, "DETACHED_PROCESS", WINDOWS_DETACHED_PROCESS)
     else:
         options["start_new_session"] = True
     try:

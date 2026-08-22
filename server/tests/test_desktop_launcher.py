@@ -167,6 +167,70 @@ def test_missing_pywebview_reports_the_pip_requirements_repair(
     assert controller.closes == 1
 
 
+def test_missing_windows_webview2_reports_evergreen_and_opens_browser_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller = StubController()
+    webview, created = _stub_webview()
+    monkeypatch.setitem(sys.modules, "webview", webview)
+    monkeypatch.setattr(desktop.sys, "platform", "win32")
+    reported: list[tuple[str, str | None]] = []
+    opened: list[str] = []
+    monkeypatch.setattr(
+        desktop,
+        "_report_startup_failure",
+        lambda message, *, detail=None: reported.append((message, detail)),
+    )
+
+    result = desktop.DesktopWindow(
+        controller,  # type: ignore[arg-type]
+        poll_interval=0,
+        pythonnet_loader=lambda: object(),
+        webview2_probe=lambda: False,
+        browser_fallback=opened.append,
+    ).run()
+
+    assert result == 0
+    assert created == []
+    assert opened == [controller.url]
+    assert "Microsoft Edge WebView2 Evergreen Runtime" in reported[0][0]
+    assert "default browser" in reported[0][0]
+    assert controller.closes == 1
+
+
+def test_windows_pythonnet_initialization_error_uses_the_same_visible_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller = StubController()
+    webview, created = _stub_webview()
+    monkeypatch.setitem(sys.modules, "webview", webview)
+    monkeypatch.setattr(desktop.sys, "platform", "win32")
+    reported: list[str] = []
+    opened: list[str] = []
+    monkeypatch.setattr(
+        desktop,
+        "_report_startup_failure",
+        lambda message, *, detail=None: reported.append(message),
+    )
+
+    def broken_pythonnet() -> object:
+        raise ImportError("No module named 'clr_loader'")
+
+    result = desktop.DesktopWindow(
+        controller,  # type: ignore[arg-type]
+        poll_interval=0,
+        pythonnet_loader=broken_pythonnet,
+        webview2_probe=lambda: True,
+        browser_fallback=opened.append,
+    ).run()
+
+    assert result == 0
+    assert created == []
+    assert opened == [controller.url]
+    assert "pythonnet could not load" in reported[0]
+    assert "Evergreen Runtime" in reported[0]
+
+
 def test_linux_window_request_reports_and_uses_status_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -352,9 +416,7 @@ def test_bundle_handoff_stops_the_server_before_spawning_the_staged_updater(
     webview, window = _live_webview(polls=3)
     monkeypatch.setitem(sys.modules, "webview", webview)
 
-    assert desktop.DesktopWindow(
-        controller, poll_interval=0, update_ready_delay=0
-    ).run() == 0  # type: ignore[arg-type]
+    assert desktop.DesktopWindow(controller, poll_interval=0, update_ready_delay=0).run() == 0  # type: ignore[arg-type]
 
     assert events[:2] == ["close", "launch"]
     assert window.destroyed == 1
@@ -379,9 +441,7 @@ def test_first_healthy_bundle_start_removes_previous_layers_and_resigns(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(desktop.sys, "platform", "darwin")
-    resources = (
-        tmp_path / "Waveguide Generator.app" / "Contents" / "Resources"
-    )
+    resources = tmp_path / "Waveguide Generator.app" / "Contents" / "Resources"
     app = resources / "app"
     previous = resources / "app.previous"
     app.mkdir(parents=True)
@@ -413,9 +473,7 @@ def test_failed_new_bundle_start_rolls_back_and_reports_the_result(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(desktop.sys, "platform", "darwin")
-    resources = (
-        tmp_path / "Waveguide Generator.app" / "Contents" / "Resources"
-    )
+    resources = tmp_path / "Waveguide Generator.app" / "Contents" / "Resources"
     app = resources / "app"
     previous = resources / "app.previous"
     app.mkdir(parents=True)

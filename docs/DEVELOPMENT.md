@@ -74,13 +74,13 @@ Geometry, solver, platform, or release work may also require the pinned sibling 
 constellation checks, a real browser, or owned qualification hardware. Hosted CI never
 runs real Metal or BEMPP solves.
 
-## Building the standalone macOS app
+## Building the standalone desktop apps
 
 `scripts/build_bundle.py` creates the relocatable CPython runtime layer, the tracked
-application layer, the ad-hoc-signed `.app`, and the DMG and update assets under
-`build/bundle/`. It requires Apple Silicon macOS, `uv`, Swift, `codesign`, and
-`hdiutil`; it installs only `server/requirements-runtime.txt` and
-`server/requirements-pins.txt`, never the development requirements.
+application layer, a platform bundle, and the install/update assets under
+`build/bundle/`. It installs only `server/requirements-runtime.txt` and
+`server/requirements-pins.txt`, never the development requirements. The macOS build
+requires Apple Silicon macOS, `uv`, Swift, `codesign`, and `hdiutil`.
 
 Release builds pass the checksum file beside the SPA tarball automatically:
 
@@ -102,17 +102,47 @@ should leave verification enabled:
 .venv/bin/python scripts/build_bundle.py --output build/bundle
 ```
 
+The Windows build must run on x86-64 Windows with `uv` and the x64 Microsoft Visual
+C++ redistributable files available on `PATH`, in `System32`, or below the Visual
+Studio redistributable tree. `uv python install` cannot install another host platform,
+so `--platform windows` deliberately refuses on macOS/Linux instead of packaging a
+host interpreter under a Windows asset name:
+
+```powershell
+python scripts/build_bundle.py --platform windows `
+  --spa waveguide-generator-v2-spa-<version>.tar.gz `
+  --output build/bundle
+```
+
+It leaves `build/bundle/Waveguide Generator/` and archives that folder as
+`Waveguide Generator-<version>-windows-x86_64.zip`. The runtime uses the
+same pinned CPython patch as macOS and carries `vcruntime140.dll`,
+`vcruntime140_1.dll`, and `msvcp140.dll` for clean machines. Verification runs the
+renamed `pythonw.exe` launcher path, requires `scripts/check_backends.py` to report
+the bempp/numba backend ready, and requires `/` and `/health` to answer. The included
+isolated `Waveguide Generator._pth` uses CPython's permitted `import site` hook;
+`sitecustomize.py` then imports `wg_desktop_bootstrap` to distinguish a direct GUI
+launch from the same executable being reused as `sys.executable` by workers. The
+included `WaveguideGenerator.ico` can be selected for a shortcut; setting the icon inside
+`Waveguide Generator.exe` itself requires a Windows PE resource edit and is deferred
+until the executable-signing work.
+
 The runtime id is content-addressed from the two requirement files and the exact pinned
-Python patch. Layer ZIPs use sorted entries, fixed timestamps, and preserved Unix modes
-so repeated builds are reproducible in spirit. Internal file symlinks are materialized
-as regular files: the in-app extractor rejects every link member along with absolute
+Python patch. Runtime ZIPs use sorted entries, fixed timestamps, and preserved modes.
+The platform-neutral app ZIP additionally uses canonical modes, and both release
+jobs run it through the same pinned CPython patch, so macOS and Windows builds of the same commit and SPA are
+byte-identical; file content is copied verbatim, including line endings. Release CI
+compares the two SHA-256 values before uploading any Windows assets, and only the
+macOS job uploads the shared app layer. Internal file symlinks are materialized as
+regular files: the in-app extractor rejects every link member along with absolute
 paths, `..` traversal, and AppleDouble metadata.
 
 ## Standalone application updates
 
 The server keeps release discovery read-only. In bundle mode (`WG2_BUNDLE=1`) it reads
-the installed version from `Resources/app/APP-MANIFEST.json` and the installed runtime
-id from `Resources/runtime/RUNTIME-MANIFEST.json`. A newer release is installable only
+the installed version and runtime id from `Resources/app` and `Resources/runtime` on
+macOS, or the executable's sibling `app` and `runtime` directories on Windows. A newer
+release is installable only
 after its separate app manifest has been size-limited, checksum-verified, and read; the
 app ZIP and its checksum must exist, and a different runtime id must resolve to a
 runtime ZIP/checksum pair. Content-addressed runtimes can come from one of the 20 most
@@ -144,11 +174,14 @@ After staging, the server atomically writes the status owner's temporary
 desktop launcher resolves both paths and refuses a request unless they are existing
 directories inside the application data directory. It then stops the server and
 starts `launchers/apply_update.py` from the staged app layer, using the staged runtime's
-Python when present. The updater waits for the desktop parent, renames live layers to
+Python when present. This is required on Windows because loaded DLLs in the old runtime
+prevent NTFS from moving that directory. The updater waits for the desktop parent,
+renames live layers to
 `*.previous`, renames staged layers into place, removes quarantine attributes, ad-hoc
 signs the changed bundle, and relaunches it (`open -n <bundle> --args <original CLI
-arguments>` on macOS, the exe path on Windows, so `--port`/`--data-dir` survive the
-restart). The launcher removes `*.previous`, signs again, and deletes the downloaded
+arguments>` on macOS, the exe path detached without a console on Windows, so
+`--port`/`--data-dir` survive the restart). Windows skips the macOS quarantine and
+codesign repairs. The launcher removes `*.previous`, signs again, and deletes the downloaded
 archives under `<data>/updates/` only after `/health` and the frontend are healthy; a
 failed first start restores the previous layers and records the result in
 `<data>/logs/update.log`.
