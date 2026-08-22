@@ -46,6 +46,7 @@ DETECTED_PYTHON_VERSION=""
 SPA_SUMMARY=""
 WGLINK_SUMMARY=""
 METAL_SUMMARY=""
+UPDATE_TRANSACTION="${WG_UPDATE_ROLLBACK_DIR:-}"
 
 usage() {
     cat <<'USAGE'
@@ -60,7 +61,7 @@ Waveguide Generator installer.
                       install this reviewed WGLink package instead of fetching it
   --skip-wglink       leave Fusion's WGLink registration untouched
   --replace-wglink    replace an existing non-WG developer install
-  --force             rebuild the environment and reinstall the SPA
+  --force             fully repair the environment and reinstall the SPA
   --no-launch         finish without starting the application
   --help              this message
 
@@ -71,8 +72,179 @@ USAGE
 say() { printf '%s\n' "$*"; }
 step() { printf '\n%s\n' "$*"; }
 
+update_transaction_path() {
+    local git_dir
+    git_dir="$(git rev-parse --git-dir 2>/dev/null)" || return 1
+    if [[ "$git_dir" != /* ]]; then
+        git_dir="$ROOT/$git_dir"
+    fi
+    printf '%s\n' "$git_dir/wg-install-rollback"
+}
+
+load_update_transaction() {
+    if [[ -z "$UPDATE_TRANSACTION" ]]; then
+        UPDATE_TRANSACTION="$(update_transaction_path 2>/dev/null || true)"
+    fi
+    if [[ -z "$UPDATE_TRANSACTION" ]] || [[ ! -f "$UPDATE_TRANSACTION/prior-head" ]]; then
+        UPDATE_TRANSACTION=""
+    fi
+}
+
+rollback_update() {
+    load_update_transaction
+    [[ -n "$UPDATE_TRANSACTION" ]] || return 0
+
+    say "  Restoring the previous code and runtime after the failed update..."
+    local prior_head prior_ref rollback_failed=0 venv_repair_failed=0
+    prior_head="$(<"$UPDATE_TRANSACTION/prior-head")"
+    prior_ref=""
+    if [[ -f "$UPDATE_TRANSACTION/prior-ref" ]]; then
+        prior_ref="$(<"$UPDATE_TRANSACTION/prior-ref")"
+    fi
+
+    set +e
+    if [[ -n "$prior_ref" ]]; then
+        git checkout --quiet "${prior_ref#refs/heads/}" && git reset --hard "$prior_head" >/dev/null
+    else
+        git checkout --quiet --detach "$prior_head"
+    fi
+    [[ $? -eq 0 ]] || rollback_failed=1
+
+    if [[ -f "$UPDATE_TRANSACTION/had-spa" ]]; then
+        if [[ -d "$UPDATE_TRANSACTION/dist" ]]; then
+            if ! rm -rf "$ROOT/frontend/dist" ||
+               [[ -e "$ROOT/frontend/dist" ]] ||
+               ! cp -a "$UPDATE_TRANSACTION/dist" "$ROOT/frontend/dist"; then
+                rollback_failed=1
+            fi
+        else
+            rollback_failed=1
+        fi
+    elif [[ -f "$UPDATE_TRANSACTION/manage-spa" ]]; then
+        rm -rf "$ROOT/frontend/dist" || rollback_failed=1
+    fi
+    if [[ -f "$UPDATE_TRANSACTION/had-venv" ]]; then
+        if [[ -d "$UPDATE_TRANSACTION/venv" ]]; then
+            local live_venv="$ROOT/.venv"
+            local saved_venv="$UPDATE_TRANSACTION/venv"
+            local failed_venv="$UPDATE_TRANSACTION/failed-venv"
+            local venv_swap_failed=0
+            rm -rf "$failed_venv" || venv_swap_failed=1
+            if [[ "$venv_swap_failed" -eq 0 ]] && [[ -e "$live_venv" ]]; then
+                mv "$live_venv" "$failed_venv" || venv_swap_failed=1
+            fi
+            if [[ "$venv_swap_failed" -eq 0 ]]; then
+                if mv "$saved_venv" "$live_venv"; then
+                    rm -rf "$failed_venv" || venv_swap_failed=1
+                else
+                    venv_swap_failed=1
+                    if [[ ! -e "$live_venv" ]] && [[ -e "$failed_venv" ]]; then
+                        mv "$failed_venv" "$live_venv" || :
+                    fi
+                fi
+            fi
+            [[ "$venv_swap_failed" -eq 0 ]] || rollback_failed=1
+        else
+            rollback_failed=1
+        fi
+    elif [[ -f "$UPDATE_TRANSACTION/manage-venv" ]]; then
+        rm -rf "$ROOT/.venv" || rollback_failed=1
+    elif [[ -f "$UPDATE_TRANSACTION/venv-repair" ]]; then
+        if [[ -n "$BOOTSTRAP_PYTHON" ]] &&
+           "$BOOTSTRAP_PYTHON" "$ROOT/scripts/bootstrap.py"; then
+            :
+        else
+            rollback_failed=1
+            venv_repair_failed=1
+        fi
+    fi
+    if [[ "$rollback_failed" -eq 0 ]]; then
+        if rm -rf "$UPDATE_TRANSACTION"; then
+            UPDATE_TRANSACTION=""
+            unset WG_UPDATE_ROLLBACK_DIR
+            say "  Previous installation restored."
+        else
+            rollback_failed=1
+        fi
+    fi
+    if [[ "$rollback_failed" -ne 0 ]]; then
+        printf '\nWARNING: automatic rollback was incomplete; recovery files remain at:\n  %s\n' \
+            "$UPDATE_TRANSACTION" >&2
+        if [[ "$venv_repair_failed" -eq 1 ]]; then
+            printf '%s\n' \
+                'The restored checkout also needs its Python environment repaired.' \
+                'Ensure CPython 3.13 and network access are available, then run the installer again.' >&2
+        fi
+    fi
+    set -e
+    [[ "$rollback_failed" -eq 0 ]]
+}
+
+begin_update_transaction() {
+    UPDATE_TRANSACTION="$(update_transaction_path)" || return 1
+    if [[ -e "$UPDATE_TRANSACTION" ]]; then
+        printf 'An unfinished update transaction already exists at %s.\n' \
+            "$UPDATE_TRANSACTION" >&2
+        return 1
+    fi
+    mkdir -p "$UPDATE_TRANSACTION" || return 1
+    git rev-parse HEAD > "$UPDATE_TRANSACTION/prior-head" || return 1
+    git symbolic-ref --quiet HEAD > "$UPDATE_TRANSACTION/prior-ref" || :
+    if [[ -d "$ROOT/.venv" ]]; then
+        # A filesystem clone makes exact rollback cheap. Where cloning is not
+        # available, keep the live venv in place and let the restored checkout's
+        # lock-driven bootstrap repair it instead of making a huge byte copy.
+        local venv_cloned=0
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            cp -a -c "$ROOT/.venv" "$UPDATE_TRANSACTION/venv" 2>/dev/null && venv_cloned=1
+        elif [[ "$(uname -s)" == "Linux" ]]; then
+            # --reflink=auto may silently make a full copy, so first prove this
+            # filesystem accepts a forced reflink using the venv's small config.
+            local reflink_probe="$UPDATE_TRANSACTION/venv-reflink-probe"
+            if cp --reflink=always "$ROOT/.venv/pyvenv.cfg" "$reflink_probe" 2>/dev/null; then
+                rm -f "$reflink_probe"
+                cp -a --reflink=auto "$ROOT/.venv" "$UPDATE_TRANSACTION/venv" 2>/dev/null &&
+                    venv_cloned=1
+            fi
+            rm -f "$reflink_probe"
+        fi
+        if [[ "$venv_cloned" -eq 1 ]]; then
+            : > "$UPDATE_TRANSACTION/had-venv"
+        else
+            rm -rf "$UPDATE_TRANSACTION/venv"
+            : > "$UPDATE_TRANSACTION/venv-repair"
+        fi
+    else
+        : > "$UPDATE_TRANSACTION/manage-venv"
+    fi
+    if [[ "$SKIP_SPA" -ne 1 ]]; then
+        if [[ -d "$ROOT/frontend/dist" ]]; then
+            if ! cp -a "$ROOT/frontend/dist" "$UPDATE_TRANSACTION/dist"; then
+                rm -rf "$UPDATE_TRANSACTION/dist"
+                return 1
+            fi
+            : > "$UPDATE_TRANSACTION/had-spa"
+        else
+            : > "$UPDATE_TRANSACTION/manage-spa"
+        fi
+    fi
+    export WG_UPDATE_ROLLBACK_DIR="$UPDATE_TRANSACTION"
+}
+
+commit_update_transaction() {
+    load_update_transaction
+    [[ -n "$UPDATE_TRANSACTION" ]] || return 0
+    rm -f "$UPDATE_TRANSACTION/prior-head"
+    if ! rm -rf "$UPDATE_TRANSACTION"; then
+        say "  WARNING: could not remove the completed update backup at $UPDATE_TRANSACTION."
+    fi
+    UPDATE_TRANSACTION=""
+    unset WG_UPDATE_ROLLBACK_DIR
+}
+
 fail() {
     printf '\nERROR: %s\n' "$1" >&2
+    rollback_update
     exit 1
 }
 
@@ -224,6 +396,12 @@ if [[ "${WG_UPDATE_LOCK_HELD:-0}" != "1" ]]; then
         "${ORIGINAL_ARGS[@]+"${ORIGINAL_ARGS[@]}"}"
 fi
 
+load_update_transaction
+if [[ -n "$UPDATE_TRANSACTION" ]] && [[ "$AFTER_PULL" -ne 1 ]]; then
+    say "  Found an interrupted update; rolling it back before trying again."
+    rollback_update
+fi
+
 # macOS: the Metal solve path is a Swift package the pinned module builds on
 # first use, which needs the Command Line Tools. Missing tools are not fatal --
 # bempp is the cross-platform fallback and does run -- but the machine then
@@ -244,7 +422,7 @@ fi
 
 # ── Code update ───────────────────────────────────────────────────────────────
 # Kept inside a function on purpose. Bash parses a function definition as one
-# unit, so the whole body is in memory before `git pull` can rewrite this file
+# unit, so the whole body is in memory before Git can rewrite this file
 # underneath it; the `exec` then restarts cleanly from the updated copy.
 update_from_git() {
     if [[ "$AFTER_PULL" -eq 1 ]]; then
@@ -265,7 +443,8 @@ update_from_git() {
         if ! git rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null; then
             fail "No such tag: $TAG. List what exists with:  git tag --list 'v*'"
         fi
-        git checkout --quiet "$TAG"
+        begin_update_transaction || fail "Could not preserve the current installation before switching to $TAG."
+        git checkout --quiet "$TAG" || fail "Could not check out $TAG."
         say "  Checked out $TAG (detached HEAD; fast-forward updates are off until you"
         say "  switch back to a branch)."
         say "  Restarting with the installer from $TAG."
@@ -300,22 +479,31 @@ update_from_git() {
         return 0
     fi
 
-    local before after
+    local before after upstream
     before="$(git rev-parse HEAD)"
-    if ! git pull --ff-only; then
+    if ! git fetch --quiet; then
+        fail "Code update failed while fetching the upstream branch."
+    fi
+    upstream="$(git rev-parse '@{u}')"
+    if [[ "$before" == "$upstream" ]]; then
+        say "  Already up to date at ${before:0:7}."
+        return 0
+    fi
+    if ! git merge-base --is-ancestor "$before" "$upstream"; then
         fail "Code update failed. This installer only fast-forwards.
        The branch has diverged from its upstream and cannot fast-forward.
        Reconcile it by hand, then run this again. Diagnose with:
          git status
          git log --oneline -5"
     fi
-    after="$(git rev-parse HEAD)"
-    if [[ "$before" != "$after" ]]; then
-        say "  Updated ${before:0:7} -> ${after:0:7}. Restarting with the updated installer."
-        exec bash "$ROOT/scripts/install.sh" --after-pull \
-            "${ORIGINAL_ARGS[@]+"${ORIGINAL_ARGS[@]}"}"
+    begin_update_transaction || fail "Could not preserve the current installation before updating."
+    if ! git merge --ff-only "$upstream"; then
+        fail "Code update failed while applying the fetched fast-forward."
     fi
-    say "  Already up to date at ${after:0:7}."
+    after="$(git rev-parse HEAD)"
+    say "  Updated ${before:0:7} -> ${after:0:7}. Restarting with the updated installer."
+    exec bash "$ROOT/scripts/install.sh" --after-pull \
+        "${ORIGINAL_ARGS[@]+"${ORIGINAL_ARGS[@]}"}"
 }
 
 step "Checking for code updates..."
@@ -390,6 +578,10 @@ if ! "$VENV_PYTHON" "$ROOT/scripts/check_backends.py"; then
     fail "No solve backend is usable, so simulations would all fail.
        Fix the reason reported above, then run this script again."
 fi
+
+# Code, interface, environment, and backend validation now agree. Only at this
+# point is it safe to discard the previous runtime preserved for rollback.
+commit_update_transaction
 
 # ── Fusion 360 integration ───────────────────────────────────────────────────
 # The verified source payload uses this environment's already-pinned NumPy,
