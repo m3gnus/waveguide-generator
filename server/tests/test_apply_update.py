@@ -6,6 +6,8 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
+import time
 
 import pytest
 
@@ -32,43 +34,65 @@ from launchers.apply_update import (
 )
 
 
-class _VanishedPid(OSError):
-    """The error Windows raises for a pid that no longer exists."""
+@pytest.mark.skipif(sys.platform != "win32", reason="Win32 handle semantics")
+def test_the_liveness_probe_survives_every_windows_case(tmp_path: Path) -> None:
+    """os.kill cannot answer this on Windows, and not for the usual reason.
 
-    winerror = 87  # ERROR_INVALID_PARAMETER, straight out of OpenProcess
-
-
-def test_a_vanished_windows_parent_reads_as_gone_not_as_a_crash(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Windows never raises ProcessLookupError, so the POSIX-shaped check missed it.
-
-    The updater is handed the launcher's pid and started detached; the launcher
-    then exits within milliseconds, so by the first poll the pid is already
-    gone. An unguarded OSError here killed the updater before it opened its own
-    log, which is why a failed update left no trace anywhere on the machine.
+    Signal 0 does not terminate the target -- measured on 3.13.3 and 3.13.12,
+    contrary to the comment this repository carried for a while. What actually
+    breaks is that Win32 keeps a process object resolvable while anyone holds a
+    handle to it, so a dead process reads as running and a bounded wait becomes
+    a hang. GetExitCodeProcess fixes that and then mistakes exit code 259 for
+    STILL_ACTIVE. Only waiting on the handle gets every case right.
     """
 
+    def spawn(code: str) -> subprocess.Popen[bytes]:
+        return subprocess.Popen([sys.executable, "-c", code])
+
+    # Dead, but this test still holds the handle: the case os.kill gets wrong.
+    reaped = spawn("pass")
+    reaped.wait()
+    time.sleep(0.5)
+    assert process_exists(reaped.pid) is False
+    assert wait_for_parent(reaped.pid, timeout=2.0) is True
+
+    # Exited with 259, which is STILL_ACTIVE: the case GetExitCodeProcess gets wrong.
+    unlucky = spawn("raise SystemExit(259)")
+    unlucky.wait()
+    time.sleep(0.5)
+    assert process_exists(unlucky.pid) is False
+
+    # A genuinely running process must still read as running.
+    alive = spawn("import time; time.sleep(30)")
+    try:
+        time.sleep(0.8)
+        assert process_exists(alive.pid) is True
+        # ... and the probe must not have killed it, which is the myth's claim.
+        assert alive.poll() is None
+    finally:
+        alive.kill()
+        alive.wait()
+
+    assert process_exists(4294967) is False
+    assert process_exists(0) is False
+    assert process_exists(-1) is False
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX signal semantics")
+def test_the_posix_probe_still_uses_signal_zero(monkeypatch: pytest.MonkeyPatch) -> None:
     def vanished(pid: int, signal_number: int) -> None:
-        raise _VanishedPid(22, "The parameter is incorrect")
+        raise ProcessLookupError
 
     monkeypatch.setattr(os, "kill", vanished)
-
     assert process_exists(4321) is False
     assert wait_for_parent(4321, timeout=0.0) is True
 
-
-def test_an_unrelated_oserror_still_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
-    class _Unrelated(OSError):
-        winerror = 1314  # ERROR_PRIVILEGE_NOT_HELD
-
     def refused(pid: int, signal_number: int) -> None:
-        raise _Unrelated(1, "A required privilege is not held by the client")
+        raise PermissionError
 
     monkeypatch.setattr(os, "kill", refused)
-
-    with pytest.raises(OSError):
-        process_exists(4321)
+    # A process we may not signal is still a process.
+    assert process_exists(4321) is True
 
 
 class _AccessDenied(OSError):
