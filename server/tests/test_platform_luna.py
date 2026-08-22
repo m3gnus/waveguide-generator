@@ -156,7 +156,7 @@ def test_pid_liveness_probe_answers_without_killing() -> None:
     """The probe must report on a process, never terminate it.
 
     os.kill(pid, 0) is a liveness check on POSIX but resolves to
-    TerminateProcess on Windows, so the survival assertion matters as much as
+    a handle probe on Windows, so the survival assertion matters as much as
     the answer does.
     """
 

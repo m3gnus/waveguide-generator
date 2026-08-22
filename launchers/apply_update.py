@@ -25,6 +25,10 @@ ROLLBACK_PARENT_WAIT_SECONDS = 900.0
 # ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION: the three
 # ways Windows reports "something still has this open" for a directory move.
 WINDOWS_TRANSIENT_RENAME_ERRORS = frozenset({5, 32, 33})
+WINDOWS_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+WINDOWS_SYNCHRONIZE = 0x00100000
+WINDOWS_ERROR_ACCESS_DENIED = 5
+WINDOWS_WAIT_OBJECT_0 = 0x00000000
 RENAME_RETRY_SECONDS = 20.0
 RENAME_RETRY_INTERVAL = 0.25
 RELAUNCH_CONFIRM_SECONDS = 6.0
@@ -65,22 +69,60 @@ def append_update_log(data_dir: Path, message: str) -> None:
         handle.write(f"[{stamp}] {message}\n")
 
 
+def _windows_process_exists(pid: int) -> bool:
+    """Ask Win32 directly, because ``os.kill`` cannot answer this on Windows.
+
+    Two failure modes rule ``os.kill(pid, 0)`` out here, and neither is the
+    one this repository used to cite -- signal 0 does not terminate anything,
+    measured on 3.13.3 and 3.13.12.  The real problems: a pid that no longer
+    exists raises a bare ``OSError`` rather than ``ProcessLookupError``, and,
+    worse, Win32 keeps a process object resolvable for as long as *anyone*
+    holds a handle to it, so a dead process reads as running whenever some
+    other process still has it open.  A probe that says "alive" forever turns
+    a bounded wait into a hang.
+
+    ``GetExitCodeProcess`` would fix the first and trip over ``STILL_ACTIVE``
+    being 259: a process that exited with code 259 looks like a running one.
+    Waiting on the handle with a zero timeout avoids both -- a process handle
+    is signalled exactly when the process has exited, whatever it exited with.
+    ``WaitForSingleObject`` needs ``SYNCHRONIZE`` on the handle; without it the
+    call fails and the failure is indistinguishable from "still running".
+    """
+
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+    kernel32.WaitForSingleObject.restype = wintypes.DWORD
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    handle = kernel32.OpenProcess(
+        WINDOWS_PROCESS_QUERY_LIMITED_INFORMATION | WINDOWS_SYNCHRONIZE, False, pid
+    )
+    if not handle:
+        # A live process we are not allowed to open still counts as running.
+        return ctypes.get_last_error() == WINDOWS_ERROR_ACCESS_DENIED
+    try:
+        return kernel32.WaitForSingleObject(handle, 0) != WINDOWS_WAIT_OBJECT_0
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def process_exists(pid: int) -> bool:
     if pid <= 0:
         return False
+    if sys.platform == "win32":
+        return _windows_process_exists(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
     except PermissionError:
         return True
-    except OSError as exc:
-        # Windows reports a pid that no longer exists as ERROR_INVALID_PARAMETER
-        # (87) from OpenProcess, or ERROR_INVALID_HANDLE (6) -- never as
-        # ProcessLookupError, so the POSIX-shaped check above misses it.
-        if getattr(exc, "winerror", None) in {6, 87}:
-            return False
-        raise
     return True
 
 

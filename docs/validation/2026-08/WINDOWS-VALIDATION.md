@@ -384,7 +384,8 @@ acquire → conflict → release → re-acquire and passes on Windows.
 **Graceful shutdown: pass.** `launch/serve.py` now also handles `SIGBREAK`,
 which is what Ctrl+Break raises on Windows, alongside `SIGINT` and `SIGTERM`.
 That is worth having on its own — `SIGTERM` cannot be delivered by another
-process on Windows at all, since `os.kill` maps to `TerminateProcess` — and it
+process on Windows at all: `os.kill(pid, 0)` reports a dead process as running
+whenever anything still holds a handle to it — and it
 is also the only stop signal that can be addressed to a *specific* process
 group, which is what finally made this testable. `CTRL_BREAK_EVENT` aimed at
 the server's own group cannot touch any other console, unlike
@@ -515,7 +516,9 @@ Not required to make anything start, fixed because leaving it would be a
 landmine in a module being made portable.
 
 `os.kill(pid, 0)` is not a liveness probe on Windows. CPython implements
-`os.kill` there as `OpenProcess` + `TerminateProcess(handle, sig)`, so signal 0
+`os.kill` there as `OpenProcess` + `TerminateProcess(handle, sig)`; signal 0 is
+special-cased and does *not* terminate the target (measured on 3.13.3 and
+3.13.12), but it
 **terminates the process being asked about**. Demonstrated directly: a spawned
 process was gone immediately after `os.kill(pid, 0)` returned without raising.
 

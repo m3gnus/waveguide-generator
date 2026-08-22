@@ -28,6 +28,8 @@ if sys.platform == "win32":
     _kernel32.GetExitCodeProcess.restype = wintypes.BOOL
     _kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
     _kernel32.CloseHandle.restype = wintypes.BOOL
+    _kernel32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+    _kernel32.WaitForSingleObject.restype = wintypes.DWORD
 else:
     import fcntl
 
@@ -52,8 +54,13 @@ LOCK_BYTE_OFFSET = 1 << 30
 
 # Win32 constants for the liveness probe below.
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+# WaitForSingleObject needs SYNCHRONIZE; a query-only handle makes it fail
+# with WAIT_FAILED, which is indistinguishable from "still running".
+SYNCHRONIZE = 0x00100000
 ERROR_ACCESS_DENIED = 5
 STILL_ACTIVE = 259
+WAIT_OBJECT_0 = 0x00000000
+WAIT_TIMEOUT = 0x00000102
 
 log = logging.getLogger("wg.instance")
 
@@ -120,18 +127,31 @@ LockConflict = InstanceAlreadyRunning
 
 
 def _windows_pid_is_running(pid: int) -> bool:
-    # os.kill(pid, 0) is not a liveness probe on Windows: it resolves to
-    # TerminateProcess, so the check kills the process it is asked about.
-    # Opening a query handle answers the same question without that side effect.
-    handle = _kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    """Answer "is this pid running" without trusting the exit code.
+
+    ``os.kill(pid, 0)`` is still the wrong probe here, but not for the reason
+    this comment used to give: measured on CPython 3.13.3 and 3.13.12, signal 0
+    does **not** terminate the target -- the process is alive afterwards, by
+    both ``poll()`` and ``tasklist``.  What it actually gets wrong is subtler
+    and worse to debug: Win32 keeps a process object resolvable for as long as
+    anyone holds a handle to it, so ``os.kill`` reports a *dead* process as
+    running whenever some other process still holds a handle open.  A probe
+    that reads "alive" forever turns a wait into a hang.
+
+    ``GetExitCodeProcess`` fixes that case and introduces one of its own:
+    ``STILL_ACTIVE`` is 259, so a process that exited with code 259 is
+    indistinguishable from a running one.  Waiting on the handle with a zero
+    timeout has neither flaw -- ``WAIT_OBJECT_0`` means signalled, which for a
+    process handle means exited, whatever it exited with.
+    """
+
+    access = PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE
+    handle = _kernel32.OpenProcess(access, False, pid)
     if not handle:
         # A live process we are not allowed to open still counts as running.
         return ctypes.get_last_error() == ERROR_ACCESS_DENIED
     try:
-        exit_code = wintypes.DWORD()
-        if not _kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
-            return True
-        return exit_code.value == STILL_ACTIVE
+        return _kernel32.WaitForSingleObject(handle, 0) != WAIT_OBJECT_0
     finally:
         _kernel32.CloseHandle(handle)
 
@@ -276,9 +296,7 @@ class InstanceLock:
         self.release()
 
 
-def requested_port(
-    cli_port: int | None = None, *, environ: Mapping[str, str] | None = None
-) -> int:
+def requested_port(cli_port: int | None = None, *, environ: Mapping[str, str] | None = None) -> int:
     """Resolve and validate CLI/environment/default port precedence."""
 
     env = os.environ if environ is None else environ
