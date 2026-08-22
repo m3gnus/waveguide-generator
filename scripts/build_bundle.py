@@ -215,6 +215,34 @@ def write_runtime_manifest(
     return payload
 
 
+def tree_digest(root: Path, *, exclude: frozenset[str] = frozenset()) -> str:
+    """Digest a directory's content, independent of how it is packed.
+
+    The two platforms must ship the same application layer, and comparing the
+    archives byte for byte is a poor way to check that: it forces the canonical
+    archive to be stored uncompressed, which cost ten times the download on
+    every update, and it would still be defeated by any difference in the
+    compressor. This digest covers what actually has to match -- the set of
+    paths, the executable bit, and the bytes of each file -- so the archive is
+    free to be compressed.
+    """
+
+    digest = hashlib.sha256()
+    entries = sorted(
+        path for path in root.rglob("*") if path.name not in exclude and not path.is_dir()
+    )
+    for path in entries:
+        relative = PurePosixPath(path.relative_to(root).as_posix())
+        # Symlinks are recorded by target rather than followed: a layer that
+        # replaced a file with a link to it is not the same layer.
+        if path.is_symlink():
+            digest.update(f"l\x00{relative}\x00{os.readlink(path)}\x00".encode())
+            continue
+        executable = "x" if path.stat().st_mode & 0o111 else "-"
+        digest.update(f"f{executable}\x00{relative}\x00{file_sha256(path)}\x00".encode())
+    return digest.hexdigest()
+
+
 def write_app_manifest(
     app_root: Path,
     *,
@@ -227,6 +255,10 @@ def write_app_manifest(
         "version": version,
         "commit": commit,
         "runtimeId": runtime_id,
+        # Computed before the manifest exists, and therefore excluding it: the
+        # manifest cannot contain a digest of itself. Consumers comparing two
+        # layers compare this field, not the file that carries it.
+        "treeSha256": tree_digest(app_root, exclude=frozenset({"APP-MANIFEST.json"})),
     }
     write_json(app_root / "APP-MANIFEST.json", payload)
     return payload
@@ -1352,14 +1384,15 @@ def build(args: argparse.Namespace, *, builder: BundleBuilder | None = None) -> 
                 commit=commit,
             )
             app_asset = output / f"waveguide-generator-app-{version}.zip"
-            # Canonical modes avoid NTFS/POSIX checkout differences. Storing
-            # the platform-neutral layer avoids relying on two runners' zlib
-            # implementations to emit the same deflate stream.
+            # Canonical modes avoid NTFS/POSIX checkout differences. The archive
+            # is compressed: the two platforms are held to the same *content*
+            # through the manifest's treeSha256, which no compressor can
+            # perturb, so there is no reason to make every update download ten
+            # times what it needs to.
             deterministic_zip(
                 app_root,
                 app_asset,
                 canonical_modes=True,
-                compression=zipfile.ZIP_STORED,
             )
             _register_asset(assets, app_asset)
             manifest_asset = output / (f"waveguide-generator-app-{version}.manifest.json")
