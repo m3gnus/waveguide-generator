@@ -277,7 +277,7 @@ def test_return_listing_reads_cheap_inventory_and_marks_bad_manifests(tmp_path: 
                 "sources": [
                     {
                         "id": "source-hf",
-                        "role": "HF",
+                        "role": " hf ",
                         "required": True,
                         "suggested_resolution_mm": 3.5,
                         "default_drive_channel_id": "drive-hf",

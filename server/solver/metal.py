@@ -23,6 +23,7 @@ import numpy as np
 
 from hornlab_sim.methods import driver_coupling, radiation_impedance
 
+from server.cadlink.roles import canonical_source_role
 from server.jobs.models import ImportedGeometrySource, SolveRequest
 from server.mesh.builder import _solver_mesher_config, build_solver_mesh
 from server.preview.translate import has_closed_outer_body
@@ -616,7 +617,7 @@ def _channel_source_identity(
         source_id = str(source.get("id") or "")
         if not source_id:
             continue
-        role = str(source.get("role") or "").strip().upper()
+        role = canonical_source_role(str(source.get("role") or ""))
         if role in _BAND_ROLES:
             roles[source_id] = role
         label = source.get("label") or source.get("name")
@@ -713,7 +714,7 @@ def _passive_cardioid_apertures(
         if not isinstance(source, Mapping):
             continue
         source_id = str(source.get("id") or "")
-        if str(source.get("role") or "").strip().upper() != "MF":
+        if canonical_source_role(str(source.get("role") or "")) != "MF":
             continue
         if source_id in source_tags:
             mf_candidates.append(("MF", source_id, int(source_tags[source_id])))
