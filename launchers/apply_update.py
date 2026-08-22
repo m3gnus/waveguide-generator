@@ -772,6 +772,7 @@ def relaunch_application(
 def confirm_relaunch(
     process: Any,
     *,
+    platform_name: str = sys.platform,
     timeout: float = RELAUNCH_CONFIRM_SECONDS,
     clock: Callable[[], float] = time.monotonic,
     sleeper: Callable[[float], None] = time.sleep,
@@ -782,6 +783,14 @@ def confirm_relaunch(
     line the interpreter rejects -- ``unknown option --port`` -- produces a
     healthy-looking ``Popen`` and a process that is gone milliseconds later.
     Watch the child for a moment so the updater cannot log success over that.
+
+    What is being watched differs by platform, and reading one as the other
+    inverts the verdict. On Windows the child *is* the application, so an exit
+    is the failure. On macOS the child is :program:`open`, a stub that hands
+    the request to LaunchServices and exits immediately -- with status 0 when
+    the application was started, non-zero when it could not be. Treating that
+    exit as the application's own reported every successful macOS update as a
+    relaunch failure, and the caller answered by rolling the update back.
     """
 
     poll = getattr(process, "poll", None)
@@ -791,6 +800,10 @@ def confirm_relaunch(
     while True:
         code = poll()
         if code is not None:
+            if platform_name == "darwin":
+                if code == 0:
+                    return None
+                return f"could not be reopened: open exited with code {code}"
             return f"exited with code {code} within {timeout:.0f} seconds of starting"
         if clock() >= deadline:
             return None
@@ -988,13 +1001,19 @@ def apply_update(
     runner: CommandRunner = subprocess.run,
     relauncher: RelaunchCallable = relaunch_application,
     waiter: Callable[[int], bool] = wait_for_parent,
-    confirm: Callable[[Any], str | None] = confirm_relaunch,
+    confirm: Callable[[Any], str | None] | None = None,
     environ: Mapping[str, str] | None = None,
     logger: LogCallable | None = None,
     failure_reporter: LogCallable | None = None,
 ) -> int:
     """Wait, swap, repair the seal, and relaunch; return a process exit code."""
 
+    # Bound to the platform this call is acting on, not to the one the module
+    # was imported on: the probe reads a relaunch child that differs by
+    # platform, so an unbound default would misread an injected platform.
+    confirmer = confirm or (
+        lambda process: confirm_relaunch(process, platform_name=platform_name)
+    )
     selected_logger = logger or (lambda message: append_update_log(data_dir, message))
     selected_reporter = failure_reporter or (
         lambda message: _show_update_failure_dialog(message, platform_name)
@@ -1028,7 +1047,7 @@ def apply_update(
             process = relauncher(command, platform_name, environment=environment)
         except Exception as exc:  # noqa: BLE001 - recovery must describe any launch failure
             return f"the application could not be relaunched: {type(exc).__name__}: {exc}"
-        failure = confirm(process)
+        failure = confirmer(process)
         if failure is not None:
             return f"the application {failure}"
         return None
@@ -1118,7 +1137,7 @@ def apply_update(
             f"Could not relaunch the updated Waveguide Generator: {type(exc).__name__}: {exc}",
             3,
         )
-    failure = confirm(process)
+    failure = confirmer(process)
     if failure is not None:
         return finish_failure_after_mutation(
             f"The relaunched Waveguide Generator {failure}; it did not stay running.",
@@ -1143,7 +1162,7 @@ def rollback_bundle(
     runner: CommandRunner = subprocess.run,
     relauncher: RelaunchCallable = relaunch_application,
     waiter: Callable[[int], bool] = _wait_for_failed_application,
-    confirm: Callable[[Any], str | None] = confirm_relaunch,
+    confirm: Callable[[Any], str | None] | None = None,
     environ: Mapping[str, str] | None = None,
 ) -> int:
     """Restore the previous version once the failed application has exited.
@@ -1193,7 +1212,8 @@ def rollback_bundle(
         platform_name=platform_name,
         arguments=relaunch_arguments,
         relauncher=relauncher,
-        confirm=confirm,
+        confirm=confirm
+        or (lambda process: confirm_relaunch(process, platform_name=platform_name)),
         environ=environ,
         log=log,
     )

@@ -504,6 +504,46 @@ def test_a_relaunch_that_keeps_running_reports_success() -> None:
     assert confirm_relaunch(object()) is None
 
 
+def test_a_macos_relaunch_reads_open_not_the_application(tmp_path: Path) -> None:
+    """The macOS relaunch child is ``open``, which always exits immediately.
+
+    Reading its exit as the application's own reported every successful macOS
+    update as a failed relaunch, and apply_update answered that by rolling the
+    installed update straight back off the disk.
+    """
+
+    assert confirm_relaunch(_ExitedChild(0), platform_name="darwin") is None
+    assert "open exited with code 1" in str(
+        confirm_relaunch(_ExitedChild(1), platform_name="darwin")
+    )
+
+    folder = tmp_path / "Waveguide Generator.app"
+    resources = folder / "Contents" / "Resources"
+    app = resources / "app"
+    runtime = resources / "runtime"
+    staged_app = tmp_path / "data" / "updates" / "9.9.9" / "staged" / "app"
+    for path in (app, runtime, staged_app):
+        path.mkdir(parents=True)
+
+    exit_code = apply_update(
+        bundle=folder,
+        data_dir=tmp_path / "data",
+        staged_app=staged_app,
+        staged_runtime=None,
+        parent_pid=1,
+        platform_name="darwin",
+        runner=lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+        relauncher=lambda command, _platform, **_kwargs: _ExitedChild(0),
+        waiter=lambda _pid: True,
+    )
+
+    assert exit_code == 0
+    assert (resources / "app.previous").is_dir()
+    log = (tmp_path / "data" / "logs" / "update.log").read_text(encoding="utf-8")
+    assert "Relaunched Waveguide Generator" in log
+    assert "did not stay running" not in log
+
+
 def test_windows_apply_skips_macos_repairs_and_injects_the_exe_relaunch(
     tmp_path: Path,
 ) -> None:
