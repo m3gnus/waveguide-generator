@@ -475,6 +475,24 @@ describe('solve invocation mutex', () => {
     expect(solve.title).toBe('Ingest a CAD return before solving.');
   });
 
+  it.each([
+    ['equal sweep endpoints', { angleStart: 0, angleEnd: 0 }],
+    ['zero angular step', { angleStep: 0 }],
+    ['short measurement distance', { distance: 0.05 }],
+    ['no display planes', { enabledAxes: [] }],
+    ['more than 721 samples', { angleStart: 0, angleEnd: 180, angleStep: 0.1 }],
+  ])('disables the global Solve action in parametric and CAD modes for %s', async (_name, invalid) => {
+    await act(async () => { root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>); });
+    const solve = host.querySelector<HTMLButtonElement>('button')!;
+    act(() => useSolveOptionsStore.getState().updatePolar(invalid));
+    expect(solve.disabled).toBe(true);
+    expect(solve.title).toMatch(/Directivity|directivity/);
+
+    act(() => workspaceModeStore.setMode('cad'));
+    expect(solve.disabled).toBe(true);
+    expect(solve.title).toMatch(/Directivity|directivity/);
+  });
+
   it('guards two fast retries routed through the coordinator bridge', async () => {
     // A retry replays the stored run on the server rather than resubmitting the
     // design from the browser, so the guarded call here is retryJob.

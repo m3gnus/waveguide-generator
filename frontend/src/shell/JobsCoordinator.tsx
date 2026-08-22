@@ -17,7 +17,7 @@ import { useDesignStore, type DesignDocument } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { consumeParkedSolveCommand } from '../stores/solveCommand';
-import { useSolveOptionsStore, type SolveOptions } from '../stores/solveOptions';
+import { polarValidationError, useSolveOptionsStore, type SolveOptions } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 
@@ -193,6 +193,8 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     : cadGeometryActive
       ? importedSubmissionBlocker(cadReturn, solveOptions)
       : null;
+  const directivityError = polarValidationError(solveOptions.polar);
+  const solveBlocker = cadSolveBlocker ?? directivityError;
 
   const run = useCallback(async (nextDesign: DesignDocument, nextRevision = revision) => {
     if (submissionInFlight.current) return;
@@ -347,26 +349,26 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   }, [cadGeometryActive, design, fileGeometryActive, reportError, revision, run, solveCurrentCadImport]);
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && activeCapability?.available && !submitting && !cadSolveBlocker && !fileGeometryActive) {
+      if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && activeCapability?.available && !submitting && !solveBlocker && !fileGeometryActive) {
         event.preventDefault();
         solve();
       }
     };
     window.addEventListener('keydown', shortcut);
     return () => window.removeEventListener('keydown', shortcut);
-  }, [activeCapability, cadSolveBlocker, fileGeometryActive, solve, submitting]);
+  }, [activeCapability, fileGeometryActive, solve, solveBlocker, submitting]);
 
   const control = useMemo<SolveControl>(() => ({
     solve,
-    disabled: !activeCapability?.available || submitting || Boolean(cadSolveBlocker) || fileGeometryActive,
+    disabled: !activeCapability?.available || submitting || Boolean(solveBlocker) || fileGeometryActive,
     submitting,
     label: cadGeometryActive ? 'Solve CAD Link' : 'Solve',
     title: submitting
       ? 'Submitting solve…'
       : fileGeometryActive
         ? 'Standalone imported meshes are viewport-only. Show Parametric to solve the WG design.'
-        : cadSolveBlocker
-          ? cadSolveBlocker
+        : solveBlocker
+          ? solveBlocker
           : cadGeometryActive && activeCapability?.available
             ? 'Solve the displayed CAD Link model with Metal'
             : activeCapability?.available
@@ -374,7 +376,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
               : cadGeometryActive
                 ? metalCapability?.reason ?? capabilityError ?? 'Metal engine is unavailable'
                 : unavailable,
-  }), [activeCapability, cadGeometryActive, cadSolveBlocker, capabilityError, fileGeometryActive, metalCapability?.reason, selectedEngine, solve, submitting, unavailable]);
+  }), [activeCapability, cadGeometryActive, capabilityError, fileGeometryActive, metalCapability?.reason, selectedEngine, solve, solveBlocker, submitting, unavailable]);
 
   return <SolveContext.Provider value={control}>{children}<JobAnnouncer jobs={jobs}/></SolveContext.Provider>;
 }

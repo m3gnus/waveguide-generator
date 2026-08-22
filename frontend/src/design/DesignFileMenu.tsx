@@ -10,8 +10,8 @@ import {
   type StepBody,
 } from '../api/designIo';
 import { resetDesignStore, useDesignStore } from '../stores/design';
-import { wgSolveSettingsFromStore } from '../stores/designWire';
-import { resetDocumentStore, useDocumentStore, type CadLinkClassification } from '../stores/document';
+import { documentSettingsSignature, wgSolveSettingsFromStore } from '../stores/designWire';
+import { documentIsUnsaved, resetDocumentStore, useDocumentStore, type CadLinkClassification } from '../stores/document';
 import { useUnsavedChanges } from '../stores/unsavedChanges';
 import { designNameSlug } from '../stores/designName';
 import { usePreferences } from '../prefs/preferences';
@@ -84,6 +84,7 @@ export function DesignFileMenu() {
   const [adoptionCandidate, setAdoptionCandidate] = useState<CadLinkOpenState['adoptionCandidate']>(null);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
+  const documentMutationGeneration = useRef(0);
   const openInput = useRef<HTMLInputElement>(null);
   const reportInput = useRef<HTMLInputElement>(null);
   const meshInput = useRef<HTMLInputElement>(null);
@@ -96,6 +97,31 @@ export function DesignFileMenu() {
     document.addEventListener('mousedown', close);
     return () => document.removeEventListener('mousedown', close);
   }, []);
+
+  useEffect(() => {
+    const changed = () => { documentMutationGeneration.current += 1; };
+    const unsubscribeDesign = useDesignStore.subscribe(changed);
+    const unsubscribeDocument = useDocumentStore.subscribe(changed);
+    const unsubscribeSolveOptions = useSolveOptionsStore.subscribe(changed);
+    return () => {
+      unsubscribeDesign();
+      unsubscribeDocument();
+      unsubscribeSolveOptions();
+    };
+  }, []);
+
+  function documentIsUnsavedNow(): boolean {
+    const designState = useDesignStore.getState();
+    const documentState = useDocumentStore.getState();
+    return documentIsUnsaved(
+      designState.designRevision,
+      documentState.savedRevision,
+      documentState.savedSettings,
+      documentSettingsSignature(),
+      documentState.designName,
+      documentState.savedDesignName,
+    );
+  }
 
   async function act(operation: () => Promise<void>) {
     if (busyRef.current) return;
@@ -116,13 +142,22 @@ export function DesignFileMenu() {
     const file = input.files?.[0];
     input.value = '';
     if (!file) return;
+    const openingGeneration = documentMutationGeneration.current;
     await act(async () => {
       const text = await file.text();
       if (reportOnly) {
         setMessage(reportText(await inspectDesignText(text)));
         return;
       }
-      applyOpenedDesign(await openDesignText(text), file.name);
+      // Parsing is deliberately side-effect free. The discard decision belongs
+      // immediately beside the one operation that replaces the document, so a
+      // malformed file cannot prompt and an edit made while either await was
+      // pending cannot be overwritten by a stale response.
+      const opened = await openDesignText(text);
+      const changedWhileOpening = openingGeneration !== documentMutationGeneration.current;
+      if ((changedWhileOpening || documentIsUnsavedNow())
+        && !window.confirm(`Discard unsaved changes and open ${file.name}?`)) return;
+      applyOpenedDesign(opened, file.name);
     });
   }
 

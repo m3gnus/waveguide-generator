@@ -89,13 +89,14 @@ export const MIN_POLAR_DISTANCE_M = 0.1;
  */
 export const MIN_ANGLE_STEP_EXCLUSIVE_DEG = 0;
 
-export function polarConfigFromUi(ui: PolarUiState): PolarConfig {
+/** A render-safe verdict for the directivity grid as a whole. */
+export function polarValidationError(ui: PolarUiState): string | null {
   const numeric = [ui.angleStart, ui.angleEnd, ui.angleStep, ui.distance, ui.normAngle, ui.diagonalAngle];
-  if (!numeric.every(Number.isFinite)) throw new Error('Directivity settings must be finite numbers.');
-  if (ui.angleEnd <= ui.angleStart) throw new Error('Directivity sweep end must be greater than its start.');
-  if (ui.angleStep <= 0) throw new Error('Directivity angular step must be greater than 0 degrees.');
-  if (ui.distance < 0.1) throw new Error('Directivity measurement distance must be at least 0.1 m.');
-  if (ui.enabledAxes.length === 0) throw new Error('Select at least one directivity plane.');
+  if (!numeric.every(Number.isFinite)) return 'Directivity settings must be finite numbers.';
+  if (ui.angleEnd <= ui.angleStart) return 'Directivity sweep end must be greater than its start.';
+  if (ui.angleStep <= 0) return 'Directivity angular step must be greater than 0 degrees.';
+  if (ui.distance < 0.1) return 'Directivity measurement distance must be at least 0.1 m.';
+  if (ui.enabledAxes.length === 0) return 'Select at least one directivity plane.';
   const span = ui.angleEnd - ui.angleStart;
   const intervals = span / ui.angleStep;
   const nearestIntervals = Math.round(intervals);
@@ -106,7 +107,20 @@ export function polarConfigFromUi(ui: PolarUiState): PolarConfig {
     ? nearestIntervals
     : Math.floor(intervals);
   const count = Math.max(2, resolvedIntervals + 1);
-  if (count > 721) throw new Error(`Directivity sweep supports at most 721 angle samples (got ${count}).`);
+  if (count > 721) return `Directivity sweep supports at most 721 angle samples (got ${count}).`;
+  return null;
+}
+
+export function polarConfigFromUi(ui: PolarUiState): PolarConfig {
+  const validationError = polarValidationError(ui);
+  if (validationError) throw new Error(validationError);
+  const span = ui.angleEnd - ui.angleStart;
+  const intervals = span / ui.angleStep;
+  const nearestIntervals = Math.round(intervals);
+  const resolvedIntervals = Math.abs(intervals - nearestIntervals) <= Math.max(1e-9, Math.abs(intervals) * 1e-12)
+    ? nearestIntervals
+    : Math.floor(intervals);
+  const count = Math.max(2, resolvedIntervals + 1);
   return {
     angle_range: [ui.angleStart, ui.angleEnd, count],
     angle_step: ui.angleStep,
