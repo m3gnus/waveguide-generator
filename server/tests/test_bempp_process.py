@@ -35,6 +35,18 @@ def _blocking_worker(connection) -> None:
         connection.close()
 
 
+def _large_result_worker(connection) -> None:
+    """Return enough distinct floats to make pipe deserialization measurable."""
+
+    try:
+        job_id, _payload = connection.recv()
+        connection.send(
+            ("done", job_id, {"values": [float(index) for index in range(2_000_000)]})
+        )
+    finally:
+        connection.close()
+
+
 def _context() -> SolverContext:
     return SolverContext(
         design=None,
@@ -110,3 +122,40 @@ def test_cancellation_terminates_blocked_native_worker_promptly() -> None:
         assert host._process is None
     finally:
         host.close()
+
+
+def test_large_worker_result_is_deserialized_without_blocking_event_loop() -> None:
+    async def exercise() -> tuple[dict, float]:
+        host = BemppProcessHost(target=_large_result_worker)
+        gaps: list[float] = []
+        stop = asyncio.Event()
+
+        async def ticker() -> None:
+            previous = asyncio.get_running_loop().time()
+            while not stop.is_set():
+                await asyncio.sleep(0.005)
+                current = asyncio.get_running_loop().time()
+                gaps.append(current - previous)
+                previous = current
+
+        ticker_task = asyncio.create_task(ticker())
+        try:
+            result = await host.run(
+                "mesh",
+                _context(),
+                mesh_metadata={},
+                mesh_stats={},
+                cancel_cb=lambda: None,
+                stage_cb=lambda *_event: None,
+                result_cb=None,
+            )
+        finally:
+            stop.set()
+            await ticker_task
+            host.close()
+        return result, max(gaps)
+
+    result, largest_gap = asyncio.run(exercise())
+
+    assert len(result["values"]) == 2_000_000
+    assert largest_gap < 0.05
