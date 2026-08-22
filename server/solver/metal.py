@@ -1022,6 +1022,15 @@ def _apply_channel_driver(
         result.surface_neumann_complex = (
             np.asarray(surface_neumann, dtype=np.complex128) * scale_raw[:, None]
         )
+    power_scale = np.square(np.abs(scale_raw))
+    for field in ("radiated_power_surface_w", "radiated_power_sphere_w"):
+        radiated_power = getattr(result, field, None)
+        if radiated_power is not None:
+            setattr(
+                result,
+                field,
+                np.asarray(radiated_power, dtype=np.float64) * power_scale,
+            )
     payload["source_id"] = source_id
     payload["source_area_m2"] = area_m2
     return payload
@@ -1203,6 +1212,15 @@ def _coupled_cardioid_result(
             relative_port_acceleration
         )[:, None] * np.asarray(port_sphere, dtype=np.complex128)
         mf_result.sphere_pressure_complex = total_sphere * scale_raw[:, None]
+
+    # The coupled response is a coherent synthesis of two native solves.  The
+    # member powers cannot be scaled or added into the power of that sum, so do
+    # not let the MF member's optional cross-check survive the copied result.
+    for field in ("radiated_power_surface_w", "radiated_power_sphere_w"):
+        if hasattr(mf_result, field):
+            setattr(mf_result, field, None)
+    if hasattr(mf_result, "radiated_power_sphere_coverage_sr"):
+        mf_result.radiated_power_sphere_coverage_sr = None
 
     payload = {
         "mf_source_id": mf_source_id,

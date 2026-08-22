@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import numpy as np
@@ -246,3 +247,56 @@ def test_nonfinite_sphere_pressure_nulls_only_its_frequency() -> None:
     assert response["metadata"]["failures"][0]["code"] == (
         "nonfinite_spherical_pressure"
     )
+
+
+def test_optional_native_radiated_power_maps_agreement_and_round_trips_json() -> None:
+    result = _result(angles=[0.0, 90.0])
+    result.radiated_power_surface_w = np.asarray([1.0, 2.0])
+    result.radiated_power_sphere_w = np.asarray([10.0**0.02, 2.0 * 10.0**-0.05])
+    result.radiated_power_sphere_coverage_sr = 4.0 * np.pi
+
+    response = build_solver_response(
+        result=result,
+        config=_config(),
+        context=_context(),
+        start_time=0.0,
+        metadata={},
+        sound_speed_m_per_s=343.0,
+    )
+
+    power = response["metadata"]["radiated_power"]
+    assert power["surface_w"] == [1.0, 2.0]
+    assert power["sphere_w"] == pytest.approx([10.0**0.02, 2.0 * 10.0**-0.05])
+    assert power["sphere_coverage_sr"] == pytest.approx(4.0 * np.pi)
+    assert power["agreement_db"] == pytest.approx([0.2, -0.5])
+    assert "10log10(sphere_w / surface_w)" in power["definition"]
+    assert json.loads(json.dumps(response, allow_nan=False))["metadata"][
+        "radiated_power"
+    ] == power
+
+
+def test_optional_native_radiated_power_is_absent_or_null_when_unavailable() -> None:
+    without = build_solver_response(
+        result=_result(angles=[0.0, 90.0]),
+        config=_config(),
+        context=_context(),
+        start_time=0.0,
+        metadata={},
+        sound_speed_m_per_s=343.0,
+    )
+    assert "radiated_power" not in without["metadata"]
+
+    surface_only = _result(angles=[0.0, 90.0])
+    surface_only.radiated_power_surface_w = np.asarray([1.0, 0.0])
+    mapped = build_solver_response(
+        result=surface_only,
+        config=_config(),
+        context=_context(),
+        start_time=0.0,
+        metadata={},
+        sound_speed_m_per_s=343.0,
+    )["metadata"]["radiated_power"]
+    assert mapped["surface_w"] == [1.0, 0.0]
+    assert mapped["sphere_w"] == [None, None]
+    assert mapped["agreement_db"] == [None, None]
+    assert mapped["sphere_coverage_sr"] is None
