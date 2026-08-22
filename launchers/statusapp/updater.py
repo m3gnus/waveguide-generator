@@ -158,6 +158,15 @@ def consume_update_request(
     return tag
 
 
+# The helper interpreters run from the staged runtime under the data
+# directory, where there is no pyvenv.cfg beside them, so the switch the
+# bundle relies on is out of reach. Measured: a planted user-site .pth ran
+# in the updater process during a real update. This is the process that
+# renames the application layers, so it is the last one that should be
+# executing whatever a user pip-installed years ago.
+NO_USER_SITE_ENVIRONMENT = {"PYTHONNOUSERSITE": "1"}
+
+
 def _data_dir_override(server_args: Sequence[str]) -> str | None:
     for index, argument in enumerate(server_args):
         if argument == "--data-dir" and index + 1 < len(server_args):
@@ -275,6 +284,7 @@ def launch_update_handoff(
         raise UpdateHandoffError(f"The update installer is missing: {installer}")
 
     environment = dict(environ)
+    environment.update(NO_USER_SITE_ENVIRONMENT)
     data_dir_override = _data_dir_override(server_args)
     if data_dir_override is not None:
         # The installer relaunches through the normal platform launcher, which
@@ -375,6 +385,7 @@ def launch_bundle_update_handoff(
 
     selected_platform = sys.platform if platform_name is None else platform_name
     environment = dict(environ)
+    environment.update(NO_USER_SITE_ENVIRONMENT)
     data_dir = resolve_data_dir(
         _data_dir_override(server_args),
         environ=environment,
@@ -576,7 +587,7 @@ def launch_rollback_handoff(
 
     options: dict[str, object] = {
         "cwd": str(data_dir),
-        "env": dict(environ),
+        "env": dict(environ) | NO_USER_SITE_ENVIRONMENT,
         "stdin": subprocess.DEVNULL,
         "stdout": subprocess.DEVNULL,
         "stderr": subprocess.DEVNULL,

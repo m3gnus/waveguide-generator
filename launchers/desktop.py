@@ -174,8 +174,22 @@ class DesktopWindow:
             return None
         return bundle, resources_directory(bundle, sys.platform), data_dir
 
+    # WARNING is the lamp for "the SPA is being served, but it looks stale
+    # against its sources" -- the interface works, it just has a caveat beside
+    # it. Requiring OK here meant an update that landed perfectly well never
+    # reclaimed anything: both .previous layers and the downloaded archives
+    # stayed on disk for good, silently, which measured over a gigabyte on a
+    # bundle whose only sin was a dist that looked older than its sources.
+    # A started application is the signal this cleanup is waiting for, and a
+    # freshness caveat is not evidence that the update failed.
+    _HEALTHY_FRONTEND_STATES = (ServiceState.OK, ServiceState.WARNING)
+
     def _finish_healthy_bundle_update(self, snapshot: StatusSnapshot) -> None:
-        if self._healthy_bundle_checked or snapshot.frontend.state is not ServiceState.OK:
+        started = (
+            snapshot.backend.state is ServiceState.OK
+            and snapshot.frontend.state in self._HEALTHY_FRONTEND_STATES
+        )
+        if self._healthy_bundle_checked or not started:
             return
         self._healthy_bundle_checked = True
         paths = self._bundle_paths()
