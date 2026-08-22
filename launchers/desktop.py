@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import os
 from pathlib import Path
 import shutil
@@ -438,6 +439,61 @@ class DesktopWindow:
         else:
             self._report_bundle_failure(message, detail=detail)
 
+    @staticmethod
+    def _layer_runtime_ids(resources: Path) -> tuple[str | None, str | None]:
+        """Return (the runtime the app requires, the runtime installed)."""
+
+        def read(path: Path, key: str) -> str | None:
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return None
+            value = payload.get(key) if isinstance(payload, dict) else None
+            return value if isinstance(value, str) and value else None
+
+        return (
+            read(resources / "app" / "APP-MANIFEST.json", "runtimeId"),
+            read(resources / "runtime" / "RUNTIME-MANIFEST.json", "runtimeId"),
+        )
+
+    @classmethod
+    def _layers_disagree(cls, resources: Path) -> bool:
+        """Report a live app and runtime that came from different generations.
+
+        Unreadable or absent manifests are not treated as disagreement: an older
+        bundle predates these fields, and refusing to start over a missing file
+        would be worse than the mismatch this is looking for.
+        """
+
+        required, installed = cls._layer_runtime_ids(resources)
+        return required is not None and installed is not None and required != installed
+
+    def _roll_back_mixed_generation(self, resources: Path, data_dir: Path) -> bool:
+        """Undo an update that was interrupted between its two layer renames."""
+
+        def log(message: str) -> None:
+            append_update_log(data_dir, message)
+
+        log("The installed app and runtime are from different updates; rolling back.")
+        if not self._previous_generation_paths(resources):
+            # Nothing to restore: report rather than start a combination the app
+            # never shipped, because the failure it produces would arrive later
+            # and look like something else entirely.
+            self._report_bundle_window_failure(
+                "Waveguide Generator cannot start: an interrupted update left the "
+                "application and its runtime from different versions, and there is "
+                "no previous version to restore. Reinstall to repair it."
+            )
+            return False
+        if rollback_previous_layers(resources, log=log):
+            return True
+        self._report_bundle_window_failure(
+            "Waveguide Generator cannot start: an interrupted update left the "
+            "application and its runtime from different versions, and restoring "
+            "the previous version failed. Reinstall to repair it."
+        )
+        return False
+
     def _recover_interrupted_bundle_update(self) -> bool:
         """Restore a missing live layer from pending rollback before server start."""
 
@@ -451,6 +507,13 @@ class DesktopWindow:
             if not (resources / name).is_dir()
         ]
         if not missing:
+            # Both layers exist, which is not the same as both belonging to one
+            # generation. An update interrupted between its two renames leaves a
+            # complete new app on the complete old runtime; nothing is missing,
+            # and the app would then start against a runtime it never declared.
+            # The manifests say which generation each layer is, so ask them.
+            if self._layers_disagree(resources):
+                return self._roll_back_mixed_generation(resources, data_dir)
             return True
         unavailable = [
             live
@@ -643,6 +706,13 @@ class DesktopWindow:
             else:
                 self._report_bundle_window_failure(message)
             return 1
+        # The browser is now showing the interface, so this launch succeeded as
+        # surely as one with a native window, and the update it may have just
+        # applied has to be committed here too. Without this a machine that
+        # always takes the fallback -- no WebView2 -- would keep every previous
+        # layer and every downloaded archive for ever, and eventually refuse the
+        # next update for having rollback material pending.
+        self._finish_healthy_bundle_update(snapshot)
         return 0
 
     def open_window(self, url: str) -> None:

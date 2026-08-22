@@ -942,9 +942,17 @@ def test_post_mutation_logger_failure_does_not_change_a_successful_update(
     assert relaunched == [[str(root / "Waveguide Generator.exe")]]
 
 
-def test_layer_swap_order_matches_the_windows_verified_path(
-    tmp_path: Path,
-) -> None:
+def test_the_runtime_is_installed_before_the_app(tmp_path: Path) -> None:
+    """Order the two swaps for the state a killed process leaves behind.
+
+    Each rename is atomic; the pair is not, and process death runs no rollback
+    handler. Interrupted between them, installing the runtime first leaves an
+    old app on a newer runtime, which is likelier to start than a new app on the
+    runtime it explicitly replaced -- and the app manifest names the runtime it
+    requires, so the surviving mismatch is detectable at startup rather than
+    silent.
+    """
+
     _bundle, resources, staged_app, staged_runtime = _layout(tmp_path)
     moves: list[tuple[str, str]] = []
 
@@ -955,10 +963,10 @@ def test_layer_swap_order_matches_the_windows_verified_path(
     swap_staged_layers(resources, staged_app, staged_runtime, renamer=record)
 
     assert moves == [
-        ("app", "app.previous"),
-        ("app", "app"),
         ("runtime", "runtime.previous"),
         ("runtime", "runtime"),
+        ("app", "app.previous"),
+        ("app", "app"),
     ]
 
 

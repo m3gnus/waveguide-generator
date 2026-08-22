@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
 import os
 from pathlib import Path
 import sys
@@ -989,3 +990,138 @@ def test_a_healthy_start_after_a_rollback_clears_what_windows_refused_to_delete(
     assert "rolled-back failed update copy" in (
         tmp_path / "data" / "logs" / "update.log"
     ).read_text(encoding="utf-8")
+
+
+def _bundle_layers(tmp_path: Path, *, app_runtime_id: str, runtime_id: str) -> Path:
+    """A bundle whose two layers declare the runtime ids given."""
+
+    resources = tmp_path / "Waveguide Generator.app" / "Contents" / "Resources"
+    (resources / "app").mkdir(parents=True)
+    (resources / "runtime").mkdir(parents=True)
+    (resources / "app" / "APP-MANIFEST.json").write_text(
+        json.dumps({"schemaVersion": 1, "version": "0.2.5", "runtimeId": app_runtime_id}),
+        encoding="utf-8",
+    )
+    (resources / "runtime" / "RUNTIME-MANIFEST.json").write_text(
+        json.dumps({"schemaVersion": 1, "runtimeId": runtime_id}), encoding="utf-8"
+    )
+    (tmp_path / "data" / "logs").mkdir(parents=True)
+    return resources
+
+
+def test_an_update_interrupted_between_its_two_renames_is_rolled_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both layers present is not the same as both from one generation.
+
+    Process death between the runtime and app renames leaves a complete new app
+    on the complete old runtime. Nothing is missing, so a recovery that only
+    looks for a missing directory starts the app against a runtime it never
+    declared.
+    """
+
+    resources = _bundle_layers(tmp_path, app_runtime_id="new1", runtime_id="old0")
+    (resources / "app.previous").mkdir()
+    data_dir = tmp_path / "data"
+    window = desktop.DesktopWindow.__new__(desktop.DesktopWindow)
+    monkeypatch.setattr(
+        desktop.DesktopWindow,
+        "_bundle_paths",
+        lambda _self: (resources.parents[1], resources, data_dir),
+    )
+    rolled: list[Path] = []
+    monkeypatch.setattr(
+        desktop, "rollback_previous_layers", lambda res, log=None: rolled.append(res) or True
+    )
+
+    assert window._recover_interrupted_bundle_update() is True
+    assert rolled == [resources], "a mixed generation must be rolled back, not started"
+    assert "different updates" in (data_dir / "logs" / "update.log").read_text(encoding="utf-8")
+
+
+def test_matching_layers_and_unreadable_manifests_both_start_normally(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only a real disagreement blocks a start; a missing field is not one."""
+
+    resources = _bundle_layers(tmp_path, app_runtime_id="same", runtime_id="same")
+    data_dir = tmp_path / "data"
+    window = desktop.DesktopWindow.__new__(desktop.DesktopWindow)
+    monkeypatch.setattr(
+        desktop.DesktopWindow,
+        "_bundle_paths",
+        lambda _self: (resources.parents[1], resources, data_dir),
+    )
+    monkeypatch.setattr(
+        desktop, "rollback_previous_layers", lambda *_a, **_k: pytest.fail("must not roll back")
+    )
+
+    assert window._recover_interrupted_bundle_update() is True
+
+    # An older bundle predates these fields; refusing to start over a missing
+    # file would be worse than the mismatch this is looking for.
+    (resources / "runtime" / "RUNTIME-MANIFEST.json").write_text("not json", encoding="utf-8")
+    assert window._recover_interrupted_bundle_update() is True
+
+
+def test_a_successful_browser_fallback_still_commits_the_update(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A browser start is as successful as a native one, and must finalize.
+
+    A machine without WebView2 takes this path on every launch, so an update
+    applied there would otherwise keep its previous layers and downloads for
+    ever -- and eventually be refused for having rollback material pending.
+    """
+
+    _bundle_layers(tmp_path, app_runtime_id="same", runtime_id="same")
+    window = desktop.DesktopWindow.__new__(desktop.DesktopWindow)
+    window.browser_fallback = lambda _url: None
+    finished: list[StatusSnapshot] = []
+    monkeypatch.setattr(
+        desktop.DesktopWindow, "_finish_healthy_bundle_update", lambda _s, snap: finished.append(snap)
+    )
+    monkeypatch.setattr(desktop.DesktopWindow, "_report_desktop_failure", lambda *_a, **_k: None)
+    snapshot = StatusSnapshot(
+        backend=LampStatus(ServiceState.OK, "ready"),
+        frontend=LampStatus(ServiceState.OK, "ready"),
+        url="http://127.0.0.1:3100/",
+        pid=1,
+        exit_code=None,
+    )
+
+    assert window._fallback_from_windows_webview(snapshot, RuntimeError("no WebView2")) == 0
+    assert finished == [snapshot]
+
+
+def test_a_failed_browser_fallback_commits_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    resources = _bundle_layers(tmp_path, app_runtime_id="same", runtime_id="same")
+    window = desktop.DesktopWindow.__new__(desktop.DesktopWindow)
+
+    def refuse(_url: str) -> None:
+        raise RuntimeError("the default browser refused the local interface URL")
+
+    window.browser_fallback = refuse
+    monkeypatch.setattr(
+        desktop.DesktopWindow,
+        "_bundle_paths",
+        lambda _self: (resources.parents[1], resources, tmp_path / "data"),
+    )
+    monkeypatch.setattr(
+        desktop.DesktopWindow,
+        "_finish_healthy_bundle_update",
+        lambda *_a: pytest.fail("a failed fallback must not commit the update"),
+    )
+    monkeypatch.setattr(desktop.DesktopWindow, "_report_desktop_failure", lambda *_a, **_k: None)
+    monkeypatch.setattr(desktop.DesktopWindow, "_report_bundle_window_failure", lambda *_a: None)
+    snapshot = StatusSnapshot(
+        backend=LampStatus(ServiceState.OK, "ready"),
+        frontend=LampStatus(ServiceState.OK, "ready"),
+        url="http://127.0.0.1:3100/",
+        pid=1,
+        exit_code=None,
+    )
+
+    assert window._fallback_from_windows_webview(snapshot, RuntimeError("no WebView2")) == 1

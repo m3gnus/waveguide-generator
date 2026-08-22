@@ -293,9 +293,16 @@ def swap_staged_layers(
 ) -> None:
     """Swap complete layers into place and restore all old layers on failure."""
 
-    layers = [(resources / "app", staged_app.resolve())]
+    layers: list[tuple[Path, Path]] = []
     if staged_runtime is not None:
         layers.append((resources / "runtime", staged_runtime.resolve()))
+    # Install the app last. Each rename is atomic but the sequence is not, and
+    # process death cannot run the rollback handler below. Interrupted between
+    # the two, an old app on a newer runtime is likelier to start than a new app
+    # on the runtime it explicitly replaced -- and the app layer is the one whose
+    # manifest names the runtime it needs, so the mismatch is detectable at
+    # startup rather than silent.
+    layers.append((resources / "app", staged_app.resolve()))
     for target, staged in layers:
         previous = target.with_name(target.name + ".previous")
         if not target.is_dir():
