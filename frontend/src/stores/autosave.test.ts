@@ -96,6 +96,73 @@ describe('design autosave', () => {
     unsubscribe();
   });
 
+  it('replaces an untouched cached draft when a newer durable draft arrives late', () => {
+    useDesignStore.getState().updateField('R', 150);
+    expect(writeAutosave()).toBe(true);
+    const cached = localStorage.getItem(AUTOSAVE_KEY)!;
+    useDesignStore.getState().updateField('R', 200);
+    expect(writeAutosave()).toBe(true);
+    const durable = localStorage.getItem(AUTOSAVE_KEY)!;
+    resetDesignStore();
+    resetDocumentStore();
+
+    const values = new Map([[AUTOSAVE_KEY, cached]]);
+    const storage = {
+      getItem: vi.fn((key: string) => values.get(key) ?? null),
+      setItem: vi.fn((key: string, value: string) => { values.set(key, value); }),
+      removeItem: vi.fn((key: string) => { values.delete(key); }),
+    };
+    let notify: ((raw: string | null) => void) | undefined;
+    const settings = {
+      subscribe: vi.fn((_namespace: 'designDraft', listener: (raw: string | null) => void) => {
+        notify = listener;
+        return vi.fn();
+      }),
+    };
+
+    const unsubscribe = restoreAutosaveWithLateRetry(settings, storage);
+    expect(useDesignStore.getState().design.R).toBe(150);
+
+    values.set(AUTOSAVE_KEY, durable);
+    notify?.(durable);
+    expect(useDesignStore.getState().design.R).toBe(200);
+    unsubscribe();
+  });
+
+  it('does not replace intervening edits when a durable draft arrives late', () => {
+    useDesignStore.getState().updateField('R', 150);
+    expect(writeAutosave()).toBe(true);
+    const cached = localStorage.getItem(AUTOSAVE_KEY)!;
+    useDesignStore.getState().updateField('R', 200);
+    expect(writeAutosave()).toBe(true);
+    const durable = localStorage.getItem(AUTOSAVE_KEY)!;
+    resetDesignStore();
+    resetDocumentStore();
+
+    const values = new Map([[AUTOSAVE_KEY, cached]]);
+    const storage = {
+      getItem: vi.fn((key: string) => values.get(key) ?? null),
+      setItem: vi.fn((key: string, value: string) => { values.set(key, value); }),
+      removeItem: vi.fn((key: string) => { values.delete(key); }),
+    };
+    let notify: ((raw: string | null) => void) | undefined;
+    const settings = {
+      subscribe: vi.fn((_namespace: 'designDraft', listener: (raw: string | null) => void) => {
+        notify = listener;
+        return vi.fn();
+      }),
+    };
+
+    const unsubscribe = restoreAutosaveWithLateRetry(settings, storage);
+    expect(useDesignStore.getState().design.R).toBe(150);
+    useDesignStore.getState().updateField('R', 175);
+
+    values.set(AUTOSAVE_KEY, durable);
+    notify?.(durable);
+    expect(useDesignStore.getState().design.R).toBe(175);
+    unsubscribe();
+  });
+
   it('debounces edits and flushes the latest draft before unload', () => {
     vi.useFakeTimers();
     const controller = startAutosave(localStorage, 250, window, document);

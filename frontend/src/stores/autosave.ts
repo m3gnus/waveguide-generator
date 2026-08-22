@@ -144,9 +144,20 @@ export function restoreAutosaveWithLateRetry(
   settings: DraftSettingsSubscriber = durableSettings,
   storage: DraftStorage | null = defaultStorage(),
 ): () => void {
-  let restored = restoreAutosave(storage);
+  restoreAutosave(storage);
+  let restoredDesignState = useDesignStore.getState();
+  let restoredDocumentState = useDocumentStore.getState();
   return settings.subscribe('designDraft', () => {
-    if (!restored) restored = restoreAutosave(storage);
+    // Hydration may finish after startup already restored the browser cache.
+    // Adopt that durable draft only while the restored state is untouched;
+    // otherwise the user's intervening work is newer and autosave must publish
+    // it back instead of replacing it with the late server response.
+    if (useDesignStore.getState() !== restoredDesignState
+      || useDocumentStore.getState() !== restoredDocumentState) return;
+    if (restoreAutosave(storage)) {
+      restoredDesignState = useDesignStore.getState();
+      restoredDocumentState = useDocumentStore.getState();
+    }
   });
 }
 
