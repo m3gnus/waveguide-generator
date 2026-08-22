@@ -114,6 +114,7 @@ MSVC_RUNTIME_DLLS = (
 WINDOWS_LAUNCHER_NAME = "Waveguide Generator.exe"
 WINDOWS_PTH_NAME = "Waveguide Generator._pth"
 WINDOWS_PYVENV_NAME = "pyvenv.cfg"
+WINDOWS_RUNTIME_PTH_NAME = "python._pth"
 WINDOWS_ICON_NAME = "WaveguideGenerator.ico"
 WINDOWS_CREATE_NEW_PROCESS_GROUP = 0x00000200
 WINDOWS_CREATE_NO_WINDOW = 0x08000000
@@ -461,6 +462,28 @@ def windows_pyvenv_cfg() -> str:
     """
 
     return "include-system-site-packages = false\n"
+
+
+def windows_runtime_pth() -> str:
+    """Pin the runtime interpreter's own search path inside its layer.
+
+    ``pyvenv.cfg`` sits beside the launcher so it reaches the interpreter
+    before start-up, but ``site.venv()`` also rewrites ``PREFIXES`` to that
+    directory -- and ``runtime\\python.exe``, which has no path file of
+    its own, resolves ``site-packages`` through exactly that prefix.  Left
+    alone it loses its own ``site-packages`` and cannot import so much as
+    ``fastapi``, which is how ``scripts/check_backends.py`` and the build's
+    own backend gate break.  Spelling the paths out makes the plain
+    interpreter independent of the prefix, and it inherits the user-site
+    switch as a bonus: the documented support command now diagnoses the
+    bundle instead of a mixture of the bundle and whatever the user
+    pip-installed.
+
+    Deliberately no ``..\\app`` entry: the app and runtime layers are
+    swapped independently, and the runtime must not reach into the other.
+    """
+
+    return "Lib\nDLLs\nLib\\site-packages\nimport site\n"
 
 
 def windows_desktop_bootstrap() -> str:
@@ -1049,6 +1072,9 @@ class BundleBuilder:
                 runner=self.runner, environ=self.command_environment
             ).items():
                 shutil.copy2(source, destination / filename)
+            (destination / WINDOWS_RUNTIME_PTH_NAME).write_text(
+                windows_runtime_pth(), encoding="utf-8", newline="\n"
+            )
         removed = prune_runtime(destination, platform_name=platform_name)
         print(f"Pruned {len(removed)} runtime directories.")
         write_runtime_manifest(
