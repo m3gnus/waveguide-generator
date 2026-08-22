@@ -75,10 +75,11 @@ _CIRCSYM_AZIMUTH_POINTS_PER_KRHO = 4.0
 _CIRCSYM_LINE_QUADRATURE_ORDER = 4
 _COMPLEX128_BYTES = 16
 _CIRCSYM_DEFAULT_RESOLUTION_MM = {
-    "throatResolution": 3.0,
-    "mouthResolution": 12.0,
-    "rearResolution": 18.0,
+    "throatResolution": 6.0,
+    "mouthResolution": 15.0,
+    "rearResolution": 40.0,
 }
+_CIRCSYM_DEFAULT_APERTURE_RESOLUTION_SCALE = 1.5
 
 
 def _positive_resolution(value: Any, key: str) -> float:
@@ -122,7 +123,11 @@ def _frequency_refined_meridian_config(
         mesh[key] = applied[key]
 
     aperture_scale = _positive_resolution(
-        mesh.get("apertureResolutionScale", 1.0), "apertureResolutionScale"
+        mesh.get(
+            "apertureResolutionScale",
+            _CIRCSYM_DEFAULT_APERTURE_RESOLUTION_SCALE,
+        ),
+        "apertureResolutionScale",
     )
     requested["apertureResolutionScale"] = aperture_scale
     max_aperture_scale = max(1.0, max_segment_mm / applied["mouthResolution"])

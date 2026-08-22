@@ -502,6 +502,23 @@ def test_circsym_meridian_resolution_is_refined_from_sweep_top(monkeypatch) -> N
     assert report["refined"] is True
 
 
+def test_circsym_meridian_resolution_fallbacks_match_design_defaults(monkeypatch) -> None:
+    monkeypatch.setattr(circsym, "solver_sound_speed_m_per_s", lambda _name: 300.0)
+
+    refined, report = circsym._frequency_refined_meridian_config({}, 1_000.0)
+
+    expected = {
+        "throatResolution": 6.0,
+        "mouthResolution": 15.0,
+        "rearResolution": 40.0,
+        "apertureResolutionScale": 1.5,
+    }
+    assert refined["mesh"] == expected
+    assert report["requested"] == expected
+    assert report["applied"] == expected
+    assert report["refined"] is False
+
+
 @pytest.mark.parametrize(
     ("value", "message"),
     [
