@@ -384,8 +384,8 @@ acquire → conflict → release → re-acquire and passes on Windows.
 **Graceful shutdown: pass.** `launch/serve.py` now also handles `SIGBREAK`,
 which is what Ctrl+Break raises on Windows, alongside `SIGINT` and `SIGTERM`.
 That is worth having on its own — `SIGTERM` cannot be delivered by another
-process on Windows at all: `os.kill(pid, 0)` reports a dead process as running
-whenever anything still holds a handle to it — and it
+process on Windows at all, since `os.kill` maps to `TerminateProcess` for every
+signal except `0` — and it
 is also the only stop signal that can be addressed to a *specific* process
 group, which is what finally made this testable. `CTRL_BREAK_EVENT` aimed at
 the server's own group cannot touch any other console, unlike
@@ -510,23 +510,46 @@ could interleave a seek with another's truncate and leave malformed metadata.
 No caller does this today — `serve.py` holds one lock on one thread — but the
 extra seeks are mine, so the hazard is mine to close.
 
-### 4.1a `_pid_is_running()` was a process killer on Windows
+### 4.1a `_pid_is_running()` could not answer the question on Windows
 
 Not required to make anything start, fixed because leaving it would be a
 landmine in a module being made portable.
 
-`os.kill(pid, 0)` is not a liveness probe on Windows. CPython implements
-`os.kill` there as `OpenProcess` + `TerminateProcess(handle, sig)`; signal 0 is
-special-cased and does *not* terminate the target (measured on 3.13.3 and
-3.13.12), but it
-**terminates the process being asked about**. Demonstrated directly: a spawned
-process was gone immediately after `os.kill(pid, 0)` returned without raising.
+`os.kill(pid, 0)` is not a liveness probe on Windows, but not for the reason
+first recorded here. CPython does implement `os.kill` there as `OpenProcess` +
+`TerminateProcess(handle, sig)` — that part is true, and it is why no other
+signal can be delivered gracefully — but signal `0` is special-cased and does
+**not** terminate the target. Measured on CPython 3.13.3 and on the bundled
+3.13.12: the process is still running afterwards, confirmed by both `poll()`
+and `tasklist`. The earlier claim here, that a spawned process "was gone
+immediately", did not reproduce.
 
-The function has no call site today, which is why nothing has been damaged, but
-it is monkeypatched by `test_platform_batch_e.py` and is exactly the shape
-someone would wire into stale-lock handling next. It now branches to
-`OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` + `GetExitCodeProcess` on
-Windows, treating `ERROR_ACCESS_DENIED` as "alive but not ours to open".
+What signal `0` actually gets wrong is subtler and worse to debug. Win32 keeps
+a process object resolvable for as long as *anyone* holds a handle to it, so a
+dead process reads as running whenever some other process still has it open.
+A probe that answers "alive" forever turns a bounded wait into a hang, which
+leaves nothing in a log. Separately, a pid that never existed raises a bare
+`OSError` (`WinError 87`) rather than `ProcessLookupError`, so the POSIX-shaped
+`except` misses it.
+
+| case | `os.kill(pid, 0)` | handle probe |
+|---|---|---|
+| live process | alive | alive |
+| dead, a handle still held | **alive (wrong)** | dead |
+| dead, handles released | `OSError 87` | dead |
+| pid never existed | `OSError 87` | dead |
+| dead, exited with code 259 | **alive (wrong)** | dead |
+
+`GetExitCodeProcess` fixes the handle-held case and walks into the last row:
+`STILL_ACTIVE` is 259, so a process that exits with code 259 is
+indistinguishable from a running one. The function now opens with
+`PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE` and waits on the handle with
+a zero timeout, which is immune to the exit code entirely — a process handle
+is signalled exactly when the process has exited. `SYNCHRONIZE` is not
+optional: with a query-only handle the wait fails with `WAIT_FAILED`, which is
+not `WAIT_OBJECT_0`, so the probe silently answers "alive" for everything it
+can open and still passes a live-process test. `ERROR_ACCESS_DENIED` from
+`OpenProcess` is treated as "alive but not ours to open".
 
 Those three Win32 calls carry explicit `argtypes`/`restype`. Without them ctypes
 assumes a C `int` return, but a `HANDLE` is pointer-sized: on 64-bit Windows the
