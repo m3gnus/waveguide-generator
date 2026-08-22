@@ -18,7 +18,7 @@ import zipfile
 import pytest
 
 from launchers.macos import generate_icon
-from scripts import fetch_spa
+from scripts import build_bundle, fetch_spa
 from scripts.build_bundle import (
     BundleBuilder,
     BundleError,
@@ -177,6 +177,10 @@ def test_manifest_writers_record_layer_identity_and_stable_hashes(tmp_path: Path
         "version": "1.2.3",
         "commit": "a" * 40,
         "runtimeId": "0123456789ab",
+        # Excludes the manifest itself, or no two builds could agree.
+        "treeSha256": build_bundle.tree_digest(
+            app, exclude=frozenset({"APP-MANIFEST.json"})
+        ),
     }
     assert json.loads((runtime / "RUNTIME-MANIFEST.json").read_text()) == runtime_payload
     assert json.loads((app / "APP-MANIFEST.json").read_text()) == app_payload
@@ -900,3 +904,61 @@ def test_app_root_uses_checkout_by_default_and_bundle_environment_when_set(
 
     assert app_root(environ={}) == checkout
     assert app_root(environ={"WG2_APP_ROOT": str(bundled)}) == bundled.resolve()
+
+
+def test_tree_digest_covers_content_not_packing(tmp_path: Path) -> None:
+    """The digest must see what matters and ignore what does not."""
+
+    def _layer(root: Path) -> Path:
+        (root / "server").mkdir(parents=True)
+        (root / "server" / "app.py").write_text("print('x')\n", encoding="utf-8")
+        (root / "LICENSE").write_text("licence\n", encoding="utf-8")
+        return root
+
+    first = _layer(tmp_path / "a")
+    second = _layer(tmp_path / "b")
+    assert build_bundle.tree_digest(first) == build_bundle.tree_digest(second)
+
+    # Content, paths and the executable bit are all part of the identity.
+    (second / "server" / "app.py").write_text("print('y')\n", encoding="utf-8")
+    assert build_bundle.tree_digest(first) != build_bundle.tree_digest(second)
+
+    (second / "server" / "app.py").write_text("print('x')\n", encoding="utf-8")
+    assert build_bundle.tree_digest(first) == build_bundle.tree_digest(second)
+
+    (second / "server" / "app.py").chmod(0o755)
+    assert build_bundle.tree_digest(first) != build_bundle.tree_digest(second)
+    (second / "server" / "app.py").chmod(0o644)
+
+    (second / "extra.txt").write_text("", encoding="utf-8")
+    assert build_bundle.tree_digest(first) != build_bundle.tree_digest(second)
+
+
+def test_tree_digest_can_exclude_the_manifest_that_carries_it(tmp_path: Path) -> None:
+    root = tmp_path / "app"
+    root.mkdir()
+    (root / "LICENSE").write_text("licence\n", encoding="utf-8")
+    before = build_bundle.tree_digest(root, exclude=frozenset({"APP-MANIFEST.json"}))
+
+    # Writing the manifest must not change the digest the manifest reports, or
+    # no two builds could ever agree.
+    (root / "APP-MANIFEST.json").write_text('{"treeSha256": "..."}\n', encoding="utf-8")
+    after = build_bundle.tree_digest(root, exclude=frozenset({"APP-MANIFEST.json"}))
+    assert before == after
+    assert build_bundle.tree_digest(root) != after
+
+
+def test_the_app_manifest_records_the_tree_digest(tmp_path: Path) -> None:
+    root = tmp_path / "app"
+    root.mkdir()
+    (root / "LICENSE").write_text("licence\n", encoding="utf-8")
+
+    payload = build_bundle.write_app_manifest(
+        root, version="0.2.4", commit="0" * 40, runtime_id="abcdef012345"
+    )
+
+    written = json.loads((root / "APP-MANIFEST.json").read_text(encoding="utf-8"))
+    assert payload["treeSha256"] == written["treeSha256"]
+    assert written["treeSha256"] == build_bundle.tree_digest(
+        root, exclude=frozenset({"APP-MANIFEST.json"})
+    )

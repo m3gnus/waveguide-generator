@@ -112,6 +112,7 @@ jobs:
           path: |
             build/bundle/waveguide-generator-app-*.zip
             build/bundle/waveguide-generator-app-*.zip.sha256
+            build/bundle/waveguide-generator-app-*.manifest.json
           if-no-files-found: error
 
       - name: Share the complete macOS release asset set
@@ -168,21 +169,29 @@ jobs:
           }
           uv run --no-project --python 3.13.12 python scripts/build_bundle.py --platform windows --spa $spa --output build/bundle
 
-      - name: Assert the app layer is byte-identical across platforms
+      - name: Assert both platforms built the same app layer
         shell: pwsh
+        # The archives themselves are compressed and need not match byte for
+        # byte; what must match is the content, which the manifest's treeSha256
+        # covers - every path, its executable bit and its bytes. Comparing the
+        # digest rather than the ZIP is what lets the layer stay compressed
+        # without weakening the guarantee.
         run: |
           $ErrorActionPreference = "Stop"
-          $local = @(Get-ChildItem -File build/bundle/waveguide-generator-app-*.zip)
-          $reference = @(Get-ChildItem -File build/app-reference/waveguide-generator-app-*.zip)
+          $local = @(Get-ChildItem -File build/bundle/waveguide-generator-app-*.manifest.json)
+          $reference = @(Get-ChildItem -File build/app-reference/waveguide-generator-app-*.manifest.json)
           if ($local.Count -ne 1 -or $reference.Count -ne 1) {
-            throw "Expected exactly one local and one macOS-built app layer."
+            throw "Expected exactly one local and one macOS-built app manifest."
           }
-          $localHash = (Get-FileHash -Algorithm SHA256 $local[0]).Hash
-          $referenceHash = (Get-FileHash -Algorithm SHA256 $reference[0]).Hash
-          if ($localHash -ne $referenceHash) {
-            throw "Windows and macOS app-layer ZIPs differ: $localHash != $referenceHash"
+          $localTree = (Get-Content -Raw $local[0] | ConvertFrom-Json).treeSha256
+          $referenceTree = (Get-Content -Raw $reference[0] | ConvertFrom-Json).treeSha256
+          if (-not $localTree -or -not $referenceTree) {
+            throw "An app manifest carries no treeSha256; the builder did not write one."
           }
-          Write-Host "Cross-platform app layer SHA-256: $localHash"
+          if ($localTree -ne $referenceTree) {
+            throw "Windows and macOS app layers differ: $localTree != $referenceTree"
+          }
+          Write-Host "Cross-platform app layer treeSha256: $localTree"
 
       - name: Share the complete Windows release asset set
         uses: actions/upload-artifact@v4

@@ -384,7 +384,9 @@ acquire → conflict → release → re-acquire and passes on Windows.
 **Graceful shutdown: pass.** `launch/serve.py` now also handles `SIGBREAK`,
 which is what Ctrl+Break raises on Windows, alongside `SIGINT` and `SIGTERM`.
 That is worth having on its own — `SIGTERM` cannot be delivered by another
-process on Windows at all, since `os.kill` maps to `TerminateProcess` — and it
+process on Windows at all, because `os.kill` there terminates rather than
+signals for a non-zero signal (this is *not* true of signal 0, whatever an
+earlier version of 4.1a claimed: see the correction there) — and it
 is also the only stop signal that can be addressed to a *specific* process
 group, which is what finally made this testable. `CTRL_BREAK_EVENT` aimed at
 the server's own group cannot touch any other console, unlike
