@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "normalization_schema": "wg-design-physical-source-v1",
+  "canonicalization": "json-sort-keys-compact-utf8-ascii-v1",
+  "leaf_count": 40,
+  "sha256": "2667d10f72e3f5cf209d9fe1e8ac77ea9aa75c9cd5b4ad74e883abe5e474ccb8",
+  "payload": {
+    "geometry": {
+      "enclosure": {
+        "depth": 0.0,
+        "edge_radius": 18.0,
+        "edge_type": 1.0,
+        "space_b": 25.0,
+        "space_l": 25.0,
+        "space_r": 25.0,
+        "space_t": 25.0
+      },
+      "vertical_offset": 0.0,
+      "wall_thickness": 5.0
+    },
+    "profile": {
+      "R": 600.0,
+      "a": 37.0,
+      "a0": 5.25,
+      "b": 0.3,
+      "coverage_mode": "auto",
+      "formula": "R-OSSE",
+      "k": 0.65,
+      "length_mode": "profile",
+      "m": 0.8,
+      "morph": {
+        "allow_shrinkage": 0.0,
+        "corner_radius": 0.0,
+        "fixed_part": 0.0,
+        "rate": 3.0,
+        "target_exponent": null,
+        "target_height": 0.0,
+        "target_shape": 0.0,
+        "target_width": 0.0
+      },
+      "q": 4.0,
+      "r": 0.3,
+      "r0": 19.5,
+      "scale": 1.0,
+      "slot_length": 0.0,
+      "throat_ext_angle": 5.25,
+      "throat_ext_length": 12.0,
+      "tmax": 1.0
+    },
+    "source": {
+      "contours": "",
+      "curvature": 0.0,
+      "radius": -1.0,
+      "shape": 2.0,
+      "velocity": 1.0,
+      "velocity_convention": "normal"
+    }
+  }
+}

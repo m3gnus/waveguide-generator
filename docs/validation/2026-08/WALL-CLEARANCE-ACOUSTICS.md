@@ -43,13 +43,26 @@ equivalent after canonical JSON serialization to the run-101 snapshot.
 | requested mouth resolution | 15 mm | 25 mm | 25 mm |
 | solver-neutral model SHA-256 | `2667d10f72e3f5cf209d9fe1e8ac77ea9aa75c9cd5b4ad74e883abe5e474ccb8` | same | same |
 
-The solver-neutral digest is reproducible from the archived snapshot's typed
-values. It removes UI-only `raw` strings, then serializes 40 physical/source
-leaves as compact JSON with sorted keys before SHA-256. The included fields are
-the formula and all profile coefficients, scale and throat extension, the full
-morph block, vertical offset, wall thickness, enclosure depth/edge/clearances,
-and the complete source block. Mesh tessellation controls, output flags, legacy
-solver text and sweep/observation options are excluded.
+The exact `wg-design-physical-source-v1` field selection and UI-value unwrapping
+are implemented in `scripts/verify_model_identity.py`. The sanitized 40-leaf
+canonical payload and expected digest are committed in
+`docs/validation/2026-08/wall-clearance-model-identity.json`; it contains no
+labels, paths, raw requests or mesh. Reproduce the published identity from a
+clean checkout with:
+
+```console
+python scripts/verify_model_identity.py docs/validation/2026-08/wall-clearance-model-identity.json
+```
+
+The verifier serializes the payload as UTF-8 JSON with sorted keys, compact
+separators, ASCII escaping and non-finite values forbidden, then applies
+SHA-256. With `--snapshot PATH`, it can also extract and normalize an ordinary
+design snapshot or execution request and compare it to the committed payload.
+The schema includes the formula and all profile coefficients, scale and throat
+extension, the full morph block, vertical offset, wall thickness, enclosure
+depth/edge/clearances, and the complete source block. Mesh tessellation
+controls, output flags, legacy solver text and sweep/observation options are
+excluded.
 
 | normalized field group | value in all three snapshots |
 |---|---|
