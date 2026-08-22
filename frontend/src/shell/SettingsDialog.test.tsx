@@ -181,6 +181,52 @@ describe('SettingsDialog', () => {
     expect(cad.textContent).toContain('disk is read-only');
   });
 
+  it('serializes rapid capture choices so the latest choice is the last server write', async () => {
+    const firstWrite = deferred<Response>();
+    const secondWrite = deferred<Response>();
+    const writes: string[] = [];
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path === '/api/cad-workspace/path') {
+        return Promise.resolve(new Response(JSON.stringify({
+          selected: true, path: '/cad/exchange', captureMode: 'run',
+        })));
+      }
+      if (path === '/api/cad-workspace/capture-document' && init?.method === 'POST') {
+        writes.push((JSON.parse(String(init.body)) as { mode: string }).mode);
+        return writes.length === 1 ? firstWrite.promise : secondWrite.promise;
+      }
+      return Promise.resolve(new Response('not found', { status: 404 }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await act(async () => host.querySelector<HTMLButtonElement>('#open-settings')!.click());
+    const cad = host.querySelector<HTMLElement>('#settings-cad')!;
+    const choice = (label: string) => [...cad.querySelectorAll<HTMLInputElement>('input[type=radio]')]
+      .find((input) => input.closest('label')?.textContent?.includes(label))!;
+
+    await act(async () => {
+      choice('Don\u2019t keep one').click();
+      choice('With every run').click();
+      await Promise.resolve();
+    });
+
+    expect(writes).toEqual(['off']);
+    await act(async () => {
+      firstWrite.resolve(new Response(JSON.stringify({ captureDocument: false, captureMode: 'off' })));
+      await firstWrite.promise;
+      await Promise.resolve();
+    });
+    expect(writes).toEqual(['off', 'run']);
+
+    await act(async () => {
+      secondWrite.resolve(new Response(JSON.stringify({ captureDocument: true, captureMode: 'run' })));
+      await secondWrite.promise;
+      await Promise.resolve();
+    });
+    expect(choice('With every run').checked).toBe(true);
+  });
+
   /** Open Settings with the CAD application switched to Onshape, serving one
    * canned connection reply. Returns the CAD section for assertions. */
   async function openOnshapeSettings(connection: Record<string, unknown>): Promise<HTMLElement> {

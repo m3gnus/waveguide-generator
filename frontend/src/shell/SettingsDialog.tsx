@@ -114,18 +114,29 @@ function CadFolderSettings() {
   const [error, setError] = useState<string>();
   const [manualPath, setManualPath] = useState('');
   const requestGeneration = useRef(0);
+  const captureGeneration = useRef(0);
+  const confirmedCapture = useRef<CadCaptureMode>('run');
+  const captureWrite = useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => {
     const request = ++requestGeneration.current;
+    const captureRequest = captureGeneration.current;
     void getCadWorkspace().then(
       (value) => {
         if (request !== requestGeneration.current) return;
         setPath(value.path);
-        setCapture(value.captureMode ?? (value.captureDocument === false ? 'off' : 'run'));
+        if (captureRequest === captureGeneration.current) {
+          const mode = value.captureMode ?? (value.captureDocument === false ? 'off' : 'run');
+          confirmedCapture.current = mode;
+          setCapture(mode);
+        }
       },
       (reason: unknown) => { if (request === requestGeneration.current) setError(String(reason)); },
     );
-    return () => { requestGeneration.current += 1; };
+    return () => {
+      requestGeneration.current += 1;
+      captureGeneration.current += 1;
+    };
   }, []);
 
   const run = async (action: 'open' | 'select', requestedPath?: string) => {
@@ -148,13 +159,24 @@ function CadFolderSettings() {
     // Optimistic: the chosen option is the state, and a refused write puts the
     // previous one back rather than leaving the radio disagreeing with the file
     // the add-in reads.
-    const previous = capture;
+    const request = ++captureGeneration.current;
     setCapture(mode); setError(undefined);
+    const write = captureWrite.current.then(async () => {
+      const saved = await setCaptureMode(mode);
+      confirmedCapture.current = saved;
+      return saved;
+    });
+    // A refusal must not poison the queue: the next choice still needs to be
+    // sent after it so the latest click is the last write on the server.
+    captureWrite.current = write.then(() => undefined, () => undefined);
     try {
-      setCapture(await setCaptureMode(mode));
+      const saved = await write;
+      if (request === captureGeneration.current) setCapture(saved);
     } catch (reason) {
-      setCapture(previous);
-      setError(reason instanceof Error ? reason.message : String(reason));
+      if (request === captureGeneration.current) {
+        setCapture(confirmedCapture.current);
+        setError(reason instanceof Error ? reason.message : String(reason));
+      }
     }
   };
 
