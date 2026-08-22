@@ -25,10 +25,23 @@ from launchers.apply_update import (
     resources_directory,
     rollback_previous_layers,
 )
-from launchers.statusapp.updater import BundleUpdateRequest, UpdateHandoffError
+from launchers.statusapp.updater import (
+    BundleUpdateRequest,
+    UpdateHandoffError,
+    launch_rollback_handoff,
+)
 
 
 WINDOW_TITLE = "Waveguide Generator"
+ROLLBACK_HANDOFF_RESULT = (
+    "The previous version is being restored by a separate helper and will "
+    "reopen by itself. If it does not, review update.log in the application "
+    "data log directory before changing the installation."
+)
+ROLLBACK_FAILED_RESULT = (
+    "Automatic rollback failed. Review update.log in the application "
+    "data log directory before changing the bundle."
+)
 PYWEBVIEW_REPAIR = (
     "Install the desktop dependency with pip from server/requirements-runtime.txt "
     "(for example: python -m pip install -r server/requirements-runtime.txt)."
@@ -173,7 +186,15 @@ class DesktopWindow:
         def log(message: str) -> None:
             append_update_log(data_dir, message)
 
-        had_previous = any((resources / f"{name}.previous").exists() for name in ("app", "runtime"))
+        # ``.failed`` is the trail a rollback leaves: Windows would not let the
+        # helper delete a directory whose DLLs were still mapped, so the
+        # deletion was deferred to exactly here, where nothing holds them and
+        # the download that produced them is equally spent.
+        had_previous = any(
+            (resources / f"{name}{suffix}").exists()
+            for name in ("app", "runtime")
+            for suffix in (".previous", ".failed")
+        )
         try:
             cleanup_previous_layers(resources, log=log)
         except OSError as exc:
@@ -223,16 +244,60 @@ class DesktopWindow:
         def log(entry: str) -> None:
             append_update_log(data_dir, entry)
 
+        if self._hand_off_rollback(bundle, data_dir, log):
+            # The helper waits for this process to exit before it touches
+            # anything, so the dialog below can keep the window open for as
+            # long as the user leaves it there.
+            self._report_bundle_failure(f"{message}\n\n{ROLLBACK_HANDOFF_RESULT}")
+            return
+
         rolled_back = rollback_previous_layers(resources, log=log)
         if rolled_back:
             repair_bundle(bundle, platform_name=sys.platform, log=log)
             result = "The previous version was restored. Reopen Waveguide Generator."
         else:
-            result = (
-                "Automatic rollback failed. Review update.log in the application "
-                "data log directory before changing the bundle."
-            )
+            result = ROLLBACK_FAILED_RESULT
         self._report_bundle_failure(f"{message}\n\n{result}")
+
+    def _hand_off_rollback(
+        self,
+        bundle: Path,
+        data_dir: Path,
+        log: Callable[[str], None],
+    ) -> bool:
+        """Start the detached helper that restores the previous version.
+
+        Windows will happily rename a directory whose DLLs are mapped, but it
+        refuses to delete one, and this process has the failed ``runtime`` and
+        ``app`` mapped into it. Rolling back from here left the launcher files
+        beside the runtime unrestored -- a 0.2.5 runtime under a 0.2.6
+        ``vcruntime140.dll`` -- so the work moves to a process that outlives
+        this one and starts only once these mappings are gone.
+
+        macOS has no such rule and its in-process rollback is the tested path,
+        so the handoff is Windows-only; a handoff that cannot start falls back
+        to it as well, because a rollback that happens here is still far better
+        than none.
+        """
+
+        if sys.platform != "win32":
+            return False
+        try:
+            command = launch_rollback_handoff(
+                bundle,
+                data_dir,
+                os.getpid(),
+                environ=dict(getattr(self.controller, "environ", os.environ)),
+                server_args=tuple(getattr(self.controller, "server_args", ())),
+            )
+        except (UpdateHandoffError, OSError) as exc:
+            log(
+                f"Could not start the detached rollback helper: {exc} "
+                "Rolling back in this process instead."
+            )
+            return False
+        log(f"Started the detached rollback helper: {' '.join(command)}")
+        return True
 
     @staticmethod
     def _failure_message(snapshot: StatusSnapshot, cause: str) -> str:
