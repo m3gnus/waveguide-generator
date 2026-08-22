@@ -502,21 +502,28 @@ def test_circsym_meridian_resolution_is_refined_from_sweep_top(monkeypatch) -> N
     assert report["refined"] is True
 
 
-def test_circsym_meridian_resolution_fallbacks_match_design_defaults(monkeypatch) -> None:
+def test_circsym_missing_mesh_controls_preserve_legacy_discretization(monkeypatch) -> None:
     monkeypatch.setattr(circsym, "solver_sound_speed_m_per_s", lambda _name: 300.0)
 
-    refined, report = circsym._frequency_refined_meridian_config({}, 1_000.0)
+    missing, missing_report = circsym._frequency_refined_meridian_config(
+        {},
+        1_000.0,
+    )
+    legacy, legacy_report = circsym._frequency_refined_meridian_config(
+        {
+            "mesh": {
+                "throatResolution": 3.0,
+                "mouthResolution": 12.0,
+                "rearResolution": 18.0,
+                "apertureResolutionScale": 1.0,
+            }
+        },
+        1_000.0,
+    )
 
-    expected = {
-        "throatResolution": 6.0,
-        "mouthResolution": 15.0,
-        "rearResolution": 40.0,
-        "apertureResolutionScale": 1.5,
-    }
-    assert refined["mesh"] == expected
-    assert report["requested"] == expected
-    assert report["applied"] == expected
-    assert report["refined"] is False
+    assert missing["mesh"] == legacy["mesh"]
+    assert missing_report["applied"] == legacy_report["applied"]
+    assert missing_report["refined"] is legacy_report["refined"] is False
 
 
 @pytest.mark.parametrize(

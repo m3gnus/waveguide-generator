@@ -294,7 +294,9 @@ export function fieldPlaneErrorMessage(reason: unknown): string {
       case 404: return 'field-plane result was not found';
       case 409: return 'field-plane result changed; select the completed run again';
       case 410: return 're-solve to enable field planes';
-      case 422: return 'field planes are unavailable for this solve';
+      case 422: return reason.remedy
+        ? `${reason.message} ${reason.remedy}`
+        : 'field planes are unavailable for this solve';
       case 429: return 'field-plane request was superseded; try again';
       case 503: return 'waiting for solve to finish';
       case 504: return 'field-plane evaluation timed out';

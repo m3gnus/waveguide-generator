@@ -1,13 +1,13 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { fetchJobResults } from '../api/results';
-import { resolveEngine, submitDesign, submitImported, type ImportedSolveSubmission } from '../jobs/actions';
+import { planSolveDesign, submitDesign, submitImported, type ImportedSolveSubmission, type SolvePlan } from '../jobs/actions';
 import { useCapabilities, useCapabilityRefreshOnReconnect } from '../jobs/useCapabilities';
+import { useSolvePlan } from '../jobs/useSolvePlan';
 import { JobAutomation } from '../jobs/automation';
 import { exportStemForJob, exportSubdirectoryForJob } from '../jobs/exportNaming';
 import { explainImportedRefusal } from '../jobs/importedRefusals';
 import { buildImportedSubmission, importedSubmissionBlocker } from '../jobs/importedSubmission';
-import { plannedBackendCapabilities } from '../design/backendSupport';
 import { advanceRunSequence, nextRunLabel } from '../jobs/runNaming';
 import { currentRunNameSource } from '../jobs/runNameSource';
 import { preferencesStore, usePreferences } from '../prefs/preferences';
@@ -163,7 +163,6 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   const automation = useRef(new JobAutomation()).current;
   const {
     engines: capabilities,
-    engineSelection,
     error: capabilityError,
   } = useCapabilities();
   const [actionError, setActionError] = useState<string | null>(null);
@@ -172,29 +171,22 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
 
   useEffect(() => { jobsSocket.start(); return () => jobsSocket.stop(); }, []);
 
-  let effectiveEngine = selectedEngine;
-  let engineResolutionError: string | null = null;
+  let currentOptions: SolveOptions | null = null;
+  let solveOptionsError: string | null = null;
   try {
-    effectiveEngine = resolveEngine(selectedEngine, { engines: capabilities, engineSelection }, solveOptions.solverMode);
+    currentOptions = solveOptions.options();
   } catch (error) {
-    engineResolutionError = error instanceof Error ? error.message : String(error);
-    // Keep the advertised runner as the effective identity so the status and
-    // disabled control describe the missing dependency, never the otherwise
-    // selected full-3D fallback.
-    if (solveOptions.solverMode === 'circsym' && engineSelection.axisymmetricRunner) {
-      effectiveEngine = engineSelection.axisymmetricRunner;
-    }
+    solveOptionsError = error instanceof Error ? error.message : String(error);
   }
-  const capability = capabilities.find((engine) => engine.name.toLowerCase() === effectiveEngine.toLowerCase()) ?? null;
-  const plannedCapabilities = plannedBackendCapabilities(
-    selectedEngine,
-    capabilities,
-    engineSelection,
-    solveOptions.solverMode,
+  const {
+    plan: solvePlan,
+    error: solvePlanError,
+    isPending: solvePlanPending,
+  } = useSolvePlan(
+    design,
+    currentOptions,
+    workspaceMode === 'parametric',
   );
-  const runCapability = solveOptions.solverMode === 'auto'
-    ? plannedCapabilities[0] ?? null
-    : capability;
   const metalCapability = capabilities.find((engine) => engine.name.toLowerCase() === 'metal') ?? null;
   const visibleImported = viewportGeometry.showing === 'cad'
     ? viewportGeometry.cad
@@ -221,8 +213,6 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     if (submissionInFlight.current) return;
     submissionInFlight.current = true;
     try {
-      if (engineResolutionError) throw new Error(engineResolutionError);
-      if (!runCapability?.available) throw new Error(capability?.reason ?? capabilityError ?? `${selectedEngine} engine is unavailable`);
       setSubmitting(true);
       setActionError(null);
       // Pressing Solve never edits the design. BEMPP's own closed-wall default
@@ -234,6 +224,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       // discarded any expression bound to the field, bumped the revision, and
       // marked the file unsaved -- for a correction the run had already made.
       const options = useSolveOptionsStore.getState().options();
+      await planSolveDesign(nextDesign, options);
       const designName = useDocumentStore.getState().designName;
       const label = nextRunLabel(designName, preferencesStore.getSnapshot(), now());
       await submitDesign(
@@ -248,7 +239,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       submissionInFlight.current = false;
       setSubmitting(false);
     }
-  }, [capability?.reason, capabilityError, designName, engineResolutionError, now, preferences, runCapability, selectedEngine]);
+  }, [designName, now, preferences]);
 
   const runImported = useCallback(async (submission: ImportedSolveSubmission) => {
     if (submissionInFlight.current) return null;
@@ -347,12 +338,12 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     });
   }, [automation, jobs, preferences, reportError]);
 
-  const unavailable = engineResolutionError ?? capability?.reason ?? capabilityError ?? 'Checking solver engine capability…';
-  const activeCapability = cadGeometryActive
-    ? metalCapability
-    : engineResolutionError === null
-      ? runCapability
-      : null;
+  const parametricUnavailable = solveOptionsError
+    ?? solvePlanError
+    ?? (solvePlanPending ? 'Planning solve for the current design…' : 'Solve plan is unavailable');
+  const solveAvailable = cadGeometryActive
+    ? Boolean(metalCapability?.available)
+    : solvePlan !== null && !solvePlanPending && solvePlanError === null;
   const solve = useCallback(() => {
     const action = async () => {
       if (fileGeometryActive) {
@@ -368,18 +359,18 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   }, [cadGeometryActive, design, fileGeometryActive, reportError, revision, run, solveCurrentCadImport]);
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && activeCapability?.available && !submitting && !cadSolveBlocker && !fileGeometryActive) {
+      if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && solveAvailable && !submitting && !cadSolveBlocker && !fileGeometryActive) {
         event.preventDefault();
         solve();
       }
     };
     window.addEventListener('keydown', shortcut);
     return () => window.removeEventListener('keydown', shortcut);
-  }, [activeCapability, cadSolveBlocker, fileGeometryActive, solve, submitting]);
+  }, [cadSolveBlocker, fileGeometryActive, solve, solveAvailable, submitting]);
 
   const control = useMemo<SolveControl>(() => ({
     solve,
-    disabled: !activeCapability?.available || submitting || Boolean(cadSolveBlocker) || fileGeometryActive,
+    disabled: !solveAvailable || submitting || Boolean(cadSolveBlocker) || fileGeometryActive,
     submitting,
     label: cadGeometryActive ? 'Solve CAD Link' : 'Solve',
     title: submitting
@@ -388,20 +379,28 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         ? 'Standalone imported meshes are viewport-only. Show Parametric to solve the WG design.'
         : cadSolveBlocker
           ? cadSolveBlocker
-          : cadGeometryActive && activeCapability?.available
+          : cadGeometryActive && metalCapability?.available
             ? 'Solve the displayed CAD Link model with Metal'
-            : activeCapability?.available
-              ? selectedEngine === 'auto'
-                ? `Solve current design with AUTO (${capability?.name ?? activeCapability.name})`
-                : solveOptions.solverMode === 'auto' && capability?.available === false
-                  ? `Solve current design with AUTO formulation planning (${activeCapability.name.toUpperCase()} available; requested ${capability.name.toUpperCase()} fallback is offline)`
-                  : `Solve current design with ${capability?.name ?? activeCapability.name}`
+            : solvePlan
+              ? solvePlanTitle(solvePlan, selectedEngine)
               : cadGeometryActive
                 ? metalCapability?.reason ?? capabilityError ?? 'Metal engine is unavailable'
-                : unavailable,
-  }), [activeCapability, cadGeometryActive, cadSolveBlocker, capability?.available, capability?.name, capabilityError, fileGeometryActive, metalCapability?.reason, selectedEngine, solve, solveOptions.solverMode, submitting, unavailable]);
+                : parametricUnavailable,
+  }), [cadGeometryActive, cadSolveBlocker, capabilityError, fileGeometryActive, metalCapability?.available, metalCapability?.reason, parametricUnavailable, selectedEngine, solve, solveAvailable, solvePlan, submitting]);
 
   return <SolveContext.Provider value={control}>{children}<JobAnnouncer jobs={jobs}/></SolveContext.Provider>;
+}
+
+export function solvePlanTitle(plan: SolvePlan, requestedEngine: string): string {
+  const requested = requestedEngine.trim().toLowerCase();
+  const resolved = plan.engine.trim().toLowerCase();
+  if (requested === 'auto') {
+    return `Solve current design with AUTO (${resolved.toUpperCase()})`;
+  }
+  if (requested !== resolved) {
+    return `Solve current design with ${resolved.toUpperCase()} (requested ${requested.toUpperCase()} full-3D fallback)`;
+  }
+  return `Solve current design with ${resolved.toUpperCase()}`;
 }
 
 /**

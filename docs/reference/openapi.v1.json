@@ -1898,6 +1898,75 @@
         "title": "FieldPlaneSpec",
         "type": "object"
       },
+      "FieldPlaneStringErrorResponse": {
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "FieldPlaneStringErrorResponse",
+        "type": "object"
+      },
+      "FieldPlaneUnavailableResponse": {
+        "description": "Backward-compatible, versioned remedy for an unsupported field plane.",
+        "properties": {
+          "code": {
+            "enum": [
+              "unsupported_axisymmetric_formulation",
+              "unsupported_coupled_infinite_baffle"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "error_contract_version": {
+            "const": 1,
+            "default": 1,
+            "title": "Error Contract Version",
+            "type": "integer"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "remedy": {
+            "title": "Remedy",
+            "type": "string"
+          }
+        },
+        "required": [
+          "detail",
+          "code",
+          "message",
+          "remedy"
+        ],
+        "title": "FieldPlaneUnavailableResponse",
+        "type": "object"
+      },
+      "FieldPlaneValidationErrorResponse": {
+        "properties": {
+          "detail": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "FieldPlaneValidationErrorResponse",
+        "type": "object"
+      },
       "FreeformConfig": {
         "additionalProperties": false,
         "properties": {
@@ -5879,6 +5948,42 @@
         "title": "SolveOptions",
         "type": "object"
       },
+      "SolvePlanResponse": {
+        "description": "The request-specific engine/formulation selected by the runtime.",
+        "properties": {
+          "eligibility_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Eligibility Reasons",
+            "type": "array"
+          },
+          "engine": {
+            "title": "Engine",
+            "type": "string"
+          },
+          "formulation": {
+            "enum": [
+              "axisymmetric",
+              "full-3d"
+            ],
+            "title": "Formulation",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "engine",
+          "formulation",
+          "reason",
+          "eligibility_reasons"
+        ],
+        "title": "SolvePlanResponse",
+        "type": "object"
+      },
       "SolveRequest": {
         "additionalProperties": false,
         "properties": {
@@ -8223,11 +8328,22 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/FieldPlaneUnavailableResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/FieldPlaneStringErrorResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/FieldPlaneValidationErrorResponse"
+                    }
+                  ],
+                  "title": "Response 422 Field Plane Api Results  Job Id  Field Plane Post"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Invalid field-plane selection, unsupported solve with an actionable remedy, or invalid request body"
           }
         },
         "summary": "Field Plane"
@@ -8398,6 +8514,55 @@
           }
         },
         "summary": "Submit Solve"
+      }
+    },
+    "/api/solve/plan": {
+      "post": {
+        "description": "Resolve the submitted design without allocating or persisting a job.",
+        "operationId": "plan_solve_api_solve_plan_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SolveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SolvePlanResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Solve request refused"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Engine unavailable"
+          }
+        },
+        "summary": "Plan Solve"
       }
     },
     "/api/status/{job_id}": {

@@ -164,4 +164,45 @@ describe('field-plane request errors', () => {
       replacementRequestId: 'request-6',
     } satisfies Partial<FieldPlaneHttpError>));
   });
+
+  it.each([
+    {
+      code: 'unsupported_axisymmetric_formulation',
+      message: 'Axisymmetric meridian solves do not retain exterior field traces.',
+      remedy: 'Set Solver mode to Full 3D and re-solve with Metal or BEMPP.',
+    },
+    {
+      code: 'unsupported_coupled_infinite_baffle',
+      message: 'Coupled infinite-baffle solves do not retain exterior field traces.',
+      remedy: 'Set Simulation type to Free-standing and re-solve with Metal or BEMPP.',
+    },
+  ])('retains the $code remedy from a backward-compatible 422 body', async ({ code, message, remedy }) => {
+    const request = buildFieldPlaneRequest({
+      requestId: 'request-7',
+      plane: {
+        origin_m: [0, 0, 0],
+        axis_u: [1, 0, 0],
+        axis_v: [0, 0, 1],
+        width_m: 1,
+        height_m: 1,
+        nx: 96,
+        ny: 96,
+      },
+      frequencyIndex: 0,
+    });
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      detail: message,
+      error_contract_version: 1,
+      code,
+      message,
+      remedy,
+    }), { status: 422, statusText: 'Unprocessable Entity' })) as typeof fetch;
+
+    await expect(fetchFieldPlane('job-1', request, fetcher)).rejects.toEqual(expect.objectContaining({
+      status: 422,
+      code,
+      message,
+      remedy,
+    } satisfies Partial<FieldPlaneHttpError>));
+  });
 });
