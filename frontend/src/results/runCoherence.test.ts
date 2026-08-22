@@ -107,6 +107,7 @@ describe('run coherence', () => {
     const cadContext = contextFor(design, { mode: 'cad', ingestId: 'wgi_live' });
     expect(runContextMarker(cad('wgi_live'), parametricContext)).toBe('CAD');
     expect(runContextMarker(cad('wgi_live'), cadContext)).toBeNull();
+    expect(runContextMarker(cad('wgi_other'), cadContext)).toBe('other model');
     expect(runContextMarker(parametric(design), cadContext)).toBe('Parametric');
     expect(runProvenanceMarker(cad('wgi_live'), 'cad')).toBeNull();
     expect(runProvenanceMarker(cad('wgi_live'), 'parametric')).toBe('CAD');

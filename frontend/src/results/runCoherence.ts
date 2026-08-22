@@ -154,6 +154,7 @@ export function runProvenanceMarker(job: Pick<JobItem, 'config_summary'>, mode: 
 /** Compact provenance marker used wherever a run can join a comparison. */
 export function runContextMarker(job: JobItem, context: RunContext): string | null {
   const provenance = runProvenanceMarker(job, context.mode);
-  if (provenance || job.config_summary?.geometry_type === 'imported') return provenance;
-  return runMatchesContext(job, context) === 'current' ? null : RUN_VERDICT_MARKER['older-revision'];
+  if (provenance) return provenance;
+  const verdict = runMatchesContext(job, context);
+  return verdict === 'current' ? null : RUN_VERDICT_MARKER[verdict];
 }

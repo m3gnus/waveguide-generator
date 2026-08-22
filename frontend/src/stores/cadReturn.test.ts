@@ -3,6 +3,7 @@ import type { CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
 import {
   acknowledgedFindingWire,
   combineChain,
+  combineChannelRole,
   combineDefaultHz,
   combineEnabledEffective,
   combineWire,
@@ -578,6 +579,22 @@ describe('combined output', () => {
     }]);
   });
 
+  it('assigns a mixed-role channel its lowest band regardless of source order', () => {
+    const mixed = {
+      ...bundle,
+      sources: [
+        { ...bundle.sources[1], id: 'source-hf', role: 'HF' },
+        { ...bundle.sources[0], id: 'source-lf', role: 'LF' },
+      ],
+    };
+    useCadReturnStore.setState({
+      selectedBundle: mixed,
+      driveChannels: [{ id: 'mixed', source_ids: ['source-hf', 'source-lf'], motion: 'normal' }],
+    });
+
+    expect(combineChannelRole(useCadReturnStore.getState(), 'mixed')).toBe('LF');
+  });
+
   it('falls back inside the sweep when the role default lies outside it', () => {
     useCadReturnStore.getState().selectBundle(rebanded({ 'source-mf': 'LF', 'source-hf': 'MF' }));
     // 100 Hz would be refused by the server's own band check on a 200 Hz sweep,
@@ -606,15 +623,20 @@ describe('combined output', () => {
 
   it('adopts the crossovers a recombine was computed with, ignoring foreign members', () => {
     useCadReturnStore.getState().selectBundle(bundle);
-    useCadReturnStore.getState().setCombineCrossoversFromResult(['drive-mf', 'drive-hf'], [1_450]);
+    useCadReturnStore.setState({ ingestRecord: record() });
+    useCadReturnStore.getState().setCombineCrossoversFromResult('wgi_one', ['drive-mf', 'drive-hf'], [1_450]);
     expect(useCadReturnStore.getState().combineCrossoversHz).toEqual({ 'drive-mf→drive-hf': 1_450 });
     expect(combineChain(useCadReturnStore.getState())[0].hz).toBe(1_450);
 
+    // Identical channel ids do not make a result from another ingest current.
+    useCadReturnStore.getState().setCombineCrossoversFromResult('wgi_other', ['drive-mf', 'drive-hf'], [1_900]);
+    expect(useCadReturnStore.getState().combineCrossoversHz).toEqual({ 'drive-mf→drive-hf': 1_450 });
+
     // A run from another return names channels this one has not got.
-    useCadReturnStore.getState().setCombineCrossoversFromResult(['drive-lf', 'drive-mf', 'drive-hf'], [90, 900]);
+    useCadReturnStore.getState().setCombineCrossoversFromResult('wgi_one', ['drive-lf', 'drive-mf', 'drive-hf'], [90, 900]);
     expect(useCadReturnStore.getState().combineCrossoversHz).toEqual({ 'drive-mf→drive-hf': 900 });
 
-    useCadReturnStore.getState().setCombineCrossoversFromResult(['drive-mf', 'drive-hf'], []);
+    useCadReturnStore.getState().setCombineCrossoversFromResult('wgi_one', ['drive-mf', 'drive-hf'], []);
     expect(useCadReturnStore.getState().combineCrossoversHz).toEqual({ 'drive-mf→drive-hf': 900 });
   });
 

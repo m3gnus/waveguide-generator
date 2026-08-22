@@ -326,6 +326,33 @@ describe('results dock view switch', () => {
     expect(host.querySelector('form.result-recombine')).toBeNull();
   });
 
+  it('does not hand a foreign run crossover back to the active CAD return', async () => {
+    useCadReturnStore.setState({ combineCrossoversHz: { 'drive-mf→drive-hf': 1_100 } });
+    const applied = { ...threeWay() };
+    (applied.channels!.combined.metadata!.combine as Record<string, unknown>).crossovers_hz = [1_400];
+    recombineMocks.recombine.mockResolvedValue(applied);
+    const foreign = job('foreign', 3);
+    foreign.cad_source!.ingest_id = 'wgi_foreign';
+    payloads.foreign = threeWay();
+    publishJobs([foreign]);
+    compareSelection.setPrimary('foreign');
+    await render();
+
+    const field = host.querySelector<HTMLInputElement>('.result-recombine input')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(field, '1400');
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      host.querySelector<HTMLFormElement>('form.result-recombine')!
+        .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      await Promise.resolve();
+    });
+
+    expect(recombineMocks.recombine).toHaveBeenCalledWith('foreign', expect.objectContaining({ crossovers_hz: [1_400] }));
+    expect(useCadReturnStore.getState().combineCrossoversHz).toEqual({ 'drive-mf→drive-hf': 1_100 });
+  });
+
   it('names the shown channel on the summary card', async () => {
     publishJobs([job('primary', 1)]);
     compareSelection.setPrimary('primary');
