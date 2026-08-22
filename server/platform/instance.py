@@ -129,10 +129,12 @@ LockConflict = InstanceAlreadyRunning
 def _windows_pid_is_running(pid: int) -> bool:
     """Answer "is this pid running" without trusting the exit code.
 
-    ``os.kill(pid, 0)`` is still the wrong probe here, but not for the reason
-    this comment used to give: measured on CPython 3.13.3 and 3.13.12, signal 0
-    does **not** terminate the target -- the process is alive afterwards, by
-    both ``poll()`` and ``tasklist``.  What it actually gets wrong is subtler
+    ``os.kill`` does map to ``TerminateProcess`` on Windows, which is why no
+    signal but ``0`` can be delivered gracefully -- but signal ``0`` itself is
+    special-cased and does **not** kill. Measured on CPython 3.13.3 and on the
+    bundled 3.13.12: the target is still running afterwards, by both
+    ``poll()`` and ``tasklist``. It is still the wrong probe here, just not for
+    the reason this comment used to give. What it gets wrong is subtler
     and worse to debug: Win32 keeps a process object resolvable for as long as
     anyone holds a handle to it, so ``os.kill`` reports a *dead* process as
     running whenever some other process still holds a handle open.  A probe
