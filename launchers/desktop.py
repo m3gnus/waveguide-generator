@@ -10,7 +10,9 @@ import sys
 import time
 import traceback
 from types import ModuleType
+from collections.abc import Callable
 from urllib.parse import urljoin, urlsplit
+import webbrowser
 
 from launchers.statusapp.__main__ import _report_startup_failure, _show_startup_failure_dialog
 from launchers.statusapp.controller import ServiceState, StatusController, StatusSnapshot
@@ -31,6 +33,68 @@ PYWEBVIEW_REPAIR = (
     "Install the desktop dependency with pip from server/requirements-runtime.txt "
     "(for example: python -m pip install -r server/requirements-runtime.txt)."
 )
+WEBVIEW2_REPAIR = (
+    "Install or repair the Microsoft Edge WebView2 Evergreen Runtime (x64), then "
+    "reopen Waveguide Generator: https://developer.microsoft.com/microsoft-edge/webview2/\n"
+    "If WebView2 is already installed and the error names pythonnet, reinstall the "
+    "dependencies from server/requirements-runtime.txt."
+)
+
+
+class WindowsWebViewUnavailable(RuntimeError):
+    """The Windows native-window prerequisites could not initialize."""
+
+
+def _load_pythonnet() -> object:
+    return importlib.import_module("clr")
+
+
+def _windows_webview2_installed() -> bool:
+    """Detect the Evergreen runtime registrations used by pywebview."""
+
+    if sys.platform != "win32":
+        return True
+    configured = os.environ.get("WEBVIEW2_BROWSER_EXECUTABLE_FOLDER")
+    if configured and Path(configured).is_dir():
+        return True
+    try:
+        import winreg
+    except ImportError:
+        return False
+
+    client = r"Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+    views = {
+        0,
+        getattr(winreg, "KEY_WOW64_32KEY", 0),
+        getattr(winreg, "KEY_WOW64_64KEY", 0),
+    }
+    for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+        for view in views:
+            try:
+                with winreg.OpenKey(hive, client, 0, winreg.KEY_READ | view) as key:
+                    version, _kind = winreg.QueryValueEx(key, "pv")
+            except OSError:
+                continue
+            if isinstance(version, str) and version.strip(" .0"):
+                return True
+    return False
+
+
+def _open_browser_fallback(url: str) -> None:
+    """Open the interface and retain a visible owner for the local server."""
+
+    if not webbrowser.open(url):
+        raise RuntimeError("the default browser refused the local interface URL")
+    if sys.platform == "win32":
+        import ctypes
+
+        ctypes.windll.user32.MessageBoxW(
+            0,
+            "Waveguide Generator is running in your browser.\n\n"
+            "Select OK when you want to stop it.",
+            WINDOW_TITLE,
+            0x40 | 0x10000,
+        )
 
 
 def _origin(url: str) -> tuple[str, str, int] | None:
@@ -69,11 +133,17 @@ class DesktopWindow:
         poll_interval: float = 0.25,
         startup_timeout: float = 120.0,
         update_ready_delay: float = 0.75,
+        pythonnet_loader: Callable[[], object] = _load_pythonnet,
+        webview2_probe: Callable[[], bool] = _windows_webview2_installed,
+        browser_fallback: Callable[[str], None] = _open_browser_fallback,
     ) -> None:
         self.controller = controller
         self.poll_interval = poll_interval
         self.startup_timeout = startup_timeout
         self.update_ready_delay = update_ready_delay
+        self.pythonnet_loader = pythonnet_loader
+        self.webview2_probe = webview2_probe
+        self.browser_fallback = browser_fallback
         self.js_api = _WindowApi(self)
         self._webview: ModuleType | None = None
         self._window: object | None = None
@@ -103,9 +173,7 @@ class DesktopWindow:
         def log(message: str) -> None:
             append_update_log(data_dir, message)
 
-        had_previous = any(
-            (resources / f"{name}.previous").exists() for name in ("app", "runtime")
-        )
+        had_previous = any((resources / f"{name}.previous").exists() for name in ("app", "runtime"))
         try:
             cleanup_previous_layers(resources, log=log)
         except OSError as exc:
@@ -140,9 +208,7 @@ class DesktopWindow:
         if sys.stderr is not None:
             _show_startup_failure_dialog(message)
 
-    def _report_bundle_startup_failure(
-        self, snapshot: StatusSnapshot, cause: str
-    ) -> None:
+    def _report_bundle_startup_failure(self, snapshot: StatusSnapshot, cause: str) -> None:
         message = self._failure_message(snapshot, cause)
         paths = self._bundle_paths()
         if paths is None:
@@ -221,6 +287,36 @@ class DesktopWindow:
             )
             raise
 
+    def _prepare_windows_webview(self) -> None:
+        if sys.platform != "win32":
+            return
+        try:
+            self.pythonnet_loader()
+        except Exception as exc:  # noqa: BLE001 - translated to an actionable repair
+            raise WindowsWebViewUnavailable(
+                f"pythonnet could not load: {type(exc).__name__}: {exc}"
+            ) from exc
+        if not self.webview2_probe():
+            raise WindowsWebViewUnavailable("the Microsoft Edge WebView2 runtime was not found")
+
+    def _fallback_from_windows_webview(self, snapshot: StatusSnapshot, exc: Exception) -> int:
+        _report_startup_failure(
+            "Waveguide Generator could not initialize its Windows desktop window: "
+            f"{type(exc).__name__}: {exc}\n\n{WEBVIEW2_REPAIR}\n\n"
+            "The interface will open in your default browser instead.",
+            detail=traceback.format_exc(),
+        )
+        try:
+            self.browser_fallback(snapshot.url)
+        except Exception as fallback_exc:  # noqa: BLE001 - must be visible under pythonw
+            _report_startup_failure(
+                "Waveguide Generator also could not open the browser fallback: "
+                f"{type(fallback_exc).__name__}: {fallback_exc}",
+                detail=traceback.format_exc(),
+            )
+            return 1
+        return 0
+
     def open_window(self, url: str) -> None:
         """Open one same-origin secondary window for the JavaScript bridge."""
 
@@ -291,6 +387,10 @@ class DesktopWindow:
                 webview = self._load_webview()
             except ImportError:
                 return 1
+            try:
+                self._prepare_windows_webview()
+            except WindowsWebViewUnavailable as exc:
+                return self._fallback_from_windows_webview(snapshot, exc)
             self._webview = webview
             webview.settings["ALLOW_DOWNLOADS"] = True
             self._window = webview.create_window(
@@ -301,7 +401,14 @@ class DesktopWindow:
                 height=900,
                 min_size=(1100, 700),
             )
-            webview.start(func=self._poll_loop)
+            try:
+                webview.start(func=self._poll_loop)
+            except Exception as exc:  # noqa: BLE001 - native initialization boundary
+                if sys.platform == "win32" and (
+                    "pythonnet" in str(exc).casefold() or "webview2" in str(exc).casefold()
+                ):
+                    return self._fallback_from_windows_webview(snapshot, exc)
+                raise
             return 0
         except Exception as exc:  # noqa: BLE001 - native startup must remain visible
             _report_startup_failure(

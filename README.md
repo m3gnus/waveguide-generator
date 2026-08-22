@@ -29,6 +29,18 @@ Applications. The app is ad-hoc signed rather than notarized, so on first launch
 macOS may require **System Settings → Privacy & Security → Open Anyway** and a
 confirmation; later launches work normally.
 
+For a self-contained Windows install, download **Waveguide
+Generator-…-windows-x86_64.zip**, extract the complete **Waveguide Generator**
+folder, and double-click **Waveguide Generator.exe** inside it. The executable is
+not publisher-signed, so Microsoft Defender SmartScreen may require **More info →
+Run anyway** on first launch. The native window requires the **Microsoft Edge
+WebView2 Evergreen Runtime (x64)**, which is normally present on current Windows
+10 and Windows 11 systems; when it is missing or its pythonnet bridge cannot load,
+WG shows a repair link and opens the interface in the default browser. The folder
+also includes `WaveguideGenerator.ico` for a shortcut. The executable itself keeps
+the generic Python icon until a future signed build adds the icon as a Windows
+executable resource.
+
 It fast-forwards the checkout, downloads that version's prebuilt interface from
 the GitHub release and **refuses to extract it unless it matches the published
 SHA-256**, creates `.venv` with CPython 3.13 and the locked dependency set,

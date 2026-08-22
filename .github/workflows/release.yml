@@ -2,7 +2,7 @@ name: Release
 
 # Goal 6 of the rebuild plan: end users must not need a Node runtime. The SPA is
 # therefore built here, once, and attached to the tagged release; both the
-# checkout installer and the standalone macOS bundle consume that same artifact.
+# checkout installer and both standalone bundles consume that same artifact.
 
 on:
   push:
@@ -126,11 +126,20 @@ jobs:
         # does not depend on whichever python3 the runner image ships.
         run: |
           set -euo pipefail
-          version="$(uv run --no-project --python 3.13 python -c 'import json; print(json.load(open("shared/version.json"))["version"])')"
+          version="$(uv run --no-project --python 3.13.12 python -c 'import json; print(json.load(open("shared/version.json"))["version"])')"
           spa="build/spa/waveguide-generator-v2-spa-$version.tar.gz"
           test -f "$spa"
           test -f "$spa.sha256"
-          uv run --no-project --python 3.13 scripts/build_bundle.py --spa "$spa" --output build/bundle
+          uv run --no-project --python 3.13.12 scripts/build_bundle.py --spa "$spa" --output build/bundle
+
+      - name: Share the canonical platform-neutral app layer
+        uses: actions/upload-artifact@v4
+        with:
+          name: standalone-app-layer
+          path: |
+            build/bundle/waveguide-generator-app-*.zip
+            build/bundle/waveguide-generator-app-*.zip.sha256
+          if-no-files-found: error
 
       - name: Reuse a runtime already published on an earlier release
         env:
@@ -169,3 +178,104 @@ jobs:
             The standalone macOS assets include a drag-to-Applications DMG, an app-layer
             update zip and manifest, and a content-addressed runtime zip when that runtime
             has not already been published. Every uploaded asset has a `.sha256` sidecar.
+
+  windows-bundle:
+    name: Build and attach the Windows standalone app
+    runs-on: windows-latest
+    # The macOS job publishes the one canonical app-layer artifact. Waiting for
+    # it lets this job prove that the independently built Windows copy is exact.
+    needs: [spa, macos-bundle]
+    env:
+      RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Download the verified SPA inputs
+        uses: actions/download-artifact@v4
+        with:
+          name: release-spa
+          path: build/spa
+
+      - name: Download the macOS-built app layer
+        uses: actions/download-artifact@v4
+        with:
+          name: standalone-app-layer
+          path: build/app-reference
+
+      - name: Build and verify the standalone app
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = uv run --no-project --python 3.13.12 python -c 'import json; print(json.load(open("shared/version.json"))["version"])'
+          $spa = "build/spa/waveguide-generator-v2-spa-$version.tar.gz"
+          if (-not (Test-Path -LiteralPath $spa) -or -not (Test-Path -LiteralPath "$spa.sha256")) {
+            throw "The verified SPA inputs are missing."
+          }
+          uv run --no-project --python 3.13.12 python scripts/build_bundle.py --platform windows --spa $spa --output build/bundle
+
+      - name: Assert the app layer is byte-identical across platforms
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $local = @(Get-ChildItem -File build/bundle/waveguide-generator-app-*.zip)
+          $reference = @(Get-ChildItem -File build/app-reference/waveguide-generator-app-*.zip)
+          if ($local.Count -ne 1 -or $reference.Count -ne 1) {
+            throw "Expected exactly one local and one macOS-built app layer."
+          }
+          $localHash = (Get-FileHash -Algorithm SHA256 $local[0]).Hash
+          $referenceHash = (Get-FileHash -Algorithm SHA256 $reference[0]).Hash
+          if ($localHash -ne $referenceHash) {
+            throw "Windows and macOS app-layer ZIPs differ: $localHash != $referenceHash"
+          }
+          Write-Host "Cross-platform app layer SHA-256: $localHash"
+
+      - name: Reuse a runtime already published on an earlier release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $runtime = @(Get-ChildItem -File build/bundle/waveguide-generator-runtime-windows-x86_64-*.zip)
+          if ($runtime.Count -ne 1) {
+            throw "The bundle build produced no unique Windows runtime zip."
+          }
+          $currentCreatedAt = [DateTimeOffset]::Parse((gh release view $env:RELEASE_TAG --json createdAt --jq '.createdAt'))
+          $releases = gh release list --limit 1000 --json tagName,createdAt | ConvertFrom-Json
+          foreach ($release in $releases) {
+            if ([DateTimeOffset]::Parse($release.createdAt) -ge $currentCreatedAt) {
+              continue
+            }
+            $assetNames = @(gh release view $release.tagName --json assets --jq '.assets[].name')
+            if ($assetNames -contains $runtime[0].Name) {
+              Write-Host "Runtime $($runtime[0].Name) already exists on $($release.tagName); skipping this upload."
+              $reused = Join-Path $env:RUNNER_TEMP "reused-runtime"
+              New-Item -ItemType Directory -Force $reused | Out-Null
+              Move-Item -LiteralPath $runtime[0].FullName -Destination $reused
+              Move-Item -LiteralPath "$($runtime[0].FullName).sha256" -Destination $reused
+              break
+            }
+          }
+
+      - name: Select Windows-only release assets
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force build/windows-upload | Out-Null
+          Get-ChildItem -File "build/bundle/Waveguide Generator-*-windows-x86_64.zip*" | Copy-Item -Destination build/windows-upload
+          Get-ChildItem -File build/bundle/waveguide-generator-runtime-windows-x86_64-*.zip* -ErrorAction SilentlyContinue | Copy-Item -Destination build/windows-upload
+
+      - name: Attach standalone assets to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: build/windows-upload/*
+          fail_on_unmatched_files: true
+          append_body: true
+          body: |
+            The Windows standalone asset is an extract-and-run folder ZIP. Its
+            content-addressed runtime ZIP is included only when that runtime has
+            not already been published. Every uploaded asset has a `.sha256` sidecar.

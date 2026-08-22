@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the committed macOS launcher icon using only the standard library.
+"""Generate the macOS ICNS or Windows ICO using only the standard library.
 
 The mark is two curves the application itself produces, drawn in the interface
 palette: the R-OSSE flare of the reference design as a solid cream mass running
@@ -50,6 +50,7 @@ ICNS_ELEMENTS = {
     b"ic09": "icon_512x512.png",
     b"ic10": "icon_512x512@2x.png",
 }
+ICO_SIZES = (16, 24, 32, 48, 64, 128, 256)
 
 
 def _chunk(kind: bytes, payload: bytes) -> bytes:
@@ -69,36 +70,217 @@ _VIEWBOX = 64.0
 _RESPONSE_HALF_WIDTH = 1.8
 
 FLARE_Y = (
-    64.000, 63.765, 63.523, 63.274, 63.018, 62.755, 62.486, 62.211,
-    61.930, 61.642, 61.349, 61.050, 60.746, 60.437, 60.124, 59.805,
-    59.482, 59.153, 58.820, 58.483, 58.141, 57.794, 57.444, 57.089,
-    56.730, 56.366, 55.999, 55.627, 55.251, 54.871, 54.487, 54.098,
-    53.705, 53.308, 52.907, 52.501, 52.091, 51.677, 51.258, 50.835,
-    50.407, 49.974, 49.537, 49.095, 48.648, 48.196, 47.740, 47.277,
-    46.810, 46.337, 45.859, 45.375, 44.886, 44.390, 43.889, 43.381,
-    42.867, 42.345, 41.817, 41.283, 40.741, 40.191, 39.634, 39.069,
-    38.496, 37.914, 37.323, 36.723, 36.113, 35.493, 34.863, 34.221,
-    33.568, 32.904, 32.226, 31.534, 30.829, 30.108, 29.370, 28.616,
-    27.841, 27.048, 26.231, 25.391, 24.523, 23.625, 22.694, 21.724,
-    20.709, 19.642, 18.511, 17.300, 15.985, 14.525, 12.844, 10.738,
+    64.000,
+    63.765,
+    63.523,
+    63.274,
+    63.018,
+    62.755,
+    62.486,
+    62.211,
+    61.930,
+    61.642,
+    61.349,
+    61.050,
+    60.746,
+    60.437,
+    60.124,
+    59.805,
+    59.482,
+    59.153,
+    58.820,
+    58.483,
+    58.141,
+    57.794,
+    57.444,
+    57.089,
+    56.730,
+    56.366,
+    55.999,
+    55.627,
+    55.251,
+    54.871,
+    54.487,
+    54.098,
+    53.705,
+    53.308,
+    52.907,
+    52.501,
+    52.091,
+    51.677,
+    51.258,
+    50.835,
+    50.407,
+    49.974,
+    49.537,
+    49.095,
+    48.648,
+    48.196,
+    47.740,
+    47.277,
+    46.810,
+    46.337,
+    45.859,
+    45.375,
+    44.886,
+    44.390,
+    43.889,
+    43.381,
+    42.867,
+    42.345,
+    41.817,
+    41.283,
+    40.741,
+    40.191,
+    39.634,
+    39.069,
+    38.496,
+    37.914,
+    37.323,
+    36.723,
+    36.113,
+    35.493,
+    34.863,
+    34.221,
+    33.568,
+    32.904,
+    32.226,
+    31.534,
+    30.829,
+    30.108,
+    29.370,
+    28.616,
+    27.841,
+    27.048,
+    26.231,
+    25.391,
+    24.523,
+    23.625,
+    22.694,
+    21.724,
+    20.709,
+    19.642,
+    18.511,
+    17.300,
+    15.985,
+    14.525,
+    12.844,
+    10.738,
     6.000,
 )
 
 RESPONSE_Y = (
-    39.000, 38.732, 38.421, 37.839, 37.221, 36.509, 35.738, 34.880,
-    33.945, 32.944, 31.871, 30.764, 29.660, 28.557, 27.629, 26.738,
-    26.146, 25.625, 25.356, 25.147, 25.048, 24.948, 24.847, 24.683,
-    24.483, 24.208, 23.910, 23.595, 23.281, 23.042, 22.824, 22.703,
-    22.606, 22.560, 22.522, 22.493, 22.467, 22.442, 22.407, 22.369,
-    22.299, 22.222, 22.095, 21.962, 21.790, 21.618, 21.447, 21.289,
-    21.153, 21.064, 21.016, 21.042, 21.105, 21.210, 21.327, 21.472,
-    21.620, 21.784, 21.969, 22.234, 22.533, 22.898, 23.276, 23.670,
-    24.061, 24.450, 24.875, 25.312, 25.775, 26.241, 26.742, 27.244,
-    27.757, 28.260, 28.736, 29.236, 29.771, 30.211, 30.578, 31.048,
-    31.563, 32.008, 32.437, 32.928, 33.402, 33.719, 34.070, 34.530,
-    35.018, 35.550, 36.126, 36.743, 37.159, 37.464, 37.673, 37.854,
-    37.859, 37.854, 37.963, 38.052, 38.056, 38.138, 38.387, 38.533,
-    38.557, 38.609, 38.680, 38.549, 38.343, 38.278, 38.236,
+    39.000,
+    38.732,
+    38.421,
+    37.839,
+    37.221,
+    36.509,
+    35.738,
+    34.880,
+    33.945,
+    32.944,
+    31.871,
+    30.764,
+    29.660,
+    28.557,
+    27.629,
+    26.738,
+    26.146,
+    25.625,
+    25.356,
+    25.147,
+    25.048,
+    24.948,
+    24.847,
+    24.683,
+    24.483,
+    24.208,
+    23.910,
+    23.595,
+    23.281,
+    23.042,
+    22.824,
+    22.703,
+    22.606,
+    22.560,
+    22.522,
+    22.493,
+    22.467,
+    22.442,
+    22.407,
+    22.369,
+    22.299,
+    22.222,
+    22.095,
+    21.962,
+    21.790,
+    21.618,
+    21.447,
+    21.289,
+    21.153,
+    21.064,
+    21.016,
+    21.042,
+    21.105,
+    21.210,
+    21.327,
+    21.472,
+    21.620,
+    21.784,
+    21.969,
+    22.234,
+    22.533,
+    22.898,
+    23.276,
+    23.670,
+    24.061,
+    24.450,
+    24.875,
+    25.312,
+    25.775,
+    26.241,
+    26.742,
+    27.244,
+    27.757,
+    28.260,
+    28.736,
+    29.236,
+    29.771,
+    30.211,
+    30.578,
+    31.048,
+    31.563,
+    32.008,
+    32.437,
+    32.928,
+    33.402,
+    33.719,
+    34.070,
+    34.530,
+    35.018,
+    35.550,
+    36.126,
+    36.743,
+    37.159,
+    37.464,
+    37.673,
+    37.854,
+    37.859,
+    37.854,
+    37.963,
+    38.052,
+    38.056,
+    38.138,
+    38.387,
+    38.533,
+    38.557,
+    38.609,
+    38.680,
+    38.549,
+    38.343,
+    38.278,
+    38.236,
 )
 
 
@@ -117,9 +299,7 @@ def _curve_y(table: tuple[float, ...], x: float) -> float:
     return table[lower] + (table[lower + 1] - table[lower]) * weight
 
 
-def _segment_distance(
-    x: float, y: float, x1: float, y1: float, x2: float, y2: float
-) -> float:
+def _segment_distance(x: float, y: float, x1: float, y1: float, x2: float, y2: float) -> float:
     dx, dy = x2 - x1, y2 - y1
     length_squared = dx * dx + dy * dy
     if not length_squared:
@@ -140,10 +320,17 @@ def _response_distance(x: float, y: float) -> float:
     index = int(min(max(x, 0.0), 1.0) * last)
     nearest = float("inf")
     for j in range(max(0, index - 2), min(last, index + 3)):
-        nearest = min(nearest, _segment_distance(
-            x * _VIEWBOX, y * _VIEWBOX,
-            j * step, RESPONSE_Y[j], (j + 1) * step, RESPONSE_Y[j + 1],
-        ))
+        nearest = min(
+            nearest,
+            _segment_distance(
+                x * _VIEWBOX,
+                y * _VIEWBOX,
+                j * step,
+                RESPONSE_Y[j],
+                (j + 1) * step,
+                RESPONSE_Y[j + 1],
+            ),
+        )
     return nearest
 
 
@@ -206,6 +393,41 @@ def _pack_icns(output: Path, iconset: Path) -> None:
     output.write_bytes(b"icns" + struct.pack(">I", len(elements) + 8) + elements)
 
 
+def build_ico(output: Path) -> None:
+    """Write a deterministic multi-resolution Windows icon containing PNG frames."""
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="wg2-icon-") as temporary:
+        root = Path(temporary)
+        images: list[tuple[int, bytes]] = []
+        for size in ICO_SIZES:
+            png = root / f"icon-{size}.png"
+            write_png(png, size)
+            images.append((size, png.read_bytes()))
+
+    offset = 6 + 16 * len(images)
+    entries = bytearray()
+    payload = bytearray()
+    for size, png in images:
+        dimension = 0 if size == 256 else size
+        entries.extend(
+            struct.pack(
+                "<BBBBHHII",
+                dimension,
+                dimension,
+                0,
+                0,
+                1,
+                32,
+                len(png),
+                offset,
+            )
+        )
+        payload.extend(png)
+        offset += len(png)
+    output.write_bytes(struct.pack("<HHH", 0, 1, len(images)) + entries + payload)
+
+
 def build(output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="wg2-icon-") as temporary:
@@ -230,12 +452,19 @@ def build(output: Path) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument(
+        "--ico",
+        action="store_true",
+        help="write a Windows ICO instead of an ICNS container",
+    )
     parser.add_argument("--check", action="store_true", help="verify the committed icon")
     args = parser.parse_args()
     if not args.check:
-        build(args.output)
+        (build_ico if args.ico else build)(args.output)
         print(f"Generated {args.output}")
         return 0
+    if args.ico:
+        parser.error("--check verifies the committed ICNS; omit --ico")
     with tempfile.TemporaryDirectory(prefix="wg2-icon-check-") as temporary:
         generated = Path(temporary) / "WaveguideGenerator.icns"
         build(generated)

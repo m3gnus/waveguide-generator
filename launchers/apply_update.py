@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable, Sequence
 from datetime import datetime
+import json
 import os
 from pathlib import Path
 import shutil
@@ -17,6 +18,8 @@ from typing import Any
 
 PARENT_WAIT_SECONDS = 60.0
 PARENT_POLL_SECONDS = 0.2
+WINDOWS_CREATE_NEW_PROCESS_GROUP = 0x00000200
+WINDOWS_DETACHED_PROCESS = 0x00000008
 
 RenameCallable = Callable[[Path, Path], None]
 CommandRunner = Callable[..., subprocess.CompletedProcess[Any]]
@@ -87,7 +90,11 @@ def bundle_from_app_layer(app_layer: Path, platform_name: str) -> Path:
 
 
 def _rename(source: Path, destination: Path) -> None:
-    source.rename(destination)
+    # ``os.replace`` maps to the replace-existing Win32 move operation while
+    # retaining atomic rename semantics on POSIX. The staged updater is run by
+    # the staged runtime whenever that layer changes, so no loaded DLL remains
+    # inside the old runtime directory when NTFS moves it to ``.previous``.
+    os.replace(source, destination)
 
 
 def _remove(path: Path) -> None:
@@ -151,6 +158,104 @@ def swap_staged_layers(
         raise ApplyUpdateError(f"Could not swap the staged update: {exc}.{suffix}") from exc
 
 
+def staged_launcher_files(runtime: Path) -> list[tuple[str, str]]:
+    """Read the launcher files a runtime layer declares for its application folder.
+
+    Only Windows runtimes carry the key: macOS keeps every executable inside the
+    bundle, so there is nothing beside it to refresh.
+    """
+
+    manifest = runtime / "RUNTIME-MANIFEST.json"
+    try:
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return []
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ApplyUpdateError(f"Could not read the runtime manifest {manifest}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ApplyUpdateError(f"The runtime manifest {manifest} is not an object.")
+    entries = payload.get("launcherFiles")
+    if entries is None:
+        return []
+    if not isinstance(entries, list):
+        raise ApplyUpdateError(f"The runtime manifest {manifest} has invalid launcherFiles.")
+    files: list[tuple[str, str]] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise ApplyUpdateError(f"The runtime manifest {manifest} has invalid launcherFiles.")
+        source = entry.get("source")
+        destination = entry.get("destination")
+        for name in (source, destination):
+            # A manifest travels with a downloaded archive, so treat these as
+            # untrusted input: only plain file names may be copied, and never
+            # into a parent or absolute location.
+            if (
+                not isinstance(name, str)
+                or not name
+                or name in {".", ".."}
+                or Path(name).name != name
+            ):
+                raise ApplyUpdateError(
+                    f"The runtime manifest {manifest} names an unsafe launcher file: {name!r}"
+                )
+        assert isinstance(source, str) and isinstance(destination, str)
+        files.append((source, destination))
+    return files
+
+
+def refresh_launcher_files(
+    resources: Path,
+    *,
+    copier: Callable[[Path, Path], object] = shutil.copy2,
+    renamer: RenameCallable = _rename,
+    log: LogCallable | None = None,
+) -> list[Path]:
+    """Replace the launcher files beside a swapped-in runtime, reversibly.
+
+    The old files move aside as ``<name>.previous`` so a failed start restores a
+    matched launcher and runtime together; a healthy start removes them with the
+    layer directories.
+    """
+
+    runtime = resources / "runtime"
+    files = staged_launcher_files(runtime)
+    if not files:
+        return []
+
+    replaced: list[tuple[Path, Path]] = []
+    written: list[Path] = []
+    try:
+        for source, destination in files:
+            origin = runtime / source
+            if not origin.is_file():
+                raise ApplyUpdateError(f"The installed runtime is missing {origin}.")
+            target = resources / destination
+            previous = target.with_name(target.name + ".previous")
+            if target.exists() or target.is_symlink():
+                _remove(previous)
+                renamer(target, previous)
+                replaced.append((target, previous))
+            copier(origin, target)
+            written.append(target)
+    except (ApplyUpdateError, OSError) as exc:
+        for target in reversed(written):
+            try:
+                _remove(target)
+            except OSError:
+                pass
+        for target, previous in reversed(replaced):
+            try:
+                if previous.exists() and not target.exists():
+                    renamer(previous, target)
+            except OSError:
+                pass
+        raise ApplyUpdateError(f"Could not refresh the launcher files: {exc}") from exc
+
+    if log is not None:
+        log(f"Refreshed {len(written)} launcher files from the installed runtime.")
+    return written
+
+
 def cleanup_previous_layers(resources: Path, *, log: LogCallable | None = None) -> list[Path]:
     """Remove rollback layers only after the new app has reported healthy."""
 
@@ -162,6 +267,14 @@ def cleanup_previous_layers(resources: Path, *, log: LogCallable | None = None) 
             removed.append(path)
             if log is not None:
                 log(f"Removed healthy-start rollback layer: {path}")
+    for path in sorted(resources.glob("*.previous")):
+        # Whatever remains at this point is a launcher file saved by
+        # refresh_launcher_files; the two layer directories are gone above.
+        if path.is_file() or path.is_symlink():
+            _remove(path)
+            removed.append(path)
+            if log is not None:
+                log(f"Removed healthy-start rollback launcher file: {path}")
     return removed
 
 
@@ -212,8 +325,23 @@ def rollback_previous_layers(
 
     for _current, failed in moved_current:
         _remove(failed)
+    restored_files = 0
+    for previous in sorted(resources.glob("*.previous")):
+        # Launcher files saved beside the layers must go back with them, or a
+        # restored runtime would keep the newer launcher that failed to start.
+        if not (previous.is_file() or previous.is_symlink()):
+            continue
+        current = previous.with_name(previous.name[: -len(".previous")])
+        try:
+            _remove(current)
+            renamer(previous, current)
+            restored_files += 1
+        except OSError as exc:
+            if log is not None:
+                log(f"Could not restore the previous launcher file {current}: {exc}")
     if log is not None:
-        log("Restored the previous bundle layers after startup failed.")
+        suffix = f" and {restored_files} launcher files" if restored_files else ""
+        log(f"Restored the previous bundle layers{suffix} after startup failed.")
     return True
 
 
@@ -267,7 +395,12 @@ def repair_bundle(
     )
 
 
-def relaunch_application(command: Sequence[str], platform_name: str) -> None:
+def relaunch_application(
+    command: Sequence[str],
+    platform_name: str,
+    *,
+    process_factory: Callable[..., subprocess.Popen[Any]] = subprocess.Popen,
+) -> None:
     options: dict[str, object] = {
         "stdin": subprocess.DEVNULL,
         "stdout": subprocess.DEVNULL,
@@ -275,18 +408,17 @@ def relaunch_application(command: Sequence[str], platform_name: str) -> None:
         "close_fds": True,
     }
     if platform_name == "win32":
-        options["creationflags"] = (
-            getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-            | getattr(subprocess, "DETACHED_PROCESS", 0)
-        )
+        options["creationflags"] = getattr(
+            subprocess,
+            "CREATE_NEW_PROCESS_GROUP",
+            WINDOWS_CREATE_NEW_PROCESS_GROUP,
+        ) | getattr(subprocess, "DETACHED_PROCESS", WINDOWS_DETACHED_PROCESS)
     else:
         options["start_new_session"] = True
-    subprocess.Popen(list(command), **options)
+    process_factory(list(command), **options)
 
 
-def relaunch_command(
-    bundle: Path, platform_name: str, arguments: Sequence[str] = ()
-) -> list[str]:
+def relaunch_command(bundle: Path, platform_name: str, arguments: Sequence[str] = ()) -> list[str]:
     """Relaunch the bundle with the CLI arguments the updated process was started with.
 
     ``open`` starts the app through LaunchServices, which passes neither the
@@ -338,6 +470,14 @@ def apply_update(
     except ApplyUpdateError as exc:
         log(str(exc))
         return 2
+
+    if staged_runtime is not None:
+        try:
+            refresh_launcher_files(resources, log=log)
+        except ApplyUpdateError as exc:
+            log(str(exc))
+            rollback_previous_layers(resources, renamer=renamer, log=log)
+            return 4
 
     log("Installed the staged bundle layers.")
     repair_bundle(bundle.resolve(), platform_name=platform_name, runner=runner, log=log)
