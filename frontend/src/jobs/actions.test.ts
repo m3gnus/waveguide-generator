@@ -16,7 +16,7 @@ describe('API validation errors', () => {
 });
 
 describe('solve submission', () => {
-  it('keeps AUTO on real backends even when solver mode forces the Metal fast path', () => {
+  it('requires the advertised Axisym runner when solver mode forces the meridian path', () => {
     const capabilities = { engines: [
       { name: 'dryrun', available: true, reason: null, version: 'builtin', fast_paths: [] },
       { name: 'metal', available: true, reason: null, version: '1', fast_paths: ['axisymmetric-meridian'] },
@@ -24,7 +24,14 @@ describe('solve submission', () => {
       default: 'auto', resolvedDefault: 'metal', full3dOrder: ['metal', 'dryrun'], axisymmetricRunner: 'axisym',
     } };
     expect(resolveEngine('auto', capabilities)).toBe('metal');
-    expect(resolveEngine('auto', capabilities, 'circsym')).toBe('metal');
+    expect(() => resolveEngine('auto', capabilities, 'circsym')).toThrow('requires the advertised axisym runner');
+    expect(() => resolveEngine('metal', capabilities, 'circsym')).toThrow('requires the advertised axisym runner');
+
+    capabilities.engines.push({
+      name: 'axisym', available: true, reason: null, version: '1', fast_paths: ['axisymmetric-meridian'],
+    });
+    expect(resolveEngine('auto', capabilities, 'circsym')).toBe('axisym');
+    expect(resolveEngine('metal', capabilities, 'circsym')).toBe('axisym');
   });
 
   it('resolves AUTO to Axisym when it is the only engine the host has', () => {

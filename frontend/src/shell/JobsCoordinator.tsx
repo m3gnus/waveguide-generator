@@ -172,8 +172,17 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   useEffect(() => { jobsSocket.start(); return () => jobsSocket.stop(); }, []);
 
   let effectiveEngine = selectedEngine;
-  if (selectedEngine === 'auto') {
-    try { effectiveEngine = resolveEngine('auto', { engines: capabilities, engineSelection }, solveOptions.solverMode); } catch { /* surfaced below */ }
+  let engineResolutionError: string | null = null;
+  try {
+    effectiveEngine = resolveEngine(selectedEngine, { engines: capabilities, engineSelection }, solveOptions.solverMode);
+  } catch (error) {
+    engineResolutionError = error instanceof Error ? error.message : String(error);
+    // Keep the advertised runner as the effective identity so the status and
+    // disabled control describe the missing dependency, never the otherwise
+    // selected full-3D fallback.
+    if (solveOptions.solverMode === 'circsym' && engineSelection.axisymmetricRunner) {
+      effectiveEngine = engineSelection.axisymmetricRunner;
+    }
   }
   const capability = capabilities.find((engine) => engine.name.toLowerCase() === effectiveEngine.toLowerCase()) ?? null;
   const metalCapability = capabilities.find((engine) => engine.name.toLowerCase() === 'metal') ?? null;
@@ -202,7 +211,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     if (submissionInFlight.current) return;
     submissionInFlight.current = true;
     try {
-      if (!capability?.available) throw new Error(capability?.reason ?? capabilityError ?? `${selectedEngine} engine is unavailable`);
+      if (!capability?.available) throw new Error(engineResolutionError ?? capability?.reason ?? capabilityError ?? `${selectedEngine} engine is unavailable`);
       setSubmitting(true);
       setActionError(null);
       // Pressing Solve never edits the design. BEMPP's own closed-wall default
@@ -228,7 +237,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       submissionInFlight.current = false;
       setSubmitting(false);
     }
-  }, [capability, capabilityError, designName, now, preferences, selectedEngine]);
+  }, [capability, capabilityError, designName, engineResolutionError, now, preferences, selectedEngine]);
 
   const runImported = useCallback(async (submission: ImportedSolveSubmission) => {
     if (submissionInFlight.current) return null;
@@ -327,7 +336,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     });
   }, [automation, jobs, preferences, reportError]);
 
-  const unavailable = capability?.reason ?? capabilityError ?? 'Checking solver engine capability…';
+  const unavailable = engineResolutionError ?? capability?.reason ?? capabilityError ?? 'Checking solver engine capability…';
   const activeCapability = cadGeometryActive ? metalCapability : capability;
   const solve = useCallback(() => {
     const action = async () => {
