@@ -376,6 +376,7 @@ def solve_metal_from_msh_text(
             channel_count=1,
             enabled=field_plane_enabled,
             supported=aperture_tag is None,
+            unsupported_reason="unsupported_coupled_infinite_baffle",
             cap_bytes=field_trace_cap_bytes,
         )
     )
@@ -2028,7 +2029,9 @@ class MetalEngine:
                     else "solver_mode='auto' selected the eligible Metal "
                     "axisymmetric meridian fast path"
                 )
-                outcome.field_trace_unavailable_reason = "unsupported_solve_mode"
+                outcome.field_trace_unavailable_reason = (
+                    "unsupported_axisymmetric_formulation"
+                )
                 return outcome
 
         context = SolverContext.from_request(request, solver_mode="full_3d")

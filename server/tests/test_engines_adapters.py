@@ -322,7 +322,9 @@ def test_metal_infinite_baffle_requires_and_maps_aperture_tag(monkeypatch) -> No
     assert captured["return_surface_traces"] is False
     assert captured["frame_override"].origin.tolist() == pytest.approx([0.0, 0.04, 0.05])
     assert response["metadata"]["infinite_baffle"]["backend"] == "full_3d_coupled"
-    assert response["_field_trace_unavailable_reason"] == "unsupported_solve_mode"
+    assert response["_field_trace_unavailable_reason"] == (
+        "unsupported_coupled_infinite_baffle"
+    )
 
 
 def test_bempp_adapter_is_cpu_fallback_and_supports_coupled_infinite_baffle(monkeypatch) -> None:
@@ -381,7 +383,9 @@ def test_bempp_adapter_is_cpu_fallback_and_supports_coupled_infinite_baffle(monk
         "aperture_tag": 12,
         "source": "hornlab-waveguide-mesher",
     }
-    assert ib_response["_field_trace_unavailable_reason"] == "unsupported_solve_mode"
+    assert ib_response["_field_trace_unavailable_reason"] == (
+        "unsupported_coupled_infinite_baffle"
+    )
 
 
 def test_bempp_field_plane_option_disables_trace_retention(monkeypatch) -> None:

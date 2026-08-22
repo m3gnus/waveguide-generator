@@ -252,8 +252,14 @@ class FieldPlaneService:
         metadata = metadata if isinstance(metadata, Mapping) else {}
         solve_path = metadata.get("solve_path")
         unavailable_reason = metadata.get("unavailable_reason")
-        if solve_path not in {None, "full-3d"} or unavailable_reason == (
-            "unsupported_solve_mode"
+        unsupported_reasons = {
+            "unsupported_solve_mode",
+            "unsupported_axisymmetric_formulation",
+            "unsupported_coupled_infinite_baffle",
+        }
+        if (
+            solve_path not in {None, "full-3d"}
+            or unavailable_reason in unsupported_reasons
         ):
             raise FieldPlaneUnsupported(
                 "Field planes require a completed full-3D solve"

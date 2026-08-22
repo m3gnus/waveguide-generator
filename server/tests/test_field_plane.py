@@ -182,6 +182,7 @@ def _create_job(
     multi: bool = False,
     solve_path: str = "full-3d",
     backend: str = METAL_FIELD_TRACE_BACKEND,
+    unavailable_reason: str | None = None,
 ) -> None:
     now = "2026-08-18T00:00:00"
     geometry: dict[str, Any]
@@ -217,9 +218,12 @@ def _create_job(
                     None
                     if traces
                     else (
-                        "unsupported_solve_mode"
-                        if solve_path != "full-3d"
-                        else "solve_predates_traces"
+                        unavailable_reason
+                        or (
+                            "unsupported_solve_mode"
+                            if solve_path != "full-3d"
+                            else "solve_predates_traces"
+                        )
                     )
                 ),
             },
@@ -603,12 +607,27 @@ def test_system_response_weights_traces_and_tracks_synthesis_revision(
 
 
 @pytest.mark.parametrize(
-    ("job_id", "status", "traces", "solve_path", "expected"),
+    ("job_id", "status", "traces", "solve_path", "unavailable_reason", "expected"),
     [
-        ("missing", None, False, "full-3d", 404),
-        ("incomplete", "error", False, "full-3d", 409),
-        ("old", "complete", False, "full-3d", 410),
-        ("axisymmetric", "complete", False, "axisymmetric-meridian", 422),
+        ("missing", None, False, "full-3d", None, 404),
+        ("incomplete", "error", False, "full-3d", None, 409),
+        ("old", "complete", False, "full-3d", None, 410),
+        (
+            "axisymmetric",
+            "complete",
+            False,
+            "axisymmetric-meridian",
+            "unsupported_axisymmetric_formulation",
+            422,
+        ),
+        (
+            "coupled-ib",
+            "complete",
+            False,
+            "full-3d",
+            "unsupported_coupled_infinite_baffle",
+            422,
+        ),
     ],
 )
 def test_job_and_artifact_error_mappings(
@@ -617,6 +636,7 @@ def test_job_and_artifact_error_mappings(
     status: str | None,
     traces: bool,
     solve_path: str,
+    unavailable_reason: str | None,
     expected: int,
 ) -> None:
     async def scenario() -> None:
@@ -630,6 +650,7 @@ def test_job_and_artifact_error_mappings(
                 status=status,
                 traces=traces,
                 solve_path=solve_path,
+                unavailable_reason=unavailable_reason,
             )
         response_status, _raw, _headers = await _request(
             app,

@@ -616,7 +616,7 @@ class AxisymmetricEngine:
         )
         return EngineRunResult(
             results=results,
-            field_trace_unavailable_reason="unsupported_solve_mode",
+            field_trace_unavailable_reason="unsupported_axisymmetric_formulation",
         )
 
 
