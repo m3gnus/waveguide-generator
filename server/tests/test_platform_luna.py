@@ -160,7 +160,9 @@ def test_pid_liveness_probe_answers_without_killing() -> None:
     the answer does.
     """
 
-    child = subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.read()"], stdin=subprocess.PIPE)
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import sys; sys.stdin.read()"], stdin=subprocess.PIPE
+    )
     try:
         assert instance._pid_is_running(child.pid) is True
         assert child.poll() is None
@@ -202,14 +204,11 @@ def test_runtime_file_handler_rotates_during_logging(
     # event is the event loop. They are still exactly one rotating file
     # handler, they are just no longer attached to the root logger.
     file_handlers = [
-        handler
-        for handler in logging_setup.log_sinks()
-        if isinstance(handler, RotatingFileHandler)
+        handler for handler in logging_setup.log_sinks() if isinstance(handler, RotatingFileHandler)
     ]
     assert len(file_handlers) == 1
     assert not any(
-        isinstance(handler, RotatingFileHandler)
-        for handler in logging.getLogger().handlers
+        isinstance(handler, RotatingFileHandler) for handler in logging.getLogger().handlers
     )
     logger.warning("x" * 220)
     logger.warning("y" * 220)
@@ -223,12 +222,42 @@ def test_runtime_file_handler_rotates_during_logging(
 @pytest.mark.parametrize(
     "kwargs",
     [
-        {"frequency_start_hz": 0.0, "frequency_end_hz": 100.0, "num_frequencies": 2, "frequency_spacing": "log"},
-        {"frequency_start_hz": float("nan"), "frequency_end_hz": 100.0, "num_frequencies": 2, "frequency_spacing": "log"},
-        {"frequency_start_hz": 100.0, "frequency_end_hz": 50.0, "num_frequencies": 2, "frequency_spacing": "linear"},
-        {"frequency_start_hz": 100.0, "frequency_end_hz": 200.0, "num_frequencies": 0, "frequency_spacing": "log"},
-        {"frequency_start_hz": 100.0, "frequency_end_hz": 200.0, "num_frequencies": 402, "frequency_spacing": "log"},
-        {"frequency_start_hz": 100.0, "frequency_end_hz": 200.0, "num_frequencies": 2, "frequency_spacing": "octave"},
+        {
+            "frequency_start_hz": 0.0,
+            "frequency_end_hz": 100.0,
+            "num_frequencies": 2,
+            "frequency_spacing": "log",
+        },
+        {
+            "frequency_start_hz": float("nan"),
+            "frequency_end_hz": 100.0,
+            "num_frequencies": 2,
+            "frequency_spacing": "log",
+        },
+        {
+            "frequency_start_hz": 100.0,
+            "frequency_end_hz": 50.0,
+            "num_frequencies": 2,
+            "frequency_spacing": "linear",
+        },
+        {
+            "frequency_start_hz": 100.0,
+            "frequency_end_hz": 200.0,
+            "num_frequencies": 0,
+            "frequency_spacing": "log",
+        },
+        {
+            "frequency_start_hz": 100.0,
+            "frequency_end_hz": 200.0,
+            "num_frequencies": 402,
+            "frequency_spacing": "log",
+        },
+        {
+            "frequency_start_hz": 100.0,
+            "frequency_end_hz": 200.0,
+            "num_frequencies": 2,
+            "frequency_spacing": "octave",
+        },
     ],
 )
 def test_dryrun_validates_all_axis_inputs(kwargs: dict[str, Any]) -> None:
@@ -247,7 +276,9 @@ def test_launcher_checks_lock_conflict_before_port_binding(
             pass
 
         def acquire(self, _port: int) -> None:
-            raise InstanceAlreadyRunning(InstanceInfo(pid=123, port=3100), paths.locks / "server.pid")
+            raise InstanceAlreadyRunning(
+                InstanceInfo(pid=123, port=3100), paths.locks / "server.pid"
+            )
 
     def reserve(*_args: Any, **_kwargs: Any) -> Any:
         nonlocal bound
@@ -344,9 +375,7 @@ def test_launcher_aligns_websocket_transport_limits_with_frame_protocol(
         app_kwargs.update(kwargs)
         return object()
 
-    def capture_console_handler(
-        _request_shutdown: Any, shutdown_complete: threading.Event
-    ) -> None:
+    def capture_console_handler(_request_shutdown: Any, shutdown_complete: threading.Event) -> None:
         nonlocal console_shutdown_complete
         assert not shutdown_complete.is_set()
         console_shutdown_complete = shutdown_complete
@@ -452,10 +481,9 @@ def test_public_gmsh_worker_rearms_registered_signals_on_the_main_thread(
     )
 
     async def scenario() -> None:
-        token = register_signal_rearm(
-            lambda: callback_threads.append(threading.get_ident())
-        )
+        token = register_signal_rearm(lambda: callback_threads.append(threading.get_ident()))
         try:
+
             def observe() -> str:
                 work_threads.append(threading.get_ident())
                 assert state["initialized"] is True
@@ -475,7 +503,7 @@ def test_public_gmsh_worker_rearms_registered_signals_on_the_main_thread(
 
 
 def test_port_reservation_retries_bind_failures_without_real_sockets(
-    monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     attempts: list[int] = []
 
@@ -526,9 +554,7 @@ def test_windows_port_checks_require_exclusive_address_use(
             self.closed = True
 
     monkeypatch.setattr(instance.sys, "platform", "win32")
-    monkeypatch.setattr(
-        instance.socket, "SO_EXCLUSIVEADDRUSE", exclusive, raising=False
-    )
+    monkeypatch.setattr(instance.socket, "SO_EXCLUSIVEADDRUSE", exclusive, raising=False)
     monkeypatch.setattr(instance.socket, "socket", lambda *_args: FakeSocket())
 
     assert instance.port_is_available(3100) is True
@@ -562,29 +588,33 @@ def test_capability_probe_runs_off_thread_and_is_cached(
 
     async def scenario() -> None:
         first, second = await asyncio.gather(endpoint(), endpoint())
-        assert first == second == {
-            "engines": [
-                {
-                    "name": "mock",
-                    "available": True,
-                    "reason": "ready",
-                    "version": "1",
-                    "fast_paths": (),
-                    "formulations": (),
-                    "mountings": (),
-                    "symmetry_domains": (),
-                    "field_traces": False,
-                    "di_sphere": True,
-                    "cancellation_granularity": "between-frequencies",
-                }
-            ],
-            "engineSelection": {
-                "default": "auto",
-                "resolvedDefault": None,
-                "full3dOrder": ["metal", "beat", "bempp", "dryrun"],
-                "axisymmetricRunner": "axisym",
-            },
-        }
+        assert (
+            first
+            == second
+            == {
+                "engines": [
+                    {
+                        "name": "mock",
+                        "available": True,
+                        "reason": "ready",
+                        "version": "1",
+                        "fast_paths": (),
+                        "formulations": (),
+                        "mountings": (),
+                        "symmetry_domains": (),
+                        "field_traces": False,
+                        "di_sphere": True,
+                        "cancellation_granularity": "between-frequencies",
+                    }
+                ],
+                "engineSelection": {
+                    "default": "auto",
+                    "resolvedDefault": None,
+                    "full3dOrder": ["metal", "beat", "bempp", "dryrun"],
+                    "axisymmetricRunner": "axisym",
+                },
+            }
+        )
 
     asyncio.run(scenario())
     assert len(calls) == 1
@@ -602,29 +632,39 @@ def test_local_origin_rejects_invalid_ports(origin: str) -> None:
 
 def test_websocket_origin_must_match_the_bound_host_and_port() -> None:
     assert websocket_request_allowed(
-        origin="http://127.0.0.1:3100", host="127.0.0.1:3100",
-        scheme="ws", bound_port=3100,
+        origin="http://127.0.0.1:3100",
+        host="127.0.0.1:3100",
+        scheme="ws",
+        bound_port=3100,
     )
     assert websocket_request_allowed(
-        origin=None, host="127.0.0.1:3100", scheme="ws", bound_port=3100,
+        origin=None,
+        host="127.0.0.1:3100",
+        scheme="ws",
+        bound_port=3100,
     )
     assert not websocket_request_allowed(
-        origin="http://127.0.0.1:5173", host="127.0.0.1:3100",
-        scheme="ws", bound_port=3100,
+        origin="http://127.0.0.1:5173",
+        host="127.0.0.1:3100",
+        scheme="ws",
+        bound_port=3100,
     )
     assert not websocket_request_allowed(
-        origin="http://localhost:3100", host="127.0.0.1:3100",
-        scheme="ws", bound_port=3100,
+        origin="http://localhost:3100",
+        host="127.0.0.1:3100",
+        scheme="ws",
+        bound_port=3100,
     )
     assert not websocket_request_allowed(
-        origin=None, host="127.0.0.1:5173", scheme="ws", bound_port=3100,
+        origin=None,
+        host="127.0.0.1:5173",
+        scheme="ws",
+        bound_port=3100,
     )
 
 
 def test_extra_websocket_origins_allow_only_exact_listed_loopback_origins() -> None:
-    extra_origins = parse_extra_websocket_origins(
-        " http://localhost:3101,https://example.com "
-    )
+    extra_origins = parse_extra_websocket_origins(" http://localhost:3101,https://example.com ")
 
     assert extra_origins == frozenset({"http://localhost:3101"})
     assert websocket_request_allowed(
@@ -654,9 +694,7 @@ def test_unset_extra_websocket_origins_preserve_strict_behavior(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("WG2_EXTRA_WS_ORIGINS", raising=False)
-    extra_origins = parse_extra_websocket_origins(
-        os.environ.get("WG2_EXTRA_WS_ORIGINS")
-    )
+    extra_origins = parse_extra_websocket_origins(os.environ.get("WG2_EXTRA_WS_ORIGINS"))
 
     assert extra_origins == frozenset()
     assert not websocket_request_allowed(
