@@ -398,6 +398,38 @@ class SubmissionResolution:
     symmetry_metadata: dict[str, Any]
 
 
+def _design_quadrants_text(request: SolveRequest) -> str | None:
+    quadrants = request.design.root.mesh.quadrants
+    return quadrants.text() if quadrants is not None else None
+
+
+def _axisymmetric_symmetry_metadata(request: SolveRequest) -> dict[str, Any]:
+    """Describe the continuous domain without building a revolved surface."""
+
+    reason = "axisymmetric formulation is continuously rotationally symmetric"
+    requested_quadrants = {
+        "auto": 1,
+        "full": 1234,
+        "half_xz": 12,
+        "half_yz": 14,
+        "quarter": 1,
+    }[request.options.symmetry]
+    return {
+        "requested": request.options.symmetry,
+        "resolved_quadrants": requested_quadrants,
+        "auto_resolution": {
+            "quadrants": 1,
+            "xz": True,
+            "yz": True,
+            "reasons": {"xz": [reason], "yz": [reason]},
+            "tolerance_mm": 0.0,
+            "relative_tolerance": 0.0,
+        },
+        "design_quadrants": _design_quadrants_text(request),
+        "domain": "continuous-axisymmetric",
+    }
+
+
 async def resolve_submission(
     request: SolveRequest,
     engine_registry: EngineRegistry,
@@ -420,24 +452,6 @@ async def resolve_submission(
     engine_name = request.options.engine
     if engine_name not in {"auto", "axisym", "dryrun", "metal", "bempp", "beat"}:
         raise UnknownEngineError(f"Unknown solve engine: {engine_name}")
-
-    resolution = await asyncio.to_thread(resolve_symmetry, request.design)
-    try:
-        resolved_quadrants = validate_symmetry_mode(
-            request.options.symmetry, resolution
-        )
-    except ValueError as exc:
-        raise SymmetryValidationError(str(exc)) from exc
-    symmetry_metadata = {
-        "requested": request.options.symmetry,
-        "resolved_quadrants": resolved_quadrants,
-        "auto_resolution": resolution.as_dict(),
-        "design_quadrants": (
-            request.design.root.mesh.quadrants.text()
-            if request.design.root.mesh.quadrants is not None
-            else None
-        ),
-    }
 
     # Formulation is planned before the full-3D backend. Axisymmetric geometry
     # uses the platform-neutral meridian runner on every OS; Metal/BEMPP/BEAT
@@ -481,11 +495,14 @@ async def resolve_submission(
                 + "; ".join(axisym_reasons)
             )
         if not axisym_reasons:
+            symmetry_metadata = _axisymmetric_symmetry_metadata(request)
             try:
                 plan_cost = await asyncio.to_thread(
                     axisymmetric_plan_cost,
                     request,
-                    full_3d_quadrants=resolved_quadrants,
+                    full_3d_quadrants=int(
+                        symmetry_metadata["resolved_quadrants"]
+                    ),
                 )
             except Exception as exc:
                 # Eligibility remains authoritative. A diagnostic cost model
@@ -509,6 +526,19 @@ async def resolve_submission(
                 "cost_evidence": plan_cost,
             }
     if engine_name != "axisym":
+        resolution = await asyncio.to_thread(resolve_symmetry, request.design)
+        try:
+            resolved_quadrants = validate_symmetry_mode(
+                request.options.symmetry, resolution
+            )
+        except ValueError as exc:
+            raise SymmetryValidationError(str(exc)) from exc
+        symmetry_metadata = {
+            "requested": request.options.symmetry,
+            "resolved_quadrants": resolved_quadrants,
+            "auto_resolution": resolution.as_dict(),
+            "design_quadrants": _design_quadrants_text(request),
+        }
         symmetry_metadata["solver_plan"] = {
             "formulation": "full-3d",
             "engine": engine_name,
