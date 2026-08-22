@@ -14,6 +14,10 @@ const payload = {
   action: null,
   canInstall: false,
   lastError: null,
+  installState: 'idle',
+  downloadedBytes: 0,
+  totalBytes: 0,
+  error: null,
 };
 
 describe('getUpdateStatus', () => {
@@ -49,5 +53,19 @@ describe('getUpdateStatus', () => {
       method: 'POST',
       headers: { 'X-WG-Update': 'install' },
     });
+  });
+
+  it('accepts bundle installation progress from the same mutation endpoint', async () => {
+    const bundle = {
+      accepted: true,
+      version: '2.0.1',
+      installState: 'downloading',
+      downloadedBytes: 1024,
+      totalBytes: 4096,
+      error: null,
+    };
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(bundle), { status: 202 })));
+
+    await expect(installApplicationUpdate()).resolves.toEqual(bundle);
   });
 });

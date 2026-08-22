@@ -1,6 +1,15 @@
 export type UpdateAvailability = 'available' | 'current' | 'ahead' | 'incomplete' | 'unknown';
 export type UpdateFreshness = 'fresh' | 'stale' | 'unknown';
 export type CheckoutKind = 'release' | 'development' | 'detached' | 'modified' | 'unsupported' | 'bundle';
+export type UpdateInstallState = 'idle' | 'downloading' | 'verifying' | 'ready' | 'failed';
+
+export interface BundleUpdateAsset {
+  name: string;
+  url: string;
+  sha256Url: string;
+  bytes: number;
+  layer: 'app' | 'runtime';
+}
 
 export interface UpdateRelease {
   version: string;
@@ -8,6 +17,7 @@ export interface UpdateRelease {
   url: string;
   publishedAt: string | null;
   assetsReady: boolean;
+  runtimeId?: string;
 }
 
 export interface CheckoutStatus {
@@ -20,13 +30,23 @@ export interface CheckoutStatus {
   behindCount: number | null;
   updateSupported: boolean;
   reason: string | null;
+  installedVersion?: string;
+  runtimeId?: string | null;
 }
 
-export interface UpdateAction {
+export interface CopyCommandUpdateAction {
   kind: 'copy_command';
   shell: string;
   command: string;
 }
+
+export interface BundleDownloadUpdateAction {
+  kind: 'bundle_download';
+  assets: BundleUpdateAsset[];
+  downloadBytes: number;
+}
+
+export type UpdateAction = CopyCommandUpdateAction | BundleDownloadUpdateAction;
 
 export interface UpdateStatus {
   schemaVersion: 1;
@@ -41,15 +61,34 @@ export interface UpdateStatus {
   action: UpdateAction | null;
   canInstall: boolean;
   lastError: string | null;
+  installState: UpdateInstallState;
+  downloadedBytes: number;
+  totalBytes: number;
+  error: string | null;
 }
 
-export interface UpdateInstallAccepted {
+export interface CheckoutUpdateInstallAccepted {
   accepted: true;
   tag: string;
 }
 
+export interface BundleUpdateInstallAccepted {
+  accepted: true;
+  version: string;
+  installState: UpdateInstallState;
+  downloadedBytes: number;
+  totalBytes: number;
+  error: string | null;
+}
+
+export type UpdateInstallAccepted = CheckoutUpdateInstallAccepted | BundleUpdateInstallAccepted;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+function isInstallState(value: unknown): value is UpdateInstallState {
+  return value === 'idle' || value === 'downloading' || value === 'verifying' || value === 'ready' || value === 'failed';
 }
 
 export async function getUpdateStatus(refresh = false): Promise<UpdateStatus> {
@@ -63,6 +102,9 @@ export async function getUpdateStatus(refresh = false): Promise<UpdateStatus> {
     || !isRecord(payload.checkout)
     || typeof payload.checkout.kind !== 'string'
     || typeof payload.canInstall !== 'boolean'
+    || !isInstallState(payload.installState)
+    || typeof payload.downloadedBytes !== 'number'
+    || typeof payload.totalBytes !== 'number'
   ) {
     throw new Error('Update status response is invalid');
   }
@@ -85,7 +127,14 @@ export async function installApplicationUpdate(): Promise<UpdateInstallAccepted>
     throw new Error(detail);
   }
   const payload: unknown = await response.json();
-  if (!isRecord(payload) || payload.accepted !== true || typeof payload.tag !== 'string') {
+  const checkoutAccepted = isRecord(payload) && payload.accepted === true && typeof payload.tag === 'string';
+  const bundleAccepted = isRecord(payload)
+    && payload.accepted === true
+    && typeof payload.version === 'string'
+    && isInstallState(payload.installState)
+    && typeof payload.downloadedBytes === 'number'
+    && typeof payload.totalBytes === 'number';
+  if (!checkoutAccepted && !bundleAccepted) {
     throw new Error('Update installation response is invalid');
   }
   return payload as unknown as UpdateInstallAccepted;

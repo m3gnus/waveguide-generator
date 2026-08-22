@@ -677,6 +677,9 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .update-command p { margin-top: 2px; color: var(--fg3); font-size: var(--text-micro); }
 .update-command pre { overflow: auto; margin: 0; padding: 9px 10px; border: 1px solid var(--hair-soft); border-radius: var(--r3); background: var(--input-bg); color: var(--fg1); font: var(--text-micro)/1.5 var(--mono); white-space: pre-wrap; user-select: text; }
 .update-command button { justify-self: start; }
+.bundle-update progress { width: 100%; height: 7px; accent-color: var(--acc); }
+.bundle-update-progress { color: var(--fg1); }
+.bundle-update-progress.ready { color: var(--green); }
 .update-release-link { justify-self: start; color: var(--acc-text); }
 .update-release-link:hover { text-decoration: underline; }
 .update-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 2px; }

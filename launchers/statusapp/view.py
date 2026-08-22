@@ -11,6 +11,7 @@ import webbrowser
 
 from .controller import ServiceState, StatusController, StatusSnapshot
 from .diagnostics import WindowUnavailable
+from .updater import BundleUpdateRequest, UpdateRequest
 
 
 COLORS = {
@@ -113,22 +114,27 @@ class StatusView:
             threading.Thread(target=self._poll, name="wg2-status-poll", daemon=True).start()
         self.root.after(100, self._tick)
 
-    def _start_update(self, tag: str) -> None:
+    def _start_update(self, request: UpdateRequest) -> None:
+        label = request.version if isinstance(request, BundleUpdateRequest) else request
         self._closing = True
-        self._backend_reason.set(f"Preparing {tag}…")
+        self._backend_reason.set(f"Preparing {label}…")
         self._frontend_reason.set("WG will close, install the update, and restart.")
         self._open_button.configure(state="disabled")
         threading.Thread(
             target=self._handoff_update,
-            args=(tag,),
+            args=(request,),
             name="wg2-status-update",
             daemon=True,
         ).start()
 
-    def _handoff_update(self, tag: str) -> None:
+    def _handoff_update(self, request: UpdateRequest) -> None:
         try:
-            self.controller.launch_update(tag)
+            if isinstance(request, BundleUpdateRequest):
+                self.controller.close()
+            self.controller.launch_update(request)
         except Exception as exc:  # noqa: BLE001 - keep the current healthy app usable
+            if isinstance(request, BundleUpdateRequest):
+                self.controller.start()
             self._update_errors.put(str(exc) or type(exc).__name__)
             return
         self._updates.put(("closed", self.controller.close()))

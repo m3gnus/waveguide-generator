@@ -104,7 +104,63 @@ should leave verification enabled:
 
 The runtime id is content-addressed from the two requirement files and the exact pinned
 Python patch. Layer ZIPs use sorted entries, fixed timestamps, and preserved Unix modes
-and symlinks so repeated builds are reproducible in spirit.
+so repeated builds are reproducible in spirit. Internal file symlinks are materialized
+as regular files: the in-app extractor rejects every link member along with absolute
+paths, `..` traversal, and AppleDouble metadata.
+
+## Standalone application updates
+
+The server keeps release discovery read-only. In bundle mode (`WG2_BUNDLE=1`) it reads
+the installed version from `Resources/app/APP-MANIFEST.json` and the installed runtime
+id from `Resources/runtime/RUNTIME-MANIFEST.json`. A newer release is installable only
+after its separate app manifest has been size-limited, checksum-verified, and read; the
+app ZIP and its checksum must exist, and a different runtime id must resolve to a
+runtime ZIP/checksum pair. Content-addressed runtimes can come from one of the 20 most
+recent releases because the release job deliberately does not upload an unchanged
+runtime again.
+
+`POST /api/updates/install` starts one background `BundleUpdateInstaller`. Archives
+download through retained `.part` files under `<data>/updates/<version>/`, are capped by
+their advertised size, verified against their `.sha256` assets, and extracted into
+complete staging directories. `/api/updates/status` reports `installState` (`idle`,
+`downloading`, `verifying`, `ready`, or `failed`), byte progress, and the last staging
+error. A second install request while work is active returns that state and does not
+start another worker.
+
+After staging, the server atomically writes the status owner's temporary
+`update.json` request with this schema:
+
+```json
+{
+  "schemaVersion": 1,
+  "kind": "apply_bundle",
+  "version": "0.2.5",
+  "stagedAppDir": "<data>/updates/0.2.5/staged/app",
+  "stagedRuntimeDir": null
+}
+```
+
+`stagedRuntimeDir` is either `null` or the matching staged runtime directory. The
+desktop launcher resolves both paths and refuses a request unless they are existing
+directories inside the application data directory. It then stops the server and
+starts `launchers/apply_update.py` from the staged app layer, using the staged runtime's
+Python when present. The updater waits for the desktop parent, renames live layers to
+`*.previous`, renames staged layers into place, removes quarantine attributes, ad-hoc
+signs the changed bundle, and relaunches it (`open -n <bundle> --args <original CLI
+arguments>` on macOS, the exe path on Windows, so `--port`/`--data-dir` survive the
+restart). The launcher removes `*.previous`, signs again, and deletes the downloaded
+archives under `<data>/updates/` only after `/health` and the frontend are healthy; a
+failed first start restores the previous layers and records the result in
+`<data>/logs/update.log`.
+
+`WG2_UPDATES_API_BASE` (default `https://api.github.com`) redirects the latest-release
+and release-list requests for an end-to-end rehearsal against a local fake; asset URLs
+are taken verbatim from the payload. Plain `http://` is accepted only for loopback
+hosts, and only while the API base itself is loopback.
+
+The bundle stub's `PYTHONPYCACHEPREFIX` and `NUMBA_CACHE_DIR` remain inherited by the
+staged updater and restarted application. Runtime imports therefore continue to write
+only below the user cache directory, never into the signed bundle.
 
 ## Documentation changes
 

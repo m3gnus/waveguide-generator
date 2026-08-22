@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 import sys
 from types import ModuleType, SimpleNamespace
 
@@ -10,7 +11,11 @@ import pytest
 
 from launchers import desktop
 from launchers.statusapp.controller import LampStatus, ServiceState, StatusSnapshot
-from launchers.statusapp.updater import UpdateHandoffError
+from launchers.statusapp.updater import (
+    BundleUpdateRequest,
+    UpdateHandoffError,
+    UpdateRequest,
+)
 
 
 def _snapshot(state: ServiceState, url: str = "http://127.0.0.1:3199/") -> StatusSnapshot:
@@ -30,8 +35,8 @@ class StubController:
     starts: int = 0
     polls: int = 0
     closes: int = 0
-    update_requests: list[str | None] = field(default_factory=list)
-    launched: list[str] = field(default_factory=list)
+    update_requests: list[UpdateRequest | None] = field(default_factory=list)
+    launched: list[UpdateRequest] = field(default_factory=list)
     handoff_error: str | None = None
 
     @property
@@ -50,10 +55,10 @@ class StubController:
         self.closes += 1
         return _snapshot(ServiceState.STOPPED)
 
-    def take_update_request(self) -> str | None:
+    def take_update_request(self) -> UpdateRequest | None:
         return self.update_requests.pop(0) if self.update_requests else None
 
-    def launch_update(self, tag: str) -> None:
+    def launch_update(self, tag: UpdateRequest) -> None:
         if self.handoff_error is not None:
             raise UpdateHandoffError(self.handoff_error)
         self.launched.append(tag)
@@ -324,3 +329,118 @@ def test_a_failed_update_handoff_is_reported_and_the_window_stays_open(
     # one readiness poll, then all three loop turns the stub window allowed.
     assert controller.polls == 4
     assert controller.closes == 1
+
+
+def test_bundle_handoff_stops_the_server_before_spawning_the_staged_updater(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    staged_app = tmp_path / "data" / "updates" / "1.2.3" / "staged" / "app"
+    staged_app.mkdir(parents=True)
+    request = BundleUpdateRequest("1.2.3", staged_app, None)
+    events: list[str] = []
+
+    class OrderedController(StubController):
+        def close(self) -> StatusSnapshot:
+            events.append("close")
+            return super().close()
+
+        def launch_update(self, update: UpdateRequest) -> None:
+            assert update is request
+            events.append("launch")
+
+    controller = OrderedController(update_requests=[request])
+    webview, window = _live_webview(polls=3)
+    monkeypatch.setitem(sys.modules, "webview", webview)
+
+    assert desktop.DesktopWindow(
+        controller, poll_interval=0, update_ready_delay=0
+    ).run() == 0  # type: ignore[arg-type]
+
+    assert events[:2] == ["close", "launch"]
+    assert window.destroyed == 1
+
+
+class BundleController(StubController):
+    def __init__(
+        self,
+        app_layer: Path,
+        data_dir: Path,
+        *,
+        start_snapshot: StatusSnapshot = _snapshot(ServiceState.STARTING),
+        poll_snapshot: StatusSnapshot = _snapshot(ServiceState.OK),
+    ) -> None:
+        super().__init__(start_snapshot=start_snapshot, poll_snapshot=poll_snapshot)
+        self.environ = {"WG2_BUNDLE": "1"}
+        self.repo_root = app_layer
+        self.data_dir = data_dir
+
+
+def test_first_healthy_bundle_start_removes_previous_layers_and_resigns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(desktop.sys, "platform", "darwin")
+    resources = (
+        tmp_path / "Waveguide Generator.app" / "Contents" / "Resources"
+    )
+    app = resources / "app"
+    previous = resources / "app.previous"
+    app.mkdir(parents=True)
+    previous.mkdir()
+    downloads = tmp_path / "data" / "updates" / "1.2.3" / "downloads"
+    downloads.mkdir(parents=True)
+    (downloads / "waveguide-generator-app-1.2.3.zip").write_bytes(b"zip")
+    controller = BundleController(app, tmp_path / "data")
+    webview, _created = _stub_webview()
+    monkeypatch.setitem(sys.modules, "webview", webview)
+    repaired: list[Path] = []
+    monkeypatch.setattr(
+        desktop,
+        "repair_bundle",
+        lambda bundle, **_kwargs: repaired.append(bundle),
+    )
+
+    assert desktop.DesktopWindow(controller, poll_interval=0).run() == 0  # type: ignore[arg-type]
+
+    assert not previous.exists()
+    assert not (tmp_path / "data" / "updates").exists()
+    assert repaired == [tmp_path / "Waveguide Generator.app"]
+    log_text = (tmp_path / "data" / "logs" / "update.log").read_text(encoding="utf-8")
+    assert "Removed healthy-start rollback layer" in log_text
+    assert "Removed the update downloads" in log_text
+
+
+def test_failed_new_bundle_start_rolls_back_and_reports_the_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(desktop.sys, "platform", "darwin")
+    resources = (
+        tmp_path / "Waveguide Generator.app" / "Contents" / "Resources"
+    )
+    app = resources / "app"
+    previous = resources / "app.previous"
+    app.mkdir(parents=True)
+    previous.mkdir()
+    (app / "marker").write_text("new", encoding="utf-8")
+    (previous / "marker").write_text("old", encoding="utf-8")
+    controller = BundleController(
+        app,
+        tmp_path / "data",
+        start_snapshot=_snapshot(ServiceState.ERROR),
+    )
+    reported: list[str] = []
+    shown: list[str] = []
+    monkeypatch.setattr(desktop, "_report_startup_failure", reported.append)
+    monkeypatch.setattr(desktop, "_show_startup_failure_dialog", shown.append)
+    monkeypatch.setattr(desktop, "repair_bundle", lambda *_args, **_kwargs: None)
+
+    assert desktop.DesktopWindow(controller, poll_interval=0).run() == 1  # type: ignore[arg-type]
+
+    assert (app / "marker").read_text(encoding="utf-8") == "old"
+    assert not previous.exists()
+    assert "previous version was restored" in reported[0]
+    # A bundle started by LaunchServices has a stderr nobody reads, so the
+    # rollback result must reach the screen regardless of the console heuristic.
+    assert shown == reported
+    assert "Restored the previous bundle layers" in (
+        tmp_path / "data" / "logs" / "update.log"
+    ).read_text(encoding="utf-8")

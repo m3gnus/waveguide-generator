@@ -14,7 +14,6 @@ import plistlib
 import shlex
 import shutil
 import socket
-import stat
 import subprocess
 import sys
 import tempfile
@@ -365,9 +364,10 @@ def _iter_zip_entries(root: Path) -> Iterable[tuple[Path, str]]:
 
 
 def deterministic_zip(source: Path, output: Path) -> None:
-    """Archive a layer in stable path order while preserving Unix symlinks."""
+    """Archive a layer in stable path order without unsafe link members."""
 
     output.parent.mkdir(parents=True, exist_ok=True)
+    source_root = source.resolve()
     with zipfile.ZipFile(
         output,
         "w",
@@ -375,7 +375,15 @@ def deterministic_zip(source: Path, output: Path) -> None:
         compresslevel=9,
     ) as archive:
         for path, member in _iter_zip_entries(source):
-            metadata = path.lstat()
+            if path.is_symlink():
+                resolved = path.resolve()
+                if not resolved.is_relative_to(source_root) or not resolved.is_file():
+                    raise BundleError(
+                        f"Layer symlink does not resolve to a file inside the layer: {path}"
+                    )
+                metadata = resolved.stat()
+            else:
+                metadata = path.lstat()
             info = zipfile.ZipInfo(member, ZIP_TIMESTAMP)
             info.create_system = 3
             info.compress_type = zipfile.ZIP_DEFLATED
@@ -383,8 +391,6 @@ def deterministic_zip(source: Path, output: Path) -> None:
             if member.endswith("/"):
                 info.external_attr |= 0x10
                 archive.writestr(info, b"")
-            elif stat.S_ISLNK(metadata.st_mode):
-                archive.writestr(info, os.fsencode(os.readlink(path)))
             else:
                 with path.open("rb") as source_handle, archive.open(info, "w") as target:
                     shutil.copyfileobj(source_handle, target, length=1 << 20)

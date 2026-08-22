@@ -337,7 +337,7 @@ def test_checkout_classifier_only_supports_an_exact_clean_release(tmp_path: Path
     assert modified["updateSupported"] is False
 
 
-def test_checkout_classifier_never_offers_git_installer_to_bundle(
+def test_bundle_with_missing_manifests_never_falls_back_to_the_git_installer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("WG2_BUNDLE", "1")
@@ -346,7 +346,7 @@ def test_checkout_classifier_never_offers_git_installer_to_bundle(
 
     assert bundled["kind"] == "bundle"
     assert bundled["updateSupported"] is False
-    assert "DMG" in bundled["reason"]
+    assert "manifest" in bundled["reason"]
 
 
 def test_status_endpoint_runs_the_blocking_service_off_loop(tmp_path: Path):
