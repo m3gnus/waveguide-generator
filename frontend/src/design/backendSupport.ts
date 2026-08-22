@@ -1,4 +1,4 @@
-import type { EngineCapability } from '../jobs/actions';
+import type { EngineCapability, EngineSelection } from '../jobs/actions';
 
 export type BackendIdentity = string | EngineCapability | null;
 
@@ -10,9 +10,8 @@ export type BackendIdentity = string | EngineCapability | null;
  * told the backend cannot solve it at all. These names let the controls that
  * offer a backend-specific choice hide it up front instead.
  *
- * Each entry mirrors a real server-side refusal. Keep them in sync: a feature
- * listed here as supported that the server then rejects is worse than no gate,
- * because the user has no way left to see why the solve failed.
+ * Support comes from the server's capability record. This file owns only the
+ * UI vocabulary and remedies; it does not maintain a second engine matrix.
  */
 export type BackendFeature =
   /** Coupled infinite-baffle solves — ``server/solver/infinite_baffle.py``. */
@@ -21,19 +20,6 @@ export type BackendFeature =
   | 'meridian-fast-path'
   /** Solving ingested CAD geometry — ``server/jobs/runtime.py``. */
   | 'imported-geometry';
-
-/**
- * Backends that implement each feature, lower-cased to match ``EngineCapability``.
- *
- * Axisymmetric execution is a platform-neutral runner rather than a full-3D
- * backend. Metal and BEMPP both understand the coupled ``MOUTH_APERTURE``
- * infinite-baffle contract; imported CAD remains Metal-only.
- */
-const FEATURE_BACKENDS: Record<BackendFeature, readonly string[]> = {
-  'infinite-baffle': ['metal', 'bempp', 'axisym'],
-  'meridian-fast-path': ['axisym'],
-  'imported-geometry': ['metal'],
-};
 
 /** Human phrasing for the feature, as the object of "X does not support …". */
 const FEATURE_LABELS: Record<BackendFeature, string> = {
@@ -63,10 +49,17 @@ const FEATURE_REMEDIES: Record<BackendFeature, string> = {
 export function activeBackendName(
   engine: string,
   engines: readonly EngineCapability[],
+  selection?: Readonly<EngineSelection>,
 ): string | null {
   const requested = engine.trim().toLowerCase();
   if (requested && requested !== 'auto') return requested;
-  const available = ['metal', 'beat', 'bempp', 'dryrun']
+  const resolved = selection?.resolvedDefault?.toLowerCase();
+  if (resolved && engines.some((item) => item.available
+    && item.name.toLowerCase() === resolved)) return resolved;
+  const order = selection?.full3dOrder.map((name) => name.toLowerCase())
+    ?? engines.filter((item) => item.formulations?.includes('full-3d'))
+      .map((item) => item.name.toLowerCase());
+  const available = order
     .flatMap((name) => engines.filter((item) => item.available && item.name.toLowerCase() === name));
   return available[0]?.name.toLowerCase() ?? null;
 }
@@ -75,8 +68,9 @@ export function activeBackendName(
 export function activeBackendCapability(
   engine: string,
   engines: readonly EngineCapability[],
+  selection?: Readonly<EngineSelection>,
 ): EngineCapability | null {
-  const name = activeBackendName(engine, engines);
+  const name = activeBackendName(engine, engines, selection);
   return name === null
     ? null
     : engines.find((item) => item.name.toLowerCase() === name) ?? null;
@@ -101,7 +95,7 @@ function hostCoversFeature(
 ): boolean {
   if (feature !== 'infinite-baffle') return false;
   return host.some((item) => item.available
-    && item.name.toLowerCase() === 'axisym'
+    && item.formulations?.includes('axisymmetric')
     && (item.mountings?.includes('infinite-baffle') ?? true));
 }
 
@@ -121,17 +115,13 @@ export function backendSupports(
   if (!normalized) return true;
   if (hostCoversFeature(host, feature)) return true;
   if (typeof backend !== 'string') {
-    if (feature === 'infinite-baffle' && backend.mountings) {
-      return backend.mountings.includes('infinite-baffle');
-    }
-    if (feature === 'meridian-fast-path' && backend.formulations) {
-      return backend.formulations.includes('axisymmetric');
-    }
+    if (feature === 'infinite-baffle') return backend.mountings?.includes('infinite-baffle') ?? true;
+    if (feature === 'meridian-fast-path') return backend.formulations?.includes('axisymmetric') ?? true;
+    if (feature === 'imported-geometry') return backend.geometry_sources?.includes('imported') ?? true;
   }
-  const known = Object.values(FEATURE_BACKENDS).some((names) => names.includes(normalized))
-    || normalized === 'bempp' || normalized === 'dryrun' || normalized === 'beat';
-  if (!known) return true;
-  return FEATURE_BACKENDS[feature].includes(normalized);
+  // A bare name has no capability payload. Preserve the pre-gating behaviour
+  // instead of hiding a control based on client-side engine knowledge.
+  return true;
 }
 
 /**

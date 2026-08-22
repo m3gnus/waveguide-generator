@@ -171,6 +171,7 @@ def test_capabilities_and_dryrun_guard(tmp_path: Path, monkeypatch) -> None:
             "fast_paths",
             "formulations",
             "mountings",
+            "geometry_sources",
             "symmetry_domains",
             "field_traces",
             "di_sphere",
