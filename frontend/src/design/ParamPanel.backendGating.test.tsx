@@ -133,4 +133,32 @@ describe('solver-backend parameter gating', () => {
     });
     expect(optionsOf('simulation.sim_type')).toEqual(['Free-standing']);
   });
+
+  it('replans the AUTO backend gate when solver mode changes formulation', async () => {
+    const payload = {
+      engines: [
+        engine('beat', true, ['free-standing']),
+        engine('axisym', true, ['free-standing', 'infinite-baffle'], ['axisymmetric']),
+      ],
+      engineSelection: {
+        default: 'auto', resolvedDefault: 'beat',
+        full3dOrder: ['beat'], axisymmetricRunner: 'axisym',
+      },
+    };
+
+    await mount(payload);
+    expect(optionsOf('simulation.sim_type')).toEqual(['Free-standing', 'Infinite baffle']);
+
+    await act(async () => {
+      useSolveOptionsStore.setState({ solverMode: 'full_3d' });
+      await Promise.resolve();
+    });
+    expect(optionsOf('simulation.sim_type')).toEqual(['Free-standing']);
+
+    await act(async () => {
+      useSolveOptionsStore.setState({ solverMode: 'circsym' });
+      await Promise.resolve();
+    });
+    expect(optionsOf('simulation.sim_type')).toEqual(['Free-standing', 'Infinite baffle']);
+  });
 });

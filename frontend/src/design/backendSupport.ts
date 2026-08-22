@@ -1,4 +1,5 @@
-import type { EngineCapability, EngineSelection } from '../jobs/actions';
+import { plannedEngineNames, type EngineCapability, type EngineSelection } from '../jobs/actions';
+import type { SolverMode } from '../stores/solveOptions';
 
 export type BackendIdentity = string | EngineCapability | null;
 
@@ -79,12 +80,13 @@ export function activeBackendCapability(
 /**
  * Available capabilities the server may plan for the requested engine.
  *
- * Explicit selection has exactly one candidate. AUTO can first select the
- * advertised meridian runner for eligible geometry and otherwise walks the
- * server-advertised full-3D order, skipping candidates whose capability does
- * not cover the requested mounting. Keeping the whole plan matters on a GPU
- * host: BEAT can be the resolved free-standing default while BEMPP later in
- * the plan handles coupled infinite-baffle solves.
+ * Solver mode AUTO can first select the advertised meridian runner for
+ * eligible geometry, even with an explicit non-dryrun backend chosen as the
+ * full-3D fallback. An AUTO engine then walks the server-advertised full-3D
+ * order. Forced Full 3D excludes the meridian runner; forced CircSym includes
+ * only that runner. Keeping the whole AUTO-engine plan matters on a GPU host:
+ * BEAT can be the resolved free-standing default while BEMPP later in the plan
+ * handles coupled infinite-baffle solves.
  *
  * Geometry eligibility and final routing stay the server planner's call. This
  * list only prevents the frontend from hiding an option no planned candidate
@@ -94,15 +96,20 @@ export function plannedBackendCapabilities(
   engine: string,
   engines: readonly EngineCapability[],
   selection?: Readonly<EngineSelection>,
+  solverMode: SolverMode = 'auto',
 ): readonly EngineCapability[] {
-  const requested = engine.trim().toLowerCase();
-  if (requested && requested !== 'auto') {
-    return engines.filter((item) => item.available && item.name.toLowerCase() === requested);
+  let advertised: readonly string[];
+  try {
+    advertised = plannedEngineNames(
+      engine,
+      { engines, engineSelection: selection },
+      solverMode,
+    );
+  } catch {
+    // Gating is deliberately total while capabilities/local settings settle;
+    // resolveEngine still blocks the stale or contradictory submission.
+    return [];
   }
-  const advertised = [
-    selection?.axisymmetricRunner,
-    ...(selection?.full3dOrder ?? engines.map((item) => item.name)),
-  ].map((name) => name?.trim().toLowerCase()).filter((name): name is string => Boolean(name));
   const planned: EngineCapability[] = [];
   for (const name of advertised) {
     const capability = engines.find((item) => item.available && item.name.toLowerCase() === name);
@@ -120,12 +127,17 @@ function backendName(backend: BackendIdentity): string | null {
 export function backendSupports(
   backend: BackendIdentity,
   feature: BackendFeature,
-  plan: readonly EngineCapability[] = [],
+  plan?: readonly EngineCapability[],
 ): boolean {
   if (!backend) return true;
   const normalized = backendName(backend);
   if (!normalized) return true;
-  if (plan.some((item) => capabilitySupports(item, feature))) return true;
+  // When supplied, the plan is authoritative: a full-3D backend outside a
+  // forced CircSym plan must not rescue a feature the sole Axisym candidate
+  // lacks (and vice versa).
+  if (plan !== undefined) {
+    return plan.some((item) => capabilitySupports(item, feature));
+  }
   if (typeof backend !== 'string') {
     return capabilitySupports(backend, feature);
   }
@@ -147,7 +159,7 @@ function capabilitySupports(backend: EngineCapability, feature: BackendFeature):
 export function backendLimitation(
   backend: BackendIdentity,
   feature: BackendFeature,
-  plan: readonly EngineCapability[] = [],
+  plan?: readonly EngineCapability[],
 ): string | undefined {
   if (backendSupports(backend, feature, plan)) return undefined;
   const name = (backendName(backend) ?? '').toUpperCase();

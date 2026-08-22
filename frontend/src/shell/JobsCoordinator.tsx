@@ -211,6 +211,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     if (submissionInFlight.current) return;
     submissionInFlight.current = true;
     try {
+      if (engineResolutionError) throw new Error(engineResolutionError);
       if (!capability?.available) throw new Error(engineResolutionError ?? capability?.reason ?? capabilityError ?? `${selectedEngine} engine is unavailable`);
       setSubmitting(true);
       setActionError(null);
@@ -337,7 +338,11 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   }, [automation, jobs, preferences, reportError]);
 
   const unavailable = engineResolutionError ?? capability?.reason ?? capabilityError ?? 'Checking solver engine capability…';
-  const activeCapability = cadGeometryActive ? metalCapability : capability;
+  const activeCapability = cadGeometryActive
+    ? metalCapability
+    : engineResolutionError === null
+      ? capability
+      : null;
   const solve = useCallback(() => {
     const action = async () => {
       if (fileGeometryActive) {

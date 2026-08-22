@@ -85,9 +85,14 @@ describe('backend feature support', () => {
     expect(backendSupports(beat, 'infinite-baffle', autoPlan)).toBe(true);
     expect(backendLimitation(beat, 'infinite-baffle', autoPlan)).toBeUndefined();
 
-    // Explicit BEAT is not rescued by some other capability on the host.
-    const explicitPlan = plannedBackendCapabilities('beat', [beat, axisym], selection);
-    expect(backendSupports(beat, 'infinite-baffle', explicitPlan)).toBe(false);
+    // Solver mode AUTO considers the eligible Axisym formulation even when
+    // BEAT was chosen explicitly as the eventual full-3D fallback.
+    const explicitAutoPlan = plannedBackendCapabilities('beat', [beat, axisym], selection, 'auto');
+    expect(explicitAutoPlan.map((item) => item.name)).toEqual(['axisym', 'beat']);
+    expect(backendSupports(beat, 'infinite-baffle', explicitAutoPlan)).toBe(true);
+    const explicitFull3dPlan = plannedBackendCapabilities('beat', [beat, axisym], selection, 'full_3d');
+    expect(explicitFull3dPlan.map((item) => item.name)).toEqual(['beat']);
+    expect(backendSupports(beat, 'infinite-baffle', explicitFull3dPlan)).toBe(false);
   });
 
   it('lets AUTO skip BEAT for a coupled IB-capable BEMPP without Axisym', () => {
@@ -102,6 +107,23 @@ describe('backend feature support', () => {
     expect(autoPlan.map((item) => item.name)).toEqual(['beat', 'bempp']);
     expect(backendSupports(beat, 'infinite-baffle', autoPlan)).toBe(true);
     expect(backendSupports(beat, 'infinite-baffle', plannedBackendCapabilities('beat', [beat, bempp], advertised))).toBe(false);
+  });
+
+  it('keeps forced CircSym limited to Axisym instead of full-3D fallbacks', () => {
+    const beat = { ...engine('beat', true), mountings: ['free-standing'] };
+    const bempp = { ...engine('bempp', true), mountings: ['free-standing', 'infinite-baffle'] };
+    const axisym = { ...engine('axisym', true), mountings: ['free-standing'] };
+    const host = [beat, bempp, axisym];
+    const advertised = { ...selection, resolvedDefault: 'beat', full3dOrder: ['beat', 'bempp'] };
+
+    const full3dPlan = plannedBackendCapabilities('auto', host, advertised, 'full_3d');
+    expect(full3dPlan.map((item) => item.name)).toEqual(['beat', 'bempp']);
+    expect(backendSupports(beat, 'infinite-baffle', full3dPlan)).toBe(true);
+
+    const circsymPlan = plannedBackendCapabilities('auto', host, advertised, 'circsym');
+    expect(circsymPlan.map((item) => item.name)).toEqual(['axisym']);
+    expect(backendSupports(beat, 'infinite-baffle', circsymPlan)).toBe(false);
+    expect(backendSupports(bempp, 'infinite-baffle', circsymPlan)).toBe(false);
   });
 
   it('uses the server capability payload for version-dependent BEMPP IB support', () => {

@@ -172,6 +172,21 @@ describe('solve invocation mutex', () => {
     expect(solve.title).not.toContain('AUTO (metal)');
   });
 
+  it('blocks invalid dry-run and stale engine selections in forced Axisymmetric mode', async () => {
+    useSolveOptionsStore.setState({ engine: 'dryrun', solverMode: 'circsym' });
+    await act(async () => {
+      root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>);
+    });
+    const solve = host.querySelector<HTMLButtonElement>('button')!;
+    expect(solve.disabled).toBe(true);
+    expect(solve.title).toContain('Dry-run cannot run forced Axisymmetric');
+
+    useSolveOptionsStore.setState({ engine: 'stale-engine' });
+    await act(async () => { await Promise.resolve(); });
+    expect(solve.disabled).toBe(true);
+    expect(solve.title).toContain('Unknown solve engine');
+  });
+
   it('submits again after the first invocation resolves', async () => {
     mocks.submitDesign.mockResolvedValue('job');
     const design = designForFamily('OSSE');

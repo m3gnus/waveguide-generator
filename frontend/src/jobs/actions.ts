@@ -1,5 +1,5 @@
 import { serializeSolveDesign, type DesignDocument } from '../stores/design';
-import { useSolveOptionsStore, type SolveOptions } from '../stores/solveOptions';
+import { useSolveOptionsStore, type SolveOptions, type SolverMode } from '../stores/solveOptions';
 
 export interface EngineCapability {
   name: string;
@@ -116,17 +116,81 @@ export async function getCapabilities(fetcher: typeof fetch = fetch): Promise<Ca
   return response.json() as Promise<Capabilities>;
 }
 
+interface EngineModePlan {
+  requested: string;
+  runner: string;
+  full3dOrder: readonly string[];
+  solverMode: SolverMode;
+}
+
+/** Normalize and validate the engine/formulation pair exactly once. */
+function engineModePlan(
+  engine: string,
+  capabilities: {
+    engines: readonly EngineCapability[];
+    engineSelection?: Readonly<EngineSelection>;
+  },
+  solverMode: SolverMode,
+): EngineModePlan {
+  const requested = engine.trim().toLowerCase();
+  const runner = capabilities.engineSelection?.axisymmetricRunner.trim().toLowerCase() ?? '';
+  const known = capabilities.engines.some((item) => item.name.toLowerCase() === requested);
+  if (requested !== 'auto' && !known) {
+    throw new Error(`Unknown solve engine: ${requested || '(empty)'}`);
+  }
+  if (requested === runner && solverMode === 'full_3d') {
+    throw new Error(`Engine '${runner}' cannot run solver mode Full 3D.`);
+  }
+  if (requested === 'dryrun' && solverMode === 'circsym') {
+    throw new Error('Dry-run cannot run forced Axisymmetric solver mode.');
+  }
+  const full3dOrder = capabilities.engineSelection?.full3dOrder.map((name) => name.toLowerCase())
+    ?? capabilities.engines
+      .filter((item) => item.formulations?.includes('full-3d'))
+      .map((item) => item.name.toLowerCase());
+  return { requested, runner, full3dOrder, solverMode };
+}
+
+/**
+ * Server-advertised candidates the formulation planner may reach, in order.
+ *
+ * This is shared by capability gating and submission resolution so AUTO's
+ * conditional Axisym-first path cannot drift between those two UI surfaces.
+ */
+export function plannedEngineNames(
+  engine: string,
+  capabilities: {
+    engines: readonly EngineCapability[];
+    engineSelection?: Readonly<EngineSelection>;
+  },
+  solverMode: SolverMode = 'auto',
+): readonly string[] {
+  const plan = engineModePlan(engine, capabilities, solverMode);
+  if (plan.solverMode === 'circsym') return plan.runner ? [plan.runner] : [];
+  if (plan.solverMode === 'full_3d') {
+    return plan.requested === 'auto' ? plan.full3dOrder : [plan.requested];
+  }
+  if (plan.requested === 'dryrun' || plan.requested === plan.runner) {
+    return [plan.requested];
+  }
+  const axisymFirst = plan.runner ? [plan.runner] : [];
+  return plan.requested === 'auto'
+    ? [...axisymFirst, ...plan.full3dOrder]
+    : [...axisymFirst, plan.requested];
+}
+
 export function resolveEngine(
   engine: string,
   capabilities: {
     engines: readonly EngineCapability[];
-    engineSelection?: EngineSelection;
+    engineSelection?: Readonly<EngineSelection>;
   },
-  solverMode = 'auto',
+  solverMode: SolverMode = 'auto',
 ): string {
+  const plan = engineModePlan(engine, capabilities, solverMode);
   const selection = capabilities.engineSelection;
   if (solverMode === 'circsym') {
-    const runner = selection?.axisymmetricRunner.trim().toLowerCase();
+    const runner = plan.runner;
     const axisym = capabilities.engines.find((item) => item.available
       && item.name.toLowerCase() === runner);
     if (axisym) return runner!;
@@ -136,11 +200,8 @@ export function resolveEngine(
       ? `Forced Axisymmetric mode requires the advertised ${runner} runner, but it is unavailable.${detail}`
       : 'Forced Axisymmetric mode is unavailable because the server advertised no axisymmetric runner.');
   }
-  if (engine.toLowerCase() !== 'auto') return engine.toLowerCase();
-  const order = selection?.full3dOrder.map((name) => name.toLowerCase())
-    ?? capabilities.engines
-      .filter((item) => item.formulations?.includes('full-3d'))
-      .map((item) => item.name.toLowerCase());
+  if (plan.requested !== 'auto') return plan.requested;
+  const order = plan.full3dOrder;
   const resolvedDefault = selection?.resolvedDefault?.toLowerCase() ?? null;
   const available = capabilities.engines.find((item) => item.available
     && item.name.toLowerCase() === resolvedDefault)
@@ -153,7 +214,10 @@ export function resolveEngine(
   // and Run blocked on a design the server would have solved -- escapable only
   // by knowing to force the meridian mode by hand. Geometry eligibility is the
   // planner's to judge, not this function's.
-  const runner = selection?.axisymmetricRunner.toLowerCase();
+  if (solverMode === 'full_3d') {
+    throw new Error('No full-3D solver backend is currently available');
+  }
+  const runner = plan.runner;
   const axisym = capabilities.engines.find((item) => item.available
     && item.name.toLowerCase() === runner);
   if (axisym) return runner!;
