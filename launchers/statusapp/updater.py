@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
@@ -14,16 +15,35 @@ import tempfile
 import time
 
 from server.platform.paths import resolve_data_dir
+from launchers.apply_update import bundle_from_app_layer
 
 
 TAG_RE = re.compile(r"^v\d+\.\d+\.\d+$")
+VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 
 
 class UpdateHandoffError(RuntimeError):
     """An update request or installer handoff could not be trusted or started."""
 
 
-def consume_update_request(path: Path, *, now: float | None = None) -> str | None:
+@dataclass(frozen=True, slots=True)
+class BundleUpdateRequest:
+    """Validated paths for one staged standalone-app update."""
+
+    version: str
+    staged_app_dir: Path
+    staged_runtime_dir: Path | None
+
+
+UpdateRequest = str | BundleUpdateRequest
+
+
+def consume_update_request(
+    path: Path,
+    *,
+    now: float | None = None,
+    data_dir: Path | None = None,
+) -> UpdateRequest | None:
     """Consume a ready, schema-valid request; retain a request whose delay is active."""
 
     try:
@@ -42,11 +62,59 @@ def consume_update_request(path: Path, *, now: float | None = None) -> str | Non
             pass
         raise UpdateHandoffError("Discarded a malformed update request.") from exc
 
-    if not isinstance(payload, dict):
-        invalid = True
+    if isinstance(payload, dict) and payload.get("kind") == "apply_bundle":
+        version = payload.get("version")
+        raw_app = payload.get("stagedAppDir")
+        raw_runtime = payload.get("stagedRuntimeDir")
+        root = data_dir.resolve() if data_dir is not None else None
+        try:
+            staged_app = Path(raw_app).resolve() if isinstance(raw_app, str) else None
+            staged_runtime = (
+                Path(raw_runtime).resolve() if isinstance(raw_runtime, str) else None
+            )
+            inside = (
+                root is not None
+                and staged_app is not None
+                and staged_app.is_relative_to(root)
+                and (staged_runtime is None or staged_runtime.is_relative_to(root))
+            )
+        except OSError:
+            inside = False
+            staged_app = None
+            staged_runtime = None
+        invalid = (
+            set(payload)
+            != {
+                "schemaVersion",
+                "kind",
+                "version",
+                "stagedAppDir",
+                "stagedRuntimeDir",
+            }
+            or payload.get("schemaVersion") != 1
+            or not isinstance(version, str)
+            or VERSION_RE.fullmatch(version) is None
+            or raw_runtime is not None
+            and not isinstance(raw_runtime, str)
+            or not inside
+            or staged_app is None
+            or not staged_app.is_dir()
+            or staged_runtime is not None
+            and not staged_runtime.is_dir()
+        )
+        if not invalid:
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                return None
+            except OSError as exc:
+                raise UpdateHandoffError(
+                    f"Could not consume the update request: {exc}"
+                ) from exc
+            return BundleUpdateRequest(version, staged_app, staged_runtime)
         tag = ""
         ready_at = 0.0
-    else:
+    elif isinstance(payload, dict):
         tag = payload.get("tag")
         ready_at = payload.get("readyAtEpoch", 0.0)
         invalid = (
@@ -56,6 +124,10 @@ def consume_update_request(path: Path, *, now: float | None = None) -> str | Non
             or TAG_RE.fullmatch(tag) is None
             or not isinstance(ready_at, int | float)
         )
+    else:
+        invalid = True
+        tag = ""
+        ready_at = 0.0
 
     if invalid:
         try:
@@ -282,3 +354,80 @@ def launch_update_handoff(
         except (OSError, UnboundLocalError):
             pass
         raise UpdateHandoffError(f"Could not start the update installer: {exc}") from exc
+
+
+def launch_bundle_update_handoff(
+    app_layer: Path,
+    request: BundleUpdateRequest,
+    parent_pid: int,
+    *,
+    environ: Mapping[str, str],
+    server_args: Sequence[str] = (),
+    platform_name: str | None = None,
+) -> None:
+    """Run the updater from the staged app, using its runtime when supplied."""
+
+    selected_platform = sys.platform if platform_name is None else platform_name
+    environment = dict(environ)
+    data_dir = resolve_data_dir(
+        _data_dir_override(server_args),
+        environ=environment,
+    ).resolve()
+    if not request.staged_app_dir.is_relative_to(data_dir) or (
+        request.staged_runtime_dir is not None
+        and not request.staged_runtime_dir.is_relative_to(data_dir)
+    ):
+        raise UpdateHandoffError("Refusing staged bundle paths outside the data directory.")
+    script = request.staged_app_dir / "launchers" / "apply_update.py"
+    if not script.is_file():
+        raise UpdateHandoffError(f"The staged bundle updater is missing: {script}")
+    if request.staged_runtime_dir is not None:
+        if selected_platform == "win32":
+            python = request.staged_runtime_dir / "python.exe"
+        else:
+            python = request.staged_runtime_dir / "bin" / "python3.13"
+    else:
+        python = Path(sys.executable).resolve()
+    if not python.is_file():
+        raise UpdateHandoffError(f"The bundle updater Python is missing: {python}")
+    try:
+        bundle = bundle_from_app_layer(app_layer, selected_platform)
+    except Exception as exc:  # noqa: BLE001 - translate into the handoff contract
+        raise UpdateHandoffError(str(exc)) from exc
+    command = [
+        str(python),
+        str(script),
+        "--bundle",
+        str(bundle),
+        "--data-dir",
+        str(data_dir),
+        "--staged-app-dir",
+        str(request.staged_app_dir),
+        "--parent-pid",
+        str(parent_pid),
+    ]
+    if request.staged_runtime_dir is not None:
+        command.extend(("--staged-runtime-dir", str(request.staged_runtime_dir)))
+    for argument in server_args:
+        # The relaunch goes through LaunchServices/the exe, which receives no
+        # environment; carry --port/--data-dir as explicit CLI arguments.
+        command.append(f"--relaunch-arg={argument}")
+    options: dict[str, object] = {
+        "cwd": str(request.staged_app_dir),
+        "env": environment,
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "close_fds": True,
+    }
+    if selected_platform == "win32":
+        options["creationflags"] = (
+            getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            | getattr(subprocess, "DETACHED_PROCESS", 0)
+        )
+    else:
+        options["start_new_session"] = True
+    try:
+        subprocess.Popen(command, **options)
+    except OSError as exc:
+        raise UpdateHandoffError(f"Could not start the bundle updater: {exc}") from exc

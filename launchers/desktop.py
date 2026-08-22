@@ -3,15 +3,27 @@
 from __future__ import annotations
 
 import importlib
+import os
+from pathlib import Path
+import shutil
 import sys
 import time
 import traceback
 from types import ModuleType
 from urllib.parse import urljoin, urlsplit
 
-from launchers.statusapp.__main__ import _report_startup_failure
+from launchers.statusapp.__main__ import _report_startup_failure, _show_startup_failure_dialog
 from launchers.statusapp.controller import ServiceState, StatusController, StatusSnapshot
-from launchers.statusapp.updater import UpdateHandoffError
+from launchers.apply_update import (
+    ApplyUpdateError,
+    append_update_log,
+    bundle_from_app_layer,
+    cleanup_previous_layers,
+    repair_bundle,
+    resources_directory,
+    rollback_previous_layers,
+)
+from launchers.statusapp.updater import BundleUpdateRequest, UpdateHandoffError
 
 
 WINDOW_TITLE = "Waveguide Generator"
@@ -56,13 +68,105 @@ class DesktopWindow:
         *,
         poll_interval: float = 0.25,
         startup_timeout: float = 120.0,
+        update_ready_delay: float = 0.75,
     ) -> None:
         self.controller = controller
         self.poll_interval = poll_interval
         self.startup_timeout = startup_timeout
+        self.update_ready_delay = update_ready_delay
         self.js_api = _WindowApi(self)
         self._webview: ModuleType | None = None
         self._window: object | None = None
+        self._healthy_bundle_checked = False
+
+    def _bundle_paths(self) -> tuple[Path, Path, Path] | None:
+        environment = getattr(self.controller, "environ", os.environ)
+        if environment.get("WG2_BUNDLE") != "1":
+            return None
+        try:
+            app_layer = Path(getattr(self.controller, "repo_root")).resolve()
+            bundle = bundle_from_app_layer(app_layer, sys.platform)
+            data_dir = Path(getattr(self.controller, "data_dir")).resolve()
+        except (ApplyUpdateError, AttributeError, OSError, RuntimeError, TypeError, ValueError):
+            return None
+        return bundle, resources_directory(bundle, sys.platform), data_dir
+
+    def _finish_healthy_bundle_update(self, snapshot: StatusSnapshot) -> None:
+        if self._healthy_bundle_checked or snapshot.frontend.state is not ServiceState.OK:
+            return
+        self._healthy_bundle_checked = True
+        paths = self._bundle_paths()
+        if paths is None:
+            return
+        bundle, resources, data_dir = paths
+
+        def log(message: str) -> None:
+            append_update_log(data_dir, message)
+
+        had_previous = any(
+            (resources / f"{name}.previous").exists() for name in ("app", "runtime")
+        )
+        try:
+            cleanup_previous_layers(resources, log=log)
+        except OSError as exc:
+            log(f"Could not remove healthy-start rollback layers: {exc}")
+        finally:
+            if had_previous:
+                repair_bundle(bundle, platform_name=sys.platform, log=log)
+                # The staged layers moved into the bundle; what is left under
+                # updates/ is the downloaded archives (the runtime zip alone is
+                # well over 100 MB), which the healthy new version never needs.
+                downloads = data_dir / "updates"
+                try:
+                    shutil.rmtree(downloads)
+                except FileNotFoundError:
+                    pass
+                except OSError as exc:
+                    log(f"Could not remove the update downloads {downloads}: {exc}")
+                else:
+                    log(f"Removed the update downloads: {downloads}")
+
+    @staticmethod
+    def _report_bundle_failure(message: str) -> None:
+        """Log as usual, and always put a bundle's failure on screen.
+
+        LaunchServices starts the bundle with stderr attached to nothing a
+        user can read, yet not ``None``, so the console-only heuristic in
+        ``_report_startup_failure`` would leave a failed start (or a completed
+        rollback) invisible.
+        """
+
+        _report_startup_failure(message)
+        if sys.stderr is not None:
+            _show_startup_failure_dialog(message)
+
+    def _report_bundle_startup_failure(
+        self, snapshot: StatusSnapshot, cause: str
+    ) -> None:
+        message = self._failure_message(snapshot, cause)
+        paths = self._bundle_paths()
+        if paths is None:
+            _report_startup_failure(message)
+            return
+        bundle, resources, data_dir = paths
+        if not any((resources / f"{name}.previous").is_dir() for name in ("app", "runtime")):
+            self._report_bundle_failure(message)
+            return
+        self.controller.close()
+
+        def log(entry: str) -> None:
+            append_update_log(data_dir, entry)
+
+        rolled_back = rollback_previous_layers(resources, log=log)
+        if rolled_back:
+            repair_bundle(bundle, platform_name=sys.platform, log=log)
+            result = "The previous version was restored. Reopen Waveguide Generator."
+        else:
+            result = (
+                "Automatic rollback failed. Review update.log in the application "
+                "data log directory before changing the bundle."
+            )
+        self._report_bundle_failure(f"{message}\n\n{result}")
 
     @staticmethod
     def _failure_message(snapshot: StatusSnapshot, cause: str) -> str:
@@ -93,18 +197,17 @@ class DesktopWindow:
         deadline = time.monotonic() + self.startup_timeout
         while not self._frontend_ready(snapshot):
             if self._startup_failed(snapshot):
-                _report_startup_failure(self._failure_message(snapshot, "did not start"))
+                self._report_bundle_startup_failure(snapshot, "did not start")
                 return None
             if time.monotonic() >= deadline:
-                _report_startup_failure(
-                    self._failure_message(
-                        snapshot,
-                        f"did not answer within {self.startup_timeout:.0f} seconds",
-                    )
+                self._report_bundle_startup_failure(
+                    snapshot,
+                    f"did not answer within {self.startup_timeout:.0f} seconds",
                 )
                 return None
             time.sleep(self.poll_interval)
             snapshot = self.controller.poll()
+        self._finish_healthy_bundle_update(snapshot)
         return snapshot
 
     def _load_webview(self) -> ModuleType:
@@ -151,16 +254,24 @@ class DesktopWindow:
         mode, so without this the button would be a silent no-op.
         """
 
-        tag = self.controller.take_update_request()
-        if tag is None:
+        request = self.controller.take_update_request()
+        if request is None:
             return False
+        label = request.version if isinstance(request, BundleUpdateRequest) else request
         try:
-            self.controller.launch_update(tag)
+            if isinstance(request, BundleUpdateRequest):
+                # Leave one progress-poll window in which the SPA can render
+                # "ready" after the server publishes the request file.
+                time.sleep(self.update_ready_delay)
+                self.controller.close()
+            self.controller.launch_update(request)
         except UpdateHandoffError as exc:
             _report_startup_failure(
-                f"Waveguide Generator could not start the {tag} update: {exc}\n\n"
+                f"Waveguide Generator could not start the {label} update: {exc}\n\n"
                 "The current version stays open."
             )
+            if isinstance(request, BundleUpdateRequest):
+                self.controller.start()
             return False
         # Closing the window ends webview.start(), and run()'s finally stops
         # the server the way a user-initiated close does.

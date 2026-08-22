@@ -6,6 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 import plistlib
+import stat
 import subprocess
 import zipfile
 
@@ -208,6 +209,23 @@ def test_layer_zip_is_sorted_and_omits_appledouble_files(tmp_path: Path) -> None
         assert {item.date_time for item in handle.infolist()} == {
             (1980, 1, 1, 0, 0, 0)
         }
+
+
+def test_layer_zip_materializes_internal_file_symlinks_as_regular_files(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "runtime"
+    (source / "bin").mkdir(parents=True)
+    (source / "bin" / "python3.13").write_bytes(b"python")
+    (source / "bin" / "python3").symlink_to("python3.13")
+    archive = tmp_path / "runtime.zip"
+
+    deterministic_zip(source, archive)
+
+    with zipfile.ZipFile(archive) as handle:
+        alias = handle.getinfo("bin/python3")
+        assert stat.S_IFMT(alias.external_attr >> 16) == stat.S_IFREG
+        assert handle.read(alias) == b"python"
 
 
 def test_app_root_uses_checkout_by_default_and_bundle_environment_when_set(

@@ -42,8 +42,41 @@ function status(overrides: Partial<UpdateStatus> = {}): UpdateStatus {
     },
     canInstall: true,
     lastError: null,
+    installState: 'idle',
+    downloadedBytes: 0,
+    totalBytes: 0,
+    error: null,
     ...overrides,
   };
+}
+
+function bundleStatus(overrides: Partial<UpdateStatus> = {}): UpdateStatus {
+  return status({
+    checkout: {
+      ...status().checkout,
+      kind: 'bundle',
+      branch: null,
+      head: null,
+      atDeclaredTag: false,
+      updateSupported: true,
+      installedVersion: __WG2_VERSION__,
+      runtimeId: '111111111111',
+      reason: null,
+    },
+    action: {
+      kind: 'bundle_download',
+      assets: [{
+        name: 'waveguide-generator-app-2.0.1.zip',
+        url: 'https://github.com/example/app.zip',
+        sha256Url: 'https://github.com/example/app.zip.sha256',
+        bytes: 5_500_000,
+        layer: 'app',
+      }],
+      downloadBytes: 5_500_000,
+    },
+    totalBytes: 5_500_000,
+    ...overrides,
+  });
 }
 
 function Harness({ value, refresh = async () => value }: { value: UpdateStatus; refresh?: () => Promise<UpdateStatus> }) {
@@ -100,7 +133,9 @@ describe('UpdateControl', () => {
     const copy = [...dialog.querySelectorAll<HTMLButtonElement>('button')]
       .find((button) => button.textContent === 'Copy update command')!;
     await act(async () => copy.click());
-    expect(writeText).toHaveBeenCalledWith(value.action?.command);
+    expect(writeText).toHaveBeenCalledWith(
+      value.action?.kind === 'copy_command' ? value.action.command : undefined,
+    );
     expect(dialog.textContent).toContain('Update command copied');
   });
 
@@ -122,23 +157,38 @@ describe('UpdateControl', () => {
     expect(host.querySelector('.update-command')).toBeNull();
   });
 
-  it('labels a bundled install without offering the checkout installer', async () => {
-    const value = status({
-      action: null,
-      canInstall: false,
-      checkout: {
-        ...status().checkout,
-        kind: 'bundle',
-        branch: null,
-        updateSupported: false,
-        reason: 'Install a newer DMG manually.',
-      },
+  it('offers a bundled download without a command fallback or copy button', async () => {
+    const value = bundleStatus();
+    act(() => root.render(<Harness value={value}/>));
+    await act(async () => host.querySelector<HTMLButtonElement>('.update-indicator')!.click());
+    expect(host.textContent).toContain('Download size 5.5 MB');
+    expect(host.textContent).toContain('Install update');
+    expect(host.textContent).not.toContain('fallback');
+    expect(host.textContent).not.toContain('Copy update command');
+    expect(host.querySelector('pre')).toBeNull();
+  });
+
+  it.each([
+    ['downloading', 2_000_000, 'Downloading 2.0 of 5.5 MB'],
+    ['verifying', 5_500_000, 'Verifying downloaded update'],
+    ['ready', 5_500_000, 'Update ready — WG will restart'],
+    ['failed', 3_000_000, 'Update failed: disk full'],
+  ] as const)('renders bundle install state %s', async (installState, downloadedBytes, expected) => {
+    const value = bundleStatus({
+      installState,
+      downloadedBytes,
+      error: installState === 'failed' ? 'disk full' : null,
     });
     act(() => root.render(<Harness value={value}/>));
     await act(async () => host.querySelector<HTMLButtonElement>('.update-indicator')!.click());
-    expect(host.textContent).toContain('Standalone app');
-    expect(host.textContent).toContain('Install a newer DMG manually.');
-    expect(host.querySelector('.update-command')).toBeNull();
+
+    expect(host.textContent).toContain(expected);
+    expect(host.textContent).not.toContain('Copy update command');
+    const installButtons = [...host.querySelectorAll<HTMLButtonElement>('.bundle-update button')];
+    expect(installButtons).toHaveLength(1);
+    if (installState === 'downloading' || installState === 'verifying' || installState === 'ready') {
+      expect(installButtons[0].disabled).toBe(true);
+    }
   });
 
   it('hands a ready release to the in-app installer', async () => {
@@ -154,6 +204,25 @@ describe('UpdateControl', () => {
       headers: { 'X-WG-Update': 'install' },
     });
     expect(host.textContent).toContain('WG will close and restart');
+  });
+
+  it('starts a bundle download and switches to progress', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      accepted: true,
+      version: '2.0.1',
+      installState: 'downloading',
+      downloadedBytes: 1_000_000,
+      totalBytes: 5_500_000,
+      error: null,
+    }), { status: 202 })));
+    act(() => root.render(<Harness value={bundleStatus()}/>));
+    await act(async () => host.querySelector<HTMLButtonElement>('.update-indicator')!.click());
+    const install = [...host.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent === 'Install update')!;
+
+    await act(async () => install.click());
+
+    expect(host.textContent).toContain('Downloading 1.0 of 5.5 MB');
   });
 
   it('prioritizes frontend/backend skew over release status', () => {
