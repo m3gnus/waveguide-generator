@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import subprocess
+
+import pytest
 
 from launchers.apply_update import (
     WINDOWS_CREATE_NEW_PROCESS_GROUP,
@@ -12,12 +15,53 @@ from launchers.apply_update import (
     apply_update,
     build_parser,
     cleanup_previous_layers,
+    process_exists,
     refresh_launcher_files,
     relaunch_application,
     relaunch_command,
     rollback_previous_layers,
     staged_launcher_files,
+    wait_for_parent,
 )
+
+
+class _VanishedPid(OSError):
+    """The error Windows raises for a pid that no longer exists."""
+
+    winerror = 87  # ERROR_INVALID_PARAMETER, straight out of OpenProcess
+
+
+def test_a_vanished_windows_parent_reads_as_gone_not_as_a_crash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Windows never raises ProcessLookupError, so the POSIX-shaped check missed it.
+
+    The updater is handed the launcher's pid and started detached; the launcher
+    then exits within milliseconds, so by the first poll the pid is already
+    gone. An unguarded OSError here killed the updater before it opened its own
+    log, which is why a failed update left no trace anywhere on the machine.
+    """
+
+    def vanished(pid: int, signal_number: int) -> None:
+        raise _VanishedPid(22, "The parameter is incorrect")
+
+    monkeypatch.setattr(os, "kill", vanished)
+
+    assert process_exists(4321) is False
+    assert wait_for_parent(4321, timeout=0.0) is True
+
+
+def test_an_unrelated_oserror_still_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _Unrelated(OSError):
+        winerror = 1314  # ERROR_PRIVILEGE_NOT_HELD
+
+    def refused(pid: int, signal_number: int) -> None:
+        raise _Unrelated(1, "A required privilege is not held by the client")
+
+    monkeypatch.setattr(os, "kill", refused)
+
+    with pytest.raises(OSError):
+        process_exists(4321)
 
 
 def _layout(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
