@@ -573,7 +573,7 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .jobs-filter:focus-within { border-color: rgba(var(--acc-rgb), .5); box-shadow: 0 0 0 2px rgba(var(--acc-rgb), .08); }
 .jobs-filter svg { width: 12px; height: 12px; flex: none; }
 .jobs-filter input { width: 100%; min-width: 0; height: var(--field-h); background: transparent; color: var(--fg); font-size: var(--text-micro); }
-.jobs-filter input::placeholder { color: var(--fg4); }
+.jobs-filter input::placeholder { color: var(--fg2); }
 .jobs-kept-toggle { display: grid; place-items: center; width: 23px; height: 23px; flex: none; border-radius: var(--r3); background: transparent; color: var(--fg4); font-size: var(--text-base); }
 .jobs-kept-toggle:hover { background: var(--ov3); color: var(--amber); }
 .jobs-kept-toggle.on { background: color-mix(in srgb, var(--amber) 13%, transparent); color: var(--amber); }

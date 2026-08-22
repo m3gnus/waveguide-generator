@@ -89,3 +89,20 @@ def test_side_by_side_v1_migration_requires_explicit_provenance() -> None:
         readme.split()
     )
     assert "looks for" in readme and "in sibling checkout folders" not in readme
+
+
+def test_user_guide_distinguishes_startup_returns_from_new_arrivals() -> None:
+    guide = _read("docs/USER-GUIDE.md")
+    workflow = _between(
+        guide,
+        "A newly arriving return",
+        "### Starting from a model drawn in Fusion",
+    )
+    normalized = " ".join(workflow.split())
+
+    assert "manually select from the History list" in normalized
+    assert "prepared automatically" in normalized
+    assert "On startup" in normalized
+    assert "Ready to prepare" in normalized
+    assert "Prepare simulation" in normalized
+    assert "appears only as the retry" not in normalized
