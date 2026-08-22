@@ -55,6 +55,65 @@ def test_reference_client_polls_to_a_versioned_result() -> None:
     assert evaluation.result_sha256 == "a" * 64
 
 
+def test_reference_client_stops_a_timed_out_job_without_masking_stop_failure() -> None:
+    module = _module()
+
+    class FixtureClient(module.WaveguideGeneratorClient):
+        def __init__(self) -> None:
+            self.stopped: list[str] = []
+
+        def submit(self, _solve_request: dict[str, Any]) -> str:
+            return "job-timeout"
+
+        def status(self, job_id: str) -> dict[str, Any]:
+            assert job_id == "job-timeout"
+            return {"status": "running"}
+
+        def stop(self, job_id: str) -> dict[str, Any]:
+            self.stopped.append(job_id)
+            raise RuntimeError("stop endpoint unavailable")
+
+    client = FixtureClient()
+    with pytest.raises(TimeoutError, match="job-timeout"):
+        client.evaluate({}, timeout_seconds=0)
+    assert client.stopped == ["job-timeout"]
+
+
+def test_reference_client_stops_a_job_when_polling_is_interrupted() -> None:
+    module = _module()
+
+    class FixtureClient(module.WaveguideGeneratorClient):
+        def __init__(self) -> None:
+            self.stopped: list[str] = []
+
+        def submit(self, _solve_request: dict[str, Any]) -> str:
+            return "job-interrupted"
+
+        def status(self, _job_id: str) -> dict[str, Any]:
+            raise KeyboardInterrupt
+
+        def stop(self, job_id: str) -> dict[str, Any]:
+            self.stopped.append(job_id)
+            return {"status": "stopping"}
+
+    client = FixtureClient()
+    with pytest.raises(KeyboardInterrupt):
+        client.evaluate({})
+    assert client.stopped == ["job-interrupted"]
+
+
+def test_reference_client_stop_uses_the_cooperative_cancellation_route() -> None:
+    module = _module()
+
+    class FixtureClient(module.WaveguideGeneratorClient):
+        def _request(self, method, path, payload=None, *, timeout_seconds=60.0):
+            assert (method, path, payload) == ("POST", "/api/stop/job-1", None)
+            assert timeout_seconds == module.STOP_TIMEOUT_SECONDS
+            return b'{"status":"stopping"}', {}
+
+    assert FixtureClient().stop("job-1") == {"status": "stopping"}
+
+
 def _result_client(module, results: object, declared_digest: str | None):
     raw = json.dumps(results, separators=(",", ":")).encode("utf-8")
 
