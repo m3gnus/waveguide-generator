@@ -10,6 +10,8 @@ import threading
 import time
 import sqlite3
 
+import pytest
+
 from server.cadlink.identity import SaveIdentity
 from server.cadlink.store import CadLinkStore
 
@@ -53,10 +55,11 @@ def test_registry_schema_is_separate_versioned_and_snapshot_preserving(tmp_path:
     assert db_path.exists()
     assert not (tmp_path / "db" / "simulations.db").exists()
     conn = sqlite3.connect(db_path)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 10
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 11
     assert {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")} >= {
         "designs",
         "exports",
+        "export_reservations",
         "ingests",
         "onshape_links",
         "lineage_cad_names",
@@ -93,7 +96,7 @@ def test_v2_registry_with_rows_migrates_to_current_without_data_loss(tmp_path: P
     migrated.close()
 
     connection = sqlite3.connect(db_path)
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 10
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == 11
     assert connection.execute("SELECT COUNT(*) FROM designs").fetchone()[0] == 1
     assert connection.execute("SELECT COUNT(*) FROM exports").fetchone()[0] == 1
     connection.close()
@@ -371,6 +374,80 @@ def test_concurrent_same_key_runs_exactly_one_export_builder(tmp_path: Path) -> 
     assert calls == 1
 
 
+def test_slow_export_builder_does_not_block_registry_reads(tmp_path: Path) -> None:
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    saved = _save(store)
+    design_id = saved["identity"].design_id  # type: ignore[union-attr]
+    building = threading.Event()
+
+    def build(facts):
+        building.set()
+        time.sleep(0.25)
+        return {
+            "manifest_json": json.dumps(facts),
+            "geometry_hash": "sha256:geometry",
+            "artifact_sha256": "sha256:artifact",
+        }
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(
+            store.allocate_export,
+            design_id=design_id,
+            idempotency_key="slow-build",
+            export_builder=build,
+        )
+        assert building.wait(timeout=1)
+        started = time.monotonic()
+        design = store.get_design(design_id)
+        read_elapsed = time.monotonic() - started
+        exported = future.result(timeout=1)
+
+    assert design is not None
+    assert exported["sequence"] == 1
+    assert read_elapsed < 0.1
+
+
+def test_failed_export_build_keeps_the_same_retryable_reservation(tmp_path: Path) -> None:
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    saved = _save(store)
+    design_id = saved["identity"].design_id  # type: ignore[union-attr]
+    attempts: list[dict[str, object]] = []
+
+    def fail(facts):
+        attempts.append(dict(facts))
+        raise RuntimeError("STEP generator failed")
+
+    with pytest.raises(RuntimeError, match="STEP generator failed"):
+        store.allocate_export(
+            design_id=design_id,
+            idempotency_key="retry-build",
+            export_builder=fail,
+        )
+
+    connection = sqlite3.connect(tmp_path / "cadlink.db")
+    assert connection.execute(
+        "SELECT state FROM export_reservations WHERE idempotency_key = 'retry-build'"
+    ).fetchone() == ("retryable",)
+    connection.close()
+
+    exported = store.allocate_export(
+        design_id=design_id,
+        idempotency_key="retry-build",
+        export_builder=lambda facts: (
+            attempts.append(dict(facts))
+            or {
+                "manifest_json": json.dumps(facts),
+                "geometry_hash": "sha256:geometry",
+                "artifact_sha256": "sha256:artifact",
+            }
+        ),
+    )
+
+    assert attempts[0] == attempts[1]
+    assert exported["export_id"] == attempts[0]["exportId"]
+    assert exported["sequence"] == 1
+
+
 def test_lineage_cad_names_are_claimed_once_and_span_a_fork(tmp_path: Path) -> None:
     """A linked CAD document depends on these names, so they never move."""
 
@@ -448,7 +525,7 @@ def test_v9_archive_stem_migration_resolves_portable_collisions_stably(
     restarted.close()
 
     connection = sqlite3.connect(db_path)
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 10
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == 11
     assert connection.execute(
         "SELECT COUNT(*) FROM sqlite_master "
         "WHERE type = 'index' AND name = 'lineage_cad_names_by_archive_stem'"

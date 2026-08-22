@@ -61,6 +61,22 @@ _SCHEMA = (
     """,
     "CREATE INDEX IF NOT EXISTS exports_by_artifact ON exports(artifact_sha256)",
     """
+    CREATE TABLE IF NOT EXISTS export_reservations (
+      idempotency_key TEXT PRIMARY KEY,
+      export_id TEXT NOT NULL UNIQUE,
+      bundle_id TEXT NOT NULL UNIQUE,
+      design_id TEXT NOT NULL REFERENCES designs(design_id),
+      sequence INTEGER NOT NULL,
+      parent_export_id TEXT,
+      edit_version INTEGER NOT NULL,
+      design_hash TEXT NOT NULL,
+      snapshot_text TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      state TEXT NOT NULL CHECK (state IN ('building', 'retryable')),
+      UNIQUE (design_id, sequence)
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS ingests (
       ingest_id TEXT PRIMARY KEY,
       manifest_sha256 TEXT NOT NULL,
@@ -200,6 +216,9 @@ def _allocate_archive_stem(
         return base
     return _suffixed_archive_stem(base, lineage_id, used)
 
+_EXPORT_BUILD_LOCKS_GUARD = threading.Lock()
+_EXPORT_BUILD_LOCKS: dict[tuple[str, str], threading.Lock] = {}
+
 
 class CadLinkStore:
     """Thread-safe, transaction-per-write CAD-link registry."""
@@ -223,7 +242,7 @@ class CadLinkStore:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._lock, self._transaction() as conn:
             version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-            if version not in {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10}:
+            if version not in {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}:
                 raise RuntimeError(f"unsupported cadlink.db schema version {version}")
             for statement in _SCHEMA:
                 conn.execute(statement)
@@ -279,7 +298,10 @@ class CadLinkStore:
                 "ON lineage_cad_names(archive_stem COLLATE NOCASE) "
                 "WHERE archive_stem IS NOT NULL AND archive_stem != ''"
             )
-            conn.execute("PRAGMA user_version = 10")
+            # Schema 11 adds export_reservations (created by _SCHEMA above):
+            # exports are reserved in a short transaction and finalised after
+            # the bundle is built outside the registry lock.
+            conn.execute("PRAGMA user_version = 11")
         self._initialized = True
 
     def get_design(self, design_id: str) -> dict[str, Any] | None:
@@ -677,97 +699,172 @@ class CadLinkStore:
         parent_export_id: str | None = None,
         created_at: str | None = None,
     ) -> dict[str, Any]:
-        """Atomically allocate a per-design sequence and immutable snapshot."""
+        """Reserve quickly, build unlocked, then atomically finalize an export."""
 
+        builders = sum(
+            value is not None
+            for value in (manifest_json, manifest_builder, export_builder)
+        )
+        if builders != 1:
+            raise ValueError(
+                "provide exactly one of manifest_json, manifest_builder, or export_builder"
+            )
         self.initialize()
-        now = created_at or utc_now()
-        with self._lock, self._transaction() as conn:
-            retry = conn.execute(
-                "SELECT * FROM exports WHERE idempotency_key = ?", (idempotency_key,)
-            ).fetchone()
-            if retry is not None:
-                return self._row(retry) or {}
-            design = conn.execute(
-                "SELECT * FROM designs WHERE design_id = ?", (design_id,)
-            ).fetchone()
-            if design is None:
-                raise KeyError(f"unknown design_id {design_id}")
-            latest = conn.execute(
-                "SELECT export_id, sequence FROM exports WHERE design_id = ? "
-                "ORDER BY sequence DESC LIMIT 1",
-                (design_id,),
-            ).fetchone()
-            sequence = (int(latest["sequence"]) if latest else 0) + 1
-            resolved_parent = (
-                parent_export_id
-                if parent_export_id is not None
-                else (str(latest["export_id"]) if latest else None)
-            )
-            export_id = mint_id("wge_")
-            resolved_bundle_id = bundle_id or mint_id("wgb_")
+        build_lock = self._export_build_lock(design_id)
+        with build_lock:
+            now = created_at or utc_now()
+            with self._lock, self._transaction() as conn:
+                retry = conn.execute(
+                    "SELECT * FROM exports WHERE idempotency_key = ?",
+                    (idempotency_key,),
+                ).fetchone()
+                if retry is not None:
+                    return self._row(retry) or {}
+                reservation = conn.execute(
+                    "SELECT * FROM export_reservations WHERE idempotency_key = ?",
+                    (idempotency_key,),
+                ).fetchone()
+                if reservation is None:
+                    design = conn.execute(
+                        "SELECT * FROM designs WHERE design_id = ?", (design_id,)
+                    ).fetchone()
+                    if design is None:
+                        raise KeyError(f"unknown design_id {design_id}")
+                    latest = conn.execute(
+                        """
+                        SELECT export_id, sequence FROM (
+                          SELECT export_id, sequence FROM exports WHERE design_id = ?
+                          UNION ALL
+                          SELECT export_id, sequence FROM export_reservations
+                          WHERE design_id = ?
+                        ) ORDER BY sequence DESC LIMIT 1
+                        """,
+                        (design_id, design_id),
+                    ).fetchone()
+                    sequence = (int(latest["sequence"]) if latest else 0) + 1
+                    resolved_parent = (
+                        parent_export_id
+                        if parent_export_id is not None
+                        else (str(latest["export_id"]) if latest else None)
+                    )
+                    export_id = mint_id("wge_")
+                    resolved_bundle_id = bundle_id or mint_id("wgb_")
+                    conn.execute(
+                        """
+                        INSERT INTO export_reservations (
+                          idempotency_key, export_id, bundle_id, design_id,
+                          sequence, parent_export_id, edit_version, design_hash,
+                          snapshot_text, created_at, state
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'building')
+                        """,
+                        (
+                            idempotency_key,
+                            export_id,
+                            resolved_bundle_id,
+                            design_id,
+                            sequence,
+                            resolved_parent,
+                            design["edit_version"],
+                            design["design_hash"],
+                            design["snapshot_text"],
+                            now,
+                        ),
+                    )
+                    reservation = conn.execute(
+                        "SELECT * FROM export_reservations WHERE idempotency_key = ?",
+                        (idempotency_key,),
+                    ).fetchone()
+                elif str(reservation["design_id"]) != design_id:
+                    raise ValueError("idempotency_key is reserved for another design")
+                conn.execute(
+                    "UPDATE export_reservations SET state = 'building' "
+                    "WHERE idempotency_key = ?",
+                    (idempotency_key,),
+                )
+
+            assert reservation is not None
             facts: dict[str, object] = {
-                "exportId": export_id,
-                "bundleId": resolved_bundle_id,
-                "designId": design_id,
-                "sequence": sequence,
-                "parentExportId": resolved_parent,
-                "editVersion": design["edit_version"],
-                "designHash": design["design_hash"],
-                "createdAt": now,
+                "exportId": reservation["export_id"],
+                "bundleId": reservation["bundle_id"],
+                "designId": reservation["design_id"],
+                "sequence": reservation["sequence"],
+                "parentExportId": reservation["parent_export_id"],
+                "editVersion": reservation["edit_version"],
+                "designHash": reservation["design_hash"],
+                "createdAt": reservation["created_at"],
             }
-            builders = sum(
-                value is not None
-                for value in (manifest_json, manifest_builder, export_builder)
-            )
-            if builders != 1:
-                raise ValueError(
-                    "provide exactly one of manifest_json, manifest_builder, or export_builder"
-                )
-            if export_builder is not None:
-                products = export_builder(facts)
-                stored_manifest = products.get("manifest_json")
-                geometry_hash = products.get("geometry_hash")
-                artifact_sha256 = products.get("artifact_sha256")
-                bundle_path = products.get("bundle_path")
-            else:
-                stored_manifest = (
-                    manifest_builder(facts)
-                    if manifest_builder is not None
-                    else manifest_json
-                )
-            assert stored_manifest is not None
-            if geometry_hash is None or artifact_sha256 is None:
-                raise ValueError("geometry_hash and artifact_sha256 are required")
-            conn.execute(
-                """
-                INSERT INTO exports (
-                  export_id, bundle_id, design_id, sequence, parent_export_id,
-                  edit_version, design_hash, geometry_hash, artifact_sha256,
-                  manifest_json, snapshot_text, idempotency_key, created_at,
-                  bundle_path
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    export_id,
-                    resolved_bundle_id,
-                    design_id,
-                    sequence,
-                    resolved_parent,
-                    design["edit_version"],
-                    design["design_hash"],
-                    geometry_hash,
-                    artifact_sha256,
-                    stored_manifest,
-                    design["snapshot_text"],
-                    idempotency_key,
-                    now,
-                    bundle_path,
-                ),
-            )
-            row = conn.execute(
-                "SELECT * FROM exports WHERE idempotency_key = ?", (idempotency_key,)
-            ).fetchone()
+            try:
+                if export_builder is not None:
+                    products = export_builder(facts)
+                    stored_manifest = products.get("manifest_json")
+                    geometry_hash = products.get("geometry_hash")
+                    artifact_sha256 = products.get("artifact_sha256")
+                    bundle_path = products.get("bundle_path")
+                else:
+                    stored_manifest = (
+                        manifest_builder(facts)
+                        if manifest_builder is not None
+                        else manifest_json
+                    )
+                if stored_manifest is None:
+                    raise ValueError("manifest builder did not return manifest_json")
+                if geometry_hash is None or artifact_sha256 is None:
+                    raise ValueError("geometry_hash and artifact_sha256 are required")
+
+                with self._lock, self._transaction() as conn:
+                    conn.execute(
+                        """
+                        INSERT INTO exports (
+                          export_id, bundle_id, design_id, sequence, parent_export_id,
+                          edit_version, design_hash, geometry_hash, artifact_sha256,
+                          manifest_json, snapshot_text, idempotency_key, created_at,
+                          bundle_path
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            reservation["export_id"],
+                            reservation["bundle_id"],
+                            reservation["design_id"],
+                            reservation["sequence"],
+                            reservation["parent_export_id"],
+                            reservation["edit_version"],
+                            reservation["design_hash"],
+                            geometry_hash,
+                            artifact_sha256,
+                            stored_manifest,
+                            reservation["snapshot_text"],
+                            idempotency_key,
+                            reservation["created_at"],
+                            bundle_path,
+                        ),
+                    )
+                    conn.execute(
+                        "DELETE FROM export_reservations WHERE idempotency_key = ?",
+                        (idempotency_key,),
+                    )
+                    row = conn.execute(
+                        "SELECT * FROM exports WHERE idempotency_key = ?",
+                        (idempotency_key,),
+                    ).fetchone()
+            except BaseException:
+                with self._lock, self._transaction() as conn:
+                    conn.execute(
+                        "UPDATE export_reservations SET state = 'retryable' "
+                        "WHERE idempotency_key = ?",
+                        (idempotency_key,),
+                    )
+                raise
         return self._row(row) or {}
+
+    def _export_build_lock(self, design_id: str) -> threading.Lock:
+        database = (
+            f"memory:{id(self)}"
+            if str(self.db_path) == ":memory:"
+            else str(self.db_path.absolute())
+        )
+        key = (database, design_id)
+        with _EXPORT_BUILD_LOCKS_GUARD:
+            return _EXPORT_BUILD_LOCKS.setdefault(key, threading.Lock())
 
     def get_onshape_link(
         self, design_id: str, account_id: str | None = None
