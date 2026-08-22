@@ -1,4 +1,5 @@
 import { buildDerivedAcoustics, type DerivedAcousticsRow } from './derivedAcoustics';
+import { radiatedPowerMetadata } from './radiatedPower';
 import { resultChannels, type ResultPayload } from './types';
 
 interface RunReportOptions {
@@ -34,6 +35,11 @@ function mean(values: Array<number | null>): number | null {
   return valid.length
     ? valid.reduce((sum, value) => sum + value, 0) / valid.length
     : null;
+}
+
+function maximumAbsolute(values: Array<number | null>): number | null {
+  const valid = values.filter(finite).map(Math.abs);
+  return valid.length ? Math.max(...valid) : null;
 }
 
 function svgLineChart(
@@ -103,11 +109,14 @@ function warningList(result: ResultPayload): string {
 
 function channelSection(id: string, result: ResultPayload): string {
   const derived = buildDerivedAcoustics(result);
+  const radiatedPower = radiatedPowerMetadata(result);
   const rows = derived.rows;
   const frequencies = rows.map(({ frequency_hz }) => frequency_hz);
   const table = rows.map((row) => `<tr>
       <td>${format(row.frequency_hz, 2)}</td><td>${format(row.on_axis_spl_db)}</td>
       <td>${format(row.directivity_index_db)}</td><td>${format(row.power_response_db_spl_avg)}</td>
+      <td>${format(row.radiated_power_surface_w, 6)}</td><td>${format(row.radiated_power_sphere_w, 6)}</td>
+      <td>${format(row.power_agreement_db, 3)}</td>
       <td>${format(row.group_delay_ms, 4)}</td><td>${format(row.horizontal_beamwidth_deg)}</td>
       <td>${format(row.vertical_beamwidth_deg)}</td>
     </tr>`).join('');
@@ -118,6 +127,7 @@ function channelSection(id: string, result: ResultPayload): string {
       <div><span>Samples</span><strong>${rows.length}</strong></div>
       <div><span>Mean on-axis SPL</span><strong>${format(mean(rows.map((row) => row.on_axis_spl_db)))} dB</strong></div>
       <div><span>Mean DI</span><strong>${format(mean(rows.map((row) => row.directivity_index_db)))} dB</strong></div>
+      ${radiatedPower ? `<div><span>Max |power agreement|</span><strong>${format(maximumAbsolute(rows.map((row) => row.power_agreement_db)), 3)} dB</strong></div>` : ''}
     </div>
     <h3>Response and power response</h3>
     ${svgLineChart(rows, [
@@ -130,8 +140,12 @@ function channelSection(id: string, result: ResultPayload): string {
       { key: 'vertical_beamwidth_deg', label: 'Vertical', color: '#c792ea' },
     ], 'Beamwidth (degrees)')}
     <h3>Warnings</h3>${warningList(result)}
+    ${radiatedPower ? `<details><summary>Radiated-power cross-check</summary>
+      <p class="quiet">${escapeHtml(radiatedPower.definition)}</p>
+      <pre>${escapeHtml(JSON.stringify(radiatedPower, null, 2))}</pre>
+    </details>` : ''}
     <details><summary>Derived acoustics table (${rows.length} rows)</summary>
-      <div class="table-wrap"><table><thead><tr><th>Hz</th><th>SPL dB</th><th>DI dB</th><th>Power response dB</th><th>Group delay ms</th><th>H beamwidth °</th><th>V beamwidth °</th></tr></thead><tbody>${table}</tbody></table></div>
+      <div class="table-wrap"><table><thead><tr><th>Hz</th><th>SPL dB</th><th>DI dB</th><th>Power response dB</th><th>Surface power W</th><th>Sphere power W</th><th>Agreement dB</th><th>Group delay ms</th><th>H beamwidth °</th><th>V beamwidth °</th></tr></thead><tbody>${table}</tbody></table></div>
     </details>
     <details><summary>Result metadata</summary><pre>${escapeHtml(JSON.stringify(result.metadata ?? {}, null, 2))}</pre></details>
   </section>`;

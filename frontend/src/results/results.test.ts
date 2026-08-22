@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CompareStore, fetchJobResults, fetchRadiationImpedancePresentation, mergeProvisionalResults, ProvisionalResultsStore, recombineJobResults, ResultsLruCache, resultsCache, type JobResults } from '../api/results';
 import { COMBINED_VIEW } from '../stores/resultView';
-import { beamShapeSeries, complexToDb, directivityGrid, directivityIndexSeries, excursionChartSeries, impedanceComparable, impedanceSeries, impedanceSubtitle, polarCut, polarMirrorsAcrossAxis, polarSeries, selectResultChannels, splSeries, type NamedResult } from './mappers';
+import { beamShapeSeries, complexToDb, directivityGrid, directivityIndexSeries, excursionChartSeries, impedanceComparable, impedanceSeries, impedanceSubtitle, polarCut, polarMirrorsAcrossAxis, polarSeries, powerResponseMethodCaption, powerResponseSeries, selectResultChannels, splSeries, type NamedResult } from './mappers';
 import { combinedChannelId, type ResultPayload } from './types';
 
 /** A channel as the server stamps it from the ingest record's source roles. */
@@ -333,6 +333,28 @@ describe('chart data mappers', () => {
       di: { frequencies: [200, 1_000], di: [null, null] },
     } as JobResults;
     expect(directivityIndexSeries(payload)).toEqual([]);
+  });
+
+  it('maps the true balloon-integrated power response and keeps unavailable DI cells empty', () => {
+    const payload = {
+      frequencies: [200, 1_000, 5_000],
+      spl_on_axis: { frequencies: [200, 1_000, 5_000], spl: [90, 96, 100] },
+      di: { frequencies: [200, 1_000, 5_000], di: [2, null, 9] },
+      metadata: { directivity_index: {
+        definition: '10log10(reference-axis mean-square pressure / full-sphere mean-square pressure)',
+        domain: 'full_sphere',
+      } },
+    } as ResultPayload;
+
+    expect(powerResponseSeries(payload)).toEqual([expect.objectContaining({
+      name: 'full-sphere integral of the solved balloon',
+      data: [[200, 88], [1_000, null], [5_000, 91]],
+    })]);
+    expect(powerResponseMethodCaption({
+      ...payload,
+      balloon: { frequencies: [], theta_deg: [], phi_deg: [], spl_norm_db: [], hemisphere: true },
+    })).toContain('zero-radiation rear hemisphere');
+    expect(powerResponseSeries({ ...payload, di: { frequencies: [200], di: [null] } })).toEqual([]);
   });
 });
 

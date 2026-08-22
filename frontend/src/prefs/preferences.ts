@@ -11,6 +11,7 @@ export const CHART_TYPES = [
   { id: 'directivity_map', label: 'Directivity Map (All planes)' },
   { id: 'frequency_response', label: 'Frequency Response (SPL On-Axis)' },
   { id: 'directivity_index', label: 'Directivity Index' },
+  { id: 'power_response', label: 'Power Response (Spatial Average)' },
   { id: 'beam_shape', label: 'Forward Beam Shape' },
   { id: 'beam_fit', label: 'Beam Shape Fit (aspect / exponent)' },
   { id: 'beam_map', label: 'Forward Beam Map' },

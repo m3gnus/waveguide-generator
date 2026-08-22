@@ -192,6 +192,7 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .panel-meta-warn { color: var(--amber); }
 .pill { padding: 2px 4px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov2); color: var(--fg2); font: var(--text-micro) var(--mono); letter-spacing: .04em; }
 .pill.accent { border-color: rgba(var(--acc-rgb), .28); background: rgba(var(--acc-rgb), .1); color: var(--acc); }
+.pill.result-power-check { flex: none; border-color: rgba(var(--amber-rgb), .38); background: rgba(var(--amber-rgb), .1); color: var(--amber); letter-spacing: 0; text-transform: none; white-space: nowrap; }
 .panel-text-action { min-height: 26px; padding-inline: 6px; border-radius: var(--r3); background: transparent; color: var(--fg2); font-size: var(--text-micro); }
 .panel-text-action:hover { background: var(--ov3); color: var(--fg); }
 .panel-text-action--danger { color: var(--red); }

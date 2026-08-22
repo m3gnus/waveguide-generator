@@ -287,6 +287,7 @@ describe('result exporters', () => {
 
     expect(saveText).toHaveBeenCalledTimes(2);
     expect(saveText.mock.calls[0][0]).toContain('power_response_db_spl_avg');
+    expect(saveText.mock.calls[0][0]).toContain('radiated_power_surface_w,radiated_power_sphere_w,power_agreement_db');
     expect(JSON.parse(saveText.mock.calls[1][0]).rows[0]).toMatchObject({
       frequency_hz: 100,
       power_response_db_spl_avg: 87,

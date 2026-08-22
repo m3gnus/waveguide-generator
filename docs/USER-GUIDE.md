@@ -24,8 +24,14 @@ Jobs remain available after their panel is closed. Completed results can be comp
 smoothed, rendered as response/directivity/impedance/beam plots, rated, reopened, or
 rerun while the retained snapshot is available. The result-card picker also exposes a
 frequency-scrubbable polar response, on-axis phase, group delay, beam-fit diagnostics,
-and—when a driver model was solved—electrical power/current and cone excursion against
-Xmax. A completed passive-cardioid campaign also offers **Radiation Matrix Load**:
+and **Power Response**. Power Response is the spatial average calculated as on-axis SPL
+minus DI: its DI comes from the full-sphere integral of the solved balloon, not a
+CEA2034-style estimate assembled from polar cuts. Infinite-baffle results integrate the
+solved hemisphere with the physically absent rear hemisphere treated as zero radiation.
+The card repeats that method beside the title and in the curve tooltip so the plotted
+quantity cannot be mistaken for a cut-based estimate. When a driver model was solved,
+the picker also exposes electrical power/current and cone excursion against Xmax. A
+completed passive-cardioid campaign also offers **Radiation Matrix Load**:
 the engineering-convention real/imaginary load seen by each port when the port set is
 driven in phase. Results settings choose real/imaginary versus magnitude/phase impedance and can
 show the same referenced phase trace over the on-axis SPL chart that appears in its PNG
