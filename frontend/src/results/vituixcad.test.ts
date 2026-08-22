@@ -255,9 +255,11 @@ describe('VituixCAD exports', () => {
     }, ['vxp', 'zma']);
 
     expect(bundle.failures).toEqual([]);
-    const body = JSON.parse(String(requests[0].init?.body));
-    expect(body).toMatchObject({ subdirectory: 'horn_7', existing: 'merge_identical' });
-    expect(body.members.map((member: { relative_path: string }) => member.relative_path)).toEqual([
+    const body = requests[0].init?.body as FormData;
+    expect(body).toBeInstanceOf(FormData);
+    expect(String(body.get('subdirectory'))).toBe('horn_7');
+    expect(String(body.get('existing'))).toBe('merge_identical');
+    expect(body.getAll('relative_path').map(String)).toEqual([
       'horn_7.frd', 'horn_7.zma', 'horn_7.vxp',
     ]);
   });

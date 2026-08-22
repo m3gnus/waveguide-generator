@@ -1714,43 +1714,6 @@
         "title": "ErrorEnvelope",
         "type": "object"
       },
-      "ExportMember": {
-        "additionalProperties": false,
-        "properties": {
-          "content_base64": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Content Base64"
-          },
-          "relative_path": {
-            "minLength": 1,
-            "title": "Relative Path",
-            "type": "string"
-          },
-          "text": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Text"
-          }
-        },
-        "required": [
-          "relative_path"
-        ],
-        "title": "ExportMember",
-        "type": "object"
-      },
       "ExportRequest": {
         "additionalProperties": false,
         "properties": {
@@ -6219,41 +6182,6 @@
         ],
         "title": "WgLinkExportRequest",
         "type": "object"
-      },
-      "WriteExportRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "existing": {
-            "default": "reject",
-            "enum": [
-              "reject",
-              "merge_identical",
-              "overwrite"
-            ],
-            "title": "Existing",
-            "type": "string"
-          },
-          "members": {
-            "items": {
-              "$ref": "#/components/schemas/ExportMember"
-            },
-            "maxItems": 100,
-            "minItems": 1,
-            "title": "Members",
-            "type": "array"
-          },
-          "subdirectory": {
-            "minLength": 1,
-            "title": "Subdirectory",
-            "type": "string"
-          }
-        },
-        "required": [
-          "subdirectory",
-          "members"
-        ],
-        "title": "WriteExportRequest",
-        "type": "object"
       }
     }
   },
@@ -8959,7 +8887,115 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/WriteExportRequest"
+                "$defs": {
+                  "ExportMember": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "content_base64": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "title": "Content Base64"
+                      },
+                      "relative_path": {
+                        "minLength": 1,
+                        "title": "Relative Path",
+                        "type": "string"
+                      },
+                      "text": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "title": "Text"
+                      }
+                    },
+                    "required": [
+                      "relative_path"
+                    ],
+                    "title": "ExportMember",
+                    "type": "object"
+                  }
+                },
+                "additionalProperties": false,
+                "properties": {
+                  "existing": {
+                    "default": "reject",
+                    "enum": [
+                      "reject",
+                      "merge_identical",
+                      "overwrite"
+                    ],
+                    "title": "Existing",
+                    "type": "string"
+                  },
+                  "members": {
+                    "items": {
+                      "$ref": "#/$defs/ExportMember"
+                    },
+                    "maxItems": 100,
+                    "minItems": 1,
+                    "title": "Members",
+                    "type": "array"
+                  },
+                  "subdirectory": {
+                    "minLength": 1,
+                    "title": "Subdirectory",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "subdirectory",
+                  "members"
+                ],
+                "title": "WriteExportRequest",
+                "type": "object"
+              }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "properties": {
+                  "existing": {
+                    "default": "reject",
+                    "enum": [
+                      "reject",
+                      "merge_identical",
+                      "overwrite"
+                    ],
+                    "type": "string"
+                  },
+                  "file": {
+                    "items": {
+                      "format": "binary",
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "relative_path": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "subdirectory": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "subdirectory",
+                  "relative_path",
+                  "file"
+                ],
+                "type": "object"
               }
             }
           },

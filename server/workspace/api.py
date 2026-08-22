@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import Sequence
 import base64
 import binascii
+import hashlib
 import json
 import logging
 import os
@@ -18,9 +19,10 @@ import tempfile
 from typing import Any, Literal
 import unicodedata
 
-from fastapi import APIRouter, FastAPI, HTTPException
+from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from starlette.datastructures import UploadFile
 
 from server.platform.paths import data_paths, proposed_cadlink_dir
 from server.platform.process import background_process_kwargs
@@ -32,9 +34,8 @@ MAX_EXPORT_MEMBERS = 100
 # Automatic bundles can include tessellated STL/STEP geometry and rendered
 # plots, so the old text-export ceiling was too small for otherwise valid runs.
 MAX_EXPORT_BYTES = 256 * 1024 * 1024
-# Binary members use base64 in the JSON request (4/3 expansion). This route-only
-# envelope leaves another 42 MiB for member metadata and JSON framing while
-# keeping the binary-content limit above as the user-facing export constraint.
+# Legacy JSON clients use base64 (4/3 expansion), while current clients send
+# multipart binary parts. Keep the larger route-only envelope for compatibility.
 MAX_EXPORT_REQUEST_BODY_BYTES = 384 * 1024 * 1024
 _WINDOWS_DEVICE_NAME = re.compile(
     r"^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$", re.IGNORECASE
@@ -152,6 +153,69 @@ def _archive_design_lineage(content: bytes) -> tuple[bool, object]:
     if not isinstance(record, dict) or "schemaVersion" not in record or "lineageId" not in record:
         return False, None
     return True, record["lineageId"]
+
+
+def _decode_json_export_request(
+    payload: bytes | WriteExportRequest,
+) -> tuple[str, str, list[tuple[str, bytes]]]:
+    request = (
+        payload
+        if isinstance(payload, WriteExportRequest)
+        else WriteExportRequest.model_validate_json(payload)
+    )
+    return (
+        request.subdirectory,
+        request.existing,
+        [(member.relative_path, _member_bytes(member)) for member in request.members],
+    )
+
+
+async def _decode_multipart_export_request(
+    request: Request,
+) -> tuple[str, str, list[tuple[str, bytes]]]:
+    form = await request.form()
+    subdirectory = form.get("subdirectory")
+    existing = form.get("existing", "reject")
+    relative_paths = form.getlist("relative_path")
+    files = form.getlist("file")
+    if not isinstance(subdirectory, str) or not subdirectory:
+        raise ValueError("subdirectory is required")
+    if existing not in {"reject", "merge_identical", "overwrite"}:
+        raise ValueError("existing must be reject, merge_identical, or overwrite")
+    if not 1 <= len(files) <= MAX_EXPORT_MEMBERS:
+        raise ValueError(f"file count must be between 1 and {MAX_EXPORT_MEMBERS}")
+    if len(relative_paths) != len(files) or not all(
+        isinstance(path, str) for path in relative_paths
+    ):
+        raise ValueError("each file requires one corresponding relative_path")
+
+    members: list[tuple[str, bytes]] = []
+    total_bytes = 0
+    for relative_path, upload in zip(relative_paths, files, strict=True):
+        if not isinstance(upload, UploadFile):
+            raise ValueError("file fields must contain binary uploads")
+        remaining = MAX_EXPORT_BYTES - total_bytes
+        content = await upload.read(remaining + 1)
+        total_bytes += len(content)
+        if total_bytes > MAX_EXPORT_BYTES:
+            raise ValueError(
+                f"Export set exceeds the {MAX_EXPORT_BYTES}-byte binary size limit"
+            )
+        members.append((relative_path, content))
+    return subdirectory, existing, members
+
+
+def _streaming_file_matches(path: Path, content: bytes) -> bool:
+    """Compare an existing member without loading a second full copy into RAM."""
+
+    if path.is_symlink() or not path.is_file() or path.stat().st_size != len(content):
+        return False
+    expected = hashlib.sha256(content).digest()
+    observed = hashlib.sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(1024 * 1024):
+            observed.update(chunk)
+    return observed.digest() == expected
 
 
 def _path_segments(raw: str, label: str) -> list[str]:
@@ -646,6 +710,171 @@ def create_cad_workspace_router(state: CadWorkspaceState) -> APIRouter:
     return router
 
 
+def _write_export_sync(
+    workspace_path: Path,
+    subdirectory: str,
+    existing: str,
+    members: list[tuple[str, bytes]],
+) -> dict[str, Any]:
+    """Validate and publish an export set from a worker thread."""
+
+    workspace_root = workspace_path.resolve()
+    try:
+        subdirectory_segments = _path_segments(subdirectory, "subdirectory")
+        export_directory = workspace_root.joinpath(*subdirectory_segments).resolve()
+        _strictly_inside(export_directory, workspace_root, "subdirectory")
+
+        prepared: list[tuple[list[str], bytes, Path]] = []
+        total_bytes = 0
+        seen: set[Path] = set()
+        portable_seen: set[tuple[str, ...]] = set()
+        for index, (relative_path, content) in enumerate(members):
+            label = f"members[{index}].relative_path"
+            segments = _path_segments(relative_path, label)
+            destination = export_directory.joinpath(*segments).resolve()
+            _strictly_inside(destination, workspace_root, label)
+            if destination == export_directory or export_directory not in destination.parents:
+                raise ValueError(f"{label} resolves outside the export subdirectory")
+            portable_key = _portable_path_key(segments)
+            if destination in seen or portable_key in portable_seen:
+                raise ValueError(f"{label} duplicates another member path")
+            seen.add(destination)
+            portable_seen.add(portable_key)
+            total_bytes += len(content)
+            if total_bytes > MAX_EXPORT_BYTES:
+                raise ValueError(
+                    f"Export set exceeds the {MAX_EXPORT_BYTES}-byte binary size limit"
+                )
+            prepared.append((segments, content, destination))
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    export_exists = export_directory.exists() or export_directory.is_symlink()
+    if export_exists and existing == "reject":
+        raise HTTPException(
+            status_code=409, detail=f"Export directory already exists: {export_directory}"
+        )
+    if export_exists:
+        if export_directory.is_symlink() or not export_directory.is_dir():
+            raise HTTPException(
+                status_code=409,
+                detail=f"Export path is not a directory: {export_directory}",
+            )
+
+    pending = prepared
+    if export_exists and existing == "merge_identical":
+        pending = []
+        for segments, content, destination in prepared:
+            if not (destination.exists() or destination.is_symlink()):
+                pending.append((segments, content, destination))
+                continue
+            try:
+                identical = _streaming_file_matches(destination, content)
+            except OSError:
+                identical = False
+            if not identical:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Export file already exists with different content: "
+                        f"{destination}"
+                    ),
+                )
+    if export_exists and existing == "overwrite":
+        # Replacing a file is the point here; replacing a *directory* with a
+        # file is not, and would surface as an opaque write failure below.
+        for segments, content, destination in prepared:
+            if destination.is_dir() and not destination.is_symlink():
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Export path is a directory, not a file: {destination}",
+                )
+            if segments == ["design.json"] and destination.is_file():
+                incoming_record, incoming_lineage = _archive_design_lineage(content)
+                if incoming_record:
+                    try:
+                        existing_record, existing_lineage = _archive_design_lineage(
+                            destination.read_bytes()
+                        )
+                    except OSError:
+                        existing_record = False
+                        existing_lineage = None
+                    if not existing_record or existing_lineage != incoming_lineage:
+                        raise HTTPException(
+                            status_code=409,
+                            detail=(
+                                "Archive design.json belongs to another lineage "
+                                "or has unreadable lineage metadata; refusing overwrite."
+                            ),
+                        )
+
+    response = {
+        "directory": str(export_directory),
+        "files": [str(destination) for _segments, _content, destination in prepared],
+    }
+    # A byte-identical merge retry is a genuine no-op: do not even create and
+    # remove a staging directory, since that still generates watcher traffic.
+    if not pending:
+        return response
+
+    export_directory.parent.mkdir(parents=True, exist_ok=True)
+    staging_directory = Path(
+        tempfile.mkdtemp(prefix=".wg2-export-staging-", dir=export_directory.parent)
+    )
+    try:
+        for segments, content, _destination in pending:
+            staged_file = staging_directory.joinpath(*segments)
+            staged_file.parent.mkdir(parents=True, exist_ok=True)
+            staged_file.write_bytes(content)
+        if existing == "reject":
+            os.replace(staging_directory, export_directory)
+        else:
+            export_directory.mkdir(exist_ok=True)
+            for segments, _content, destination in pending:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(staging_directory.joinpath(*segments), destination)
+            shutil.rmtree(staging_directory, ignore_errors=True)
+    except Exception as exc:
+        shutil.rmtree(staging_directory, ignore_errors=True)
+        raise HTTPException(
+            status_code=500, detail=f"Failed to write export set: {exc}"
+        ) from exc
+
+    return response
+
+
+_WRITE_EXPORT_OPENAPI = {
+    "requestBody": {
+        "required": True,
+        "content": {
+            "application/json": {"schema": WriteExportRequest.model_json_schema()},
+            "multipart/form-data": {
+                "schema": {
+                    "type": "object",
+                    "required": ["subdirectory", "relative_path", "file"],
+                    "properties": {
+                        "subdirectory": {"type": "string"},
+                        "existing": {
+                            "type": "string",
+                            "enum": ["reject", "merge_identical", "overwrite"],
+                            "default": "reject",
+                        },
+                        "relative_path": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "file": {
+                            "type": "array",
+                            "items": {"type": "string", "format": "binary"},
+                        },
+                    },
+                }
+            },
+        },
+    }
+}
+
+
 def create_workspace_router(state: WorkspaceState) -> APIRouter:
     router = APIRouter(prefix="/api/workspace", tags=["workspace"])
 
@@ -691,128 +920,55 @@ def create_workspace_router(state: WorkspaceState) -> APIRouter:
             raise HTTPException(status_code=500, detail=f"Failed to open folder: {exc}") from exc
         return {"status": "opened", "path": str(path)}
 
-    @router.post("/write-export")
-    async def workspace_write_export(request: WriteExportRequest) -> Any:
+    @router.post(
+        "/write-export",
+        openapi_extra=_WRITE_EXPORT_OPENAPI,
+        responses={
+            422: {
+                "description": "Validation Error",
+                "content": {
+                    "application/json": {
+                        "schema": {"$ref": "#/components/schemas/HTTPValidationError"}
+                    }
+                },
+            }
+        },
+    )
+    async def workspace_write_export(request: Request) -> Any:
         # Automatic exports must work on first launch without a native folder
         # picker. Production supplies ``<checkout>/output`` as this fallback;
         # an explicit selection still overrides it.
         workspace_path = available_path()
         if isinstance(workspace_path, JSONResponse):
             return workspace_path
-        workspace_root = workspace_path.resolve()
         try:
-            subdirectory_segments = _path_segments(request.subdirectory, "subdirectory")
-            export_directory = workspace_root.joinpath(*subdirectory_segments).resolve()
-            _strictly_inside(export_directory, workspace_root, "subdirectory")
-
-            prepared: list[tuple[list[str], bytes, Path]] = []
-            total_bytes = 0
-            seen: set[Path] = set()
-            portable_seen: set[tuple[str, ...]] = set()
-            for index, member in enumerate(request.members):
-                label = f"members[{index}].relative_path"
-                segments = _path_segments(member.relative_path, label)
-                destination = export_directory.joinpath(*segments).resolve()
-                _strictly_inside(destination, workspace_root, label)
-                if destination == export_directory or export_directory not in destination.parents:
-                    raise ValueError(f"{label} resolves outside the export subdirectory")
-                portable_key = _portable_path_key(segments)
-                if destination in seen or portable_key in portable_seen:
-                    raise ValueError(f"{label} duplicates another member path")
-                seen.add(destination)
-                portable_seen.add(portable_key)
-                encoded = _member_bytes(member)
-                total_bytes += len(encoded)
-                if total_bytes > MAX_EXPORT_BYTES:
-                    raise ValueError(
-                        f"Export set exceeds the {MAX_EXPORT_BYTES}-byte binary size limit"
-                    )
-                prepared.append((segments, encoded, destination))
+            if isinstance(request, WriteExportRequest):
+                # Direct endpoint calls in unit tests retain the legacy model
+                # shape; actual ASGI requests always take one branch below.
+                subdirectory, existing, members = await asyncio.to_thread(
+                    _decode_json_export_request, request
+                )
+            elif request.headers.get("content-type", "").lower().startswith(
+                "multipart/form-data"
+            ):
+                subdirectory, existing, members = (
+                    await _decode_multipart_export_request(request)
+                )
+            else:
+                raw = await request.body()
+                subdirectory, existing, members = await asyncio.to_thread(
+                    _decode_json_export_request, raw
+                )
         except (OSError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-        export_exists = export_directory.exists() or export_directory.is_symlink()
-        if export_exists and request.existing == "reject":
-            raise HTTPException(status_code=409, detail=f"Export directory already exists: {export_directory}")
-        if export_exists:
-            if export_directory.is_symlink() or not export_directory.is_dir():
-                raise HTTPException(status_code=409, detail=f"Export path is not a directory: {export_directory}")
-        if export_exists and request.existing == "merge_identical":
-            for _segments, encoded, destination in prepared:
-                if not (destination.exists() or destination.is_symlink()):
-                    continue
-                try:
-                    identical = (
-                        not destination.is_symlink()
-                        and destination.is_file()
-                        and destination.read_bytes() == encoded
-                    )
-                except OSError:
-                    identical = False
-                if not identical:
-                    raise HTTPException(
-                        status_code=409,
-                        detail=f"Export file already exists with different content: {destination}",
-                    )
-        if export_exists and request.existing == "overwrite":
-            # Replacing a file is the point here; replacing a *directory* with a
-            # file is not, and would surface as an opaque write failure below.
-            for segments, encoded, destination in prepared:
-                if destination.is_dir() and not destination.is_symlink():
-                    raise HTTPException(
-                        status_code=409,
-                        detail=f"Export path is a directory, not a file: {destination}",
-                    )
-                if segments == ["design.json"] and destination.is_file():
-                    incoming_record, incoming_lineage = _archive_design_lineage(encoded)
-                    if incoming_record:
-                        try:
-                            existing_record, existing_lineage = _archive_design_lineage(
-                                destination.read_bytes()
-                            )
-                        except OSError:
-                            existing_record = False
-                            existing_lineage = None
-                        if not existing_record or existing_lineage != incoming_lineage:
-                            raise HTTPException(
-                                status_code=409,
-                                detail=(
-                                    "Archive design.json belongs to another lineage "
-                                    "or has unreadable lineage metadata; refusing overwrite."
-                                ),
-                            )
-
-        export_directory.parent.mkdir(parents=True, exist_ok=True)
-        staging_directory = Path(
-            tempfile.mkdtemp(prefix=".wg2-export-staging-", dir=export_directory.parent)
+        return await asyncio.to_thread(
+            _write_export_sync,
+            workspace_path,
+            subdirectory,
+            existing,
+            members,
         )
-        try:
-            for segments, encoded, _destination in prepared:
-                staged_file = staging_directory.joinpath(*segments)
-                staged_file.parent.mkdir(parents=True, exist_ok=True)
-                staged_file.write_bytes(encoded)
-            if request.existing == "reject":
-                os.replace(staging_directory, export_directory)
-            else:
-                export_directory.mkdir(exist_ok=True)
-                overwrite = request.existing == "overwrite"
-                for segments, _encoded, destination in prepared:
-                    # merge_identical has already proven every existing file is
-                    # byte-identical, so skipping it keeps the write a no-op
-                    # rather than churning mtimes a file watcher would report.
-                    if destination.exists() and not overwrite:
-                        continue
-                    destination.parent.mkdir(parents=True, exist_ok=True)
-                    os.replace(staging_directory.joinpath(*segments), destination)
-                shutil.rmtree(staging_directory, ignore_errors=True)
-        except Exception as exc:
-            shutil.rmtree(staging_directory, ignore_errors=True)
-            raise HTTPException(status_code=500, detail=f"Failed to write export set: {exc}") from exc
-
-        return {
-            "directory": str(export_directory),
-            "files": [str(destination) for _segments, _encoded, destination in prepared],
-        }
 
     return router
 
