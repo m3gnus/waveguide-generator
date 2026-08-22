@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import os
 from pathlib import Path
 import sys
 from types import ModuleType, SimpleNamespace
@@ -500,5 +501,165 @@ def test_failed_new_bundle_start_rolls_back_and_reports_the_result(
     # rollback result must reach the screen regardless of the console heuristic.
     assert shown == reported
     assert "Restored the previous bundle layers" in (
+        tmp_path / "data" / "logs" / "update.log"
+    ).read_text(encoding="utf-8")
+
+
+def _failed_windows_bundle(tmp_path: Path) -> tuple[Path, Path]:
+    """A Windows folder whose newly installed layers are about to fail to start."""
+
+    bundle = tmp_path / "Waveguide Generator"
+    for name, marker in (
+        ("app", "new"),
+        ("app.previous", "old"),
+        ("runtime", "new"),
+        ("runtime.previous", "old"),
+    ):
+        layer = bundle / name
+        layer.mkdir(parents=True)
+        (layer / "marker").write_text(marker, encoding="utf-8")
+    (bundle / "Waveguide Generator.exe").write_bytes(b"pythonw")
+    (bundle / "vcruntime140.dll").write_text("new", encoding="utf-8")
+    (bundle / "vcruntime140.dll.previous").write_text("old", encoding="utf-8")
+    return bundle, tmp_path / "data"
+
+
+class WindowsBundleController(BundleController):
+    def __init__(self, app_layer: Path, data_dir: Path) -> None:
+        super().__init__(app_layer, data_dir, start_snapshot=_snapshot(ServiceState.ERROR))
+        self.server_args = ("--port", "3110")
+
+
+def test_a_failed_windows_start_hands_the_rollback_to_a_detached_helper(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """This process is the one holding the DLLs, so it must not do the restore.
+
+    It has ``runtime`` and ``app`` mapped into it, and Windows will not let
+    anything delete a mapped file until the process exits. Rolling back from
+    here is what left the 0.2.6 ``vcruntime140.dll`` sitting on top of a
+    restored 0.2.5 runtime: the deletion raised, and the launcher files were
+    never reached.
+    """
+
+    monkeypatch.setattr(desktop.sys, "platform", "win32")
+    bundle, data_dir = _failed_windows_bundle(tmp_path)
+    controller = WindowsBundleController(bundle / "app", data_dir)
+    handoffs: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    monkeypatch.setattr(
+        desktop,
+        "launch_rollback_handoff",
+        lambda *args, **kwargs: (
+            handoffs.append((args, kwargs)) or [str(bundle / "Waveguide Generator.exe")]
+        ),
+    )
+    monkeypatch.setattr(
+        desktop,
+        "rollback_previous_layers",
+        lambda *_args, **_kwargs: pytest.fail("the failed process must not roll back in place"),
+    )
+    reported: list[str] = []
+    shown: list[str] = []
+    monkeypatch.setattr(desktop, "_report_startup_failure", reported.append)
+    monkeypatch.setattr(desktop, "_show_startup_failure_dialog", shown.append)
+
+    assert desktop.DesktopWindow(controller, poll_interval=0).run() == 1  # type: ignore[arg-type]
+
+    # Nothing moved in this process; the helper does it after this one exits.
+    assert (bundle / "app" / "marker").read_text(encoding="utf-8") == "new"
+    assert (bundle / "vcruntime140.dll.previous").is_file()
+    (positional, keywords) = handoffs[0]
+    assert positional[0] == bundle
+    assert positional[1] == data_dir
+    assert positional[2] == os.getpid()
+    assert keywords["server_args"] == ("--port", "3110")
+    assert "reopen by itself" in reported[0]
+    assert shown == reported
+    assert "Started the detached rollback helper" in (data_dir / "logs" / "update.log").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_a_rollback_handoff_that_cannot_start_falls_back_to_this_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An in-process rollback is imperfect on Windows; no rollback is worse."""
+
+    monkeypatch.setattr(desktop.sys, "platform", "win32")
+    bundle, data_dir = _failed_windows_bundle(tmp_path)
+    controller = WindowsBundleController(bundle / "app", data_dir)
+
+    def refuse(*_args: object, **_kwargs: object) -> list[str]:
+        raise UpdateHandoffError("The rollback helper interpreter is missing")
+
+    monkeypatch.setattr(desktop, "launch_rollback_handoff", refuse)
+    monkeypatch.setattr(desktop, "repair_bundle", lambda *_args, **_kwargs: None)
+    reported: list[str] = []
+    monkeypatch.setattr(desktop, "_report_startup_failure", reported.append)
+    monkeypatch.setattr(desktop, "_show_startup_failure_dialog", lambda _message: None)
+
+    assert desktop.DesktopWindow(controller, poll_interval=0).run() == 1  # type: ignore[arg-type]
+
+    assert (bundle / "app" / "marker").read_text(encoding="utf-8") == "old"
+    assert (bundle / "runtime" / "marker").read_text(encoding="utf-8") == "old"
+    assert (bundle / "vcruntime140.dll").read_text(encoding="utf-8") == "old"
+    assert "previous version was restored" in reported[0]
+    log_text = (data_dir / "logs" / "update.log").read_text(encoding="utf-8")
+    assert "Could not start the detached rollback helper" in log_text
+    assert "Rolling back in this process instead" in log_text
+
+
+def test_macos_keeps_rolling_back_in_the_process_that_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(desktop.sys, "platform", "darwin")
+    resources = tmp_path / "Waveguide Generator.app" / "Contents" / "Resources"
+    (resources / "app").mkdir(parents=True)
+    (resources / "app.previous").mkdir()
+    (resources / "app" / "marker").write_text("new", encoding="utf-8")
+    (resources / "app.previous" / "marker").write_text("old", encoding="utf-8")
+    controller = BundleController(
+        resources / "app",
+        tmp_path / "data",
+        start_snapshot=_snapshot(ServiceState.ERROR),
+    )
+    monkeypatch.setattr(
+        desktop,
+        "launch_rollback_handoff",
+        lambda *_args, **_kwargs: pytest.fail("macOS has no mapped-file problem to work around"),
+    )
+    monkeypatch.setattr(desktop, "repair_bundle", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(desktop, "_report_startup_failure", lambda _message: None)
+    monkeypatch.setattr(desktop, "_show_startup_failure_dialog", lambda _message: None)
+
+    assert desktop.DesktopWindow(controller, poll_interval=0).run() == 1  # type: ignore[arg-type]
+    assert (resources / "app" / "marker").read_text(encoding="utf-8") == "old"
+
+
+def test_a_healthy_start_after_a_rollback_clears_what_windows_refused_to_delete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The deferred deletion has to actually happen somewhere."""
+
+    monkeypatch.setattr(desktop.sys, "platform", "win32")
+    bundle = tmp_path / "Waveguide Generator"
+    (bundle / "app").mkdir(parents=True)
+    (bundle / "app.failed").mkdir()
+    (bundle / "runtime.failed").mkdir()
+    (bundle / "vcruntime140.dll.failed").write_text("new", encoding="utf-8")
+    downloads = tmp_path / "data" / "updates" / "0.2.6" / "downloads"
+    downloads.mkdir(parents=True)
+    (downloads / "runtime.zip").write_bytes(b"zip")
+    controller = BundleController(bundle / "app", tmp_path / "data")
+    webview, _created = _stub_webview()
+    monkeypatch.setitem(sys.modules, "webview", webview)
+    monkeypatch.setattr(desktop, "repair_bundle", lambda *_args, **_kwargs: None)
+
+    assert desktop.DesktopWindow(controller, poll_interval=0).run() == 0  # type: ignore[arg-type]
+
+    assert not list(bundle.glob("*.failed*"))
+    # The download that produced them is equally spent.
+    assert not (tmp_path / "data" / "updates").exists()
+    assert "rolled-back failed update copy" in (
         tmp_path / "data" / "logs" / "update.log"
     ).read_text(encoding="utf-8")
