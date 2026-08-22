@@ -76,3 +76,16 @@ def test_spa_docs_distinguish_module_import_from_app_construction() -> None:
     assert "`create_app()`" in workflow
     assert "at import" not in workflow
     assert "cannot even collect" not in workflow
+
+
+def test_side_by_side_v1_migration_requires_explicit_provenance() -> None:
+    readme = _between(
+        _read("README.md"), "### Original-app run migration", "## Run the server directly"
+    )
+
+    assert "including a v1 checkout in a sibling folder" in readme
+    assert "set `WG1_ROOT`" in readme
+    assert "Automatic sibling discovery is deliberately disabled" in " ".join(
+        readme.split()
+    )
+    assert "looks for" in readme and "in sibling checkout folders" not in readme

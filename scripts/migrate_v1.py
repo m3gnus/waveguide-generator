@@ -227,12 +227,12 @@ def discover_v1_roots(
     """Find legacy checkouts that can contain v1 runs.
 
     An update that changes an existing checkout from the v1 branch to v2 leaves
-    the database below ``checkout_root``. Side-by-side installs leave it in a
-    sibling checkout, whose folder name is user-controlled, so direct siblings
-    are inspected by schema rather than by one hard-coded product name.
+    the database below ``checkout_root`` and can be discovered safely. A v2
+    database retains v1's core schema, so a sibling database has ambiguous
+    provenance and is never selected automatically.
 
-    ``WG1_ROOT`` is an escape hatch for a checkout stored elsewhere. An explicit
-    path is authoritative and an invalid one is reported instead of silently
+    ``WG1_ROOT`` opts a side-by-side checkout into migration. An explicit path
+    is authoritative and an invalid one is reported instead of silently
     falling back to a different database.
     """
 

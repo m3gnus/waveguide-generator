@@ -82,6 +82,7 @@ def _run_fake_bootstrap(
 
     bootstrap._validate = validate
     bootstrap._write_stamp = lambda *_args, **_kwargs: None
+    bootstrap._remove_undeclared_distributions = lambda _python: None
     pip_calls = 0
 
     def run_pip(*_args: object, **_kwargs: object) -> SimpleNamespace:
