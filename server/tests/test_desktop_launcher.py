@@ -311,6 +311,66 @@ def test_a_stale_frontend_build_still_opens_the_window(
     assert created[0][0] == (desktop.WINDOW_TITLE, stale.url)
 
 
+def test_a_stale_frontend_still_counts_as_a_healthy_start_for_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A freshness caveat is not evidence that the update failed.
+
+    WARNING means "the SPA is being served, but it looks stale against its
+    sources". Requiring OK meant a perfectly good update never reclaimed its
+    .previous layers or its downloaded archives -- measured at over a gigabyte
+    on a bundle whose only fault was a dist that looked older than its source.
+    """
+
+    bundle = tmp_path / "Waveguide Generator"
+    data = tmp_path / "data"
+    for name in ("app", "runtime", "app.previous", "runtime.previous"):
+        (bundle / name).mkdir(parents=True)
+    (data / "updates" / "0.2.5").mkdir(parents=True)
+    (data / "logs").mkdir(parents=True)
+
+    stale_start = StatusSnapshot(
+        backend=LampStatus(ServiceState.OK, "Healthy"),
+        frontend=LampStatus(ServiceState.WARNING, "SPA is being served, but stale"),
+        url="http://127.0.0.1:3199/",
+        pid=123,
+        exit_code=None,
+    )
+    window = desktop.DesktopWindow(StubController(poll_snapshot=stale_start))  # type: ignore[arg-type]
+    monkeypatch.setattr(window, "_bundle_paths", lambda: (bundle, bundle, data))
+    monkeypatch.setattr(desktop, "repair_bundle", lambda *a, **k: None)
+
+    window._finish_healthy_bundle_update(stale_start)
+
+    assert not (bundle / "app.previous").exists()
+    assert not (bundle / "runtime.previous").exists()
+    assert not (data / "updates").exists()
+
+
+def test_a_backend_that_is_not_healthy_does_not_trigger_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle = tmp_path / "Waveguide Generator"
+    data = tmp_path / "data"
+    for name in ("app", "runtime", "app.previous"):
+        (bundle / name).mkdir(parents=True)
+    (data / "logs").mkdir(parents=True)
+
+    unhealthy = StatusSnapshot(
+        backend=LampStatus(ServiceState.ERROR, "/health failed"),
+        frontend=LampStatus(ServiceState.WARNING, "SPA is being served, but stale"),
+        url="http://127.0.0.1:3199/",
+        pid=123,
+        exit_code=None,
+    )
+    window = desktop.DesktopWindow(StubController(poll_snapshot=unhealthy))  # type: ignore[arg-type]
+    monkeypatch.setattr(window, "_bundle_paths", lambda: (bundle, bundle, data))
+
+    window._finish_healthy_bundle_update(unhealthy)
+
+    assert (bundle / "app.previous").exists()
+
+
 def test_a_server_that_never_answers_is_reported_instead_of_waited_on_forever(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
