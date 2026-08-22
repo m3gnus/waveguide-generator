@@ -433,7 +433,9 @@ export function CadLinkCoordinator() {
 
   useEffect(() => subscribeRevision((event) => {
     if (event.reason !== 'load') return;
-    workspaceModeStore.setMode('parametric');
+    workspaceModeStore.setMode(
+      event.loadSource === 'cad-project-switch' ? 'cad' : 'parametric',
+    );
     // A replacement may be the document this return belongs to, so retain the
     // evidence and channel work for the freshness verdict instead of guessing
     // ownership here. The stale gate makes the old geometry unsendable now.

@@ -5,7 +5,9 @@ import { compareSelection } from '../api/results';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { resetCadReturnStore } from '../stores/cadReturn';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
-import { resetDesignStore } from '../stores/design';
+import { resetDesignStore, useDesignStore } from '../stores/design';
+import { workspaceModeStore } from '../stores/workspaceMode';
+import { CadLinkCoordinator } from './CadLinkCoordinator';
 import { CadProjectHeader, CadProjectHistory, modelStateLabel, projectName } from './CadProjectPanel';
 
 const LINEAGE = 'wgl_project';
@@ -31,6 +33,12 @@ function run(overrides: Partial<JobItem> & { id: string; returnStateHash?: strin
 
 function json(body: unknown): Response {
   return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settle) => { resolve = settle; });
+  return { promise, resolve };
 }
 
 const documents = {
@@ -74,6 +82,7 @@ describe('CAD project history', () => {
   afterEach(() => {
     act(() => root.unmount());
     compareSelection.clear();
+    workspaceModeStore.setMode('parametric');
     vi.restoreAllMocks(); vi.unstubAllGlobals(); host.remove();
   });
 
@@ -151,6 +160,77 @@ describe('CAD project history', () => {
     expect(host.textContent).toContain('No run archive folder is available.');
   });
 
+  it('clears the previous project documents while the new lineage loads and after failure', async () => {
+    const nextLineage = 'wgl_next_project';
+    setJobs([
+      run({ id: 'old', returnStateHash: 'sha256:aaa' }),
+      {
+        ...run({ id: 'next', returnStateHash: 'sha256:aaa' }),
+        cad_source: {
+          ingest_id: 'wgi_next', lineage_id: nextLineage, return_state_hash: 'sha256:aaa',
+        },
+      } as JobItem,
+    ]);
+    await render(<CadProjectHistory/>);
+    expect(host.querySelector('.cad-model-download')).not.toBeNull();
+
+    const failedRefresh = deferred<Response>();
+    vi.stubGlobal('fetch', vi.fn(() => failedRefresh.promise));
+    await act(async () => {
+      useDocumentStore.getState().setCadLink(
+        { designId: 'wgd_next', lineageId: nextLineage, baseEditVersion: 1 }, 'current',
+      );
+      await Promise.resolve();
+    });
+
+    expect(host.querySelector('.cad-model-download')).toBeNull();
+    await act(async () => {
+      failedRefresh.resolve(new Response(
+        JSON.stringify({ detail: 'archive unavailable' }), { status: 409 },
+      ));
+      await failedRefresh.promise;
+      await Promise.resolve();
+    });
+    expect(host.querySelector('.cad-model-download')).toBeNull();
+    expect(host.textContent).toContain('archive unavailable');
+  });
+
+  it('ignores a document response for a lineage that is no longer current', async () => {
+    const nextLineage = 'wgl_next_project';
+    const oldListing = deferred<Response>();
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.includes(`/${LINEAGE}/documents`)) return oldListing.promise;
+      if (path.includes(`/${nextLineage}/documents`)) {
+        return Promise.resolve(json({ archiveStem: 'Next', folder: '/runs/Next', items: [] }));
+      }
+      return Promise.resolve(json({}));
+    }));
+    setJobs([{
+      ...run({ id: 'next', returnStateHash: 'sha256:aaa' }),
+      cad_source: {
+        ingest_id: 'wgi_next', lineage_id: nextLineage, return_state_hash: 'sha256:aaa',
+      },
+    } as JobItem]);
+    await render(<CadProjectHistory/>);
+
+    await act(async () => {
+      useDocumentStore.getState().setCadLink(
+        { designId: 'wgd_next', lineageId: nextLineage, baseEditVersion: 1 }, 'current',
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(host.querySelector('.cad-model-download')).toBeNull();
+
+    await act(async () => {
+      oldListing.resolve(json(documents));
+      await oldListing.promise;
+      await Promise.resolve();
+    });
+    expect(host.querySelector('.cad-model-download')).toBeNull();
+  });
+
   it('invites a first run rather than showing an empty list', async () => {
     setJobs([]);
 
@@ -185,6 +265,65 @@ describe('CAD project history', () => {
     await render(<CadProjectHeader documentName={null}/>);
 
     expect(host.textContent).toContain('No CAD project open');
+  });
+
+  it('keeps CAD mode when a project is opened from the CAD-only switcher', async () => {
+    const nextIdentity = {
+      designId: 'wgd_next', lineageId: 'wgl_next', baseEditVersion: 4,
+      editVersion: 4, savedAt: '2026-08-22T10:00:00Z', savedDesignHash: 'sha256:next', schema: 1,
+    };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === '/api/cadlink/designs') return json({ items: [{
+        designId: nextIdentity.designId,
+        lineageId: nextIdentity.lineageId,
+        editVersion: 4,
+        designHash: 'sha256:next',
+        filename: 'next-project.cfg',
+        branchedFromDesignId: null,
+        branchedFromEditVersion: null,
+        exportCount: 1,
+        lastExportedAt: '2026-08-22T10:00:00Z',
+        createdAt: '2026-08-22T09:00:00Z',
+        updatedAt: '2026-08-22T10:00:00Z',
+        archiveStem: 'next-project',
+      }] });
+      if (path === `/api/cadlink/designs/${nextIdentity.designId}`) return json({
+        designId: nextIdentity.designId,
+        lineageId: nextIdentity.lineageId,
+        editVersion: 4,
+        filename: 'next-project.cfg',
+        updatedAt: '2026-08-22T10:00:00Z',
+        text: 'next project snapshot',
+      });
+      if (path === '/api/design/open') return json({
+        dialect: 'ath',
+        migrationsApplied: [],
+        passthrough: { keysPreserved: [], blocksPreserved: [], keyCount: 0, blockCount: 0 },
+        design: useDesignStore.getState().design,
+        cadlink: { identity: nextIdentity, classification: 'current', adoptionCandidate: null },
+      });
+      if (path.endsWith('/returns')) return json({ items: [] });
+      if (path.endsWith('/fusion-status')) return json({ state: 'closed' });
+      if (path.endsWith('/solve-command')) return json({ command: null });
+      return json({});
+    }));
+    workspaceModeStore.setMode('cad');
+    await render(<><CadLinkCoordinator/><CadProjectHeader documentName="Tritonia"/></>);
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('.cad-project-switcher > button')!.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('[role="menuitem"]')!.click();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
   });
 });
 

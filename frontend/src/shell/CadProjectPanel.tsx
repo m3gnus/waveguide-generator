@@ -81,7 +81,9 @@ function ProjectSwitcher({ current, onOpened, onError }: {
     if (unsaved && !window.confirm('Discard unsaved changes and open this CAD-linked project?')) return;
     setBusy(true);
     try {
-      const opened = await openCadLinkedProject(project.designId);
+      const opened = await openCadLinkedProject(
+        project.designId, fetch, 'cad-project-switch',
+      );
       setOpen(false);
       onOpened(opened.filename);
     } catch (error) {
@@ -209,6 +211,7 @@ export function CadProjectHistory() {
   const [documents, setDocuments] = useState<CadProjectDocument[]>([]);
   const [error, setError] = useState<string | null>(null);
   const generation = useRef(0);
+  const activeLineage = useRef<string | null>(null);
 
   const refresh = useCallback(async (id: string) => {
     const request = ++generation.current;
@@ -222,13 +225,21 @@ export function CadProjectHistory() {
     } catch (reason) {
       // Advisory: the run list is still the history. Only the Fusion-file
       // column depends on this, and it says so per row.
-      if (request === generation.current) setError(reason instanceof Error ? reason.message : String(reason));
+      if (request === generation.current) {
+        setDocuments([]);
+        setError(reason instanceof Error ? reason.message : String(reason));
+      }
     }
   }, []);
 
   useEffect(() => {
-    if (!lineageId) {
+    if (lineageId !== activeLineage.current) {
+      activeLineage.current = lineageId;
+      generation.current += 1;
       setDocuments([]);
+      setError(null);
+    }
+    if (!lineageId) {
       return;
     }
     void refresh(lineageId);
