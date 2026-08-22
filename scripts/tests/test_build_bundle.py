@@ -6,6 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 import plistlib
+import shutil
 import stat
 import struct
 import subprocess
@@ -22,42 +23,106 @@ from scripts.build_bundle import (
     MSVC_RUNTIME_DLLS,
     PRUNE_LIBRARY_GLOBS,
     PRUNE_RELATIVE_PATHS,
+    WINDOWS_CREATE_NEW_PROCESS_GROUP,
+    WINDOWS_CREATE_NO_WINDOW,
     WINDOWS_ICON_NAME,
     WINDOWS_LAUNCHER_NAME,
     WINDOWS_PLATFORM,
     WINDOWS_PTH_NAME,
     WINDOWS_PRUNE_RELATIVE_PATHS,
+    WINDOWS_PYVENV_NAME,
     build,
     copy_tracked_app_files,
     deterministic_zip,
     is_x64_pe,
     launcher_stub,
     locate_msvc_runtime_dlls,
+    pe_file_version,
     prune_runtime,
     substitute_info_plist,
     windows_desktop_bootstrap,
     windows_pth,
+    windows_pyvenv_cfg,
     write_app_manifest,
     write_checksum,
     write_json,
     write_runtime_manifest,
     write_windows_bootstrap,
 )
-from server.platform.paths import app_root
+from server.platform.instance import PORT_ENV
+from server.platform.paths import DATA_DIR_ENV, app_root
 from shared.runtime_id import compute_runtime_id, runtime_id_from_files
 
 
-def write_pe_stub(path: Path, *, machine: int = 0x8664) -> Path:
-    """Write the smallest file the architecture probe accepts as a PE image."""
+def _version_resource(version: tuple[int, int, int, int], resource_va: int) -> bytes:
+    """Build a one-entry PE resource directory holding a ``VS_FIXEDFILEINFO``."""
 
-    pe_offset = 0x40
-    header = bytearray(pe_offset + 6)
-    header[0:2] = b"MZ"
-    header[0x3C:0x40] = struct.pack("<I", pe_offset)
-    header[pe_offset : pe_offset + 4] = b"PE\0\0"
-    header[pe_offset + 4 : pe_offset + 6] = struct.pack("<H", machine)
+    major, minor, build, revision = version
+    fixed = struct.pack(
+        "<IIII",
+        0xFEEF04BD,
+        0x00010000,
+        (major << 16) | minor,
+        (build << 16) | revision,
+    )
+    payload = 88
+    blob = bytearray(payload)
+    # Three nested directories -- type, name, language -- each with one entry,
+    # which is the shape a real DLL's version resource has.
+    struct.pack_into("<IIHHHH", blob, 0, 0, 0, 0, 0, 0, 1)
+    struct.pack_into("<II", blob, 16, 16, 0x80000000 | 24)  # RT_VERSION
+    struct.pack_into("<IIHHHH", blob, 24, 0, 0, 0, 0, 0, 1)
+    struct.pack_into("<II", blob, 40, 1, 0x80000000 | 48)
+    struct.pack_into("<IIHHHH", blob, 48, 0, 0, 0, 0, 0, 1)
+    struct.pack_into("<II", blob, 64, 0x409, 72)
+    struct.pack_into("<IIII", blob, 72, resource_va + payload, len(fixed), 0, 0)
+    return bytes(blob) + fixed
+
+
+def write_pe_stub(
+    path: Path,
+    *,
+    machine: int = 0x8664,
+    version: tuple[int, int, int, int] | None = None,
+) -> Path:
+    """Write the smallest file the architecture probe accepts as a PE image.
+
+    With ``version`` the stub also carries the ``.rsrc`` section a real
+    redistributable DLL uses to report its file version, so the builder can
+    tell one serviced set from a mixture of two.
+    """
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(bytes(header) + path.name.encode())
+    pe_offset = 0x40
+    if version is None:
+        header = bytearray(pe_offset + 6)
+        header[0:2] = b"MZ"
+        header[0x3C:0x40] = struct.pack("<I", pe_offset)
+        header[pe_offset : pe_offset + 4] = b"PE\0\0"
+        header[pe_offset + 4 : pe_offset + 6] = struct.pack("<H", machine)
+        path.write_bytes(bytes(header) + path.name.encode())
+        return path
+
+    optional = pe_offset + 24
+    optional_size = 240  # PE32+ with all sixteen data directories
+    section_table = optional + optional_size
+    raw_offset = section_table + 40
+    resource_va = 0x1000
+    blob = _version_resource(version, resource_va)
+    image = bytearray(raw_offset)
+    image[0:2] = b"MZ"
+    struct.pack_into("<I", image, 0x3C, pe_offset)
+    image[pe_offset : pe_offset + 4] = b"PE\0\0"
+    struct.pack_into("<HH", image, pe_offset + 4, machine, 1)
+    struct.pack_into("<H", image, pe_offset + 20, optional_size)
+    struct.pack_into("<H", image, optional, 0x20B)
+    struct.pack_into("<I", image, optional + 108, 16)
+    struct.pack_into("<II", image, optional + 128, resource_va, len(blob))
+    image[section_table : section_table + 8] = b".rsrc\0\0\0"
+    struct.pack_into(
+        "<IIII", image, section_table + 8, len(blob), resource_va, len(blob), raw_offset
+    )
+    path.write_bytes(bytes(image) + blob)
     return path
 
 
@@ -376,11 +441,32 @@ def test_windows_pth_and_bootstrap_keep_direct_launch_separate_from_workers(
     )
 
 
+def test_user_site_is_switched_off_before_the_interpreter_starts() -> None:
+    """Post-start sys.path pruning is not isolation, so the bundle must not rely on it.
+
+    ``site.main()`` runs ``addusersitepackages()`` -- which *executes* every
+    ``.pth`` file in the user site directory -- before it imports
+    ``sitecustomize``.  Anything the bootstrap does has therefore already lost
+    the race, which is why the switch lives in ``pyvenv.cfg`` instead:
+    ``site.venv()`` reads it earlier and clears ``ENABLE_USER_SITE``.
+    """
+
+    config = windows_pyvenv_cfg()
+    assert "include-system-site-packages = false" in config
+    # A wrong "home" is fatal inside getpath, before any of our code can report
+    # it, and the ._pth already locates the standard library.
+    assert "home" not in config
+
+    bootstrap = windows_desktop_bootstrap()
+    assert "_drop_user_site" not in bootstrap
+    assert "sys.path[:]" not in bootstrap
+
+
 def _bootstrap_launch_predicate() -> object:
     """Compile only the bootstrap's declarations, without running its body."""
 
-    head, separator, _ = windows_desktop_bootstrap().partition("\n_drop_user_site()")
-    assert separator, "the bootstrap no longer calls _drop_user_site at import time"
+    head, separator, _ = windows_desktop_bootstrap().partition("\nif _is_direct_launch():")
+    assert separator, "the bootstrap no longer guards its body with _is_direct_launch"
     namespace: dict[str, object] = {}
     exec(compile(head, "wg_desktop_bootstrap", "exec"), namespace)  # noqa: S102
     return namespace["_is_direct_launch"]
@@ -430,14 +516,8 @@ def test_manifest_and_checksum_writers_always_emit_lf(tmp_path: Path) -> None:
     assert body.endswith(b"  layer.zip\n")
 
 
-def test_msvc_dll_discovery_uses_where_then_system32_then_visual_studio(
-    tmp_path: Path,
-) -> None:
-    system_root = tmp_path / "Windows"
-    program_files = tmp_path / "Program Files"
-    where_dll = tmp_path / "path" / MSVC_RUNTIME_DLLS[0]
-    system_dll = system_root / "System32" / MSVC_RUNTIME_DLLS[1]
-    visual_dll = (
+def _visual_studio_crt(program_files: Path, toolset: str = "14.40") -> Path:
+    return (
         program_files
         / "Microsoft Visual Studio"
         / "2022"
@@ -445,42 +525,84 @@ def test_msvc_dll_discovery_uses_where_then_system32_then_visual_studio(
         / "VC"
         / "Redist"
         / "MSVC"
-        / "14.40"
+        / toolset
         / "x64"
         / "Microsoft.VC143.CRT"
-        / MSVC_RUNTIME_DLLS[2]
     )
-    for path in (where_dll, system_dll, visual_dll):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        write_pe_stub(path)
-    # System32 also carries the DLL that where.exe reports, so the two sources
-    # compete for the same name.
-    system_first = system_root / "System32" / MSVC_RUNTIME_DLLS[0]
-    write_pe_stub(system_first)
 
+
+def _no_where(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+    return subprocess.CompletedProcess(command, 1, "", "")
+
+
+def _where_in(directory: Path) -> object:
     def where(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
-        output = str(where_dll) if command[-1] == where_dll.name else ""
-        return subprocess.CompletedProcess(command, 0 if output else 1, output, "")
+        candidate = directory / command[-1]
+        if command[0] != "where.exe" or not candidate.is_file():
+            return subprocess.CompletedProcess(command, 1, "", "")
+        return subprocess.CompletedProcess(command, 0, f"{candidate}\n", "")
+
+    return where
+
+
+def test_msvc_dll_discovery_prefers_a_complete_set_from_the_higher_priority_source(
+    tmp_path: Path,
+) -> None:
+    """Only whole sets compete, and the most trustworthy complete set wins."""
+
+    system_root = tmp_path / "Windows"
+    program_files = tmp_path / "Program Files"
+    system32 = system_root / "System32"
+    visual_studio = _visual_studio_crt(program_files)
+    on_path = tmp_path / "Eclipse Adoptium" / "jdk-25.0.2.10-hotspot" / "bin"
+    for name in MSVC_RUNTIME_DLLS:
+        write_pe_stub(system32 / name, version=(14, 44, 35211, 0))
+        write_pe_stub(visual_studio / name, version=(14, 40, 33810, 0))
+        write_pe_stub(on_path / name, version=(14, 29, 30139, 0))
+    environ = {"SystemRoot": str(system_root), "ProgramFiles": str(program_files)}
+
+    located = locate_msvc_runtime_dlls(runner=_where_in(on_path), environ=environ)
+
+    # The machine's own serviced redistributable outranks both others.
+    assert located == {name: (system32 / name).resolve() for name in MSVC_RUNTIME_DLLS}
+
+    # Without it, an installed Visual Studio's x64 CRT still outranks whatever
+    # unrelated application happens to sit first on PATH.
+    shutil.rmtree(system32)
+    located = locate_msvc_runtime_dlls(runner=_where_in(on_path), environ=environ)
+
+    assert located == {name: (visual_studio / name).resolve() for name in MSVC_RUNTIME_DLLS}
+
+
+def test_msvc_dll_discovery_skips_an_incomplete_directory_instead_of_mixing_sources(
+    tmp_path: Path,
+) -> None:
+    """The redistributable is serviced as a set; a half-set is not a source."""
+
+    system_root = tmp_path / "Windows"
+    program_files = tmp_path / "Program Files"
+    system32 = system_root / "System32"
+    visual_studio = _visual_studio_crt(program_files)
+    # System32 is missing msvcp140.dll. Historically the build topped that up
+    # from a JDK on PATH and shipped a combination nobody has ever tested.
+    for name in MSVC_RUNTIME_DLLS[:2]:
+        write_pe_stub(system32 / name, version=(14, 44, 35211, 0))
+    jdk = tmp_path / "Eclipse Adoptium" / "jdk-25.0.2.10-hotspot" / "bin"
+    write_pe_stub(jdk / MSVC_RUNTIME_DLLS[2], version=(14, 40, 33810, 0))
+    for name in MSVC_RUNTIME_DLLS:
+        write_pe_stub(visual_studio / name, version=(14, 40, 33810, 0))
 
     located = locate_msvc_runtime_dlls(
-        runner=where,
-        environ={
-            "SystemRoot": str(system_root),
-            "ProgramFiles": str(program_files),
-        },
+        runner=_where_in(jdk),
+        environ={"SystemRoot": str(system_root), "ProgramFiles": str(program_files)},
     )
 
-    # The installed redistributable wins over whatever sits first on PATH: a
-    # where.exe hit is some unrelated application's private copy as often as
-    # not, and the redistributable is only supported as a matched set.
-    assert located == {
-        MSVC_RUNTIME_DLLS[0]: system_first.resolve(),
-        MSVC_RUNTIME_DLLS[1]: system_dll.resolve(),
-        MSVC_RUNTIME_DLLS[2]: visual_dll.resolve(),
-    }
+    assert located == {name: (visual_studio / name).resolve() for name in MSVC_RUNTIME_DLLS}
+    # Nothing was taken from the incomplete System32 set or from the JDK.
+    assert {path.parent for path in located.values()} == {visual_studio.resolve()}
 
 
-def test_msvc_dll_discovery_skips_a_32_bit_candidate(tmp_path: Path) -> None:
+def test_msvc_dll_discovery_skips_a_complete_32_bit_set(tmp_path: Path) -> None:
     """A 32-bit DLL beside a 64-bit interpreter fails at load with no useful error."""
 
     system_root = tmp_path / "Windows"
@@ -491,24 +613,86 @@ def test_msvc_dll_discovery_skips_a_32_bit_candidate(tmp_path: Path) -> None:
         write_pe_stub(redist / name)
 
     located = locate_msvc_runtime_dlls(
-        runner=lambda command, **_kwargs: subprocess.CompletedProcess(command, 1, "", ""),
+        runner=_no_where,
         environ={"SystemRoot": str(system_root), "ProgramFiles": str(program_files)},
     )
 
     assert located == {name: (redist / name).resolve() for name in MSVC_RUNTIME_DLLS}
 
 
-def test_msvc_dll_discovery_fails_loudly_when_a_required_file_is_absent(
+def test_msvc_dll_discovery_rejects_a_directory_whose_dlls_did_not_ship_together(
+    tmp_path: Path,
+) -> None:
+    """A mixed directory is a build-time failure, not something to ship."""
+
+    system_root = tmp_path / "Windows"
+    system32 = system_root / "System32"
+    for name in MSVC_RUNTIME_DLLS[:2]:
+        write_pe_stub(system32 / name, version=(14, 44, 35211, 0))
+    write_pe_stub(system32 / MSVC_RUNTIME_DLLS[2], version=(14, 40, 33810, 0))
+
+    with pytest.raises(BundleError) as error:
+        locate_msvc_runtime_dlls(
+            runner=_no_where,
+            environ={
+                "SystemRoot": str(system_root),
+                "ProgramFiles": str(tmp_path / "Program Files"),
+            },
+        )
+
+    message = str(error.value)
+    assert "mismatched versions" in message
+    assert "14.44.35211.0" in message and "14.40.33810.0" in message
+    assert str(system32) in message
+
+
+def test_msvc_dll_discovery_fails_loudly_when_no_directory_holds_a_complete_set(
+    tmp_path: Path,
+) -> None:
+    system_root = tmp_path / "Windows"
+    program_files = tmp_path / "Program Files"
+    system32 = system_root / "System32"
+    visual_studio = _visual_studio_crt(program_files)
+    on_path = tmp_path / "vendor" / "bin"
+    # One file each: three sources that between them could be assembled into a
+    # full set, and must not be.
+    write_pe_stub(system32 / MSVC_RUNTIME_DLLS[0])
+    write_pe_stub(visual_studio / MSVC_RUNTIME_DLLS[1])
+    write_pe_stub(on_path / MSVC_RUNTIME_DLLS[2])
+
+    with pytest.raises(BundleError) as error:
+        locate_msvc_runtime_dlls(
+            runner=_where_in(on_path),
+            environ={"SystemRoot": str(system_root), "ProgramFiles": str(program_files)},
+        )
+
+    message = str(error.value)
+    assert all(name in message for name in MSVC_RUNTIME_DLLS)
+    for directory in (system32, visual_studio, on_path):
+        assert str(directory) in message
+    assert "Microsoft Visual C++ x64 Redistributable" in message
+
+
+def test_msvc_dll_discovery_reports_the_searched_directories_when_nothing_exists(
     tmp_path: Path,
 ) -> None:
     with pytest.raises(BundleError, match=MSVC_RUNTIME_DLLS[0]):
         locate_msvc_runtime_dlls(
-            runner=lambda command, **_kwargs: subprocess.CompletedProcess(command, 1, "", ""),
+            runner=_no_where,
             environ={
                 "SystemRoot": str(tmp_path / "Windows"),
                 "ProgramFiles": str(tmp_path / "Program Files"),
             },
         )
+
+
+def test_pe_version_probe_reads_the_fixed_file_info(tmp_path: Path) -> None:
+    stamped = write_pe_stub(tmp_path / "stamped.dll", version=(14, 44, 35211, 0))
+
+    assert pe_file_version(stamped) == (14, 44, 35211, 0)
+    # A DLL without a version resource is unknown, never a mismatch.
+    assert pe_file_version(write_pe_stub(tmp_path / "bare.dll")) is None
+    assert pe_file_version(tmp_path / "missing.dll") is None
 
 
 def test_pe_architecture_probe_reads_the_machine_field(tmp_path: Path) -> None:
@@ -600,11 +784,148 @@ def test_windows_layout_writer_copies_launcher_dlls_layers_pth_and_icon(
 
     assert (destination / WINDOWS_LAUNCHER_NAME).read_bytes() == b"gui python"
     assert (destination / WINDOWS_PTH_NAME).read_text(encoding="utf-8") == windows_pth()
+    assert (destination / WINDOWS_PYVENV_NAME).read_text(encoding="utf-8") == windows_pyvenv_cfg()
     assert (destination / WINDOWS_ICON_NAME).read_bytes() == b"ico"
     assert (destination / "runtime" / "Lib" / "os.py").is_file()
     assert (destination / "app" / "APP-MANIFEST.json").is_file()
     for filename in ("python313.dll", "python3.dll", *MSVC_RUNTIME_DLLS):
         assert (destination / filename).read_bytes() == (runtime / filename).read_bytes()
+
+
+class _FakeLauncherProcess:
+    """Stand in for the launcher process the bare-launch gate owns."""
+
+    def __init__(self, *, returncode: int | None = None) -> None:
+        self.pid = 4321
+        self.returncode = returncode
+        self.waits: list[float | None] = []
+        self.terminated = False
+        self.killed = False
+
+    def poll(self) -> int | None:
+        return self.returncode
+
+    def wait(self, timeout: float | None = None) -> int:
+        self.waits.append(timeout)
+        if self.returncode is None:
+            self.returncode = 0
+        return self.returncode
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+    def kill(self) -> None:
+        self.killed = True
+        self.returncode = -9
+
+
+def _bare_launch_harness(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    process: _FakeLauncherProcess,
+    status: int | None,
+) -> tuple[BundleBuilder, Path, Path, list[tuple[list[str], dict[str, object]]], list[list[str]]]:
+    launcher = tmp_path / "Waveguide Generator" / WINDOWS_LAUNCHER_NAME
+    launcher.parent.mkdir(parents=True, exist_ok=True)
+    launcher.write_bytes(b"launcher")
+    scratch = tmp_path / "verification"
+    scratch.mkdir(exist_ok=True)
+    starts: list[tuple[list[str], dict[str, object]]] = []
+    commands: list[list[str]] = []
+
+    def process_factory(command: list[str], **options: object) -> _FakeLauncherProcess:
+        starts.append((list(command), options))
+        return process
+
+    def runner(command: list[str], **_options: object) -> subprocess.CompletedProcess[str]:
+        commands.append(list(command))
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(BundleBuilder, "_http_status", staticmethod(lambda _url: status))
+    builder = BundleBuilder(tmp_path, runner=runner, process_factory=process_factory)
+    return builder, launcher, scratch, starts, commands
+
+
+def test_bare_windows_launcher_gate_starts_with_no_arguments_and_kills_the_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `-c` probe cannot reach the double-click path; only a bare start can."""
+
+    process = _FakeLauncherProcess()
+    builder, launcher, scratch, starts, commands = _bare_launch_harness(
+        tmp_path, monkeypatch, process=process, status=200
+    )
+
+    builder.verify_windows_bare_launch(
+        launcher,
+        scratch=scratch,
+        environment={
+            "WG2_BUNDLE": "1",
+            "WG2_APP_ROOT": str(tmp_path / "stale"),
+            "PYTHONPYCACHEPREFIX": str(tmp_path / "caches"),
+        },
+    )
+
+    command, options = starts[0]
+    # Any argument, even one the app understands, gives CPython a non-empty
+    # argv[0] and the bootstrap correctly declines to start the desktop.
+    assert command == [str(launcher)]
+    environment = options["env"]
+    # The bootstrap has to establish these itself; presetting them would hide
+    # the failure this gate exists to catch.
+    assert "WG2_BUNDLE" not in environment
+    assert "WG2_APP_ROOT" not in environment
+    # The cache redirection stays, so a verified bundle is never written into.
+    assert environment["PYTHONPYCACHEPREFIX"] == str(tmp_path / "caches")
+    assert Path(environment[DATA_DIR_ENV]).is_relative_to(scratch)
+    assert 1 <= int(environment[PORT_ENV]) <= 65535
+    assert options["cwd"] == launcher.parent
+    flags = int(options["creationflags"])
+    assert flags & WINDOWS_CREATE_NO_WINDOW
+    assert flags & WINDOWS_CREATE_NEW_PROCESS_GROUP
+    # The launcher spawns the server as a child, so only a tree kill collects it.
+    assert commands == [["taskkill", "/PID", str(process.pid), "/T", "/F"]]
+    assert process.waits and all(timeout is not None for timeout in process.waits)
+
+
+def test_bare_windows_launcher_gate_fails_when_a_bare_start_never_serves_the_app(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    process = _FakeLauncherProcess()
+    builder, launcher, scratch, _starts, commands = _bare_launch_harness(
+        tmp_path, monkeypatch, process=process, status=None
+    )
+
+    with pytest.raises(BundleError) as error:
+        builder.verify_windows_bare_launch(
+            launcher,
+            scratch=scratch,
+            environment={},
+            timeout=0.0,
+        )
+
+    message = str(error.value)
+    assert "/health=None" in message
+    assert "/=None" in message
+    assert "REPL" in message
+    # The tree is killed even when the gate fails.
+    assert commands == [["taskkill", "/PID", str(process.pid), "/T", "/F"]]
+
+
+def test_bare_windows_launcher_gate_names_an_immediate_launcher_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    process = _FakeLauncherProcess(returncode=0)
+    builder, launcher, scratch, _starts, commands = _bare_launch_harness(
+        tmp_path, monkeypatch, process=process, status=None
+    )
+
+    with pytest.raises(BundleError, match="exited with 0"):
+        builder.verify_windows_bare_launch(launcher, scratch=scratch, environment={})
+
+    # Nothing is left running, so nothing is killed.
+    assert commands == []
 
 
 def test_stdlib_icon_generator_writes_a_multi_resolution_ico(tmp_path: Path) -> None:
