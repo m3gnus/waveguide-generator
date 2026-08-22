@@ -1,6 +1,44 @@
 {
   "components": {
     "schemas": {
+      "ArchiveRunDocumentRequest": {
+        "additionalProperties": false,
+        "description": "Where the caller wrote the run folder this document belongs beside.\n\nThe run-folder naming rule lives in the frontend, which has just used it to\nwrite the folder; asking the server to re-derive it would be a third\nimplementation of one name rule and a third chance for them to disagree.",
+        "properties": {
+          "archiveStem": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Archivestem",
+            "type": "string"
+          },
+          "returnStateHash": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Returnstatehash",
+            "type": "string"
+          },
+          "runStem": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Runstem",
+            "type": "string"
+          },
+          "subdirectory": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Subdirectory",
+            "type": "string"
+          }
+        },
+        "required": [
+          "subdirectory",
+          "runStem",
+          "archiveStem",
+          "returnStateHash"
+        ],
+        "title": "ArchiveRunDocumentRequest",
+        "type": "object"
+      },
       "CadDriveChannelIdentity": {
         "additionalProperties": false,
         "description": "The submitted channel address resolved against immutable return sources.",
@@ -311,13 +349,33 @@
         "additionalProperties": false,
         "properties": {
           "enabled": {
-            "title": "Enabled",
-            "type": "boolean"
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "off",
+                  "project",
+                  "run"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
           }
         },
-        "required": [
-          "enabled"
-        ],
         "title": "CaptureDocumentRequest",
         "type": "object"
       },
@@ -6348,7 +6406,7 @@
     },
     "/api/cadlink/designs": {
       "get": {
-        "description": "Expose recent CAD-linked design heads as a local project picker.",
+        "description": "Expose recent CAD-linked projects as a local project picker.\n\nEach lineage contributes only its newest head and reports the archive folder its runs and captured CAD\ndocuments share, so a project can be opened, revealed and counted from one\nlisting rather than from three that could disagree.",
         "operationId": "list_designs_api_cadlink_designs_get",
         "responses": {
           "200": {
@@ -6867,6 +6925,148 @@
         ]
       }
     },
+    "/api/cadlink/projects/{lineage_id}/documents": {
+      "get": {
+        "description": "The captured CAD documents this project's runs were solved from.",
+        "operationId": "list_project_documents_api_cadlink_projects__lineage_id__documents_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "lineage_id",
+            "required": true,
+            "schema": {
+              "title": "Lineage Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Project Documents Api Cadlink Projects  Lineage Id  Documents Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Project Documents",
+        "tags": [
+          "cadlink"
+        ]
+      }
+    },
+    "/api/cadlink/projects/{lineage_id}/documents/{return_state_hash}": {
+      "get": {
+        "description": "Hand back the Fusion document one geometry version was captured from.",
+        "operationId": "download_project_document_api_cadlink_projects__lineage_id__documents__return_state_hash__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "lineage_id",
+            "required": true,
+            "schema": {
+              "title": "Lineage Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "return_state_hash",
+            "required": true,
+            "schema": {
+              "title": "Return State Hash",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Download Project Document",
+        "tags": [
+          "cadlink"
+        ]
+      }
+    },
+    "/api/cadlink/projects/{lineage_id}/reveal": {
+      "post": {
+        "description": "Open this project's archive folder in the desktop file manager.",
+        "operationId": "reveal_project_folder_api_cadlink_projects__lineage_id__reveal_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "lineage_id",
+            "required": true,
+            "schema": {
+              "title": "Lineage Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Reveal Project Folder Api Cadlink Projects  Lineage Id  Reveal Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reveal Project Folder",
+        "tags": [
+          "cadlink"
+        ]
+      }
+    },
     "/api/cadlink/request-fusion-return": {
       "post": {
         "description": "Ask the connected add-in to export the active Fusion document to WG.",
@@ -6931,6 +7131,50 @@
           }
         },
         "summary": "List Returns",
+        "tags": [
+          "cadlink"
+        ]
+      }
+    },
+    "/api/cadlink/runs/archive-document": {
+      "post": {
+        "description": "File a run's CAD document beside the run, when the mode asks for it.\n\nAdvisory throughout: the run archive is already written by the time this is\ncalled, and a missing convenience copy must never make a good run look\nfailed.",
+        "operationId": "archive_run_document_api_cadlink_runs_archive_document_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ArchiveRunDocumentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Archive Run Document Api Cadlink Runs Archive Document Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Archive Run Document",
         "tags": [
           "cadlink"
         ]
