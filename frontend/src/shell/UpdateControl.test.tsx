@@ -122,6 +122,25 @@ describe('UpdateControl', () => {
     expect(host.querySelector('.update-command')).toBeNull();
   });
 
+  it('labels a bundled install without offering the checkout installer', async () => {
+    const value = status({
+      action: null,
+      canInstall: false,
+      checkout: {
+        ...status().checkout,
+        kind: 'bundle',
+        branch: null,
+        updateSupported: false,
+        reason: 'Install a newer DMG manually.',
+      },
+    });
+    act(() => root.render(<Harness value={value}/>));
+    await act(async () => host.querySelector<HTMLButtonElement>('.update-indicator')!.click());
+    expect(host.textContent).toContain('Standalone app');
+    expect(host.textContent).toContain('Install a newer DMG manually.');
+    expect(host.querySelector('.update-command')).toBeNull();
+  });
+
   it('hands a ready release to the in-app installer', async () => {
     act(() => root.render(<Harness value={status()}/>));
     await act(async () => host.querySelector<HTMLButtonElement>('.update-indicator')!.click());

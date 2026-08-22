@@ -55,11 +55,12 @@ from server.cadlink.limits import (
     MESH_MEMORY_BYTES,
     MESH_TIMEOUT_S,
 )
+from server.platform.paths import app_root
 
 
 CHILD_ENTRYPOINT = "server.cadlink.child_main"
 PROTOCOL_VERSION = 1
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+_REPO_ROOT = app_root()
 _COPY_CHUNK_BYTES = 1024 * 1024
 #: How often the parent samples the child's resident memory and deadline.
 _WATCHDOG_INTERVAL_S = 0.5

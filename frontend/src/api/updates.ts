@@ -1,6 +1,6 @@
 export type UpdateAvailability = 'available' | 'current' | 'ahead' | 'incomplete' | 'unknown';
 export type UpdateFreshness = 'fresh' | 'stale' | 'unknown';
-export type CheckoutKind = 'release' | 'development' | 'detached' | 'modified' | 'unsupported';
+export type CheckoutKind = 'release' | 'development' | 'detached' | 'modified' | 'unsupported' | 'bundle';
 
 export interface UpdateRelease {
   version: string;

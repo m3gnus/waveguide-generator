@@ -214,7 +214,7 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose }: {
     <div ref={dialog} className="settings-dialog update-dialog" role="dialog" aria-modal="true" aria-labelledby="update-dialog-title" aria-busy={busy}>
       <header><div><h2 id="update-dialog-title">{title}</h2><p>{summary}</p></div><button className="dialog-close" aria-label="Close update details" onClick={close}><Icon name="close"/></button></header>
       <div className="update-dialog-body">
-        {data?.checkout.reason && <p className={`update-checkout-note ${data.checkout.updateSupported ? '' : 'blocked'}`}><b>{data.checkout.kind === 'development' ? 'Development checkout' : 'Checkout status'}</b>{data.checkout.reason}</p>}
+        {data?.checkout.reason && <p className={`update-checkout-note ${data.checkout.updateSupported ? '' : 'blocked'}`}><b>{data.checkout.kind === 'bundle' ? 'Standalone app' : data.checkout.kind === 'development' ? 'Development checkout' : 'Checkout status'}</b>{data.checkout.reason}</p>}
         {data?.freshness === 'stale' && <p className="update-stale-note">Showing the last successful result. {data.lastError}</p>}
         {data?.action && <section className="update-command" aria-labelledby="update-command-title">
           <div><h3 id="update-command-title">Install this update</h3><p>WG will close, run the verified installer, and restart. The {data.action.shell} command remains available as a fallback.</p></div>

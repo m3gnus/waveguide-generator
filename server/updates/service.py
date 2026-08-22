@@ -237,6 +237,22 @@ def _run_git(repo_root: Path, *args: str) -> str | None:
 def checkout_status(repo_root: Path, running_version: str) -> dict[str, Any]:
     """Classify local install safety without fetching or mutating Git state."""
 
+    if os.environ.get("WG2_BUNDLE") == "1":
+        return {
+            "kind": "bundle",
+            "branch": None,
+            "head": None,
+            "atDeclaredTag": False,
+            "trackedChanges": False,
+            "aheadCount": None,
+            "behindCount": None,
+            "updateSupported": False,
+            "reason": (
+                "Standalone app updates are not enabled yet. Install a newer DMG "
+                "manually when one is available."
+            ),
+        }
+
     if _run_git(repo_root, "rev-parse", "--is-inside-work-tree") != "true":
         return {
             "kind": "unsupported",

@@ -1,10 +1,8 @@
 name: Release
 
 # Goal 6 of the rebuild plan: end users must not need a Node runtime. The SPA is
-# therefore built here, once, and attached to the tagged release; the installer
-# downloads that artifact instead of building from a clone. Nothing else about
-# the app ships here -- the Python side comes from the tag itself, and the
-# HornLab modules from the SHAs pinned in pins.json.
+# therefore built here, once, and attached to the tagged release; both the
+# checkout installer and the standalone macOS bundle consume that same artifact.
 
 on:
   push:
@@ -80,6 +78,15 @@ jobs:
           # and make tar's otherwise-successful SIGPIPE fail the release step.
           tar -tzf "${{ env.artifact }}.tar.gz" | grep -Fx "dist/index.html"
 
+      - name: Share the SPA with bundle jobs
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-spa
+          path: |
+            ${{ env.artifact }}.tar.gz
+            ${{ env.artifact }}.tar.gz.sha256
+          if-no-files-found: error
+
       - name: Attach to the release
         uses: softprops/action-gh-release@v2
         with:
@@ -94,3 +101,71 @@ jobs:
             `${{ env.artifact }}.tar.gz` is the prebuilt SPA. The installer
             downloads it so that running Waveguide Generator needs no Node.js. Verify it against
             the accompanying `.sha256` before extracting over `frontend/dist`.
+
+  macos-bundle:
+    name: Build and attach the macOS standalone app
+    runs-on: macos-latest
+    needs: spa
+    env:
+      RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Download the verified SPA inputs
+        uses: actions/download-artifact@v4
+        with:
+          name: release-spa
+          path: build/spa
+
+      - name: Build and verify the standalone app
+        # The builder runs on the same pinned CPython it packages, so the job
+        # does not depend on whichever python3 the runner image ships.
+        run: |
+          set -euo pipefail
+          version="$(uv run --no-project --python 3.13 python -c 'import json; print(json.load(open("shared/version.json"))["version"])')"
+          spa="build/spa/waveguide-generator-v2-spa-$version.tar.gz"
+          test -f "$spa"
+          test -f "$spa.sha256"
+          uv run --no-project --python 3.13 scripts/build_bundle.py --spa "$spa" --output build/bundle
+
+      - name: Reuse a runtime already published on an earlier release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          runtime_path="$(find build/bundle -maxdepth 1 -type f -name 'waveguide-generator-runtime-macos-arm64-*.zip' -print -quit)"
+          if [ -z "$runtime_path" ]; then
+            echo "The bundle build produced no runtime zip." >&2
+            exit 1
+          fi
+          runtime_name="$(basename "$runtime_path")"
+          current_created_at="$(gh release view "$RELEASE_TAG" --json createdAt --jq '.createdAt')"
+          while IFS= read -r earlier_tag; do
+            if [ -z "$earlier_tag" ]; then
+              continue
+            fi
+            asset_names="$(gh release view "$earlier_tag" --json assets --jq '.assets[].name')"
+            if grep -Fxq "$runtime_name" <<< "$asset_names"; then
+              echo "Runtime $runtime_name already exists on $earlier_tag; skipping this upload."
+              mkdir -p "$RUNNER_TEMP/reused-runtime"
+              mv "$runtime_path" "$runtime_path.sha256" "$RUNNER_TEMP/reused-runtime/"
+              break
+            fi
+          done < <(gh release list --limit 1000 --json tagName,createdAt \
+            --jq ".[] | select(.createdAt < \"$current_created_at\") | .tagName")
+
+      - name: Attach standalone assets to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: build/bundle/*
+          fail_on_unmatched_files: true
+          append_body: true
+          body: |
+            The standalone macOS assets include a drag-to-Applications DMG, an app-layer
+            update zip and manifest, and a content-addressed runtime zip when that runtime
+            has not already been published. Every uploaded asset has a `.sha256` sidecar.

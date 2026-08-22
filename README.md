@@ -23,6 +23,12 @@ Then run the installer for your platform:
 | Windows | double-click `installers\windows\install-and-update.bat` |
 | Linux | `bash installers/linux/install.sh` |
 
+For a self-contained macOS install, download the release's **Waveguide
+Generator-…-macos-arm64.dmg**, open it, and drag **Waveguide Generator** to
+Applications. The app is ad-hoc signed rather than notarized, so on first launch
+macOS may require **System Settings → Privacy & Security → Open Anyway** and a
+confirmation; later launches work normally.
+
 It fast-forwards the checkout, downloads that version's prebuilt interface from
 the GitHub release and **refuses to extract it unless it matches the published
 SHA-256**, creates `.venv` with CPython 3.13 and the locked dependency set,

@@ -8,13 +8,15 @@ import sys
 import traceback
 from typing import TYPE_CHECKING
 
+from server.platform.paths import app_root
+
 if TYPE_CHECKING:  # pragma: no cover - import cost is why it is deferred at runtime
     from .diagnostics import TkFailure
 
 #: Checked before terminal mode hands over to the server. This is the same file
 #: ``server.app.FRONTEND_DIST`` is built from, resolved from this module so the
 #: check costs no application import.
-FRONTEND_INDEX = Path(__file__).resolve().parents[2] / "frontend" / "dist" / "index.html"
+FRONTEND_INDEX = app_root() / "frontend" / "dist" / "index.html"
 
 #: Startup failures land here, beside server.log and install.log, so one
 #: directory holds the whole story of a bad install.

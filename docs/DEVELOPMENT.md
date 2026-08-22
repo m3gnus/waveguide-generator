@@ -74,6 +74,38 @@ Geometry, solver, platform, or release work may also require the pinned sibling 
 constellation checks, a real browser, or owned qualification hardware. Hosted CI never
 runs real Metal or BEMPP solves.
 
+## Building the standalone macOS app
+
+`scripts/build_bundle.py` creates the relocatable CPython runtime layer, the tracked
+application layer, the ad-hoc-signed `.app`, and the DMG and update assets under
+`build/bundle/`. It requires Apple Silicon macOS, `uv`, Swift, `codesign`, and
+`hdiutil`; it installs only `server/requirements-runtime.txt` and
+`server/requirements-pins.txt`, never the development requirements.
+
+Release builds pass the checksum file beside the SPA tarball automatically:
+
+```bash
+python3 scripts/build_bundle.py \
+  --spa waveguide-generator-v2-spa-<version>.tar.gz \
+  --output build/bundle
+```
+
+Without `--spa`, `frontend/dist` must already contain the matching verified
+`.wg2-spa.json` release stamp. `--runtime-only` and `--app-only` build an individual
+update layer, `--python-version` can rehearse another CPython 3.13 patch, and
+`--skip-verify` skips the copied-bundle gate (backends ready, `/` and `/health`
+answer, and `codesign --verify --strict` still passes after the run, which proves the
+launcher's cache redirection keeps the sealed bundle unmodified). A normal local build
+should leave verification enabled:
+
+```bash
+.venv/bin/python scripts/build_bundle.py --output build/bundle
+```
+
+The runtime id is content-addressed from the two requirement files and the exact pinned
+Python patch. Layer ZIPs use sorted entries, fixed timestamps, and preserved Unix modes
+and symlinks so repeated builds are reproducible in spirit.
+
 ## Documentation changes
 
 Every new document must state its audience or status. Repository plans must record an

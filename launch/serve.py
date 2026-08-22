@@ -18,9 +18,11 @@ import time
 import webbrowser
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+_IMPORT_ROOT = Path(
+    os.environ.get("WG2_APP_ROOT") or Path(__file__).resolve().parents[1]
+).expanduser().resolve()
+if str(_IMPORT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_IMPORT_ROOT))
 
 import uvicorn  # noqa: E402 - the checkout root must be importable first
 
@@ -35,7 +37,7 @@ from server.platform.instance import (  # noqa: E402
     reserve_port,
 )
 from server.platform.logging_setup import flush_logs, setup_logging  # noqa: E402
-from server.platform.paths import default_runs_dir, ensure_data_layout  # noqa: E402
+from server.platform.paths import app_root, default_runs_dir, ensure_data_layout  # noqa: E402
 from server.platform.signal_rearm import (  # noqa: E402
     register_signal_rearm,
     unregister_signal_rearm,
@@ -45,6 +47,7 @@ from scripts.migrate_v1 import MigrationError, auto_migrate_v1  # noqa: E402
 
 
 HOST = "127.0.0.1"
+REPO_ROOT = app_root()
 SPA_STAMP = REPO_ROOT / "frontend" / "dist" / ".wg2-spa.json"
 VERSION_MANIFEST = REPO_ROOT / "shared" / "version.json"
 
