@@ -71,6 +71,19 @@ describe('frontend result and status labels', () => {
     expect(engineStatusLabel(engines, selection, 'metal', 'circsym')).toBe('AXISYM · OFFLINE');
   });
 
+  it('labels invalid engine/mode pairs without implying Axisym will run', () => {
+    const engines = [
+      { name: 'dryrun', available: true, reason: null, version: 'builtin', fast_paths: [] },
+      { name: 'axisym', available: true, reason: null, version: '1.0', fast_paths: [] },
+    ];
+    const selection = {
+      default: 'auto', resolvedDefault: 'dryrun', full3dOrder: ['dryrun'], axisymmetricRunner: 'axisym',
+    };
+    expect(engineStatusLabel(engines, selection, 'dryrun', 'circsym')).toBe('DRYRUN · INVALID');
+    expect(engineStatusLabel(engines, selection, 'stale-engine', 'circsym')).toBe('STALE-ENGINE · INVALID');
+    expect(engineStatusLabel(engines, selection, 'axisym', 'full_3d')).toBe('AXISYM · INVALID');
+  });
+
   it('shows the tracked design filename instead of a path placeholder', () => {
     expect(documentLabel('loaded-design.cfg')).toBe('loaded-design.cfg');
     expect(documentLabel('   ')).toBe('untitled design');

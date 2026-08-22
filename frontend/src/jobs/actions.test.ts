@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { hydrateDesignDocument } from '../api/designIo';
 import { designForFamily, serializeDesign } from '../stores/design';
 import type { SolveOptions } from '../stores/solveOptions';
-import { fetchSymmetry, formatApiDetail, getCapabilities, postSymmetry, resolveEngine, submitDesign, submitImported, toSolveDesign } from './actions';
+import { fetchSymmetry, formatApiDetail, getCapabilities, plannedEngineNames, postSymmetry, resolveEngine, submitDesign, submitImported, toSolveDesign } from './actions';
 
 describe('API validation errors', () => {
   it('formats structured FastAPI detail arrays with locations', async () => {
@@ -32,6 +32,16 @@ describe('solve submission', () => {
     });
     expect(resolveEngine('auto', capabilities, 'circsym')).toBe('axisym');
     expect(resolveEngine('metal', capabilities, 'circsym')).toBe('axisym');
+    expect(() => resolveEngine('dryrun', capabilities, 'circsym')).toThrow('Dry-run cannot run forced Axisymmetric');
+    expect(() => resolveEngine('stale-manual-engine', capabilities, 'circsym')).toThrow('Unknown solve engine');
+    expect(() => resolveEngine('axisym', capabilities, 'full_3d')).toThrow("cannot run solver mode Full 3D");
+    expect(resolveEngine('dryrun', capabilities, 'auto')).toBe('dryrun');
+    expect(resolveEngine('metal', capabilities, 'full_3d')).toBe('metal');
+
+    expect(plannedEngineNames('metal', capabilities, 'auto')).toEqual(['axisym', 'metal']);
+    expect(plannedEngineNames('auto', capabilities, 'full_3d')).toEqual(['metal', 'dryrun']);
+    expect(plannedEngineNames('metal', capabilities, 'circsym')).toEqual(['axisym']);
+    expect(plannedEngineNames('dryrun', capabilities, 'auto')).toEqual(['dryrun']);
   });
 
   it('resolves AUTO to Axisym when it is the only engine the host has', () => {
@@ -46,6 +56,7 @@ describe('solve submission', () => {
       default: 'auto', resolvedDefault: null, full3dOrder: ['bempp'], axisymmetricRunner: 'axisym',
     } };
     expect(resolveEngine('auto', axisymOnly)).toBe('axisym');
+    expect(() => resolveEngine('auto', axisymOnly, 'full_3d')).toThrow('No full-3D solver backend');
 
     // A full-3D backend still wins when the host has one, and a host with
     // nothing available still refuses rather than inventing an engine.
@@ -58,6 +69,7 @@ describe('solve submission', () => {
     } };
     expect(resolveEngine('auto', withBempp)).toBe('bempp');
     expect(() => resolveEngine('auto', { engines: [] })).toThrow('No solver backend is currently available');
+    expect(() => resolveEngine('removed-engine', withBempp)).toThrow('Unknown solve engine');
   });
 
   it('submits every solve option and the G1 polar_config contract without forcing dryrun', async () => {

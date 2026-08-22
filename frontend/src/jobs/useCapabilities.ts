@@ -90,8 +90,9 @@ export function useActiveBackendCapability(): EngineCapability | null {
 /** Candidates the server may select for the current explicit/AUTO request. */
 export function usePlannedBackendCapabilities(): readonly EngineCapability[] {
   const engine = useSolveOptionsStore((state) => state.engine);
+  const solverMode = useSolveOptionsStore((state) => state.solverMode);
   const { engines, engineSelection } = useCapabilities();
-  return plannedBackendCapabilities(engine, engines, engineSelection);
+  return plannedBackendCapabilities(engine, engines, engineSelection, solverMode);
 }
 
 /**
