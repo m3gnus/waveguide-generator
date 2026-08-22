@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from './icons';
 import { commandShortcutLabel } from './platformKeys';
-import { trapDialogFocus } from './SettingsDialog';
+import { trapDialogFocus } from './dialogFocus';
 
 export type PaletteKind = 'Parameters' | 'Jobs' | 'Commands';
 

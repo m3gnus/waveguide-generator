@@ -70,7 +70,10 @@ describe('SettingsDialog', () => {
     const section = host.querySelector<HTMLElement>('[aria-labelledby="settings-workspace-title"]')!;
     expect(section).not.toBeNull();
     expect(section.textContent).toContain('/data/workspace');
+    expect(section.textContent).toContain('Documents/Waveguide Generator/runs');
+    expect(section.textContent).toContain('path shown below is authoritative');
     expect(section.textContent).toContain('not result exports');
+    expect(section.textContent).not.toContain('folder beside Waveguide Generator');
 
     const buttons = [...section.querySelectorAll<HTMLButtonElement>('button')];
     await act(async () => buttons.find((button) => button.textContent === 'Open folder')!.click());

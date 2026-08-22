@@ -147,23 +147,19 @@ export function SolveActions() {
     cadLinkCoordinatorBridge.getSnapshot,
     cadLinkCoordinatorBridge.getSnapshot,
   );
-  const [pulling, setPulling] = useState(false);
   const fusionMoved = mode === 'cad' && cadCoordinator.fusionStatus?.fusionChangesAvailable === true;
 
   return <>
     {fusionMoved && <button
       className="solve-button"
-      disabled={pulling || solve.submitting}
+      disabled={cadCoordinator.pullingFromFusion || solve.submitting}
       title="Ask Fusion for its current geometry, prepare it, and solve"
-      aria-busy={pulling}
-      onClick={() => {
-        setPulling(true);
-        void cadCoordinator.pullAndSolve().catch(() => undefined).finally(() => setPulling(false));
-      }}
-    ><Icon name="reset"/>{pulling ? 'Pulling…' : 'Pull from Fusion & Solve'}</button>}
+      aria-busy={cadCoordinator.pullingFromFusion}
+      onClick={() => { void cadCoordinator.pullAndSolve().catch(() => undefined); }}
+    ><Icon name="reset"/>{cadCoordinator.pullingFromFusion ? 'Waiting for Fusion…' : 'Pull from Fusion & Solve'}</button>}
     <button
       className={fusionMoved ? 'solve-button solve-button-secondary' : 'solve-button'}
-      disabled={solve.disabled || pulling}
+      disabled={solve.disabled || cadCoordinator.pullingFromFusion}
       title={fusionMoved ? `${solve.title} (the geometry WG already prepared)` : solve.title}
       aria-busy={solve.submitting}
       onClick={solve.solve}
