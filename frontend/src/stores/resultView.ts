@@ -9,19 +9,24 @@ import { combinedChannelId, resultChannels, type ResultPayload } from '../result
  * run with no sum falls back rather than resolving to a channel that happens
  * to share the name.
  */
-export const COMBINED_VIEW = 'combined';
+export const COMBINED_VIEW: unique symbol = Symbol('combined-result-view');
 
 /** `COMBINED_VIEW`, or the id of one drive channel. */
-export type ResultView = string;
+export type ResultView = string | typeof COMBINED_VIEW;
 
 /** Session-scoped on purpose: which driver you were looking at is a property of
  * the sitting, not of the workspace, and carrying it across restarts would
  * reopen the dock on a channel the next design may not have. */
 const STORAGE_KEY = 'wg2.resultView.v1';
+const CHANNEL_VIEW_STORAGE_PREFIX = '\u0000channel:';
 
 function readStored(): ResultView {
   try {
-    return sessionStorage.getItem(STORAGE_KEY) || COMBINED_VIEW;
+    const stored = sessionStorage.getItem(STORAGE_KEY);
+    if (!stored || stored === 'combined') return COMBINED_VIEW;
+    return stored.startsWith(CHANNEL_VIEW_STORAGE_PREFIX)
+      ? stored.slice(CHANNEL_VIEW_STORAGE_PREFIX.length)
+      : stored;
   } catch {
     // Private-mode and sandboxed embeddings refuse session storage; the view
     // still works for as long as the tab lives.
@@ -31,7 +36,8 @@ function readStored(): ResultView {
 
 function writeStored(view: ResultView): void {
   try {
-    sessionStorage.setItem(STORAGE_KEY, view);
+    if (view === COMBINED_VIEW) sessionStorage.removeItem(STORAGE_KEY);
+    else sessionStorage.setItem(STORAGE_KEY, `${CHANNEL_VIEW_STORAGE_PREFIX}${view}`);
   } catch { /* the in-memory value remains authoritative for this tab */ }
 }
 

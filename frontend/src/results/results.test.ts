@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CompareStore, fetchJobResults, fetchRadiationImpedancePresentation, mergeProvisionalResults, ProvisionalResultsStore, recombineJobResults, ResultsLruCache, resultsCache, type JobResults } from '../api/results';
+import { COMBINED_VIEW } from '../stores/resultView';
 import { beamShapeSeries, complexToDb, directivityGrid, directivityIndexSeries, excursionChartSeries, impedanceComparable, impedanceSeries, impedanceSubtitle, polarCut, polarMirrorsAcrossAxis, polarSeries, selectResultChannels, splSeries, type NamedResult } from './mappers';
-import type { ResultPayload } from './types';
+import { combinedChannelId, type ResultPayload } from './types';
 
 /** A channel as the server stamps it from the ingest record's source roles. */
 function roled(payload: JobResults, role: string): JobResults {
@@ -214,6 +215,20 @@ describe('provisional frequency results', () => {
 });
 
 describe('chart data mappers', () => {
+  it('does not classify an ordinary channel literally named combined as a sum', () => {
+    const payload: JobResults = {
+      frequencies: [],
+      channel_order: ['drive-hf', 'combined'],
+      channels: { 'drive-hf': roled(result(1), 'HF'), combined: result(2) },
+    };
+
+    expect(combinedChannelId(payload)).toBeNull();
+    expect(selectResultChannels('job-ordinary', 'Ordinary', payload, COMBINED_VIEW).map(({ id, label }) => ({ id, label })))
+      .toEqual([{ id: 'job-ordinary#drive-hf', label: 'Ordinary · HF' }]);
+    expect(selectResultChannels('job-ordinary', 'Ordinary', payload, 'combined').map(({ id, label }) => ({ id, label })))
+      .toEqual([{ id: 'job-ordinary#combined', label: 'Ordinary · combined' }]);
+  });
+
   it('contributes only the chosen channel of an imported run', () => {
     const payload: JobResults = {
       frequencies: [],
