@@ -98,11 +98,19 @@ def _planner_request(
     )
 
 
-def test_formulation_planner_uses_portable_axisym_without_metal(
+@pytest.mark.parametrize("solver_mode", ["auto", "circsym"])
+def test_formulation_planner_uses_portable_axisym_without_revolved_symmetry(
     monkeypatch,
+    solver_mode: str,
 ) -> None:
     from server.solver import circsym
 
+    monkeypatch.setattr(
+        "server.jobs.runtime.resolve_symmetry",
+        lambda _design: pytest.fail(
+            "axisymmetric submissions must not build a revolved surface"
+        ),
+    )
     monkeypatch.setattr(circsym, "axisymmetric_eligibility_reasons", lambda _request: [])
     monkeypatch.setattr(
         circsym,
@@ -120,17 +128,24 @@ def test_formulation_planner_uses_portable_axisym_without_metal(
         factory=lambda name: object() if name in {"axisym", "bempp"} else None,
     )
 
-    resolution = asyncio.run(resolve_submission(_planner_request(), engine_registry))
+    resolution = asyncio.run(
+        resolve_submission(_planner_request(solver_mode=solver_mode), engine_registry)
+    )
 
     assert resolution.engine_name == "axisym"
     assert resolution.request.options.engine == "axisym"
     assert resolution.symmetry_metadata["solver_plan"] == {
         "formulation": "axisymmetric",
         "engine": "axisym",
-        "reason": "AUTO selected the eligible platform-neutral axisymmetric runner",
+        "reason": (
+            "forced by solver_mode='circsym'"
+            if solver_mode == "circsym"
+            else "AUTO selected the eligible platform-neutral axisymmetric runner"
+        ),
         "eligibility_reasons": [],
         "cost_evidence": {"model": "test", "full_3d_quadrants": 1},
     }
+    assert resolution.symmetry_metadata["domain"] == "continuous-axisymmetric"
 
 
 def test_axisymmetric_cost_evidence_uses_refined_meridian_and_requested_domain() -> None:
