@@ -19,15 +19,17 @@ def _save(
     requested: SaveIdentity | None = None,
     *,
     marker: str = "one",
+    filename: str = "design.cfg",
+    saved_at: str = "2026-08-10T14:22:31Z",
 ) -> dict[str, object]:
     return store.save(
         requested=requested,
         design_hash="sha256:" + hashlib.sha256(marker.encode()).hexdigest(),
-        filename="design.cfg",
+        filename=filename,
         snapshot_builder=lambda identity: (
             f"DesignId={identity.design_id};Version={identity.edit_version};{marker}"
         ),
-        saved_at="2026-08-10T14:22:31Z",
+        saved_at=saved_at,
     )
 
 
@@ -148,6 +150,54 @@ def test_project_listing_orders_heads_without_loading_snapshot_text(tmp_path: Pa
     assert "snapshot_text" not in rows[0]
     assert rows[1]["export_count"] == 1
     assert rows[1]["last_exported_at"] == "2026-08-10T15:00:00Z"
+
+
+def test_project_listing_uses_only_the_newest_head_in_each_lineage(tmp_path: Path) -> None:
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    first = _save(
+        store,
+        marker="first",
+        filename="first-name.cfg",
+        saved_at="2026-08-10T10:00:00Z",
+    )
+    _save(
+        store,
+        _request(first),
+        marker="updated",
+        filename="older-head-name.cfg",
+        saved_at="2026-08-11T10:00:00Z",
+    )
+    fork = _save(
+        store,
+        _request(first),
+        marker="fork",
+        filename="canonical-name.cfg",
+        saved_at="2026-08-12T10:00:00Z",
+    )
+
+    rows = store.list_projects()
+
+    assert len(store.list_designs()) == 2
+    assert [row["design_id"] for row in rows] == [fork["identity"].design_id]  # type: ignore[union-attr]
+    assert rows[0]["filename"] == "canonical-name.cfg"
+
+
+def test_exact_lineage_lookup_returns_the_newest_head(tmp_path: Path) -> None:
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    first = _save(store, marker="first", saved_at="2026-08-10T10:00:00Z")
+    fork = _save(
+        store,
+        _request(first),
+        marker="fork",
+        saved_at="2026-08-12T10:00:00Z",
+    )
+    lineage_id = first["identity"].lineage_id  # type: ignore[union-attr]
+
+    latest = store.find_latest_design_for_lineage(lineage_id)
+
+    assert latest is not None
+    assert latest["design_id"] == fork["identity"].design_id  # type: ignore[union-attr]
+    assert store.find_latest_design_for_lineage("wgl_absent") is None
 
 
 def test_export_sequences_are_atomic_and_idempotent_across_store_instances(

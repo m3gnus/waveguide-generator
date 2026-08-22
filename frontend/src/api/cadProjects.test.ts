@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   groupRunsByModelState,
+  listCadProjects,
   runProjectLineage,
   runReturnStateHash,
   runsForProject,
@@ -37,6 +38,33 @@ function document(hash: string, capturedAt: string): CadProjectDocument {
     bytes: 12,
   };
 }
+
+describe('listing CAD projects', () => {
+  it('reads the server canonical-head contract including its archive stem', async () => {
+    const project = {
+      designId: 'wgd_newest',
+      lineageId: 'wgl_project',
+      editVersion: 2,
+      designHash: 'sha256:newest',
+      filename: 'newest.cfg',
+      archiveStem: 'stable-project-folder',
+      branchedFromDesignId: 'wgd_older',
+      branchedFromEditVersion: 1,
+      exportCount: 0,
+      lastExportedAt: null,
+      createdAt: '2026-08-20T10:00:00Z',
+      updatedAt: '2026-08-22T10:00:00Z',
+    };
+    const fetcher = async () => new Response(
+      JSON.stringify({ items: [project] }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    );
+
+    const projects = await listCadProjects(fetcher as typeof fetch);
+
+    expect(projects).toEqual([project]);
+  });
+});
 
 describe('which project a run belongs to', () => {
   it('is the lineage, and only for imported runs', () => {
