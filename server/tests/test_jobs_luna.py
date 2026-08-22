@@ -49,6 +49,38 @@ def _request() -> SolveRequest:
     )
 
 
+def _result_envelope() -> dict[str, Any]:
+    digest = "a" * 64
+    return {
+        "result_kind": "parametric",
+        "result_contract_version": 1,
+        "client_request_id": None,
+        "client_metadata": {},
+        "provenance": {
+            "schema_version": 1,
+            "wg_version": "test",
+            "dependency_shas": {},
+            "request_sha256": digest,
+            "geometry_sha256": digest,
+            "solve_options_sha256": digest,
+            "request_identity": "execution",
+            "execution_request_sha256": digest,
+            "execution_geometry_sha256": digest,
+            "execution_solve_options_sha256": digest,
+            "effective_request_sha256": digest,
+            "effective_geometry_sha256": digest,
+            "effective_solve_options_sha256": digest,
+            "resolved_engine": "test",
+        },
+        "metadata": {
+            "field_plane_available": False,
+            "field_trace_bytes": None,
+            "unavailable_reason": "unsupported_solve_mode",
+        },
+        "frequencies": [100.0],
+    }
+
+
 @pytest.mark.parametrize("bound", [float("nan"), float("inf"), float("-inf")])
 def test_frequency_range_rejects_every_nonfinite_bound(bound: float) -> None:
     with pytest.raises(ValidationError, match="finite"):
@@ -172,7 +204,7 @@ def test_complete_job_cannot_overwrite_committed_cancellation(tmp_path: Path) ->
     store.update_job("race", cancellation_requested=True)
     event = store.complete_job(
         "race",
-        {"frequencies": [100.0]},
+        _result_envelope(),
         {"status": "complete", "progress": 1.0},
         {"status": "complete"},
     )
@@ -183,7 +215,7 @@ def test_complete_job_cannot_overwrite_committed_cancellation(tmp_path: Path) ->
     store.create_job(_record("completion-wins"))
     completed = store.complete_job(
         "completion-wins",
-        {"frequencies": [100.0]},
+        _result_envelope(),
         {"status": "complete", "progress": 1.0},
         {"status": "complete"},
     )

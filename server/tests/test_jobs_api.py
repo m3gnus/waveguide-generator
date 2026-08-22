@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+import sqlite3
 from typing import Any
 
 from server.app import create_app
@@ -373,6 +374,50 @@ def test_dryrun_http_lifecycle_metadata_results_and_delete(
         assert item["parent_job_id"] == "parent-job"
         status, raw = await _request(app, "DELETE", f"/api/jobs/{job_id}")
         assert status == 200 and json.loads(raw)["deleted"] is True
+        await app.state.jobs_runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_cad_submission_replay_after_missing_outcome_returns_the_same_job(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A failed CAD outcome POST leaves a marker, so remount replays the solve."""
+
+    monkeypatch.setenv("WG2_ENABLE_DRYRUN", "1")
+
+    async def scenario() -> None:
+        app = create_app(data_dir=tmp_path)
+        solve_body = _solve_body(delay_ms=25)
+        solve_body["client_request_id"] = "cad-solve:cmd-remount"
+
+        first_status, first_raw = await _request(
+            app, "POST", "/api/solve", body=solve_body
+        )
+        # Simulate outcome persistence failing after creation: no terminal
+        # ledger entry is written, and the browser remount submits the marker.
+        replay_status, replay_raw = await _request(
+            app, "POST", "/api/solve", body=solve_body
+        )
+
+        assert (first_status, replay_status) == (200, 200)
+        first_id = json.loads(first_raw)["job_id"]
+        assert json.loads(replay_raw)["job_id"] == first_id
+        with sqlite3.connect(app.state.jobs_runtime.store.db_path) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM simulation_jobs").fetchone()[0] == 1
+            assert conn.execute(
+                "SELECT submission_key, job_id FROM job_submissions"
+            ).fetchone() == ("cad-solve:cmd-remount", first_id)
+
+        changed = json.loads(json.dumps(solve_body))
+        changed["design"]["L"] = 121
+        conflict_status, conflict_raw = await _request(
+            app, "POST", "/api/solve", body=changed
+        )
+        assert conflict_status == 409
+        assert json.loads(conflict_raw)["error"]["code"] == "submission_key_conflict"
+
+        await app.state.jobs_runtime.wait_idle()
         await app.state.jobs_runtime.shutdown()
 
     asyncio.run(scenario())
