@@ -1,6 +1,6 @@
 import { getCadLinkedDesign } from '../api/cadlink';
 import { hydrateDesignDocument, openDesignText, type CadLinkOpenState } from '../api/designIo';
-import { useDesignStore } from '../stores/design';
+import { useDesignStore, type DesignLoadSource } from '../stores/design';
 import { documentSettingsSignature } from '../stores/designWire';
 import { designNameForOpenedFile } from '../stores/designName';
 import { useDocumentStore, type DesignIdentity } from '../stores/document';
@@ -33,9 +33,10 @@ export interface OpenedDesign {
 export function applyOpenedDesign(
   opened: Awaited<ReturnType<typeof openDesignText>>,
   filename: string,
+  loadSource: DesignLoadSource = 'ordinary',
 ): OpenedDesign {
   const openedDesign = hydrateDesignDocument(opened.design);
-  useDesignStore.getState().replaceDesign(openedDesign);
+  useDesignStore.getState().replaceDesign(openedDesign, { loadSource });
   restoreSolveSettingsFromBlocks(openedDesign.extra_blocks);
   const document = useDocumentStore.getState();
   // One name for the whole document: the opened file's, unless the file's own
@@ -56,7 +57,10 @@ export function applyOpenedDesign(
 export async function openCadLinkedProject(
   designId: string,
   fetcher: typeof fetch = fetch,
+  loadSource: DesignLoadSource = 'ordinary',
 ): Promise<OpenedDesign> {
   const snapshot = await getCadLinkedDesign(designId, fetcher);
-  return applyOpenedDesign(await openDesignText(snapshot.text, fetcher), snapshot.filename);
+  return applyOpenedDesign(
+    await openDesignText(snapshot.text, fetcher), snapshot.filename, loadSource,
+  );
 }

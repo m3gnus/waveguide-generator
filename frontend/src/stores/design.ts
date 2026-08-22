@@ -5,6 +5,7 @@ import { replaceAthPolarBlocks } from './athPolars';
 
 export type DesignFamily = 'OSSE' | 'R-OSSE' | 'ICW' | 'FREEFORM';
 export type MutationReason = 'edit' | 'drag' | 'undo' | 'redo' | 'load' | 'family';
+export type DesignLoadSource = 'ordinary' | 'cad-project-switch';
 export type DesignValue = number | string | boolean | null | FreeformPoint[] | CrossSectionStation[];
 
 export interface ExprNumber {
@@ -509,6 +510,7 @@ export interface RevisionEvent {
   revision: number;
   reason: MutationReason;
   immediate: boolean;
+  loadSource?: DesignLoadSource;
 }
 
 type RevisionListener = (event: RevisionEvent) => void;
@@ -546,7 +548,10 @@ interface DesignStore {
   setSourceConvention: (convention: DesignDocument['source']['velocity_convention']) => void;
   setFamily: (family: DesignFamily) => void;
   loadDesign: (design: DesignDocument) => void;
-  replaceDesign: (design: DesignDocument, options?: { keepHistory?: boolean }) => void;
+  replaceDesign: (design: DesignDocument, options?: {
+    keepHistory?: boolean;
+    loadSource?: DesignLoadSource;
+  }) => void;
   beginDrag: () => void;
   endDrag: () => void;
   undo: () => void;
@@ -605,9 +610,9 @@ function setMany(design: DesignDocument, updates: Record<string, DesignValue>): 
   return Object.entries(updates).reduce((next, [path, value]) => setAtPath(next, path, value), design);
 }
 
-function bump(reason: MutationReason, immediate: boolean): void {
+function bump(reason: MutationReason, immediate: boolean, loadSource?: DesignLoadSource): void {
   const revision = useDesignStore.getState().designRevision;
-  announce({ revision, reason, immediate });
+  announce({ revision, reason, immediate, ...(loadSource ? { loadSource } : {}) });
 }
 
 export const useDesignStore = create<DesignStore>()(
@@ -675,7 +680,7 @@ export const useDesignStore = create<DesignStore>()(
         cancelRevisionTimers();
         get().endDrag();
         set((state) => ({ design: structuredClone(design), designRevision: state.designRevision + 1 }));
-        bump('load', true);
+        bump('load', true, 'ordinary');
       },
       replaceDesign: (design, options) => {
         cancelRevisionTimers();
@@ -686,7 +691,7 @@ export const useDesignStore = create<DesignStore>()(
         // session, and undo has to be able to bring the working design back.
         if (!options?.keepHistory) useDesignStore.temporal.getState().clear();
         useDesignStore.temporal.getState().resume();
-        bump('load', true);
+        bump('load', true, options?.loadSource ?? 'ordinary');
       },
       beginDrag: () => {
         if (get().dragSnapshot) return;
@@ -738,7 +743,7 @@ export function resetDesignStore(): void {
   useDesignStore.temporal.getState().clear();
   useDesignStore.temporal.getState().resume();
   useDesignStore.setState({ design: structuredClone(seedDesign), designRevision: 1, dragSnapshot: null });
-  bump('load', true);
+  bump('load', true, 'ordinary');
 }
 
 /**
