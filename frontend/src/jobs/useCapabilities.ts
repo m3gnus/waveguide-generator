@@ -114,6 +114,10 @@ export function useCapabilityRefreshOnReconnect(connection: string): void {
     if (connection !== 'connected') return;
     if (hasConnected.current) {
       void client.invalidateQueries({ queryKey: CAPABILITIES_QUERY_KEY });
+      // Request-specific plans depend on the same process-local registry.
+      // Reusing one across a restart could re-enable a solve against an engine
+      // the replacement process no longer has.
+      void client.invalidateQueries({ queryKey: ['solve-plan'] });
     }
     hasConnected.current = true;
   }, [connection, client]);

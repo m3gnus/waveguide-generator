@@ -26,6 +26,9 @@ vi.mock('../jobs/useCapabilities', () => ({
   }),
   useCapabilityRefreshOnReconnect: () => undefined,
 }));
+vi.mock('../jobs/useSolvePlan', () => ({
+  useSolvePlan: () => ({ plan: null, error: null, isPending: true }),
+}));
 
 function job(id: string, label: string, runNumber: number): JobItem {
   return {

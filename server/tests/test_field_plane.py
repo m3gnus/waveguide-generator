@@ -696,9 +696,13 @@ def test_unsupported_field_plane_details_distinguish_formulation_and_mounting(
         )
 
         assert axisym_status == coupled_status == 422
-        axisym = json.loads(axisym_raw)["detail"]
-        coupled = json.loads(coupled_raw)["detail"]
+        axisym = json.loads(axisym_raw)
+        coupled = json.loads(coupled_raw)
         assert axisym == {
+            "detail": (
+                "Axisymmetric meridian solves do not retain exterior field traces."
+            ),
+            "error_contract_version": 1,
             "code": "unsupported_axisymmetric_formulation",
             "message": (
                 "Axisymmetric meridian solves do not retain exterior field traces."
@@ -710,6 +714,10 @@ def test_unsupported_field_plane_details_distinguish_formulation_and_mounting(
             ),
         }
         assert coupled == {
+            "detail": (
+                "Coupled infinite-baffle solves do not retain exterior field traces."
+            ),
+            "error_contract_version": 1,
             "code": "unsupported_coupled_infinite_baffle",
             "message": (
                 "Coupled infinite-baffle solves do not retain exterior field traces."

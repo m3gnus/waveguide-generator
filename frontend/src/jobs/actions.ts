@@ -27,6 +27,12 @@ export interface Capabilities {
   engines: EngineCapability[];
   engineSelection: EngineSelection;
 }
+export interface SolvePlan {
+  engine: string;
+  formulation: 'axisymmetric' | 'full-3d';
+  reason: string;
+  eligibility_reasons: string[];
+}
 export interface SolveSubmissionMetadata { label: string; designRevision: number }
 export interface ImportedGeometrySubmission {
   type: 'imported';
@@ -255,6 +261,55 @@ export async function postSymmetry(
   });
   if (!response.ok) throw new Error(await detail(response));
   return response.json() as Promise<SymmetryResolution>;
+}
+
+export function solvePlanRequestBody(
+  design: DesignDocument,
+  requestedOptions: SolveOptions = useSolveOptionsStore.getState().options(),
+): string {
+  return JSON.stringify({
+    design: toSolveDesign(design),
+    options: structuredClone(requestedOptions),
+  });
+}
+
+export async function postSolvePlan(
+  body: string,
+  fetcher: typeof fetch = fetch,
+  signal?: AbortSignal,
+): Promise<SolvePlan> {
+  const response = await fetcher('/api/solve/plan', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body,
+    signal,
+  });
+  if (!response.ok) throw new Error(await detail(response));
+  const plan = await response.json() as Partial<SolvePlan>;
+  if (
+    typeof plan.engine !== 'string'
+    || !plan.engine.trim()
+    || (plan.formulation !== 'axisymmetric' && plan.formulation !== 'full-3d')
+    || typeof plan.reason !== 'string'
+    || !Array.isArray(plan.eligibility_reasons)
+    || !plan.eligibility_reasons.every((reason) => typeof reason === 'string')
+  ) {
+    throw new Error('Solve plan response is invalid');
+  }
+  return plan as SolvePlan;
+}
+
+export async function planSolveDesign(
+  design: DesignDocument,
+  requestedOptions: SolveOptions = useSolveOptionsStore.getState().options(),
+  fetcher: typeof fetch = fetch,
+  signal?: AbortSignal,
+): Promise<SolvePlan> {
+  return postSolvePlan(
+    solvePlanRequestBody(design, requestedOptions),
+    fetcher,
+    signal,
+  );
 }
 
 export async function submitDesign(

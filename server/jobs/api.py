@@ -57,6 +57,7 @@ from server.jobs.runtime import (
     JobRuntime,
     SymmetryValidationError,
     UnknownEngineError,
+    resolve_submission,
 )
 from server.jobs.store import JobStore
 from server.engines.registry import EngineRegistry
@@ -143,6 +144,43 @@ class RadiationImpedancePresentation(BaseModel):
     in_phase_termination: RadiationImpedanceTermination
 
 
+class SolvePlanResponse(BaseModel):
+    """The request-specific engine/formulation selected by the runtime."""
+
+    engine: str
+    formulation: Literal["axisymmetric", "full-3d"]
+    reason: str
+    eligibility_reasons: list[str]
+
+
+class FieldPlaneUnavailableResponse(BaseModel):
+    """Backward-compatible, versioned remedy for an unsupported field plane."""
+
+    detail: str
+    error_contract_version: Literal[1] = 1
+    code: Literal[
+        "unsupported_axisymmetric_formulation",
+        "unsupported_coupled_infinite_baffle",
+    ]
+    message: str
+    remedy: str
+
+
+class FieldPlaneStringErrorResponse(BaseModel):
+    detail: str
+
+
+class FieldPlaneValidationErrorResponse(BaseModel):
+    detail: list[dict[str, Any]]
+
+
+FieldPlane422Response = (
+    FieldPlaneUnavailableResponse
+    | FieldPlaneStringErrorResponse
+    | FieldPlaneValidationErrorResponse
+)
+
+
 
 class _FastAPIJobsTransport:
     def __init__(self, websocket: WebSocket) -> None:
@@ -205,11 +243,11 @@ def _recover_client_request_id(body: Any) -> str | None:
 
 
 class _JobsContractRoute(APIRoute):
-    """Use the public error envelope for request parsing on ``/api/solve`` only."""
+    """Use the public error envelope for solve submission and planning."""
 
     def get_route_handler(self) -> Callable[[Request], Awaitable[Response]]:
         route_handler = super().get_route_handler()
-        if self.path != "/api/solve":
+        if self.path not in {"/api/solve", "/api/solve/plan"}:
             return route_handler
 
         async def solve_contract_handler(request: Request) -> Response:
@@ -239,6 +277,60 @@ def create_jobs_router(
     router = APIRouter(route_class=_JobsContractRoute)
     router.add_event_handler("startup", runtime.start)
     router.add_event_handler("shutdown", runtime.shutdown)
+
+    @router.post(
+        "/api/solve/plan",
+        response_model=SolvePlanResponse,
+        responses={
+            422: {"model": ErrorEnvelope, "description": "Solve request refused"},
+            503: {"model": ErrorEnvelope, "description": "Engine unavailable"},
+        },
+    )
+    async def plan_solve(body: SolveRequest) -> SolvePlanResponse | JSONResponse:
+        """Resolve the submitted design without allocating or persisting a job."""
+
+        try:
+            resolved = await resolve_submission(body, runtime.engine_registry)
+        except UnknownEngineError as exc:
+            return _error_response(
+                422,
+                code="unknown_engine",
+                stage="planning",
+                message=str(exc),
+                client_request_id=body.client_request_id,
+            )
+        except ImportedSolveRefusal as exc:
+            return _error_response(
+                422,
+                code=exc.reason_code,
+                stage="planning",
+                message=str(exc),
+                details=exc.details,
+                client_request_id=body.client_request_id,
+            )
+        except (SymmetryValidationError, ValueError) as exc:
+            return _error_response(
+                422,
+                code="invalid_solve_plan",
+                stage="planning",
+                message=str(exc),
+                client_request_id=body.client_request_id,
+            )
+        except EngineUnavailableError as exc:
+            return _error_response(
+                503,
+                code="engine_unavailable",
+                stage="planning",
+                message=str(exc),
+                client_request_id=body.client_request_id,
+            )
+        plan = resolved.symmetry_metadata["solver_plan"]
+        return SolvePlanResponse(
+            engine=resolved.engine_name,
+            formulation=plan["formulation"],
+            reason=plan["reason"],
+            eligibility_reasons=[str(reason) for reason in plan["eligibility_reasons"]],
+        )
 
     @router.post(
         "/api/solve",
@@ -407,7 +499,19 @@ def create_jobs_router(
             media_type="application/json",
         )
 
-    @router.post("/api/results/{job_id}/field-plane", response_model=None)
+    @router.post(
+        "/api/results/{job_id}/field-plane",
+        response_model=None,
+        responses={
+            422: {
+                "model": FieldPlane422Response,
+                "description": (
+                    "Invalid field-plane selection, unsupported solve with an "
+                    "actionable remedy, or invalid request body"
+                ),
+            }
+        },
+    )
     async def field_plane(job_id: str, body: FieldPlaneRequest) -> Response:
         """Evaluate one exterior complex-pressure grid from retained traces."""
 
@@ -425,12 +529,20 @@ def create_jobs_router(
                 detail=f"Field-trace artifact is corrupt: {exc}",
             ) from exc
         except FieldPlaneUnsupported as exc:
-            detail: str | dict[str, str] = str(exc)
-            if exc.code is not None:
-                detail = {"code": exc.code, "message": str(exc)}
-                if exc.remedy is not None:
-                    detail["remedy"] = exc.remedy
-            raise HTTPException(status_code=422, detail=detail) from exc
+            if exc.code in {
+                "unsupported_axisymmetric_formulation",
+                "unsupported_coupled_infinite_baffle",
+            } and exc.remedy is not None:
+                return JSONResponse(
+                    status_code=422,
+                    content=FieldPlaneUnavailableResponse(
+                        detail=str(exc),
+                        code=exc.code,
+                        message=str(exc),
+                        remedy=exc.remedy,
+                    ).model_dump(mode="json"),
+                )
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         except FieldPlaneInvalidSelection as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except FieldEvaluationSuperseded as exc:

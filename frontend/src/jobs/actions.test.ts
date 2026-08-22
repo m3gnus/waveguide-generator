@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { hydrateDesignDocument } from '../api/designIo';
 import { designForFamily, serializeDesign } from '../stores/design';
 import type { SolveOptions } from '../stores/solveOptions';
-import { fetchSymmetry, formatApiDetail, getCapabilities, plannedEngineNames, postSymmetry, resolveEngine, submitDesign, submitImported, toSolveDesign } from './actions';
+import { fetchSymmetry, formatApiDetail, getCapabilities, plannedEngineNames, planSolveDesign, postSymmetry, resolveEngine, submitDesign, submitImported, toSolveDesign } from './actions';
 
 describe('API validation errors', () => {
   it('formats structured FastAPI detail arrays with locations', async () => {
@@ -99,6 +99,32 @@ describe('solve submission', () => {
     expect(body?.options).toEqual(options);
     expect(body).toMatchObject({ label: 'atomic', design_revision: 19, design_snapshot: { version: 1 } });
     expect((body?.design_snapshot as { design: unknown }).design).toEqual(body?.design);
+  });
+
+  it('preflights the same design and options that submission will use', async () => {
+    const design = designForFamily('OSSE');
+    design.simulation.sim_type = 'infinite-baffle';
+    const options: SolveOptions = {
+      engine: 'auto', solver_mode: 'full_3d', symmetry: 'auto', mesh_validation_mode: 'warn', verbose: false, frequency_spacing: 'log',
+      polar_config: { angle_range: [0, 180, 37], angle_step: 5, distance: 2, norm_angle: 5, inclination: 45, enabled_axes: ['horizontal'], observation_origin: 'mouth', spherical_sampling: false, field_plane: true },
+    };
+    let path = '';
+    let body: Record<string, unknown> | undefined;
+    const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
+      path = String(input);
+      body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(JSON.stringify({
+        engine: 'bempp', formulation: 'full-3d',
+        reason: "explicit solver_mode='full_3d'", eligibility_reasons: [],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    };
+
+    await expect(planSolveDesign(design, options, fetcher as typeof fetch)).resolves.toEqual({
+      engine: 'bempp', formulation: 'full-3d',
+      reason: "explicit solver_mode='full_3d'", eligibility_reasons: [],
+    });
+    expect(path).toBe('/api/solve/plan');
+    expect(body).toEqual({ design: toSolveDesign(design), options });
   });
 
   it('submits the imported geometry union without a parametric design sibling', async () => {
