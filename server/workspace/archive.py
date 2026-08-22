@@ -169,16 +169,32 @@ def place_run_cad_document(
         return None
     destination_directory = design_folder.joinpath(*segments)
     destination = destination_directory / f"{archive_folder_slug(run_stem, 'run')}{source.suffix}"
+    source_sidecar = source.with_suffix(".json")
+    destination_sidecar = destination.with_suffix(".cad.json")
     relative = f"{'/'.join(segments)}/{destination.name}"
     resolved_root = design_folder.resolve()
     if resolved_root not in destination_directory.resolve().parents and destination_directory.resolve() != resolved_root:
         return None
     if destination.is_symlink():
         return None
+    if destination_sidecar.is_symlink():
+        return None
     if destination.is_file():
         # Byte-identical means the archive already holds it: a retried archive
         # after a restart must be a no-op, not a second write.
-        return relative if destination.read_bytes() == source.read_bytes() else None
+        if destination.read_bytes() != source.read_bytes():
+            return None
+    if source_sidecar.is_file() and destination_sidecar.is_file():
+        # A CAD sidecar is part of the same immutable archive copy. Refuse a
+        # collision rather than replacing metadata that may belong to a file
+        # the user put there.
+        if destination_sidecar.read_bytes() != source_sidecar.read_bytes():
+            return None
+
+    if destination.is_file():
+        if source_sidecar.is_file() and not destination_sidecar.is_file():
+            shutil.copy2(source_sidecar, destination_sidecar)
+        return relative
 
     destination_directory.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=".wg2-run-document-", dir=destination_directory))
@@ -188,9 +204,8 @@ def place_run_cad_document(
         os.replace(staged, destination)
     finally:
         shutil.rmtree(staging, ignore_errors=True)
-    sidecar = source.with_suffix(".json")
-    if sidecar.is_file():
-        shutil.copy2(sidecar, destination.with_suffix(".json"))
+    if source_sidecar.is_file():
+        shutil.copy2(source_sidecar, destination_sidecar)
     return relative
 
 
