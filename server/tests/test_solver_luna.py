@@ -100,6 +100,34 @@ def test_bempp_engine_delegates_axisymmetric_mode_to_portable_runner(
     assert called is True
 
 
+def test_axisymmetric_engine_reports_its_specific_field_trace_limitation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = SolveRequest.model_validate(
+        {
+            "design": {"formula": "OSSE", "simulation": {"solver_mode": "circsym"}},
+            "options": {"engine": "axisym", "solver_mode": "circsym"},
+        }
+    )
+    monkeypatch.setattr(
+        circsym,
+        "solve_circsym_design",
+        lambda *_args, **_kwargs: {"metadata": {}},
+    )
+
+    async def scenario() -> None:
+        outcome = await circsym.AxisymmetricEngine().run(
+            request,
+            cancel_cb=lambda: None,
+            stage_cb=lambda *_args: None,
+        )
+        assert outcome.field_trace_unavailable_reason == (
+            "unsupported_axisymmetric_formulation"
+        )
+
+    asyncio.run(scenario())
+
+
 def test_old_native_helpers_get_explicit_unsupported_option_errors(
     monkeypatch: pytest.MonkeyPatch
 ) -> None:

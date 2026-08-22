@@ -515,6 +515,7 @@ def solve_bempp_from_msh_text(
             channel_count=1,
             enabled=field_plane_enabled,
             supported=aperture_tag is None,
+            unsupported_reason="unsupported_coupled_infinite_baffle",
             cap_bytes=field_trace_cap_bytes,
         )
     )

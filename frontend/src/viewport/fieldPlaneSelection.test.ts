@@ -35,7 +35,8 @@ describe('viewport field-plane job selection', () => {
 
   it('explains why the disabled overlay needs a new solve', () => {
     expect(fieldPlaneUnavailableTooltip([job('legacy', false, 'solve_predates_traces')])).toContain('re-solve');
-    expect(fieldPlaneUnavailableTooltip([job('axisymmetric', false, 'unsupported_solve_mode')])).toContain('full-3D Metal');
+    expect(fieldPlaneUnavailableTooltip([job('axisymmetric', false, 'unsupported_axisymmetric_formulation')])).toContain('Solver mode to Full 3D');
+    expect(fieldPlaneUnavailableTooltip([job('coupled-ib', false, 'unsupported_coupled_infinite_baffle')])).toContain('Simulation type to Free-standing');
     expect(fieldPlaneUnavailableTooltip([job('disabled', false, 'disabled_by_option')])).toContain('Keep field plane data');
   });
 });
