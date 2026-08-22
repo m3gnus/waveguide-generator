@@ -232,3 +232,9 @@ def test_windows_bundle_handoff_runs_from_staged_runtime_before_ntfs_swap(
     assert command[command.index("--staged-runtime-dir") + 1] == str(staged_runtime)
     assert options["creationflags"] != 0
     assert "start_new_session" not in options
+    # Never the staged app directory. Windows keeps an open handle on a
+    # process's current directory, and this process exists precisely to rename
+    # that directory into place; starting it there makes the swap fail with
+    # WinError 32 and roll straight back.
+    assert options["cwd"] == str(data.resolve())
+    assert options["cwd"] != str(staged_app)

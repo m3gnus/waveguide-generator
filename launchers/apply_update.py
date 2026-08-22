@@ -50,6 +50,13 @@ def process_exists(pid: int) -> bool:
         return False
     except PermissionError:
         return True
+    except OSError as exc:
+        # Windows reports a pid that no longer exists as ERROR_INVALID_PARAMETER
+        # (87) from OpenProcess, or ERROR_INVALID_HANDLE (6) -- never as
+        # ProcessLookupError, so the POSIX-shaped check above misses it.
+        if getattr(exc, "winerror", None) in {6, 87}:
+            return False
+        raise
     return True
 
 

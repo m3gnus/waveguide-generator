@@ -406,14 +406,33 @@ def launch_bundle_update_handoff(
         # The relaunch goes through LaunchServices/the exe, which receives no
         # environment; carry --port/--data-dir as explicit CLI arguments.
         command.append(f"--relaunch-arg={argument}")
+    # Not the staged app directory.  Windows keeps an open handle on a
+    # process's current directory, so an updater started inside
+    # ``<data>/updates/<version>/staged/app`` cannot rename that very directory
+    # into place: the swap fails with WinError 32 and rolls itself back. The
+    # data directory is outside both the staged tree and the bundle, and is
+    # never renamed.
     options: dict[str, object] = {
-        "cwd": str(request.staged_app_dir),
+        "cwd": str(data_dir),
         "env": environment,
         "stdin": subprocess.DEVNULL,
         "stdout": subprocess.DEVNULL,
         "stderr": subprocess.DEVNULL,
         "close_fds": True,
     }
+    # An updater that dies before it opens its own log leaves no trace at all,
+    # which is the difference between a five-minute diagnosis and a blind one.
+    # Send whatever it prints to the log directory it would have written to.
+    handoff_log = None
+    try:
+        log_directory = data_dir / "logs"
+        log_directory.mkdir(parents=True, exist_ok=True)
+        handoff_log = (log_directory / "update-handoff.log").open("a", encoding="utf-8")
+    except OSError:
+        handoff_log = None
+    if handoff_log is not None:
+        options["stdout"] = handoff_log
+        options["stderr"] = subprocess.STDOUT
     if selected_platform == "win32":
         options["creationflags"] = getattr(
             subprocess,
@@ -426,3 +445,6 @@ def launch_bundle_update_handoff(
         subprocess.Popen(command, **options)
     except OSError as exc:
         raise UpdateHandoffError(f"Could not start the bundle updater: {exc}") from exc
+    finally:
+        if handoff_log is not None:
+            handoff_log.close()
