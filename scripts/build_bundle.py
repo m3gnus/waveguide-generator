@@ -35,7 +35,8 @@ if str(_IMPORT_ROOT) not in sys.path:
 from scripts import fetch_spa  # noqa: E402
 from launchers.macos import generate_icon  # noqa: E402
 from server.platform.paths import app_root  # noqa: E402
-from shared.runtime_id import runtime_id_from_files  # noqa: E402
+from shared.runtime_id import compute_runtime_id  # noqa: E402
+from shared.safe_names import UnsafeName, collision_key, validate_relative_name  # noqa: E402
 
 
 REPO_ROOT = app_root()
@@ -44,6 +45,11 @@ REPO_ROOT = app_root()
 # the full string so a later uv catalog update cannot silently change a layer.
 PYTHON_VERSION = "3.13.12"
 PYTHON_SERIES = "3.13"
+# python-build-standalone records this release identifier in the root BUILD
+# file. uv's version catalog may otherwise move a Python patch request to a
+# newer standalone build without changing PYTHON_VERSION.
+PYTHON_BUILD = "20260325"
+RUNTIME_RECIPE = "wg2-bundle-runtime-v2"
 MACOS_PLATFORM = "macos-arm64"
 WINDOWS_PLATFORM = "windows-x86_64"
 WINDOWS_TARGET = "x86_64-pc-windows-msvc"
@@ -58,6 +64,7 @@ APP_SOURCE_DIRECTORIES = (
     "docs",
 )
 APP_SOURCE_FILES = ("LICENSE", "README.md")
+APP_EXCLUDED_DIRECTORIES = frozenset({"test", "tests", "__pycache__"})
 PRUNE_RELATIVE_PATHS = (
     "lib/python3.13/idlelib",
     "lib/python3.13/tkinter",
@@ -140,6 +147,7 @@ def write_json(path: Path, payload: dict[str, object]) -> None:
     path.write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
+        newline="\n",
     )
 
 
@@ -170,14 +178,23 @@ def write_runtime_manifest(
     runtime_id: str,
     requirements: bytes,
     pins: bytes,
+    lock: bytes,
+    python_build: str,
+    runtime_recipe: str,
     platform_name: str = MACOS_PLATFORM,
 ) -> dict[str, object]:
     payload: dict[str, object] = {
         "schemaVersion": 1,
         "python": python_version,
+        "pythonBuild": python_build,
+        "pythonDistribution": (
+            f"cpython-{python_version}+{python_build}-python-build-standalone"
+        ),
         "platform": platform_name,
         "requirementsSha256": sha256_bytes(requirements),
         "pinsSha256": sha256_bytes(pins),
+        "lockSha256": sha256_bytes(lock),
+        "runtimeRecipe": runtime_recipe,
         "runtimeId": runtime_id,
     }
     if platform_name == WINDOWS_PLATFORM:
@@ -185,7 +202,11 @@ def write_runtime_manifest(
         # refresh them without the updater carrying a second, driftable copy of
         # this list: a runtime built for a later Python names its own DLLs.
         payload["launcherFiles"] = [
-            {"source": source, "destination": destination}
+            {
+                "source": source,
+                "destination": destination,
+                "sha256": file_sha256(runtime_root / source),
+            }
             for source, destination in windows_launcher_files(
                 python_version.rsplit(".", 1)[0] if python_version.count(".") > 1 else PYTHON_SERIES
             )
@@ -266,15 +287,44 @@ def _allowed_app_path(path: PurePosixPath) -> bool:
     return any(value.startswith(directory + "/") for directory in APP_SOURCE_DIRECTORIES)
 
 
-def git_tracked_app_files(
+def _excluded_app_path(path: PurePosixPath) -> bool:
+    return any(part in APP_EXCLUDED_DIRECTORIES for part in path.parts) or path.suffix == ".pyc"
+
+
+def _validate_app_paths(paths: Iterable[PurePosixPath]) -> None:
+    siblings: dict[PurePosixPath, dict[str, str]] = {}
+    for path in paths:
+        parent = PurePosixPath()
+        for component in path.parts:
+            try:
+                component.encode("utf-8")
+                validate_relative_name(component, what=f"app path component in {path.as_posix()!r}")
+            except (UnicodeEncodeError, UnsafeName) as exc:
+                raise BundleError(f"Git names an unsafe platform-neutral app path: {exc}") from exc
+            key = collision_key(component)
+            existing = siblings.setdefault(parent, {}).setdefault(key, component)
+            if existing != component:
+                raise BundleError(
+                    "Git app paths collide on a case-insensitive filesystem: "
+                    f"{(parent / existing).as_posix()!r} and "
+                    f"{(parent / component).as_posix()!r}"
+                )
+            parent /= component
+
+
+def _git_tracked_app_entries(
     repo_root: Path,
     *,
-    runner: RunCallable = subprocess.run,
-) -> tuple[PurePosixPath, ...]:
+    commit: str,
+    runner: RunCallable,
+) -> tuple[tuple[PurePosixPath, str], ...]:
     command = [
         "git",
-        "ls-files",
+        "ls-tree",
+        "-r",
         "-z",
+        "--full-tree",
+        commit,
         "--",
         *APP_SOURCE_DIRECTORIES,
         *APP_SOURCE_FILES,
@@ -282,36 +332,82 @@ def git_tracked_app_files(
     result = runner(command, cwd=repo_root, check=False, capture_output=True)
     if result.returncode != 0:
         stderr = os.fsdecode(result.stderr or b"").strip()
-        raise BundleError(f"git ls-files failed: {stderr or f'exit {result.returncode}'}")
+        raise BundleError(f"git ls-tree failed: {stderr or f'exit {result.returncode}'}")
     stdout = result.stdout
     encoded = stdout if isinstance(stdout, bytes) else stdout.encode()
-    paths = tuple(PurePosixPath(os.fsdecode(item)) for item in encoded.split(b"\0") if item)
-    refused = [path.as_posix() for path in paths if not _allowed_app_path(path)]
+    entries: list[tuple[PurePosixPath, str]] = []
+    refused: list[str] = []
+    for record in encoded.split(b"\0"):
+        if not record:
+            continue
+        try:
+            metadata, raw_path = record.split(b"\t", 1)
+            mode, object_type, object_id = os.fsdecode(metadata).split()
+        except ValueError as exc:
+            raise BundleError(f"git ls-tree returned a malformed entry: {record!r}") from exc
+        path = PurePosixPath(os.fsdecode(raw_path))
+        if not _allowed_app_path(path):
+            refused.append(path.as_posix())
+            continue
+        if _excluded_app_path(path):
+            continue
+        if object_type != "blob" or mode not in {"100644", "100755"}:
+            raise BundleError(
+                f"Tracked app source is not a regular Git blob: {path.as_posix()} "
+                f"({mode} {object_type})"
+            )
+        entries.append((path, object_id))
     if refused:
-        raise BundleError(f"git ls-files returned paths outside the app filter: {refused}")
-    return tuple(sorted(paths, key=lambda item: item.as_posix()))
+        raise BundleError(f"git ls-tree returned paths outside the app filter: {refused}")
+    entries.sort(key=lambda item: item[0].as_posix())
+    _validate_app_paths(path for path, _object_id in entries)
+    return tuple(entries)
+
+
+def git_tracked_app_files(
+    repo_root: Path,
+    *,
+    commit: str = "HEAD",
+    runner: RunCallable = subprocess.run,
+) -> tuple[PurePosixPath, ...]:
+    return tuple(
+        path
+        for path, _object_id in _git_tracked_app_entries(
+            repo_root,
+            commit=commit,
+            runner=runner,
+        )
+    )
 
 
 def copy_tracked_app_files(
     repo_root: Path,
     destination: Path,
     *,
+    commit: str = "HEAD",
     runner: RunCallable = subprocess.run,
 ) -> tuple[PurePosixPath, ...]:
-    """Copy only Git-tracked app sources; ignored and untracked files cannot enter."""
+    """Materialize exact app blobs from ``commit``, never checkout-filtered bytes."""
 
-    tracked = git_tracked_app_files(repo_root, runner=runner)
-    for relative in tracked:
-        source = repo_root.joinpath(*relative.parts)
+    entries = _git_tracked_app_entries(repo_root, commit=commit, runner=runner)
+    for relative, object_id in entries:
         target = destination.joinpath(*relative.parts)
-        if not source.is_file() and not source.is_symlink():
-            raise BundleError(f"Tracked app source is missing or not a file: {relative}")
+        result = runner(
+            ["git", "cat-file", "blob", object_id],
+            cwd=repo_root,
+            check=False,
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            stderr = os.fsdecode(result.stderr or b"").strip()
+            raise BundleError(
+                f"git cat-file failed for {relative.as_posix()}: "
+                f"{stderr or f'exit {result.returncode}'}"
+            )
+        payload = result.stdout if isinstance(result.stdout, bytes) else result.stdout.encode()
         target.parent.mkdir(parents=True, exist_ok=True)
-        if source.is_symlink():
-            target.symlink_to(os.readlink(source))
-        else:
-            shutil.copy2(source, target)
-    return tracked
+        target.write_bytes(payload)
+    return tuple(path for path, _object_id in entries)
 
 
 def _validated_existing_spa(repo_root: Path, version: str) -> Path:
@@ -331,15 +427,30 @@ def _validated_existing_spa(repo_root: Path, version: str) -> Path:
             "tarball instead of packaging a local build."
         ) from exc
     digest = stamp.get("sha256") if isinstance(stamp, dict) else None
+    try:
+        expected_tree = (dist / fetch_spa.TREE_STAMP_NAME).read_text(
+            encoding="ascii"
+        ).strip()
+    except OSError:
+        expected_tree = None
     if (
         not isinstance(stamp, dict)
         or stamp.get("version") != version
         or not isinstance(digest, str)
         or fetch_spa.DIGEST_RE.fullmatch(digest.lower()) is None
+        or not isinstance(expected_tree, str)
+        or fetch_spa.DIGEST_RE.fullmatch(expected_tree.lower()) is None
     ):
         raise BundleError(
             f"frontend/dist does not contain a verified release stamp for {version}. "
             "Pass --spa with the matching release SPA tarball."
+        )
+    actual_tree = fetch_spa.tree_digest(dist)
+    if actual_tree != expected_tree.lower():
+        raise BundleError(
+            "frontend/dist changed after its release archive was verified: "
+            f"tree digest {actual_tree} does not match its stamp. Pass --spa with "
+            "the matching release SPA tarball."
         )
     return dist
 
@@ -428,8 +539,9 @@ def windows_desktop_bootstrap() -> str:
     """Start the desktop only for a direct launch of the renamed GUI executable.
 
     The same executable is deliberately usable as ``sys.executable`` by server
-    workers.  For a script, ``-m`` or ``-c`` invocation, ``sys.argv[0]`` is not
-    the launcher filename and importing this module only establishes the path.
+    workers. CPython represents a true no-script launch as ``sys.argv == ['']``;
+    every script, ``-m`` and ``-c`` invocation only receives the bundle
+    environment and continues through the interpreter normally.
     """
 
     return '''"""Bootstrap the double-clickable Windows executable."""
@@ -442,20 +554,18 @@ import sys
 import traceback
 
 
-def _is_direct_launch() -> bool:
-    return Path(sys.argv[0]).name.casefold() == "waveguide generator.exe"
+bundle_root = Path(sys.executable).resolve().parent
+app_root = bundle_root / "app"
+os.environ["WG2_BUNDLE"] = "1"
+os.environ["WG2_APP_ROOT"] = str(app_root)
+local_app_data = os.environ.get("LOCALAPPDATA")
+cache_base = Path(local_app_data) if local_app_data else Path.home() / "AppData" / "Local"
+cache_root = cache_base / "WaveguideGenerator" / "cache"
+os.environ.setdefault("PYTHONPYCACHEPREFIX", str(cache_root / "pycache"))
+os.environ.setdefault("NUMBA_CACHE_DIR", str(cache_root / "numba"))
 
 
-if _is_direct_launch():
-    bundle_root = Path(sys.executable).resolve().parent
-    app_root = bundle_root / "app"
-    os.environ["WG2_BUNDLE"] = "1"
-    os.environ["WG2_APP_ROOT"] = str(app_root)
-    local_app_data = os.environ.get("LOCALAPPDATA")
-    if local_app_data:
-        cache_root = Path(local_app_data) / "WaveguideGenerator" / "cache"
-        os.environ.setdefault("PYTHONPYCACHEPREFIX", str(cache_root / "pycache"))
-        os.environ.setdefault("NUMBA_CACHE_DIR", str(cache_root / "numba"))
+if sys.argv == [""]:
     try:
         os.chdir(app_root)
         from launchers.desktop import main
@@ -617,8 +727,45 @@ def deterministic_zip(
 
 def write_checksum(asset: Path) -> Path:
     sidecar = asset.with_name(asset.name + ".sha256")
-    sidecar.write_text(f"{file_sha256(asset)}  {asset.name}\n", encoding="ascii")
+    sidecar.write_text(
+        f"{file_sha256(asset)}  {asset.name}\n",
+        encoding="ascii",
+        newline="\n",
+    )
     return sidecar
+
+
+def prepare_output_directory(output: Path) -> None:
+    """Create a new output directory or refuse one containing stale assets."""
+
+    if output.exists():
+        if not output.is_dir():
+            raise BundleError(f"Bundle output is not a directory: {output}")
+        existing = sorted(path.name for path in output.iterdir())
+        if existing:
+            preview = ", ".join(existing[:5])
+            suffix = " ..." if len(existing) > 5 else ""
+            raise BundleError(
+                f"Bundle output directory must be empty: {output} contains {preview}{suffix}"
+            )
+        return
+    output.mkdir(parents=True)
+
+
+def require_python_build(runtime_root: Path, expected: str) -> None:
+    """Require uv's managed Python to carry the pinned standalone build marker."""
+
+    try:
+        installed = (runtime_root / "BUILD").read_text(encoding="ascii").strip()
+    except OSError as exc:
+        raise BundleError(
+            "The managed Python has no readable python-build-standalone BUILD marker"
+        ) from exc
+    if installed != expected:
+        raise BundleError(
+            "uv installed python-build-standalone build "
+            f"{installed!r}, expected the pinned build {expected!r}."
+        )
 
 
 def declared_version(repo_root: Path) -> str:
@@ -688,12 +835,57 @@ class BundleBuilder:
             raise BundleError(f"git rev-parse returned an invalid commit: {commit!r}")
         return commit
 
+    def require_clean_worktree(self) -> None:
+        result = self.runner(
+            ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+            cwd=self.repo_root,
+            check=False,
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            stderr = os.fsdecode(result.stderr or b"").strip()
+            raise BundleError(f"git status failed: {stderr or f'exit {result.returncode}'}")
+        stdout = result.stdout
+        dirty = stdout if isinstance(stdout, bytes) else stdout.encode()
+        if dirty:
+            entries = [
+                os.fsdecode(entry).strip()
+                for entry in dirty.split(b"\0")
+                if entry
+            ]
+            preview = ", ".join(entries[:5])
+            suffix = " ..." if len(entries) > 5 else ""
+            raise BundleError(
+                "Release bundles require a clean Git worktree; found: "
+                f"{preview}{suffix}"
+            )
+
+    def git_blob(self, commit: str, relative: PurePosixPath) -> bytes:
+        result = self.runner(
+            ["git", "cat-file", "blob", f"{commit}:{relative.as_posix()}"],
+            cwd=self.repo_root,
+            check=False,
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            stderr = os.fsdecode(result.stderr or b"").strip()
+            raise BundleError(
+                f"Could not read {relative.as_posix()} from commit {commit}: "
+                f"{stderr or f'exit {result.returncode}'}"
+            )
+        return result.stdout if isinstance(result.stdout, bytes) else result.stdout.encode()
+
     def build_runtime(
         self,
         destination: Path,
         *,
         python_version: str,
+        python_build: str,
+        runtime_recipe: str,
         runtime_id: str,
+        requirements: bytes,
+        pins: bytes,
+        lock: bytes,
         platform_name: str = MACOS_PLATFORM,
     ) -> None:
         install_parent = destination.parent / "python-install"
@@ -736,8 +928,17 @@ class BundleBuilder:
         )
         if not installed_root.is_relative_to(install_parent.resolve()):
             raise BundleError(f"uv resolved the installed Python outside {install_parent}")
+        require_python_build(installed_root, python_build)
         shutil.move(str(installed_root), destination)
         runtime_python = destination / relative_python
+        inputs = destination.parent / "runtime-inputs"
+        inputs.mkdir()
+        requirements_path = inputs / "requirements-runtime.txt"
+        pins_path = inputs / "requirements-pins.txt"
+        lock_path = inputs / "requirements-lock.txt"
+        requirements_path.write_bytes(requirements)
+        pins_path.write_bytes(pins)
+        lock_path.write_bytes(lock)
         self.run_command(
             [
                 "uv",
@@ -746,12 +947,15 @@ class BundleBuilder:
                 "--python",
                 str(runtime_python),
                 "--no-cache",
+                "-c",
+                str(lock_path),
                 "-r",
-                str(self.repo_root / "server" / "requirements-runtime.txt"),
+                str(requirements_path),
                 "-r",
-                str(self.repo_root / "server" / "requirements-pins.txt"),
+                str(pins_path),
             ]
         )
+        self.run_command(["uv", "pip", "check", "--python", str(runtime_python)])
         helper = destination / METAL_HELPER
         if platform_name == MACOS_PLATFORM and self.machine() == "arm64" and not helper.is_file():
             raise BundleError(
@@ -769,8 +973,11 @@ class BundleBuilder:
             destination,
             python_version=python_version,
             runtime_id=runtime_id,
-            requirements=(self.repo_root / "server" / "requirements-runtime.txt").read_bytes(),
-            pins=(self.repo_root / "server" / "requirements-pins.txt").read_bytes(),
+            requirements=requirements,
+            pins=pins,
+            lock=lock,
+            python_build=python_build,
+            runtime_recipe=runtime_recipe,
             platform_name=platform_name,
         )
 
@@ -781,9 +988,15 @@ class BundleBuilder:
         version: str,
         runtime_id: str,
         spa: Path | None,
+        commit: str,
     ) -> dict[str, object]:
         destination.mkdir()
-        tracked = copy_tracked_app_files(self.repo_root, destination, runner=self.runner)
+        tracked = copy_tracked_app_files(
+            self.repo_root,
+            destination,
+            commit=commit,
+            runner=self.runner,
+        )
         print(f"Copied {len(tracked)} tracked app files.")
         install_spa_layer(
             destination,
@@ -797,7 +1010,7 @@ class BundleBuilder:
         return write_app_manifest(
             destination,
             version=version,
-            commit=self.git_commit(),
+            commit=commit,
             runtime_id=runtime_id,
         )
 
@@ -1081,19 +1294,30 @@ def build(args: argparse.Namespace, *, builder: BundleBuilder | None = None) -> 
             f"The desktop layout requires a {PYTHON_SERIES}.x Python version, "
             f"not {args.python_version!r}"
         )
+    if args.runtime_only or args.app_only:
+        raise BundleError(
+            "Layer-only builds are disabled because they cannot receive the relocated "
+            "runtime and server verification required for publishable assets."
+        )
 
+    builder.require_clean_worktree()
+    commit = builder.git_commit()
     version = declared_version(builder.repo_root)
-    requirements_path = builder.repo_root / "server" / "requirements-runtime.txt"
-    pins_path = builder.repo_root / "server" / "requirements-pins.txt"
-    runtime_id = runtime_id_from_files(
-        requirements_path,
-        pins_path,
+    requirements = builder.git_blob(commit, PurePosixPath("server/requirements-runtime.txt"))
+    pins = builder.git_blob(commit, PurePosixPath("server/requirements-pins.txt"))
+    lock = builder.git_blob(commit, PurePosixPath("server/requirements-lock.txt"))
+    runtime_id = compute_runtime_id(
+        requirements,
+        pins,
+        lock,
         args.python_version,
+        PYTHON_BUILD,
+        RUNTIME_RECIPE,
     )
     output = args.output
     if not output.is_absolute():
         output = builder.repo_root / output
-    output.mkdir(parents=True, exist_ok=True)
+    prepare_output_directory(output)
     assets: list[Path] = []
 
     with tempfile.TemporaryDirectory(prefix="wg-bundle-") as raw_scratch:
@@ -1105,7 +1329,12 @@ def build(args: argparse.Namespace, *, builder: BundleBuilder | None = None) -> 
             builder.build_runtime(
                 runtime_root,
                 python_version=args.python_version,
+                python_build=PYTHON_BUILD,
+                runtime_recipe=RUNTIME_RECIPE,
                 runtime_id=runtime_id,
+                requirements=requirements,
+                pins=pins,
+                lock=lock,
                 platform_name=platform_name,
             )
             runtime_asset = output / (
@@ -1120,15 +1349,17 @@ def build(args: argparse.Namespace, *, builder: BundleBuilder | None = None) -> 
                 version=version,
                 runtime_id=runtime_id,
                 spa=args.spa,
+                commit=commit,
             )
             app_asset = output / f"waveguide-generator-app-{version}.zip"
-            # Canonical modes avoid NTFS/POSIX checkout differences. Both CI
-            # jobs run the same pinned CPython/zlib and file bytes are never
-            # transformed; the Windows job compares this archive byte-for-byte.
+            # Canonical modes avoid NTFS/POSIX checkout differences. Storing
+            # the platform-neutral layer avoids relying on two runners' zlib
+            # implementations to emit the same deflate stream.
             deterministic_zip(
                 app_root,
                 app_asset,
                 canonical_modes=True,
+                compression=zipfile.ZIP_STORED,
             )
             _register_asset(assets, app_asset)
             manifest_asset = output / (f"waveguide-generator-app-{version}.manifest.json")
@@ -1144,7 +1375,9 @@ def build(args: argparse.Namespace, *, builder: BundleBuilder | None = None) -> 
                     app_root=app_root,
                     version=version,
                 )
-                installer_asset = output / (f"Waveguide Generator-{version}-macos-arm64.dmg")
+                installer_asset = output / (
+                    f"Waveguide.Generator-{version}-macos-arm64.dmg"
+                )
                 if installer_asset.exists():
                     installer_asset.unlink()
                 builder.create_dmg(bundle, installer_asset, scratch / "dmg-staging")
@@ -1155,7 +1388,9 @@ def build(args: argparse.Namespace, *, builder: BundleBuilder | None = None) -> 
                     runtime_root=runtime_root,
                     app_root=app_root,
                 )
-                installer_asset = output / (f"Waveguide Generator-{version}-windows-x86_64.zip")
+                installer_asset = output / (
+                    f"Waveguide.Generator-{version}-windows-x86_64.zip"
+                )
                 deterministic_zip(
                     bundle,
                     installer_asset,

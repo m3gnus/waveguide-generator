@@ -247,6 +247,25 @@ def test_linux_window_request_reports_and_uses_status_fallback(
     assert seen == [["--browser", "--port", "3199"]]
 
 
+def test_bundle_failure_dialog_uses_valid_macos_applescript(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(desktop.sys, "platform", "darwin")
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        desktop.subprocess,
+        "run",
+        lambda command, **_kwargs: commands.append(command),
+    )
+
+    desktop._show_bundle_failure_dialog('Update failed at "app"')
+
+    assert commands[0][0] == "/usr/bin/osascript"
+    script = " ".join(commands[0])
+    assert 'buttons {"OK"} default button "OK" with icon stop' in script
+    assert commands[0][-1] == 'Update failed at "app"'
+
+
 class SequencedController(StubController):
     """A controller whose polls replay a scripted sequence of snapshots."""
 
@@ -446,11 +465,22 @@ def test_first_healthy_bundle_start_removes_previous_layers_and_resigns(
     previous = resources / "app.previous"
     app.mkdir(parents=True)
     previous.mkdir()
+    (resources / "runtime").mkdir()
     downloads = tmp_path / "data" / "updates" / "1.2.3" / "downloads"
     downloads.mkdir(parents=True)
     (downloads / "waveguide-generator-app-1.2.3.zip").write_bytes(b"zip")
     controller = BundleController(app, tmp_path / "data")
     webview, _created = _stub_webview()
+    event_loop_started: list[bool] = []
+
+    def start(*, func) -> None:
+        # HTTP is already healthy, but rollback must remain until pywebview
+        # actually enters its event-loop callback.
+        assert previous.exists()
+        event_loop_started.append(True)
+        func()
+
+    webview.start = start
     monkeypatch.setitem(sys.modules, "webview", webview)
     repaired: list[Path] = []
     monkeypatch.setattr(
@@ -462,6 +492,7 @@ def test_first_healthy_bundle_start_removes_previous_layers_and_resigns(
     assert desktop.DesktopWindow(controller, poll_interval=0).run() == 0  # type: ignore[arg-type]
 
     assert not previous.exists()
+    assert event_loop_started == [True]
     assert not (tmp_path / "data" / "updates").exists()
     assert repaired == [tmp_path / "Waveguide Generator.app"]
     log_text = (tmp_path / "data" / "logs" / "update.log").read_text(encoding="utf-8")
@@ -478,6 +509,7 @@ def test_failed_new_bundle_start_rolls_back_and_reports_the_result(
     previous = resources / "app.previous"
     app.mkdir(parents=True)
     previous.mkdir()
+    (resources / "runtime").mkdir()
     (app / "marker").write_text("new", encoding="utf-8")
     (previous / "marker").write_text("old", encoding="utf-8")
     controller = BundleController(
@@ -488,7 +520,7 @@ def test_failed_new_bundle_start_rolls_back_and_reports_the_result(
     reported: list[str] = []
     shown: list[str] = []
     monkeypatch.setattr(desktop, "_report_startup_failure", reported.append)
-    monkeypatch.setattr(desktop, "_show_startup_failure_dialog", shown.append)
+    monkeypatch.setattr(desktop, "_show_bundle_failure_dialog", shown.append)
     monkeypatch.setattr(desktop, "repair_bundle", lambda *_args, **_kwargs: None)
 
     assert desktop.DesktopWindow(controller, poll_interval=0).run() == 1  # type: ignore[arg-type]
@@ -502,3 +534,210 @@ def test_failed_new_bundle_start_rolls_back_and_reports_the_result(
     assert "Restored the previous bundle layers" in (
         tmp_path / "data" / "logs" / "update.log"
     ).read_text(encoding="utf-8")
+
+
+def test_missing_pywebview_rolls_back_bundle_after_http_readiness(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(desktop.sys, "platform", "darwin")
+    resources = tmp_path / "Waveguide Generator.app" / "Contents" / "Resources"
+    app = resources / "app"
+    previous = resources / "app.previous"
+    runtime = resources / "runtime"
+    app.mkdir(parents=True)
+    previous.mkdir()
+    runtime.mkdir()
+    (app / "marker").write_text("new", encoding="utf-8")
+    (previous / "marker").write_text("old", encoding="utf-8")
+    controller = BundleController(app, tmp_path / "data")
+
+    def missing(_name: str) -> ModuleType:
+        raise ModuleNotFoundError("No module named 'webview'", name="webview")
+
+    monkeypatch.setattr(desktop.importlib, "import_module", missing)
+    monkeypatch.setattr(desktop, "repair_bundle", lambda *_args, **_kwargs: None)
+    reported: list[str] = []
+    shown: list[str] = []
+    monkeypatch.setattr(desktop, "_report_startup_failure", reported.append)
+    monkeypatch.setattr(desktop, "_show_bundle_failure_dialog", shown.append)
+
+    assert desktop.DesktopWindow(controller, poll_interval=0).run() == 1  # type: ignore[arg-type]
+    assert (app / "marker").read_text(encoding="utf-8") == "old"
+    assert not previous.exists()
+    assert "pywebview is unavailable" in reported[0]
+    assert "previous version was restored" in reported[0]
+    assert shown == reported
+
+
+def test_macos_cleanup_sign_failure_restores_rollback_material(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(desktop.sys, "platform", "darwin")
+    resources = tmp_path / "Waveguide Generator.app" / "Contents" / "Resources"
+    app = resources / "app"
+    previous = resources / "app.previous"
+    app.mkdir(parents=True)
+    previous.mkdir()
+    (resources / "runtime").mkdir()
+    downloads = tmp_path / "data" / "updates" / "1.2.3" / "downloads"
+    downloads.mkdir(parents=True)
+    controller = BundleController(app, tmp_path / "data")
+    webview, _created = _stub_webview()
+    monkeypatch.setitem(sys.modules, "webview", webview)
+    repair_calls = 0
+
+    def repair(_bundle: Path, **_kwargs: object) -> None:
+        nonlocal repair_calls
+        repair_calls += 1
+        if repair_calls == 1:
+            raise desktop.ApplyUpdateError("injected verification failure")
+
+    monkeypatch.setattr(desktop, "repair_bundle", repair)
+    reported: list[str] = []
+    shown: list[str] = []
+    monkeypatch.setattr(desktop, "_report_startup_failure", reported.append)
+    monkeypatch.setattr(desktop, "_show_bundle_failure_dialog", shown.append)
+
+    assert desktop.DesktopWindow(controller, poll_interval=0).run() == 0  # type: ignore[arg-type]
+    assert previous.is_dir()
+    assert downloads.is_dir()
+    assert repair_calls == 2
+    assert "rollback material was restored" in reported[0].casefold()
+    assert shown == reported
+
+
+def test_startup_recovers_a_missing_live_layer_before_starting_the_server(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(desktop.sys, "platform", "darwin")
+    resources = tmp_path / "Waveguide Generator.app" / "Contents" / "Resources"
+    app = resources / "app"
+    runtime_previous = resources / "runtime.previous"
+    app.mkdir(parents=True)
+    runtime_previous.mkdir()
+    (runtime_previous / "marker").write_text("old runtime", encoding="utf-8")
+
+    class RecoveryController(BundleController):
+        def start(self) -> StatusSnapshot:
+            assert (resources / "runtime" / "marker").read_text() == "old runtime"
+            return super().start()
+
+    controller = RecoveryController(app, tmp_path / "data")
+    webview, _created = _stub_webview()
+    monkeypatch.setitem(sys.modules, "webview", webview)
+    repaired: list[Path] = []
+    monkeypatch.setattr(
+        desktop,
+        "repair_bundle",
+        lambda bundle, **_kwargs: repaired.append(bundle),
+    )
+
+    assert desktop.DesktopWindow(controller, poll_interval=0).run() == 0  # type: ignore[arg-type]
+    assert (resources / "runtime" / "marker").read_text() == "old runtime"
+    assert not runtime_previous.exists()
+    assert repaired == [tmp_path / "Waveguide Generator.app"]
+
+
+def test_second_bundle_update_with_pending_previous_stays_visible_and_running(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(desktop.sys, "platform", "darwin")
+    resources = tmp_path / "Waveguide Generator.app" / "Contents" / "Resources"
+    app = resources / "app"
+    app.mkdir(parents=True)
+    (resources / "runtime").mkdir()
+    (resources / "app.previous").mkdir()
+    staged_app = tmp_path / "data" / "updates" / "1.2.3" / "staged" / "app"
+    staged_app.mkdir(parents=True)
+    warning = StatusSnapshot(
+        backend=LampStatus(ServiceState.OK, "Healthy"),
+        frontend=LampStatus(ServiceState.WARNING, "SPA stale"),
+        url="http://127.0.0.1:3199/",
+        pid=123,
+        exit_code=None,
+    )
+    controller = BundleController(app, tmp_path / "data", poll_snapshot=warning)
+    controller.update_requests = [BundleUpdateRequest("1.2.3", staged_app, None)]
+    webview, window = _live_webview(polls=2)
+    monkeypatch.setitem(sys.modules, "webview", webview)
+    reported: list[str] = []
+    shown: list[str] = []
+    monkeypatch.setattr(desktop, "_report_startup_failure", reported.append)
+    monkeypatch.setattr(desktop, "_show_bundle_failure_dialog", shown.append)
+
+    assert desktop.DesktopWindow(controller, poll_interval=0, update_ready_delay=0).run() == 0  # type: ignore[arg-type]
+    assert controller.launched == []
+    assert controller.closes == 1
+    assert window.destroyed == 0
+    assert "rollback material from an earlier update" in reported[0]
+    assert "current version remains open" in reported[0]
+    assert shown == reported
+
+
+def test_failed_bundle_handoff_restarts_before_claiming_current_version_is_open(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(desktop.sys, "platform", "darwin")
+    resources = tmp_path / "Waveguide Generator.app" / "Contents" / "Resources"
+    app = resources / "app"
+    app.mkdir(parents=True)
+    (resources / "runtime").mkdir()
+    staged_app = tmp_path / "data" / "updates" / "1.2.3" / "staged" / "app"
+    staged_app.mkdir(parents=True)
+    controller = BundleController(app, tmp_path / "data")
+    controller.update_requests = [BundleUpdateRequest("1.2.3", staged_app, None)]
+    controller.handoff_error = "updater spawn failed"
+    webview, window = _live_webview(polls=3)
+    monkeypatch.setitem(sys.modules, "webview", webview)
+    reported: list[str] = []
+    shown: list[str] = []
+    monkeypatch.setattr(desktop, "_report_startup_failure", reported.append)
+    monkeypatch.setattr(desktop, "_show_bundle_failure_dialog", shown.append)
+
+    assert desktop.DesktopWindow(controller, poll_interval=0, update_ready_delay=0).run() == 0  # type: ignore[arg-type]
+    assert controller.starts == 2
+    assert window.destroyed == 0
+    assert "was restarted and remains open" in reported[0]
+    assert shown == reported
+
+
+def test_failed_bundle_handoff_and_restart_close_the_dead_window(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(desktop.sys, "platform", "darwin")
+    resources = tmp_path / "Waveguide Generator.app" / "Contents" / "Resources"
+    app = resources / "app"
+    app.mkdir(parents=True)
+    (resources / "runtime").mkdir()
+    staged_app = tmp_path / "data" / "updates" / "1.2.3" / "staged" / "app"
+    staged_app.mkdir(parents=True)
+
+    class RestartFailureController(BundleController):
+        def start(self) -> StatusSnapshot:
+            if self.starts:
+                self.starts += 1
+                return _snapshot(ServiceState.ERROR)
+            return super().start()
+
+    controller = RestartFailureController(app, tmp_path / "data")
+    controller.update_requests = [BundleUpdateRequest("1.2.3", staged_app, None)]
+    controller.handoff_error = "updater spawn failed"
+    webview, window = _live_webview(polls=3)
+    monkeypatch.setitem(sys.modules, "webview", webview)
+    reported: list[str] = []
+    shown: list[str] = []
+    monkeypatch.setattr(desktop, "_report_startup_failure", reported.append)
+    monkeypatch.setattr(desktop, "_show_bundle_failure_dialog", shown.append)
+
+    assert desktop.DesktopWindow(controller, poll_interval=0, update_ready_delay=0).run() == 1  # type: ignore[arg-type]
+    assert controller.starts == 2
+    assert window.destroyed == 1
+    assert "also could not restart" in reported[0]
+    assert "unusable window was closed" in reported[0]
+    assert shown == reported

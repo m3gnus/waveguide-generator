@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import subprocess
 
@@ -193,6 +194,14 @@ def test_bundle_handoff_uses_the_staged_updater_and_new_runtime(
     assert command[command.index("--parent-pid") + 1] == "4321"
     assert command[command.index("--bundle") + 1] == str(tmp_path / "Waveguide Generator.app")
     assert options["start_new_session"] is True
+    assert options["cwd"] == str(data.resolve())
+    assert options["cwd"] not in {
+        str(staged_app),
+        str(staged_runtime),
+        str(app_layer),
+        str(app_layer.parent / "runtime"),
+    }
+    assert str(staged_app) == options["env"]["PYTHONPATH"].split(os.pathsep)[0]
 
 
 def test_windows_bundle_handoff_runs_from_staged_runtime_before_ntfs_swap(
@@ -232,3 +241,10 @@ def test_windows_bundle_handoff_runs_from_staged_runtime_before_ntfs_swap(
     assert command[command.index("--staged-runtime-dir") + 1] == str(staged_runtime)
     assert options["creationflags"] != 0
     assert "start_new_session" not in options
+    assert options["cwd"] == str(data.resolve())
+    assert options["cwd"] not in {
+        str(staged_app),
+        str(staged_runtime),
+        str(app_layer),
+        str(app_layer.parent / "runtime"),
+    }

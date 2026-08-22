@@ -4,23 +4,29 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import plistlib
 import stat
 import struct
 import subprocess
+import sys
+import tarfile
 from types import SimpleNamespace
 import zipfile
 
 import pytest
 
 from launchers.macos import generate_icon
+from scripts import fetch_spa
 from scripts.build_bundle import (
     BundleBuilder,
     BundleError,
     MSVC_RUNTIME_DLLS,
+    PYTHON_BUILD,
     PRUNE_LIBRARY_GLOBS,
     PRUNE_RELATIVE_PATHS,
+    RUNTIME_RECIPE,
     WINDOWS_ICON_NAME,
     WINDOWS_LAUNCHER_NAME,
     WINDOWS_PLATFORM,
@@ -29,34 +35,104 @@ from scripts.build_bundle import (
     build,
     copy_tracked_app_files,
     deterministic_zip,
+    install_spa_layer,
     launcher_stub,
     locate_msvc_runtime_dlls,
+    prepare_output_directory,
     prune_runtime,
+    require_python_build,
     substitute_info_plist,
-    windows_desktop_bootstrap,
+    windows_launcher_files,
     windows_pth,
     write_app_manifest,
     write_runtime_manifest,
+    write_checksum,
     write_windows_bootstrap,
 )
 from server.platform.paths import app_root
 from shared.runtime_id import compute_runtime_id, runtime_id_from_files
 
 
-def test_runtime_id_hashes_requirements_pins_and_exact_python_without_separators(
+def test_runtime_id_hashes_lock_interpreter_build_and_framed_recipe_inputs(
     tmp_path: Path,
 ) -> None:
     requirements = b"fastapi==1\n"
     pins = b"git+https://example.invalid/module@abc\n"
+    lock = b"anyio==4\n"
     version = "3.13.12"
-    expected = hashlib.sha256(requirements + pins + version.encode()).hexdigest()[:12]
     requirements_path = tmp_path / "runtime.txt"
     pins_path = tmp_path / "pins.txt"
+    lock_path = tmp_path / "lock.txt"
     requirements_path.write_bytes(requirements)
     pins_path.write_bytes(pins)
+    lock_path.write_bytes(lock)
 
-    assert compute_runtime_id(requirements, pins, version) == expected
-    assert runtime_id_from_files(requirements_path, pins_path, version) == expected
+    expected = compute_runtime_id(
+        requirements,
+        pins,
+        lock,
+        version,
+        PYTHON_BUILD,
+        RUNTIME_RECIPE,
+    )
+
+    assert len(expected) == 12
+    assert runtime_id_from_files(
+        requirements_path,
+        pins_path,
+        lock_path,
+        version,
+        PYTHON_BUILD,
+        RUNTIME_RECIPE,
+    ) == expected
+    assert compute_runtime_id(
+        requirements,
+        pins,
+        lock + b"security-fix\n",
+        version,
+        PYTHON_BUILD,
+        RUNTIME_RECIPE,
+    ) != expected
+    assert compute_runtime_id(
+        requirements,
+        pins,
+        lock,
+        version,
+        "different-build",
+        RUNTIME_RECIPE,
+    ) != expected
+    assert compute_runtime_id(
+        requirements,
+        pins,
+        lock,
+        version,
+        PYTHON_BUILD,
+        "different-recipe",
+    ) != expected
+    assert compute_runtime_id(
+        b"ab",
+        b"c",
+        lock,
+        version,
+        PYTHON_BUILD,
+        RUNTIME_RECIPE,
+    ) != compute_runtime_id(
+        b"a",
+        b"bc",
+        lock,
+        version,
+        PYTHON_BUILD,
+        RUNTIME_RECIPE,
+    )
+
+
+def test_python_build_marker_must_match_the_pinned_standalone_artifact(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "BUILD").write_text("different-build", encoding="ascii")
+
+    with pytest.raises(BundleError, match="different-build.*expected.*20260325"):
+        require_python_build(tmp_path, PYTHON_BUILD)
 
 
 def test_manifest_writers_record_layer_identity_and_stable_hashes(tmp_path: Path) -> None:
@@ -71,6 +147,9 @@ def test_manifest_writers_record_layer_identity_and_stable_hashes(tmp_path: Path
         runtime_id="0123456789ab",
         requirements=b"runtime\n",
         pins=b"pins\n",
+        lock=b"lock\n",
+        python_build=PYTHON_BUILD,
+        runtime_recipe=RUNTIME_RECIPE,
     )
     app_payload = write_app_manifest(
         app,
@@ -82,9 +161,15 @@ def test_manifest_writers_record_layer_identity_and_stable_hashes(tmp_path: Path
     assert runtime_payload == {
         "schemaVersion": 1,
         "python": "3.13.12",
+        "pythonBuild": PYTHON_BUILD,
+        "pythonDistribution": (
+            f"cpython-3.13.12+{PYTHON_BUILD}-python-build-standalone"
+        ),
         "platform": "macos-arm64",
         "requirementsSha256": hashlib.sha256(b"runtime\n").hexdigest(),
         "pinsSha256": hashlib.sha256(b"pins\n").hexdigest(),
+        "lockSha256": hashlib.sha256(b"lock\n").hexdigest(),
+        "runtimeRecipe": RUNTIME_RECIPE,
         "runtimeId": "0123456789ab",
     }
     assert app_payload == {
@@ -95,39 +180,143 @@ def test_manifest_writers_record_layer_identity_and_stable_hashes(tmp_path: Path
     }
     assert json.loads((runtime / "RUNTIME-MANIFEST.json").read_text()) == runtime_payload
     assert json.loads((app / "APP-MANIFEST.json").read_text()) == app_payload
+    assert b"\r\n" not in (runtime / "RUNTIME-MANIFEST.json").read_bytes()
+    assert (app / "APP-MANIFEST.json").read_bytes().endswith(b"\n")
 
     windows_runtime = tmp_path / "windows-runtime"
     windows_runtime.mkdir()
+    for source, _destination in windows_launcher_files():
+        (windows_runtime / source).write_bytes(source.encode())
     windows_payload = write_runtime_manifest(
         windows_runtime,
         python_version="3.13.12",
         runtime_id="0123456789ab",
         requirements=b"runtime\n",
         pins=b"pins\n",
+        lock=b"lock\n",
+        python_build=PYTHON_BUILD,
+        runtime_recipe=RUNTIME_RECIPE,
         platform_name=WINDOWS_PLATFORM,
     )
     assert windows_payload["platform"] == "windows-x86_64"
+    assert all(
+        entry["sha256"] == hashlib.sha256(entry["source"].encode()).hexdigest()
+        for entry in windows_payload["launcherFiles"]
+    )
 
 
-def test_git_ls_files_copy_never_includes_ignored_or_untracked_files(
+def test_spa_stamp_binds_the_installed_tree_and_uses_lf(tmp_path: Path) -> None:
+    source = tmp_path / "source" / "dist"
+    source.mkdir(parents=True)
+    (source / "index.html").write_text("<script src='app.js'></script>\n", encoding="utf-8")
+    (source / "app.js").write_bytes(b"console.log('release');\n")
+    archive = tmp_path / "spa.tar.gz"
+    with tarfile.open(archive, "w:gz") as handle:
+        handle.add(source, arcname="dist")
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    repo = tmp_path / "repo"
+
+    installed = fetch_spa.install_archive(
+        archive,
+        version="1.2.3",
+        digest=digest,
+        source="release fixture",
+        root=repo,
+    )
+
+    stamp_path = installed / fetch_spa.STAMP_NAME
+    tree_stamp_path = installed / fetch_spa.TREE_STAMP_NAME
+    stamp = json.loads(stamp_path.read_text(encoding="utf-8"))
+    assert stamp["sha256"] == digest
+    assert tree_stamp_path.read_text(encoding="ascii").strip() == fetch_spa.tree_digest(installed)
+    assert b"\r\n" not in stamp_path.read_bytes()
+    assert stamp_path.read_bytes().endswith(b"\n")
+    assert b"\r\n" not in tree_stamp_path.read_bytes()
+    assert tree_stamp_path.read_bytes().endswith(b"\n")
+    app = tmp_path / "app"
+    install_spa_layer(app, version="1.2.3", archive=None, repo_root=repo)
+    assert (app / "frontend" / "dist" / "app.js").is_file()
+
+    (installed / "app.js").write_bytes(b"console.log('tampered');\n")
+    with pytest.raises(BundleError, match="changed after its release archive was verified"):
+        install_spa_layer(
+            tmp_path / "tampered-app",
+            version="1.2.3",
+            archive=None,
+            repo_root=repo,
+        )
+
+
+def test_git_object_copy_uses_committed_bytes_and_excludes_test_trees(
     tmp_path: Path,
 ) -> None:
     repo = tmp_path / "repo"
     destination = tmp_path / "app"
     (repo / "server").mkdir(parents=True)
+    (repo / "server" / "tests").mkdir()
     (repo / "server" / "tracked.py").write_text("tracked = True\n", encoding="utf-8")
+    (repo / "server" / "tests" / "test_shipped.py").write_text(
+        "assert False\n", encoding="utf-8"
+    )
     (repo / "server" / "ignored.py").write_text("ignored = True\n", encoding="utf-8")
-    (repo / "server" / "untracked.py").write_text("untracked = True\n", encoding="utf-8")
     (repo / ".gitignore").write_text("server/ignored.py\n", encoding="utf-8")
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    subprocess.run(["git", "add", "server/tracked.py"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "add", ".gitignore", "server/tracked.py", "server/tests/test_shipped.py"],
+        cwd=repo,
+        check=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Bundle Test",
+            "-c",
+            "user.email=bundle-test@example.invalid",
+            "commit",
+            "-qm",
+            "fixture",
+        ],
+        cwd=repo,
+        check=True,
+    )
+    (repo / "server" / "tracked.py").write_bytes(b"tracked = False\r\n")
+    (repo / "server" / "untracked.py").write_text("untracked = True\n", encoding="utf-8")
 
     copied = copy_tracked_app_files(repo, destination)
 
     assert [path.as_posix() for path in copied] == ["server/tracked.py"]
-    assert (destination / "server" / "tracked.py").is_file()
+    assert (destination / "server" / "tracked.py").read_bytes() == b"tracked = True\n"
+    assert not (destination / "server" / "tests").exists()
     assert not (destination / "server" / "ignored.py").exists()
     assert not (destination / "server" / "untracked.py").exists()
+
+
+def test_release_builder_refuses_a_dirty_worktree(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    tracked = repo / "tracked.txt"
+    tracked.write_text("committed\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "tracked.txt"], cwd=repo, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Bundle Test",
+            "-c",
+            "user.email=bundle-test@example.invalid",
+            "commit",
+            "-qm",
+            "fixture",
+        ],
+        cwd=repo,
+        check=True,
+    )
+    tracked.write_text("modified\n", encoding="utf-8")
+
+    with pytest.raises(BundleError, match="require a clean Git worktree.*tracked.txt"):
+        BundleBuilder(repo).require_clean_worktree()
 
 
 def test_prune_runtime_removes_the_contract_list_and_nested_test_caches(
@@ -307,12 +496,13 @@ def test_platform_neutral_app_zip_is_byte_identical_across_host_metadata(
             source,
             output,
             canonical_modes=True,
+            compression=zipfile.ZIP_STORED,
         )
 
     assert first_zip.read_bytes() == second_zip.read_bytes()
     with zipfile.ZipFile(first_zip) as archive:
         assert archive.read("nested/bytes.txt") == b"preserve\r\nthese\x00bytes\n"
-        assert archive.getinfo("nested/bytes.txt").compress_type == zipfile.ZIP_DEFLATED
+        assert archive.getinfo("nested/bytes.txt").compress_type == zipfile.ZIP_STORED
 
 
 def test_windows_distribution_zip_retains_the_enclosing_folder(tmp_path: Path) -> None:
@@ -331,25 +521,190 @@ def test_windows_distribution_zip_retains_the_enclosing_folder(tmp_path: Path) -
         ]
 
 
-def test_windows_pth_and_bootstrap_keep_direct_launch_separate_from_workers(
+def test_checksum_sidecar_names_the_final_dotted_public_asset(tmp_path: Path) -> None:
+    asset = tmp_path / "Waveguide.Generator-1.2.3-macos-arm64.dmg"
+    asset.write_bytes(b"installer")
+
+    sidecar = write_checksum(asset)
+
+    assert sidecar.read_text(encoding="ascii") == (
+        f"{hashlib.sha256(b'installer').hexdigest()}  {asset.name}\n"
+    )
+    assert b"\r\n" not in sidecar.read_bytes()
+
+
+def test_output_directory_must_be_empty(tmp_path: Path) -> None:
+    output = tmp_path / "bundle"
+    prepare_output_directory(output)
+    assert output.is_dir()
+
+    (output / "stale.zip").write_bytes(b"stale")
+    with pytest.raises(BundleError, match="must be empty.*stale.zip"):
+        prepare_output_directory(output)
+
+
+def test_release_workflow_publishes_one_complete_draft_inventory() -> None:
+    workflow = (
+        Path(__file__).resolve().parents[2] / ".github" / "workflows" / "release.yml"
+    ).read_text(encoding="utf-8")
+
+    assert workflow.count("softprops/action-gh-release@") == 1
+    assert "needs: [spa, macos-bundle, windows-bundle]" in workflow
+    assert "draft: true" in workflow
+    assert 'gh release edit "$RELEASE_TAG" --draft=false' in workflow
+    assert "Reuse a runtime already published" not in workflow
+    assert "Validated seven release asset pairs." in workflow
+    assert "Waveguide.Generator-*-macos-arm64.dmg" in workflow
+    assert "Waveguide.Generator-*-windows-x86_64.zip" in workflow
+
+
+@pytest.mark.parametrize(("runtime_only", "app_only"), ((True, False), (False, True)))
+def test_layer_only_builds_are_refused_as_unverified_publishable_assets(
+    tmp_path: Path,
+    runtime_only: bool,
+    app_only: bool,
+) -> None:
+    builder = BundleBuilder(
+        tmp_path,
+        system=lambda: "Darwin",
+        machine=lambda: "arm64",
+    )
+    args = SimpleNamespace(
+        platform="macos",
+        python_version="3.13.12",
+        output=tmp_path / "output",
+        app_only=app_only,
+        runtime_only=runtime_only,
+        spa=None,
+        skip_verify=False,
+    )
+
+    with pytest.raises(BundleError, match="Layer-only builds are disabled"):
+        build(args, builder=builder)
+
+
+def test_windows_bootstrap_executes_only_for_real_no_script_launch(
     tmp_path: Path,
 ) -> None:
     expected = "runtime\\Lib\nruntime\\DLLs\nruntime\\Lib\\site-packages\napp\nimport site\n"
     assert windows_pth() == expected
-    bootstrap = windows_desktop_bootstrap()
-    assert 'os.environ["WG2_BUNDLE"] = "1"' in bootstrap
-    assert 'os.environ["WG2_APP_ROOT"] = str(app_root)' in bootstrap
-    assert 'Path(sys.argv[0]).name.casefold() == "waveguide generator.exe"' in bootstrap
-    assert "from launchers.desktop import main" in bootstrap
-    assert "_report_startup_failure" in bootstrap
-
-    app = tmp_path / "app"
-    app.mkdir()
+    bundle = tmp_path / "bundle"
+    app = bundle / "app"
+    harness = tmp_path / "harness"
+    launchers = app / "launchers"
+    launchers.mkdir(parents=True)
+    harness.mkdir()
+    (bundle / WINDOWS_LAUNCHER_NAME).write_bytes(b"test executable identity")
     write_windows_bootstrap(app)
-    assert (app / "wg_desktop_bootstrap.py").read_text(encoding="utf-8") == bootstrap
-    assert (app / "sitecustomize.py").read_text(encoding="utf-8") == (
-        "import wg_desktop_bootstrap\n"
+    (harness / "sitecustomize.py").write_text(
+        "import os\n"
+        "import sys\n"
+        'sys.executable = os.environ["WG_TEST_EXECUTABLE"]\n'
+        "import wg_desktop_bootstrap\n",
+        encoding="utf-8",
+        newline="\n",
     )
+    (launchers / "__init__.py").write_text("", encoding="utf-8")
+    (app / "probe_support.py").write_text(
+        "from __future__ import annotations\n"
+        "import json\n"
+        "import os\n"
+        "from pathlib import Path\n"
+        "import sys\n"
+        "def record(kind, argv=None):\n"
+        "    payload = {\n"
+        "        'kind': kind,\n"
+        "        'argv': list(sys.argv if argv is None else argv),\n"
+        "        'bundle': os.environ.get('WG2_BUNDLE'),\n"
+        "        'appRoot': os.environ.get('WG2_APP_ROOT'),\n"
+        "        'pycache': os.environ.get('PYTHONPYCACHEPREFIX'),\n"
+        "        'numba': os.environ.get('NUMBA_CACHE_DIR'),\n"
+        "    }\n"
+        "    Path(os.environ['WG_TEST_RESULT']).write_text(json.dumps(payload))\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    (launchers / "desktop.py").write_text(
+        "from __future__ import annotations\n"
+        "import sys\n"
+        "from probe_support import record\n"
+        "def main(argv=None):\n"
+        "    record('desktop', sys.argv[1:] if argv is None else argv)\n"
+        "    return 0\n"
+        "if __name__ == '__main__':\n"
+        "    raise SystemExit(main())\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    script = app / "worker.py"
+    script.write_text(
+        "from probe_support import record\nrecord('script')\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+    base_environment = dict(os.environ)
+    base_environment.update(
+        {
+            "PYTHONPATH": os.pathsep.join((str(harness), str(app))),
+            "PYTHONNOUSERSITE": "1",
+            "LOCALAPPDATA": str(tmp_path / "local-app-data"),
+            "WG_TEST_EXECUTABLE": str(bundle / WINDOWS_LAUNCHER_NAME),
+        }
+    )
+    for name in ("WG2_BUNDLE", "WG2_APP_ROOT", "PYTHONPYCACHEPREFIX", "NUMBA_CACHE_DIR"):
+        base_environment.pop(name, None)
+
+    invocations = (
+        ("no-script", [], "desktop", [], 1),
+        (
+            "module",
+            ["-m", "launchers.desktop", "--port", "3110"],
+            "desktop",
+            ["--port", "3110"],
+            0,
+        ),
+        (
+            "command",
+            ["-c", "from probe_support import record; record('command')"],
+            "command",
+            ["-c"],
+            0,
+        ),
+        (
+            "script",
+            [str(script), "worker-argument"],
+            "script",
+            [str(script), "worker-argument"],
+            0,
+        ),
+    )
+    for label, arguments, expected_kind, expected_argv, expected_returncode in invocations:
+        result_path = tmp_path / f"{label}.json"
+        environment = dict(base_environment)
+        environment["WG_TEST_RESULT"] = str(result_path)
+        result = subprocess.run(
+            [sys.executable, *arguments],
+            cwd=tmp_path,
+            env=environment,
+            input="" if not arguments else None,
+            text=True,
+            check=False,
+            capture_output=True,
+        )
+
+        # Raising SystemExit from sitecustomize after the no-script desktop
+        # returns makes CPython report an init_import_site failure. pythonw has
+        # no console, and the desktop has already run for its full lifetime.
+        assert result.returncode == expected_returncode, result.stderr
+        payload = json.loads(result_path.read_text(encoding="utf-8"))
+        assert payload["kind"] == expected_kind
+        assert payload["argv"] == expected_argv
+        assert payload["bundle"] == "1"
+        assert payload["appRoot"] == str(app)
+        cache = tmp_path / "local-app-data" / "WaveguideGenerator" / "cache"
+        assert payload["pycache"] == str(cache / "pycache")
+        assert payload["numba"] == str(cache / "numba")
 
 
 def test_msvc_dll_discovery_uses_where_then_system32_then_visual_studio(
@@ -415,6 +770,7 @@ def test_windows_runtime_build_requests_the_explicit_host_target_and_copies_msvc
     (repo / "server").mkdir(parents=True)
     (repo / "server" / "requirements-runtime.txt").write_bytes(b"runtime\n")
     (repo / "server" / "requirements-pins.txt").write_bytes(b"pins\n")
+    (repo / "server" / "requirements-lock.txt").write_bytes(b"lock\n")
     redist = tmp_path / "redist"
     redist.mkdir()
     for filename in MSVC_RUNTIME_DLLS:
@@ -428,6 +784,7 @@ def test_windows_runtime_build_requests_the_explicit_host_target_and_copies_msvc
             runtime = install_dir / "managed"
             (runtime / "Lib" / "site-packages").mkdir(parents=True)
             (runtime / "DLLs").mkdir()
+            (runtime / "BUILD").write_text(PYTHON_BUILD, encoding="ascii")
             for filename in ("python.exe", "pythonw.exe", "python313.dll", "python3.dll"):
                 (runtime / filename).write_bytes(filename.encode())
             return subprocess.CompletedProcess(command, 0, "", "")
@@ -443,7 +800,12 @@ def test_windows_runtime_build_requests_the_explicit_host_target_and_copies_msvc
     builder.build_runtime(
         destination,
         python_version="3.13.12",
+        python_build=PYTHON_BUILD,
+        runtime_recipe=RUNTIME_RECIPE,
         runtime_id="0123456789ab",
+        requirements=b"runtime\n",
+        pins=b"pins\n",
+        lock=b"lock\n",
         platform_name=WINDOWS_PLATFORM,
     )
 
@@ -451,10 +813,16 @@ def test_windows_runtime_build_requests_the_explicit_host_target_and_copies_msvc
     assert install[-1] == "cpython-3.13.12-windows-x86_64-none"
     pip = next(command for command in commands if command[:3] == ["uv", "pip", "install"])
     assert pip[pip.index("--python") + 1] == str(destination / "python.exe")
+    constraint = Path(pip[pip.index("-c") + 1])
+    assert constraint.name == "requirements-lock.txt"
+    assert constraint.read_bytes() == b"lock\n"
+    assert any(command[:3] == ["uv", "pip", "check"] for command in commands)
     for filename in MSVC_RUNTIME_DLLS:
         assert (destination / filename).read_bytes() == filename.encode()
     manifest = json.loads((destination / "RUNTIME-MANIFEST.json").read_text())
     assert manifest["platform"] == "windows-x86_64"
+    assert manifest["pythonBuild"] == PYTHON_BUILD
+    assert manifest["lockSha256"] == hashlib.sha256(b"lock\n").hexdigest()
 
 
 def test_windows_layout_writer_copies_launcher_dlls_layers_pth_and_icon(

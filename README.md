@@ -23,20 +23,21 @@ Then run the installer for your platform:
 | Windows | double-click `installers\windows\install-and-update.bat` |
 | Linux | `bash installers/linux/install.sh` |
 
-For a self-contained macOS install, download the release's **Waveguide
-Generator-…-macos-arm64.dmg**, open it, and drag **Waveguide Generator** to
+For a self-contained macOS install, download the release's
+**Waveguide.Generator-&lt;version&gt;-macos-arm64.dmg**, open it, and drag **Waveguide Generator** to
 Applications. The app is ad-hoc signed rather than notarized, so on first launch
 macOS may require **System Settings → Privacy & Security → Open Anyway** and a
 confirmation; later launches work normally.
 
-For a self-contained Windows install, download **Waveguide
-Generator-…-windows-x86_64.zip**, extract the complete **Waveguide Generator**
+For a self-contained Windows install, download
+**Waveguide.Generator-&lt;version&gt;-windows-x86_64.zip**, extract the complete **Waveguide Generator**
 folder, and double-click **Waveguide Generator.exe** inside it. The executable is
 not publisher-signed, so Microsoft Defender SmartScreen may require **More info →
 Run anyway** on first launch. The native window requires the **Microsoft Edge
 WebView2 Evergreen Runtime (x64)**, which is normally present on current Windows
 10 and Windows 11 systems; when it is missing or its pythonnet bridge cannot load,
-WG shows a repair link and opens the interface in the default browser. The folder
+WG shows repair instructions containing the WebView2 download URL and opens the
+interface in the default browser. The folder
 also includes `WaveguideGenerator.ico` for a shortcut. The executable itself keeps
 the generic Python icon until a future signed build adds the icon as a Windows
 executable resource.
@@ -170,8 +171,13 @@ click **Install update** to download the checksum-verified app layer and, when
 its content id changed, the matching runtime layer. WG stages them in its data
 directory, closes only after verification succeeds, swaps the complete layers,
 restores the ad-hoc bundle signature, and restarts. The previous layers remain
-available for automatic rollback until the updated interface reports healthy.
+available for automatic rollback until the updated native application starts successfully.
 The same action is available from the command palette as **Application update**.
+
+The job-log dialog reads and renders at most the first 1.0 MB. For example, opening
+a 50 MB log keeps a 1.0 MB preview in the interface; **Download complete log** uses
+the browser's download path for the full file, and **Copy preview** copies only the
+bounded text shown in the dialog.
 
 WG caches successful checks, retries incomplete releases quickly, and keeps the
 last known result when the network is unavailable. It also inspects the local
@@ -287,8 +293,17 @@ git tag v0.2.1 && git push origin v0.2.1
 
 The tag fires `.github/workflows/release.yml`, which **refuses to build when the
 tag disagrees with `shared/version.json`** — a build that misreports itself is
-worse than a failed release. It then attaches the prebuilt SPA as
-`waveguide-generator-v2-spa-<version>.tar.gz` with a `.sha256` beside it, so
+worse than a failed release. Its SPA job attaches
+`waveguide-generator-v2-spa-<version>.tar.gz`; the macOS job builds the canonical
+platform-neutral app ZIP and manifest, the macOS runtime ZIP, and
+`Waveguide.Generator-<version>-macos-arm64.dmg`; the Windows job
+checks its independently built app ZIP byte-for-byte against the canonical one and
+builds the Windows runtime ZIP plus
+`Waveguide.Generator-<version>-windows-x86_64.zip`. Every attached file has a
+`.sha256` sidecar. A final publisher job validates the exact seven asset pairs, uploads
+them to a draft, and makes the release public only after all three build jobs succeed.
+Installer filenames use dots because those are the names GitHub serves; the installed
+application and extracted Windows folder retain spaces. The prebuilt SPA means
 installing Waveguide Generator needs no Node runtime.
 
 Pre-release and build-metadata suffixes are deliberately unsupported: the tag is

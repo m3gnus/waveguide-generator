@@ -117,6 +117,7 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose }: {
   onRefresh: () => Promise<UpdateStatus>;
   onClose: () => void;
 }) {
+  const client = useQueryClient();
   const dialog = useRef<HTMLDivElement>(null);
   const operationGeneration = useRef(0);
   const [busy, setBusy] = useState(false);
@@ -181,26 +182,36 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose }: {
 
   useEffect(() => {
     if (!open || !installActive) return;
-    let cancelled = false;
-    const timer = window.setTimeout(() => {
-      void getUpdateStatus().then((status) => {
-        if (!cancelled) {
-          setBundleProgress({
-            installState: status.installState,
-            downloadedBytes: status.downloadedBytes,
-            totalBytes: status.totalBytes,
-            error: status.error,
-          });
-        }
-      }).catch((reason: unknown) => {
-        if (!cancelled) setFeedback(`Could not read update progress: ${reason instanceof Error ? reason.message : String(reason)}`);
-      });
-    }, UPDATE_PROGRESS_POLL_MS);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
+    const controller = new AbortController();
+    let timer: number | undefined;
+    const schedule = () => {
+      timer = window.setTimeout(() => void poll(), UPDATE_PROGRESS_POLL_MS);
     };
-  }, [installActive, installProgress?.downloadedBytes, installProgress?.installState, open]);
+    const poll = async () => {
+      try {
+        const status = await getUpdateStatus(false, controller.signal);
+        if (controller.signal.aborted) return;
+        client.setQueryData(UPDATE_QUERY_KEY, status);
+        setBundleProgress({
+          installState: status.installState,
+          downloadedBytes: status.downloadedBytes,
+          totalBytes: status.totalBytes,
+          error: status.error,
+        });
+        setFeedback((current) => current?.startsWith('Could not read update progress:') ? undefined : current);
+        if (status.installState === 'downloading' || status.installState === 'verifying') schedule();
+      } catch (reason) {
+        if (controller.signal.aborted) return;
+        setFeedback(`Could not read update progress: ${reason instanceof Error ? reason.message : String(reason)}`);
+        schedule();
+      }
+    };
+    schedule();
+    return () => {
+      controller.abort();
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [client, installActive, open]);
 
   if (!open) return null;
 
@@ -289,13 +300,13 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose }: {
           <button disabled={busy} onClick={() => void copy()}>Copy update command</button>
         </section>}
         {bundleAction && <section className="update-command bundle-update" aria-labelledby="update-command-title">
-          <div><h3 id="update-command-title">Install this update</h3><p>WG downloads and verifies the required application layers before restarting.</p></div>
+          <div><h3 id="update-command-title">Install this update</h3><p>WG stays open while it downloads and verifies the update, then closes and restarts to install it.</p></div>
           {installProgress?.installState === 'downloading' && <>
             <p className="bundle-update-progress" role="status">Downloading {megabytes(installProgress.downloadedBytes)} of {megabytes(installProgress.totalBytes || bundleAction.downloadBytes)} MB</p>
             <progress max={installProgress.totalBytes || bundleAction.downloadBytes} value={installProgress.downloadedBytes} />
           </>}
           {installProgress?.installState === 'verifying' && <p className="bundle-update-progress" role="status">Verifying downloaded update…</p>}
-          {installProgress?.installState === 'ready' && <p className="bundle-update-progress ready" role="status">Update ready — WG will restart.</p>}
+          {installProgress?.installState === 'ready' && <p className="bundle-update-progress ready" role="status">Update ready — WG will close and restart.</p>}
           {installProgress?.installState === 'failed' && <p className="update-blocked" role="alert">Update failed: {installProgress.error ?? 'Unknown error'}</p>}
           <button
             className="primary"

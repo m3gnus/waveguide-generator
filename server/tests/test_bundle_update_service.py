@@ -21,7 +21,10 @@ def _asset(name: str, size: int = 100) -> dict[str, object]:
         "name": name,
         "state": "uploaded",
         "size": size,
-        "browser_download_url": f"https://github.com/example/releases/download/v2.0.1/{name}",
+        "browser_download_url": (
+            "https://github.com/m3gnus/waveguide-generator/releases/"
+            f"download/v2.0.1/{name}"
+        ),
     }
 
 
@@ -216,15 +219,15 @@ def test_current_release_records_all_bundle_assets_and_downloads_both_layers(
         "assets": [
             {
                 "name": "waveguide-generator-app-2.0.1.zip",
-                "url": "https://github.com/example/releases/download/v2.0.1/waveguide-generator-app-2.0.1.zip",
-                "sha256Url": "https://github.com/example/releases/download/v2.0.1/waveguide-generator-app-2.0.1.zip.sha256",
+                "url": "https://github.com/m3gnus/waveguide-generator/releases/download/v2.0.1/waveguide-generator-app-2.0.1.zip",
+                "sha256Url": "https://github.com/m3gnus/waveguide-generator/releases/download/v2.0.1/waveguide-generator-app-2.0.1.zip.sha256",
                 "bytes": 1_500,
                 "layer": "app",
             },
             {
                 "name": f"waveguide-generator-runtime-macos-arm64-{NEW_RUNTIME}.zip",
-                "url": f"https://github.com/example/releases/download/v2.0.1/waveguide-generator-runtime-macos-arm64-{NEW_RUNTIME}.zip",
-                "sha256Url": f"https://github.com/example/releases/download/v2.0.1/waveguide-generator-runtime-macos-arm64-{NEW_RUNTIME}.zip.sha256",
+                "url": f"https://github.com/m3gnus/waveguide-generator/releases/download/v2.0.1/waveguide-generator-runtime-macos-arm64-{NEW_RUNTIME}.zip",
+                "sha256Url": f"https://github.com/m3gnus/waveguide-generator/releases/download/v2.0.1/waveguide-generator-runtime-macos-arm64-{NEW_RUNTIME}.zip.sha256",
                 "bytes": 7_500,
                 "layer": "runtime",
             },
@@ -271,7 +274,7 @@ def test_runtime_is_selected_from_an_earlier_release_and_the_list_is_cached(
     def recent() -> list[dict[str, Any]]:
         nonlocal recent_calls
         recent_calls += 1
-        return [{"assets": _pair(runtime_name, 7_500)}]
+        return [{"tag_name": "v2.0.1", "assets": _pair(runtime_name, 7_500)}]
 
     update = _service(tmp_path, payload, fetched, recent_releases_fetcher=recent)
 
@@ -295,6 +298,75 @@ def test_bad_release_manifest_digest_is_a_guarded_update_error(tmp_path: Path) -
     assert result["availability"] == "unknown"
     assert "does not match" in result["lastError"]
     assert result["action"] is None
+
+
+@pytest.mark.parametrize(
+    "untrusted_url",
+    [
+        "https://github.com/another/project/releases/download/v2.0.1/{name}",
+        (
+            "https://github.com/m3gnus/waveguide-generator/releases/"
+            "download/v2.0.0/{name}"
+        ),
+    ],
+)
+def test_release_assets_are_bound_to_this_repository_and_release_tag(
+    tmp_path: Path,
+    untrusted_url: str,
+) -> None:
+    payload, fetched = _release(include_runtime=True)
+    app_name = "waveguide-generator-app-2.0.1.zip"
+    app_asset = next(asset for asset in payload["assets"] if asset["name"] == app_name)
+    app_asset["browser_download_url"] = untrusted_url.format(name=app_name)
+
+    result = _service(tmp_path, payload, fetched).get_status()
+
+    assert result["availability"] == "incomplete"
+    assert result["release"]["assetsReady"] is False
+    assert result["action"] is None
+
+
+def test_install_request_carries_release_and_installed_runtime_ids(tmp_path: Path) -> None:
+    payload, fetched = _release(include_runtime=True)
+    calls: list[tuple[str, str, str]] = []
+
+    class RecordingInstaller:
+        active_version: str | None = None
+
+        def status(self) -> dict[str, object]:
+            return {
+                "installState": "downloading" if self.active_version else "idle",
+                "activeVersion": self.active_version,
+                "downloadedBytes": 0,
+                "totalBytes": 0,
+                "error": None,
+            }
+
+        def start(
+            self,
+            version: str,
+            _assets: list[dict[str, object]],
+            *,
+            expected_runtime_id: str,
+            installed_runtime_id: str,
+        ) -> dict[str, object]:
+            calls.append((version, expected_runtime_id, installed_runtime_id))
+            self.active_version = version
+            return self.status()
+
+    update = _service(
+        tmp_path,
+        payload,
+        fetched,
+        bundle_installer=RecordingInstaller(),  # type: ignore[arg-type]
+    )
+
+    result = update.request_install()
+
+    assert result["accepted"] is True
+    assert result["activeVersion"] == "2.0.1"
+    assert calls == [("2.0.1", NEW_RUNTIME, OLD_RUNTIME)]
+    assert update.get_status()["activeVersion"] == "2.0.1"
 
 
 def test_windows_release_uses_windows_runtime_and_full_zip_asset_names(

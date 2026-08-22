@@ -1,7 +1,8 @@
 # Standalone application
 
 Status: all four steps implemented on `feature/standalone-app`, macOS verified
-end to end, Windows unverified (see "Verification status"). This plan turns the
+end to end, four-lens review remediation applied, and Windows still unverified
+(see "Verification status"). This plan turns the
 checkout-bound `.app` into a self-contained, self-updating desktop application
 without Electron, Tauri, or a frozen interpreter. It is written as the contract
 for the implementation batches; each numbered step is independently shippable
@@ -22,15 +23,54 @@ Verified on Apple Silicon, by building and running the real artifacts:
 - A deliberately broken release rolled back to the previous version and said so
   in a dialog.
 
+The branch was then reviewed through four independent lenses: packaging/release,
+launcher/update lifecycle, update security, and frontend/documentation/test quality.
+The review found and this branch fixed the following actionable defect classes:
+
+- Packaging now materializes the app layer from committed blobs at the packaged
+  commit with canonical text/modes, a stored cross-platform ZIP, a verified SPA tree,
+  and no tracked test trees. Runtime construction uses the constraint lock and records
+  its pinned Python distribution build and recipe. Installer assets and checksum
+  sidecars use the dotted filenames GitHub actually serves. A final publisher validates
+  all seven asset pairs and keeps the release draft-only until every platform succeeds.
+- Windows direct launch recognizes CPython's no-script argv, while update relaunches
+  explicitly use `"<exe>" -m launchers.desktop <args...>`. Launcher-file and archive
+  names are validated with Windows-strict rules on every host.
+- Update download origins and every redirect hop are constrained to the repository's
+  release origin (or one literal loopback rehearsal origin). Active installers are
+  bound to one version/asset set, embedded and detached runtime identities are checked,
+  extraction has measured per-layer/member/ratio/disk limits, and staging is moved to
+  the destination volume before the application closes.
+- Lifecycle recovery uses a non-destructive Windows process probe, a stable updater
+  working directory, no-throw recovery logging, transactional launcher rollback,
+  required macOS sign/verify steps, and browser-fallback handoff polling. Rollback
+  files remain until the native application has initialized, and preflight/handoff or
+  relaunch failures reopen the known-good version or present native recovery guidance.
+- The interface now keeps polling through unchanged progress and transient read
+  failures, rejects malformed nested update payloads, explains that installation closes
+  and restarts the app, and gives keyboard users a focusable log region. Log preview,
+  rendering, and copying are capped at 1.0 MB; the complete file uses a download action.
+  TypeScript tests exercise the real bundle state lifecycle, repeated progress samples,
+  recovery after a polling error, decoder rejection, and large/empty log behavior.
+
+The review also left release-design work that these remediations do not claim to close:
+a publisher signature rooted in the installed updater (release SHA sidecars alone do
+not authenticate the publisher), a durable journal for power loss between multi-layer
+renames, and fully pinned release-action and tool provenance. These are release gates,
+not properties implied by the macOS happy-path evidence above.
+
 Not verifiable here, and therefore open:
 
-- Everything Windows. The first `windows-bundle` CI run must show the uv Windows
+- Everything Windows: nothing for this branch has executed on a Windows host yet. The
+  first `windows-bundle` CI run must show the uv Windows
   layout, the launcher loading its adjacent DLLs through the isolated `._pth`,
-  bempp/numba ready, the server answering, and the app-layer zip matching the
+  a no-argument executable starting the desktop path, `-c` remaining usable by worker
+  subprocesses, bempp/numba ready, the server answering, and the app-layer ZIP matching the
   macOS one byte for byte. A real Windows machine must then show an
   Explorer double-click starting without a console, the SmartScreen prompt, a
   clean-machine numba load from the bundled MSVC DLLs, the WebView2 window and
-  its browser fallback, and one in-app update including the launcher refresh.
+  its browser fallback, and one in-app update including launcher refresh and the
+  `-m launchers.desktop` argument-preserving relaunch.
 - Gatekeeper on a genuinely downloaded DMG (quarantined by the browser), which
   needs the release assets to exist.
 - The Windows executable keeps the generic Python icon; embedding the ICO as a
@@ -55,10 +95,10 @@ browser tab rather than a window.
   `install_name_tool` post-processing.
 - **Window.** pywebview 6.x on CPython 3.13 (pure pyobjc on macOS, WebView2
   through pythonnet on Windows) renders the live interface with WebGL and
-  WebSockets. It is a native window around the same loopback server; nothing
-  in the frontend changes for it except the two JavaScript `window.open` calls
-  (job log, radiation-impedance download), which WKWebView's new-window hook
-  ignores.
+  WebSockets. It is a native window around the same loopback server. The
+  frontend uses an in-app dialog for job logs and a same-origin download anchor
+  for radiation impedance, so it does not depend on a new-window JavaScript
+  bridge and behaves the same in pywebview and a normal browser.
 
 Freezing tools (PyInstaller, py2app, Nuitka) are rejected: numba/llvmlite,
 gmsh's `find_library` lookup, bempp's hooks and WG's `sys.executable` worker
@@ -76,8 +116,9 @@ Waveguide Generator.app/Contents/
   Resources/runtime/              relocatable CPython + site-packages (the "runtime layer")
     bin/python3.13
     lib/python3.13/site-packages/...
-    RUNTIME-MANIFEST.json         {"schemaVersion":1,"python":"3.13.12","platform":"macos-arm64",
-                                   "requirementsSha256":"...", "pinsSha256":"..."}
+    RUNTIME-MANIFEST.json         {"schemaVersion":1,"python":"3.13.12","pythonBuild":"...",
+                                   "platform":"macos-arm64","requirementsSha256":"...",
+                                   "pinsSha256":"...","lockSha256":"...","runtimeRecipe":"..."}
   Resources/app/                  the "app layer": server/ launch/ launchers/ shared/
                                   scripts/ frontend/dist/ integrations/wglink/ docs/ LICENSE
     APP-MANIFEST.json             {"schemaVersion":1,"version":"0.2.5","commit":"<sha>",
@@ -89,18 +130,20 @@ The two layers are independent release assets:
 | Asset | Contents | Changes when |
 |---|---|---|
 | `waveguide-generator-app-<version>.zip` | `Resources/app` | every release (a few MB) |
-| `waveguide-generator-runtime-macos-arm64-<runtimeId>.zip` | `Resources/runtime` | `requirements-*.txt` or `pins.json` change |
-| `Waveguide Generator-<version>-macos-arm64.dmg` | complete bundle | every release (first install); GitHub stores it as `Waveguide.Generator-…` |
+| `waveguide-generator-runtime-macos-arm64-<runtimeId>.zip` | `Resources/runtime` | requirements, lock, Python distribution build, or runtime recipe changes |
+| `Waveguide.Generator-<version>-macos-arm64.dmg` | complete bundle | every release (first install); this is the filename GitHub serves |
 
-`runtimeId` is the first 12 hex digits of SHA-256 over the concatenation of
-`server/requirements-runtime.txt`, `server/requirements-pins.txt`, and the
-python-build-standalone version string. The app layer's `APP-MANIFEST.json`
+`runtimeId` is the first 12 hex digits of a length-delimited SHA-256 identity over
+`server/requirements-runtime.txt`, `server/requirements-pins.txt`,
+`server/requirements-lock.txt`, the exact Python patch and python-build-standalone
+build, and the versioned runtime recipe. The app layer's `APP-MANIFEST.json`
 names the runtime id it was built against, so the updater knows whether the
 runtime must be replaced too.
 
 Windows mirrors this with `Waveguide Generator/` as a folder (no bundle
 concept): `Waveguide Generator.exe` is a copy of `pythonw.exe` beside
-`runtime/` and `app/`; the zip is the distributable until an installer exists.
+`runtime/` and `app/`; `Waveguide.Generator-<version>-windows-x86_64.zip` is
+the distributable until an installer exists.
 
 ## Step 1 — desktop window from the checkout
 
@@ -121,8 +164,9 @@ working.
   → `webview.create_window(title, url, width=1440, height=900,
   min_size=(1100, 700))` → `webview.start(func=poll_loop)` → on window close,
   `controller.close()`. `webview.settings['ALLOW_DOWNLOADS'] = True` so
-  `<a download>` exports land in the user's Downloads folder;
-  `OPEN_EXTERNAL_LINKS_IN_BROWSER` stays True (documentation links).
+  `<a download>` exports land in the user's Downloads folder. External
+  documentation links currently use pywebview's browser-opening default; the
+  launcher does not set `OPEN_EXTERNAL_LINKS_IN_BROWSER` as an application contract.
   Must run on the main thread (Cocoa); the status window and the desktop
   window are therefore mutually exclusive front ends of the same controller.
 - Startup failures before the window exists reuse
@@ -131,16 +175,14 @@ working.
 - `launchers/statusapp/__main__.py` gains `--window` and `--browser`; the
   status app remains the default for the checkout in this step (the bundle
   flips the default in step 2).
-- A JS bridge object is exposed (`webview.create_window(..., js_api=api)`)
-  with one method, `open_window(url)`, which opens a second pywebview window
-  for the given same-origin URL. The frontend calls it only when
-  `window.pywebview` exists.
 - Frontend: replace the three `window.open(...)` sites in
   `frontend/src/shell/JobsPanel.tsx`:
   - Job log → an in-app `LogDialog` (same `role="dialog"` pattern and focus
-    trap as `SettingsDialog.tsx`) that fetches `/api/jobs/{id}/log`, shows it
-    monospaced with a Copy button and a Refresh button. Works identically in
-    browser mode.
+    trap as `SettingsDialog.tsx`) that streams at most a 1.0 MB preview from
+    `/api/jobs/{id}/log`, shows it monospaced with Copy-preview, full-download,
+    and Refresh actions, and makes the scrollable output keyboard-focusable.
+    A 50 MB log therefore mounts and copies only its first 1.0 MB. Works
+    identically in browser mode.
   - Radiation impedance → a same-tab `<a download>` so the file goes through
     the download path in both modes.
 - Tests: Python unit tests for the window module with pywebview stubbed
@@ -156,7 +198,8 @@ working.
 1. **Runtime layer.** `uv python install --install-dir <tmp> 3.13` (pin the
    exact python-build-standalone version in the script), then
    `uv pip install --python <that> --no-cache -r server/requirements-runtime.txt
-   -r server/requirements-pins.txt`. Remove `lib/tcl*`, `lib/tk*`, `lib/itcl*`,
+   -r server/requirements-pins.txt -c server/requirements-lock.txt`. Remove
+   `lib/tcl*`, `lib/tk*`, `lib/itcl*`,
    `lib/python3.13/idlelib`, `tkinter`, `turtledemo`, `ensurepip`, `pip`,
    `test`/`tests` directories under site-packages, and `__pycache__`. The
    Metal helper must exist at
@@ -165,16 +208,19 @@ working.
    was missing on the build machine — a source-only package would fall back
    to interpreting the helper at runtime and time out, as the 2026-06
    HornLab Studio attempt found).
-2. **App layer.** Copy the tracked files of `server/ launch/ launchers/ shared/
-   scripts/ integrations/wglink/ docs/ LICENSE README.md` (use `git ls-files`
-   so ignored and untracked files never ship) plus `frontend/dist` (built
-   fresh by the same job; refuse an unstamped or missing dist). Write
-   `APP-MANIFEST.json`.
+2. **App layer.** Resolve the packaged commit and materialize its committed blobs
+   for `server/ launch/ launchers/ shared/ scripts/ integrations/wglink/ docs/
+   LICENSE README.md`, excluding test trees and unsafe/case-colliding paths.
+   Worktree edits, ignored files, untracked files, symlinks, and checkout filters
+   cannot change the layer. Add the verified `frontend/dist` from the release SPA
+   (or require and recheck a canonical tree digest for an existing dist), then write
+   `APP-MANIFEST.json` with LF newlines.
 3. **Bundle.** Assemble the `.app`, write `Info.plist` from the existing one
    (`CFBundleShortVersionString` from `shared/version.json`), copy the `.icns`,
    then `codesign --force --deep --sign - "Waveguide Generator.app"` (ad-hoc;
    `/usr/bin/codesign` ships with macOS) and `hdiutil create -volname
-   "Waveguide Generator" -srcfolder ... -format UDZO`. Every asset gets a
+   "Waveguide Generator" -srcfolder ... -format UDZO`, writing the public asset as
+   `Waveguide.Generator-<version>-macos-arm64.dmg`. Every asset gets a
    `.sha256` sidecar in `sha256sum` format, the same as the SPA tarball.
 
 The `MacOS/Waveguide Generator` stub keeps the `sysctl.proc_translated`
@@ -195,9 +241,10 @@ never breaks the seal).
 `macos-latest` (arm64; Xcode present for Swift). It runs after the SPA job,
 downloads the SPA artifact instead of rebuilding it, runs
 `scripts/build_bundle.py --spa <tarball>`, and attaches the DMG, the app
-layer zip, the runtime zip (only when the runtime id is not already attached
-to an earlier release — checked with `gh release view`), and their `.sha256`
-files. The release body lists the assets.
+layer ZIP/manifest, runtime ZIP, and their `.sha256` files as workflow artifacts.
+The Windows job contributes its complete installer and runtime pairs. A final
+publisher validates exactly those seven pairs and their sidecars, uploads them to a
+draft, and publishes only after every build job succeeds.
 
 ## Step 3 — in-app updater
 
@@ -216,18 +263,21 @@ happens when the running instance is a bundle (`WG2_BUNDLE=1`):
 - `POST /api/updates/install` in bundle mode downloads the app layer (and the
   runtime layer when the id differs) into `<data>/updates/<version>/`,
   verifies each against its `.sha256`, extracts with the same path-safety
-  checks as `scripts/fetch_spa.py`, and writes `update-request.json` for the
+  checks as `scripts/fetch_spa.py`, and writes `update.json` for the
   desktop launcher. Progress is exposed through `/api/updates/status`
-  (`installState: downloading | verifying | ready | failed`, with bytes).
+  (`installState: downloading | verifying | ready | failed`, with active version
+  and bytes). The interface keeps polling through unchanged byte counts,
+  verification pauses, and transient status-read failures until a terminal state.
 - `launchers/desktop.py` observes the request file exactly as the status
   window does today, stops the server, and runs `launchers/apply_update.py`
   **from the staged new app layer** (so a bug in the old updater cannot block
   an update forever): it swaps `Resources/app` (and `Resources/runtime`) with
   the staged directories using rename-into-place with a `.previous`
   fallback, re-signs the bundle ad-hoc, and relaunches through
-  `open -n <bundle>` (macOS) or the exe path (Windows). The previous layers
-  are kept until the new version has started once and reported healthy, then
-  deleted.
+  `open -n <bundle>` (macOS) or `"<exe>" -m launchers.desktop <args...>`
+  (Windows). The previous layers are kept until the new native application has
+  initialized successfully; macOS cleanup is signed and verified before rollback
+  material is deleted.
 - Files the app downloads carry no quarantine attribute, so the relaunch does
   not trigger Gatekeeper. The first launch of a freshly downloaded DMG still
   needs **Open Anyway** once; the README documents this already.
@@ -242,8 +292,11 @@ cleanup.
 - `scripts/build_bundle.py --platform windows` produces
   `Waveguide Generator/` with `runtime/` (uv Windows x86-64 build), `app/`,
   `Waveguide Generator.exe` (copied `pythonw.exe`, `launchers/desktop.py`
-  located through a sibling `Waveguide Generator.pth`-style bootstrap) and a
-  zip. pywebview uses WebView2 through pythonnet; the Evergreen WebView2
+  located through a sibling `Waveguide Generator._pth`/`sitecustomize`
+  bootstrap) and a `Waveguide.Generator-<version>-windows-x86_64.zip`. A
+  no-argument launch enters the desktop bootstrap; interpreter `-c`, `-m`, and
+  script commands stay available to workers. pywebview uses WebView2 through
+  pythonnet; the Evergreen WebView2
   runtime ships with Windows 11 and recent Windows 10, and the launcher
   reports a precise repair hint when it is absent.
 - numba/llvmlite need the MSVC runtime; the build job copies
@@ -252,10 +305,13 @@ cleanup.
   installer. `scripts/check_backends.py` is the gate, as on macOS.
 - SmartScreen shows "unknown publisher" on first run; documented the same
   way as Gatekeeper.
-- The updater is shared code; only the relaunch command differs.
+- The updater is shared code; its Windows relaunch command is explicitly
+  `"<exe>" -m launchers.desktop <args...>` so application arguments are not
+  consumed as CPython options.
 
-Runs on `windows-latest` in `release.yml`. The fresh-machine gate for Windows
-(`TODO.md`) stays open until a real machine has run the zip.
+Runs on `windows-latest` in `release.yml`. The Windows CI and real-machine gates
+remain recorded in this plan's **Verification status** section until that CI job
+and a fresh Windows machine have actually run the ZIP.
 
 ## Out of scope
 

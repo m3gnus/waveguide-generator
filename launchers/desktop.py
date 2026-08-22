@@ -6,6 +6,7 @@ import importlib
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import time
 import traceback
@@ -21,6 +22,7 @@ from launchers.apply_update import (
     append_update_log,
     bundle_from_app_layer,
     cleanup_previous_layers,
+    previous_generation_paths,
     repair_bundle,
     resources_directory,
     rollback_previous_layers,
@@ -43,6 +45,35 @@ WEBVIEW2_REPAIR = (
 
 class WindowsWebViewUnavailable(RuntimeError):
     """The Windows native-window prerequisites could not initialize."""
+
+
+def _show_bundle_failure_dialog(message: str) -> None:
+    """Show a bundle failure even when LaunchServices supplied a dead stderr."""
+
+    if sys.platform != "darwin":
+        _show_startup_failure_dialog(message)
+        return
+    try:
+        subprocess.run(
+            [
+                "/usr/bin/osascript",
+                "-e",
+                "on run argv",
+                "-e",
+                'display dialog (item 1 of argv) with title "Waveguide Generator" '
+                'buttons {"OK"} default button "OK" with icon stop',
+                "-e",
+                "end run",
+                "--",
+                message,
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    except Exception:  # noqa: BLE001 - statusapp.log remains the fallback
+        pass
 
 
 def _load_pythonnet() -> object:
@@ -148,6 +179,8 @@ class DesktopWindow:
         self._webview: ModuleType | None = None
         self._window: object | None = None
         self._healthy_bundle_checked = False
+        self._startup_snapshot: StatusSnapshot | None = None
+        self._exit_code = 0
 
     def _bundle_paths(self) -> tuple[Path, Path, Path] | None:
         environment = getattr(self.controller, "environ", os.environ)
@@ -173,29 +206,144 @@ class DesktopWindow:
         def log(message: str) -> None:
             append_update_log(data_dir, message)
 
-        had_previous = any((resources / f"{name}.previous").exists() for name in ("app", "runtime"))
+        previous = previous_generation_paths(resources)
+        if not previous:
+            return
+        if sys.platform == "darwin":
+            self._finish_healthy_macos_update(bundle, resources, data_dir, previous)
+            return
         try:
             cleanup_previous_layers(resources, log=log)
         except OSError as exc:
             log(f"Could not remove healthy-start rollback layers: {exc}")
-        finally:
-            if had_previous:
-                repair_bundle(bundle, platform_name=sys.platform, log=log)
-                # The staged layers moved into the bundle; what is left under
-                # updates/ is the downloaded archives (the runtime zip alone is
-                # well over 100 MB), which the healthy new version never needs.
-                downloads = data_dir / "updates"
-                try:
-                    shutil.rmtree(downloads)
-                except FileNotFoundError:
-                    pass
-                except OSError as exc:
-                    log(f"Could not remove the update downloads {downloads}: {exc}")
-                else:
-                    log(f"Removed the update downloads: {downloads}")
+            return
+        self._remove_update_downloads(data_dir, log)
 
     @staticmethod
-    def _report_bundle_failure(message: str) -> None:
+    def _cleanup_holding_directory(bundle: Path) -> Path:
+        return bundle.with_name(f".{bundle.name}.update-rollback")
+
+    @staticmethod
+    def _restore_held_previous(
+        holding: Path,
+        moved: list[tuple[Path, Path]],
+    ) -> list[str]:
+        errors: list[str] = []
+        for original, saved in reversed(moved):
+            try:
+                if (saved.exists() or saved.is_symlink()) and not (
+                    original.exists() or original.is_symlink()
+                ):
+                    os.replace(saved, original)
+            except OSError as exc:
+                errors.append(f"{original}: {exc}")
+        try:
+            holding.rmdir()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            if holding.exists():
+                errors.append(f"{holding}: {exc}")
+        return errors
+
+    def _finish_healthy_macos_update(
+        self,
+        bundle: Path,
+        resources: Path,
+        data_dir: Path,
+        previous: list[Path],
+    ) -> None:
+        """Remove sealed rollback content only around a required sign/verify."""
+
+        def log(message: str) -> None:
+            append_update_log(data_dir, message)
+
+        holding = self._cleanup_holding_directory(bundle)
+        if holding.exists() or holding.is_symlink():
+            message = (
+                f"Waveguide Generator could not finish update cleanup because recovery material "
+                f"already exists at {holding}. The current version remains open and rollback "
+                "material was retained."
+            )
+            log(message)
+            self._report_bundle_failure(message)
+            return
+
+        moved: list[tuple[Path, Path]] = []
+        try:
+            holding.mkdir()
+            for original in previous:
+                saved = holding / original.name
+                os.replace(original, saved)
+                moved.append((original, saved))
+        except OSError as exc:
+            restore_errors = self._restore_held_previous(holding, moved)
+            if moved and not restore_errors:
+                try:
+                    repair_bundle(bundle, platform_name="darwin", log=log)
+                except ApplyUpdateError as repair_exc:
+                    restore_errors.append(str(repair_exc))
+            detail = "; ".join(restore_errors) if restore_errors else "rollback material restored"
+            message = (
+                f"Waveguide Generator could not stage healthy-update cleanup: {exc}. "
+                f"Recovery result: {detail}."
+            )
+            log(message)
+            self._report_bundle_failure(message)
+            return
+        try:
+            repair_bundle(bundle, platform_name="darwin", log=log)
+        except ApplyUpdateError as exc:
+            restore_errors = self._restore_held_previous(holding, moved)
+            repair_error: ApplyUpdateError | None = None
+            if not restore_errors:
+                try:
+                    repair_bundle(bundle, platform_name="darwin", log=log)
+                except ApplyUpdateError as restored_exc:
+                    repair_error = restored_exc
+            if restore_errors:
+                outcome = "Rollback material could not be fully restored: " + "; ".join(
+                    restore_errors
+                )
+            elif repair_error is not None:
+                outcome = (
+                    "Rollback material was restored, but the restored bundle also failed "
+                    f"signature verification: {repair_error}"
+                )
+            else:
+                outcome = "Rollback material was restored and the current version remains open."
+            message = f"Waveguide Generator could not verify healthy-update cleanup: {exc}. {outcome}"
+            log(message)
+            self._report_bundle_failure(message)
+            return
+
+        try:
+            shutil.rmtree(holding)
+        except OSError as exc:
+            # The holding directory is outside the signed bundle. Failure to
+            # remove it wastes space but cannot invalidate the verified app.
+            log(f"Could not remove obsolete update rollback material {holding}: {exc}")
+        for original in previous:
+            kind = "layer" if original.name in {"app.previous", "runtime.previous"} else "launcher file"
+            log(f"Removed healthy-start rollback {kind}: {original}")
+        self._remove_update_downloads(data_dir, log)
+
+    @staticmethod
+    def _remove_update_downloads(data_dir: Path, log: Callable[[str], None]) -> None:
+        # The staged layers moved into the bundle; only downloaded archives are
+        # left, including a runtime zip that can exceed 100 MB.
+        downloads = data_dir / "updates"
+        try:
+            shutil.rmtree(downloads)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            log(f"Could not remove the update downloads {downloads}: {exc}")
+        else:
+            log(f"Removed the update downloads: {downloads}")
+
+    @staticmethod
+    def _report_bundle_failure(message: str, *, detail: str | None = None) -> None:
         """Log as usual, and always put a bundle's failure on screen.
 
         LaunchServices starts the bundle with stderr attached to nothing a
@@ -204,18 +352,75 @@ class DesktopWindow:
         rollback) invisible.
         """
 
-        _report_startup_failure(message)
+        if detail is None:
+            _report_startup_failure(message)
+        else:
+            _report_startup_failure(message, detail=detail)
         if sys.stderr is not None:
-            _show_startup_failure_dialog(message)
+            _show_bundle_failure_dialog(message)
 
-    def _report_bundle_startup_failure(self, snapshot: StatusSnapshot, cause: str) -> None:
-        message = self._failure_message(snapshot, cause)
+    def _report_desktop_failure(self, message: str, *, detail: str | None = None) -> None:
+        if self._bundle_paths() is None:
+            _report_startup_failure(message, detail=detail)
+        else:
+            self._report_bundle_failure(message, detail=detail)
+
+    def _recover_interrupted_bundle_update(self) -> bool:
+        """Restore a missing live layer from pending rollback before server start."""
+
+        paths = self._bundle_paths()
+        if paths is None:
+            return True
+        bundle, resources, data_dir = paths
+        missing = [
+            resources / name
+            for name in ("runtime", "app")
+            if not (resources / name).is_dir()
+        ]
+        if not missing:
+            return True
+        unavailable = [
+            live
+            for live in missing
+            if not live.with_name(live.name + ".previous").is_dir()
+        ]
+        if unavailable:
+            self._report_bundle_failure(
+                "Waveguide Generator detected an interrupted update, but no previous layer is "
+                "available for: " + ", ".join(str(path) for path in unavailable)
+            )
+            return False
+        if not rollback_previous_layers(resources):
+            self._report_bundle_failure(
+                "Waveguide Generator detected an interrupted update, but could not restore every "
+                "required layer and launcher file. Review update.log before changing the bundle."
+            )
+            return False
+        try:
+            repair_bundle(bundle, platform_name=sys.platform)
+        except ApplyUpdateError as exc:
+            message = (
+                "Waveguide Generator restored files from an interrupted update, but could not "
+                f"sign and verify the recovered bundle: {exc}"
+            )
+            append_update_log(data_dir, message)
+            self._report_bundle_failure(message)
+            return False
+        append_update_log(
+            data_dir,
+            "Recovered missing live bundle layers from an interrupted update before startup.",
+        )
+        return True
+
+    def _report_bundle_window_failure(self, message: str) -> None:
+        """Rollback a failed bundle window start, then report the exact result."""
+
         paths = self._bundle_paths()
         if paths is None:
             _report_startup_failure(message)
             return
         bundle, resources, data_dir = paths
-        if not any((resources / f"{name}.previous").is_dir() for name in ("app", "runtime")):
+        if not previous_generation_paths(resources):
             self._report_bundle_failure(message)
             return
         self.controller.close()
@@ -225,14 +430,24 @@ class DesktopWindow:
 
         rolled_back = rollback_previous_layers(resources, log=log)
         if rolled_back:
-            repair_bundle(bundle, platform_name=sys.platform, log=log)
-            result = "The previous version was restored. Reopen Waveguide Generator."
+            try:
+                repair_bundle(bundle, platform_name=sys.platform, log=log)
+            except ApplyUpdateError as exc:
+                result = (
+                    "The previous files were restored, but the bundle could not be signed and "
+                    f"verified: {exc}. Automatic recovery is incomplete."
+                )
+            else:
+                result = "The previous version was restored. Reopen Waveguide Generator."
         else:
             result = (
                 "Automatic rollback failed. Review update.log in the application "
                 "data log directory before changing the bundle."
             )
         self._report_bundle_failure(f"{message}\n\n{result}")
+
+    def _report_bundle_startup_failure(self, snapshot: StatusSnapshot, cause: str) -> None:
+        self._report_bundle_window_failure(self._failure_message(snapshot, cause))
 
     @staticmethod
     def _failure_message(snapshot: StatusSnapshot, cause: str) -> str:
@@ -259,6 +474,8 @@ class DesktopWindow:
         return snapshot.backend.state is ServiceState.ERROR and not snapshot.running
 
     def _wait_for_frontend(self) -> StatusSnapshot | None:
+        if not self._recover_interrupted_bundle_update():
+            return None
         snapshot = self.controller.start()
         deadline = time.monotonic() + self.startup_timeout
         while not self._frontend_ready(snapshot):
@@ -273,19 +490,10 @@ class DesktopWindow:
                 return None
             time.sleep(self.poll_interval)
             snapshot = self.controller.poll()
-        self._finish_healthy_bundle_update(snapshot)
         return snapshot
 
     def _load_webview(self) -> ModuleType:
-        try:
-            return importlib.import_module("webview")
-        except ImportError as exc:
-            _report_startup_failure(
-                "Waveguide Generator could not open a desktop window because "
-                f"pywebview is unavailable: {exc}\n\n{PYWEBVIEW_REPAIR}",
-                detail=traceback.format_exc(),
-            )
-            raise
+        return importlib.import_module("webview")
 
     def _prepare_windows_webview(self) -> None:
         if sys.platform != "win32":
@@ -300,7 +508,7 @@ class DesktopWindow:
             raise WindowsWebViewUnavailable("the Microsoft Edge WebView2 runtime was not found")
 
     def _fallback_from_windows_webview(self, snapshot: StatusSnapshot, exc: Exception) -> int:
-        _report_startup_failure(
+        self._report_desktop_failure(
             "Waveguide Generator could not initialize its Windows desktop window: "
             f"{type(exc).__name__}: {exc}\n\n{WEBVIEW2_REPAIR}\n\n"
             "The interface will open in your default browser instead.",
@@ -309,11 +517,14 @@ class DesktopWindow:
         try:
             self.browser_fallback(snapshot.url)
         except Exception as fallback_exc:  # noqa: BLE001 - must be visible under pythonw
-            _report_startup_failure(
+            message = (
                 "Waveguide Generator also could not open the browser fallback: "
-                f"{type(fallback_exc).__name__}: {fallback_exc}",
-                detail=traceback.format_exc(),
+                f"{type(fallback_exc).__name__}: {fallback_exc}"
             )
+            if self._bundle_paths() is None:
+                _report_startup_failure(message, detail=traceback.format_exc())
+            else:
+                self._report_bundle_window_failure(message)
             return 1
         return 0
 
@@ -329,6 +540,10 @@ class DesktopWindow:
         self._webview.create_window(WINDOW_TITLE, target)
 
     def _poll_loop(self) -> None:
+        if self._startup_snapshot is not None:
+            # pywebview invokes this callback only after its native event loop
+            # has started. HTTP readiness alone is not enough to discard rollback.
+            self._finish_healthy_bundle_update(self._startup_snapshot)
         window = self._window
         closed = getattr(getattr(window, "events", None), "closed", None)
         wait = getattr(closed, "wait", None)
@@ -339,6 +554,42 @@ class DesktopWindow:
             self.controller.poll()
             if self._hand_off_update(window):
                 return
+
+    def _pending_bundle_update_paths(self) -> list[Path]:
+        paths = self._bundle_paths()
+        if paths is None:
+            return []
+        bundle, resources, _data_dir = paths
+        pending = previous_generation_paths(resources)
+        pending.extend(
+            path
+            for path in sorted(resources.glob("*.failed"))
+            if path.exists() or path.is_symlink()
+        )
+        holding = self._cleanup_holding_directory(bundle)
+        if holding.exists() or holding.is_symlink():
+            pending.append(holding)
+        return pending
+
+    def _restart_after_failed_handoff(self) -> str | None:
+        """Restart the server and wait until the existing window is usable again."""
+
+        try:
+            snapshot = self.controller.start()
+        except Exception as exc:  # noqa: BLE001 - include controller startup faults
+            return f"restart raised {type(exc).__name__}: {exc}"
+        deadline = time.monotonic() + self.startup_timeout
+        while not self._frontend_ready(snapshot):
+            if self._startup_failed(snapshot):
+                return self._failure_message(snapshot, "did not restart")
+            if time.monotonic() >= deadline:
+                return self._failure_message(
+                    snapshot,
+                    f"did not restart within {self.startup_timeout:.0f} seconds",
+                )
+            time.sleep(self.poll_interval)
+            snapshot = self.controller.poll()
+        return None
 
     def _hand_off_update(self, window: object) -> bool:
         """Run a consumed in-app update request; True once the window is going.
@@ -354,6 +605,16 @@ class DesktopWindow:
         if request is None:
             return False
         label = request.version if isinstance(request, BundleUpdateRequest) else request
+        if isinstance(request, BundleUpdateRequest):
+            pending = self._pending_bundle_update_paths()
+            if pending:
+                self._report_bundle_failure(
+                    f"Waveguide Generator cannot start the {label} update because rollback "
+                    "material from an earlier update is still present:\n"
+                    + "\n".join(str(path) for path in pending)
+                    + "\n\nThe current version remains open. Review update.log before trying again."
+                )
+                return False
         try:
             if isinstance(request, BundleUpdateRequest):
                 # Leave one progress-poll window in which the SPA can render
@@ -362,12 +623,28 @@ class DesktopWindow:
                 self.controller.close()
             self.controller.launch_update(request)
         except UpdateHandoffError as exc:
+            if isinstance(request, BundleUpdateRequest):
+                restart_error = self._restart_after_failed_handoff()
+                if restart_error is None:
+                    self._report_bundle_failure(
+                        f"Waveguide Generator could not start the {label} update: {exc}\n\n"
+                        "The current version was restarted and remains open."
+                    )
+                    return False
+                destroy = getattr(window, "destroy", None)
+                if callable(destroy):
+                    destroy()
+                self._exit_code = 1
+                self._report_bundle_failure(
+                    f"Waveguide Generator could not start the {label} update: {exc}\n\n"
+                    f"The current version also could not restart: {restart_error}. "
+                    "The unusable window was closed."
+                )
+                return True
             _report_startup_failure(
                 f"Waveguide Generator could not start the {label} update: {exc}\n\n"
                 "The current version stays open."
             )
-            if isinstance(request, BundleUpdateRequest):
-                self.controller.start()
             return False
         # Closing the window ends webview.start(), and run()'s finally stops
         # the server the way a user-initiated close does.
@@ -379,13 +656,22 @@ class DesktopWindow:
     def run(self) -> int:
         """Start the controller, show its frontend, and own shutdown."""
 
+        snapshot: StatusSnapshot | None = None
         try:
             snapshot = self._wait_for_frontend()
             if snapshot is None:
                 return 1
             try:
                 webview = self._load_webview()
-            except ImportError:
+            except ImportError as exc:
+                message = (
+                    "Waveguide Generator could not open a desktop window because "
+                    f"pywebview is unavailable: {exc}\n\n{PYWEBVIEW_REPAIR}"
+                )
+                if self._bundle_paths() is None:
+                    _report_startup_failure(message, detail=traceback.format_exc())
+                else:
+                    self._report_bundle_window_failure(message)
                 return 1
             try:
                 self._prepare_windows_webview()
@@ -393,6 +679,7 @@ class DesktopWindow:
                 return self._fallback_from_windows_webview(snapshot, exc)
             self._webview = webview
             webview.settings["ALLOW_DOWNLOADS"] = True
+            self._startup_snapshot = snapshot
             self._window = webview.create_window(
                 WINDOW_TITLE,
                 snapshot.url,
@@ -409,13 +696,16 @@ class DesktopWindow:
                 ):
                     return self._fallback_from_windows_webview(snapshot, exc)
                 raise
-            return 0
+            return self._exit_code
         except Exception as exc:  # noqa: BLE001 - native startup must remain visible
-            _report_startup_failure(
+            message = (
                 "Waveguide Generator could not open its desktop window: "
-                f"{type(exc).__name__}: {exc}",
-                detail=traceback.format_exc(),
+                f"{type(exc).__name__}: {exc}"
             )
+            if snapshot is not None and self._bundle_paths() is not None:
+                self._report_bundle_window_failure(message)
+            else:
+                self._report_desktop_failure(message, detail=traceback.format_exc())
             return 1
         finally:
             self.controller.close()

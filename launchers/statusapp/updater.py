@@ -372,6 +372,10 @@ def launch_bundle_update_handoff(
         and not request.staged_runtime_dir.is_relative_to(data_dir)
     ):
         raise UpdateHandoffError("Refusing staged bundle paths outside the data directory.")
+    inherited_pythonpath = environment.get("PYTHONPATH")
+    environment["PYTHONPATH"] = os.pathsep.join(
+        part for part in (str(request.staged_app_dir), inherited_pythonpath) if part
+    )
     script = request.staged_app_dir / "launchers" / "apply_update.py"
     if not script.is_file():
         raise UpdateHandoffError(f"The staged bundle updater is missing: {script}")
@@ -407,7 +411,10 @@ def launch_bundle_update_handoff(
         # environment; carry --port/--data-dir as explicit CLI arguments.
         command.append(f"--relaunch-arg={argument}")
     options: dict[str, object] = {
-        "cwd": str(request.staged_app_dir),
+        # The updater renames both staged layers and both live layers. Its CWD
+        # must be a stable absolute directory or Windows will lock that layer
+        # against the very rename the updater is meant to perform.
+        "cwd": str(data_dir),
         "env": environment,
         "stdin": subprocess.DEVNULL,
         "stdout": subprocess.DEVNULL,
