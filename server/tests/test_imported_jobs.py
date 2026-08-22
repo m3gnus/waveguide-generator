@@ -1507,7 +1507,11 @@ def test_execution_uses_job_mesh_after_import_cache_is_deleted(tmp_path: Path) -
             assert imported_record["_execution_mesh_source"] == "job-artifact"
             assert imported_record["_execution_msh_text"].startswith("$MeshFormat")
             return EngineRunResult(
-                results={"channels": {"left": {}, "right": {}}, "metadata": {}},
+                results={
+                    "channels": {"left": {}, "right": {}},
+                    "channel_order": ["left", "right"],
+                    "metadata": {},
+                },
                 msh_text=imported_record["_execution_msh_text"],
                 mesh_stats={"triangle_count": 3},
             )

@@ -10,6 +10,7 @@ import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resolveOuterBodyMode } from '../design/ParamPanel';
 import { designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
+import { parkedSolveCommandStore } from '../stores/solveCommand';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
@@ -113,10 +114,12 @@ describe('solve invocation mutex', () => {
     useDocumentStore.getState().setDesignName('horn');
     resetDesignStore();
     resetCadReturnStore();
+    parkedSolveCommandStore.clear();
     resetSolveOptionsStore();
     importedMeshStore.clear();
     workspaceModeStore.setMode('parametric');
     compareSelection.clear();
+    parkedSolveCommandStore.clear();
     publishJobs([]);
     resetCadReturnStore();
     importedMeshStore.clear();
@@ -135,6 +138,7 @@ describe('solve invocation mutex', () => {
     publishJobs([]);
     compareSelection.clear();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     vi.clearAllMocks();
     workspaceModeStore.setMode('parametric');
   });
@@ -327,6 +331,75 @@ describe('solve invocation mutex', () => {
     await act(async () => { await jobsCoordinatorBridge.getSnapshot().runImported(importedSubmission('wgi_second')); });
 
     expect(mocks.submitImported.mock.calls.map((call) => call[2])).toEqual(['horn1', 'horn2', 'horn3']);
+  });
+
+  it('keys a parked CAD command submission by its command id', async () => {
+    useCadReturnStore.setState({
+      selectedBundle: {
+        name: 'speaker.wgreturn', bundlePath: 'wgreturn/speaker.wgreturn',
+        modifiedAt: '2026-08-22T00:00:00Z', readable: true, documentName: 'Speaker',
+        requestId: null, sourceCount: 0, instanceCount: 0, designIds: [], sources: [],
+      },
+    });
+    parkedSolveCommandStore.park({
+      commandId: 'cmd-1', bundlePath: 'wgreturn/speaker.wgreturn', blockers: [],
+      parkedAt: '2026-08-22T00:00:00Z',
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      JSON.stringify({ state: 'accepted', cleared: true }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    )));
+    mocks.submitImported.mockResolvedValue('job-cad');
+
+    await act(async () => {
+      await jobsCoordinatorBridge.getSnapshot().runImported(importedSubmission('wgi_command'));
+    });
+
+    expect(mocks.submitImported.mock.calls[0][3]).toBe('cad-solve:cmd-1');
+    expect(parkedSolveCommandStore.getSnapshot().command).toBeNull();
+  });
+
+  it('replays the identical keyed request after acknowledgement persistence fails', async () => {
+    useCadReturnStore.setState({
+      selectedBundle: {
+        name: 'speaker.wgreturn', bundlePath: 'wgreturn/speaker.wgreturn',
+        modifiedAt: '2026-08-22T00:00:00Z', readable: true, documentName: 'Speaker',
+        requestId: null, sourceCount: 0, instanceCount: 0, designIds: [], sources: [],
+      },
+    });
+    parkedSolveCommandStore.park({
+      commandId: 'cmd-retry', bundlePath: 'wgreturn/speaker.wgreturn', blockers: [],
+      parkedAt: '2026-08-22T00:00:00Z',
+    });
+    let outcomeAttempt = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      outcomeAttempt += 1;
+      return outcomeAttempt === 1
+        ? new Response(JSON.stringify({ detail: 'ledger unavailable' }), {
+          status: 503, headers: { 'Content-Type': 'application/json' },
+        })
+        : new Response(JSON.stringify({ state: 'accepted', cleared: true }), {
+          status: 200, headers: { 'Content-Type': 'application/json' },
+        });
+    }));
+    mocks.submitImported.mockResolvedValue('job-existing');
+    const submission = importedSubmission('wgi_command');
+
+    await act(async () => {
+      await expect(jobsCoordinatorBridge.getSnapshot().runImported(submission))
+        .rejects.toThrow('acknowledgement failed');
+    });
+    expect(parkedSolveCommandStore.getSnapshot().command?.commandId).toBe('cmd-retry');
+    await act(async () => {
+      await expect(jobsCoordinatorBridge.getSnapshot().runImported(submission))
+        .resolves.toBe('job-existing');
+    });
+
+    expect(mocks.submitImported.mock.calls.map((call) => [call[2], call[3]])).toEqual([
+      ['horn1', 'cad-solve:cmd-retry'],
+      ['horn1', 'cad-solve:cmd-retry'],
+    ]);
+    expect(parkedSolveCommandStore.getSnapshot().command).toBeNull();
   });
 
   it('submits a full CAD solve from the main control without mounting CadLinkPanel', async () => {

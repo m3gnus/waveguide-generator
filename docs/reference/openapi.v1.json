@@ -5919,6 +5919,7 @@
                 "type": "null"
               }
             ],
+            "description": "Durable submission key: an identical replay returns the original job; the same key with a different normalized request is refused.",
             "title": "Client Request Id"
           },
           "geometry": {
@@ -8548,6 +8549,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Submission key conflict"
           },
           "422": {
             "content": {

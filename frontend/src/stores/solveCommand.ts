@@ -77,11 +77,20 @@ export async function consumeParkedSolveCommand(
   // Only the return the command named: solving some other bundle is not the
   // work Fusion asked for and must not spend its request.
   if (useCadReturnStore.getState().selectedBundle?.bundlePath !== parked.bundlePath) return;
-  parkedSolveCommandStore.clear();
-  await reportSolveCommandOutcome(
-    { commandId: parked.commandId, state: 'accepted', jobId, reason: null },
-    fetcher,
-  ).catch(() => undefined);
+  try {
+    await reportSolveCommandOutcome(
+      { commandId: parked.commandId, state: 'accepted', jobId, reason: null },
+      fetcher,
+    );
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `The solve job was created, but its CAD command acknowledgement failed. Retry the parked solve to acknowledge the existing job: ${detail}`,
+    );
+  }
+  if (parkedSolveCommandStore.getSnapshot().command?.commandId === parked.commandId) {
+    parkedSolveCommandStore.clear();
+  }
 }
 
 /** Refuse a parked command for good: the marker is deleted and the ledger says
@@ -93,9 +102,11 @@ export async function refuseParkedSolveCommand(
 ): Promise<void> {
   const parked = parkedSolveCommandStore.getSnapshot().command;
   if (!parked) return;
-  parkedSolveCommandStore.clear();
   await reportSolveCommandOutcome(
     { commandId: parked.commandId, state: 'refused', jobId: null, reason },
     fetcher,
-  ).catch(() => undefined);
+  );
+  if (parkedSolveCommandStore.getSnapshot().command?.commandId === parked.commandId) {
+    parkedSolveCommandStore.clear();
+  }
 }

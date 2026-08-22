@@ -741,7 +741,14 @@ class SolveRequest(JobModel):
     options: SolveOptions = Field(default_factory=SolveOptions)
     label: str | None = None
     parent_job_id: str | None = None
-    client_request_id: str | None = Field(default=None, max_length=200)
+    client_request_id: str | None = Field(
+        default=None,
+        max_length=200,
+        description=(
+            "Durable submission key: an identical replay returns the original job; "
+            "the same key with a different normalized request is refused."
+        ),
+    )
     client_metadata: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="before")

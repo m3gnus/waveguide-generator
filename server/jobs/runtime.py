@@ -41,7 +41,7 @@ from server.jobs.models import (
     SolveRequest,
 )
 from server.jobs.store import ALLOWED_STATUSES, JobStore
-from server.integration.provenance import enrich_result_contract
+from server.integration.provenance import canonical_json_sha256, enrich_result_contract
 from server.platform.instance import LOCK_OPEN_FLAGS, lock_exclusive, unlock
 from server.solver.imported import (
     ImportedMeshArtifactError,
@@ -1098,6 +1098,18 @@ class JobRuntime:
 
     async def submit(self, request: SolveRequest) -> str:
         await self.start()
+        submission_key = request.client_request_id
+        submission_request_sha256 = canonical_json_sha256(
+            request.model_dump(mode="json")
+        )
+        if submission_key is not None:
+            existing_job_id = await asyncio.to_thread(
+                self.store.resolve_submission,
+                submission_key,
+                submission_request_sha256,
+            )
+            if existing_job_id is not None:
+                return existing_job_id
         imported: _ImportedSubmission | None = None
         if isinstance(request.geometry, ImportedGeometrySource):
             imported = await self._prepare_imported_submission(request)
@@ -1198,7 +1210,18 @@ class JobRuntime:
             "task_metadata": task_metadata,
         }
         initial_event = ("queued", {"status": "queued", "progress": 0.0})
-        if imported is None:
+        if submission_key is not None:
+            claimed_job_id, created, event = await asyncio.to_thread(
+                self.store.create_job_idempotent,
+                job_record,
+                submission_key=submission_key,
+                request_sha256=submission_request_sha256,
+                initial_event=initial_event,
+                mesh_artifact=imported.msh_text if imported is not None else None,
+            )
+            if not created:
+                return claimed_job_id
+        elif imported is None:
             event = self.store.create_job(job_record, initial_event=initial_event)
         else:
             event = await asyncio.to_thread(
@@ -1516,6 +1539,10 @@ class JobRuntime:
         row = self._require_job(job_id)
         request = _replay_request(row)
         request.parent_job_id = job_id
+        # Retry is explicitly a new run, not a transport replay of the source
+        # submission. Reusing its key would either recover the source job or
+        # conflict because the parent id is now different.
+        request.client_request_id = None
         return await self.submit(request)
 
     async def get_job(self, job_id: str) -> dict[str, Any]:
