@@ -124,14 +124,19 @@ export function resolveEngine(
   },
   solverMode = 'auto',
 ): string {
-  if (engine.toLowerCase() !== 'auto') return engine.toLowerCase();
   const selection = capabilities.engineSelection;
   if (solverMode === 'circsym') {
-    const runner = selection?.axisymmetricRunner.toLowerCase();
+    const runner = selection?.axisymmetricRunner.trim().toLowerCase();
     const axisym = capabilities.engines.find((item) => item.available
       && item.name.toLowerCase() === runner);
     if (axisym) return runner!;
+    const advertised = capabilities.engines.find((item) => item.name.toLowerCase() === runner);
+    const detail = advertised?.reason ? ` ${advertised.reason}` : '';
+    throw new Error(runner
+      ? `Forced Axisymmetric mode requires the advertised ${runner} runner, but it is unavailable.${detail}`
+      : 'Forced Axisymmetric mode is unavailable because the server advertised no axisymmetric runner.');
   }
+  if (engine.toLowerCase() !== 'auto') return engine.toLowerCase();
   const order = selection?.full3dOrder.map((name) => name.toLowerCase())
     ?? capabilities.engines
       .filter((item) => item.formulations?.includes('full-3d'))

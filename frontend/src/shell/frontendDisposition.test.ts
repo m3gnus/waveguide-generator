@@ -59,6 +59,18 @@ describe('frontend result and status labels', () => {
     expect(engineStatusLabel(engines, selection, 'auto', 'auto')).toBe('METAL · 1.0');
   });
 
+  it('labels the advertised Axisym dependency offline when forced mode cannot run', () => {
+    const engines = [
+      { name: 'metal', available: true, reason: null, version: '1.0', fast_paths: [] },
+      { name: 'axisym', available: false, reason: 'runner unavailable', version: null, fast_paths: [] },
+    ];
+    const selection = {
+      default: 'auto', resolvedDefault: 'metal', full3dOrder: ['metal'], axisymmetricRunner: 'axisym',
+    };
+    expect(engineStatusLabel(engines, selection, 'auto', 'circsym')).toBe('AXISYM · OFFLINE');
+    expect(engineStatusLabel(engines, selection, 'metal', 'circsym')).toBe('AXISYM · OFFLINE');
+  });
+
   it('shows the tracked design filename instead of a path placeholder', () => {
     expect(documentLabel('loaded-design.cfg')).toBe('loaded-design.cfg');
     expect(documentLabel('   ')).toBe('untitled design');

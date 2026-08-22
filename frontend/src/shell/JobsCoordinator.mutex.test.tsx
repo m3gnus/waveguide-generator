@@ -160,6 +160,18 @@ describe('solve invocation mutex', () => {
     });
   });
 
+  it('blocks forced Axisymmetric mode when the advertised runner is unavailable', async () => {
+    useSolveOptionsStore.setState({ engine: 'auto', solverMode: 'circsym' });
+    await act(async () => {
+      root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>);
+    });
+
+    const solve = host.querySelector<HTMLButtonElement>('button')!;
+    expect(solve.disabled).toBe(true);
+    expect(solve.title).toContain('requires the advertised axisym runner');
+    expect(solve.title).not.toContain('AUTO (metal)');
+  });
+
   it('submits again after the first invocation resolves', async () => {
     mocks.submitDesign.mockResolvedValue('job');
     const design = designForFamily('OSSE');

@@ -71,7 +71,16 @@ export function engineStatusLabel(
   isLoading = false,
 ): string {
   let effectiveEngine = selectedEngine.toLowerCase();
-  try { effectiveEngine = resolveEngine(selectedEngine, { engines, engineSelection }, solverMode); } catch { /* reported as offline below */ }
+  try {
+    effectiveEngine = resolveEngine(selectedEngine, { engines, engineSelection }, solverMode);
+  } catch {
+    // A forced meridian solve cannot fall back to the selected full-3D engine.
+    // Name the advertised dependency that is offline instead of implying AUTO
+    // or an explicit full-3D selection remains the path that will run.
+    if (solverMode === 'circsym') {
+      effectiveEngine = engineSelection.axisymmetricRunner.trim().toLowerCase() || 'axisym';
+    }
+  }
   const engine = engines.find((item) => item.name.toLowerCase() === effectiveEngine);
   if (engine) return `${engine.name.toUpperCase()} · ${engine.available ? engine.version ?? 'READY' : 'OFFLINE'}`;
   return isLoading ? `${effectiveEngine.toUpperCase()}…` : `${effectiveEngine.toUpperCase()} · OFFLINE`;
