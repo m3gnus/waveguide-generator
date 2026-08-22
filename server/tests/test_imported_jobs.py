@@ -1389,6 +1389,8 @@ def test_channel_driver_scaling_includes_retained_pressure_and_neumann_traces(
     result = _native_result()
     result.surface_pressure_complex = np.ones((2, 3), dtype=np.complex128)
     result.surface_neumann_complex = np.full((2, 2), 4 - 2j, dtype=np.complex128)
+    result.radiated_power_surface_w = np.asarray([1.0, 2.0])
+    result.radiated_power_sphere_w = np.asarray([3.0, 4.0])
     channel = SimpleNamespace(
         source_ids=["source-a"],
         driver=object(),
@@ -1417,6 +1419,14 @@ def test_channel_driver_scaling_includes_retained_pressure_and_neumann_traces(
     np.testing.assert_array_equal(
         result.surface_neumann_complex,
         np.full((2, 2), 4 - 2j, dtype=np.complex128) * scales[:, None],
+    )
+    np.testing.assert_array_equal(
+        result.radiated_power_surface_w,
+        np.asarray([1.0, 2.0]) * np.square(np.abs(scales)),
+    )
+    np.testing.assert_array_equal(
+        result.radiated_power_sphere_w,
+        np.asarray([3.0, 4.0]) * np.square(np.abs(scales)),
     )
 
 
@@ -1708,6 +1718,12 @@ def test_coupled_cardioid_adds_derived_channel_and_defers_mf_driver_once(
         assert sources == [{101: 1.0 + 0.0j}, {10: 1.0 + 0.0j}]
         mf = _native_result_3f()
         port = _native_result_3f()
+        mf.radiated_power_surface_w = np.asarray([1.0, 2.0, 3.0])
+        mf.radiated_power_sphere_w = np.asarray([1.1, 2.1, 3.1])
+        mf.radiated_power_sphere_coverage_sr = 4.0 * np.pi
+        port.radiated_power_surface_w = np.asarray([0.5, 0.6, 0.7])
+        port.radiated_power_sphere_w = np.asarray([0.55, 0.65, 0.75])
+        port.radiated_power_sphere_coverage_sr = 4.0 * np.pi
         port.pressure_complex *= 0.5
         return [mf, port]
 
@@ -1740,7 +1756,13 @@ def test_coupled_cardioid_adds_derived_channel_and_defers_mf_driver_once(
     assert response["channels"]["mf"]["metadata"]["driver_coupling_deferred_to"] == (
         "passive_cardioid"
     )
+    assert response["channels"]["mf"]["metadata"]["radiated_power"]["surface_w"] == [
+        1.0,
+        2.0,
+        3.0,
+    ]
     derived = response["channels"]["passive_cardioid"]
+    assert "radiated_power" not in derived["metadata"]
     assert derived["metadata"]["impedance_units"] == "ohms"
     assert derived["metadata"]["impedance_drive"] == "voltage"
     assert derived["metadata"]["impedance_phase_convention"] == (

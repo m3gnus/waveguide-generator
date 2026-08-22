@@ -46,6 +46,24 @@ def _finite(value: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
+def _optional_frequency_series(
+    result: Any, field: str, count: int
+) -> tuple[list[float | None] | None, int | None]:
+    """Read one optional native ``(F,)`` array without requiring a new pin."""
+
+    raw = getattr(result, field, None)
+    if raw is None:
+        return None, None
+    try:
+        array = np.asarray(raw, dtype=np.float64)
+    except (TypeError, ValueError):
+        return [None] * count, 0
+    if array.ndim != 1:
+        return [None] * count, int(array.shape[0]) if array.ndim else 0
+    values = [_finite(value) for value in array.tolist()]
+    return (values + [None] * count)[:count], int(array.size)
+
+
 def json_safe_native_value(value: Any) -> Any:
     """Convert native/NumPy values without permitting JSON NaN/Infinity."""
 
@@ -857,6 +875,12 @@ def build_solver_response(
     phase_patterns = directivity_phase(result)
     on_axis_angle_deg = _on_axis_reference_angle(result)
     balloon = _balloon_grid_from_result(result)
+    surface_power_w, surface_power_count = _optional_frequency_series(
+        result, "radiated_power_surface_w", len(frequency_values)
+    )
+    sphere_power_w, sphere_power_count = _optional_frequency_series(
+        result, "radiated_power_sphere_w", len(frequency_values)
+    )
     spherical_di_available = balloon is not None and (
         not bool(balloon["hemisphere"]) or context.sim_type == 1
     )
@@ -898,6 +922,10 @@ def build_solver_response(
         ),
         "impedance": int(np.asarray(getattr(result, "impedance", [])).size),
     }
+    if surface_power_count is not None:
+        raw_counts["radiated_power_surface_w"] = surface_power_count
+    if sphere_power_count is not None:
+        raw_counts["radiated_power_sphere_w"] = sphere_power_count
     for quantity, actual in raw_counts.items():
         if actual != expected:
             failures.append(
@@ -959,6 +987,32 @@ def build_solver_response(
         "opposing_orbit_sides": "not_applicable",
         "rear_hemisphere": "zero_radiation" if context.sim_type == 1 else "sampled",
     }
+    if surface_power_w is not None or sphere_power_w is not None:
+        surface_values = surface_power_w or [None] * len(frequency_values)
+        sphere_values = sphere_power_w or [None] * len(frequency_values)
+        agreement_db = [
+            10.0 * math.log10(sphere / surface)
+            if surface is not None
+            and sphere is not None
+            and surface > 0.0
+            and sphere > 0.0
+            else None
+            for surface, sphere in zip(surface_values, sphere_values, strict=True)
+        ]
+        metadata["radiated_power"] = {
+            "surface_w": surface_values,
+            "sphere_w": sphere_values,
+            "sphere_coverage_sr": _finite(
+                getattr(result, "radiated_power_sphere_coverage_sr", None)
+            ),
+            "definition": (
+                "surface_w is one-half real pressure-normal-velocity flux over "
+                "the driven faces; sphere_w is far-field acoustic power integrated "
+                "over the sampled sphere with solid-angle weights; agreement_db = "
+                "10log10(sphere_w / surface_w)"
+            ),
+            "agreement_db": agreement_db,
+        }
     metadata.update(
         {
             "result_contract_version": 1,
