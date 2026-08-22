@@ -6,8 +6,10 @@ from copy import deepcopy
 from functools import lru_cache
 import hashlib
 import json
-from pathlib import Path
+import re
 from typing import TYPE_CHECKING, Any, Mapping
+
+from server.platform.paths import app_root
 
 if TYPE_CHECKING:
     from server.jobs.models import SolveRequest
@@ -15,7 +17,11 @@ if TYPE_CHECKING:
 from .contracts import PROVENANCE_CONTRACT_VERSION
 
 
-_REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+_REPOSITORY_ROOT = app_root()
+_PIN_REQUIREMENT_RE = re.compile(
+    r"^git\+https://github\.com/m3gnus/(?P<name>[^/]+)\.git@"
+    r"(?P<sha>[0-9a-f]{40})#egg=(?P=name)$"
+)
 
 
 def _canonical_json(value: Any) -> bytes:
@@ -39,13 +45,19 @@ def _release_identity() -> tuple[str, dict[str, str]]:
     version = json.loads(
         (_REPOSITORY_ROOT / "shared" / "version.json").read_text(encoding="utf-8")
     )["version"]
-    pins = json.loads(
-        (_REPOSITORY_ROOT / "pins.json").read_text(encoding="utf-8")
-    )["modules"]
-    dependency_shas = {
-        str(name): str(entry["sha"])
-        for name, entry in sorted(pins.items())
-    }
+    pins_path = _REPOSITORY_ROOT / "pins.json"
+    if pins_path.is_file():
+        pins = json.loads(pins_path.read_text(encoding="utf-8"))["modules"]
+        dependency_shas = {
+            str(name): str(entry["sha"]) for name, entry in sorted(pins.items())
+        }
+    else:
+        dependency_shas = {}
+        requirements = _REPOSITORY_ROOT / "server" / "requirements-pins.txt"
+        for line in requirements.read_text(encoding="utf-8").splitlines():
+            match = _PIN_REQUIREMENT_RE.fullmatch(line.strip())
+            if match is not None:
+                dependency_shas[match.group("name")] = match.group("sha")
     return str(version), dependency_shas
 
 

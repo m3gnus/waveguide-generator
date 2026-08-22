@@ -33,6 +33,7 @@ import numpy as np
 
 from server.design.conventions import artifact_conventions
 from server.jobs.store import JobStore
+from server.platform.paths import app_root
 from server.solver.field_traces_store import (
     ArtifactCorrupt,
     ArtifactMissing,
@@ -634,7 +635,7 @@ def _engine(row: Mapping[str, Any], results: Mapping[str, Any] | None) -> str | 
 
 
 def _app_version() -> str:
-    version_path = Path(__file__).resolve().parents[2] / "shared" / "version.json"
+    version_path = app_root() / "shared" / "version.json"
     try:
         return str(json.loads(version_path.read_text(encoding="utf-8"))["version"])
     except (OSError, KeyError, ValueError):

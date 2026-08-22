@@ -42,7 +42,20 @@ else:
     import fcntl
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+# This script must stay runnable on its own: the shell installers call it in a
+# checkout whose application packages may be absent or broken (the installer
+# integrity tests stage exactly that), so the shared root helper is optional.
+_IMPORT_ROOT = Path(
+    os.environ.get("WG2_APP_ROOT") or Path(__file__).resolve().parents[1]
+).expanduser().resolve()
+if (_IMPORT_ROOT / "server" / "platform" / "paths.py").is_file():
+    if str(_IMPORT_ROOT) not in sys.path:
+        sys.path.insert(0, str(_IMPORT_ROOT))
+    from server.platform.paths import app_root  # noqa: E402
+
+    REPO_ROOT = app_root()
+else:
+    REPO_ROOT = _IMPORT_ROOT
 DEFAULT_REPO = "m3gnus/waveguide-generator"
 DEFAULT_TIMEOUT = 60.0
 FRONTEND = REPO_ROOT / "frontend"

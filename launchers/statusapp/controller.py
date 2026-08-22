@@ -28,6 +28,7 @@ from scripts.frontend_freshness import (
     refresh_hint,
 )
 from server.platform.instance import requested_port
+from server.platform.paths import app_root
 from .updater import UpdateHandoffError, consume_update_request, launch_update_handoff
 
 
@@ -207,11 +208,11 @@ class StatusController:
         request_timeout: float = 0.35,
         shutdown_timeout: float = 8.0,
     ) -> None:
-        self.repo_root = Path(repo_root or Path(__file__).resolve().parents[2]).resolve()
+        self.environ = dict(os.environ if environ is None else environ)
+        self.repo_root = Path(repo_root or app_root(environ=self.environ)).resolve()
         self.python_executable = Path(python_executable or sys.executable).resolve()
         self.server_args = tuple(server_args)
         self.server_command = tuple(server_command) if server_command is not None else None
-        self.environ = dict(os.environ if environ is None else environ)
         self.request_probe = request_probe
         self.request_timeout = request_timeout
         self.shutdown_timeout = shutdown_timeout

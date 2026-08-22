@@ -17,14 +17,22 @@ exactly that.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import platform
 import sys
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+_IMPORT_ROOT = Path(
+    os.environ.get("WG2_APP_ROOT") or Path(__file__).resolve().parents[1]
+).expanduser().resolve()
+if str(_IMPORT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_IMPORT_ROOT))
+
+from server.platform.paths import app_root  # noqa: E402
+
+
+REPO_ROOT = app_root()
 
 
 def _report(label: str, status: dict[str, object]) -> bool:

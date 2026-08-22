@@ -24,6 +24,7 @@ from server.design.conventions import artifact_conventions
 from server.design.schema import DesignConfig
 from server.design.textcfg import serialize
 from server.mesh.gmsh_worker import run_on_gmsh_worker
+from server.platform.paths import app_root
 from server.preview.translate import design_to_mesher_config
 from server.workspace.api import WorkspaceState, _path_segments, _portable_path_key
 
@@ -169,7 +170,7 @@ def _export_error(exc: Exception) -> HTTPException:
 
 
 def _app_version() -> str:
-    version_path = Path(__file__).resolve().parents[2] / "shared" / "version.json"
+    version_path = app_root() / "shared" / "version.json"
     return str(json.loads(version_path.read_text(encoding="utf-8"))["version"])
 
 

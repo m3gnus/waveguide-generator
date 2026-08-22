@@ -51,7 +51,7 @@ Waveguide Generator.app/Contents/
   Resources/app/                  the "app layer": server/ launch/ launchers/ shared/
                                   scripts/ frontend/dist/ integrations/wglink/ docs/ LICENSE
     APP-MANIFEST.json             {"schemaVersion":1,"version":"0.2.5","commit":"<sha>",
-                                   "runtimeRequirementsSha256":"..."}
+                                   "runtimeId":"..."}
 ```
 
 The two layers are independent release assets:
@@ -60,7 +60,7 @@ The two layers are independent release assets:
 |---|---|---|
 | `waveguide-generator-app-<version>.zip` | `Resources/app` | every release (a few MB) |
 | `waveguide-generator-runtime-macos-arm64-<runtimeId>.zip` | `Resources/runtime` | `requirements-*.txt` or `pins.json` change |
-| `Waveguide Generator-<version>-macos-arm64.dmg` | complete bundle | every release (first install) |
+| `Waveguide Generator-<version>-macos-arm64.dmg` | complete bundle | every release (first install); GitHub stores it as `Waveguide.Generator-…` |
 
 `runtimeId` is the first 12 hex digits of SHA-256 over the concatenation of
 `server/requirements-runtime.txt`, `server/requirements-pins.txt`, and the
@@ -157,7 +157,9 @@ Verification is part of the script: after building, it launches
 `Resources/runtime/bin/python3.13 scripts/check_backends.py` from a *copy*
 of the bundle in a temporary directory and requires Metal ready (on Apple
 Silicon), then starts the server with `--no-browser` on a free port and
-fetches `/` and `/api/health`.
+fetches `/` and `/health`, then re-verifies the ad-hoc signature (the stub
+redirects `__pycache__` and the numba cache outside the bundle so a run
+never breaks the seal).
 
 `.github/workflows/release.yml` gains a `macos-bundle` job on
 `macos-latest` (arm64; Xcode present for Swift). It runs after the SPA job,
