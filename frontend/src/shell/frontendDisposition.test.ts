@@ -84,6 +84,18 @@ describe('frontend result and status labels', () => {
     expect(engineStatusLabel(engines, selection, 'axisym', 'full_3d')).toBe('AXISYM · INVALID');
   });
 
+  it('keeps an unavailable explicit fallback honest while AUTO may try Axisym', () => {
+    const engines = [
+      { name: 'beat', available: false, reason: 'GPU offline', version: null, fast_paths: [] },
+      { name: 'axisym', available: true, reason: null, version: '1.0', fast_paths: [] },
+    ];
+    const selection = {
+      default: 'auto', resolvedDefault: null, full3dOrder: ['beat'], axisymmetricRunner: 'axisym',
+    };
+    expect(engineStatusLabel(engines, selection, 'beat', 'auto')).toBe('BEAT · OFFLINE');
+    expect(engineStatusLabel(engines, selection, 'beat', 'full_3d')).toBe('BEAT · OFFLINE');
+  });
+
   it('shows the tracked design filename instead of a path placeholder', () => {
     expect(documentLabel('loaded-design.cfg')).toBe('loaded-design.cfg');
     expect(documentLabel('   ')).toBe('untitled design');

@@ -26,6 +26,13 @@ import { JobsPanel } from './JobsPanel';
 const mocks = vi.hoisted(() => ({
   submitDesign: vi.fn(),
   submitImported: vi.fn(),
+  capabilities: {
+    engines: [] as Array<{ name: string; available: boolean; reason: string | null; version: string | null; fast_paths: string[]; formulations?: string[]; mountings?: string[] }>,
+    engineSelection: {
+      default: 'auto', resolvedDefault: 'metal' as string | null,
+      full3dOrder: ['metal', 'bempp', 'dryrun'], axisymmetricRunner: 'axisym',
+    },
+  },
 }));
 
 vi.mock('../jobs/actions', async (importOriginal) => {
@@ -34,10 +41,8 @@ vi.mock('../jobs/actions', async (importOriginal) => {
 });
 vi.mock('../jobs/useCapabilities', () => ({
   useCapabilities: () => ({
-    engines: [{ name: 'metal', available: true, reason: null, version: null, fast_paths: [] }, { name: 'bempp', available: true, reason: null, version: null, fast_paths: [] }, { name: 'dryrun', available: true, reason: null, version: null, fast_paths: [] }],
-    engineSelection: {
-      default: 'auto', resolvedDefault: 'metal', full3dOrder: ['metal', 'bempp', 'dryrun'], axisymmetricRunner: 'axisym',
-    },
+    engines: mocks.capabilities.engines,
+    engineSelection: mocks.capabilities.engineSelection,
     error: null,
     isLoading: false,
   }),
@@ -118,6 +123,15 @@ describe('solve invocation mutex', () => {
     resetSolveOptionsStore();
     importedMeshStore.clear();
     workspaceModeStore.setMode('parametric');
+    mocks.capabilities.engines = [
+      { name: 'metal', available: true, reason: null, version: null, fast_paths: [], formulations: ['full-3d'] },
+      { name: 'bempp', available: true, reason: null, version: null, fast_paths: [], formulations: ['full-3d'] },
+      { name: 'dryrun', available: true, reason: null, version: null, fast_paths: [], formulations: ['full-3d'] },
+    ];
+    mocks.capabilities.engineSelection = {
+      default: 'auto', resolvedDefault: 'metal',
+      full3dOrder: ['metal', 'bempp', 'dryrun'], axisymmetricRunner: 'axisym',
+    };
     publishJobs([]);
     resetCadReturnStore();
     importedMeshStore.clear();
@@ -185,6 +199,41 @@ describe('solve invocation mutex', () => {
     await act(async () => { await Promise.resolve(); });
     expect(solve.disabled).toBe(true);
     expect(solve.title).toContain('Unknown solve engine');
+  });
+
+  it('allows AUTO formulation planning when Axisym is available but the explicit fallback is offline', async () => {
+    mocks.capabilities.engines = [
+      { name: 'beat', available: false, reason: 'GPU backend is offline', version: null, fast_paths: [], formulations: ['full-3d'] },
+      { name: 'axisym', available: true, reason: null, version: '1', fast_paths: [], formulations: ['axisymmetric'] },
+    ];
+    mocks.capabilities.engineSelection = {
+      default: 'auto', resolvedDefault: null,
+      full3dOrder: ['beat'], axisymmetricRunner: 'axisym',
+    };
+    useSolveOptionsStore.setState({ engine: 'beat', solverMode: 'auto' });
+    mocks.submitDesign.mockResolvedValue('axisym-job');
+    await act(async () => {
+      root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>);
+    });
+
+    const solve = host.querySelector<HTMLButtonElement>('button')!;
+    expect(solve.disabled).toBe(false);
+    expect(solve.title).toContain('AXISYM available');
+    expect(solve.title).toContain('requested BEAT fallback is offline');
+    await act(async () => {
+      solve.click();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(mocks.submitDesign).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      useSolveOptionsStore.setState({ solverMode: 'full_3d' });
+      await Promise.resolve();
+    });
+    expect(solve.disabled).toBe(true);
+    expect(solve.title).toBe('GPU backend is offline');
   });
 
   it('submits again after the first invocation resolves', async () => {
