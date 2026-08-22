@@ -421,14 +421,14 @@ export function fieldOptionsForBackend(
   field: ParameterDefinition,
   value: unknown,
   backend: BackendIdentity,
-  host: readonly EngineCapability[] = [],
+  plan: readonly EngineCapability[] = [],
 ): ParameterOption[] {
   return (field.options ?? [])
     .filter((option) => !option.requiresFeature
-      || backendSupports(backend, option.requiresFeature, host)
+      || backendSupports(backend, option.requiresFeature, plan)
       || String(option.value) === String(value ?? ''))
     .map((option) => (option.degradedWithout && option.degradedLabel
-      && !backendSupports(backend, option.degradedWithout, host)
+      && !backendSupports(backend, option.degradedWithout, plan)
       ? { ...option, label: option.degradedLabel }
       : option));
 }
@@ -443,11 +443,11 @@ export function fieldUnsupportedFeature(
   field: ParameterDefinition,
   value: unknown,
   backend: BackendIdentity,
-  host: readonly EngineCapability[] = [],
+  plan: readonly EngineCapability[] = [],
 ): BackendFeature | undefined {
   const selected = (field.options ?? []).find((option) => String(option.value) === String(value ?? ''));
   const feature = selected?.requiresFeature;
-  return feature && !backendSupports(backend, feature, host) ? feature : undefined;
+  return feature && !backendSupports(backend, feature, plan) ? feature : undefined;
 }
 
 export function fieldMatchesQuery(field: ParameterDefinition, query: string): boolean {

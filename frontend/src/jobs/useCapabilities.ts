@@ -5,7 +5,7 @@ import {
   type EngineCapability,
   type EngineSelection,
 } from './actions';
-import { activeBackendCapability, activeBackendName } from '../design/backendSupport';
+import { activeBackendCapability, activeBackendName, plannedBackendCapabilities } from '../design/backendSupport';
 import { useSolveOptionsStore } from '../stores/solveOptions';
 
 /**
@@ -85,6 +85,13 @@ export function useActiveBackendCapability(): EngineCapability | null {
   const engine = useSolveOptionsStore((state) => state.engine);
   const { engines, engineSelection } = useCapabilities();
   return activeBackendCapability(engine, engines, engineSelection);
+}
+
+/** Candidates the server may select for the current explicit/AUTO request. */
+export function usePlannedBackendCapabilities(): readonly EngineCapability[] {
+  const engine = useSolveOptionsStore((state) => state.engine);
+  const { engines, engineSelection } = useCapabilities();
+  return plannedBackendCapabilities(engine, engines, engineSelection);
 }
 
 /**
