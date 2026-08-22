@@ -1668,9 +1668,10 @@ interface ResultFetchError {
  * complex bases server-side, so a change repaints without a re-solve. The
  * applied frequencies are also written back to the CAD rail, so the dock and
  * the pre-solve fields are one setting rather than two that disagree. */
-function RecombineRow({ jobId, channelId, combine, onApplied }: {
+function RecombineRow({ jobId, channelId, resultIngestId, combine, onApplied }: {
   jobId: string;
   channelId: string;
+  resultIngestId: string | null;
   combine: CombineMetadata;
   onApplied: (jobId: string, updated: JobResults) => void;
 }) {
@@ -1704,7 +1705,7 @@ function RecombineRow({ jobId, channelId, combine, onApplied }: {
         align: combine.align ?? true,
       });
       onApplied(jobId, updated);
-      useCadReturnStore.getState().setCombineCrossoversFromResult(combine.members, crossovers);
+      useCadReturnStore.getState().setCombineCrossoversFromResult(resultIngestId, combine.members, crossovers);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -1953,6 +1954,9 @@ export function ResultsPanel() {
     return newer ? latest : null;
   }, [dismissedNewRun, latest, primaryJob, selection.primary]);
   const selectedJob = useMemo(() => jobs.find((job) => job.id === display?.primaryId) ?? null, [display?.primaryId, jobs]);
+  const recombineIngestId = selectedJob && runMatchesContext(selectedJob, coherenceContext) === 'current'
+    ? selectedJob.cad_source?.ingest_id ?? null
+    : null;
   const primaryIsProvisional = Boolean(display?.provisionalIds.includes(display.primaryId));
   const provisionalMetadata = primaryRaw?.metadata?.provisional;
   const provisionalRecord = provisionalMetadata && typeof provisionalMetadata === 'object'
@@ -2161,7 +2165,7 @@ export function ResultsPanel() {
         : <><button type="button" onClick={() => { setCoherenceOpen(false); showPrimaryModel(); }}>Show this model</button><button type="button" onClick={() => { setCoherenceOpen(false); compareSelection.followLatest(latest?.id ?? null); }}>Show newest run</button></>}
     </AnchoredPanel>}
     {shownActiveChannel && shownCombine && display && selectedJob?.status === 'complete' && !primaryIsProvisional
-      && <RecombineRow jobId={display.primaryId} channelId={shownActiveChannel} combine={shownCombine} onApplied={applyRecombined}/>}
+      && <RecombineRow jobId={display.primaryId} channelId={shownActiveChannel} resultIngestId={recombineIngestId} combine={shownCombine} onApplied={applyRecombined}/>}
     {(measuredOverlays.length > 0 || measuredError) && <div className="results-toolbar result-measured">
       <span className="result-measured-caption">Measured</span>
       {measuredOverlays.map((overlay) => <MeasuredOverlayRow key={overlay.id} overlay={overlay}/>)}

@@ -139,9 +139,10 @@ interface CadReturnState {
   setCombineCrossover: (pairKey: string, hz: number) => void;
   /** Adopt the crossovers a recombined result was computed with, so the dock
    * and the rail hold one setting and the next solve starts where the last
-   * recombine left off. Pairs naming channels this return has not got are
-   * ignored: a stale run must not seed the rail with foreign ids. */
-  setCombineCrossoversFromResult: (members: string[], crossoversHz: number[]) => void;
+   * recombine left off. The run must carry the active return's immutable ingest
+   * id (the same identity `runMatchesContext` uses); matching channel ids alone
+   * are not lineage. Pairs naming channels this return has not got are ignored. */
+  setCombineCrossoversFromResult: (resultIngestId: string | null, members: string[], crossoversHz: number[]) => void;
   setCombineLevelMatch: (value: boolean | null) => void;
   setCombineAlign: (value: boolean | null) => void;
   setChannelDriverEnabled: (channelId: string, enabled: boolean) => void;
@@ -1013,7 +1014,8 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
     set((state) => ({ combineCrossoversHz: { ...state.combineCrossoversHz, [pairKey]: hz } }));
     saveSolveProfile(get());
   },
-  setCombineCrossoversFromResult: (members, crossoversHz) => {
+  setCombineCrossoversFromResult: (resultIngestId, members, crossoversHz) => {
+    if (resultIngestId === null || resultIngestId !== get().ingestRecord?.ingest_id) return;
     set((state) => {
       const known = new Set(state.driveChannels.map((channel) => channel.id));
       const adopted = members.slice(0, -1).flatMap((lower, index): Array<[string, number]> => {
@@ -1184,6 +1186,7 @@ export interface CombinePair {
   outsideSweep: boolean;
 }
 
+// Keep this ranking in sync with _BAND_ROLE_RANK in server/solver/metal.py.
 const ROLE_BAND_RANK: Record<string, number> = { LF: 0, MF: 1, HF: 2 };
 
 /** What a speaker designer expects to see in the field before touching it.

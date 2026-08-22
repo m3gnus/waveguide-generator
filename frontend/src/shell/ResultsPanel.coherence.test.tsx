@@ -207,7 +207,7 @@ describe('results run coherence', () => {
       await Promise.resolve();
     });
     const cadOptions = [...host.querySelectorAll<HTMLOptionElement>('.result-compare-add option')].map((option) => option.textContent);
-    expect(cadOptions).toContain('#11 · imported-option');
+    expect(cadOptions).toContain('#11 · imported-option · other model');
     expect(cadOptions).toContain('#7 · current · Parametric');
   });
 
