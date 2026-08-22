@@ -265,4 +265,46 @@ describe('results run coherence', () => {
     await act(async () => { root.render(<ResultsPanel/>); await Promise.resolve(); });
     expect(host.querySelector('.result-power-check')).toBeNull();
   });
+
+  it('reports a failed radiation-matrix request and retries only that artifact', async () => {
+    const solved = { ...job('cardioid', 16, liveDesign()), has_radiation_impedance_artifact: true };
+    publishJobs([solved]);
+    compareSelection.setPrimary(solved.id);
+    preferencesStore.update({ chartTypes: ['radiation_impedance'] });
+    const paths: string[] = [];
+    let matrixAttempt = 0;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      paths.push(path);
+      if (path === '/api/results/cardioid') return new Response(JSON.stringify({ frequencies: [1_000], metadata: {} }), { status: 200 });
+      if (path === '/api/radiation-impedance/cardioid/presentation') {
+        matrixAttempt += 1;
+        if (matrixAttempt === 1) return new Response(JSON.stringify({ detail: 'matrix store temporarily unavailable' }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+        return new Response(JSON.stringify({
+          schema_version: 1,
+          quantity: 'average_aperture_pressure_per_volume_velocity',
+          units: 'Pa*s/m^3',
+          phase_time_convention: 'engineering_exp_plus_jwt',
+          frequencies_hz: [1_000],
+          apertures: [{ name: 'PORT', area_m2: 0.01, tag: 31 }],
+          engineering_matrix: { real: [[[1]]], imaginary: [[[0]]] },
+          in_phase_termination: { aperture_names: ['PORT'], real: [[1]], imaginary: [[0]] },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response('not found', { status: 404 });
+    }));
+
+    await act(async () => { root.render(<ResultsPanel/>); await Promise.resolve(); await Promise.resolve(); });
+    expect(host.textContent).toContain('Could not load Radiation Matrix Load');
+    expect(host.textContent).toContain('matrix store temporarily unavailable');
+    const retry = [...host.querySelectorAll<HTMLButtonElement>('.chart-stub button')]
+      .find((button) => button.textContent === 'Retry')!;
+    expect(retry).toBeDefined();
+
+    await act(async () => { retry.click(); await Promise.resolve(); await Promise.resolve(); });
+    expect(paths.filter((path) => path === '/api/results/cardioid')).toHaveLength(1);
+    expect(paths.filter((path) => path === '/api/radiation-impedance/cardioid/presentation')).toHaveLength(2);
+    expect(host.textContent).not.toContain('Could not load Radiation Matrix Load');
+    expect(host.textContent).not.toContain('needs a retained passive-cardioid');
+  });
 });

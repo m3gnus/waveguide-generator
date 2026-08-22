@@ -28,7 +28,7 @@ import { deEmbeddedPhaseRadians, hasOnAxisPhase, phaseSpatialSign, phaseUnwrapIs
 import { Icon } from './icons';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { useVisibleRedraw } from './panelVisibility';
-import { trapDialogFocus } from './SettingsDialog';
+import { trapDialogFocus } from './dialogFocus';
 import { useSolveOptionsStore } from '../stores/solveOptions';
 import { MAX_MEASURED_OVERLAYS, useMeasuredOverlayStore, type MeasuredOverlay } from '../stores/measuredOverlays';
 import { useDesignStore } from '../stores/design';
@@ -101,7 +101,7 @@ export function chartDensity(width: number, height: number): ChartDensity {
   return 'compact';
 }
 
-const LABEL_FONT: Record<ChartDensity, number> = { compact: 10, regular: 11, full: 12 };
+const LABEL_FONT: Record<ChartDensity, number> = { compact: 11, regular: 11, full: 12 };
 /** `top` is the band reserved for the floating title chip and the legend. */
 const LINE_GRID: Record<ChartDensity, { left: number; right: number; top: number; bottom: number }> = {
   compact: { left: 30, right: 8, top: 16, bottom: 17 },
@@ -161,10 +161,10 @@ export function lineOption(series: EChartsOption['series'], tokens: ChartTokens,
     // a single row rather than wrapping down over the plot on a narrow card.
     // The tooltip and the detail view still name every series in full.
     legend: {
-      ...(density === 'compact' ? { type: 'scroll' as const, width: '46%', pageIconSize: 9, pageIconColor: tokens.muted, pageIconInactiveColor: tokens.grid, pageTextStyle: { color: tokens.muted, fontSize: 10 } } : {}),
+      ...(density === 'compact' ? { type: 'scroll' as const, width: '46%', pageIconSize: 9, pageIconColor: tokens.muted, pageIconInactiveColor: tokens.grid, pageTextStyle: { color: tokens.muted, fontSize: 11 } } : {}),
       top: density === 'full' ? 2 : 1,
       right: density === 'full' ? 8 : LEGEND_INSET,
-      textStyle: { color: tokens.muted, fontSize: density === 'compact' ? 10 : 11 },
+      textStyle: { color: tokens.muted, fontSize: 11 },
       formatter: (name: string) => middleEllipsis(name, density === 'compact' ? 12 : 22),
       itemWidth: density === 'compact' ? 10 : 14,
       itemHeight: 2,
@@ -636,7 +636,7 @@ export function heatmapOption(
         const points = polylines[Number(api.value(0))].map((point) => contourPointToPixels(point, contourGrid, params.coordSys!));
         const middle = points[Math.floor(points.length / 2)];
         const children: Array<Record<string, unknown>> = [{ type: 'polyline', shape: smoothContourShape(points), style: { fill: null, stroke: color, lineWidth: level === mapReference ? 1.6 : 1.05, opacity: .92, lineCap: 'round', lineJoin: 'round', lineDash: level <= -12 ? [4, 3] : undefined } }];
-        if (Number(api.value(1))) children.push({ type: 'text', style: { x: middle[0] + 3, y: middle[1] - 3, text: isComparisonContour ? middleEllipsis(comparison!.primaryLabel, 18) : `${level} dB`, fill: color, font: '8px ui-monospace, monospace', backgroundColor: tokens.background, padding: [1, 2], borderRadius: 2 } });
+        if (Number(api.value(1)) && (density !== 'compact' || level === -6 || isComparisonContour)) children.push({ type: 'text', style: { x: middle[0] + 3, y: middle[1] - 3, text: isComparisonContour ? middleEllipsis(comparison!.primaryLabel, 14) : `${level} dB`, fill: color, font: '11px ui-monospace, monospace', backgroundColor: tokens.background, padding: [1, 2], borderRadius: 2 } });
         return { type: 'group', children };
       },
     }];
@@ -669,7 +669,7 @@ export function heatmapOption(
         }];
         if (Number(api.value(1))) children.push({
           type: 'text',
-          style: { x: middle[0] + 3, y: middle[1] - 3, text: middleEllipsis(reference.label, 18), fill: color, font: '8px ui-monospace, monospace', backgroundColor: tokens.background, padding: [1, 2], borderRadius: 2 },
+          style: { x: middle[0] + 3, y: middle[1] - 3, text: middleEllipsis(reference.label, density === 'compact' ? 12 : 18), fill: color, font: '11px ui-monospace, monospace', backgroundColor: tokens.background, padding: [1, 2], borderRadius: 2 },
         });
         return { type: 'group', children };
       },
@@ -684,7 +684,7 @@ export function heatmapOption(
       data: comparisonLabels,
       top: 1,
       right: LEGEND_INSET,
-      textStyle: { color: tokens.muted, fontSize: density === 'compact' ? 9 : 10 },
+      textStyle: { color: tokens.muted, fontSize: 11 },
       formatter: (name: string) => middleEllipsis(name, density === 'compact' ? 11 : 18),
       itemWidth: density === 'compact' ? 10 : 14,
       itemHeight: 2,
@@ -709,7 +709,7 @@ export function heatmapOption(
       splitLine: { ...categoryAxis.splitLine, show: true, interval: isFrequencyTick },
     },
     yAxis: { type: 'category', data: grid.angles.map((angle) => String(Number(angle.toFixed(2)))), ...(density === 'full' ? { name: 'Angle [°]', nameLocation: 'start' as const, nameGap: 10, nameTextStyle: { color: tokens.muted, fontSize: 11, align: 'right' as const, verticalAlign: 'top' as const } } : {}), ...categoryAxis, axisLabel: { ...categoryAxis.axisLabel, interval: Math.max(0, grid.factor * 2 - 1) } },
-    visualMap: { min: floor, max: 0, dimension: 2, seriesIndex: 0, right: 2, top: 'middle', itemWidth: density === 'compact' ? 6 : 8, itemHeight: MAP_RAMP[density], text: ['0', `${floor}`], textStyle: { color: tokens.muted, fontSize: density === 'compact' ? 9 : 10 }, inRange: { color: tokens.colormap } },
+    visualMap: { min: floor, max: 0, dimension: 2, seriesIndex: 0, right: 2, top: 'middle', itemWidth: density === 'compact' ? 6 : 8, itemHeight: MAP_RAMP[density], text: ['0', `${floor}`], textStyle: { color: tokens.muted, fontSize: 11 }, inRange: { color: tokens.colormap } },
     // Cartesian heatmaps do not chunk safely in ECharts: progressive mode can
     // stop after the first angle band and leave the rest of the map blank.
     series: [{ type: 'heatmap', progressive: 0, z: 1, data: cells, emphasis: { itemStyle: { borderColor: tokens.accent, borderWidth: 1.2, shadowBlur: 7, shadowColor: tokens.accent } } }, ...angleGuideSeries, ...contourSeries, ...comparisonSeries] as EChartsOption['series'],
@@ -973,7 +973,7 @@ export function polarOption(items: NamedResult[], tokens: ChartTokens, plane: Po
     color: tokens.series,
     textStyle: { color: tokens.foreground, fontFamily: 'Inter, system-ui, sans-serif' },
     tooltip: { trigger: 'item', confine: true, backgroundColor: tokens.background, borderColor: tokens.spine ?? tokens.grid, textStyle: { color: tokens.foreground, fontSize: 11 } },
-    legend: { top: 1, right: LEGEND_INSET, textStyle: { color: tokens.muted, fontSize: density === 'compact' ? 10 : 11 }, formatter: (name: string) => middleEllipsis(name, density === 'compact' ? 12 : 22), itemWidth: density === 'compact' ? 10 : 14, itemHeight: 2 },
+    legend: { top: 1, right: LEGEND_INSET, textStyle: { color: tokens.muted, fontSize: 11 }, formatter: (name: string) => middleEllipsis(name, density === 'compact' ? 12 : 22), itemWidth: density === 'compact' ? 10 : 14, itemHeight: 2 },
     polar: { radius: density === 'compact' ? '68%' : '72%', center: ['50%', '54%'] },
     angleAxis: {
       type: 'value' as const,
@@ -1404,7 +1404,13 @@ export function chartEntries(chartType: ChartType, named: NamedResult[], showMem
   return named.filter(({ secondary }) => !secondary);
 }
 
-function ResultChart({ chartType, result, named, tokens, density, live, beamShapeAction, wrapper, job, channelId }: { chartType: ChartType; result: ResultPayload; named: NamedResult[]; tokens: ChartTokens; density: ChartDensity; live: boolean; beamShapeAction?: ChartStubAction } & SummarySourceProps) {
+interface RadiationArtifactView {
+  status: 'absent' | 'failed' | 'loading' | 'loaded';
+  message?: string;
+  retry?: () => void;
+}
+
+function ResultChart({ chartType, result, named, tokens, density, live, beamShapeAction, radiationArtifact, wrapper, job, channelId }: { chartType: ChartType; result: ResultPayload; named: NamedResult[]; tokens: ChartTokens; density: ChartDensity; live: boolean; beamShapeAction?: ChartStubAction; radiationArtifact?: RadiationArtifactView } & SummarySourceProps) {
   const preferences = usePreferences();
   // Only comparable and driver charts read the cross-job list. Keeping it in the
   // dependency array for every chart would rebuild expensive single-run
@@ -1497,6 +1503,11 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
     }
     if (chartType === 'radiation_impedance') {
       const presentation = wrapper?.radiation_impedance ?? result.radiation_impedance;
+      if (radiationArtifact?.status === 'failed') return <ChartStub
+        reason={`Could not load Radiation Matrix Load. ${radiationArtifact.message ?? 'The artifact request failed.'}`}
+        action={radiationArtifact.retry ? { label: 'Retry', onClick: radiationArtifact.retry } : undefined}
+      />;
+      if (radiationArtifact?.status === 'loading') return <ChartStub reason="Loading Radiation Matrix Load…"/>;
       if (!presentation) return <ChartStub reason="Radiation Matrix Load needs a retained passive-cardioid radiation-impedance artifact."/>;
       const option = radiationImpedanceOption(presentation, tokens, density);
       return Array.isArray(option.series) && option.series.length
@@ -1504,7 +1515,7 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
         : <ChartStub reason="The retained radiation matrix has no finite reduced load curves."/>;
     }
     return null;
-  }, [beamShapeAction, chartType, density, live, measured, overlays, preferences.directivityGuideInterval, preferences.impedanceDisplay, preferences.mapReference, preferences.smoothing, preferences.splPhase, result, tokens, wrapper]);
+  }, [beamShapeAction, chartType, density, live, measured, overlays, preferences.directivityGuideInterval, preferences.impedanceDisplay, preferences.mapReference, preferences.smoothing, preferences.splPhase, radiationArtifact, result, tokens, wrapper]);
   return plot ?? <Summary result={result} wrapper={wrapper} job={job} channelId={channelId} density={density}/>;
 }
 
@@ -1544,7 +1555,7 @@ export function useCardMetrics(target: React.RefObject<HTMLElement | null>): Car
   return metrics;
 }
 
-function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAction, wrapper, job, channelId }: { index: number; chartType: ChartType; result: ResultPayload; named: NamedResult[]; tokens: ChartTokens; live: boolean; beamShapeAction?: ChartStubAction } & SummarySourceProps) {
+function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAction, radiationArtifact, wrapper, job, channelId }: { index: number; chartType: ChartType; result: ResultPayload; named: NamedResult[]; tokens: ChartTokens; live: boolean; beamShapeAction?: ChartStubAction; radiationArtifact?: RadiationArtifactView } & SummarySourceProps) {
   // A comparison is active but this card cannot carry it. Saying so is the
   // whole point: silently drawing the primary run looks identical to drawing
   // both, so the user believes they are comparing when they are not. Members of
@@ -1623,7 +1634,7 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
   return <>
     <section ref={card} className={`result-card result-${index}`} data-density={density}>
       <div className="chart-placeholder" title="Hover for values · double-click for detail" onDoubleClick={() => setExpanded(true)}>
-        <ResultChart chartType={chartType} result={result} named={named} tokens={tokens} density={density} live={live} beamShapeAction={beamShapeAction} wrapper={wrapper} job={job} channelId={channelId}/>
+        <ResultChart chartType={chartType} result={result} named={named} tokens={tokens} density={density} live={live} beamShapeAction={beamShapeAction} radiationArtifact={radiationArtifact} wrapper={wrapper} job={job} channelId={channelId}/>
       </div>
       {/* Chrome floats over the plot rather than reserving a row of its own:
           a fixed header costs a quarter of a six-panel card's height. */}
@@ -1649,7 +1660,7 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
     {expanded && createPortal(<div className="result-detail-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setExpanded(false); }}>
       <section ref={detail} className="result-detail" role="dialog" aria-modal="true" aria-label={`${chartLabel(chartType)} detail`}>
         <header><div><b>{chartLabel(chartType)}</b>{subtitle && <span>{subtitle}</span>}</div><small>Hover to inspect · Ctrl/scroll to zoom lines</small><button aria-label="Close detail view" onClick={() => setExpanded(false)}><Icon name="close"/></button></header>
-        <div className="result-detail-chart"><ResultChart chartType={chartType} result={result} named={named} tokens={tokens} density="full" live={live} beamShapeAction={beamShapeAction} wrapper={wrapper} job={job} channelId={channelId}/></div>
+        <div className="result-detail-chart"><ResultChart chartType={chartType} result={result} named={named} tokens={tokens} density="full" live={live} beamShapeAction={beamShapeAction} radiationArtifact={radiationArtifact} wrapper={wrapper} job={job} channelId={channelId}/></div>
       </section>
     </div>, document.body)}
   </>;
@@ -1659,19 +1670,20 @@ export function resultLayoutClass(count: number): string {
   return `result-layout-${Math.max(0, Math.min(MAX_RESULT_PANELS, Math.floor(count)))}`;
 }
 
-export function ResultsChartGrid({ chartTypes, result, named, tokens, live = false, beamShapeAction, wrapper, job, channelId }: {
+export function ResultsChartGrid({ chartTypes, result, named, tokens, live = false, beamShapeAction, radiationArtifact, wrapper, job, channelId }: {
   chartTypes: ChartType[];
   result: ResultPayload;
   named: NamedResult[];
   tokens: ChartTokens;
   live?: boolean;
   beamShapeAction?: ChartStubAction;
+  radiationArtifact?: RadiationArtifactView;
 } & SummarySourceProps) {
   if (!chartTypes.length) {
     return <div className="result-grid-empty" role="status"><b>NO CHARTS OPEN</b><span>Add a chart to rebuild the results workspace.</span><button onClick={() => preferencesStore.addChart()}>+ Add chart</button></div>;
   }
   return <div className={`result-grid ${resultLayoutClass(chartTypes.length)}`} data-chart-count={chartTypes.length}>
-    {chartTypes.map((chartType, index) => <ChartCard key={`${index}-${chartType}`} index={index} chartType={chartType} result={result} named={named} tokens={tokens} live={live} beamShapeAction={beamShapeAction} wrapper={wrapper} job={job} channelId={channelId}/>) }
+    {chartTypes.map((chartType, index) => <ChartCard key={`${index}-${chartType}`} index={index} chartType={chartType} result={result} named={named} tokens={tokens} live={live} beamShapeAction={beamShapeAction} radiationArtifact={radiationArtifact} wrapper={wrapper} job={job} channelId={channelId}/>) }
   </div>;
 }
 
@@ -1811,6 +1823,7 @@ export function ResultsPanel() {
   const [display, setDisplay] = useState<ResultDisplaySnapshot | null>(null);
   const [fetchError, setFetchError] = useState<ResultFetchError | null>(null);
   const [fetchAttempt, setFetchAttempt] = useState(0);
+  const [radiationArtifactLoads, setRadiationArtifactLoads] = useState<Record<string, RadiationArtifactView>>({});
   const [exportStatus, setExportStatus] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
@@ -1881,20 +1894,29 @@ export function ResultsPanel() {
     void Promise.all(requestedIds.map(async (id) => {
       const job = jobs.find((item) => item.id === id);
       const provisionalEntry = job?.status !== 'complete' ? provisional.entries[id] : undefined;
-      if (provisionalEntry) return [id, provisionalEntry.result as ResultPayload, true] as const;
+      if (provisionalEntry) return { id, result: provisionalEntry.result as ResultPayload, isProvisional: true, radiationArtifact: { status: 'absent' as const } };
       const result = await fetchJobResults(id) as ResultPayload;
-      if (!job?.has_radiation_impedance_artifact) return [id, result, false] as const;
+      if (!job?.has_radiation_impedance_artifact) return { id, result, isProvisional: false, radiationArtifact: { status: 'absent' as const } };
       try {
         const presentation = await fetchRadiationImpedancePresentation(id);
-        return [
+        return {
           id,
-          presentation ? { ...result, radiation_impedance: presentation } : result,
-          false,
-        ] as const;
-      } catch {
+          result: presentation ? { ...result, radiation_impedance: presentation } : result,
+          isProvisional: false,
+          radiationArtifact: { status: presentation ? 'loaded' as const : 'absent' as const },
+        };
+      } catch (reason) {
         // The matrix is optional. A corrupt or temporarily unavailable
         // artifact must not make otherwise valid SPL/directivity disappear.
-        return [id, result, false] as const;
+        return {
+          id,
+          result,
+          isProvisional: false,
+          radiationArtifact: {
+            status: 'failed' as const,
+            message: reason instanceof Error ? reason.message : String(reason),
+          },
+        };
       }
     }))
       .then((pairs) => {
@@ -1903,10 +1925,14 @@ export function ResultsPanel() {
           key: selectionKey,
           primaryId: selection.primary!,
           ids: requestedIds,
-          results: Object.fromEntries(pairs.map(([id, result]) => [id, result])),
-          provisionalIds: pairs.filter(([, , isProvisional]) => isProvisional).map(([id]) => id),
+          results: Object.fromEntries(pairs.map(({ id, result }) => [id, result])),
+          provisionalIds: pairs.filter(({ isProvisional }) => isProvisional).map(({ id }) => id),
         });
-        pairs.forEach(([id, , isProvisional]) => {
+        setRadiationArtifactLoads((current) => ({
+          ...current,
+          ...Object.fromEntries(pairs.map(({ id, radiationArtifact }) => [id, radiationArtifact])),
+        }));
+        pairs.forEach(({ id, isProvisional }) => {
           if (!isProvisional) provisionalResults.remove(id);
         });
       })
@@ -2018,6 +2044,32 @@ export function ResultsPanel() {
     disabled: beamRerunSubmitting,
     busy: beamRerunSubmitting,
   } : undefined, [beamRerunSubmitting, enableBalloonAndRerun, selectedJobCanRerun]);
+  const retryRadiationArtifact = useCallback((jobId: string) => {
+    setRadiationArtifactLoads((current) => ({ ...current, [jobId]: { status: 'loading' } }));
+    void fetchRadiationImpedancePresentation(jobId)
+      .then((presentation) => {
+        if (presentation) {
+          setDisplay((current) => current?.results[jobId]
+            ? { ...current, results: { ...current.results, [jobId]: { ...current.results[jobId], radiation_impedance: presentation } } }
+            : current);
+        }
+        setRadiationArtifactLoads((current) => ({
+          ...current,
+          [jobId]: { status: presentation ? 'loaded' : 'absent' },
+        }));
+      })
+      .catch((reason) => setRadiationArtifactLoads((current) => ({
+        ...current,
+        [jobId]: { status: 'failed', message: reason instanceof Error ? reason.message : String(reason) },
+      })));
+  }, []);
+  const radiationArtifact = selectedJob ? radiationArtifactLoads[selectedJob.id] : undefined;
+  const radiationArtifactView = useMemo<RadiationArtifactView | undefined>(() => radiationArtifact ? {
+    ...radiationArtifact,
+    ...(radiationArtifact.status === 'failed' && selectedJob
+      ? { retry: () => retryRadiationArtifact(selectedJob.id) }
+      : {}),
+  } : undefined, [radiationArtifact, retryRadiationArtifact, selectedJob]);
   const powerHealth = shown
     ? powerAgreementHealth(shown, shownRaw ?? shown)
     : null;
@@ -2040,7 +2092,7 @@ export function ResultsPanel() {
   // is rebuilt and no canvas is touched until the tab is in front again, and
   // then exactly once from the newest snapshot.
   const charts = useVisibleRedraw(shown
-    ? <ResultsChartGrid chartTypes={preferences.chartTypes} result={shown} named={named} tokens={tokens} live={primaryIsProvisional} beamShapeAction={beamShapeAction} wrapper={shownRaw} job={selectedJob} channelId={shownActiveChannel}/>
+    ? <ResultsChartGrid chartTypes={preferences.chartTypes} result={shown} named={named} tokens={tokens} live={primaryIsProvisional} beamShapeAction={beamShapeAction} radiationArtifact={radiationArtifactView} wrapper={shownRaw} job={selectedJob} channelId={shownActiveChannel}/>
     : null);
   /** Every file is attempted; the ones that fail are named rather than
    * cancelling the ones that parsed. */

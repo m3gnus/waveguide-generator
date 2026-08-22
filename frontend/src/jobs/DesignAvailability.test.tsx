@@ -102,6 +102,7 @@ describe('the design verdict a job card shows', () => {
   it('states the cause in the card, not only in a tooltip', () => {
     render(<DesignAvailabilityNotice job={FREEFORM}/>);
     expect(notice()?.textContent).toContain('Re-enter its profiles');
+    expect(getComputedStyle(notice()!).fontSize).toBe('11px');
   });
 
   it('says what a payload-recovered design is missing, without blocking it', () => {
