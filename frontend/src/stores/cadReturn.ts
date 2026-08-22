@@ -743,12 +743,12 @@ function retainedChannelDrivers(
   state: Pick<CadReturnState, 'channelDrivers' | 'driveChannels'>,
   nextChannels: CadDriveChannel[],
 ): Record<string, ChannelDriverForm> {
-  const before = new Map(state.driveChannels.map((channel) => [channel.id, channel.source_ids.join(' ')]));
+  const before = new Map(state.driveChannels.map((channel) => [channel.id, channel.source_ids.join('\u0000')]));
   return Object.fromEntries(Object.entries(state.channelDrivers).filter(([id]) => {
     const next = nextChannels.find((channel) => channel.id === id);
     if (!next || !channelAcceptsDriver(next)) return false;
     const previousMembers = before.get(id);
-    return previousMembers === undefined || previousMembers === next.source_ids.join(' ');
+    return previousMembers === undefined || previousMembers === next.source_ids.join('\u0000');
   }));
 }
 
