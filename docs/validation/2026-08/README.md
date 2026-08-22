@@ -17,6 +17,9 @@ constraints stated inside them; they are not a current release status dashboard.
 - [Result and archive sizes](ARTIFACT-SIZES.md) — measured archive, retained
   artifact, and snapshot-wire sizes across the available local corpus on
   2026-08-20, with explicit evidence still required before hard limits.
+- [Wall-clearance acoustic validation](WALL-CLEARANCE-ACOUSTICS.md) — isolated
+  run-101 replay proving that the capped rear-shell mesh removes both the
+  intersections and their acoustic failure on 2026-08-22.
 
 Current release gates are maintained in the workspace-local maintainer backlog, not in
 this dated evidence directory.
