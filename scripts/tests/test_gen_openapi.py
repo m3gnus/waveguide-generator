@@ -12,7 +12,14 @@ def test_committed_openapi_matches_the_live_application() -> None:
     assert "/api/solve" in schema["paths"]
     assert "/api/integration/v1/parameters" in schema["paths"]
     assert "/api/integration/v1/design-schema" in schema["paths"]
+    assert {
+        "/api/cadlink/projects/{lineage_id}/documents",
+        "/api/cadlink/projects/{lineage_id}/documents/{return_state_hash}",
+        "/api/cadlink/projects/{lineage_id}/reveal",
+        "/api/cadlink/runs/archive-document",
+    } <= set(schema["paths"])
     assert "SolveRequest" in schema["components"]["schemas"]
+    assert "ArchiveRunDocumentRequest" in schema["components"]["schemas"]
     assert "ErrorEnvelope" in schema["components"]["schemas"]
     assert "ParameterCatalog" in schema["components"]["schemas"]
     assert "DesignSchemaDocument" in schema["components"]["schemas"]
