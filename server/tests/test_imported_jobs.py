@@ -657,13 +657,32 @@ class _AlwaysRegistry:
 
 
 async def _runtime_fixture(
-    tmp_path: Path, record_changes: dict[str, Any] | None = None
+    tmp_path: Path,
+    record_changes: dict[str, Any] | None = None,
+    lineage_cad_names: dict[str, str | None] | None = None,
 ) -> tuple[JobRuntime, str, dict[str, Any]]:
     mesh_path = tmp_path / "imported.msh"
     mesh_path.write_text("$MeshFormat\n2.2 0 8\n$EndMeshFormat\n", encoding="utf-8")
     record = _record(mesh_path)
     record.update(record_changes or {})
     cad_store = CadLinkStore(tmp_path / "cadlink.db")
+    if lineage_cad_names is not None:
+        saved = cad_store.save(
+            requested=None,
+            design_hash="sha256:" + "5" * 64,
+            filename="anchored.cfg",
+            snapshot_builder=lambda identity: (
+                f"CadLink = {{\nDesignId = {identity.design_id}\n}}\n"
+            ),
+            saved_at="2026-08-20T12:00:00Z",
+        )
+        identity = saved["identity"]
+        record["anchor"]["design_id"] = identity.design_id
+        cad_store.record_lineage_cad_names(
+            identity.lineage_id,
+            bundle_stem=lineage_cad_names.get("bundle_stem"),
+            archive_stem=lineage_cad_names.get("archive_stem"),
+        )
 
     def build(ingest_id: str, created_at: str) -> str:
         return json.dumps({**record, "ingest_id": ingest_id, "created_at": created_at})
@@ -679,6 +698,39 @@ async def _runtime_fixture(
         cadlink_store=cad_store,
     )
     return runtime, str(row["ingest_id"]), record
+
+
+@pytest.mark.parametrize(
+    ("bundle_stem", "archive_stem", "expected"),
+    [
+        ("old-bundle-name", "claimed-archive-name", "claimed-archive-name"),
+        (None, "archive-without-bundle", "archive-without-bundle"),
+        ("legacy-bundle-name", None, "legacy-bundle-name"),
+    ],
+)
+def test_imported_jobs_use_the_lineage_archive_stem_before_legacy_bundle_stem(
+    tmp_path: Path,
+    bundle_stem: str | None,
+    archive_stem: str | None,
+    expected: str,
+) -> None:
+    async def scenario() -> None:
+        runtime, ingest_id, _ = await _runtime_fixture(
+            tmp_path,
+            lineage_cad_names={
+                "bundle_stem": bundle_stem,
+                "archive_stem": archive_stem,
+            },
+        )
+        try:
+            job_id = await runtime.submit(_request(ingest_id))
+            row = runtime.store.get_job_row(job_id)
+            assert row is not None
+            assert runtime._serialize_job(row)["cad_source"]["archive_stem"] == expected
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
 
 
 def test_coupled_cardioid_topology_is_rejected_during_submission(
