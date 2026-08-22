@@ -20,6 +20,7 @@ import json
 import logging
 import math
 import os
+from pathlib import Path
 import time
 from typing import Any, Mapping
 import uuid
@@ -1409,16 +1410,25 @@ class JobRuntime:
                 anchor_design_id = record_anchor_design_id
                 anchor_lineage_id = str(design_row["lineage_id"] or "") or None
                 if anchor_lineage_id is not None:
-                    # The archive folder is the name the lineage already owns in
-                    # ``wglink/``, so a renamed design keeps writing its history
-                    # to one folder instead of starting a second one.
+                    # Claim the server-normalized portable key even when CAD
+                    # document capture is disabled. The browser consumes this
+                    # value verbatim, so every imported run and captured model
+                    # uses the same globally unique lineage folder.
                     names = await asyncio.to_thread(
                         self.cadlink_store.get_lineage_cad_names, anchor_lineage_id
                     )
-                    archive_stem = (
+                    document = record.get("document")
+                    document = document if isinstance(document, Mapping) else {}
+                    preferred_archive_stem = (
                         str((names or {}).get("archive_stem") or "").strip()
                         or str((names or {}).get("bundle_stem") or "").strip()
-                        or None
+                        or str(document.get("name") or "").strip()
+                        or Path(str(design_row.get("filename") or "")).stem
+                    )
+                    archive_stem = await asyncio.to_thread(
+                        self.cadlink_store.claim_archive_stem,
+                        anchor_lineage_id,
+                        preferred=preferred_archive_stem,
                     )
                 try:
                     parsed = await asyncio.to_thread(

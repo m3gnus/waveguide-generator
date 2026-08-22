@@ -142,6 +142,18 @@ def _member_bytes(member: ExportMember) -> bytes:
         raise ValueError(f"{member.relative_path!r} contains invalid base64 data") from exc
 
 
+def _archive_design_lineage(content: bytes) -> tuple[bool, object]:
+    """Recognize the reserved run-archive pointer and return its lineage."""
+
+    try:
+        record = json.loads(content.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError, TypeError):
+        return False, None
+    if not isinstance(record, dict) or "schemaVersion" not in record or "lineageId" not in record:
+        return False, None
+    return True, record["lineageId"]
+
+
 def _path_segments(raw: str, label: str) -> list[str]:
     if raw.startswith(("/", "\\")) or _WINDOWS_DRIVE.match(raw):
         raise ValueError(f"{label} must be a relative path")
@@ -745,12 +757,30 @@ def create_workspace_router(state: WorkspaceState) -> APIRouter:
         if export_exists and request.existing == "overwrite":
             # Replacing a file is the point here; replacing a *directory* with a
             # file is not, and would surface as an opaque write failure below.
-            for _segments, _encoded, destination in prepared:
+            for segments, encoded, destination in prepared:
                 if destination.is_dir() and not destination.is_symlink():
                     raise HTTPException(
                         status_code=409,
                         detail=f"Export path is a directory, not a file: {destination}",
                     )
+                if segments == ["design.json"] and destination.is_file():
+                    incoming_record, incoming_lineage = _archive_design_lineage(encoded)
+                    if incoming_record:
+                        try:
+                            existing_record, existing_lineage = _archive_design_lineage(
+                                destination.read_bytes()
+                            )
+                        except OSError:
+                            existing_record = False
+                            existing_lineage = None
+                        if not existing_record or existing_lineage != incoming_lineage:
+                            raise HTTPException(
+                                status_code=409,
+                                detail=(
+                                    "Archive design.json belongs to another lineage "
+                                    "or has unreadable lineage metadata; refusing overwrite."
+                                ),
+                            )
 
         export_directory.parent.mkdir(parents=True, exist_ok=True)
         staging_directory = Path(

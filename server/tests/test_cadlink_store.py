@@ -53,7 +53,7 @@ def test_registry_schema_is_separate_versioned_and_snapshot_preserving(tmp_path:
     assert db_path.exists()
     assert not (tmp_path / "db" / "simulations.db").exists()
     conn = sqlite3.connect(db_path)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 9
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 10
     assert {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")} >= {
         "designs",
         "exports",
@@ -93,7 +93,7 @@ def test_v2_registry_with_rows_migrates_to_current_without_data_loss(tmp_path: P
     migrated.close()
 
     connection = sqlite3.connect(db_path)
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 9
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == 10
     assert connection.execute("SELECT COUNT(*) FROM designs").fetchone()[0] == 1
     assert connection.execute("SELECT COUNT(*) FROM exports").fetchone()[0] == 1
     connection.close()
@@ -390,6 +390,112 @@ def test_lineage_cad_names_are_claimed_once_and_span_a_fork(tmp_path: Path) -> N
     assert claimed["bundle_stem"] is None
     assert later["parameter_slug"] == "demo_horn"
     assert later["bundle_stem"] == "demo_horn"
+
+
+def test_v9_archive_stem_migration_resolves_portable_collisions_stably(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "cadlink.db"
+    connection = sqlite3.connect(db_path)
+    connection.execute(
+        """
+        CREATE TABLE lineage_cad_names (
+          lineage_id TEXT PRIMARY KEY,
+          parameter_slug TEXT,
+          bundle_stem TEXT,
+          archive_stem TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )
+        """
+    )
+    rows = [
+        ("wgl_a", "Horn A"),
+        ("wgl_b", "Horn+A"),
+        ("wgl_c", "Horn"),
+        ("wgl_d", "horn"),
+    ]
+    connection.executemany(
+        "INSERT INTO lineage_cad_names VALUES (?, NULL, NULL, ?, ?, ?)",
+        [
+            (lineage_id, stem, "2026-08-21T00:00:00Z", "2026-08-21T00:00:00Z")
+            for lineage_id, stem in rows
+        ],
+    )
+    connection.execute("PRAGMA user_version = 9")
+    connection.commit()
+    connection.close()
+
+    migrated = CadLinkStore(db_path)
+    migrated.initialize()
+    claimed = {
+        lineage_id: migrated.get_lineage_cad_names(lineage_id)["archive_stem"]  # type: ignore[index]
+        for lineage_id, _stem in rows
+    }
+    assert claimed["wgl_a"] == "Horn_A"
+    assert claimed["wgl_b"].startswith("Horn_A-")
+    assert claimed["wgl_c"] == "Horn"
+    assert claimed["wgl_d"].startswith("horn-")
+    assert len({stem.casefold() for stem in claimed.values()}) == 4
+    migrated.close()
+
+    restarted = CadLinkStore(db_path)
+    restarted.initialize()
+    assert {
+        lineage_id: restarted.get_lineage_cad_names(lineage_id)["archive_stem"]  # type: ignore[index]
+        for lineage_id, _stem in rows
+    } == claimed
+    restarted.close()
+
+    connection = sqlite3.connect(db_path)
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == 10
+    assert connection.execute(
+        "SELECT COUNT(*) FROM sqlite_master "
+        "WHERE type = 'index' AND name = 'lineage_cad_names_by_archive_stem'"
+    ).fetchone()[0] == 1
+    connection.close()
+
+
+def test_archive_stems_are_unique_under_concurrent_portable_claims(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "cadlink.db"
+    seed = CadLinkStore(db_path)
+    seed.initialize()
+    seed.close()
+    requested = [
+        ("wgl_a", "Horn A"),
+        ("wgl_b", "Horn+A"),
+        ("wgl_c", "Horn"),
+        ("wgl_d", "horn"),
+    ]
+
+    def claim(item: tuple[str, str]) -> tuple[str, str]:
+        lineage_id, preferred = item
+        store = CadLinkStore(db_path)
+        try:
+            result = store.claim_archive_stem(lineage_id, preferred=preferred)
+            assert result is not None
+            return lineage_id, result
+        finally:
+            store.close()
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        claimed = dict(pool.map(claim, requested))
+
+    assert len({stem.casefold() for stem in claimed.values()}) == 4
+    assert all(" " not in stem and "+" not in stem for stem in claimed.values())
+    restarted = CadLinkStore(db_path)
+    restarted.initialize()
+    try:
+        assert {
+            lineage_id: restarted.claim_archive_stem(
+                lineage_id, preferred="renamed after restart"
+            )
+            for lineage_id, _preferred in requested
+        } == claimed
+    finally:
+        restarted.close()
 
 
 def test_latest_lineage_export_reaches_across_designs(tmp_path: Path) -> None:
