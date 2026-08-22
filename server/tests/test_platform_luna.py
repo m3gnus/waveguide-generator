@@ -153,11 +153,15 @@ def test_instance_metadata_write_refuses_zero_progress(
 
 
 def test_pid_liveness_probe_answers_without_killing() -> None:
-    """The probe must report on a process, never terminate it.
+    """The probe must answer about a process without disturbing it.
 
-    os.kill(pid, 0) is a liveness check on POSIX but resolves to
-    TerminateProcess on Windows, so the survival assertion matters as much as
-    the answer does.
+    The survival assertion is kept deliberately, but not for the reason this
+    test once gave: ``os.kill(pid, 0)`` does *not* terminate a process on
+    Windows (measured 2026-08-22; see WINDOWS-VALIDATION.md 4.1a). It is the
+    wrong probe there because Win32 keeps an exited process resolvable while
+    any handle to it is open, so it reports a dead process as running -- which
+    is what the assertion after ``child.kill()`` pins, since Popen still holds
+    that handle.
     """
 
     child = subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.read()"], stdin=subprocess.PIPE)
