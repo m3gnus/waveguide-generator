@@ -11,6 +11,7 @@ from pathlib import Path
 import subprocess
 import sys
 import threading
+import time
 from types import SimpleNamespace
 from typing import Any
 
@@ -152,19 +153,47 @@ def test_instance_metadata_write_refuses_zero_progress(
         InstanceLock(tmp_path).acquire(3100)
 
 
-def test_pid_liveness_probe_answers_without_killing() -> None:
-    """The probe must answer about a process without disturbing it.
+@pytest.mark.skipif(sys.platform != "win32", reason="Win32 handle semantics")
+def test_pid_liveness_probe_survives_every_windows_case() -> None:
+    """Exercise the real cases that distinguish the Windows liveness probes."""
 
-    The survival assertion is kept deliberately, but not for the reason this
-    test once gave: ``os.kill(pid, 0)`` does *not* terminate a process on
-    Windows (measured 2026-08-22; see WINDOWS-VALIDATION.md 4.1a). It is the
-    wrong probe there because Win32 keeps an exited process resolvable while
-    any handle to it is open, so it reports a dead process as running -- which
-    is what the assertion after ``child.kill()`` pins, since Popen still holds
-    that handle.
-    """
+    def spawn(code: str) -> subprocess.Popen[bytes]:
+        return subprocess.Popen([sys.executable, "-c", code])
 
-    child = subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.read()"], stdin=subprocess.PIPE)
+    # Dead, but this test still holds the handle: the case os.kill gets wrong.
+    reaped = spawn("pass")
+    reaped.wait()
+    time.sleep(0.5)
+    assert instance._pid_is_running(reaped.pid) is False
+
+    # Exited with 259, which is STILL_ACTIVE: GetExitCodeProcess gets this wrong.
+    unlucky = spawn("raise SystemExit(259)")
+    unlucky.wait()
+    time.sleep(0.5)
+    assert instance._pid_is_running(unlucky.pid) is False
+
+    # A genuinely running process must read as running and survive the probe.
+    alive = spawn("import time; time.sleep(30)")
+    try:
+        time.sleep(0.8)
+        assert instance._pid_is_running(alive.pid) is True
+        assert alive.poll() is None
+    finally:
+        alive.kill()
+        alive.wait()
+
+    assert instance._pid_is_running(4294967) is False
+    assert instance._pid_is_running(0) is False
+    assert instance._pid_is_running(-1) is False
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX signal semantics")
+def test_pid_liveness_probe_answers_without_killing_on_posix() -> None:
+    """The POSIX signal-zero probe must answer without disturbing its target."""
+
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import sys; sys.stdin.read()"], stdin=subprocess.PIPE
+    )
     try:
         assert instance._pid_is_running(child.pid) is True
         assert child.poll() is None
@@ -206,14 +235,11 @@ def test_runtime_file_handler_rotates_during_logging(
     # event is the event loop. They are still exactly one rotating file
     # handler, they are just no longer attached to the root logger.
     file_handlers = [
-        handler
-        for handler in logging_setup.log_sinks()
-        if isinstance(handler, RotatingFileHandler)
+        handler for handler in logging_setup.log_sinks() if isinstance(handler, RotatingFileHandler)
     ]
     assert len(file_handlers) == 1
     assert not any(
-        isinstance(handler, RotatingFileHandler)
-        for handler in logging.getLogger().handlers
+        isinstance(handler, RotatingFileHandler) for handler in logging.getLogger().handlers
     )
     logger.warning("x" * 220)
     logger.warning("y" * 220)
@@ -227,12 +253,42 @@ def test_runtime_file_handler_rotates_during_logging(
 @pytest.mark.parametrize(
     "kwargs",
     [
-        {"frequency_start_hz": 0.0, "frequency_end_hz": 100.0, "num_frequencies": 2, "frequency_spacing": "log"},
-        {"frequency_start_hz": float("nan"), "frequency_end_hz": 100.0, "num_frequencies": 2, "frequency_spacing": "log"},
-        {"frequency_start_hz": 100.0, "frequency_end_hz": 50.0, "num_frequencies": 2, "frequency_spacing": "linear"},
-        {"frequency_start_hz": 100.0, "frequency_end_hz": 200.0, "num_frequencies": 0, "frequency_spacing": "log"},
-        {"frequency_start_hz": 100.0, "frequency_end_hz": 200.0, "num_frequencies": 402, "frequency_spacing": "log"},
-        {"frequency_start_hz": 100.0, "frequency_end_hz": 200.0, "num_frequencies": 2, "frequency_spacing": "octave"},
+        {
+            "frequency_start_hz": 0.0,
+            "frequency_end_hz": 100.0,
+            "num_frequencies": 2,
+            "frequency_spacing": "log",
+        },
+        {
+            "frequency_start_hz": float("nan"),
+            "frequency_end_hz": 100.0,
+            "num_frequencies": 2,
+            "frequency_spacing": "log",
+        },
+        {
+            "frequency_start_hz": 100.0,
+            "frequency_end_hz": 50.0,
+            "num_frequencies": 2,
+            "frequency_spacing": "linear",
+        },
+        {
+            "frequency_start_hz": 100.0,
+            "frequency_end_hz": 200.0,
+            "num_frequencies": 0,
+            "frequency_spacing": "log",
+        },
+        {
+            "frequency_start_hz": 100.0,
+            "frequency_end_hz": 200.0,
+            "num_frequencies": 402,
+            "frequency_spacing": "log",
+        },
+        {
+            "frequency_start_hz": 100.0,
+            "frequency_end_hz": 200.0,
+            "num_frequencies": 2,
+            "frequency_spacing": "octave",
+        },
     ],
 )
 def test_dryrun_validates_all_axis_inputs(kwargs: dict[str, Any]) -> None:
@@ -251,7 +307,9 @@ def test_launcher_checks_lock_conflict_before_port_binding(
             pass
 
         def acquire(self, _port: int) -> None:
-            raise InstanceAlreadyRunning(InstanceInfo(pid=123, port=3100), paths.locks / "server.pid")
+            raise InstanceAlreadyRunning(
+                InstanceInfo(pid=123, port=3100), paths.locks / "server.pid"
+            )
 
     def reserve(*_args: Any, **_kwargs: Any) -> Any:
         nonlocal bound
@@ -348,9 +406,7 @@ def test_launcher_aligns_websocket_transport_limits_with_frame_protocol(
         app_kwargs.update(kwargs)
         return object()
 
-    def capture_console_handler(
-        _request_shutdown: Any, shutdown_complete: threading.Event
-    ) -> None:
+    def capture_console_handler(_request_shutdown: Any, shutdown_complete: threading.Event) -> None:
         nonlocal console_shutdown_complete
         assert not shutdown_complete.is_set()
         console_shutdown_complete = shutdown_complete
@@ -456,10 +512,9 @@ def test_public_gmsh_worker_rearms_registered_signals_on_the_main_thread(
     )
 
     async def scenario() -> None:
-        token = register_signal_rearm(
-            lambda: callback_threads.append(threading.get_ident())
-        )
+        token = register_signal_rearm(lambda: callback_threads.append(threading.get_ident()))
         try:
+
             def observe() -> str:
                 work_threads.append(threading.get_ident())
                 assert state["initialized"] is True
@@ -479,7 +534,7 @@ def test_public_gmsh_worker_rearms_registered_signals_on_the_main_thread(
 
 
 def test_port_reservation_retries_bind_failures_without_real_sockets(
-    monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     attempts: list[int] = []
 
@@ -530,9 +585,7 @@ def test_windows_port_checks_require_exclusive_address_use(
             self.closed = True
 
     monkeypatch.setattr(instance.sys, "platform", "win32")
-    monkeypatch.setattr(
-        instance.socket, "SO_EXCLUSIVEADDRUSE", exclusive, raising=False
-    )
+    monkeypatch.setattr(instance.socket, "SO_EXCLUSIVEADDRUSE", exclusive, raising=False)
     monkeypatch.setattr(instance.socket, "socket", lambda *_args: FakeSocket())
 
     assert instance.port_is_available(3100) is True
@@ -566,29 +619,33 @@ def test_capability_probe_runs_off_thread_and_is_cached(
 
     async def scenario() -> None:
         first, second = await asyncio.gather(endpoint(), endpoint())
-        assert first == second == {
-            "engines": [
-                {
-                    "name": "mock",
-                    "available": True,
-                    "reason": "ready",
-                    "version": "1",
-                    "fast_paths": (),
-                    "formulations": (),
-                    "mountings": (),
-                    "symmetry_domains": (),
-                    "field_traces": False,
-                    "di_sphere": True,
-                    "cancellation_granularity": "between-frequencies",
-                }
-            ],
-            "engineSelection": {
-                "default": "auto",
-                "resolvedDefault": None,
-                "full3dOrder": ["metal", "beat", "bempp", "dryrun"],
-                "axisymmetricRunner": "axisym",
-            },
-        }
+        assert (
+            first
+            == second
+            == {
+                "engines": [
+                    {
+                        "name": "mock",
+                        "available": True,
+                        "reason": "ready",
+                        "version": "1",
+                        "fast_paths": (),
+                        "formulations": (),
+                        "mountings": (),
+                        "symmetry_domains": (),
+                        "field_traces": False,
+                        "di_sphere": True,
+                        "cancellation_granularity": "between-frequencies",
+                    }
+                ],
+                "engineSelection": {
+                    "default": "auto",
+                    "resolvedDefault": None,
+                    "full3dOrder": ["metal", "beat", "bempp", "dryrun"],
+                    "axisymmetricRunner": "axisym",
+                },
+            }
+        )
 
     asyncio.run(scenario())
     assert len(calls) == 1
@@ -606,29 +663,39 @@ def test_local_origin_rejects_invalid_ports(origin: str) -> None:
 
 def test_websocket_origin_must_match_the_bound_host_and_port() -> None:
     assert websocket_request_allowed(
-        origin="http://127.0.0.1:3100", host="127.0.0.1:3100",
-        scheme="ws", bound_port=3100,
+        origin="http://127.0.0.1:3100",
+        host="127.0.0.1:3100",
+        scheme="ws",
+        bound_port=3100,
     )
     assert websocket_request_allowed(
-        origin=None, host="127.0.0.1:3100", scheme="ws", bound_port=3100,
+        origin=None,
+        host="127.0.0.1:3100",
+        scheme="ws",
+        bound_port=3100,
     )
     assert not websocket_request_allowed(
-        origin="http://127.0.0.1:5173", host="127.0.0.1:3100",
-        scheme="ws", bound_port=3100,
+        origin="http://127.0.0.1:5173",
+        host="127.0.0.1:3100",
+        scheme="ws",
+        bound_port=3100,
     )
     assert not websocket_request_allowed(
-        origin="http://localhost:3100", host="127.0.0.1:3100",
-        scheme="ws", bound_port=3100,
+        origin="http://localhost:3100",
+        host="127.0.0.1:3100",
+        scheme="ws",
+        bound_port=3100,
     )
     assert not websocket_request_allowed(
-        origin=None, host="127.0.0.1:5173", scheme="ws", bound_port=3100,
+        origin=None,
+        host="127.0.0.1:5173",
+        scheme="ws",
+        bound_port=3100,
     )
 
 
 def test_extra_websocket_origins_allow_only_exact_listed_loopback_origins() -> None:
-    extra_origins = parse_extra_websocket_origins(
-        " http://localhost:3101,https://example.com "
-    )
+    extra_origins = parse_extra_websocket_origins(" http://localhost:3101,https://example.com ")
 
     assert extra_origins == frozenset({"http://localhost:3101"})
     assert websocket_request_allowed(
@@ -658,9 +725,7 @@ def test_unset_extra_websocket_origins_preserve_strict_behavior(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("WG2_EXTRA_WS_ORIGINS", raising=False)
-    extra_origins = parse_extra_websocket_origins(
-        os.environ.get("WG2_EXTRA_WS_ORIGINS")
-    )
+    extra_origins = parse_extra_websocket_origins(os.environ.get("WG2_EXTRA_WS_ORIGINS"))
 
     assert extra_origins == frozenset()
     assert not websocket_request_allowed(

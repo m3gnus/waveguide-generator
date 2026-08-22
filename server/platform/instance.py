@@ -54,6 +54,8 @@ LOCK_BYTE_OFFSET = 1 << 30
 
 # Win32 constants for the liveness probe below.
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+# WaitForSingleObject needs SYNCHRONIZE; a query-only handle makes it fail
+# with WAIT_FAILED, which is indistinguishable from "still running".
 SYNCHRONIZE = 0x00100000
 ERROR_ACCESS_DENIED = 5
 STILL_ACTIVE = 259
@@ -144,9 +146,7 @@ def _windows_pid_is_running(pid: int) -> bool:
     # SYNCHRONIZE is what WaitForSingleObject needs below. Ask for it, but do
     # not require it: a process we may only query is still one we can answer
     # for, just without the unambiguous wait.
-    handle = _kernel32.OpenProcess(
-        PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, False, pid
-    )
+    handle = _kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, False, pid)
     waitable = bool(handle)
     if not handle:
         handle = _kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
@@ -188,7 +188,7 @@ def _pid_is_running(pid: int) -> bool:
 
 
 def pid_is_running(pid: int) -> bool:
-    """Return whether ``pid`` is live without the destructive Windows os.kill trap."""
+    """Return whether ``pid`` is live without relying on Windows ``os.kill`` semantics."""
 
     return _pid_is_running(pid)
 
@@ -311,9 +311,7 @@ class InstanceLock:
         self.release()
 
 
-def requested_port(
-    cli_port: int | None = None, *, environ: Mapping[str, str] | None = None
-) -> int:
+def requested_port(cli_port: int | None = None, *, environ: Mapping[str, str] | None = None) -> int:
     """Resolve and validate CLI/environment/default port precedence."""
 
     env = os.environ if environ is None else environ

@@ -22,15 +22,27 @@ from launchers.apply_update import (
     append_update_log,
     bundle_from_app_layer,
     cleanup_previous_layers,
-    previous_generation_paths,
     repair_bundle,
     resources_directory,
     rollback_previous_layers,
 )
-from launchers.statusapp.updater import BundleUpdateRequest, UpdateHandoffError
+from launchers.statusapp.updater import (
+    BundleUpdateRequest,
+    UpdateHandoffError,
+    launch_rollback_handoff,
+)
 
 
 WINDOW_TITLE = "Waveguide Generator"
+ROLLBACK_HANDOFF_RESULT = (
+    "The previous version is being restored by a separate helper and will "
+    "reopen by itself. If it does not, review update.log in the application "
+    "data log directory before changing the installation."
+)
+ROLLBACK_FAILED_RESULT = (
+    "Automatic rollback failed. Review update.log in the application "
+    "data log directory before changing the bundle."
+)
 PYWEBVIEW_REPAIR = (
     "Install the desktop dependency with pip from server/requirements-runtime.txt "
     "(for example: python -m pip install -r server/requirements-runtime.txt)."
@@ -194,9 +206,36 @@ class DesktopWindow:
             return None
         return bundle, resources_directory(bundle, sys.platform), data_dir
 
+    @staticmethod
+    def _previous_generation_paths(resources: Path) -> list[Path]:
+        """Return layer and launcher backups that belong to one pending update."""
+
+        paths = [
+            path
+            for name in ("app.previous", "runtime.previous")
+            if ((path := resources / name).exists() or path.is_symlink())
+        ]
+        paths.extend(
+            path
+            for path in sorted(resources.glob("*.previous"))
+            if path not in paths and (path.is_file() or path.is_symlink())
+        )
+        return paths
+
     def _finish_healthy_bundle_update(self, snapshot: StatusSnapshot) -> None:
-        # Resolve the paths first: the data directory is where the log lives, so
-        # a guard that returns before this point cannot explain itself.
+        # Exactly the predicate _wait_for_frontend loops on, and deliberately
+        # not a stricter one. This runs on the single snapshot that ended that
+        # loop, so any extra condition here is a condition the loop never
+        # promised to satisfy -- and the failure is silent, because a skipped
+        # cleanup logs nothing at all. Requiring the frontend lamp to be OK
+        # rather than OK-or-WARNING left a perfectly good update holding both
+        # .previous layers and its downloaded archives for good: 1.08 GB
+        # against 0.56 GB swept, on a bundle whose only fault was a dist whose
+        # timestamps looked older than its sources. Requiring the backend lamp
+        # to be OK as well, which is the shape this had while that was being
+        # fixed, reintroduced the same silence from the other side.
+        if self._healthy_bundle_checked:
+            return
         paths = self._bundle_paths()
         if paths is None:
             return
@@ -205,33 +244,53 @@ class DesktopWindow:
         def log(message: str) -> None:
             append_update_log(data_dir, message)
 
-        if self._healthy_bundle_checked:
-            return
-        # Ask the same question the loop that precedes this one exits on. A
-        # stricter guard here would decline forever on a start this application
-        # already considers healthy -- silently, which is how it would be found:
-        # by noticing gigabytes of retained layers rather than by reading a log.
+        # Say so when it declines. Both times this broke, the whole symptom was
+        # a gigabyte that never came back and an update.log that stopped after
+        # "Relaunched" -- there was nothing to search for. A refusal that
+        # names the two lamps turns the third occurrence into one grep.
         if not self._frontend_ready(snapshot):
             log(
-                "Not reclaiming the previous layers yet: "
-                f"backend {snapshot.backend.state.value}, "
-                f"frontend {snapshot.frontend.state.value}."
+                "Not reclaiming the previous layers yet: backend "
+                f"{snapshot.backend.state.name}, frontend {snapshot.frontend.state.name}."
             )
             return
         self._healthy_bundle_checked = True
 
-        previous = previous_generation_paths(resources)
-        if not previous:
-            return
+        previous = self._previous_generation_paths(resources)
         if sys.platform == "darwin":
+            if not previous:
+                return
             self._finish_healthy_macos_update(bundle, resources, data_dir, previous)
             return
+
+        # ``.failed`` is the trail a rollback leaves: Windows would not let the
+        # helper delete a directory whose DLLs were still mapped, so the
+        # deletion was deferred to exactly here, where nothing holds them and
+        # the download that produced them is equally spent.
+        had_previous = any(
+            (resources / f"{name}{suffix}").exists()
+            for name in ("app", "runtime")
+            for suffix in (".previous", ".failed")
+        )
         try:
             cleanup_previous_layers(resources, log=log)
         except OSError as exc:
             log(f"Could not remove healthy-start rollback layers: {exc}")
-            return
-        self._remove_update_downloads(data_dir, log)
+        finally:
+            if had_previous:
+                repair_bundle(bundle, platform_name=sys.platform, log=log)
+                # The staged layers moved into the bundle; what is left under
+                # updates/ is the downloaded archives (the runtime zip alone is
+                # well over 100 MB), which the healthy new version never needs.
+                downloads = data_dir / "updates"
+                try:
+                    shutil.rmtree(downloads)
+                except FileNotFoundError:
+                    pass
+                except OSError as exc:
+                    log(f"Could not remove the update downloads {downloads}: {exc}")
+                else:
+                    log(f"Removed the update downloads: {downloads}")
 
     @staticmethod
     def _cleanup_holding_directory(bundle: Path) -> Path:
@@ -434,13 +493,20 @@ class DesktopWindow:
             _report_startup_failure(message)
             return
         bundle, resources, data_dir = paths
-        if not previous_generation_paths(resources):
+        if not self._previous_generation_paths(resources):
             self._report_bundle_failure(message)
             return
         self.controller.close()
 
         def log(entry: str) -> None:
             append_update_log(data_dir, entry)
+
+        if self._hand_off_rollback(bundle, data_dir, log):
+            # The helper waits for this process to exit before it touches
+            # anything, so the dialog below can keep the window open for as
+            # long as the user leaves it there.
+            self._report_bundle_failure(f"{message}\n\n{ROLLBACK_HANDOFF_RESULT}")
+            return
 
         rolled_back = rollback_previous_layers(resources, log=log)
         if rolled_back:
@@ -454,11 +520,48 @@ class DesktopWindow:
             else:
                 result = "The previous version was restored. Reopen Waveguide Generator."
         else:
-            result = (
-                "Automatic rollback failed. Review update.log in the application "
-                "data log directory before changing the bundle."
-            )
+            result = ROLLBACK_FAILED_RESULT
         self._report_bundle_failure(f"{message}\n\n{result}")
+
+    def _hand_off_rollback(
+        self,
+        bundle: Path,
+        data_dir: Path,
+        log: Callable[[str], None],
+    ) -> bool:
+        """Start the detached helper that restores the previous version.
+
+        Windows will happily rename a directory whose DLLs are mapped, but it
+        refuses to delete one, and this process has the failed ``runtime`` and
+        ``app`` mapped into it. Rolling back from here left the launcher files
+        beside the runtime unrestored -- a 0.2.5 runtime under a 0.2.6
+        ``vcruntime140.dll`` -- so the work moves to a process that outlives
+        this one and starts only once these mappings are gone.
+
+        macOS has no such rule and its in-process rollback is the tested path,
+        so the handoff is Windows-only; a handoff that cannot start falls back
+        to it as well, because a rollback that happens here is still far better
+        than none.
+        """
+
+        if sys.platform != "win32":
+            return False
+        try:
+            command = launch_rollback_handoff(
+                bundle,
+                data_dir,
+                os.getpid(),
+                environ=dict(getattr(self.controller, "environ", os.environ)),
+                server_args=tuple(getattr(self.controller, "server_args", ())),
+            )
+        except (UpdateHandoffError, OSError) as exc:
+            log(
+                f"Could not start the detached rollback helper: {exc} "
+                "Rolling back in this process instead."
+            )
+            return False
+        log(f"Started the detached rollback helper: {' '.join(command)}")
+        return True
 
     def _report_bundle_startup_failure(self, snapshot: StatusSnapshot, cause: str) -> None:
         self._report_bundle_window_failure(self._failure_message(snapshot, cause))
@@ -574,7 +677,7 @@ class DesktopWindow:
         if paths is None:
             return []
         bundle, resources, _data_dir = paths
-        pending = previous_generation_paths(resources)
+        pending = self._previous_generation_paths(resources)
         pending.extend(
             path
             for path in sorted(resources.glob("*.failed"))

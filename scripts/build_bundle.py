@@ -34,7 +34,8 @@ if str(_IMPORT_ROOT) not in sys.path:
 
 from scripts import fetch_spa  # noqa: E402
 from launchers.macos import generate_icon  # noqa: E402
-from server.platform.paths import app_root  # noqa: E402
+from server.platform.instance import PORT_ENV  # noqa: E402
+from server.platform.paths import DATA_DIR_ENV, app_root  # noqa: E402
 from shared.runtime_id import compute_runtime_id  # noqa: E402
 from shared.safe_names import UnsafeName, collision_key, validate_relative_name  # noqa: E402
 
@@ -119,9 +120,18 @@ MSVC_RUNTIME_DLLS = (
 )
 WINDOWS_LAUNCHER_NAME = "Waveguide Generator.exe"
 WINDOWS_PTH_NAME = "Waveguide Generator._pth"
+WINDOWS_PYVENV_NAME = "pyvenv.cfg"
+WINDOWS_RUNTIME_PTH_NAME = "python._pth"
 WINDOWS_ICON_NAME = "WaveguideGenerator.ico"
 WINDOWS_CREATE_NEW_PROCESS_GROUP = 0x00000200
 WINDOWS_CREATE_NO_WINDOW = 0x08000000
+# A bare launch has to start the interpreter, import the app layer and let the
+# desktop controller start its own server child, so it is allowed more than the
+# plain server verification above -- but it is still hard-bounded, because a
+# launcher that hangs must fail the build rather than the CI job's own clock.
+WINDOWS_BARE_LAUNCH_TIMEOUT = 180.0
+PROCESS_TREE_KILL_TIMEOUT = 30.0
+PROCESS_EXIT_TIMEOUT = 15.0
 
 RunCallable = Callable[..., subprocess.CompletedProcess[Any]]
 ProcessFactory = Callable[..., subprocess.Popen[str]]
@@ -144,6 +154,9 @@ def file_sha256(path: Path) -> str:
 
 
 def write_json(path: Path, payload: dict[str, object]) -> None:
+    # newline="\n" is load-bearing: without it Windows text mode writes CRLF,
+    # the manifests inside the app layer differ from the macOS ones byte for
+    # byte, and the release workflow's cross-platform identity check fails.
     path.write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -567,13 +580,65 @@ def windows_pth() -> str:
     return "runtime\\Lib\nruntime\\DLLs\nruntime\\Lib\\site-packages\napp\nimport site\n"
 
 
+def windows_pyvenv_cfg() -> str:
+    """Switch the per-user site directory off before the interpreter starts.
+
+    The ``._pth`` must contain ``import site`` for ``sitecustomize`` -- and so
+    the bootstrap -- to run at all, and that also re-enables the per-user site
+    directory.  Anything done from ``sitecustomize`` is far too late: CPython's
+    ``site.main()`` calls ``addusersitepackages()`` before it imports
+    ``sitecustomize``, so by then every ``.pth`` file in ``%APPDATA%\\Python``
+    has already been *executed*.  Pruning ``sys.path`` afterwards hides the
+    symptom and undoes none of it.
+
+    ``site.venv()`` runs earlier still, ahead of ``addusersitepackages()``, and
+    sets ``ENABLE_USER_SITE = False`` when it reads
+    ``include-system-site-packages = false``.  A ``pyvenv.cfg`` beside the
+    launcher therefore gives real isolation with no launcher of our own to
+    build and maintain, and every worker subprocess inherits it for free
+    because they run the same executable from the same directory.
+
+    ``home`` is deliberately omitted: with a ``._pth`` present the interpreter
+    already knows where its standard library lives, and a wrong ``home`` is a
+    fatal error in ``getpath`` before any of our code can report it.
+    """
+
+    return "include-system-site-packages = false\n"
+
+
+def windows_runtime_pth() -> str:
+    """Pin the runtime interpreter's own search path inside its layer.
+
+    ``pyvenv.cfg`` sits beside the launcher so it reaches the interpreter
+    before start-up, but ``site.venv()`` also rewrites ``PREFIXES`` to that
+    directory -- and ``runtime\\python.exe``, which has no path file of
+    its own, resolves ``site-packages`` through exactly that prefix.  Left
+    alone it loses its own ``site-packages`` and cannot import so much as
+    ``fastapi``, which is how ``scripts/check_backends.py`` and the build's
+    own backend gate break.  Spelling the paths out makes the plain
+    interpreter independent of the prefix, and it inherits the user-site
+    switch as a bonus: the documented support command now diagnoses the
+    bundle instead of a mixture of the bundle and whatever the user
+    pip-installed.
+
+    Deliberately no ``..\\app`` entry: the app and runtime layers are
+    swapped independently, and the runtime must not reach into the other.
+    """
+
+    return "Lib\nDLLs\nLib\\site-packages\nimport site\n"
+
+
 def windows_desktop_bootstrap() -> str:
     """Start the desktop only for a direct launch of the renamed GUI executable.
 
     The same executable is deliberately usable as ``sys.executable`` by server
-    workers. CPython represents a true no-script launch as ``sys.argv == ['']``;
-    every script, ``-m`` and ``-c`` invocation only receives the bundle
-    environment and continues through the interpreter normally.
+    workers, so the bootstrap has to tell a double-click apart from every other
+    invocation.  CPython sets ``sys.argv[0]`` to the empty string when it is
+    given no script, no ``-c`` and no ``-m`` -- it is never the launcher
+    filename -- so an empty ``argv[0]`` beside the launcher's own
+    ``sys.executable`` is exactly "the user double-clicked this".  For a
+    script, ``-m`` or ``-c`` invocation importing this module only establishes
+    the path.
     """
 
     return '''"""Bootstrap the double-clickable Windows executable."""
@@ -581,25 +646,46 @@ def windows_desktop_bootstrap() -> str:
 from __future__ import annotations
 
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import sys
 import traceback
 
 
-bundle_root = Path(sys.executable).resolve().parent
-app_root = bundle_root / "app"
-os.environ["WG2_BUNDLE"] = "1"
-os.environ["WG2_APP_ROOT"] = str(app_root)
-local_app_data = os.environ.get("LOCALAPPDATA")
-cache_base = Path(local_app_data) if local_app_data else Path.home() / "AppData" / "Local"
-cache_root = cache_base / "WaveguideGenerator" / "cache"
-os.environ.setdefault("PYTHONPYCACHEPREFIX", str(cache_root / "pycache"))
-os.environ.setdefault("NUMBA_CACHE_DIR", str(cache_root / "numba"))
+def _is_direct_launch() -> bool:
+    return (
+        sys.argv[0] == ""
+        and PureWindowsPath(sys.executable).name.casefold() == "waveguide generator.exe"
+    )
 
 
-if sys.argv == [""]:
+# Per-user site packages are switched off by the pyvenv.cfg beside the
+# launcher, which takes effect before the interpreter runs any of this. There
+# is deliberately nothing to do here: removing sys.path entries at this point
+# would be theatre, because site.main() has already executed every .pth file
+# in the user site directory by the time sitecustomize is imported.
+
+
+if _is_direct_launch():
+    bundle_root = Path(sys.executable).resolve().parent
+    app_root = bundle_root / "app"
+    os.environ["WG2_BUNDLE"] = "1"
+    os.environ["WG2_APP_ROOT"] = str(app_root)
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        cache_root = Path(local_app_data) / "WaveguideGenerator" / "cache"
+        os.environ.setdefault("PYTHONPYCACHEPREFIX", str(cache_root / "pycache"))
+        os.environ.setdefault("NUMBA_CACHE_DIR", str(cache_root / "numba"))
+        # PYTHONPYCACHEPREFIX is read at interpreter start-up, long before a
+        # sitecustomize import, so setting it here only ever reaches child
+        # processes.  Assigning sys.pycache_prefix is what stops *this* process
+        # from writing __pycache__ into the swappable app and runtime layers.
+        sys.pycache_prefix = os.environ["PYTHONPYCACHEPREFIX"]
     try:
-        os.chdir(app_root)
+        # Deliberately not app_root.  Windows keeps an open handle on a
+        # process's current directory, and a failed update has to rename
+        # ``app`` out of the way while this very process asks for the rollback.
+        # The bundle root is never renamed.
+        os.chdir(bundle_root)
         from launchers.desktop import main
 
         result = main(sys.argv[1:])
@@ -650,42 +736,263 @@ def _where_candidates(
     )
 
 
+def _env_value(environ: dict[str, str], name: str, default: str) -> str:
+    """Read an environment variable the way Windows itself reads them.
+
+    ``os.environ`` upper-cases its keys on Windows, so ``dict(os.environ)``
+    holds ``SYSTEMROOT`` and an exact-case lookup for ``SystemRoot`` quietly
+    misses and takes the default instead.
+    """
+
+    if name in environ:
+        return environ[name]
+    wanted = name.casefold()
+    for key, value in environ.items():
+        if key.casefold() == wanted:
+            return value
+    return default
+
+
+IMAGE_FILE_MACHINE_AMD64 = 0x8664
+RESOURCE_TYPE_VERSION = 16
+VS_FIXEDFILEINFO_SIGNATURE = b"\xbd\x04\xef\xfe"
+RESOURCE_SUBDIRECTORY_FLAG = 0x80000000
+
+
+def is_x64_pe(path: Path) -> bool:
+    """Report whether ``path`` is an x86-64 PE image.
+
+    A 32-bit DLL copied beside a 64-bit interpreter fails at load time with an
+    error that names neither the file nor the reason, so it is worth ruling out
+    while the build still has the file in its hands.
+    """
+
+    try:
+        with path.open("rb") as handle:
+            if handle.read(2) != b"MZ":
+                return False
+            handle.seek(0x3C)
+            header = handle.read(4)
+            if len(header) != 4:
+                return False
+            handle.seek(int.from_bytes(header, "little"))
+            if handle.read(4) != b"PE\0\0":
+                return False
+            machine = handle.read(2)
+            if len(machine) != 2:
+                return False
+            return int.from_bytes(machine, "little") == IMAGE_FILE_MACHINE_AMD64
+    except OSError:
+        return False
+
+
+def _pe_resource_blob(data: bytes, resource_type: int) -> bytes | None:
+    """Return the first resource of ``resource_type`` in a PE image, or ``None``."""
+
+    if data[:2] != b"MZ":
+        return None
+    pe_offset = int.from_bytes(data[0x3C:0x40], "little")
+    if data[pe_offset : pe_offset + 4] != b"PE\0\0":
+        return None
+    coff = pe_offset + 4
+    section_count = int.from_bytes(data[coff + 2 : coff + 4], "little")
+    optional_size = int.from_bytes(data[coff + 16 : coff + 18], "little")
+    optional = coff + 20
+    magic = int.from_bytes(data[optional : optional + 2], "little")
+    if magic == 0x20B:  # PE32+
+        directories = optional + 112
+    elif magic == 0x10B:  # PE32
+        directories = optional + 96
+    else:
+        return None
+    # The resource table is the third entry of the data directory.
+    entry = directories + 16
+    resource_rva = int.from_bytes(data[entry : entry + 4], "little")
+    if not resource_rva:
+        return None
+
+    sections: list[tuple[int, int, int]] = []
+    table = optional + optional_size
+    for index in range(section_count):
+        header = table + 40 * index
+        virtual_size = int.from_bytes(data[header + 8 : header + 12], "little")
+        virtual_address = int.from_bytes(data[header + 12 : header + 16], "little")
+        raw_size = int.from_bytes(data[header + 16 : header + 20], "little")
+        raw_offset = int.from_bytes(data[header + 20 : header + 24], "little")
+        sections.append((virtual_address, max(virtual_size, raw_size), raw_offset))
+
+    def file_offset(rva: int) -> int | None:
+        for virtual_address, span, raw_offset in sections:
+            if virtual_address <= rva < virtual_address + span:
+                return rva - virtual_address + raw_offset
+        return None
+
+    def child_offset(directory: int, wanted: int | None) -> int | None:
+        named = int.from_bytes(data[directory + 12 : directory + 14], "little")
+        identified = int.from_bytes(data[directory + 14 : directory + 16], "little")
+        for index in range(named + identified):
+            record = directory + 16 + 8 * index
+            name = int.from_bytes(data[record : record + 4], "little")
+            if wanted is not None and name != wanted:
+                continue
+            return int.from_bytes(data[record + 4 : record + 8], "little")
+        return None
+
+    root = file_offset(resource_rva)
+    if root is None:
+        return None
+    cursor = root
+    for wanted in (resource_type, None):  # type directory, then name directory
+        child = child_offset(cursor, wanted)
+        if child is None or not child & RESOURCE_SUBDIRECTORY_FLAG:
+            return None
+        cursor = root + (child & ~RESOURCE_SUBDIRECTORY_FLAG)
+    leaf = child_offset(cursor, None)  # the first language of that resource
+    if leaf is None or leaf & RESOURCE_SUBDIRECTORY_FLAG:
+        return None
+    described = root + leaf
+    payload = file_offset(int.from_bytes(data[described : described + 4], "little"))
+    size = int.from_bytes(data[described + 4 : described + 8], "little")
+    if payload is None or not size:
+        return None
+    return data[payload : payload + size]
+
+
+def pe_file_version(path: Path) -> tuple[int, int, int, int] | None:
+    """Read a PE image's ``VS_FIXEDFILEINFO`` file version, or ``None``.
+
+    Not every PE carries a version resource, and the build must not reject a
+    DLL merely because it could not read one, so an unreadable or absent
+    version is reported as unknown rather than as a mismatch.
+    """
+
+    try:
+        data = path.read_bytes()
+        resource = _pe_resource_blob(data, RESOURCE_TYPE_VERSION)
+    except (OSError, IndexError, ValueError):
+        return None
+    if not resource:
+        return None
+    marker = resource.find(VS_FIXEDFILEINFO_SIGNATURE)
+    if marker < 0 or len(resource) < marker + 16:
+        return None
+    most = int.from_bytes(resource[marker + 8 : marker + 12], "little")
+    least = int.from_bytes(resource[marker + 12 : marker + 16], "little")
+    return (most >> 16, most & 0xFFFF, least >> 16, least & 0xFFFF)
+
+
+def _format_version(version: tuple[int, int, int, int]) -> str:
+    return ".".join(str(part) for part in version)
+
+
+def _visual_studio_x64_directories(visual_studio: Path) -> list[Path]:
+    """List the x64 CRT directories of an installed Visual Studio, newest first."""
+
+    if not visual_studio.is_dir():
+        return []
+    wanted = {name.casefold() for name in MSVC_RUNTIME_DLLS}
+    found: set[Path] = set()
+    for base, _directories, files in os.walk(visual_studio):
+        directory = Path(base)
+        if "x64" not in {part.casefold() for part in directory.parts}:
+            continue
+        if any(name.casefold() in wanted for name in files):
+            found.add(directory)
+    # The redistributable directories are version-named (``14.40``, ``14.44``),
+    # so a reverse path sort puts the newest toolset first.
+    return sorted(found, key=lambda path: path.as_posix().casefold(), reverse=True)
+
+
+def _path_directories(*, runner: RunCallable, environ: dict[str, str]) -> list[Path]:
+    """List the directories ``where.exe`` reports, in the order PATH gives them."""
+
+    directories: list[Path] = []
+    for filename in MSVC_RUNTIME_DLLS:
+        for candidate in _where_candidates(filename, runner=runner, environ=environ):
+            parent = candidate.parent
+            if parent not in directories:
+                directories.append(parent)
+    return directories
+
+
+def _require_matched_versions(located: dict[str, Path]) -> None:
+    """Reject a directory whose three DLLs plainly did not ship together."""
+
+    versions = {name: pe_file_version(path) for name, path in located.items()}
+    known = {name: version for name, version in versions.items() if version is not None}
+    # The revision is the one field Microsoft services on its own; a difference
+    # in major, minor or build is a mixture of two redistributables.
+    if len({version[:3] for version in known.values()}) <= 1:
+        return
+    directory = next(iter(located.values())).parent
+    detail = ", ".join(f"{name} {_format_version(known[name])}" for name in sorted(known))
+    raise BundleError(
+        f"The MSVC runtime DLLs in {directory} report mismatched versions ({detail}). "
+        "The redistributable is serviced only as a matched set, so this combination "
+        "has never been tested. Repair or reinstall the Microsoft Visual C++ x64 "
+        "Redistributable and rebuild."
+    )
+
+
 def locate_msvc_runtime_dlls(
     *,
     runner: RunCallable = subprocess.run,
     environ: dict[str, str] | None = None,
 ) -> dict[str, Path]:
-    """Find the x64 MSVC redistributable DLLs in the documented priority order."""
+    """Choose one directory holding a complete, matched x64 MSVC runtime set.
+
+    The redistributable is serviced as a set: Microsoft ships and tests
+    ``vcruntime140``, ``vcruntime140_1`` and ``msvcp140`` together, and no one
+    tests a current ``vcruntime140`` beside a year-old ``msvcp140``.  Resolving
+    each file on its own is what produces that mixture -- on a developer machine
+    ``where.exe`` answers with whatever unrelated application happens to sit
+    first on ``PATH`` (a JDK, a vendor tool, sometimes a 32-bit build), so the
+    three names can easily come from three installations.  This therefore picks
+    a *directory* that holds all three, never a file at a time: an incomplete
+    directory is skipped whole rather than topped up from the next source.
+
+    The preference order is the machine's own installed redistributable in
+    ``%SystemRoot%\\System32``, then an installed Visual Studio's x64 CRT, then
+    a directory on ``PATH`` that happens to hold all three itself.
+    """
 
     env = dict(os.environ if environ is None else environ)
-    system_root = Path(env.get("SystemRoot", r"C:\Windows"))
-    program_files = Path(env.get("ProgramFiles", r"C:\Program Files"))
+    system_root = Path(_env_value(env, "SystemRoot", r"C:\Windows"))
+    program_files = Path(_env_value(env, "ProgramFiles", r"C:\Program Files"))
     visual_studio = program_files / "Microsoft Visual Studio"
-    located: dict[str, Path] = {}
-    for filename in MSVC_RUNTIME_DLLS:
-        candidates = list(_where_candidates(filename, runner=runner, environ=env))
-        candidates.append(system_root / "System32" / filename)
-        if visual_studio.is_dir():
-            visual_studio_matches = sorted(
-                (
-                    path
-                    for path in visual_studio.rglob(filename)
-                    if "x64" in {part.casefold() for part in path.parts}
-                ),
-                key=lambda path: path.as_posix().casefold(),
-                reverse=True,
-            )
-            candidates.extend(visual_studio_matches)
-        found = next((candidate.resolve() for candidate in candidates if candidate.is_file()), None)
-        if found is None:
-            raise BundleError(
-                f"Required MSVC runtime DLL {filename} was not found via where.exe, "
-                f"{system_root / 'System32'}, or the Visual Studio x64 redistributables "
-                f"under {visual_studio}. Install the Microsoft Visual C++ x64 "
-                "Redistributable and rebuild."
-            )
-        located[filename] = found
-    return located
+
+    def candidates() -> Iterable[Path]:
+        # A generator, so that a complete System32 set costs neither a walk of
+        # an installed Visual Studio nor a where.exe call.
+        yield system_root / "System32"
+        yield from _visual_studio_x64_directories(visual_studio)
+        yield from _path_directories(runner=runner, environ=env)
+
+    rejected: list[str] = []
+    seen: set[str] = set()
+    for directory in candidates():
+        key = os.path.normcase(str(directory))
+        if key in seen:
+            continue
+        seen.add(key)
+        located = {name: directory / name for name in MSVC_RUNTIME_DLLS}
+        missing = [
+            name for name, path in located.items() if not (path.is_file() and is_x64_pe(path))
+        ]
+        if missing:
+            rejected.append(f"{directory} (no x64 {', '.join(missing)})")
+            continue
+        _require_matched_versions(located)
+        return {name: path.resolve() for name, path in located.items()}
+    searched = "; ".join(rejected) if rejected else "no candidate directory exists"
+    raise BundleError(
+        "No single directory holds a complete x64 MSVC runtime set "
+        f"({', '.join(MSVC_RUNTIME_DLLS)}). The redistributable is only supported as a "
+        "matched set, so the build refuses to assemble one from several directories. "
+        f"Searched {system_root / 'System32'}, the Visual Studio x64 CRT directories "
+        f"under {visual_studio}, and the where.exe hits on PATH: {searched}. Install the "
+        "Microsoft Visual C++ x64 Redistributable and rebuild."
+    )
 
 
 def _iter_zip_entries(root: Path, *, archive_root: str | None = None) -> Iterable[tuple[Path, str]]:
@@ -759,6 +1066,8 @@ def deterministic_zip(
 
 def write_checksum(asset: Path) -> Path:
     sidecar = asset.with_name(asset.name + ".sha256")
+    # sha256sum format is one LF-terminated line on every platform; Windows
+    # text mode would otherwise ship CRLF sidecars beside the release assets.
     sidecar.write_text(
         f"{file_sha256(asset)}  {asset.name}\n",
         encoding="ascii",
@@ -999,6 +1308,9 @@ class BundleBuilder:
                 runner=self.runner, environ=self.command_environment
             ).items():
                 shutil.copy2(source, destination / filename)
+            (destination / WINDOWS_RUNTIME_PTH_NAME).write_text(
+                windows_runtime_pth(), encoding="utf-8", newline="\n"
+            )
         removed = prune_runtime(destination, platform_name=platform_name)
         print(f"Pruned {len(removed)} runtime directories.")
         write_runtime_manifest(
@@ -1084,9 +1396,7 @@ class BundleBuilder:
         shutil.copytree(runtime_root, destination / "runtime", symlinks=True)
         shutil.copytree(app_root, destination / "app", symlinks=True)
         launcher_files = windows_launcher_files()
-        missing = [
-            source for source, _ in launcher_files if not (runtime_root / source).is_file()
-        ]
+        missing = [source for source, _ in launcher_files if not (runtime_root / source).is_file()]
         if missing:
             raise BundleError(
                 "The Windows runtime is missing files required beside the renamed "
@@ -1095,6 +1405,9 @@ class BundleBuilder:
         for source, target in launcher_files:
             shutil.copy2(runtime_root / source, destination / target)
         (destination / WINDOWS_PTH_NAME).write_text(windows_pth(), encoding="utf-8", newline="\n")
+        (destination / WINDOWS_PYVENV_NAME).write_text(
+            windows_pyvenv_cfg(), encoding="utf-8", newline="\n"
+        )
         icon_writer(destination / WINDOWS_ICON_NAME)
 
     def create_dmg(self, bundle: Path, output: Path, staging: Path) -> None:
@@ -1128,6 +1441,136 @@ class BundleBuilder:
                 return int(response.status)
         except (OSError, urllib.error.URLError):
             return None
+
+    def _terminate_process_tree(
+        self,
+        process: subprocess.Popen[str],
+        *,
+        platform_name: str,
+    ) -> None:
+        """Stop a verification process together with everything it started.
+
+        The Windows launcher runs the server in a child process, so terminating
+        only the launcher leaves that child holding the verification port and an
+        open handle on the scratch directory -- a leak that outlives the build.
+        ``taskkill /T`` is the documented way to end the whole tree, and every
+        wait here is bounded so a wedged child cannot hang the build.
+        """
+
+        if process.poll() is not None:
+            return
+        if platform_name == WINDOWS_PLATFORM:
+            try:
+                self.runner(
+                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=PROCESS_TREE_KILL_TIMEOUT,
+                )
+            except (OSError, subprocess.SubprocessError):
+                pass
+        else:
+            process.terminate()
+        try:
+            process.wait(timeout=PROCESS_EXIT_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            try:
+                process.wait(timeout=5.0)
+            except subprocess.TimeoutExpired:
+                pass
+
+    def verify_windows_bare_launch(
+        self,
+        launcher: Path,
+        *,
+        scratch: Path,
+        environment: dict[str, str],
+        timeout: float = WINDOWS_BARE_LAUNCH_TIMEOUT,
+    ) -> None:
+        """Start the launcher exactly as a double-click does and require a live app.
+
+        The ``-c`` probe proves a different contract: that the adjacent Python
+        and MSVC DLLs and the isolated ``._pth`` load. It cannot prove the app
+        starts, because ``-c`` is precisely the invocation the bootstrap stands
+        down for -- the same executable is deliberately reusable as
+        ``sys.executable`` by the server's own workers. A probe like that passes
+        happily while a double-click opens nothing but a REPL, so the only gate
+        that covers what users do is an argument-free start.
+
+        Arguments cannot be passed to this executable at all without turning it
+        back into a plain interpreter, so the isolated data directory and the
+        free port travel in the environment instead.
+        """
+
+        port = self._free_port()
+        data_dir = scratch / "bare-launch-data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        log_path = scratch / "bare-launcher-verification.log"
+        launch_environment = dict(environment)
+        # Setting these here would hide the very failure this gate exists to
+        # catch: it is the bundled bootstrap's job to establish them.
+        launch_environment.pop("WG2_BUNDLE", None)
+        launch_environment.pop("WG2_APP_ROOT", None)
+        launch_environment[DATA_DIR_ENV] = str(data_dir)
+        launch_environment[PORT_ENV] = str(port)
+        print(
+            f"+ {shlex.join([str(launcher)])}  "
+            f"[no arguments, {DATA_DIR_ENV}={data_dir}, {PORT_ENV}={port}]",
+            flush=True,
+        )
+        with log_path.open("w+", encoding="utf-8") as log_handle:
+            process = self.process_factory(
+                # No arguments at all. Anything here, even a flag the app would
+                # understand, gives CPython a non-empty argv[0] and the bootstrap
+                # correctly declines to start the desktop.
+                [str(launcher)],
+                cwd=launcher.parent,
+                env=launch_environment,
+                stdin=subprocess.DEVNULL,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                text=True,
+                creationflags=getattr(
+                    subprocess,
+                    "CREATE_NEW_PROCESS_GROUP",
+                    WINDOWS_CREATE_NEW_PROCESS_GROUP,
+                )
+                | getattr(subprocess, "CREATE_NO_WINDOW", WINDOWS_CREATE_NO_WINDOW),
+            )
+            root_status: int | None = None
+            health_status: int | None = None
+            exit_code: int | None = None
+            deadline = time.monotonic() + timeout
+            try:
+                while time.monotonic() < deadline:
+                    exit_code = process.poll()
+                    if exit_code is not None:
+                        break
+                    health_status = self._http_status(f"http://127.0.0.1:{port}/health")
+                    root_status = self._http_status(f"http://127.0.0.1:{port}/")
+                    if root_status == 200 and health_status == 200:
+                        break
+                    time.sleep(0.25)
+                if root_status != 200 or health_status != 200:
+                    log_handle.flush()
+                    log_handle.seek(0)
+                    detail = log_handle.read()[-8000:]
+                    exited = "" if exit_code is None else f"; the launcher exited with {exit_code}"
+                    raise BundleError(
+                        "Starting the Windows launcher with no arguments did not serve the "
+                        f"application on 127.0.0.1:{port} within {timeout:.0f}s: "
+                        f"/health={health_status}, /={root_status}{exited}. A double-click "
+                        "must run the bundled bootstrap through the generated ._pth and "
+                        "sitecustomize, not open a Python REPL.\n" + detail
+                    )
+                print(
+                    "Windows launcher verification: an argument-free start served / and "
+                    "/health through the bundled bootstrap."
+                )
+            finally:
+                self._terminate_process_tree(process, platform_name=WINDOWS_PLATFORM)
 
     def verify_bundle(
         self,
@@ -1264,6 +1707,16 @@ class BundleBuilder:
                     except subprocess.TimeoutExpired:
                         process.kill()
                         process.wait(timeout=5.0)
+
+        if platform_name == WINDOWS_PLATFORM:
+            # Last, because it is the widest gate: it needs the launcher, the
+            # _pth, sitecustomize, the bootstrap, the app layer and the server
+            # all at once, and the narrower failures above diagnose themselves.
+            self.verify_windows_bare_launch(
+                copied_bundle / WINDOWS_LAUNCHER_NAME,
+                scratch=scratch,
+                environment=environment,
+            )
 
         if platform_name == MACOS_PLATFORM:
             # Running the bundle must not have written into it: a Gatekeeper

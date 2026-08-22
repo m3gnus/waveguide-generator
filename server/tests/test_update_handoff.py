@@ -6,15 +6,22 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 
 import pytest
 
 from launchers.statusapp.updater import (
+    WINDOWS_CREATE_NEW_PROCESS_GROUP,
+    WINDOWS_CREATE_NO_WINDOW,
+    WINDOWS_DETACHED_PROCESS,
     BundleUpdateRequest,
     UpdateHandoffError,
     consume_update_request,
     launch_bundle_update_handoff,
+    launch_rollback_handoff,
     launch_update_handoff,
+    rollback_interpreter,
+    rollback_renamed_directories,
 )
 
 
@@ -248,3 +255,151 @@ def test_windows_bundle_handoff_runs_from_staged_runtime_before_ntfs_swap(
         str(app_layer),
         str(app_layer.parent / "runtime"),
     }
+    # Never the staged app directory. Windows keeps an open handle on a
+    # process's current directory, and this process exists precisely to rename
+    # that directory into place; starting it there makes the swap fail with
+    # WinError 32 and roll straight back.
+    assert options["cwd"] == str(data.resolve())
+    assert options["cwd"] != str(staged_app)
+
+
+def _windows_rollback_installation(tmp_path: Path) -> tuple[Path, Path]:
+    """A Windows folder that has rolled forward, plus its data directory."""
+
+    bundle = tmp_path / "Waveguide Generator"
+    for name in ("app", "app.previous", "runtime", "runtime.previous"):
+        (bundle / name).mkdir(parents=True)
+    # The staged runtime the updater itself ran from is gone: the swap moved it
+    # into place as ``runtime``. This is the only interpreter left outside the
+    # directories the rollback renames.
+    (bundle / "Waveguide Generator.exe").write_bytes(b"pythonw")
+    (bundle / "runtime" / "python.exe").write_bytes(b"python")
+    (bundle / "runtime.previous" / "python.exe").write_bytes(b"python")
+    data = tmp_path / "data"
+    data.mkdir()
+    return bundle, data
+
+
+def test_windows_rollback_handoff_runs_outside_every_directory_it_renames(
+    tmp_path: Path,
+) -> None:
+    """The failed application cannot roll itself back, so it hands off.
+
+    Windows permits renaming a directory whose DLLs are mapped -- verified on a
+    real machine -- but not deleting one, and the process that has them mapped
+    is the one whose exit releases them. So the restore moves to an independent
+    process that starts only after that exit, and it must not stand on anything
+    it moves: not its interpreter, not its script, not its working directory.
+    """
+
+    bundle, data = _windows_rollback_installation(tmp_path)
+    source = tmp_path / "source" / "apply_update.py"
+    source.parent.mkdir()
+    source.write_text("# the standalone updater\n", encoding="utf-8")
+    started: list[tuple[list[str], dict[str, object]]] = []
+
+    command = launch_rollback_handoff(
+        bundle,
+        data,
+        4321,
+        environ={"WG2_DATA_DIR": str(data)},
+        server_args=("--port", "3110"),
+        platform_name="win32",
+        source_script=source,
+        process_factory=lambda command, **options: started.append((command, options)) or object(),
+    )
+
+    spawned, options = started[0]
+    assert spawned == command
+    # The renamed pythonw.exe at the bundle root: outside runtime and
+    # runtime.previous, and the bundle root itself is never renamed.
+    assert command[0] == str(bundle / "Waveguide Generator.exe")
+    # The script is a copy in the data directory, because the original lives in
+    # the ``app`` layer this helper renames.
+    script = data / "rollback" / "apply_update.py"
+    assert command[1] == str(script)
+    assert script.read_text(encoding="utf-8") == "# the standalone updater\n"
+    assert "--rollback" in command
+    assert command[command.index("--bundle") + 1] == str(bundle)
+    assert command[command.index("--parent-pid") + 1] == "4321"
+    assert command[-2:] == ["--relaunch-arg=--port", "--relaunch-arg=3110"]
+
+    # Never inside the bundle: Windows keeps an open handle on a process's
+    # current directory, and every directory in there is about to move.
+    assert options["cwd"] == str(data)
+    for directory in rollback_renamed_directories(bundle, "win32"):
+        assert not Path(options["cwd"]).is_relative_to(directory)
+        assert not Path(command[0]).is_relative_to(directory)
+        assert not Path(command[1]).is_relative_to(directory)
+
+    creationflags = options["creationflags"]
+    assert isinstance(creationflags, int)
+    assert creationflags & WINDOWS_DETACHED_PROCESS
+    assert creationflags & WINDOWS_CREATE_NEW_PROCESS_GROUP
+    assert creationflags & WINDOWS_CREATE_NO_WINDOW
+    assert "start_new_session" not in options
+    assert options["stdin"] is subprocess.DEVNULL
+    assert options["close_fds"] is True
+    assert (data / "logs" / "rollback-handoff.log").is_file()
+
+
+def test_the_rollback_helper_refuses_an_interpreter_inside_a_renamed_layer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The guard, not the comment, is what keeps this true.
+
+    A future runtime layout that put the launcher back inside ``runtime`` would
+    reintroduce exactly the bug this handoff exists to remove, silently.
+    """
+
+    bundle, _data = _windows_rollback_installation(tmp_path)
+    monkeypatch.setattr(sys, "executable", str(bundle / "runtime.previous" / "python.exe"))
+
+    with pytest.raises(UpdateHandoffError, match="directory the rollback renames"):
+        rollback_interpreter(bundle, "linux")
+
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "outside" / "python"))
+    with pytest.raises(UpdateHandoffError, match="interpreter is missing"):
+        rollback_interpreter(bundle, "linux")
+
+    assert rollback_interpreter(bundle, "win32") == (bundle / "Waveguide Generator.exe").resolve()
+
+
+def test_the_rollback_helper_refuses_a_data_directory_inside_the_bundle(
+    tmp_path: Path,
+) -> None:
+    bundle, _data = _windows_rollback_installation(tmp_path)
+    inside = bundle / "data"
+    inside.mkdir()
+
+    with pytest.raises(UpdateHandoffError, match="inside the bundle"):
+        launch_rollback_handoff(
+            bundle,
+            inside,
+            4321,
+            environ={},
+            platform_name="win32",
+            process_factory=lambda *_args, **_kwargs: pytest.fail("nothing may start"),
+        )
+
+
+def test_a_rollback_handoff_that_cannot_start_is_reported_not_swallowed(
+    tmp_path: Path,
+) -> None:
+    bundle, data = _windows_rollback_installation(tmp_path)
+    source = tmp_path / "apply_update.py"
+    source.write_text("# updater\n", encoding="utf-8")
+
+    def refuse(command: list[str], **_options: object) -> object:
+        raise OSError(8, "Not enough memory resources are available")
+
+    with pytest.raises(UpdateHandoffError, match="Could not start the rollback helper"):
+        launch_rollback_handoff(
+            bundle,
+            data,
+            4321,
+            environ={},
+            platform_name="win32",
+            source_script=source,
+            process_factory=refuse,
+        )

@@ -2,26 +2,38 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
 import time
 
 from server.platform.paths import resolve_data_dir
-from launchers.apply_update import bundle_from_app_layer
+from launchers import apply_update as apply_update_module
+from launchers.apply_update import (
+    BUNDLE_LAYERS,
+    FAILED_SUFFIX,
+    PREVIOUS_SUFFIX,
+    WINDOWS_LAUNCHER_NAME,
+    bundle_from_app_layer,
+    resources_directory,
+)
 
 
 TAG_RE = re.compile(r"^v\d+\.\d+\.\d+$")
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 WINDOWS_CREATE_NEW_PROCESS_GROUP = 0x00000200
 WINDOWS_DETACHED_PROCESS = 0x00000008
+WINDOWS_CREATE_NO_WINDOW = 0x08000000
+ROLLBACK_HELPER_DIRECTORY = "rollback"
+ROLLBACK_HELPER_SCRIPT = "apply_update.py"
 
 
 class UpdateHandoffError(RuntimeError):
@@ -146,6 +158,15 @@ def consume_update_request(
     return tag
 
 
+# The helper interpreters run from the staged runtime under the data
+# directory, where there is no pyvenv.cfg beside them, so the switch the
+# bundle relies on is out of reach. Measured: a planted user-site .pth ran
+# in the updater process during a real update. This is the process that
+# renames the application layers, so it is the last one that should be
+# executing whatever a user pip-installed years ago.
+NO_USER_SITE_ENVIRONMENT = {"PYTHONNOUSERSITE": "1"}
+
+
 def _data_dir_override(server_args: Sequence[str]) -> str | None:
     for index, argument in enumerate(server_args):
         if argument == "--data-dir" and index + 1 < len(server_args):
@@ -263,6 +284,7 @@ def launch_update_handoff(
         raise UpdateHandoffError(f"The update installer is missing: {installer}")
 
     environment = dict(environ)
+    environment.update(NO_USER_SITE_ENVIRONMENT)
     data_dir_override = _data_dir_override(server_args)
     if data_dir_override is not None:
         # The installer relaunches through the normal platform launcher, which
@@ -363,6 +385,7 @@ def launch_bundle_update_handoff(
 
     selected_platform = sys.platform if platform_name is None else platform_name
     environment = dict(environ)
+    environment.update(NO_USER_SITE_ENVIRONMENT)
     data_dir = resolve_data_dir(
         _data_dir_override(server_args),
         environ=environment,
@@ -410,6 +433,12 @@ def launch_bundle_update_handoff(
         # The relaunch goes through LaunchServices/the exe, which receives no
         # environment; carry --port/--data-dir as explicit CLI arguments.
         command.append(f"--relaunch-arg={argument}")
+    # Not the staged app directory.  Windows keeps an open handle on a
+    # process's current directory, so an updater started inside
+    # ``<data>/updates/<version>/staged/app`` cannot rename that very directory
+    # into place: the swap fails with WinError 32 and rolls itself back. The
+    # data directory is outside both the staged tree and the bundle, and is
+    # never renamed.
     options: dict[str, object] = {
         # The updater renames both staged layers and both live layers. Its CWD
         # must be a stable absolute directory or Windows will lock that layer
@@ -421,6 +450,19 @@ def launch_bundle_update_handoff(
         "stderr": subprocess.DEVNULL,
         "close_fds": True,
     }
+    # An updater that dies before it opens its own log leaves no trace at all,
+    # which is the difference between a five-minute diagnosis and a blind one.
+    # Send whatever it prints to the log directory it would have written to.
+    handoff_log = None
+    try:
+        log_directory = data_dir / "logs"
+        log_directory.mkdir(parents=True, exist_ok=True)
+        handoff_log = (log_directory / "update-handoff.log").open("a", encoding="utf-8")
+    except OSError:
+        handoff_log = None
+    if handoff_log is not None:
+        options["stdout"] = handoff_log
+        options["stderr"] = subprocess.STDOUT
     if selected_platform == "win32":
         options["creationflags"] = getattr(
             subprocess,
@@ -433,3 +475,154 @@ def launch_bundle_update_handoff(
         subprocess.Popen(command, **options)
     except OSError as exc:
         raise UpdateHandoffError(f"Could not start the bundle updater: {exc}") from exc
+    finally:
+        if handoff_log is not None:
+            handoff_log.close()
+
+
+def rollback_renamed_directories(bundle: Path, platform_name: str) -> tuple[Path, ...]:
+    """Name every directory a rollback of ``bundle`` renames."""
+
+    resources = resources_directory(Path(bundle).resolve(), platform_name)
+    return tuple(
+        resources / f"{layer}{suffix}"
+        for layer in BUNDLE_LAYERS
+        for suffix in ("", PREVIOUS_SUFFIX, FAILED_SUFFIX)
+    )
+
+
+def rollback_interpreter(bundle: Path, platform_name: str) -> Path:
+    """Return a Python that no rollback rename can pull out from under itself.
+
+    On Windows the bundle root holds the renamed ``pythonw.exe`` and the
+    interpreter DLLs beside it, deliberately *outside* the swappable ``runtime``
+    directory so a launcher and its interpreter can be refreshed together. That
+    makes it the only interpreter in the installation that does not live in a
+    directory this rollback is about to rename -- the staged runtime the
+    updater itself ran from no longer exists, because the swap moved it into
+    place as ``runtime``.
+
+    The bundle root is never renamed. The launcher *file* is (its ``.previous``
+    has to go back), and Windows allows that while the image is mapped: an
+    executable can be renamed out from under a running process, which is how
+    every Windows updater replaces one. Only deletion is refused, and a
+    rollback never deletes anything it is standing on.
+    """
+
+    candidate = (
+        Path(bundle).resolve() / WINDOWS_LAUNCHER_NAME
+        if platform_name == "win32"
+        else Path(sys.executable)
+    )
+    if not candidate.is_file():
+        raise UpdateHandoffError(f"The rollback helper interpreter is missing: {candidate}")
+    resolved = candidate.resolve()
+    for directory in rollback_renamed_directories(bundle, platform_name):
+        if resolved == directory or resolved.is_relative_to(directory):
+            raise UpdateHandoffError(
+                "Refusing a rollback helper whose interpreter lives in a "
+                f"directory the rollback renames: {resolved}"
+            )
+    return resolved
+
+
+def launch_rollback_handoff(
+    bundle: Path,
+    data_dir: Path,
+    parent_pid: int,
+    *,
+    environ: Mapping[str, str],
+    server_args: Sequence[str] = (),
+    platform_name: str | None = None,
+    source_script: Path | None = None,
+    process_factory: Callable[..., object] = subprocess.Popen,
+) -> list[str]:
+    """Start the detached helper that rolls back after ``parent_pid`` exits.
+
+    The application that could not start cannot roll itself back on Windows:
+    it holds mapped DLLs from the very ``runtime`` and ``app`` directories the
+    restore has to move, and it is its own exit that releases them. So it hands
+    the intent to an independent process -- exactly as an update hands off to
+    the staged updater -- and leaves.
+
+    Both halves of "does not stand on what it moves" are checked here rather
+    than assumed: :func:`rollback_interpreter` refuses an interpreter inside a
+    renamed directory, the script is copied out of the swappable ``app`` layer
+    into the data directory first, and the working directory is the data
+    directory, which is outside the bundle altogether.
+    """
+
+    selected_platform = sys.platform if platform_name is None else platform_name
+    bundle = Path(bundle).resolve()
+    data_dir = Path(data_dir).resolve()
+    if data_dir == bundle or data_dir.is_relative_to(bundle):
+        raise UpdateHandoffError(
+            f"Refusing a rollback helper whose data directory is inside the bundle: {data_dir}"
+        )
+
+    origin = Path(
+        apply_update_module.__file__ if source_script is None else source_script
+    ).resolve()
+    if not origin.is_file():
+        raise UpdateHandoffError(f"The rollback helper source is missing: {origin}")
+    python = rollback_interpreter(bundle, selected_platform)
+
+    helper_root = data_dir / ROLLBACK_HELPER_DIRECTORY
+    script = helper_root / ROLLBACK_HELPER_SCRIPT
+    try:
+        helper_root.mkdir(parents=True, exist_ok=True)
+        # A copy, because the original is inside the ``app`` layer this helper
+        # renames; the module is deliberately standard-library only, so the
+        # copy runs anywhere.
+        shutil.copyfile(origin, script)
+    except OSError as exc:
+        raise UpdateHandoffError(f"Could not stage the rollback helper: {exc}") from exc
+
+    command = [
+        str(python),
+        str(script),
+        "--rollback",
+        "--bundle",
+        str(bundle),
+        "--data-dir",
+        str(data_dir),
+        "--parent-pid",
+        str(parent_pid),
+    ]
+    for argument in server_args:
+        command.append(f"--relaunch-arg={argument}")
+
+    options: dict[str, object] = {
+        "cwd": str(data_dir),
+        "env": dict(environ) | NO_USER_SITE_ENVIRONMENT,
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "close_fds": True,
+    }
+    handoff_log = None
+    try:
+        log_directory = data_dir / "logs"
+        log_directory.mkdir(parents=True, exist_ok=True)
+        handoff_log = (log_directory / "rollback-handoff.log").open("a", encoding="utf-8")
+    except OSError:
+        handoff_log = None
+    if handoff_log is not None:
+        options["stdout"] = handoff_log
+        options["stderr"] = subprocess.STDOUT
+    if selected_platform == "win32":
+        options["creationflags"] = (
+            getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", WINDOWS_CREATE_NEW_PROCESS_GROUP)
+            | getattr(subprocess, "DETACHED_PROCESS", WINDOWS_DETACHED_PROCESS)
+            | getattr(subprocess, "CREATE_NO_WINDOW", WINDOWS_CREATE_NO_WINDOW)
+        )
+    else:
+        options["start_new_session"] = True
+    try:
+        process_factory(command, **options)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise UpdateHandoffError(f"Could not start the rollback helper: {exc}") from exc
+    finally:
+        if handoff_log is not None:
+            handoff_log.close()
+    return command

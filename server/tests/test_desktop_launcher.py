@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import os
 from pathlib import Path
 import sys
 from types import ModuleType, SimpleNamespace
@@ -327,6 +328,105 @@ def test_a_stale_frontend_build_still_opens_the_window(
 
     assert desktop.DesktopWindow(controller, poll_interval=0).run() == 0  # type: ignore[arg-type]
     assert created[0][0] == (desktop.WINDOW_TITLE, stale.url)
+
+
+def test_a_stale_frontend_still_counts_as_a_healthy_start_for_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A freshness caveat is not evidence that the update failed.
+
+    WARNING means "the SPA is being served, but it looks stale against its
+    sources". Requiring OK meant a perfectly good update never reclaimed its
+    .previous layers or its downloaded archives -- measured at over a gigabyte
+    on a bundle whose only fault was a dist that looked older than its source.
+    """
+
+    bundle = tmp_path / "Waveguide Generator"
+    data = tmp_path / "data"
+    for name in ("app", "runtime", "app.previous", "runtime.previous"):
+        (bundle / name).mkdir(parents=True)
+    (data / "updates" / "0.2.5").mkdir(parents=True)
+    (data / "logs").mkdir(parents=True)
+
+    stale_start = StatusSnapshot(
+        backend=LampStatus(ServiceState.OK, "Healthy"),
+        frontend=LampStatus(ServiceState.WARNING, "SPA is being served, but stale"),
+        url="http://127.0.0.1:3199/",
+        pid=123,
+        exit_code=None,
+    )
+    window = desktop.DesktopWindow(StubController(poll_snapshot=stale_start))  # type: ignore[arg-type]
+    monkeypatch.setattr(window, "_bundle_paths", lambda: (bundle, bundle, data))
+    monkeypatch.setattr(desktop, "repair_bundle", lambda *a, **k: None)
+
+    window._finish_healthy_bundle_update(stale_start)
+
+    assert not (bundle / "app.previous").exists()
+    assert not (bundle / "runtime.previous").exists()
+    assert not (data / "updates").exists()
+
+
+def test_declining_to_clean_says_so_in_the_update_log(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A silent refusal is what made this cost two rebuilds to find."""
+
+    bundle = tmp_path / "Waveguide Generator"
+    data = tmp_path / "data"
+    (bundle / "app.previous").mkdir(parents=True)
+    (data / "logs").mkdir(parents=True)
+
+    not_serving = StatusSnapshot(
+        backend=LampStatus(ServiceState.OK, "Healthy"),
+        frontend=LampStatus(ServiceState.STARTING, "Waiting for the SPA route"),
+        url="http://127.0.0.1:3199/",
+        pid=123,
+        exit_code=None,
+    )
+    window = desktop.DesktopWindow(StubController(poll_snapshot=not_serving))  # type: ignore[arg-type]
+    monkeypatch.setattr(window, "_bundle_paths", lambda: (bundle, bundle, data))
+
+    window._finish_healthy_bundle_update(not_serving)
+
+    assert (bundle / "app.previous").exists()
+    written = (data / "logs" / "update.log").read_text(encoding="utf-8")
+    assert "Not reclaiming the previous layers" in written
+    assert "STARTING" in written
+
+
+def test_the_cleanup_guard_is_never_stricter_than_the_loop_that_calls_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_wait_for_frontend calls this on the snapshot that ended its loop.
+
+    Any condition here that the loop does not also enforce is one the caller
+    never promised, and skipping is silent: no log line, no dialog, just a
+    gigabyte that never comes back.
+    """
+
+    bundle = tmp_path / "Waveguide Generator"
+    data = tmp_path / "data"
+    for name in ("app", "runtime", "app.previous"):
+        (bundle / name).mkdir(parents=True)
+    (data / "logs").mkdir(parents=True)
+
+    # Backend still reporting ERROR while the SPA is already being served is a
+    # real ordering during start-up, and it must not block the sweep.
+    serving = StatusSnapshot(
+        backend=LampStatus(ServiceState.ERROR, "/health failed: timed out"),
+        frontend=LampStatus(ServiceState.WARNING, "SPA is being served, but stale"),
+        url="http://127.0.0.1:3199/",
+        pid=123,
+        exit_code=None,
+    )
+    window = desktop.DesktopWindow(StubController(poll_snapshot=serving))  # type: ignore[arg-type]
+    assert window._frontend_ready(serving) is True
+    monkeypatch.setattr(window, "_bundle_paths", lambda: (bundle, bundle, data))
+    monkeypatch.setattr(desktop, "repair_bundle", lambda *a, **k: None)
+
+    window._finish_healthy_bundle_update(serving)
+
+    assert not (bundle / "app.previous").exists()
 
 
 def test_a_server_that_never_answers_is_reported_instead_of_waited_on_forever(
@@ -751,80 +851,141 @@ def test_failed_bundle_handoff_and_restart_close_the_dead_window(
     assert shown == reported
 
 
-def test_healthy_start_cleanup_is_not_stricter_than_the_loop_it_follows(
-    tmp_path, monkeypatch
-) -> None:
-    """A stale-looking interface still counts as a healthy start.
+def _failed_windows_bundle(tmp_path: Path) -> tuple[Path, Path]:
+    """A Windows folder whose newly installed layers are about to fail to start."""
 
-    The wait loop exits on OK *or* WARNING, so a cleanup guard demanding OK
-    declines forever on a start the application already treated as healthy --
-    silently retaining every previous layer and download.
+    bundle = tmp_path / "Waveguide Generator"
+    for name, marker in (
+        ("app", "new"),
+        ("app.previous", "old"),
+        ("runtime", "new"),
+        ("runtime.previous", "old"),
+    ):
+        layer = bundle / name
+        layer.mkdir(parents=True)
+        (layer / "marker").write_text(marker, encoding="utf-8")
+    (bundle / "Waveguide Generator.exe").write_bytes(b"pythonw")
+    (bundle / "vcruntime140.dll").write_text("new", encoding="utf-8")
+    (bundle / "vcruntime140.dll.previous").write_text("old", encoding="utf-8")
+    return bundle, tmp_path / "data"
+
+
+class WindowsBundleController(BundleController):
+    def __init__(self, app_layer: Path, data_dir: Path) -> None:
+        super().__init__(app_layer, data_dir, start_snapshot=_snapshot(ServiceState.ERROR))
+        self.server_args = ("--port", "3110")
+
+
+def test_a_failed_windows_start_hands_the_rollback_to_a_detached_helper(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """This process is the one holding the DLLs, so it must not do the restore.
+
+    It has ``runtime`` and ``app`` mapped into it, and Windows will not let
+    anything delete a mapped file until the process exits. Rolling back from
+    here is what left the 0.2.6 ``vcruntime140.dll`` sitting on top of a
+    restored 0.2.5 runtime: the deletion raised, and the launcher files were
+    never reached.
     """
 
-    from launchers import desktop as desktop_module
-
-    data_dir = tmp_path / "data"
-    resources = tmp_path / "Waveguide Generator.app" / "Contents" / "Resources"
-    (resources / "app.previous").mkdir(parents=True)
-    (data_dir / "logs").mkdir(parents=True)
-
-    window = desktop_module.DesktopWindow.__new__(desktop_module.DesktopWindow)
-    window._healthy_bundle_checked = False
+    monkeypatch.setattr(desktop.sys, "platform", "win32")
+    bundle, data_dir = _failed_windows_bundle(tmp_path)
+    controller = WindowsBundleController(bundle / "app", data_dir)
+    handoffs: list[tuple[tuple[object, ...], dict[str, object]]] = []
     monkeypatch.setattr(
-        desktop_module.DesktopWindow,
-        "_bundle_paths",
-        lambda _self: (resources.parents[1], resources, data_dir),
+        desktop,
+        "launch_rollback_handoff",
+        lambda *args, **kwargs: (
+            handoffs.append((args, kwargs)) or [str(bundle / "Waveguide Generator.exe")]
+        ),
     )
-    removed: list[Path] = []
     monkeypatch.setattr(
-        desktop_module,
-        "cleanup_previous_layers",
-        lambda res, log=None: removed.append(res),
+        desktop,
+        "rollback_previous_layers",
+        lambda *_args, **_kwargs: pytest.fail("the failed process must not roll back in place"),
     )
-    monkeypatch.setattr(desktop_module.sys, "platform", "win32")
-    monkeypatch.setattr(
-        desktop_module.DesktopWindow, "_remove_update_downloads", lambda *_a: None
-    )
+    reported: list[str] = []
+    shown: list[str] = []
+    monkeypatch.setattr(desktop, "_report_startup_failure", reported.append)
+    monkeypatch.setattr(desktop, "_show_startup_failure_dialog", shown.append)
 
-    stale = StatusSnapshot(
-        backend=LampStatus(ServiceState.OK, "ready"),
-        frontend=LampStatus(ServiceState.WARNING, "sources are newer than dist"),
-        url="http://127.0.0.1:3100/",
-        pid=123,
-        exit_code=None,
-    )
-    window._finish_healthy_bundle_update(stale)
+    assert desktop.DesktopWindow(controller, poll_interval=0).run() == 1  # type: ignore[arg-type]
 
-    assert removed == [resources], "a WARNING frontend must still reclaim the layers"
-
-
-def test_a_declining_cleanup_guard_says_why(tmp_path, monkeypatch) -> None:
-    """A guard that declines silently costs a rebuild to diagnose."""
-
-    from launchers import desktop as desktop_module
-
-    data_dir = tmp_path / "data"
-    resources = tmp_path / "Waveguide Generator.app" / "Contents" / "Resources"
-    resources.mkdir(parents=True)
-    (data_dir / "logs").mkdir(parents=True)
-
-    window = desktop_module.DesktopWindow.__new__(desktop_module.DesktopWindow)
-    window._healthy_bundle_checked = False
-    monkeypatch.setattr(
-        desktop_module.DesktopWindow,
-        "_bundle_paths",
-        lambda _self: (resources.parents[1], resources, data_dir),
+    # Nothing moved in this process; the helper does it after this one exits.
+    assert (bundle / "app" / "marker").read_text(encoding="utf-8") == "new"
+    assert (bundle / "vcruntime140.dll.previous").is_file()
+    (positional, keywords) = handoffs[0]
+    assert positional[0] == bundle
+    assert positional[1] == data_dir
+    assert positional[2] == os.getpid()
+    assert keywords["server_args"] == ("--port", "3110")
+    assert "reopen by itself" in reported[0]
+    assert shown == reported
+    assert "Started the detached rollback helper" in (data_dir / "logs" / "update.log").read_text(
+        encoding="utf-8"
     )
 
-    starting = StatusSnapshot(
-        backend=LampStatus(ServiceState.STARTING, "starting"),
-        frontend=LampStatus(ServiceState.STARTING, "starting"),
-        url="http://127.0.0.1:3100/",
-        pid=123,
-        exit_code=None,
-    )
-    window._finish_healthy_bundle_update(starting)
 
-    logged = (data_dir / "logs" / "update.log").read_text(encoding="utf-8")
-    assert "Not reclaiming the previous layers yet" in logged
-    assert "frontend starting" in logged
+def test_a_rollback_handoff_that_cannot_start_falls_back_to_this_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An in-process rollback is imperfect on Windows; no rollback is worse."""
+
+    monkeypatch.setattr(desktop.sys, "platform", "win32")
+    bundle, data_dir = _failed_windows_bundle(tmp_path)
+    controller = WindowsBundleController(bundle / "app", data_dir)
+
+    def refuse(*_args: object, **_kwargs: object) -> list[str]:
+        raise UpdateHandoffError("The rollback helper interpreter is missing")
+
+    monkeypatch.setattr(desktop, "launch_rollback_handoff", refuse)
+    monkeypatch.setattr(desktop, "repair_bundle", lambda *_args, **_kwargs: None)
+    reported: list[str] = []
+    monkeypatch.setattr(desktop, "_report_startup_failure", reported.append)
+    monkeypatch.setattr(desktop, "_show_startup_failure_dialog", lambda _message: None)
+
+    assert desktop.DesktopWindow(controller, poll_interval=0).run() == 1  # type: ignore[arg-type]
+
+    assert (bundle / "app" / "marker").read_text(encoding="utf-8") == "old"
+    assert (bundle / "runtime" / "marker").read_text(encoding="utf-8") == "old"
+    assert (bundle / "vcruntime140.dll").read_text(encoding="utf-8") == "old"
+    assert "previous version was restored" in reported[0]
+    log_text = (data_dir / "logs" / "update.log").read_text(encoding="utf-8")
+    assert "Could not start the detached rollback helper" in log_text
+    assert "Rolling back in this process instead" in log_text
+
+
+def test_a_healthy_start_after_a_rollback_clears_what_windows_refused_to_delete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The deferred deletion has to actually happen somewhere."""
+
+    monkeypatch.setattr(desktop.sys, "platform", "win32")
+    bundle = tmp_path / "Waveguide Generator"
+    (bundle / "app").mkdir(parents=True)
+    (bundle / "runtime").mkdir()
+    (bundle / "app.failed").mkdir()
+    (bundle / "runtime.failed").mkdir()
+    (bundle / "vcruntime140.dll.failed").write_text("new", encoding="utf-8")
+    downloads = tmp_path / "data" / "updates" / "0.2.6" / "downloads"
+    downloads.mkdir(parents=True)
+    (downloads / "runtime.zip").write_bytes(b"zip")
+    controller = BundleController(bundle / "app", tmp_path / "data")
+    webview, _created = _stub_webview()
+    monkeypatch.setitem(sys.modules, "webview", webview)
+    monkeypatch.setattr(desktop, "repair_bundle", lambda *_args, **_kwargs: None)
+    window = desktop.DesktopWindow(
+        controller,
+        poll_interval=0,
+        pythonnet_loader=lambda: object(),
+        webview2_probe=lambda: True,
+    )  # type: ignore[arg-type]
+
+    assert window.run() == 0
+
+    assert not list(bundle.glob("*.failed*"))
+    # The download that produced them is equally spent.
+    assert not (tmp_path / "data" / "updates").exists()
+    assert "rolled-back failed update copy" in (
+        tmp_path / "data" / "logs" / "update.log"
+    ).read_text(encoding="utf-8")
