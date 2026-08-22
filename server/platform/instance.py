@@ -130,10 +130,15 @@ def _windows_pid_is_running(pid: int) -> bool:
     A handle answers for a process whose handle someone still holds: Win32
     keeps the process object resolvable until the last handle closes, so an
     exited process stays addressable and ``os.kill(pid, 0)`` reports it as
-    running. (It does *not* terminate the process -- an earlier comment here
-    and in the Windows validation notes said it did, measured on Windows in
-    2026-08 and found false. The handle probe is preferred for the
-    handle-held case, not because the signal is destructive.)
+    running. That, plus the bare ``OSError`` (WinError 87) it raises for a pid
+    that never existed, is why it is the wrong probe here.
+
+    It is *not* the wrong probe because it kills: signal 0 is special-cased and
+    leaves the process alone (measured on Windows 2026-08-22; an earlier comment
+    here claimed otherwise and was read and reasoned from in good faith). Every
+    *other* signal does map to ``TerminateProcess(handle, sig)`` and really does
+    terminate -- ``SIGTERM`` leaves exit code 15 -- so do not reduce this to
+    "os.kill is harmless on Windows" either.
     """
 
     # SYNCHRONIZE is what WaitForSingleObject needs below. Ask for it, but do
