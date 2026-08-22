@@ -12,6 +12,12 @@ const CAPABILITIES = {
   ],
 };
 
+const flushReact = () => act(async () => {
+  await Promise.resolve();
+  await vi.advanceTimersByTimeAsync(0);
+  await Promise.resolve();
+});
+
 function Consumer({ tag }: { tag: string }) {
   const { engines, error } = useCapabilities();
   return <div data-tag={tag}>{error ?? engines.map((engine) => engine.name).join(',')}</div>;
@@ -24,6 +30,7 @@ describe('useCapabilities', () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
+    vi.useFakeTimers();
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     fetchMock = vi.fn(async () => new Response(JSON.stringify(CAPABILITIES), {
       status: 200,
@@ -41,20 +48,15 @@ describe('useCapabilities', () => {
     host.remove();
     client.clear();
     vi.unstubAllGlobals();
+    vi.clearAllTimers();
+    vi.useRealTimers();
   });
 
-  const tick = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });
-
-  /**
-   * Render, then pump until the query has resolved and re-rendered. The budget
-   * covers the one retry `useCapabilities` allows, whose backoff is ~1s; a
-   * settled query exits on the first poll, so the success paths stay fast.
-   */
-  const render = async (children: React.ReactNode, settled: () => boolean = () => true) => {
+  const render = async (children: React.ReactNode) => {
     await act(async () => {
       root.render(<QueryClientProvider client={client}>{children}</QueryClientProvider>);
     });
-    for (let attempt = 0; attempt < 400 && !settled(); attempt += 1) await tick();
+    await flushReact();
   };
 
   const textOf = (tag: string) => host.querySelector(`[data-tag="${tag}"]`)?.textContent ?? '';
@@ -64,7 +66,6 @@ describe('useCapabilities', () => {
     // used to fetch independently, so a cold load made three identical calls.
     await render(
       <><Consumer tag="status"/><Consumer tag="jobs"/><Consumer tag="options"/></>,
-      () => textOf('status') !== '',
     );
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledWith('/api/capabilities');
@@ -72,18 +73,25 @@ describe('useCapabilities', () => {
   });
 
   it('does not refetch when a panel remounts', async () => {
-    await render(<Consumer tag="options"/>, () => textOf('options') !== '');
+    await render(<Consumer tag="options"/>);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     // Dockview disposes and recreates a panel's React root on every tab switch.
     await render(<></>);
-    await render(<Consumer tag="options"/>, () => textOf('options') !== '');
+    await render(<Consumer tag="options"/>);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(textOf('options')).toBe('metal,bempp');
   });
 
   it('surfaces a failure as a message rather than an empty engine list', async () => {
     fetchMock.mockImplementation(async () => new Response('{"detail":"probe exploded"}', { status: 500 }));
-    await render(<Consumer tag="status"/>, () => textOf('status') !== '');
+    await render(<Consumer tag="status"/>);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(999); });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    await flushReact();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
     expect(textOf('status')).toContain('probe exploded');
   });
 
@@ -111,6 +119,7 @@ describe('useCapabilityRefreshOnReconnect', () => {
   }
 
   beforeEach(() => {
+    vi.useFakeTimers();
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     fetchMock = vi.fn(async () => new Response(JSON.stringify(CAPABILITIES), {
       status: 200, headers: { 'Content-Type': 'application/json' },
@@ -127,22 +136,15 @@ describe('useCapabilityRefreshOnReconnect', () => {
     host.remove();
     client.clear();
     vi.unstubAllGlobals();
+    vi.clearAllTimers();
+    vi.useRealTimers();
   });
 
   const show = async (connection: string) => {
     await act(async () => {
       root.render(<QueryClientProvider client={client}><Subject connection={connection}/></QueryClientProvider>);
     });
-    for (let attempt = 0; attempt < 200; attempt += 1) {
-      if (host.textContent !== '') break;
-      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });
-    }
-  };
-
-  const settleRefetch = async () => {
-    for (let attempt = 0; attempt < 60; attempt += 1) {
-      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });
-    }
+    await flushReact();
   };
 
   it('refetches after the socket drops and comes back', async () => {
@@ -151,12 +153,10 @@ describe('useCapabilityRefreshOnReconnect', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
     await show('reconnecting');
-    await settleRefetch();
     // Still one: a drop alone is not evidence of a new server.
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
     await show('connected');
-    await settleRefetch();
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
@@ -164,7 +164,6 @@ describe('useCapabilityRefreshOnReconnect', () => {
     await show('idle');
     await show('connecting');
     await show('connected');
-    await settleRefetch();
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
@@ -181,6 +180,7 @@ describe('AppQueryProvider wiring', () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
+    vi.useFakeTimers();
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     fetchMock = vi.fn(async () => new Response(JSON.stringify(CAPABILITIES), {
       status: 200, headers: { 'Content-Type': 'application/json' },
@@ -196,6 +196,8 @@ describe('AppQueryProvider wiring', () => {
     for (const host of hosts) host.remove();
     appQueryClient.clear();
     vi.unstubAllGlobals();
+    vi.clearAllTimers();
+    vi.useRealTimers();
   });
 
   it('shares one client across separate React roots, as Dockview mounts them', async () => {
@@ -208,10 +210,7 @@ describe('AppQueryProvider wiring', () => {
       await act(async () => {
         root.render(<AppQueryProvider><Consumer tag={tag}/></AppQueryProvider>);
       });
-    }
-    for (let attempt = 0; attempt < 200; attempt += 1) {
-      if (hosts.every((host) => host.textContent !== '')) break;
-      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });
+      await flushReact();
     }
     expect(fetchMock).toHaveBeenCalledTimes(1);
     for (const host of hosts) expect(host.textContent).toBe('metal,bempp');
