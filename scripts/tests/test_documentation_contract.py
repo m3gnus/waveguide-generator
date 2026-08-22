@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
+import platform
 from pathlib import Path
+import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -78,11 +81,58 @@ def test_spa_docs_distinguish_module_import_from_app_construction() -> None:
     assert "cannot even collect" not in workflow
 
 
-def test_wall_clearance_identity_command_uses_portable_python3_entrypoint() -> None:
-    report = _read("docs/validation/2026-08/WALL-CLEARANCE-ACOUSTICS.md")
+def _console_command(document: str, heading: str) -> str:
+    section = document.split(heading, 1)[1]
+    return section.split("```console", 1)[1].split("```", 1)[0].strip()
 
-    assert (
-        "python3 scripts/verify_model_identity.py "
-        "docs/validation/2026-08/wall-clearance-model-identity.json"
-    ) in report
-    assert "python scripts/verify_model_identity.py" not in report
+
+def _identity_command_for_platform(report: str, system: str) -> str:
+    heading = (
+        "**Windows Command Prompt**"
+        if system == "Windows"
+        else "**POSIX (macOS/Linux)**"
+    )
+    return _console_command(report, heading)
+
+
+def test_wall_clearance_identity_command_selection_is_platform_specific() -> None:
+    report = _read("docs/validation/2026-08/WALL-CLEARANCE-ACOUSTICS.md")
+    posix = _identity_command_for_platform(report, "Darwin")
+    windows = _identity_command_for_platform(report, "Windows")
+
+    assert posix.startswith("python3.13 -m scripts.verify_model_identity ")
+    assert windows.startswith("py -3.13 -m scripts.verify_model_identity ")
+    assert _identity_command_for_platform(report, "Linux") == posix
+    assert posix != windows
+
+
+def test_wall_clearance_identity_command_runs_on_the_host_platform() -> None:
+    report = _read("docs/validation/2026-08/WALL-CLEARANCE-ACOUSTICS.md")
+    command = _identity_command_for_platform(report, platform.system())
+    completed = subprocess.run(
+        command,
+        cwd=ROOT,
+        shell=True,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    manifest = json.loads(
+        _read("docs/validation/2026-08/wall-clearance-model-identity.json")
+    )
+    assert f"sha256={manifest['sha256']}" in completed.stdout
+
+
+def test_wall_clearance_report_limits_claims_to_committed_evidence() -> None:
+    report = _read("docs/validation/2026-08/WALL-CLEARANCE-ACOUSTICS.md")
+    index = _read("docs/validation/2026-08/README.md")
+    combined = " ".join(f"{report}\n{index}".lower().split())
+
+    assert "verdict: **pass**" not in combined
+    assert "proving that" not in combined
+    assert "non-reproducible local observation" in combined
+    assert "no mesh-refinement or convergence run" in combined
+    assert "unresolved and uninterpretable" in combined
+    assert "do not independently validate" in combined

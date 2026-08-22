@@ -8,11 +8,20 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import sys
 from typing import Any
 
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-SCHEMA_VERSION = 1
-NORMALIZATION_SCHEMA = "wg-design-physical-source-v1"
+from pydantic import BaseModel  # noqa: E402
+
+from server.design.schema import DesignConfig, Expr  # noqa: E402
+
+
+SCHEMA_VERSION = 2
+NORMALIZATION_SCHEMA = "wg-design-physical-source-v2"
+CANONICALIZATION = "json-domain-envelope-sort-keys-compact-utf8-ascii-v2"
 PROFILE_KEYS = (
     "formula",
     "scale",
@@ -41,11 +50,24 @@ class IdentityError(ValueError):
 
 
 def _typed(value: Any) -> Any:
+    if isinstance(value, Expr):
+        constant = value.constant_value()
+        if constant is not None:
+            return constant
+        executable = value.execution_text()
+        if executable is None:
+            return None
+        if not isinstance(executable, str):
+            raise IdentityError("parameterized expressions must have executable text")
+        return {"expression": executable}
+    if isinstance(value, BaseModel):
+        return {
+            name: _typed(getattr(value, name))
+            for name in value.__class__.model_fields
+        }
     if isinstance(value, dict):
-        if set(value) == {"value", "raw"}:
-            return _typed(value["value"])
-        return {key: _typed(child) for key, child in value.items() if key != "raw"}
-    if isinstance(value, list):
+        return {key: _typed(child) for key, child in value.items()}
+    if isinstance(value, (list, tuple)):
         return [_typed(child) for child in value]
     if isinstance(value, float) and not math.isfinite(value):
         raise IdentityError("identity values must be finite")
@@ -66,26 +88,31 @@ def _extract_snapshot(document: Any) -> dict[str, Any]:
 
 
 def normalize_design_snapshot(document: Any) -> dict[str, Any]:
-    """Return the exact physical/source payload defined by the v1 schema."""
+    """Return the exact physical/source payload defined by the v2 schema."""
 
     snapshot = _extract_snapshot(document)
-    design = snapshot["design"]
     try:
+        design = DesignConfig.model_validate(snapshot["design"]).root
+        enclosure = (
+            None
+            if design.enclosure is None
+            else {
+                key: getattr(design.enclosure, key)
+                for key in design.enclosure.__class__.model_fields
+                if key not in EXCLUDED_ENCLOSURE_KEYS
+            }
+        )
         selected = {
-            "profile": {key: design[key] for key in PROFILE_KEYS},
+            "profile": {key: getattr(design, key) for key in PROFILE_KEYS},
             "geometry": {
-                "vertical_offset": design["mesh"]["vertical_offset"],
-                "wall_thickness": design["mesh"]["wall_thickness"],
-                "enclosure": {
-                    key: value
-                    for key, value in design["enclosure"].items()
-                    if key not in EXCLUDED_ENCLOSURE_KEYS
-                },
+                "vertical_offset": design.mesh.vertical_offset,
+                "wall_thickness": design.mesh.wall_thickness,
+                "enclosure": enclosure,
             },
-            "source": design["source"],
+            "source": design.source,
         }
-    except (KeyError, TypeError) as exc:
-        raise IdentityError(f"snapshot is missing required identity input: {exc}") from exc
+    except (KeyError, TypeError, ValueError) as exc:
+        raise IdentityError(f"snapshot does not satisfy the design schema: {exc}") from exc
     normalized = _typed(selected)
     if not isinstance(normalized, dict):
         raise AssertionError("normalization must produce an object")
@@ -106,8 +133,17 @@ def canonical_bytes(payload: Any) -> bytes:
     return rendered.encode("utf-8")
 
 
-def payload_sha256(payload: Any) -> str:
+def canonical_sha256(payload: Any) -> str:
     return hashlib.sha256(canonical_bytes(payload)).hexdigest()
+
+
+def identity_sha256(payload: Any) -> str:
+    envelope = {
+        "schema_version": SCHEMA_VERSION,
+        "normalization_schema": NORMALIZATION_SCHEMA,
+        "payload": payload,
+    }
+    return canonical_sha256(envelope)
 
 
 def leaf_count(value: Any) -> int:
@@ -135,7 +171,7 @@ def verify_manifest(document: Any) -> dict[str, Any]:
         raise IdentityError("unsupported identity manifest schema")
     if document["normalization_schema"] != NORMALIZATION_SCHEMA:
         raise IdentityError("unsupported normalization schema")
-    if document["canonicalization"] != "json-sort-keys-compact-utf8-ascii-v1":
+    if document["canonicalization"] != CANONICALIZATION:
         raise IdentityError("unsupported canonicalization")
     payload = document["payload"]
     actual_leaves = leaf_count(payload)
@@ -143,7 +179,7 @@ def verify_manifest(document: Any) -> dict[str, Any]:
         raise IdentityError(
             f"leaf count mismatch: expected {document['leaf_count']}, got {actual_leaves}"
         )
-    actual_digest = payload_sha256(payload)
+    actual_digest = identity_sha256(payload)
     if document["sha256"] != actual_digest:
         raise IdentityError(
             f"SHA-256 mismatch: expected {document['sha256']}, got {actual_digest}"
