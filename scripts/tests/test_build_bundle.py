@@ -9,6 +9,7 @@ import plistlib
 import stat
 import struct
 import subprocess
+import sys
 from types import SimpleNamespace
 import zipfile
 
@@ -29,6 +30,7 @@ from scripts.build_bundle import (
     build,
     copy_tracked_app_files,
     deterministic_zip,
+    is_x64_pe,
     launcher_stub,
     locate_msvc_runtime_dlls,
     prune_runtime,
@@ -36,11 +38,27 @@ from scripts.build_bundle import (
     windows_desktop_bootstrap,
     windows_pth,
     write_app_manifest,
+    write_checksum,
+    write_json,
     write_runtime_manifest,
     write_windows_bootstrap,
 )
 from server.platform.paths import app_root
 from shared.runtime_id import compute_runtime_id, runtime_id_from_files
+
+
+def write_pe_stub(path: Path, *, machine: int = 0x8664) -> Path:
+    """Write the smallest file the architecture probe accepts as a PE image."""
+
+    pe_offset = 0x40
+    header = bytearray(pe_offset + 6)
+    header[0:2] = b"MZ"
+    header[0x3C:0x40] = struct.pack("<I", pe_offset)
+    header[pe_offset : pe_offset + 4] = b"PE\0\0"
+    header[pe_offset + 4 : pe_offset + 6] = struct.pack("<H", machine)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(bytes(header) + path.name.encode())
+    return path
 
 
 def test_runtime_id_hashes_requirements_pins_and_exact_python_without_separators(
@@ -339,9 +357,15 @@ def test_windows_pth_and_bootstrap_keep_direct_launch_separate_from_workers(
     bootstrap = windows_desktop_bootstrap()
     assert 'os.environ["WG2_BUNDLE"] = "1"' in bootstrap
     assert 'os.environ["WG2_APP_ROOT"] = str(app_root)' in bootstrap
-    assert 'Path(sys.argv[0]).name.casefold() == "waveguide generator.exe"' in bootstrap
     assert "from launchers.desktop import main" in bootstrap
     assert "_report_startup_failure" in bootstrap
+    # An update renames the app layer out from under the running process, and
+    # Windows refuses to rename any process's current directory.
+    assert "os.chdir(bundle_root)" in bootstrap
+    assert "os.chdir(app_root)" not in bootstrap
+    # PYTHONPYCACHEPREFIX is read at interpreter start-up, so setting it in the
+    # environment here only ever reaches children.
+    assert "sys.pycache_prefix = os.environ[" in bootstrap
 
     app = tmp_path / "app"
     app.mkdir()
@@ -350,6 +374,60 @@ def test_windows_pth_and_bootstrap_keep_direct_launch_separate_from_workers(
     assert (app / "sitecustomize.py").read_text(encoding="utf-8") == (
         "import wg_desktop_bootstrap\n"
     )
+
+
+def _bootstrap_launch_predicate() -> object:
+    """Compile only the bootstrap's declarations, without running its body."""
+
+    head, separator, _ = windows_desktop_bootstrap().partition("\n_drop_user_site()")
+    assert separator, "the bootstrap no longer calls _drop_user_site at import time"
+    namespace: dict[str, object] = {}
+    exec(compile(head, "wg_desktop_bootstrap", "exec"), namespace)  # noqa: S102
+    return namespace["_is_direct_launch"]
+
+
+@pytest.mark.parametrize(
+    ("argv0", "executable", "expected"),
+    [
+        # A double-click: CPython leaves argv[0] empty because it was given no
+        # script, no -c and no -m. This is the case the bundle exists for, and
+        # the one a `-c` build probe can never reach.
+        ("", r"C:\Apps\Waveguide Generator\Waveguide Generator.exe", True),
+        ("", r"C:\Apps\Waveguide Generator\WAVEGUIDE GENERATOR.EXE", True),
+        # Worker subprocesses reuse the launcher as sys.executable and must
+        # stay inert, whichever form they take.
+        ("-c", r"C:\Apps\Waveguide Generator\Waveguide Generator.exe", False),
+        (
+            r"C:\Apps\Waveguide Generator\app\launch\serve.py",
+            r"C:\Apps\Waveguide Generator\Waveguide Generator.exe",
+            False,
+        ),
+        # And a plain interpreter is never the launcher.
+        ("", r"C:\Python313\python.exe", False),
+    ],
+)
+def test_direct_launch_is_recognised_only_for_an_argument_free_launcher_start(
+    monkeypatch: pytest.MonkeyPatch, argv0: str, executable: str, expected: bool
+) -> None:
+    predicate = _bootstrap_launch_predicate()
+    monkeypatch.setattr(sys, "argv", [argv0])
+    monkeypatch.setattr(sys, "executable", executable)
+    assert predicate() is expected
+
+
+def test_manifest_and_checksum_writers_always_emit_lf(tmp_path: Path) -> None:
+    """CRLF here breaks the release workflow's cross-platform identity check."""
+
+    manifest = tmp_path / "APP-MANIFEST.json"
+    write_json(manifest, {"schemaVersion": 1, "version": "0.2.4"})
+    assert b"\r\n" not in manifest.read_bytes()
+
+    asset = tmp_path / "layer.zip"
+    asset.write_bytes(b"payload")
+    sidecar = write_checksum(asset)
+    body = sidecar.read_bytes()
+    assert b"\r\n" not in body
+    assert body.endswith(b"  layer.zip\n")
 
 
 def test_msvc_dll_discovery_uses_where_then_system32_then_visual_studio(
@@ -374,7 +452,11 @@ def test_msvc_dll_discovery_uses_where_then_system32_then_visual_studio(
     )
     for path in (where_dll, system_dll, visual_dll):
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(path.name.encode())
+        write_pe_stub(path)
+    # System32 also carries the DLL that where.exe reports, so the two sources
+    # compete for the same name.
+    system_first = system_root / "System32" / MSVC_RUNTIME_DLLS[0]
+    write_pe_stub(system_first)
 
     def where(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
         output = str(where_dll) if command[-1] == where_dll.name else ""
@@ -388,11 +470,32 @@ def test_msvc_dll_discovery_uses_where_then_system32_then_visual_studio(
         },
     )
 
+    # The installed redistributable wins over whatever sits first on PATH: a
+    # where.exe hit is some unrelated application's private copy as often as
+    # not, and the redistributable is only supported as a matched set.
     assert located == {
-        MSVC_RUNTIME_DLLS[0]: where_dll.resolve(),
+        MSVC_RUNTIME_DLLS[0]: system_first.resolve(),
         MSVC_RUNTIME_DLLS[1]: system_dll.resolve(),
         MSVC_RUNTIME_DLLS[2]: visual_dll.resolve(),
     }
+
+
+def test_msvc_dll_discovery_skips_a_32_bit_candidate(tmp_path: Path) -> None:
+    """A 32-bit DLL beside a 64-bit interpreter fails at load with no useful error."""
+
+    system_root = tmp_path / "Windows"
+    program_files = tmp_path / "Program Files"
+    redist = program_files / "Microsoft Visual Studio" / "2022" / "VC" / "x64"
+    for name in MSVC_RUNTIME_DLLS:
+        write_pe_stub(system_root / "System32" / name, machine=0x014C)
+        write_pe_stub(redist / name)
+
+    located = locate_msvc_runtime_dlls(
+        runner=lambda command, **_kwargs: subprocess.CompletedProcess(command, 1, "", ""),
+        environ={"SystemRoot": str(system_root), "ProgramFiles": str(program_files)},
+    )
+
+    assert located == {name: (redist / name).resolve() for name in MSVC_RUNTIME_DLLS}
 
 
 def test_msvc_dll_discovery_fails_loudly_when_a_required_file_is_absent(
@@ -408,17 +511,30 @@ def test_msvc_dll_discovery_fails_loudly_when_a_required_file_is_absent(
         )
 
 
+def test_pe_architecture_probe_reads_the_machine_field(tmp_path: Path) -> None:
+    assert is_x64_pe(write_pe_stub(tmp_path / "x64.dll")) is True
+    assert is_x64_pe(write_pe_stub(tmp_path / "x86.dll", machine=0x014C)) is False
+    not_pe = tmp_path / "text.dll"
+    not_pe.write_bytes(b"not an executable at all")
+    assert is_x64_pe(not_pe) is False
+    assert is_x64_pe(tmp_path / "missing.dll") is False
+
+
 def test_windows_runtime_build_requests_the_explicit_host_target_and_copies_msvc(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repo = tmp_path / "repo"
     (repo / "server").mkdir(parents=True)
     (repo / "server" / "requirements-runtime.txt").write_bytes(b"runtime\n")
     (repo / "server" / "requirements-pins.txt").write_bytes(b"pins\n")
+    # Point the two preferred sources at empty directories so this stays a test
+    # of the builder rather than of whatever the host happens to have installed.
+    monkeypatch.setenv("SystemRoot", str(tmp_path / "no-windows"))
+    monkeypatch.setenv("ProgramFiles", str(tmp_path / "no-program-files"))
     redist = tmp_path / "redist"
     redist.mkdir()
     for filename in MSVC_RUNTIME_DLLS:
-        (redist / filename).write_bytes(filename.encode())
+        write_pe_stub(redist / filename)
     commands: list[list[str]] = []
 
     def run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
@@ -452,7 +568,7 @@ def test_windows_runtime_build_requests_the_explicit_host_target_and_copies_msvc
     pip = next(command for command in commands if command[:3] == ["uv", "pip", "install"])
     assert pip[pip.index("--python") + 1] == str(destination / "python.exe")
     for filename in MSVC_RUNTIME_DLLS:
-        assert (destination / filename).read_bytes() == filename.encode()
+        assert (destination / filename).read_bytes() == (redist / filename).read_bytes()
     manifest = json.loads((destination / "RUNTIME-MANIFEST.json").read_text())
     assert manifest["platform"] == "windows-x86_64"
 

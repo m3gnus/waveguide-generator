@@ -137,9 +137,13 @@ def file_sha256(path: Path) -> str:
 
 
 def write_json(path: Path, payload: dict[str, object]) -> None:
+    # newline="\n" is load-bearing: without it Windows text mode writes CRLF,
+    # the manifests inside the app layer differ from the macOS ones byte for
+    # byte, and the release workflow's cross-platform identity check fails.
     path.write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
+        newline="\n",
     )
 
 
@@ -428,8 +432,13 @@ def windows_desktop_bootstrap() -> str:
     """Start the desktop only for a direct launch of the renamed GUI executable.
 
     The same executable is deliberately usable as ``sys.executable`` by server
-    workers.  For a script, ``-m`` or ``-c`` invocation, ``sys.argv[0]`` is not
-    the launcher filename and importing this module only establishes the path.
+    workers, so the bootstrap has to tell a double-click apart from every other
+    invocation.  CPython sets ``sys.argv[0]`` to the empty string when it is
+    given no script, no ``-c`` and no ``-m`` -- it is never the launcher
+    filename -- so an empty ``argv[0]`` beside the launcher's own
+    ``sys.executable`` is exactly "the user double-clicked this".  For a
+    script, ``-m`` or ``-c`` invocation importing this module only establishes
+    the path.
     """
 
     return '''"""Bootstrap the double-clickable Windows executable."""
@@ -442,8 +451,39 @@ import sys
 import traceback
 
 
+def _drop_user_site() -> None:
+    """Keep a per-user pip install from shadowing the pinned runtime.
+
+    The ``._pth`` has to say ``import site`` to reach this module at all, and
+    that also re-enables the per-user site directory.  Every dependency here is
+    pinned, so a per-user pip install is an accident rather than a fallback;
+    drop it instead of relying on search order.
+    """
+
+    try:
+        import site
+
+        user_site = getattr(site, "USER_SITE", None)
+        if not user_site:
+            return
+        wanted = os.path.normcase(os.path.normpath(user_site))
+        sys.path[:] = [
+            entry
+            for entry in sys.path
+            if os.path.normcase(os.path.normpath(entry)) != wanted
+        ]
+    except Exception:
+        pass
+
+
 def _is_direct_launch() -> bool:
-    return Path(sys.argv[0]).name.casefold() == "waveguide generator.exe"
+    return (
+        sys.argv[0] == ""
+        and Path(sys.executable).name.casefold() == "waveguide generator.exe"
+    )
+
+
+_drop_user_site()
 
 
 if _is_direct_launch():
@@ -456,8 +496,17 @@ if _is_direct_launch():
         cache_root = Path(local_app_data) / "WaveguideGenerator" / "cache"
         os.environ.setdefault("PYTHONPYCACHEPREFIX", str(cache_root / "pycache"))
         os.environ.setdefault("NUMBA_CACHE_DIR", str(cache_root / "numba"))
+        # PYTHONPYCACHEPREFIX is read at interpreter start-up, long before a
+        # sitecustomize import, so setting it here only ever reaches child
+        # processes.  Assigning sys.pycache_prefix is what stops *this* process
+        # from writing __pycache__ into the swappable app and runtime layers.
+        sys.pycache_prefix = os.environ["PYTHONPYCACHEPREFIX"]
     try:
-        os.chdir(app_root)
+        # Deliberately not app_root.  Windows keeps an open handle on a
+        # process's current directory, and a failed update has to rename
+        # ``app`` out of the way while this very process asks for the rollback.
+        # The bundle root is never renamed.
+        os.chdir(bundle_root)
         from launchers.desktop import main
 
         result = main(sys.argv[1:])
@@ -508,21 +557,76 @@ def _where_candidates(
     )
 
 
+def _env_value(environ: dict[str, str], name: str, default: str) -> str:
+    """Read an environment variable the way Windows itself reads them.
+
+    ``os.environ`` upper-cases its keys on Windows, so ``dict(os.environ)``
+    holds ``SYSTEMROOT`` and an exact-case lookup for ``SystemRoot`` quietly
+    misses and takes the default instead.
+    """
+
+    if name in environ:
+        return environ[name]
+    wanted = name.casefold()
+    for key, value in environ.items():
+        if key.casefold() == wanted:
+            return value
+    return default
+
+
+IMAGE_FILE_MACHINE_AMD64 = 0x8664
+
+
+def is_x64_pe(path: Path) -> bool:
+    """Report whether ``path`` is an x86-64 PE image.
+
+    A 32-bit DLL copied beside a 64-bit interpreter fails at load time with an
+    error that names neither the file nor the reason, so it is worth ruling out
+    while the build still has the file in its hands.
+    """
+
+    try:
+        with path.open("rb") as handle:
+            if handle.read(2) != b"MZ":
+                return False
+            handle.seek(0x3C)
+            header = handle.read(4)
+            if len(header) != 4:
+                return False
+            handle.seek(int.from_bytes(header, "little"))
+            if handle.read(4) != b"PE\0\0":
+                return False
+            machine = handle.read(2)
+            if len(machine) != 2:
+                return False
+            return int.from_bytes(machine, "little") == IMAGE_FILE_MACHINE_AMD64
+    except OSError:
+        return False
+
+
 def locate_msvc_runtime_dlls(
     *,
     runner: RunCallable = subprocess.run,
     environ: dict[str, str] | None = None,
 ) -> dict[str, Path]:
-    """Find the x64 MSVC redistributable DLLs in the documented priority order."""
+    """Find the x64 MSVC redistributable DLLs in the documented priority order.
+
+    ``where.exe`` is consulted last, not first.  It answers with the first hit
+    on ``PATH``, which on a developer machine is whatever unrelated application
+    happens to ship its own copy -- a JDK, a vendor tool, sometimes a 32-bit
+    one.  The servicing story for the redistributable is per-set, so mixing a
+    stale ``msvcp140`` with a current ``vcruntime140`` is not a combination
+    anyone tests.  Prefer the machine's own installed redistributable, then the
+    Visual Studio x64 redistributables, and reject anything that is not x64.
+    """
 
     env = dict(os.environ if environ is None else environ)
-    system_root = Path(env.get("SystemRoot", r"C:\Windows"))
-    program_files = Path(env.get("ProgramFiles", r"C:\Program Files"))
+    system_root = Path(_env_value(env, "SystemRoot", r"C:\Windows"))
+    program_files = Path(_env_value(env, "ProgramFiles", r"C:\Program Files"))
     visual_studio = program_files / "Microsoft Visual Studio"
     located: dict[str, Path] = {}
     for filename in MSVC_RUNTIME_DLLS:
-        candidates = list(_where_candidates(filename, runner=runner, environ=env))
-        candidates.append(system_root / "System32" / filename)
+        candidates = [system_root / "System32" / filename]
         if visual_studio.is_dir():
             visual_studio_matches = sorted(
                 (
@@ -534,13 +638,21 @@ def locate_msvc_runtime_dlls(
                 reverse=True,
             )
             candidates.extend(visual_studio_matches)
-        found = next((candidate.resolve() for candidate in candidates if candidate.is_file()), None)
+        candidates.extend(_where_candidates(filename, runner=runner, environ=env))
+        found = next(
+            (
+                candidate.resolve()
+                for candidate in candidates
+                if candidate.is_file() and is_x64_pe(candidate)
+            ),
+            None,
+        )
         if found is None:
             raise BundleError(
-                f"Required MSVC runtime DLL {filename} was not found via where.exe, "
-                f"{system_root / 'System32'}, or the Visual Studio x64 redistributables "
-                f"under {visual_studio}. Install the Microsoft Visual C++ x64 "
-                "Redistributable and rebuild."
+                f"No x64 build of the required MSVC runtime DLL {filename} was found in "
+                f"{system_root / 'System32'}, the Visual Studio x64 redistributables "
+                f"under {visual_studio}, or via where.exe. Install the Microsoft Visual "
+                "C++ x64 Redistributable and rebuild."
             )
         located[filename] = found
     return located
@@ -617,7 +729,9 @@ def deterministic_zip(
 
 def write_checksum(asset: Path) -> Path:
     sidecar = asset.with_name(asset.name + ".sha256")
-    sidecar.write_text(f"{file_sha256(asset)}  {asset.name}\n", encoding="ascii")
+    # sha256sum format is one LF-terminated line on every platform; Windows
+    # text mode would otherwise ship CRLF sidecars beside the release assets.
+    sidecar.write_text(f"{file_sha256(asset)}  {asset.name}\n", encoding="ascii", newline="\n")
     return sidecar
 
 
@@ -839,9 +953,7 @@ class BundleBuilder:
         shutil.copytree(runtime_root, destination / "runtime", symlinks=True)
         shutil.copytree(app_root, destination / "app", symlinks=True)
         launcher_files = windows_launcher_files()
-        missing = [
-            source for source, _ in launcher_files if not (runtime_root / source).is_file()
-        ]
+        missing = [source for source, _ in launcher_files if not (runtime_root / source).is_file()]
         if missing:
             raise BundleError(
                 "The Windows runtime is missing files required beside the renamed "
