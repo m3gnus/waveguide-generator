@@ -509,21 +509,39 @@ could interleave a seek with another's truncate and leave malformed metadata.
 No caller does this today — `serve.py` holds one lock on one thread — but the
 extra seeks are mine, so the hazard is mine to close.
 
-### 4.1a `_pid_is_running()` was a process killer on Windows
+### 4.1a `_pid_is_running()` used the wrong Windows liveness probe
 
 Not required to make anything start, fixed because leaving it would be a
 landmine in a module being made portable.
 
-`os.kill(pid, 0)` is not a liveness probe on Windows. CPython implements
-`os.kill` there as `OpenProcess` + `TerminateProcess(handle, sig)`, so signal 0
-**terminates the process being asked about**. Demonstrated directly: a spawned
-process was gone immediately after `os.kill(pid, 0)` returned without raising.
+**Correction (2026-08-22).** This section previously claimed that
+`os.kill(pid, 0)` terminates the process it is asked about, because CPython
+implements `os.kill` on Windows as `OpenProcess` + `TerminateProcess`. That
+claim is **false** and the "demonstrated directly" evidence behind it did not
+survive re-measurement: two independent Windows sessions, on CPython 3.13.3 and
+on the bundled 3.13.12, measured a live process still running afterwards,
+confirmed by both `poll()` and `tasklist`. The claim was repeated in a source
+comment in `server/platform/instance.py`, where it was read and reasoned from in
+good faith months later; both have been corrected. Do not restore it.
+
+The real defect is narrower and still worth the change. `os.kill(pid, 0)` raises
+a plain `OSError` (WinError 87) for a pid that no longer exists, which is neither
+`ProcessLookupError` nor `PermissionError`, so a probe catching only those two
+lets it escape. More importantly, Win32 keeps a process object resolvable while
+any handle to it is open, so `os.kill` reports an exited process as **running**
+for as long as anything holds a handle on it — a silent hang rather than a crash.
 
 The function has no call site today, which is why nothing has been damaged, but
 it is monkeypatched by `test_platform_batch_e.py` and is exactly the shape
 someone would wire into stale-lock handling next. It now branches to
 `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` + `GetExitCodeProcess` on
 Windows, treating `ERROR_ACCESS_DENIED` as "alive but not ours to open".
+
+It also asks for `SYNCHRONIZE` and prefers `WaitForSingleObject(handle, 0)`,
+because `STILL_ACTIVE` is 259: a process that exits with code 259 is
+indistinguishable from a running one by exit code alone, and would be reported
+alive forever. The wait is unambiguous, and the exit code remains the fallback
+for a process we may query but not synchronise on.
 
 Those three Win32 calls carry explicit `argtypes`/`restype`. Without them ctypes
 assumes a C `int` return, but a `HANDLE` is pointer-sized: on 64-bit Windows the
