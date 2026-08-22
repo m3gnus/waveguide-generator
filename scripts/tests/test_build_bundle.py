@@ -31,6 +31,7 @@ from scripts.build_bundle import (
     WINDOWS_PTH_NAME,
     WINDOWS_PRUNE_RELATIVE_PATHS,
     WINDOWS_PYVENV_NAME,
+    WINDOWS_RUNTIME_PTH_NAME,
     build,
     copy_tracked_app_files,
     deterministic_zip,
@@ -43,6 +44,7 @@ from scripts.build_bundle import (
     windows_desktop_bootstrap,
     windows_pth,
     windows_pyvenv_cfg,
+    windows_runtime_pth,
     write_app_manifest,
     write_checksum,
     write_json,
@@ -462,6 +464,25 @@ def test_user_site_is_switched_off_before_the_interpreter_starts() -> None:
     assert "sys.path[:]" not in bootstrap
 
 
+def test_the_runtime_interpreter_keeps_its_own_site_packages() -> None:
+    """pyvenv.cfg moves PREFIXES, so the plain interpreter needs explicit paths.
+
+    ``runtime\\python.exe`` has no path file of its own and finds
+    ``site-packages`` through ``sys.prefix``.  The pyvenv.cfg beside the
+    launcher rewrites that prefix for every interpreter under the bundle, so
+    without this the plain one cannot import ``fastapi`` and both
+    ``scripts/check_backends.py`` and the build's backend gate fail.
+    """
+
+    pth = windows_runtime_pth()
+    assert pth.splitlines() == ["Lib", "DLLs", "Lib\\site-packages", "import site"]
+    # The two layers are swapped independently; the runtime must not reach into
+    # the app layer to resolve its own imports.
+    assert "app" not in pth
+    # site is still imported, because that is what applies the pyvenv.cfg switch.
+    assert pth.endswith("import site\n")
+
+
 def _bootstrap_launch_predicate() -> object:
     """Compile only the bootstrap's declarations, without running its body."""
 
@@ -753,6 +774,9 @@ def test_windows_runtime_build_requests_the_explicit_host_target_and_copies_msvc
     assert pip[pip.index("--python") + 1] == str(destination / "python.exe")
     for filename in MSVC_RUNTIME_DLLS:
         assert (destination / filename).read_bytes() == (redist / filename).read_bytes()
+    assert (destination / WINDOWS_RUNTIME_PTH_NAME).read_text(
+        encoding="utf-8"
+    ) == windows_runtime_pth()
     manifest = json.loads((destination / "RUNTIME-MANIFEST.json").read_text())
     assert manifest["platform"] == "windows-x86_64"
 
