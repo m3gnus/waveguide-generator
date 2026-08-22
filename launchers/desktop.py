@@ -186,9 +186,8 @@ class DesktopWindow:
         # timestamps looked older than its sources. Requiring the backend lamp
         # to be OK as well, which is the shape this had while that was being
         # fixed, reintroduced the same silence from the other side.
-        if self._healthy_bundle_checked or not self._frontend_ready(snapshot):
+        if self._healthy_bundle_checked:
             return
-        self._healthy_bundle_checked = True
         paths = self._bundle_paths()
         if paths is None:
             return
@@ -196,6 +195,18 @@ class DesktopWindow:
 
         def log(message: str) -> None:
             append_update_log(data_dir, message)
+
+        # Say so when it declines. Both times this broke, the whole symptom was
+        # a gigabyte that never came back and an update.log that stopped after
+        # "Relaunched" -- there was nothing to search for. A refusal that
+        # names the two lamps turns the third occurrence into one grep.
+        if not self._frontend_ready(snapshot):
+            log(
+                "Not reclaiming the previous layers yet: backend "
+                f"{snapshot.backend.state.name}, frontend {snapshot.frontend.state.name}."
+            )
+            return
+        self._healthy_bundle_checked = True
 
         # ``.failed`` is the trail a rollback leaves: Windows would not let the
         # helper delete a directory whose DLLs were still mapped, so the
