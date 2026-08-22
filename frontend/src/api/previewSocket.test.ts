@@ -157,6 +157,7 @@ describe('preview socket state machine', () => {
     socket.message(fixtureAtRevision(56));
     expect(manager.getSnapshot().frame).toBe(displayed);
     expect(manager.getSnapshot().displayedRevision).toBe(57);
+    expect(manager.getSnapshot().stale).toBe(false);
     manager.stop();
   });
 
