@@ -742,8 +742,15 @@ def test_ingestion_record_publishes_role_findings_and_numpy_metadata(
         isolated_integrity.update(kwargs)
         return built
 
+    build_calls = 0
+
+    def counted_build_isolated(*args, **kwargs):
+        nonlocal build_calls
+        build_calls += 1
+        return build_isolated(*args, **kwargs)
+
     monkeypatch.setattr(
-        "server.cadlink.ingest.build_imported_mesh_isolated", build_isolated
+        "server.cadlink.ingest.build_imported_mesh_isolated", counted_build_isolated
     )
     record = ingest_bundle(
         bundle_path,
@@ -774,6 +781,62 @@ def test_ingestion_record_publishes_role_findings_and_numpy_metadata(
     )
     assert isolated_integrity["expected_sha256"] == bundle.artifact_sha256
     assert isolated_integrity["expected_size_bytes"] == bundle.artifact_size_bytes
+
+    cached_mesh = Path(record["mesh_store_path"])
+    cached_sidecar = cached_mesh.with_suffix(".json")
+    sidecar = json.loads(cached_sidecar.read_text(encoding="utf-8"))
+    assert sidecar["content_sha256"] == mesh_text_sha256(str(built["msh_text"]))
+    cached_mesh.write_text("altered solver geometry", encoding="utf-8")
+
+    rebuilt = ingest_bundle(
+        bundle_path,
+        {
+            "rigid_size_mm": 20,
+            "transition_mm": 30,
+            "source_size_mm": {"source-hf": 8},
+        },
+        [],
+        CadLinkStore(tmp_path / "cadlink.db"),
+        tmp_path / "data",
+    )
+    assert rebuilt["mesh_cache_hit"] is False
+    assert build_calls == 2
+    assert cached_mesh.read_text(encoding="utf-8") == built["msh_text"]
+    assert rebuilt["mesh_content_sha256"] == record["mesh_content_sha256"]
+
+    mismatched_sidecar = json.loads(cached_sidecar.read_text(encoding="utf-8"))
+    mismatched_sidecar["transformed_geometry_hash"] = "sha256:" + "4" * 64
+    cached_sidecar.write_bytes(_canonical(mismatched_sidecar) + b"\n")
+    mismatched_key = ingest_bundle(
+        bundle_path,
+        {
+            "rigid_size_mm": 20,
+            "transition_mm": 30,
+            "source_size_mm": {"source-hf": 8},
+        },
+        [],
+        CadLinkStore(tmp_path / "cadlink.db"),
+        tmp_path / "data",
+    )
+    assert mismatched_key["mesh_cache_hit"] is False
+    assert build_calls == 3
+
+    legacy_sidecar = json.loads(cached_sidecar.read_text(encoding="utf-8"))
+    del legacy_sidecar["content_sha256"]
+    cached_sidecar.write_bytes(_canonical(legacy_sidecar) + b"\n")
+    legacy_cache = ingest_bundle(
+        bundle_path,
+        {
+            "rigid_size_mm": 20,
+            "transition_mm": 30,
+            "source_size_mm": {"source-hf": 8},
+        },
+        [],
+        CadLinkStore(tmp_path / "cadlink.db"),
+        tmp_path / "data",
+    )
+    assert legacy_cache["mesh_cache_hit"] is False
+    assert build_calls == 4
 
 
 def test_visual_mesh_failure_is_advisory_and_does_not_create_healing_finding(

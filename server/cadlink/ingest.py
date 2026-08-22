@@ -470,11 +470,14 @@ def _load_cached_mesh(mesh_path: Path, metadata_path: Path) -> dict[str, Any] | 
     if not mesh_path.is_file() or not metadata_path.is_file():
         return None
     try:
-        result = json.loads(metadata_path.read_text(encoding="utf-8"))
-        result["msh_text"] = mesh_path.read_text(encoding="utf-8")
-    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        msh_text = mesh_path.read_text(encoding="utf-8")
+        expected = str(metadata["content_sha256"])
+        if mesh_text_sha256(msh_text) != expected:
+            return None
+        return {**metadata, "msh_text": msh_text}
+    except (KeyError, OSError, ValueError, TypeError, json.JSONDecodeError):
         return None
-    return result
 
 
 def _write_cache(mesh_path: Path, metadata_path: Path, result: Mapping[str, Any]) -> None:
@@ -483,12 +486,17 @@ def _write_cache(mesh_path: Path, metadata_path: Path, result: Mapping[str, Any]
     try:
         staged_mesh = temporary / mesh_path.name
         staged_meta = temporary / metadata_path.name
-        staged_mesh.write_text(str(result["msh_text"]), encoding="utf-8")
+        msh_text = str(result["msh_text"])
+        staged_mesh.write_text(msh_text, encoding="utf-8")
         sidecar = {
             key: value
             for key, value in result.items()
             if key not in {"msh_text", "viewport_msh_text"}
         }
+        # The sidecar is the cache commit marker. Binding it to the exact mesh
+        # bytes makes a replaced/truncated artifact a miss instead of minting a
+        # new ingestion record that blesses the altered bytes as solver input.
+        sidecar["content_sha256"] = mesh_text_sha256(msh_text)
         staged_meta.write_bytes(_canonical(sidecar) + b"\n")
         # Metadata is the commit marker: publish mesh first, metadata last.
         os.replace(staged_mesh, mesh_path)
@@ -681,6 +689,24 @@ def ingest_bundle(
     mesh_path = imports_root / "meshes" / f"{cache_key}.msh" if cache_key else imports_root / "meshes" / ".pending.msh"
     metadata_path = imports_root / "meshes" / f"{cache_key}.json" if cache_key else imports_root / "meshes" / ".pending.json"
     built = _load_cached_mesh(mesh_path, metadata_path) if cache_key else None
+    if built is not None:
+        try:
+            expected_cache_key = _cache_key(
+                bundle,
+                manifest,
+                normalized_mesh,
+                skipped_source_ids,
+                options,
+                str(built["transformed_geometry_hash"]),
+            )
+        except (KeyError, TypeError, ValueError):
+            built = None
+        else:
+            # The lookup index is only a shortcut from immutable bundle inputs
+            # to measured geometry. It is not itself evidence: require the
+            # sidecar's stored geometry hash to reproduce the indexed CAS key.
+            if expected_cache_key != cache_key:
+                built = None
     cache_hit = built is not None
     if built is None:
         try:
