@@ -663,6 +663,66 @@ def test_job_and_artifact_error_mappings(
     asyncio.run(scenario())
 
 
+def test_unsupported_field_plane_details_distinguish_formulation_and_mounting(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        app = create_app(data_dir=tmp_path)
+        store = app.state.jobs_runtime.store
+        store.initialize()
+        _create_job(
+            store,
+            "axisymmetric-detail",
+            traces=False,
+            solve_path="axisymmetric-meridian",
+            unavailable_reason="unsupported_axisymmetric_formulation",
+        )
+        _create_job(
+            store,
+            "coupled-detail",
+            traces=False,
+            unavailable_reason="unsupported_coupled_infinite_baffle",
+        )
+
+        axisym_status, axisym_raw, _headers = await _request(
+            app,
+            "/api/results/axisymmetric-detail/field-plane",
+            _body(),
+        )
+        coupled_status, coupled_raw, _headers = await _request(
+            app,
+            "/api/results/coupled-detail/field-plane",
+            _body(),
+        )
+
+        assert axisym_status == coupled_status == 422
+        axisym = json.loads(axisym_raw)["detail"]
+        coupled = json.loads(coupled_raw)["detail"]
+        assert axisym == {
+            "code": "unsupported_axisymmetric_formulation",
+            "message": (
+                "Axisymmetric meridian solves do not retain exterior field traces."
+            ),
+            "remedy": (
+                "Set Solver mode to Full 3D and re-solve with Metal or BEMPP. "
+                "For a coupled infinite-baffle design, also change Simulation "
+                "type to Free-standing."
+            ),
+        }
+        assert coupled == {
+            "code": "unsupported_coupled_infinite_baffle",
+            "message": (
+                "Coupled infinite-baffle solves do not retain exterior field traces."
+            ),
+            "remedy": (
+                "Set Simulation type to Free-standing and re-solve with Metal or BEMPP."
+            ),
+        }
+        await app.state.jobs_runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     "plane_update",
     [

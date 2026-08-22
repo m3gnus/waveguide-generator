@@ -424,7 +424,14 @@ def create_jobs_router(
                 status_code=410,
                 detail=f"Field-trace artifact is corrupt: {exc}",
             ) from exc
-        except (FieldPlaneUnsupported, FieldPlaneInvalidSelection) as exc:
+        except FieldPlaneUnsupported as exc:
+            detail: str | dict[str, str] = str(exc)
+            if exc.code is not None:
+                detail = {"code": exc.code, "message": str(exc)}
+                if exc.remedy is not None:
+                    detail["remedy"] = exc.remedy
+            raise HTTPException(status_code=422, detail=detail) from exc
+        except FieldPlaneInvalidSelection as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except FieldEvaluationSuperseded as exc:
             raise HTTPException(
