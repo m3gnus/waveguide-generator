@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { getOnshapeConnection, type OnshapeConnection } from '../api/onshape';
 import {
   getCadWorkspace,
@@ -11,33 +11,9 @@ import { JobsPreferencesSurface, ResultsPreferencesSurface } from '../prefs/Pref
 import { preferencesStore, usePreferences, type CadApplication } from '../prefs/preferences';
 import { Icon } from './icons';
 import type { SettingsSection } from './settingsNavigation';
+import { focusableSelector, useModalDialogFocus } from './dialogFocus';
 
 export type Theme = 'dark' | 'light';
-
-const focusableSelector = [
-  'button:not([disabled])',
-  'input:not([disabled])',
-  'select:not([disabled])',
-  'textarea:not([disabled])',
-  '[href]',
-  '[tabindex]:not([tabindex="-1"])',
-].join(',');
-
-export function trapDialogFocus(dialog: RefObject<HTMLElement | null>, event: KeyboardEvent): void {
-  if (event.key !== 'Tab') return;
-  const focusable = [...(dialog.current?.querySelectorAll<HTMLElement>(focusableSelector) ?? [])]
-    .filter((element) => !element.hidden && element.getAttribute('aria-hidden') !== 'true');
-  if (!focusable.length) return;
-  const first = focusable[0];
-  const last = focusable.at(-1)!;
-  if (event.shiftKey && (document.activeElement === first || !dialog.current?.contains(document.activeElement))) {
-    event.preventDefault();
-    last.focus();
-  } else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault();
-    first.focus();
-  }
-}
 
 async function workspacePath(endpoint: '/path' | '/open' | '/select', method?: 'POST'): Promise<string> {
   const response = await fetch(`/api/workspace${endpoint}`, method ? { method } : undefined);
@@ -78,7 +54,7 @@ function WorkspaceSettings() {
 
   return <section className="settings-theme workspace-settings" aria-labelledby="settings-workspace-title" aria-busy={busy !== undefined}>
     <h3 id="settings-workspace-title">Workspace</h3>
-    <p className="cad-settings-note">Manual and automatic run exports are saved here. The default is the <code>output</code> folder beside Waveguide Generator; AppData continues to hold internal databases and logs, not result exports.</p>
+    <p className="cad-settings-note">Manual and automatic run exports are saved here. The default is <code>Documents/Waveguide Generator/runs</code>; when you choose another workspace, the path shown below is authoritative. The application-data folder continues to hold internal databases and logs, not result exports.</p>
     <p className="workspace-settings-path" title={path}>{path ?? (error ? 'Unavailable' : 'Loading…')}</p>
     <div className="settings-theme-options">
       <button disabled={!path || busy !== undefined} onClick={() => void run('open')}>Open folder</button>
@@ -301,32 +277,13 @@ export function SettingsDialog({ open, theme, focusSection, onThemeChange, onClo
   onThemeChange: (theme: Theme) => void;
   onClose: () => void;
 }) {
-  const dialog = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const focus = requestAnimationFrame(() => {
-      const section = focusSection ? dialog.current?.querySelector<HTMLElement>(`#settings-${focusSection}`) : null;
+  const initialFocus = useCallback((current: HTMLDivElement) => {
+      const section = focusSection ? current.querySelector<HTMLElement>(`#settings-${focusSection}`) : null;
       section?.scrollIntoView({ block: 'start' });
-      (section?.querySelector<HTMLElement>('select:not([disabled]), button:not([disabled])')
-        ?? dialog.current?.querySelector<HTMLElement>(focusableSelector))?.focus();
-    });
-    const keydown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        onClose();
-        return;
-      }
-      trapDialogFocus(dialog, event);
-    };
-    document.addEventListener('keydown', keydown);
-    return () => {
-      cancelAnimationFrame(focus);
-      document.removeEventListener('keydown', keydown);
-      previous?.focus();
-    };
-  }, [focusSection, onClose, open]);
+      return section?.querySelector<HTMLElement>('select:not([disabled]), button:not([disabled])')
+        ?? current.querySelector<HTMLElement>(focusableSelector);
+  }, [focusSection]);
+  const dialog = useModalDialogFocus<HTMLDivElement>({ open, onClose, initialFocus });
 
   if (!open) return null;
   return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>

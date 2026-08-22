@@ -269,7 +269,6 @@ export function CadLinkPanel() {
   const setCadLink = useDocumentStore((current) => current.setCadLink);
   const cadCoordinator = useSyncExternalStore(cadLinkCoordinatorBridge.subscribe, cadLinkCoordinatorBridge.getSnapshot, cadLinkCoordinatorBridge.getSnapshot);
   const parkedCommand = useSyncExternalStore(parkedSolveCommandStore.subscribe, parkedSolveCommandStore.getSnapshot, parkedSolveCommandStore.getSnapshot).command;
-  const [requestingReturn, setRequestingReturn] = useState(false);
   const [confirmPublicDocument, setConfirmPublicDocument] = useState<string | null>(null);
   const [sendingToOnshape, setSendingToOnshape] = useState(false);
   const onshapeSendGeneration = useRef(0);
@@ -342,17 +341,9 @@ export function CadLinkPanel() {
   // design menu and the Geometry rail call the coordinator's unified path.
   const send = async () => { await sendToOnshape(); };
 
-  const bringFromFusion = async () => {
-    setRequestingReturn(true); cadCoordinator.clearFeedback();
-    try {
-      // The arrival itself is awaited by the coordinator's correlated waiter,
-      // which also owns the timeout message; this button only starts the pull.
-      void cadCoordinator.pullFromFusion().catch(() => undefined);
-    } catch (reason) {
-      cadCoordinator.reportError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setRequestingReturn(false);
-    }
+  const bringFromFusion = () => {
+    cadCoordinator.clearFeedback();
+    void cadCoordinator.pullFromFusion().catch(() => undefined);
   };
 
   const workflow = onshape ? onshapeWorkflowView(onshapeStatus) : fusionWorkflowView(fusionStatus);
@@ -463,8 +454,8 @@ export function CadLinkPanel() {
     </section>}
     {!onshape && <section className="cad-workflow cad-return-workflow">
     <header className="cad-workflow-header no-step"><div><h3>FUSION → SIMULATION</h3><p>Bring Fusion geometry and source tags into WG.</p></div><button disabled={loading || ingesting} onClick={() => void cadCoordinator.refresh()}><Icon name="reset"/>{loading ? 'Loading…' : 'Refresh'}</button></header>
-    {fusionStatus?.fusionChangesAvailable && <div className="cad-direction-alert"><div><b>Fusion geometry has changed</b><span>The active Fusion body or source setup differs from the last design returned to WG.</span></div><div className="cad-confirm-actions"><button disabled={!canRequestFusionReturn || requestingReturn} onClick={() => void bringFromFusion()}>{requestingReturn ? 'Requesting…' : 'Bring changes into WG'}</button><button className="primary" disabled={!canRequestFusionReturn || requestingReturn} onClick={() => { void cadCoordinator.pullAndSolve(); }}>Bring changes in & solve</button></div></div>}
-    {!fusionStatus?.fusionChangesAvailable && canRequestFusionReturn && <button className="cad-secondary-action" disabled={requestingReturn} onClick={() => void bringFromFusion()}>{requestingReturn ? 'Requesting…' : 'Refresh geometry from Fusion'}</button>}
+    {fusionStatus?.fusionChangesAvailable && <div className="cad-direction-alert"><div><b>Fusion geometry has changed</b><span>The active Fusion body or source setup differs from the last design returned to WG.</span></div><div className="cad-confirm-actions"><button disabled={!canRequestFusionReturn || cadCoordinator.pullingFromFusion} onClick={bringFromFusion}>{cadCoordinator.pullingFromFusion ? 'Waiting for Fusion…' : 'Bring changes into WG'}</button><button className="primary" disabled={!canRequestFusionReturn || cadCoordinator.pullingFromFusion} onClick={() => { void cadCoordinator.pullAndSolve(); }}>{cadCoordinator.pullingFromFusion ? 'Waiting for Fusion…' : 'Bring changes in & solve'}</button></div></div>}
+    {!fusionStatus?.fusionChangesAvailable && canRequestFusionReturn && <button className="cad-secondary-action" disabled={cadCoordinator.pullingFromFusion} onClick={bringFromFusion}>{cadCoordinator.pullingFromFusion ? 'Waiting for Fusion…' : 'Refresh geometry from Fusion'}</button>}
     {parked && <div className="cad-direction-alert cad-parked-command" role="status">
       <div><b>Fusion asked for a solve</b><span>Waiting on: {parked.blockers.join(' · ')}</span></div>
       <div className="cad-confirm-actions">

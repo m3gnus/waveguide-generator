@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getUpdateStatus, installApplicationUpdate, type UpdateStatus } from '../api/updates';
 import { Icon } from './icons';
-import { trapDialogFocus } from './SettingsDialog';
+import { trapDialogFocus } from './dialogFocus';
 
 export const UPDATE_QUERY_KEY = ['application-update'] as const;
 const UPDATE_CLIENT_STALE_MS = 60_000;

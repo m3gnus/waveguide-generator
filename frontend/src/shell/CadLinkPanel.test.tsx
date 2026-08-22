@@ -93,6 +93,12 @@ function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settle) => { resolve = settle; });
+  return { promise, resolve };
+}
+
 describe('CadLinkPanel', () => {
   let host: HTMLDivElement;
   let root: Root;
@@ -972,6 +978,52 @@ describe('CadLinkPanel', () => {
     await act(async () => { await cadLinkCoordinatorBridge.getSnapshot().sendWgToFusion(); });
     expect(host.textContent).toContain('Both WG and Fusion changed');
     expect(host.textContent).toContain('Continue: send WG changes');
+  });
+
+  it('keeps both Fusion pull controls busy and suppresses repeated requests until arrival', async () => {
+    useDocumentStore.setState({
+      identity: { designId: 'wgd_a', lineageId: 'wgl_a', baseEditVersion: 2 },
+    });
+    const fusion = { ...currentFusion, state: 'stale' as const, fusionChangesAvailable: true };
+    const request = deferred<Response>();
+    let requestCount = 0;
+    let returns = { items: listing.items };
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/fusion-status')) return Promise.resolve(json(fusion));
+      if (path.endsWith('/returns')) return Promise.resolve(json(returns));
+      if (path.endsWith('/request-fusion-return')) {
+        requestCount += 1;
+        return request.promise;
+      }
+      return Promise.resolve(json(record));
+    }));
+    await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
+    const pullButtons = () => [...host.querySelectorAll<HTMLButtonElement>('.cad-direction-alert button')];
+
+    await act(async () => {
+      pullButtons()[0].click();
+      cadLinkCoordinatorBridge.getSnapshot().pullAndSolve();
+      cadLinkCoordinatorBridge.getSnapshot().pullFromFusion();
+      await Promise.resolve();
+    });
+    expect(requestCount).toBe(1);
+    expect(pullButtons()).toHaveLength(2);
+    expect(pullButtons().every((button) => button.disabled)).toBe(true);
+    expect(pullButtons().map((button) => button.textContent)).toEqual(['Waiting for Fusion…', 'Waiting for Fusion…']);
+
+    await act(async () => {
+      request.resolve(json({ status: 'requested', requestId: 'req_busy', documentName: 'Tritonia V' }));
+      await Promise.resolve(); await Promise.resolve();
+    });
+    expect(pullButtons().every((button) => button.disabled)).toBe(true);
+    returns = { items: [{ ...listing.items[0], requestId: 'req_busy' }] };
+    await act(async () => {
+      await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
+      await Promise.resolve();
+    });
+    expect(cadLinkCoordinatorBridge.getSnapshot().pullingFromFusion).toBe(false);
+    expect(requestCount).toBe(1);
   });
 
   it('builds acknowledgement wires from the current record, filters skipped sizes, and emits range/list sweep shapes', () => {
