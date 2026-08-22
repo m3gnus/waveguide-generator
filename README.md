@@ -118,12 +118,12 @@ installer can acquire the application data lock.
 
 ### Output workspace
 
-Manual and automatic run exports default to the `output/` folder inside the
-Waveguide Generator checkout. This folder is user-visible and does not require
-browser download permission or approval for a protected operating-system data
-directory. A different output folder can be selected once in **Settings →
-Workspace**. Internal databases, logs, and process locks remain under the
-platform application-data directory; result exports do not.
+Manual and automatic run exports default to `Documents/Waveguide Generator/runs`.
+This folder is user-visible and does not require browser download permission or
+approval for a protected operating-system data directory. A different output
+folder can be selected once in **Settings → Workspace**; the path displayed
+there is authoritative. Internal databases, logs, and process locks remain
+under the platform application-data directory; result exports do not.
 
 The Fusion WGLink exchange folder is configured separately under **Settings →
 CAD Link**. Changing the output folder never moves or disconnects Fusion's

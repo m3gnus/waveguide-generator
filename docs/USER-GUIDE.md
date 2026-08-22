@@ -243,14 +243,15 @@ finally. A machine with no Metal engine cannot run an imported solve at all, so
 a request that lands there is refused outright instead of being offered again on
 every reopen.
 
-A return arriving from Fusion — and a return selected from the History list —
-is prepared automatically; **Prepare simulation** appears only as the retry
-when a preparation fails. Preparing a new return keeps the mesh sizing,
-channel mapping, drivers, combine settings and sweep from the previous one
-whenever the source inventory is unchanged. Findings acknowledgements persist
-per design the same way: evidence you have already acknowledged stays
-acknowledged when it reappears unchanged, and only new or changed findings ask
-again.
+A newly arriving return — and a return you manually select from the History
+list — is prepared automatically. On startup, WG selects the newest existing
+return without preparing it; its summary says **Ready to prepare**, and you must
+choose **Prepare simulation**. That action also remains available to retry a
+failed preparation. Preparing a new return keeps the mesh sizing, channel
+mapping, drivers, combine settings and sweep from the previous one whenever the
+source inventory is unchanged. Findings acknowledgements persist per design the
+same way: evidence you have already acknowledged stays acknowledged when it
+reappears unchanged, and only new or changed findings ask again.
 
 ### Starting from a model drawn in Fusion
 
