@@ -1415,7 +1415,11 @@ class JobRuntime:
                     names = await asyncio.to_thread(
                         self.cadlink_store.get_lineage_cad_names, anchor_lineage_id
                     )
-                    archive_stem = str((names or {}).get("bundle_stem") or "") or None
+                    archive_stem = (
+                        str((names or {}).get("archive_stem") or "").strip()
+                        or str((names or {}).get("bundle_stem") or "").strip()
+                        or None
+                    )
                 try:
                     parsed = await asyncio.to_thread(
                         parse, str(design_row["snapshot_text"])
