@@ -102,8 +102,10 @@ class MetalUnavailable(RuntimeError):
 
 logger = logging.getLogger(__name__)
 
-# Ingest source roles that name a driver band on a result channel.
-_BAND_ROLES = frozenset({"HF", "MF", "LF"})
+# Ingest source roles that name a driver band on a result channel, lowest first.
+# Keep this ranking in sync with ROLE_BAND_RANK in frontend/src/stores/cadReturn.ts.
+_BAND_ROLE_RANK = {"LF": 0, "MF": 1, "HF": 2}
+_BAND_ROLES = frozenset(_BAND_ROLE_RANK)
 
 
 def _native_config_or_unavailable(kwargs: Mapping[str, Any]) -> Any:
@@ -602,7 +604,8 @@ def _channel_source_identity(
 
     Only band roles name a driver: the record also carries structural roles
     (the rigid shell, port apertures) that no result may present as one. A
-    channel spanning several roles takes the first roled source's band.
+    channel spanning several roles takes the lowest band, independent of the
+    source order authored by CAD.
     """
 
     roles: dict[str, str] = {}
@@ -623,9 +626,10 @@ def _channel_source_identity(
     for channel in geometry.drive_channels:
         source_ids = list(channel.source_ids)
         entry: dict[str, Any] = {
-            "role": next(
+            "role": min(
                 (roles[source_id] for source_id in source_ids if source_id in roles),
-                None,
+                key=_BAND_ROLE_RANK.__getitem__,
+                default=None,
             )
         }
         if any(source_id in labels for source_id in source_ids):
