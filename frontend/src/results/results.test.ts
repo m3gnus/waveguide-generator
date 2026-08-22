@@ -90,8 +90,20 @@ describe('results LRU', () => {
     expect(first).toBe(second);
   });
 
+  it('adopts the parametric v1 identity for a result migrated from the original application', async () => {
+    resultsCache.clear();
+    const { result_kind: _kind, result_contract_version: _version, provenance: _provenance, ...legacy } = result();
+    const fetcher = vi.fn(async () => new Response(JSON.stringify(legacy), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    const fetched = await fetchJobResults('migrated-v1', fetcher);
+    expect(fetched).toMatchObject({ result_kind: 'parametric', result_contract_version: 1 });
+    expect(resultsCache.has('migrated-v1')).toBe(true);
+  });
+
   it.each([
-    ['missing identity', { frequencies: [200] }, 'missing result_contract_version'],
+    ['half-declared identity', { ...result(), result_contract_version: undefined }, 'missing result_contract_version'],
     ['unsupported version', { ...result(), result_contract_version: 999 }, 'unsupported result version 999'],
   ])('rejects a %s final envelope without caching it', async (_case, payload, message) => {
     resultsCache.clear();

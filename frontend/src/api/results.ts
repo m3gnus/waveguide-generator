@@ -110,6 +110,14 @@ function isResultProvenance(value: unknown): boolean {
 /** Validate the OpenAPI result union before a durable response can enter UI state. */
 export function parseFinalResultEnvelope(value: unknown): JobResults {
   if (!isRecord(value)) throw new Error('invalid final result envelope');
+  if (!('result_contract_version' in value) && !('result_kind' in value) && !('channels' in value)) {
+    // Results migrated from the original application predate the envelope
+    // fields; their shape is the parametric v1 contract, so adopt that
+    // identity rather than refusing a documented, supported input. A payload
+    // that declares either field is held to the declared contract below.
+    if (!isResultData(value)) throw new Error('invalid final result envelope');
+    return { ...value, result_kind: 'parametric', result_contract_version: 1 } as JobResults;
+  }
   if (!('result_contract_version' in value)) {
     throw new Error('final result is missing result_contract_version');
   }
@@ -121,11 +129,15 @@ export function parseFinalResultEnvelope(value: unknown): JobResults {
   const supportedIdentity = (value.result_kind === 'parametric' && version === 1)
     || (value.result_kind === 'multi_channel' && version === 2);
   if (!supportedIdentity) throw new Error(`unsupported result version ${String(version)}`);
+  // Provenance and client fields are validated when present; results persisted
+  // before a field existed are still readable, only the contract identity is
+  // mandatory.
   if (!isResultData(value)
-    || !(value.client_request_id === null || typeof value.client_request_id === 'string')
-    || !isRecord(value.client_metadata) || !isSafeJson(value.client_metadata)
+    || !('client_request_id' in value
+      ? value.client_request_id === null || typeof value.client_request_id === 'string' : true)
+    || ('client_metadata' in value && !(isRecord(value.client_metadata) && isSafeJson(value.client_metadata)))
     || !isRecord(value.metadata)
-    || !isResultProvenance(value.provenance)) {
+    || ('provenance' in value && value.provenance !== null && !isResultProvenance(value.provenance))) {
     throw new Error('invalid final result envelope');
   }
   if (value.result_kind === 'multi_channel' && !(
