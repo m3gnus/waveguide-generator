@@ -1,10 +1,40 @@
 # Standalone application
 
-Status: in progress (branch `feature/standalone-app`). This plan turns the
+Status: all four steps implemented on `feature/standalone-app`, macOS verified
+end to end, Windows unverified (see "Verification status"). This plan turns the
 checkout-bound `.app` into a self-contained, self-updating desktop application
 without Electron, Tauri, or a frozen interpreter. It is written as the contract
 for the implementation batches; each numbered step is independently shippable
 and is reviewed before the next starts.
+
+## Verification status
+
+Verified on Apple Silicon, by building and running the real artifacts:
+
+- The DMG mounts, and the copied `.app` runs from anywhere: its own interpreter,
+  Metal ready, `/` and `/health` answering, the SPA rendered in the native
+  window, no reference to the build checkout, and the ad-hoc signature still
+  valid after a run.
+- A built bundle updated itself from a locally served release: app layer only,
+  the already-installed runtime reused, layers swapped, re-signed, relaunched
+  with its original arguments, and the rollback layers and downloads removed
+  after the healthy start.
+- A deliberately broken release rolled back to the previous version and said so
+  in a dialog.
+
+Not verifiable here, and therefore open:
+
+- Everything Windows. The first `windows-bundle` CI run must show the uv Windows
+  layout, the launcher loading its adjacent DLLs through the isolated `._pth`,
+  bempp/numba ready, the server answering, and the app-layer zip matching the
+  macOS one byte for byte. A real Windows machine must then show an
+  Explorer double-click starting without a console, the SmartScreen prompt, a
+  clean-machine numba load from the bundled MSVC DLLs, the WebView2 window and
+  its browser fallback, and one in-app update including the launcher refresh.
+- Gatekeeper on a genuinely downloaded DMG (quarantined by the browser), which
+  needs the release assets to exist.
+- The Windows executable keeps the generic Python icon; embedding the ICO as a
+  PE resource is deferred.
 
 ## Problem
 
