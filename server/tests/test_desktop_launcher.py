@@ -347,6 +347,34 @@ def test_a_stale_frontend_still_counts_as_a_healthy_start_for_cleanup(
     assert not (data / "updates").exists()
 
 
+def test_declining_to_clean_says_so_in_the_update_log(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A silent refusal is what made this cost two rebuilds to find."""
+
+    bundle = tmp_path / "Waveguide Generator"
+    data = tmp_path / "data"
+    (bundle / "app.previous").mkdir(parents=True)
+    (data / "logs").mkdir(parents=True)
+
+    not_serving = StatusSnapshot(
+        backend=LampStatus(ServiceState.OK, "Healthy"),
+        frontend=LampStatus(ServiceState.STARTING, "Waiting for the SPA route"),
+        url="http://127.0.0.1:3199/",
+        pid=123,
+        exit_code=None,
+    )
+    window = desktop.DesktopWindow(StubController(poll_snapshot=not_serving))  # type: ignore[arg-type]
+    monkeypatch.setattr(window, "_bundle_paths", lambda: (bundle, bundle, data))
+
+    window._finish_healthy_bundle_update(not_serving)
+
+    assert (bundle / "app.previous").exists()
+    written = (data / "logs" / "update.log").read_text(encoding="utf-8")
+    assert "Not reclaiming the previous layers" in written
+    assert "STARTING" in written
+
+
 def test_the_cleanup_guard_is_never_stricter_than_the_loop_that_calls_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
