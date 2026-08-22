@@ -76,3 +76,13 @@ def test_spa_docs_distinguish_module_import_from_app_construction() -> None:
     assert "`create_app()`" in workflow
     assert "at import" not in workflow
     assert "cannot even collect" not in workflow
+
+
+def test_wall_clearance_identity_command_uses_portable_python3_entrypoint() -> None:
+    report = _read("docs/validation/2026-08/WALL-CLEARANCE-ACOUSTICS.md")
+
+    assert (
+        "python3 scripts/verify_model_identity.py "
+        "docs/validation/2026-08/wall-clearance-model-identity.json"
+    ) in report
+    assert "python scripts/verify_model_identity.py" not in report
