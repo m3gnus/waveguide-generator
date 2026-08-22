@@ -228,4 +228,41 @@ describe('results run coherence', () => {
     expect(compareSelection.getSnapshot()).toMatchObject({ primary: 'elsewhere' });
     expect(toolbarButton(host, 'New · #13 → Show')).toBeUndefined();
   });
+
+  it('shows the radiated-power health hint only for an in-band difference above the threshold', async () => {
+    const solved = job('power-check', 14, liveDesign());
+    publishJobs([solved]);
+    compareSelection.setPrimary(solved.id);
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      frequencies: [100, 1_000, 10_000],
+      metadata: {
+        source_ids: ['driver'],
+        per_source_frequency_validity: {
+          driver: { effective_max_valid_frequency_hz: 2_000 },
+        },
+        radiated_power: {
+          surface_w: [1, 2, 3],
+          sphere_w: [1.01, 2.2, 5],
+          sphere_coverage_sr: 12.566370614359172,
+          definition: 'test radiated-power definition',
+          agreement_db: [0.04, -0.6, 2.4],
+        },
+      },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+
+    await act(async () => { root.render(<ResultsPanel/>); await Promise.resolve(); });
+    const hint = host.querySelector<HTMLElement>('.result-power-check')!;
+    expect(hint.textContent).toBe('Power check: far-field vs surface differ by 0.6 dB');
+    expect(hint.title).toContain('mesh or spherical-quadrature error');
+    expect(hint.textContent).not.toContain('2.4');
+  });
+
+  it('shows no radiated-power health hint when the optional block is absent', async () => {
+    const solved = job('without-power-check', 15, liveDesign());
+    publishJobs([solved]);
+    compareSelection.setPrimary(solved.id);
+
+    await act(async () => { root.render(<ResultsPanel/>); await Promise.resolve(); });
+    expect(host.querySelector('.result-power-check')).toBeNull();
+  });
 });

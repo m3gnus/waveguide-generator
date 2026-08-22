@@ -7,6 +7,14 @@ export interface ObservationMetadata {
   sound_speed_m_per_s?: number;
 }
 
+export interface RadiatedPowerMetadata {
+  surface_w: NullableNumber[];
+  sphere_w: NullableNumber[];
+  sphere_coverage_sr: number | null;
+  definition: string;
+  agreement_db: NullableNumber[];
+}
+
 /**
  * What the LR4 sum recorded about the channels it summed.
  *
@@ -43,6 +51,7 @@ export interface ResultMetadata extends Record<string, unknown> {
     effective_max_valid_frequency_hz?: number;
     [key: string]: unknown;
   }>;
+  radiated_power?: RadiatedPowerMetadata;
   combine?: Partial<CombineMetadata> & Record<string, unknown>;
 }
 

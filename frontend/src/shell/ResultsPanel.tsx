@@ -4,7 +4,7 @@ import type { EChartsOption } from 'echarts';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { compareSelection, fetchJobResults, fetchRadiationImpedancePresentation, provisionalResults, recombineJobResults, type JobResults, type RadiationImpedancePresentation } from '../api/results';
 import { EChart, useChartTokens, type ChartTokens } from '../results/EChart';
-import { beamFitSeries, beamShapeSeries, directivityGrid, directivityIndexSeries, drivePowerChartSeries, excursionChartSeries, groupDelaySeries, impedanceComparable, impedanceSeries, impedanceSubtitle, nearestFrequencyIndex, phaseSeries, polarCut, selectResultChannels, splSeries, type NamedResult } from '../results/mappers';
+import { beamFitSeries, beamShapeSeries, directivityGrid, directivityIndexSeries, drivePowerChartSeries, excursionChartSeries, groupDelaySeries, impedanceComparable, impedanceSeries, impedanceSubtitle, nearestFrequencyIndex, phaseSeries, polarCut, powerResponseMethodCaption, powerResponseSeries, selectResultChannels, splSeries, type NamedResult } from '../results/mappers';
 import { BalloonRenderer, ChartStub, ForwardBeamRenderer, hasBalloonData, type ChartStubAction } from '../results/balloon';
 import { runWorkspaceExportBundle } from '../results/exporters';
 import { resultExportSnapshot } from '../results/exportContext';
@@ -35,6 +35,7 @@ import { useDesignStore } from '../stores/design';
 import { RUN_VERDICT_MARKER, RUN_VERDICT_SENTENCE, runContextMarker, runMatchesContext, useRunContext } from '../results/runCoherence';
 import { AnchoredPanel } from '../prefs/AnchoredPanel';
 import { radiationImpedanceTraces } from '../results/radiationImpedance';
+import { powerAgreementHealth } from '../results/radiatedPower';
 
 export function splSubtitle(result: JobResults | undefined): string {
   const observation = result?.metadata?.observation;
@@ -78,6 +79,7 @@ export const COMPARABLE_CHARTS = new Set<ChartType>([
   'directivity_map_d',
   'directivity_map',
   'directivity_index',
+  'power_response',
   'impedance',
   'phase_response',
   'group_delay',
@@ -738,6 +740,20 @@ export function directivityIndexOption(items: NamedResult[], tokens: ChartTokens
   return lineOption(series, tokens, 'DI [dB]', density);
 }
 
+export function powerResponseOption(items: NamedResult[], tokens: ChartTokens, smoothing: ReturnType<typeof usePreferences>['smoothing'], density: ChartDensity): EChartsOption {
+  const colors = seriesColorsByLabel(items.map(({ label }) => label), tokens.series, tokens.accent);
+  const series = items.flatMap((item, index) => powerResponseSeries(item.result as ResultPayload, smoothing).map((entry) => {
+    const color = colors.get(item.label) ?? tokens.accent;
+    return {
+      ...entry,
+      name: items.length === 1 ? entry.name : `${item.label} · ${entry.name}`,
+      lineStyle: { color, width: index ? 1.35 : 2, type: index ? 'dashed' as const : 'solid' as const },
+      itemStyle: { color },
+    };
+  }));
+  return lineOption(series, tokens, 'Spatial-average level [dB SPL]', density);
+}
+
 /**
  * Impedance, in whatever quantity the result actually holds.
  *
@@ -1008,6 +1024,7 @@ const CHART_BADGES: Record<ChartType, { short: string; long?: string; unit?: str
   directivity_map_d: { short: 'Dir D', long: 'Directivity Diagonal', unit: 'dB' },
   directivity_map: { short: 'Dir', long: 'Directivity', unit: 'dB' },
   directivity_index: { short: 'DI', long: 'Directivity index', unit: 'dB' },
+  power_response: { short: 'Power resp', long: 'Power response', unit: 'dB SPL' },
   beam_shape: { short: 'Beam', long: 'Beam width', unit: '°' },
   beam_fit: { short: 'Beam fit', long: 'Beam shape fit' },
   beam_map: { short: 'Beam map' },
@@ -1418,6 +1435,12 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
       const option = directivityIndexOption(overlays, tokens, preferences.smoothing, density);
       return Array.isArray(option.series) && option.series.length ? <EChart option={option} label="Interactive HornLab directivity index by frequency" live={live}/> : <ChartStub reason="Directivity Index needs a complete spherical field from a supported solve backend."/>;
     }
+    if (chartType === 'power_response') {
+      const option = powerResponseOption(overlays, tokens, preferences.smoothing, density);
+      return Array.isArray(option.series) && option.series.length
+        ? <EChart option={option} label="Interactive HornLab spatially averaged power response from the solved spherical balloon" live={live}/>
+        : <ChartStub reason="Power Response needs on-axis SPL and directivity index from a complete spherical field."/>;
+    }
     if (chartType === 'beam_shape') {
       if (result.beam_shape?.frequencies?.length) return <EChart option={lineOption(beamShapeSeries(result), tokens, 'Beam width [°]', density)} label="Interactive HornLab horizontal and vertical forward beam width" live={live}/>;
       const missing = beamShapeMissingReason(result);
@@ -1574,6 +1597,7 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
   const subtitle = chartType.startsWith('directivity_map')
     ? `ref ${preferencesStore.getSnapshot().mapReference} dB${polarStep ? ` · ${polarStep}` : ''}`
     : chartType === 'frequency_response' ? splSubtitle(result)
+    : chartType === 'power_response' ? powerResponseMethodCaption(result)
     : impedanceItems ? impedanceSubtitle(impedanceItems)
     : chartType === 'radiation_impedance' ? 'engineering · exp(+jωt) · in-phase ports'
     : null;
@@ -1994,6 +2018,9 @@ export function ResultsPanel() {
     disabled: beamRerunSubmitting,
     busy: beamRerunSubmitting,
   } : undefined, [beamRerunSubmitting, enableBalloonAndRerun, selectedJobCanRerun]);
+  const powerHealth = shown
+    ? powerAgreementHealth(shown, shownRaw ?? shown)
+    : null;
   const restorePrimaryDesign = useCallback(() => {
     if (!primaryJob || replaceWithJobDesign(primaryJob, { keepHistory: true })) return;
     coordinator.reportError('This result has no readable design snapshot, so its design cannot be restored.');
@@ -2114,6 +2141,11 @@ export function ResultsPanel() {
         return <span className="result-single-run" title={`${comparing} of ${preferences.chartTypes.length} charts overlay every selected run. The rest describe one run at a time and show ${labelFor(ids[0], jobs)}.`}>{comparing}/{preferences.chartTypes.length} compare</span>;
       })()}
       {primaryIsProvisional && <span className="pill accent" role="status">Live · {liveCompleted}{liveExpected ? `/${liveExpected}` : ''} frequencies</span>}
+      {powerHealth && <span
+        className="pill result-power-check"
+        role="status"
+        title="A far-field sphere integral that disagrees with driven-surface power indicates mesh or spherical-quadrature error. Only frequencies inside the result's valid band are checked."
+      >Power check: far-field vs surface differ by {Number(powerHealth.maxDifferenceDb.toFixed(3))} dB</span>}
       <select className="result-compare-add" aria-label="Add comparison result" value="" onChange={(event) => { if (event.target.value) compareSelection.toggleOverlay(event.target.value); }}><option value="">+ compare</option>{available.map((job) => {
         const marker = runContextMarker(job, coherenceContext);
         return <option key={job.id} value={job.id}>{labelFor(job.id, jobs)}{marker ? ` · ${marker}` : ''}</option>;

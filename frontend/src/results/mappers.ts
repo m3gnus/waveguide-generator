@@ -163,6 +163,60 @@ export function directivityIndexSeries(result: ResultPayload, smoothing: Smoothi
   });
 }
 
+const FULL_SPHERE_POWER_RESPONSE_METHOD = 'full-sphere integral of the solved balloon';
+
+/**
+ * Human-readable provenance for the spatially averaged power response.
+ *
+ * The curve is only as honest as its DI provenance.  Current results carry the
+ * mathematical definition plus the infinite-baffle rear-domain policy; older
+ * results may carry only the definition, so preserve an unfamiliar definition
+ * verbatim rather than relabelling it as the current spherical method.
+ */
+export function powerResponseMethodCaption(result: ResultPayload): string {
+  const raw = result.metadata?.directivity_index;
+  const metadata = raw && typeof raw === 'object' && !Array.isArray(raw)
+    ? raw as Record<string, unknown> : {};
+  const definition = typeof metadata.definition === 'string' ? metadata.definition.trim() : '';
+  const spherical = definition.toLocaleLowerCase().includes('full-sphere')
+    || metadata.domain === 'full_sphere'
+    || metadata.method === 'spherical_grid';
+  if (!spherical && definition) return definition;
+  const zeroRear = metadata.rear_hemisphere === 'zero_radiation' || result.balloon?.hemisphere === true;
+  return zeroRear
+    ? `${FULL_SPHERE_POWER_RESPONSE_METHOD} · zero-radiation rear hemisphere`
+    : FULL_SPHERE_POWER_RESPONSE_METHOD;
+}
+
+/** Spatially averaged SPL: on-axis SPL minus full-sphere directivity index. */
+export function powerResponseSeries(result: ResultPayload, smoothing: SmoothingMode = 'none') {
+  const frequencies = result.di?.frequencies?.length ? result.di.frequencies : result.frequencies;
+  const rawDi = result.di?.di;
+  const di = Array.isArray(rawDi)
+    ? rawDi
+    : rawDi?.horizontal ?? Object.values(rawDi ?? {})[0] ?? [];
+  const splFrequencies = result.spl_on_axis?.frequencies?.length
+    ? result.spl_on_axis.frequencies : result.frequencies;
+  const splByFrequency = new Map(splFrequencies.map((frequency, index) => [
+    frequency,
+    result.spl_on_axis?.spl?.[index] ?? null,
+  ]));
+  const raw = frequencies.map((frequency, index) => {
+    const onAxis = splByFrequency.get(frequency);
+    const directivityIndex = di[index];
+    return finite(onAxis) && finite(directivityIndex) ? onAxis - directivityIndex : null;
+  });
+  if (!raw.some(finite)) return [];
+  const values = applySmoothing(frequencies, raw, smoothing);
+  return [{
+    name: powerResponseMethodCaption(result),
+    type: 'line' as const,
+    showSymbol: false,
+    connectNulls: false,
+    data: frequencies.map((frequency, index) => [frequency, values[index] ?? null]),
+  }];
+}
+
 export function beamShapeSeries(result: ResultPayload) {
   const beam = result.beam_shape;
   const frequencies = beam?.frequencies?.length ? beam.frequencies : result.balloon?.frequencies ?? [];

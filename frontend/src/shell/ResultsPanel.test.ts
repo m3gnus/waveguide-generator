@@ -9,7 +9,7 @@ import type { SummaryContext, SummaryGroup } from '../results/summary';
 import type { ResultPayload } from '../results/types';
 import { resultFrequencyValidity } from '../results/validity';
 import { designForFamily, serializeDesign } from '../stores/design';
-import { beamShapeMissingReason, chartImageFilename, chartUnit, COMPARABLE_CHARTS, comparisonContourPointToPixels, directivityIndexOption, directivityMapPanels, driverChartMissingReason, drivePowerOption, groupDelayMissingReason, groupDelayOption, heatmapOption, impedanceOption, phaseOption, polarOption, ResultsChartGrid, resolvedPolarStepNotice, resultExportSnapshot, resultLayoutClass, splOption } from './ResultsPanel';
+import { beamShapeMissingReason, chartImageFilename, chartUnit, COMPARABLE_CHARTS, comparisonContourPointToPixels, directivityIndexOption, directivityMapPanels, driverChartMissingReason, drivePowerOption, groupDelayMissingReason, groupDelayOption, heatmapOption, impedanceOption, phaseOption, polarOption, powerResponseOption, ResultsChartGrid, resolvedPolarStepNotice, resultExportSnapshot, resultLayoutClass, splOption } from './ResultsPanel';
 
 const chartImageMocks = vi.hoisted(() => ({
   copy: vi.fn<() => Promise<void>>(),
@@ -57,10 +57,10 @@ describe('result comparison charts', () => {
   });
   const items = [primary, overlay];
 
-  it('enables comparison for SPL, every directivity map, DI, impedance, phase, group delay and polar', () => {
+  it('enables comparison for SPL, every directivity map, DI, power response, impedance, phase, group delay and polar', () => {
     expect([...COMPARABLE_CHARTS]).toEqual([
       'frequency_response', 'directivity_map_h', 'directivity_map_v',
-      'directivity_map_d', 'directivity_map', 'directivity_index', 'impedance',
+      'directivity_map_d', 'directivity_map', 'directivity_index', 'power_response', 'impedance',
       'phase_response', 'group_delay', 'polar_response',
     ]);
   });
@@ -119,6 +119,22 @@ describe('result comparison charts', () => {
     expect(series[2].lineStyle).toMatchObject({ color: '#0ff', type: 'dashed' });
     expect(series[3].lineStyle).toMatchObject({ color: '#f90', type: 'dashed' });
     expect(series[2].data).toEqual([[500, 4], [1_000, 6]]);
+  });
+
+  it('labels the power response with the solved-balloon method and computes SPL minus DI', () => {
+    const power = named('power', 'Run A', {
+      frequencies: [500, 1_000],
+      spl_on_axis: { frequencies: [500, 1_000], spl: [91, 94] },
+      di: { frequencies: [500, 1_000], di: [3, 5] },
+      metadata: { directivity_index: {
+        definition: '10log10(reference-axis mean-square pressure / full-sphere mean-square pressure)',
+      } },
+    });
+    const series = powerResponseOption([power], comparisonTokens, 'none', 'full').series as Array<{ name: string; data: number[][] }>;
+    expect(series).toEqual([expect.objectContaining({
+      name: 'full-sphere integral of the solved balloon',
+      data: [[500, 88], [1_000, 89]],
+    })]);
   });
 
   it('overlays impedance with one colour per run and solid Re/dashed Im traces', () => {
@@ -491,6 +507,37 @@ describe('results chart layouts', () => {
     expect(preferencesStore.getSnapshot().chartTypes).toEqual(['directivity_map_d']);
     expect(host.querySelector('.result-title b')?.textContent).toBe('Directivity Diagonal');
     expect(host.querySelector('.chart-stub')?.textContent).toContain('diagonal polar plane');
+  });
+
+  it('registers the power-response layout and shows its spherical method caption', () => {
+    const power: ResultPayload = {
+      frequencies: [500],
+      spl_on_axis: { frequencies: [500], spl: [91] },
+      di: { frequencies: [500], di: [3] },
+      metadata: { directivity_index: {
+        definition: '10log10(reference-axis mean-square pressure / full-sphere mean-square pressure)',
+      } },
+    };
+    act(() => root.render(createElement(ResultsChartGrid, {
+      chartTypes: ['power_response'], result: power, named: [], tokens,
+    })));
+
+    expect(host.querySelector<HTMLSelectElement>('[aria-label="Panel 1 chart type"]')?.value).toBe('power_response');
+    expect(host.querySelector('.result-title b')?.textContent).toBe('Power response');
+    expect(host.querySelector('.result-subtitle')?.textContent).toBe('full-sphere integral of the solved balloon');
+    expect(host.querySelector('.chart-stub')).toBeNull();
+  });
+
+  it('uses the existing empty chart state when directivity index is unavailable', () => {
+    act(() => root.render(createElement(ResultsChartGrid, {
+      chartTypes: ['power_response'],
+      result: { frequencies: [500], spl_on_axis: { frequencies: [500], spl: [91] } },
+      named: [],
+      tokens,
+    })));
+    expect(host.querySelector('.chart-stub')?.textContent).toContain(
+      'Power Response needs on-axis SPL and directivity index from a complete spherical field.',
+    );
   });
 
   it('renders summary groups, row titles, and a marked warning group', () => {
