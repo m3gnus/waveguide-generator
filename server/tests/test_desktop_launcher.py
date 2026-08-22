@@ -662,6 +662,14 @@ def test_second_bundle_update_with_pending_previous_stays_visible_and_running(
     )
     controller = BundleController(app, tmp_path / "data", poll_snapshot=warning)
     controller.update_requests = [BundleUpdateRequest("1.2.3", staged_app, None)]
+    # This test is about refusing a second update while rollback material is
+    # pending. The healthy-start cleanup would now reclaim that material first
+    # (it treats a stale interface as healthy, as the wait loop does), which is
+    # its own behaviour with its own tests; hold it still so the refusal is what
+    # is being exercised here.
+    monkeypatch.setattr(
+        desktop.DesktopWindow, "_finish_healthy_bundle_update", lambda *_a: None
+    )
     webview, window = _live_webview(polls=2)
     monkeypatch.setitem(sys.modules, "webview", webview)
     reported: list[str] = []
@@ -741,3 +749,82 @@ def test_failed_bundle_handoff_and_restart_close_the_dead_window(
     assert "also could not restart" in reported[0]
     assert "unusable window was closed" in reported[0]
     assert shown == reported
+
+
+def test_healthy_start_cleanup_is_not_stricter_than_the_loop_it_follows(
+    tmp_path, monkeypatch
+) -> None:
+    """A stale-looking interface still counts as a healthy start.
+
+    The wait loop exits on OK *or* WARNING, so a cleanup guard demanding OK
+    declines forever on a start the application already treated as healthy --
+    silently retaining every previous layer and download.
+    """
+
+    from launchers import desktop as desktop_module
+
+    data_dir = tmp_path / "data"
+    resources = tmp_path / "Waveguide Generator.app" / "Contents" / "Resources"
+    (resources / "app.previous").mkdir(parents=True)
+    (data_dir / "logs").mkdir(parents=True)
+
+    window = desktop_module.DesktopWindow.__new__(desktop_module.DesktopWindow)
+    window._healthy_bundle_checked = False
+    monkeypatch.setattr(
+        desktop_module.DesktopWindow,
+        "_bundle_paths",
+        lambda _self: (resources.parents[1], resources, data_dir),
+    )
+    removed: list[Path] = []
+    monkeypatch.setattr(
+        desktop_module,
+        "cleanup_previous_layers",
+        lambda res, log=None: removed.append(res),
+    )
+    monkeypatch.setattr(desktop_module.sys, "platform", "win32")
+    monkeypatch.setattr(
+        desktop_module.DesktopWindow, "_remove_update_downloads", lambda *_a: None
+    )
+
+    stale = StatusSnapshot(
+        backend=LampStatus(ServiceState.OK, "ready"),
+        frontend=LampStatus(ServiceState.WARNING, "sources are newer than dist"),
+        url="http://127.0.0.1:3100/",
+        pid=123,
+        exit_code=None,
+    )
+    window._finish_healthy_bundle_update(stale)
+
+    assert removed == [resources], "a WARNING frontend must still reclaim the layers"
+
+
+def test_a_declining_cleanup_guard_says_why(tmp_path, monkeypatch) -> None:
+    """A guard that declines silently costs a rebuild to diagnose."""
+
+    from launchers import desktop as desktop_module
+
+    data_dir = tmp_path / "data"
+    resources = tmp_path / "Waveguide Generator.app" / "Contents" / "Resources"
+    resources.mkdir(parents=True)
+    (data_dir / "logs").mkdir(parents=True)
+
+    window = desktop_module.DesktopWindow.__new__(desktop_module.DesktopWindow)
+    window._healthy_bundle_checked = False
+    monkeypatch.setattr(
+        desktop_module.DesktopWindow,
+        "_bundle_paths",
+        lambda _self: (resources.parents[1], resources, data_dir),
+    )
+
+    starting = StatusSnapshot(
+        backend=LampStatus(ServiceState.STARTING, "starting"),
+        frontend=LampStatus(ServiceState.STARTING, "starting"),
+        url="http://127.0.0.1:3100/",
+        pid=123,
+        exit_code=None,
+    )
+    window._finish_healthy_bundle_update(starting)
+
+    logged = (data_dir / "logs" / "update.log").read_text(encoding="utf-8")
+    assert "Not reclaiming the previous layers yet" in logged
+    assert "frontend starting" in logged

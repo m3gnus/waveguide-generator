@@ -195,9 +195,8 @@ class DesktopWindow:
         return bundle, resources_directory(bundle, sys.platform), data_dir
 
     def _finish_healthy_bundle_update(self, snapshot: StatusSnapshot) -> None:
-        if self._healthy_bundle_checked or snapshot.frontend.state is not ServiceState.OK:
-            return
-        self._healthy_bundle_checked = True
+        # Resolve the paths first: the data directory is where the log lives, so
+        # a guard that returns before this point cannot explain itself.
         paths = self._bundle_paths()
         if paths is None:
             return
@@ -205,6 +204,21 @@ class DesktopWindow:
 
         def log(message: str) -> None:
             append_update_log(data_dir, message)
+
+        if self._healthy_bundle_checked:
+            return
+        # Ask the same question the loop that precedes this one exits on. A
+        # stricter guard here would decline forever on a start this application
+        # already considers healthy -- silently, which is how it would be found:
+        # by noticing gigabytes of retained layers rather than by reading a log.
+        if not self._frontend_ready(snapshot):
+            log(
+                "Not reclaiming the previous layers yet: "
+                f"backend {snapshot.backend.state.value}, "
+                f"frontend {snapshot.frontend.state.value}."
+            )
+            return
+        self._healthy_bundle_checked = True
 
         previous = previous_generation_paths(resources)
         if not previous:
