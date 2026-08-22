@@ -108,23 +108,19 @@ export function combineMetadataOf(payload: ResultPayload | undefined): CombineMe
   return combine as CombineMetadata;
 }
 
-/** The id the server used for the solve-time sum when nothing is tagged. */
-const COMBINED_CHANNEL_FALLBACK_ID = 'combined';
-
 /**
  * Which channel is the combined sum.
  *
  * Read from the combine record rather than from the id, because the id is only
  * a convention: a return that names its channels itself, or a recombine issued
  * under another id, would otherwise leave the dock with no combined view at
- * all. The literal id is the last resort, for a payload whose metadata was not
- * retained.
+ * all. A drive channel may itself legally be named `combined`, so metadata is
+ * the only authoritative discriminator.
  */
 export function combinedChannelId(result: ResultPayload): string | null {
   const channels = resultChannels(result);
   const tagged = channels.find(({ result: payload }) => combineMetadataOf(payload));
-  if (tagged) return tagged.id;
-  return channels.some(({ id }) => id === COMBINED_CHANNEL_FALLBACK_ID) ? COMBINED_CHANNEL_FALLBACK_ID : null;
+  return tagged?.id ?? null;
 }
 
 function portableSuffixKey(value: string): string {

@@ -19,7 +19,7 @@ describe('result view store', () => {
     expect(resultViewStore.getSnapshot()).toBe(COMBINED_VIEW);
     resultViewStore.setView('drive-mf');
     expect(resultViewStore.getSnapshot()).toBe('drive-mf');
-    expect(sessionStorage.getItem('wg2.resultView.v1')).toBe('drive-mf');
+    expect(sessionStorage.getItem('wg2.resultView.v1')).toBe('\u0000channel:drive-mf');
   });
 
   it('notifies subscribers once per distinct choice', () => {
@@ -43,6 +43,12 @@ describe('resolveResultView', () => {
     const renamed = run({ 'drive-mf': driver('MF'), lr4: sum(['drive-mf', 'drive-hf']) });
     expect(resolveResultView(renamed, COMBINED_VIEW)).toBe('lr4');
     expect(resolveResultView(combined, COMBINED_VIEW)).toBe('combined');
+  });
+
+  it('keeps the sentinel distinct from an ordinary channel named combined', () => {
+    const ordinary = run({ 'drive-hf': driver('HF'), combined: driver('AUX') }, ['drive-hf', 'combined']);
+    expect(resolveResultView(ordinary, COMBINED_VIEW)).toBe('drive-hf');
+    expect(resolveResultView(ordinary, 'combined')).toBe('combined');
   });
 
   it('keeps a chosen driver the run has', () => {
