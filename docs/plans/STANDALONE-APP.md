@@ -41,7 +41,7 @@ plain Python.
 Waveguide Generator.app/Contents/
   Info.plist                      CFBundleExecutable = "Waveguide Generator"
   MacOS/Waveguide Generator       bash stub: Rosetta guard, then exec
-                                  ../Resources/python/bin/python3.13 -m launchers.desktop
+                                  ../Resources/runtime/bin/python3.13 -m launchers.desktop
   Resources/WaveguideGenerator.icns
   Resources/runtime/              relocatable CPython + site-packages (the "runtime layer")
     bin/python3.13
