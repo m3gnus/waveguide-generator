@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 import hashlib
+import time
 
 import pytest
 
@@ -29,6 +30,8 @@ from server.design.schema import DesignConfig
 
 
 NOW = datetime(2026, 8, 12, 15, 30, tzinfo=timezone.utc)
+TARGET_DESIGN_ID = "wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M"
+TARGET_LINEAGE_ID = "wgl_01J4Y2WZQK8Z3TFD3E7V9XKQ4M"
 
 
 def _write_status(
@@ -471,6 +474,158 @@ def test_status_endpoint_hashes_the_design_and_reports_wglink_folder_setup(
             "parameters": [],
         },
     }
+
+
+def test_returns_and_status_share_one_cached_manifest_parse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from server.cadlink import api as cadlink_api
+
+    data_dir = tmp_path / "data"
+    workspace = tmp_path / "workspace"
+    returned = workspace / "wgreturn" / "speaker.wgreturn"
+    returned.mkdir(parents=True)
+    design = DesignConfig.model_validate({"formula": "OSSE", "L": 120, "a": 45})
+    current_hash = design_hash(design)
+    (returned / "wgreturn.json").write_text(
+        json.dumps(
+            {
+                "document": {"name": "Speaker"},
+                "assembly": {"signature_hash": "sha256:document", "n_bodies_expected": 1},
+                "scope": {"selection": "root"},
+                "instances": [
+                    {
+                        "instance_id": "instance-a",
+                        "design_id": TARGET_DESIGN_ID,
+                        "body_evidence": {"observed_fingerprint": {"volume": 1.0}},
+                    }
+                ],
+                "sources": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    app = create_app(data_dir=data_dir)
+    app.state.cad_workspace.select(workspace)
+    _write_status(
+        data_dir,
+        links=[
+            _link(
+                designId=TARGET_DESIGN_ID,
+                designHash=current_hash,
+                bodyFingerprintHash="sha256:old",
+                documentSignatureHash="sha256:document",
+                documentBodyCount=1,
+            )
+        ],
+        updated_at=datetime.now(timezone.utc),
+        adapter_version="1.2.3",
+        workspace_root=workspace,
+    )
+    original_parse = cadlink_api._parse_return_manifest
+    parses = 0
+
+    def counted_parse(path: Path):
+        nonlocal parses
+        parses += 1
+        return original_parse(path)
+
+    monkeypatch.setattr(cadlink_api, "_parse_return_manifest", counted_parse)
+    monkeypatch.setattr(cadlink_api, "fusion_process_running", lambda: False)
+    payload = FusionStatusRequest.model_validate(
+        {
+            "design": design.model_dump(mode="json"),
+            "identity": {
+                "designId": TARGET_DESIGN_ID,
+                "lineageId": TARGET_LINEAGE_ID,
+                "baseEditVersion": 1,
+            },
+            "instanceId": "instance-a",
+            "returnBundlePath": "wgreturn/speaker.wgreturn",
+        }
+    )
+
+    inventory = asyncio.run(cadlink_api.list_returns(SimpleNamespace(app=app)))
+    status = asyncio.run(fusion_status(payload, SimpleNamespace(app=app)))
+    unchanged = asyncio.run(cadlink_api.list_returns(SimpleNamespace(app=app)))
+
+    assert inventory == unchanged
+    assert status["selectedInstanceId"] == "instance-a"
+    assert parses == 1
+
+
+def test_status_resolution_with_500_returns_keeps_event_loop_responsive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from server.cadlink import api as cadlink_api
+
+    data_dir = tmp_path / "data"
+    workspace = tmp_path / "workspace"
+    for index in range(500):
+        returned = workspace / "wgreturn" / f"speaker-{index:03d}.wgreturn"
+        returned.mkdir(parents=True)
+        (returned / "wgreturn.json").write_text(
+            json.dumps(
+                {
+                    "document": {"name": f"Speaker {index}"},
+                    "instances": [
+                        {
+                            "instance_id": f"instance-{index}",
+                            "design_id": TARGET_DESIGN_ID if index == 499 else f"wgd_{index}",
+                        }
+                    ],
+                    "sources": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+    app = create_app(data_dir=data_dir)
+    app.state.cad_workspace.select(workspace)
+    original_parse = cadlink_api._parse_return_manifest
+
+    def measurable_parse(path: Path):
+        time.sleep(0.0002)
+        return original_parse(path)
+
+    monkeypatch.setattr(cadlink_api, "_parse_return_manifest", measurable_parse)
+    monkeypatch.setattr(cadlink_api, "fusion_process_running", lambda: False)
+    payload = FusionStatusRequest.model_validate(
+        {
+            "design": {"formula": "OSSE", "L": 120, "a": 45},
+            "identity": {
+                "designId": TARGET_DESIGN_ID,
+                "lineageId": TARGET_LINEAGE_ID,
+                "baseEditVersion": 1,
+            },
+            "instanceId": "instance-499",
+        }
+    )
+
+    async def exercise() -> tuple[dict[str, object], float]:
+        gaps: list[float] = []
+        stop = asyncio.Event()
+
+        async def ticker() -> None:
+            previous = asyncio.get_running_loop().time()
+            while not stop.is_set():
+                await asyncio.sleep(0.005)
+                current = asyncio.get_running_loop().time()
+                gaps.append(current - previous)
+                previous = current
+
+        ticker_task = asyncio.create_task(ticker())
+        await asyncio.sleep(0)
+        try:
+            response = await fusion_status(payload, SimpleNamespace(app=app))
+        finally:
+            stop.set()
+            await ticker_task
+        return response, max(gaps)
+
+    status, largest_gap = asyncio.run(exercise())
+
+    assert status["cadFolderConfigured"] is True
+    assert largest_gap < 0.03
 
 
 def test_status_endpoint_reports_old_addins_and_folder_mismatches(

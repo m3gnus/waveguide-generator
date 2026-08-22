@@ -336,6 +336,56 @@ def test_return_listing_reads_cheap_inventory_and_marks_bad_manifests(tmp_path: 
     }
 
 
+def test_return_inventory_parses_only_new_or_changed_manifests(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = create_app(data_dir=tmp_path / "data")
+    workspace = tmp_path / "workspace"
+    manifests: list[Path] = []
+    for index in range(2):
+        bundle = workspace / "wgreturn" / f"speaker-{index}.wgreturn"
+        bundle.mkdir(parents=True)
+        manifest = bundle / "wgreturn.json"
+        manifest.write_text(
+            json.dumps(
+                {
+                    "document": {"name": f"Speaker {index}"},
+                    "instances": [
+                        {"instance_id": f"instance-{index}", "design_id": "wgd_speaker"}
+                    ],
+                    "sources": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        manifests.append(manifest)
+    app.state.cad_workspace.select(workspace)
+
+    from server.cadlink import api as cadlink_api
+
+    original_parse = cadlink_api._parse_return_manifest
+    parsed: list[Path] = []
+
+    def counted_parse(path: Path):
+        parsed.append(path)
+        return original_parse(path)
+
+    monkeypatch.setattr(cadlink_api, "_parse_return_manifest", counted_parse)
+
+    first = asyncio.run(list_returns(SimpleNamespace(app=app)))
+    second = asyncio.run(list_returns(SimpleNamespace(app=app)))
+    previous = manifests[1].stat().st_mtime_ns
+    manifests[1].write_text(
+        manifests[1].read_text(encoding="utf-8").replace("Speaker 1", "Speaker X"),
+        encoding="utf-8",
+    )
+    os.utime(manifests[1], ns=(previous + 1_000_000, previous + 1_000_000))
+    third = asyncio.run(list_returns(SimpleNamespace(app=app)))
+
+    assert len(first["items"]) == len(second["items"]) == len(third["items"]) == 2
+    assert parsed == [manifests[0].resolve(), manifests[1].resolve(), manifests[1].resolve()]
+
+
 def test_ingest_refuses_a_return_from_another_active_project(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:

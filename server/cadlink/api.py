@@ -11,6 +11,7 @@ import math
 from pathlib import Path
 import re
 import subprocess
+import threading
 from typing import Any, Literal, Mapping
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
@@ -60,6 +61,17 @@ logger = logging.getLogger(__name__)
 
 
 _INGEST_ID = re.compile(r"^wgi_[0-9A-HJKMNP-TV-Z]{26}$")
+_RETURN_INVENTORY_CACHE: dict[
+    tuple[str, int, int], tuple[dict[str, Any], Mapping[str, Any] | None]
+] = {}
+_RETURN_INVENTORY_CACHE_LOCK = threading.Lock()
+
+
+def _parse_return_manifest(path: Path) -> Mapping[str, Any]:
+    parsed = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(parsed, Mapping):
+        raise ValueError("manifest inventory has the wrong shape")
+    return parsed
 
 
 class ImportedMeshRequest(BaseModel):
@@ -209,19 +221,23 @@ def _realized_dimensions_payload(
     return {"state": payload_state, **base, "parameters": parameters}
 
 
-def _return_listing(workspace_root: Path) -> list[dict[str, Any]]:
+def _return_inventory(
+    workspace_root: Path,
+) -> list[tuple[dict[str, Any], Mapping[str, Any] | None, Path]]:
     returns_root = workspace_root / "wgreturn"
     if not returns_root.is_dir():
         return []
-    items: list[dict[str, Any]] = []
+    items: list[tuple[dict[str, Any], Mapping[str, Any] | None, Path]] = []
+    active_cache_keys: set[tuple[str, int, int]] = set()
     for candidate in sorted(returns_root.glob("*.wgreturn"), key=lambda item: item.name.casefold()):
         try:
             resolved = candidate.resolve()
             _strictly_inside(resolved, workspace_root, "bundlePath")
             if not resolved.is_dir():
                 continue
+            candidate_stat = candidate.stat()
             modified_at = datetime.fromtimestamp(
-                candidate.stat().st_mtime, tz=timezone.utc
+                candidate_stat.st_mtime, tz=timezone.utc
             ).isoformat().replace("+00:00", "Z")
         except (OSError, ValueError):
             continue
@@ -239,8 +255,25 @@ def _return_listing(workspace_root: Path) -> list[dict[str, Any]]:
             "instances": [],
             "sources": [],
         }
+        manifest: Mapping[str, Any] | None = None
+        cache_key: tuple[str, int, int] | None = None
         try:
-            manifest = json.loads((resolved / "wgreturn.json").read_text(encoding="utf-8"))
+            manifest_path = resolved / "wgreturn.json"
+            manifest_stat = manifest_path.stat()
+            cache_key = (
+                str(manifest_path),
+                manifest_stat.st_mtime_ns,
+                manifest_stat.st_size,
+            )
+            active_cache_keys.add(cache_key)
+            with _RETURN_INVENTORY_CACHE_LOCK:
+                cached = _RETURN_INVENTORY_CACHE.get(cache_key)
+            if cached is not None:
+                cached_item = dict(cached[0])
+                cached_item["modifiedAt"] = modified_at
+                items.append((cached_item, cached[1], resolved))
+                continue
+            manifest = _parse_return_manifest(manifest_path)
             document = manifest.get("document")
             sources = manifest.get("sources")
             instances = manifest.get("instances")
@@ -386,8 +419,73 @@ def _return_listing(workspace_root: Path) -> list[dict[str, Any]]:
             )
         except (OSError, UnicodeError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
             item["reason"] = str(exc) or "Manifest is unreadable"
-        items.append(item)
-    return sorted(items, key=lambda item: item["modifiedAt"], reverse=True)
+        if cache_key is not None:
+            with _RETURN_INVENTORY_CACHE_LOCK:
+                _RETURN_INVENTORY_CACHE[cache_key] = (dict(item), manifest)
+        items.append((item, manifest, resolved))
+    root_prefix = str(returns_root.resolve()) + "/"
+    with _RETURN_INVENTORY_CACHE_LOCK:
+        stale = [
+            key
+            for key in _RETURN_INVENTORY_CACHE
+            if key[0].startswith(root_prefix) and key not in active_cache_keys
+        ]
+        for key in stale:
+            del _RETURN_INVENTORY_CACHE[key]
+    return sorted(items, key=lambda entry: entry[0]["modifiedAt"], reverse=True)
+
+
+def _return_listing(workspace_root: Path) -> list[dict[str, Any]]:
+    return [item for item, _manifest, _path in _return_inventory(workspace_root)]
+
+
+def _manifest_matches_return(
+    manifest: Mapping[str, Any], design_id: str | None, instance_id: str | None
+) -> bool:
+    instances = manifest.get("instances")
+    if design_id is None and instance_id is None:
+        return True
+    return isinstance(instances, list) and any(
+        isinstance(instance, Mapping)
+        and (design_id is None or instance.get("design_id") == design_id)
+        and (instance_id is None or instance.get("instance_id") == instance_id)
+        for instance in instances
+    )
+
+
+def _resolve_return_bundle(
+    workspace_root: Path,
+    requested_path: str | None,
+    design_id: str | None,
+    instance_id: str | None,
+) -> tuple[Path | None, Mapping[str, Any] | None]:
+    inventory = _return_inventory(workspace_root)
+    if requested_path:
+        selected_return = (workspace_root / requested_path).resolve()
+        _strictly_inside(selected_return, workspace_root, "returnBundlePath")
+        if (
+            selected_return.is_symlink()
+            or not selected_return.is_dir()
+            or selected_return.suffix != ".wgreturn"
+        ):
+            raise ValueError("Selected CAD return is unavailable.")
+        selected = next(
+            (entry for entry in inventory if entry[2] == selected_return), None
+        )
+        if selected is None or not selected[0].get("readable") or selected[1] is None:
+            raise ValueError("Selected CAD return is unavailable.")
+        if _manifest_matches_return(selected[1], design_id, instance_id):
+            return selected_return, selected[1]
+
+    if design_id is not None:
+        for item, manifest, candidate_path in inventory:
+            if (
+                item.get("readable")
+                and manifest is not None
+                and _manifest_matches_return(manifest, design_id, instance_id)
+            ):
+                return candidate_path, manifest
+    return None, None
 
 
 @router.get("/returns")
@@ -473,69 +571,24 @@ async def fusion_status(
     selected = workspace.selected_path()
     workspace_root = selected.resolve() if selected is not None else None
     returned_bundle: Path | None = None
-    if payload.return_bundle_path:
+    returned_manifest: Mapping[str, Any] | None = None
+    if payload.return_bundle_path and workspace_root is None:
+        raise HTTPException(
+            status_code=422, detail="No WGLink folder has been selected."
+        )
+    if workspace_root is not None and (
+        payload.return_bundle_path or payload.identity is not None
+    ):
         try:
-            if workspace_root is None:
-                raise ValueError("No WGLink folder has been selected.")
-            selected_return = (workspace_root / payload.return_bundle_path).resolve()
-            _strictly_inside(selected_return, workspace_root, "returnBundlePath")
-            if (
-                selected_return.is_symlink()
-                or not selected_return.is_dir()
-                or selected_return.suffix != ".wgreturn"
-            ):
-                raise ValueError("Selected CAD return is unavailable.")
-            manifest = json.loads(
-                (selected_return / "wgreturn.json").read_text(encoding="utf-8")
+            returned_bundle, returned_manifest = await asyncio.to_thread(
+                _resolve_return_bundle,
+                workspace_root,
+                payload.return_bundle_path,
+                payload.identity.design_id if payload.identity else None,
+                payload.instance_id,
             )
-            instances = manifest.get("instances")
-            matches_design = payload.identity is None or (
-                isinstance(instances, list)
-                and any(
-                    isinstance(instance, dict)
-                    and instance.get("design_id") == payload.identity.design_id
-                    for instance in instances
-                )
-            )
-            matches_instance = payload.instance_id is None or (
-                isinstance(instances, list)
-                and any(
-                    isinstance(instance, dict)
-                    and instance.get("instance_id") == payload.instance_id
-                    and (
-                        payload.identity is None
-                        or instance.get("design_id") == payload.identity.design_id
-                    )
-                    for instance in instances
-                )
-            )
-            if matches_design and matches_instance:
-                returned_bundle = selected_return
         except (OSError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-    if returned_bundle is None and payload.identity is not None and workspace_root is not None:
-        for candidate in _return_listing(workspace_root):
-            if not candidate.get("readable"):
-                continue
-            candidate_path = workspace_root / str(candidate["bundlePath"])
-            try:
-                manifest = json.loads(
-                    (candidate_path / "wgreturn.json").read_text(encoding="utf-8")
-                )
-                instances = manifest.get("instances")
-            except (OSError, ValueError, TypeError):
-                continue
-            if isinstance(instances, list) and any(
-                isinstance(instance, dict)
-                and instance.get("design_id") == payload.identity.design_id
-                and (
-                    payload.instance_id is None
-                    or instance.get("instance_id") == payload.instance_id
-                )
-                for instance in instances
-            ):
-                returned_bundle = candidate_path
-                break
     current_hash = design_hash(payload.design)
     status = await asyncio.to_thread(
         read_fusion_status,
@@ -546,6 +599,7 @@ async def fusion_status(
         instance_id=payload.instance_id,
         process_running=await asyncio.to_thread(fusion_process_running),
         returned_bundle=returned_bundle,
+        returned_manifest=returned_manifest,
     )
     status["cadFolderConfigured"] = selected is not None
     status["cadFolderPath"] = str(selected) if selected is not None else None
