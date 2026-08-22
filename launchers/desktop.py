@@ -174,22 +174,19 @@ class DesktopWindow:
             return None
         return bundle, resources_directory(bundle, sys.platform), data_dir
 
-    # WARNING is the lamp for "the SPA is being served, but it looks stale
-    # against its sources" -- the interface works, it just has a caveat beside
-    # it. Requiring OK here meant an update that landed perfectly well never
-    # reclaimed anything: both .previous layers and the downloaded archives
-    # stayed on disk for good, silently, which measured over a gigabyte on a
-    # bundle whose only sin was a dist that looked older than its sources.
-    # A started application is the signal this cleanup is waiting for, and a
-    # freshness caveat is not evidence that the update failed.
-    _HEALTHY_FRONTEND_STATES = (ServiceState.OK, ServiceState.WARNING)
-
     def _finish_healthy_bundle_update(self, snapshot: StatusSnapshot) -> None:
-        started = (
-            snapshot.backend.state is ServiceState.OK
-            and snapshot.frontend.state in self._HEALTHY_FRONTEND_STATES
-        )
-        if self._healthy_bundle_checked or not started:
+        # Exactly the predicate _wait_for_frontend loops on, and deliberately
+        # not a stricter one. This runs on the single snapshot that ended that
+        # loop, so any extra condition here is a condition the loop never
+        # promised to satisfy -- and the failure is silent, because a skipped
+        # cleanup logs nothing at all. Requiring the frontend lamp to be OK
+        # rather than OK-or-WARNING left a perfectly good update holding both
+        # .previous layers and its downloaded archives for good: 1.08 GB
+        # against 0.56 GB swept, on a bundle whose only fault was a dist whose
+        # timestamps looked older than its sources. Requiring the backend lamp
+        # to be OK as well, which is the shape this had while that was being
+        # fixed, reintroduced the same silence from the other side.
+        if self._healthy_bundle_checked or not self._frontend_ready(snapshot):
             return
         self._healthy_bundle_checked = True
         paths = self._bundle_paths()
