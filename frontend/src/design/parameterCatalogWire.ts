@@ -134,5 +134,3 @@ export function buildParameterCatalog() {
     parameters: PARAMETER_REGISTRY.map(serializeField),
   };
 }
-
-export const PARAMETER_CATALOG_CONDITIONS = FIELD_CONDITIONS;
