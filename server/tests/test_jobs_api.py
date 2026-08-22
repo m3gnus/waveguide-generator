@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from server.app import create_app
+from server.jobs.api import create_jobs_router
 from server.jobs.models import SolveRequest
 
 
@@ -82,6 +83,51 @@ async def _request(
         query=query,
     )
     return status, response_body
+
+
+def test_large_archive_snapshot_serialization_keeps_event_loop_responsive() -> None:
+    class Runtime:
+        async def start(self) -> None:
+            pass
+
+        async def shutdown(self) -> None:
+            pass
+
+        async def get_archive_snapshot(self, _job_id: str) -> dict[str, object]:
+            return {"schema_version": 1, "artifact": "x" * (64 * 1024 * 1024)}
+
+    route = next(
+        route
+        for route in create_jobs_router(Runtime()).routes  # type: ignore[arg-type]
+        if route.path == "/api/jobs/{job_id}/archive-snapshot"
+    )
+
+    async def exercise() -> tuple[bytes, float]:
+        gaps: list[float] = []
+        stop = asyncio.Event()
+
+        async def ticker() -> None:
+            previous = asyncio.get_running_loop().time()
+            while not stop.is_set():
+                await asyncio.sleep(0.005)
+                current = asyncio.get_running_loop().time()
+                gaps.append(current - previous)
+                previous = current
+
+        ticker_task = asyncio.create_task(ticker())
+        await asyncio.sleep(0)
+        try:
+            response = await route.endpoint("large")
+            body = b"".join([chunk async for chunk in response.body_iterator])
+        finally:
+            stop.set()
+            await ticker_task
+        return body, max(gaps)
+
+    body, largest_gap = asyncio.run(exercise())
+
+    assert len(body) > 64 * 1024 * 1024
+    assert largest_gap < 0.03
 
 
 def _solve_body(delay_ms: int = 1) -> dict[str, Any]:

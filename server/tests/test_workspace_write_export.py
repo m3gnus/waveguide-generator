@@ -4,11 +4,14 @@ import asyncio
 import base64
 import json
 from pathlib import Path
+import tempfile
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
+from starlette.datastructures import FormData, UploadFile
 
 from server import app as app_module
 from server.platform import paths
@@ -183,6 +186,144 @@ def test_binary_auto_export_merges_new_files_and_accepts_identical_retries(tmp_p
     ]
     assert (workspace / "horn_1/horn_1_plot.png").read_bytes() == b"\x89PNG\r\n"
     assert (workspace / "horn_1/horn_1.csv").read_text() == "frequency,level\n100,90\n"
+
+
+def test_large_multipart_export_is_responsive_and_identical_retry_writes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state, workspace = selected_state(tmp_path)
+    content = b"x" * (64 * 1024 * 1024)
+
+    def multipart_request() -> tuple[SimpleNamespace, object]:
+        stream = tempfile.TemporaryFile()
+        stream.write(content)
+        stream.seek(0)
+        upload = UploadFile(stream, filename="large.bin")
+        form = FormData(
+            [
+                ("subdirectory", "large-run"),
+                ("existing", "merge_identical"),
+                ("relative_path", "large.bin"),
+                ("file", upload),
+            ]
+        )
+
+        async def read_form() -> FormData:
+            return form
+
+        return (
+            SimpleNamespace(
+                headers={"content-type": "multipart/form-data; boundary=test"},
+                form=read_form,
+            ),
+            stream,
+        )
+
+    async def write_with_ticker() -> tuple[dict[str, object], float]:
+        gaps: list[float] = []
+        stop = asyncio.Event()
+
+        async def ticker() -> None:
+            previous = asyncio.get_running_loop().time()
+            while not stop.is_set():
+                await asyncio.sleep(0.005)
+                current = asyncio.get_running_loop().time()
+                gaps.append(current - previous)
+                previous = current
+
+        request_value, stream = multipart_request()
+        ticker_task = asyncio.create_task(ticker())
+        await asyncio.sleep(0)
+        try:
+            response = await endpoint(state)(request_value)
+        finally:
+            stop.set()
+            await ticker_task
+            stream.close()
+        return response, max(gaps)
+
+    response, largest_gap = asyncio.run(write_with_ticker())
+    destination = workspace / "large-run" / "large.bin"
+    initial_mtime = destination.stat().st_mtime_ns
+    staging_calls: list[object] = []
+    original_mkdtemp = workspace_api.tempfile.mkdtemp
+
+    def counted_mkdtemp(*args, **kwargs):
+        staging_calls.append((args, kwargs))
+        return original_mkdtemp(*args, **kwargs)
+
+    monkeypatch.setattr(workspace_api.tempfile, "mkdtemp", counted_mkdtemp)
+    retry_request, retry_stream = multipart_request()
+    try:
+        retry = asyncio.run(endpoint(state)(retry_request))
+    finally:
+        retry_stream.close()
+
+    assert response == retry
+    assert destination.stat().st_size == len(content)
+    assert destination.read_bytes() == content
+    assert destination.stat().st_mtime_ns == initial_mtime
+    assert staging_calls == []
+    assert largest_gap < 0.03
+
+
+def test_multipart_transport_pairs_repeated_paths_with_binary_parts(tmp_path: Path) -> None:
+    state, workspace = selected_state(tmp_path)
+    boundary = b"wg-boundary"
+
+    def field(name: str, value: bytes, filename: str | None = None) -> bytes:
+        disposition = f'Content-Disposition: form-data; name="{name}"'
+        if filename is not None:
+            disposition += f'; filename="{filename}"'
+        content_type = (
+            b"Content-Type: application/octet-stream\r\n" if filename else b""
+        )
+        return (
+            b"--" + boundary + b"\r\n" + disposition.encode("ascii") + b"\r\n"
+            + content_type + b"\r\n" + value + b"\r\n"
+        )
+
+    body = b"".join(
+        [
+            field("subdirectory", b"binary-run"),
+            field("existing", b"merge_identical"),
+            field("relative_path", b"nested/first.bin"),
+            field("relative_path", b"second.bin"),
+            field("file", b"\x00\x01\xff", "first.bin"),
+            field("file", b"second\x00member", "second.bin"),
+            b"--" + boundary + b"--\r\n",
+        ]
+    )
+    delivered = False
+
+    async def receive() -> dict[str, object]:
+        nonlocal delivered
+        if delivered:
+            return {"type": "http.disconnect"}
+        delivered = True
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    from starlette.requests import Request
+
+    request_value = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/workspace/write-export",
+            "headers": [
+                (b"content-type", b"multipart/form-data; boundary=" + boundary)
+            ],
+        },
+        receive,
+    )
+    response = asyncio.run(endpoint(state)(request_value))
+
+    assert response["files"] == [
+        str(workspace / "binary-run/nested/first.bin"),
+        str(workspace / "binary-run/second.bin"),
+    ]
+    assert (workspace / "binary-run/nested/first.bin").read_bytes() == b"\x00\x01\xff"
+    assert (workspace / "binary-run/second.bin").read_bytes() == b"second\x00member"
 
 
 def test_merge_refuses_to_overwrite_a_different_existing_export(tmp_path: Path) -> None:

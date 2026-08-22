@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Collection
+from collections.abc import Awaitable, Callable, Collection, Iterator, Mapping
 import json
 from pathlib import Path
 import re
@@ -12,7 +12,7 @@ from typing import Annotated, Any, Literal
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request, WebSocket
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, PlainTextResponse, Response
+from fastapi.responses import JSONResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 from starlette.websockets import WebSocketDisconnect, WebSocketState
@@ -65,6 +65,51 @@ from server.platform.origin import websocket_request_allowed
 
 class ExtensibleResultModel(BaseModel):
     model_config = ConfigDict(extra="allow")
+
+
+def _json_tokens(value: Any) -> Iterator[str]:
+    """Yield valid JSON without encoding one unbounded string or array at once."""
+
+    if isinstance(value, str):
+        yield '"'
+        for offset in range(0, len(value), 64 * 1024):
+            encoded = json.dumps(value[offset : offset + 64 * 1024], allow_nan=False)
+            yield encoded[1:-1]
+        yield '"'
+    elif isinstance(value, Mapping):
+        yield "{"
+        for index, (key, member) in enumerate(value.items()):
+            if index:
+                yield ","
+            yield json.dumps(str(key), allow_nan=False)
+            yield ":"
+            yield from _json_tokens(member)
+        yield "}"
+    elif isinstance(value, (list, tuple)):
+        yield "["
+        for index, member in enumerate(value):
+            if index:
+                yield ","
+            yield from _json_tokens(member)
+        yield "]"
+    else:
+        yield json.dumps(value, allow_nan=False, separators=(",", ":"))
+
+
+def _json_chunks(value: Any) -> Iterator[bytes]:
+    """Coalesce tokens into bounded chunks for StreamingResponse's threadpool."""
+
+    buffered: list[str] = []
+    buffered_characters = 0
+    for token in _json_tokens(value):
+        buffered.append(token)
+        buffered_characters += len(token)
+        if buffered_characters >= 256 * 1024:
+            yield "".join(buffered).encode("utf-8")
+            buffered.clear()
+            buffered_characters = 0
+    if buffered:
+        yield "".join(buffered).encode("utf-8")
 
 
 class ResultProvenance(BaseModel):
@@ -390,8 +435,8 @@ def create_jobs_router(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except JobResourceUnavailableError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return Response(
-            content=json.dumps(snapshot, allow_nan=False),
+        return StreamingResponse(
+            _json_chunks(snapshot),
             media_type="application/json",
             headers={
                 "Cache-Control": "no-store",
