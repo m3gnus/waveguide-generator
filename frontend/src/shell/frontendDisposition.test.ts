@@ -52,8 +52,11 @@ describe('frontend result and status labels', () => {
       { name: 'metal', available: true, reason: null, version: '1.0', fast_paths: [] },
       { name: 'bempp', available: true, reason: null, version: '2.0', fast_paths: [] },
     ];
-    expect(engineStatusLabel(engines, 'bempp', 'auto')).toBe('BEMPP · 2.0');
-    expect(engineStatusLabel(engines, 'auto', 'auto')).toBe('METAL · 1.0');
+    const selection = {
+      default: 'auto', resolvedDefault: 'metal', full3dOrder: ['metal', 'bempp'], axisymmetricRunner: 'axisym',
+    };
+    expect(engineStatusLabel(engines, selection, 'bempp', 'auto')).toBe('BEMPP · 2.0');
+    expect(engineStatusLabel(engines, selection, 'auto', 'auto')).toBe('METAL · 1.0');
   });
 
   it('shows the tracked design filename instead of a path placeholder', () => {

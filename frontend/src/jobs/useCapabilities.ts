@@ -1,6 +1,10 @@
 import { useEffect, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { getCapabilities, type EngineCapability } from './actions';
+import {
+  getCapabilities,
+  type EngineCapability,
+  type EngineSelection,
+} from './actions';
 import { activeBackendCapability, activeBackendName } from '../design/backendSupport';
 import { useSolveOptionsStore } from '../stores/solveOptions';
 
@@ -31,9 +35,16 @@ export const CAPABILITIES_STALE_MS = 5 * 60_000;
 
 /** Stable identity so consumers do not re-render on an unchanged empty result. */
 const NO_ENGINES: readonly EngineCapability[] = Object.freeze([]);
+const NO_ENGINE_SELECTION: Readonly<EngineSelection> = Object.freeze({
+  default: 'auto',
+  resolvedDefault: null,
+  full3dOrder: Object.freeze([]),
+  axisymmetricRunner: '',
+});
 
 export interface CapabilitiesSnapshot {
   engines: readonly EngineCapability[];
+  engineSelection: Readonly<EngineSelection>;
   /** A human-readable reason, or null while loading or once loaded. */
   error: string | null;
   isLoading: boolean;
@@ -48,6 +59,7 @@ export function useCapabilities(): CapabilitiesSnapshot {
   });
   return {
     engines: data?.engines ?? NO_ENGINES,
+    engineSelection: data?.engineSelection ?? NO_ENGINE_SELECTION,
     error: isError ? (error instanceof Error ? error.message : String(error)) : null,
     isLoading: isPending,
   };
@@ -64,15 +76,15 @@ export function useCapabilities(): CapabilitiesSnapshot {
  */
 export function useActiveBackend(): string | null {
   const engine = useSolveOptionsStore((state) => state.engine);
-  const { engines } = useCapabilities();
-  return activeBackendName(engine, engines);
+  const { engines, engineSelection } = useCapabilities();
+  return activeBackendName(engine, engines, engineSelection);
 }
 
 /** Full capability record for controls whose support is version-dependent. */
 export function useActiveBackendCapability(): EngineCapability | null {
   const engine = useSolveOptionsStore((state) => state.engine);
-  const { engines } = useCapabilities();
-  return activeBackendCapability(engine, engines);
+  const { engines, engineSelection } = useCapabilities();
+  return activeBackendCapability(engine, engines, engineSelection);
 }
 
 /**

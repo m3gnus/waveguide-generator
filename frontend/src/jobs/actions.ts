@@ -9,13 +9,24 @@ export interface EngineCapability {
   fast_paths: string[];
   formulations?: string[];
   mountings?: string[];
+  geometry_sources?: string[];
   symmetry_domains?: string[];
   field_traces?: boolean;
   di_sphere?: boolean;
   cancellation_granularity?: string;
 }
 
-export interface Capabilities { engines: EngineCapability[] }
+export interface EngineSelection {
+  readonly default: string;
+  readonly resolvedDefault: string | null;
+  readonly full3dOrder: readonly string[];
+  readonly axisymmetricRunner: string;
+}
+
+export interface Capabilities {
+  engines: EngineCapability[];
+  engineSelection: EngineSelection;
+}
 export interface SolveSubmissionMetadata { label: string; designRevision: number }
 export interface ImportedGeometrySubmission {
   type: 'imported';
@@ -107,16 +118,29 @@ export async function getCapabilities(fetcher: typeof fetch = fetch): Promise<Ca
 
 export function resolveEngine(
   engine: string,
-  capabilities: { engines: readonly EngineCapability[] },
+  capabilities: {
+    engines: readonly EngineCapability[];
+    engineSelection?: EngineSelection;
+  },
   solverMode = 'auto',
 ): string {
   if (engine.toLowerCase() !== 'auto') return engine.toLowerCase();
+  const selection = capabilities.engineSelection;
   if (solverMode === 'circsym') {
-    const axisym = capabilities.engines.find((item) => item.available && item.name.toLowerCase() === 'axisym');
-    if (axisym) return 'axisym';
+    const runner = selection?.axisymmetricRunner.toLowerCase();
+    const axisym = capabilities.engines.find((item) => item.available
+      && item.name.toLowerCase() === runner);
+    if (axisym) return runner!;
   }
-  const order = ['metal', 'beat', 'bempp', 'dryrun'];
-  const available = order.flatMap((name) => capabilities.engines.filter((item) => item.available && item.name.toLowerCase() === name))[0];
+  const order = selection?.full3dOrder.map((name) => name.toLowerCase())
+    ?? capabilities.engines
+      .filter((item) => item.formulations?.includes('full-3d'))
+      .map((item) => item.name.toLowerCase());
+  const resolvedDefault = selection?.resolvedDefault?.toLowerCase() ?? null;
+  const available = capabilities.engines.find((item) => item.available
+    && item.name.toLowerCase() === resolvedDefault)
+    ?? order.flatMap((name) => capabilities.engines.filter((item) => item.available
+      && item.name.toLowerCase() === name))[0];
   if (available) return available.name.toLowerCase();
   // An Axisym-only host is not a host without a solver. The server planner
   // selects the meridian runner for an eligible circular design before any
@@ -124,8 +148,10 @@ export function resolveEngine(
   // and Run blocked on a design the server would have solved -- escapable only
   // by knowing to force the meridian mode by hand. Geometry eligibility is the
   // planner's to judge, not this function's.
-  const axisym = capabilities.engines.find((item) => item.available && item.name.toLowerCase() === 'axisym');
-  if (axisym) return 'axisym';
+  const runner = selection?.axisymmetricRunner.toLowerCase();
+  const axisym = capabilities.engines.find((item) => item.available
+    && item.name.toLowerCase() === runner);
+  if (axisym) return runner!;
   throw new Error('No solver backend is currently available');
 }
 

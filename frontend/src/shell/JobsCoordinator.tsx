@@ -160,7 +160,11 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   ).mode;
   const preferences = usePreferences();
   const automation = useRef(new JobAutomation()).current;
-  const { engines: capabilities, error: capabilityError } = useCapabilities();
+  const {
+    engines: capabilities,
+    engineSelection,
+    error: capabilityError,
+  } = useCapabilities();
   const [actionError, setActionError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const submissionInFlight = useRef(false);
@@ -169,7 +173,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
 
   let effectiveEngine = selectedEngine;
   if (selectedEngine === 'auto') {
-    try { effectiveEngine = resolveEngine('auto', { engines: capabilities }, solveOptions.solverMode); } catch { /* surfaced below */ }
+    try { effectiveEngine = resolveEngine('auto', { engines: capabilities, engineSelection }, solveOptions.solverMode); } catch { /* surfaced below */ }
   }
   const capability = capabilities.find((engine) => engine.name.toLowerCase() === effectiveEngine.toLowerCase()) ?? null;
   const metalCapability = capabilities.find((engine) => engine.name.toLowerCase() === 'metal') ?? null;

@@ -35,6 +35,9 @@ vi.mock('../jobs/actions', async (importOriginal) => {
 vi.mock('../jobs/useCapabilities', () => ({
   useCapabilities: () => ({
     engines: [{ name: 'metal', available: true, reason: null, version: null, fast_paths: [] }, { name: 'bempp', available: true, reason: null, version: null, fast_paths: [] }, { name: 'dryrun', available: true, reason: null, version: null, fast_paths: [] }],
+    engineSelection: {
+      default: 'auto', resolvedDefault: 'metal', full3dOrder: ['metal', 'bempp', 'dryrun'], axisymmetricRunner: 'axisym',
+    },
     error: null,
     isLoading: false,
   }),

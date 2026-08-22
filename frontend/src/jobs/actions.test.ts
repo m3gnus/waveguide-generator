@@ -20,7 +20,9 @@ describe('solve submission', () => {
     const capabilities = { engines: [
       { name: 'dryrun', available: true, reason: null, version: 'builtin', fast_paths: [] },
       { name: 'metal', available: true, reason: null, version: '1', fast_paths: ['axisymmetric-meridian'] },
-    ] };
+    ], engineSelection: {
+      default: 'auto', resolvedDefault: 'metal', full3dOrder: ['metal', 'dryrun'], axisymmetricRunner: 'axisym',
+    } };
     expect(resolveEngine('auto', capabilities)).toBe('metal');
     expect(resolveEngine('auto', capabilities, 'circsym')).toBe('metal');
   });
@@ -33,7 +35,9 @@ describe('solve submission', () => {
     const axisymOnly = { engines: [
       { name: 'axisym', available: true, reason: null, version: '1', fast_paths: ['axisymmetric-meridian'] },
       { name: 'bempp', available: false, reason: 'not installed', version: null, fast_paths: [] },
-    ] };
+    ], engineSelection: {
+      default: 'auto', resolvedDefault: null, full3dOrder: ['bempp'], axisymmetricRunner: 'axisym',
+    } };
     expect(resolveEngine('auto', axisymOnly)).toBe('axisym');
 
     // A full-3D backend still wins when the host has one, and a host with
@@ -41,7 +45,10 @@ describe('solve submission', () => {
     const withBempp = { engines: [
       ...axisymOnly.engines.slice(0, 1),
       { name: 'bempp', available: true, reason: null, version: '1', fast_paths: [] },
-    ] };
+    ], engineSelection: {
+      ...axisymOnly.engineSelection,
+      resolvedDefault: 'bempp',
+    } };
     expect(resolveEngine('auto', withBempp)).toBe('bempp');
     expect(() => resolveEngine('auto', { engines: [] })).toThrow('No solver backend is currently available');
   });

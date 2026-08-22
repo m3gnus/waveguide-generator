@@ -17,6 +17,9 @@ vi.mock('../jobs/useCapabilities', () => ({
       { name: 'metal', available: true, reason: null, version: '1.0', fast_paths: [] },
       { name: 'bempp', available: true, reason: null, version: '2.0', fast_paths: [] },
     ],
+    engineSelection: {
+      default: 'auto', resolvedDefault: 'metal', full3dOrder: ['metal', 'bempp'], axisymmetricRunner: 'axisym',
+    },
     error: null,
     isLoading: false,
   }),

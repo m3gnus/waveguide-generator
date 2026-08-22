@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { designForFamily } from '../stores/design';
 import { activeBackendName, backendLimitation, backendSupports, type BackendIdentity } from './backendSupport';
+import type { EngineCapability, EngineSelection } from '../jobs/actions';
 import {
   PARAMETER_REGISTRY,
   fieldIsVisible,
@@ -8,9 +9,19 @@ import {
   fieldUnsupportedFeature,
 } from './parameterRegistry';
 
-const engine = (name: string, available: boolean) => ({
+const engine = (name: string, available: boolean): EngineCapability => ({
   name, available, reason: null, version: null, fast_paths: [],
+  formulations: name === 'axisym' ? ['axisymmetric'] : ['full-3d'],
+  mountings: name === 'beat' ? ['free-standing'] : ['free-standing', 'infinite-baffle'],
+  geometry_sources: name === 'metal' ? ['parametric', 'imported'] : ['parametric'],
 });
+
+const selection: EngineSelection = {
+  default: 'auto',
+  resolvedDefault: 'metal',
+  full3dOrder: ['metal', 'beat', 'bempp', 'dryrun'],
+  axisymmetricRunner: 'axisym',
+};
 
 const field = (id: string) => {
   const found = PARAMETER_REGISTRY.find((item) => item.id === id);
@@ -23,8 +34,8 @@ const labels = (id: string, value: unknown, backend: BackendIdentity) =>
 
 describe('active backend resolution', () => {
   it('resolves AUTO to the first available backend in preference order', () => {
-    expect(activeBackendName('auto', [engine('metal', true), engine('bempp', true)])).toBe('metal');
-    expect(activeBackendName('auto', [engine('metal', false), engine('bempp', true)])).toBe('bempp');
+    expect(activeBackendName('auto', [engine('metal', true), engine('bempp', true)], selection)).toBe('metal');
+    expect(activeBackendName('auto', [engine('metal', false), engine('bempp', true)], { ...selection, resolvedDefault: 'bempp' })).toBe('bempp');
   });
 
   it('honours an explicit selection without consulting availability', () => {
@@ -32,23 +43,25 @@ describe('active backend resolution', () => {
   });
 
   it('returns null rather than throwing when nothing is available', () => {
-    expect(activeBackendName('auto', [])).toBeNull();
-    expect(activeBackendName('auto', [engine('metal', false)])).toBeNull();
+    expect(activeBackendName('auto', [], { ...selection, resolvedDefault: null })).toBeNull();
+    expect(activeBackendName('auto', [engine('metal', false)], { ...selection, resolvedDefault: null })).toBeNull();
   });
 });
 
 describe('backend feature support', () => {
   it('grants Metal full-3D mounting/import features but keeps meridian separate', () => {
-    expect(backendSupports('metal', 'infinite-baffle')).toBe(true);
-    expect(backendSupports('metal', 'meridian-fast-path')).toBe(false);
-    expect(backendSupports('metal', 'imported-geometry')).toBe(true);
+    const metal = engine('metal', true);
+    expect(backendSupports(metal, 'infinite-baffle')).toBe(true);
+    expect(backendSupports(metal, 'meridian-fast-path')).toBe(false);
+    expect(backendSupports(metal, 'imported-geometry')).toBe(true);
   });
 
   it('gives BEMPP coupled IB but not meridian or imported geometry', () => {
-    expect(backendSupports('bempp', 'infinite-baffle')).toBe(true);
-    expect(backendSupports('bempp', 'meridian-fast-path')).toBe(false);
-    expect(backendSupports('bempp', 'imported-geometry')).toBe(false);
-    expect(backendSupports('axisym', 'meridian-fast-path')).toBe(true);
+    const bempp = engine('bempp', true);
+    expect(backendSupports(bempp, 'infinite-baffle')).toBe(true);
+    expect(backendSupports(bempp, 'meridian-fast-path')).toBe(false);
+    expect(backendSupports(bempp, 'imported-geometry')).toBe(false);
+    expect(backendSupports(engine('axisym', true), 'meridian-fast-path')).toBe(true);
   });
 
   it('offers coupled IB when the host carries Axisym, whatever the full-3D backend', () => {
@@ -87,30 +100,30 @@ describe('backend feature support', () => {
   });
 
   it('names both the limitation and the way around it', () => {
-    const message = backendLimitation('bempp', 'imported-geometry');
+    const message = backendLimitation(engine('bempp', true), 'imported-geometry');
     expect(message).toContain('BEMPP');
     expect(message).toContain('imported');
     expect(message).toContain('Metal');
-    expect(backendLimitation('metal', 'infinite-baffle')).toBeUndefined();
+    expect(backendLimitation(engine('metal', true), 'infinite-baffle')).toBeUndefined();
   });
 });
 
 describe('simulation type gating', () => {
   it('offers infinite baffle on Metal', () => {
-    expect(labels('simulation.sim_type', 'freestanding', 'metal')).toEqual(['Free-standing', 'Infinite baffle']);
+    expect(labels('simulation.sim_type', 'freestanding', engine('metal', true))).toEqual(['Free-standing', 'Infinite baffle']);
   });
 
   it('offers infinite baffle on BEMPP', () => {
-    expect(labels('simulation.sim_type', 'freestanding', 'bempp')).toEqual(['Free-standing', 'Infinite baffle']);
-    expect(fieldUnsupportedFeature(field('simulation.sim_type'), 'freestanding', 'bempp')).toBeUndefined();
+    expect(labels('simulation.sim_type', 'freestanding', engine('bempp', true))).toEqual(['Free-standing', 'Infinite baffle']);
+    expect(fieldUnsupportedFeature(field('simulation.sim_type'), 'freestanding', engine('bempp', true))).toBeUndefined();
   });
 
   /* An ATH .cfg with `ABEC.SimType = 1`, or a .wg file authored on a Mac,
    * arrives already set to a value this host cannot solve. Removing the option
    * would leave the select blank and the design unfixable. */
   it('keeps a selected BEMPP infinite baffle supported', () => {
-    expect(labels('simulation.sim_type', 'infinite-baffle', 'bempp')).toEqual(['Free-standing', 'Infinite baffle']);
-    expect(fieldUnsupportedFeature(field('simulation.sim_type'), 'infinite-baffle', 'bempp'))
+    expect(labels('simulation.sim_type', 'infinite-baffle', engine('bempp', true))).toEqual(['Free-standing', 'Infinite baffle']);
+    expect(fieldUnsupportedFeature(field('simulation.sim_type'), 'infinite-baffle', engine('bempp', true)))
       .toBeUndefined();
   });
 });

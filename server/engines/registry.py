@@ -25,6 +25,7 @@ class EngineInfo:
     fast_paths: tuple[str, ...] = ()
     formulations: tuple[str, ...] = ()
     mountings: tuple[str, ...] = ()
+    geometry_sources: tuple[str, ...] = ("parametric",)
     symmetry_domains: tuple[str, ...] = ()
     field_traces: bool = False
     di_sphere: bool = True
@@ -45,6 +46,7 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
                 version="builtin",
                 formulations=("full-3d",),
                 mountings=("free-standing", "infinite-baffle"),
+                geometry_sources=("parametric",),
                 symmetry_domains=("full",),
             )
         )
@@ -79,6 +81,7 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
             fast_paths=("axisymmetric-meridian",),
             formulations=("axisymmetric",),
             mountings=("free-standing", "infinite-baffle"),
+            geometry_sources=("parametric",),
             symmetry_domains=("continuous-axisymmetric",),
             field_traces=False,
             di_sphere=True,
@@ -114,6 +117,11 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
                     ("free-standing", "infinite-baffle")
                     if name == "metal" or bool(status.get("coupled_infinite_baffle"))
                     else ("free-standing",)
+                ),
+                geometry_sources=(
+                    ("parametric", "imported")
+                    if name == "metal"
+                    else ("parametric",)
                 ),
                 symmetry_domains=(
                     ("full", "half", "quarter")
