@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable, Sequence
 from datetime import datetime
+import errno
 import json
 import os
 from pathlib import Path
@@ -14,6 +15,8 @@ import subprocess
 import sys
 import time
 from typing import Any
+
+from shared.safe_names import UnsafeName, collision_key, validate_relative_name
 
 
 PARENT_WAIT_SECONDS = 60.0
@@ -25,6 +28,7 @@ RenameCallable = Callable[[Path, Path], None]
 CommandRunner = Callable[..., subprocess.CompletedProcess[Any]]
 RelaunchCallable = Callable[[Sequence[str], str], None]
 LogCallable = Callable[[str], None]
+ProcessProbe = Callable[[int], bool]
 
 
 class ApplyUpdateError(RuntimeError):
@@ -32,24 +36,54 @@ class ApplyUpdateError(RuntimeError):
 
 
 def append_update_log(data_dir: Path, message: str) -> None:
-    """Append one updater/rollback event to the persistent update log."""
+    """Append one updater/rollback event without affecting recovery control flow."""
 
-    logs = data_dir.resolve() / "logs"
-    logs.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().isoformat(timespec="seconds")
-    with (logs / "update.log").open("a", encoding="utf-8") as handle:
-        handle.write(f"[{stamp}] {message}\n")
+    try:
+        logs = data_dir.resolve() / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().isoformat(timespec="seconds")
+        with (logs / "update.log").open("a", encoding="utf-8") as handle:
+            handle.write(f"[{stamp}] {message}\n")
+    except Exception:  # noqa: BLE001 - logging must never suppress recovery
+        pass
 
 
-def process_exists(pid: int) -> bool:
+def _emit_log(log: LogCallable | None, message: str) -> None:
+    if log is None:
+        return
+    try:
+        log(message)
+    except Exception:  # noqa: BLE001 - injected/logging failures are non-fatal
+        pass
+
+
+def process_exists(
+    pid: int,
+    *,
+    platform_name: str | None = None,
+    windows_probe: ProcessProbe | None = None,
+) -> bool:
+    """Return whether ``pid`` exists without using destructive Windows ``os.kill``."""
+
     if pid <= 0:
         return False
+    selected_platform = sys.platform if platform_name is None else platform_name
+    if selected_platform == "win32":
+        if windows_probe is None:
+            # Keep the Win32 handle implementation in its existing single owner.
+            # This import is safe in the staged app layer and remains stdlib-only.
+            from server.platform.instance import pid_is_running
+
+            windows_probe = pid_is_running
+        return windows_probe(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
     except PermissionError:
         return True
+    except OSError as exc:
+        return exc.errno == errno.EPERM
     return True
 
 
@@ -104,6 +138,22 @@ def _remove(path: Path) -> None:
         shutil.rmtree(path)
 
 
+def previous_generation_paths(resources: Path) -> list[Path]:
+    """Return layer and launcher backups that belong to one pending update."""
+
+    paths = [
+        path
+        for name in ("app.previous", "runtime.previous")
+        if ((path := resources / name).exists() or path.is_symlink())
+    ]
+    paths.extend(
+        path
+        for path in sorted(resources.glob("*.previous"))
+        if path not in paths and (path.is_file() or path.is_symlink())
+    )
+    return paths
+
+
 def swap_staged_layers(
     resources: Path,
     staged_app: Path,
@@ -113,19 +163,25 @@ def swap_staged_layers(
 ) -> None:
     """Swap complete layers into place and restore all old layers on failure."""
 
-    layers = [(resources / "app", staged_app.resolve())]
+    layers: list[tuple[Path, Path]] = []
     if staged_runtime is not None:
         layers.append((resources / "runtime", staged_runtime.resolve()))
+    # Install the app last. If the process is interrupted between complete
+    # layer swaps, an old app with a newer runtime is likelier to remain usable
+    # than a new app with the older runtime it explicitly replaced.
+    layers.append((resources / "app", staged_app.resolve()))
+    pending = previous_generation_paths(resources)
+    if pending:
+        raise ApplyUpdateError(
+            "A previous update has not completed its healthy-start check: "
+            + ", ".join(str(path) for path in pending)
+        )
     for target, staged in layers:
         previous = target.with_name(target.name + ".previous")
         if not target.is_dir():
             raise ApplyUpdateError(f"The installed layer is missing: {target}")
         if not staged.is_dir():
             raise ApplyUpdateError(f"The staged layer is missing: {staged}")
-        if previous.exists():
-            raise ApplyUpdateError(
-                f"A previous update has not completed its healthy-start check: {previous}"
-            )
 
     moved_old: list[tuple[Path, Path]] = []
     moved_new: list[tuple[Path, Path]] = []
@@ -158,6 +214,41 @@ def swap_staged_layers(
         raise ApplyUpdateError(f"Could not swap the staged update: {exc}.{suffix}") from exc
 
 
+def _validate_launcher_files(
+    files: Sequence[tuple[object, object]],
+    *,
+    description: str,
+) -> list[tuple[str, str]]:
+    validated: list[tuple[str, str]] = []
+    source_keys: set[str] = set()
+    destination_keys: set[str] = set()
+    for source_value, destination_value in files:
+        try:
+            source = validate_relative_name(source_value, what="launcher source")
+            destination = validate_relative_name(
+                destination_value,
+                what="launcher destination",
+            )
+        except UnsafeName as exc:
+            raise ApplyUpdateError(f"{description} names an unsafe launcher file: {exc}") from exc
+        source_key = collision_key(source)
+        destination_key = collision_key(destination)
+        if source_key in source_keys:
+            raise ApplyUpdateError(f"{description} repeats launcher source {source!r}.")
+        if destination_key in destination_keys:
+            raise ApplyUpdateError(f"{description} repeats launcher destination {destination!r}.")
+        if destination_key in {"app", "runtime"} or destination_key.endswith(
+            (".previous", ".failed")
+        ):
+            raise ApplyUpdateError(
+                f"{description} names a protected launcher destination: {destination!r}."
+            )
+        source_keys.add(source_key)
+        destination_keys.add(destination_key)
+        validated.append((source, destination))
+    return validated
+
+
 def staged_launcher_files(runtime: Path) -> list[tuple[str, str]]:
     """Read the launcher files a runtime layer declares for its application folder.
 
@@ -179,28 +270,12 @@ def staged_launcher_files(runtime: Path) -> list[tuple[str, str]]:
         return []
     if not isinstance(entries, list):
         raise ApplyUpdateError(f"The runtime manifest {manifest} has invalid launcherFiles.")
-    files: list[tuple[str, str]] = []
+    files: list[tuple[object, object]] = []
     for entry in entries:
         if not isinstance(entry, dict):
             raise ApplyUpdateError(f"The runtime manifest {manifest} has invalid launcherFiles.")
-        source = entry.get("source")
-        destination = entry.get("destination")
-        for name in (source, destination):
-            # A manifest travels with a downloaded archive, so treat these as
-            # untrusted input: only plain file names may be copied, and never
-            # into a parent or absolute location.
-            if (
-                not isinstance(name, str)
-                or not name
-                or name in {".", ".."}
-                or Path(name).name != name
-            ):
-                raise ApplyUpdateError(
-                    f"The runtime manifest {manifest} names an unsafe launcher file: {name!r}"
-                )
-        assert isinstance(source, str) and isinstance(destination, str)
-        files.append((source, destination))
-    return files
+        files.append((entry.get("source"), entry.get("destination")))
+    return _validate_launcher_files(files, description=f"The runtime manifest {manifest}")
 
 
 def refresh_launcher_files(
@@ -218,24 +293,41 @@ def refresh_launcher_files(
     """
 
     runtime = resources / "runtime"
-    files = staged_launcher_files(runtime)
+    files = _validate_launcher_files(
+        staged_launcher_files(runtime),
+        description="The installed runtime manifest",
+    )
     if not files:
         return []
+
+    incoming_directory = resources / ".launcher-update"
+    if incoming_directory.exists() or incoming_directory.is_symlink():
+        raise ApplyUpdateError(
+            f"A previous launcher refresh did not finish cleanly: {incoming_directory}"
+        )
+    for source, destination in files:
+        origin = runtime / source
+        if not origin.is_file():
+            raise ApplyUpdateError(f"The installed runtime is missing {origin}.")
+        previous = (resources / destination).with_name(destination + ".previous")
+        if previous.exists() or previous.is_symlink():
+            raise ApplyUpdateError(
+                f"A previous launcher refresh has not completed its healthy-start check: {previous}"
+            )
 
     replaced: list[tuple[Path, Path]] = []
     written: list[Path] = []
     try:
+        incoming_directory.mkdir()
         for source, destination in files:
-            origin = runtime / source
-            if not origin.is_file():
-                raise ApplyUpdateError(f"The installed runtime is missing {origin}.")
+            copier(runtime / source, incoming_directory / destination)
+        for _source, destination in files:
             target = resources / destination
             previous = target.with_name(target.name + ".previous")
             if target.exists() or target.is_symlink():
-                _remove(previous)
                 renamer(target, previous)
                 replaced.append((target, previous))
-            copier(origin, target)
+            renamer(incoming_directory / destination, target)
             written.append(target)
     except (ApplyUpdateError, OSError) as exc:
         for target in reversed(written):
@@ -249,10 +341,17 @@ def refresh_launcher_files(
                     renamer(previous, target)
             except OSError:
                 pass
+        try:
+            _remove(incoming_directory)
+        except OSError:
+            pass
         raise ApplyUpdateError(f"Could not refresh the launcher files: {exc}") from exc
 
-    if log is not None:
-        log(f"Refreshed {len(written)} launcher files from the installed runtime.")
+    try:
+        _remove(incoming_directory)
+    except OSError as exc:
+        _emit_log(log, f"Could not remove the empty launcher staging directory: {exc}")
+    _emit_log(log, f"Refreshed {len(written)} launcher files from the installed runtime.")
     return written
 
 
@@ -265,16 +364,14 @@ def cleanup_previous_layers(resources: Path, *, log: LogCallable | None = None) 
         if path.exists() or path.is_symlink():
             _remove(path)
             removed.append(path)
-            if log is not None:
-                log(f"Removed healthy-start rollback layer: {path}")
+            _emit_log(log, f"Removed healthy-start rollback layer: {path}")
     for path in sorted(resources.glob("*.previous")):
         # Whatever remains at this point is a launcher file saved by
         # refresh_launcher_files; the two layer directories are gone above.
         if path.is_file() or path.is_symlink():
             _remove(path)
             removed.append(path)
-            if log is not None:
-                log(f"Removed healthy-start rollback launcher file: {path}")
+            _emit_log(log, f"Removed healthy-start rollback launcher file: {path}")
     return removed
 
 
@@ -286,66 +383,93 @@ def rollback_previous_layers(
 ) -> bool:
     """Restore every available ``.previous`` layer transactionally."""
 
-    layers = [
-        (resources / name, resources / f"{name}.previous")
-        for name in ("app", "runtime")
+    items: list[tuple[Path, Path, bool]] = [
+        (resources / name, resources / f"{name}.previous", True)
+        for name in ("runtime", "app")
         if (resources / f"{name}.previous").is_dir()
     ]
-    if not layers:
-        if log is not None:
-            log("No previous bundle layers were available for rollback.")
+    items.extend(
+        (
+            previous.with_name(previous.name[: -len(".previous")]),
+            previous,
+            False,
+        )
+        for previous in sorted(resources.glob("*.previous"))
+        if previous.is_file() or previous.is_symlink()
+    )
+    if not items:
+        _emit_log(log, "No previous bundle layers or launcher files were available for rollback.")
+        return False
+
+    failed_paths = [
+        current.with_name(current.name + ".failed") for current, _previous, _is_layer in items
+    ]
+    if any(path.exists() or path.is_symlink() for path in failed_paths):
+        _emit_log(log, "Rollback failed because prior .failed recovery material still exists.")
         return False
 
     moved_current: list[tuple[Path, Path]] = []
     restored: list[tuple[Path, Path]] = []
+
+    def reverse_partial_rollback() -> None:
+        for current, previous in reversed(restored):
+            try:
+                if (current.exists() or current.is_symlink()) and not previous.exists():
+                    renamer(current, previous)
+            except OSError:
+                pass
+        for current, failed in reversed(moved_current):
+            try:
+                if (failed.exists() or failed.is_symlink()) and not current.exists():
+                    renamer(failed, current)
+            except OSError:
+                pass
+
     try:
-        for current, previous in layers:
+        # Preserve the entire new generation before restoring any old item.
+        for current, previous, _is_layer in items:
             failed = current.with_name(current.name + ".failed")
-            _remove(failed)
-            renamer(current, failed)
-            moved_current.append((current, failed))
+            if current.exists() or current.is_symlink():
+                renamer(current, failed)
+                moved_current.append((current, failed))
+        for current, previous, _is_layer in items:
             renamer(previous, current)
             restored.append((current, previous))
     except OSError as exc:
-        for current, previous in reversed(restored):
-            if current.exists() and not previous.exists():
-                try:
-                    renamer(current, previous)
-                except OSError:
-                    pass
-        for current, failed in reversed(moved_current):
-            if failed.exists() and not current.exists():
-                try:
-                    renamer(failed, current)
-                except OSError:
-                    pass
-        if log is not None:
-            log(f"Rollback failed: {exc}")
+        reverse_partial_rollback()
+        _emit_log(log, f"Rollback failed: {exc}")
         return False
 
+    complete = all((resources / name).is_dir() for name in ("app", "runtime")) and all(
+        current.is_dir() if is_layer else current.is_file() or current.is_symlink()
+        for current, _previous, is_layer in items
+    )
+    if not complete:
+        reverse_partial_rollback()
+        _emit_log(log, "Rollback failed final-state validation.")
+        return False
+
+    cleanup_errors: list[str] = []
+    # Only now is the restored installation proven runnable enough to discard
+    # the failed/new generation. A failed cleanup leaves extra recovery data,
+    # never a missing live executable or layer.
     for _current, failed in moved_current:
-        _remove(failed)
-    restored_files = 0
-    for previous in sorted(resources.glob("*.previous")):
-        # Launcher files saved beside the layers must go back with them, or a
-        # restored runtime would keep the newer launcher that failed to start.
-        if not (previous.is_file() or previous.is_symlink()):
-            continue
-        current = previous.with_name(previous.name[: -len(".previous")])
         try:
-            _remove(current)
-            renamer(previous, current)
-            restored_files += 1
+            _remove(failed)
         except OSError as exc:
-            if log is not None:
-                log(f"Could not restore the previous launcher file {current}: {exc}")
-    if log is not None:
-        suffix = f" and {restored_files} launcher files" if restored_files else ""
-        log(f"Restored the previous bundle layers{suffix} after startup failed.")
+            cleanup_errors.append(f"{failed}: {exc}")
+    launcher_count = sum(not is_layer for _current, _previous, is_layer in items)
+    suffix = f" and {launcher_count} launcher files" if launcher_count else ""
+    detail = (
+        " Cleanup of failed generation was incomplete: " + "; ".join(cleanup_errors)
+        if cleanup_errors
+        else ""
+    )
+    _emit_log(log, f"Restored the previous bundle layers{suffix} after startup failed.{detail}")
     return True
 
 
-def _best_effort_bundle_repairs(
+def _repair_macos_bundle(
     bundle: Path,
     *,
     platform_name: str,
@@ -354,9 +478,23 @@ def _best_effort_bundle_repairs(
 ) -> None:
     if platform_name != "darwin":
         return
+    quarantine = ["/usr/bin/xattr", "-dr", "com.apple.quarantine", str(bundle)]
+    try:
+        result = runner(quarantine, check=False, capture_output=True, text=True)
+        if result.returncode == 0:
+            _emit_log(log, f"Completed: {' '.join(quarantine[:-1])}")
+        else:
+            detail = str(result.stderr or result.stdout or "").strip()
+            _emit_log(
+                log,
+                f"Best-effort quarantine removal failed ({result.returncode}): {detail}",
+            )
+    except (OSError, subprocess.SubprocessError) as exc:
+        _emit_log(log, f"Best-effort quarantine removal could not run: {exc}")
+
     commands = (
-        ["xattr", "-dr", "com.apple.quarantine", str(bundle)],
         ["/usr/bin/codesign", "--force", "--deep", "--sign", "-", str(bundle)],
+        ["/usr/bin/codesign", "--verify", "--deep", "--strict", str(bundle)],
     )
     for command in commands:
         try:
@@ -366,16 +504,17 @@ def _best_effort_bundle_repairs(
                 capture_output=True,
                 text=True,
             )
-            if result.returncode == 0:
-                log(f"Completed: {' '.join(command[:-1])}")
-            else:
+            if result.returncode != 0:
                 detail = str(result.stderr or result.stdout or "").strip()
-                log(
-                    f"Best-effort command failed ({result.returncode}): "
+                raise ApplyUpdateError(
+                    f"Required bundle command failed ({result.returncode}): "
                     f"{' '.join(command[:-1])}: {detail}"
                 )
+            _emit_log(log, f"Completed: {' '.join(command[:-1])}")
         except (OSError, subprocess.SubprocessError) as exc:
-            log(f"Best-effort command could not run: {' '.join(command[:-1])}: {exc}")
+            raise ApplyUpdateError(
+                f"Required bundle command could not run: {' '.join(command[:-1])}: {exc}"
+            ) from exc
 
 
 def repair_bundle(
@@ -387,7 +526,7 @@ def repair_bundle(
 ) -> None:
     """Remove quarantine and restore the ad-hoc seal after a swap or rollback."""
 
-    _best_effort_bundle_repairs(
+    _repair_macos_bundle(
         bundle.resolve(),
         platform_name=platform_name,
         runner=runner,
@@ -427,13 +566,61 @@ def relaunch_command(bundle: Path, platform_name: str, arguments: Sequence[str] 
     """
 
     if platform_name == "darwin":
-        command = ["open", "-n", str(bundle)]
+        # Absolute, because the updater inherits whatever PATH the desktop had.
+        command = ["/usr/bin/open", "-n", str(bundle)]
         if arguments:
             command.extend(("--args", *arguments))
         return command
     if platform_name == "win32":
-        return [str(bundle / "Waveguide Generator.exe"), *arguments]
+        # The Windows launcher is a renamed pythonw.exe, so a bare argument
+        # would be parsed as an interpreter option ("unknown option --port")
+        # and the restart would fail with no console to say so. Naming the
+        # module explicitly hands the arguments to the application's parser,
+        # and the bundle's own bootstrap starts the desktop only for the
+        # no-argument double-click, so this cannot start it twice.
+        return [
+            str(bundle / "Waveguide Generator.exe"),
+            "-m",
+            "launchers.desktop",
+            *arguments,
+        ]
     raise ApplyUpdateError(f"Bundle updates are unsupported on {platform_name}.")
+
+
+def _show_update_failure_dialog(message: str, platform_name: str) -> None:
+    """Best-effort visible failure channel for the detached updater."""
+
+    try:
+        if platform_name == "win32":
+            import ctypes
+
+            ctypes.windll.user32.MessageBoxW(
+                0,
+                message,
+                "Waveguide Generator update",
+                0x10 | 0x10000,
+            )
+        elif platform_name == "darwin":
+            subprocess.run(
+                [
+                    "/usr/bin/osascript",
+                    "-e",
+                    "on run argv",
+                    "-e",
+                    'display dialog (item 1 of argv) with title "Waveguide Generator update" '
+                    'buttons {"OK"} default button "OK" with icon stop',
+                    "-e",
+                    "end run",
+                    "--",
+                    message,
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+    except Exception:  # noqa: BLE001 - update.log remains the fallback channel
+        pass
 
 
 def apply_update(
@@ -449,17 +636,83 @@ def apply_update(
     runner: CommandRunner = subprocess.run,
     relauncher: RelaunchCallable = relaunch_application,
     waiter: Callable[[int], bool] = wait_for_parent,
+    logger: LogCallable | None = None,
+    failure_reporter: LogCallable | None = None,
 ) -> int:
     """Wait, swap, repair the seal, and relaunch; return a process exit code."""
 
+    selected_logger = logger or (lambda message: append_update_log(data_dir, message))
+    selected_reporter = failure_reporter or (
+        lambda message: _show_update_failure_dialog(message, platform_name)
+    )
+
     def log(message: str) -> None:
-        append_update_log(data_dir, message)
+        _emit_log(selected_logger, message)
+
+    def report(message: str) -> None:
+        _emit_log(selected_reporter, message)
+
+    resolved_bundle = bundle.resolve()
+    resources = resources_directory(resolved_bundle, platform_name)
+    command = relaunch_command(resolved_bundle, platform_name, relaunch_arguments)
+
+    def live_installation_is_complete() -> bool:
+        if not all((resources / name).is_dir() for name in ("app", "runtime")):
+            return False
+        return platform_name != "win32" or (resources / "Waveguide Generator.exe").is_file()
+
+    def relaunch_current() -> str | None:
+        if not live_installation_is_complete():
+            return "the on-disk installation is incomplete and was not relaunched"
+        try:
+            relauncher(command, platform_name)
+        except Exception as exc:  # noqa: BLE001 - recovery must describe any launch failure
+            return f"the application could not be relaunched: {type(exc).__name__}: {exc}"
+        return None
+
+    def finish_failure_after_mutation(reason: str, exit_code: int) -> int:
+        # Do not emit the failure diagnostic until rollback, required signing,
+        # and the attempt to reopen the restored version have all run.
+        rolled_back = rollback_previous_layers(resources, renamer=renamer)
+        repair_error: str | None = None
+        if rolled_back:
+            try:
+                repair_bundle(
+                    resolved_bundle,
+                    platform_name=platform_name,
+                    runner=runner,
+                )
+            except ApplyUpdateError as exc:
+                repair_error = str(exc)
+        relaunch_error = None if not rolled_back or repair_error else relaunch_current()
+        if not rolled_back:
+            outcome = (
+                "Automatic rollback could not restore every required layer and launcher file. "
+                "The installation was not relaunched."
+            )
+        elif repair_error is not None:
+            outcome = (
+                "The previous files were restored, but the restored macOS bundle could not be "
+                f"signed and verified: {repair_error}. The installation was not relaunched."
+            )
+        elif relaunch_error is not None:
+            outcome = f"The previous version was restored, but {relaunch_error}."
+        else:
+            outcome = "The previous version was restored and reopened."
+        message = f"{reason}\n\n{outcome} Review update.log in the application data log directory."
+        log(message)
+        report(message)
+        return exit_code
 
     if not waiter(parent_pid):
-        log(f"Parent process {parent_pid} did not exit; update cancelled.")
+        message = (
+            f"Parent process {parent_pid} did not exit; the update was cancelled before any "
+            "files changed. The current process remains open."
+        )
+        log(message)
+        report(message)
         return 1
 
-    resources = resources_directory(bundle.resolve(), platform_name)
     try:
         swap_staged_layers(
             resources,
@@ -468,25 +721,35 @@ def apply_update(
             renamer=renamer,
         )
     except ApplyUpdateError as exc:
-        log(str(exc))
+        relaunch_error = relaunch_current()
+        outcome = (
+            "The current version was reopened."
+            if relaunch_error is None
+            else f"The update was cancelled, but {relaunch_error}."
+        )
+        message = f"{exc}\n\n{outcome} Review update.log in the application data log directory."
+        log(message)
+        report(message)
         return 2
 
     if staged_runtime is not None:
         try:
             refresh_launcher_files(resources, log=log)
         except ApplyUpdateError as exc:
-            log(str(exc))
-            rollback_previous_layers(resources, renamer=renamer, log=log)
-            return 4
+            return finish_failure_after_mutation(str(exc), 4)
 
-    log("Installed the staged bundle layers.")
-    repair_bundle(bundle.resolve(), platform_name=platform_name, runner=runner, log=log)
-    command = relaunch_command(bundle.resolve(), platform_name, relaunch_arguments)
+    try:
+        repair_bundle(resolved_bundle, platform_name=platform_name, runner=runner, log=log)
+    except ApplyUpdateError as exc:
+        return finish_failure_after_mutation(str(exc), 5)
+    log("Installed and verified the staged bundle layers.")
     try:
         relauncher(command, platform_name)
-    except (OSError, subprocess.SubprocessError) as exc:
-        log(f"Could not relaunch Waveguide Generator: {exc}")
-        return 3
+    except Exception as exc:  # noqa: BLE001 - a failed launch must restore the old version
+        return finish_failure_after_mutation(
+            f"Could not relaunch the updated Waveguide Generator: {type(exc).__name__}: {exc}",
+            3,
+        )
     log(f"Relaunched Waveguide Generator: {' '.join(command)}")
     return 0
 

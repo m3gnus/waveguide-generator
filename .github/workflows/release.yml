@@ -1,8 +1,8 @@
 name: Release
 
-# Goal 6 of the rebuild plan: end users must not need a Node runtime. The SPA is
-# therefore built here, once, and attached to the tagged release; both the
-# checkout installer and both standalone bundles consume that same artifact.
+# Build every release component before creating a public release. The final job
+# validates the exact asset inventory and checksums, uploads it to a draft, and
+# only then publishes the release.
 
 on:
   push:
@@ -10,15 +10,15 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing tag to build and attach to"
+        description: "Existing tag to build and publish"
         required: true
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   spa:
-    name: Build and attach the SPA
+    name: Build the SPA
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,9 +32,6 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: Tag must match shared/version.json
-        # The version reaches the UI, /health and the update checker from this
-        # one file. A tag that disagrees with it ships a build that misreports
-        # itself, which is worse than a failed release.
         env:
           RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
@@ -58,27 +55,19 @@ jobs:
           npm ci
           npm run build
 
-      - name: Package
+      - name: Package and verify the SPA
         run: |
           set -euo pipefail
           name="waveguide-generator-v2-spa-${{ env.version }}"
           tar -czf "$name.tar.gz" -C frontend dist
           sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
           echo "artifact=$name" >> "$GITHUB_ENV"
-          # sed consumes the complete listing. With pipefail, `head` may close
-          # the pipe early and turn a successful tar into SIGPIPE exit 141.
           tar -tzf "$name.tar.gz" | sed -n '1,5p'
+          # Do not use grep -q: closing the pipe early turns tar's success into
+          # SIGPIPE under pipefail.
+          tar -tzf "$name.tar.gz" | grep -Fx "dist/index.html"
 
-      - name: Refuse to ship an empty bundle
-        # A silently-successful build that produced no index.html would install
-        # cleanly and then serve nothing.
-        run: |
-          set -euo pipefail
-          # Do not use grep -q here: it can close the pipe on the first match
-          # and make tar's otherwise-successful SIGPIPE fail the release step.
-          tar -tzf "${{ env.artifact }}.tar.gz" | grep -Fx "dist/index.html"
-
-      - name: Share the SPA with bundle jobs
+      - name: Share the SPA with bundle and publisher jobs
         uses: actions/upload-artifact@v4
         with:
           name: release-spa
@@ -87,33 +76,19 @@ jobs:
             ${{ env.artifact }}.tar.gz.sha256
           if-no-files-found: error
 
-      - name: Attach to the release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          files: |
-            ${{ env.artifact }}.tar.gz
-            ${{ env.artifact }}.tar.gz.sha256
-          fail_on_unmatched_files: true
-          body: |
-            Waveguide Generator v${{ env.version }}.
-
-            `${{ env.artifact }}.tar.gz` is the prebuilt SPA. The installer
-            downloads it so that running Waveguide Generator needs no Node.js. Verify it against
-            the accompanying `.sha256` before extracting over `frontend/dist`.
-
   macos-bundle:
-    name: Build and attach the macOS standalone app
+    name: Build the macOS standalone app
     runs-on: macos-latest
     needs: spa
-    env:
-      RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
-      - uses: astral-sh/setup-uv@v6
+      - name: Install pinned uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.2"
 
       - name: Download the verified SPA inputs
         uses: actions/download-artifact@v4
@@ -122,8 +97,6 @@ jobs:
           path: build/spa
 
       - name: Build and verify the standalone app
-        # The builder runs on the same pinned CPython it packages, so the job
-        # does not depend on whichever python3 the runner image ships.
         run: |
           set -euo pipefail
           version="$(uv run --no-project --python 3.13.12 python -c 'import json; print(json.load(open("shared/version.json"))["version"])')"
@@ -141,58 +114,36 @@ jobs:
             build/bundle/waveguide-generator-app-*.zip.sha256
           if-no-files-found: error
 
-      - name: Reuse a runtime already published on an earlier release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          runtime_path="$(find build/bundle -maxdepth 1 -type f -name 'waveguide-generator-runtime-macos-arm64-*.zip' -print -quit)"
-          if [ -z "$runtime_path" ]; then
-            echo "The bundle build produced no runtime zip." >&2
-            exit 1
-          fi
-          runtime_name="$(basename "$runtime_path")"
-          current_created_at="$(gh release view "$RELEASE_TAG" --json createdAt --jq '.createdAt')"
-          while IFS= read -r earlier_tag; do
-            if [ -z "$earlier_tag" ]; then
-              continue
-            fi
-            asset_names="$(gh release view "$earlier_tag" --json assets --jq '.assets[].name')"
-            if grep -Fxq "$runtime_name" <<< "$asset_names"; then
-              echo "Runtime $runtime_name already exists on $earlier_tag; skipping this upload."
-              mkdir -p "$RUNNER_TEMP/reused-runtime"
-              mv "$runtime_path" "$runtime_path.sha256" "$RUNNER_TEMP/reused-runtime/"
-              break
-            fi
-          done < <(gh release list --limit 1000 --json tagName,createdAt \
-            --jq ".[] | select(.createdAt < \"$current_created_at\") | .tagName")
-
-      - name: Attach standalone assets to the release
-        uses: softprops/action-gh-release@v2
+      - name: Share the complete macOS release asset set
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          files: build/bundle/*
-          fail_on_unmatched_files: true
-          append_body: true
-          body: |
-            The standalone macOS assets include a drag-to-Applications DMG, an app-layer
-            update zip and manifest, and a content-addressed runtime zip when that runtime
-            has not already been published. Every uploaded asset has a `.sha256` sidecar.
+          name: standalone-macos-assets
+          path: |
+            build/bundle/Waveguide.Generator-*-macos-arm64.dmg
+            build/bundle/Waveguide.Generator-*-macos-arm64.dmg.sha256
+            build/bundle/waveguide-generator-app-*.zip
+            build/bundle/waveguide-generator-app-*.zip.sha256
+            build/bundle/waveguide-generator-app-*.manifest.json
+            build/bundle/waveguide-generator-app-*.manifest.json.sha256
+            build/bundle/waveguide-generator-runtime-macos-arm64-*.zip
+            build/bundle/waveguide-generator-runtime-macos-arm64-*.zip.sha256
+          if-no-files-found: error
 
   windows-bundle:
-    name: Build and attach the Windows standalone app
+    name: Build the Windows standalone app
     runs-on: windows-latest
-    # The macOS job publishes the one canonical app-layer artifact. Waiting for
-    # it lets this job prove that the independently built Windows copy is exact.
+    # The macOS job produces the canonical app archive. Waiting for it lets
+    # Windows prove that its independently materialized Git blobs are exact.
     needs: [spa, macos-bundle]
-    env:
-      RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
-      - uses: astral-sh/setup-uv@v6
+      - name: Install pinned uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.2"
 
       - name: Download the verified SPA inputs
         uses: actions/download-artifact@v4
@@ -233,49 +184,143 @@ jobs:
           }
           Write-Host "Cross-platform app layer SHA-256: $localHash"
 
-      - name: Reuse a runtime already published on an earlier release
-        shell: pwsh
+      - name: Share the complete Windows release asset set
+        uses: actions/upload-artifact@v4
+        with:
+          name: standalone-windows-assets
+          path: |
+            build/bundle/Waveguide.Generator-*-windows-x86_64.zip
+            build/bundle/Waveguide.Generator-*-windows-x86_64.zip.sha256
+            build/bundle/waveguide-generator-runtime-windows-x86_64-*.zip
+            build/bundle/waveguide-generator-runtime-windows-x86_64-*.zip.sha256
+          if-no-files-found: error
+
+  publish:
+    name: Validate and publish the complete release
+    runs-on: ubuntu-latest
+    needs: [spa, macos-bundle, windows-bundle]
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Download SPA assets
+        uses: actions/download-artifact@v4
+        with:
+          name: release-spa
+          path: build/publish-inputs/spa
+
+      - name: Download macOS assets
+        uses: actions/download-artifact@v4
+        with:
+          name: standalone-macos-assets
+          path: build/publish-inputs/macos
+
+      - name: Download Windows assets
+        uses: actions/download-artifact@v4
+        with:
+          name: standalone-windows-assets
+          path: build/publish-inputs/windows
+
+      - name: Validate the exact inventory and every checksum
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import hashlib
+          import json
+          from pathlib import Path
+          import re
+          import shutil
+
+          from shared.safe_names import collision_key, validate_relative_name
+
+          root = Path("build/publish-inputs")
+          destination = Path("build/release-assets")
+          destination.mkdir()
+          version = json.loads(Path("shared/version.json").read_text(encoding="utf-8"))["version"]
+          escaped = re.escape(version)
+          specs = (
+              ("spa", rf"waveguide-generator-v2-spa-{escaped}\.tar\.gz"),
+              ("macos", rf"Waveguide\.Generator-{escaped}-macos-arm64\.dmg"),
+              ("macos", rf"waveguide-generator-app-{escaped}\.zip"),
+              ("macos", rf"waveguide-generator-app-{escaped}\.manifest\.json"),
+              ("macos", r"waveguide-generator-runtime-macos-arm64-[0-9a-f]{12}\.zip"),
+              ("windows", rf"Waveguide\.Generator-{escaped}-windows-x86_64\.zip"),
+              ("windows", r"waveguide-generator-runtime-windows-x86_64-[0-9a-f]{12}\.zip"),
+          )
+          expected_paths: set[Path] = set()
+          public_keys: set[str] = set()
+          for directory_name, pattern in specs:
+              directory = root / directory_name
+              matches = [
+                  path
+                  for path in directory.iterdir()
+                  if path.is_file() and re.fullmatch(pattern, path.name)
+              ]
+              if len(matches) != 1:
+                  raise SystemExit(
+                      f"Expected exactly one {pattern!r} in {directory}, found {matches}"
+                  )
+              asset = matches[0]
+              sidecar = asset.with_name(asset.name + ".sha256")
+              if not sidecar.is_file():
+                  raise SystemExit(f"Missing checksum sidecar for {asset.name}")
+              name = validate_relative_name(asset.name, what="release asset")
+              key = collision_key(name)
+              if key in public_keys:
+                  raise SystemExit(f"Release asset name collides: {name}")
+              public_keys.add(key)
+              digest = hashlib.sha256(asset.read_bytes()).hexdigest()
+              expected_line = f"{digest}  {asset.name}\n"
+              if sidecar.read_text(encoding="ascii") != expected_line:
+                  raise SystemExit(f"Invalid checksum sidecar for {asset.name}")
+              expected_paths.update((asset, sidecar))
+              shutil.copy2(asset, destination / asset.name)
+              shutil.copy2(sidecar, destination / sidecar.name)
+
+          actual_paths = {path for path in root.rglob("*") if path.is_file()}
+          if actual_paths != expected_paths:
+              missing = sorted(str(path) for path in expected_paths - actual_paths)
+              extra = sorted(str(path) for path in actual_paths - expected_paths)
+              raise SystemExit(f"Release inventory mismatch; missing={missing}, extra={extra}")
+          if len(list(destination.iterdir())) != len(specs) * 2:
+              raise SystemExit("Release staging did not produce exactly seven asset pairs")
+          print("Validated seven release asset pairs.")
+          PY
+
+      - name: Refuse to overwrite a published release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $ErrorActionPreference = "Stop"
-          $runtime = @(Get-ChildItem -File build/bundle/waveguide-generator-runtime-windows-x86_64-*.zip)
-          if ($runtime.Count -ne 1) {
-            throw "The bundle build produced no unique Windows runtime zip."
-          }
-          $currentCreatedAt = [DateTimeOffset]::Parse((gh release view $env:RELEASE_TAG --json createdAt --jq '.createdAt'))
-          $releases = gh release list --limit 1000 --json tagName,createdAt | ConvertFrom-Json
-          foreach ($release in $releases) {
-            if ([DateTimeOffset]::Parse($release.createdAt) -ge $currentCreatedAt) {
-              continue
-            }
-            $assetNames = @(gh release view $release.tagName --json assets --jq '.assets[].name')
-            if ($assetNames -contains $runtime[0].Name) {
-              Write-Host "Runtime $($runtime[0].Name) already exists on $($release.tagName); skipping this upload."
-              $reused = Join-Path $env:RUNNER_TEMP "reused-runtime"
-              New-Item -ItemType Directory -Force $reused | Out-Null
-              Move-Item -LiteralPath $runtime[0].FullName -Destination $reused
-              Move-Item -LiteralPath "$($runtime[0].FullName).sha256" -Destination $reused
-              break
-            }
-          }
+          set -euo pipefail
+          if state="$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft' 2>/dev/null)"; then
+            if [ "$state" != "true" ]; then
+              echo "Release $RELEASE_TAG is already public; refusing a non-atomic mutation." >&2
+              exit 1
+            fi
+          fi
 
-      - name: Select Windows-only release assets
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          New-Item -ItemType Directory -Force build/windows-upload | Out-Null
-          Get-ChildItem -File "build/bundle/Waveguide Generator-*-windows-x86_64.zip*" | Copy-Item -Destination build/windows-upload
-          Get-ChildItem -File build/bundle/waveguide-generator-runtime-windows-x86_64-*.zip* -ErrorAction SilentlyContinue | Copy-Item -Destination build/windows-upload
-
-      - name: Attach standalone assets to the release
-        uses: softprops/action-gh-release@v2
+      - name: Upload the validated inventory to a draft release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
-          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          files: build/windows-upload/*
+          tag_name: ${{ env.RELEASE_TAG }}
+          draft: true
+          overwrite_files: true
+          files: build/release-assets/*
           fail_on_unmatched_files: true
-          append_body: true
           body: |
-            The Windows standalone asset is an extract-and-run folder ZIP. Its
-            content-addressed runtime ZIP is included only when that runtime has
-            not already been published. Every uploaded asset has a `.sha256` sidecar.
+            Waveguide Generator ${{ env.RELEASE_TAG }}.
+
+            The release contains the prebuilt SPA, the canonical app update layer,
+            both platform runtime layers, and first-install assets for macOS and
+            Windows. Every asset has a `.sha256` sidecar.
+
+      - name: Publish only after every upload succeeded
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "$RELEASE_TAG" --draft=false

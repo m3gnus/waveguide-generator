@@ -285,7 +285,10 @@ describe('jobs panel run list', () => {
     });
 
     expect(open).not.toHaveBeenCalled();
-    expect(fetchMock).toHaveBeenCalledWith(`/api/jobs/${completed.id}/log`);
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/jobs/${completed.id}/log`,
+      { signal: expect.any(AbortSignal) },
+    );
     expect(document.querySelector('[role="dialog"] pre')?.textContent).toContain('solver output');
   });
 

@@ -11,17 +11,31 @@ export interface BundleUpdateAsset {
   layer: 'app' | 'runtime';
 }
 
-export interface UpdateRelease {
+export interface BundleReleaseAsset {
+  name: string;
+  url: string;
+  sha256Url: string;
+  bytes: number;
+  sha256Bytes: number;
+  layer: 'app' | 'runtime' | 'manifest' | 'installer';
+}
+
+export interface CheckoutUpdateRelease {
   version: string;
   tag: string;
   url: string;
   publishedAt: string | null;
   assetsReady: boolean;
-  runtimeId?: string;
 }
 
-export interface CheckoutStatus {
-  kind: CheckoutKind;
+export interface BundleUpdateRelease extends CheckoutUpdateRelease {
+  runtimeId: string;
+  bundleAssets: BundleReleaseAsset[];
+}
+
+export type UpdateRelease = CheckoutUpdateRelease | BundleUpdateRelease;
+
+interface CheckoutStatusBase {
   branch: string | null;
   head: string | null;
   atDeclaredTag: boolean;
@@ -30,9 +44,19 @@ export interface CheckoutStatus {
   behindCount: number | null;
   updateSupported: boolean;
   reason: string | null;
-  installedVersion?: string;
-  runtimeId?: string | null;
 }
+
+export interface RepositoryCheckoutStatus extends CheckoutStatusBase {
+  kind: Exclude<CheckoutKind, 'bundle'>;
+}
+
+export interface BundleCheckoutStatus extends CheckoutStatusBase {
+  kind: 'bundle';
+  installedVersion: string;
+  runtimeId: string | null;
+}
+
+export type CheckoutStatus = RepositoryCheckoutStatus | BundleCheckoutStatus;
 
 export interface CopyCommandUpdateAction {
   kind: 'copy_command';
@@ -62,6 +86,7 @@ export interface UpdateStatus {
   canInstall: boolean;
   lastError: string | null;
   installState: UpdateInstallState;
+  activeVersion: string | null;
   downloadedBytes: number;
   totalBytes: number;
   error: string | null;
@@ -76,6 +101,7 @@ export interface BundleUpdateInstallAccepted {
   accepted: true;
   version: string;
   installState: UpdateInstallState;
+  activeVersion: string;
   downloadedBytes: number;
   totalBytes: number;
   error: string | null;
@@ -91,24 +117,143 @@ function isInstallState(value: unknown): value is UpdateInstallState {
   return value === 'idle' || value === 'downloading' || value === 'verifying' || value === 'ready' || value === 'failed';
 }
 
-export async function getUpdateStatus(refresh = false): Promise<UpdateStatus> {
-  const response = await fetch(`/api/updates/status${refresh ? '?refresh=true' : ''}`);
+function isAvailability(value: unknown): value is UpdateAvailability {
+  return value === 'available' || value === 'current' || value === 'ahead' || value === 'incomplete' || value === 'unknown';
+}
+
+function isFreshness(value: unknown): value is UpdateFreshness {
+  return value === 'fresh' || value === 'stale' || value === 'unknown';
+}
+
+function isCheckoutKind(value: unknown): value is CheckoutKind {
+  return value === 'release' || value === 'development' || value === 'detached' || value === 'modified' || value === 'unsupported' || value === 'bundle';
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === 'string';
+}
+
+function isVersion(value: unknown): value is string {
+  return typeof value === 'string' && /^\d+\.\d+\.\d+$/.test(value);
+}
+
+function isRuntimeId(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-f]{12}$/.test(value);
+}
+
+function isNonNegativeNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+function isPositiveInteger(value: unknown): value is number {
+  return isNonNegativeNumber(value) && Number.isInteger(value) && value > 0;
+}
+
+function isNullableNonNegativeInteger(value: unknown): value is number | null {
+  return value === null || (isNonNegativeNumber(value) && Number.isInteger(value));
+}
+
+function isBundleReleaseAsset(value: unknown): value is BundleReleaseAsset {
+  return isRecord(value)
+    && typeof value.name === 'string'
+    && typeof value.url === 'string'
+    && typeof value.sha256Url === 'string'
+    && isPositiveInteger(value.bytes)
+    && isPositiveInteger(value.sha256Bytes)
+    && (value.layer === 'app' || value.layer === 'runtime' || value.layer === 'manifest' || value.layer === 'installer');
+}
+
+function isUpdateRelease(value: unknown): value is UpdateRelease {
+  if (!isRecord(value)
+    || !isVersion(value.version)
+    || value.tag !== `v${value.version}`
+    || typeof value.url !== 'string'
+    || !isNullableString(value.publishedAt)
+    || typeof value.assetsReady !== 'boolean') return false;
+  const hasRuntimeId = Object.hasOwn(value, 'runtimeId');
+  const hasBundleAssets = Object.hasOwn(value, 'bundleAssets');
+  if (hasRuntimeId !== hasBundleAssets) return false;
+  return !hasRuntimeId || (
+    isRuntimeId(value.runtimeId)
+    && Array.isArray(value.bundleAssets)
+    && value.bundleAssets.every(isBundleReleaseAsset)
+  );
+}
+
+function isCheckoutStatus(value: unknown): value is CheckoutStatus {
+  if (!isRecord(value)
+    || !isCheckoutKind(value.kind)
+    || !isNullableString(value.branch)
+    || !isNullableString(value.head)
+    || typeof value.atDeclaredTag !== 'boolean'
+    || typeof value.trackedChanges !== 'boolean'
+    || !isNullableNonNegativeInteger(value.aheadCount)
+    || !isNullableNonNegativeInteger(value.behindCount)
+    || typeof value.updateSupported !== 'boolean'
+    || !isNullableString(value.reason)) return false;
+  if (value.kind !== 'bundle') {
+    return !Object.hasOwn(value, 'installedVersion') && !Object.hasOwn(value, 'runtimeId');
+  }
+  return isVersion(value.installedVersion)
+    && (value.runtimeId === null || isRuntimeId(value.runtimeId));
+}
+
+function isBundleUpdateAsset(value: unknown): value is BundleUpdateAsset {
+  return isRecord(value)
+    && typeof value.name === 'string'
+    && typeof value.url === 'string'
+    && typeof value.sha256Url === 'string'
+    && isPositiveInteger(value.bytes)
+    && (value.layer === 'app' || value.layer === 'runtime');
+}
+
+function isUpdateAction(value: unknown): value is UpdateAction | null {
+  if (value === null) return true;
+  if (!isRecord(value)) return false;
+  if (value.kind === 'copy_command') {
+    return typeof value.shell === 'string' && typeof value.command === 'string';
+  }
+  if (value.kind === 'bundle_download') {
+    if (!Array.isArray(value.assets) || !value.assets.every(isBundleUpdateAsset)) return false;
+    return value.assets.some((asset) => asset.layer === 'app')
+      && isNonNegativeNumber(value.downloadBytes)
+      && Number.isInteger(value.downloadBytes)
+      && value.downloadBytes === value.assets.reduce((total, asset) => total + asset.bytes, 0);
+  }
+  return false;
+}
+
+function isUpdateStatus(value: unknown): value is UpdateStatus {
+  return isRecord(value)
+    && value.schemaVersion === 1
+    && typeof value.runningVersion === 'string'
+    && isAvailability(value.availability)
+    && isFreshness(value.freshness)
+    && typeof value.cached === 'boolean'
+    && (value.release === null || isUpdateRelease(value.release))
+    && isNullableString(value.checkedAt)
+    && isNullableString(value.nextCheckAt)
+    && isCheckoutStatus(value.checkout)
+    && isUpdateAction(value.action)
+    && typeof value.canInstall === 'boolean'
+    && isNullableString(value.lastError)
+    && isInstallState(value.installState)
+    && (value.installState === 'idle' ? value.activeVersion === null : isVersion(value.activeVersion))
+    && isNonNegativeNumber(value.downloadedBytes)
+    && isNonNegativeNumber(value.totalBytes)
+    && value.downloadedBytes <= value.totalBytes
+    && isNullableString(value.error);
+}
+
+export async function getUpdateStatus(refresh = false, signal?: AbortSignal): Promise<UpdateStatus> {
+  const url = `/api/updates/status${refresh ? '?refresh=true' : ''}`;
+  const response = signal ? await fetch(url, { signal }) : await fetch(url);
   if (!response.ok) throw new Error(`Update status request failed (${response.status})`);
   const payload: unknown = await response.json();
-  if (
-    !isRecord(payload)
-    || payload.schemaVersion !== 1
-    || typeof payload.runningVersion !== 'string'
-    || !isRecord(payload.checkout)
-    || typeof payload.checkout.kind !== 'string'
-    || typeof payload.canInstall !== 'boolean'
-    || !isInstallState(payload.installState)
-    || typeof payload.downloadedBytes !== 'number'
-    || typeof payload.totalBytes !== 'number'
-  ) {
+  if (!isUpdateStatus(payload)) {
     throw new Error('Update status response is invalid');
   }
-  return payload as unknown as UpdateStatus;
+  return payload;
 }
 
 export async function installApplicationUpdate(): Promise<UpdateInstallAccepted> {
@@ -130,10 +275,13 @@ export async function installApplicationUpdate(): Promise<UpdateInstallAccepted>
   const checkoutAccepted = isRecord(payload) && payload.accepted === true && typeof payload.tag === 'string';
   const bundleAccepted = isRecord(payload)
     && payload.accepted === true
-    && typeof payload.version === 'string'
+    && isVersion(payload.version)
     && isInstallState(payload.installState)
-    && typeof payload.downloadedBytes === 'number'
-    && typeof payload.totalBytes === 'number';
+    && payload.activeVersion === payload.version
+    && isNonNegativeNumber(payload.downloadedBytes)
+    && isNonNegativeNumber(payload.totalBytes)
+    && payload.downloadedBytes <= payload.totalBytes
+    && isNullableString(payload.error);
   if (!checkoutAccepted && !bundleAccepted) {
     throw new Error('Update installation response is invalid');
   }

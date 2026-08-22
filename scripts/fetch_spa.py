@@ -61,6 +61,7 @@ DEFAULT_TIMEOUT = 60.0
 FRONTEND = REPO_ROOT / "frontend"
 DIST = FRONTEND / "dist"
 STAMP_NAME = ".wg2-spa.json"
+TREE_STAMP_NAME = ".wg2-spa-tree.sha256"
 STAGING_NAME = ".wg2-spa-staging"
 PREVIOUS_NAME = ".wg2-dist-previous"
 LOCK_NAME = ".wg2-spa-install.lock"
@@ -248,6 +249,29 @@ def file_digest(path: Path) -> str:
     return digest.hexdigest()
 
 
+def tree_digest(root: Path) -> str:
+    """Hash the installed SPA's relative file names and bytes, excluding its stamp."""
+
+    digest = hashlib.sha256()
+    files = sorted(
+        (
+            path
+            for path in root.rglob("*")
+            if path.is_file()
+            and path not in {root / STAMP_NAME, root / TREE_STAMP_NAME}
+        ),
+        key=lambda path: path.relative_to(root).as_posix(),
+    )
+    for path in files:
+        relative = path.relative_to(root).as_posix().encode("utf-8")
+        payload = path.read_bytes()
+        digest.update(len(relative).to_bytes(4, "big"))
+        digest.update(relative)
+        digest.update(len(payload).to_bytes(8, "big"))
+        digest.update(payload)
+    return digest.hexdigest()
+
+
 def verify_archive(path: Path, expected: str) -> str:
     """Return the archive's digest, or refuse loudly when it is not the expected one."""
 
@@ -369,6 +393,12 @@ def _install_archive_locked(
             "interface that serves nothing. Nothing was changed."
         )
 
+    installed_tree_digest = tree_digest(staged_dist)
+    (staged_dist / TREE_STAMP_NAME).write_text(
+        installed_tree_digest + "\n",
+        encoding="ascii",
+        newline="\n",
+    )
     (staged_dist / STAMP_NAME).write_text(
         json.dumps(
             {"version": version, "asset": archive.name, "sha256": digest, "source": source},
@@ -377,6 +407,7 @@ def _install_archive_locked(
         )
         + "\n",
         encoding="utf-8",
+        newline="\n",
     )
 
     if dist.exists():
