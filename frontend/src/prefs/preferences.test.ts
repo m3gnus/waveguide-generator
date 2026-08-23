@@ -32,6 +32,14 @@ describe('client preferences', () => {
       directivityGuideInterval: 0,
     });
   });
+  it('keeps the reverse-null overlay off until it is asked for', () => {
+    expect(loadPreferences(null).showReverseNull).toBe(false);
+    // Unlike the members overlay, absence means off: it is a diagnostic, so a
+    // profile that never mentioned it must not acquire a fourth trace.
+    expect(loadPreferences(JSON.stringify({ version: STORAGE_VERSION, preferences: {} })).showReverseNull).toBe(false);
+    preferencesStore.update({ showReverseNull: true });
+    expect(loadPreferences(localStorage.getItem('waveguide-v2-g3-preferences')).showReverseNull).toBe(true);
+  });
   it('persists and bounds the directivity angular guide interval', () => {
     preferencesStore.update({ directivityGuideInterval: 15 });
     expect(loadPreferences(localStorage.getItem('waveguide-v2-g3-preferences')).directivityGuideInterval).toBe(15);

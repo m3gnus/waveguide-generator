@@ -38,6 +38,7 @@ export const PREFERENCE_EFFECTS: Record<keyof Preferences, PreferenceEffect> = {
   chartTheme: 'render-refreshing',
   splPhase: 'render-refreshing',
   showMembersUnderCombined: 'render-refreshing',
+  showReverseNull: 'render-refreshing',
   impedanceDisplay: 'render-refreshing',
   // Export selections are read at export time and nothing displays them.
   exportFormats: 'inert',

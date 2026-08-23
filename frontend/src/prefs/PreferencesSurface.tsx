@@ -69,6 +69,10 @@ function ResultsPreferencesContent() {
           Off leaves the sum alone on the chart, which is the right reading when
           comparing runs rather than tuning a crossover. */}
       <label className="ui-check"><input type="checkbox" checked={preferences.showMembersUnderCombined} onChange={(event) => preferencesStore.update({ showMembersUnderCombined: event.target.checked })}/>Show drivers under Combined</label>
+      {/* The bench check on a crossover: the sum with one member inverted must
+          cancel deeply if the two really are summing as the filter pair says.
+          Off by default — it is a diagnostic, not part of the response. */}
+      <label className="ui-check"><input type="checkbox" checked={preferences.showReverseNull} onChange={(event) => preferencesStore.update({ showReverseNull: event.target.checked })}/>Show reverse null</label>
       <label className="ui-check"><input type="checkbox" checked={preferences.archiveRunsOnComplete} onChange={(event) => preferencesStore.update({ archiveRunsOnComplete: event.target.checked })}/>Archive every completed run</label>
       <label className="ui-check"><input type="checkbox" checked={preferences.autoExportOnComplete} onChange={(event) => preferencesStore.update({ autoExportOnComplete: event.target.checked })}/>Auto-export completed jobs</label>
       <label className="ui-check"><input type="checkbox" checked={preferences.autoDownloadMesh} onChange={(event) => preferencesStore.update({ autoDownloadMesh: event.target.checked })}/>Auto-save solve mesh to Workspace</label>
