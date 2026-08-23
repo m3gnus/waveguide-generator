@@ -7,6 +7,7 @@ import { PARAMETER_REGISTRY, PARAMETER_SECTION_DEFINITIONS, fieldAppliesToFamily
 import { PARAMETRIC_CONTROL_DESCRIPTORS, parametricControlMatchesQuery } from '../design/parametricControlRegistry';
 import { RESULT_PANEL_COUNTS, preferencesStore, runDisplayName } from '../prefs/preferences';
 import { useCadReturnStore } from '../stores/cadReturn';
+import { waveguideDefinitionAppliesNow } from '../stores/waveguideLink';
 import { useDesignStore, type DesignDocument, type DesignFamily } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
 import { workspaceModeStore, type WorkspaceMode } from '../stores/workspaceMode';
@@ -65,6 +66,7 @@ export interface ParameterPaletteContext {
   mode?: WorkspaceMode;
   design?: DesignDocument;
   cadReturnReady?: boolean;
+  waveguideLinked?: boolean;
 }
 
 /** Enter a workspace mode and route first-time CAD users to the workflow that
@@ -81,13 +83,14 @@ export function buildParameterPaletteEntries(family?: DesignFamily, context: Par
   const mode = context.mode ?? 'parametric';
   const design = context.design ?? useDesignStore.getState().design;
   const cadReturnReady = context.cadReturnReady ?? Boolean(useCadReturnStore.getState().ingestRecord);
+  const waveguideLinked = context.waveguideLinked ?? waveguideDefinitionAppliesNow();
   const parameterEntries: PaletteEntry[] = PARAMETER_REGISTRY
     .filter((field) => !family || fieldAppliesToFamily(field, family))
     // Section policy already decides what the rail can render. Reusing it here
     // prevents palette and rail from growing subtly different CAD mode rules.
     .filter((field) => {
       const section = parameterSectionByTitle.get(field.section);
-      return !section || parameterSectionIsVisible(section, mode, design);
+      return !section || parameterSectionIsVisible(section, { mode, design, waveguideLinked });
     })
     .map((field) => {
       const tab = parameterTabBySection.get(field.section) ?? 'geometry';

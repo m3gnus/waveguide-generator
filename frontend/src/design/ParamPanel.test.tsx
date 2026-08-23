@@ -264,6 +264,27 @@ describe('ParamPanel inventory UX', () => {
     expect(host.textContent).toContain('Effective grid −180° … 180°');
   });
 
+  it('drops the waveguide definition for geometry that was authored in CAD', () => {
+    act(() => {
+      useDesignStore.getState().setFamily('OSSE');
+      setCadReady();
+      // How a Fusion-authored return resolves: a project of its own, with no
+      // WG design behind it. There is no horn of WG's here to describe.
+      useCadReturnStore.setState({
+        ingestRecord: {
+          ...cadRecord,
+          project: { lineage_id: 'wgl_cad_authored', design_id: null },
+        } as unknown as CadReturnIngestRecord,
+      });
+      workspaceModeStore.setMode('cad');
+    });
+    const titles = () => [...host.querySelectorAll<HTMLElement>('[data-section]')].map((section) => section.dataset.section);
+    expect(titles()).toEqual(['Linked design', 'Realized dimensions']);
+    for (const gone of ['Profile Dimensions', 'Throat Extension', 'Morph Target', 'Wall & Enclosure', 'Guiding Curve']) {
+      expect(host.querySelector(`[data-section="${gone}"]`)).toBeNull();
+    }
+  });
+
   it('renders manifest interface roles as read-only per-instance facts and omits informational roles', () => {
     const snapshot: CadRealizedDimensions = {
       state: 'current', instanceId: 'instance-a', exportId: 'wge_4',

@@ -83,13 +83,35 @@ describe('complete parameter registry', () => {
 
   it('uses a mode-and-design predicate for section visibility', () => {
     const design = designForFamily('OSSE');
-    const visible = (title: string, mode: 'parametric' | 'cad') => parameterSectionIsVisible(
-      PARAMETER_SECTION_DEFINITIONS.find((section) => section.title === title)!, mode, design,
-    );
+    const visible = (title: string, mode: 'parametric' | 'cad', waveguideLinked = true) =>
+      parameterSectionIsVisible(
+        PARAMETER_SECTION_DEFINITIONS.find((section) => section.title === title)!,
+        { mode, design, waveguideLinked },
+      );
     expect(visible('Profile Dimensions', 'cad')).toBe(true);
     expect(visible('Surface sampling', 'parametric')).toBe(true);
     expect(visible('Surface sampling', 'cad')).toBe(false);
     expect(visible('Source Definition', 'cad')).toBe(false);
+  });
+
+  it('hides the waveguide definition when no WG design stands behind the project', () => {
+    const design = designForFamily('OSSE');
+    const visible = (title: string, mode: 'parametric' | 'cad', waveguideLinked: boolean) =>
+      parameterSectionIsVisible(
+        PARAMETER_SECTION_DEFINITIONS.find((section) => section.title === title)!,
+        { mode, design, waveguideLinked },
+      );
+    const waveguideSections = [
+      'Profile Dimensions', 'Throat Extension', 'Morph Target', 'Wall & Enclosure', 'Guiding Curve',
+    ];
+    // Geometry authored in CAD has no horn of WG's, so every field in these
+    // sections would be an input that cannot move the model.
+    waveguideSections.forEach((title) => expect(visible(title, 'cad', false)).toBe(false));
+    // A WG-originated project keeps them: they are what you edit before
+    // sending the design back to CAD.
+    waveguideSections.forEach((title) => expect(visible(title, 'cad', true)).toBe(true));
+    // The parametric workspace never depends on a CAD link at all.
+    waveguideSections.forEach((title) => expect(visible(title, 'parametric', false)).toBe(true));
   });
 
   it('applies profile and guiding controls to the correct family', () => {
