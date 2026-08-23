@@ -8,9 +8,9 @@ import { buildImportedSubmission, importedSubmissionBlocker } from '../jobs/impo
 import { cadLinkCoordinatorBridge } from '../shell/CadLinkCoordinator';
 import { buildParameterPaletteEntries } from '../shell/TopBar';
 import { workspaceNavigation } from '../shell/workspaceNavigation';
-import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
+import { channelDriverWire, driverEditedKeys, resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetCadPreparationStore, useCadPreparationStore } from '../stores/cadPreparation';
-import { resetDriverLibraryStore } from '../stores/driverLibrary';
+import { resetDriverLibraryStore, useDriverLibraryStore } from '../stores/driverLibrary';
 import { hydrateDesignDocument } from '../api/designIo';
 import { designForFamily, resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
@@ -1135,8 +1135,12 @@ const LIBRARY_HIT = {
   source: { file: 'compression-drivers.csv' },
 };
 
-/** One fetch stub for every driver route, with a switch for an empty library. */
-function stubDriverApi({ files = 1 }: { files?: number } = {}) {
+/**
+ * One fetch stub for every driver route, with a switch for an empty library
+ * and another for a stocked library whose search happens to answer nothing --
+ * the case a driver that is not in any CSV actually presents.
+ */
+function stubDriverApi({ files = 1, hits = files }: { files?: number; hits?: number } = {}) {
   const library = {
     folder: '/library/driver-databases',
     files: files ? [{ name: 'compression-drivers.csv', rows: 1 }] : [],
@@ -1147,7 +1151,7 @@ function stubDriverApi({ files = 1 }: { files?: number } = {}) {
   const fetchMock = vi.fn((input: RequestInfo | URL) => {
     const url = String(input);
     if (url.startsWith('/api/drivers/library')) return json(library);
-    if (url.startsWith('/api/drivers?')) return json({ items: files ? [LIBRARY_HIT] : [], total: files });
+    if (url.startsWith('/api/drivers?')) return json({ items: hits ? [LIBRARY_HIT] : [], total: hits });
     if (url.startsWith('/api/drivers/')) return json({ ...LIBRARY_HIT, fields: {}, extras: {} });
     return Promise.resolve(new Response('not found', { status: 404 }));
   });
@@ -1194,7 +1198,7 @@ describe('driver picker', () => {
     vi.unstubAllGlobals();
   });
 
-  const mountWithLibrary = async (options?: { files?: number }) => {
+  const mountWithLibrary = async (options?: { files?: number; hits?: number }) => {
     const fetchMock = stubDriverApi(options);
     act(() => {
       setCadReady();
@@ -1218,7 +1222,9 @@ describe('driver picker', () => {
     await settle();
 
     const options = [...channelCard().querySelectorAll<HTMLElement>('[role="option"]')];
-    expect(options.map((option) => option.querySelector('.driver-result-name')?.textContent)).toEqual(['Acme HD-1']);
+    // Hand entry is the last row even when the search found something.
+    expect(options.map((option) => option.querySelector('.driver-result-name')?.textContent))
+      .toEqual(['Acme HD-1', 'Enter T/S manually…']);
     // The first hit is pre-selected, so Enter alone picks it.
     expect(options[0].getAttribute('aria-selected')).toBe('true');
 
@@ -1240,7 +1246,7 @@ describe('driver picker', () => {
     const input = searchInput();
     act(() => input.focus());
     await settle();
-    expect(channelCard().querySelectorAll('[role="option"]')).toHaveLength(1);
+    expect(channelCard().querySelectorAll('[role="option"]')).toHaveLength(2);
 
     await press(input, 'Escape');
     await settle();
@@ -1304,5 +1310,160 @@ describe('driver picker', () => {
 
     expect(document.querySelector('.driver-chip.accent')).toBeNull();
     expect(useCadReturnStore.getState().channelDrivers['drive-hf'].fields).toEqual({ count: 2 });
+  });
+
+  const manualRow = () => [...channelCard().querySelectorAll<HTMLButtonElement>('[role="option"]')]
+    .find((option) => option.querySelector('.driver-result-name')?.textContent === 'Enter T/S manually…');
+  const sheetField = (label: string) => [...document.querySelectorAll<HTMLElement>('.driver-sheet .cad-driver-field')]
+    .find((field) => field.querySelector('span')?.textContent === label)!
+    .querySelector<HTMLInputElement>('input')!;
+  const sheetButton = (text: string) => [...document.querySelectorAll<HTMLButtonElement>('.driver-sheet-actions button')]
+    .find((button) => button.textContent === text);
+
+  const resultNames = () => [...channelCard().querySelectorAll<HTMLElement>('[role="option"]')]
+    .map((option) => option.querySelector('.driver-result-name')?.textContent);
+
+  it('offers hand entry as the last row on an untouched search', async () => {
+    await mountWithLibrary();
+    const input = searchInput();
+    act(() => input.focus());
+    await settle();
+    expect(resultNames()).toEqual(['Acme HD-1', 'Enter T/S manually…']);
+    expect(channelCard().textContent).not.toContain('No driver matches that search.');
+  });
+
+  it('offers hand entry beside the empty-search line rather than instead of it', async () => {
+    // A stocked library that answers nothing is exactly the situation hand
+    // entry exists for, and the worst moment to be left with a dead end.
+    await mountWithLibrary({ files: 1, hits: 0 });
+    const input = searchInput();
+    act(() => input.focus());
+    await settle();
+    await type(input, 'radian 745');
+    await settle();
+    expect(resultNames()).toEqual(['Enter T/S manually…']);
+    expect(channelCard().textContent).toContain('No driver matches that search.');
+  });
+
+  it('lands a hand-entered driver in the sheet, submits it, and never calls it edited', async () => {
+    await mountWithLibrary();
+    const input = searchInput();
+    act(() => input.focus());
+    await settle();
+    await type(input, 'Radian 745Neo');
+    await settle();
+
+    // Arrow past the single hit onto the manual row and take it from the
+    // keyboard, exactly as any other row is reachable.
+    await press(input, 'ArrowDown');
+    expect(manualRow()?.getAttribute('aria-selected')).toBe('true');
+    await press(input, 'Enter');
+    await settle();
+
+    const preset = useCadReturnStore.getState().channelDrivers['drive-hf'].preset!;
+    expect(preset).toMatchObject({ label: 'Radian 745Neo', source: 'manual', kind: 'cd', z_ohm: null, base: {} });
+    expect(preset.id).toBe('manual:radian-745neo');
+
+    // The sheet opened by itself, on empty fields: there is nowhere else for a
+    // driver with no numbers in it to be filled in.
+    const sheet = document.querySelector<HTMLElement>('.driver-sheet')!;
+    expect(sheet).not.toBeNull();
+    expect([...sheet.querySelectorAll<HTMLInputElement>('.driver-sheet-grid input')].every((field) => field.value === ''))
+      .toBe(true);
+    expect(sheet.textContent).toContain('Typed by hand');
+    expect(sheet.textContent).toContain('Still needed:');
+    // Nothing to reset to, so neither the count nor the button is offered.
+    expect(sheetButton('Reset to database values')).toBeUndefined();
+
+    for (const [label, value] of [['Sd (cm²)', '26'], ['Bl (T·m)', '12.4'], ['Re (Ω)', '6.2'], ['Mms (g)', '2.4'], ['Fs (Hz)', '620']] as const) {
+      await type(sheetField(label), value);
+      await settle();
+    }
+    expect(document.querySelector('.driver-chip.accent')).toBeNull();
+    expect(driverEditedKeys(useCadReturnStore.getState().channelDrivers['drive-hf'])).toEqual([]);
+
+    // Derived values read the typed numbers like any other driver's.
+    const derived = [...document.querySelectorAll<HTMLElement>('.driver-derived-row')].map((row) => row.textContent);
+    const qes = (2 * Math.PI * 620 * 0.0024 * 6.2) / (12.4 * 12.4);
+    expect(derived[1]).toBe(`Qes${Number(qes.toPrecision(3))}`);
+
+    expect(channelDriverWire(useCadReturnStore.getState().channelDrivers['drive-hf'])).toEqual({
+      sd_cm2: 26, bl_t_m: 12.4, re_ohm: 6.2, mms_g: 2.4, fs_hz: 620, label: 'Radian 745Neo',
+    });
+  });
+
+  it('saves a hand-entered driver to My drivers, updates it in place, and finds it again', async () => {
+    await mountWithLibrary();
+    const input = searchInput();
+    act(() => input.focus());
+    await settle();
+    await type(input, 'Radian 745Neo');
+    await settle();
+    act(() => manualRow()!.click());
+    await settle();
+
+    for (const [label, value] of [['Sd (cm²)', '26'], ['Bl (T·m)', '12.4'], ['Re (Ω)', '6.2'], ['Mms (g)', '2.4'], ['Fs (Hz)', '620'], ['Count', '2']] as const) {
+      await type(sheetField(label), value);
+      await settle();
+    }
+    act(() => sheetButton('Save to My drivers')!.click());
+    await settle();
+
+    // The typed numbers are the saved driver's own; the count is this
+    // channel's installation, not the driver's.
+    expect(useDriverLibraryStore.getState().saved).toEqual([{
+      id: 'mine:manual:radian-745neo',
+      label: 'Radian 745Neo',
+      based_on: 'manual',
+      base: { sd_cm2: 26, bl_t_m: 12.4, re_ohm: 6.2, mms_g: 2.4, fs_hz: 620 },
+      overrides: {},
+      kind: 'cd',
+      z_ohm: null,
+      xo_min_hz: null,
+    }]);
+    // The channel now holds the saved copy, so the values survive and a second
+    // save is an update rather than a duplicate.
+    const afterSave = useCadReturnStore.getState().channelDrivers['drive-hf'];
+    expect(afterSave.preset).toMatchObject({ id: 'mine:manual:radian-745neo', source: 'mine' });
+    expect(afterSave.fields).toEqual({ count: 2 });
+    expect(channelDriverWire(afterSave)).toMatchObject({ sd_cm2: 26, count: 2, label: 'Radian 745Neo' });
+
+    // Renaming re-arms the button; saving again replaces the one entry.
+    const name = document.querySelector<HTMLInputElement>('.driver-name-input')!;
+    await type(name, 'Radian 745Neo (measured)');
+    await settle();
+    act(() => sheetButton('Save to My drivers')!.click());
+    await settle();
+    expect(useDriverLibraryStore.getState().saved).toHaveLength(1);
+    expect(useDriverLibraryStore.getState().saved[0].label).toBe('Radian 745Neo (measured)');
+
+    // And it is searchable: clearing the channel puts the search back, and the
+    // saved driver answers its own name under the "mine" section.
+    act(() => document.querySelector<HTMLButtonElement>('.driver-sheet-actions button.primary')!.click());
+    await settle();
+    act(() => channelCard().querySelector<HTMLButtonElement>('.driver-clear-link')!.click());
+    await settle();
+    const again = searchInput();
+    act(() => again.focus());
+    await settle();
+    await type(again, 'measured');
+    await settle();
+    expect([...channelCard().querySelectorAll<HTMLElement>('[role="option"]')]
+      .map((option) => option.querySelector('.driver-result-name')?.textContent))
+      .toEqual(['Acme HD-1', 'Radian 745Neo (measured)', 'Enter T/S manually…']);
+  });
+
+  it('keeps a library driver’s name read-only', async () => {
+    await mountWithLibrary();
+    const input = searchInput();
+    act(() => input.focus());
+    await settle();
+    await press(input, 'Enter');
+    await settle();
+    act(() => channelCard().querySelector<HTMLButtonElement>('.driver-edit-link')!.click());
+    await settle();
+    expect(document.querySelector('.driver-name-input')).toBeNull();
+    expect(document.querySelector('.driver-sheet h2')?.textContent).toBe('Acme HD-1');
+    expect(sheetButton('Reset to database values')).toBeDefined();
   });
 });
