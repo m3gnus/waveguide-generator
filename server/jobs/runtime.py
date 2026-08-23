@@ -591,6 +591,39 @@ class _ImportedSubmission:
     anchor_snapshot: dict[str, Any] | None
 
 
+async def _cad_authored_project(
+    store: Any, record: Mapping[str, Any]
+) -> tuple[str | None, str | None]:
+    """The project of a return with no design to anchor to.
+
+    Geometry authored in CAD has no WG design behind it, so its project is the
+    Fusion document, claimed during ingestion. Without this the run carried no
+    lineage at all and dropped out of the project history it belongs to, and
+    its archive folder was derived a second time from the run's own label.
+    """
+
+    project = record.get("project")
+    project = project if isinstance(project, Mapping) else {}
+    lineage_id = str(project.get("lineage_id") or "") or None
+    archive_stem = str(project.get("archive_stem") or "") or None
+    if lineage_id is not None:
+        return lineage_id, archive_stem
+    # Returns ingested before projects existed carry no project block. The
+    # claim is keyed on the document, so the document can still find it.
+    native_id = str((record.get("document") or {}).get("native_id") or "")
+    if not native_id:
+        return None, None
+    names = await asyncio.to_thread(store.get_lineage_for_cad_document, native_id)
+    if not names:
+        return None, None
+    return (
+        str(names.get("lineage_id") or "") or None,
+        str(names.get("archive_stem") or "")
+        or str(names.get("document_name") or "")
+        or None,
+    )
+
+
 def _imported_record_sources(record: Mapping[str, Any]) -> list[dict[str, Any]]:
     sources = record.get("sources")
     if not isinstance(sources, list) or not all(
@@ -1423,7 +1456,10 @@ class JobRuntime:
                 if anchor_lineage_id is not None:
                     # The archive folder is the name the lineage already owns in
                     # ``wglink/``, so a renamed design keeps writing its history
-                    # to one folder instead of starting a second one.
+                    # to one folder instead of starting a second one. The
+                    # claim reads an already-claimed stem before it writes one,
+                    # so this returns the stem the ingest filed the captured CAD
+                    # document under whenever the ingest got there first.
                     archive_stem = await asyncio.to_thread(
                         self.cadlink_store.claim_archive_stem,
                         anchor_lineage_id,
@@ -1441,6 +1477,10 @@ class JobRuntime:
                         "Could not parse anchor design snapshot %s for imported job",
                         record_anchor_design_id,
                     )
+        else:
+            anchor_lineage_id, archive_stem = await _cad_authored_project(
+                self.cadlink_store, record
+            )
         identity = _cad_identity_provenance(record, geometry)
         return _ImportedSubmission(
             record=dict(record),

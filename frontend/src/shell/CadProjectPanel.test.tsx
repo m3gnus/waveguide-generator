@@ -3,7 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { compareSelection } from '../api/results';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
-import { resetCadReturnStore } from '../stores/cadReturn';
+import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { resetDesignStore } from '../stores/design';
 import { resetWorkspaceFolderStore } from '../stores/workspaceFolder';
@@ -34,6 +34,21 @@ function run(overrides: Partial<JobItem> & { id: string; returnStateHash?: strin
 function json(body: unknown): Response {
   return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
 }
+
+const projects = {
+  items: [
+    {
+      designId: 'wgd_project',
+      lineageId: LINEAGE,
+      filename: 'hans-rosse.cfg',
+      documentName: 'Tritonia M',
+      archiveStem: 'Tritonia',
+      exportCount: 1,
+      createdAt: '2026-08-20T08:00:00Z',
+      updatedAt: '2026-08-21T08:00:00Z',
+    },
+  ],
+};
 
 const documents = {
   archiveStem: 'Tritonia',
@@ -67,6 +82,7 @@ describe('CAD project history', () => {
     host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       if (String(input).includes('/documents')) return json(documents);
+      if (String(input).includes('/api/cadlink/designs')) return json(projects);
       return json({});
     }));
     useDocumentStore.getState().setCadLink(
@@ -174,10 +190,32 @@ describe('CAD project history', () => {
   it('names the project by the Fusion document and counts its runs', async () => {
     setJobs([run({ id: 'a' }), run({ id: 'b' })]);
 
-    await render(<CadProjectHeader documentName="Tritonia M"/>);
+    await render(<CadProjectHeader/>);
 
     expect(host.querySelector('.cad-project-name')?.textContent).toBe('Tritonia M');
     expect(host.textContent).toContain('2 runs in this project');
+  });
+
+  it('names the project the ingested return belongs to, not the design file', async () => {
+    // The regression this closes: the heading was filled from whatever document
+    // Fusion had open while the rest of the panel pointed at the open `.cfg`,
+    // so one project showed two names.
+    useCadReturnStore.setState({
+      ingestRecord: {
+        project: {
+          lineage_id: 'wgl_cad_first',
+          design_id: null,
+          document_native_id: 'urn:adsk:lineage:1',
+          document_name: '260627 - PartyMEH v10',
+          archive_stem: '260627 - PartyMEH v10',
+        },
+      } as never,
+    });
+    setJobs([]);
+
+    await render(<CadProjectHeader/>);
+
+    expect(host.querySelector('.cad-project-name')?.textContent).toBe('260627 - PartyMEH v10');
   });
 
   it('shows the folder projects are archived in, and can change it', async () => {
@@ -191,11 +229,12 @@ describe('CAD project history', () => {
       }
       if (path === '/api/workspace/open' && init?.method === 'POST') return json({ status: 'opened', path: stored });
       if (path.includes('/documents')) return json(documents);
+      if (path.includes('/api/cadlink/designs')) return json(projects);
       return json({});
     }));
     setJobs([run({ id: 'a' })]);
 
-    await render(<CadProjectHeader documentName="Tritonia M"/>);
+    await render(<CadProjectHeader/>);
     const strip = host.querySelector<HTMLElement>('.cad-projects-folder')!;
     expect(strip.textContent).toContain('/exports');
 
@@ -214,17 +253,21 @@ describe('CAD project history', () => {
     resetDocumentStore();
     setJobs([]);
 
-    await render(<CadProjectHeader documentName={null}/>);
+    await render(<CadProjectHeader/>);
 
     expect(host.textContent).toContain('No CAD project open');
   });
 });
 
 describe('what the history calls things', () => {
-  it('names a project by the folder it owns, then by its design file', () => {
-    expect(projectName({ archiveStem: 'Tritonia', filename: 'other.cfg' })).toBe('Tritonia');
-    expect(projectName({ archiveStem: null, filename: 'Big Horn.cfg' })).toBe('Big Horn');
-    expect(projectName({ archiveStem: '   ', filename: 'Big Horn.cfg' })).toBe('Big Horn');
+  it('names a project by its CAD document, then the folder, then its design file', () => {
+    // The document name leads: in CAD mode the Fusion document owns the name,
+    // and the archive stem is frozen against renames so it goes stale as a label.
+    expect(projectName({ documentName: 'PartyMEH v10', archiveStem: 'PartyMEH v9', filename: 'other.cfg' })).toBe('PartyMEH v10');
+    expect(projectName({ documentName: null, archiveStem: 'Tritonia', filename: 'other.cfg' })).toBe('Tritonia');
+    expect(projectName({ documentName: null, archiveStem: null, filename: 'Big Horn.cfg' })).toBe('Big Horn');
+    expect(projectName({ documentName: '  ', archiveStem: '   ', filename: 'Big Horn.cfg' })).toBe('Big Horn');
+    expect(projectName({ documentName: null, archiveStem: null, filename: null })).toBe('Untitled project');
   });
 
   it('gives same-named registry heads a stable visible reference', () => {

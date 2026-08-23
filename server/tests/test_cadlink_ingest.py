@@ -386,6 +386,7 @@ def test_design_registry_routes_list_heads_and_open_the_exact_snapshot(
             "designHash": stored_hash,
             "filename": "speaker.cfg",
             "archiveStem": "speaker",
+            "documentName": None,
             "branchedFromDesignId": None,
             "branchedFromEditVersion": None,
             "exportCount": 0,

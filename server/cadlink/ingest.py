@@ -545,6 +545,44 @@ def _write_viewport_cache(
     return {**metadata, "msh_text": msh_text}
 
 
+def _resolve_project(
+    store: CadLinkStore,
+    design_id: str | None,
+    native_id: str | None,
+    document_name: str | None,
+) -> dict[str, Any] | None:
+    """Which project this return belongs to, claiming one if it has none.
+
+    A WG-originated return already has a project: the lineage of the design it
+    was exported from. Geometry authored in CAD has no design at all, and used
+    to end up in no project either -- so its runs carried no lineage and were
+    dropped from the very history they were listed above, and its captured
+    document was filed under a folder no run ever wrote to. For those, the
+    Fusion document itself is the project.
+    """
+
+    lineage_id: str | None = None
+    if design_id:
+        row = store.get_design(design_id)
+        lineage_id = str((row or {}).get("lineage_id") or "").strip() or None
+        if lineage_id:
+            store.record_cad_document(lineage_id, native_id, document_name)
+    elif native_id:
+        lineage_id = store.claim_cad_document_lineage(native_id, document_name)
+    if not lineage_id:
+        return None
+    return {
+        "lineage_id": lineage_id,
+        "design_id": design_id,
+        "document_native_id": native_id,
+        "document_name": document_name,
+        # The one folder the captured document and every run of it share.
+        "archive_stem": store.claim_archive_stem(
+            lineage_id, preferred=document_name
+        ),
+    }
+
+
 def ingest_bundle(
     bundle_path: str | Path,
     mesh: Mapping[str, Any],
@@ -890,6 +928,26 @@ def ingest_bundle(
         },
     }
 
+    anchor_instance_id = built["normalisation"].get("anchor_instance_id")
+    anchor_design_id = next(
+        (
+            str(instance["design_id"])
+            for instance in manifest["instances"]
+            if instance["instance_id"] == anchor_instance_id
+            and instance.get("design_id")
+        ),
+        None,
+    )
+    document_meta = manifest.get("document") or {}
+    document_native_id = str(document_meta.get("native_id") or "").strip() or None
+    document_name = str(document_meta.get("name") or "").strip() or None
+    # Resolved out here rather than inside ``publish``: that callback already
+    # runs inside ``allocate_ingest``'s transaction, and a claim written from
+    # within it would be a nested write on the same connection.
+    project = _resolve_project(
+        store, anchor_design_id, document_native_id, document_name
+    )
+
     def publish(ingest_id: str, created_at: str) -> str:
         _publish_staged_bundle(bundle_destination, staged_bundle)
         anchor_instance_id = built["normalisation"].get("anchor_instance_id")
@@ -984,6 +1042,10 @@ def ingest_bundle(
                 ),
                 "file": cad_document_member(manifest),
             },
+            # Which project this return belongs to. Without it a CAD-authored
+            # document has no lineage anywhere downstream, so its runs cannot
+            # be grouped with it and its archive folder is derived twice.
+            "project": project,
             "sources": manifest["sources"],
             "mesh_sizes": effective_mesh,
             "skipped_source_ids": effective_skipped_source_ids,
