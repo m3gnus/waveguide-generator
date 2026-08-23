@@ -1112,6 +1112,7 @@ export function CadLinkCoordinator() {
         requestId: null,
         sourceCount: result.bundle.sourceCount,
         instanceCount: result.bundle.instanceCount,
+        designIds: [identity.designId],
         sources,
       };
       const state = useCadReturnStore.getState();

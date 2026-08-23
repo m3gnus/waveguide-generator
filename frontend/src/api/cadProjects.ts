@@ -30,6 +30,22 @@ export interface CadProject extends CadLinkedDesignSummary {
   archiveStem: string | null;
 }
 
+/** Human name for either a full project row or the lighter file-menu row. */
+export function cadProjectName(
+  project: Pick<CadLinkedDesignSummary, 'filename'> & { archiveStem?: string | null },
+): string {
+  return project.archiveStem?.trim() || project.filename.replace(/\.[^.]+$/, '');
+}
+
+/** Stable visible suffix for same-named registry heads. A timestamp can tie
+ * and an edit version can repeat after a fork; the design id cannot. */
+export function cadProjectReference(
+  project: Pick<CadLinkedDesignSummary, 'designId'>,
+): string {
+  const id = project.designId.trim();
+  return `ID …${id.slice(-6) || 'unknown'}`;
+}
+
 async function failure(response: Response): Promise<Error> {
   try {
     const body = await response.json() as { detail?: unknown };

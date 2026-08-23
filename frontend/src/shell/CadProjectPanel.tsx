@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
+  cadProjectName,
+  cadProjectReference,
   groupRunsByModelState,
   listCadProjects,
   listProjectDocuments,
@@ -27,7 +29,7 @@ export { groupRunsByModelState } from '../api/cadProjects';
 
 /** What a project is called: the folder it owns, else the design file. */
 export function projectName(project: Pick<CadProject, 'archiveStem' | 'filename'>): string {
-  return project.archiveStem?.trim() || project.filename.replace(/\.[^.]+$/, '');
+  return cadProjectName(project);
 }
 
 /**
@@ -113,7 +115,7 @@ function ProjectSwitcher({ current, onOpened, onError }: {
         title={`Updated ${fullTime(project.updatedAt)}`}
         onClick={() => void open_(project)}
       >
-        <b>{middleEllipsis(projectName(project), 24)}</b>
+        <b>{middleEllipsis(`${projectName(project)} · ${cadProjectReference(project)}`, 32)}</b>
         <span>{pluralized(project.exportCount, 'send')} · {relativeTime(project.updatedAt)}</span>
       </button>)}
     </div>}

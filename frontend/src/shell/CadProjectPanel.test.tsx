@@ -7,6 +7,7 @@ import { resetCadReturnStore } from '../stores/cadReturn';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { resetDesignStore } from '../stores/design';
 import { resetWorkspaceFolderStore } from '../stores/workspaceFolder';
+import { cadProjectReference } from '../api/cadProjects';
 import { CadProjectHeader, CadProjectHistory, modelStateLabel, projectName } from './CadProjectPanel';
 
 const LINEAGE = 'wgl_project';
@@ -224,6 +225,11 @@ describe('what the history calls things', () => {
     expect(projectName({ archiveStem: 'Tritonia', filename: 'other.cfg' })).toBe('Tritonia');
     expect(projectName({ archiveStem: null, filename: 'Big Horn.cfg' })).toBe('Big Horn');
     expect(projectName({ archiveStem: '   ', filename: 'Big Horn.cfg' })).toBe('Big Horn');
+  });
+
+  it('gives same-named registry heads a stable visible reference', () => {
+    expect(cadProjectReference({ designId: 'wgd_01K000000000000000ABCDEF' }))
+      .toBe('ID …ABCDEF');
   });
 
   it('dates a model rather than numbering it', () => {

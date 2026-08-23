@@ -23,6 +23,7 @@ import { parseMSH } from '../viewport/mshParser';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { cadLinkCoordinatorBridge } from '../shell/CadLinkCoordinator';
 import { listCadLinkedDesigns, type CadLinkedDesignSummary } from '../api/cadlink';
+import { cadProjectReference } from '../api/cadProjects';
 import {
   applyOpenedDesign as applyOpenedDocument,
   editableIdentity,
@@ -255,7 +256,7 @@ export function DesignFileMenu() {
         {projects.length === 0
           ? <div className="design-menu-item" role="status"><span>No linked designs yet</span></div>
           : projects.map((project) => <button key={project.designId} role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void openProject(project)} title={`Updated ${new Date(project.updatedAt).toLocaleString()}`}>
-            <span>{project.filename}</span><span>v{project.editVersion} · {project.exportCount} export{project.exportCount === 1 ? '' : 's'}</span>
+            <span>{project.filename}</span><span>v{project.editVersion} · {project.exportCount} export{project.exportCount === 1 ? '' : 's'} · {cadProjectReference(project)}</span>
           </button>)}
       </div>}
       <button role="menuitem" className="design-menu-item" disabled={busy} onClick={() => void downloadCopy()}><span>Download a copy</span><kbd>cfg</kbd></button>

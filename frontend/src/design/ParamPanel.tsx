@@ -1053,7 +1053,7 @@ function CadMeshDetail() {
 
 function CadSimulationEmpty() {
   const cadApplication = cadApplicationName(usePreferences().cadApplication);
-  return <div className="cad-mode-empty" role="status"><b>Finish the CAD Link workflow</b><span>Use CAD Link to set up the connection, open this design in {cadApplication}, and bring the finished geometry back for simulation.</span><button className="primary" onClick={() => workspaceNavigation.activate('cadlink')}>Open CAD Link setup</button></div>;
+  return <div className="cad-mode-empty" role="status"><b>Prepare CAD geometry to unlock these inputs</b><span>Driver T/S, crossover, sweep, directivity, solve options, and mesh detail appear here after CAD Link brings the finished geometry back from {cadApplication}.</span><button className="primary" onClick={() => workspaceNavigation.activate('cadlink')}>Open CAD Link setup</button></div>;
 }
 
 export function ParamPanel({ tab }: { tab: ParameterTab }) {
