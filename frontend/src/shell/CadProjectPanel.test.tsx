@@ -8,7 +8,9 @@ import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { resetDesignStore } from '../stores/design';
 import { resetWorkspaceFolderStore } from '../stores/workspaceFolder';
 import { cadProjectReference } from '../api/cadProjects';
-import { CadProjectHeader, CadProjectHistory, modelStateLabel, projectName } from './CadProjectPanel';
+import { CadProjectHeader, CadProjectHistory, modelStateLabel, newestReturnForProject, projectName } from './CadProjectPanel';
+import { cadLinkCoordinatorBridge } from './CadLinkCoordinator';
+import type { CadReturnBundle } from '../api/cadlink';
 
 const LINEAGE = 'wgl_project';
 
@@ -256,6 +258,46 @@ describe('CAD project history', () => {
     await render(<CadProjectHeader/>);
 
     expect(host.textContent).toContain('No CAD project open');
+  });
+  it('reopens a CAD-only project from the newest return its document sent', async () => {
+    // After a reload nothing on the client remembers a CAD-authored project:
+    // it has no design snapshot to open, and the switcher used to grey it out
+    // with advice to send from Fusion again although its returns were there.
+    const bundle = (name: string, modifiedAt: string): CadReturnBundle => ({
+      name, bundlePath: `wgreturn/${name}`, modifiedAt, readable: true,
+      documentName: '260627 - PartyMEH v10', requestId: null, sourceCount: 3, instanceCount: 1, designIds: [], sources: [],
+    });
+    const older = bundle('260627 - PartyMEH v10-4.wgreturn', '2026-08-23T15:09:02Z');
+    const newest = bundle('260627 - PartyMEH v10-5.wgreturn', '2026-08-23T19:14:58Z');
+    const selectBundle = vi.fn();
+    vi.spyOn(cadLinkCoordinatorBridge, 'getSnapshot').mockReturnValue({
+      ...cadLinkCoordinatorBridge.getSnapshot(), bundles: [], selectBundle,
+    });
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes('/api/cadlink/returns')) return json({ items: [older, newest], cadFolderConfigured: true });
+      if (String(input).includes('/documents')) return json(documents);
+      if (String(input).includes('/api/cadlink/designs')) {
+        return json({ items: [{
+          designId: null, lineageId: 'wgl_cad_first', filename: null, documentName: '260627 - PartyMEH v10',
+          archiveStem: '260627 - PartyMEH v10', exportCount: 0, createdAt: '2026-08-23T14:34:20Z', updatedAt: '2026-08-23T19:15:10Z',
+        }] });
+      }
+      return json({});
+    }));
+    setJobs([]);
+    await render(<CadProjectHeader/>);
+
+    const toggle = host.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')!;
+    await act(async () => { toggle.click(); await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { await Promise.resolve(); });
+    const item = host.querySelector<HTMLButtonElement>('.cad-project-menu [role="menuitem"]')!;
+    expect(item.textContent).toContain('PartyME');
+    expect(item.disabled).toBe(false);
+    await act(async () => { item.click(); await Promise.resolve(); await Promise.resolve(); });
+
+    expect(selectBundle).toHaveBeenCalledWith(newest);
+    expect(newestReturnForProject([older, newest], { documentName: '260627 - PartyMEH v10', archiveStem: null })).toBe(newest);
+    expect(newestReturnForProject([older, newest], { documentName: 'Other', archiveStem: null })).toBeNull();
   });
 });
 
