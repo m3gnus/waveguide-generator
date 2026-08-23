@@ -2,9 +2,10 @@
  * Where a captured CAD document is filed in the run archive.
  *
  * `run` puts the model beside the run it produced, which is where people look
- * for it; `project` keeps one copy per model state for the whole project, which
- * costs less when one geometry is swept many times; `off` asks the add-in not
- * to carry the document at all.
+ * for it and is never pruned; `project` keeps only the newest model state for
+ * the whole project -- archiving a later state deletes the last, which costs
+ * less when one geometry is swept many times; `off` asks the add-in not to
+ * carry the document at all.
  */
 export type CadCaptureMode = 'off' | 'project' | 'run';
 

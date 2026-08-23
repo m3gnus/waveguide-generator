@@ -36,7 +36,6 @@ from server.workspace.api import (
 from server.workspace.archive import (
     CAD_SUBDIRECTORY,
     archive_cad_document,
-    archive_folder_slug,
     captured_cad_document,
     design_archive_folder,
     place_run_cad_document,
@@ -1070,7 +1069,7 @@ async def download_project_document(
     return FileResponse(
         document,
         media_type="application/octet-stream",
-        filename=f"{archive_folder_slug(stem, 'project')}{document.suffix}",
+        filename=document.name,
     )
 
 

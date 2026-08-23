@@ -93,10 +93,11 @@ class SelectWorkspaceRequest(BaseModel):
 
 #: Where a captured CAD document is filed in the run archive.
 #:
-#: ``project`` keeps one copy per model state under ``runs/<project>/cad/``;
+#: ``project`` keeps only the newest model state under
+#: ``runs/<project>/cad/`` -- archiving a later state deletes the last;
 #: ``run`` additionally places that document beside the run that was solved
-#: from it, which is where people look for it; ``off`` asks the add-in not to
-#: carry the document at all.
+#: from it, which is where people look for it and is never pruned; ``off``
+#: asks the add-in not to carry the document at all.
 CaptureMode = Literal["off", "project", "run"]
 CAPTURE_MODES: tuple[str, ...] = ("off", "project", "run")
 
