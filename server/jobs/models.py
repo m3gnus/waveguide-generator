@@ -277,6 +277,17 @@ class DriverSpec(JobModel):
     xmax_mm: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     count: int = Field(default=1, ge=1, le=64)
     rear_volume_l: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    #: A human name for this driver (e.g. from the driver library, or typed by
+    #: hand), carried through to solve metadata so results can name it.
+    label: str | None = Field(default=None, max_length=120)
+
+    @field_validator("label")
+    @classmethod
+    def normalize_label(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
 
     @model_validator(mode="after")
     def validate_completeness(self) -> "DriverSpec":
