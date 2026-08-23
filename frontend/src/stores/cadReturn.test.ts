@@ -823,6 +823,35 @@ describe('a channel driver picked from the library', () => {
     expect(manual).not.toHaveProperty('label');
   });
 
+  it('treats a hand-entered driver as its own numbers, not as edits of a base', () => {
+    const store = useCadReturnStore.getState();
+    store.setChannelDriverPreset('drive-hf', {
+      id: 'manual:radian-745neo',
+      label: 'Radian 745Neo',
+      source: 'manual',
+      kind: 'cd',
+      z_ohm: null,
+      xo_min_hz: null,
+      base: {},
+    });
+    (['sd_cm2', 'bl_t_m', 're_ohm'] as const).forEach((key) => store.setChannelDriverField('drive-hf', key, 1));
+    store.setChannelDriverField('drive-hf', 'mms_g', 2.4);
+
+    const form = useCadReturnStore.getState().channelDrivers['drive-hf'];
+    // Every value is an override on an empty base, so counting them would put
+    // an "n edited" chip and a live reset on a driver with nothing to reset to.
+    expect(form.fields).toMatchObject({ sd_cm2: 1, mms_g: 2.4 });
+    expect(driverEditedKeys(form)).toEqual([]);
+    // Still incomplete: no compliance source yet.
+    expect(driverMissingGroups(form)).toEqual([['cms_m_per_n', 'vas_l', 'fs_hz']]);
+
+    store.setChannelDriverField('drive-hf', 'fs_hz', 620);
+    // The name reaches the wire exactly as a picked driver's does.
+    expect(channelDriverWire(useCadReturnStore.getState().channelDrivers['drive-hf'])).toEqual({
+      sd_cm2: 1, bl_t_m: 1, re_ohm: 1, mms_g: 2.4, fs_hz: 620, label: 'Radian 745Neo',
+    });
+  });
+
   it('keeps the installation inputs when the driver changes or the edits are reset', () => {
     const store = useCadReturnStore.getState();
     store.setChannelDriverPreset('drive-hf', PRESET);
