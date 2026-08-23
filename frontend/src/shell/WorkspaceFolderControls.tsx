@@ -49,15 +49,17 @@ export function WorkspaceFolderControls({ note, manual = false, selectLabel = 'S
 }
 
 /**
- * The same setting, small enough to sit under a project without competing with
- * it. Deliberately not a second copy of the state: both read one store, so
- * changing the folder in Settings retitles this line immediately.
+ * The same setting as Settings' "Workspace folder", small enough to sit under
+ * a project without competing with it. Deliberately not a second copy of the
+ * state: both read one store, so changing the folder in Settings retitles
+ * this line immediately — and it carries the same name, because two names for
+ * one folder read as two folders.
  */
 export function ProjectsFolderStrip() {
   const { path, loaded, busy, error, open, select } = useWorkspaceFolder();
   return <div className="cad-projects-folder" aria-busy={busy !== null}>
     <div className="cad-projects-folder-line">
-      <span className="cad-detail">Projects folder</span>
+      <span className="cad-detail" title="The same folder as Settings → Workspace folder. Every CAD project's archive lives in it, beside run exports.">Workspace folder</span>
       <span className="cad-projects-folder-path" title={path ?? undefined}>{path ?? (loaded ? 'Unavailable' : 'Loading…')}</span>
     </div>
     <div className="cad-projects-folder-actions">
