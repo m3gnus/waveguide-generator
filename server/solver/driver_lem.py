@@ -129,6 +129,7 @@ def channel_drive_scaling(
     payload: dict[str, Any] = {
         "drive_voltage_v": float(drive_voltage_v),
         "rg_ohm": float(rg_ohm),
+        "label": spec.label,
         "spec": spec.model_dump(mode="json", exclude_none=True),
         "electrical_impedance_ohm": {
             "frequencies": frequencies.tolist(),
