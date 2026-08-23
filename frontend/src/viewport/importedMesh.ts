@@ -1,7 +1,8 @@
 import { Box3, Vector3 } from 'three';
 import type { FrameScene } from './frameScene';
 import type { ParsedMSH } from './mshParser';
-import type { SceneSurface } from './types';
+import { ROLE_MATERIAL_FAMILY, SOURCE_ROLES } from './types';
+import type { SceneSurface, SourceRole } from './types';
 import { expandImportedSymmetry, markParametricSolvedDomain, quadrantsForCutPlanes } from './symmetryScene';
 
 let nextArtifactToken = 1;
@@ -187,9 +188,61 @@ function splitCreaseNormals(vertices: Float32Array, indices: Uint32Array): Creas
   };
 }
 
-function roleForTag(tag: number, physicalNames: Map<number, string>): string {
-  const name = physicalNames.get(tag)?.trim().replace(/[^a-zA-Z0-9_.-]+/g, '-') || `tag-${tag}`;
-  return `imported.${name}`;
+/**
+ * Physical names on a WG-ingested CAD return are a pipe-delimited record:
+ *
+ *   wg-import-v1|tag=2|source_id=source-hf|instance_id=…|role=HF
+ *   wg-import-v1|rigid
+ *
+ * so the paint role the user chose in Fusion — the one that made that face red,
+ * amber or blue there — is already on the mesh and needs no second lookup.
+ */
+function parseImportRecord(name: string): Map<string, string> | null {
+  if (!name.startsWith('wg-import-v1|')) return null;
+  const fields = new Map<string, string>();
+  for (const field of name.split('|').slice(1)) {
+    const split = field.indexOf('=');
+    if (split < 0) fields.set(field, '');
+    else fields.set(field.slice(0, split), field.slice(split + 1));
+  }
+  return fields;
+}
+
+const ROLE_BY_SOLVER_GROUP: Record<string, SourceRole> = {
+  // The parametric mesher's own physical-group contract, seen when a solver
+  // artifact is opened from the design file menu rather than ingested.
+  SD1D1001: 'HF',
+  mid_port_exit_left: 'PORT_EXIT',
+  mid_port_exit_right: 'PORT_EXIT',
+};
+
+function sourceRoleFor(label: string): SourceRole | null {
+  const upper = label.toUpperCase();
+  if ((SOURCE_ROLES as readonly string[]).includes(upper)) return upper as SourceRole;
+  return ROLE_BY_SOLVER_GROUP[label] ?? null;
+}
+
+interface ImportedGroup {
+  role: string;
+  sourceRole: SourceRole | null;
+}
+
+/** Name and classify one physical group. Sources are labelled by the role the
+ * CAD document gave them, keeping the two-driver case readable — `HF`, `LF` —
+ * where the raw record would read as one unbroken eighty-character string. */
+function describeTag(tag: number, physicalNames: Map<number, string>): ImportedGroup {
+  const raw = physicalNames.get(tag)?.trim() ?? '';
+  const record = parseImportRecord(raw);
+  const declared = record?.get('role');
+  if (declared) {
+    const sourceRole = sourceRoleFor(declared);
+    // Two sources can share a role; `source-hf-2` keeps them apart on screen.
+    const ordinal = /-(\d+)$/.exec(record?.get('source_id') ?? '')?.[1];
+    const label = (sourceRole ?? declared) + (ordinal ? `-${ordinal}` : '');
+    return { role: `imported.${label}`, sourceRole };
+  }
+  const name = (record ? [...record.keys()][0] ?? '' : raw).replace(/[^a-zA-Z0-9_.-]+/g, '-') || `tag-${tag}`;
+  return { role: `imported.${name}`, sourceRole: sourceRoleFor(name) };
 }
 
 export function createImportedMeshScene(
@@ -210,11 +263,15 @@ export function createImportedMeshScene(
   }
   const surfaces: SceneSurface[] = [...grouped.entries()].map(([tag, values]) => {
     const geometry = splitCreaseNormals(mesh.vertices, Uint32Array.from(values));
+    const group = describeTag(tag, mesh.physicalNames);
     return {
       key: `msh:${name}:${tag}`,
-      role: roleForTag(tag, mesh.physicalNames),
+      role: group.role,
       shading: 'smooth',
-      materialClass: 'horn-smooth',
+      materialClass: group.sourceRole
+        ? (`${ROLE_MATERIAL_FAMILY[group.sourceRole]}-smooth` as const)
+        : ('horn-smooth' as const),
+      sourceRole: group.sourceRole,
       enclosure: false,
       positions: geometry.positions,
       normals: geometry.normals,

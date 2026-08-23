@@ -79,4 +79,33 @@ describe('viewport material mode matrix', () => {
     expect((zebra.surfaces['horn-smooth'] as ShaderMaterial).defines.FLAT_SHADED).toBeUndefined();
     zebra.all.forEach((material) => material.dispose());
   });
+  it('paints each source role in its Fusion appearance colour', () => {
+    const library = createMaterialLibrary('clay', null, 'dark');
+    const hex = (materialClass: 'hf-smooth' | 'mf-smooth' | 'lf-smooth' | 'port-smooth') =>
+      (library.surfaces[materialClass] as MeshStandardMaterial).color.getHexString();
+    // The four values WGLink paints on a face in Fusion, unchanged. A drift
+    // here means the viewport and the CAD document disagree about which
+    // driver the user is looking at.
+    expect(hex('hf-smooth')).toBe('ff0000');
+    expect(hex('mf-smooth')).toBe('ffbb00');
+    expect(hex('lf-smooth')).toBe('004cff');
+    expect(hex('port-smooth')).toBe('449648');
+    library.all.forEach((material) => material.dispose());
+  });
+
+  it('leaves a role colour untinted by the solved-region wash', () => {
+    const library = createMaterialLibrary('clay', null, 'dark', true);
+    expect((library.solvedSurfaces['hf-smooth'] as MeshStandardMaterial).color.getHexString())
+      .toBe((library.surfaces['hf-smooth'] as MeshStandardMaterial).color.getHexString());
+    library.all.forEach((material) => material.dispose());
+  });
+
+  it('falls back to the neutral cap material when role colouring is off', () => {
+    const off = createMaterialLibrary('clay', null, 'dark', true, false);
+    const neutral = (off.surfaces['source-smooth'] as MeshStandardMaterial).color.getHexString();
+    for (const materialClass of ['hf-smooth', 'mf-smooth', 'lf-smooth', 'port-smooth'] as const) {
+      expect((off.surfaces[materialClass] as MeshStandardMaterial).color.getHexString()).toBe(neutral);
+    }
+    off.all.forEach((material) => material.dispose());
+  });
 });

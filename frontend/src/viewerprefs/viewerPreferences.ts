@@ -14,6 +14,9 @@ export interface ViewerPreferences {
   keyboardPanEnabled: boolean;
   liveUpdate: boolean;
   tintSolvedRegion: boolean;
+  /** Paint each acoustic source in its CAD role colour — HF red, MF amber, LF
+   * blue, port exit green — instead of the one neutral cap material. */
+  sourceRoleColors: boolean;
   startupCameraMode: CameraProjection;
   fieldPlaneDisplayMode: FieldPlaneDisplayMode;
   fieldPlaneRangeLocked: boolean;
@@ -51,6 +54,7 @@ export const DEFAULT_VIEWER_PREFERENCES: Readonly<ViewerPreferences> = Object.fr
   keyboardPanEnabled: false,
   liveUpdate: true,
   tintSolvedRegion: true,
+  sourceRoleColors: true,
   // Orthographic projection keeps circles circular on screen and makes small
   // H/V geometry differences inspectable without perspective foreshortening.
   startupCameraMode: 'orthographic',
@@ -94,6 +98,7 @@ export function parseViewerPreferences(raw: string | null): ViewerPreferences {
       keyboardPanEnabled: typeof stored.keyboardPanEnabled === 'boolean' ? stored.keyboardPanEnabled : DEFAULT_VIEWER_PREFERENCES.keyboardPanEnabled,
       liveUpdate: typeof stored.liveUpdate === 'boolean' ? stored.liveUpdate : DEFAULT_VIEWER_PREFERENCES.liveUpdate,
       tintSolvedRegion: typeof stored.tintSolvedRegion === 'boolean' ? stored.tintSolvedRegion : DEFAULT_VIEWER_PREFERENCES.tintSolvedRegion,
+      sourceRoleColors: typeof stored.sourceRoleColors === 'boolean' ? stored.sourceRoleColors : DEFAULT_VIEWER_PREFERENCES.sourceRoleColors,
       startupCameraMode: stored.startupCameraMode === 'orthographic' || stored.startupCameraMode === 'perspective'
         ? stored.startupCameraMode
         : DEFAULT_VIEWER_PREFERENCES.startupCameraMode,

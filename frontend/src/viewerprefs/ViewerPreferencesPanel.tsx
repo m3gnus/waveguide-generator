@@ -49,6 +49,7 @@ export function ViewerPreferencesPanel({ preferences, showEnclosure, showStats, 
 
       <h3>Geometry</h3>
       <TogglePreference label="Tint solved symmetry region" checked={preferences.tintSolvedRegion} onChange={(tintSolvedRegion) => viewerPreferences.update({ tintSolvedRegion })} />
+      <TogglePreference label="Colour sources by CAD role" checked={preferences.sourceRoleColors} onChange={(sourceRoleColors) => viewerPreferences.update({ sourceRoleColors })} />
       <TogglePreference label="Show enclosure" checked={showEnclosure} onChange={onShowEnclosure} />
       <TogglePreference label="Show frame stats" checked={showStats} onChange={onShowStats} />
 

@@ -15,19 +15,32 @@ import {
   ReplaceStencilOp,
   ShaderMaterial,
 } from 'three';
-import type { DisplayMode, MaterialLibrary, SurfaceMaterialClass, ViewportTheme } from './types';
+import type { DisplayMode, MaterialLibrary, SurfaceMaterialClass, SurfaceMaterialFamily, ViewportTheme } from './types';
 
-const classes: SurfaceMaterialClass[] = [
-  'horn-smooth', 'horn-flat', 'source-smooth', 'source-flat', 'enclosure-smooth', 'enclosure-flat',
-];
+const families: SurfaceMaterialFamily[] = ['horn', 'source', 'enclosure', 'hf', 'mf', 'lf', 'port'];
+const classes: SurfaceMaterialClass[] = families.flatMap(
+  (family): SurfaceMaterialClass[] => [`${family}-smooth`, `${family}-flat`],
+);
+
+/** The four families that carry a painted acoustic role rather than a
+ * structural material. Switching role colouring off resolves all of them to
+ * the neutral source cap instead. */
+const roleFamilies = new Set<SurfaceMaterialFamily>(['hf', 'mf', 'lf', 'port']);
 
 // Fallbacks only, for a document-less render; the tokens above them are what
 // actually ships. They used to be blue-greys from the pre-Console skin, which
 // meant a token lookup failure silently swapped the model to a palette the
-// interface no longer contains.
-const fallbackColors: Record<ViewportTheme, Record<'horn' | 'source' | 'enclosure', string>> = {
-  dark: { horn: '#b8b1a6', source: '#c07a4e', enclosure: '#7a7367' },
-  light: { horn: '#9fa39b', source: '#a5674a', enclosure: '#8a8d85' },
+// interface no longer contains. The role colours are Fusion's own, so both
+// themes fall back to the same four.
+const fallbackColors: Record<ViewportTheme, Record<SurfaceMaterialFamily, string>> = {
+  dark: {
+    horn: '#b8b1a6', source: '#c07a4e', enclosure: '#7a7367',
+    hf: '#ff0000', mf: '#ffbb00', lf: '#004cff', port: '#449648',
+  },
+  light: {
+    horn: '#9fa39b', source: '#a5674a', enclosure: '#8a8d85',
+    hf: '#ff0000', mf: '#ffbb00', lf: '#004cff', port: '#449648',
+  },
 };
 
 function tokenColor(token: string, fallback: string): string {
@@ -35,10 +48,11 @@ function tokenColor(token: string, fallback: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(token).trim() || fallback;
 }
 
-function classColor(materialClass: SurfaceMaterialClass, theme: ViewportTheme): Color {
-  const family = materialClass.startsWith('enclosure')
-    ? 'enclosure'
-    : materialClass.startsWith('source') ? 'source' : 'horn';
+export function materialFamily(materialClass: SurfaceMaterialClass): SurfaceMaterialFamily {
+  return materialClass.slice(0, materialClass.lastIndexOf('-')) as SurfaceMaterialFamily;
+}
+
+export function familyColor(family: SurfaceMaterialFamily, theme: ViewportTheme): Color {
   return new Color(tokenColor(`--vp-${family}-material`, fallbackColors[theme][family]));
 }
 
@@ -142,9 +156,17 @@ function surfaceMaterial(
   clippingPlanes: Plane[],
   theme: ViewportTheme,
   solvedTint = false,
+  roleColors = true,
 ) {
-  const color = classColor(materialClass, theme);
-  if (solvedTint) {
+  const declared = materialFamily(materialClass);
+  // A role family with colouring switched off is the neutral cap material, so
+  // nothing about the scene has to be rebuilt to turn the Fusion colours off.
+  const family = roleColors || !roleFamilies.has(declared) ? declared : 'source';
+  const color = familyColor(family, theme);
+  // The solved-domain wash exists to separate a solved quadrant from its
+  // mirrored copies. Laying it over a role colour would move the hue the CAD
+  // document assigned, which is the one thing these four colours must not do.
+  if (solvedTint && !roleFamilies.has(family)) {
     color.lerp(
       new Color(tokenColor('--vp-solved-domain-material', theme === 'light' ? '#a96b4d' : '#d58c62')),
       0.28,
@@ -189,16 +211,17 @@ export function createMaterialLibrary(
   clipPlane: Plane | null,
   theme: ViewportTheme = 'dark',
   tintSolvedRegion = true,
+  sourceRoleColors = true,
 ): MaterialLibrary {
   const clippingPlanes = clipPlane ? [clipPlane] : [];
   const surfaces = Object.fromEntries(classes.map((materialClass) => [
     materialClass,
-    surfaceMaterial(mode, materialClass, clippingPlanes, theme),
+    surfaceMaterial(mode, materialClass, clippingPlanes, theme, false, sourceRoleColors),
   ])) as Record<SurfaceMaterialClass, ReturnType<typeof surfaceMaterial>>;
   const solvedSurfaces = tintSolvedRegion
     ? Object.fromEntries(classes.map((materialClass) => [
         materialClass,
-        surfaceMaterial(mode, materialClass, clippingPlanes, theme, true),
+        surfaceMaterial(mode, materialClass, clippingPlanes, theme, true, sourceRoleColors),
       ])) as Record<SurfaceMaterialClass, ReturnType<typeof surfaceMaterial>>
     : surfaces;
   const wire = new MeshBasicMaterial({
