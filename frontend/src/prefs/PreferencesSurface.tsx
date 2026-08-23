@@ -1,7 +1,7 @@
 import { useEffect, useState, type RefObject } from 'react';
 import { nextRunLabel, type RunNameDateFormat, type RunNameDatePosition, type RunNameNumberFormat, type RunNameNumberPosition } from '../jobs/runNaming';
 import { useRunNameSource } from '../jobs/runNameSource';
-import { EXPORT_FORMATS, IMPEDANCE_DISPLAYS, MAP_REFERENCES, MATCH_INTERFACE_THEME, RESULT_PANEL_COUNTS, preferencesStore, usePreferences, type ImpedanceDisplay, type JobSort, type MapReference } from './preferences';
+import { EXPORT_FORMATS, GROUP_DELAY_UNITS, IMPEDANCE_DISPLAYS, MAP_REFERENCES, MATCH_INTERFACE_THEME, RESULT_PANEL_COUNTS, preferencesStore, usePreferences, type GroupDelayUnit, type ImpedanceDisplay, type JobSort, type MapReference } from './preferences';
 import { SMOOTHING_MODES, type SmoothingMode } from '../results/smoothing';
 import { Icon } from '../shell/icons';
 import { AnchoredPanel } from './AnchoredPanel';
@@ -55,6 +55,11 @@ function ResultsPreferencesContent() {
           phase is how a driver's electrical impedance is. The same chart draws
           both, so which one is useful depends on the run. */}
       <label className="ui-field">Impedance display<select aria-label="Impedance display" value={preferences.impedanceDisplay} onChange={(event) => preferencesStore.update({ impedanceDisplay: event.target.value as ImpedanceDisplay })}>{IMPEDANCE_DISPLAYS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
+      {/* The same excess delay either way. Milliseconds answers "how late";
+          cycles answers "how late for this frequency", which is the reading a
+          group delay is usually judged by, since a fixed time is a fraction of
+          a period up high and several periods down low. */}
+      <label className="ui-field" title="Group delay as a time, or as periods of the frequency it occurs at (tau x f).">Group delay in<select aria-label="Group delay unit" value={preferences.groupDelayUnit} onChange={(event) => preferencesStore.update({ groupDelayUnit: event.target.value as GroupDelayUnit })}>{GROUP_DELAY_UNITS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
       {/* "Match interface" is not a server theme: it resolves to console or
           vellum at export time so a figure leaves on the same ground as the
           window it was taken from. The server never sees the sentinel. */}

@@ -37,6 +37,10 @@ describe('preferences surfaces', () => {
     expect(host.querySelector<HTMLInputElement>('[aria-label="Directivity angular guide interval"]')?.value).toBe('0');
     expect(host.querySelector<HTMLInputElement>('[aria-label="Directivity angular guide interval"]')?.min).toBe('0');
     expect(host.querySelector<HTMLSelectElement>('[aria-label="Results layout count"]')?.options).toHaveLength(5);
+    // Two units, milliseconds selected: a delay is a time until asked otherwise.
+    const groupDelayUnit = host.querySelector<HTMLSelectElement>('[aria-label="Group delay unit"]')!;
+    expect([...groupDelayUnit.options].map(({ value }) => value)).toEqual(['ms', 'cycles']);
+    expect(groupDelayUnit.value).toBe('ms');
     expect(host.querySelector('[aria-label="Export counter"]')).toBeNull();
     expect(host.querySelectorAll('[aria-label^="Manual export:"]')).toHaveLength(20);
     expect(host.querySelectorAll('[aria-label^="Automatic export:"]')).toHaveLength(20);
@@ -51,6 +55,12 @@ describe('preferences surfaces', () => {
       guideInterval.dispatchEvent(new Event('input', { bubbles: true }));
     });
     expect(preferencesStore.getSnapshot().directivityGuideInterval).toBe(15);
+
+    act(() => {
+      groupDelayUnit.value = 'cycles';
+      groupDelayUnit.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(preferencesStore.getSnapshot().groupDelayUnit).toBe('cycles');
   });
 
   it('edits manual and automatic formats independently and warns about an empty enabled auto list', async () => {
