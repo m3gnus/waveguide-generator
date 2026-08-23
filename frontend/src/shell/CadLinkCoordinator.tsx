@@ -40,6 +40,8 @@ import {
   useSolveOptionsStore,
   type SymmetryMode,
 } from '../stores/solveOptions';
+import { rememberCadProject, rememberedCadProject } from '../stores/cadProjectMemory';
+import { cadProjectName, listCadProjects, newestReturnForProject } from '../api/cadProjects';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { createImportedMeshScene } from '../viewport/importedMesh';
 import { importedMeshStore } from '../viewport/importedMeshStore';
@@ -571,6 +573,7 @@ export function CadLinkCoordinator() {
   const solveCommandSeen = useRef<string | null>(null);
   const autoIngestPending = useRef(false);
   const ingestSelectedRef = useRef<() => Promise<CadReturnIngestRecord>>(unavailable);
+  const selectBundleRef = useRef<(bundle: CadReturnBundle) => void>(() => undefined);
   const pendingReturnWaiter = useRef<{
     requestId: string;
     settle: (bundle: CadReturnBundle) => void;
@@ -863,6 +866,46 @@ export function CadLinkCoordinator() {
   }, [autoIngestSelected]);
   refreshRef.current = refresh;
 
+  // Entering CAD Link with nothing on screen reopens the project that was
+  // there last: the remembered lineage's newest return, selected exactly as
+  // the project switcher would, which prepares it and names the project.
+  // Anything already selected -- including the initial listing's own pick --
+  // wins; this only fills an otherwise empty mode.
+  const restoringCadProject = useRef(false);
+  useEffect(() => {
+    const maybeRestore = () => {
+      if (workspaceModeStore.getSnapshot().mode !== 'cad') return;
+      if (preferencesStore.getSnapshot().cadApplication === 'onshape') return;
+      if (restoringCadProject.current) return;
+      const lineage = rememberedCadProject();
+      if (!lineage) return;
+      const current = useCadReturnStore.getState();
+      if (current.selectedBundle || current.ingestRecord) return;
+      restoringCadProject.current = true;
+      void (async () => {
+        try {
+          const [projects, returns] = await Promise.all([listCadProjects(), listReturns()]);
+          const project = projects.find((item) => item.lineageId === lineage);
+          if (!project) return;
+          const bundle = newestReturnForProject(returns.items, project);
+          if (!bundle) return;
+          const latest = useCadReturnStore.getState();
+          if (latest.selectedBundle || latest.ingestRecord) return;
+          if (workspaceModeStore.getSnapshot().mode !== 'cad') return;
+          selectBundleRef.current(bundle);
+          setStatus(`Reopened ${cadProjectName(project)}.`);
+        } catch {
+          // Restoring is a convenience; the empty-mode guidance stays the
+          // honest fallback when the listing cannot be read.
+        } finally {
+          restoringCadProject.current = false;
+        }
+      })();
+    };
+    maybeRestore();
+    return workspaceModeStore.subscribe(maybeRestore);
+  }, []);
+
   /** One outbound Fusion action for every surface. The rail card and CAD Link
    * panel both call this bridge so identity adoption, feedback, and return-list
    * refresh cannot drift into subtly different send paths. */
@@ -1031,6 +1074,7 @@ export function CadLinkCoordinator() {
         throw new SupersededError(superseded);
       }
       if (request === ingestRequest.current && mounted.current) {
+        rememberCadProject(record.project?.lineage_id);
         setStatus(`Ingested ${record.ingest_id}. Review the verdicts before solving.`);
         // Before the display, so the viewport adopts the CAD slot rather than
         // loading it invisibly behind the parametric design.
@@ -1089,6 +1133,7 @@ export function CadLinkCoordinator() {
     enterCadWorkspace();
     autoIngestSelected();
   }, [autoIngestSelected]);
+  selectBundleRef.current = selectBundle;
 
   // The panel's button: same work, feedback already presented, nothing thrown.
   const ingest = useCallback(async () => {

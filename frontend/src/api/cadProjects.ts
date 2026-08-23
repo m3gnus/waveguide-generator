@@ -1,3 +1,4 @@
+import type { CadReturnBundle } from './cadlink';
 import type { JobItem } from './jobsSocket';
 import { listCadLinkedDesigns, type CadLinkedDesignSummary } from './cadlink';
 
@@ -221,4 +222,23 @@ export async function placeRunCadDocument(
   const returnStateHash = runReturnStateHash(job);
   if (!archiveStem || !returnStateHash) return;
   await archiveRunCadDocument({ subdirectory, runStem, archiveStem, returnStateHash }, fetcher);
+}
+
+/**
+ * The newest readable return a CAD project can be reopened from.
+ *
+ * A CAD-only project has no design snapshot, so the only way back into it is
+ * the geometry it last sent: returns name the CAD document, and the document
+ * is the project. Selecting one ingests it, and the ingest record then names
+ * the project for the rest of the panel.
+ */
+export function newestReturnForProject(
+  bundles: readonly CadReturnBundle[],
+  project: Pick<CadProject, 'documentName' | 'archiveStem'>,
+): CadReturnBundle | null {
+  const names = new Set([project.documentName, project.archiveStem].filter((name): name is string => Boolean(name)));
+  if (names.size === 0) return null;
+  return [...bundles]
+    .filter((bundle) => bundle.readable && bundle.documentName !== null && names.has(bundle.documentName))
+    .sort((a, b) => Date.parse(b.modifiedAt) - Date.parse(a.modifiedAt))[0] ?? null;
 }
