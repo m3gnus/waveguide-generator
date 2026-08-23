@@ -12,6 +12,7 @@ export { resultExportSnapshot } from '../results/exportContext';
 import { copyChartPng, downloadChartPng } from '../results/chartImage';
 import { summaryGroups, summaryText, type SummaryGroup, type SummaryRow } from '../results/summary';
 import { latestCombine } from '../results/latestCombine';
+import { reverseNullTraces, type ReverseNullTrace } from '../results/reverseNull';
 import { CrossoverStrip } from './CrossoverStrip';
 import { combineMetadataOf, type ResultPayload } from '../results/types';
 import { ResultViewSwitch } from '../results/ResultViewSwitch';
@@ -224,6 +225,7 @@ export function splOption(
   density: ChartDensity,
   measured: MeasuredOverlay[] = [],
   showPhase = false,
+  reverseNull: ReverseNullTrace[] = [],
 ): EChartsOption {
   const measuredNames = measured.map(({ label }) => measuredSeriesName(label));
   const colors = seriesColorsByLabel([...items.map(({ label }) => label), ...measuredNames], tokens.series, tokens.accent);
@@ -264,8 +266,21 @@ export function splOption(
       data: points,
     };
   }) : [];
+  // Muted and dashed, behind everything: the reverse null is a check on the
+  // sum, not a response anybody listens to. It must never be mistaken for one
+  // of the curves it is testing.
+  const reverseNullSeries = reverseNull.map((trace) => ({
+    name: trace.name,
+    type: 'line' as const,
+    showSymbol: false,
+    connectNulls: false,
+    z: 0,
+    lineStyle: { color: tokens.muted, width: 1, type: 'dashed' as const, opacity: .7 },
+    itemStyle: { color: tokens.muted },
+    data: trace.points,
+  }));
   return lineOption(
-    [...simulated, ...measuredSeries, ...phase],
+    [...simulated, ...measuredSeries, ...reverseNullSeries, ...phase],
     tokens,
     'dB SPL',
     density,
@@ -1149,6 +1164,7 @@ function Summary({ result, wrapper, job, channelId, density }: { result: ResultP
 
 const NO_NAMED_RESULTS: NamedResult[] = [];
 const NO_MEASURED_OVERLAYS: MeasuredOverlay[] = [];
+const NO_REVERSE_NULL: ReverseNullTrace[] = [];
 
 export interface DirectivityMapPanel {
   key: string;
@@ -1444,12 +1460,22 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
       : NO_MEASURED_OVERLAYS,
     [chartType, loadedMeasurements],
   );
+  // Only the Combined view has a reverse null to draw, and only while the
+  // preference asks for it. `reverseNullTraces` withholds the overlay unless
+  // it can rebuild the sum already on screen, so an empty list here is a
+  // deliberate silence rather than a missing feature.
+  const reverseNull = useMemo(
+    () => (chartType === 'frequency_response' && preferences.showReverseNull
+      ? reverseNullTraces(wrapper as ResultPayload | undefined, result, combineMetadataOf(result))
+      : NO_REVERSE_NULL),
+    [chartType, preferences.showReverseNull, result, wrapper],
+  );
   // Progress and log events replace the selected JobItem many times during a
   // solve. Keep those summary-only props outside the plot memo, otherwise a
   // new progress percentage rebuilds and repaints every EChart even when its
   // result snapshot has not changed.
   const plot = useMemo(() => {
-    if (chartType === 'frequency_response') return result.spl_on_axis?.spl?.length ? <EChart option={splOption(overlays, tokens, preferences.smoothing, density, measured, preferences.splPhase)} label="Interactive HornLab sound pressure frequency response" live={live}/> : <ChartStub reason="Frequency Response needs spl_on_axis data from a completed solve."/>;
+    if (chartType === 'frequency_response') return result.spl_on_axis?.spl?.length ? <EChart option={splOption(overlays, tokens, preferences.smoothing, density, measured, preferences.splPhase, reverseNull)} label="Interactive HornLab sound pressure frequency response" live={live}/> : <ChartStub reason="Frequency Response needs spl_on_axis data from a completed solve."/>;
     if (chartType === 'directivity_map_h' || chartType === 'directivity_map_v' || chartType === 'directivity_map_d' || chartType === 'directivity_map') return <DirectivityComparisonMaps chartType={chartType} items={overlays} tokens={tokens} mapReference={preferences.mapReference} angleGuideInterval={preferences.directivityGuideInterval} density={density} live={live}/>;
     if (chartType === 'directivity_index') {
       const option = directivityIndexOption(overlays, tokens, preferences.smoothing, density);

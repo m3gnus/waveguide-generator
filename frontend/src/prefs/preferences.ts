@@ -120,6 +120,15 @@ export interface Preferences {
    * show — where the drivers hand over — is invisible.
    */
   showMembersUnderCombined: boolean;
+  /**
+   * Draw the reverse null under the combined sum: the same sum with one
+   * member's polarity flipped.
+   *
+   * Off by default. It is the bench check on a crossover rather than part of
+   * the response, and a fourth trace under the sum and its branches is noise
+   * for everyone who is not currently tuning one.
+   */
+  showReverseNull: boolean;
   impedanceDisplay: ImpedanceDisplay;
   exportFormats: ExportFormat[];
   autoExportFormats: ExportFormat[];
@@ -179,6 +188,7 @@ const defaults: Preferences = {
   chartTheme: MATCH_INTERFACE_THEME,
   splPhase: true,
   showMembersUnderCombined: true,
+  showReverseNull: false,
   impedanceDisplay: 'real_imaginary',
   exportFormats: ['csv', 'png'],
   autoExportFormats: [],
@@ -237,6 +247,7 @@ export function normalize(raw: Partial<Preferences> = {}): Preferences {
     chartTheme: typeof raw.chartTheme === 'string' && raw.chartTheme ? raw.chartTheme : defaults.chartTheme,
     splPhase: raw.splPhase !== false,
     showMembersUnderCombined: raw.showMembersUnderCombined !== false,
+    showReverseNull: raw.showReverseNull === true,
     impedanceDisplay: impedanceDisplayIds.has(raw.impedanceDisplay as ImpedanceDisplay)
       ? raw.impedanceDisplay as ImpedanceDisplay
       : defaults.impedanceDisplay,
