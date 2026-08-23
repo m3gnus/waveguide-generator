@@ -607,11 +607,16 @@ export function heatmapOption(
   const angleGuideSeries = angleGuides.length ? [{
     name: `${angleGuideInterval}° angular guides`, type: 'custom', coordinateSystem: 'cartesian2d', silent: true, z: 4, clip: true,
     data: angleGuides,
-    renderItem: (params: { coordSys?: PlotRect }, api: { value: (index: number) => unknown }) => {
+    // The guide angle is read from `angleGuides` by index, not through
+    // `api.value`. Both axes here are category axes, so ECharts expands a
+    // bare-number datum to [dataIndex, value] and `api.value(0)` hands back
+    // the ordinal instead of the angle -- which stacked every guide between
+    // 0 deg and the guide count rather than spreading them over the sweep.
+    renderItem: (params: { coordSys?: PlotRect; dataIndex: number }) => {
       if (!params.coordSys || grid.angles.length < 2) return null;
       const lower = grid.angles[0];
       const upper = grid.angles.at(-1)!;
-      const fraction = (Number(api.value(0)) - lower) / (upper - lower);
+      const fraction = (angleGuides[params.dataIndex] - lower) / (upper - lower);
       const y = params.coordSys.y + params.coordSys.height * (1 - fraction);
       return { type: 'line', shape: { x1: params.coordSys.x, y1: y, x2: params.coordSys.x + params.coordSys.width, y2: y }, style: { stroke: tokens.grid, lineWidth: .8, opacity: .9 } };
     },
