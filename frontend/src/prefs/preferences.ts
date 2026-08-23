@@ -73,6 +73,22 @@ export const IMPEDANCE_DISPLAYS: Array<[ImpedanceDisplay, string]> = [
   ['real_imaginary', 'Real / Imaginary'],
   ['magnitude_phase', 'Magnitude / Phase'],
 ];
+/**
+ * Group delay read as a time, or as a count of periods of the frequency it
+ * occurs at: `cycles(f) = tau(f) * f`, tau in seconds.
+ *
+ * Milliseconds is the default because it is the number the FRD export and the
+ * report already state, and because a delay is a time. Cycles is the
+ * frequency-proportional reading of exactly the same curve -- 0.3 ms is a third
+ * of a period at 1 kHz and three periods at 10 kHz -- which is how a group
+ * delay is judged against audibility rather than against a stopwatch. It is a
+ * presentation of one tau, never a second estimate of it.
+ */
+export type GroupDelayUnit = 'ms' | 'cycles';
+export const GROUP_DELAY_UNITS: Array<[GroupDelayUnit, string]> = [
+  ['ms', 'Milliseconds'],
+  ['cycles', 'Cycles (tau x f)'],
+];
 /** Planes a polar plot can be cut in. */
 export const POLAR_PLANES = ['horizontal', 'vertical'] as const;
 export type PolarPlane = typeof POLAR_PLANES[number];
@@ -130,6 +146,11 @@ export interface Preferences {
    */
   showReverseNull: boolean;
   impedanceDisplay: ImpedanceDisplay;
+  /**
+   * The unit the Group Delay chart is read in. The underlying curve is the
+   * same excess delay either way; only the axis it is projected onto changes.
+   */
+  groupDelayUnit: GroupDelayUnit;
   exportFormats: ExportFormat[];
   autoExportFormats: ExportFormat[];
   autoExportOnComplete: boolean;
@@ -190,6 +211,7 @@ const defaults: Preferences = {
   showMembersUnderCombined: true,
   showReverseNull: false,
   impedanceDisplay: 'real_imaginary',
+  groupDelayUnit: 'ms',
   exportFormats: ['csv', 'png'],
   autoExportFormats: [],
   autoExportOnComplete: false,
@@ -209,6 +231,7 @@ const chartIds = new Set(CHART_TYPES.map(({ id }) => id));
 const exportIds = new Set(EXPORT_FORMATS.map(({ id }) => id));
 const smoothingIds = new Set(['none', '1/1', '1/2', '1/3', '1/6', '1/12', '1/24', '1/48', 'variable', 'psychoacoustic', 'erb']);
 const impedanceDisplayIds = new Set<ImpedanceDisplay>(['real_imaginary', 'magnitude_phase']);
+const groupDelayUnitIds = new Set<GroupDelayUnit>(['ms', 'cycles']);
 const jobSortIds = new Set<JobSort>(['completed_desc', 'created_desc', 'rating_desc', 'name_asc']);
 const cadApplicationIds = new Set<CadApplication>(['fusion360', 'onshape']);
 const runNameDatePositions = new Set<RunNameDatePosition>(['off', 'prefix', 'suffix']);
@@ -251,6 +274,9 @@ export function normalize(raw: Partial<Preferences> = {}): Preferences {
     impedanceDisplay: impedanceDisplayIds.has(raw.impedanceDisplay as ImpedanceDisplay)
       ? raw.impedanceDisplay as ImpedanceDisplay
       : defaults.impedanceDisplay,
+    groupDelayUnit: groupDelayUnitIds.has(raw.groupDelayUnit as GroupDelayUnit)
+      ? raw.groupDelayUnit as GroupDelayUnit
+      : defaults.groupDelayUnit,
     exportFormats: formats,
     autoExportFormats: autoFormats,
     autoExportOnComplete: raw.autoExportOnComplete === true,

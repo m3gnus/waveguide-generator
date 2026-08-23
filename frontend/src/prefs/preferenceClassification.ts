@@ -40,6 +40,8 @@ export const PREFERENCE_EFFECTS: Record<keyof Preferences, PreferenceEffect> = {
   showMembersUnderCombined: 'render-refreshing',
   showReverseNull: 'render-refreshing',
   impedanceDisplay: 'render-refreshing',
+  // Which unit the group delay chart is read in: the same tau, a different axis.
+  groupDelayUnit: 'render-refreshing',
   // Export selections are read at export time and nothing displays them.
   exportFormats: 'inert',
   autoExportFormats: 'inert',
