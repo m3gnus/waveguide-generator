@@ -9,7 +9,7 @@ import type { SummaryContext, SummaryGroup } from '../results/summary';
 import type { ResultPayload } from '../results/types';
 import { resultFrequencyValidity } from '../results/validity';
 import { designForFamily, serializeDesign } from '../stores/design';
-import { beamShapeMissingReason, chartImageFilename, chartUnit, COMPARABLE_CHARTS, comparisonContourPointToPixels, directivityIndexOption, directivityMapPanels, driverChartMissingReason, drivePowerOption, groupDelayMissingReason, groupDelayOption, heatmapOption, impedanceOption, phaseOption, polarOption, ResultsChartGrid, resolvedPolarStepNotice, resultExportSnapshot, resultLayoutClass, splOption } from './ResultsPanel';
+import { beamShapeMissingReason, chartImageFilename, chartUnit, COMPARABLE_CHARTS, comparisonContourPointToPixels, directivityIndexOption, directivityMapPanels, driverChartMissingReason, drivePowerOption, formatGroupDelay, groupDelayMissingReason, groupDelayOption, heatmapOption, impedanceOption, phaseOption, polarOption, ResultsChartGrid, resolvedPolarStepNotice, resultExportSnapshot, resultLayoutClass, splOption } from './ResultsPanel';
 
 const chartImageMocks = vi.hoisted(() => ({
   copy: vi.fn<() => Promise<void>>(),
@@ -221,6 +221,40 @@ describe('phase, group delay and polar charts', () => {
   it('recovers the excess delay in milliseconds', () => {
     const series = groupDelayOption([withPhase], tokens, 'full').series as Array<{ data: number[][] }>;
     series[0].data.forEach(([, value]) => expect(value).toBeCloseTo(0.3, 6));
+  });
+
+  it('counts the same delay in periods of its own frequency when asked', () => {
+    const milliseconds = groupDelayOption([withPhase], tokens, 'full').series as Array<{ data: number[][] }>;
+    const cycles = groupDelayOption([withPhase], tokens, 'full', 'cycles').series as Array<{ data: number[][] }>;
+    // One tau, two projections: cycles is tau[s] * f on the very same samples,
+    // so it rises with frequency where the millisecond curve is flat.
+    expect(cycles[0].data.map(([frequency]) => frequency)).toEqual(milliseconds[0].data.map(([frequency]) => frequency));
+    cycles[0].data.forEach(([frequency, value], index) => {
+      expect(value).toBeCloseTo(milliseconds[0].data[index][1] / 1_000 * frequency, 9);
+      expect(value).toBeCloseTo(0.0003 * frequency, 9);
+    });
+    // The legend is about the runs, not the unit, so it must not move.
+    expect((cycles as unknown as Array<{ name: string }>).map(({ name }) => name))
+      .toEqual((milliseconds as unknown as Array<{ name: string }>).map(({ name }) => name));
+  });
+
+  it('names the unit on the axis, in the tooltip and on the title chip', () => {
+    const axisName = (option: ReturnType<typeof groupDelayOption>) => (option.yAxis as { name?: string }).name;
+    expect(axisName(groupDelayOption([withPhase], tokens, 'full'))).toBe('Group delay [ms]');
+    expect(axisName(groupDelayOption([withPhase], tokens, 'full', 'cycles'))).toBe('Group delay [cycles]');
+    const tooltip = (option: ReturnType<typeof groupDelayOption>) => (option.tooltip as { valueFormatter?: (value: unknown) => string }).valueFormatter;
+    expect(tooltip(groupDelayOption([withPhase], tokens, 'full'))?.(0.3)).toBe('0.300 ms');
+    expect(tooltip(groupDelayOption([withPhase], tokens, 'full', 'cycles'))?.(0.3)).toBe('0.30 cycles');
+    // 1 ms at 1 kHz is exactly one period of 1 kHz.
+    expect(formatGroupDelay((1 / 1_000) * 1_000, 'cycles')).toBe('1.00 cycles');
+    // An axis-triggered tooltip can hand over the whole [frequency, value] pair.
+    expect(formatGroupDelay([1_000, 0.3], 'cycles')).toBe('0.30 cycles');
+    // A gap is a gap: Number(null) is 0, which would read as a real 0.000 ms.
+    expect(formatGroupDelay(null, 'ms')).toBe('—');
+    expect(formatGroupDelay(undefined, 'ms')).toBe('—');
+    expect(formatGroupDelay('-', 'ms')).toBe('—');
+    expect(chartUnit('group_delay')).toBe('ms');
+    expect(chartUnit('group_delay', undefined, undefined, 'cycles')).toBe('cycles');
   });
 
   it('has nothing to draw for a result that carries no phase', () => {
