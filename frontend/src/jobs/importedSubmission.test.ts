@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
-import { buildImportedSubmission, importedSubmissionBlocker } from './importedSubmission';
+import { buildImportedSubmission, importedSubmissionBlocker, widenPolarToDerivation } from './importedSubmission';
 
 const bundle = {
   name: 'three-way.wgreturn', bundlePath: 'wgreturn/three-way.wgreturn', modifiedAt: '2026-08-13T12:00:00Z', readable: true,
@@ -83,5 +83,48 @@ describe('imported solve submission wire', () => {
 
     expect(importedSubmissionBlocker(useCadReturnStore.getState())).toBeNull();
     expect(buildImportedSubmission(useCadReturnStore.getState()).geometry.acknowledged_findings).toEqual([]);
+  });
+});
+
+describe('widening a polar grid onto the ingestion derivation', () => {
+  const derivation = (diagonalPinned: boolean) => ({
+    axes: {
+      horizontal: { minimum_deg: 0, maximum_deg: 180 },
+      vertical: { minimum_deg: -180, maximum_deg: 180 },
+      diagonal: diagonalPinned
+        ? { minimum_deg: -180, maximum_deg: 180 }
+        : { minimum_deg: 0, maximum_deg: 180 },
+    },
+  });
+  const options = (enabledAxes: string[], inclination: number) => ({
+    polar_config: { angle_range: [0, 180, 37] as [number, number, number], enabled_axes: enabledAxes, inclination },
+  }) as unknown as Parameters<typeof widenPolarToDerivation>[0];
+
+  it('defaults the inclination of a diagonal the user never enabled', () => {
+    // A y0-asymmetric speaker pins the diagonal, so the submission enables a
+    // plane the form had switched off -- and with it an angle field the form
+    // had disabled. Sending that stale angle refuses the whole solve.
+    const wire = options(['horizontal', 'vertical'], 35);
+    widenPolarToDerivation(wire, derivation(true));
+
+    expect(wire.polar_config).toMatchObject({
+      enabled_axes: ['horizontal', 'vertical', 'diagonal'],
+      inclination: 45,
+      angle_range: [-180, 180, 73],
+    });
+  });
+
+  it('keeps an inclination the user chose for a diagonal they enabled themselves', () => {
+    const wire = options(['horizontal', 'vertical', 'diagonal'], 35);
+    widenPolarToDerivation(wire, derivation(true));
+
+    expect(wire.polar_config).toMatchObject({ inclination: 35 });
+  });
+
+  it('leaves an unpinned diagonal alone', () => {
+    const wire = options(['horizontal'], 35);
+    widenPolarToDerivation(wire, derivation(false));
+
+    expect(wire.polar_config).toMatchObject({ enabled_axes: ['horizontal', 'vertical'], inclination: 35 });
   });
 });
