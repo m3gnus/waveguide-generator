@@ -10,6 +10,7 @@ import { designForFamily, resetDesignStore, useDesignStore } from '../stores/des
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { consumeParkedSolveCommand, parkedSolveCommandStore } from '../stores/solveCommand';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
+import { rememberCadProject, rememberedCadProject } from '../stores/cadProjectMemory';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import {
@@ -114,6 +115,8 @@ describe('CadLinkCoordinator', () => {
     resetSolveOptionsStore();
     parkedSolveCommandStore.clear();
     workspaceModeStore.setMode('parametric');
+    localStorage.removeItem('wg2.workspace.mode.v1');
+    localStorage.removeItem('wg2.cad.project.v1');
     preferencesStore.resetForTests();
     host = document.createElement('div');
     document.body.append(host);
@@ -1533,5 +1536,60 @@ describe('CadLinkCoordinator', () => {
     } as unknown as import('../api/jobsSocket').JobItem;
     await act(async () => { await showCadJobModel(v2Job); });
     expect(useCadReturnStore.getState().combineSpec).toEqual(v2Spec);
+  });
+
+  it('reopens the remembered CAD project when the mode comes back empty', async () => {
+    rememberCadProject('wgl_remembered');
+    expect(rememberedCadProject()).toBe('wgl_remembered');
+    // The open design belongs to no return, exactly the state a reload in
+    // Parametric mode leaves behind: nothing auto-selects on the first listing.
+    useDocumentStore.getState().setCadLink({ designId: 'wgd_unrelated', lineageId: 'wgl_unrelated', baseEditVersion: 1 }, 'current');
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      calls.push(path);
+      if (path.endsWith('/api/cadlink/designs')) return json({ items: [{
+        designId: null, lineageId: 'wgl_remembered', filename: null,
+        documentName: initialBundle.documentName, archiveStem: initialBundle.documentName,
+        exportCount: 0, createdAt: '2026-08-23T14:34:20Z', updatedAt: '2026-08-23T19:15:10Z',
+      }] });
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [initialBundle] });
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.endsWith('/solve-command')) return json({ command: null });
+      return json({}, 404);
+    }));
+
+    await renderCoordinator();
+    expect(useCadReturnStore.getState().selectedBundle).toBeNull();
+
+    await act(async () => {
+      workspaceModeStore.setMode('cad');
+      for (let i = 0; i < 8; i += 1) await Promise.resolve();
+    });
+
+    expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(initialBundle.bundlePath);
+    expect(calls.some((path) => path.endsWith('/api/cadlink/designs'))).toBe(true);
+  });
+
+  it('never restores over a selection the listing already made', async () => {
+    rememberCadProject('wgl_remembered');
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/api/cadlink/designs')) return json({ items: [] });
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [initialBundle] });
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.endsWith('/solve-command')) return json({ command: null });
+      return json({}, 404);
+    }));
+    await renderCoordinator();
+    const other = { ...initialBundle, bundlePath: 'wgreturn/other.wgreturn', name: 'other.wgreturn' };
+    act(() => useCadReturnStore.getState().selectBundle(other));
+
+    await act(async () => {
+      workspaceModeStore.setMode('cad');
+      for (let i = 0; i < 8; i += 1) await Promise.resolve();
+    });
+
+    expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe('wgreturn/other.wgreturn');
   });
 });
