@@ -31,6 +31,7 @@ from server.design.textcfg import parse
 from server.engines.registry import EngineRegistry, create_engine as get_engine
 from server.jobs.legacy_design import resolve_job_design
 from server.jobs.models import (
+    PORT_APERTURE_NAME_GROUPS,
     CadIdentityProvenance,
     ChannelCombineSpec,
     FieldPlaneRequest,
@@ -772,24 +773,15 @@ def _validate_passive_cardioid_topology(
         str(source_id).strip().upper(): str(source_id)
         for source_id in source_tags
     }
-    if "PORT_EXIT" in by_upper:
-        port_source_ids = [by_upper["PORT_EXIT"]]
-    else:
-        port_source_ids = [
-            by_upper[name]
-            for name in ("PORT_EXIT_L", "PORT_EXIT_R")
-            if name in by_upper
-        ]
-        if not port_source_ids:
-            port_source_ids = [
-                by_upper[name]
-                for name in ("MID_PORT_EXIT_LEFT", "MID_PORT_EXIT_RIGHT")
-                if name in by_upper
-            ]
+    port_source_ids: list[str] = []
+    for group in PORT_APERTURE_NAME_GROUPS:
+        port_source_ids = [by_upper[name] for name in group if name in by_upper]
+        if port_source_ids:
+            break
     if not port_source_ids:
         raise ImportedSolveRefusal(
             "passive_cardioid_topology",
-            "passive cardioid requires PORT_EXIT aperture sources",
+            "passive cardioid requires PASSIVE_CARDIOID or PORT_EXIT aperture sources",
         )
 
     mf_source_ids = [

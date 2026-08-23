@@ -221,6 +221,33 @@ def test_passive_cardioid_aperture_mapping_resolves_imported_lr_names() -> None:
     assert mf_source_id == "source-mf"
 
 
+def test_passive_cardioid_aperture_mapping_resolves_the_renamed_role() -> None:
+    # PASSIVE_CARDIOID is the name the add-in authors since the rename; it
+    # wins over a legacy PORT_EXIT tag if both are somehow present.
+    aperture_tags, port_names, mf_source_id = metal._passive_cardioid_apertures(
+        {"passive_cardioid": 12, "PORT_EXIT": 10, "source-mf": 101},
+        {"sources": [{"id": "source-mf", "role": "MF"}]},
+    )
+
+    assert aperture_tags == {"passive_cardioid": [12], "MF": [101]}
+    assert port_names == ["passive_cardioid"]
+    assert mf_source_id == "source-mf"
+
+
+def test_passive_cardioid_aperture_mapping_resolves_renamed_lr_halves() -> None:
+    aperture_tags, port_names, _ = metal._passive_cardioid_apertures(
+        {"PASSIVE_CARDIOID_L": 3, "PASSIVE_CARDIOID_R": 4, "source-mf": 101},
+        {"sources": [{"id": "source-mf", "role": "MF"}]},
+    )
+
+    assert aperture_tags == {
+        "PASSIVE_CARDIOID_L": [3],
+        "PASSIVE_CARDIOID_R": [4],
+        "MF": [101],
+    }
+    assert port_names == ["PASSIVE_CARDIOID_L", "PASSIVE_CARDIOID_R"]
+
+
 def test_frequency_reconciliation_rejects_same_length_different_values() -> None:
     with pytest.raises(ValueError, match="grids cannot be reconciled"):
         metal._frequency_value_indices(

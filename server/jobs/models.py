@@ -706,6 +706,19 @@ _INGEST_ID = re.compile(r"^wgi_[0-9A-HJKMNP-TV-Z]{26}$")
 _SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
+#: One passive-cardioid aperture naming convention per row, tried in order;
+#: the first row with any member present in a source tag map wins.
+#: ``PASSIVE_CARDIOID`` is the name the WGLink add-in authors today; the rest
+#: keep every model tagged before the rename working unchanged.
+PORT_APERTURE_NAME_GROUPS: tuple[tuple[str, ...], ...] = (
+    ("PASSIVE_CARDIOID",),
+    ("PASSIVE_CARDIOID_L", "PASSIVE_CARDIOID_R"),
+    ("PORT_EXIT",),
+    ("PORT_EXIT_L", "PORT_EXIT_R"),
+    ("MID_PORT_EXIT_LEFT", "MID_PORT_EXIT_RIGHT"),
+)
+
+
 class ImportedGeometrySource(JobModel):
     type: Literal["imported"]
     ingest_id: str
