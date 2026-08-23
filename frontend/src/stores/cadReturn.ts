@@ -309,8 +309,14 @@ function bundleIdentity(bundle: CadReturnBundle): string {
   });
 }
 
+/** Set when a poll cannot find the ingested bundle. Unlike every other stale
+ * reason it can be wrong transiently -- a listing read during a server
+ * restart is empty -- so it is the one reason that clears itself when the
+ * identical bundle reappears. */
+export const LISTING_GONE_REASON = 'The ingested return no longer appears in the workspace listing.';
+
 function bundleChangeReason(previous: CadReturnBundle, current: CadReturnBundle | null): string | null {
-  if (!current) return 'The ingested return no longer appears in the workspace listing.';
+  if (!current) return LISTING_GONE_REASON;
   if (bundleIdentity(previous) === bundleIdentity(current)) return null;
   if (previous.readable !== current.readable) return current.readable
     ? 'The return became readable after it was ingested.'
@@ -1034,9 +1040,16 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
         ? bundleChangeReason(previous, selectedBundle) ?? state.ingestStaleReason ?? 'The return listing differs from the bundle used for this ingestion.'
         : null;
       if (!selectedBundle) return reason ? { needsIngest: true, ingestStaleReason: reason } : {};
+      // The one self-healing staleness: the bundle "vanished" only because a
+      // poll read an empty listing (a restarting server answers exactly that),
+      // and the identical bundle is back. Every real change keeps its flag.
+      const healed = !differsFromIngest && state.ingestStaleReason === LISTING_GONE_REASON
+        ? { needsIngest: false, ingestStaleReason: null }
+        : {};
       return {
         ...reconcileListing(state, selectedBundle),
         ...(reason ? { needsIngest: true, ingestStaleReason: reason } : {}),
+        ...healed,
       };
     });
   },

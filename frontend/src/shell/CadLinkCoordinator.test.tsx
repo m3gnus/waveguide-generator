@@ -177,7 +177,7 @@ describe('CadLinkCoordinator', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
       calls.push(path);
-      if (path.endsWith('/returns')) return json({ items: [] });
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [] });
       if (path.endsWith('/fusion-status')) return json(closedFusion);
       if (path.endsWith('/solve-command')) return json({ command: null });
       return json({}, 404);
@@ -212,7 +212,7 @@ describe('CadLinkCoordinator', () => {
     const requests: Array<Record<string, unknown>> = [];
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
-      if (path.endsWith('/returns')) return json({ items: [] });
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [] });
       if (path.endsWith('/solve-command')) return json({ command: null });
       if (path.endsWith('/fusion-status')) {
         const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
@@ -368,7 +368,7 @@ describe('CadLinkCoordinator', () => {
     useDocumentStore.getState().setCadLink({
       designId: 'wgd_1', lineageId: 'wgl_1', baseEditVersion: 1,
     }, 'current');
-    let listing: { items: CadReturnBundle[] } = { items: [] };
+    let listing: { cadFolderConfigured: boolean; items: CadReturnBundle[] } = { cadFolderConfigured: true, items: [] };
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
       if (path.endsWith('/returns')) return json(listing);
@@ -388,13 +388,13 @@ describe('CadLinkCoordinator', () => {
     expect(cadLinkCoordinatorBridge.getSnapshot().status).toContain('Waiting for Fusion…');
 
     // An uncorrelated bundle must not settle this pull.
-    listing = { items: [{ ...initialBundle, requestId: 'req_other' }] };
+    listing = { cadFolderConfigured: true, items: [{ ...initialBundle, requestId: 'req_other' }] };
     await act(async () => {
       await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
     });
 
     const correlated = { ...initialBundle, requestId: 'req_1', documentName: 'Speaker pulled' };
-    listing = { items: [correlated] };
+    listing = { cadFolderConfigured: true, items: [correlated] };
     await act(async () => {
       await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
     });
@@ -420,7 +420,7 @@ describe('CadLinkCoordinator', () => {
     }, 'current');
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
-      if (path.endsWith('/returns')) return json({ items: [] });
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [] });
       if (path.endsWith('/fusion-status')) return json(linkedFusion);
       if (path.endsWith('/request-fusion-return')) {
         return json({ status: 'requested', requestId: 'req_1', documentName: 'Speaker' });
@@ -465,7 +465,7 @@ describe('CadLinkCoordinator', () => {
     useDocumentStore.getState().setCadLink({
       designId: 'wgd_1', lineageId: 'wgl_1', baseEditVersion: 1,
     }, 'current');
-    let listing: { items: CadReturnBundle[] } = { items: [] };
+    let listing: { cadFolderConfigured: boolean; items: CadReturnBundle[] } = { cadFolderConfigured: true, items: [] };
     const ingested = ingestRecord;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
@@ -486,7 +486,7 @@ describe('CadLinkCoordinator', () => {
     await renderCoordinator();
 
     const arrive = async () => {
-      listing = { items: [{ ...initialBundle, requestId: 'req_1', modifiedAt: '2026-08-13T12:00:00Z' }] };
+      listing = { cadFolderConfigured: true, items: [{ ...initialBundle, requestId: 'req_1', modifiedAt: '2026-08-13T12:00:00Z' }] };
       await act(async () => {
         await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
         await Promise.resolve();
@@ -507,7 +507,7 @@ describe('CadLinkCoordinator', () => {
 
     // With the gate satisfied the same chain reaches the solve.
     solveCurrentCadImport.mockImplementation(async () => 'submitted' as never);
-    listing = { items: [] };
+    listing = { cadFolderConfigured: true, items: [] };
     await act(async () => {
       const chain = cadLinkCoordinatorBridge.getSnapshot().pullAndSolve().then((value) => { outcome = value; });
       await Promise.resolve(); await Promise.resolve();
@@ -528,7 +528,7 @@ describe('CadLinkCoordinator', () => {
     let outcome: Record<string, unknown> | null = null;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
-      if (path.endsWith('/returns')) return json({ items: [initialBundle] });
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [initialBundle] });
       if (path.endsWith('/fusion-status')) return json(closedFusion);
       if (path.endsWith('/solve-command/outcome')) {
         reported.push(JSON.parse(String(init?.body)));
@@ -572,7 +572,7 @@ describe('CadLinkCoordinator', () => {
     let ingestCalls = 0;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
-      if (path.endsWith('/returns')) return json({ items: [otherProject] });
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [otherProject] });
       if (path.endsWith('/fusion-status')) return json(closedFusion);
       if (path.endsWith('/solve-command/outcome')) {
         reported.push(JSON.parse(String(init?.body)));
@@ -611,7 +611,7 @@ describe('CadLinkCoordinator', () => {
     let ingestIndex = 0;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
-      if (path.endsWith('/returns')) return json({ items: [initialBundle] });
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [initialBundle] });
       if (path.endsWith('/fusion-status')) return json(closedFusion);
       if (path.endsWith('/solve-command/outcome')) {
         reported.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
@@ -839,7 +839,7 @@ describe('CadLinkCoordinator', () => {
   });
 
   it('detects, selects, and automatically ingests a newly arrived return', async () => {
-    let listing = { items: [initialBundle] };
+    let listing = { cadFolderConfigured: true, items: [initialBundle] };
     const ingestBodies: Array<Record<string, unknown>> = [];
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
@@ -861,7 +861,7 @@ describe('CadLinkCoordinator', () => {
     expect(workspaceModeStore.getSnapshot().mode).toBe('parametric');
 
     const arrived = { ...initialBundle, modifiedAt: '2026-08-13T12:00:00Z', documentName: 'Speaker rebuilt' };
-    listing = { items: [arrived] };
+    listing = { cadFolderConfigured: true, items: [arrived] };
     await act(async () => {
       await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
       await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
@@ -879,7 +879,7 @@ describe('CadLinkCoordinator', () => {
 
   it('does not double-ingest an arrival while its solve command is being consumed', async () => {
     const solveResponse = deferred<Response>();
-    let listing = { items: [initialBundle] };
+    let listing = { cadFolderConfigured: true, items: [initialBundle] };
     let ingestCalls = 0;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
@@ -897,7 +897,7 @@ describe('CadLinkCoordinator', () => {
     await renderCoordinator();
 
     const arrived = { ...initialBundle, modifiedAt: '2026-08-13T12:00:00Z', documentName: 'Command arrival' };
-    listing = { items: [arrived] };
+    listing = { cadFolderConfigured: true, items: [arrived] };
     await act(async () => {
       await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
       await Promise.resolve();
@@ -921,7 +921,7 @@ describe('CadLinkCoordinator', () => {
   });
 
   it('does not auto-ingest an arrival already owned by a parked solve command', async () => {
-    let listing = { items: [initialBundle] };
+    let listing = { cadFolderConfigured: true, items: [initialBundle] };
     let ingestCalls = 0;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
@@ -937,7 +937,7 @@ describe('CadLinkCoordinator', () => {
       commandId: 'cmd-parked', bundlePath: arrived.bundlePath, blockers: ['review settings'],
       parkedAt: '2026-08-13T12:00:00Z',
     });
-    listing = { items: [arrived] };
+    listing = { cadFolderConfigured: true, items: [arrived] };
 
     await act(async () => {
       await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
@@ -949,7 +949,7 @@ describe('CadLinkCoordinator', () => {
   });
 
   it('retires a parked solve command when a different newer return arrives', async () => {
-    let listing = { items: [initialBundle] };
+    let listing = { cadFolderConfigured: true, items: [initialBundle] };
     const reported: Array<Record<string, unknown>> = [];
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
@@ -974,7 +974,7 @@ describe('CadLinkCoordinator', () => {
       name: 'newer.wgreturn', bundlePath: 'wgreturn/newer.wgreturn',
       documentName: 'Newer return', modifiedAt: '2026-08-13T12:00:00Z',
     };
-    listing = { items: [arrived, initialBundle] };
+    listing = { cadFolderConfigured: true, items: [arrived, initialBundle] };
 
     await act(async () => {
       await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
@@ -1001,7 +1001,7 @@ describe('CadLinkCoordinator', () => {
     const ingestPaths: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
-      if (path.endsWith('/returns')) return json({ items: [initialBundle, selected] });
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [initialBundle, selected] });
       if (path.endsWith('/fusion-status')) return json(closedFusion);
       if (path.endsWith('/solve-command')) return json({ command: null });
       if (path.endsWith('/ingest')) {
@@ -1037,7 +1037,7 @@ describe('CadLinkCoordinator', () => {
     const ingestPaths: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
-      if (path.endsWith('/returns')) return json({ items: [initialBundle, older, newer] });
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [initialBundle, older, newer] });
       if (path.endsWith('/fusion-status')) return json(closedFusion);
       if (path.endsWith('/solve-command')) return json({ command: null });
       if (path.endsWith('/ingest')) {
@@ -1076,7 +1076,7 @@ describe('CadLinkCoordinator', () => {
       const path = String(input);
       if (path.endsWith('/returns')) {
         listingRequest += 1;
-        if (listingRequest === 1) return json({ items: [initialBundle] });
+        if (listingRequest === 1) return json({ cadFolderConfigured: true, items: [initialBundle] });
         return listingRequest === 2 ? olderResponse.promise : newerResponse.promise;
       }
       if (path.endsWith('/fusion-status')) return json(closedFusion);
@@ -1097,11 +1097,11 @@ describe('CadLinkCoordinator', () => {
       await Promise.resolve();
     });
     await act(async () => {
-      newerResponse.resolve(json({ items: [newer] }));
+      newerResponse.resolve(json({ cadFolderConfigured: true, items: [newer] }));
       await newerRefresh;
     });
     await act(async () => {
-      olderResponse.resolve(json({ items: [older] }));
+      olderResponse.resolve(json({ cadFolderConfigured: true, items: [older] }));
       await olderRefresh;
     });
 
@@ -1111,7 +1111,7 @@ describe('CadLinkCoordinator', () => {
   });
 
   it('marks an ingestion stale while the CAD Link panel is unmounted', async () => {
-    let listing = { items: [initialBundle] };
+    let listing = { cadFolderConfigured: true, items: [initialBundle] };
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
       if (path.endsWith('/returns')) return json(listing);
@@ -1124,7 +1124,7 @@ describe('CadLinkCoordinator', () => {
       useCadReturnStore.getState().setSourceSize('source-hf', 3);
     });
 
-    listing = { items: [{
+    listing = { cadFolderConfigured: true, items: [{
       ...initialBundle,
       // The revision timestamp can remain stable when a listing's parsed
       // source evidence changes; reconciliation must still invalidate ingest.
@@ -1155,7 +1155,7 @@ describe('CadLinkCoordinator', () => {
     const response = deferred<Response>();
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
-      if (path.endsWith('/returns')) return json({ items: [initialBundle] });
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [initialBundle] });
       if (path.endsWith('/fusion-status')) return json(closedFusion);
       if (path.endsWith('/ingest')) return response.promise;
       return json({}, 404);
@@ -1185,7 +1185,7 @@ describe('CadLinkCoordinator', () => {
     let ingestCalls = 0;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
-      if (path.endsWith('/returns')) return json({ items: [initialBundle] });
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [initialBundle] });
       if (path.endsWith('/fusion-status')) return json(closedFusion);
       if (path.endsWith('/ingest')) {
         ingestCalls += 1;
@@ -1248,7 +1248,7 @@ describe('CadLinkCoordinator', () => {
           sequence: 5, designHash: 'sha256:d', geometryHash: 'sha256:g', artifactSha256: 'sha256:a',
         });
       }
-      if (path.endsWith('/returns')) return json({ items: [] });
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [] });
       if (path.endsWith('/fusion-status')) return json(bothChanged);
       return json({}, 404);
     }));
@@ -1291,7 +1291,7 @@ describe('CadLinkCoordinator', () => {
         sendCalls += 1;
         return sendCalls === 1 ? older.promise : newer.promise;
       }
-      if (path.endsWith('/returns')) return json({ items: [initialBundle] });
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [initialBundle] });
       if (path.endsWith('/fusion-status')) return json(closedFusion);
       return json({}, 404);
     }));
@@ -1330,7 +1330,7 @@ describe('CadLinkCoordinator', () => {
   ] as const)('%s returns to parametric mode and invalidates retained CAD state', async (_path, replace) => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
-      if (path.endsWith('/returns')) return json({ items: [initialBundle] });
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [initialBundle] });
       if (path.endsWith('/fusion-status')) return json(closedFusion);
       return json({}, 404);
     }));
@@ -1386,7 +1386,7 @@ describe('CadLinkCoordinator', () => {
     };
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
-      if (path.endsWith('/returns')) return json({ items: [initialBundle, matching] });
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [initialBundle, matching] });
       if (path.endsWith('/fusion-status')) return json(closedFusion);
       if (path.endsWith('/solve-command')) return json({ command: null });
       return json({}, 404);
