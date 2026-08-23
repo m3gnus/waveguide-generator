@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ChartTokens } from '../results/EChart';
 import type { ResultPayload } from '../results/types';
-import { directivityAngleGuides, heatmapOption } from './ResultsPanel';
+import { directivityAngleGuides, directivityAngleLabelIndices, heatmapOption } from './ResultsPanel';
 
 type GuideLine = { shape: { x1: number; y1: number; x2: number; y2: number } };
 type GuideRenderItem = (params: { coordSys: { x: number; y: number; width: number; height: number }; dataIndex: number }) => GuideLine | null;
@@ -48,5 +48,35 @@ describe('directivity angular guides', () => {
     const drawn = guides.data!.map((_angle, dataIndex) => guides.renderItem!({ coordSys, dataIndex }));
     expect(drawn.map((line) => Math.round(line!.shape.y1))).toEqual([165, 150, 135, 120, 105, 90, 75, 60, 45, 30, 15]);
     expect(drawn.every((line) => line!.shape.x1 === 0 && line!.shape.x2 === 100)).toBe(true);
+  });
+});
+
+describe('directivity angle labels', () => {
+  const sweep = Array.from({ length: 289 }, (_, index) => -180 + index * 1.25);
+  const labelled = (density: 'compact' | 'regular' | 'full') =>
+    [...directivityAngleLabelIndices(sweep, density)].map((index) => sweep[index]).sort((a, b) => a - b);
+
+  it('always labels the on-axis row, at every card size', () => {
+    // ECharts' hideOverlap kept every second tick on a small card, so the axis
+    // read 170, 150, 130 ... and dropped 0 deg -- the angle the whole map is
+    // read against.
+    (['compact', 'regular', 'full'] as const).forEach((density) => {
+      expect(labelled(density)).toContain(0);
+    });
+  });
+
+  it('stays symmetric about zero on round steps', () => {
+    expect(labelled('compact')).toEqual([-180, -135, -90, -45, 0, 45, 90, 135, 180]);
+    expect(labelled('regular')).toEqual([-180, -150, -120, -90, -60, -30, 0, 30, 60, 90, 120, 150, 180]);
+    expect(labelled('full')).toEqual(Array.from({ length: 37 }, (_, index) => -180 + index * 10));
+  });
+
+  it('labels a half sweep and a single row without dividing by zero', () => {
+    const half = Array.from({ length: 37 }, (_, index) => index * 5);
+    // Half the span fits a finer step inside the same label budget.
+    expect([...directivityAngleLabelIndices(half, 'compact')].map((i) => half[i]).sort((a, b) => a - b))
+      .toEqual([0, 30, 60, 90, 120, 150, 180]);
+    expect([...directivityAngleLabelIndices([0], 'full')]).toEqual([0]);
+    expect([...directivityAngleLabelIndices([], 'full')]).toEqual([]);
   });
 });
