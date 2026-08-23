@@ -20,7 +20,7 @@ import { resolveResultView, resultViewStore, useResultView } from '../stores/res
 import { hydrateJobDesign, replaceWithJobDesign } from '../jobs/jobDesign';
 import { showJobModel } from '../jobs/showJobModel';
 import { exportStemForJob, exportTitleSlug } from '../jobs/exportNaming';
-import { CHART_TYPES, MAX_RESULT_PANELS, POLAR_PLANES, RESULT_PANEL_COUNTS, preferencesStore, runDisplayName, usePreferences, type ChartType, type PolarPlane } from '../prefs/preferences';
+import { CHART_TYPES, MAX_RESULT_PANELS, POLAR_PLANES, RESULT_PANEL_COUNTS, preferencesStore, runDisplayName, usePreferences, type ChartType, type GroupDelayUnit, type PolarPlane } from '../prefs/preferences';
 import { ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
 import { directivityFrequencyTickLabels } from '../results/directivityFrequencyAxis';
 import { seriesColorsByLabel } from '../results/seriesColors';
@@ -875,9 +875,31 @@ export function phaseOption(items: NamedResult[], tokens: ChartTokens, density: 
   return lineOption(series, tokens, 'Phase [°]', density);
 }
 
-/** Group delay in ms, with the common time-of-flight to the mic removed. */
-export function groupDelayOption(items: NamedResult[], tokens: ChartTokens, density: ChartDensity): EChartsOption {
-  const traces = groupDelaySeries(items);
+/** Decimals that keep a group delay readable in the unit it is drawn in. */
+const GROUP_DELAY_DIGITS: Record<GroupDelayUnit, number> = { ms: 3, cycles: 2 };
+
+/** How one group delay sample reads in the tooltip, unit included. */
+export function formatGroupDelay(value: unknown, unit: GroupDelayUnit): string {
+  // Cartesian tooltips hand over the value dimension, but a series whose data
+  // are [frequency, value] pairs can hand over the pair; take the last element
+  // either way rather than printing a frequency as a delay.
+  const sample = Array.isArray(value) ? value[value.length - 1] : value;
+  // `Number(null)` is 0, and a gap printed as "0.000 ms" is a delay the solve
+  // never reported.
+  const numeric = typeof sample === 'number' || typeof sample === 'string' ? Number(sample) : Number.NaN;
+  return Number.isFinite(numeric) ? `${numeric.toFixed(GROUP_DELAY_DIGITS[unit])} ${unit}` : '—';
+}
+
+/**
+ * Group delay, with the common time-of-flight to the mic removed.
+ *
+ * The unit is the user's: milliseconds, or periods of the frequency the delay
+ * occurs at. Only the projection changes -- the curve, its trust gating and its
+ * series names are the same either way -- and the axis autoscales in both, since
+ * a constant delay rises linearly with frequency once it is counted in cycles.
+ */
+export function groupDelayOption(items: NamedResult[], tokens: ChartTokens, density: ChartDensity, unit: GroupDelayUnit = 'ms'): EChartsOption {
+  const traces = groupDelaySeries(items, unit);
   const colors = seriesColorsByLabel(traces.map(({ name }) => name), tokens.series, tokens.accent);
   const series = traces.map((trace, index) => {
     const color = colors.get(trace.name) ?? tokens.accent;
@@ -887,7 +909,17 @@ export function groupDelayOption(items: NamedResult[], tokens: ChartTokens, dens
       itemStyle: { color },
     };
   });
-  return lineOption(series, tokens, 'Group delay [ms]', density);
+  const option = lineOption(series, tokens, `Group delay [${unit}]`, density);
+  // Compact and regular cards drop the axis title, so without this the tooltip
+  // is the only place the unit can be stated -- and a bare number reads as ms
+  // by habit.
+  return {
+    ...option,
+    tooltip: {
+      ...(option.tooltip as Record<string, unknown>),
+      valueFormatter: (value: unknown) => formatGroupDelay(value, unit),
+    },
+  };
 }
 
 /**
@@ -1066,7 +1098,8 @@ const CHART_BADGES: Record<ChartType, { short: string; long?: string; unit?: str
   balloon: { short: 'Balloon' },
   polar_response: { short: 'Polar', long: 'Polar response', unit: 'dB' },
   phase_response: { short: 'Phase', long: 'On-axis phase', unit: '°' },
-  group_delay: { short: 'GD', long: 'Group delay', unit: 'ms' },
+  // The group delay unit follows a preference, not the chart: see chartUnit.
+  group_delay: { short: 'GD', long: 'Group delay' },
   // The impedance unit depends on the result, not the chart: see chartUnit.
   impedance: { short: 'Impedance' },
   radiation_impedance: { short: 'Rad Z', long: 'Radiation load', unit: 'Pa·s/m³' },
@@ -1088,7 +1121,8 @@ const CHART_BADGES: Record<ChartType, { short: string; long?: string; unit?: str
  * primary had no impedance block: an electrical overlay then put Ω on the axis
  * while the chip went blank, which is the mislabelling in its quietest form.
  */
-export function chartUnit(chartType: ChartType, result?: ResultPayload, items?: NamedResult[]): string | undefined {
+export function chartUnit(chartType: ChartType, result?: ResultPayload, items?: NamedResult[], groupDelayUnit: GroupDelayUnit = 'ms'): string | undefined {
+  if (chartType === 'group_delay') return groupDelayUnit;
   if (chartType === 'impedance') {
     const candidates = items?.length ? items : result ? [{ id: 'primary', label: 'Primary', result }] : [];
     const { items: comparable, units } = impedanceComparable(candidates);
@@ -1501,7 +1535,7 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
         : <ChartStub reason="On-Axis Phase needs the spl_on_axis phase samples from a completed solve."/>;
     }
     if (chartType === 'group_delay') {
-      const option = groupDelayOption(overlays, tokens, density);
+      const option = groupDelayOption(overlays, tokens, density, preferences.groupDelayUnit);
       return Array.isArray(option.series) && option.series.length
         ? <EChart option={option} label="Interactive HornLab on-axis group delay by frequency" live={live}/>
         : <ChartStub reason={groupDelayMissingReason(result)}/>;
@@ -1544,7 +1578,7 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
         : <ChartStub reason="The retained radiation matrix has no finite reduced load curves."/>;
     }
     return null;
-  }, [beamShapeAction, chartType, density, live, measured, overlays, preferences.directivityGuideInterval, preferences.impedanceDisplay, preferences.mapReference, preferences.smoothing, preferences.splPhase, result, tokens, wrapper]);
+  }, [beamShapeAction, chartType, density, live, measured, overlays, preferences.directivityGuideInterval, preferences.groupDelayUnit, preferences.impedanceDisplay, preferences.mapReference, preferences.smoothing, preferences.splPhase, result, tokens, wrapper]);
   return plot ?? <Summary result={result} wrapper={wrapper} job={job} channelId={channelId} density={density}/>;
 }
 
@@ -1640,7 +1674,7 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
     : impedanceItems ? impedanceSubtitle(impedanceItems)
     : chartType === 'radiation_impedance' ? 'engineering · exp(+jωt) · in-phase ports'
     : null;
-  const unit = chartUnit(chartType, result, impedanceItems);
+  const unit = chartUnit(chartType, result, impedanceItems, preferencesStore.getSnapshot().groupDelayUnit);
   const activeLabel = compared.find((item) => item.result === result)?.label ?? compared[0]?.label ?? 'the primary run';
   // The detail dialog owns the rendered chart while it is open, so capture from
   // there rather than from the card behind it -- otherwise the large view would

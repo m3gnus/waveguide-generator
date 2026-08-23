@@ -40,6 +40,15 @@ describe('client preferences', () => {
     preferencesStore.update({ showReverseNull: true });
     expect(loadPreferences(localStorage.getItem('waveguide-v2-g3-preferences')).showReverseNull).toBe(true);
   });
+  it('reads group delay in milliseconds until cycles is asked for', () => {
+    expect(loadPreferences(null).groupDelayUnit).toBe('ms');
+    expect(loadPreferences(JSON.stringify({ version: STORAGE_VERSION, preferences: {} })).groupDelayUnit).toBe('ms');
+    preferencesStore.update({ groupDelayUnit: 'cycles' });
+    expect(loadPreferences(localStorage.getItem('waveguide-v2-g3-preferences')).groupDelayUnit).toBe('cycles');
+    // A hand-edited profile cannot invent a third unit for the axis to name.
+    expect(loadPreferences(JSON.stringify({ version: STORAGE_VERSION, preferences: { groupDelayUnit: 'seconds' } })).groupDelayUnit).toBe('ms');
+  });
+
   it('persists and bounds the directivity angular guide interval', () => {
     preferencesStore.update({ directivityGuideInterval: 15 });
     expect(loadPreferences(localStorage.getItem('waveguide-v2-g3-preferences')).directivityGuideInterval).toBe(15);
