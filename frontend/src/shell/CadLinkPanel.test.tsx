@@ -152,9 +152,13 @@ describe('CadLinkPanel', () => {
     expect(host.querySelector('.cad-return-summary')?.textContent).toContain('Ready to solve');
     expect(host.querySelector('.cad-findings .section-head')?.getAttribute('aria-expanded')).toBe('false');
     expect(host.querySelector('.cad-blocking-suffix')).toBeNull();
-    for (const moved of ['Mesh detail', 'Drive channels & drivers', 'Crossover', 'Rebuild mesh']) {
+    for (const moved of ['Mesh detail', 'Crossover', 'Rebuild mesh']) {
       expect(host.textContent).not.toContain(moved);
     }
+    // The Drivers section moved too, but the guide above names it in prose, so
+    // this asks the DOM for its controls rather than for the word.
+    expect(host.querySelector('.cad-channel')).toBeNull();
+    expect(host.querySelector('[aria-label^="Drive channel for"]')).toBeNull();
     expect(host.textContent).not.toContain('Explicit solve sweep');
     expect([...host.querySelectorAll<HTMLButtonElement>('button')].some((button) => button.textContent === 'Solve CAD import')).toBe(false);
     expect(host.querySelector('.cad-viewport-source-buttons')).toBeNull();
@@ -697,7 +701,7 @@ describe('CadLinkPanel', () => {
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
 
     const guide = host.querySelector('.cad-simulation-guide')!;
-    expect(guide.textContent).toContain('Driver T/S, crossover, sweep, directivity, solve options, and mesh detail');
+    expect(guide.textContent).toContain('Drivers, crossover, sweep, directivity, solve options, and mesh detail');
     act(() => guide.querySelector<HTMLButtonElement>('button')!.click());
     expect(activate).toHaveBeenCalledWith('simulation');
   });

@@ -268,7 +268,7 @@ function SimulationInputsGuide({ prepared }: { prepared: boolean }) {
   return <section className={`cad-simulation-guide${prepared ? ' ready' : ''}`}>
     <div>
       <b>{prepared ? 'Simulation inputs are ready' : 'Simulation inputs appear after preparation'}</b>
-      <span>Driver T/S, crossover, sweep, directivity, solve options, and mesh detail live in the Simulation tab.</span>
+      <span>Drivers, crossover, sweep, directivity, solve options, and mesh detail live in the Simulation tab.</span>
     </div>
     <button onClick={() => workspaceNavigation.activate('simulation')}>Open Simulation</button>
   </section>;
