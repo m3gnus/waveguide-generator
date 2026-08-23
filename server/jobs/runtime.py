@@ -1387,7 +1387,8 @@ class JobRuntime:
         ):
             raise ImportedSolveRefusal(
                 "imported_diagonal_inclination_unsupported",
-                "Phase 2 imported solves support diagonal observation only at the default 45-degree inclination",
+                "Phase 2 imported solves support diagonal observation only at the "
+                "default 45-degree inclination; set the diagonal plane angle to 45",
                 details={"inclination": polar.inclination},
             )
         try:
