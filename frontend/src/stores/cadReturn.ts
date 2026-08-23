@@ -1264,10 +1264,17 @@ export function driverValues(form: ChannelDriverForm | undefined): Partial<Recor
   return { ...(form.preset?.base ?? {}), ...form.fields };
 }
 
-/** Which fields the user has changed away from the preset. Installation inputs
- * are excluded: they were never the driver's to state. */
+/**
+ * Which fields the user has changed away from the preset. Installation inputs
+ * are excluded: they were never the driver's to state.
+ *
+ * A hand-entered driver has no base to have been changed away from -- every
+ * number in it is the user's own -- so it reports no edits at all. Counting
+ * them would put an "n edited" chip and a live *Reset to database values* on a
+ * driver that has no database values to go back to.
+ */
 export function driverEditedKeys(form: ChannelDriverForm | undefined): DriverFieldKey[] {
-  if (!form?.preset) return [];
+  if (!form?.preset || form.preset.source === 'manual') return [];
   return DRIVER_FIELD_KEYS.filter((key) => (
     !DRIVER_INSTALLATION_KEYS.includes(key)
     && form.fields[key] !== undefined
