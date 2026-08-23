@@ -90,7 +90,7 @@ const CAPTURE_CHOICES: Array<{ mode: CadCaptureMode; label: string; detail: stri
   {
     mode: 'project',
     label: 'Once per project',
-    detail: 'In runs/<project>/cad/, one copy per model state however many times it is solved. Saves space when sweeping one geometry.',
+    detail: 'In runs/<project>/cad/, only the newest model state -- archiving a later one deletes the last. Saves space when sweeping one geometry; each run folder keeps its own copy regardless.',
   },
   {
     mode: 'off',
