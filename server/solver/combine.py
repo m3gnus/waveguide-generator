@@ -340,6 +340,8 @@ class _PairFit:
     residual_deg: float | None
     intercept_deg: float | None
     points: int
+    fitted_delay_s: float | None = None
+    phase_at_fc_rad: float | None = None
 
 
 def _weighted_line_fit(
@@ -424,15 +426,45 @@ def _pair_alignment(
             notes,
         )
     slope, intercept, rms = refined
+    fitted_delay = coarse_delay + slope
+    at_fc = _interp_complex(freqs, ratio, eval_hz)
     return (
         _PairFit(
-            delay_s=coarse_delay + slope,
+            delay_s=fitted_delay,
+            fitted_delay_s=fitted_delay,
             residual_deg=float(np.degrees(rms)),
             intercept_deg=float(np.degrees(_wrap_pi(intercept))),
             points=int(np.count_nonzero(refine_mask)),
+            phase_at_fc_rad=float(np.angle(at_fc)) if abs(at_fc) > 0.0 else None,
         ),
         notes,
     )
+
+
+def _pin_delay_s(fit: _PairFit, eval_hz: float, target_rad: float) -> float:
+    """Pin a pair's delay where the crossover actually sums.
+
+    The fit settles the period branch, which a phase value at one frequency
+    cannot do on its own; the delay itself then brings the raw ratio's phase
+    at ``eval_hz`` to ``target_rad`` (0 for a like-polarity pair, pi when the
+    applied polarity flips the raw pair) on the branch nearest the fitted
+    slope. On a real horn the raw ratio is rarely a pure delay, and the
+    least-squares line trades exactness at fc for the wings -- measured on a
+    three-way return as a reverse null of -8 dB instead of -15 dB.
+    """
+
+    if fit.phase_at_fc_rad is None:
+        return fit.delay_s
+    period = 1.0 / float(eval_hz)
+    principal = (fit.phase_at_fc_rad - target_rad) / (_TWO_PI * float(eval_hz))
+    cycles = round((fit.delay_s - principal) / period)
+    return principal + cycles * period
+
+
+def _raw_pair_flipped(fit: _PairFit) -> bool:
+    """True when the raw drivers of a pair sit closer to 180 than to 0 degrees."""
+
+    return fit.intercept_deg is not None and abs(fit.intercept_deg) > 90.0
 
 
 def _spl_db(pressure: np.ndarray, reference_pa: float) -> np.ndarray:
@@ -535,15 +567,17 @@ def _phase_error_deg(
     freqs: np.ndarray,
     lower: np.ndarray,
     upper: np.ndarray,
-    lp: Filter | None,
-    hp: Filter | None,
+    lower_channel: ResolvedChannel,
+    upper_channel: ResolvedChannel,
     eval_hz: float,
 ) -> float | None:
-    """How far the aligned pair sits from what its filter pair asks for.
+    """How far the aligned pair sits from what its filter chains ask for.
 
     The ideal pair already has a phase relationship of its own at the
-    crossover (0 degrees for LR4, 90 for BW3); what matters is the departure
-    from it. Polarity cancels in the ratio, so it is left out of both sides.
+    crossover (0 degrees for LR4, 90 for BW3, plus whatever a middle band's
+    other section contributes there); what matters is the departure from it.
+    ``lower``/``upper`` carry the applied polarity, so an inverted channel
+    that sums correctly reads as 0, not 180.
     """
 
     point = np.asarray([float(eval_hz)], dtype=np.float64)
@@ -551,11 +585,11 @@ def _phase_error_deg(
     measured_high = _interp_complex(freqs, upper, eval_hz)
     if abs(measured_low) <= 0.0 or abs(measured_high) <= 0.0:
         return None
-    ideal_low = (
-        complex(1.0) if lp is None else complex(channel_weight(point, lp=lp)[0])
+    ideal_low = complex(
+        channel_weight(point, hp=lower_channel.hp, lp=lower_channel.lp)[0]
     )
-    ideal_high = (
-        complex(1.0) if hp is None else complex(channel_weight(point, hp=hp)[0])
+    ideal_high = complex(
+        channel_weight(point, hp=upper_channel.hp, lp=upper_channel.lp)[0]
     )
     if abs(ideal_low) <= 0.0 or abs(ideal_high) <= 0.0:
         return None
@@ -732,7 +766,6 @@ def combine_drive_channels(
 
     # Alignment: one fit per adjacent pair on the raw arrival difference, so
     # the ideal filter pair sees a coincident pair of drivers.
-    pair_delay_s: list[float] = []
     pair_fits: list[_PairFit] = []
     overlaps: list[np.ndarray] = []
     for index in range(len(members) - 1):
@@ -758,7 +791,6 @@ def combine_drive_channels(
             )
         fit, notes = _pair_alignment(freqs, ratio, weight, overlap, eval_hz[index])
         pair_fits.append(fit)
-        pair_delay_s.append(fit.delay_s)
         for note in notes:
             warnings.append(f"pair {pair_names[index]}: {note}")
         if fit.residual_deg is not None and fit.residual_deg > _RESIDUAL_WARN_DEG:
@@ -767,12 +799,58 @@ def combine_drive_channels(
                 f"{fit.residual_deg:.1f} degree RMS residual; the delay it "
                 "reports is an estimate, not a measurement"
             )
-        if fit.intercept_deg is not None and abs(abs(fit.intercept_deg) - 180.0) < 30.0:
-            warnings.append(
-                f"pair {pair_names[index]}: the raw drivers sit "
-                f"{fit.intercept_deg:.0f} degrees apart after alignment; they "
-                "may be wired in opposite polarity"
-            )
+
+    # Polarity: the ideal filter pair says whether the upper member flips
+    # (LR2, BW2); the raw drivers say whether they are already opposed
+    # (intercept near 180 degrees). Auto applies both, so an opposed pair is
+    # inverted and then aligned on its true delay instead of a half-period
+    # one. An explicit ``invert`` overrides the channel; the delay target
+    # follows whatever polarity is actually applied, so the pair still sums in
+    # phase at the crossover either way.
+    ideal_flips = [
+        pair_inverts(
+            settings[members[index]].lp,
+            settings[members[index + 1]].hp,
+            eval_hz[index],
+        )
+        for index in range(len(members) - 1)
+    ]
+    raw_flips = [_raw_pair_flipped(pair_fits[index]) for index in range(len(members) - 1)]
+    auto_inverted: dict[str, bool] = {members[0]: False}
+    for index in range(len(members) - 1):
+        auto_inverted[members[index + 1]] = auto_inverted[members[index]] != (
+            ideal_flips[index] != raw_flips[index]
+        )
+    inverted = {
+        name: (
+            auto_inverted[name]
+            if settings[name].invert is None
+            else bool(settings[name].invert)
+        )
+        for name in members
+    }
+    pair_delay_s: list[float] = []
+    for index in range(len(members) - 1):
+        lower, upper = members[index], members[index + 1]
+        applied_flip = inverted[lower] != inverted[upper]
+        raw_target = np.pi if applied_flip != ideal_flips[index] else 0.0
+        pair_delay_s.append(_pin_delay_s(pair_fits[index], eval_hz[index], raw_target))
+        if raw_flips[index]:
+            if applied_flip != ideal_flips[index]:
+                warnings.append(
+                    f"pair {pair_names[index]}: the raw drivers sit "
+                    f"{pair_fits[index].intercept_deg:.0f} degrees apart; "
+                    f"{upper!r} is inverted relative to {lower!r} so the pair "
+                    "sums in phase on its true delay"
+                )
+            else:
+                warnings.append(
+                    f"pair {pair_names[index]}: the raw drivers sit "
+                    f"{pair_fits[index].intercept_deg:.0f} degrees apart but "
+                    "neither channel is inverted, so they are aligned with a "
+                    "half-period delay that only holds near the crossover; "
+                    "consider inverting one of them"
+                )
 
     reference_index = members.index(reference_id)
     auto_delay_s: dict[str, float] = {reference_id: 0.0}
@@ -794,23 +872,6 @@ def combine_drive_channels(
     }
     aligned_any = any(settings[name].delay_mode == "auto" for name in members)
 
-    auto_inverted: dict[str, bool] = {members[0]: False}
-    for index in range(len(members) - 1):
-        flips = pair_inverts(
-            settings[members[index]].lp,
-            settings[members[index + 1]].hp,
-            eval_hz[index],
-        )
-        auto_inverted[members[index + 1]] = auto_inverted[members[index]] != flips
-    inverted = {
-        name: (
-            auto_inverted[name]
-            if settings[name].invert is None
-            else bool(settings[name].invert)
-        )
-        for name in members
-    }
-
     aligned = {
         name: levelled[name] * np.exp(-1j * _TWO_PI * freqs * delays_s[name])
         for name in members
@@ -821,12 +882,17 @@ def combine_drive_channels(
         pairs[pair_names[index]] = {
             "eval_hz": eval_hz[index],
             "fit_residual_deg": pair_fits[index].residual_deg,
+            "fit_delay_ms": (
+                None
+                if pair_fits[index].fitted_delay_s is None
+                else pair_fits[index].fitted_delay_s * 1000.0
+            ),
             "phase_error_at_fc_deg": _phase_error_deg(
                 freqs,
-                aligned[lower],
-                aligned[upper],
-                settings[lower].lp,
-                settings[upper].hp,
+                aligned[lower] * (-1.0 if inverted[lower] else 1.0),
+                aligned[upper] * (-1.0 if inverted[upper] else 1.0),
+                settings[lower],
+                settings[upper],
                 eval_hz[index],
             ),
             "reverse_null_db": _reverse_null_db(
