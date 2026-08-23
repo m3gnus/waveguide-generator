@@ -16,12 +16,51 @@ export interface ObservationMetadata {
  * only sanctioned way to obtain one, because a payload that does not carry
  * both members and crossovers is not a combined channel.
  */
+/** One high-pass or low-pass section as the result payload states it. */
+export interface CombineFilterSection {
+  family: string;
+  order: number;
+  fc_hz: number;
+}
+
+/** What the solver resolved for one member: the values auto chose, the values
+ * the user stated, and which of the two each one is. */
+export interface CombineChannelMetadata {
+  hp?: CombineFilterSection | null;
+  lp?: CombineFilterSection | null;
+  gain_db?: number;
+  gain_mode?: 'auto' | 'manual';
+  gain_auto_db?: number;
+  delay_ms?: number;
+  delay_mode?: 'auto' | 'manual';
+  delay_auto_ms?: number;
+  inverted?: boolean;
+  invert_mode?: 'auto' | 'manual';
+}
+
+/** Per-pair alignment evidence, keyed `"<lower>-<upper>"`. */
+export interface CombinePairMetadata {
+  eval_hz?: number;
+  fit_residual_deg?: number;
+  phase_error_at_fc_deg?: number;
+  reverse_null_db?: number;
+  points?: number;
+}
+
 export interface CombineMetadata {
   members: string[];
   member_roles?: Array<string | null>;
-  crossovers_hz: number[];
+  /** One entry per adjacent pair: its crossover, or null when the pair's two
+   * sections do not share one — which a per-channel spec is free to do. */
+  crossovers_hz: Array<number | null>;
+  /** The channel auto alignment pinned at 0 ms. Absent on legacy payloads. */
+  reference?: string;
+  /** The resolved per-channel form. Absent on payloads solved before it. */
+  channels?: Record<string, CombineChannelMetadata>;
+  pairs?: Record<string, CombinePairMetadata>;
   /** Time alignment applied per member, keyed by channel id. */
   delays_ms?: Record<string, number>;
+  gains_db?: Record<string, number>;
   /** The server also records the target and the per-member gains it applied. */
   level_match?: { enabled?: boolean; [key: string]: unknown };
   align?: boolean;
