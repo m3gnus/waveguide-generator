@@ -1028,6 +1028,11 @@ class JobItem(JobModel):
     axisymmetric_eligibility_reasons: list[str] = Field(default_factory=list)
     solve_wall_time_seconds: float | None = None
     cad_source: CadSource | None = None
+    #: The exact imported-geometry request persisted with a CAD run. This is
+    #: deliberately a JSON object rather than today's ImportedGeometrySource:
+    #: old rows must remain inspectable even if their accepted wire predates a
+    #: later additive field or stricter validation rule.
+    cad_setup: dict[str, Any] | None = None
 
 
 class JobStatusResponse(JobItem):
