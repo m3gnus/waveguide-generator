@@ -91,6 +91,7 @@ describe('imported solve submission wire', () => {
             source: 'database',
             kind: 'cd',
             z_ohm: 8,
+            xo_min_hz: null,
             base: { sd_cm2: 26, bl_t_m: 12.4, re_ohm: 6.2, mms_g: 2.4, fs_hz: 620 },
           },
         },

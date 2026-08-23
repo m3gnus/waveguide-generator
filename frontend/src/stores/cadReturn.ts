@@ -63,6 +63,9 @@ export interface DriverPreset {
   source: DriverPresetSource;
   kind: DriverKind;
   z_ohm: number | null;
+  /** The manufacturer's recommended minimum crossover frequency, or null when
+   * the driver's source did not publish one. */
+  xo_min_hz: number | null;
   base: Partial<Record<DriverFieldKey, number>>;
 }
 
@@ -411,14 +414,17 @@ function parseDriverFields(value: unknown): Partial<Record<DriverFieldKey, numbe
 function parseDriverPreset(value: unknown): DriverPreset | null | undefined {
   if (value === undefined || value === null) return null;
   if (!isObject(value)) return undefined;
-  const { id, label, source, kind, z_ohm: z } = value;
+  const { id, label, source, kind, z_ohm: z, xo_min_hz: xoMin } = value;
   if (typeof id !== 'string' || !id || typeof label !== 'string' || !label) return undefined;
   if (source !== 'database' && source !== 'mine' && source !== 'manual') return undefined;
   if (kind !== 'lf' && kind !== 'cd' && kind !== 'unknown') return undefined;
   if (z !== null && (typeof z !== 'number' || !Number.isFinite(z))) return undefined;
+  // Absent is the migration: a preset stored before this field existed. A
+  // present value is parsed strictly, same as every other field here.
+  if (xoMin !== undefined && xoMin !== null && (typeof xoMin !== 'number' || !Number.isFinite(xoMin))) return undefined;
   const base = parseDriverFields(value.base);
   if (!base) return undefined;
-  return { id, label, source, kind, z_ohm: z, base };
+  return { id, label, source, kind, z_ohm: z, xo_min_hz: typeof xoMin === 'number' ? xoMin : null, base };
 }
 
 function parseChannelDrivers(value: unknown): Record<string, ChannelDriverForm> | null {

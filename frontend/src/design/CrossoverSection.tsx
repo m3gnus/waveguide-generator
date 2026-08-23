@@ -5,6 +5,7 @@ import { NumberField } from './NumberField';
 import { ToggleRow } from './SolveOptionsSections';
 import { latestCombine } from '../results/latestCombine';
 import {
+  driverXoMinNote,
   familyOrders,
   FILTER_FAMILIES,
   FILTER_FAMILY_LABELS,
@@ -27,6 +28,7 @@ import {
   combineSpecEffective,
   useCadReturnStore,
   type CombinePair,
+  type DriverPreset,
 } from '../stores/cadReturn';
 
 /** The bands a pair joins, in the words a designer uses for them. Unroled ends
@@ -64,13 +66,21 @@ function ModeRow({ label, help, revealId, mode, onSelect }: {
   </div>;
 }
 
-function PairRow({ pair, spec, onChange }: {
+function PairRow({ pair, spec, preset, onChange }: {
   pair: CombinePair;
   spec: CrossoverSpec;
+  preset: DriverPreset | null;
   onChange: (spec: CrossoverSpec) => void;
 }) {
   const linked = pair.linked;
   const specPair = pairsOf(spec).find((item) => item.key === pair.key);
+  // The upper channel's own high-pass corner, not the field's displayed
+  // value: an unlinked pair's `pair.hz` can come from the lower channel's
+  // low-pass instead, which would blame the wrong driver's minimum.
+  const upperHpHz = specPair?.upperHp?.fcHz;
+  const xoNote = preset?.xo_min_hz != null && upperHpHz !== undefined && upperHpHz < preset.xo_min_hz
+    ? driverXoMinNote(preset.label, preset.xo_min_hz, upperHpHz)
+    : null;
   return <Fragment>
     <NumberField
       label={combinePairLabel(pair)}
@@ -102,6 +112,7 @@ function PairRow({ pair, spec, onChange }: {
     {linked
       ? <p className="section-note">{combinePairHint(pair)}</p>
       : <p className="section-note warning" role="status">{specPair ? unlinkedPairNote(specPair) : 'This pair is not symmetric; edit it in Advanced.'}</p>}
+    {xoNote && <p className="section-note warning" role="status">{xoNote}</p>}
   </Fragment>;
 }
 
@@ -118,7 +129,13 @@ export function CadCrossover() {
   return <>
     <ToggleRow id="cad-combine" label={CAD_CONTROLS.combinedOutput.label} revealId={CAD_CONTROLS.combinedOutput.reveal.id} help="Append a filtered, time-aligned crossover sum of the drive channels as one more result channel. On by default for a return with two or more drive channels; the chain runs lowest band first, ordered by the sources' return roles (LF → MF → HF)." checked={enabled} onChange={state.setCombineEnabled}/>
     {enabled && spec && <>
-      {combineChain(state).map((pair) => <PairRow key={pair.key} pair={pair} spec={spec} onChange={apply}/>)}
+      {combineChain(state).map((pair) => <PairRow
+        key={pair.key}
+        pair={pair}
+        spec={spec}
+        preset={state.channelDrivers[pair.upper]?.preset ?? null}
+        onChange={apply}
+      />)}
       <ModeRow
         label={CAD_CONTROLS.levelMatch.label}
         revealId={CAD_CONTROLS.levelMatch.reveal.id}
@@ -159,6 +176,7 @@ export function CadCrossover() {
           const role = pair?.lower === member ? pair.lowerRole : pair?.upperRole;
           return role ? `${role} · ${member}` : member;
         }}
+        presetFor={(member) => state.channelDrivers[member]?.preset ?? null}
         onChange={apply}
       />}
     </>}

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  driverXoMinNote,
   expandLegacy,
   FILTER_FAMILY_ORDERS,
   fromResult,
@@ -103,6 +104,13 @@ describe('pairsOf', () => {
     expect(pair.hz).toBeNull();
     expect(unlinkedPairNote(pair)).toBe('LP 900 Hz BW3 / HP 1 kHz LR4 — edit in Advanced');
     expect(isSimple(unlinked)).toBe(false);
+  });
+});
+
+describe('driverXoMinNote', () => {
+  it('names the driver and states both frequencies the app\'s own way', () => {
+    expect(driverXoMinNote('DE250', 1_600, 1_000)).toBe('DE250 minimum 1.6 kHz — current 1 kHz');
+    expect(driverXoMinNote('Acme HD-1', 900, 850)).toBe('Acme HD-1 minimum 900 Hz — current 850 Hz');
   });
 });
 

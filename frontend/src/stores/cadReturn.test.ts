@@ -754,6 +754,7 @@ const PRESET: DriverPreset = {
   source: 'database',
   kind: 'cd',
   z_ohm: 8,
+  xo_min_hz: 1_600,
   base: { sd_cm2: 26, bl_t_m: 12.4, re_ohm: 6.2, le_mh: 0.12, mms_g: 2.4, fs_hz: 620, vas_l: 0.35, qms: 3.1 },
 };
 
@@ -865,6 +866,30 @@ describe('a channel driver picked from the library', () => {
     expect(useCadReturnStore.getState().channelDrivers['drive-hf']).toEqual({
       enabled: true, fields: { xmax_mm: 1.2 }, preset: null,
     });
+  });
+
+  it('tolerates a stored preset saved before xo_min_hz existed, and rejects a malformed one', () => {
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 1,
+    }, 'current');
+    useCadReturnStore.getState().setChannelDriverPreset('drive-hf', PRESET);
+
+    // A preset stored before this field existed carries no `xo_min_hz` key at
+    // all; that migrates to null rather than dropping the preset.
+    const raw = JSON.parse(localStorage.getItem(solveProfileStorageKey)!);
+    delete raw.profiles[0].settings.channelDrivers['drive-hf'].preset.xo_min_hz;
+    localStorage.setItem(solveProfileStorageKey, JSON.stringify(raw));
+    resetCadReturnStore();
+    useCadReturnStore.getState().selectBundle(bundle);
+    expect(useCadReturnStore.getState().channelDrivers['drive-hf'].preset).toEqual({ ...PRESET, xo_min_hz: null });
+
+    // A present but malformed value still fails the whole profile, like every
+    // other field parsed here.
+    raw.profiles[0].settings.channelDrivers['drive-hf'].preset.xo_min_hz = 'soon';
+    localStorage.setItem(solveProfileStorageKey, JSON.stringify(raw));
+    resetCadReturnStore();
+    useCadReturnStore.getState().selectBundle(bundle);
+    expect(useCadReturnStore.getState().channelDrivers).toEqual({});
   });
 
   it('refuses a malformed stored preset rather than restoring half of one', () => {
