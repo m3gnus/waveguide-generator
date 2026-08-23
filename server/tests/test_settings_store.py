@@ -153,3 +153,34 @@ def test_routes_read_and_write_the_same_store(tmp_path: Path) -> None:
         "namespaces": {"theme": "light"},
     }
     assert store_for(tmp_path).get("theme") == "light"
+
+
+def test_driver_library_namespace_round_trips(tmp_path: Path) -> None:
+    """CADLINK-CROSSOVER-DRIVERS.md §4: saved drivers live in their own opaque
+    namespace, with no server-side schema of their own to keep in step."""
+
+    from server.settings.api import create_settings_router
+
+    store = store_for(tmp_path)
+    routes = {
+        (route.path, tuple(sorted(route.methods - {"HEAD", "OPTIONS"}))): route
+        for route in create_settings_router(store).routes
+    }
+    write = routes[("/api/settings/{namespace}", ("PUT",))]
+    read = routes[("/api/settings", ("GET",))]
+
+    payload = {
+        "drivers": [
+            {
+                "id": "manual-1",
+                "based_on": "manual",
+                "overrides": {"sd_cm2": 210.0, "bl_t_m": 10.5, "re_ohm": 5.3},
+            }
+        ]
+    }
+    asyncio.run(write.endpoint(namespace="driverLibrary", value=payload))
+    assert asyncio.run(read.endpoint()) == {
+        "schemaVersion": SCHEMA_VERSION,
+        "namespaces": {"driverLibrary": payload},
+    }
+    assert store_for(tmp_path).get("driverLibrary") == payload

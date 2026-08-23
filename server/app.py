@@ -21,6 +21,7 @@ from server.design.schema import DesignConfig
 from server.charts import mount_charts
 from server.cadlink import mount_cadlink, mount_onshape
 from server.design_io import mount_design_io
+from server.drivers import mount_drivers
 from server.exports import mount_exports
 from server.jobs import mount_jobs
 from server.integration import mount_integration
@@ -408,6 +409,7 @@ def create_app(
     mount_onshape(application)
     mount_charts(application)
     mount_settings(application)
+    mount_drivers(application)
     mount_updates(
         application,
         running_version=VERSION,
