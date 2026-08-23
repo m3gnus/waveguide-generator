@@ -690,6 +690,7 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
     saveText(buildRunReportHtml(context.result, {
       title: context.designName ?? context.jobStem,
       generatedAt: now,
+      groupDelayUnit: context.preferences.groupDelayUnit,
     }), filename, 'text/html;charset=utf-8');
     return [filename];
   }
