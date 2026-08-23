@@ -127,13 +127,17 @@
 
 .cad-project-history .cad-run-list { max-height: 320px; margin-top: 7px; overflow-y: auto; }
 .cad-run-group { display: grid; gap: 3px; }
-.cad-run-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 6px; padding: 5px 7px; border: 1px solid var(--hair); background: var(--surface-panel); }
+.cad-run-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; align-items: center; gap: 6px; padding: 5px 7px; border: 1px solid var(--hair); background: var(--surface-panel); }
 .cad-run-row.selected { border-color: var(--selection-row-border); background: var(--selection-row-bg); }
 .cad-run-open { display: grid; gap: 1px; min-width: 0; padding: 0; text-align: left; background: none; border: 0; }
 .cad-run-open b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cad-run-open span { color: var(--fg3); font-size: var(--text-micro); }
 .cad-run-compare { padding: 2px 6px; font-size: var(--text-micro); }
 .cad-run-compare.on { border-color: var(--acc); color: var(--acc); }
+/* The removal control is the jobs rail's, unchanged; only its border is
+   dropped so it sits beside Compare without reading as a second action of the
+   same weight. It must not add to the row height. */
+.cad-run-remove { border: 0; }
 .cad-run-row .job-stars { color: var(--amber); font-size: var(--text-micro); }
 
 /* The break where the CAD model itself changed. It carries the download for
