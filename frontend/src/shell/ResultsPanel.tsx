@@ -523,6 +523,33 @@ export function contourPolylines(segments: ContourSegment[]): ContourPoint[][] {
   return polylines;
 }
 
+/** Round angular steps a person reads without decoding: 5 deg up to quadrants. */
+const ANGLE_LABEL_STEPS_DEG = [5, 10, 15, 20, 30, 45, 60, 90] as const;
+/** How many angle labels each card size can carry without crowding. */
+const ANGLE_LABEL_BUDGET: Record<ChartDensity, number> = { compact: 9, regular: 15, full: 37 };
+
+/**
+ * Which angle rows get a label.
+ *
+ * Leaving this to ECharts' `hideOverlap` produced an arbitrary, drifting set:
+ * on a small card it kept every second tick, so the axis read 170, 150, 130 ...
+ * and dropped 0 deg entirely -- the one angle a directivity map is read
+ * against. Choosing round steps that divide zero instead keeps the axis
+ * symmetric about the on-axis row and always labels it, at every card size.
+ */
+export function directivityAngleLabelIndices(angles: number[], density: ChartDensity): Set<number> {
+  if (angles.length < 2) return new Set(angles.map((_angle, index) => index));
+  const span = Math.abs(angles.at(-1)! - angles[0]);
+  const budget = ANGLE_LABEL_BUDGET[density];
+  const step = ANGLE_LABEL_STEPS_DEG.find((candidate) => span / candidate + 1 <= budget)
+    ?? ANGLE_LABEL_STEPS_DEG.at(-1)!;
+  const labelled = new Set<number>();
+  angles.forEach((angle, index) => {
+    if (Math.abs(angle - Math.round(angle / step) * step) < 1e-6) labelled.add(index);
+  });
+  return labelled;
+}
+
 /**
  * Return the interior angular graticule values for a directivity map.
  *
@@ -603,6 +630,7 @@ export function heatmapOption(
   const categoryAxis = { ...axes(tokens, density), axisTick: { alignWithLabel: true }, axisLabel: { ...axes(tokens, density).axisLabel, hideOverlap: true } };
   const frequencyTickLabels = directivityFrequencyTickLabels(grid.frequencies);
   const isFrequencyTick = (index: number) => frequencyTickLabels.has(index);
+  const angleLabels = directivityAngleLabelIndices(grid.angles, density);
   const angleGuides = directivityAngleGuides(grid.angles, angleGuideInterval);
   const angleGuideSeries = angleGuides.length ? [{
     name: `${angleGuideInterval}° angular guides`, type: 'custom', coordinateSystem: 'cartesian2d', silent: true, z: 4, clip: true,
@@ -711,7 +739,10 @@ export function heatmapOption(
       },
       splitLine: { ...categoryAxis.splitLine, show: true, interval: isFrequencyTick },
     },
-    yAxis: { type: 'category', data: grid.angles.map((angle) => String(Number(angle.toFixed(2)))), ...(density === 'full' ? { name: 'Angle [°]', nameLocation: 'start' as const, nameGap: 10, nameTextStyle: { color: tokens.muted, fontSize: 11, align: 'right' as const, verticalAlign: 'top' as const } } : {}), ...categoryAxis, axisLabel: { ...categoryAxis.axisLabel, interval: Math.max(0, grid.factor * 2 - 1) } },
+    // `hideOverlap` is off here on purpose: the label set is already chosen to
+    // fit this card size, and letting ECharts thin it again is what broke the
+    // axis's symmetry and dropped 0 deg.
+    yAxis: { type: 'category', data: grid.angles.map((angle) => String(Number(angle.toFixed(2)))), ...(density === 'full' ? { name: 'Angle [°]', nameLocation: 'start' as const, nameGap: 10, nameTextStyle: { color: tokens.muted, fontSize: 11, align: 'right' as const, verticalAlign: 'top' as const } } : {}), ...categoryAxis, axisLabel: { ...categoryAxis.axisLabel, hideOverlap: false, interval: (index: number) => angleLabels.has(index) } },
     visualMap: { min: floor, max: 0, dimension: 2, seriesIndex: 0, right: 2, top: 'middle', itemWidth: density === 'compact' ? 6 : 8, itemHeight: MAP_RAMP[density], text: ['0', `${floor}`], textStyle: { color: tokens.muted, fontSize: density === 'compact' ? 9 : 10 }, inRange: { color: tokens.colormap } },
     // Cartesian heatmaps do not chunk safely in ECharts: progressive mode can
     // stop after the first angle band and leave the rest of the map blank.
@@ -1584,8 +1615,12 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
     : null;
   const unit = chartUnit(chartType, result, impedanceItems);
   const activeLabel = compared.find((item) => item.result === result)?.label ?? compared[0]?.label ?? 'the primary run';
+  // The detail dialog owns the rendered chart while it is open, so capture from
+  // there rather than from the card behind it -- otherwise the large view would
+  // silently hand back the small view's image.
   const imageAction = useCallback(async (operation: 'copy' | 'download') => {
-    const target = card.current?.querySelector<HTMLElement>('.chart-placeholder');
+    const target = detail.current?.querySelector<HTMLElement>('.result-detail-chart')
+      ?? card.current?.querySelector<HTMLElement>('.chart-placeholder');
     if (!target || imageOperation) return;
     setImageOperation(operation);
     setImageStatus(null);
@@ -1629,7 +1664,18 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
     </section>
     {expanded && createPortal(<div className="result-detail-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setExpanded(false); }}>
       <section ref={detail} className="result-detail" role="dialog" aria-modal="true" aria-label={`${chartLabel(chartType)} detail`}>
-        <header><div><b>{chartLabel(chartType)}</b>{subtitle && <span>{subtitle}</span>}</div><small>Hover to inspect · Ctrl/scroll to zoom lines</small><button aria-label="Close detail view" onClick={() => setExpanded(false)}><Icon name="close"/></button></header>
+        <header>
+          <div><b>{chartLabel(chartType)}</b>{subtitle && <span>{subtitle}</span>}</div>
+          <small>Hover to inspect · Ctrl/scroll to zoom lines</small>
+          {/* The same actions the card carries: a view that shows the chart
+              larger should not offer less to do with it. */}
+          {chartType !== 'summary' && <>
+            <button className="result-card-image-action" type="button" disabled={imageOperation !== null} aria-label="Copy chart as PNG" title="Copy chart image" onClick={() => void imageAction('copy')}><Icon name="copy"/></button>
+            <button className="result-card-image-action" type="button" disabled={imageOperation !== null} aria-label="Download chart as PNG" title="Download chart as PNG" onClick={() => void imageAction('download')}><Icon name="download"/></button>
+          </>}
+          {imageStatus && <span className="result-image-status" role="status">{imageStatus}</span>}
+          <button aria-label="Close detail view" onClick={() => setExpanded(false)}><Icon name="close"/></button>
+        </header>
         <div className="result-detail-chart"><ResultChart chartType={chartType} result={result} named={named} tokens={tokens} density="full" live={live} beamShapeAction={beamShapeAction} wrapper={wrapper} job={job} channelId={channelId}/></div>
       </section>
     </div>, document.body)}
