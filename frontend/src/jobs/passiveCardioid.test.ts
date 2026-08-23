@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
 import {
   assignableChannelIds,
+  hasPassiveCardioidSurface,
   normalizePassiveCardioid,
   passiveCardioidBlocker,
   passiveCardioidWire,
@@ -113,6 +114,44 @@ describe('passive cardioid opt-in boundary', () => {
     expect(CAD_CARDIOID_FIELD_CONTROLS.map(({ formKey }) => formKey)).toEqual([
       'rearVolumeL', 'portLengthMm', 'modelPortAreaM2', 'bemPortAreaM2', 'foamResistancePaSM3',
     ]);
+  });
+
+  /**
+   * The form persists in the solve profile, so an enabled campaign outlives
+   * the geometry it was set up for. On a model with no port aperture the rail
+   * hides the section; this is the half that matters on the wire -- the keys
+   * must not travel, or the server refuses a campaign the user cannot see, for
+   * a surface the mesh does not contain.
+   */
+  it('drops a stale enabled campaign for a return with no port aperture', () => {
+    seedReturn(complete);
+    useCadReturnStore.setState({
+      selectedBundle: {
+        ...bundle,
+        sources: [{ id: 'MF', role: 'MF', required: true, suggestedResolutionMm: 4, defaultDriveChannelId: 'drive-mf' }],
+      },
+      driveChannels: [{ id: 'drive-mf', source_ids: ['MF'], motion: 'normal' }],
+    });
+    expect(useCadReturnStore.getState().passiveCardioid.enabled).toBe(true);
+    expect(importedSubmissionBlocker(useCadReturnStore.getState())).toBeNull();
+    const geometry = buildImportedSubmission(useCadReturnStore.getState()).geometry as unknown as Record<string, unknown>;
+    expect(Object.keys(geometry).filter((key) => key.includes('cardioid') || key.includes('port_area'))).toEqual([]);
+  });
+
+  it('recognises every spelling the solver accepts for the port aperture, on the role or the id', () => {
+    const source = (id: string, role: string) => ({ id, role });
+    for (const name of [
+      'PORT_EXIT', 'PORT_EXIT_L', 'PORT_EXIT_R', 'MID_PORT_EXIT_LEFT', 'MID_PORT_EXIT_RIGHT',
+      'PASSIVE_CARDIOID', 'PASSIVE_CARDIOID_L', 'PASSIVE_CARDIOID_R',
+      // Authored lower-case, hyphenated or padded: the server upper-cases and
+      // trims the names it matches, so the rail must not be stricter.
+      'port_exit', ' mid-port-exit-left ', 'Passive Cardioid',
+    ]) {
+      expect(hasPassiveCardioidSurface([source('source-a', name)]), `role ${name}`).toBe(true);
+      expect(hasPassiveCardioidSurface([source(name, 'MF')]), `id ${name}`).toBe(true);
+    }
+    expect(hasPassiveCardioidSurface([])).toBe(false);
+    expect(hasPassiveCardioidSurface([source('source-mf', 'MF'), source('source-hf', 'HF')])).toBe(false);
   });
 
   it('sends the complete set together once the whole form is filled', () => {

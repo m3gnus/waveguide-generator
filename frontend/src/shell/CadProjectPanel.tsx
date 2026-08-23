@@ -268,10 +268,16 @@ export function CadProjectHeader() {
   </section>;
 }
 
-function RunRow({ job, selected, current }: { job: JobItem; selected: boolean; current: boolean }) {
+function RunRow({ job, selected, current, onRemove }: {
+  job: JobItem;
+  selected: boolean;
+  current: boolean;
+  onRemove: (job: JobItem) => void;
+}) {
   const overlaid = useSyncExternalStore(compareSelection.subscribe, compareSelection.getSnapshot, compareSelection.getSnapshot)
     .overlays.includes(job.id);
   const name = runDisplayName(job);
+  const running = job.status === 'running' || job.status === 'queued';
   return <article role="listitem" className={`cad-run-row${selected ? ' selected' : ''}`}>
     <button
       className="cad-run-open"
@@ -290,6 +296,16 @@ function RunRow({ job, selected, current }: { job: JobItem; selected: boolean; c
       title={selected ? 'This run is the one being shown' : overlaid ? 'Stop comparing this run' : 'Compare this run against the one on screen'}
       onClick={() => compareSelection.toggleOverlay(job.id)}
     >{overlaid ? 'Comparing' : 'Compare'}</button>
+    {/* Same removal as the jobs rail, on the same confirmation and the same
+        endpoint: this list is a view of the same runs, so it cannot offer a
+        second, gentler meaning of "delete". A run still in flight is stopped
+        from the jobs rail, never removed from under itself here. */}
+    {!running && <button
+      className="job-remove cad-run-remove"
+      aria-label={`Remove ${name}`}
+      title="Remove this run"
+      onClick={() => onRemove(job)}
+    ><Icon name="close"/></button>}
   </article>;
 }
 
@@ -309,7 +325,17 @@ export function CadProjectHistory() {
   const liveIngestId = useCadReturnStore((state) => state.ingestRecord?.ingest_id ?? null);
   const [documents, setDocuments] = useState<CadProjectDocument[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [removeError, setRemoveError] = useState<string | null>(null);
   const generation = useRef(0);
+
+  // The list is a projection of `jobsSocket`'s own snapshot, and deleteJob
+  // drops the run from it, so the row disappears here exactly as it does in
+  // the jobs rail -- no local list to keep in step.
+  const remove = useCallback((job: JobItem) => {
+    if (!window.confirm(`Remove “${runDisplayName(job)}” and its saved results?`)) return;
+    setRemoveError(null);
+    void jobsSocket.deleteJob(job.id).catch((reason) => setRemoveError(String(reason)));
+  }, []);
 
   const refresh = useCallback(async (id: string) => {
     const request = ++generation.current;
@@ -345,6 +371,7 @@ export function CadProjectHistory() {
       <div><h3>Runs in this project</h3><p>Newest first. A break marks where the CAD model changed.</p></div>
     </header>
     {error && <div className="cad-alert cad-alert-notice" role="status">Could not read the archived Fusion files: {error}</div>}
+    {removeError && <div className="cad-alert cad-alert-error" role="alert">{removeError}</div>}
     {runs.length === 0 && <div className="empty-state">
       <b>No runs yet</b>
       <span>Bring geometry in from CAD and solve it. Every solve of this project is listed here with the model it came from.</span>
@@ -356,6 +383,7 @@ export function CadProjectHistory() {
           job={job}
           selected={job.id === selection.primary}
           current={liveIngestId !== null && job.cad_source?.ingest_id === liveIngestId}
+          onRemove={remove}
         />)}
         <ModelDivider group={group} lineageId={lineageId}/>
       </div>)}
