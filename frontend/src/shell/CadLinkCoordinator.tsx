@@ -12,12 +12,19 @@ import {
   type CadReturnIngestRecord,
   type FusionCadStatus,
 } from '../api/cadlink';
-import type { JobItem } from '../api/jobsSocket';
+import type { CadSetup, JobItem } from '../api/jobsSocket';
 import { sendDesignToCad, type WgLinkExportResponse } from '../api/designIo';
 import { getOnshapeConnection, getOnshapeStatus, returnOnshapeToWg, type OnshapeConnection, type OnshapeStatus } from '../api/onshape';
 import { preferencesStore, usePreferences } from '../prefs/preferences';
 import { useCadPreparationStore } from '../stores/cadPreparation';
-import { useCadReturnStore } from '../stores/cadReturn';
+import {
+  DRIVER_FIELD_KEYS,
+  PASSIVE_CARDIOID_DEFAULTS,
+  useCadReturnStore,
+  type CadDriveChannel,
+  type ChannelDriverForm,
+  type PassiveCardioidForm,
+} from '../stores/cadReturn';
 import { recordCommittedAthPolars, subscribeRevision, useDesignStore } from '../stores/design';
 import { useDocumentStore, type DesignIdentity } from '../stores/document';
 import { documentSettingsSignature } from '../stores/designWire';
@@ -25,7 +32,12 @@ import {
   parkedSolveCommandStore,
   refuseParkedSolveCommand,
 } from '../stores/solveCommand';
-import { polarConfigFromUi, useSolveOptionsStore } from '../stores/solveOptions';
+import {
+  polarConfigFromUi,
+  polarUiFromConfig,
+  useSolveOptionsStore,
+  type SymmetryMode,
+} from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { createImportedMeshScene } from '../viewport/importedMesh';
 import { importedMeshStore } from '../viewport/importedMeshStore';
@@ -143,6 +155,16 @@ export function returnBelongsToAnotherProject(
   return Boolean(designId && returned.length > 0 && !returned.includes(designId));
 }
 
+/** Whether a return is positively linked to the open registry project.
+ * Unlinked returns remain available for manual adoption, but must not be
+ * guessed into every project merely because they name no other project. */
+export function returnBelongsToProject(
+  bundle: CadReturnBundle,
+  designId: string | null | undefined,
+): boolean {
+  return Boolean(designId && (bundle.designIds ?? []).includes(designId));
+}
+
 export function newestReturnArrival(
   items: CadReturnBundle[],
   previous: Map<string, string> | null,
@@ -154,6 +176,182 @@ export function newestReturnArrival(
       ? previous.get(item.bundlePath) !== item.modifiedAt
       : Date.parse(item.modifiedAt) >= recentThreshold
   )) ?? null;
+}
+
+type CadHistorySetup = Pick<ReturnType<typeof useCadReturnStore.getState>,
+  'sourceSizesMm' | 'rigidSizeMm' | 'transitionMm' | 'skippedSourceIds'
+  | 'driveChannels' | 'exteriorOnly' | 'combineEnabled' | 'combineCrossoversHz'
+  | 'combineLevelMatch' | 'combineAlign' | 'channelDrivers' | 'passiveCardioid'
+  | 'driveVoltageV' | 'frequencyStartHz' | 'frequencyEndHz' | 'frequencyCount'>;
+
+function object(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function finite(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function finiteRecord(value: unknown): Record<string, number> | null {
+  const record = object(value);
+  if (!record) return null;
+  const entries = Object.entries(record);
+  if (entries.some(([key, item]) => !key || finite(item) === null)) return null;
+  return Object.fromEntries(entries) as Record<string, number>;
+}
+
+function savedDriveChannels(
+  setup: CadSetup | null | undefined,
+  record: CadReturnIngestRecord,
+): CadDriveChannel[] {
+  const knownSources = new Set(record.sources.map((source) => source.id));
+  const raw = setup?.drive_channels;
+  if (!Array.isArray(raw) || raw.length === 0) return [];
+  const assigned = new Set<string>();
+  const channels = raw.flatMap((channel): CadDriveChannel[] => {
+    if (!channel || typeof channel.id !== 'string' || !channel.id.trim()
+      || !Array.isArray(channel.source_ids) || channel.source_ids.length === 0
+      || (channel.motion !== undefined && channel.motion !== 'normal' && channel.motion !== 'axial')
+      || channel.source_ids.some((id) => (
+        typeof id !== 'string' || !knownSources.has(id) || assigned.has(id)
+      ))) return [];
+    channel.source_ids.forEach((id) => assigned.add(id));
+    return [{
+      id: channel.id,
+      source_ids: [...channel.source_ids],
+      motion: channel.motion ?? 'normal',
+    }];
+  });
+  return channels.length === raw.length ? channels : [];
+}
+
+function savedChannelDrivers(
+  setup: CadSetup | null | undefined,
+  channels: CadDriveChannel[],
+): Record<string, ChannelDriverForm> {
+  const rawById = new Map((setup?.drive_channels ?? []).map((channel) => [channel.id, channel]));
+  return Object.fromEntries(channels.flatMap((channel): Array<[string, ChannelDriverForm]> => {
+    const driver = object(rawById.get(channel.id)?.driver);
+    if (!driver) return [];
+    const fields = Object.fromEntries(DRIVER_FIELD_KEYS.flatMap((key) => {
+      const value = finite(driver[key]);
+      return value === null ? [] : [[key, value]];
+    }));
+    return [[channel.id, { enabled: true, fields }]];
+  }));
+}
+
+function savedPassiveCardioid(setup: CadSetup | null | undefined): PassiveCardioidForm {
+  const rearVolumeL = finite(setup?.passive_cardioid_rear_volume_l);
+  if (rearVolumeL === null) return { ...PASSIVE_CARDIOID_DEFAULTS };
+  const portAreaSource = setup?.port_area_source === 'bem_aperture'
+    ? 'bem_aperture'
+    : 'user';
+  return {
+    enabled: true,
+    rearVolumeL,
+    portLengthMm: finite(setup?.passive_cardioid_port_length_mm),
+    modelPortAreaM2: finite(setup?.model_port_area_m2),
+    bemPortAreaM2: finite(setup?.bem_port_area_m2),
+    portAreaSource,
+    foamResistancePaSM3: finite(setup?.passive_cardioid_foam_resistance_pa_s_m3),
+    invertPort: setup?.passive_cardioid_invert_port !== false,
+    coupled: setup?.passive_cardioid_coupled === true,
+  };
+}
+
+/** Translate the exact persisted imported request into the editable CAD rail.
+ * Missing/malformed legacy pieces fall back to the immutable ingestion, never
+ * to values left behind by whichever project happened to be open before it. */
+export function cadHistorySetup(
+  job: JobItem,
+  record: CadReturnIngestRecord,
+): CadHistorySetup {
+  const setup = job.cad_setup;
+  const mesh = object(setup?.mesh);
+  const channels = savedDriveChannels(setup, record);
+  const skippedSourceIds = Array.isArray(setup?.skipped_source_ids)
+    && setup.skipped_source_ids.every((id) => typeof id === 'string')
+    ? [...setup.skipped_source_ids]
+    : [...record.skipped_source_ids];
+  const fallbackChannels = (() => {
+    const skipped = new Set(skippedSourceIds);
+    const grouped = new Map<string, CadDriveChannel>();
+    record.sources.filter((source) => !skipped.has(source.id)).forEach((source) => {
+      const channel = grouped.get(source.default_drive_channel_id) ?? {
+        id: source.default_drive_channel_id,
+        source_ids: [],
+        motion: 'normal' as const,
+      };
+      channel.source_ids.push(source.id);
+      grouped.set(channel.id, channel);
+    });
+    return [...grouped.values()];
+  })();
+  const driveChannels = channels.length ? channels : fallbackChannels;
+  const combine = object(setup?.combine);
+  const members = Array.isArray(combine?.members)
+    && combine.members.every((member) => typeof member === 'string')
+    ? combine.members as string[]
+    : [];
+  const crossovers = Array.isArray(combine?.crossovers_hz)
+    && combine.crossovers_hz.every((value) => finite(value) !== null)
+    ? combine.crossovers_hz as number[]
+    : [];
+  const validCombine = members.length >= 2 && crossovers.length === members.length - 1;
+  const explicitFrequencies = Array.isArray(job.solve_options.frequencies_hz)
+    ? job.solve_options.frequencies_hz.filter((value) => finite(value) !== null)
+    : [];
+  const range = job.solve_options.frequency_range;
+  const fallbackRange = Array.isArray(range) && range.length === 2
+    ? range.map(Number)
+    : [200, 20_000];
+  const sourceSizes = finiteRecord(mesh?.source_size_mm)
+    ?? { ...record.mesh_sizes.source_size_mm };
+  return {
+    sourceSizesMm: sourceSizes,
+    rigidSizeMm: finite(mesh?.rigid_size_mm) ?? record.mesh_sizes.rigid_size_mm,
+    transitionMm: finite(mesh?.transition_mm) ?? record.mesh_sizes.transition_mm,
+    skippedSourceIds,
+    driveChannels,
+    exteriorOnly: typeof setup?.exterior_only === 'boolean' ? setup.exterior_only : false,
+    combineEnabled: setup ? validCombine : null,
+    combineCrossoversHz: validCombine ? Object.fromEntries(
+      members.slice(0, -1).map((lower, index) => [`${lower}→${members[index + 1]}`, crossovers[index]]),
+    ) : {},
+    combineLevelMatch: validCombine ? combine?.level_match !== false : null,
+    combineAlign: validCombine ? combine?.align !== false : null,
+    channelDrivers: savedChannelDrivers(setup, driveChannels),
+    passiveCardioid: savedPassiveCardioid(setup),
+    driveVoltageV: finite(setup?.drive_voltage_v) ?? 2.83,
+    frequencyStartHz: explicitFrequencies[0] ?? fallbackRange[0],
+    frequencyEndHz: explicitFrequencies.at(-1) ?? fallbackRange[1],
+    frequencyCount: explicitFrequencies.length || Number(job.solve_options.num_frequencies) || 1,
+  };
+}
+
+function restoreCadJobSolveOptions(job: JobItem): void {
+  const options = job.solve_options;
+  const explicit = Array.isArray(options.frequencies_hz) && options.frequencies_hz.length > 0
+    ? options.frequencies_hz
+    : null;
+  const polar = polarUiFromConfig(options.polar_config);
+  useSolveOptionsStore.setState((state) => ({
+    engine: options.engine || state.engine,
+    symmetry: ['auto', 'full', 'half_xz', 'half_yz', 'quarter'].includes(options.symmetry)
+      ? options.symmetry as SymmetryMode
+      : state.symmetry,
+    meshValidationMode: ['warn', 'strict', 'off'].includes(options.mesh_validation_mode)
+      ? options.mesh_validation_mode
+      : state.meshValidationMode,
+    verbose: options.verbose,
+    frequencySpacing: options.frequency_spacing === 'linear' ? 'linear' : 'log',
+    frequencyMode: explicit ? 'list' : 'range',
+    frequencyListText: explicit ? explicit.join('\n') : '',
+    polar: polar ?? state.polar,
+  }));
 }
 
 /** Show the CAD workspace and focus its panel.
@@ -284,15 +482,7 @@ export async function showCadJobModel(
       })),
     };
     useCadReturnStore.getState().beginIngestIntent();
-    const skipped = new Set(record.skipped_source_ids);
-    const channels = new Map<string, { id: string; source_ids: string[]; motion: 'normal' }>();
-    record.sources.filter((source) => !skipped.has(source.id)).forEach((source) => {
-      const channel = channels.get(source.default_drive_channel_id) ?? {
-        id: source.default_drive_channel_id, source_ids: [], motion: 'normal' as const,
-      };
-      channel.source_ids.push(source.id);
-      channels.set(channel.id, channel);
-    });
+    const savedSetup = cadHistorySetup(job, record);
     // Keep the archived source inventory visible, but disable actions that need
     // the original return bundle path. Direct restoration deliberately avoids
     // persisting this read-only history view as the current design's CAD profile.
@@ -304,33 +494,16 @@ export async function showCadJobModel(
       },
       ingestRecord: record,
       acknowledgedFindingIds: [],
-      sourceSizesMm: { ...record.mesh_sizes.source_size_mm },
-      rigidSizeMm: record.mesh_sizes.rigid_size_mm,
-      transitionMm: record.mesh_sizes.transition_mm,
-      skippedSourceIds: [...record.skipped_source_ids],
-      driveChannels: [...channels.values()],
+      ...savedSetup,
       areaDriftOverrides: [],
       areaDriftSourceIds: [...new Set((record.role_findings ?? [])
         .filter((finding) => String(finding.kind).includes('area-drift'))
         .map((finding) => String(finding.source_id)))],
-      exteriorOnly: false,
-      combineEnabled: null,
-      combineCrossoversHz: {},
-      combineLevelMatch: null,
-      combineAlign: null,
-      channelDrivers: {},
-      driveVoltageV: 2.83,
       needsIngest: false,
       ingestedBundleIdentity: null,
       ingestStaleReason: null,
-      ...(Array.isArray(job.solve_options.frequency_range) && job.solve_options.frequency_range.length === 2
-        ? {
-            frequencyStartHz: Number(job.solve_options.frequency_range[0]),
-            frequencyEndHz: Number(job.solve_options.frequency_range[1]),
-            frequencyCount: Number(job.solve_options.num_frequencies) || 1,
-          }
-        : {}),
     });
+    restoreCadJobSolveOptions(job);
     const viewportGeneration = importedMeshStore.beginIntent();
     await showIngestedMeshInViewport(record, displayName, coordinator.reportViewportNotice, fetcher, viewportGeneration);
     const shown = importedMeshStore.getSnapshot().cad?.ingestId === ingestId;
@@ -375,6 +548,8 @@ export function CadLinkCoordinator() {
   const [selectedOnshapeInstanceId, setSelectedOnshapeInstanceId] = useState<string | null>(null);
   const [onshapeConnection, setOnshapeConnection] = useState<OnshapeConnection | null>(null);
   const seenReturnRevisions = useRef<Map<string, string> | null>(null);
+  const projectOpenPending = useRef(false);
+  const refreshRef = useRef<(options?: RefreshOptions) => Promise<void>>(unavailable);
   const returnListRequest = useRef(0);
   const fusionSendRequest = useRef(0);
   const ingestRequest = useRef(0);
@@ -433,6 +608,23 @@ export function CadLinkCoordinator() {
 
   useEffect(() => subscribeRevision((event) => {
     if (event.reason !== 'load') return;
+    if (event.loadSource === 'cad-project-switch') {
+      // A registry project is a CAD workflow, even before it has a prepared
+      // return. Drop the previous project's geometry and make the latest
+      // positively-linked return eligible for selection on the next listing.
+      projectOpenPending.current = true;
+      seenReturnRevisions.current = null;
+      returnListRequest.current += 1;
+      useCadReturnStore.getState().selectBundle(null);
+      importedMeshStore.beginIntent();
+      importedMeshStore.clear('cad');
+      setError(null);
+      setStatus('Project design loaded. Looking for its latest CAD return…');
+      enterCadWorkspace();
+      queueMicrotask(() => { void refreshRef.current(); });
+      return;
+    }
+    projectOpenPending.current = false;
     workspaceModeStore.setMode('parametric');
     // A replacement may be the document this return belongs to, so retain the
     // evidence and channel work for the freshness verdict instead of guessing
@@ -528,6 +720,10 @@ export function CadLinkCoordinator() {
     // the guard inside the command also prevents callers from accidentally
     // reading it while the always-mounted coordinator is in Onshape mode.
     if (preferencesStore.getSnapshot().cadApplication === 'onshape') {
+      if (projectOpenPending.current) {
+        projectOpenPending.current = false;
+        setStatus('Project design loaded. Return it from Onshape to prepare Simulation geometry.');
+      }
       setLoading(false);
       return;
     }
@@ -571,7 +767,11 @@ export function CadLinkCoordinator() {
       const currentDesignId = useDocumentStore.getState().identity?.designId;
       const initial = previous === null
         ? response.items.find((item) => (
-            item.readable && !returnBelongsToAnotherProject(item, currentDesignId)
+            item.readable && (
+              currentDesignId
+                ? returnBelongsToProject(item, currentDesignId)
+                : (item.designIds ?? []).length === 0
+            )
           )) ?? null
         : null;
       const opened = arrived ?? initial;
@@ -588,6 +788,12 @@ export function CadLinkCoordinator() {
         // Selecting evidence invalidates a load for the previous return, but
         // mode—not return discovery—decides what the viewport displays.
         importedMeshStore.beginIntent();
+      }
+      if (projectOpenPending.current) {
+        projectOpenPending.current = false;
+        setStatus(initial
+          ? `Project design loaded. Selected the latest matching return from ${initial.documentName ?? initial.name}; prepare it to restore Simulation geometry.`
+          : 'Project design loaded. No matching CAD return is available yet; return the project from Fusion or Onshape to prepare Simulation geometry.');
       }
       if (arrived) {
         if (projectMismatch) {
@@ -635,6 +841,10 @@ export function CadLinkCoordinator() {
       }
     } catch (reason) {
       if (request === returnListRequest.current && !background) {
+        if (projectOpenPending.current) {
+          projectOpenPending.current = false;
+          setStatus('Project design loaded, but its CAD returns could not be read. Refresh CAD Link to try again.');
+        }
         setError(reason instanceof Error ? reason.message : String(reason));
       }
     } finally {
@@ -643,6 +853,7 @@ export function CadLinkCoordinator() {
       if (request === returnListRequest.current) setLoading(false);
     }
   }, [autoIngestSelected]);
+  refreshRef.current = refresh;
 
   /** One outbound Fusion action for every surface. The rail card and CAD Link
    * panel both call this bridge so identity adoption, feedback, and return-list

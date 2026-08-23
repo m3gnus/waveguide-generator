@@ -8,9 +8,14 @@ import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { consumeParkedSolveCommand, parkedSolveCommandStore } from '../stores/solveCommand';
+import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
-import { CadLinkCoordinator, cadLinkCoordinatorBridge } from './CadLinkCoordinator';
+import {
+  CadLinkCoordinator,
+  cadLinkCoordinatorBridge,
+  showCadJobModel,
+} from './CadLinkCoordinator';
 import { cadSolveBlockerNow, jobsCoordinatorBridge, SolveEngineUnavailableError } from './JobsCoordinator';
 import { workspaceNavigation } from './workspaceNavigation';
 
@@ -105,6 +110,7 @@ describe('CadLinkCoordinator', () => {
     resetCadReturnStore();
     resetDesignStore();
     resetDocumentStore();
+    resetSolveOptionsStore();
     parkedSolveCommandStore.clear();
     workspaceModeStore.setMode('parametric');
     preferencesStore.resetForTests();
@@ -1362,5 +1368,153 @@ describe('CadLinkCoordinator', () => {
     expect(state.needsIngest).toBe(true);
     expect(state.ingestStaleReason).toContain('design was replaced');
     expect(importedSubmissionBlocker()).toBe(state.ingestStaleReason);
+  });
+
+  it('keeps CAD Link active and selects only this project’s latest return on project open', async () => {
+    const oldDesignId = 'wgd_old_project';
+    const nextDesignId = 'wgd_next_project';
+    useDocumentStore.getState().setCadLink({
+      designId: oldDesignId, lineageId: 'wgl_old_project', baseEditVersion: 1,
+    }, 'current');
+    const matching = {
+      ...initialBundle,
+      name: 'matching.wgreturn',
+      bundlePath: 'wgreturn/matching.wgreturn',
+      documentName: 'Next project',
+      designIds: [nextDesignId],
+    };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json({ items: [initialBundle, matching] });
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.endsWith('/solve-command')) return json({ command: null });
+      return json({}, 404);
+    }));
+    const activate = vi.spyOn(workspaceNavigation, 'activate');
+    await renderCoordinator();
+
+    act(() => {
+      useCadReturnStore.getState().selectBundle({ ...initialBundle, designIds: [oldDesignId] });
+      const generation = useCadReturnStore.getState().beginIngestIntent();
+      useCadReturnStore.getState().applyIngest(ingestRecord, generation);
+      workspaceModeStore.setMode('cad');
+    });
+    await act(async () => {
+      useDesignStore.getState().replaceDesign(designForFamily('R-OSSE'), {
+        loadSource: 'cad-project-switch',
+      });
+      useDocumentStore.getState().setCadLink({
+        designId: nextDesignId, lineageId: 'wgl_next_project', baseEditVersion: 2,
+      }, 'current');
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
+    expect(activate).toHaveBeenCalledWith('cadlink');
+    expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(matching.bundlePath);
+    expect(useCadReturnStore.getState().ingestRecord).toBeNull();
+    expect(cadLinkCoordinatorBridge.getSnapshot().status).toContain('Selected the latest matching return');
+  });
+
+  it('restores driver, crossover, mesh, and sweep inputs from a historical CAD run', async () => {
+    const record = {
+      ...ingestRecord,
+      sources: [
+        ingestRecord.sources[0],
+        {
+          ...ingestRecord.sources[0],
+          id: 'source-mf', role: 'MF', default_drive_channel_id: 'drive-mf',
+        },
+      ],
+      mesh_sizes: {
+        rigid_size_mm: 7,
+        transition_mm: 14,
+        source_size_mm: { 'source-hf': 3, 'source-mf': 5 },
+      },
+    };
+    const job = {
+      id: 'historical-cad',
+      run_number: 82,
+      label: 'Tritonia run',
+      config_summary: { geometry_type: 'imported' },
+      cad_source: { ingest_id: record.ingest_id, document_name: 'Tritonia V' },
+      cad_setup: {
+        type: 'imported',
+        ingest_id: record.ingest_id,
+        drive_channels: [
+          { id: 'drive-mf', source_ids: ['source-mf'], motion: 'normal' },
+          {
+            id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal',
+            driver: {
+              sd_cm2: 82, bl_t_m: 11.4, re_ohm: 5.8, le_mh: 0.4,
+              mmd_g: 18.5, cms_m_per_n: 0.00042, rms_kg_per_s: 1.2,
+              xmax_mm: 6, count: 2, rear_volume_l: 1.5,
+            },
+          },
+        ],
+        combine: {
+          members: ['drive-mf', 'drive-hf'], crossovers_hz: [1_250],
+          level_match: false, align: true,
+        },
+        drive_voltage_v: 4,
+        mesh: {
+          rigid_size_mm: 8,
+          transition_mm: 16,
+          source_size_mm: { 'source-mf': 4, 'source-hf': 2.5 },
+        },
+        skipped_source_ids: [],
+        exterior_only: true,
+      },
+      solve_options: {
+        engine: 'metal', symmetry: 'auto', frequency_range: null,
+        num_frequencies: null, frequency_spacing: 'linear',
+        frequencies_hz: [400, 800, 1_600], verbose: true,
+        mesh_validation_mode: 'strict', polar_config: {
+          angle_range: [-90, 90, 19], distance: 2, norm_angle: 5,
+          inclination: 45, enabled_axes: ['horizontal'],
+          observation_origin: 'mouth', spherical_sampling: false,
+        },
+        stage_delay_ms: 0,
+      },
+    } as unknown as import('../api/jobsSocket').JobItem;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === `/api/cadlink/ingest/${record.ingest_id}`) return json(record);
+      if (path.endsWith('/viewport-mesh')) return new Response(viewportMesh);
+      return json({}, 404);
+    }));
+
+    let shown = false;
+    await act(async () => { shown = await showCadJobModel(job); });
+
+    const state = useCadReturnStore.getState();
+    expect(shown).toBe(true);
+    expect(state.driveChannels).toEqual(job.cad_setup?.drive_channels?.map(({ driver: _driver, ...channel }) => channel));
+    expect(state.channelDrivers['drive-hf']).toEqual({
+      enabled: true,
+      fields: {
+        sd_cm2: 82, bl_t_m: 11.4, re_ohm: 5.8, le_mh: 0.4,
+        mmd_g: 18.5, cms_m_per_n: 0.00042, rms_kg_per_s: 1.2,
+        xmax_mm: 6, count: 2, rear_volume_l: 1.5,
+      },
+    });
+    expect(state.combineEnabled).toBe(true);
+    expect(state.combineCrossoversHz).toEqual({ 'drive-mf→drive-hf': 1_250 });
+    expect(state.combineLevelMatch).toBe(false);
+    expect(state.combineAlign).toBe(true);
+    expect(state.driveVoltageV).toBe(4);
+    expect(state.sourceSizesMm).toEqual({ 'source-mf': 4, 'source-hf': 2.5 });
+    expect(state.rigidSizeMm).toBe(8);
+    expect(state.transitionMm).toBe(16);
+    expect(state.exteriorOnly).toBe(true);
+    expect(state.frequencyStartHz).toBe(400);
+    expect(state.frequencyEndHz).toBe(1_600);
+    expect(state.frequencyCount).toBe(3);
+    expect(useSolveOptionsStore.getState()).toMatchObject({
+      frequencyMode: 'list', frequencyListText: '400\n800\n1600',
+      frequencySpacing: 'linear', meshValidationMode: 'strict', verbose: true,
+    });
   });
 });
