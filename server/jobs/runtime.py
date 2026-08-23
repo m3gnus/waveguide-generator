@@ -2995,7 +2995,8 @@ class JobRuntime:
                 {
                     "id": request.geometry.combine.id,
                     "members": list(request.geometry.combine.members),
-                    "crossovers_hz": list(request.geometry.combine.crossovers_hz),
+                    "crossovers_hz": request.geometry.combine.linked_crossovers_hz(),
+                    "reference": request.geometry.combine.resolved_reference,
                 }
                 if request.geometry.combine is not None
                 else None

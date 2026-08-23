@@ -358,9 +358,14 @@ function activeProjectSpec(result: ResultPayload, eligibleIds: string[]): Active
     const combine = channel.metadata?.combine;
     if (!combine || typeof combine !== 'object') continue;
     const record = combine as Record<string, unknown>;
-    if (record.type !== 'lr4_time_aligned_sum') continue;
+    // 'lr4_time_aligned_sum' is the pre-filter-library name of the same
+    // payload; results solved before that rename still carry it.
+    if (record.type !== 'filtered_time_aligned_sum' && record.type !== 'lr4_time_aligned_sum') continue;
     const members = Array.isArray(record.members) ? record.members.map(String) : [];
-    const crossoversHz = Array.isArray(record.crossovers_hz) ? record.crossovers_hz.map(Number) : [];
+    // An unlinked pair reports a null crossover, which this LR4-shaped export
+    // cannot represent; Number(null) would silently write it as 0 Hz.
+    const crossoversHz = Array.isArray(record.crossovers_hz)
+      ? record.crossovers_hz.map((value) => (value === null ? Number.NaN : Number(value))) : [];
     if (members.length !== eligible.size || members.some((id) => !eligible.has(id))) continue;
     if (crossoversHz.length !== members.length - 1 || crossoversHz.some((value) => !Number.isFinite(value))) continue;
     const levelMatch = record.level_match && typeof record.level_match === 'object'

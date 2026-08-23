@@ -525,20 +525,41 @@
       },
       "ChannelCombineSpec": {
         "additionalProperties": false,
-        "description": "LR4 time-aligned sum of drive-channel bases (CAD-LINK-PHASE3.md \u00a72).\n\n``members`` is the chain in band order, lowest first; ``crossovers_hz``\nsits between adjacent members. Structural defects refuse at submission;\nsolve-time observations become metadata warnings, never silent skips.",
+        "description": "Filtered time-aligned sum of drive-channel bases.\n\n``members`` is the chain in band order, lowest first. Two spec forms are\naccepted (CADLINK-CROSSOVER-DRIVERS.md \u00a72): the per-channel ``channels``\nmap, and the legacy ``crossovers_hz``/``level_match``/``align`` triple,\nwhich means an LR4 chain with auto gain and auto delay. ``resolved()`` is\nthe single place that turns the legacy form into the other one, so the\nsolver only ever sees one shape. Structural defects refuse at submission;\nsolve-time observations become metadata warnings, never silent skips.",
         "properties": {
           "align": {
             "default": true,
             "title": "Align",
             "type": "boolean"
           },
+          "channels": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/ChannelFilterSpec"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Channels"
+          },
           "crossovers_hz": {
-            "items": {
-              "type": "number"
-            },
-            "minItems": 1,
-            "title": "Crossovers Hz",
-            "type": "array"
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Crossovers Hz"
           },
           "id": {
             "default": "combined",
@@ -557,13 +578,68 @@
             "minItems": 2,
             "title": "Members",
             "type": "array"
+          },
+          "reference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference"
           }
         },
         "required": [
-          "members",
-          "crossovers_hz"
+          "members"
         ],
         "title": "ChannelCombineSpec",
+        "type": "object"
+      },
+      "ChannelFilterSpec": {
+        "additionalProperties": false,
+        "description": "Everything one member of the chain owns: band, level, delay, polarity.",
+        "properties": {
+          "delay": {
+            "$ref": "#/components/schemas/DelaySpec"
+          },
+          "gain": {
+            "$ref": "#/components/schemas/GainSpec"
+          },
+          "hp": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FilterSpec"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "invert": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invert"
+          },
+          "lp": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FilterSpec"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "ChannelFilterSpec",
         "type": "object"
       },
       "ChartsReferencePayload": {
@@ -1053,6 +1129,34 @@
           "shape"
         ],
         "title": "CrossSectionStation",
+        "type": "object"
+      },
+      "DelaySpec": {
+        "additionalProperties": false,
+        "description": "A channel's delay: aligned automatically, or stated in ms.",
+        "properties": {
+          "mode": {
+            "default": "auto",
+            "enum": [
+              "auto",
+              "manual"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ms"
+          }
+        },
+        "title": "DelaySpec",
         "type": "object"
       },
       "DeleteResponse": {
@@ -2401,6 +2505,40 @@
         "title": "FieldPlaneSpec",
         "type": "object"
       },
+      "FilterSpec": {
+        "additionalProperties": false,
+        "description": "One high-pass or low-pass section of a drive channel.",
+        "properties": {
+          "family": {
+            "enum": [
+              "lr",
+              "butterworth",
+              "bessel",
+              "linear_phase"
+            ],
+            "title": "Family",
+            "type": "string"
+          },
+          "fc_hz": {
+            "exclusiveMinimum": 0.0,
+            "title": "Fc Hz",
+            "type": "number"
+          },
+          "order": {
+            "maximum": 8.0,
+            "minimum": 1.0,
+            "title": "Order",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "family",
+          "order",
+          "fc_hz"
+        ],
+        "title": "FilterSpec",
+        "type": "object"
+      },
       "FreeformConfig": {
         "additionalProperties": false,
         "properties": {
@@ -2711,6 +2849,34 @@
           "design"
         ],
         "title": "FusionStatusRequest",
+        "type": "object"
+      },
+      "GainSpec": {
+        "additionalProperties": false,
+        "description": "A channel's level: matched automatically, or stated in dB.",
+        "properties": {
+          "db": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Db"
+          },
+          "mode": {
+            "default": "auto",
+            "enum": [
+              "auto",
+              "manual"
+            ],
+            "title": "Mode",
+            "type": "string"
+          }
+        },
+        "title": "GainSpec",
         "type": "object"
       },
       "GuidingCurveConfig": {
