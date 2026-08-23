@@ -2967,6 +2967,18 @@
             "title": "Axisymmetric Eligibility Reasons",
             "type": "array"
           },
+          "cad_setup": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cad Setup"
+          },
           "cad_source": {
             "anyOf": [
               {
@@ -3528,6 +3540,18 @@
             },
             "title": "Axisymmetric Eligibility Reasons",
             "type": "array"
+          },
+          "cad_setup": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cad Setup"
           },
           "cad_source": {
             "anyOf": [
