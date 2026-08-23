@@ -238,3 +238,20 @@ describe('client preferences', () => {
     expect(runDisplayName(untitled, 'short')).toBe('osse-1a2b3c');
   });
 });
+
+describe('angular graticule retirement', () => {
+  it('turns off a profile that still holds the old shipped interval', () => {
+    const stored = JSON.stringify({ version: 13, preferences: { directivityGuideInterval: 10 } });
+    expect(readPreferences(stored).value.directivityGuideInterval).toBe(0);
+    expect(readPreferences(stored).migrated).toBe(true);
+  });
+
+  it('leaves a deliberately chosen interval alone', () => {
+    const stored = JSON.stringify({ version: 13, preferences: { directivityGuideInterval: 15 } });
+    expect(readPreferences(stored).value.directivityGuideInterval).toBe(15);
+    // Already off stays off, and a profile written at the current version is
+    // never migrated at all.
+    expect(readPreferences(JSON.stringify({ version: 13, preferences: { directivityGuideInterval: 0 } })).value.directivityGuideInterval).toBe(0);
+    expect(readPreferences(JSON.stringify({ version: STORAGE_VERSION, preferences: { directivityGuideInterval: 10 } })).value.directivityGuideInterval).toBe(10);
+  });
+});

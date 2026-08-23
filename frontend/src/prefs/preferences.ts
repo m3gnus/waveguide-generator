@@ -275,7 +275,7 @@ export function normalize(raw: Partial<Preferences> = {}): Preferences {
   };
 }
 
-export const STORAGE_VERSION = 13;
+export const STORAGE_VERSION = 14;
 
 function migrateV1ToV2(preferences: Partial<Preferences>): Partial<Preferences> {
   const { chartTypes: _replaced, ...carried } = preferences;
@@ -344,6 +344,21 @@ function migrateV12ToV13(preferences: Partial<Preferences>): Partial<Preferences
 }
 
 /**
+ * Retire the angular graticule that shipped on.
+ *
+ * The lines were drawn every 10 degrees straight across the on-axis band the
+ * map is read in, duplicating a fainter set the PNG renderer already draws.
+ * 10 cannot be told apart from a deliberate choice by its value alone -- except
+ * that it was the shipped default, and 0 was not even accepted until now, so a
+ * profile holding 10 is one that never had the option to turn them off. Move
+ * exactly that value and leave every other interval alone.
+ */
+function migrateV13ToV14(preferences: Partial<Preferences>): Partial<Preferences> {
+  if (preferences.directivityGuideInterval !== 10) return preferences;
+  return { ...preferences, directivityGuideInterval: 0 };
+}
+
+/**
  * Migrations are intentionally sequential. v1→v2 replaced two unusable seeded
  * panels while preserving unrelated settings; v2→v3 makes the chart list's
  * stored length authoritative; v3→v4 adds independent job-version naming;
@@ -354,7 +369,7 @@ function migrateV12ToV13(preferences: Partial<Preferences>): Partial<Preferences
  * design-change number as a configurable suffix; v10→v11 adds the CAD
  * application choice; v11→v12 persists the user-definable directivity
  * guide interval; v12->v13 retires the standalone run name for the document's
- * design name. Each stored version runs every
+ * design name; v13->v14 turns the untouched angular graticule off. Each stored version runs every
  * step from its own onwards -- v3 used to run only its first step, so a v3
  * profile would have skipped v4→v5 entirely.
  */
@@ -371,6 +386,7 @@ const MIGRATIONS: Record<number, (preferences: Partial<Preferences>) => Partial<
   10: (preferences) => preferences,
   11: (preferences) => preferences,
   12: migrateV12ToV13,
+  13: migrateV13ToV14,
 };
 
 export function readPreferences(raw: string | null): { value: Preferences; migrated: boolean } {
