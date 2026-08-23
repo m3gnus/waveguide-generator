@@ -147,6 +147,50 @@ def _find_captured_document(directory: Path, digest: str) -> Path | None:
     return None
 
 
+def _prune_other_captured_documents(directory: Path, keep_digest: str, keep_name: str) -> None:
+    """Remove every other captured document once a newer model state lands.
+
+    The project-level ``cad/`` folder keeps only the newest model state --
+    each run folder still keeps its own permanent copy via
+    ``place_run_cad_document``, so an old run stays reopenable in Fusion long
+    after the shared project-level copy it started from is gone.
+
+    A file is only ever removed once its own sidecar confirms it belongs to a
+    *different* return state, new-style name or legacy ``sha256_<digest>``
+    alike; anything without a readable, matching sidecar -- including a file
+    this function has no naming convention for at all -- is left untouched.
+    A deletion that fails is logged and otherwise ignored: the document that
+    was just written is what matters, not the tidying afterwards.
+    """
+
+    if not directory.is_dir():
+        return
+    for candidate in sorted(directory.iterdir()):
+        if candidate.name == keep_name or candidate.suffix == ".json":
+            continue
+        if candidate.is_symlink() or not candidate.is_file():
+            continue
+        sidecar = candidate.with_suffix(".json")
+        if not sidecar.is_file():
+            continue
+        try:
+            payload = json.loads(sidecar.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(payload, Mapping):
+            continue
+        digest = str(payload.get("returnStateHash") or "")
+        if not digest or digest == keep_digest:
+            continue
+        for victim in (candidate, sidecar):
+            try:
+                victim.unlink()
+            except OSError as exc:
+                logger.warning(
+                    "Could not prune the superseded CAD document %s: %s", victim.name, exc
+                )
+
+
 def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     temporary = Path(temporary_name)
@@ -167,11 +211,14 @@ def archive_cad_document(
 ) -> str | None:
     """Copy a return's captured CAD document into the design's archive.
 
-    One file per *return*, named by the return-state hash, rather than one per
-    run: a Fusion archive is tens of megabytes and is identical across every
-    solve of one geometry, so ten sweeps of one waveguide must not cost ten
-    copies of the same document. Re-ingesting a return it already holds is a
-    no-op.
+    Only the *newest* model state is kept here, not one file per return: a
+    Fusion archive is tens of megabytes, so a project swept many times must
+    not grow one project-level copy per solve. Writing a new state prunes
+    every other captured document this design folder held, new-style or
+    legacy-named alike -- an old run's own copy survives regardless, since
+    ``place_run_cad_document`` puts that one beside the run itself, outside
+    this pruning. Re-ingesting a return already stored here is a no-op that
+    prunes nothing, since nothing new arrived.
 
     Returns the path relative to the design folder, or ``None`` when there is
     nothing to archive.
@@ -216,6 +263,7 @@ def archive_cad_document(
             "capturedAt": record.get("created_at"),
         },
     )
+    _prune_other_captured_documents(destination_directory, digest, destination.name)
     return relative
 
 

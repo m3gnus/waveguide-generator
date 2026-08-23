@@ -166,9 +166,14 @@ def test_re_ingesting_a_return_already_filed_under_the_legacy_name_is_a_no_op(
     ]
 
 
-def test_two_returns_of_the_same_document_at_different_times_coexist(
-    tmp_path: Path,
-) -> None:
+def test_archiving_a_new_model_state_prunes_the_previous_one(tmp_path: Path) -> None:
+    """The project-level cad/ folder keeps only the newest model state.
+
+    Each run folder keeps its own copy forever via ``place_run_cad_document``,
+    so an older run stays reopenable even after the shared project-level copy
+    it was solved from is superseded and removed.
+    """
+
     bundle = bundle_with_document(tmp_path, content=b"first-bytes")
     runs = tmp_path / "runs"
     first_record = record_for()
@@ -184,14 +189,90 @@ def test_two_returns_of_the_same_document_at_different_times_coexist(
 
     assert first == "cad/Big_Horn_v7_260819-1000_aaa111.f3d"
     assert second == "cad/Big_Horn_v7_260820-1130_bbb222.f3d"
-    assert (runs / "Big_Horn" / first).read_bytes() == b"first-bytes"
     assert (runs / "Big_Horn" / second).read_bytes() == b"second-bytes"
+    # The first state's data file and sidecar are both gone: only the newest
+    # model state's pair remains.
     assert sorted(path.name for path in (runs / "Big_Horn" / "cad").iterdir()) == [
-        "Big_Horn_v7_260819-1000_aaa111.f3d",
-        "Big_Horn_v7_260819-1000_aaa111.json",
         "Big_Horn_v7_260820-1130_bbb222.f3d",
         "Big_Horn_v7_260820-1130_bbb222.json",
     ]
+
+
+def test_archiving_a_new_model_state_prunes_a_legacy_named_one(tmp_path: Path) -> None:
+    """A legacy ``sha256_<digest>`` capture is pruned exactly like a new one."""
+
+    runs = tmp_path / "runs"
+    directory = runs / "Big_Horn" / "cad"
+    directory.mkdir(parents=True)
+    (directory / "sha256_aaa111.f3d").write_bytes(b"legacy-bytes")
+    (directory / "sha256_aaa111.json").write_text(
+        json.dumps({"schemaVersion": 1, "returnStateHash": "sha256:aaa111"}),
+        encoding="utf-8",
+    )
+
+    bundle = bundle_with_document(tmp_path, content=b"second-bytes")
+    record = record_for()
+    record["document"]["return_state_hash"] = "sha256:bbb222"
+
+    relative = archive_cad_document(bundle, record, runs, "Big Horn")
+
+    assert relative == "cad/Big_Horn_v7_260819-1000_bbb222.f3d"
+    assert sorted(path.name for path in directory.iterdir()) == [
+        "Big_Horn_v7_260819-1000_bbb222.f3d",
+        "Big_Horn_v7_260819-1000_bbb222.json",
+    ]
+
+
+def test_re_archiving_the_same_state_prunes_nothing(tmp_path: Path) -> None:
+    """The dedup no-op path must never prune: nothing new arrived to keep."""
+
+    bundle = bundle_with_document(tmp_path)
+    runs = tmp_path / "runs"
+    directory = runs / "Big_Horn" / "cad"
+    archive_cad_document(bundle, record_for(), runs, "Big Horn")
+    before = {
+        path.name: path.stat().st_mtime_ns for path in directory.iterdir()
+    }
+
+    again = archive_cad_document(bundle, record_for(), runs, "Big Horn")
+
+    assert again == "cad/Big_Horn_v7_260819-1000_abc123.f3d"
+    after = {path.name: path.stat().st_mtime_ns for path in directory.iterdir()}
+    assert after == before
+
+
+def test_pruning_leaves_unrelated_files_in_the_folder_alone(tmp_path: Path) -> None:
+    """Files this function has no naming convention for are never touched."""
+
+    bundle = bundle_with_document(tmp_path, content=b"first-bytes")
+    runs = tmp_path / "runs"
+    first_record = record_for()
+    first_record["document"]["return_state_hash"] = "sha256:aaa111"
+    archive_cad_document(bundle, first_record, runs, "Big Horn")
+
+    directory = runs / "Big_Horn" / "cad"
+    (directory / "notes.txt").write_text("keep me", encoding="utf-8")
+    (directory / "orphan.json").write_text("{not json", encoding="utf-8")
+    # A stray data file with no sidecar at all -- its digest cannot be
+    # determined, so pruning must leave it exactly where it is.
+    (directory / "mystery.f3d").write_bytes(b"unidentified-model")
+
+    later_bundle = bundle_with_document(tmp_path / "later", content=b"second-bytes")
+    second_record = record_for()
+    second_record["created_at"] = "2026-08-20T11:30:00Z"
+    second_record["document"]["return_state_hash"] = "sha256:bbb222"
+    archive_cad_document(later_bundle, second_record, runs, "Big Horn")
+
+    remaining = sorted(path.name for path in directory.iterdir())
+    assert remaining == [
+        "Big_Horn_v7_260820-1130_bbb222.f3d",
+        "Big_Horn_v7_260820-1130_bbb222.json",
+        "mystery.f3d",
+        "notes.txt",
+        "orphan.json",
+    ]
+    assert (directory / "notes.txt").read_text(encoding="utf-8") == "keep me"
+    assert (directory / "mystery.f3d").read_bytes() == b"unidentified-model"
 
 
 def test_a_return_without_a_captured_document_archives_nothing(tmp_path: Path) -> None:
@@ -368,27 +449,29 @@ def test_a_digest_fragment_collision_is_disambiguated_by_the_sidecar(
 
     Two different digests that happen to share their first twelve hex
     characters would, without the sidecar check, let one return's lookup
-    silently hand back a different return's document.
+    silently hand back a different return's document. Both files are placed
+    directly rather than through two ``archive_cad_document`` calls, since the
+    project-level folder now only ever keeps the newest state and would prune
+    the first the moment the second was archived; this isolates the lookup's
+    disambiguation from that pruning.
     """
 
-    bundle_one = bundle_with_document(tmp_path / "one", content=b"model-one")
-    bundle_two = bundle_with_document(tmp_path / "two", content=b"model-two")
     runs = tmp_path / "runs"
+    directory = runs / "Big_Horn" / "cad"
+    directory.mkdir(parents=True)
 
-    # Distinct digests that happen to share their first twelve hex characters
-    # -- and distinct capture times, as two real returns would have, so this
-    # exercises the lookup's disambiguation rather than a genuine filename
-    # collision on write.
+    def place(name: str, content: bytes, digest: str) -> None:
+        (directory / f"{name}.f3d").write_bytes(content)
+        (directory / f"{name}.json").write_text(
+            json.dumps({"schemaVersion": 1, "returnStateHash": digest}),
+            encoding="utf-8",
+        )
+
+    # Distinct digests that happen to share their first twelve hex characters.
     digest_one = "sha256:abcabcabcabc111111"
     digest_two = "sha256:abcabcabcabc222222"
-    record_one = record_for()
-    record_one["document"]["return_state_hash"] = digest_one
-    record_two = record_for()
-    record_two["created_at"] = "2026-08-20T11:00:00Z"
-    record_two["document"]["return_state_hash"] = digest_two
-
-    archive_cad_document(bundle_one, record_one, runs, "Big Horn")
-    archive_cad_document(bundle_two, record_two, runs, "Big Horn")
+    place("Big_Horn_v7_260819-1000_abcabcabcabc", b"model-one", digest_one)
+    place("Other_Name_260820-1100_abcabcabcabc", b"model-two", digest_two)
 
     found_one = captured_cad_document(runs, "Big Horn", digest_one)
     found_two = captured_cad_document(runs, "Big Horn", digest_two)

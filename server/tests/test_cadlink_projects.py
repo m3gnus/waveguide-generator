@@ -71,7 +71,13 @@ def app_with_runs(tmp_path: Path):
     return app, runs
 
 
-def test_a_project_lists_its_captured_models_newest_first(tmp_path: Path) -> None:
+def test_a_project_lists_only_its_newest_captured_model(tmp_path: Path) -> None:
+    """The project-level cad/ folder keeps only the newest model state.
+
+    Capturing a second return state prunes the first, so the listing (which
+    reads that folder directly) reports one item, not one per return.
+    """
+
     app, runs = app_with_runs(tmp_path)
     _design_id, lineage_id = project(app)
     capture(runs, tmp_path, "Tritonia", "aaa", at="2026-08-20T09:00:00Z")
@@ -80,10 +86,7 @@ def test_a_project_lists_its_captured_models_newest_first(tmp_path: Path) -> Non
     listing = asyncio.run(list_project_documents(lineage_id, SimpleNamespace(app=app)))
 
     assert listing["archiveStem"] == "Tritonia"
-    assert [item["returnStateHash"] for item in listing["items"]] == [
-        "sha256:bbb",
-        "sha256:aaa",
-    ]
+    assert [item["returnStateHash"] for item in listing["items"]] == ["sha256:bbb"]
     assert listing["items"][0]["filename"] == "Tritonia_260821-0900_bbb.f3d"
     assert listing["items"][0]["bytes"] == len(b"model-bbb")
 
