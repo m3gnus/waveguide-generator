@@ -62,7 +62,7 @@ function DriverLibrarySettings() {
   return <section id="settings-drivers" className="settings-theme driver-library-settings" aria-labelledby="settings-drivers-title" tabIndex={-1}>
     <h3 id="settings-drivers-title">Driver library</h3>
     <p className={`workspace-settings-path ${info?.folder ? '' : 'not-selected'}`} title={info?.folder ?? undefined}>{info?.folder ?? 'Not resolved yet'}</p>
-    <p className="cad-settings-note">Waveguide Generator ships no driver data. Put CSV files in this folder and their drivers become searchable in <b>Drive channels &amp; drivers</b>.</p>
+    <p className="cad-settings-note">Waveguide Generator ships no driver data. Put CSV files in this folder and their drivers become searchable in <b>Drivers</b>.</p>
     <div className="driver-library-counts">
       <span>{files.toLocaleString()} file{files === 1 ? '' : 's'} · {(info?.total_drivers ?? 0).toLocaleString()} driver{info?.total_drivers === 1 ? '' : 's'}</span>
     </div>

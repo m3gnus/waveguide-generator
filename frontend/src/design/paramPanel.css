@@ -105,7 +105,9 @@
 .cad-channel-list { display: grid; gap: 3px; }
 .cad-channel { padding-top: 3px; border-top: 1px solid var(--hair-soft); }
 .cad-channel-row, .cad-channel-summary { display: grid; grid-template-columns: minmax(90px, 1fr) auto; align-items: center; gap: 6px; padding: 4px 0; }
-.cad-channel-row { border-top: 1px solid var(--hair-soft); }
+/* Each source's assignment sits inside its channel's card, indented to line up
+   with the summary above it rather than with the card's own edge. */
+.cad-channel-row { margin-left: 12px; border-top: 1px solid var(--hair-soft); }
 .cad-channel-summary { margin-left: 12px; color: var(--fg2); font-size: var(--text-micro); }
 .cad-source { padding: 4px 0; border-top: 1px solid var(--hair-soft); }
 .cad-source.skipped { opacity: .66; }

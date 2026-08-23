@@ -843,28 +843,46 @@ function CadFrequencySweep() {
   </>;
 }
 
+/**
+ * Per-channel driver setup.
+ *
+ * One card per drive channel, and the source-to-channel assignment inside the
+ * card that currently drives it. The standalone list this replaces sat above
+ * every card and repeated each source there, so an LF channel's grouping and
+ * its driver were two separate places in the same section.
+ */
 function CadDriveChannels() {
   const state = useCadReturnStore();
-  const activeSources = (state.selectedBundle?.sources ?? []).filter((source) => !state.skippedSourceIds.includes(source.id));
+  const sources = state.selectedBundle?.sources ?? [];
+  const activeSources = sources.filter((source) => !state.skippedSourceIds.includes(source.id));
   // The coupled campaign writes its derived output to a reserved channel id.
   // Withholding it from the assignable list is what turns a server refusal
   // into a collision that cannot be made in the first place.
   const channelIds = assignableChannelIds(
-    [...new Set((state.selectedBundle?.sources ?? []).map((source) => source.defaultDriveChannelId))],
+    [...new Set(sources.map((source) => source.defaultDriveChannelId))],
     state.passiveCardioid.enabled && state.passiveCardioid.coupled,
   );
+  // Grouping is a choice only when there is another channel to move a source
+  // to and another source to move. One source on one channel would get a
+  // select offering the state it is already in, so it gets none -- the card
+  // summary already names the source. The palette's reveal for the assignment
+  // then falls back to the section, which is what `fallbackId` is for.
+  const regroupable = channelIds.length > 1 && activeSources.length > 1;
+  // The exception: a channel holding the id the coupled campaign reserves is
+  // no longer assignable, and the refusal it raises tells the user to reassign
+  // that source. Hiding the only control that can is how a blocker becomes a
+  // dead end, so a stranded channel keeps its select however few there are.
+  const showsAssignment = (channel: { id: string }) => regroupable || !channelIds.includes(channel.id);
   return <>
-    <p className="section-note">Assign two sources to the same channel to drive them together.</p>
     <div className="cad-channel-list">
-      {activeSources.map((source) => {
-        const channel = state.driveChannels.find((item) => item.source_ids.includes(source.id));
-        return <div className="cad-channel-row" data-control-reveal-id={CAD_CONTROLS.channelAssignment.reveal.id} key={source.id}><b>{source.id}</b><select aria-label={`${CAD_CONTROLS.channelAssignment.label} for ${source.id}`} value={channel?.id ?? ''} onChange={(event) => state.setSourceChannel(source.id, event.target.value)}>{channelIds.map((id) => <option value={id} key={id}>{id}</option>)}</select></div>;
-      })}
       {state.driveChannels.map((channel) => {
         const driverForm = state.channelDrivers[channel.id];
         const driverEligible = channelAcceptsDriver(channel);
-        return <div className="cad-channel" key={channel.id}>
+        return <div className="cad-channel" data-channel-id={channel.id} key={channel.id}>
           <div className="cad-channel-summary" data-control-reveal-id={CAD_CONTROLS.channelMotion.reveal.id}><span>{channel.id} · {channel.source_ids.join(' + ')}</span><select aria-label={`${CAD_CONTROLS.channelMotion.label} for ${channel.id}`} value={channel.motion} onChange={(event) => state.setChannelMotion(channel.id, event.target.value as 'normal' | 'axial')}><option value="normal">Normal motion</option><option value="axial">Axial motion</option></select></div>
+          {showsAssignment(channel) && channel.source_ids
+            .filter((sourceId) => activeSources.some((source) => source.id === sourceId))
+            .map((sourceId) => <div className="cad-channel-row" data-control-reveal-id={CAD_CONTROLS.channelAssignment.reveal.id} key={sourceId}><b>{sourceId}</b><select aria-label={`${CAD_CONTROLS.channelAssignment.label} for ${sourceId}`} value={channel.id} onChange={(event) => state.setSourceChannel(sourceId, event.target.value)}>{channelIds.map((id) => <option value={id} key={id}>{id}</option>)}</select></div>)}
           {driverEligible && <ToggleRow id={`cad-driver-${channel.id}`} label={`${CAD_CONTROLS.driverToggle.label} · ${channel.id}`} revealId={CAD_CONTROLS.driverToggle.reveal.id} help="Voltage-driven Thiele-Small coupling. The channel's levels become absolute at the drive voltage and its impedance chart becomes the electrical input impedance in ohms." checked={driverForm?.enabled ?? false} onChange={(checked) => state.setChannelDriverEnabled(channel.id, checked)}/>}
           {driverEligible && driverForm?.enabled && <ChannelDriverPicker
             channel={channel}
@@ -993,7 +1011,7 @@ function CadMeshDetail() {
 
 function CadSimulationEmpty() {
   const cadApplication = cadApplicationName(usePreferences().cadApplication);
-  return <div className="cad-mode-empty" role="status"><b>Prepare CAD geometry to unlock these inputs</b><span>Driver T/S, crossover, sweep, directivity, solve options, and mesh detail appear here after CAD Link brings the finished geometry back from {cadApplication}.</span><button className="primary" onClick={() => workspaceNavigation.activate('cadlink')}>Open CAD Link setup</button></div>;
+  return <div className="cad-mode-empty" role="status"><b>Prepare CAD geometry to unlock these inputs</b><span>Drivers, crossover, sweep, directivity, solve options, and mesh detail appear here after CAD Link brings the finished geometry back from {cadApplication}.</span><button className="primary" onClick={() => workspaceNavigation.activate('cadlink')}>Open CAD Link setup</button></div>;
 }
 
 export function ParamPanel({ tab }: { tab: ParameterTab }) {
@@ -1184,7 +1202,7 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
           {tab === 'simulation' && ingestRecord && <>
             {cadSectionMatches(CAD_CONTROLS.frequencySweep.section) && <Section title={CAD_CONTROLS.frequencySweep.section} description="The explicit range submitted with this imported CAD geometry." forceOpen={searching} revealId={CAD_CONTROLS.frequencySweep.reveal.id}><CadFrequencySweep/></Section>}
             {cadSectionMatches(CAD_CONTROLS.directivityMap.section) && <Section title={CAD_CONTROLS.directivityMap.section} description="Display-plane and angular sampling controls, including the effective imported-CAD grid." forceOpen={searching} revealId={CAD_CONTROLS.directivityMap.reveal.id}><DirectivityMapControls effectiveDerivation={ingestRecord.polar_grid_derivation}/></Section>}
-            {cadSectionMatches(CAD_CONTROLS.driveChannels.section) && <Section title={CAD_CONTROLS.driveChannels.section} description="Source-to-channel assignment, motion, voltage drive, and per-channel Thiele-Small data." forceOpen={searching} revealId={CAD_CONTROLS.driveChannels.reveal.id}><CadDriveChannels/></Section>}
+            {cadSectionMatches(CAD_CONTROLS.driveChannels.section) && <Section title={CAD_CONTROLS.driveChannels.section} description="Per-channel driver setup: which sources each channel drives, its motion, voltage drive, and Thiele-Small data. Assign two sources to the same channel to drive them together." forceOpen={searching} revealId={CAD_CONTROLS.driveChannels.reveal.id}><CadDriveChannels/></Section>}
             {cadSectionMatches(CAD_CONTROLS.passiveCardioid.section) && <Section title={CAD_CONTROLS.passiveCardioid.section} description="Sealed rear chamber vented through a damped port, and the extra radiation-impedance campaign it needs." forceOpen={searching} revealId={CAD_CONTROLS.passiveCardioid.reveal.id}><CadPassiveCardioid/></Section>}
             {cadSectionMatches(CAD_CONTROLS.crossover.section) && <Section title={CAD_CONTROLS.crossover.section} description="Optional combined output of adjacent drive channels: a filter family and slope per pair, with automatic or manual level, delay and polarity per channel." forceOpen={searching} revealId={CAD_CONTROLS.crossover.reveal.id}><CadCrossover/></Section>}
             {cadSectionMatches(CAD_CONTROLS.solveOptions.section) && <Section title={CAD_CONTROLS.solveOptions.section} description="Imported-CAD validation, frequency selection, and diagnostic controls. Geometry fixes the backend and domain." forceOpen={searching} revealId={CAD_CONTROLS.solveOptions.reveal.id}><SolveOptionsControls mode="cad" ingestRecord={ingestRecord}/></Section>}

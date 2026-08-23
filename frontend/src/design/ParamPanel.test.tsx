@@ -258,7 +258,7 @@ describe('ParamPanel inventory UX', () => {
     expect(host.textContent).not.toContain('Surface sampling');
 
     act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
-    expect(titles()).toEqual(['Frequency Sweep', 'Directivity Map', 'Drive channels & drivers', 'Passive cardioid', 'Crossover', 'Solve options', 'Mesh detail']);
+    expect(titles()).toEqual(['Frequency Sweep', 'Directivity Map', 'Drivers', 'Passive cardioid', 'Crossover', 'Solve options', 'Mesh detail']);
     for (const hidden of ['Source Definition', 'Solve & export mesh', 'Output & Passthrough']) expect(host.textContent).not.toContain(hidden);
     expect(host.querySelector('#solve-engine')).toBeNull();
     expect(host.querySelector('#solve-symmetry')).toBeNull();
@@ -683,9 +683,70 @@ describe('ParamPanel inventory UX', () => {
     }));
     expect(options()).toEqual(['drive-port']);
     // The channel that already claims the id predates the choice, so the
-    // prevention is backed by a refusal the user can act on.
+    // prevention is backed by a refusal the user can act on -- and the control
+    // it asks for survives the list shrinking to one, or the blocker would be
+    // a dead end.
     expect(host.querySelector('[data-section="Passive cardioid"] [role="alert"]')?.textContent)
       .toContain('Reassign that source');
+    expect(host.querySelector('.cad-channel[data-channel-id="passive_cardioid"] .cad-channel-row')).not.toBeNull();
+  });
+
+  it('keeps each source assignment inside the card that drives it and moves it when regrouped', () => {
+    act(() => {
+      setCadReady();
+      workspaceModeStore.setMode('cad');
+      root.render(withQueryClient(<ParamPanel tab="simulation" />));
+    });
+    const card = (id: string) => host.querySelector<HTMLElement>(`.cad-channel[data-channel-id="${id}"]`);
+    const assignment = (sourceId: string) => host.querySelector<HTMLSelectElement>(`[aria-label="Drive channel for ${sourceId}"]`);
+
+    // The standalone list above the cards is gone: every assignment sits in
+    // the card of the channel that currently drives that source.
+    expect([...host.querySelectorAll<HTMLElement>('.cad-channel-row')].map((row) => row.closest<HTMLElement>('.cad-channel')?.dataset.channelId))
+      .toEqual(['drive-hf', 'drive-mf']);
+    expect(card('drive-hf')!.contains(assignment('source-hf'))).toBe(true);
+    expect(card('drive-mf')!.contains(assignment('source-mf'))).toBe(true);
+    expect(host.textContent).not.toContain('Assign two sources to the same channel to drive them together.');
+
+    // Regrouping is the same store action as before, and the row follows the
+    // source to the card that now drives it.
+    const select = assignment('source-mf')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set?.call(select, 'drive-hf');
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(useCadReturnStore.getState().driveChannels)
+      .toEqual([{ id: 'drive-hf', source_ids: ['source-hf', 'source-mf'], motion: 'normal' }]);
+    expect(card('drive-mf')).toBeNull();
+    expect(card('drive-hf')!.contains(assignment('source-mf'))).toBe(true);
+
+    // One active source is not a choice: skipping the other takes the selects
+    // away and leaves the summary that already names what is driven.
+    act(() => useCadReturnStore.getState().setSkipped('source-mf', true));
+    expect(host.querySelector('.cad-channel-row')).toBeNull();
+    expect(card('drive-hf')!.querySelector('.cad-channel-summary')!.textContent).toContain('drive-hf · source-hf');
+  });
+
+  it('offers no channel assignment for a single-channel return', () => {
+    act(() => {
+      setCadReady();
+      useCadReturnStore.setState({
+        selectedBundle: {
+          ...cadBundle,
+          sources: [{ id: 'source-hf', role: 'HF', required: true, suggestedResolutionMm: 2, defaultDriveChannelId: 'drive-hf' }],
+        },
+        driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }],
+      });
+      workspaceModeStore.setMode('cad');
+      root.render(withQueryClient(<ParamPanel tab="simulation" />));
+    });
+    expect(host.querySelector('.cad-channel[data-channel-id="drive-hf"] .cad-channel-summary')!.textContent)
+      .toContain('drive-hf · source-hf');
+    expect(host.querySelector('.cad-channel-row')).toBeNull();
+    expect(host.querySelector('[aria-label^="Drive channel for"]')).toBeNull();
+    // Motion and the driver stay where they were.
+    expect(host.querySelector('[aria-label="Motion for drive-hf"]')).not.toBeNull();
+    expect(host.querySelector('#cad-driver-drive-hf')).not.toBeNull();
   });
 
   it('shows the CAD simulation empty state without hiding formula editing on Geometry', () => {
@@ -694,7 +755,7 @@ describe('ParamPanel inventory UX', () => {
     expect(host.querySelector('[data-section="Profile Dimensions"]')).not.toBeNull();
     act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
     expect(host.textContent).toContain('Prepare CAD geometry to unlock these inputs');
-    expect(host.textContent).toContain('Driver T/S, crossover, sweep');
+    expect(host.textContent).toContain('Drivers, crossover, sweep');
     expect(host.textContent).toContain('Open CAD Link setup');
     expect(host.querySelector('[data-section]')).toBeNull();
   });
@@ -739,7 +800,7 @@ describe('ParamPanel inventory UX', () => {
     };
 
     expect(matchingSections('frequencyStartHz')).toEqual(['Frequency Sweep']);
-    expect(matchingSections('sd_cm2')).toEqual(['Drive channels & drivers']);
+    expect(matchingSections('sd_cm2')).toEqual(['Drivers']);
     expect(matchingSections('LR4')).toEqual(['Crossover']);
     expect(matchingSections('surface sizing')).toEqual(['Mesh detail']);
   });
@@ -1061,8 +1122,7 @@ describe('driver picker', () => {
   const press = (element: HTMLElement, key: string) => act(() => {
     element.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
   });
-  const channelCard = () => [...host.querySelectorAll<HTMLElement>('.cad-channel')]
-    .find((card) => card.textContent?.includes('drive-hf'))!;
+  const channelCard = () => host.querySelector<HTMLElement>('.cad-channel[data-channel-id="drive-hf"]')!;
 
   beforeEach(async () => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
