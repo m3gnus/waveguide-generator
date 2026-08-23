@@ -6,7 +6,7 @@ export const CAD_CONTROL_SECTIONS = {
   realizedDimensions: 'Realized dimensions',
   frequencySweep: 'Frequency Sweep',
   directivityMap: 'Directivity Map',
-  driveChannels: 'Drive channels & drivers',
+  driveChannels: 'Drivers',
   passiveCardioid: 'Passive cardioid',
   crossover: 'Crossover',
   solveOptions: 'Solve options',
@@ -75,8 +75,11 @@ export const CAD_CONTROLS = {
     ['polar', 'angular step', 'measurement distance', 'normalization angle', 'directivity planes', 'measurement origin', '3D balloon', 'field plane'],
   ),
   driveChannels: control(
-    'cad.drive-channels', 'Drive channels & drivers', CAD_CONTROL_SECTIONS.driveChannels, 'simulation',
-    ['source assignment', 'channel', 'driver', 'Thiele-Small', 'T/S'],
+    'cad.drive-channels', 'Drivers', CAD_CONTROL_SECTIONS.driveChannels, 'simulation',
+    // The section lost the solver's own vocabulary from its name, so the
+    // keywords have to carry it: "drive channel" is still what the wire, the
+    // server refusals and the CAD roles call this.
+    ['drive channel', 'drive channels', 'source assignment', 'channel', 'motion', 'driver', 'Thiele-Small', 'T/S'],
   ),
   channelAssignment: control(
     'cad.drive-channel.assignment', 'Drive channel', CAD_CONTROL_SECTIONS.driveChannels, 'simulation',
