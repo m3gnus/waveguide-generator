@@ -7,8 +7,8 @@ export const CAD_CONTROL_SECTIONS = {
   frequencySweep: 'Frequency Sweep',
   directivityMap: 'Directivity Map',
   driveChannels: 'Drivers',
-  passiveCardioid: 'Passive cardioid',
   crossover: 'Crossover',
+  passiveCardioid: 'Passive cardioid',
   solveOptions: 'Solve options',
   meshDetail: 'Mesh detail',
 } as const;
@@ -107,26 +107,6 @@ export const CAD_CONTROLS = {
     'cad.driver.voltage', 'Drive voltage', CAD_CONTROL_SECTIONS.driveChannels, 'simulation',
     ['RMS', 'volts', '2.83 V', 'driveVoltageV'], 'ingested-return', 'cad.drive-channels',
   ),
-  passiveCardioid: control(
-    'cad.passive-cardioid', 'Passive cardioid', CAD_CONTROL_SECTIONS.passiveCardioid, 'simulation',
-    ['cardioid', 'rear chamber', 'port', 'foam', 'radiation impedance', 'aperture', 'back radiation'],
-  ),
-  cardioidEnabled: control(
-    'cad.passive-cardioid.enabled', 'Passive-cardioid campaign', CAD_CONTROL_SECTIONS.passiveCardioid, 'simulation',
-    ['cardioid', 'chamber', 'enable', 'rear volume'], 'ingested-return', 'cad.passive-cardioid',
-  ),
-  cardioidPortAreaSource: control(
-    'cad.passive-cardioid.port-area-source', 'Port area source', CAD_CONTROL_SECTIONS.passiveCardioid, 'simulation',
-    ['provenance', 'user', 'BEM aperture', 'port_area_source'], 'ingested-return', 'cad.passive-cardioid',
-  ),
-  cardioidInvertPort: control(
-    'cad.passive-cardioid.invert-port', 'Invert port', CAD_CONTROL_SECTIONS.passiveCardioid, 'simulation',
-    ['rear drive sign', 'polarity', 'passive_cardioid_invert_port'], 'ingested-return', 'cad.passive-cardioid',
-  ),
-  cardioidCoupled: control(
-    'cad.passive-cardioid.coupled', 'Coupled', CAD_CONTROL_SECTIONS.passiveCardioid, 'simulation',
-    ['derived channel', 'cone excursion', 'passive_cardioid_coupled'], 'ingested-return', 'cad.passive-cardioid',
-  ),
   crossover: control(
     'cad.crossover', 'Crossover', CAD_CONTROL_SECTIONS.crossover, 'simulation',
     ['combined output', 'LR4', 'sum', 'adjacent bands'],
@@ -179,6 +159,26 @@ export const CAD_CONTROLS = {
   crossoverInvert: control(
     'cad.crossover.invert', 'Channel polarity', CAD_CONTROL_SECTIONS.crossover, 'simulation',
     ['invert', 'phase flip', 'per channel'], 'ingested-return', 'cad.crossover.advanced',
+  ),
+  passiveCardioid: control(
+    'cad.passive-cardioid', 'Passive cardioid', CAD_CONTROL_SECTIONS.passiveCardioid, 'simulation',
+    ['cardioid', 'rear chamber', 'port', 'foam', 'radiation impedance', 'aperture', 'back radiation'],
+  ),
+  cardioidEnabled: control(
+    'cad.passive-cardioid.enabled', 'Passive-cardioid campaign', CAD_CONTROL_SECTIONS.passiveCardioid, 'simulation',
+    ['cardioid', 'chamber', 'enable', 'rear volume'], 'ingested-return', 'cad.passive-cardioid',
+  ),
+  cardioidPortAreaSource: control(
+    'cad.passive-cardioid.port-area-source', 'Port area source', CAD_CONTROL_SECTIONS.passiveCardioid, 'simulation',
+    ['provenance', 'user', 'BEM aperture', 'port_area_source'], 'ingested-return', 'cad.passive-cardioid',
+  ),
+  cardioidInvertPort: control(
+    'cad.passive-cardioid.invert-port', 'Invert port', CAD_CONTROL_SECTIONS.passiveCardioid, 'simulation',
+    ['rear drive sign', 'polarity', 'passive_cardioid_invert_port'], 'ingested-return', 'cad.passive-cardioid',
+  ),
+  cardioidCoupled: control(
+    'cad.passive-cardioid.coupled', 'Coupled', CAD_CONTROL_SECTIONS.passiveCardioid, 'simulation',
+    ['derived channel', 'cone excursion', 'passive_cardioid_coupled'], 'ingested-return', 'cad.passive-cardioid',
   ),
   solveOptions: control(
     'cad.solve-options', 'Solve options', CAD_CONTROL_SECTIONS.solveOptions, 'simulation',

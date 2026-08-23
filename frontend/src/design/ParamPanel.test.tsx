@@ -258,7 +258,7 @@ describe('ParamPanel inventory UX', () => {
     expect(host.textContent).not.toContain('Surface sampling');
 
     act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
-    expect(titles()).toEqual(['Frequency Sweep', 'Directivity Map', 'Drivers', 'Passive cardioid', 'Crossover', 'Solve options', 'Mesh detail']);
+    expect(titles()).toEqual(['Frequency Sweep', 'Directivity Map', 'Drivers', 'Crossover', 'Passive cardioid', 'Solve options', 'Mesh detail']);
     for (const hidden of ['Source Definition', 'Solve & export mesh', 'Output & Passthrough']) expect(host.textContent).not.toContain(hidden);
     expect(host.querySelector('#solve-engine')).toBeNull();
     expect(host.querySelector('#solve-symmetry')).toBeNull();
