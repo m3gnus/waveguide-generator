@@ -1,9 +1,10 @@
-import { Fragment, useRef, useState, useSyncExternalStore } from 'react';
+import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { CAD_CONTROLS } from './cadControlRegistry';
 import { CrossoverAdvanced } from './CrossoverAdvanced';
 import { NumberField } from './NumberField';
 import { ToggleRow } from './SolveOptionsSections';
 import { latestCombine } from '../results/latestCombine';
+import { recombineJobResults } from '../api/results';
 import {
   driverXoMinNote,
   familyOrders,
@@ -21,6 +22,9 @@ import {
   withPair,
   type CrossoverSpec,
   type FilterFamily,
+  fromResult,
+  sameSpec,
+  toWire,
 } from '../results/crossoverSpec';
 import {
   combineChain,
@@ -116,16 +120,70 @@ function PairRow({ pair, spec, preset, onChange }: {
   </Fragment>;
 }
 
+/** How long an edit may settle before it is applied to the shown run. */
+const LIVE_RECOMBINE_DEBOUNCE_MS = 400;
+
+/**
+ * Apply the rail's crossover to the shown run as it is edited.
+ *
+ * Recombining runs from stored bases in milliseconds, so the combined result
+ * follows the settings live: whenever the effective spec differs from the one
+ * the shown combined channel was computed with, the recombine is posted after
+ * a short settle and the dock swaps the repainted result in through the
+ * bridge's own callback. The dock then republishes, the specs compare equal,
+ * and the loop rests. A run for different channels, a provisional live view,
+ * or an incomplete run is never touched.
+ */
+function useLiveRecombine(
+  spec: CrossoverSpec | null,
+  enabled: boolean,
+  shown: ReturnType<typeof latestCombine.getSnapshot>,
+): { live: boolean; busy: boolean; error: string | null } {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const generation = useRef(0);
+  useEffect(() => {
+    generation.current += 1;
+    const request = generation.current;
+    if (!enabled || !spec || !shown?.canApply) { setBusy(false); setError(null); return; }
+    const applied = fromResult(shown.combine);
+    if (!applied) return;
+    const members = shown.combine.members ?? [];
+    if (spec.members.length !== members.length
+      || spec.members.some((member, index) => member !== members[index])) return;
+    if (sameSpec(spec, applied)) { setBusy(false); setError(null); return; }
+    const timer = setTimeout(() => {
+      void (async () => {
+        setBusy(true); setError(null);
+        try {
+          const updated = await recombineJobResults(shown.jobId, { id: shown.channelId, ...toWire(spec) });
+          if (generation.current === request) shown.onApplied(shown.jobId, updated);
+        } catch (reason) {
+          if (generation.current === request) {
+            setError(reason instanceof Error ? reason.message : String(reason));
+          }
+        } finally {
+          if (generation.current === request) setBusy(false);
+        }
+      })();
+    }, LIVE_RECOMBINE_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [spec, enabled, shown]);
+  return { live: Boolean(shown?.canApply), busy, error };
+}
+
 export function CadCrossover() {
   const state = useCadReturnStore();
   const advancedAnchor = useRef<HTMLButtonElement | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  const shownCombine = useSyncExternalStore(latestCombine.subscribe, latestCombine.getSnapshot, latestCombine.getSnapshot);
-  if (state.driveChannels.length < 2) return <p className="section-note">Two or more drive channels are required for a combined output.</p>;
+  const shown = useSyncExternalStore(latestCombine.subscribe, latestCombine.getSnapshot, latestCombine.getSnapshot);
   const enabled = combineEnabledEffective(state);
   const spec = combineSpecEffective(state);
+  const liveState = useLiveRecombine(spec, enabled && state.driveChannels.length >= 2, shown);
+  if (state.driveChannels.length < 2) return <p className="section-note">Two or more drive channels are required for a combined output.</p>;
   const apply = (next: CrossoverSpec) => state.setCombineSpec(next);
-  const resolved = resolvedChannels(shownCombine ?? undefined);
+  const resolved = resolvedChannels(shown?.combine);
+  const { live, busy, error: liveError } = liveState;
   return <>
     <ToggleRow id="cad-combine" label={CAD_CONTROLS.combinedOutput.label} revealId={CAD_CONTROLS.combinedOutput.reveal.id} help="Append a filtered, time-aligned crossover sum of the drive channels as one more result channel. On by default for a return with two or more drive channels; the chain runs lowest band first, ordered by the sources' return roles (LF → MF → HF)." checked={enabled} onChange={state.setCombineEnabled}/>
     {enabled && spec && <>
@@ -179,6 +237,9 @@ export function CadCrossover() {
         presetFor={(member) => state.channelDrivers[member]?.preset ?? null}
         onChange={apply}
       />}
+      {live && <p className={liveError ? 'section-note warning' : 'section-note'} role="status" aria-live="polite">
+        {liveError ?? (busy ? 'Updating the shown run…' : 'Changes apply to the shown combined result immediately.')}
+      </p>}
     </>}
   </>;
 }

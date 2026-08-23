@@ -1,20 +1,33 @@
+import type { JobResults } from '../api/results';
 import type { CombineMetadata } from './types';
 
 /**
- * The combine record of the result currently on screen, published by the
- * results dock and read by the pre-solve rail.
+ * The combined result currently on screen, published by the results dock and
+ * read by the pre-solve rail.
  *
- * The rail's crossover fields have automatic gains and delays, and "auto" is
- * only useful when the number it chose can be seen. That number exists only in
- * a solved result, which the rail has no business fetching for itself — so the
- * dock, which already holds it, hands it over here. Null while nothing
- * combined is shown, and the rail simply says "auto" then.
+ * Two things ride on it. The rail's automatic gains and delays are only
+ * useful when the number auto chose can be seen, and that number exists only
+ * in a solved result — which the rail has no business fetching for itself.
+ * And since the crossover settings live in the rail alone, the rail is also
+ * where an edit must reach the shown run: `onApplied` is the dock's own
+ * swap-in, handed over so a live recombine repaints without the rail knowing
+ * anything about how results are displayed.
  *
  * Deliberately a bare snapshot store rather than another zustand store: it
  * holds one reference, is written from one place, and must not participate in
  * solve-profile persistence.
  */
-let current: CombineMetadata | null = null;
+export interface ShownCombine {
+  jobId: string;
+  channelId: string;
+  combine: CombineMetadata;
+  /** Whether the shown run accepts a live recombine: complete, and not a
+   * provisional live view that a running solve is still revising. */
+  canApply: boolean;
+  onApplied: (jobId: string, updated: JobResults) => void;
+}
+
+let current: ShownCombine | null = null;
 const listeners = new Set<() => void>();
 
 export const latestCombine = {
@@ -22,10 +35,10 @@ export const latestCombine = {
     listeners.add(listener);
     return () => { listeners.delete(listener); };
   },
-  getSnapshot(): CombineMetadata | null {
+  getSnapshot(): ShownCombine | null {
     return current;
   },
-  publish(value: CombineMetadata | null): void {
+  publish(value: ShownCombine | null): void {
     if (value === current) return;
     current = value;
     listeners.forEach((listener) => listener());
