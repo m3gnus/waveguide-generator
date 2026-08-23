@@ -6,6 +6,7 @@ import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { resetCadReturnStore } from '../stores/cadReturn';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { resetDesignStore } from '../stores/design';
+import { resetWorkspaceFolderStore } from '../stores/workspaceFolder';
 import { CadProjectHeader, CadProjectHistory, modelStateLabel, projectName } from './CadProjectPanel';
 
 const LINEAGE = 'wgl_project';
@@ -60,7 +61,7 @@ describe('CAD project history', () => {
 
   beforeEach(() => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-    resetCadReturnStore(); resetDocumentStore(); resetDesignStore();
+    resetCadReturnStore(); resetDocumentStore(); resetDesignStore(); resetWorkspaceFolderStore();
     compareSelection.clear();
     host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
@@ -176,6 +177,36 @@ describe('CAD project history', () => {
 
     expect(host.querySelector('.cad-project-name')?.textContent).toBe('Tritonia M');
     expect(host.textContent).toContain('2 runs in this project');
+  });
+
+  it('shows the folder projects are archived in, and can change it', async () => {
+    let stored = '/exports';
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path === '/api/workspace/path') return json({ selected: true, path: stored });
+      if (path === '/api/workspace/select' && init?.method === 'POST') {
+        stored = '/picked/projects';
+        return json({ selected: true, path: stored });
+      }
+      if (path === '/api/workspace/open' && init?.method === 'POST') return json({ status: 'opened', path: stored });
+      if (path.includes('/documents')) return json(documents);
+      return json({});
+    }));
+    setJobs([run({ id: 'a' })]);
+
+    await render(<CadProjectHeader documentName="Tritonia M"/>);
+    const strip = host.querySelector<HTMLElement>('.cad-projects-folder')!;
+    expect(strip.textContent).toContain('/exports');
+
+    const buttons = [...strip.querySelectorAll<HTMLButtonElement>('button')];
+    await act(async () => { buttons[0].click(); await Promise.resolve(); });
+    expect(globalThis.fetch).toHaveBeenCalledWith('/api/workspace/open', { method: 'POST' });
+
+    // Chosen through the server, not the browser: the same v1 mechanism the
+    // output and WGLink folders use, so it works away from Chromium.
+    await act(async () => { buttons[1].click(); await Promise.resolve(); });
+    expect(globalThis.fetch).toHaveBeenCalledWith('/api/workspace/select', { method: 'POST' });
+    expect(strip.textContent).toContain('/picked/projects');
   });
 
   it('offers to open a project when none is', async () => {

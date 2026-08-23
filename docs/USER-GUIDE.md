@@ -131,6 +131,16 @@ Documents/Waveguide Generator/
     <run>/                      run.json, results, derived sidecars, *_report.html
 ```
 
+A CAD-linked project's folder is one of these design folders, so the Workspace
+folder is also the folder every CAD project is kept in. It can be opened or moved
+from three places, all the same setting: **Settings → Workspace**, **Settings →
+CAD Link → Project folder**, and the **Projects folder** line under the project in
+the CAD Link panel. The folder is chosen by the server's native picker, as v1 did,
+so it works in every browser; a path can also be typed in Settings when WG is
+reached from another machine. Changing it does not move projects that already
+exist — new runs and captures go to the new folder, and the old folder keeps what
+it has.
+
 A design keeps one folder across a rename, and its parametric and CAD-link runs sit
 side by side, because they are the same design's history. `run.json` records what was
 solved, from which CAD document and return state, and with which settings.

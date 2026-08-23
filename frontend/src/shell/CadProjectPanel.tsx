@@ -21,6 +21,7 @@ import { useUnsavedChanges } from '../stores/unsavedChanges';
 import { fullTime, pluralized, relativeTime } from './cadTime';
 import { Icon } from './icons';
 import { middleEllipsis } from './ResultsPanel';
+import { ProjectsFolderStrip } from './WorkspaceFolderControls';
 
 export { groupRunsByModelState } from '../api/cadProjects';
 
@@ -148,6 +149,7 @@ export function CadProjectHeader({ documentName }: { documentName: string | null
         <div><h3>No CAD project open</h3><p>Send a design to CAD, or switch to one you already have.</p></div>
         <ProjectSwitcher current={null} onOpened={(name) => setNotice(`Opened ${name}`)} onError={setError}/>
       </header>
+      <ProjectsFolderStrip/>
       {notice && <div className="cad-status-strip" role="status">{notice}</div>}
       {error && <div className="cad-alert cad-alert-error" role="alert">{error}</div>}
     </section>;
@@ -162,6 +164,7 @@ export function CadProjectHeader({ documentName }: { documentName: string | null
       <ProjectSwitcher current={identity.designId ?? null} onOpened={(name) => setNotice(`Opened ${name}`)} onError={setError}/>
     </header>
     <button className="cad-secondary-action" onClick={() => void reveal()}><Icon name="folder"/>Open project folder</button>
+    <ProjectsFolderStrip/>
     {notice && <div className="cad-status-strip" role="status">{notice}</div>}
     {error && <div className="cad-alert cad-alert-error" role="alert">{error}</div>}
   </section>;
