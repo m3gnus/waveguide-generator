@@ -112,6 +112,8 @@ _SCHEMA = (
       parameter_slug TEXT,
       bundle_stem TEXT,
       archive_stem TEXT,
+      document_native_id TEXT,
+      document_name TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )
@@ -141,7 +143,7 @@ class CadLinkStore:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._lock, self._transaction() as conn:
             version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-            if version not in {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}:
+            if version not in {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10}:
                 raise RuntimeError(f"unsupported cadlink.db schema version {version}")
             for statement in _SCHEMA:
                 conn.execute(statement)
@@ -187,7 +189,24 @@ class CadLinkStore:
             }
             if "archive_stem" not in lineage_columns:
                 conn.execute("ALTER TABLE lineage_cad_names ADD COLUMN archive_stem TEXT")
-            conn.execute("PRAGMA user_version = 9")
+            for column in ("document_native_id", "document_name"):
+                if column not in lineage_columns:
+                    conn.execute(
+                        f"ALTER TABLE lineage_cad_names ADD COLUMN {column} TEXT"
+                    )
+            # Created here rather than in _SCHEMA because the column it indexes
+            # only exists after the migration above has run on a v9 database.
+            #
+            # A document authored in CAD and sent to WG has no design to anchor
+            # to, so the Fusion document itself is the project. Its identity is
+            # the native id -- a Fusion *lineage* urn, which survives a rename
+            # exactly as WG's own lineage does -- never the document name.
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS lineage_cad_names_by_document "
+                "ON lineage_cad_names(document_native_id) "
+                "WHERE document_native_id IS NOT NULL"
+            )
+            conn.execute("PRAGMA user_version = 10")
         self._initialized = True
 
     def get_design(self, design_id: str) -> dict[str, Any] | None:
@@ -315,6 +334,131 @@ class CadLinkStore:
                 "SELECT * FROM lineage_cad_names WHERE lineage_id = ?", (lineage_id,)
             ).fetchone()
         return self._row(row) or {}
+
+    def get_lineage_for_cad_document(self, native_id: str) -> dict[str, Any] | None:
+        """The lineage a Fusion document owns, if one has been claimed."""
+
+        if not str(native_id or "").strip():
+            return None
+        return self._read_one(
+            "SELECT * FROM lineage_cad_names WHERE document_native_id = ?",
+            (str(native_id).strip(),),
+        )
+
+    def claim_cad_document_lineage(
+        self,
+        native_id: str,
+        document_name: str | None = None,
+        *,
+        recorded_at: str | None = None,
+    ) -> str | None:
+        """The lineage a CAD-authored document is the project for.
+
+        Geometry authored in CAD arrives with no design to anchor to, so
+        without this it belonged to no project at all: its runs carried no
+        lineage and dropped out of the project history, and its captured
+        document was filed under a folder no run ever wrote to.
+
+        The Fusion native id is a lineage urn and therefore the identity; the
+        document name is only a label and follows a rename. The archive stem
+        deliberately does not -- see ``claim_archive_stem``.
+        """
+
+        native = str(native_id or "").strip()
+        if not native:
+            return None
+        self.initialize()
+        now = recorded_at or utc_now()
+        name = str(document_name or "").strip() or None
+        with self._lock, self._transaction() as conn:
+            row = conn.execute(
+                "SELECT lineage_id FROM lineage_cad_names WHERE document_native_id = ?",
+                (native,),
+            ).fetchone()
+            if row is not None:
+                lineage_id = str(row["lineage_id"])
+                if name is not None:
+                    conn.execute(
+                        "UPDATE lineage_cad_names SET document_name = ?, "
+                        "updated_at = ? WHERE lineage_id = ?",
+                        (name, now, lineage_id),
+                    )
+                return lineage_id
+            lineage_id = mint_id("wgl_")
+            conn.execute(
+                """
+                INSERT INTO lineage_cad_names (
+                  lineage_id, document_native_id, document_name,
+                  created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (lineage_id, native, name, now, now),
+            )
+        return lineage_id
+
+    def record_cad_document(
+        self,
+        lineage_id: str,
+        native_id: str | None,
+        document_name: str | None = None,
+        *,
+        recorded_at: str | None = None,
+    ) -> None:
+        """Note which CAD document a WG-originated lineage is linked to.
+
+        First writer wins on the native id, as everywhere else in this table:
+        if another lineage already owns that document, both rows are left
+        alone rather than one stealing the other's identity.
+        """
+
+        native = str(native_id or "").strip() or None
+        name = str(document_name or "").strip() or None
+        if native is None and name is None:
+            return
+        self.initialize()
+        now = recorded_at or utc_now()
+        with self._lock, self._transaction() as conn:
+            if native is not None:
+                owner = conn.execute(
+                    "SELECT lineage_id FROM lineage_cad_names "
+                    "WHERE document_native_id = ?",
+                    (native,),
+                ).fetchone()
+                if owner is not None and str(owner["lineage_id"]) != lineage_id:
+                    native = None
+            conn.execute(
+                """
+                INSERT INTO lineage_cad_names (
+                  lineage_id, document_native_id, document_name,
+                  created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT (lineage_id) DO UPDATE SET
+                  document_native_id = COALESCE(
+                    excluded.document_native_id,
+                    lineage_cad_names.document_native_id
+                  ),
+                  document_name = COALESCE(
+                    excluded.document_name, lineage_cad_names.document_name
+                  ),
+                  updated_at = excluded.updated_at
+                """,
+                (lineage_id, native, name, now, now),
+            )
+
+    def list_cad_document_projects(self) -> list[dict[str, Any]]:
+        """Projects that exist only in CAD: a document with no WG design."""
+
+        self.initialize()
+        with self._lock, self._transaction() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM lineage_cad_names
+                WHERE document_native_id IS NOT NULL
+                  AND lineage_id NOT IN (SELECT lineage_id FROM designs)
+                ORDER BY updated_at DESC
+                """
+            ).fetchall()
+        return [self._row(row) or {} for row in rows]
 
     def claim_archive_stem(
         self,

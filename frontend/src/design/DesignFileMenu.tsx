@@ -143,7 +143,9 @@ export function DesignFileMenu() {
     setBusy(true);
     setMessage(null);
     try {
-      setProjects((await listCadLinkedDesigns()).items);
+      // This menu opens designs; a project that exists only in CAD has no
+      // snapshot to open, so it belongs to the CAD Link tab and not here.
+      setProjects((await listCadLinkedDesigns()).items.filter((item) => item.designId));
       setProjectsOpen(true);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
@@ -154,11 +156,11 @@ export function DesignFileMenu() {
   }
 
   async function openProject(project: CadLinkedDesignSummary) {
+    if (!project.designId) return;
+    const designId = project.designId;
     if (unsaved && !window.confirm('Discard unsaved changes and open this CAD-linked design?')) return;
     await act(async () => {
-      const opened = await openCadLinkedProject(
-        project.designId, fetch, 'cad-project-switch',
-      );
+      const opened = await openCadLinkedProject(designId, fetch, 'cad-project-switch');
       if (opened.adoptionCandidate) setAdoptionCandidate(opened.adoptionCandidate);
       setMessage(`Opened CAD-linked design ${opened.filename}`);
     });

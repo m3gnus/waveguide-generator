@@ -27,9 +27,58 @@ import { ProjectsFolderStrip } from './WorkspaceFolderControls';
 
 export { groupRunsByModelState } from '../api/cadProjects';
 
-/** What a project is called: the folder it owns, else the design file. */
-export function projectName(project: Pick<CadProject, 'archiveStem' | 'filename'>): string {
+/**
+ * What a project is called: what CAD calls it, else the folder it owns, else
+ * the design file. One rule, in `cadProjectName`, so the panel heading and the
+ * file menu cannot disagree about the same project.
+ */
+export function projectName(
+  project: Pick<CadProject, 'documentName' | 'archiveStem' | 'filename'>,
+): string {
   return cadProjectName(project);
+}
+
+/**
+ * Which project the CAD workspace is on, and what to call it.
+ *
+ * The ingested return decides, because that is the geometry on screen -- and
+ * for geometry authored in CAD it is the only thing that knows the project at
+ * all. Falling back to the open design's lineage keeps a WG-originated project
+ * named before any return has arrived.
+ *
+ * The live Fusion document is deliberately not consulted. Naming the panel
+ * after whatever Fusion happens to have open is what let the heading and the
+ * rest of the panel disagree about which project this is.
+ */
+export function useCurrentCadProjectLineage(): string | null {
+  const identity = useDocumentStore((state) => state.identity);
+  const returned = useCadReturnStore((state) => state.ingestRecord?.project ?? null);
+  return returned?.lineage_id ?? identity?.lineageId ?? null;
+}
+
+export function useCurrentCadProject(): { lineageId: string; name: string } | null {
+  const returned = useCadReturnStore((state) => state.ingestRecord?.project ?? null);
+  const lineageId = useCurrentCadProjectLineage();
+  const [projects, setProjects] = useState<CadProject[]>([]);
+  const generation = useRef(0);
+
+  useEffect(() => {
+    if (!lineageId) return;
+    const request = ++generation.current;
+    listCadProjects()
+      .then((items) => { if (request === generation.current) setProjects(items); })
+      // Advisory: a name that cannot be read leaves the project unnamed, it
+      // does not take the panel down.
+      .catch(() => undefined);
+  }, [lineageId]);
+  useEffect(() => () => { generation.current += 1; }, []);
+
+  if (!lineageId) return null;
+  const known = projects.find((project) => project.lineageId === lineageId);
+  const name = known
+    ? projectName(known)
+    : returned?.document_name?.trim() || returned?.archive_stem?.trim() || 'Untitled project';
+  return { lineageId, name };
 }
 
 /**
@@ -54,6 +103,7 @@ function documentReason(document: CadProjectDocument | null, hash: string | null
 }
 
 function ProjectSwitcher({ current, onOpened, onError }: {
+  /** The current project's lineage: the one identity every project has. */
   current: string | null;
   onOpened: (name: string) => void;
   onError: (message: string) => void;
@@ -81,6 +131,7 @@ function ProjectSwitcher({ current, onOpened, onError }: {
   useEffect(() => () => { generation.current += 1; }, []);
 
   const open_ = async (project: CadProject) => {
+    if (!project.designId) return;
     if (unsaved && !window.confirm('Discard unsaved changes and open this CAD-linked project?')) return;
     setBusy(true);
     try {
@@ -108,11 +159,16 @@ function ProjectSwitcher({ current, onOpened, onError }: {
       {projects === null && <div role="status" className="cad-detail">Loading…</div>}
       {projects?.length === 0 && <div role="status" className="cad-detail">No CAD-linked projects yet. Send a design to CAD to start one.</div>}
       {projects?.map((project) => <button
-        key={project.designId}
+        key={project.lineageId}
         role="menuitem"
-        disabled={busy}
-        aria-current={project.designId === current ? 'true' : undefined}
-        title={`Updated ${fullTime(project.updatedAt)}`}
+        // A project that exists only in CAD has no snapshot to open. It is
+        // still listed, because it is where the panel already is when a
+        // CAD-authored return is on screen.
+        disabled={busy || (!project.designId && project.lineageId !== current)}
+        aria-current={project.lineageId === current ? 'true' : undefined}
+        title={project.designId
+          ? `Updated ${fullTime(project.updatedAt)}`
+          : 'CAD-only project. Open its document in Fusion and send it to WG.'}
         onClick={() => void open_(project)}
       >
         <b>{middleEllipsis(`${projectName(project)} · ${cadProjectReference(project)}`, 32)}</b>
@@ -130,24 +186,24 @@ function ProjectSwitcher({ current, onOpened, onError }: {
  * what renames this. The archive folder is frozen separately so that renaming
  * can never strand the CAD document's stored bundle path.
  */
-export function CadProjectHeader({ documentName }: { documentName: string | null }) {
-  const identity = useDocumentStore((state) => state.identity);
+export function CadProjectHeader() {
+  const project = useCurrentCadProject();
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const snapshot = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot);
-  const runs = runsForProject(snapshot.jobs, identity?.lineageId ?? null);
+  const runs = runsForProject(snapshot.jobs, project?.lineageId ?? null);
 
   const reveal = async () => {
-    if (!identity?.lineageId) return;
+    if (!project) return;
     setError(null);
     try {
-      setNotice(`Opened ${await revealProjectFolder(identity.lineageId)}`);
+      setNotice(`Opened ${await revealProjectFolder(project.lineageId)}`);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     }
   };
 
-  if (!identity?.lineageId) {
+  if (!project) {
     return <section className="cad-workflow cad-project">
       <header className="cad-workflow-header no-step">
         <div><h3>No CAD project open</h3><p>Send a design to CAD, or switch to one you already have.</p></div>
@@ -162,10 +218,10 @@ export function CadProjectHeader({ documentName }: { documentName: string | null
   return <section className="cad-workflow cad-project">
     <header className="cad-workflow-header no-step">
       <div>
-        <h3 className="cad-project-name" title={documentName ?? undefined}>{documentName ?? 'Untitled project'}</h3>
+        <h3 className="cad-project-name" title={project.name}>{project.name}</h3>
         <p>{runs.length ? `${pluralized(runs.length, 'run')} in this project` : 'No runs in this project yet'}</p>
       </div>
-      <ProjectSwitcher current={identity.designId ?? null} onOpened={(name) => setNotice(`Opened ${name}`)} onError={setError}/>
+      <ProjectSwitcher current={project.lineageId} onOpened={(name) => setNotice(`Opened ${name}`)} onError={setError}/>
     </header>
     <button className="cad-secondary-action" onClick={() => void reveal()}><Icon name="folder"/>Open project folder</button>
     <ProjectsFolderStrip/>
@@ -208,8 +264,8 @@ function RunRow({ job, selected, current }: { job: JobItem; selected: boolean; c
  * it, which is the whole of "that older one was better -- give it back to me".
  */
 export function CadProjectHistory() {
-  const identity = useDocumentStore((state) => state.identity);
-  const lineageId = identity?.lineageId ?? null;
+  // Only the identity is needed here; the name is the header's business.
+  const lineageId = useCurrentCadProjectLineage();
   const snapshot = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot);
   const selection = useSyncExternalStore(compareSelection.subscribe, compareSelection.getSnapshot, compareSelection.getSnapshot);
   const liveIngestId = useCadReturnStore((state) => state.ingestRecord?.ingest_id ?? null);

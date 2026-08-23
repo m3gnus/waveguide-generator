@@ -412,7 +412,7 @@ export function CadLinkPanel() {
         for in that order: what am I working on, how did it get here, what do I
         do next. The history caps its own height so the workflow below it stays
         one scroll away rather than N runs away. */}
-    <CadProjectHeader documentName={fusionStatus?.documentName ?? documentName ?? null}/>
+    <CadProjectHeader/>
     <CadProjectHistory/>
     <SimulationInputsGuide prepared={Boolean(state.ingestRecord)}/>
     {metalUnavailable && <div className="cad-alert cad-alert-notice cad-solver-unavailable" role="status">

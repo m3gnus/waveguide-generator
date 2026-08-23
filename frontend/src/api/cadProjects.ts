@@ -25,24 +25,58 @@ export interface CadProjectDocumentListing {
   items: CadProjectDocument[];
 }
 
-export interface CadProject extends CadLinkedDesignSummary {
+/**
+ * One CAD-linked project.
+ *
+ * Deliberately not a `CadLinkedDesignSummary`: a project whose geometry was
+ * authored in CAD has no WG design behind it, so it has no `designId` and no
+ * `.cfg` to open. What every project does have is a lineage, a name and an
+ * archive folder.
+ */
+export interface CadProject {
+  /** Absent for a project that exists only in CAD: there is no snapshot. */
+  designId: string | null;
+  lineageId: string;
+  filename: string | null;
+  /** What CAD calls this project. Follows a rename; the archive stem does not. */
+  documentName: string | null;
   /** The archive folder this project's runs and CAD documents share. */
   archiveStem: string | null;
+  exportCount: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
-/** Human name for either a full project row or the lighter file-menu row. */
+/**
+ * Human name for either a full project row or the lighter file-menu row.
+ *
+ * The CAD document name leads because in CAD mode the Fusion document owns the
+ * name -- the same rule the run names follow. The archive stem is only a folder
+ * and is frozen against renames, so it would go stale as a label the first time
+ * the document is renamed. A project authored in CAD has no `.cfg`, so the
+ * filename is the last resort rather than the first.
+ */
 export function cadProjectName(
-  project: Pick<CadLinkedDesignSummary, 'filename'> & { archiveStem?: string | null },
+  project: { filename?: string | null; documentName?: string | null; archiveStem?: string | null },
 ): string {
-  return project.archiveStem?.trim() || project.filename.replace(/\.[^.]+$/, '');
+  return project.documentName?.trim()
+    || project.archiveStem?.trim()
+    || project.filename?.replace(/\.[^.]+$/, '')
+    || 'Untitled project';
 }
 
-/** Stable visible suffix for same-named registry heads. A timestamp can tie
- * and an edit version can repeat after a fork; the design id cannot. */
+/**
+ * Stable visible suffix for same-named registry heads. A timestamp can tie and
+ * an edit version can repeat after a fork; an id cannot.
+ *
+ * A project authored in CAD has no design id, so the lineage answers instead --
+ * that is the project's identity in either case, and the design id is only the
+ * registry head that happens to carry it for a WG-originated project.
+ */
 export function cadProjectReference(
-  project: Pick<CadLinkedDesignSummary, 'designId'>,
+  project: Pick<CadLinkedDesignSummary, 'designId'> & { lineageId?: string | null },
 ): string {
-  const id = project.designId.trim();
+  const id = (project.designId ?? project.lineageId ?? '').trim();
   return `ID …${id.slice(-6) || 'unknown'}`;
 }
 
@@ -55,7 +89,19 @@ async function failure(response: Response): Promise<Error> {
 }
 
 export async function listCadProjects(fetcher: typeof fetch = fetch): Promise<CadProject[]> {
-  return (await listCadLinkedDesigns(fetcher)).items as CadProject[];
+  const items = (await listCadLinkedDesigns(fetcher)).items as unknown as Array<
+    Partial<CadProject> & { lineageId: string }
+  >;
+  return items.map((item) => ({
+    designId: item.designId ?? null,
+    lineageId: item.lineageId,
+    filename: item.filename ?? null,
+    documentName: item.documentName ?? null,
+    archiveStem: item.archiveStem ?? null,
+    exportCount: item.exportCount ?? 0,
+    createdAt: item.createdAt ?? '',
+    updatedAt: item.updatedAt ?? '',
+  }));
 }
 
 export async function listProjectDocuments(

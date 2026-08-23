@@ -42,11 +42,14 @@ export interface CadReturnBundle {
 export interface CadReturnListing { items: CadReturnBundle[]; cadFolderConfigured: boolean }
 
 export interface CadLinkedDesignSummary {
-  designId: string;
+  /** Null for a project that exists only in CAD; it has no snapshot to open. */
+  designId: string | null;
   lineageId: string;
-  editVersion: number;
-  designHash: string;
-  filename: string;
+  editVersion: number | null;
+  designHash: string | null;
+  filename: string | null;
+  /** What CAD calls this project, once a return has named it. */
+  documentName?: string | null;
   branchedFromDesignId: string | null;
   branchedFromEditVersion: number | null;
   exportCount: number;
@@ -253,6 +256,20 @@ export interface CadReturnIngestRecord {
   polar_grid_derivation: Record<string, unknown>;
   tag_map: Record<string, unknown>;
   role_findings?: Array<Record<string, unknown>>;
+  /**
+   * Which project this return belongs to.
+   *
+   * Present even when the geometry was authored in CAD and has no WG design
+   * behind it: the Fusion document is the project in that case, so the panel
+   * can name it and its runs can be grouped with it.
+   */
+  project?: {
+    lineage_id: string;
+    design_id: string | null;
+    document_native_id: string | null;
+    document_name: string | null;
+    archive_stem: string | null;
+  } | null;
   [key: string]: unknown;
 }
 
