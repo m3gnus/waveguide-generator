@@ -1394,6 +1394,18 @@
             ],
             "title": "Fs Hz"
           },
+          "label": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
           "le_mh": {
             "default": 0.0,
             "minimum": 0.0,
