@@ -1,4 +1,5 @@
 import type { Preferences } from '../prefs/preferences';
+import { familyOrders, isFilterFamily, type FilterFamily } from './crossoverSpec';
 import { buildOnAxisFrd } from './frd';
 import { normalizePhaseConvention, phaseSpatialSign, wrapPhaseDegrees } from './phaseConvention';
 import { resultChannelFileSuffix, resultChannels, scopeResultChannel, type ResultPayload } from './types';
@@ -27,12 +28,34 @@ interface ProjectDriver {
   zmaFilename: string;
 }
 
+/** One active block in the exported schematic: VituixCAD's own Shape and Order
+ * plus the corner it sits at. */
+interface ActiveFilterSection {
+  kind: 'hp' | 'lp';
+  shape: string;
+  order: number;
+  frequencyHz: number;
+}
+
 interface ActiveProjectSpec {
   members: string[];
-  crossoversHz: number[];
+  chains: Record<string, ActiveFilterSection[]>;
   gainsDb: Record<string, number>;
   delaysMs: Record<string, number>;
+  inverted: Record<string, boolean>;
+  /** Whether any section was a linear-phase one. VituixCAD has no such shape,
+   * so it is exported as the Linkwitz-Riley of the same order and the project
+   * description says so — a silent substitution would be a different filter. */
+  linearPhase: boolean;
 }
+
+/** VituixCAD's Shape vocabulary for each family this app offers. */
+const VITUIXCAD_SHAPES: Record<FilterFamily, string> = {
+  lr: 'Linkwitz-Riley',
+  butterworth: 'Butterworth',
+  bessel: 'Bessel',
+  linear_phase: 'Linkwitz-Riley',
+};
 
 interface XmlNode {
   tag: string;
@@ -223,8 +246,12 @@ function addPart(parent: XmlNode, index: number, type: string, centerX: number, 
   return part;
 }
 
-function addProjectDefaults(root: XmlNode, active: boolean): void {
-  add(root, 'Description', active ? 'HornLab active LR4 project' : 'HornLab VituixCAD project');
+function addProjectDefaults(root: XmlNode, active: ActiveProjectSpec | null): void {
+  add(root, 'Description', active
+    ? `HornLab active crossover project${active.linearPhase
+      ? ' — linear-phase sections exported as Linkwitz-Riley of the same order; VituixCAD has no zero-phase shape'
+      : ''}`
+    : 'HornLab VituixCAD project');
   [
     ['ReferenceAngle', 0], ['DualPlane', 'False'], ['KeywordHor', 'hor'], ['KeywordVer', 'ver'],
     ['AngleMultiplier', 1], ['XMin', 20], ['XMax', 20000], ['Interpolate', 'True'],
@@ -294,15 +321,15 @@ function addWire(crossover: XmlNode, partIndex: number, points: Array<[number, n
 function addActiveFilter(
   crossover: XmlNode,
   partIndex: number,
-  kind: 'hp' | 'lp',
+  section: ActiveFilterSection,
   centerX: number,
   signalY: number,
-  frequencyHz: number,
   unitId: number,
 ): void {
+  const { kind, frequencyHz } = section;
   const filter = addPart(crossover, partIndex, kind === 'hp' ? 'Active High pass' : 'Active Low pass', centerX, signalY + 1);
-  add(filter, 'Shape', 'Linkwitz-Riley');
-  add(filter, 'Order', 4);
+  add(filter, 'Shape', section.shape);
+  add(filter, 'Order', section.order);
   add(filter, 'Open', 'False');
   add(filter, 'Shorted', 'False');
   add(filter, 'PartID', `U${unitId}`);
@@ -318,13 +345,14 @@ function addBuffer(
   signalY: number,
   gainDb: number,
   delayMs: number,
+  inverted: boolean,
   bufferId: number,
 ): void {
   const buffer = addPart(crossover, partIndex, 'Buffer', centerX, signalY + 1);
   add(buffer, 'Shape');
   add(buffer, 'Open', 'False');
   add(buffer, 'Shorted', 'False');
-  add(buffer, 'Inverted', 'False');
+  add(buffer, 'Inverted', inverted ? 'True' : 'False');
   add(buffer, 'PartID', `A${bufferId}`);
   add(buffer, 'GUID');
   addParameter(buffer, 0, 'A', gainDb, 'dB', -100, 100);
@@ -352,6 +380,39 @@ function addDriverPart(crossover: XmlNode, partIndex: number, driver: ProjectDri
   addWirePoints(part, [[centerX - 1, centerY - 3], [centerX - 1, centerY + 3]]);
 }
 
+function numberOf(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+/** One channel's active blocks, or null when a section names a family/order
+ * this app does not evaluate — which would export a filter nobody solved. */
+function chainOf(channel: Record<string, unknown> | undefined): ActiveFilterSection[] | null {
+  const sections: ActiveFilterSection[] = [];
+  for (const kind of ['hp', 'lp'] as const) {
+    const raw = channel?.[kind];
+    if (raw === null || raw === undefined) continue;
+    if (typeof raw !== 'object') return null;
+    const record = raw as Record<string, unknown>;
+    const family = record.family;
+    const order = numberOf(record.order);
+    const frequencyHz = numberOf(record.fc_hz);
+    if (!isFilterFamily(family) || order === null || frequencyHz === null) return null;
+    if (!familyOrders(family).includes(order)) return null;
+    sections.push({ kind, shape: VITUIXCAD_SHAPES[family], order, frequencyHz });
+  }
+  return sections;
+}
+
+/** The LR4 chain a payload from before the filter library describes. */
+function legacyChains(members: string[], crossoversHz: number[]): Record<string, ActiveFilterSection[]> {
+  return Object.fromEntries(members.map((member, index) => {
+    const sections: ActiveFilterSection[] = [];
+    if (index > 0) sections.push({ kind: 'hp', shape: 'Linkwitz-Riley', order: 4, frequencyHz: crossoversHz[index - 1] });
+    if (index < crossoversHz.length) sections.push({ kind: 'lp', shape: 'Linkwitz-Riley', order: 4, frequencyHz: crossoversHz[index] });
+    return [member, sections];
+  }));
+}
+
 function activeProjectSpec(result: ResultPayload, eligibleIds: string[]): ActiveProjectSpec | null {
   const eligible = new Set(eligibleIds);
   for (const { result: channel } of resultChannels(result)) {
@@ -362,33 +423,56 @@ function activeProjectSpec(result: ResultPayload, eligibleIds: string[]): Active
     // payload; results solved before that rename still carry it.
     if (record.type !== 'filtered_time_aligned_sum' && record.type !== 'lr4_time_aligned_sum') continue;
     const members = Array.isArray(record.members) ? record.members.map(String) : [];
-    // An unlinked pair reports a null crossover, which this LR4-shaped export
-    // cannot represent; Number(null) would silently write it as 0 Hz.
-    const crossoversHz = Array.isArray(record.crossovers_hz)
-      ? record.crossovers_hz.map((value) => (value === null ? Number.NaN : Number(value))) : [];
     if (members.length !== eligible.size || members.some((id) => !eligible.has(id))) continue;
-    if (crossoversHz.length !== members.length - 1 || crossoversHz.some((value) => !Number.isFinite(value))) continue;
+    const resolved = record.channels && typeof record.channels === 'object'
+      ? record.channels as Record<string, unknown>
+      : null;
+    let chains: Record<string, ActiveFilterSection[]> | null = null;
+    let linearPhase = false;
+    if (resolved && members.every((id) => resolved[id] && typeof resolved[id] === 'object')) {
+      const built = members.map((id) => chainOf(resolved[id] as Record<string, unknown>));
+      if (built.some((sections) => sections === null)) continue;
+      chains = Object.fromEntries(members.map((id, index) => [id, built[index]!]));
+      linearPhase = members.some((id) => {
+        const entry = resolved[id] as Record<string, unknown>;
+        return [entry.hp, entry.lp].some((section) => (
+          section && typeof section === 'object'
+          && (section as Record<string, unknown>).family === 'linear_phase'
+        ));
+      });
+    } else {
+      // An unlinked pair reports a null crossover, which this LR4-shaped
+      // fallback cannot represent; Number(null) would write it as 0 Hz.
+      const crossoversHz = Array.isArray(record.crossovers_hz)
+        ? record.crossovers_hz.map((value) => (value === null ? Number.NaN : Number(value))) : [];
+      if (crossoversHz.length !== members.length - 1 || crossoversHz.some((value) => !Number.isFinite(value))) continue;
+      chains = legacyChains(members, crossoversHz);
+    }
     const levelMatch = record.level_match && typeof record.level_match === 'object'
       ? record.level_match as Record<string, unknown> : {};
     const gains = levelMatch.gains_db && typeof levelMatch.gains_db === 'object'
       ? levelMatch.gains_db as Record<string, unknown> : {};
     const delays = record.delays_ms && typeof record.delays_ms === 'object'
       ? record.delays_ms as Record<string, unknown> : {};
+    const channelValue = (id: string, key: string): unknown => (
+      resolved && resolved[id] && typeof resolved[id] === 'object'
+        ? (resolved[id] as Record<string, unknown>)[key]
+        : undefined
+    );
     return {
       members,
-      crossoversHz,
-      gainsDb: Object.fromEntries(members.map((id) => [id, finite(Number(gains[id])) ? Number(gains[id]) : 0])),
-      delaysMs: Object.fromEntries(members.map((id) => [id, finite(Number(delays[id])) ? Number(delays[id]) : 0])),
+      chains,
+      gainsDb: Object.fromEntries(members.map((id) => [
+        id, numberOf(channelValue(id, 'gain_db')) ?? numberOf(Number(gains[id])) ?? 0,
+      ])),
+      delaysMs: Object.fromEntries(members.map((id) => [
+        id, numberOf(channelValue(id, 'delay_ms')) ?? numberOf(Number(delays[id])) ?? 0,
+      ])),
+      inverted: Object.fromEntries(members.map((id) => [id, channelValue(id, 'inverted') === true])),
+      linearPhase,
     };
   }
   return null;
-}
-
-function filterChain(memberIndex: number, crossoversHz: number[]): Array<['hp' | 'lp', number]> {
-  const chain: Array<['hp' | 'lp', number]> = [];
-  if (memberIndex > 0) chain.push(['hp', crossoversHz[memberIndex - 1]]);
-  if (memberIndex < crossoversHz.length) chain.push(['lp', crossoversHz[memberIndex]]);
-  return chain;
 }
 
 /**
@@ -398,7 +482,7 @@ function filterChain(memberIndex: number, crossoversHz: number[]): Array<['hp' |
  */
 export function buildVxp(drivers: ProjectDriver[], activeSpec: ActiveProjectSpec | null): string {
   const root = xml('SPEAKER');
-  addProjectDefaults(root, activeSpec !== null);
+  addProjectDefaults(root, activeSpec);
   drivers.forEach((driver, index) => addDriverHeader(root, driver, index));
   add(root, 'Variant', 0);
   const crossover = add(root, 'CROSSOVER');
@@ -420,13 +504,14 @@ export function buildVxp(drivers: ProjectDriver[], activeSpec: ActiveProjectSpec
       ? [[3, 6], [currentX, signalY]]
       : [[3, 6], [6, 6], [6, signalY], [currentX, signalY]]);
     if (activeSpec) {
-      filterChain(memberIndex, activeSpec.crossoversHz).forEach(([kind, frequency]) => {
-        addActiveFilter(crossover, partIndex++, kind, currentX + 3, signalY, frequency, unitId++);
+      (activeSpec.chains[driver.id] ?? []).forEach((section) => {
+        addActiveFilter(crossover, partIndex++, section, currentX + 3, signalY, unitId++);
         currentX += 6;
       });
       addBuffer(
         crossover, partIndex++, currentX + 3, signalY,
-        activeSpec.gainsDb[driver.id] ?? 0, activeSpec.delaysMs[driver.id] ?? 0, bufferId++,
+        activeSpec.gainsDb[driver.id] ?? 0, activeSpec.delaysMs[driver.id] ?? 0,
+        activeSpec.inverted[driver.id] === true, bufferId++,
       );
       currentX += 6;
     }
