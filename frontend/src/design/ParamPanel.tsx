@@ -25,6 +25,7 @@ import {
   type DriverFieldKey,
   type PortAreaSource,
 } from '../stores/cadReturn';
+import { useWaveguideDefinitionApplies } from '../stores/waveguideLink';
 import { useDesignStore, type DesignDocument, type DesignFamily, type DesignValue } from '../stores/design';
 import { namespaceStorage } from '../stores/durableSettings';
 import { useSolveOptionsStore, type SymmetryMode } from '../stores/solveOptions';
@@ -1074,6 +1075,7 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
   const currentPreviewFields = previewErrorRevision === designRevision ? previewErrorFields : null;
   const workspaceMode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
   const ingestRecord = useCadReturnStore((state) => state.ingestRecord);
+  const waveguideLinked = useWaveguideDefinitionApplies();
   const setFamily = useDesignStore((state) => state.setFamily);
   const loadDesign = useDesignStore((state) => state.loadDesign);
   const helpVisible = useParameterHelp();
@@ -1085,7 +1087,8 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
   const searching = Boolean(query.trim());
   const definitions = useMemo(() => PARAMETER_SECTION_DEFINITIONS
     .filter((definition) => definition.tab === tab)
-    .filter((definition) => parameterSectionIsVisible(definition, workspaceMode, design)), [design, tab, workspaceMode]);
+    .filter((definition) => parameterSectionIsVisible(definition, { mode: workspaceMode, design, waveguideLinked })),
+    [design, tab, waveguideLinked, workspaceMode]);
   const fieldsBySection = useMemo(() => new Map(definitions.map(({ title }) => {
     const fields = PARAMETER_REGISTRY.filter((field) => field.section === title)
       .filter((field) => query.trim() ? fieldAppliesToFamily(field, design.formula) : fieldIsVisible(field, design))
