@@ -16,6 +16,14 @@ import {
   useCadReturnStore,
   type DriverPreset,
 } from './cadReturn';
+import {
+  expandLegacy,
+  relinkPairs,
+  withChannel,
+  withDelayMode,
+  withGainMode,
+  withPair,
+} from '../results/crossoverSpec';
 import { buildImportedSubmission } from '../jobs/importedSubmission';
 import { resetDocumentStore, useDocumentStore } from './document';
 
@@ -370,13 +378,14 @@ describe('CAD return store', () => {
     store.setSourceSize('source-hf', 2.25);
     store.setRigidSize(9.5);
     store.setTransition(4.5);
+    // The crossover is set while both bands still have a channel: a spec names
+    // its members, so it cannot be edited once one of them is skipped away.
+    store.setCombineEnabled(true);
+    store.setCombineCrossover('drive-mf→drive-hf', 1_350);
+    store.updateCombineSpec((spec) => withDelayMode(withGainMode(spec, 'manual'), 'manual'));
     store.setSkipped('source-hf', true);
     store.setChannelMotion('drive-mf', 'axial');
     store.setExteriorOnly(true);
-    store.setCombineEnabled(true);
-    store.setCombineCrossover('drive-mf→drive-hf', 1_350);
-    store.setCombineLevelMatch(false);
-    store.setCombineAlign(false);
     store.setChannelDriverEnabled('drive-mf', true);
     store.setChannelDriverField('drive-mf', 'sd_cm2', 135);
     store.setDriveVoltage(4);
@@ -403,9 +412,7 @@ describe('CAD return store', () => {
       driveChannels: [{ id: 'drive-mf', source_ids: ['source-mf'], motion: 'axial' }],
       exteriorOnly: true,
       combineEnabled: true,
-      combineCrossoversHz: { 'drive-mf→drive-hf': 1_350 },
-      combineLevelMatch: false,
-      combineAlign: false,
+      combineSpec: expandLegacy(['drive-mf', 'drive-hf'], [1_350], false, false),
       channelDrivers: { 'drive-mf': { enabled: true, fields: { sd_cm2: 135 } } },
       driveVoltageV: 4,
       frequencyStartHz: 300,
@@ -584,6 +591,9 @@ describe('combined output', () => {
       upperRole: 'HF',
       defaultHz: 1_000,
       outsideSweep: false,
+      linked: true,
+      family: 'lr',
+      order: 4,
     }]);
   });
 
@@ -593,7 +603,8 @@ describe('combined output', () => {
     // so the log-spaced sqrt(200 * 20000) = 2000 Hz is used instead.
     const [pair] = combineChain(useCadReturnStore.getState());
     expect(pair).toMatchObject({ defaultHz: 100, outsideSweep: true, hz: 2_000 });
-    expect(combineWire(useCadReturnStore.getState())?.crossovers_hz).toEqual([2_000]);
+    expect(combineWire(useCadReturnStore.getState())?.channels['drive-mf'].lp)
+      .toEqual({ family: 'lr', order: 4, fc_hz: 2_000 });
 
     useCadReturnStore.getState().setSweep({ frequencyStartHz: 50, frequencyEndHz: 20_000, frequencyCount: 24 });
     expect(combineChain(useCadReturnStore.getState())[0]).toMatchObject({ outsideSweep: false, hz: 100 });
@@ -610,21 +621,99 @@ describe('combined output', () => {
       upperRole: undefined,
       defaultHz: undefined,
       outsideSweep: false,
+      linked: true,
+      family: 'lr',
+      order: 4,
     }]);
   });
 
-  it('adopts the crossovers a recombine was computed with, ignoring foreign members', () => {
+  it('adopts the spec a recombine was computed with, ignoring foreign members', () => {
     useCadReturnStore.getState().selectBundle(bundle);
-    useCadReturnStore.getState().setCombineCrossoversFromResult(['drive-mf', 'drive-hf'], [1_450]);
-    expect(useCadReturnStore.getState().combineCrossoversHz).toEqual({ 'drive-mf→drive-hf': 1_450 });
+    const applied = expandLegacy(['drive-mf', 'drive-hf'], [1_450]);
+    useCadReturnStore.getState().setCombineSpecFromResult(applied);
+    expect(useCadReturnStore.getState().combineSpec).toEqual(applied);
     expect(combineChain(useCadReturnStore.getState())[0].hz).toBe(1_450);
 
     // A run from another return names channels this one has not got.
-    useCadReturnStore.getState().setCombineCrossoversFromResult(['drive-lf', 'drive-mf', 'drive-hf'], [90, 900]);
-    expect(useCadReturnStore.getState().combineCrossoversHz).toEqual({ 'drive-mf→drive-hf': 900 });
+    useCadReturnStore.getState().setCombineSpecFromResult(
+      expandLegacy(['drive-lf', 'drive-mf', 'drive-hf'], [90, 900]),
+    );
+    expect(useCadReturnStore.getState().combineSpec).toEqual(applied);
+  });
 
-    useCadReturnStore.getState().setCombineCrossoversFromResult(['drive-mf', 'drive-hf'], []);
-    expect(useCadReturnStore.getState().combineCrossoversHz).toEqual({ 'drive-mf→drive-hf': 900 });
+  it('keeps a family and slope change symmetric and submits it as the v2 wire', () => {
+    useCadReturnStore.getState().selectBundle(bundle);
+    useCadReturnStore.getState().updateCombineSpec(
+      (spec) => withPair(spec, 'drive-mf→drive-hf', { hz: 1_400, family: 'butterworth', order: 3 }),
+    );
+    const [pair] = combineChain(useCadReturnStore.getState());
+    expect(pair).toMatchObject({ hz: 1_400, family: 'butterworth', order: 3, linked: true });
+    const wire = combineWire(useCadReturnStore.getState())!;
+    expect(wire.channels['drive-mf'].lp).toEqual({ family: 'butterworth', order: 3, fc_hz: 1_400 });
+    expect(wire.channels['drive-hf'].hp).toEqual({ family: 'butterworth', order: 3, fc_hz: 1_400 });
+    expect(wire.reference).toBe('drive-hf');
+    expect(wire).not.toHaveProperty('crossovers_hz');
+  });
+
+  it('marks a pair unlinked when one channel is edited on its own', () => {
+    useCadReturnStore.getState().selectBundle(bundle);
+    useCadReturnStore.getState().updateCombineSpec((spec) => withChannel(spec, 'drive-mf', {
+      lp: { family: 'butterworth', order: 3, fcHz: 900 },
+    }));
+    expect(combineChain(useCadReturnStore.getState())[0]).toMatchObject({ linked: false, hz: 900 });
+    useCadReturnStore.getState().updateCombineSpec(relinkPairs);
+    expect(combineChain(useCadReturnStore.getState())[0]).toMatchObject({ linked: true, hz: 900 });
+  });
+
+  it('falls back to the base chain when the drive channels no longer match the override', () => {
+    useCadReturnStore.getState().selectBundle(bundle);
+    useCadReturnStore.getState().setCombineCrossover('drive-mf→drive-hf', 1_450);
+    useCadReturnStore.getState().setSourceChannel('source-hf', 'drive-mf');
+    expect(combineWire(useCadReturnStore.getState())).toBeUndefined();
+    useCadReturnStore.getState().setSourceChannel('source-hf', 'drive-hf');
+    expect(combineChain(useCadReturnStore.getState())[0].hz).toBe(1_450);
+  });
+
+  it('migrates a version 2 profile crossover map into one spec override', () => {
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 1,
+    }, 'current');
+    useCadReturnStore.getState().selectBundle(bundle);
+    useCadReturnStore.getState().setCombineEnabled(true);
+
+    const raw = JSON.parse(localStorage.getItem(solveProfileStorageKey)!);
+    raw.version = 2;
+    delete raw.profiles[0].settings.combineSpec;
+    raw.profiles[0].settings.combineCrossoversHz = { 'drive-mf→drive-hf': 1_350 };
+    raw.profiles[0].settings.combineLevelMatch = false;
+    raw.profiles[0].settings.combineAlign = null;
+    localStorage.setItem(solveProfileStorageKey, JSON.stringify(raw));
+
+    resetCadReturnStore();
+    useCadReturnStore.getState().selectBundle(bundle);
+    expect(useCadReturnStore.getState().combineSpec)
+      .toEqual(expandLegacy(['drive-mf', 'drive-hf'], [1_350], false, true));
+  });
+
+  it('migrates an untouched version 2 profile to no override at all', () => {
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 1,
+    }, 'current');
+    useCadReturnStore.getState().selectBundle(bundle);
+    useCadReturnStore.getState().setCombineEnabled(true);
+
+    const raw = JSON.parse(localStorage.getItem(solveProfileStorageKey)!);
+    raw.version = 2;
+    delete raw.profiles[0].settings.combineSpec;
+    raw.profiles[0].settings.combineCrossoversHz = {};
+    raw.profiles[0].settings.combineLevelMatch = null;
+    raw.profiles[0].settings.combineAlign = null;
+    localStorage.setItem(solveProfileStorageKey, JSON.stringify(raw));
+
+    resetCadReturnStore();
+    useCadReturnStore.getState().selectBundle(bundle);
+    expect(useCadReturnStore.getState().combineSpec).toBeNull();
+    expect(combineChain(useCadReturnStore.getState())[0].hz).toBe(1_000);
   });
 
   it('restores a profile written before the combined output defaulted on as no choice', () => {

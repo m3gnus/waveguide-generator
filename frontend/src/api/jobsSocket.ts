@@ -1,3 +1,4 @@
+import type { CrossoverChannelWire } from '../results/crossoverSpec';
 import { compareSelection, provisionalResults, type JobResults } from './results';
 
 /**
@@ -101,10 +102,14 @@ export interface CadSetup {
     motion?: 'normal' | 'axial';
     driver?: Record<string, number> | null;
   }>;
+  /** Both crossover generations: the per-channel v2 form every new submission
+   * writes, and the legacy triple older jobs still carry. */
   combine?: {
     id?: string;
     members: string[];
-    crossovers_hz: number[];
+    reference?: string;
+    channels?: Record<string, CrossoverChannelWire>;
+    crossovers_hz?: number[];
     level_match?: boolean;
     align?: boolean;
   } | null;

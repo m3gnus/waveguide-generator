@@ -5,6 +5,7 @@ import type { EChartsOption } from 'echarts';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
 import { compareSelection, provisionalResults, resultsCache, type JobResults } from '../api/results';
 import { preferencesStore } from '../prefs/preferences';
+import { expandLegacy, toWire } from '../results/crossoverSpec';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetDesignStore } from '../stores/design';
 import { resetDocumentStore } from '../stores/document';
@@ -73,6 +74,41 @@ function threeWay(): JobResults {
     },
     metadata: { geometry_type: 'imported' },
   };
+}
+
+/** The same run as `threeWay`, but solved after the per-channel spec: the
+ * resolved channels, the pair metrics and a reference channel. */
+function threeWayV2(): JobResults {
+  const payload = threeWay();
+  payload.channels!.combined.metadata!.combine = {
+    members: ['drive-mf', 'drive-hf'],
+    member_roles: ['MF', 'HF'],
+    reference: 'drive-hf',
+    crossovers_hz: [1_000],
+    channels: {
+      'drive-mf': {
+        hp: null, lp: { family: 'lr', order: 4, fc_hz: 1_000 },
+        gain_db: -1.5, gain_mode: 'auto', gain_auto_db: -1.5,
+        delay_ms: 0.38, delay_mode: 'auto', delay_auto_ms: 0.38,
+        inverted: false, invert_mode: 'auto',
+      },
+      'drive-hf': {
+        hp: { family: 'lr', order: 4, fc_hz: 1_000 }, lp: null,
+        gain_db: 0, gain_mode: 'auto', gain_auto_db: 0,
+        delay_ms: 0, delay_mode: 'auto', delay_auto_ms: 0,
+        inverted: false, invert_mode: 'auto',
+      },
+    },
+    pairs: {
+      'drive-mf-drive-hf': {
+        eval_hz: 1_000, fit_residual_deg: 3.1, phase_error_at_fc_deg: 4,
+        reverse_null_db: -28.4, points: 12,
+      },
+    },
+    align: true,
+    warnings: [],
+  };
+  return payload;
 }
 
 /** A two-way return with no MF driver, for the substitution rule. */
@@ -160,6 +196,10 @@ describe('results dock view switch', () => {
   const render = async () => {
     await act(async () => { root.render(<ResultsPanel/>); await Promise.resolve(); });
     await act(async () => { await Promise.resolve(); });
+  };
+  const renderWith = async (payload: JobResults) => {
+    payloads.primary = payload;
+    await render();
   };
 
   beforeEach(() => {
@@ -317,13 +357,59 @@ describe('results dock view switch', () => {
         .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
       await Promise.resolve();
     });
-    expect(recombineMocks.recombine).toHaveBeenCalledWith('primary', expect.objectContaining({
-      id: 'combined', members: ['drive-mf', 'drive-hf'], crossovers_hz: [1_400],
-    }));
-    expect(useCadReturnStore.getState().combineCrossoversHz).toEqual({ 'drive-mf→drive-hf': 1_400 });
+    // The v2 body: per-channel sections, no crossovers_hz.
+    expect(recombineMocks.recombine).toHaveBeenCalledWith('primary', {
+      id: 'combined', ...toWire(expandLegacy(['drive-mf', 'drive-hf'], [1_400])),
+    });
+    expect(useCadReturnStore.getState().combineSpec)
+      .toEqual(expandLegacy(['drive-mf', 'drive-hf'], [1_400]));
 
     await chooseView('HF');
     expect(host.querySelector('form.result-recombine')).toBeNull();
+  });
+
+  it('shows the resolved delays and the reverse-null depth, and posts a changed slope', async () => {
+    recombineMocks.recombine.mockResolvedValue(threeWayV2());
+    publishJobs([job('primary', 1)]);
+    compareSelection.setPrimary('primary');
+    await renderWith(threeWayV2());
+
+    const strip = host.querySelector('form.result-recombine')!;
+    expect(strip.textContent).toContain('MF 0.38 · HF ref ms');
+    const nullChip = [...strip.querySelectorAll('.result-recombine-chip')]
+      .find((chip) => chip.textContent?.startsWith('null'))!;
+    expect(nullChip.textContent).toBe('null −28 dB');
+    expect(nullChip.className).not.toContain('warn');
+
+    const slope = strip.querySelector<HTMLSelectElement>('[aria-label="Crossover drive-mf to drive-hf slope"]')!;
+    expect(slope.value).toBe('4');
+    await act(async () => {
+      slope.value = '2';
+      slope.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await act(async () => {
+      strip.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      await Promise.resolve();
+    });
+    const posted = recombineMocks.recombine.mock.calls.at(-1)![1] as { channels: Record<string, { lp: unknown; hp: unknown }> };
+    expect(posted.channels['drive-mf'].lp).toEqual({ family: 'lr', order: 2, fc_hz: 1_000 });
+    expect(posted.channels['drive-hf'].hp).toEqual({ family: 'lr', order: 2, fc_hz: 1_000 });
+    expect(useCadReturnStore.getState().combineSpec?.channels['drive-hf'].hp)
+      .toEqual({ family: 'lr', order: 2, fcHz: 1_000 });
+  });
+
+  it('flags a shallow reverse null in amber', async () => {
+    const shallow = threeWayV2();
+    const combine = shallow.channels!.combined.metadata!.combine as Record<string, unknown>;
+    (combine.pairs as Record<string, Record<string, number>>)['drive-mf-drive-hf'].reverse_null_db = -4.2;
+    publishJobs([job('primary', 1)]);
+    compareSelection.setPrimary('primary');
+    await renderWith(shallow);
+
+    const nullChip = [...host.querySelectorAll('.result-recombine-chip')]
+      .find((chip) => chip.textContent?.startsWith('null'))!;
+    expect(nullChip.textContent).toBe('null −4 dB');
+    expect(nullChip.className).toContain('warn');
   });
 
   it('names the shown channel on the summary card', async () => {

@@ -239,6 +239,17 @@ describe('phase, group delay and polar charts', () => {
     expect((withTrace.yAxis as Array<{ name?: string }>).map(({ name }) => name)).toEqual(['dB SPL', 'Phase [°]']);
   });
 
+  it('draws the reverse null muted and dashed, behind the phase trace', () => {
+    const option = splOption([withPhase], tokens, 'none', 'full', [], true, [
+      { name: 'Reverse null · MF → HF', points: [[500, -12], [1_000, -31]] },
+    ]);
+    const series = option.series as Array<{ name: string; z?: number; lineStyle?: { color?: string; type?: string } }>;
+    expect(series.map(({ name }) => name)).toEqual(['Run A', 'Reverse null · MF → HF', 'Run A · phase']);
+    expect(series[1].z).toBe(0);
+    expect(series[1].lineStyle?.type).toBe('dashed');
+    expect(series[1].lineStyle?.color).toBe(tokens.muted);
+  });
+
   it('normalizes a polar cut to its own on-axis sample and floors the radius', () => {
     const option = polarOption([withPhase], tokens, 'horizontal', 1_000, -30, 'full');
     const series = option.series as Array<{ data: Array<Array<number | null>> }>;
