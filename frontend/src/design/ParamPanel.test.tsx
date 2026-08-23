@@ -540,6 +540,16 @@ describe('ParamPanel inventory UX', () => {
     const spec = useCadReturnStore.getState().combineSpec!;
     expect(spec.channels['drive-mf'].gain).toEqual({ mode: 'manual', db: 0 });
     expect(spec.channels['drive-hf'].gain).toEqual({ mode: 'auto' });
+    // Clearing a manual field is the same gesture as everywhere else: it gives
+    // the value back to whatever computes it.
+    const field = document.querySelector<HTMLInputElement>('.crossover-advanced [aria-label="Gain in dB"]')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(field, '');
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(useCadReturnStore.getState().combineSpec!.channels['drive-mf'].gain).toEqual({ mode: 'auto' });
+    act(() => [...groups[0].querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent === 'Manual')!.click());
     // The chain-wide segment can no longer claim one mode for two.
     const levels = host.querySelector('[aria-label="Level match members mode"]')!;
     expect(levels.querySelector('button[aria-pressed="true"]')).toBeNull();
