@@ -31,6 +31,12 @@
 .cad-alert-notice { border-color: var(--hair); background: var(--surface-raised); color: var(--fg2); }
 .cad-status-strip { background: var(--ov1); color: var(--fg2); }
 
+.cad-simulation-guide { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; margin: 0 0 10px; padding: 8px; border: 1px solid var(--hair); background: var(--surface-raised); }
+.cad-simulation-guide > div { display: grid; min-width: 0; gap: 2px; }
+.cad-simulation-guide span { color: var(--fg3); font-size: var(--text-micro); overflow-wrap: anywhere; }
+.cad-simulation-guide button { white-space: nowrap; }
+.cad-simulation-guide.ready { border-color: color-mix(in srgb, var(--green) 45%, var(--hair)); }
+
 .cad-return-quick-action, .cad-return-summary { display: grid; gap: 7px; margin: 7px 0; padding: 8px; border: 1px solid color-mix(in srgb, var(--acc) 45%, var(--hair)); background: color-mix(in srgb, var(--acc) 7%, var(--surface-panel)); }
 .cad-return-quick-action > div:first-child, .cad-return-summary-copy { display: grid; min-width: 0; gap: 2px; }
 .cad-return-quick-action span { color: var(--fg3); font-size: var(--text-base); overflow-wrap: anywhere; }

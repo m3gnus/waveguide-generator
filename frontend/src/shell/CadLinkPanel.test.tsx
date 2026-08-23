@@ -18,6 +18,7 @@ import meshFixture from '../viewport/test-fixtures/tagged_sources-small.msh?raw'
 import { buildImportedSubmission, CadLinkPanel, fusionWorkflowView, newestReturnArrival, onshapeWorkflowView, showIngestedMeshInViewport } from './CadLinkPanel';
 import { CadLinkCoordinator, cadLinkCoordinatorBridge } from './CadLinkCoordinator';
 import { JobsCoordinator, jobsCoordinatorBridge } from './JobsCoordinator';
+import { workspaceNavigation } from './workspaceNavigation';
 
 const mocks = vi.hoisted(() => ({ submitImported: vi.fn() }));
 
@@ -688,6 +689,16 @@ describe('CadLinkPanel', () => {
       .some((button) => button.textContent === 'Prepare simulation')).toBe(true);
     expect(host.querySelector('.cad-history .section-head')?.getAttribute('aria-expanded')).toBe('false');
     expect(host.textContent).not.toContain('Mesh detail');
+  });
+
+  it('points directly to the Simulation tab and names the hidden driver inputs', async () => {
+    const activate = vi.spyOn(workspaceNavigation, 'activate');
+    await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
+
+    const guide = host.querySelector('.cad-simulation-guide')!;
+    expect(guide.textContent).toContain('Driver T/S, crossover, sweep, directivity, solve options, and mesh detail');
+    act(() => guide.querySelector<HTMLButtonElement>('button')!.click());
+    expect(activate).toHaveBeenCalledWith('simulation');
   });
 
   it('rolls the selected return summary into its preparing state', async () => {

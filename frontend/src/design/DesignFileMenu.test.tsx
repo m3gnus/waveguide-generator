@@ -340,6 +340,12 @@ describe('design file export menu', () => {
         branchedFromDesignId: null, branchedFromEditVersion: null,
         exportCount: 3, lastExportedAt: '2026-08-20T11:00:00Z',
         createdAt: '2026-08-19T10:00:00Z', updatedAt: '2026-08-20T12:00:00Z',
+      }, {
+        designId: 'wgd_01K000000000000000ABCDEF', lineageId: 'wgl_other', editVersion: 2,
+        designHash: 'sha256:other', filename: 'registry-head.cfg',
+        branchedFromDesignId: null, branchedFromEditVersion: null,
+        exportCount: 1, lastExportedAt: '2026-08-18T11:00:00Z',
+        createdAt: '2026-08-18T10:00:00Z', updatedAt: '2026-08-18T12:00:00Z',
       }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       if (path === `/api/cadlink/designs/${identity.designId}`) return new Response(JSON.stringify({
         designId: identity.designId, lineageId: identity.lineageId, editVersion: 7,
@@ -363,6 +369,9 @@ describe('design file export menu', () => {
     const project = [...container.querySelectorAll<HTMLButtonElement>('[aria-label="CAD-linked designs"] button')][0];
     expect(project.textContent).toContain('registry-head.cfg');
     expect(project.textContent).toContain('v7 · 3 exports');
+    expect(project.textContent).toContain('ID …000000');
+    expect([...container.querySelectorAll<HTMLButtonElement>('[aria-label="CAD-linked designs"] button')][1].textContent)
+      .toContain('ID …ABCDEF');
 
     await act(async () => { project.click(); await Promise.resolve(); await Promise.resolve(); });
 
