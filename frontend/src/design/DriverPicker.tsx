@@ -213,7 +213,7 @@ function DriverSearch({ channel, roleHint, onPick }: {
   useEffect(() => {
     if (!open) return;
     const request = ++generation.current;
-    void searchDrivers({ q: query, kind, limit: 20 }).then(
+    void searchDrivers({ q: query, kind, limit: 40 }).then(
       (items) => { if (request === generation.current) { setHits(items); setError(null); } },
       (reason: unknown) => {
         if (request !== generation.current) return;
