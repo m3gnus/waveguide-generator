@@ -90,6 +90,16 @@ export const CAD_CONTROLS = {
     'cad.driver.enabled', 'Driver T/S', CAD_CONTROL_SECTIONS.driveChannels, 'simulation',
     ['Thiele-Small', 'voltage driven', 'driver model'], 'ingested-return', 'cad.drive-channels',
   ),
+  driverSearch: control(
+    'cad.driver.search', 'Find driver', CAD_CONTROL_SECTIONS.driveChannels, 'simulation',
+    ['driver library', 'search drivers', 'preset', 'database', 'brand', 'model', 'compression driver', 'woofer'],
+    'ingested-return', 'cad.drive-channels',
+  ),
+  driverEdit: control(
+    'cad.driver.edit', 'Edit T/S', CAD_CONTROL_SECTIONS.driveChannels, 'simulation',
+    ['Thiele-Small sheet', 'datasheet', 'override', 'Qes', 'Qts', 'sensitivity', 'impedance variant'],
+    'ingested-return', 'cad.drive-channels',
+  ),
   driveVoltage: control(
     'cad.driver.voltage', 'Drive voltage', CAD_CONTROL_SECTIONS.driveChannels, 'simulation',
     ['RMS', 'volts', '2.83 V', 'driveVoltageV'], 'ingested-return', 'cad.drive-channels',
@@ -195,12 +205,29 @@ export const CAD_DRIVER_FIELD_CONTROLS: readonly CadDriverFieldDescriptor[] = [
   driverField('re_ohm', 'Re', 'Ω', 0.1),
   driverField('le_mh', 'Le', 'mH', 0.05),
   driverField('mmd_g', 'Mmd', 'g', 1),
+  driverField('mms_g', 'Mms', 'g', 1),
   driverField('cms_m_per_n', 'Cms', 'm/N', 0.0001),
+  driverField('vas_l', 'Vas', 'L', 1),
+  driverField('fs_hz', 'Fs', 'Hz', 5),
+  driverField('qms', 'Qms', '', 0.1),
   driverField('rms_kg_per_s', 'Rms', 'kg/s', 0.1),
   driverField('xmax_mm', 'Xmax', 'mm', 0.5),
   driverField('count', 'Count', '', 1),
   driverField('rear_volume_l', 'Rear vol', 'L', 0.5),
 ];
+
+/**
+ * The datasheet fields the *Edit T/S* sheet offers, in reading order.
+ *
+ * Mmd and Cms are deliberately absent: a picked driver states Mms, Fs and Vas,
+ * and offering their substitutes beside them invites a spec carrying two
+ * masses, which the server refuses outright. They remain available in the
+ * manual grid, which is what a hand-entered driver uses.
+ */
+export const CAD_DRIVER_SHEET_FIELDS: readonly CadDriverFieldDescriptor[] = [
+  'sd_cm2', 'bl_t_m', 're_ohm', 'le_mh', 'mms_g', 'fs_hz', 'vas_l', 'qms', 'xmax_mm',
+  'count', 'rear_volume_l',
+].map((key) => CAD_DRIVER_FIELD_CONTROLS.find((control) => control.driverKey === key)!);
 
 export interface CadCardioidFieldDescriptor extends CadControlDescriptor {
   formKey: PassiveCardioidNumberField;

@@ -15,16 +15,13 @@ import {
   combineChain,
   combineEnabledEffective,
   combineLevelMatchDefault,
-  DRIVER_REQUIRED_KEYS,
   PASSIVE_CARDIOID_CHANNEL_ID,
   passiveCardioidBlocker,
   useCadReturnStore,
-  type CadDriveChannel,
-  type ChannelDriverForm,
   type CombinePair,
-  type DriverFieldKey,
   type PortAreaSource,
 } from '../stores/cadReturn';
+import { ChannelDriverPicker } from './DriverPicker';
 import { useWaveguideDefinitionApplies } from '../stores/waveguideLink';
 import { useDesignStore, type DesignDocument, type DesignFamily, type DesignValue } from '../stores/design';
 import { namespaceStorage } from '../stores/durableSettings';
@@ -57,7 +54,6 @@ import {
   CAD_CARDIOID_FIELD_CONTROLS,
   CAD_CONTROLS,
   CAD_CONTROL_DESCRIPTORS,
-  CAD_DRIVER_FIELD_CONTROLS,
   cadControlIsAvailable,
   cadControlMatchesQuery,
   cadDisplayValue,
@@ -850,30 +846,6 @@ function CadFrequencySweep() {
   </>;
 }
 
-/** Hornresp-unit T/S entry for one drive channel. Plain inputs are required:
- * an empty field means "not provided", which NumberField cannot represent. */
-function DriverFields({ channel, form, onField }: {
-  channel: CadDriveChannel;
-  form: ChannelDriverForm | undefined;
-  onField: (field: DriverFieldKey, value: number | null) => void;
-}) {
-  const missing = DRIVER_REQUIRED_KEYS.filter((key) => form?.fields[key] === undefined);
-  return <div className="cad-driver-grid">
-    {CAD_DRIVER_FIELD_CONTROLS.map(({ driverKey, label, unit, step, reveal }) => <label key={driverKey} className="cad-driver-field" data-control-reveal-id={reveal.id}>
-      <span>{label}{unit ? ` (${unit})` : ''}{DRIVER_REQUIRED_KEYS.includes(driverKey) ? ' *' : ''}</span>
-      <input
-        type="number"
-        min={0}
-        step={step}
-        value={form?.fields[driverKey] ?? ''}
-        aria-label={`${label} for ${channel.id}`}
-        onChange={(event) => onField(driverKey, event.target.value === '' ? null : Number(event.target.value))}
-      />
-    </label>)}
-    {missing.length > 0 && <p className="cad-driver-hint">Required: {missing.map((key) => CAD_DRIVER_FIELD_CONTROLS.find((item) => item.driverKey === key)?.label ?? key).join(', ')}. The channel solves as a unit-drive basis until they are set. Vas/Fs/Qms alternatives are accepted through the API.</p>}
-  </div>;
-}
-
 function CadDriveChannels() {
   const state = useCadReturnStore();
   const activeSources = (state.selectedBundle?.sources ?? []).filter((source) => !state.skippedSourceIds.includes(source.id));
@@ -897,7 +869,11 @@ function CadDriveChannels() {
         return <div className="cad-channel" key={channel.id}>
           <div className="cad-channel-summary" data-control-reveal-id={CAD_CONTROLS.channelMotion.reveal.id}><span>{channel.id} · {channel.source_ids.join(' + ')}</span><select aria-label={`${CAD_CONTROLS.channelMotion.label} for ${channel.id}`} value={channel.motion} onChange={(event) => state.setChannelMotion(channel.id, event.target.value as 'normal' | 'axial')}><option value="normal">Normal motion</option><option value="axial">Axial motion</option></select></div>
           {driverEligible && <ToggleRow id={`cad-driver-${channel.id}`} label={`${CAD_CONTROLS.driverToggle.label} · ${channel.id}`} revealId={CAD_CONTROLS.driverToggle.reveal.id} help="Voltage-driven Thiele-Small coupling. The channel's levels become absolute at the drive voltage and its impedance chart becomes the electrical input impedance in ohms." checked={driverForm?.enabled ?? false} onChange={(checked) => state.setChannelDriverEnabled(channel.id, checked)}/>}
-          {driverEligible && driverForm?.enabled && <DriverFields channel={channel} form={driverForm} onField={(field, value) => state.setChannelDriverField(channel.id, field, value)}/>}
+          {driverEligible && driverForm?.enabled && <ChannelDriverPicker
+            channel={channel}
+            form={driverForm}
+            roleHint={activeSources.find((source) => source.id === channel.source_ids[0])?.role}
+          />}
         </div>;
       })}
     </div>

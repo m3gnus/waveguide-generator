@@ -1499,6 +1499,8 @@ describe('CadLinkCoordinator', () => {
         mmd_g: 18.5, cms_m_per_n: 0.00042, rms_kg_per_s: 1.2,
         xmax_mm: 6, count: 2, rear_volume_l: 1.5,
       },
+      // The stored setup names no driver, so this is still hand entry.
+      preset: null,
     });
     expect(state.combineEnabled).toBe(true);
     expect(state.combineCrossoversHz).toEqual({ 'drive-mf→drive-hf': 1_250 });
