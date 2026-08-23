@@ -60,6 +60,7 @@ export const SETTINGS_NAMESPACE_EFFECTS: Record<SettingsNamespace, PreferenceEff
   // Panel sizes and which arrangement they were saved for.
   dockviewLayout: 'inert',
   dockviewMode: 'inert',
+  workspaceMode: 'inert',
   paramHelp: 'inert',
   paramSections: 'inert',
   cadSolveProfiles: 'inert',

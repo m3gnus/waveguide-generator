@@ -1,3 +1,5 @@
+import { namespaceStorage } from './durableSettings';
+
 export type WorkspaceMode = 'parametric' | 'cad';
 
 type Listener = () => void;
@@ -6,11 +8,20 @@ export interface WorkspaceModeState {
   mode: WorkspaceMode;
 }
 
-/** Autosave restores the document before React mounts, but a CAD return only
- * lives for the current session. Persisting `cad` would therefore describe
- * geometry that a reload cannot restore, so every module load starts honest. */
+const storage = namespaceStorage('workspaceMode');
+const STORAGE_KEY = 'mode';
+
+function storedMode(): WorkspaceMode {
+  return storage.getItem(STORAGE_KEY) === 'cad' ? 'cad' : 'parametric';
+}
+
+/** The workspace comes back the way it was left. Reloading in CAD Link mode
+ * used to fall back to Parametric on the grounds that a CAD return could not
+ * be restored; the coordinator now reselects the latest matching return on
+ * load and a CAD-only project can be reopened from its archive, so starting
+ * over was the dishonest option. */
 class WorkspaceModeStore {
-  private value: WorkspaceModeState = { mode: 'parametric' };
+  private value: WorkspaceModeState = { mode: storedMode() };
   private listeners = new Set<Listener>();
 
   subscribe = (listener: Listener): (() => void) => {
@@ -23,6 +34,7 @@ class WorkspaceModeStore {
   setMode = (mode: WorkspaceMode): void => {
     if (mode === this.value.mode) return;
     this.value = { mode };
+    storage.setItem(STORAGE_KEY, mode);
     this.listeners.forEach((listener) => listener());
   };
 }
