@@ -12,7 +12,9 @@ import {
   type CadProjectDocument,
   type RunGroup,
 } from '../api/cadProjects';
+import { listReturns, type CadReturnBundle } from '../api/cadlink';
 import { compareSelection } from '../api/results';
+import { cadLinkCoordinatorBridge } from './CadLinkCoordinator';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { openCadLinkedProject } from '../design/openCadProject';
 import { selectJob } from './JobsPanel';
@@ -102,6 +104,38 @@ function documentReason(document: CadProjectDocument | null, hash: string | null
   return '';
 }
 
+/**
+ * The newest readable return a CAD-only project can be reopened from.
+ *
+ * Such a project has no design snapshot, so the only way back into it after
+ * a reload is the geometry it last sent: returns name the CAD document, and
+ * the document is the project. Selecting one ingests it, and the ingest
+ * record then names the project for the rest of the panel.
+ */
+export function newestReturnForProject(
+  bundles: readonly CadReturnBundle[],
+  project: Pick<CadProject, 'documentName' | 'archiveStem'>,
+): CadReturnBundle | null {
+  const names = new Set([project.documentName, project.archiveStem].filter((name): name is string => Boolean(name)));
+  if (names.size === 0) return null;
+  return [...bundles]
+    .filter((bundle) => bundle.readable && bundle.documentName !== null && names.has(bundle.documentName))
+    .sort((a, b) => Date.parse(b.modifiedAt) - Date.parse(a.modifiedAt))[0] ?? null;
+}
+
+async function openCadOnlyProject(project: CadProject): Promise<string> {
+  // Asked of the server, not the coordinator's snapshot: that snapshot is
+  // React state and may still be the pre-reload empty list while a poll is
+  // in flight.
+  const response = await listReturns();
+  const bundle = newestReturnForProject(response.items, project);
+  if (!bundle) {
+    throw new Error(`No return from ${projectName(project)} is available to open. Send the document from Fusion again.`);
+  }
+  cadLinkCoordinatorBridge.getSnapshot().selectBundle(bundle);
+  return projectName(project);
+}
+
 function ProjectSwitcher({ current, onOpened, onError }: {
   /** The current project's lineage: the one identity every project has. */
   current: string | null;
@@ -131,15 +165,20 @@ function ProjectSwitcher({ current, onOpened, onError }: {
   useEffect(() => () => { generation.current += 1; }, []);
 
   const open_ = async (project: CadProject) => {
-    if (!project.designId) return;
     if (unsaved && !window.confirm('Discard unsaved changes and open this CAD-linked project?')) return;
     setBusy(true);
     try {
-      const opened = await openCadLinkedProject(
-        project.designId, fetch, 'cad-project-switch',
-      );
-      setOpen(false);
-      onOpened(opened.filename);
+      if (project.designId) {
+        const opened = await openCadLinkedProject(
+          project.designId, fetch, 'cad-project-switch',
+        );
+        setOpen(false);
+        onOpened(opened.filename);
+      } else {
+        const name = await openCadOnlyProject(project);
+        setOpen(false);
+        onOpened(name);
+      }
     } catch (error) {
       onError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -161,14 +200,13 @@ function ProjectSwitcher({ current, onOpened, onError }: {
       {projects?.map((project) => <button
         key={project.lineageId}
         role="menuitem"
-        // A project that exists only in CAD has no snapshot to open. It is
-        // still listed, because it is where the panel already is when a
-        // CAD-authored return is on screen.
-        disabled={busy || (!project.designId && project.lineageId !== current)}
+        // A project that exists only in CAD has no snapshot to open; it is
+        // reopened from the newest return its document sent.
+        disabled={busy}
         aria-current={project.lineageId === current ? 'true' : undefined}
         title={project.designId
           ? `Updated ${fullTime(project.updatedAt)}`
-          : 'CAD-only project. Open its document in Fusion and send it to WG.'}
+          : 'CAD-only project. Opens the newest geometry its Fusion document sent and prepares it.'}
         onClick={() => void open_(project)}
       >
         <b>{middleEllipsis(`${projectName(project)} · ${cadProjectReference(project)}`, 32)}</b>
