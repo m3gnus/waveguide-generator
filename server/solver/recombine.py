@@ -53,7 +53,9 @@ def recombine_stored_results(
     frequencies = bundle["frequencies_hz"]
     band = (float(frequencies[0]), float(frequencies[-1]))
     outside = [
-        value for value in spec.crossovers_hz if value < band[0] or value > band[1]
+        value
+        for value in spec.corner_frequencies_hz()
+        if value < band[0] or value > band[1]
     ]
     if outside:
         raise RecombineError(
@@ -94,12 +96,12 @@ def recombine_stored_results(
             stored_metadata.get("role") if isinstance(stored_metadata, Mapping) else None
         )
 
+    resolved = spec.resolved()
     combined_result, combine_payload = combine_drive_channels(
         bundle["results_by_id"],
         members=list(spec.members),
-        crossovers_hz=list(spec.crossovers_hz),
-        level_match=spec.level_match,
-        align=spec.align,
+        channels=resolved["channels"],
+        reference=resolved["reference"],
         member_validity_hz=member_validity_hz,
         member_roles=member_roles,
     )
