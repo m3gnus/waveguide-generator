@@ -1239,8 +1239,8 @@
         "properties": {
           "angle_guide_step": {
             "default": 10.0,
-            "exclusiveMinimum": 0.0,
             "maximum": 180.0,
+            "minimum": 0.0,
             "title": "Angle Guide Step",
             "type": "number"
           },

@@ -32,7 +32,10 @@ describe('preferences surfaces', () => {
     await act(async () => { root.render(<ResultsPreferencesSurface/>); await Promise.resolve(); });
     expect(host.querySelector<HTMLSelectElement>('[aria-label="Smoothing"]')?.options).toHaveLength(11);
     expect(host.querySelector<HTMLSelectElement>('[aria-label="Map reference"]')?.options).toHaveLength(4);
-    expect(host.querySelector<HTMLInputElement>('[aria-label="Directivity angular guide interval"]')?.value).toBe('10');
+    // Ships off: the map is read by hovering, and the graticule was drawing
+    // lines across the very region the on-axis response lives in.
+    expect(host.querySelector<HTMLInputElement>('[aria-label="Directivity angular guide interval"]')?.value).toBe('0');
+    expect(host.querySelector<HTMLInputElement>('[aria-label="Directivity angular guide interval"]')?.min).toBe('0');
     expect(host.querySelector<HTMLSelectElement>('[aria-label="Results layout count"]')?.options).toHaveLength(5);
     expect(host.querySelector('[aria-label="Export counter"]')).toBeNull();
     expect(host.querySelectorAll('[aria-label^="Manual export:"]')).toHaveLength(20);
