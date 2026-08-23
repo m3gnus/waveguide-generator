@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import type { EChartsOption } from 'echarts';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
-import { compareSelection, fetchJobResults, fetchRadiationImpedancePresentation, provisionalResults, recombineJobResults, type JobResults, type RadiationImpedancePresentation } from '../api/results';
+import { compareSelection, fetchJobResults, fetchRadiationImpedancePresentation, provisionalResults, type JobResults, type RadiationImpedancePresentation } from '../api/results';
 import { EChart, useChartTokens, type ChartTokens } from '../results/EChart';
 import { beamFitSeries, beamShapeSeries, directivityGrid, directivityIndexSeries, drivePowerChartSeries, excursionChartSeries, groupDelaySeries, impedanceComparable, impedanceSeries, impedanceSubtitle, nearestFrequencyIndex, phaseSeries, polarCut, selectResultChannels, splSeries, type NamedResult } from '../results/mappers';
 import { BalloonRenderer, ChartStub, ForwardBeamRenderer, hasBalloonData, type ChartStubAction } from '../results/balloon';
@@ -11,12 +11,11 @@ import { resultExportSnapshot } from '../results/exportContext';
 export { resultExportSnapshot } from '../results/exportContext';
 import { copyChartPng, downloadChartPng } from '../results/chartImage';
 import { summaryGroups, summaryText, type SummaryGroup, type SummaryRow } from '../results/summary';
-import { expandLegacy } from '../results/crossoverSpec';
 import { latestCombine } from '../results/latestCombine';
-import { combineMetadataOf, type CombineMetadata, type ResultPayload } from '../results/types';
+import { CrossoverStrip } from './CrossoverStrip';
+import { combineMetadataOf, type ResultPayload } from '../results/types';
 import { ResultViewSwitch } from '../results/ResultViewSwitch';
 import { resolveResultView, resultViewStore, useResultView } from '../stores/resultView';
-import { useCadReturnStore } from '../stores/cadReturn';
 import { hydrateJobDesign, replaceWithJobDesign } from '../jobs/jobDesign';
 import { showJobModel } from '../jobs/showJobModel';
 import { exportStemForJob, exportTitleSlug } from '../jobs/exportNaming';
@@ -1717,77 +1716,6 @@ interface ResultFetchError {
   message: string;
 }
 
-/** Crossover editor for a combined channel: recombines from the job's stored
- * complex bases server-side, so a change repaints without a re-solve. The
- * applied frequencies are also written back to the CAD rail, so the dock and
- * the pre-solve fields are one setting rather than two that disagree. */
-function RecombineRow({ jobId, channelId, combine, onApplied }: {
-  jobId: string;
-  channelId: string;
-  combine: CombineMetadata;
-  onApplied: (jobId: string, updated: JobResults) => void;
-}) {
-  const applied = combine.crossovers_hz.map((value) => String(value));
-  const [values, setValues] = useState<string[]>(applied);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const appliedKey = `${jobId}:${channelId}:${applied.join(',')}`;
-  const lastApplied = useRef(appliedKey);
-  if (lastApplied.current !== appliedKey) {
-    lastApplied.current = appliedKey;
-    setValues(applied);
-    setError(null);
-  }
-  const dirty = values.some((value, index) => value !== applied[index]);
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    const crossovers = values.map(Number);
-    if (crossovers.some((value) => !Number.isFinite(value) || value <= 0)) {
-      setError('Crossovers must be positive frequencies.');
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      const updated = await recombineJobResults(jobId, {
-        id: channelId,
-        members: combine.members,
-        crossovers_hz: crossovers,
-        level_match: combine.level_match?.enabled ?? true,
-        align: combine.align ?? true,
-      });
-      onApplied(jobId, updated);
-      useCadReturnStore.getState().setCombineSpecFromResult(expandLegacy(combine.members, crossovers, combine.level_match?.enabled ?? true, combine.align ?? true, combine.reference));
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setBusy(false);
-    }
-  };
-  return <form className="results-toolbar result-recombine" onSubmit={(event) => void submit(event)}>
-    {combine.members.slice(0, -1).map((lower, index) => {
-      const upper = combine.members[index + 1];
-      // Bands below, because that is how a crossover is spoken. The authored
-      // ids stay the fallback and remain the accessible name either way, so an
-      // unroled return still says which channels each field joins.
-      return <label key={`${lower} ${upper}`} className="result-recombine-pair">
-        <span>{combine.member_roles?.[index] ?? lower} → {combine.member_roles?.[index + 1] ?? upper}</span>
-        <input
-          type="number"
-          min={1}
-          step={10}
-          value={values[index] ?? ''}
-          aria-label={`Crossover ${lower} to ${upper} in hertz`}
-          onChange={(event) => setValues((current) => current.map((value, i) => i === index ? event.target.value : value))}
-        />
-        <span>Hz</span>
-      </label>;
-    })}
-    <button type="submit" disabled={busy || !dirty} title="Recompute the combined channel from the stored solve — no re-solve needed">{busy ? 'Recombining…' : 'Apply'}</button>
-    {error && <span className="result-recombine-error" role="alert">{error}</span>}
-  </form>;
-}
-
 /**
  * One row per loaded measurement, in the same strip the crossover editor uses.
  *
@@ -2218,7 +2146,7 @@ export function ResultsPanel() {
         : <><button type="button" onClick={() => { setCoherenceOpen(false); showPrimaryModel(); }}>Show this model</button><button type="button" onClick={() => { setCoherenceOpen(false); compareSelection.followLatest(latest?.id ?? null); }}>Show newest run</button></>}
     </AnchoredPanel>}
     {shownActiveChannel && shownCombine && display && selectedJob?.status === 'complete' && !primaryIsProvisional
-      && <RecombineRow jobId={display.primaryId} channelId={shownActiveChannel} combine={shownCombine} onApplied={applyRecombined}/>}
+      && <CrossoverStrip jobId={display.primaryId} channelId={shownActiveChannel} combine={shownCombine} onApplied={applyRecombined}/>}
     {(measuredOverlays.length > 0 || measuredError) && <div className="results-toolbar result-measured">
       <span className="result-measured-caption">Measured</span>
       {measuredOverlays.map((overlay) => <MeasuredOverlayRow key={overlay.id} overlay={overlay}/>)}
