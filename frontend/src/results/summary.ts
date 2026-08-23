@@ -1,7 +1,8 @@
 import type { JobItem } from '../api/jobsSocket';
 import { runDisplayName } from '../prefs/preferences';
 import { channelLabel } from './channelLabel';
-import { combineMetadataOf, type ResultPayload } from './types';
+import { FILTER_FAMILY_SHORT, isFilterFamily } from './crossoverSpec';
+import { combineMetadataOf, type CombineFilterSection, type ResultPayload } from './types';
 import { excursionSeries } from './drivePower';
 import { formatValidityFrequency, resultCombineWarnings, resultFrequencyValidity } from './validity';
 
@@ -253,19 +254,61 @@ export function summaryGroups(_context: SummaryContext): SummaryGroup[] {
     const combineRows: SummaryRow[] = [];
     const memberName = (index: number): string =>
       string(combine.member_roles?.[index]) ?? channelLabel(wrapper, combine.members[index]);
-    const pairs = combine.members.slice(0, -1).flatMap((_member, index) => {
+    const channelOf = (member: string) => combine.channels?.[member];
+    const sectionText = (section: CombineFilterSection | null | undefined): string | undefined => {
+      if (!section || !isFilterFamily(section.family) || !isFiniteNumber(section.fc_hz)) return undefined;
+      return `${frequency(section.fc_hz)} ${FILTER_FAMILY_SHORT[section.family]}${section.order}`;
+    };
+    // One row per pair rather than one joined line: a pair whose two sections
+    // disagree has to be spelled out, and that does not fit inside a list.
+    const pairs = combine.members.slice(0, -1).map((member, index) => {
+      const name = `${memberName(index)} → ${memberName(index + 1)}`;
+      const lower = sectionText(channelOf(member)?.lp);
+      const upper = sectionText(channelOf(combine.members[index + 1])?.hp);
       const hz = finite(combine.crossovers_hz[index]);
-      return hz === undefined ? [] : [`${memberName(index)} → ${memberName(index + 1)} ${frequency(hz)}`];
+      if (lower && upper && lower === upper) return `${name} ${lower}`;
+      if (lower || upper) return `${name} LP ${lower ?? 'off'} / HP ${upper ?? 'off'}`;
+      // A payload solved before the per-channel form only ever meant LR4.
+      return hz === undefined ? `${name} unlinked` : `${name} ${frequency(hz)} LR4`;
     });
     row(combineRows, 'Crossover', pairs.join(', '));
-    if (combine.align !== false && combine.delays_ms) {
-      const delays = combine.delays_ms;
-      const stated = combine.members.flatMap((member, index) => {
-        const delay = finite(delays[member]);
-        return delay === undefined ? [] : [`${memberName(index)} ${delay.toFixed(2)} ms`];
-      });
-      row(combineRows, 'Delays', stated.join(' · '));
-    }
+    const stated = combine.members.flatMap((member, index) => {
+      const channel = channelOf(member);
+      const delay = finite(channel?.delay_ms) ?? finite(combine.delays_ms?.[member]);
+      if (member === combine.reference) return [`${memberName(index)} ref`];
+      if (delay === undefined) return [];
+      const mode = channel?.delay_mode === 'manual' ? ' (manual)' : '';
+      return [`${memberName(index)} ${delay.toFixed(2)} ms${mode}`];
+    });
+    if (combine.align !== false || combine.channels) row(combineRows, 'Delays', stated.join(' · '));
+    const gains = combine.members.flatMap((member, index) => {
+      const channel = channelOf(member);
+      const gain = finite(channel?.gain_db) ?? finite(combine.gains_db?.[member]);
+      if (gain === undefined) return [];
+      const mode = channel?.gain_mode === 'manual' ? ' (manual)' : '';
+      return [`${memberName(index)} ${gain >= 0 ? '+' : '−'}${Math.abs(gain).toFixed(2)} dB${mode}`];
+    });
+    row(combineRows, 'Gains', gains.join(' · '));
+    // What the alignment actually achieved, per pair. Without these three
+    // numbers a summed curve is a claim; with them it is evidence.
+    combine.members.slice(0, -1).forEach((member, index) => {
+      const upper = combine.members[index + 1];
+      const pair = combine.pairs?.[`${member}-${upper}`];
+      if (!pair) return;
+      const parts = [
+        finite(pair.phase_error_at_fc_deg) === undefined ? undefined : `${pair.phase_error_at_fc_deg!.toFixed(0)}°`,
+        finite(pair.reverse_null_db) === undefined ? undefined : `null ${pair.reverse_null_db! < 0 ? '−' : ''}${Math.abs(pair.reverse_null_db!).toFixed(0)} dB`,
+        finite(pair.fit_residual_deg) === undefined ? undefined : `fit ±${pair.fit_residual_deg!.toFixed(0)}°`,
+      ].filter((part): part is string => part !== undefined);
+      const at = finite(pair.eval_hz);
+      row(
+        combineRows,
+        'Alignment',
+        `${memberName(index)}/${memberName(index + 1)}${at === undefined ? '' : ` @ ${frequency(at)}`}: ${parts.join(' · ')}`,
+        'Residual phase difference at the crossover, the depth of the reverse null, '
+        + 'and the confidence of the delay fit.',
+      );
+    });
     group(groups, 'Combine', combineRows);
   }
 
