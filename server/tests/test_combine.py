@@ -599,3 +599,67 @@ def test_channels_that_miss_a_member_refuse() -> None:
                 },
             },
         )
+
+
+def test_opposed_raw_pair_is_inverted_and_aligned_on_its_true_delay() -> None:
+    # An upper member wired backwards reads as a 180 degree intercept on the
+    # raw ratio. Auto polarity inverts it and the delay is the physical
+    # offset, not the half-period that would fake the phase at fc alone.
+    freqs = _freqs()
+    delay_s = 350.0e-6
+    base = np.ones(freqs.size, dtype=np.complex128)
+    opposed = -base * np.exp(-1j * 2.0 * np.pi * freqs * delay_s)
+    results = {"low": _member(base), "high": _member(opposed)}
+    combined, payload = combine_drive_channels(
+        results, members=["low", "high"], crossovers_hz=[1200.0]
+    )
+    assert payload["channels"]["high"]["inverted"] is True
+    assert payload["channels"]["high"]["invert_mode"] == "auto"
+    assert payload["delays_ms"]["low"] == pytest.approx(delay_s * 1000.0, rel=1e-3)
+    pair = payload["pairs"]["low-high"]
+    assert abs(pair["phase_error_at_fc_deg"]) < 2.0
+    assert pair["reverse_null_db"] < -20.0
+    assert any("inverted relative to" in note for note in payload["warnings"])
+    on_axis = combined.pressure_complex[:, 0, 1]
+    assert np.allclose(np.abs(on_axis), 1.0, atol=1e-2)
+
+
+def test_opposed_raw_pair_kept_in_polarity_pins_a_half_period_and_warns() -> None:
+    freqs = _freqs()
+    delay_s = 350.0e-6
+    fc = 1200.0
+    base = np.ones(freqs.size, dtype=np.complex128)
+    opposed = -base * np.exp(-1j * 2.0 * np.pi * freqs * delay_s)
+    results = {"low": _member(base), "high": _member(opposed)}
+    channels = expand_legacy_channels(["low", "high"], [fc])
+    channels["high"] = {**channels["high"], "invert": False}
+    _, payload = combine_drive_channels(
+        results, members=["low", "high"], channels=channels, reference="high"
+    )
+    assert payload["channels"]["high"]["inverted"] is False
+    # The pair still sums in phase at fc, on a branch half a period away from
+    # the true delay, and says so.
+    assert abs(payload["pairs"]["low-high"]["phase_error_at_fc_deg"]) < 2.0
+    offset_ms = payload["delays_ms"]["low"] - delay_s * 1000.0
+    assert abs(abs(offset_ms) - 500.0 / fc) < 0.02
+    assert any("half-period" in note for note in payload["warnings"])
+
+
+def test_three_way_chain_phase_error_accounts_for_the_middle_band() -> None:
+    # The middle member's low-pass already rotates phase at the lower
+    # crossover; the metric compares against the full chains, so coincident
+    # drivers read as zero error at both crossovers.
+    freqs = np.geomspace(50.0, 20_000.0, 96)
+    base = np.ones(freqs.size, dtype=np.complex128)
+    results = {
+        "lf": _member(base, freqs=freqs),
+        "mf": _member(base, freqs=freqs),
+        "hf": _member(base, freqs=freqs),
+    }
+    _, payload = combine_drive_channels(
+        results, members=["lf", "mf", "hf"], crossovers_hz=[100.0, 1000.0]
+    )
+    for pair in payload["pairs"].values():
+        assert abs(pair["phase_error_at_fc_deg"]) < 1.0
+        assert pair["fit_delay_ms"] == pytest.approx(0.0, abs=1e-3)
+    assert all(abs(value) < 1e-3 for value in payload["delays_ms"].values())
