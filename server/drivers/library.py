@@ -92,6 +92,11 @@ def _match_score(query_tokens: list[str], driver_tokens: list[str]) -> float | N
                 candidate = 2.0
             elif driver_token.startswith(query_token):
                 candidate = 1.0
+            elif query_token in driver_token:
+                # Mid-word fragments are how people abbreviate drivers --
+                # "ndl" for a 12NDL76, "lw" for a 15LW1400 -- so a substring
+                # matches, ranked under any prefix hit.
+                candidate = 0.5
             else:
                 continue
             if best is None or candidate > best:

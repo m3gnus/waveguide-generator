@@ -536,3 +536,18 @@ def test_full_app_wires_the_drivers_router(tmp_path: Path, monkeypatch: pytest.M
     assert "/api/drivers/library" in paths
     assert "/api/drivers/library/rescan" in paths
     assert "/api/drivers/{driver_id}" in paths
+
+
+def test_search_matches_mid_word_fragments_below_prefix_hits(tmp_path: Path) -> None:
+    # "ndl" is how a 12NDL76 is actually referred to; prefix-only matching
+    # returned nothing for it. A substring hit ranks under a prefix hit.
+    header = ["Brand", "Model", "Z_ohm", "Sd_cm2", "Bl_Tm", "Re_ohm", "Mms_g", "Fs_Hz", "Qms"]
+    _write_csv(tmp_path, "drivers.csv", header, [
+        ["Acme", "12NDL76", "8", "522", "19.7", "5.1", "64", "52", "6.1"],
+        ["Acme", "NDL99", "8", "522", "19.7", "5.1", "64", "52", "6.1"],
+        ["Acme", "12XW76", "8", "522", "19.7", "5.1", "64", "52", "6.1"],
+    ])
+    library = DriverLibrary(tmp_path)
+    hits = library.search(q="ndl", kind="all", z=None, limit=10)
+    assert [hit["model"] for hit in hits] == ["NDL99", "12NDL76"]
+    assert library.search(q="12nd", kind="all", z=None, limit=10)[0]["model"] == "12NDL76"
