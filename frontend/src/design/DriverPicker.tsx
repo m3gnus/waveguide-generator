@@ -8,6 +8,7 @@ import {
 } from '../api/drivers';
 import {
   DRIVER_FIELD_KEYS,
+  DRIVER_INSTALLATION_KEYS,
   driverEditedKeys,
   driverMissingGroups,
   driverValues,
@@ -88,6 +89,43 @@ function presetFromHit(hit: DriverHit): DriverPreset {
     xo_min_hz: typeof hit.xo_min_hz === 'number' && Number.isFinite(hit.xo_min_hz) ? hit.xo_min_hz : null,
     base,
   };
+}
+
+/** The name a hand-entered driver gets when its row was chosen on an empty query. */
+export const MANUAL_DRIVER_LABEL = 'Manual driver';
+
+/**
+ * A driver the library does not have, named after whatever was typed.
+ *
+ * The id is derived from the name rather than minted fresh so that typing the
+ * same driver twice, or saving it twice, lands on one entry in *My drivers*
+ * instead of two that differ only by a timestamp. A name with nothing sluggable
+ * in it (or none at all) falls back to a unique id, which is the only case where
+ * two hand-entered drivers can collide otherwise.
+ */
+export function manualDriverPreset(query: string, kind: DriverKind): DriverPreset {
+  const label = query.trim() || MANUAL_DRIVER_LABEL;
+  const slug = label.toLocaleLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return {
+    id: `manual:${slug || `driver-${Date.now().toString(36)}`}`,
+    label,
+    source: 'manual',
+    kind,
+    z_ohm: null,
+    xo_min_hz: null,
+    base: {},
+  };
+}
+
+/** The driver's own numbers, without WG's installation inputs: how many of it
+ * there are and what box it sits in belong to this channel, not to the driver
+ * *My drivers* will offer to every other one. */
+function driverOwnValues(
+  values: Partial<Record<DriverFieldKey, number>>,
+): Partial<Record<DriverFieldKey, number>> {
+  return Object.fromEntries(
+    Object.entries(values).filter(([key]) => !DRIVER_INSTALLATION_KEYS.includes(key as DriverFieldKey)),
+  );
 }
 
 /** What the library could not tell us about a driver the user picked. */
@@ -190,16 +228,44 @@ function SavedResultRow({ driver, active, onPick, onHover, id }: {
   </button>;
 }
 
+/** The way out of the library: type a driver it has never heard of. */
+function ManualResultRow({ query, active, onPick, onHover, id }: {
+  query: string;
+  active: boolean;
+  id: string;
+  onPick: () => void;
+  onHover: () => void;
+}) {
+  const named = query.trim();
+  return <button
+    type="button"
+    id={id}
+    role="option"
+    aria-selected={active}
+    className={`driver-result manual${active ? ' active' : ''}`}
+    onMouseMove={onHover}
+    onMouseDown={(event) => event.preventDefault()}
+    onClick={onPick}
+  >
+    <span className="driver-result-name">Enter T/S manually…</span>
+    <span className="driver-result-facts">{named ? `as “${named}”` : 'a driver the library does not have'}</span>
+  </button>;
+}
+
 interface Candidate {
   key: string;
-  preset: DriverPreset;
+  /** Built when the row is chosen: a hand-entered driver's id is minted from
+   * the query at that moment, not on every keystroke. */
+  preset: () => DriverPreset;
+  /** Whether choosing this row should land the user in the T/S sheet. */
+  manual?: boolean;
   render: (props: { active: boolean; id: string; onPick: () => void; onHover: () => void }) => ReactElement;
 }
 
 function DriverSearch({ channel, roleHint, onPick }: {
   channel: CadDriveChannel;
   roleHint: string | undefined;
-  onPick: (preset: DriverPreset) => void;
+  onPick: (preset: DriverPreset, options?: { edit?: boolean }) => void;
 }) {
   const saved = useDriverLibraryStore((state) => state.saved);
   const [kind, setKind] = useState<DriverKind>(() => defaultDriverKind(channel.id, roleHint));
@@ -224,11 +290,11 @@ function DriverSearch({ channel, roleHint, onPick }: {
     return () => { generation.current += 1; };
   }, [kind, open, query]);
 
-  const candidates = useMemo<Candidate[]>(() => {
-    const fromLibrary = hits.map((hit) => ({
+  const matches = useMemo<Candidate[]>(() => {
+    const fromLibrary = hits.map((hit): Candidate => ({
       key: `db:${hit.id}`,
-      preset: presetFromHit(hit),
-      render: ({ active, id, onPick: pick, onHover }: { active: boolean; id: string; onPick: () => void; onHover: () => void }) =>
+      preset: () => presetFromHit(hit),
+      render: ({ active, id, onPick: pick, onHover }) =>
         <DriverResultRow key={hit.id} hit={hit} active={active} id={id} onPick={pick} onHover={onHover}/>,
     }));
     // Saved drivers sit under the database hits: they are the user's own
@@ -236,14 +302,26 @@ function DriverSearch({ channel, roleHint, onPick }: {
     // leading with them would hide the library the query was aimed at.
     const fromSaved = saved
       .filter((driver) => savedDriverMatches(driver, query) && (driver.kind === kind || driver.kind === 'unknown'))
-      .map((driver) => ({
+      .map((driver): Candidate => ({
         key: `mine:${driver.id}`,
-        preset: savedDriverPreset(driver),
-        render: ({ active, id, onPick: pick, onHover }: { active: boolean; id: string; onPick: () => void; onHover: () => void }) =>
+        preset: () => savedDriverPreset(driver),
+        render: ({ active, id, onPick: pick, onHover }) =>
           <SavedResultRow key={driver.id} driver={driver} active={active} id={id} onPick={pick} onHover={onHover}/>,
       }));
     return [...fromLibrary, ...fromSaved];
   }, [hits, kind, query, saved]);
+
+  // Hand entry is the last row whatever the search did, including when it did
+  // nothing: a driver the library has never heard of is exactly the case where
+  // the search comes back empty, and that is the worst moment to be offered
+  // only a dead end.
+  const candidates = useMemo<Candidate[]>(() => [...matches, {
+    key: 'manual',
+    manual: true,
+    preset: () => manualDriverPreset(query, kind),
+    render: ({ active, id, onPick: pick, onHover }) =>
+      <ManualResultRow key="manual" query={query} active={active} id={id} onPick={pick} onHover={onHover}/>,
+  }], [kind, matches, query]);
 
   useEffect(() => setActiveIndex(0), [query, kind]);
 
@@ -251,7 +329,7 @@ function DriverSearch({ channel, roleHint, onPick }: {
     if (!candidate) return;
     setOpen(false);
     setQuery('');
-    onPick(candidate.preset);
+    onPick(candidate.preset(), { edit: candidate.manual === true });
   };
 
   const onKeyDown = (event: React.KeyboardEvent) => {
@@ -296,7 +374,7 @@ function DriverSearch({ channel, roleHint, onPick }: {
     </div>
     {open && <div id={listId} className="driver-results" role="listbox" aria-label={`Driver matches for ${channel.id}`}>
       {error && <p className="cad-driver-hint" role="status">{error}</p>}
-      {!error && !candidates.length && <p className="cad-driver-hint" role="status">No driver matches that search.</p>}
+      {!error && !matches.length && <p className="cad-driver-hint" role="status">No driver matches that search.</p>}
       {candidates.map((candidate, index) => candidate.render({
         active: index === activeIndex,
         id: `${listId}-${index}`,
@@ -317,6 +395,11 @@ function DerivedRow({ label, value, unit }: { label: string; value: string; unit
  *
  * Every input writes an override rather than the value itself, so *Reset to
  * database values* is always available and an edit is always visible as one.
+ *
+ * A hand-entered driver goes through the same sheet with nothing underneath
+ * it: the overrides are the whole driver, so there is no edit count, no reset,
+ * and the name is the user's to set because *My drivers* has nothing else to
+ * list it under.
  */
 function DriverSheet({ channel, form, onClose }: {
   channel: CadDriveChannel;
@@ -325,9 +408,11 @@ function DriverSheet({ channel, form, onClose }: {
 }) {
   const state = useCadReturnStore();
   const saveMine = useDriverLibraryStore((store) => store.save);
+  const savedDrivers = useDriverLibraryStore((store) => store.saved);
   const dialog = useRef<HTMLDivElement>(null);
   const [detail, setDetail] = useState<DriverDetail | null>(null);
-  const [saved, setSaved] = useState(false);
+  const [savedAs, setSavedAs] = useState<string | null>(null);
+  const [nameDraft, setNameDraft] = useState<string | null>(null);
   const preset = form.preset;
 
   useEffect(() => {
@@ -336,7 +421,12 @@ function DriverSheet({ channel, form, onClose }: {
       trapDialogFocus(dialog, event);
     };
     document.addEventListener('keydown', keydown);
-    const frame = requestAnimationFrame(() => dialog.current?.querySelector<HTMLElement>('input')?.focus());
+    // The T/S grid, not the name field a hand-entered driver puts above it:
+    // the name is already what the user typed to get here, the numbers are not.
+    const frame = requestAnimationFrame(() => {
+      const grid = dialog.current?.querySelector<HTMLElement>('.driver-sheet-grid input');
+      (grid ?? dialog.current?.querySelector<HTMLElement>('input'))?.focus();
+    });
     return () => {
       document.removeEventListener('keydown', keydown);
       cancelAnimationFrame(frame);
@@ -369,30 +459,73 @@ function DriverSheet({ channel, form, onClose }: {
     setDetail(next);
   }, [channel.id, preset, state]);
 
-  const saveToMine = () => {
+  const manual = preset?.source === 'manual';
+  // The name is the only thing *My drivers* will list a hand-entered driver
+  // under, so it is the user's to set -- but a database driver's name is the
+  // library's, and renaming it would break the trail back to the row it came
+  // from.
+  const nameEditable = preset !== null && preset.source !== 'database';
+  // A driver whose numbers are the user's own gets the whole grid, Mmd and Cms
+  // included: those are what a datasheet without Mms or Vas prints, and hand
+  // entry used to reach them through the no-library grid. A picked driver keeps
+  // the shorter set, where a second mass beside the library's own would be an
+  // invitation to state two (`channelDriverWire` sends only one either way).
+  const sheetFields = nameEditable ? CAD_DRIVER_FIELD_CONTROLS : CAD_DRIVER_SHEET_FIELDS;
+  const savedId = preset === null ? null : preset.source === 'mine' ? preset.id : `mine:${preset.id}`;
+  const saved = savedId !== null && savedAs === `${savedId} ${preset!.label}`;
+
+  const rename = (text: string) => {
     if (!preset) return;
+    setNameDraft(text);
+    // An empty field is a name in progress, not a driver with no name: the
+    // stored label always stays something a reloaded profile can parse.
+    state.setChannelDriverPreset(channel.id, { ...preset, label: text.trim() || MANUAL_DRIVER_LABEL }, true);
+  };
+
+  const saveToMine = () => {
+    if (!preset || !savedId) return;
+    // A hand-entered driver is all its own numbers, so they are its base and
+    // it has no overrides; a picked one keeps the two apart so the saved copy
+    // reopens with the same edit marks.
+    const base = manual ? driverOwnValues(values) : { ...preset.base };
+    const overrides = manual ? {} : Object.fromEntries(edited.map((key) => [key, form.fields[key]!]));
+    const based = preset.source === 'manual' ? 'manual'
+      : preset.source === 'mine' ? savedDrivers.find((driver) => driver.id === savedId)?.based_on ?? 'manual'
+        : preset.id;
     saveMine({
-      id: `mine:${preset.id}`,
+      id: savedId,
       label: preset.label,
-      based_on: preset.source === 'manual' ? 'manual' : preset.id,
-      base: { ...preset.base },
-      overrides: Object.fromEntries(edited.map((key) => [key, form.fields[key]!])),
+      based_on: based,
+      base,
+      overrides,
       kind: preset.kind,
       z_ohm: preset.z_ohm,
       xo_min_hz: preset.xo_min_hz,
     });
-    setSaved(true);
+    // The saved copy is now what the channel holds, so saving again updates it
+    // instead of leaving a second entry behind under a `mine:` id.
+    if (manual) state.setChannelDriverPreset(channel.id, { ...preset, id: savedId, source: 'mine', base });
+    setSavedAs(`${savedId} ${preset.label}`);
   };
 
   const provenance = preset?.source === 'mine'
     ? 'My drivers'
-    : detail?.source.file ?? (preset?.source === 'manual' ? 'Typed by hand' : null);
+    : detail?.source.file ?? (manual ? 'Typed by hand' : null);
 
   return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <div ref={dialog} className="settings-dialog driver-sheet" role="dialog" aria-modal="true" aria-labelledby={`driver-sheet-title-${channel.id}`}>
       <header>
         <div>
-          <h2 id={`driver-sheet-title-${channel.id}`}>{preset?.label ?? `Driver · ${channel.id}`}</h2>
+          <h2 id={`driver-sheet-title-${channel.id}`}>{nameEditable
+            ? <input
+                type="text"
+                className="driver-name-input"
+                aria-label={`Driver name for ${channel.id}`}
+                placeholder={MANUAL_DRIVER_LABEL}
+                value={nameDraft ?? preset.label}
+                onChange={(event) => rename(event.target.value)}
+              />
+            : preset?.label ?? `Driver · ${channel.id}`}</h2>
           <p>{channel.id}{impedanceText(preset?.z_ohm) ? ` · ${impedanceText(preset?.z_ohm)}` : ''}</p>
         </div>
         <div className="driver-sheet-chips">
@@ -412,7 +545,7 @@ function DriverSheet({ channel, form, onClose }: {
           >{impedanceText(variant.z_ohm) ?? 'unknown Ω'}</button>)}
         </div>}
         <div className="cad-driver-grid driver-sheet-grid" data-control-reveal-id={CAD_CONTROLS.driverEdit.reveal.id}>
-          {CAD_DRIVER_SHEET_FIELDS.map(({ driverKey, label, unit, step, reveal }) => <label
+          {sheetFields.map(({ driverKey, label, unit, step, reveal }) => <label
             key={driverKey}
             className={`cad-driver-field${edited.includes(driverKey) ? ' edited' : ''}`}
             data-control-reveal-id={reveal.id}
@@ -444,11 +577,13 @@ function DriverSheet({ channel, form, onClose }: {
         {missingText(form) && <p className="cad-driver-hint">Still needed: {missingText(form)}.</p>}
       </div>
       <footer className="driver-sheet-actions">
-        <button
+        {/* Nothing to reset to: a hand-entered driver has no database row
+            behind it, so the button is absent rather than permanently dead. */}
+        {!manual && <button
           type="button"
           disabled={!preset || edited.length === 0}
           onClick={() => state.clearChannelDriverOverrides(channel.id)}
-        >Reset to database values</button>
+        >Reset to database values</button>}
         <button type="button" disabled={!preset || saved} onClick={saveToMine}>{saved ? 'Saved' : 'Save to My drivers'}</button>
         <button type="button" className="primary" onClick={onClose}>Done</button>
       </footer>
@@ -472,6 +607,7 @@ function DriverSummary({ channel, form, onEdit, onClear }: {
     <div className="driver-summary-head">
       <span className="driver-chip name">{preset.label}{z ? ` · ${z}` : ''}</span>
       {preset.source === 'mine' && <span className="driver-chip">mine</span>}
+      {preset.source === 'manual' && <span className="driver-chip">manual</span>}
       {count > 1 && <span className="driver-chip">×{count}</span>}
       <button
         type="button"
@@ -538,7 +674,12 @@ export function ChannelDriverPicker({ channel, form, roleHint }: {
       ? <DriverSearch
           channel={channel}
           roleHint={roleHint}
-          onPick={(picked) => state.setChannelDriverPreset(channel.id, picked)}
+          onPick={(picked, options) => {
+            state.setChannelDriverPreset(channel.id, picked);
+            // A hand-entered driver arrives with nothing in it, so the sheet is
+            // where choosing it has to land: the card alone has no fields.
+            if (options?.edit) setSheetOpen(true);
+          }}
         />
       : <DriverSummary
           channel={channel}
