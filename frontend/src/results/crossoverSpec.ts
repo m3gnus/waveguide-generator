@@ -469,6 +469,14 @@ export function unlinkedPairNote(pair: CrossoverPair): string {
   return `${lower} / ${upper} — edit in Advanced`;
 }
 
+/** The note shown when a pair's high-pass sits below a driver's manufacturer
+ * minimum crossover frequency. `fcHz` is the offending high-pass corner, not
+ * necessarily the pair's own field — an unlinked pair's simple-mode value can
+ * come from the lower channel's low-pass instead. */
+export function driverXoMinNote(label: string, xoMinHz: number, fcHz: number): string {
+  return `${label} minimum ${frequencyText(xoMinHz)} — current ${frequencyText(fcHz)}`;
+}
+
 /** A deep copy, so an editor can hold a spec without aliasing the store's. */
 export function cloneSpec(spec: CrossoverSpec): CrossoverSpec {
   return {

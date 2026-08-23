@@ -85,6 +85,7 @@ function presetFromHit(hit: DriverHit): DriverPreset {
     source: 'database',
     kind: hit.kind,
     z_ohm: typeof hit.z_ohm === 'number' ? hit.z_ohm : null,
+    xo_min_hz: typeof hit.xo_min_hz === 'number' && Number.isFinite(hit.xo_min_hz) ? hit.xo_min_hz : null,
     base,
   };
 }
@@ -378,6 +379,7 @@ function DriverSheet({ channel, form, onClose }: {
       overrides: Object.fromEntries(edited.map((key) => [key, form.fields[key]!])),
       kind: preset.kind,
       z_ohm: preset.z_ohm,
+      xo_min_hz: preset.xo_min_hz,
     });
     setSaved(true);
   };
