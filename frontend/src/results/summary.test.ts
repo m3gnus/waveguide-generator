@@ -319,10 +319,9 @@ describe('simulation summary groups', () => {
     expect(row(groups, 'Measurement', 'Balloon')?.value).not.toBe('0');
   });
 
-  it('shows the drive without a driver-name row the server cannot fill', () => {
-    // `metadata.driver.spec` is a DriverSpec dump: fourteen numeric Thiele-Small
-    // fields under `extra="forbid"`, no `model` and no `name`. A row reading
-    // either could only ever be blank, so the group carries what does exist.
+  it('omits the driver row for a spec that names no driver', () => {
+    // `label` is optional: a hand-entered driver has no name, and an invented
+    // one would be worse than none.
     const groups = summaryGroups({
       result: {
         frequencies: [100],
@@ -340,6 +339,21 @@ describe('simulation summary groups', () => {
     expect(row(groups, 'Drive', 'Driver')).toBeUndefined();
     expect(row(groups, 'Drive', 'Peak excursion')?.value).toBe('1.20 mm · 27% of Xmax 4.5 mm');
     expect(row(groups, 'Drive', 'Peak excursion')?.title).toContain('One-way peak');
+  });
+
+  it('names the driver the channel was solved with', () => {
+    // The solver copies `DriverSpec.label` to `metadata.driver.label` beside
+    // the spec, so a driver picked from the library can be read off the card.
+    const groups = summaryGroups({
+      result: {
+        frequencies: [100],
+        metadata: {
+          drive: { voltage_v: 2.83 },
+          driver: { label: 'Acme HD-1', spec: { sd_cm2: 26, label: 'Acme HD-1' } },
+        },
+      },
+    });
+    expect(row(groups, 'Drive', 'Driver')?.value).toBe('Acme HD-1');
   });
 
   it('retains count-only diagnostics from a partial legacy payload', () => {

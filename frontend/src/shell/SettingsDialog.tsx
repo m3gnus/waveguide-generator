@@ -9,6 +9,7 @@ import {
 } from '../api/cadWorkspace';
 import { JobsPreferencesSurface, ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
 import { preferencesStore, usePreferences, type CadApplication } from '../prefs/preferences';
+import { useDriverLibraryStore } from '../stores/driverLibrary';
 import { Icon } from './icons';
 import { WorkspaceFolderControls } from './WorkspaceFolderControls';
 import type { SettingsSection } from './settingsNavigation';
@@ -38,6 +39,38 @@ export function trapDialogFocus(dialog: RefObject<HTMLElement | null>, event: Ke
     event.preventDefault();
     first.focus();
   }
+}
+
+/**
+ * Where the driver library reads its CSV files, and how many it found.
+ *
+ * Read-only apart from *Rescan*: the folder is resolved per platform beside
+ * WG's other application data, and the index rebuilds itself whenever a file's
+ * mtime changes, so this button is for the case where someone wants to see the
+ * count move after dropping a file in.
+ */
+function DriverLibrarySettings() {
+  const status = useDriverLibraryStore((store) => store.status);
+  const info = useDriverLibraryStore((store) => store.info);
+  const error = useDriverLibraryStore((store) => store.error);
+  const load = useDriverLibraryStore((store) => store.load);
+  const rescan = useDriverLibraryStore((store) => store.rescan);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const files = info?.files.length ?? 0;
+  return <section id="settings-drivers" className="settings-theme driver-library-settings" aria-labelledby="settings-drivers-title" tabIndex={-1}>
+    <h3 id="settings-drivers-title">Driver library</h3>
+    <p className={`workspace-settings-path ${info?.folder ? '' : 'not-selected'}`} title={info?.folder ?? undefined}>{info?.folder ?? 'Not resolved yet'}</p>
+    <p className="cad-settings-note">Waveguide Generator ships no driver data. Put CSV files in this folder and their drivers become searchable in <b>Drive channels &amp; drivers</b>.</p>
+    <div className="driver-library-counts">
+      <span>{files.toLocaleString()} file{files === 1 ? '' : 's'} · {(info?.total_drivers ?? 0).toLocaleString()} driver{info?.total_drivers === 1 ? '' : 's'}</span>
+    </div>
+    <div className="settings-theme-options">
+      <button disabled={status === 'loading'} onClick={() => void rescan()}>{status === 'loading' ? 'Rescanning…' : 'Rescan'}</button>
+    </div>
+    {error && <p className="workspace-settings-error" role="status">{error}</p>}
+  </section>;
 }
 
 function WorkspaceSettings() {
@@ -299,6 +332,7 @@ export function SettingsDialog({ open, theme, focusSection, onThemeChange, onClo
           </div>
         </section>
         <CadSettings/>
+        <DriverLibrarySettings/>
         <WorkspaceSettings/>
         <ResultsPreferencesSurface expanded/>
         <JobsPreferencesSurface expanded/>
