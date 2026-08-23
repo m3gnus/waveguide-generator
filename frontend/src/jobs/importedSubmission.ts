@@ -110,7 +110,7 @@ export function importedSubmissionBlocker(
 function submittedDriver(
   state: Pick<CadReturnSnapshot, 'channelDrivers'>,
   channel: CadDriveChannel,
-): Record<string, number> | undefined {
+): Record<string, number | string> | undefined {
   return channelAcceptsDriver(channel) ? channelDriverWire(state.channelDrivers[channel.id]) : undefined;
 }
 

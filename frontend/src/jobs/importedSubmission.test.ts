@@ -45,6 +45,7 @@ describe('imported solve submission wire', () => {
         'drive-hf': {
           enabled: true,
           fields: { sd_cm2: 80, bl_t_m: 7.2, re_ohm: 5.8, le_mh: 0.4, mmd_g: 12, cms_m_per_n: 0.0003 },
+          preset: null,
         },
       },
       driveVoltageV: 4,
@@ -67,6 +68,37 @@ describe('imported solve submission wire', () => {
 
     useCadReturnStore.getState().setCombineAlign(false);
     expect(buildImportedSubmission(useCadReturnStore.getState()).geometry.combine?.align).toBe(false);
+  });
+
+  it('names the picked driver on the wire, merging the preset under the edits', () => {
+    useCadReturnStore.setState({
+      selectedBundle: bundle,
+      ingestRecord: record,
+      sourceSizesMm: { 'source-hf': 2, 'source-mf': 4 },
+      driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }],
+      channelDrivers: {
+        'drive-hf': {
+          enabled: true,
+          fields: { bl_t_m: 11.9, count: 2 },
+          preset: {
+            id: 'Acme::HD-1::8',
+            label: 'Acme HD-1',
+            source: 'database',
+            kind: 'cd',
+            z_ohm: 8,
+            base: { sd_cm2: 26, bl_t_m: 12.4, re_ohm: 6.2, mms_g: 2.4, fs_hz: 620 },
+          },
+        },
+      },
+      needsIngest: false,
+    });
+
+    const driver = buildImportedSubmission(useCadReturnStore.getState())
+      .geometry.drive_channels.find((channel) => channel.id === 'drive-hf')?.driver;
+
+    expect(driver).toEqual({
+      sd_cm2: 26, bl_t_m: 11.9, re_ohm: 6.2, mms_g: 2.4, fs_hz: 620, count: 2, label: 'Acme HD-1',
+    });
   });
 
   it('does not gate a solve on the informational unlinked finding', () => {

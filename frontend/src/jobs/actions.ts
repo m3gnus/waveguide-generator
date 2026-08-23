@@ -26,7 +26,9 @@ export interface ImportedGeometrySubmission {
     id: string;
     source_ids: string[];
     motion: 'normal' | 'axial';
-    driver?: Record<string, number>;
+    /** Thiele-Small numbers in `DriverSpec`'s wire units, plus the optional
+     * `label` naming the driver they came from. */
+    driver?: Record<string, number | string>;
   }>;
   combine?: {
     id?: string;

@@ -190,11 +190,15 @@ export function summaryGroups(_context: SummaryContext): SummaryGroup[] {
     const rg = finite(driveMetadata?.rg_ohm) ?? finite(object(metadata('passive_cardioid'))?.rg_ohm);
     row(drive, 'Voltage', `${Number(driveVoltage.toPrecision(4))} V rms${rg ? ` · Rg ${Number(rg.toPrecision(3))} Ω` : ''}`);
   }
-  // No driver name row: `metadata.driver.spec` is a `DriverSpec.model_dump`,
-  // and DriverSpec is fourteen numeric Thiele-Small fields with `extra="forbid"`
-  // inherited from JobModel. There is no `model`, no `name`, and a payload
-  // carrying one is a validation error, so any such row could only ever be
-  // blank. Showing the driver by name needs a server-side spec field first.
+  // `DriverSpec` now carries an optional `label`, and the solver copies it to
+  // `metadata.driver.label` beside the spec (`server/solver/driver_lem.py`).
+  // Only a driver picked from the library or explicitly named has one, so the
+  // row appears exactly when there is a name to show.
+  const driverMetadata = object(metadata('driver'));
+  const driverLabel = string(driverMetadata?.label) ?? string(object(driverMetadata?.spec)?.label);
+  if (driverLabel) {
+    row(drive, 'Driver', driverLabel, 'The driver this channel was solved with, as named in the drive-channel rail.');
+  }
   const excursion = excursionSeries(result);
   if (excursion?.peakMm !== undefined && excursion?.peakMm !== null) {
     const xmax = excursion.xmaxMm;
