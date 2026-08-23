@@ -11,8 +11,9 @@ import {
   type CadProject,
   type CadProjectDocument,
   type RunGroup,
+  newestReturnForProject,
 } from '../api/cadProjects';
-import { listReturns, type CadReturnBundle } from '../api/cadlink';
+import { listReturns } from '../api/cadlink';
 import { compareSelection } from '../api/results';
 import { cadLinkCoordinatorBridge } from './CadLinkCoordinator';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
@@ -27,7 +28,7 @@ import { Icon } from './icons';
 import { middleEllipsis } from './ResultsPanel';
 import { ProjectsFolderStrip } from './WorkspaceFolderControls';
 
-export { groupRunsByModelState } from '../api/cadProjects';
+export { groupRunsByModelState, newestReturnForProject } from '../api/cadProjects';
 
 /**
  * What a project is called: what CAD calls it, else the folder it owns, else
@@ -102,25 +103,6 @@ function documentReason(document: CadProjectDocument | null, hash: string | null
   if (!document) return 'No Fusion file was archived for this model. Capture was off when it arrived, or the file has been removed.';
   if (!document.filename) return 'The record of this model survived but its Fusion file did not.';
   return '';
-}
-
-/**
- * The newest readable return a CAD-only project can be reopened from.
- *
- * Such a project has no design snapshot, so the only way back into it after
- * a reload is the geometry it last sent: returns name the CAD document, and
- * the document is the project. Selecting one ingests it, and the ingest
- * record then names the project for the rest of the panel.
- */
-export function newestReturnForProject(
-  bundles: readonly CadReturnBundle[],
-  project: Pick<CadProject, 'documentName' | 'archiveStem'>,
-): CadReturnBundle | null {
-  const names = new Set([project.documentName, project.archiveStem].filter((name): name is string => Boolean(name)));
-  if (names.size === 0) return null;
-  return [...bundles]
-    .filter((bundle) => bundle.readable && bundle.documentName !== null && names.has(bundle.documentName))
-    .sort((a, b) => Date.parse(b.modifiedAt) - Date.parse(a.modifiedAt))[0] ?? null;
 }
 
 async function openCadOnlyProject(project: CadProject): Promise<string> {

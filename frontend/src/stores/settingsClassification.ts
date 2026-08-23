@@ -61,6 +61,7 @@ export const SETTINGS_NAMESPACE_EFFECTS: Record<SettingsNamespace, PreferenceEff
   dockviewLayout: 'inert',
   dockviewMode: 'inert',
   workspaceMode: 'inert',
+  cadProject: 'inert',
   paramHelp: 'inert',
   paramSections: 'inert',
   cadSolveProfiles: 'inert',
