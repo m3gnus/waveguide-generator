@@ -24,6 +24,9 @@ export interface SavedDriver {
   overrides: Partial<Record<DriverFieldKey, number>>;
   kind: DriverKind;
   z_ohm: number | null;
+  /** The manufacturer's recommended minimum crossover frequency, or null when
+   * the driver it was saved from did not publish one. */
+  xo_min_hz: number | null;
 }
 
 interface SavedDriverEnvelope {
@@ -53,15 +56,21 @@ function parseFields(value: unknown): Partial<Record<DriverFieldKey, number>> | 
 
 function parseSavedDriver(value: unknown): SavedDriver | null {
   if (!isObject(value)) return null;
-  const { id, label, based_on: basedOn, kind, z_ohm: z } = value;
+  const { id, label, based_on: basedOn, kind, z_ohm: z, xo_min_hz: xoMin } = value;
   if (typeof id !== 'string' || !id || typeof label !== 'string' || !label) return null;
   if (typeof basedOn !== 'string' || !basedOn) return null;
   if (kind !== 'lf' && kind !== 'cd' && kind !== 'unknown') return null;
   if (z !== null && z !== undefined && (typeof z !== 'number' || !Number.isFinite(z))) return null;
+  // Absent is the migration: a driver saved before this field existed.
+  if (xoMin !== null && xoMin !== undefined && (typeof xoMin !== 'number' || !Number.isFinite(xoMin))) return null;
   const base = parseFields(value.base);
   const overrides = parseFields(value.overrides);
   if (!base || !overrides) return null;
-  return { id, label, based_on: basedOn, base, overrides, kind, z_ohm: typeof z === 'number' ? z : null };
+  return {
+    id, label, based_on: basedOn, base, overrides, kind,
+    z_ohm: typeof z === 'number' ? z : null,
+    xo_min_hz: typeof xoMin === 'number' ? xoMin : null,
+  };
 }
 
 function readSavedDrivers(): SavedDriver[] {
@@ -103,6 +112,7 @@ export function savedDriverPreset(driver: SavedDriver): DriverPreset {
     source: 'mine',
     kind: driver.kind,
     z_ohm: driver.z_ohm,
+    xo_min_hz: driver.xo_min_hz,
     base: { ...driver.base, ...driver.overrides },
   };
 }

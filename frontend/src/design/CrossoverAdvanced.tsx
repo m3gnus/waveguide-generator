@@ -1,6 +1,7 @@
 import { useId, type RefObject } from 'react';
 import { AnchoredPanel } from '../prefs/AnchoredPanel';
 import {
+  driverXoMinNote,
   familyOrders,
   FILTER_FAMILIES,
   FILTER_FAMILY_LABELS,
@@ -15,6 +16,7 @@ import {
   type FilterSection,
   type ResolvedChannel,
 } from '../results/crossoverSpec';
+import type { DriverPreset } from '../stores/cadReturn';
 
 /**
  * The per-channel crossover editor, shared by the rail and the results strip.
@@ -137,13 +139,16 @@ function AutoManualField({ label, unit, precision, step, mode, value, autoValue,
   </div>;
 }
 
-export function CrossoverAdvanced({ anchorRef, onClose, spec, resolved = NO_RESOLVED, memberLabel, onChange }: {
+export function CrossoverAdvanced({ anchorRef, onClose, spec, resolved = NO_RESOLVED, memberLabel, presetFor, onChange }: {
   anchorRef: RefObject<HTMLElement | null>;
   onClose: () => void;
   spec: CrossoverSpec;
   /** The values the latest shown result resolved, so auto can show a number. */
   resolved?: Record<string, ResolvedChannel>;
   memberLabel: (member: string) => string;
+  /** The driver picked for a member's channel, if any — read for the
+   * high-pass minimum-crossover note. */
+  presetFor?: (member: string) => DriverPreset | null;
   onChange: (spec: CrossoverSpec) => void;
 }) {
   const referenceId = useId();
@@ -170,6 +175,10 @@ export function CrossoverAdvanced({ anchorRef, onClose, spec, resolved = NO_RESO
       const invertLabel = state?.inverted === undefined || state?.inverted === null
         ? 'Auto'
         : `Auto (${state.inverted ? 'inverted' : 'in phase'})`;
+      const preset = presetFor?.(member) ?? null;
+      const hpXoNote = channel.hp && preset?.xo_min_hz != null && channel.hp.fcHz < preset.xo_min_hz
+        ? driverXoMinNote(preset.label, preset.xo_min_hz, channel.hp.fcHz)
+        : null;
       return <section key={member} className="crossover-channel" aria-label={`${memberLabel(member)} crossover`}>
         <h4>{memberLabel(member)}{member === spec.reference && <span className="crossover-reference-chip">reference</span>}</h4>
         <SectionEditor
@@ -177,6 +186,7 @@ export function CrossoverAdvanced({ anchorRef, onClose, spec, resolved = NO_RESO
           section={channel.hp}
           onChange={(hp) => onChange(withChannel(spec, member, { hp }))}
         />
+        {hpXoNote && <p className="section-note warning" role="status">{hpXoNote}</p>}
         <SectionEditor
           label="Low-pass"
           section={channel.lp}

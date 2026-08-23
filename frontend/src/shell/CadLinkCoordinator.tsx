@@ -247,7 +247,7 @@ function savedChannelDrivers(
     // the hand-entered form it has always been.
     const label = typeof driver.label === 'string' && driver.label.trim() ? driver.label.trim() : null;
     const preset: DriverPreset | null = label
-      ? { id: `manual:${channel.id}`, label, source: 'manual', kind: 'unknown', z_ohm: null, base: fields }
+      ? { id: `manual:${channel.id}`, label, source: 'manual', kind: 'unknown', z_ohm: null, xo_min_hz: null, base: fields }
       : null;
     return [[channel.id, { enabled: true, fields: preset ? {} : fields, preset }]];
   }));

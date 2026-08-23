@@ -20,6 +20,7 @@ const MINE: SavedDriver = {
   overrides: { bl_t_m: 11.9 },
   kind: 'cd',
   z_ohm: 8,
+  xo_min_hz: 1_600,
 };
 
 describe('the driverLibrary durable namespace', () => {
@@ -65,11 +66,34 @@ describe('the driverLibrary durable namespace', () => {
       source: 'mine',
       kind: 'cd',
       z_ohm: 8,
+      xo_min_hz: 1_600,
       base: { sd_cm2: 26, bl_t_m: 11.9, re_ohm: 6.2 },
     });
     expect(savedDriverMatches(MINE, 'acme hd')).toBe(true);
     expect(savedDriverMatches(MINE, 'hd-1 acme')).toBe(true);
     expect(savedDriverMatches(MINE, 'radian')).toBe(false);
+  });
+
+  it('round-trips xo_min_hz through storage, and tolerates a driver saved before the field existed', () => {
+    useDriverLibraryStore.getState().save(MINE);
+    resetDriverLibraryStore();
+    expect(useDriverLibraryStore.getState().saved).toEqual([MINE]);
+
+    // A driver saved before this field existed has no `xo_min_hz` key at all;
+    // that migrates to null rather than dropping the whole record.
+    const { xo_min_hz: _drop, ...withoutField } = MINE;
+    localStorage.setItem(storageKey, JSON.stringify({ version: 1, drivers: [withoutField] }));
+    resetDriverLibraryStore();
+    expect(useDriverLibraryStore.getState().saved).toEqual([{ ...MINE, xo_min_hz: null }]);
+
+    // A present but malformed value still fails the whole record, like every
+    // other field here.
+    localStorage.setItem(storageKey, JSON.stringify({
+      version: 1,
+      drivers: [{ ...MINE, xo_min_hz: 'not a number' }],
+    }));
+    resetDriverLibraryStore();
+    expect(useDriverLibraryStore.getState().saved).toEqual([]);
   });
 
   it('reports an unreachable or empty library as nothing to search', async () => {

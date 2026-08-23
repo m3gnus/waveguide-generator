@@ -463,6 +463,46 @@ describe('ParamPanel inventory UX', () => {
     expect(buildImportedSubmission(useCadReturnStore.getState()).geometry).not.toHaveProperty('combine');
   });
 
+  it('warns when a pair sits below the upper channel driver\'s minimum crossover, in both simple and Advanced', () => {
+    act(() => {
+      setCadReady();
+      workspaceModeStore.setMode('cad');
+      root.render(withQueryClient(<ParamPanel tab="simulation" />));
+    });
+
+    // drive-hf carries no preset yet, so there is nothing to warn about.
+    expect(host.textContent).not.toContain('minimum');
+
+    act(() => useCadReturnStore.getState().setChannelDriverPreset('drive-hf', {
+      id: 'Acme::HD-1::8', label: 'Acme HD-1', source: 'database', kind: 'cd',
+      z_ohm: 8, xo_min_hz: 1_600, base: { sd_cm2: 26, bl_t_m: 12.4, re_ohm: 6.2 },
+    }));
+
+    // MF → HF defaults to 1000 Hz, below the driver's 1.6 kHz minimum.
+    expect(host.textContent).toContain('Acme HD-1 minimum 1.6 kHz — current 1 kHz');
+
+    act(() => [...host.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent === 'Advanced ▸')!.click());
+    const panel = document.querySelector('.crossover-advanced')!;
+    expect(panel.textContent).toContain('Acme HD-1 minimum 1.6 kHz — current 1 kHz');
+
+    // Raising the pair above the minimum clears the note in both views.
+    act(() => useCadReturnStore.getState().setCombineCrossover('drive-mf→drive-hf', 2_000));
+    expect(host.textContent).not.toContain('minimum');
+    expect(panel.textContent).not.toContain('minimum');
+
+    // A driver whose source published no minimum never warns, whatever the
+    // pair's frequency.
+    act(() => {
+      useCadReturnStore.getState().setCombineCrossover('drive-mf→drive-hf', 100);
+      useCadReturnStore.getState().setChannelDriverPreset('drive-hf', {
+        id: 'Acme::HD-1::8', label: 'Acme HD-1', source: 'database', kind: 'cd',
+        z_ohm: 8, xo_min_hz: null, base: { sd_cm2: 26, bl_t_m: 12.4, re_ohm: 6.2 },
+      });
+    });
+    expect(host.textContent).not.toContain('minimum');
+  });
+
   it('offers a family and a slope per pair and submits both', () => {
     act(() => {
       setCadReady();
