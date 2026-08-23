@@ -42,17 +42,27 @@ const cadBundle = {
   ],
 } satisfies CadReturnBundle;
 
-function setCadReady(): void {
+/**
+ * The port aperture a passive-cardioid campaign is solved over. Only the
+ * returns that carry one may offer the section, so it is opt-in per test
+ * rather than part of the shared two-source bundle.
+ */
+const portSource = {
+  id: 'source-port', role: 'PORT_EXIT', required: false, suggestedResolutionMm: 4, defaultDriveChannelId: 'drive-port',
+};
+
+function setCadReady({ cardioidPort = false }: { cardioidPort?: boolean } = {}): void {
   useCadReturnStore.setState({
-    selectedBundle: cadBundle,
+    selectedBundle: cardioidPort ? { ...cadBundle, sources: [...cadBundle.sources, portSource] } : cadBundle,
     ingestRecord: cadRecord,
     needsIngest: false,
-    sourceSizesMm: { 'source-hf': 2, 'source-mf': 4 },
+    sourceSizesMm: { 'source-hf': 2, 'source-mf': 4, ...(cardioidPort ? { 'source-port': 4 } : {}) },
     rigidSizeMm: 5,
     transitionMm: 4,
     driveChannels: [
       { id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' },
       { id: 'drive-mf', source_ids: ['source-mf'], motion: 'normal' },
+      ...(cardioidPort ? [{ id: 'drive-port', source_ids: ['source-port'], motion: 'normal' as const }] : []),
     ],
     channelDrivers: { 'drive-hf': { enabled: true, fields: {}, preset: null } },
     exteriorOnly: true,
@@ -249,7 +259,7 @@ describe('ParamPanel inventory UX', () => {
   it('renders only the CAD workspace section set and trims forced solve options', () => {
     act(() => {
       useDesignStore.getState().setFamily('OSSE');
-      setCadReady();
+      setCadReady({ cardioidPort: true });
       workspaceModeStore.setMode('cad');
     });
     const titles = () => [...host.querySelectorAll<HTMLElement>('[data-section]')].map((section) => section.dataset.section);
@@ -600,7 +610,7 @@ describe('ParamPanel inventory UX', () => {
 
   it('edits the passive-cardioid campaign in the rail, in cm² over an m² wire', () => {
     act(() => {
-      setCadReady();
+      setCadReady({ cardioidPort: true });
       workspaceModeStore.setMode('cad');
       root.render(withQueryClient(<ParamPanel tab="simulation" />));
     });
@@ -653,6 +663,44 @@ describe('ParamPanel inventory UX', () => {
     expect(geometry.model_port_area_m2).toBe(geometry.bem_port_area_m2);
   });
 
+  /**
+   * The campaign is a property of the geometry, not a preference. A model with
+   * no port aperture cannot be solved with one -- the server refuses the whole
+   * run -- so the section is absent rather than present-and-doomed.
+   */
+  it('offers the passive-cardioid section only for a return that carries a port aperture', () => {
+    const section = () => host.querySelector('[data-section="Passive cardioid"]');
+    const show = () => act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
+
+    act(() => { setCadReady(); workspaceModeStore.setMode('cad'); });
+    show();
+    expect(section()).toBeNull();
+    // The sections around it are untouched by the gate.
+    expect(host.querySelector('[data-section="Crossover"]')).not.toBeNull();
+
+    act(() => setCadReady({ cardioidPort: true }));
+    show();
+    expect(section()).not.toBeNull();
+
+    // The role is one place CAD can carry the aperture; the source id is the
+    // other, and the server matches on either. Both spellings of the split
+    // port count, as does the newer PASSIVE_CARDIOID role.
+    for (const source of [
+      { id: 'port_exit_l', role: 'MF' },
+      { id: 'mid_port_exit_right', role: 'MF' },
+      { id: 'source-cardioid', role: 'PASSIVE_CARDIOID' },
+    ]) {
+      act(() => useCadReturnStore.setState({
+        selectedBundle: {
+          ...cadBundle,
+          sources: [{ ...portSource, ...source }],
+        },
+      }));
+      show();
+      expect(section(), `${source.role} / ${source.id}`).not.toBeNull();
+    }
+  });
+
   it('keeps the reserved coupled channel id out of the assignable drive channels', () => {
     act(() => {
       useCadReturnStore.setState({
@@ -660,7 +708,7 @@ describe('ParamPanel inventory UX', () => {
           ...cadBundle,
           sources: [
             { id: 'source-mf', role: 'MF', required: true, suggestedResolutionMm: 4, defaultDriveChannelId: 'passive_cardioid' },
-            { id: 'source-port', role: 'MF', required: true, suggestedResolutionMm: 4, defaultDriveChannelId: 'drive-port' },
+            { id: 'source-port', role: 'PORT_EXIT', required: true, suggestedResolutionMm: 4, defaultDriveChannelId: 'drive-port' },
           ],
         },
         ingestRecord: cadRecord,

@@ -4,6 +4,7 @@ import {
   channelAcceptsDriver,
   channelDriverWire,
   combineWire,
+  hasPassiveCardioidSurface,
   passiveCardioidBlocker,
   passiveCardioidWire,
   unacknowledgedBlocking,
@@ -57,6 +58,19 @@ export function widenPolarToDerivation(
 export type CadReturnSnapshot = ReturnType<typeof useCadReturnStore.getState>;
 export type SolveOptionsSnapshot = ReturnType<typeof useSolveOptionsStore.getState>;
 
+/**
+ * Whether this return can carry a cardioid campaign at all.
+ *
+ * The form persists in the solve profile, and a profile is reused across
+ * models. So an enabled campaign can outlive the geometry it was configured
+ * for: the rail hides the section when the port aperture is gone, and this is
+ * the matching half -- the form contributes neither a refusal the user cannot
+ * act on nor, worse, wire keys for an aperture the mesh does not contain.
+ */
+function cardioidSurfacePresent(state: CadReturnSnapshot): boolean {
+  return hasPassiveCardioidSurface(state.selectedBundle?.sources ?? []);
+}
+
 /** One readiness rule shared by the CAD-panel button and the global Solve
  * command. Keeping it here prevents the two entry points from drifting back
  * into submitting different geometry or accepting different evidence. */
@@ -93,8 +107,13 @@ export function importedSubmissionBlocker(
   // Dropping it would submit the pre-campaign solve under a rail that says a
   // campaign is configured, which is the one failure mode this feature cannot
   // afford: the curve would look plausible and be the wrong physics.
-  const cardioid = passiveCardioidBlocker(state);
-  if (cardioid) return cardioid;
+  // Only while this model actually has the port aperture: a stale enabled form
+  // on a model without one is dropped, not turned into a blocker for a section
+  // the rail no longer shows.
+  if (cardioidSurfacePresent(state)) {
+    const cardioid = passiveCardioidBlocker(state);
+    if (cardioid) return cardioid;
+  }
   return null;
 }
 
@@ -122,9 +141,12 @@ export function buildImportedSubmission(
   // The readiness gate already refuses this, but the builder is the last thing
   // between the rail and the wire and an enabled-yet-incomplete form must never
   // become a silently pre-campaign submission.
-  const cardioidBlocker = passiveCardioidBlocker(state);
-  if (cardioidBlocker) throw new Error(cardioidBlocker);
-  const passiveCardioid = passiveCardioidWire(state.passiveCardioid);
+  const cardioidPresent = cardioidSurfacePresent(state);
+  if (cardioidPresent) {
+    const cardioidBlocker = passiveCardioidBlocker(state);
+    if (cardioidBlocker) throw new Error(cardioidBlocker);
+  }
+  const passiveCardioid = cardioidPresent ? passiveCardioidWire(state.passiveCardioid) : null;
   const solveStore = useSolveOptionsStore.getState();
   const options = solveStore.options() as ImportedSolveSubmission['options'];
   if (solveStore.frequencyMode === 'range') {
