@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import type { EChartsOption } from 'echarts';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
-import { compareSelection, fetchJobResults, fetchRadiationImpedancePresentation, provisionalResults, recombineJobResults, type JobResults, type RadiationImpedancePresentation } from '../api/results';
+import { compareSelection, fetchJobResults, fetchRadiationImpedancePresentation, provisionalResults, type JobResults, type RadiationImpedancePresentation } from '../api/results';
 import { EChart, useChartTokens, type ChartTokens } from '../results/EChart';
 import { beamFitSeries, beamShapeSeries, directivityGrid, directivityIndexSeries, drivePowerChartSeries, excursionChartSeries, groupDelaySeries, impedanceComparable, impedanceSeries, impedanceSubtitle, nearestFrequencyIndex, phaseSeries, polarCut, selectResultChannels, splSeries, type NamedResult } from '../results/mappers';
 import { BalloonRenderer, ChartStub, ForwardBeamRenderer, hasBalloonData, type ChartStubAction } from '../results/balloon';
@@ -11,10 +11,12 @@ import { resultExportSnapshot } from '../results/exportContext';
 export { resultExportSnapshot } from '../results/exportContext';
 import { copyChartPng, downloadChartPng } from '../results/chartImage';
 import { summaryGroups, summaryText, type SummaryGroup, type SummaryRow } from '../results/summary';
-import { combineMetadataOf, type CombineMetadata, type ResultPayload } from '../results/types';
+import { latestCombine } from '../results/latestCombine';
+import { reverseNullTraces, type ReverseNullTrace } from '../results/reverseNull';
+import { CrossoverStrip } from './CrossoverStrip';
+import { combineMetadataOf, type ResultPayload } from '../results/types';
 import { ResultViewSwitch } from '../results/ResultViewSwitch';
 import { resolveResultView, resultViewStore, useResultView } from '../stores/resultView';
-import { useCadReturnStore } from '../stores/cadReturn';
 import { hydrateJobDesign, replaceWithJobDesign } from '../jobs/jobDesign';
 import { showJobModel } from '../jobs/showJobModel';
 import { exportStemForJob, exportTitleSlug } from '../jobs/exportNaming';
@@ -223,6 +225,7 @@ export function splOption(
   density: ChartDensity,
   measured: MeasuredOverlay[] = [],
   showPhase = false,
+  reverseNull: ReverseNullTrace[] = [],
 ): EChartsOption {
   const measuredNames = measured.map(({ label }) => measuredSeriesName(label));
   const colors = seriesColorsByLabel([...items.map(({ label }) => label), ...measuredNames], tokens.series, tokens.accent);
@@ -263,8 +266,21 @@ export function splOption(
       data: points,
     };
   }) : [];
+  // Muted and dashed, behind everything: the reverse null is a check on the
+  // sum, not a response anybody listens to. It must never be mistaken for one
+  // of the curves it is testing.
+  const reverseNullSeries = reverseNull.map((trace) => ({
+    name: trace.name,
+    type: 'line' as const,
+    showSymbol: false,
+    connectNulls: false,
+    z: 0,
+    lineStyle: { color: tokens.muted, width: 1, type: 'dashed' as const, opacity: .7 },
+    itemStyle: { color: tokens.muted },
+    data: trace.points,
+  }));
   return lineOption(
-    [...simulated, ...measuredSeries, ...phase],
+    [...simulated, ...measuredSeries, ...reverseNullSeries, ...phase],
     tokens,
     'dB SPL',
     density,
@@ -1148,6 +1164,7 @@ function Summary({ result, wrapper, job, channelId, density }: { result: ResultP
 
 const NO_NAMED_RESULTS: NamedResult[] = [];
 const NO_MEASURED_OVERLAYS: MeasuredOverlay[] = [];
+const NO_REVERSE_NULL: ReverseNullTrace[] = [];
 
 export interface DirectivityMapPanel {
   key: string;
@@ -1443,12 +1460,22 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
       : NO_MEASURED_OVERLAYS,
     [chartType, loadedMeasurements],
   );
+  // Only the Combined view has a reverse null to draw, and only while the
+  // preference asks for it. `reverseNullTraces` withholds the overlay unless
+  // it can rebuild the sum already on screen, so an empty list here is a
+  // deliberate silence rather than a missing feature.
+  const reverseNull = useMemo(
+    () => (chartType === 'frequency_response' && preferences.showReverseNull
+      ? reverseNullTraces(wrapper as ResultPayload | undefined, result, combineMetadataOf(result))
+      : NO_REVERSE_NULL),
+    [chartType, preferences.showReverseNull, result, wrapper],
+  );
   // Progress and log events replace the selected JobItem many times during a
   // solve. Keep those summary-only props outside the plot memo, otherwise a
   // new progress percentage rebuilds and repaints every EChart even when its
   // result snapshot has not changed.
   const plot = useMemo(() => {
-    if (chartType === 'frequency_response') return result.spl_on_axis?.spl?.length ? <EChart option={splOption(overlays, tokens, preferences.smoothing, density, measured, preferences.splPhase)} label="Interactive HornLab sound pressure frequency response" live={live}/> : <ChartStub reason="Frequency Response needs spl_on_axis data from a completed solve."/>;
+    if (chartType === 'frequency_response') return result.spl_on_axis?.spl?.length ? <EChart option={splOption(overlays, tokens, preferences.smoothing, density, measured, preferences.splPhase, reverseNull)} label="Interactive HornLab sound pressure frequency response" live={live}/> : <ChartStub reason="Frequency Response needs spl_on_axis data from a completed solve."/>;
     if (chartType === 'directivity_map_h' || chartType === 'directivity_map_v' || chartType === 'directivity_map_d' || chartType === 'directivity_map') return <DirectivityComparisonMaps chartType={chartType} items={overlays} tokens={tokens} mapReference={preferences.mapReference} angleGuideInterval={preferences.directivityGuideInterval} density={density} live={live}/>;
     if (chartType === 'directivity_index') {
       const option = directivityIndexOption(overlays, tokens, preferences.smoothing, density);
@@ -1715,77 +1742,6 @@ interface ResultFetchError {
   message: string;
 }
 
-/** Crossover editor for a combined channel: recombines from the job's stored
- * complex bases server-side, so a change repaints without a re-solve. The
- * applied frequencies are also written back to the CAD rail, so the dock and
- * the pre-solve fields are one setting rather than two that disagree. */
-function RecombineRow({ jobId, channelId, combine, onApplied }: {
-  jobId: string;
-  channelId: string;
-  combine: CombineMetadata;
-  onApplied: (jobId: string, updated: JobResults) => void;
-}) {
-  const applied = combine.crossovers_hz.map((value) => String(value));
-  const [values, setValues] = useState<string[]>(applied);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const appliedKey = `${jobId}:${channelId}:${applied.join(',')}`;
-  const lastApplied = useRef(appliedKey);
-  if (lastApplied.current !== appliedKey) {
-    lastApplied.current = appliedKey;
-    setValues(applied);
-    setError(null);
-  }
-  const dirty = values.some((value, index) => value !== applied[index]);
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    const crossovers = values.map(Number);
-    if (crossovers.some((value) => !Number.isFinite(value) || value <= 0)) {
-      setError('Crossovers must be positive frequencies.');
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      const updated = await recombineJobResults(jobId, {
-        id: channelId,
-        members: combine.members,
-        crossovers_hz: crossovers,
-        level_match: combine.level_match?.enabled ?? true,
-        align: combine.align ?? true,
-      });
-      onApplied(jobId, updated);
-      useCadReturnStore.getState().setCombineCrossoversFromResult(combine.members, crossovers);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setBusy(false);
-    }
-  };
-  return <form className="results-toolbar result-recombine" onSubmit={(event) => void submit(event)}>
-    {combine.members.slice(0, -1).map((lower, index) => {
-      const upper = combine.members[index + 1];
-      // Bands below, because that is how a crossover is spoken. The authored
-      // ids stay the fallback and remain the accessible name either way, so an
-      // unroled return still says which channels each field joins.
-      return <label key={`${lower} ${upper}`} className="result-recombine-pair">
-        <span>{combine.member_roles?.[index] ?? lower} → {combine.member_roles?.[index + 1] ?? upper}</span>
-        <input
-          type="number"
-          min={1}
-          step={10}
-          value={values[index] ?? ''}
-          aria-label={`Crossover ${lower} to ${upper} in hertz`}
-          onChange={(event) => setValues((current) => current.map((value, i) => i === index ? event.target.value : value))}
-        />
-        <span>Hz</span>
-      </label>;
-    })}
-    <button type="submit" disabled={busy || !dirty} title="Recompute the combined channel from the stored solve — no re-solve needed">{busy ? 'Recombining…' : 'Apply'}</button>
-    {error && <span className="result-recombine-error" role="alert">{error}</span>}
-  </form>;
-}
-
 /**
  * One row per loaded measurement, in the same strip the crossover editor uses.
  *
@@ -1971,6 +1927,10 @@ export function ResultsPanel() {
     ? shownRaw.channels[shownActiveChannel] as ResultPayload
     : shownRaw;
   const shownCombine = combineMetadataOf(shown);
+  // The pre-solve rail shows what "auto" chose for gain and delay, and only a
+  // solved result knows those numbers. The dock already holds one, so it hands
+  // it over rather than making the rail fetch results of its own.
+  useEffect(() => { latestCombine.publish(shownCombine); }, [shownCombine]);
   const applyRecombined = useCallback((jobId: string, updated: JobResults) => {
     setDisplay((current) => current && current.results[jobId]
       ? { ...current, results: { ...current.results, [jobId]: updated as ResultPayload } }
@@ -2212,7 +2172,7 @@ export function ResultsPanel() {
         : <><button type="button" onClick={() => { setCoherenceOpen(false); showPrimaryModel(); }}>Show this model</button><button type="button" onClick={() => { setCoherenceOpen(false); compareSelection.followLatest(latest?.id ?? null); }}>Show newest run</button></>}
     </AnchoredPanel>}
     {shownActiveChannel && shownCombine && display && selectedJob?.status === 'complete' && !primaryIsProvisional
-      && <RecombineRow jobId={display.primaryId} channelId={shownActiveChannel} combine={shownCombine} onApplied={applyRecombined}/>}
+      && <CrossoverStrip jobId={display.primaryId} channelId={shownActiveChannel} combine={shownCombine} onApplied={applyRecombined}/>}
     {(measuredOverlays.length > 0 || measuredError) && <div className="results-toolbar result-measured">
       <span className="result-measured-caption">Measured</span>
       {measuredOverlays.map((overlay) => <MeasuredOverlayRow key={overlay.id} overlay={overlay}/>)}

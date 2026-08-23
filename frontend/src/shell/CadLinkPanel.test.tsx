@@ -7,6 +7,7 @@ import { jobsSocket } from '../api/jobsSocket';
 import type { OnshapeLink } from '../api/onshape';
 import { preferencesStore } from '../prefs/preferences';
 import { importedSubmissionBlocker } from '../jobs/importedSubmission';
+import { expandLegacy, toWire, withDelayMode } from '../results/crossoverSpec';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { resetDesignStore, useDesignStore } from '../stores/design';
@@ -1035,7 +1036,7 @@ describe('CadLinkPanel', () => {
     // Two drive channels combine without being asked to; the MF -> HF role
     // default is 1000 Hz and the 200 Hz - 5 kHz sweep carries it.
     expect(buildImportedSubmission(useCadReturnStore.getState()).geometry.combine)
-      .toEqual({ members: ['drive-mf', 'drive-hf'], crossovers_hz: [1_000], level_match: true, align: true });
+      .toEqual(toWire(expandLegacy(['drive-mf', 'drive-hf'], [1_000])));
 
     useCadReturnStore.getState().setCombineEnabled(false);
     expect(buildImportedSubmission(useCadReturnStore.getState()).geometry).not.toHaveProperty('combine');
@@ -1044,10 +1045,11 @@ describe('CadLinkPanel', () => {
 
     useCadReturnStore.getState().setCombineCrossover('drive-mf\u2192drive-hf', 1_200);
     expect(buildImportedSubmission(useCadReturnStore.getState()).geometry.combine)
-      .toEqual({ members: ['drive-mf', 'drive-hf'], crossovers_hz: [1_200], level_match: true, align: true });
+      .toEqual(toWire(expandLegacy(['drive-mf', 'drive-hf'], [1_200])));
 
-    useCadReturnStore.getState().setCombineAlign(false);
-    expect(buildImportedSubmission(useCadReturnStore.getState()).geometry.combine?.align).toBe(false);
+    useCadReturnStore.getState().updateCombineSpec((spec) => withDelayMode(spec, 'manual'));
+    expect(buildImportedSubmission(useCadReturnStore.getState()).geometry.combine?.channels?.['drive-hf'].delay)
+      .toEqual({ mode: 'manual', ms: 0 });
 
     // A single remaining channel drops the wire even while enabled.
     useCadReturnStore.setState({ driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }] });

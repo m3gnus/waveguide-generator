@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ImportedSolveSubmission } from './actions';
+import { expandLegacy, toWire, withChannel, withPair } from '../results/crossoverSpec';
 import { designForFamily } from '../stores/design';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { isSubmittedDesignProjection, projectSubmittedDesign, projectSubmittedImport, submittedProjectionsEqual } from './submittedProjection';
@@ -67,6 +68,30 @@ describe('canonical submitted design projection', () => {
     expect(submittedProjectionsEqual(baseline, projectSubmittedImport(evidenceOnly))).toBe(true);
     expect(submittedProjectionsEqual(baseline, projectSubmittedImport(alignment))).toBe(false);
     expect(submittedProjectionsEqual(baseline, projectSubmittedImport(imported('wgi_second')))).toBe(false);
+  });
+
+  it('sees a per-channel crossover change, which the legacy triple could not state', () => {
+    const submission = imported('wgi_first');
+    submission.geometry.combine = toWire(expandLegacy(['mf', 'hf'], [1_200]));
+    const baseline = projectSubmittedImport(submission);
+
+    const sameSpec = structuredClone(submission);
+    sameSpec.geometry.combine = toWire(expandLegacy(['mf', 'hf'], [1_200]));
+    expect(submittedProjectionsEqual(baseline, projectSubmittedImport(sameSpec))).toBe(true);
+
+    // A slope change moves no frequency, so only the v2 wire carries it.
+    const steeper = structuredClone(submission);
+    steeper.geometry.combine = toWire(
+      withPair(expandLegacy(['mf', 'hf'], [1_200]), 'mf→hf', { family: 'butterworth', order: 3 }),
+    );
+    expect(submittedProjectionsEqual(baseline, projectSubmittedImport(steeper))).toBe(false);
+
+    // So does a single channel taking over its own gain.
+    const trimmed = structuredClone(submission);
+    trimmed.geometry.combine = toWire(
+      withChannel(expandLegacy(['mf', 'hf'], [1_200]), 'hf', { gain: { mode: 'manual', db: -1.5 } }),
+    );
+    expect(submittedProjectionsEqual(baseline, projectSubmittedImport(trimmed))).toBe(false);
   });
 
   /* The run-name projection is persisted in preferences, so a stored value

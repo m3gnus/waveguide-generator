@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadReturnBundle, CadReturnIngestRecord, FusionCadStatus } from '../api/cadlink';
 import { importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { preferencesStore } from '../prefs/preferences';
+import { expandLegacy, toWire, withChannel, withPair } from '../results/crossoverSpec';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
@@ -1352,7 +1353,7 @@ describe('CadLinkCoordinator', () => {
     const retainedRecord = useCadReturnStore.getState().ingestRecord;
     const retainedChannels = useCadReturnStore.getState().driveChannels;
     const retainedDrivers = useCadReturnStore.getState().channelDrivers;
-    const retainedCrossovers = useCadReturnStore.getState().combineCrossoversHz;
+    const retainedCrossovers = useCadReturnStore.getState().combineSpec;
     const retainedAcknowledgements = useCadReturnStore.getState().acknowledgedFindingIds;
 
     act(replace);
@@ -1363,7 +1364,7 @@ describe('CadLinkCoordinator', () => {
     expect(state.ingestRecord).toBe(retainedRecord);
     expect(state.driveChannels).toBe(retainedChannels);
     expect(state.channelDrivers).toBe(retainedDrivers);
-    expect(state.combineCrossoversHz).toBe(retainedCrossovers);
+    expect(state.combineSpec).toBe(retainedCrossovers);
     expect(state.acknowledgedFindingIds).toBe(retainedAcknowledgements);
     expect(state.needsIngest).toBe(true);
     expect(state.ingestStaleReason).toContain('design was replaced');
@@ -1503,9 +1504,9 @@ describe('CadLinkCoordinator', () => {
       preset: null,
     });
     expect(state.combineEnabled).toBe(true);
-    expect(state.combineCrossoversHz).toEqual({ 'drive-mf→drive-hf': 1_250 });
-    expect(state.combineLevelMatch).toBe(false);
-    expect(state.combineAlign).toBe(true);
+    // A job submitted before the per-channel spec carries only the legacy
+    // triple; drift compares one shape, so it is expanded on the way in.
+    expect(state.combineSpec).toEqual(expandLegacy(['drive-mf', 'drive-hf'], [1_250], false, true));
     expect(state.driveVoltageV).toBe(4);
     expect(state.sourceSizesMm).toEqual({ 'source-mf': 4, 'source-hf': 2.5 });
     expect(state.rigidSizeMm).toBe(8);
@@ -1518,5 +1519,19 @@ describe('CadLinkCoordinator', () => {
       frequencyMode: 'list', frequencyListText: '400\n800\n1600',
       frequencySpacing: 'linear', meshValidationMode: 'strict', verbose: true,
     });
+
+    // A job submitted with the per-channel spec restores it verbatim, unlinked
+    // pair and manual gain included — the shape drift compares against.
+    const v2Spec = withChannel(
+      withPair(expandLegacy(['drive-mf', 'drive-hf'], [1_250]), 'drive-mf→drive-hf', { family: 'bessel', order: 3 }),
+      'drive-hf',
+      { gain: { mode: 'manual', db: -1.5 }, invert: true },
+    );
+    const v2Job = {
+      ...job,
+      cad_setup: { ...job.cad_setup, combine: toWire(v2Spec) },
+    } as unknown as import('../api/jobsSocket').JobItem;
+    await act(async () => { await showCadJobModel(v2Job); });
+    expect(useCadReturnStore.getState().combineSpec).toEqual(v2Spec);
   });
 });

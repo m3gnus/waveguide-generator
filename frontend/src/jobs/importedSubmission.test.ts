@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
+import { expandLegacy, toWire, withDelayMode } from '../results/crossoverSpec';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { buildImportedSubmission, importedSubmissionBlocker, widenPolarToDerivation } from './importedSubmission';
@@ -39,8 +40,7 @@ describe('imported solve submission wire', () => {
       ],
       exteriorOnly: true,
       combineEnabled: true,
-      combineCrossoversHz: { 'drive-mf→drive-hf': 1_250 },
-      combineLevelMatch: false,
+      combineSpec: expandLegacy(['drive-mf', 'drive-hf'], [1_250], false, true),
       channelDrivers: {
         'drive-hf': {
           enabled: true,
@@ -57,17 +57,22 @@ describe('imported solve submission wire', () => {
     useSolveOptionsStore.getState().setVerbose(true);
 
     const submission = buildImportedSubmission(useCadReturnStore.getState());
-    const { align: _sliceCAddition, ...legacyCombine } = submission.geometry.combine!;
+    // The crossover travels as the per-channel v2 spec now. Pinning it inside
+    // the byte snapshot would make every unrelated wire change re-baseline a
+    // long nested object, so it is asserted on its own below and elided here.
     const legacyBytes = JSON.stringify({
       ...submission,
-      geometry: { ...submission.geometry, combine: legacyCombine },
+      geometry: { ...submission.geometry, combine: undefined },
     });
 
-    expect(legacyBytes).toMatchInlineSnapshot(`"{"geometry":{"type":"imported","ingest_id":"wgi_wire_fixture","manifest_sha256":"sha256:manifest","artifact_sha256":"sha256:artifact","drive_channels":[{"id":"drive-hf","source_ids":["source-hf"],"motion":"normal","driver":{"sd_cm2":80,"bl_t_m":7.2,"re_ohm":5.8,"le_mh":0.4,"mmd_g":12,"cms_m_per_n":0.0003}},{"id":"drive-mf","source_ids":["source-mf"],"motion":"axial"}],"drive_voltage_v":4,"mesh":{"rigid_size_mm":4.5,"transition_mm":2.5,"source_size_mm":{"source-hf":1.75,"source-mf":3.5}},"acknowledged_findings":["sha256:report:accepted-area-drift"],"skipped_source_ids":["source-lf"],"exterior_only":true,"combine":{"members":["drive-mf","drive-hf"],"crossovers_hz":[1250],"level_match":false}},"options":{"engine":"metal","solver_mode":"auto","symmetry":"auto","mesh_validation_mode":"warn","verbose":true,"frequency_spacing":"log","polar_config":{"angle_range":[0,180,37],"angle_step":5,"distance":2,"norm_angle":5,"inclination":45,"enabled_axes":["horizontal","vertical","diagonal"],"observation_origin":"mouth","spherical_sampling":false,"field_plane":true},"frequency_range":[180,18000],"num_frequencies":37}}"`);
-    expect(submission.geometry.combine?.align).toBe(true);
+    expect(legacyBytes).toMatchInlineSnapshot(`"{"geometry":{"type":"imported","ingest_id":"wgi_wire_fixture","manifest_sha256":"sha256:manifest","artifact_sha256":"sha256:artifact","drive_channels":[{"id":"drive-hf","source_ids":["source-hf"],"motion":"normal","driver":{"sd_cm2":80,"bl_t_m":7.2,"re_ohm":5.8,"le_mh":0.4,"mmd_g":12,"cms_m_per_n":0.0003}},{"id":"drive-mf","source_ids":["source-mf"],"motion":"axial"}],"drive_voltage_v":4,"mesh":{"rigid_size_mm":4.5,"transition_mm":2.5,"source_size_mm":{"source-hf":1.75,"source-mf":3.5}},"acknowledged_findings":["sha256:report:accepted-area-drift"],"skipped_source_ids":["source-lf"],"exterior_only":true},"options":{"engine":"metal","solver_mode":"auto","symmetry":"auto","mesh_validation_mode":"warn","verbose":true,"frequency_spacing":"log","polar_config":{"angle_range":[0,180,37],"angle_step":5,"distance":2,"norm_angle":5,"inclination":45,"enabled_axes":["horizontal","vertical","diagonal"],"observation_origin":"mouth","spherical_sampling":false,"field_plane":true},"frequency_range":[180,18000],"num_frequencies":37}}"`);
+    expect(submission.geometry.combine).toEqual(
+      toWire(expandLegacy(['drive-mf', 'drive-hf'], [1_250], false, true)),
+    );
 
-    useCadReturnStore.getState().setCombineAlign(false);
-    expect(buildImportedSubmission(useCadReturnStore.getState()).geometry.combine?.align).toBe(false);
+    useCadReturnStore.getState().updateCombineSpec((spec) => withDelayMode(spec, 'manual'));
+    expect(buildImportedSubmission(useCadReturnStore.getState()).geometry.combine?.channels?.['drive-hf'].delay)
+      .toEqual({ mode: 'manual', ms: 0 });
   });
 
   it('names the picked driver on the wire, merging the preset under the edits', () => {

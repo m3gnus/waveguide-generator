@@ -1,3 +1,4 @@
+import type { CrossoverChannelWire } from '../results/crossoverSpec';
 import { serializeSolveDesign, type DesignDocument } from '../stores/design';
 import { useSolveOptionsStore, type SolveOptions } from '../stores/solveOptions';
 
@@ -30,10 +31,16 @@ export interface ImportedGeometrySubmission {
      * `label` naming the driver they came from. */
     driver?: Record<string, number | string>;
   }>;
+  /** The per-channel v2 crossover (CADLINK-CROSSOVER-DRIVERS.md §2). The
+   * legacy `crossovers_hz`/`level_match`/`align` triple is still accepted by
+   * the server and still appears on jobs submitted before this, which is why
+   * both shapes are typed here and only the v2 one is ever written. */
   combine?: {
     id?: string;
     members: string[];
-    crossovers_hz: number[];
+    reference?: string;
+    channels?: Record<string, CrossoverChannelWire>;
+    crossovers_hz?: number[];
     level_match?: boolean;
     align?: boolean;
   };
