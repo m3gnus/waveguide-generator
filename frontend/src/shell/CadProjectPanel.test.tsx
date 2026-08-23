@@ -150,6 +150,45 @@ describe('CAD project history', () => {
     expect(compareSelection.getSnapshot().overlays).toEqual(['b']);
   });
 
+  /**
+   * The same removal as the jobs rail, on the same confirmation and the same
+   * endpoint. The list is a projection of the jobs snapshot, so nothing here
+   * has to remove the row: `deleteJob` drops it from that snapshot.
+   */
+  it('removes a run on the same confirmed deletion as the jobs rail', async () => {
+    const deleteJob = vi.spyOn(jobsSocket, 'deleteJob').mockResolvedValue(undefined);
+    setJobs([run({ id: 'a' }), run({ id: 'b', status: 'running', has_results: false, completed_at: null })]);
+    await render(<CadProjectHistory/>);
+
+    // A run still in flight is stopped from the jobs rail, not removed here.
+    const remove = host.querySelectorAll<HTMLButtonElement>('.cad-run-remove');
+    expect(remove).toHaveLength(1);
+    expect(remove[0].getAttribute('aria-label')).toBe('Remove #1 · run a');
+
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    act(() => remove[0].click());
+    expect(confirm).toHaveBeenCalledWith('Remove “#1 · run a” and its saved results?');
+    expect(deleteJob).not.toHaveBeenCalled();
+
+    confirm.mockReturnValue(true);
+    act(() => remove[0].click());
+    expect(deleteJob).toHaveBeenCalledWith('a');
+  });
+
+  it('reports a removal the server refused instead of losing it', async () => {
+    vi.spyOn(jobsSocket, 'deleteJob').mockRejectedValue(new Error('Run is still exporting.'));
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    setJobs([run({ id: 'a' })]);
+    await render(<CadProjectHistory/>);
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('.cad-run-remove')!.click();
+      await Promise.resolve();
+    });
+
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('Run is still exporting.');
+  });
+
   it('shows a run when its row is chosen', async () => {
     setJobs([run({ id: 'a' })]);
     await render(<CadProjectHistory/>);
