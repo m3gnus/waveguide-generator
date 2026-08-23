@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
+import type { DriverKind } from '../api/drivers';
 import { useDocumentStore, type DesignIdentity } from './document';
 import { namespaceStorage } from './durableSettings';
 
@@ -9,19 +10,59 @@ export interface CadDriveChannel {
   motion: 'normal' | 'axial';
 }
 
+/**
+ * The T/S fields the rail can hold, in wire order.
+ *
+ * The alternatives the server already accepts (`mms_g`, `vas_l`, `fs_hz`,
+ * `qms`) are here because that is what a driver database publishes: a
+ * datasheet gives Mms, Fs and Vas far more often than it gives Mmd and Cms.
+ * Each new key is inserted beside the one it substitutes for, so the emitted
+ * key order of a hand-entered Mmd/Cms driver is byte-for-byte what it was.
+ */
 export const DRIVER_FIELD_KEYS = [
-  'sd_cm2', 'bl_t_m', 're_ohm', 'le_mh', 'mmd_g', 'cms_m_per_n',
-  'rms_kg_per_s', 'xmax_mm', 'count', 'rear_volume_l',
+  'sd_cm2', 'bl_t_m', 're_ohm', 'le_mh', 'mmd_g', 'mms_g', 'cms_m_per_n',
+  'vas_l', 'fs_hz', 'qms', 'rms_kg_per_s', 'xmax_mm', 'count', 'rear_volume_l',
 ] as const;
 export type DriverFieldKey = typeof DRIVER_FIELD_KEYS[number];
-export const DRIVER_REQUIRED_KEYS: readonly DriverFieldKey[] = [
-  'sd_cm2', 'bl_t_m', 're_ohm', 'mmd_g', 'cms_m_per_n',
-];
+/** Always required, whatever else is supplied (`DriverSpec`, non-null fields). */
+export const DRIVER_REQUIRED_KEYS: readonly DriverFieldKey[] = ['sd_cm2', 'bl_t_m', 're_ohm'];
+/** Exactly one of these reaches the wire — `DriverSpec.validate_completeness`
+ * refuses a spec carrying both, and refuses one carrying neither. */
+export const DRIVER_MASS_KEYS: readonly DriverFieldKey[] = ['mms_g', 'mmd_g'];
+/** At least one of these is required; the solver derives the rest. */
+export const DRIVER_COMPLIANCE_KEYS: readonly DriverFieldKey[] = ['cms_m_per_n', 'vas_l', 'fs_hz'];
+/** WG's own inputs. They describe the installation, not the driver, so they
+ * are never part of a preset's base values and never count as an edit of one. */
+export const DRIVER_INSTALLATION_KEYS: readonly DriverFieldKey[] = ['count', 'rear_volume_l'];
+
+export type { DriverKind };
+export type DriverPresetSource = 'database' | 'mine' | 'manual';
+
+/**
+ * The driver a channel was filled in from.
+ *
+ * `base` is the picked driver's own numbers; `ChannelDriverForm.fields` holds
+ * only what the user changed on top of them. Keeping the two apart is what
+ * lets *Reset to database values* exist at all, and what lets an impedance
+ * variant reload its base without discarding the user's edits.
+ */
+export interface DriverPreset {
+  id: string;
+  label: string;
+  source: DriverPresetSource;
+  kind: DriverKind;
+  z_ohm: number | null;
+  base: Partial<Record<DriverFieldKey, number>>;
+}
 
 export interface ChannelDriverForm {
   enabled: boolean;
+  /** Overrides on top of `preset.base`; the whole driver when there is none. */
   fields: Partial<Record<DriverFieldKey, number>>;
+  preset: DriverPreset | null;
 }
+
+const EMPTY_DRIVER_FORM: ChannelDriverForm = { enabled: false, fields: {}, preset: null };
 
 /**
  * The channel id the coupled passive-cardioid solve writes its derived output
@@ -146,6 +187,17 @@ interface CadReturnState {
   setCombineAlign: (value: boolean | null) => void;
   setChannelDriverEnabled: (channelId: string, enabled: boolean) => void;
   setChannelDriverField: (channelId: string, field: DriverFieldKey, value: number | null) => void;
+  /** Pick a driver, or clear the picked one back to hand entry.
+   *
+   * A new driver replaces the overrides as well: they were edits of the
+   * *previous* driver's numbers and applying them to this one would silently
+   * publish a hybrid. `keepOverrides` is for reloading the same driver's other
+   * impedance variant, where the edits are still the user's own. WG's
+   * installation inputs survive either way — they describe the box, not the
+   * driver. */
+  setChannelDriverPreset: (channelId: string, preset: DriverPreset | null, keepOverrides?: boolean) => void;
+  /** *Reset to database values*: drop the edits, keep the driver. */
+  clearChannelDriverOverrides: (channelId: string) => void;
   setDriveVoltage: (value: number) => void;
   setPassiveCardioid: (patch: Partial<PassiveCardioidForm>) => void;
   setSweep: (update: Partial<Pick<CadReturnState, 'frequencyStartHz' | 'frequencyEndHz' | 'frequencyCount'>>) => void;
@@ -309,18 +361,46 @@ function parseDriveChannels(value: unknown, inventory: SourceInventoryEntry[], s
   return channels.length === value.length ? channels : null;
 }
 
+function parseDriverFields(value: unknown): Partial<Record<DriverFieldKey, number>> | null {
+  if (!isObject(value)) return null;
+  const fields: Partial<Record<DriverFieldKey, number>> = {};
+  for (const [field, fieldValue] of Object.entries(value)) {
+    if (!DRIVER_FIELD_KEYS.includes(field as DriverFieldKey)
+      || typeof fieldValue !== 'number' || !Number.isFinite(fieldValue)) return null;
+    fields[field as DriverFieldKey] = fieldValue;
+  }
+  return fields;
+}
+
+/**
+ * A stored preset, or `null` for a profile written before drivers were picked.
+ *
+ * Absence is the migration: every profile saved before the picker existed
+ * carries hand-typed `fields` and no preset, and those numbers are still the
+ * whole driver. Anything present is parsed strictly, as everywhere else here.
+ */
+function parseDriverPreset(value: unknown): DriverPreset | null | undefined {
+  if (value === undefined || value === null) return null;
+  if (!isObject(value)) return undefined;
+  const { id, label, source, kind, z_ohm: z } = value;
+  if (typeof id !== 'string' || !id || typeof label !== 'string' || !label) return undefined;
+  if (source !== 'database' && source !== 'mine' && source !== 'manual') return undefined;
+  if (kind !== 'lf' && kind !== 'cd' && kind !== 'unknown') return undefined;
+  if (z !== null && (typeof z !== 'number' || !Number.isFinite(z))) return undefined;
+  const base = parseDriverFields(value.base);
+  if (!base) return undefined;
+  return { id, label, source, kind, z_ohm: z, base };
+}
+
 function parseChannelDrivers(value: unknown): Record<string, ChannelDriverForm> | null {
   if (!isObject(value)) return null;
   const drivers: Record<string, ChannelDriverForm> = {};
   for (const [channelId, item] of Object.entries(value)) {
-    if (!channelId || !isObject(item) || typeof item.enabled !== 'boolean' || !isObject(item.fields)) return null;
-    const fields: Partial<Record<DriverFieldKey, number>> = {};
-    for (const [field, fieldValue] of Object.entries(item.fields)) {
-      if (!DRIVER_FIELD_KEYS.includes(field as DriverFieldKey)
-        || typeof fieldValue !== 'number' || !Number.isFinite(fieldValue)) return null;
-      fields[field as DriverFieldKey] = fieldValue;
-    }
-    drivers[channelId] = { enabled: item.enabled, fields };
+    if (!channelId || !isObject(item) || typeof item.enabled !== 'boolean') return null;
+    const fields = parseDriverFields(item.fields);
+    const preset = parseDriverPreset(item.preset);
+    if (!fields || preset === undefined) return null;
+    drivers[channelId] = { enabled: item.enabled, fields, preset };
   }
   return drivers;
 }
@@ -505,7 +585,11 @@ function persistedSolveSettings(state: CadReturnState): PersistedSolveSettings {
     combineAlign: state.combineAlign,
     channelDrivers: Object.fromEntries(Object.entries(state.channelDrivers).map(([channelId, form]) => [
       channelId,
-      { enabled: form.enabled, fields: { ...form.fields } },
+      {
+        enabled: form.enabled,
+        fields: { ...form.fields },
+        preset: form.preset ? { ...form.preset, base: { ...form.preset.base } } : null,
+      },
     ])),
     passiveCardioid: { ...state.passiveCardioid },
     driveVoltageV: state.driveVoltageV,
@@ -1032,21 +1116,47 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
   setCombineLevelMatch: (combineLevelMatch) => { set({ combineLevelMatch }); saveSolveProfile(get()); },
   setCombineAlign: (combineAlign) => { set({ combineAlign }); saveSolveProfile(get()); },
   setChannelDriverEnabled: (channelId, enabled) => {
-    set((state) => ({
-      channelDrivers: {
-        ...state.channelDrivers,
-        [channelId]: { enabled, fields: state.channelDrivers[channelId]?.fields ?? {} },
-      },
-    }));
+    set((state) => {
+      const current = state.channelDrivers[channelId] ?? EMPTY_DRIVER_FORM;
+      return { channelDrivers: { ...state.channelDrivers, [channelId]: { ...current, enabled } } };
+    });
     saveSolveProfile(get());
   },
   setChannelDriverField: (channelId, field, value) => {
     set((state) => {
-      const current = state.channelDrivers[channelId] ?? { enabled: true, fields: {} };
+      const current = state.channelDrivers[channelId] ?? { ...EMPTY_DRIVER_FORM, enabled: true };
       const fields = { ...current.fields };
-      if (value === null || !Number.isFinite(value)) delete fields[field];
+      // An override equal to the base value is not an edit; storing it would
+      // outline an untouched field and count it in the header.
+      if (value === null || !Number.isFinite(value) || value === current.preset?.base[field]) delete fields[field];
       else fields[field] = value;
       return { channelDrivers: { ...state.channelDrivers, [channelId]: { ...current, fields } } };
+    });
+    saveSolveProfile(get());
+  },
+  setChannelDriverPreset: (channelId, preset, keepOverrides = false) => {
+    set((state) => {
+      const current = state.channelDrivers[channelId] ?? { ...EMPTY_DRIVER_FORM, enabled: true };
+      const kept = keepOverrides ? { ...current.fields } : retainedInstallationFields(current.fields);
+      return {
+        channelDrivers: {
+          ...state.channelDrivers,
+          [channelId]: { ...current, preset, fields: kept },
+        },
+      };
+    });
+    saveSolveProfile(get());
+  },
+  clearChannelDriverOverrides: (channelId) => {
+    set((state) => {
+      const current = state.channelDrivers[channelId];
+      if (!current) return {};
+      return {
+        channelDrivers: {
+          ...state.channelDrivers,
+          [channelId]: { ...current, fields: retainedInstallationFields(current.fields) },
+        },
+      };
     });
     saveSolveProfile(get());
   },
@@ -1058,15 +1168,68 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
   setSweep: (update) => { set(update); saveSolveProfile(get()); },
 }));
 
-/** The wire driver spec for one channel, or undefined while incomplete. */
-export function channelDriverWire(form: ChannelDriverForm | undefined): Record<string, number> | undefined {
+/** Only WG's own installation inputs survive a driver change or a reset. */
+function retainedInstallationFields(
+  fields: Partial<Record<DriverFieldKey, number>>,
+): Partial<Record<DriverFieldKey, number>> {
+  return Object.fromEntries(
+    Object.entries(fields).filter(([key]) => DRIVER_INSTALLATION_KEYS.includes(key as DriverFieldKey)),
+  );
+}
+
+/** The driver as it will be submitted: the preset's numbers under the edits. */
+export function driverValues(form: ChannelDriverForm | undefined): Partial<Record<DriverFieldKey, number>> {
+  if (!form) return {};
+  return { ...(form.preset?.base ?? {}), ...form.fields };
+}
+
+/** Which fields the user has changed away from the preset. Installation inputs
+ * are excluded: they were never the driver's to state. */
+export function driverEditedKeys(form: ChannelDriverForm | undefined): DriverFieldKey[] {
+  if (!form?.preset) return [];
+  return DRIVER_FIELD_KEYS.filter((key) => (
+    !DRIVER_INSTALLATION_KEYS.includes(key)
+    && form.fields[key] !== undefined
+    && form.fields[key] !== form.preset?.base[key]
+  ));
+}
+
+/**
+ * Which requirement groups are still unsatisfied, mirroring the server's
+ * `DriverSpec.validate_completeness` rather than a flat list of keys: one mass
+ * and one compliance source are enough, and which one is the user's choice.
+ */
+export function driverMissingGroups(form: ChannelDriverForm | undefined): DriverFieldKey[][] {
+  const values = driverValues(form);
+  const groups: DriverFieldKey[][] = [];
+  for (const key of DRIVER_REQUIRED_KEYS) if (values[key] === undefined) groups.push([key]);
+  if (DRIVER_MASS_KEYS.every((key) => values[key] === undefined)) groups.push([...DRIVER_MASS_KEYS]);
+  if (DRIVER_COMPLIANCE_KEYS.every((key) => values[key] === undefined)) groups.push([...DRIVER_COMPLIANCE_KEYS]);
+  return groups;
+}
+
+/**
+ * The wire driver spec for one channel, or undefined while incomplete.
+ *
+ * Exactly one mass reaches the server, because a spec carrying both is a
+ * refusal of the whole solve. Mms wins when both are known: it is what a
+ * datasheet and the driver library publish, and the solver converts it to Mmd
+ * itself by subtracting the free-air radiation mass.
+ */
+export function channelDriverWire(
+  form: ChannelDriverForm | undefined,
+): Record<string, number | string> | undefined {
   if (!form?.enabled) return undefined;
-  if (DRIVER_REQUIRED_KEYS.some((key) => form.fields[key] === undefined)) return undefined;
-  const wire: Record<string, number> = {};
+  const values = driverValues(form);
+  if (driverMissingGroups(form).length) return undefined;
+  const mass: DriverFieldKey = values.mms_g !== undefined ? 'mms_g' : 'mmd_g';
+  const wire: Record<string, number | string> = {};
   for (const key of DRIVER_FIELD_KEYS) {
-    const value = form.fields[key];
+    if (DRIVER_MASS_KEYS.includes(key) && key !== mass) continue;
+    const value = values[key];
     if (value !== undefined) wire[key] = value;
   }
+  if (form.preset?.label) wire.label = form.preset.label;
   return wire;
 }
 

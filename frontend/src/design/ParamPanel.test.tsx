@@ -9,6 +9,7 @@ import { buildParameterPaletteEntries } from '../shell/TopBar';
 import { workspaceNavigation } from '../shell/workspaceNavigation';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetCadPreparationStore, useCadPreparationStore } from '../stores/cadPreparation';
+import { resetDriverLibraryStore } from '../stores/driverLibrary';
 import { hydrateDesignDocument } from '../api/designIo';
 import { designForFamily, resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
@@ -52,7 +53,7 @@ function setCadReady(): void {
       { id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' },
       { id: 'drive-mf', source_ids: ['source-mf'], motion: 'normal' },
     ],
-    channelDrivers: { 'drive-hf': { enabled: true, fields: {} } },
+    channelDrivers: { 'drive-hf': { enabled: true, fields: {}, preset: null } },
     exteriorOnly: true,
     // Left unset on purpose: a multi-driver return combines by default.
     combineEnabled: null,
@@ -106,6 +107,7 @@ describe('ParamPanel inventory UX', () => {
     resetCadReturnStore();
     resetCadPreparationStore();
     resetSolveOptionsStore();
+    resetDriverLibraryStore();
     workspaceModeStore.setMode('parametric');
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     host = document.createElement('div');
@@ -866,5 +868,193 @@ describe('parameter reveal requests', () => {
     expect(notified).toBe(1);
     unsubscribe();
     parameterRevealRequest.claim('geometry');
+  });
+});
+
+const LIBRARY_HIT = {
+  id: 'Acme::HD-1::8',
+  brand: 'Acme',
+  model: 'HD-1',
+  z_ohm: 8,
+  variants: [{ id: 'Acme::HD-1::8', z_ohm: 8 }, { id: 'Acme::HD-1::16', z_ohm: 16 }],
+  kind: 'cd' as const,
+  size: '1 in throat',
+  completeness: 'full' as const,
+  spec: { sd_cm2: 26, bl_t_m: 12.4, re_ohm: 6.2, le_mh: 0.12, mms_g: 2.4, fs_hz: 620, vas_l: 0.35, qms: 3.1, xmax_mm: 0.8 },
+  display: { fs_hz: 620, sd_cm2: 26, bl_t_m: 12.4, xmax_mm: 0.8 },
+  xo_min_hz: 1_200,
+  source: { file: 'compression-drivers.csv' },
+};
+
+/** One fetch stub for every driver route, with a switch for an empty library. */
+function stubDriverApi({ files = 1 }: { files?: number } = {}) {
+  const library = {
+    folder: '/library/driver-databases',
+    files: files ? [{ name: 'compression-drivers.csv', rows: 1 }] : [],
+    total_drivers: files ? 1 : 0,
+    last_scan: null,
+  };
+  const json = (body: unknown) => Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+  const fetchMock = vi.fn((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.startsWith('/api/drivers/library')) return json(library);
+    if (url.startsWith('/api/drivers?')) return json({ items: files ? [LIBRARY_HIT] : [], total: files });
+    if (url.startsWith('/api/drivers/')) return json({ ...LIBRARY_HIT, fields: {}, extras: {} });
+    return Promise.resolve(new Response('not found', { status: 404 }));
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
+}
+
+describe('driver picker', () => {
+  let host: HTMLDivElement;
+  let root: Root;
+
+  const settle = async () => {
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
+  };
+  const searchInput = () => host.querySelector<HTMLInputElement>('input[role="combobox"]')!;
+  const type = (input: HTMLInputElement, value: string) => act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, value);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  const press = (element: HTMLElement, key: string) => act(() => {
+    element.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+  });
+  const channelCard = () => [...host.querySelectorAll<HTMLElement>('.cad-channel')]
+    .find((card) => card.textContent?.includes('drive-hf'))!;
+
+  beforeEach(async () => {
+    (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    localStorage.clear();
+    resetDesignStore();
+    resetCadReturnStore();
+    resetCadPreparationStore();
+    resetSolveOptionsStore();
+    resetDriverLibraryStore();
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+  });
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+    queryClient.clear();
+    workspaceModeStore.setMode('parametric');
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  const mountWithLibrary = async (options?: { files?: number }) => {
+    const fetchMock = stubDriverApi(options);
+    act(() => {
+      setCadReady();
+      workspaceModeStore.setMode('cad');
+      root.render(withQueryClient(<ParamPanel tab="simulation" />));
+    });
+    await settle();
+    return fetchMock;
+  };
+
+  it('searches the library and collapses the keyboard-picked driver to a chip', async () => {
+    await mountWithLibrary();
+    const input = searchInput();
+    // The kind toggle starts on the compression half for an HF channel.
+    expect(channelCard().querySelector<HTMLButtonElement>('.driver-kind-toggle button[aria-pressed="true"]')?.textContent)
+      .toBe('Compression');
+
+    act(() => input.focus());
+    await settle();
+    await type(input, 'hd-1');
+    await settle();
+
+    const options = [...channelCard().querySelectorAll<HTMLElement>('[role="option"]')];
+    expect(options.map((option) => option.querySelector('.driver-result-name')?.textContent)).toEqual(['Acme HD-1']);
+    // The first hit is pre-selected, so Enter alone picks it.
+    expect(options[0].getAttribute('aria-selected')).toBe('true');
+
+    await press(input, 'Enter');
+    await settle();
+
+    const card = channelCard();
+    expect(card.querySelector('.driver-chip.name')?.textContent).toBe('Acme HD-1 · 8 Ω');
+    expect(card.querySelector('input[role="combobox"]')).toBeNull();
+    const facts = [...card.querySelectorAll<HTMLElement>('.driver-summary-facts .driver-chip')].map((chip) => chip.textContent);
+    expect(facts).toEqual(['Sd 26 cm²', 'Bl 12.4 T·m', 'Fs 620 Hz', 'Xmax 0.8 mm']);
+    expect(useCadReturnStore.getState().channelDrivers['drive-hf'].preset).toMatchObject({
+      id: 'Acme::HD-1::8', label: 'Acme HD-1', source: 'database',
+    });
+  });
+
+  it('keeps the current driver when Escape closes the list', async () => {
+    await mountWithLibrary();
+    const input = searchInput();
+    act(() => input.focus());
+    await settle();
+    expect(channelCard().querySelectorAll('[role="option"]')).toHaveLength(1);
+
+    await press(input, 'Escape');
+    await settle();
+
+    expect(channelCard().querySelector('[role="listbox"]')).toBeNull();
+    expect(useCadReturnStore.getState().channelDrivers['drive-hf'].preset).toBeNull();
+  });
+
+  it('falls back to the manual fields when the library holds no files', async () => {
+    await mountWithLibrary({ files: 0 });
+    const card = channelCard();
+    expect(card.querySelector('input[role="combobox"]')).toBeNull();
+    expect(card.textContent).toContain('No driver library found');
+    // Exactly the grid the rail has always shown, now including the API's
+    // alternatives so a datasheet driver can be typed in as printed.
+    const labels = [...card.querySelectorAll<HTMLElement>('.cad-driver-field > span')].map((span) => span.textContent);
+    expect(labels).toContain('Sd (cm²)');
+    expect(labels).toContain('Mms (g)');
+    expect(labels).toContain('Fs (Hz)');
+  });
+
+  it('derives values in the T/S sheet, counts the edits, and resets them', async () => {
+    await mountWithLibrary();
+    const input = searchInput();
+    act(() => input.focus());
+    await settle();
+    await press(input, 'Enter');
+    await settle();
+
+    act(() => channelCard().querySelector<HTMLButtonElement>('.driver-edit-link')!.click());
+    await settle();
+    const sheet = document.querySelector<HTMLElement>('.driver-sheet')!;
+    expect(sheet.querySelector('h2')?.textContent).toBe('Acme HD-1');
+    expect(sheet.textContent).toContain('compression-drivers.csv');
+
+    const derived = [...sheet.querySelectorAll<HTMLElement>('.driver-derived-row')]
+      .map((entry) => entry.textContent);
+    // Qes = 2 pi Fs Mms Re / Bl^2 with the hit's own numbers.
+    const qes = (2 * Math.PI * 620 * 0.0024 * 6.2) / (12.4 * 12.4);
+    expect(derived[1]).toBe(`Qes${Number(qes.toPrecision(3))}`);
+    expect(derived[2]).toBe(`Qts${Number(((3.1 * qes) / (3.1 + qes)).toPrecision(3))}`);
+    expect(derived[3]).toMatch(/^Sensitivity\d/);
+
+    const blField = [...sheet.querySelectorAll<HTMLElement>('.cad-driver-field')]
+      .find((field) => field.querySelector('span')?.textContent === 'Bl (T·m)')!;
+    await type(blField.querySelector<HTMLInputElement>('input')!, '11.9');
+    await settle();
+
+    expect(document.querySelector('.driver-chip.accent')?.textContent).toBe('1 edited');
+    expect(blField.className).toContain('edited');
+    // Count is WG's own input and never reads as an edit of the driver.
+    const countField = [...sheet.querySelectorAll<HTMLElement>('.cad-driver-field')]
+      .find((field) => field.querySelector('span')?.textContent === 'Count')!;
+    await type(countField.querySelector<HTMLInputElement>('input')!, '2');
+    await settle();
+    expect(document.querySelector('.driver-chip.accent')?.textContent).toBe('1 edited');
+
+    act(() => [...document.querySelectorAll<HTMLButtonElement>('.driver-sheet-actions button')]
+      .find((button) => button.textContent === 'Reset to database values')!.click());
+    await settle();
+
+    expect(document.querySelector('.driver-chip.accent')).toBeNull();
+    expect(useCadReturnStore.getState().channelDrivers['drive-hf'].fields).toEqual({ count: 2 });
   });
 });

@@ -6,10 +6,15 @@ import {
   combineDefaultHz,
   combineEnabledEffective,
   combineWire,
+  channelDriverWire,
+  driverEditedKeys,
+  driverMissingGroups,
+  driverValues,
   DRIVER_REQUIRED_KEYS,
   resetCadReturnStore,
   unacknowledgedBlocking,
   useCadReturnStore,
+  type DriverPreset,
 } from './cadReturn';
 import { buildImportedSubmission } from '../jobs/importedSubmission';
 import { resetDocumentStore, useDocumentStore } from './document';
@@ -248,6 +253,10 @@ describe('CAD return store', () => {
     store.selectBundle(bundle);
     store.setChannelDriverEnabled('drive-hf', true);
     DRIVER_REQUIRED_KEYS.forEach((key) => store.setChannelDriverField('drive-hf', key, 1));
+    // One mass and one compliance source complete the spec; which ones is the
+    // user's choice, exactly as `DriverSpec.validate_completeness` has it.
+    store.setChannelDriverField('drive-hf', 'mmd_g', 12);
+    store.setChannelDriverField('drive-hf', 'cms_m_per_n', 0.0003);
     store.applyIngest(record(), store.beginIngestIntent());
     const complete = useCadReturnStore.getState();
     expect(buildImportedSubmission(complete).geometry.drive_channels
@@ -647,5 +656,142 @@ describe('combined output', () => {
     useCadReturnStore.getState().selectBundle(bundle);
     expect(useCadReturnStore.getState().combineEnabled).toBe(false);
     expect(combineEnabledEffective(useCadReturnStore.getState())).toBe(false);
+  });
+});
+
+const PRESET: DriverPreset = {
+  id: 'Acme::HD-1::8',
+  label: 'Acme HD-1',
+  source: 'database',
+  kind: 'cd',
+  z_ohm: 8,
+  base: { sd_cm2: 26, bl_t_m: 12.4, re_ohm: 6.2, le_mh: 0.12, mms_g: 2.4, fs_hz: 620, vas_l: 0.35, qms: 3.1 },
+};
+
+describe('a channel driver picked from the library', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    resetDocumentStore();
+    resetCadReturnStore();
+    useCadReturnStore.getState().selectBundle(bundle);
+    useCadReturnStore.getState().setChannelDriverEnabled('drive-hf', true);
+  });
+
+  it('submits the preset values under the user’s edits', () => {
+    const store = useCadReturnStore.getState();
+    store.setChannelDriverPreset('drive-hf', PRESET);
+    expect(driverValues(useCadReturnStore.getState().channelDrivers['drive-hf'])).toEqual(PRESET.base);
+
+    store.setChannelDriverField('drive-hf', 'bl_t_m', 11.9);
+    const form = useCadReturnStore.getState().channelDrivers['drive-hf'];
+    // The override lives beside the base rather than replacing it, which is
+    // what makes the edit reversible and countable.
+    expect(form.fields).toEqual({ bl_t_m: 11.9 });
+    expect(form.preset?.base.bl_t_m).toBe(12.4);
+    expect(driverValues(form)).toMatchObject({ bl_t_m: 11.9, sd_cm2: 26 });
+    expect(driverEditedKeys(form)).toEqual(['bl_t_m']);
+
+    // Typing the database value back is not an edit.
+    store.setChannelDriverField('drive-hf', 'bl_t_m', 12.4);
+    expect(driverEditedKeys(useCadReturnStore.getState().channelDrivers['drive-hf'])).toEqual([]);
+  });
+
+  it('counts a datasheet Mms and Fs as a complete spec', () => {
+    // The pre-picker rule wanted Mmd and Cms, neither of which a datasheet
+    // prints. A driver stating Mms and Fs is complete to the server, so it has
+    // to be complete to the rail as well.
+    useCadReturnStore.getState().setChannelDriverPreset('drive-hf', PRESET);
+    const form = useCadReturnStore.getState().channelDrivers['drive-hf'];
+    expect(driverMissingGroups(form)).toEqual([]);
+    expect(channelDriverWire(form)).toBeDefined();
+
+    const withoutMass = { ...form, preset: { ...PRESET, base: { ...PRESET.base, mms_g: undefined } } };
+    expect(driverMissingGroups(withoutMass)).toEqual([['mms_g', 'mmd_g']]);
+    expect(channelDriverWire(withoutMass)).toBeUndefined();
+  });
+
+  it('emits the label and never both masses', () => {
+    const store = useCadReturnStore.getState();
+    store.setChannelDriverPreset('drive-hf', PRESET);
+    // A hand-typed Mmd on top of a preset that already states Mms: sending
+    // both refuses the whole solve (DriverSpec.validate_completeness).
+    store.setChannelDriverField('drive-hf', 'mmd_g', 2.1);
+    const wire = channelDriverWire(useCadReturnStore.getState().channelDrivers['drive-hf'])!;
+
+    expect(wire.label).toBe('Acme HD-1');
+    expect(wire.mms_g).toBe(2.4);
+    expect(wire).not.toHaveProperty('mmd_g');
+
+    // A hand-entered driver with no preset still submits Mmd and no label.
+    store.setChannelDriverPreset('drive-hf', null);
+    (['sd_cm2', 'bl_t_m', 're_ohm'] as const).forEach((key) => store.setChannelDriverField('drive-hf', key, 1));
+    store.setChannelDriverField('drive-hf', 'mmd_g', 12);
+    store.setChannelDriverField('drive-hf', 'cms_m_per_n', 0.0003);
+    const manual = channelDriverWire(useCadReturnStore.getState().channelDrivers['drive-hf'])!;
+    expect(manual.mmd_g).toBe(12);
+    expect(manual).not.toHaveProperty('mms_g');
+    expect(manual).not.toHaveProperty('label');
+  });
+
+  it('keeps the installation inputs when the driver changes or the edits are reset', () => {
+    const store = useCadReturnStore.getState();
+    store.setChannelDriverPreset('drive-hf', PRESET);
+    store.setChannelDriverField('drive-hf', 'count', 2);
+    store.setChannelDriverField('drive-hf', 'rear_volume_l', 1.5);
+    store.setChannelDriverField('drive-hf', 'sd_cm2', 30);
+    expect(driverEditedKeys(useCadReturnStore.getState().channelDrivers['drive-hf'])).toEqual(['sd_cm2']);
+
+    store.clearChannelDriverOverrides('drive-hf');
+    const reset = useCadReturnStore.getState().channelDrivers['drive-hf'];
+    expect(reset.fields).toEqual({ count: 2, rear_volume_l: 1.5 });
+    expect(driverValues(reset).sd_cm2).toBe(26);
+
+    // A different driver drops the edits with the driver they belonged to.
+    store.setChannelDriverField('drive-hf', 'sd_cm2', 30);
+    store.setChannelDriverPreset('drive-hf', { ...PRESET, id: 'Acme::HD-1::16', z_ohm: 16 });
+    expect(useCadReturnStore.getState().channelDrivers['drive-hf'].fields).toEqual({ count: 2, rear_volume_l: 1.5 });
+  });
+
+  it('carries the preset across sessions and reads a pre-picker profile as hand entry', () => {
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 1,
+    }, 'current');
+    // The link has to be in place before the profile is written.
+    useCadReturnStore.getState().setChannelDriverPreset('drive-hf', PRESET);
+    useCadReturnStore.getState().setChannelDriverField('drive-hf', 'xmax_mm', 1.2);
+
+    resetCadReturnStore();
+    useCadReturnStore.getState().selectBundle(bundle);
+    expect(useCadReturnStore.getState().channelDrivers['drive-hf']).toEqual({
+      enabled: true, fields: { xmax_mm: 1.2 }, preset: PRESET,
+    });
+
+    // A profile written before drivers could be picked carries no preset key
+    // at all. Its hand-typed fields are still the whole driver.
+    const raw = JSON.parse(localStorage.getItem(solveProfileStorageKey)!);
+    delete raw.profiles[0].settings.channelDrivers['drive-hf'].preset;
+    localStorage.setItem(solveProfileStorageKey, JSON.stringify(raw));
+    resetCadReturnStore();
+    useCadReturnStore.getState().selectBundle(bundle);
+    expect(useCadReturnStore.getState().channelDrivers['drive-hf']).toEqual({
+      enabled: true, fields: { xmax_mm: 1.2 }, preset: null,
+    });
+  });
+
+  it('refuses a malformed stored preset rather than restoring half of one', () => {
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 1,
+    }, 'current');
+    useCadReturnStore.getState().setChannelDriverPreset('drive-hf', PRESET);
+    useCadReturnStore.getState().setRigidSize(9.5);
+
+    const raw = JSON.parse(localStorage.getItem(solveProfileStorageKey)!);
+    raw.profiles[0].settings.channelDrivers['drive-hf'].preset.source = 'somewhere-else';
+    localStorage.setItem(solveProfileStorageKey, JSON.stringify(raw));
+
+    resetCadReturnStore();
+    useCadReturnStore.getState().selectBundle(bundle);
+    expect(useCadReturnStore.getState().channelDrivers).toEqual({});
+    expect(useCadReturnStore.getState().rigidSizeMm).toBe(8);
   });
 });

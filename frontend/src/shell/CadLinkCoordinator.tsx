@@ -23,6 +23,7 @@ import {
   useCadReturnStore,
   type CadDriveChannel,
   type ChannelDriverForm,
+  type DriverPreset,
   type PassiveCardioidForm,
 } from '../stores/cadReturn';
 import { recordCommittedAthPolars, subscribeRevision, useDesignStore } from '../stores/design';
@@ -239,7 +240,15 @@ function savedChannelDrivers(
       const value = finite(driver[key]);
       return value === null ? [] : [[key, value]];
     }));
-    return [[channel.id, { enabled: true, fields }]];
+    // A stored setup carries the submitted numbers, not which library row they
+    // came from. When it names the driver, the numbers become that driver's
+    // base so the name survives the next submission; otherwise this is exactly
+    // the hand-entered form it has always been.
+    const label = typeof driver.label === 'string' && driver.label.trim() ? driver.label.trim() : null;
+    const preset: DriverPreset | null = label
+      ? { id: `manual:${channel.id}`, label, source: 'manual', kind: 'unknown', z_ohm: null, base: fields }
+      : null;
+    return [[channel.id, { enabled: true, fields: preset ? {} : fields, preset }]];
   }));
 }
 
