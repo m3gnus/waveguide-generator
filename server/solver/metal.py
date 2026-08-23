@@ -1237,7 +1237,7 @@ def _combined_channel_response(
     per_source_validity: Mapping[str, Any],
     channel_identity: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, Any]:
-    """Package the LR4 time-aligned sum as one more contract-shaped channel."""
+    """Package the filtered time-aligned sum as one more contract-shaped channel."""
 
     spec = geometry.combine
     assert spec is not None
@@ -1253,12 +1253,12 @@ def _combined_channel_response(
         if limits:
             member_validity_hz[member] = min(limits)
 
+    resolved = spec.resolved()
     combined_result, combine_payload = combine_drive_channels(
         sorted_results,
         members=list(spec.members),
-        crossovers_hz=list(spec.crossovers_hz),
-        level_match=spec.level_match,
-        align=spec.align,
+        channels=resolved["channels"],
+        reference=resolved["reference"],
         member_validity_hz=member_validity_hz,
         member_roles={
             member: channel_identity.get(member, {}).get("role")
