@@ -87,7 +87,7 @@ describe('expandLegacy', () => {
       delay: { mode: 'auto' },
       invert: null,
     });
-    expect(parseSpec(wire)).toEqual(spec);
+    expect(parseSpec(JSON.parse(JSON.stringify(spec)))).toEqual(spec);
   });
 });
 
@@ -195,16 +195,23 @@ describe('fromResult', () => {
 });
 
 describe('parseSpec', () => {
+  const stored = () => JSON.parse(JSON.stringify(expandLegacy(MEMBERS, [100, 1_000]))) as {
+    reference: string;
+    channels: Record<string, { lp: { order: number } | null }>;
+  };
+
   it('refuses an order the family does not offer', () => {
-    const wire = toWire(expandLegacy(MEMBERS, [100, 1_000])) as unknown as Record<string, never>;
-    const broken = JSON.parse(JSON.stringify(wire)) as { channels: Record<string, { lp: { order: number } | null }> };
+    const broken = stored();
     broken.channels.lf.lp!.order = 3;
     expect(parseSpec(broken)).toBeNull();
   });
 
   it('refuses a reference outside the members and a mismatched channel map', () => {
-    const wire = toWire(expandLegacy(MEMBERS, [100, 1_000]));
-    expect(parseSpec({ ...wire, reference: 'sub' })).toBeNull();
-    expect(parseSpec({ ...wire, channels: { lf: wire.channels.lf } })).toBeNull();
+    expect(parseSpec({ ...stored(), reference: 'sub' })).toBeNull();
+    expect(parseSpec({ ...stored(), channels: { lf: stored().channels.lf } })).toBeNull();
+  });
+
+  it('refuses the wire shape, which names its corner fc_hz', () => {
+    expect(parseSpec(toWire(expandLegacy(MEMBERS, [100, 1_000])))).toBeNull();
   });
 });

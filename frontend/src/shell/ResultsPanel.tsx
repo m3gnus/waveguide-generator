@@ -11,6 +11,7 @@ import { resultExportSnapshot } from '../results/exportContext';
 export { resultExportSnapshot } from '../results/exportContext';
 import { copyChartPng, downloadChartPng } from '../results/chartImage';
 import { summaryGroups, summaryText, type SummaryGroup, type SummaryRow } from '../results/summary';
+import { expandLegacy } from '../results/crossoverSpec';
 import { combineMetadataOf, type CombineMetadata, type ResultPayload } from '../results/types';
 import { ResultViewSwitch } from '../results/ResultViewSwitch';
 import { resolveResultView, resultViewStore, useResultView } from '../stores/resultView';
@@ -1755,7 +1756,7 @@ function RecombineRow({ jobId, channelId, combine, onApplied }: {
         align: combine.align ?? true,
       });
       onApplied(jobId, updated);
-      useCadReturnStore.getState().setCombineCrossoversFromResult(combine.members, crossovers);
+      useCadReturnStore.getState().setCombineSpecFromResult(expandLegacy(combine.members, crossovers, combine.level_match?.enabled ?? true, combine.align ?? true, combine.reference));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {

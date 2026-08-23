@@ -491,8 +491,23 @@ export function sameSpec(left: CrossoverSpec | null, right: CrossoverSpec | null
   return JSON.stringify(toWire(left)) === JSON.stringify(toWire(right));
 }
 
-/** Parse a stored or received spec back into the model, or null when it is not
- * one. Strict: a half-parsed crossover would silently solve something else. */
+function sectionFromModel(value: unknown): FilterSection | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  const fcHz = finite(record.fcHz);
+  const order = finite(record.order);
+  if (!isFilterFamily(record.family) || fcHz === null || order === null) return null;
+  return { family: record.family, order, fcHz };
+}
+
+/**
+ * Parse a stored spec back into the model, or null when it is not one.
+ *
+ * This reads the model shape (`fcHz`), which is what the solve profile stores
+ * — not the wire shape (`fc_hz`), which only ever travels to the server and
+ * comes back through `fromResult`. Strict: a half-parsed crossover would
+ * silently solve something other than what the user set.
+ */
 export function parseSpec(value: unknown): CrossoverSpec | null {
   if (!value || typeof value !== 'object') return null;
   const record = value as Record<string, unknown>;
@@ -509,8 +524,8 @@ export function parseSpec(value: unknown): CrossoverSpec | null {
     const entry = wire[member];
     if (!entry || typeof entry !== 'object') return null;
     const channel = entry as Record<string, unknown>;
-    const hp = channel.hp === null || channel.hp === undefined ? null : sectionFromWire(channel.hp);
-    const lp = channel.lp === null || channel.lp === undefined ? null : sectionFromWire(channel.lp);
+    const hp = channel.hp === null || channel.hp === undefined ? null : sectionFromModel(channel.hp);
+    const lp = channel.lp === null || channel.lp === undefined ? null : sectionFromModel(channel.lp);
     if ((channel.hp && !hp) || (channel.lp && !lp)) return null;
     if (hp && !familyOrders(hp.family).includes(hp.order)) return null;
     if (lp && !familyOrders(lp.family).includes(lp.order)) return null;

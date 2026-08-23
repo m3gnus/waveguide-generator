@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadRealizedDimensions, CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
+import { sharedDelayMode } from '../results/crossoverSpec';
 import { buildImportedSubmission, importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { cadLinkCoordinatorBridge } from '../shell/CadLinkCoordinator';
 import { buildParameterPaletteEntries } from '../shell/TopBar';
@@ -408,8 +409,9 @@ describe('ParamPanel inventory UX', () => {
     const align = host.querySelector<HTMLInputElement>('#cad-combine-align')!;
     expect(align.checked).toBe(true);
     act(() => align.click());
-    expect(useCadReturnStore.getState().combineAlign).toBe(false);
-    expect(buildImportedSubmission(useCadReturnStore.getState()).geometry.combine?.align).toBe(false);
+    expect(sharedDelayMode(useCadReturnStore.getState().combineSpec!)).toBe('manual');
+    expect(buildImportedSubmission(useCadReturnStore.getState()).geometry.combine?.channels?.['drive-mf'].delay)
+      .toEqual({ mode: 'manual', ms: 0 });
     expect(importedSubmissionBlocker()).toBeNull();
 
     const forceFull = host.querySelector<HTMLInputElement>('#cad-force-full-domain')!;
@@ -435,7 +437,8 @@ describe('ParamPanel inventory UX', () => {
     expect(host.textContent).toContain('MF → HF');
     expect(host.textContent).toContain('1000 Hz default.');
     expect(host.textContent).not.toContain('Untouched crossover defaults');
-    expect(buildImportedSubmission(useCadReturnStore.getState()).geometry.combine?.crossovers_hz).toEqual([1_000]);
+    expect(buildImportedSubmission(useCadReturnStore.getState()).geometry.combine?.channels?.['drive-mf'].lp)
+      .toEqual({ family: 'lr', order: 4, fc_hz: 1_000 });
 
     // A default the sweep cannot carry says so rather than blocking the solve:
     // the server refuses a crossover outside the solved band.

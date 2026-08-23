@@ -5,6 +5,7 @@ import type { EChartsOption } from 'echarts';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
 import { compareSelection, provisionalResults, resultsCache, type JobResults } from '../api/results';
 import { preferencesStore } from '../prefs/preferences';
+import { expandLegacy } from '../results/crossoverSpec';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetDesignStore } from '../stores/design';
 import { resetDocumentStore } from '../stores/document';
@@ -320,7 +321,8 @@ describe('results dock view switch', () => {
     expect(recombineMocks.recombine).toHaveBeenCalledWith('primary', expect.objectContaining({
       id: 'combined', members: ['drive-mf', 'drive-hf'], crossovers_hz: [1_400],
     }));
-    expect(useCadReturnStore.getState().combineCrossoversHz).toEqual({ 'drive-mf→drive-hf': 1_400 });
+    expect(useCadReturnStore.getState().combineSpec)
+      .toEqual(expandLegacy(['drive-mf', 'drive-hf'], [1_400]));
 
     await chooseView('HF');
     expect(host.querySelector('form.result-recombine')).toBeNull();
