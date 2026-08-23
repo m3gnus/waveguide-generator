@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadReturnBundle, CadReturnIngestRecord, FusionCadStatus } from '../api/cadlink';
 import { importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { preferencesStore } from '../prefs/preferences';
-import { expandLegacy } from '../results/crossoverSpec';
+import { expandLegacy, toWire, withChannel, withPair } from '../results/crossoverSpec';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
@@ -1517,5 +1517,19 @@ describe('CadLinkCoordinator', () => {
       frequencyMode: 'list', frequencyListText: '400\n800\n1600',
       frequencySpacing: 'linear', meshValidationMode: 'strict', verbose: true,
     });
+
+    // A job submitted with the per-channel spec restores it verbatim, unlinked
+    // pair and manual gain included — the shape drift compares against.
+    const v2Spec = withChannel(
+      withPair(expandLegacy(['drive-mf', 'drive-hf'], [1_250]), 'drive-mf→drive-hf', { family: 'bessel', order: 3 }),
+      'drive-hf',
+      { gain: { mode: 'manual', db: -1.5 }, invert: true },
+    );
+    const v2Job = {
+      ...job,
+      cad_setup: { ...job.cad_setup, combine: toWire(v2Spec) },
+    } as unknown as import('../api/jobsSocket').JobItem;
+    await act(async () => { await showCadJobModel(v2Job); });
+    expect(useCadReturnStore.getState().combineSpec).toEqual(v2Spec);
   });
 });
