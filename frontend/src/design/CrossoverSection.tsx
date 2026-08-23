@@ -1,0 +1,166 @@
+import { Fragment, useRef, useState, useSyncExternalStore } from 'react';
+import { CAD_CONTROLS } from './cadControlRegistry';
+import { CrossoverAdvanced } from './CrossoverAdvanced';
+import { NumberField } from './NumberField';
+import { ToggleRow } from './SolveOptionsSections';
+import { latestCombine } from '../results/latestCombine';
+import {
+  familyOrders,
+  FILTER_FAMILIES,
+  FILTER_FAMILY_LABELS,
+  isSimple,
+  pairsOf,
+  resolvedChannels,
+  sharedDelayMode,
+  sharedGainMode,
+  slopeLabel,
+  unlinkedPairNote,
+  withDelayMode,
+  withGainMode,
+  withPair,
+  type CrossoverSpec,
+  type FilterFamily,
+} from '../results/crossoverSpec';
+import {
+  combineChain,
+  combineEnabledEffective,
+  combineSpecEffective,
+  useCadReturnStore,
+  type CombinePair,
+} from '../stores/cadReturn';
+
+/** The bands a pair joins, in the words a designer uses for them. Unroled ends
+ * fall back to the authored channel ids, which is all the return says. */
+export function combinePairLabel(pair: CombinePair): string {
+  return pair.lowerRole && pair.upperRole
+    ? `${pair.lowerRole} → ${pair.upperRole}`
+    : `${pair.lower} → ${pair.upper}`;
+}
+
+/** What an untouched field would hold and why, stated per pair rather than as
+ * one note for the whole section: the pairs no longer share a rule. */
+export function combinePairHint(pair: CombinePair): string {
+  if (pair.defaultHz === undefined) return 'Default follows the current Frequency Sweep.';
+  return pair.outsideSweep
+    ? `${pair.defaultHz} Hz default is outside the sweep; using ${pair.hz} Hz.`
+    : `${pair.defaultHz} Hz default.`;
+}
+
+/** Auto/Manual as one exclusive control. A mixed chain presses neither, so the
+ * rail never claims one mode for a spec that holds two. */
+function ModeRow({ label, help, revealId, mode, onSelect }: {
+  label: string;
+  help: string;
+  revealId: string;
+  mode: 'auto' | 'manual' | null;
+  onSelect: (mode: 'auto' | 'manual') => void;
+}) {
+  return <div className="crossover-mode-row" data-control-reveal-id={revealId} title={help}>
+    <span>{label}</span>
+    <div className="crossover-segment" role="group" aria-label={`${label} mode`}>
+      <button type="button" aria-pressed={mode === 'auto'} className={mode === 'auto' ? 'on' : ''} onClick={() => onSelect('auto')}>Auto</button>
+      <button type="button" aria-pressed={mode === 'manual'} className={mode === 'manual' ? 'on' : ''} onClick={() => onSelect('manual')}>Manual</button>
+    </div>
+  </div>;
+}
+
+function PairRow({ pair, spec, onChange }: {
+  pair: CombinePair;
+  spec: CrossoverSpec;
+  onChange: (spec: CrossoverSpec) => void;
+}) {
+  const linked = pair.linked;
+  const specPair = pairsOf(spec).find((item) => item.key === pair.key);
+  return <Fragment>
+    <NumberField
+      label={combinePairLabel(pair)}
+      revealId={CAD_CONTROLS.crossoverFrequency.reveal.id}
+      unit="Hz"
+      value={pair.hz}
+      min={1}
+      step={50}
+      precision={0}
+      disabled={!linked}
+      disabledReason={linked ? undefined : 'This pair is not symmetric; edit each channel in Advanced.'}
+      description={`${CAD_CONTROLS.crossoverFrequency.label} · ${pair.lower} → ${pair.upper}`}
+      onCommit={(value) => onChange(withPair(spec, pair.key, { hz: value }))}
+    />
+    <div className={`crossover-shape-row${linked ? '' : ' field-disabled'}`} data-control-reveal-id={CAD_CONTROLS.crossoverFamily.reveal.id}>
+      <select
+        aria-label={`${combinePairLabel(pair)} filter family`}
+        value={pair.family}
+        disabled={!linked}
+        onChange={(event) => onChange(withPair(spec, pair.key, { family: event.target.value as FilterFamily }))}
+      >{FILTER_FAMILIES.map((family) => <option key={family} value={family}>{FILTER_FAMILY_LABELS[family]}</option>)}</select>
+      <select
+        aria-label={`${combinePairLabel(pair)} slope`}
+        value={pair.order}
+        disabled={!linked}
+        onChange={(event) => onChange(withPair(spec, pair.key, { order: Number(event.target.value) }))}
+      >{familyOrders(pair.family).map((order) => <option key={order} value={order}>{slopeLabel(order)}</option>)}</select>
+    </div>
+    {linked
+      ? <p className="section-note">{combinePairHint(pair)}</p>
+      : <p className="section-note warning" role="status">{specPair ? unlinkedPairNote(specPair) : 'This pair is not symmetric; edit it in Advanced.'}</p>}
+  </Fragment>;
+}
+
+export function CadCrossover() {
+  const state = useCadReturnStore();
+  const advancedAnchor = useRef<HTMLButtonElement | null>(null);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const shownCombine = useSyncExternalStore(latestCombine.subscribe, latestCombine.getSnapshot, latestCombine.getSnapshot);
+  if (state.driveChannels.length < 2) return <p className="section-note">Two or more drive channels are required for a combined output.</p>;
+  const enabled = combineEnabledEffective(state);
+  const spec = combineSpecEffective(state);
+  const apply = (next: CrossoverSpec) => state.setCombineSpec(next);
+  const resolved = resolvedChannels(shownCombine ?? undefined);
+  return <>
+    <ToggleRow id="cad-combine" label={CAD_CONTROLS.combinedOutput.label} revealId={CAD_CONTROLS.combinedOutput.reveal.id} help="Append a filtered, time-aligned crossover sum of the drive channels as one more result channel. On by default for a return with two or more drive channels; the chain runs lowest band first, ordered by the sources' return roles (LF → MF → HF)." checked={enabled} onChange={state.setCombineEnabled}/>
+    {enabled && spec && <>
+      {combineChain(state).map((pair) => <PairRow key={pair.key} pair={pair} spec={spec} onChange={apply}/>)}
+      <ModeRow
+        label={CAD_CONTROLS.levelMatch.label}
+        revealId={CAD_CONTROLS.levelMatch.reveal.id}
+        help="Equalise member band levels before summing. Manual keeps the gain each channel is given in Advanced; auto defaults off when every member carries a driver model, because real voltage-driven levels should not be re-equalised."
+        mode={sharedGainMode(spec)}
+        onSelect={(mode) => apply(withGainMode(spec, mode, Object.fromEntries(
+          Object.entries(resolved).map(([id, channel]) => [id, channel.gainAutoDb]),
+        )))}
+      />
+      <ModeRow
+        label={CAD_CONTROLS.timeAlign.label}
+        revealId={CAD_CONTROLS.timeAlign.reveal.id}
+        help="Delay each member so the crossover sums the way its filter pair says it should, fitted from the phase of the solved fields across the pair's overlap. Manual keeps the delay each channel is given in Advanced."
+        mode={sharedDelayMode(spec)}
+        onSelect={(mode) => apply(withDelayMode(spec, mode, Object.fromEntries(
+          Object.entries(resolved).map(([id, channel]) => [id, channel.delayAutoMs]),
+        )))}
+      />
+      <div className="crossover-advanced-row" data-control-reveal-id={CAD_CONTROLS.crossoverAdvanced.reveal.id}>
+        <button
+          ref={advancedAnchor}
+          type="button"
+          className={advancedOpen ? 'on' : ''}
+          aria-expanded={advancedOpen}
+          aria-haspopup="dialog"
+          title="Per-channel high-pass, low-pass, gain, delay and polarity"
+          onClick={() => setAdvancedOpen((open) => !open)}
+        >Advanced ▸</button>
+        {!isSimple(spec) && <span className="crossover-advanced-flag">edited per channel</span>}
+      </div>
+      {advancedOpen && <CrossoverAdvanced
+        anchorRef={advancedAnchor}
+        onClose={() => setAdvancedOpen(false)}
+        spec={spec}
+        resolved={resolved}
+        memberLabel={(member) => {
+          const pair = combineChain(state).find((item) => item.lower === member || item.upper === member);
+          const role = pair?.lower === member ? pair.lowerRole : pair?.upperRole;
+          return role ? `${role} · ${member}` : member;
+        }}
+        onChange={apply}
+      />}
+    </>}
+  </>;
+}

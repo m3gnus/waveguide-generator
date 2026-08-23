@@ -119,20 +119,53 @@ export const CAD_CONTROLS = {
     ['combined output', 'LR4', 'sum', 'adjacent bands'],
   ),
   combinedOutput: control(
-    'cad.crossover.enabled', 'Combined output (LR4 sum)', CAD_CONTROL_SECTIONS.crossover, 'simulation',
-    ['crossover', 'combine', 'LR4'], 'ingested-return', 'cad.crossover',
+    'cad.crossover.enabled', 'Combined output', CAD_CONTROL_SECTIONS.crossover, 'simulation',
+    ['crossover', 'combine', 'sum'], 'ingested-return', 'cad.crossover',
   ),
   crossoverFrequency: control(
     'cad.crossover.frequency', 'Crossover frequency', CAD_CONTROL_SECTIONS.crossover, 'simulation',
-    ['Hz', 'band transition', 'combineCrossoversHz'], 'ingested-return', 'cad.crossover',
+    ['Hz', 'band transition', 'combineSpec'], 'ingested-return', 'cad.crossover',
+  ),
+  crossoverFamily: control(
+    'cad.crossover.family', 'Filter family & slope', CAD_CONTROL_SECTIONS.crossover, 'simulation',
+    ['Linkwitz-Riley', 'Butterworth', 'Bessel', 'linear phase', 'LR4', 'BW3', 'order', 'dB/oct'],
+    'ingested-return', 'cad.crossover',
   ),
   levelMatch: control(
     'cad.crossover.level-match', 'Level match members', CAD_CONTROL_SECTIONS.crossover, 'simulation',
-    ['equalise', 'equalize', 'combineLevelMatch'], 'ingested-return', 'cad.crossover',
+    ['equalise', 'equalize', 'gain', 'auto', 'manual'], 'ingested-return', 'cad.crossover',
   ),
   timeAlign: control(
     'cad.crossover.time-align', 'Time-align members', CAD_CONTROL_SECTIONS.crossover, 'simulation',
-    ['phase', 'delay', 'combineAlign'], 'ingested-return', 'cad.crossover',
+    ['phase', 'delay', 'align', 'auto', 'manual'], 'ingested-return', 'cad.crossover',
+  ),
+  crossoverAdvanced: control(
+    'cad.crossover.advanced', 'Advanced crossover (per channel)', CAD_CONTROL_SECTIONS.crossover, 'simulation',
+    ['high-pass', 'low-pass', 'per channel', 'popover'], 'ingested-return', 'cad.crossover',
+  ),
+  crossoverReference: control(
+    'cad.crossover.reference', 'Alignment reference channel', CAD_CONTROL_SECTIONS.crossover, 'simulation',
+    ['0 ms', 'pinned', 'datum'], 'ingested-return', 'cad.crossover.advanced',
+  ),
+  crossoverHighPass: control(
+    'cad.crossover.high-pass', 'Channel high-pass', CAD_CONTROL_SECTIONS.crossover, 'simulation',
+    ['HP', 'per channel', 'corner'], 'ingested-return', 'cad.crossover.advanced',
+  ),
+  crossoverLowPass: control(
+    'cad.crossover.low-pass', 'Channel low-pass', CAD_CONTROL_SECTIONS.crossover, 'simulation',
+    ['LP', 'per channel', 'corner'], 'ingested-return', 'cad.crossover.advanced',
+  ),
+  crossoverGain: control(
+    'cad.crossover.gain', 'Channel gain', CAD_CONTROL_SECTIONS.crossover, 'simulation',
+    ['dB', 'level', 'trim', 'per channel'], 'ingested-return', 'cad.crossover.advanced',
+  ),
+  crossoverDelay: control(
+    'cad.crossover.delay', 'Channel delay', CAD_CONTROL_SECTIONS.crossover, 'simulation',
+    ['ms', 'offset', 'time', 'per channel'], 'ingested-return', 'cad.crossover.advanced',
+  ),
+  crossoverInvert: control(
+    'cad.crossover.invert', 'Channel polarity', CAD_CONTROL_SECTIONS.crossover, 'simulation',
+    ['invert', 'phase flip', 'per channel'], 'ingested-return', 'cad.crossover.advanced',
   ),
   solveOptions: control(
     'cad.solve-options', 'Solve options', CAD_CONTROL_SECTIONS.solveOptions, 'simulation',

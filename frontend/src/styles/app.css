@@ -1026,3 +1026,36 @@ textarea:disabled { opacity: .48; }
 .cad-driver-field { display: flex; flex-direction: column; gap: 2px; font-size: var(--text-micro); color: var(--fg3); }
 .cad-driver-field input { height: 20px; padding: 0 4px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); color: var(--fg1); font-size: var(--text-micro); }
 .cad-driver-hint { grid-column: 1 / -1; margin: 2px 0 0; font-size: var(--text-micro); color: var(--fg3); }
+
+/* ---- Crossover editors -------------------------------------------------
+   One set of controls, three hosts: the pre-solve rail, the results strip and
+   the Advanced popover both of them open. The popover portals to the body, so
+   its rules live here rather than in paramPanel.css, and the segments and band
+   rows are shared so the same setting looks the same wherever it is edited. */
+.crossover-segment { display: inline-flex; flex: none; align-items: center; height: 19px; overflow: hidden; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); }
+.crossover-segment button { height: 100%; min-width: 42px; padding: 0 7px; border: 0; border-left: 1px solid var(--hair); border-radius: 0; background: transparent; color: var(--fg2); font-size: var(--text-micro); text-transform: none; white-space: nowrap; }
+.crossover-segment button:first-child { border-left: 0; }
+.crossover-segment button:hover:not(.on) { background: var(--ov3); color: var(--fg1); }
+.crossover-segment button.on { background: rgba(var(--acc-rgb), .16); color: var(--acc); }
+.panel-preferences-popover.crossover-advanced { width: min(420px, calc(100vw - 16px)); padding: 8px; overflow-y: auto; gap: 6px; }
+.crossover-advanced-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.crossover-advanced-head button { height: 21px; padding: 0 8px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); color: var(--fg1); font-size: var(--text-micro); }
+.crossover-advanced-head button:hover { border-color: var(--hair-hi); background: var(--ov3); color: var(--fg); }
+.crossover-reference { display: flex; align-items: center; gap: 5px; color: var(--fg2); font-size: var(--text-micro); }
+.crossover-reference select { height: 21px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg1); font-size: var(--text-micro); }
+.crossover-advanced-note { margin: 0; color: var(--fg4); font-size: var(--text-micro); line-height: 1.35; }
+.crossover-channel { display: grid; gap: 3px; padding: 6px; border: 1px solid var(--hair-soft); border-radius: var(--r3); background: var(--ov1); }
+.crossover-channel h4 { display: flex; align-items: center; gap: 6px; margin: 0 0 2px; color: var(--fg1); font-size: var(--text-micro); font-weight: 650; letter-spacing: .04em; text-transform: uppercase; }
+.crossover-reference-chip { padding: 0 4px; border: 1px solid rgba(var(--acc-rgb), .28); border-radius: var(--r3); color: var(--acc); font: var(--text-micro) var(--mono); font-weight: 400; letter-spacing: 0; text-transform: none; }
+.crossover-band { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-height: 21px; color: var(--fg2); font-size: var(--text-micro); }
+.crossover-band-name { width: 62px; flex: none; color: var(--fg3); }
+.crossover-band input[type="number"] { width: 66px; height: 19px; padding: 0 4px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); color: var(--fg1); font: var(--text-micro) var(--mono); }
+.crossover-band select { height: 19px; max-width: 118px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg1); font-size: var(--text-micro); }
+.crossover-unit { color: var(--fg4); }
+.crossover-band-toggle { height: 19px; min-width: 34px; padding: 0 6px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); color: var(--fg3); font-size: var(--text-micro); }
+.crossover-band-toggle.on { border-color: rgba(var(--acc-rgb), .38); background: rgba(var(--acc-rgb), .12); color: var(--acc); }
+/* Dashed: the number is real, it just was not typed. */
+.crossover-auto-value { min-width: 66px; height: 19px; padding: 0 4px; border: 1px dashed var(--hair-hi); border-radius: var(--r3); color: var(--fg3); font: var(--text-micro) var(--mono); line-height: 19px; }
+.crossover-auto-note { color: var(--fg4); }
+.crossover-reset { height: 19px; padding: 0 6px; border: 1px solid var(--hair); border-radius: var(--r3); background: transparent; color: var(--fg3); font-size: var(--text-micro); }
+.crossover-reset:hover { border-color: var(--hair-hi); color: var(--fg1); }

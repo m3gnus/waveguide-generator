@@ -12,6 +12,7 @@ export { resultExportSnapshot } from '../results/exportContext';
 import { copyChartPng, downloadChartPng } from '../results/chartImage';
 import { summaryGroups, summaryText, type SummaryGroup, type SummaryRow } from '../results/summary';
 import { expandLegacy } from '../results/crossoverSpec';
+import { latestCombine } from '../results/latestCombine';
 import { combineMetadataOf, type CombineMetadata, type ResultPayload } from '../results/types';
 import { ResultViewSwitch } from '../results/ResultViewSwitch';
 import { resolveResultView, resultViewStore, useResultView } from '../stores/resultView';
@@ -1972,6 +1973,10 @@ export function ResultsPanel() {
     ? shownRaw.channels[shownActiveChannel] as ResultPayload
     : shownRaw;
   const shownCombine = combineMetadataOf(shown);
+  // The pre-solve rail shows what "auto" chose for gain and delay, and only a
+  // solved result knows those numbers. The dock already holds one, so it hands
+  // it over rather than making the rail fetch results of its own.
+  useEffect(() => { latestCombine.publish(shownCombine); }, [shownCombine]);
   const applyRecombined = useCallback((jobId: string, updated: JobResults) => {
     setDisplay((current) => current && current.results[jobId]
       ? { ...current, results: { ...current.results, [jobId]: updated as ResultPayload } }

@@ -395,7 +395,7 @@ describe('ParamPanel inventory UX', () => {
       root.render(withQueryClient(<ParamPanel tab="simulation" />));
     });
 
-    for (const id of ['cad-force-full-domain', 'cad-combine', 'cad-combine-level', 'cad-combine-align', 'cad-exterior-only', 'skip-source-mf', 'drift-source-mf']) {
+    for (const id of ['cad-force-full-domain', 'cad-combine', 'cad-exterior-only', 'skip-source-mf', 'drift-source-mf']) {
       expect(host.querySelector(`#${id}`), id).not.toBeNull();
     }
     expect(host.querySelector('[aria-label="Drive channel for source-hf"]')).not.toBeNull();
@@ -406,9 +406,11 @@ describe('ParamPanel inventory UX', () => {
     expect(host.textContent).toContain('MF source');
     expect(host.textContent).toContain('Drive voltage');
 
-    const align = host.querySelector<HTMLInputElement>('#cad-combine-align')!;
-    expect(align.checked).toBe(true);
-    act(() => align.click());
+    const levels = host.querySelector('[aria-label="Level match members mode"]')!;
+    expect(levels.querySelector<HTMLButtonElement>('button[aria-pressed="true"]')!.textContent).toBe('Auto');
+    const align = host.querySelector('[aria-label="Time-align members mode"]')!;
+    expect(align.querySelector<HTMLButtonElement>('button[aria-pressed="true"]')!.textContent).toBe('Auto');
+    act(() => [...align.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Manual')!.click());
     expect(sharedDelayMode(useCadReturnStore.getState().combineSpec!)).toBe('manual');
     expect(buildImportedSubmission(useCadReturnStore.getState()).geometry.combine?.channels?.['drive-mf'].delay)
       .toEqual({ mode: 'manual', ms: 0 });
@@ -455,8 +457,93 @@ describe('ParamPanel inventory UX', () => {
 
     act(() => combine.click());
     expect(useCadReturnStore.getState().combineEnabled).toBe(false);
-    expect(host.querySelector('#cad-combine-align')).toBeNull();
+    expect(host.querySelector('[aria-label="Time-align members mode"]')).toBeNull();
     expect(buildImportedSubmission(useCadReturnStore.getState()).geometry).not.toHaveProperty('combine');
+  });
+
+  it('offers a family and a slope per pair and submits both', () => {
+    act(() => {
+      setCadReady();
+      workspaceModeStore.setMode('cad');
+      root.render(withQueryClient(<ParamPanel tab="simulation" />));
+    });
+
+    const family = host.querySelector<HTMLSelectElement>('[aria-label="MF → HF filter family"]')!;
+    const slope = host.querySelector<HTMLSelectElement>('[aria-label="MF → HF slope"]')!;
+    expect(family.value).toBe('lr');
+    expect(slope.value).toBe('4');
+    expect([...slope.options].map((option) => option.textContent))
+      .toEqual(['12 dB/oct', '24 dB/oct', '36 dB/oct', '48 dB/oct']);
+
+    act(() => {
+      family.value = 'butterworth';
+      family.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    // Bessel has no order 4-only table, but Butterworth carries every order, so
+    // the previous 4 survives the family change untouched.
+    expect(host.querySelector<HTMLSelectElement>('[aria-label="MF → HF slope"]')!.value).toBe('4');
+    act(() => {
+      const next = host.querySelector<HTMLSelectElement>('[aria-label="MF → HF slope"]')!;
+      next.value = '3';
+      next.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
+    const wire = buildImportedSubmission(useCadReturnStore.getState()).geometry.combine!;
+    expect(wire.channels?.['drive-mf'].lp).toEqual({ family: 'butterworth', order: 3, fc_hz: 1_000 });
+    expect(wire.channels?.['drive-hf'].hp).toEqual({ family: 'butterworth', order: 3, fc_hz: 1_000 });
+  });
+
+  it('says a pair is unlinked after an Advanced edit, and relinks it on request', () => {
+    act(() => {
+      setCadReady();
+      workspaceModeStore.setMode('cad');
+      root.render(withQueryClient(<ParamPanel tab="simulation" />));
+    });
+
+    const advanced = [...host.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent === 'Advanced ▸')!;
+    act(() => advanced.click());
+    const panel = document.querySelector('.crossover-advanced')!;
+    expect(panel).not.toBeNull();
+
+    const lowPass = panel.querySelector<HTMLInputElement>('[aria-label="Low-pass frequency in hertz"]')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(lowPass, '900');
+      lowPass.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const spec = useCadReturnStore.getState().combineSpec!;
+    expect(spec.channels['drive-mf'].lp).toEqual({ family: 'lr', order: 4, fcHz: 900 });
+    expect(host.textContent).toContain('LP 900 Hz LR4 / HP 1 kHz LR4 — edit in Advanced');
+    expect(host.querySelector<HTMLInputElement>('[aria-label="MF → HF slope"]')!.disabled).toBe(true);
+
+    act(() => [...document.querySelectorAll<HTMLButtonElement>('.crossover-advanced button')]
+      .find((button) => button.textContent === 'Relink pairs')!.click());
+    expect(useCadReturnStore.getState().combineSpec!.channels['drive-hf'].hp)
+      .toEqual({ family: 'lr', order: 4, fcHz: 900 });
+    expect(host.textContent).not.toContain('edit in Advanced');
+  });
+
+  it('takes one channel off automatic gain from the Advanced popover', () => {
+    act(() => {
+      setCadReady();
+      workspaceModeStore.setMode('cad');
+      root.render(withQueryClient(<ParamPanel tab="simulation" />));
+    });
+    act(() => [...host.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent === 'Advanced ▸')!.click());
+
+    const groups = [...document.querySelectorAll('.crossover-advanced .crossover-segment')]
+      .filter((group) => group.getAttribute('aria-label') === 'Gain mode');
+    act(() => [...groups[0].querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent === 'Manual')!.click());
+
+    const spec = useCadReturnStore.getState().combineSpec!;
+    expect(spec.channels['drive-mf'].gain).toEqual({ mode: 'manual', db: 0 });
+    expect(spec.channels['drive-hf'].gain).toEqual({ mode: 'auto' });
+    // The chain-wide segment can no longer claim one mode for two.
+    const levels = host.querySelector('[aria-label="Level match members mode"]')!;
+    expect(levels.querySelector('button[aria-pressed="true"]')).toBeNull();
+    expect(host.textContent).toContain('edited per channel');
   });
 
   it('edits the passive-cardioid campaign in the rail, in cm² over an m² wire', () => {

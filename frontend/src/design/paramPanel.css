@@ -225,3 +225,14 @@
   /* Formula fields take the full rail so long ATH expressions get the width. */
   .section-body > .parameter-entry:has(.expression-row) { grid-column: 1 / -1; }
 }
+
+/* The crossover rail: a pair's shape sits directly under its frequency field,
+   and the two chain-wide modes read as one exclusive choice each. */
+.crossover-shape-row { display: flex; align-items: center; gap: 4px; margin: -2px 0 2px; }
+.crossover-shape-row select { flex: 1 1 0; min-width: 0; height: 21px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg1); font-size: var(--text-micro); }
+.crossover-mode-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 24px; color: var(--fg1); font-size: var(--text-base); }
+.crossover-advanced-row { display: flex; align-items: center; gap: 6px; margin: 4px 0 2px; }
+.crossover-advanced-row button { height: 21px; padding: 0 8px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); color: var(--fg1); font-size: var(--text-micro); }
+.crossover-advanced-row button:hover, .crossover-advanced-row button.on { border-color: var(--hair-hi); background: var(--ov3); color: var(--fg); }
+.crossover-advanced-flag { color: var(--amber); font-size: var(--text-micro); }
+.section-note.warning { color: var(--amber); }
