@@ -1867,7 +1867,7 @@ def test_combined_channel_is_appended_with_contract_metadata(
         "combined channel: member drives differ; no single impedance exists"
     )
     payload = combined["metadata"]["combine"]
-    assert payload["type"] == "lr4_time_aligned_sum"
+    assert payload["type"] == "filtered_time_aligned_sum"
     assert payload["members"] == ["left", "right"]
     assert payload["member_roles"] == ["HF", "LF"]
     assert payload["crossovers_hz"] == [500.0]
@@ -1922,6 +1922,106 @@ def test_combine_crossover_outside_the_solved_band_refuses() -> None:
         _request(
             "wgi_" + "0" * 26,
             combine={"members": ["left", "right"], "crossovers_hz": [5000.0]},
+        )
+    # A per-channel spec is held to the same band.
+    with pytest.raises(ValidationError, match="outside the solved band"):
+        _request(
+            "wgi_" + "0" * 26,
+            combine={
+                "members": ["left", "right"],
+                "channels": {
+                    "left": {"lp": {"family": "lr", "order": 4, "fc_hz": 5000.0}},
+                    "right": {"hp": {"family": "lr", "order": 4, "fc_hz": 5000.0}},
+                },
+            },
+        )
+
+
+def test_combine_spec_v2_validates_and_expands_the_legacy_form() -> None:
+    legacy = ChannelCombineSpec(members=["lf", "mf", "hf"], crossovers_hz=[300.0, 3000.0])
+    resolved = legacy.resolved()
+    assert resolved["reference"] == "hf"
+    assert resolved["channels"]["mf"] == {
+        "hp": {"family": "lr", "order": 4, "fc_hz": 300.0},
+        "lp": {"family": "lr", "order": 4, "fc_hz": 3000.0},
+        "gain": {"mode": "auto"},
+        "delay": {"mode": "auto"},
+        "invert": None,
+    }
+    assert legacy.linked_crossovers_hz() == [300.0, 3000.0]
+    assert legacy.corner_frequencies_hz() == [300.0, 3000.0]
+
+    off = ChannelCombineSpec(
+        members=["lf", "hf"], crossovers_hz=[900.0], level_match=False, align=False
+    ).resolved()["channels"]
+    assert off["lf"]["gain"] == {"mode": "manual", "db": 0.0}
+    assert off["lf"]["delay"] == {"mode": "manual", "ms": 0.0}
+
+    per_channel = ChannelCombineSpec.model_validate(
+        {
+            "members": ["lf", "hf"],
+            "reference": "lf",
+            "channels": {
+                "lf": {
+                    "lp": {"family": "butterworth", "order": 3, "fc_hz": 800.0},
+                    "gain": {"mode": "manual", "db": -1.5},
+                },
+                "hf": {
+                    "hp": {"family": "bessel", "order": 4, "fc_hz": 1200.0},
+                    "delay": {"mode": "manual", "ms": 0.4},
+                    "invert": True,
+                },
+            },
+        }
+    )
+    assert per_channel.resolved_reference == "lf"
+    # An unlinked pair has no single crossover to report.
+    assert per_channel.linked_crossovers_hz() == [None]
+    assert per_channel.corner_frequencies_hz() == [800.0, 1200.0]
+
+    with pytest.raises(ValidationError, match="crossovers_hz or a per-channel"):
+        ChannelCombineSpec(members=["lf", "hf"])
+    with pytest.raises(ValidationError, match="must name exactly the members"):
+        ChannelCombineSpec.model_validate(
+            {"members": ["lf", "hf"], "channels": {"lf": {}}}
+        )
+    with pytest.raises(ValidationError, match="is not one of the members"):
+        ChannelCombineSpec.model_validate(
+            {"members": ["lf", "hf"], "crossovers_hz": [900.0], "reference": "sub"}
+        )
+    with pytest.raises(ValidationError, match="must sit below its low-pass"):
+        ChannelCombineSpec.model_validate(
+            {
+                "members": ["lf", "hf"],
+                "channels": {
+                    "lf": {"lp": {"family": "lr", "order": 4, "fc_hz": 900.0}},
+                    "hf": {
+                        "hp": {"family": "lr", "order": 4, "fc_hz": 900.0},
+                        "lp": {"family": "lr", "order": 4, "fc_hz": 400.0},
+                    },
+                },
+            }
+        )
+    with pytest.raises(ValidationError, match="supports orders"):
+        ChannelCombineSpec.model_validate(
+            {
+                "members": ["lf", "hf"],
+                "channels": {
+                    "lf": {"lp": {"family": "lr", "order": 3, "fc_hz": 900.0}},
+                    "hf": {"hp": {"family": "lr", "order": 4, "fc_hz": 900.0}},
+                },
+            }
+        )
+    with pytest.raises(ValidationError, match="a manual gain needs db"):
+        ChannelCombineSpec.model_validate(
+            {
+                "members": ["lf", "hf"],
+                "crossovers_hz": [900.0],
+                "channels": {
+                    "lf": {"gain": {"mode": "manual"}},
+                    "hf": {},
+                },
+            }
         )
 
 
@@ -1987,11 +2087,66 @@ def test_recombine_from_stored_bases_updates_and_adds_channels(
     assert again["channel_order"] == ["left", "right", "combined"]
     assert again["channels"]["combined"]["metadata"]["combine"]["crossovers_hz"] == [800.0]
 
+    # The route's body model is this spec, so the per-channel form reaches the
+    # solver through exactly the same door as the legacy triple.
+    per_channel = ChannelCombineSpec.model_validate(
+        {
+            "members": ["left", "right"],
+            "reference": "left",
+            "channels": {
+                "left": {
+                    "lp": {"family": "butterworth", "order": 3, "fc_hz": 600.0},
+                    "gain": {"mode": "manual", "db": -1.0},
+                },
+                "right": {
+                    "hp": {"family": "butterworth", "order": 3, "fc_hz": 600.0},
+                    "delay": {"mode": "manual", "ms": 0.2},
+                },
+            },
+        }
+    )
+    per_channel_results = recombine_stored_results(
+        updated, outcome.channel_bases, per_channel, request
+    )
+    per_channel_payload = per_channel_results["channels"]["combined"]["metadata"][
+        "combine"
+    ]
+    assert per_channel_payload["type"] == "filtered_time_aligned_sum"
+    assert per_channel_payload["reference"] == "left"
+    assert per_channel_payload["crossovers_hz"] == [600.0]
+    assert per_channel_payload["channels"]["left"]["lp"] == {
+        "family": "butterworth",
+        "order": 3,
+        "fc_hz": 600.0,
+    }
+    assert per_channel_payload["gains_db"]["left"] == pytest.approx(-1.0)
+    assert per_channel_payload["delays_ms"]["right"] == pytest.approx(0.2)
+    assert set(per_channel_payload["pairs"]) == {"left-right"}
+
     with pytest.raises(RecombineError, match="outside the solved band"):
         recombine_stored_results(
             updated,
             outcome.channel_bases,
             ChannelCombineSpec(members=["left", "right"], crossovers_hz=[5000.0]),
+            request,
+        )
+    with pytest.raises(RecombineError, match="outside the solved band"):
+        recombine_stored_results(
+            updated,
+            outcome.channel_bases,
+            ChannelCombineSpec.model_validate(
+                {
+                    "members": ["left", "right"],
+                    "channels": {
+                        "left": {
+                            "lp": {"family": "lr", "order": 4, "fc_hz": 5000.0}
+                        },
+                        "right": {
+                            "hp": {"family": "lr", "order": 4, "fc_hz": 5000.0}
+                        },
+                    },
+                }
+            ),
             request,
         )
     with pytest.raises(RecombineError, match="unknown drive channels"):
