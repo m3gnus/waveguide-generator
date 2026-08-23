@@ -509,6 +509,26 @@ function sectionFromModel(value: unknown): FilterSection | null {
  * silently solve something other than what the user set.
  */
 export function parseSpec(value: unknown): CrossoverSpec | null {
+  return parseWith(value, sectionFromModel);
+}
+
+/**
+ * Parse a spec in the wire shape (`fc_hz`), which is what a submitted job's
+ * own `cad_setup.combine` carries.
+ *
+ * Distinct from `fromResult`: this reads what the user *asked* for, so a
+ * manual gain stays manual and an explicit polarity stays explicit. A result's
+ * `metadata.combine` states what was *resolved* instead, and reading one as
+ * the other would silently turn every stated value back into "auto".
+ */
+export function parseWire(value: unknown): CrossoverSpec | null {
+  return parseWith(value, sectionFromWire);
+}
+
+function parseWith(
+  value: unknown,
+  parseSection: (value: unknown) => FilterSection | null,
+): CrossoverSpec | null {
   if (!value || typeof value !== 'object') return null;
   const record = value as Record<string, unknown>;
   const members = Array.isArray(record.members) && record.members.every((item) => typeof item === 'string' && item)
@@ -524,8 +544,8 @@ export function parseSpec(value: unknown): CrossoverSpec | null {
     const entry = wire[member];
     if (!entry || typeof entry !== 'object') return null;
     const channel = entry as Record<string, unknown>;
-    const hp = channel.hp === null || channel.hp === undefined ? null : sectionFromModel(channel.hp);
-    const lp = channel.lp === null || channel.lp === undefined ? null : sectionFromModel(channel.lp);
+    const hp = channel.hp === null || channel.hp === undefined ? null : parseSection(channel.hp);
+    const lp = channel.lp === null || channel.lp === undefined ? null : parseSection(channel.lp);
     if ((channel.hp && !hp) || (channel.lp && !lp)) return null;
     if (hp && !familyOrders(hp.family).includes(hp.order)) return null;
     if (lp && !familyOrders(lp.family).includes(lp.order)) return null;

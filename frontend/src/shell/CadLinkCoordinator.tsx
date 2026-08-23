@@ -15,7 +15,7 @@ import {
 import type { CadSetup, JobItem } from '../api/jobsSocket';
 import { sendDesignToCad, type WgLinkExportResponse } from '../api/designIo';
 import { getOnshapeConnection, getOnshapeStatus, returnOnshapeToWg, type OnshapeConnection, type OnshapeStatus } from '../api/onshape';
-import { fromResult } from '../results/crossoverSpec';
+import { fromResult, parseWire } from '../results/crossoverSpec';
 import { preferencesStore, usePreferences } from '../prefs/preferences';
 import { useCadPreparationStore } from '../stores/cadPreparation';
 import {
@@ -292,12 +292,13 @@ export function cadHistorySetup(
     return [...grouped.values()];
   })();
   const driveChannels = channels.length ? channels : fallbackChannels;
-  // Both crossover generations come back here: a job submitted before the
-  // per-channel spec carries only `crossovers_hz`, and reading it as "no
-  // crossover" would silently drop the setting the run was actually solved
-  // with. `fromResult` expands the legacy triple, so drift compares one shape.
+  // Both crossover generations come back here, in the submitted form rather
+  // than a resolved one. `parseWire` keeps a manual gain manual and an
+  // explicit polarity explicit; `fromResult` is the fallback that expands a
+  // job old enough to carry only `crossovers_hz`, because reading that as "no
+  // crossover" would silently drop the setting the run was solved with.
   const combine = object(setup?.combine);
-  const combineSpec = fromResult(combine ?? undefined);
+  const combineSpec = parseWire(combine) ?? fromResult(combine ?? undefined);
   const validCombine = combineSpec !== null;
   const explicitFrequencies = Array.isArray(job.solve_options.frequencies_hz)
     ? job.solve_options.frequencies_hz.filter((value) => finite(value) !== null)

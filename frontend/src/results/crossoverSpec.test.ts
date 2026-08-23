@@ -7,6 +7,7 @@ import {
   nearestOrder,
   pairsOf,
   parseSpec,
+  parseWire,
   relinkPairs,
   resolvedChannels,
   sameSpec,
@@ -213,5 +214,21 @@ describe('parseSpec', () => {
 
   it('refuses the wire shape, which names its corner fc_hz', () => {
     expect(parseSpec(toWire(expandLegacy(MEMBERS, [100, 1_000])))).toBeNull();
+  });
+});
+
+describe('parseWire', () => {
+  it('round-trips a submitted spec, keeping manual values and explicit polarity', () => {
+    const spec = withChannel(
+      withPair(expandLegacy(MEMBERS, [100, 1_000]), 'mf→hf', { family: 'bessel', order: 3 }),
+      'hf',
+      { gain: { mode: 'manual', db: -1.5 }, delay: { mode: 'manual', ms: 0.45 }, invert: true },
+    );
+    expect(parseWire(toWire(spec))).toEqual(spec);
+  });
+
+  it('refuses the stored model shape and a legacy triple, which have no channels', () => {
+    expect(parseWire(JSON.parse(JSON.stringify(expandLegacy(MEMBERS, [100, 1_000]))))).toBeNull();
+    expect(parseWire({ members: MEMBERS, crossovers_hz: [100, 1_000], level_match: true })).toBeNull();
   });
 });
