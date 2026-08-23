@@ -46,9 +46,15 @@ import { ClientLatencyClock, formatClientLatency } from './clientLatency';
 import { selectPreferredFrame } from './lodPolicy';
 import { previewBadge, previewErrorMessage, staleReason, viewportSubtitle } from './presentation';
 import { markParametricSolvedDomain, quadrantsForSolveMode, type DisplayQuadrants } from './symmetryScene';
-import type { DisplayMode, ViewportTheme } from './types';
+import { ROLE_MATERIAL_FAMILY, SOURCE_ROLES } from './types';
+import type { DisplayMode, SourceRole, ViewportTheme } from './types';
 import { canRenderWebGL, resetWebGLProbe, type CameraRequest, type ZoomRequest, ViewportCanvas } from './ViewportCanvas';
 import './viewport.css';
+
+/** The role names as the CAD document says them, not as the mesh spells them. */
+const SOURCE_ROLE_LABELS: Record<SourceRole, string> = {
+  HF: 'HF', MF: 'MF', LF: 'LF', PORT_EXIT: 'Port exit',
+};
 
 const modes: Array<{ mode: DisplayMode; title: string; icon?: 'clay' | 'wire' | 'xray' | 'zebra' | 'curve' | 'section'; glyph?: string }> = [
   { mode: 'clay', title: 'Clay', icon: 'clay' },
@@ -453,6 +459,29 @@ export function Viewport() {
       ? 'cad:empty'
       : `${selected?.header.epoch ?? 0}:${selected?.header.seq ?? 0}:${selected?.header.designRevision ?? 0}:${selected?.header.lod ?? ''}:${preferences.tintSolvedRegion ? solvedQuadrants : 'same'}`;
   const surfaces = activeScene?.surfaces ?? [];
+
+  // Zebra, normals and curvature replace the surface colour outright, and edge
+  // mode does not fill at all, so a colour key would be describing something
+  // that is not on screen in any of them.
+  const roleColorsVisible = preferences.sourceRoleColors
+    && mode !== 'zebra' && mode !== 'normals' && mode !== 'curvature' && mode !== 'edges';
+  const sourceLegend = useMemo(() => {
+    // Counted over distinct surface roles, not over surfaces: symmetry puts the
+    // solved quadrant and its mirrored display copies on screen as separate
+    // surfaces sharing one role, and a cap reflected four ways is still one
+    // driver. Two genuinely separate sources carry distinct labels (HF, HF-2).
+    const labels = new Map<SourceRole, Set<string>>();
+    for (const surface of surfaces) {
+      if (!surface.sourceRole) continue;
+      const seen = labels.get(surface.sourceRole) ?? new Set<string>();
+      seen.add(surface.role);
+      labels.set(surface.sourceRole, seen);
+    }
+    // Fixed role order rather than mesh order, so the key does not reshuffle
+    // itself between two returns of the same design.
+    return SOURCE_ROLES.filter((role) => labels.has(role))
+      .map((role) => ({ role, count: (labels.get(role) as Set<string>).size }));
+  }, [surfaces]);
   const webgl = canRenderWebGL() && renderFailure === null;
   const hasSurfaces = hasRenderableSurfaces(activeScene);
   const edgeModeUnavailable = activeScene?.edgeModeUnavailable === true
@@ -744,6 +773,19 @@ export function Viewport() {
         const vertexCount = surface.positions.length / 3;
         return <div key={`${index}:${surface.role}`}><span>{surface.role}</span><b>{vertexCount.toLocaleString()} vertices</b></div>;
       }) : <p>No rendered surfaces in this frame.</p>}</div>
+    </div>}
+
+    {activeScene && roleColorsVisible && sourceLegend.length > 0 && <div
+      className="source-role-legend"
+      role="group"
+      aria-label="Acoustic source colours"
+    >
+      <b>Sources</b>
+      <ul>{sourceLegend.map(({ role, count }) => <li key={role}>
+        <i style={{ background: `var(--vp-${ROLE_MATERIAL_FAMILY[role]}-material)` }} />
+        <span>{SOURCE_ROLE_LABELS[role]}</span>
+        {count > 1 && <em>×{count}</em>}
+      </li>)}</ul>
     </div>}
 
     {fieldEnabled && <div
