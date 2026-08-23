@@ -671,6 +671,7 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .cad-setup-steps a { color: var(--acc); }
 .cad-setup-folder { margin-top: 7px; padding-top: 7px; border-top: 1px solid var(--hair-soft); }
 .cad-setup-folder .cad-settings-note { margin: -2px 0 7px; }
+.cad-settings-subhead { margin: 0 0 6px; color: var(--fg2); font-size: var(--text-micro); font-weight: 600; text-transform: uppercase; }
 .cad-settings-connection { margin-top: 5px; }
 .cad-folder-manual { margin-top: 7px; color: var(--fg3); font-size: var(--text-micro); }
 .cad-folder-manual summary { width: max-content; color: var(--acc); cursor: pointer; }

@@ -10,6 +10,7 @@ import {
 import { JobsPreferencesSurface, ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
 import { preferencesStore, usePreferences, type CadApplication } from '../prefs/preferences';
 import { Icon } from './icons';
+import { WorkspaceFolderControls } from './WorkspaceFolderControls';
 import type { SettingsSection } from './settingsNavigation';
 
 export type Theme = 'dark' | 'light';
@@ -39,52 +40,10 @@ export function trapDialogFocus(dialog: RefObject<HTMLElement | null>, event: Ke
   }
 }
 
-async function workspacePath(endpoint: '/path' | '/open' | '/select', method?: 'POST'): Promise<string> {
-  const response = await fetch(`/api/workspace${endpoint}`, method ? { method } : undefined);
-  if (!response.ok) throw new Error(`Workspace request failed (${response.status})`);
-  const payload = await response.json() as { path?: unknown };
-  if (typeof payload.path !== 'string' || !payload.path) throw new Error('Workspace response has no path');
-  return payload.path;
-}
-
 function WorkspaceSettings() {
-  const [path, setPath] = useState<string>();
-  const [busy, setBusy] = useState<'open' | 'select'>();
-  const [error, setError] = useState<string>();
-  const requestGeneration = useRef(0);
-
-  useEffect(() => {
-    const request = ++requestGeneration.current;
-    void workspacePath('/path').then(
-      (value) => { if (request === requestGeneration.current) setPath(value); },
-      (reason: unknown) => { if (request === requestGeneration.current) setError(String(reason)); },
-    );
-    return () => { requestGeneration.current += 1; };
-  }, []);
-
-  const run = async (action: 'open' | 'select') => {
-    const request = ++requestGeneration.current;
-    setBusy(action);
-    setError(undefined);
-    try {
-      const nextPath = await workspacePath(action === 'open' ? '/open' : '/select', 'POST');
-      if (request === requestGeneration.current) setPath(nextPath);
-    } catch (reason) {
-      if (request === requestGeneration.current) setError(String(reason));
-    } finally {
-      if (request === requestGeneration.current) setBusy(undefined);
-    }
-  };
-
-  return <section className="settings-theme workspace-settings" aria-labelledby="settings-workspace-title" aria-busy={busy !== undefined}>
+  return <section className="settings-theme workspace-settings" aria-labelledby="settings-workspace-title">
     <h3 id="settings-workspace-title">Workspace</h3>
-    <p className="cad-settings-note">Manual and automatic run exports are saved here. The default is the <code>output</code> folder beside Waveguide Generator; AppData continues to hold internal databases and logs, not result exports.</p>
-    <p className="workspace-settings-path" title={path}>{path ?? (error ? 'Unavailable' : 'Loading…')}</p>
-    <div className="settings-theme-options">
-      <button disabled={!path || busy !== undefined} onClick={() => void run('open')}>Open folder</button>
-      <button disabled={busy !== undefined} onClick={() => void run('select')}>Select folder…</button>
-    </div>
-    {error && <p className="workspace-settings-error" role="status">{error}</p>}
+    <WorkspaceFolderControls note={<>Manual and automatic run exports are saved here, and so is every CAD project’s archive folder. The default is the <code>output</code> folder beside Waveguide Generator; AppData continues to hold internal databases and logs, not result exports.</>}/>
   </section>;
 }
 
@@ -242,6 +201,26 @@ function OnshapeConnectionStatus({ onConnection }: {
   </div>;
 }
 
+/**
+ * Where CAD projects are archived -- which is the output workspace.
+ *
+ * A project's folder is <workspace>/<project>, so this is not a second setting
+ * with its own path to drift out of step; it is the workspace setting, offered
+ * where someone looking at a project would think to change it. Both surfaces
+ * read one store, so a change here is visible in Workspace below without
+ * reopening the dialog.
+ */
+function CadProjectFolderSettings() {
+  return <div className="cad-setup-folder cad-project-folder">
+    <h4 className="cad-settings-subhead">Project folder</h4>
+    <WorkspaceFolderControls
+      manual
+      selectLabel="Choose a new folder…"
+      note={<>Each CAD project keeps its runs and captured models in its own folder here. This is the same folder as <b>Workspace</b> below, and changing it in either place changes both. Existing projects are not moved.</>}
+    />
+  </div>;
+}
+
 function CadSettings() {
   const preferences = usePreferences();
   const onshape = preferences.cadApplication === 'onshape';
@@ -269,6 +248,7 @@ function CadSettings() {
       <li><b>Choose the WGLink folder</b><span>This is separate from the output folder below. WG and Fusion read the same setting, so it is chosen only here.</span><CadFolderSettings/></li>
       <li><b>Open a design in Fusion</b><span>Close Settings, open <b>CAD Link</b>, and choose <b>Open in Fusion 360</b>. WG writes the bundle, starts Fusion, and the connection card confirms when WGLink is online.</span></li>
     </ol>}
+    <CadProjectFolderSettings/>
   </section>;
 }
 

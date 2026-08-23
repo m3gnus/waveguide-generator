@@ -35,6 +35,11 @@ def cad_select_endpoint(state: workspace_api.CadWorkspaceState):
     return next(route.endpoint for route in router.routes if route.path == "/api/cad-workspace/select")
 
 
+def select_endpoint(state: workspace_api.WorkspaceState):
+    router = workspace_api.create_workspace_router(state)
+    return next(route.endpoint for route in router.routes if route.path == "/api/workspace/select")
+
+
 def request(subdirectory: str, members: list[tuple[str, str]]):
     return workspace_api.WriteExportRequest(
         subdirectory=subdirectory,
@@ -778,3 +783,46 @@ def test_v1_task_scratch_is_never_adopted_as_an_export_folder(
 
     assert application.state.workspace.selected_path() is None
     assert application.state.workspace.path() == documents.resolve()
+
+
+def test_workspace_select_accepts_a_typed_folder_without_the_native_picker(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A browser away from the server must still be able to move the folder.
+
+    The picker opens on the machine running WG, which is no help to someone
+    reaching it from another machine -- and the CAD project archive lives in
+    this folder, so being unable to change it there is being unable to choose
+    where projects are kept.
+    """
+
+    state = workspace_api.WorkspaceState(tmp_path / "data")
+    chosen = tmp_path / "typed"
+    chosen.mkdir()
+
+    def refuse(*args: object, **kwargs: object) -> str:
+        raise AssertionError("a typed path must not open the native picker")
+
+    monkeypatch.setattr(workspace_api, "_select_workspace_folder", refuse)
+
+    result = asyncio.run(
+        select_endpoint(state)(workspace_api.SelectWorkspaceRequest(path=str(chosen)))
+    )
+
+    assert result == {"selected": True, "path": str(chosen.resolve())}
+    assert state.selected_path() == chosen.resolve()
+    # Persisted, so the next process archives projects in the same place.
+    assert workspace_api.WorkspaceState(tmp_path / "data").path() == chosen.resolve()
+
+
+def test_workspace_select_refuses_a_typed_path_that_is_not_a_folder(tmp_path: Path) -> None:
+    state = workspace_api.WorkspaceState(tmp_path / "data")
+    missing = tmp_path / "not-there"
+
+    with pytest.raises(HTTPException) as refusal:
+        asyncio.run(
+            select_endpoint(state)(workspace_api.SelectWorkspaceRequest(path=str(missing)))
+        )
+
+    assert refusal.value.status_code == 400
+    assert state.selected_path() is None

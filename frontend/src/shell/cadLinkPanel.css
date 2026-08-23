@@ -109,6 +109,16 @@
 .cad-project-menu span { color: var(--fg3); font-size: var(--text-micro); }
 .cad-project-menu > div { padding: 6px 7px; }
 
+/* The workspace folder every project is archived under. Quiet on purpose: it is
+   one setting shared with Settings, not a property of the project above it. */
+.cad-projects-folder { display: grid; gap: 3px; margin-top: 8px; padding-top: 7px; border-top: 1px solid var(--hair-soft); }
+.cad-projects-folder-line { display: grid; gap: 1px; min-width: 0; }
+.cad-projects-folder-path { overflow: hidden; color: var(--fg2); font-family: var(--mono); font-size: var(--text-micro); text-overflow: ellipsis; white-space: nowrap; }
+.cad-projects-folder-actions { display: flex; gap: 10px; }
+.cad-projects-folder-actions button { display: inline-flex; align-items: center; gap: 4px; }
+.cad-projects-folder-actions svg { flex: none; width: 11px; height: 11px; }
+.cad-projects-folder-error { margin: 2px 0 0; color: var(--red); font-size: var(--text-micro); }
+
 .cad-project-history .cad-run-list { max-height: 320px; margin-top: 7px; overflow-y: auto; }
 .cad-run-group { display: grid; gap: 3px; }
 .cad-run-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 6px; padding: 5px 7px; border: 1px solid var(--hair); background: var(--surface-panel); }
