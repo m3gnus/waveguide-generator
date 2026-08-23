@@ -1,6 +1,6 @@
 # CAD Link: customizable crossovers, delay alignment, driver presets
 
-Status: approved design, implementation in slices (2026-08-23).
+Status: implemented on `feature/cadlink-crossover-drivers` (2026-08-23); slice 6 open.
 
 Multi-channel CAD Link runs combine their drive channels into one summed
 response. Today that combine is a fixed LR4 chain with automatic level match
@@ -83,8 +83,9 @@ clients, stored solve profiles and the OpenAPI snapshot stay valid.
 - High-pass of any family: H_hp(s) = H_lp(1/s).
 
 Textbook sums with ideal coincident drivers are the test oracle: LR4/LR8
-in phase sum to 0 dB; LR2/BW2 need one side inverted; BW1/BW3 sum flat with
-a 90° offset; BW4 sums +3 dB at fc; BE4 dips ≈ −2.8 dB at fc.
+in phase sum to 0 dB; LR2 sums flat with one side inverted; BW2 nulls in
+phase and sums +3 dB at fc inverted; BW1/BW3 sum flat with a 90° offset;
+BW4 sums +3 dB at fc; BE4 dips ≈ −2.8 dB at fc in phase.
 
 ### Gains
 
@@ -96,36 +97,52 @@ manual channels.
 ### Alignment
 
 The legacy rule (filtered outputs 0° apart at fc) is correct only for LR4
-and LR8. The general rule aligns the *raw* drivers so the chosen filter pair
-sums the way its textbook says:
+and LR8. The general rule aligns the *raw* drivers so the chosen filter
+chains sum the way their textbook says:
 
-1. Overlap region per adjacent pair: weight `w(f) = |LP_lower(f)|·|HP_upper(f)|`
-   after gains; keep points with `w > −40 dB` of its maximum.
+1. Overlap region per adjacent pair: weight `w(f) = |lower(f)|·|upper(f)|`
+   of the filtered, level-matched channel responses; keep points with
+   `w > −40 dB` of its maximum.
 2. Coarse pass: in a ±1/3-octave window around the pair's crossover
    (where unwrapping is safe) fit the unwrapped phase of
-   `P_lower / P_upper` (raw, on-axis, gains applied) against `2πf` by weighted
-   least squares. The slope is the coarse delay.
+   `P_lower / P_upper` (raw, on-axis) against `2πf` by weighted least
+   squares. The slope is the coarse delay; with fewer than three points the
+   whole overlap is used and a warning says the cycle may be wrong.
 3. Refine: remove the coarse delay, unwrap over the whole overlap region,
-   refit. Slope correction gives the pair delay; the intercept is the raw
-   polarity relationship (reported as a warning when near 180°).
-4. Chain pair delays from the top member down as today; pin the `reference`
-   channel at 0 and shift the auto channels; manual channels keep their
-   value verbatim.
-5. Report per pair the weighted RMS fit residual (confidence), the residual
-   phase error at fc after alignment, and the reverse-null depth (sum with
-   the upper member inverted, minimum over the overlap region, relative to
-   the sum).
+   refit. The slope correction gives the fitted delay; the intercept is the
+   raw polarity relationship; the weighted RMS residual is the confidence.
+4. Pin: the fit settles the period branch only. The pair delay brings the
+   raw ratio's phase *at the crossover* to its target (0 for a like-polarity
+   pair, π when the applied polarity flips the raw pair) on the branch
+   nearest the fitted delay. Measured on a three-way CAD return, the
+   least-squares line alone left 68° at 1 kHz and a −8 dB reverse null where
+   the pinned delay gives −15 dB: a real horn's raw ratio is rarely a pure
+   delay, and the crossover sums at fc, not over the wings.
+5. Chain pair delays from the top member down; pin the `reference` channel
+   at 0 and shift the auto channels; manual channels keep their value
+   verbatim.
+6. Report per pair `fit_delay_ms`, `fit_residual_deg`, the residual phase
+   error at fc against each channel's *full* filter chain (a middle band's
+   other section rotates phase at the lower crossover by design, and is not
+   error), the reverse-null depth, and the point count.
 
-Regression: LR4 pairs must reproduce the legacy delays within 0.01 ms on the
-existing `test_combine.py` fixtures. A fit residual above 30° or fewer than
-three points in the coarse window produces a warning, never a silent value.
+Regression: for a two-way LR4 pair the legacy and new delays agree to
+numerical tolerance. For a three-way chain they differ deliberately: the
+legacy rule absorbed the middle band's other section into the delay
+(0.45 ms at 100 Hz on a CAD return), the new rule leaves coincident drivers
+coincident. A residual above 30° produces a warning, never a silent value.
 
 ### Polarity
 
-Auto polarity of member k+1 relative to member k: invert when
-`|LP(fc) − HP(fc)| > |LP(fc) + HP(fc)|` for the ideal filter pair at the
-pair's crossover. Polarities accumulate along the chain from the lowest
-member. An explicit `invert` overrides that channel.
+Two things decide a pair's relative polarity: the ideal filter pair
+(invert when `|LP(fc) − HP(fc)| > |LP(fc) + HP(fc)|`: LR2, BW2, and by the
+same rule Bessel), and the raw drivers (intercept closer to 180° than to 0°:
+a source returned with opposite motion sign, or ports and a throat that sit
+opposed at the crossover). Auto applies both, accumulating along the chain
+from the lowest member, so an opposed pair is inverted and aligned on its
+true delay. An explicit `invert` overrides that channel; the delay target
+follows the polarity actually applied, so a pair the user keeps in polarity
+is aligned with a half-period delay and a warning says so.
 
 ### Result payload
 
@@ -137,8 +154,8 @@ members, member_roles, reference
 crossovers_hz            # per linked pair, null when unlinked
 channels: {id: {hp, lp, gain_db, gain_mode, gain_auto_db,
                 delay_ms, delay_mode, delay_auto_ms, inverted, invert_mode}}
-pairs: {"lf-mf": {eval_hz, fit_residual_deg, phase_error_at_fc_deg,
-                  reverse_null_db, points}}
+pairs: {"lf-mf": {eval_hz, fit_delay_ms, fit_residual_deg,
+                  phase_error_at_fc_deg, reverse_null_db, points}}
 delays_ms, gains_db      # flattened aliases kept for one release
 level_match: {enabled, target_db, medians_db, gains_db}   # legacy shape
 align: bool
