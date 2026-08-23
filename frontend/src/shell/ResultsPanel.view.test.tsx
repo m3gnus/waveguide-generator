@@ -348,10 +348,15 @@ describe('results dock view switch', () => {
     expect(host.querySelector('.result-recombine-pair')?.textContent).toContain('MF → HF');
     expect(field.getAttribute('aria-label')).toBe('Crossover drive-mf to drive-hf in hertz');
 
+    // A native submit runs constraint validation first; the round crossover
+    // frequencies users type (100, 1000) must pass it, which a step relative
+    // to min=1 silently refused.
+    expect(host.querySelector<HTMLFormElement>('form.result-recombine')!.checkValidity()).toBe(true);
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(field, '1400');
       field.dispatchEvent(new Event('input', { bubbles: true }));
     });
+    expect(host.querySelector<HTMLFormElement>('form.result-recombine')!.checkValidity()).toBe(true);
     await act(async () => {
       host.querySelector<HTMLFormElement>('form.result-recombine')!
         .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));

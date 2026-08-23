@@ -59,7 +59,7 @@ function SectionEditor({ label, section, onChange }: {
         id={`${id}-hz`}
         type="number"
         min={1}
-        step={10}
+        step="any"
         value={section.fcHz}
         aria-label={`${label} frequency in hertz`}
         onChange={(event) => {
