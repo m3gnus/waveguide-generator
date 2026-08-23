@@ -84,7 +84,7 @@ def test_a_project_lists_its_captured_models_newest_first(tmp_path: Path) -> Non
         "sha256:bbb",
         "sha256:aaa",
     ]
-    assert listing["items"][0]["filename"] == "sha256_bbb.f3d"
+    assert listing["items"][0]["filename"] == "Tritonia_260821-0900_bbb.f3d"
     assert listing["items"][0]["bytes"] == len(b"model-bbb")
 
 
@@ -100,7 +100,7 @@ def test_a_model_whose_file_was_removed_is_still_listed_as_unavailable(
     app, runs = app_with_runs(tmp_path)
     _design_id, lineage_id = project(app)
     capture(runs, tmp_path, "Tritonia", "aaa", at="2026-08-20T09:00:00Z")
-    (runs / "Tritonia" / "cad" / "sha256_aaa.f3d").unlink()
+    (runs / "Tritonia" / "cad" / "Tritonia_260820-0900_aaa.f3d").unlink()
 
     listing = asyncio.run(list_project_documents(lineage_id, SimpleNamespace(app=app)))
 
@@ -127,7 +127,7 @@ def test_downloading_a_model_hands_back_the_archived_file(tmp_path: Path) -> Non
     )
 
     assert Path(response.path).read_bytes() == b"model-aaa"
-    assert response.filename == "Tritonia.f3d"
+    assert response.filename == "Tritonia_260820-0900_aaa.f3d"
 
 
 def test_downloading_a_model_that_was_never_captured_says_why(tmp_path: Path) -> None:
@@ -417,3 +417,66 @@ def test_a_cad_authored_run_joins_the_project_its_document_owns(
     # A document nothing has claimed still belongs to no project.
     unknown = {"document": {"native_id": "urn:adsk:unknown", "name": "Other"}}
     assert asyncio.run(_cad_authored_project(store, unknown)) == (None, None)
+
+
+def legacy_capture(runs: Path, stem: str, digest: str, *, content: bytes) -> None:
+    """Write a document exactly as the pre-friendly-name archiver did.
+
+    Real legacy files predate this test suite's ``capture`` helper, so this
+    reproduces the old ``sha256_<digest>.f3d`` naming directly rather than
+    going through ``archive_cad_document``, which now only ever writes the
+    new friendly name.
+    """
+
+    directory = runs / stem / "cad"
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / f"sha256_{digest}.f3d").write_bytes(content)
+    (directory / f"sha256_{digest}.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "documentName": "Tritonia",
+                "nativeId": None,
+                "returnStateHash": f"sha256:{digest}",
+                "ingestId": f"wgi_{digest}",
+                "returnId": f"wgr_{digest}",
+                "capturedAt": "2026-08-19T09:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_downloading_a_legacy_named_model_serves_its_own_filename(tmp_path: Path) -> None:
+    """A document captured before the friendly-name change stays readable.
+
+    ``sha256_<digest>.f3d`` is not renamed on disk, and the download route
+    must still hand back that exact name -- not a name recomputed to look
+    like the new convention.
+    """
+
+    app, runs = app_with_runs(tmp_path)
+    _design_id, lineage_id = project(app)
+    legacy_capture(runs, "Tritonia", "aaa", content=b"legacy-model-aaa")
+
+    response = asyncio.run(
+        download_project_document(lineage_id, "sha256:aaa", SimpleNamespace(app=app))
+    )
+
+    assert Path(response.path).read_bytes() == b"legacy-model-aaa"
+    assert response.filename == "sha256_aaa.f3d"
+
+
+def test_a_second_capture_of_a_legacy_document_is_a_no_op(tmp_path: Path) -> None:
+    """Re-archiving a return already filed under the legacy name writes nothing new."""
+
+    app, runs = app_with_runs(tmp_path)
+    project(app)
+    legacy_capture(runs, "Tritonia", "aaa", content=b"legacy-model-aaa")
+
+    capture(runs, tmp_path, "Tritonia", "aaa", at="2026-08-20T09:00:00Z")
+
+    assert sorted(path.name for path in (runs / "Tritonia" / "cad").iterdir()) == [
+        "sha256_aaa.f3d",
+        "sha256_aaa.json",
+    ]

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import re
 
 from server.workspace.archive import (
     archive_cad_document,
@@ -63,7 +64,8 @@ def test_a_captured_document_is_filed_under_the_design_by_return_state(tmp_path:
 
     relative = archive_cad_document(bundle, record_for(), runs, "Big Horn")
 
-    assert relative == "cad/sha256_abc123.f3d"
+    # <safe document name>_<UTC YYMMDD-HHMM>_<first 12 hex chars of the digest>
+    assert relative == "cad/Big_Horn_v7_260819-1000_abc123.f3d"
     archived = runs / "Big_Horn" / relative
     assert archived.read_bytes() == b"f3d-bytes"
     assert json.loads(archived.with_suffix(".json").read_text(encoding="utf-8")) == {
@@ -75,6 +77,35 @@ def test_a_captured_document_is_filed_under_the_design_by_return_state(tmp_path:
         "returnId": "wgr_01",
         "capturedAt": "2026-08-19T10:00:00Z",
     }
+
+
+def test_the_capture_stamp_falls_back_when_the_timestamp_is_unusable(tmp_path: Path) -> None:
+    bundle = bundle_with_document(tmp_path)
+    runs = tmp_path / "runs"
+    record = record_for()
+    record["created_at"] = "not-a-timestamp"
+
+    relative = archive_cad_document(bundle, record, runs, "Big Horn")
+
+    assert relative == "cad/Big_Horn_v7_000000-0000_abc123.f3d"
+
+
+def test_a_document_name_full_of_hostile_characters_is_made_safe(tmp_path: Path) -> None:
+    bundle = bundle_with_document(tmp_path)
+    runs = tmp_path / "runs"
+    record = record_for()
+    record["document"]["name"] = "  ../etc/passwd: Bjsüÿørn\\Horn <v2> ??  "
+
+    relative = archive_cad_document(bundle, record, runs, "Big Horn")
+
+    assert relative is not None
+    archived = runs / "Big_Horn" / relative
+    assert archived.is_file()
+    # No path separators, colons, or other filesystem-hostile characters
+    # survive -- only the portable alphabet archive_folder_slug already
+    # guarantees for run and design folders.
+    assert re.fullmatch(r"[A-Za-z0-9._-]+", archived.name)
+    assert "/" not in archived.name and "\\" not in archived.name
 
 
 def test_re_ingesting_the_same_return_does_not_write_a_second_copy(tmp_path: Path) -> None:
@@ -91,8 +122,75 @@ def test_re_ingesting_the_same_return_does_not_write_a_second_copy(tmp_path: Pat
     assert again == first
     assert archived.stat().st_mtime_ns == before
     assert sorted(path.name for path in (runs / "Big_Horn" / "cad").iterdir()) == [
+        "Big_Horn_v7_260819-1000_abc123.f3d",
+        "Big_Horn_v7_260819-1000_abc123.json",
+    ]
+
+
+def test_re_ingesting_a_return_already_filed_under_the_legacy_name_is_a_no_op(
+    tmp_path: Path,
+) -> None:
+    """A return that was archived before this change stays a single file.
+
+    The dedup check has to recognise the pre-existing ``sha256_<digest>.f3d``
+    just as reliably as the new friendly name, or every re-ingestion of an
+    old capture would grow a second, redundant copy beside it.
+    """
+
+    bundle = bundle_with_document(tmp_path)
+    runs = tmp_path / "runs"
+    directory = runs / "Big_Horn" / "cad"
+    directory.mkdir(parents=True)
+    (directory / "sha256_abc123.f3d").write_bytes(b"f3d-bytes")
+    (directory / "sha256_abc123.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "documentName": "Big Horn v7",
+                "nativeId": "urn:doc",
+                "returnStateHash": "sha256:abc123",
+                "ingestId": "wgi_00",
+                "returnId": "wgr_00",
+                "capturedAt": "2026-08-01T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    relative = archive_cad_document(bundle, record_for(), runs, "Big Horn")
+
+    assert relative == "cad/sha256_abc123.f3d"
+    assert sorted(path.name for path in directory.iterdir()) == [
         "sha256_abc123.f3d",
         "sha256_abc123.json",
+    ]
+
+
+def test_two_returns_of_the_same_document_at_different_times_coexist(
+    tmp_path: Path,
+) -> None:
+    bundle = bundle_with_document(tmp_path, content=b"first-bytes")
+    runs = tmp_path / "runs"
+    first_record = record_for()
+    first_record["created_at"] = "2026-08-19T10:00:00Z"
+    first_record["document"]["return_state_hash"] = "sha256:aaa111"
+    first = archive_cad_document(bundle, first_record, runs, "Big Horn")
+
+    later_bundle = bundle_with_document(tmp_path / "later", content=b"second-bytes")
+    second_record = record_for()
+    second_record["created_at"] = "2026-08-20T11:30:00Z"
+    second_record["document"]["return_state_hash"] = "sha256:bbb222"
+    second = archive_cad_document(later_bundle, second_record, runs, "Big Horn")
+
+    assert first == "cad/Big_Horn_v7_260819-1000_aaa111.f3d"
+    assert second == "cad/Big_Horn_v7_260820-1130_bbb222.f3d"
+    assert (runs / "Big_Horn" / first).read_bytes() == b"first-bytes"
+    assert (runs / "Big_Horn" / second).read_bytes() == b"second-bytes"
+    assert sorted(path.name for path in (runs / "Big_Horn" / "cad").iterdir()) == [
+        "Big_Horn_v7_260819-1000_aaa111.f3d",
+        "Big_Horn_v7_260819-1000_aaa111.json",
+        "Big_Horn_v7_260820-1130_bbb222.f3d",
+        "Big_Horn_v7_260820-1130_bbb222.json",
     ]
 
 
@@ -172,7 +270,7 @@ def test_the_run_copy_lands_beside_the_run_that_produced_it(tmp_path: Path) -> N
     ] == "sha256:abc123"
     # The project-level original stays: a return that is never solved still has
     # to keep its document somewhere.
-    assert (runs / "Big_Horn" / "cad" / "sha256_abc123.f3d").is_file()
+    assert (runs / "Big_Horn" / "cad" / "Big_Horn_v7_260819-1000_abc123.f3d").is_file()
 
 
 def test_placing_the_run_copy_again_is_a_no_op(tmp_path: Path) -> None:
@@ -238,7 +336,62 @@ def test_the_captured_document_is_found_by_its_return_state(tmp_path: Path) -> N
 
     found = captured_cad_document(runs, "Big Horn", "sha256:abc123")
 
-    assert found is not None and found.name == "sha256_abc123.f3d"
+    assert found is not None and found.name == "Big_Horn_v7_260819-1000_abc123.f3d"
     assert captured_cad_document(runs, "Big Horn", "sha256:other") is None
     # The sidecar is metadata about the document, never the document itself.
     assert captured_cad_document(runs, "Big Horn", "sha256:abc123").suffix == ".f3d"
+
+
+def test_the_captured_document_is_found_under_its_legacy_name_too(tmp_path: Path) -> None:
+    """A document archived before this change is still found by full digest."""
+
+    runs = tmp_path / "runs"
+    directory = runs / "Big_Horn" / "cad"
+    directory.mkdir(parents=True)
+    (directory / "sha256_abc123.f3d").write_bytes(b"legacy-bytes")
+    (directory / "sha256_abc123.json").write_text(
+        json.dumps({"schemaVersion": 1, "returnStateHash": "sha256:abc123"}),
+        encoding="utf-8",
+    )
+
+    found = captured_cad_document(runs, "Big Horn", "sha256:abc123")
+
+    assert found is not None
+    assert found.name == "sha256_abc123.f3d"
+    assert found.read_bytes() == b"legacy-bytes"
+
+
+def test_a_digest_fragment_collision_is_disambiguated_by_the_sidecar(
+    tmp_path: Path,
+) -> None:
+    """A shared 12-character fragment must never resolve to the wrong file.
+
+    Two different digests that happen to share their first twelve hex
+    characters would, without the sidecar check, let one return's lookup
+    silently hand back a different return's document.
+    """
+
+    bundle_one = bundle_with_document(tmp_path / "one", content=b"model-one")
+    bundle_two = bundle_with_document(tmp_path / "two", content=b"model-two")
+    runs = tmp_path / "runs"
+
+    # Distinct digests that happen to share their first twelve hex characters
+    # -- and distinct capture times, as two real returns would have, so this
+    # exercises the lookup's disambiguation rather than a genuine filename
+    # collision on write.
+    digest_one = "sha256:abcabcabcabc111111"
+    digest_two = "sha256:abcabcabcabc222222"
+    record_one = record_for()
+    record_one["document"]["return_state_hash"] = digest_one
+    record_two = record_for()
+    record_two["created_at"] = "2026-08-20T11:00:00Z"
+    record_two["document"]["return_state_hash"] = digest_two
+
+    archive_cad_document(bundle_one, record_one, runs, "Big Horn")
+    archive_cad_document(bundle_two, record_two, runs, "Big Horn")
+
+    found_one = captured_cad_document(runs, "Big Horn", digest_one)
+    found_two = captured_cad_document(runs, "Big Horn", digest_two)
+
+    assert found_one is not None and found_one.read_bytes() == b"model-one"
+    assert found_two is not None and found_two.read_bytes() == b"model-two"
