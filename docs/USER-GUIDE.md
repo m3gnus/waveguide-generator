@@ -298,3 +298,14 @@ in a different browser used to lose the lot. The uninstallers preserve the data
 directory unless `--data` is explicitly requested. Original-application runs can be imported automatically or through
 `scripts/migrate_v1.py`; the v1 source database is opened read-only and the current
 data is backed up before migration.
+
+### Driver library
+
+WG ships no driver data of its own. Drop CSV files of Thiele/Small parameters into
+`HornLab/driver-databases`, in the same per-platform application-support location as
+the application data directory above, and WG indexes them for search. Columns are
+matched case-insensitively against a fixed alias table (`Sd_cm2`/`Sd`, `Bl_Tm`/`Bl`,
+`Fs_Hz`/`Fs`, and so on); unrecognised columns are kept but never used to fill in a
+value that was not actually in the file. Rows for the same brand and model that only
+differ by impedance become one driver with an impedance-variant list. The folder is
+rescanned automatically whenever its files change, or on request through the API.
