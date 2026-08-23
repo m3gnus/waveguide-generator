@@ -840,6 +840,10 @@ export function CadLinkCoordinator() {
       } else if (!initial) {
         const selected = useCadReturnStore.getState().selectedBundle;
         if (!selected) return;
+        // An unconfigured listing is not evidence the bundle is gone -- a
+        // server that is still starting up answers exactly that, and one such
+        // poll used to latch the ingest stale until a manual re-ingest.
+        if (!response.cadFolderConfigured) return;
         const current = response.items.find((bundle) => bundle.bundlePath === selected.bundlePath);
         useCadReturnStore.getState().refreshSelectedBundle(current ?? null);
       }

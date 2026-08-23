@@ -909,3 +909,27 @@ describe('a channel driver picked from the library', () => {
     expect(useCadReturnStore.getState().rigidSizeMm).toBe(8);
   });
 });
+
+describe('listing-gone staleness self-heals', () => {
+  it('clears when the identical bundle reappears, and only then', () => {
+    // A poll against a restarting server reads an empty listing; that must
+    // not permanently block solving once the same bundle is listed again.
+    localStorage.clear();
+    resetDocumentStore();
+    resetCadReturnStore();
+    const store = useCadReturnStore.getState();
+    store.selectBundle(bundle);
+    store.applyIngest(record(), store.beginIngestIntent());
+    useCadReturnStore.getState().refreshSelectedBundle(null);
+    expect(useCadReturnStore.getState().needsIngest).toBe(true);
+    expect(useCadReturnStore.getState().ingestStaleReason).toContain('no longer appears');
+
+    useCadReturnStore.getState().refreshSelectedBundle(bundle);
+    expect(useCadReturnStore.getState().needsIngest).toBe(false);
+    expect(useCadReturnStore.getState().ingestStaleReason).toBeNull();
+
+    // A genuinely changed bundle keeps its flag.
+    useCadReturnStore.getState().refreshSelectedBundle({ ...bundle, modifiedAt: '2099-01-01T00:00:00Z' });
+    expect(useCadReturnStore.getState().needsIngest).toBe(true);
+  });
+});

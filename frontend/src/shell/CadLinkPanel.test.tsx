@@ -1119,7 +1119,7 @@ describe('CadLinkPanel', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       if (String(input).endsWith('/returns')) {
         listingCount += 1;
-        const body = listingCount === 1 ? listing : { items: [{
+        const body = listingCount === 1 ? listing : { cadFolderConfigured: true, items: [{
           ...listing.items[0], modifiedAt: '2026-08-11T01:00:00Z',
           sources: [{ ...listing.items[0].sources[0], suggestedResolutionMm: 2.75 }],
         }] };
@@ -1141,7 +1141,7 @@ describe('CadLinkPanel', () => {
   });
 
   it('renders an unreadable listing row disabled with the server reason', async () => {
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/fusion-status') ? json(closedFusion) : json({ items: [{
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/fusion-status') ? json(closedFusion) : json({ cadFolderConfigured: true, items: [{
       ...listing.items[0], readable: false, documentName: null, sourceCount: null, instanceCount: null,
       sources: [], reason: 'suggested resolution must be positive',
     }] })));
