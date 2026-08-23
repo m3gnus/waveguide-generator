@@ -82,7 +82,9 @@ function ProjectSwitcher({ current, onOpened, onError }: {
     if (unsaved && !window.confirm('Discard unsaved changes and open this CAD-linked project?')) return;
     setBusy(true);
     try {
-      const opened = await openCadLinkedProject(project.designId);
+      const opened = await openCadLinkedProject(
+        project.designId, fetch, 'cad-project-switch',
+      );
       setOpen(false);
       onOpened(opened.filename);
     } catch (error) {

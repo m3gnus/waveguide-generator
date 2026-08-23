@@ -155,7 +155,9 @@ export function DesignFileMenu() {
   async function openProject(project: CadLinkedDesignSummary) {
     if (unsaved && !window.confirm('Discard unsaved changes and open this CAD-linked design?')) return;
     await act(async () => {
-      const opened = await openCadLinkedProject(project.designId);
+      const opened = await openCadLinkedProject(
+        project.designId, fetch, 'cad-project-switch',
+      );
       if (opened.adoptionCandidate) setAdoptionCandidate(opened.adoptionCandidate);
       setMessage(`Opened CAD-linked design ${opened.filename}`);
     });
