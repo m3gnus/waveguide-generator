@@ -13,7 +13,6 @@ import { copyChartPng, downloadChartPng } from '../results/chartImage';
 import { summaryGroups, summaryText, type SummaryGroup, type SummaryRow } from '../results/summary';
 import { latestCombine } from '../results/latestCombine';
 import { reverseNullTraces, type ReverseNullTrace } from '../results/reverseNull';
-import { CrossoverStrip } from './CrossoverStrip';
 import { combineMetadataOf, type ResultPayload } from '../results/types';
 import { ResultViewSwitch } from '../results/ResultViewSwitch';
 import { resolveResultView, resultViewStore, useResultView } from '../stores/resultView';
@@ -1930,7 +1929,6 @@ export function ResultsPanel() {
   // The pre-solve rail shows what "auto" chose for gain and delay, and only a
   // solved result knows those numbers. The dock already holds one, so it hands
   // it over rather than making the rail fetch results of its own.
-  useEffect(() => { latestCombine.publish(shownCombine); }, [shownCombine]);
   const applyRecombined = useCallback((jobId: string, updated: JobResults) => {
     setDisplay((current) => current && current.results[jobId]
       ? { ...current, results: { ...current.results, [jobId]: updated as ResultPayload } }
@@ -1965,6 +1963,16 @@ export function ResultsPanel() {
   }, [dismissedNewRun, latest, primaryJob, selection.primary]);
   const selectedJob = useMemo(() => jobs.find((job) => job.id === display?.primaryId) ?? null, [display?.primaryId, jobs]);
   const primaryIsProvisional = Boolean(display?.provisionalIds.includes(display.primaryId));
+  const shownCanApply = selectedJob?.status === 'complete' && !primaryIsProvisional;
+  useEffect(() => {
+    latestCombine.publish(shownCombine && shownActiveChannel && display ? {
+      jobId: display.primaryId,
+      channelId: shownActiveChannel,
+      combine: shownCombine,
+      canApply: shownCanApply,
+      onApplied: applyRecombined,
+    } : null);
+  }, [shownCombine, shownActiveChannel, display, shownCanApply, applyRecombined]);
   const provisionalMetadata = primaryRaw?.metadata?.provisional;
   const provisionalRecord = provisionalMetadata && typeof provisionalMetadata === 'object'
     ? provisionalMetadata as Record<string, unknown>
@@ -2171,8 +2179,6 @@ export function ResultsPanel() {
         ? <><button type="button" onClick={() => { setCoherenceOpen(false); restorePrimaryDesign(); }}>Restore this run&apos;s design</button><button type="button" onClick={() => { setCoherenceOpen(false); solveCurrentDesign(); }}>Solve current design</button></>
         : <><button type="button" onClick={() => { setCoherenceOpen(false); showPrimaryModel(); }}>Show this model</button><button type="button" onClick={() => { setCoherenceOpen(false); compareSelection.followLatest(latest?.id ?? null); }}>Show newest run</button></>}
     </AnchoredPanel>}
-    {shownActiveChannel && shownCombine && display && selectedJob?.status === 'complete' && !primaryIsProvisional
-      && <CrossoverStrip jobId={display.primaryId} channelId={shownActiveChannel} combine={shownCombine} onApplied={applyRecombined}/>}
     {(measuredOverlays.length > 0 || measuredError) && <div className="results-toolbar result-measured">
       <span className="result-measured-caption">Measured</span>
       {measuredOverlays.map((overlay) => <MeasuredOverlayRow key={overlay.id} overlay={overlay}/>)}
