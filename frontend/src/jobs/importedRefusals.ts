@@ -41,13 +41,13 @@ const CARDIOID_EXPLANATIONS: readonly RefusalExplanation[] = [
   {
     match: "MF diaphragm's drive channel",
     advice: 'A coupled solve drives the diaphragm through its motor, so the MF source must sit alone on one drive '
-      + 'channel with a complete Thiele-Small model. Assign it its own channel under Drive channels & drivers and '
+      + 'channel with a complete Thiele-Small model. Assign it its own channel under Drivers and '
       + 'fill in the required driver fields, or turn Coupled off.',
   },
   {
     match: 'PORT_EXIT patches in one drive channel',
     advice: 'The port exit is split across drive channels, so the coupled solve cannot treat it as one port. '
-      + 'Assign every PORT_EXIT patch to the same drive channel under Drive channels & drivers, or turn Coupled off.',
+      + 'Assign every PORT_EXIT patch to the same drive channel under Drivers, or turn Coupled off.',
   },
 ];
 

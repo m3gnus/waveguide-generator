@@ -258,7 +258,7 @@ describe('ParamPanel inventory UX', () => {
     expect(host.textContent).not.toContain('Surface sampling');
 
     act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
-    expect(titles()).toEqual(['Frequency Sweep', 'Directivity Map', 'Drive channels & drivers', 'Passive cardioid', 'Crossover', 'Solve options', 'Mesh detail']);
+    expect(titles()).toEqual(['Frequency Sweep', 'Directivity Map', 'Drivers', 'Passive cardioid', 'Crossover', 'Solve options', 'Mesh detail']);
     for (const hidden of ['Source Definition', 'Solve & export mesh', 'Output & Passthrough']) expect(host.textContent).not.toContain(hidden);
     expect(host.querySelector('#solve-engine')).toBeNull();
     expect(host.querySelector('#solve-symmetry')).toBeNull();
@@ -755,7 +755,7 @@ describe('ParamPanel inventory UX', () => {
     expect(host.querySelector('[data-section="Profile Dimensions"]')).not.toBeNull();
     act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
     expect(host.textContent).toContain('Prepare CAD geometry to unlock these inputs');
-    expect(host.textContent).toContain('Driver T/S, crossover, sweep');
+    expect(host.textContent).toContain('Drivers, crossover, sweep');
     expect(host.textContent).toContain('Open CAD Link setup');
     expect(host.querySelector('[data-section]')).toBeNull();
   });
@@ -800,7 +800,7 @@ describe('ParamPanel inventory UX', () => {
     };
 
     expect(matchingSections('frequencyStartHz')).toEqual(['Frequency Sweep']);
-    expect(matchingSections('sd_cm2')).toEqual(['Drive channels & drivers']);
+    expect(matchingSections('sd_cm2')).toEqual(['Drivers']);
     expect(matchingSections('LR4')).toEqual(['Crossover']);
     expect(matchingSections('surface sizing')).toEqual(['Mesh detail']);
   });
