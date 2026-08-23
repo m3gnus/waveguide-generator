@@ -36,10 +36,9 @@ function decimals(value: number, places: number): string {
   return Number.isFinite(value) ? value.toFixed(places) : '—';
 }
 
-function SectionEditor({ label, section, autoNote, onChange }: {
+function SectionEditor({ label, section, onChange }: {
   label: string;
   section: FilterSection | null;
-  autoNote?: string;
   onChange: (section: FilterSection | null) => void;
 }) {
   const id = useId();
@@ -81,7 +80,6 @@ function SectionEditor({ label, section, autoNote, onChange }: {
         onChange={(event) => onChange({ ...section, order: Number(event.target.value) })}
       >{orders.map((order) => <option key={order} value={order}>{slopeLabel(order)}</option>)}</select>
     </>}
-    {!section && autoNote && <span className="crossover-auto-note">{autoNote}</span>}
   </div>;
 }
 
@@ -116,16 +114,22 @@ function AutoManualField({ label, unit, precision, step, mode, value, autoValue,
           step={step}
           value={value}
           aria-label={`${label} in ${unit}`}
+          // Emptying the field is the same gesture as everywhere else in this
+          // app: clear a value to give it back to whatever computes it.
           onChange={(event) => {
+            if (event.target.value.trim() === '') { onMode('auto'); return; }
             const next = Number(event.target.value);
             if (Number.isFinite(next)) onValue(next);
           }}
         />
         <span className="crossover-unit">{unit}</span>
+        {/* The number auto would have chosen stays visible beside the one the
+            user typed; taking a value over should not hide what it replaced. */}
+        <span className="crossover-auto-note">auto {autoText}</span>
         <button
           type="button"
           className="crossover-reset"
-          title={`Go back to the automatic ${label.toLowerCase()} (${autoText})`}
+          title={`Go back to the automatic ${label.toLowerCase()} (${autoText}); clearing the field does the same`}
           onClick={() => onMode('auto')}
         >Reset to auto</button>
       </>}
