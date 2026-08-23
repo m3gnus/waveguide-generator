@@ -7,6 +7,7 @@ import { importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { postSymmetry, toSolveDesign, type SymmetryResolution } from '../jobs/actions';
 import { useActiveBackendCapability, useCapabilities } from '../jobs/useCapabilities';
 import { backendLimitation } from './backendSupport';
+import { sharedDelayMode, sharedGainMode, withDelayMode, withGainMode } from '../results/crossoverSpec';
 import { cadApplicationName, usePreferences } from '../prefs/preferences';
 import { useCadPreparationStore } from '../stores/cadPreparation';
 import {
@@ -14,7 +15,7 @@ import {
   channelAcceptsDriver,
   combineChain,
   combineEnabledEffective,
-  combineLevelMatchDefault,
+  combineSpecEffective,
   DRIVER_REQUIRED_KEYS,
   PASSIVE_CARDIOID_CHANNEL_ID,
   passiveCardioidBlocker,
@@ -1014,8 +1015,8 @@ function CadCrossover() {
         <NumberField label={combinePairLabel(pair)} revealId={CAD_CONTROLS.crossoverFrequency.reveal.id} unit="Hz" value={pair.hz} min={1} step={50} precision={0} description={`${CAD_CONTROLS.crossoverFrequency.label} · ${pair.lower} → ${pair.upper}`} onCommit={(value) => state.setCombineCrossover(pair.key, value)}/>
         <p className="section-note">{combinePairHint(pair)}</p>
       </Fragment>)}
-      <ToggleRow id="cad-combine-level" label={CAD_CONTROLS.levelMatch.label} revealId={CAD_CONTROLS.levelMatch.reveal.id} help="Equalise member band levels before summing. Defaults off when every member carries a driver model — real voltage-driven levels should not be re-equalised." checked={state.combineLevelMatch ?? combineLevelMatchDefault(state)} onChange={state.setCombineLevelMatch}/>
-      <ToggleRow id="cad-combine-align" label={CAD_CONTROLS.timeAlign.label} revealId={CAD_CONTROLS.timeAlign.reveal.id} help="Delay each member so the crossover sums coherently, from the phase of the solved fields at each crossover frequency. Off sums the members as solved." checked={state.combineAlign ?? true} onChange={state.setCombineAlign}/>
+      <ToggleRow id="cad-combine-level" label={CAD_CONTROLS.levelMatch.label} revealId={CAD_CONTROLS.levelMatch.reveal.id} help="Equalise member band levels before summing. Defaults off when every member carries a driver model — real voltage-driven levels should not be re-equalised." checked={combineSpecEffective(state) !== null && sharedGainMode(combineSpecEffective(state)!) === 'auto'} onChange={(checked) => state.updateCombineSpec((spec) => withGainMode(spec, checked ? 'auto' : 'manual'))}/>
+      <ToggleRow id="cad-combine-align" label={CAD_CONTROLS.timeAlign.label} revealId={CAD_CONTROLS.timeAlign.reveal.id} help="Delay each member so the crossover sums coherently, from the phase of the solved fields at each crossover frequency. Off sums the members as solved." checked={combineSpecEffective(state) !== null && sharedDelayMode(combineSpecEffective(state)!) === 'auto'} onChange={(checked) => state.updateCombineSpec((spec) => withDelayMode(spec, checked ? 'auto' : 'manual'))}/>
     </>}
   </>;
 }

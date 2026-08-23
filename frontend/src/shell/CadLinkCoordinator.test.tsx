@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadReturnBundle, CadReturnIngestRecord, FusionCadStatus } from '../api/cadlink';
 import { importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { preferencesStore } from '../prefs/preferences';
+import { expandLegacy } from '../results/crossoverSpec';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
@@ -1352,7 +1353,7 @@ describe('CadLinkCoordinator', () => {
     const retainedRecord = useCadReturnStore.getState().ingestRecord;
     const retainedChannels = useCadReturnStore.getState().driveChannels;
     const retainedDrivers = useCadReturnStore.getState().channelDrivers;
-    const retainedCrossovers = useCadReturnStore.getState().combineCrossoversHz;
+    const retainedCrossovers = useCadReturnStore.getState().combineSpec;
     const retainedAcknowledgements = useCadReturnStore.getState().acknowledgedFindingIds;
 
     act(replace);
@@ -1363,7 +1364,7 @@ describe('CadLinkCoordinator', () => {
     expect(state.ingestRecord).toBe(retainedRecord);
     expect(state.driveChannels).toBe(retainedChannels);
     expect(state.channelDrivers).toBe(retainedDrivers);
-    expect(state.combineCrossoversHz).toBe(retainedCrossovers);
+    expect(state.combineSpec).toBe(retainedCrossovers);
     expect(state.acknowledgedFindingIds).toBe(retainedAcknowledgements);
     expect(state.needsIngest).toBe(true);
     expect(state.ingestStaleReason).toContain('design was replaced');
@@ -1501,9 +1502,9 @@ describe('CadLinkCoordinator', () => {
       },
     });
     expect(state.combineEnabled).toBe(true);
-    expect(state.combineCrossoversHz).toEqual({ 'drive-mf→drive-hf': 1_250 });
-    expect(state.combineLevelMatch).toBe(false);
-    expect(state.combineAlign).toBe(true);
+    // A job submitted before the per-channel spec carries only the legacy
+    // triple; drift compares one shape, so it is expanded on the way in.
+    expect(state.combineSpec).toEqual(expandLegacy(['drive-mf', 'drive-hf'], [1_250], false, true));
     expect(state.driveVoltageV).toBe(4);
     expect(state.sourceSizesMm).toEqual({ 'source-mf': 4, 'source-hf': 2.5 });
     expect(state.rigidSizeMm).toBe(8);

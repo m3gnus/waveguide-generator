@@ -15,6 +15,7 @@ import {
 import type { CadSetup, JobItem } from '../api/jobsSocket';
 import { sendDesignToCad, type WgLinkExportResponse } from '../api/designIo';
 import { getOnshapeConnection, getOnshapeStatus, returnOnshapeToWg, type OnshapeConnection, type OnshapeStatus } from '../api/onshape';
+import { fromResult } from '../results/crossoverSpec';
 import { preferencesStore, usePreferences } from '../prefs/preferences';
 import { useCadPreparationStore } from '../stores/cadPreparation';
 import {
@@ -180,8 +181,8 @@ export function newestReturnArrival(
 
 type CadHistorySetup = Pick<ReturnType<typeof useCadReturnStore.getState>,
   'sourceSizesMm' | 'rigidSizeMm' | 'transitionMm' | 'skippedSourceIds'
-  | 'driveChannels' | 'exteriorOnly' | 'combineEnabled' | 'combineCrossoversHz'
-  | 'combineLevelMatch' | 'combineAlign' | 'channelDrivers' | 'passiveCardioid'
+  | 'driveChannels' | 'exteriorOnly' | 'combineEnabled' | 'combineSpec'
+  | 'channelDrivers' | 'passiveCardioid'
   | 'driveVoltageV' | 'frequencyStartHz' | 'frequencyEndHz' | 'frequencyCount'>;
 
 function object(value: unknown): Record<string, unknown> | null {
@@ -291,16 +292,13 @@ export function cadHistorySetup(
     return [...grouped.values()];
   })();
   const driveChannels = channels.length ? channels : fallbackChannels;
+  // Both crossover generations come back here: a job submitted before the
+  // per-channel spec carries only `crossovers_hz`, and reading it as "no
+  // crossover" would silently drop the setting the run was actually solved
+  // with. `fromResult` expands the legacy triple, so drift compares one shape.
   const combine = object(setup?.combine);
-  const members = Array.isArray(combine?.members)
-    && combine.members.every((member) => typeof member === 'string')
-    ? combine.members as string[]
-    : [];
-  const crossovers = Array.isArray(combine?.crossovers_hz)
-    && combine.crossovers_hz.every((value) => finite(value) !== null)
-    ? combine.crossovers_hz as number[]
-    : [];
-  const validCombine = members.length >= 2 && crossovers.length === members.length - 1;
+  const combineSpec = fromResult(combine ?? undefined);
+  const validCombine = combineSpec !== null;
   const explicitFrequencies = Array.isArray(job.solve_options.frequencies_hz)
     ? job.solve_options.frequencies_hz.filter((value) => finite(value) !== null)
     : [];
@@ -318,11 +316,7 @@ export function cadHistorySetup(
     driveChannels,
     exteriorOnly: typeof setup?.exterior_only === 'boolean' ? setup.exterior_only : false,
     combineEnabled: setup ? validCombine : null,
-    combineCrossoversHz: validCombine ? Object.fromEntries(
-      members.slice(0, -1).map((lower, index) => [`${lower}→${members[index + 1]}`, crossovers[index]]),
-    ) : {},
-    combineLevelMatch: validCombine ? combine?.level_match !== false : null,
-    combineAlign: validCombine ? combine?.align !== false : null,
+    combineSpec,
     channelDrivers: savedChannelDrivers(setup, driveChannels),
     passiveCardioid: savedPassiveCardioid(setup),
     driveVoltageV: finite(setup?.drive_voltage_v) ?? 2.83,
