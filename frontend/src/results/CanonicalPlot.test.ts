@@ -39,7 +39,7 @@ describe('canonical HornLab plots', () => {
     expect(request.payload).toMatchObject({
       frequencies: [500, 1_000],
       reference_level: -9,
-      angle_guide_step: 10,
+      angle_guide_step: 0,
       theme: 'hornlab',
       reference_label: 'baseline',
       directivity: { horizontal: result.directivity?.horizontal },

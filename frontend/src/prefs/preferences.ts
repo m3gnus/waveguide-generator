@@ -155,7 +155,8 @@ export interface Preferences {
  * rather than an implementation detail of one function.
  */
 /** Degrees between graticule lines on a directivity map. */
-const GUIDE_INTERVAL_RANGE_DEG = [1, 180] as const;
+/** 0 turns the graticule off; the map is read by hovering for values. */
+const GUIDE_INTERVAL_RANGE_DEG = [0, 180] as const;
 /** The run-number counter; six digits is what the naming formats can render. */
 const RUN_SEQUENCE_RANGE = [1, 999_999] as const;
 /** Stars, matching the rating control in the run list. */
@@ -170,7 +171,7 @@ const defaults: Preferences = {
   cadApplication: 'fusion360',
   smoothing: 'none',
   mapReference: -6,
-  directivityGuideInterval: 10,
+  directivityGuideInterval: 0,
   // Every default panel must populate from a default solve. 3D Balloon and
   // Forward Beam Map both need spherical sampling, which is off by default, so
   // defaulting to them left two of six panels permanently showing their stub.

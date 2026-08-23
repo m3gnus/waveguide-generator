@@ -50,7 +50,7 @@ function ResultsPreferencesContent() {
       <ResultPanelCountControl/>
       <label className="ui-field">Smoothing<select aria-label="Smoothing" value={preferences.smoothing} onChange={(event) => preferencesStore.update({ smoothing: event.target.value as SmoothingMode })}>{SMOOTHING_MODES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
       <label className="ui-field">Map reference<select aria-label="Map reference" value={preferences.mapReference} onChange={(event) => preferencesStore.update({ mapReference: Number(event.target.value) as MapReference })}>{MAP_REFERENCES.map((value) => <option key={value} value={value}>{value} dB</option>)}</select></label>
-      <label className="ui-field">Angular guides (°)<input aria-label="Directivity angular guide interval" type="number" min={1} max={180} step={1} value={preferences.directivityGuideInterval} onChange={(event) => { if (Number.isFinite(event.target.valueAsNumber)) preferencesStore.update({ directivityGuideInterval: event.target.valueAsNumber }); }}/></label>
+      <label className="ui-field" title="Horizontal lines across the directivity map every N degrees. 0 turns them off.">Angular guides (°, 0 = off)<input aria-label="Directivity angular guide interval" type="number" min={0} max={180} step={1} value={preferences.directivityGuideInterval} onChange={(event) => { if (Number.isFinite(event.target.valueAsNumber)) preferencesStore.update({ directivityGuideInterval: event.target.valueAsNumber }); }}/></label>
       {/* Re/Im is how horn throat impedance is conventionally read; |Z| and
           phase is how a driver's electrical impedance is. The same chart draws
           both, so which one is useful depends on the run. */}

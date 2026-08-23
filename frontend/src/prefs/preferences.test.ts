@@ -29,13 +29,15 @@ describe('client preferences', () => {
       runNameDateFormat: 'yymmdd',
       runNameNumberPosition: 'suffix',
       runNameNumberFormat: 'natural',
-      directivityGuideInterval: 10,
+      directivityGuideInterval: 0,
     });
   });
   it('persists and bounds the directivity angular guide interval', () => {
     preferencesStore.update({ directivityGuideInterval: 15 });
     expect(loadPreferences(localStorage.getItem('waveguide-v2-g3-preferences')).directivityGuideInterval).toBe(15);
-    expect(loadPreferences(JSON.stringify({ version: STORAGE_VERSION, preferences: { directivityGuideInterval: 0 } })).directivityGuideInterval).toBe(1);
+    // 0 is a real setting now -- the graticule off -- not a value to clamp up.
+    expect(loadPreferences(JSON.stringify({ version: STORAGE_VERSION, preferences: { directivityGuideInterval: 0 } })).directivityGuideInterval).toBe(0);
+    expect(loadPreferences(JSON.stringify({ version: STORAGE_VERSION, preferences: { directivityGuideInterval: -5 } })).directivityGuideInterval).toBe(0);
     expect(loadPreferences(JSON.stringify({ version: STORAGE_VERSION, preferences: { directivityGuideInterval: 999 } })).directivityGuideInterval).toBe(180);
   });
   /**
@@ -66,7 +68,7 @@ describe('client preferences', () => {
       minRating: 5,
       jobSort: 'completed_desc',
       cadApplication: 'fusion360',
-      directivityGuideInterval: 10,
+      directivityGuideInterval: 0,
     });
     // A non-array chart list is unusable, so the shipped six panels stand.
     expect(loaded.chartTypes).toHaveLength(6);
