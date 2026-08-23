@@ -14,7 +14,12 @@ from fastapi import FastAPI
 from pydantic import ValidationError
 
 from server.cadlink.store import CadLinkStore
-from server.jobs.models import ChannelCombineSpec, ImportedGeometrySource, SolveRequest
+from server.jobs.models import (
+    ChannelCombineSpec,
+    ImportedGeometrySource,
+    JobStatusResponse,
+    SolveRequest,
+)
 from server.jobs.api import create_jobs_router
 from server.jobs.runtime import ImportedSolveRefusal, JobRuntime, _replay_request
 from server.jobs.store import JobStore
@@ -750,9 +755,85 @@ def test_submit_persists_ingestion_mesh_summary_and_availability(tmp_path: Path)
             serialized = runtime._serialize_job(row)
             assert serialized["design_availability"]["source"] == "cad-import"
             assert serialized["design_availability"]["reopenable"] is False
+            assert serialized["cad_setup"] == row["config_json"]["geometry"]
             assert _replay_request(row).model_dump(mode="json") == SolveRequest.model_validate(
                 row["config_json"]
             ).model_dump(mode="json")
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_legacy_imported_job_recovers_project_provenance_from_ingest(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        runtime, _first_ingest_id, record = await _runtime_fixture(tmp_path)
+        cad_store = runtime.cadlink_store
+        assert cad_store is not None
+        saved = cad_store.save(
+            requested=None,
+            design_hash="sha256:" + "d" * 64,
+            filename="Tritonia-V.cfg",
+            snapshot_builder=lambda _identity: "legacy snapshot",
+        )
+        identity = saved["identity"]
+        cad_store.record_lineage_cad_names(
+            identity.lineage_id,
+            bundle_stem="Tritonia-V",
+            archive_stem="Tritonia-V-project",
+        )
+
+        def build(ingest_id: str, created_at: str) -> str:
+            return json.dumps({
+                **record,
+                "ingest_id": ingest_id,
+                "created_at": created_at,
+                "anchor": {
+                    **record["anchor"],
+                    "design_id": identity.design_id,
+                },
+                "document": {
+                    "name": "Tritonia V",
+                    "return_state_hash": "sha256:return-state",
+                },
+            })
+
+        ingest = cad_store.allocate_ingest(
+            manifest_sha256=MANIFEST_SHA,
+            artifact_sha256=ARTIFACT_SHA,
+            record_builder=build,
+        )
+        try:
+            job_id = await runtime.submit(_request(str(ingest["ingest_id"])))
+            runtime.store.mutate_job_metadata(job_id, {
+                # This is the shape written by the affected historical jobs.
+                "imported_geometry": {
+                    "ingest_id": ingest["ingest_id"],
+                    "anchor_design_id": identity.design_id,
+                },
+            })
+
+            item = await runtime.get_job(job_id)
+
+            assert item["cad_source"] == {
+                "ingest_id": ingest["ingest_id"],
+                "design_id": identity.design_id,
+                "lineage_id": identity.lineage_id,
+                "archive_stem": "Tritonia-V-project",
+                "manifest_sha256": MANIFEST_SHA,
+                "document_name": "Tritonia V",
+                "return_state_hash": "sha256:return-state",
+                "identity": None,
+            }
+            assert item["cad_setup"] == runtime.store.get_job_row(job_id)[
+                "config_json"
+            ]["geometry"]
+            assert (
+                JobStatusResponse.model_validate(item).cad_source.lineage_id
+                == identity.lineage_id
+            )
         finally:
             await runtime.shutdown()
 
