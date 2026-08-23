@@ -151,7 +151,7 @@ export function CrossoverStrip({ jobId, channelId, combine, onApplied }: {
         <input
           type="number"
           min={1}
-          step={10}
+          step="any"
           disabled={!pair.linked}
           value={section?.fcHz ?? ''}
           title={pair.linked ? undefined : unlinkedPairNote(pair)}
