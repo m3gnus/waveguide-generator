@@ -508,6 +508,10 @@ def test_a_relaunch_that_dies_immediately_is_not_reported_as_a_success(
         confirm=lambda process: confirm_relaunch(
             process, timeout=0.0, sleeper=lambda _seconds: None
         ),
+        # Without this the default reporter runs, and on Windows that is a
+        # modal MessageBoxW with no timeout: the suite blocks forever on a
+        # runner that has nobody to click OK.
+        failure_reporter=lambda _message: None,
     )
 
     assert exit_code == 5
