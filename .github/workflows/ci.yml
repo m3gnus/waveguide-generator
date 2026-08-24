@@ -19,6 +19,7 @@ jobs:
   frontend:
     name: Frontend
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -39,6 +40,7 @@ jobs:
   shared-codec:
     name: Shared frame codec
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -52,6 +54,7 @@ jobs:
   drift:
     name: Generated-file drift
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -76,6 +79,12 @@ jobs:
   server:
     name: Server (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # Windows has hung here on a blocking Win32 dialog: the suite stops
+    # making progress but the process never exits, so without a cap the job
+    # sits at GitHub's 6-hour default and only dies when the next push
+    # cancels it. Linux and macOS finish in 5-7 minutes; this leaves room
+    # for a slow Windows runner and still fails a hang inside the hour.
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
