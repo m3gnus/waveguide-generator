@@ -2,6 +2,7 @@ import type { ImportedSolveSubmission } from './actions';
 import {
   blockingFindingWire,
   channelAcceptsDriver,
+  channelDriverPresent,
   channelDriverWire,
   combineEnabledEffective,
   combineSpecEffective,
@@ -136,12 +137,17 @@ export function importedSubmissionBlocker(
  * consequences are invisible until afterwards: that channel has no power,
  * current or excursion to show, and in a combined output its level was matched
  * rather than derived from a driver.
+ *
+ * A channel whose driver is present but incomplete is deliberately NOT here:
+ * it is refused by `importedSubmissionBlocker`, not solved unit-driven, and
+ * listing it both ways put "drive-hf solves unit-driven" on screen right
+ * beside the blocker refusing drive-hf.
  */
 export function undrivenChannels(
   state: Pick<CadReturnSnapshot, 'driveChannels' | 'channelDrivers'>,
 ): string[] {
   return state.driveChannels
-    .filter((channel) => channelDriverWire(state.channelDrivers[channel.id]) === undefined)
+    .filter((channel) => !(channelAcceptsDriver(channel) && channelDriverPresent(state.channelDrivers[channel.id])))
     .map((channel) => channel.id);
 }
 
@@ -162,7 +168,11 @@ export function importedSubmissionNotices(
   state: CadReturnSnapshot = useCadReturnStore.getState(),
 ): string[] {
   const undriven = undrivenChannels(state);
-  const driven = state.driveChannels.length - undriven.length;
+  // Counted from the submittable wire, not as "everything else": a channel
+  // whose present driver is still incomplete is in neither list — it is
+  // refused, and a refusal must not tip these notices into existing.
+  const driven = state.driveChannels.filter((channel) =>
+    channelAcceptsDriver(channel) && channelDriverWire(state.channelDrivers[channel.id]) !== undefined).length;
   const combining = combineEnabledEffective(state);
   const members = new Set(combineSpecEffective(state)?.members ?? []);
   // Only the mixture is worth a word. A solve with no drivers at all is the

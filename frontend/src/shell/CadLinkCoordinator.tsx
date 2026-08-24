@@ -260,7 +260,7 @@ function savedChannelDrivers(
     const preset: DriverPreset | null = label
       ? { id: `manual:${channel.id}`, label, source: 'manual', kind: 'unknown', z_ohm: null, xo_min_hz: null, base: fields }
       : null;
-    return [[channel.id, { enabled: true, fields: preset ? {} : fields, preset }]];
+    return [[channel.id, { fields: preset ? {} : fields, preset }]];
   }));
 }
 

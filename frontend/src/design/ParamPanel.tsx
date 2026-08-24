@@ -13,6 +13,7 @@ import { useCadPreparationStore } from '../stores/cadPreparation';
 import {
   assignableChannelIds,
   channelAcceptsDriver,
+  channelDriverPresent,
   hasPassiveCardioidSurface,
   PASSIVE_CARDIOID_CHANNEL_ID,
   passiveCardioidBlocker,
@@ -847,10 +848,11 @@ function CadFrequencySweep() {
 /**
  * Per-channel driver setup.
  *
- * One card per drive channel, and the source-to-channel assignment inside the
- * card that currently drives it. The standalone list this replaces sat above
- * every card and repeated each source there, so an LF channel's grouping and
- * its driver were two separate places in the same section.
+ * One card per drive channel, each carrying its motion and its driver picker.
+ * There is no driver on/off switch and no source-to-channel assignment UI any
+ * more: every source drives its own default channel, and a channel is
+ * voltage-driven exactly when a driver is present on it — picked from the
+ * library or typed by hand — and unit-driven when it is cleared.
  */
 function CadDriveChannels() {
   const state = useCadReturnStore();
@@ -863,17 +865,11 @@ function CadDriveChannels() {
     [...new Set(sources.map((source) => source.defaultDriveChannelId))],
     state.passiveCardioid.enabled && state.passiveCardioid.coupled,
   );
-  // Grouping is a choice only when there is another channel to move a source
-  // to and another source to move. One source on one channel would get a
-  // select offering the state it is already in, so it gets none -- the card
-  // summary already names the source. The palette's reveal for the assignment
-  // then falls back to the section, which is what `fallbackId` is for.
-  const regroupable = channelIds.length > 1 && activeSources.length > 1;
-  // The exception: a channel holding the id the coupled campaign reserves is
-  // no longer assignable, and the refusal it raises tells the user to reassign
-  // that source. Hiding the only control that can is how a blocker becomes a
-  // dead end, so a stranded channel keeps its select however few there are.
-  const showsAssignment = (channel: { id: string }) => regroupable || !channelIds.includes(channel.id);
+  // The one place a reassignment select survives: a channel stranded on an id
+  // that is no longer assignable — the id the coupled campaign reserves. The
+  // refusal that raises tells the user to reassign that source, and hiding the
+  // only control that can is how a blocker becomes a dead end.
+  const showsAssignment = (channel: { id: string }) => !channelIds.includes(channel.id);
   return <>
     <div className="cad-channel-list">
       {state.driveChannels.map((channel) => {
@@ -883,9 +879,8 @@ function CadDriveChannels() {
           <div className="cad-channel-summary" data-control-reveal-id={CAD_CONTROLS.channelMotion.reveal.id}><span>{channel.id} · {channel.source_ids.join(' + ')}</span><select aria-label={`${CAD_CONTROLS.channelMotion.label} for ${channel.id}`} value={channel.motion} onChange={(event) => state.setChannelMotion(channel.id, event.target.value as 'normal' | 'axial')}><option value="normal">Normal motion</option><option value="axial">Axial motion</option></select></div>
           {showsAssignment(channel) && channel.source_ids
             .filter((sourceId) => activeSources.some((source) => source.id === sourceId))
-            .map((sourceId) => <div className="cad-channel-row" data-control-reveal-id={CAD_CONTROLS.channelAssignment.reveal.id} key={sourceId}><b>{sourceId}</b><select aria-label={`${CAD_CONTROLS.channelAssignment.label} for ${sourceId}`} value={channel.id} onChange={(event) => state.setSourceChannel(sourceId, event.target.value)}>{channelIds.map((id) => <option value={id} key={id}>{id}</option>)}</select></div>)}
-          {driverEligible && <ToggleRow id={`cad-driver-${channel.id}`} label={`${CAD_CONTROLS.driverToggle.label} · ${channel.id}`} revealId={CAD_CONTROLS.driverToggle.reveal.id} help="Voltage-driven Thiele-Small coupling. The channel's levels become absolute at the drive voltage and its impedance chart becomes the electrical input impedance in ohms." checked={driverForm?.enabled ?? false} onChange={(checked) => state.setChannelDriverEnabled(channel.id, checked)}/>}
-          {driverEligible && driverForm?.enabled && <ChannelDriverPicker
+            .map((sourceId) => <div className="cad-channel-row" key={sourceId}><b>{sourceId}</b><select aria-label={`Drive channel for ${sourceId}`} value={channel.id} onChange={(event) => state.setSourceChannel(sourceId, event.target.value)}>{channelIds.map((id) => <option value={id} key={id}>{id}</option>)}</select></div>)}
+          {driverEligible && <ChannelDriverPicker
             channel={channel}
             form={driverForm}
             roleHint={activeSources.find((source) => source.id === channel.source_ids[0])?.role}
@@ -893,7 +888,7 @@ function CadDriveChannels() {
         </div>;
       })}
     </div>
-    {state.driveChannels.some((channel) => state.channelDrivers[channel.id]?.enabled)
+    {state.driveChannels.some((channel) => channelAcceptsDriver(channel) && channelDriverPresent(state.channelDrivers[channel.id]))
       && <NumberField label={CAD_CONTROLS.driveVoltage.label} revealId={CAD_CONTROLS.driveVoltage.reveal.id} unit="V" value={state.driveVoltageV} min={0.01} step={0.1} precision={2} description="RMS voltage applied to every driver channel (2.83 V ≈ 1 W into 8 Ω)" onCommit={state.setDriveVoltage}/>}
     {/* Said here, beside the drivers, and before the solve rather than after
         it: a channel with no driver is a good solve with consequences that are

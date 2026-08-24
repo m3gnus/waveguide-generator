@@ -8,7 +8,7 @@ import { buildImportedSubmission, importedSubmissionBlocker } from '../jobs/impo
 import { cadLinkCoordinatorBridge } from '../shell/CadLinkCoordinator';
 import { buildParameterPaletteEntries } from '../shell/TopBar';
 import { workspaceNavigation } from '../shell/workspaceNavigation';
-import { channelDriverWire, driverEditedKeys, resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
+import { channelDriverPresent, channelDriverWire, driverEditedKeys, resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetCadPreparationStore, useCadPreparationStore } from '../stores/cadPreparation';
 import { resetDriverLibraryStore, useDriverLibraryStore } from '../stores/driverLibrary';
 import { hydrateDesignDocument } from '../api/designIo';
@@ -64,7 +64,9 @@ function setCadReady({ cardioidPort = false }: { cardioidPort?: boolean } = {}):
       { id: 'drive-mf', source_ids: ['source-mf'], motion: 'normal' },
       ...(cardioidPort ? [{ id: 'drive-port', source_ids: ['source-port'], motion: 'normal' as const }] : []),
     ],
-    channelDrivers: { 'drive-hf': { enabled: true, fields: {}, preset: null } },
+    // Empty on purpose: with no toggle, an empty form is not a driver, and
+    // half the assertions below depend on that distinction.
+    channelDrivers: { 'drive-hf': { fields: {}, preset: null } },
     exteriorOnly: true,
     // Left unset on purpose: a multi-driver return combines by default.
     combineEnabled: null,
@@ -416,13 +418,20 @@ describe('ParamPanel inventory UX', () => {
     for (const id of ['cad-force-full-domain', 'cad-combine', 'cad-exterior-only', 'skip-source-mf', 'drift-source-mf']) {
       expect(host.querySelector(`#${id}`), id).not.toBeNull();
     }
-    expect(host.querySelector('[aria-label="Drive channel for source-hf"]')).not.toBeNull();
+    // The grouping select is gone: each source drives its default channel.
+    expect(host.querySelector('[aria-label^="Drive channel for"]')).toBeNull();
     expect(host.querySelector('[aria-label="Motion for drive-hf"]')).not.toBeNull();
     expect(host.textContent).toContain('Cabinet & waveguide');
     expect(host.textContent).toContain('Size transition');
     expect(host.textContent).toContain('HF source');
     expect(host.textContent).toContain('MF source');
+    // The voltage input follows driver presence, not a toggle: the fixture's
+    // empty form keeps it away, one typed T/S number brings it out.
+    expect(host.textContent).not.toContain('Drive voltage');
+    act(() => useCadReturnStore.getState().setChannelDriverField('drive-hf', 'sd_cm2', 26));
     expect(host.textContent).toContain('Drive voltage');
+    act(() => useCadReturnStore.getState().setChannelDriverField('drive-hf', 'sd_cm2', null));
+    expect(host.textContent).not.toContain('Drive voltage');
 
     const levels = host.querySelector('[aria-label="Level match members mode"]')!;
     expect(levels.querySelector<HTMLButtonElement>('button[aria-pressed="true"]')!.textContent).toBe('Auto');
@@ -432,11 +441,8 @@ describe('ParamPanel inventory UX', () => {
     expect(sharedDelayMode(useCadReturnStore.getState().combineSpec!)).toBe('manual');
     expect(buildImportedSubmission(useCadReturnStore.getState()).geometry.combine?.channels?.['drive-mf'].delay)
       .toEqual({ mode: 'manual', ms: 0 });
-    // The rail fixture leaves an enabled, empty driver on drive-hf so the
-    // driver controls render. That is its own refusal now -- an unfinished
-    // driver is no longer dropped on the way to the wire -- so clear it before
-    // asserting the blocker this test is about.
-    act(() => useCadReturnStore.getState().setChannelDriverEnabled('drive-hf', false));
+    // The fixture's empty form is not a driver, so nothing needs clearing
+    // before asserting the blocker this test is about.
     expect(importedSubmissionBlocker()).toBeNull();
 
     const forceFull = host.querySelector<HTMLInputElement>('#cad-force-full-domain')!;
@@ -642,12 +648,8 @@ describe('ParamPanel inventory UX', () => {
     expect(section().querySelector('[aria-label="Rear volume in L"]')).toBeNull();
     act(() => host.querySelector<HTMLInputElement>('#cad-passive-cardioid')!.click());
     expect(section().textContent).toContain('roughly 20 seconds');
-    // The rail fixture leaves an enabled, empty driver on drive-hf so the
-    // driver controls render. That is its own refusal now -- an unfinished
-    // driver is no longer dropped on the way to the wire -- so clear it before
-    // asserting the blocker this test is about.
-    act(() => useCadReturnStore.getState().setChannelDriverEnabled('drive-hf', false));
-    // Enabled but empty is a refusal, never a quiet pre-campaign submission.
+    // The rail fixture's empty driver form is not a driver, so the only
+    // refusal in play is the campaign's own.
     expect(importedSubmissionBlocker()).toContain('Rear volume');
 
     type(section().querySelector<HTMLInputElement>('[aria-label="Rear volume in L"]')!, '6');
@@ -745,7 +747,9 @@ describe('ParamPanel inventory UX', () => {
     });
     const options = () => [...host.querySelectorAll<HTMLOptionElement>('[aria-label="Drive channel for source-mf"] option')]
       .map((option) => option.value);
-    expect(options()).toContain('passive_cardioid');
+    // While its id is still assignable the channel is ordinary, and ordinary
+    // channels carry no assignment select at all any more.
+    expect(options()).toEqual([]);
 
     act(() => useCadReturnStore.getState().setPassiveCardioid({
       enabled: true, coupled: true, rearVolumeL: 6, portLengthMm: 25,
@@ -761,40 +765,20 @@ describe('ParamPanel inventory UX', () => {
     expect(host.querySelector('.cad-channel[data-channel-id="passive_cardioid"] .cad-channel-row')).not.toBeNull();
   });
 
-  it('keeps each source assignment inside the card that drives it and moves it when regrouped', () => {
+  it('offers no source assignment outside a stranded channel', () => {
     act(() => {
       setCadReady();
       workspaceModeStore.setMode('cad');
       root.render(withQueryClient(<ParamPanel tab="simulation" />));
     });
-    const card = (id: string) => host.querySelector<HTMLElement>(`.cad-channel[data-channel-id="${id}"]`);
-    const assignment = (sourceId: string) => host.querySelector<HTMLSelectElement>(`[aria-label="Drive channel for ${sourceId}"]`);
-
-    // The standalone list above the cards is gone: every assignment sits in
-    // the card of the channel that currently drives that source.
-    expect([...host.querySelectorAll<HTMLElement>('.cad-channel-row')].map((row) => row.closest<HTMLElement>('.cad-channel')?.dataset.channelId))
+    // Two channels, two sources -- exactly the case that used to render a
+    // select per source. Grouping several sources onto one drive channel is
+    // not something this rail offers any more: each source keeps its default
+    // channel, and the card summary already names what it drives.
+    expect([...host.querySelectorAll<HTMLElement>('.cad-channel')].map((card) => card.dataset.channelId))
       .toEqual(['drive-hf', 'drive-mf']);
-    expect(card('drive-hf')!.contains(assignment('source-hf'))).toBe(true);
-    expect(card('drive-mf')!.contains(assignment('source-mf'))).toBe(true);
-    expect(host.textContent).not.toContain('Assign two sources to the same channel to drive them together.');
-
-    // Regrouping is the same store action as before, and the row follows the
-    // source to the card that now drives it.
-    const select = assignment('source-mf')!;
-    act(() => {
-      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set?.call(select, 'drive-hf');
-      select.dispatchEvent(new Event('change', { bubbles: true }));
-    });
-    expect(useCadReturnStore.getState().driveChannels)
-      .toEqual([{ id: 'drive-hf', source_ids: ['source-hf', 'source-mf'], motion: 'normal' }]);
-    expect(card('drive-mf')).toBeNull();
-    expect(card('drive-hf')!.contains(assignment('source-mf'))).toBe(true);
-
-    // One active source is not a choice: skipping the other takes the selects
-    // away and leaves the summary that already names what is driven.
-    act(() => useCadReturnStore.getState().setSkipped('source-mf', true));
     expect(host.querySelector('.cad-channel-row')).toBeNull();
-    expect(card('drive-hf')!.querySelector('.cad-channel-summary')!.textContent).toContain('drive-hf · source-hf');
+    expect(host.querySelector('[aria-label^="Drive channel for"]')).toBeNull();
   });
 
   it('offers no channel assignment for a single-channel return', () => {
@@ -814,9 +798,10 @@ describe('ParamPanel inventory UX', () => {
       .toContain('drive-hf · source-hf');
     expect(host.querySelector('.cad-channel-row')).toBeNull();
     expect(host.querySelector('[aria-label^="Drive channel for"]')).toBeNull();
-    // Motion and the driver stay where they were.
+    // Motion and the driver stay where they were; with no library stubbed the
+    // picker falls back to the manual T/S grid, and there is no toggle gating it.
     expect(host.querySelector('[aria-label="Motion for drive-hf"]')).not.toBeNull();
-    expect(host.querySelector('#cad-driver-drive-hf')).not.toBeNull();
+    expect(host.querySelector('.cad-channel[data-channel-id="drive-hf"] .cad-driver-grid')).not.toBeNull();
   });
 
   it('shows the CAD simulation empty state without hiding formula editing on Geometry', () => {
@@ -1261,6 +1246,26 @@ describe('driver picker', () => {
     expect(useCadReturnStore.getState().channelDrivers['drive-hf'].preset).toMatchObject({
       id: 'Acme::HD-1::8', label: 'Acme HD-1', source: 'database',
     });
+  });
+
+  it('drives the channel by presence: picked is driven, cleared is unit-driven', async () => {
+    await mountWithLibrary();
+    const form = () => useCadReturnStore.getState().channelDrivers['drive-hf'];
+    // The rail fixture's empty form renders the picker but drives nothing.
+    expect(channelDriverPresent(form())).toBe(false);
+
+    const input = searchInput();
+    act(() => input.focus());
+    await settle();
+    await press(input, 'Enter');
+    await settle();
+    expect(channelDriverPresent(form())).toBe(true);
+    expect(channelDriverWire(form())).toBeDefined();
+
+    act(() => channelCard().querySelector<HTMLButtonElement>('.driver-clear-link')!.click());
+    await settle();
+    expect(channelDriverPresent(form())).toBe(false);
+    expect(channelDriverWire(form())).toBeUndefined();
   });
 
   it('keeps the current driver when Escape closes the list', async () => {

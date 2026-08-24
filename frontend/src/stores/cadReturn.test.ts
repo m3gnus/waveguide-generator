@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
 import {
   blockingFindingWire,
+  channelDriverPresent,
   channelDriverWire,
   combineChain,
   combineChannelRole,
@@ -154,20 +155,19 @@ describe('CAD return store', () => {
   it('carries an eligible channel driver across a same-inventory arrival', () => {
     const store = useCadReturnStore.getState();
     store.selectBundle(bundle);
-    store.setChannelDriverEnabled('drive-hf', true);
     store.setChannelDriverField('drive-hf', 'sd_cm2', 8);
 
     expect(store.selectArrivedBundle({ ...bundle, modifiedAt: '2026-08-11T02:00:00Z' })).toBe('carried');
 
     const driver = useCadReturnStore.getState().channelDrivers['drive-hf'];
-    expect(driver?.enabled).toBe(true);
+    expect(channelDriverPresent(driver)).toBe(true);
     expect(driver?.fields.sd_cm2).toBe(8);
   });
 
   it('drops a channel driver when the channel turns axial', () => {
     const store = useCadReturnStore.getState();
     store.selectBundle(bundle);
-    store.setChannelDriverEnabled('drive-mf', true);
+    store.setChannelDriverField('drive-mf', 'sd_cm2', 135);
 
     // A driver models a piston, so the server refuses one on axial motion.
     store.setChannelMotion('drive-mf', 'axial');
@@ -178,7 +178,7 @@ describe('CAD return store', () => {
   it('drops a channel driver when a second source joins the channel', () => {
     const store = useCadReturnStore.getState();
     store.selectBundle(bundle);
-    store.setChannelDriverEnabled('drive-hf', true);
+    store.setChannelDriverField('drive-hf', 'sd_cm2', 26);
 
     // Two sources leave the radiating area ambiguous, which the server refuses.
     store.setSourceChannel('source-mf', 'drive-hf');
@@ -192,7 +192,6 @@ describe('CAD return store', () => {
   it('never submits a driver a channel cannot carry', () => {
     const store = useCadReturnStore.getState();
     store.selectBundle(bundle);
-    store.setChannelDriverEnabled('drive-hf', true);
     DRIVER_REQUIRED_KEYS.forEach((key) => store.setChannelDriverField('drive-hf', key, 1));
     // One mass and one compliance source complete the spec; which ones is the
     // user's choice, exactly as `DriverSpec.validate_completeness` has it.
@@ -316,7 +315,6 @@ describe('CAD return store', () => {
     store.setSkipped('source-hf', true);
     store.setChannelMotion('drive-mf', 'axial');
     store.setExteriorOnly(true);
-    store.setChannelDriverEnabled('drive-mf', true);
     store.setChannelDriverField('drive-mf', 'sd_cm2', 135);
     store.setDriveVoltage(4);
     store.setSweep({ frequencyStartHz: 300, frequencyEndHz: 12_000, frequencyCount: 31 });
@@ -342,7 +340,7 @@ describe('CAD return store', () => {
       exteriorOnly: true,
       combineEnabled: true,
       combineSpec: expandLegacy(['drive-mf', 'drive-hf'], [1_350], false, false),
-      channelDrivers: { 'drive-mf': { enabled: true, fields: { sd_cm2: 135 } } },
+      channelDrivers: { 'drive-mf': { fields: { sd_cm2: 135 } } },
       driveVoltageV: 4,
       frequencyStartHz: 300,
       frequencyEndHz: 12_000,
@@ -681,7 +679,6 @@ describe('a channel driver picked from the library', () => {
     resetDocumentStore();
     resetCadReturnStore();
     useCadReturnStore.getState().selectBundle(bundle);
-    useCadReturnStore.getState().setChannelDriverEnabled('drive-hf', true);
   });
 
   it('submits the preset values under the user’s edits', () => {
@@ -799,7 +796,7 @@ describe('a channel driver picked from the library', () => {
     resetCadReturnStore();
     useCadReturnStore.getState().selectBundle(bundle);
     expect(useCadReturnStore.getState().channelDrivers['drive-hf']).toEqual({
-      enabled: true, fields: { xmax_mm: 1.2 }, preset: PRESET,
+      fields: { xmax_mm: 1.2 }, preset: PRESET,
     });
 
     // A profile written before drivers could be picked carries no preset key
@@ -810,8 +807,45 @@ describe('a channel driver picked from the library', () => {
     resetCadReturnStore();
     useCadReturnStore.getState().selectBundle(bundle);
     expect(useCadReturnStore.getState().channelDrivers['drive-hf']).toEqual({
-      enabled: true, fields: { xmax_mm: 1.2 }, preset: null,
+      fields: { xmax_mm: 1.2 }, preset: null,
     });
+  });
+
+  it('ignores the legacy enabled flag: a stored driver is driven because it is there', () => {
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 1,
+    }, 'current');
+    useCadReturnStore.getState().setChannelDriverPreset('drive-hf', PRESET);
+
+    // A profile stored before "present = driven" carries an `enabled` flag.
+    // Presence decides now, so even a driver deliberately switched off comes
+    // back driven -- the accepted cost of removing the switch.
+    const raw = JSON.parse(localStorage.getItem(solveProfileStorageKey)!);
+    raw.profiles[0].settings.channelDrivers['drive-hf'].enabled = false;
+    localStorage.setItem(solveProfileStorageKey, JSON.stringify(raw));
+    resetCadReturnStore();
+    useCadReturnStore.getState().selectBundle(bundle);
+    const form = useCadReturnStore.getState().channelDrivers['drive-hf'];
+    expect(form).toEqual({ fields: {}, preset: PRESET });
+    expect(channelDriverPresent(form)).toBe(true);
+
+    // The flag is ignored, not unvalidated: a non-boolean still rejects the
+    // stored drivers with the same strictness as every other field.
+    raw.profiles[0].settings.channelDrivers['drive-hf'].enabled = 'yes';
+    localStorage.setItem(solveProfileStorageKey, JSON.stringify(raw));
+    resetCadReturnStore();
+    useCadReturnStore.getState().selectBundle(bundle);
+    expect(useCadReturnStore.getState().channelDrivers['drive-hf']).toBeUndefined();
+  });
+
+  it('counts a driver present only by its own numbers, never the installation fields', () => {
+    // Count and rear volume describe the channel and survive a Clear, so they
+    // must not make a cleared channel look driven.
+    expect(channelDriverPresent(undefined)).toBe(false);
+    expect(channelDriverPresent({ fields: {}, preset: null })).toBe(false);
+    expect(channelDriverPresent({ fields: { count: 2, rear_volume_l: 1.5 }, preset: null })).toBe(false);
+    expect(channelDriverPresent({ fields: { sd_cm2: 26 }, preset: null })).toBe(true);
+    expect(channelDriverPresent({ fields: {}, preset: PRESET })).toBe(true);
   });
 
   it('tolerates a stored preset saved before xo_min_hz existed, and rejects a malformed one', () => {
