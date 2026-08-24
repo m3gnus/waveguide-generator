@@ -610,7 +610,20 @@ function setMany(design: DesignDocument, updates: Record<string, DesignValue>): 
   return Object.entries(updates).reduce((next, [path, value]) => setAtPath(next, path, value), design);
 }
 
+let currentLoadSource: DesignLoadSource = 'ordinary';
+
+/**
+ * How the design now in the store got there. `cad-project-switch` means a CAD
+ * Link flow replaced it, so it is not the user's parametric working design —
+ * which is what returning to Parametric mode should put back on screen.
+ * Edits do not change the answer: they refine whatever design was loaded.
+ */
+export function currentDesignLoadSource(): DesignLoadSource {
+  return currentLoadSource;
+}
+
 function bump(reason: MutationReason, immediate: boolean, loadSource?: DesignLoadSource): void {
+  if (reason === 'load' && loadSource) currentLoadSource = loadSource;
   const revision = useDesignStore.getState().designRevision;
   announce({ revision, reason, immediate, ...(loadSource ? { loadSource } : {}) });
 }
