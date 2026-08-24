@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
-import { DEFAULT_ATH_POLAR_UI, athPolarOverrides } from './athPolars';
+import { DEFAULT_ATH_POLAR_UI, MIN_POLAR_DISTANCE_M, athPolarOverrides } from './athPolars';
 import { durableSettings } from './durableSettings';
 import { MAX_FREQUENCY_POINTS, parseFrequencyList, type FrequencyListParse } from './frequencyList';
 import {
@@ -77,11 +77,10 @@ export const POLAR_AXES: PolarAxis[] = ['horizontal', 'vertical', 'diagonal'];
  * The angular positions are unbounded on purpose -- a sweep may legitimately
  * run through negative angles -- so only finiteness is checked for those.
  *
- * Metres. Closer than this is inside the mouth of most horns, so a stored
- * value below it is clamped up rather than replaced: the intent to measure
- * close is kept, the impossible part is not.
+ * `MIN_POLAR_DISTANCE_M` lives in `athPolars` (the `.cfg` reader clamps to it
+ * too) and is re-exported here beside the limits it belongs with.
  */
-export const MIN_POLAR_DISTANCE_M = 0.1;
+export { MIN_POLAR_DISTANCE_M };
 /**
  * Degrees, exclusive. The step has no clampable floor -- the panel offers
  * whole degrees and a `.cfg` may legitimately state a finer one -- so a stored
@@ -237,9 +236,19 @@ export function normalizePolarUi(raw: unknown, fallback: PolarUiState = defaultP
   // The fallback is itself a stored value on a rehydrate, so it gets the same
   // check before it is trusted as a replacement.
   const fallbackStep = fallback.angleStep > MIN_ANGLE_STEP_EXCLUSIVE_DEG ? fallback.angleStep : defaultPolarUi.angleStep;
+  // A degenerate sweep (end at or below start) has no clampable repair either:
+  // neither endpoint alone is the wrong one, so the pair falls back together.
+  // Left in place, it would throw out of `polarConfigFromUi` on the render
+  // path at the next launch -- durable settings must never hold one.
+  const angleStart = finite(stored.angleStart, fallback.angleStart);
+  const angleEnd = finite(stored.angleEnd, fallback.angleEnd);
+  const fallbackPair: [number, number] = fallback.angleEnd > fallback.angleStart
+    ? [fallback.angleStart, fallback.angleEnd]
+    : [defaultPolarUi.angleStart, defaultPolarUi.angleEnd];
+  const [rangeStart, rangeEnd] = angleEnd > angleStart ? [angleStart, angleEnd] : fallbackPair;
   return {
-    angleStart: finite(stored.angleStart, fallback.angleStart),
-    angleEnd: finite(stored.angleEnd, fallback.angleEnd),
+    angleStart: rangeStart,
+    angleEnd: rangeEnd,
     angleStep: angleStep > MIN_ANGLE_STEP_EXCLUSIVE_DEG ? angleStep : fallbackStep,
     distance: Math.max(MIN_POLAR_DISTANCE_M, finite(stored.distance, fallback.distance)),
     normAngle: finite(stored.normAngle, fallback.normAngle),

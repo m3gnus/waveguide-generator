@@ -153,6 +153,28 @@ describe('a corrupt stored payload cannot reach the store', () => {
     expect(() => useSolveOptionsStore.getState().options()).not.toThrow();
   });
 
+  it('repairs a degenerate sweep so it can never reach durable settings', async () => {
+    // The live bug: 0..0 persisted, then threw out of `polarConfigFromUi` on
+    // the render path at every subsequent launch.
+    await rehydrateWith({ polar: { ...defaultPolarUi, angleStart: 0, angleEnd: 0 } });
+    const { polar } = useSolveOptionsStore.getState();
+    expect(polar.angleStart).toBe(defaultPolarUi.angleStart);
+    expect(polar.angleEnd).toBe(defaultPolarUi.angleEnd);
+    expect(() => useSolveOptionsStore.getState().options()).not.toThrow();
+  });
+
+  it('falls back the endpoint pair together when the sweep is inverted', () => {
+    const normalized = normalizePolarUi({ ...defaultPolarUi, angleStart: 90, angleEnd: 30 });
+    expect(normalized.angleStart).toBe(defaultPolarUi.angleStart);
+    expect(normalized.angleEnd).toBe(defaultPolarUi.angleEnd);
+    // A degenerate fallback pair gets the same check before it is trusted.
+    const fromBadFallback = normalizePolarUi(
+      { ...defaultPolarUi, angleStart: 10, angleEnd: 10 },
+      { ...defaultPolarUi, angleStart: 5, angleEnd: 5 },
+    );
+    expect(fromBadFallback.angleEnd).toBeGreaterThan(fromBadFallback.angleStart);
+  });
+
   it('keeps the settings it can read and only replaces the ones it cannot', () => {
     const normalized = normalizePersistedSolveOptions({
       engine: 'metal',
