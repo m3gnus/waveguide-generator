@@ -472,7 +472,7 @@ function DriverSheet({ channel, form, onClose }: {
   // invitation to state two (`channelDriverWire` sends only one either way).
   const sheetFields = nameEditable ? CAD_DRIVER_FIELD_CONTROLS : CAD_DRIVER_SHEET_FIELDS;
   const savedId = preset === null ? null : preset.source === 'mine' ? preset.id : `mine:${preset.id}`;
-  const saved = savedId !== null && savedAs === `${savedId} ${preset!.label}`;
+  const saved = savedId !== null && savedAs === `${savedId}\u0000${preset!.label}`;
 
   const rename = (text: string) => {
     if (!preset) return;
@@ -505,7 +505,7 @@ function DriverSheet({ channel, form, onClose }: {
     // The saved copy is now what the channel holds, so saving again updates it
     // instead of leaving a second entry behind under a `mine:` id.
     if (manual) state.setChannelDriverPreset(channel.id, { ...preset, id: savedId, source: 'mine', base });
-    setSavedAs(`${savedId} ${preset.label}`);
+    setSavedAs(`${savedId}\u0000${preset.label}`);
   };
 
   const provenance = preset?.source === 'mine'
