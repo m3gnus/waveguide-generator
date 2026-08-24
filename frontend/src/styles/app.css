@@ -677,6 +677,7 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .cad-setup-steps a { color: var(--acc); }
 .cad-setup-folder { margin-top: 7px; padding-top: 7px; border-top: 1px solid var(--hair-soft); }
 .cad-setup-folder .cad-settings-note { margin: -2px 0 7px; }
+.cad-settings-subhead { margin: 0 0 6px; color: var(--fg2); font-size: var(--text-micro); font-weight: 600; text-transform: uppercase; }
 .cad-settings-connection { margin-top: 5px; }
 .cad-folder-manual { margin-top: 7px; color: var(--fg3); font-size: var(--text-micro); }
 .cad-folder-manual summary { width: max-content; color: var(--acc); cursor: pointer; }
@@ -1013,9 +1014,17 @@ textarea:disabled { opacity: .48; }
 }
 
 /* Post-solve crossover editor for a combined result channel. */
-.result-recombine { border-bottom: 1px solid var(--hair-soft); text-transform: none; }
+/* The crossover strip wraps rather than scrolls: a narrow dock must still show
+   the Apply button and the null-depth chip, not hide them off the right edge. */
+.result-recombine { flex-wrap: wrap; row-gap: 3px; padding-block: 3px; border-bottom: 1px solid var(--hair-soft); overflow-x: visible; text-transform: none; }
 .result-recombine-pair { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .result-recombine-pair input { width: 64px; height: 19px; padding: 0 4px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); color: var(--fg1); font-size: var(--text-micro); }
+.result-recombine-pair select { height: 19px; max-width: 104px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg1); font-size: var(--text-micro); }
+.result-recombine-pair input:disabled, .result-recombine-pair select:disabled { opacity: .55; }
+.result-recombine-unlinked { color: var(--amber); white-space: nowrap; }
+.result-recombine-mode { display: inline-flex; align-items: center; gap: 4px; color: var(--fg3); white-space: nowrap; }
+.result-recombine-chip { flex: none; padding: 0 5px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); color: var(--fg2); font: var(--text-micro) var(--mono); white-space: nowrap; }
+.result-recombine-chip.warn { border-color: rgba(var(--amber-rgb), .38); background: rgba(var(--amber-rgb), .1); color: var(--amber); }
 .result-recombine-error { color: var(--danger, #c65b4e); white-space: nowrap; }
 
 /* Measured responses overlaid on the on-axis SPL chart. */
@@ -1034,3 +1043,81 @@ textarea:disabled { opacity: .48; }
 .cad-driver-field { display: flex; flex-direction: column; gap: 2px; font-size: var(--text-micro); color: var(--fg3); }
 .cad-driver-field input { height: 20px; padding: 0 4px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); color: var(--fg1); font-size: var(--text-micro); }
 .cad-driver-hint { grid-column: 1 / -1; margin: 2px 0 0; font-size: var(--text-micro); color: var(--fg3); }
+
+/* Driver picker: an inline search whose hits drop under it, and the picked
+   driver collapsed to chips. Same density and tokens as the grid above. */
+.driver-picker { display: grid; gap: 4px; padding: 2px 6px 6px; }
+.driver-search { position: relative; display: grid; gap: 4px; }
+.driver-search-row { display: flex; align-items: center; gap: 6px; }
+.driver-search-row input { flex: 1; min-width: 0; height: 22px; padding: 0 6px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); color: var(--fg1); font-size: var(--text-micro); }
+.driver-search-row input:focus { border-color: rgba(var(--acc-rgb), .5); outline: none; }
+.driver-kind-toggle { display: flex; flex: none; gap: 0; border: 1px solid var(--hair); border-radius: var(--r3); overflow: hidden; }
+.driver-kind-toggle button { height: 20px; padding: 0 6px; border: 0; background: transparent; color: var(--fg3); font-size: var(--text-micro); }
+.driver-kind-toggle button:hover { background: var(--ov3); color: var(--fg1); }
+.driver-kind-toggle button.on { background: rgba(var(--acc-rgb), .16); color: var(--acc); }
+.driver-results { display: grid; gap: 1px; max-height: 302px; overflow-y: auto; padding: 2px; border: 1px solid var(--hair-hi); border-radius: var(--r3); background: var(--float-bg); box-shadow: var(--float-sh); }
+.driver-result { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 6px; width: 100%; padding: 3px 5px; border: 0; border-radius: var(--r3); background: transparent; text-align: left; }
+.driver-result.active, .driver-result:hover { background: var(--ov3); }
+.driver-result-name { overflow: hidden; color: var(--fg1); font-size: var(--text-micro); text-overflow: ellipsis; white-space: nowrap; }
+.driver-result-facts { color: var(--fg3); font-size: var(--text-micro); white-space: nowrap; }
+.driver-result.manual { border-top: 1px solid var(--hair); border-radius: 0 0 var(--r3) var(--r3); }
+.driver-result.manual .driver-result-name { color: var(--acc); }
+.driver-summary { display: grid; gap: 4px; }
+.driver-summary-head, .driver-summary-facts { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.driver-chip { display: inline-flex; align-items: center; padding: 1px 5px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); color: var(--fg2); font-size: var(--text-micro); white-space: nowrap; }
+.driver-chip.name { border-color: var(--hair-hi); color: var(--fg1); }
+.driver-chip.accent { border-color: rgba(var(--acc-rgb), .45); background: rgba(var(--acc-rgb), .12); color: var(--acc); }
+.driver-chip.warn { border-color: rgba(var(--amber-rgb), .38); background: rgba(var(--amber-rgb), .1); color: var(--amber); }
+.driver-edit-link, .driver-clear-link { height: 18px; padding: 0 4px; border: 0; background: transparent; color: var(--acc); font-size: var(--text-micro); }
+.driver-clear-link { color: var(--fg3); }
+.driver-edit-link:hover, .driver-clear-link:hover { text-decoration: underline; }
+
+/* The Edit T/S sheet reuses the Settings dialog shell. */
+.driver-sheet .driver-sheet-chips { display: flex; gap: 4px; margin-left: 12px; }
+.driver-sheet h2 .driver-name-input { width: 100%; max-width: 260px; padding: 1px 5px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); color: inherit; font: inherit; }
+.driver-sheet h2 .driver-name-input:focus { border-color: rgba(var(--acc-rgb), .5); outline: none; }
+.driver-sheet .settings-scroll { display: grid; gap: 8px; padding: 12px 16px; }
+.driver-variants { display: flex; gap: 4px; }
+.driver-variants button { height: 22px; padding: 0 8px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); color: var(--fg2); font-size: var(--text-micro); }
+.driver-variants button.on { border-color: rgba(var(--acc-rgb), .45); background: rgba(var(--acc-rgb), .12); color: var(--acc); }
+.driver-sheet-grid { padding: 0; }
+.cad-driver-field.edited input { border-color: rgba(var(--acc-rgb), .55); box-shadow: 0 0 0 2px rgba(var(--acc-rgb), .12); }
+.driver-derived { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 4px 8px; padding: 6px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); }
+.driver-derived-row { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; font-size: var(--text-micro); }
+.driver-derived-row span { color: var(--fg3); }
+.driver-derived-row b { color: var(--fg1); font: var(--text-micro) var(--mono); }
+.driver-sheet-actions { display: flex; justify-content: flex-end; gap: 6px; padding: 10px 16px; border-top: 1px solid var(--hair); }
+.driver-library-counts { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+
+/* ---- Crossover editors -------------------------------------------------
+   One set of controls, three hosts: the pre-solve rail, the results strip and
+   the Advanced popover both of them open. The popover portals to the body, so
+   its rules live here rather than in paramPanel.css, and the segments and band
+   rows are shared so the same setting looks the same wherever it is edited. */
+.crossover-segment { display: inline-flex; flex: none; align-items: center; height: 19px; overflow: hidden; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); }
+.crossover-segment button { height: 100%; min-width: 42px; padding: 0 7px; border: 0; border-left: 1px solid var(--hair); border-radius: 0; background: transparent; color: var(--fg2); font-size: var(--text-micro); text-transform: none; white-space: nowrap; }
+.crossover-segment button:first-child { border-left: 0; }
+.crossover-segment button:hover:not(.on) { background: var(--ov3); color: var(--fg1); }
+.crossover-segment button.on { background: rgba(var(--acc-rgb), .16); color: var(--acc); }
+.panel-preferences-popover.crossover-advanced { width: min(420px, calc(100vw - 16px)); padding: 8px; overflow-y: auto; gap: 6px; }
+.crossover-advanced-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.crossover-advanced-head button { height: 21px; padding: 0 8px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); color: var(--fg1); font-size: var(--text-micro); }
+.crossover-advanced-head button:hover { border-color: var(--hair-hi); background: var(--ov3); color: var(--fg); }
+.crossover-reference { display: flex; align-items: center; gap: 5px; color: var(--fg2); font-size: var(--text-micro); }
+.crossover-reference select { height: 21px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg1); font-size: var(--text-micro); }
+.crossover-advanced-note { margin: 0; color: var(--fg4); font-size: var(--text-micro); line-height: 1.35; }
+.crossover-channel { display: grid; gap: 3px; padding: 6px; border: 1px solid var(--hair-soft); border-radius: var(--r3); background: var(--ov1); }
+.crossover-channel h4 { display: flex; align-items: center; gap: 6px; margin: 0 0 2px; color: var(--fg1); font-size: var(--text-micro); font-weight: 650; letter-spacing: .04em; text-transform: uppercase; }
+.crossover-reference-chip { padding: 0 4px; border: 1px solid rgba(var(--acc-rgb), .28); border-radius: var(--r3); color: var(--acc); font: var(--text-micro) var(--mono); font-weight: 400; letter-spacing: 0; text-transform: none; }
+.crossover-band { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-height: 21px; color: var(--fg2); font-size: var(--text-micro); }
+.crossover-band-name { width: 62px; flex: none; color: var(--fg3); }
+.crossover-band input[type="number"] { width: 66px; height: 19px; padding: 0 4px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); color: var(--fg1); font: var(--text-micro) var(--mono); }
+.crossover-band select { height: 19px; max-width: 118px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg1); font-size: var(--text-micro); }
+.crossover-unit { color: var(--fg4); }
+.crossover-band-toggle { height: 19px; min-width: 34px; padding: 0 6px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); color: var(--fg3); font-size: var(--text-micro); }
+.crossover-band-toggle.on { border-color: rgba(var(--acc-rgb), .38); background: rgba(var(--acc-rgb), .12); color: var(--acc); }
+/* Dashed: the number is real, it just was not typed. */
+.crossover-auto-value { min-width: 66px; height: 19px; padding: 0 4px; border: 1px dashed var(--hair-hi); border-radius: var(--r3); color: var(--fg3); font: var(--text-micro) var(--mono); line-height: 19px; }
+.crossover-auto-note { color: var(--fg4); }
+.crossover-reset { height: 19px; padding: 0 6px; border: 1px solid var(--hair); border-radius: var(--r3); background: transparent; color: var(--fg3); font-size: var(--text-micro); }
+.crossover-reset:hover { border-color: var(--hair-hi); color: var(--fg1); }

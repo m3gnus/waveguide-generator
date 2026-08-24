@@ -1,7 +1,7 @@
 import { useEffect, useState, type RefObject } from 'react';
 import { nextRunLabel, type RunNameDateFormat, type RunNameDatePosition, type RunNameNumberFormat, type RunNameNumberPosition } from '../jobs/runNaming';
 import { useRunNameSource } from '../jobs/runNameSource';
-import { EXPORT_FORMATS, IMPEDANCE_DISPLAYS, MAP_REFERENCES, MATCH_INTERFACE_THEME, RESULT_PANEL_COUNTS, preferencesStore, usePreferences, type ImpedanceDisplay, type JobSort, type MapReference } from './preferences';
+import { EXPORT_FORMATS, GROUP_DELAY_UNITS, IMPEDANCE_DISPLAYS, MAP_REFERENCES, MATCH_INTERFACE_THEME, RESULT_PANEL_COUNTS, preferencesStore, usePreferences, type GroupDelayUnit, type ImpedanceDisplay, type JobSort, type MapReference } from './preferences';
 import { SMOOTHING_MODES, type SmoothingMode } from '../results/smoothing';
 import { Icon } from '../shell/icons';
 import { AnchoredPanel } from './AnchoredPanel';
@@ -50,11 +50,16 @@ function ResultsPreferencesContent() {
       <ResultPanelCountControl/>
       <label className="ui-field">Smoothing<select aria-label="Smoothing" value={preferences.smoothing} onChange={(event) => preferencesStore.update({ smoothing: event.target.value as SmoothingMode })}>{SMOOTHING_MODES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
       <label className="ui-field">Map reference<select aria-label="Map reference" value={preferences.mapReference} onChange={(event) => preferencesStore.update({ mapReference: Number(event.target.value) as MapReference })}>{MAP_REFERENCES.map((value) => <option key={value} value={value}>{value} dB</option>)}</select></label>
-      <label className="ui-field">Angular guides (°)<input aria-label="Directivity angular guide interval" type="number" min={1} max={180} step={1} value={preferences.directivityGuideInterval} onChange={(event) => { if (Number.isFinite(event.target.valueAsNumber)) preferencesStore.update({ directivityGuideInterval: event.target.valueAsNumber }); }}/></label>
+      <label className="ui-field" title="Horizontal lines across the directivity map every N degrees. 0 turns them off.">Angular guides (°, 0 = off)<input aria-label="Directivity angular guide interval" type="number" min={0} max={180} step={1} value={preferences.directivityGuideInterval} onChange={(event) => { if (Number.isFinite(event.target.valueAsNumber)) preferencesStore.update({ directivityGuideInterval: event.target.valueAsNumber }); }}/></label>
       {/* Re/Im is how horn throat impedance is conventionally read; |Z| and
           phase is how a driver's electrical impedance is. The same chart draws
           both, so which one is useful depends on the run. */}
       <label className="ui-field">Impedance display<select aria-label="Impedance display" value={preferences.impedanceDisplay} onChange={(event) => preferencesStore.update({ impedanceDisplay: event.target.value as ImpedanceDisplay })}>{IMPEDANCE_DISPLAYS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
+      {/* The same excess delay either way. Milliseconds answers "how late";
+          cycles answers "how late for this frequency", which is the reading a
+          group delay is usually judged by, since a fixed time is a fraction of
+          a period up high and several periods down low. */}
+      <label className="ui-field" title="Group delay as a time, or as periods of the frequency it occurs at (tau x f).">Group delay in<select aria-label="Group delay unit" value={preferences.groupDelayUnit} onChange={(event) => preferencesStore.update({ groupDelayUnit: event.target.value as GroupDelayUnit })}>{GROUP_DELAY_UNITS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
       {/* "Match interface" is not a server theme: it resolves to console or
           vellum at export time so a figure leaves on the same ground as the
           window it was taken from. The server never sees the sentinel. */}
@@ -69,6 +74,10 @@ function ResultsPreferencesContent() {
           Off leaves the sum alone on the chart, which is the right reading when
           comparing runs rather than tuning a crossover. */}
       <label className="ui-check"><input type="checkbox" checked={preferences.showMembersUnderCombined} onChange={(event) => preferencesStore.update({ showMembersUnderCombined: event.target.checked })}/>Show drivers under Combined</label>
+      {/* The bench check on a crossover: the sum with one member inverted must
+          cancel deeply if the two really are summing as the filter pair says.
+          Off by default — it is a diagnostic, not part of the response. */}
+      <label className="ui-check"><input type="checkbox" checked={preferences.showReverseNull} onChange={(event) => preferencesStore.update({ showReverseNull: event.target.checked })}/>Show reverse null</label>
       <label className="ui-check"><input type="checkbox" checked={preferences.archiveRunsOnComplete} onChange={(event) => preferencesStore.update({ archiveRunsOnComplete: event.target.checked })}/>Archive every completed run</label>
       <label className="ui-check"><input type="checkbox" checked={preferences.autoExportOnComplete} onChange={(event) => preferencesStore.update({ autoExportOnComplete: event.target.checked })}/>Auto-export completed jobs</label>
       <label className="ui-check"><input type="checkbox" checked={preferences.autoDownloadMesh} onChange={(event) => preferencesStore.update({ autoDownloadMesh: event.target.checked })}/>Auto-save solve mesh to Workspace</label>

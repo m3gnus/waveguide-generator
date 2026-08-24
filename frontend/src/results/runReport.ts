@@ -1,10 +1,20 @@
 import { buildDerivedAcoustics, type DerivedAcousticsRow } from './derivedAcoustics';
+import { groupDelayValue } from './mappers';
 import { radiatedPowerMetadata } from './radiatedPower';
 import { resultChannels, type ResultPayload } from './types';
+import type { GroupDelayUnit } from '../prefs/preferences';
 
 interface RunReportOptions {
   title: string;
   generatedAt: Date;
+  /**
+   * The unit the group delay column is written in, following the same
+   * preference the chart reads. Defaults to milliseconds so a caller that has
+   * no preferences to hand still writes the unit the header names. The derived
+   * acoustics CSV and JSON are unaffected: `group_delay_ms` is a data contract
+   * and stays in milliseconds whatever the report is read in.
+   */
+  groupDelayUnit?: GroupDelayUnit;
 }
 
 interface PlotSeries {
@@ -107,7 +117,7 @@ function warningList(result: ResultPayload): string {
     : '<p class="quiet">No result warnings.</p>';
 }
 
-function channelSection(id: string, result: ResultPayload): string {
+function channelSection(id: string, result: ResultPayload, groupDelayUnit: GroupDelayUnit): string {
   const derived = buildDerivedAcoustics(result);
   const radiatedPower = radiatedPowerMetadata(result);
   const rows = derived.rows;
@@ -117,7 +127,7 @@ function channelSection(id: string, result: ResultPayload): string {
       <td>${format(row.directivity_index_db)}</td><td>${format(row.power_response_db_spl_avg)}</td>
       <td>${format(row.radiated_power_surface_w, 6)}</td><td>${format(row.radiated_power_sphere_w, 6)}</td>
       <td>${format(row.power_agreement_db, 3)}</td>
-      <td>${format(row.group_delay_ms, 4)}</td><td>${format(row.horizontal_beamwidth_deg)}</td>
+      <td>${format(row.group_delay_ms === null ? null : groupDelayValue(row.group_delay_ms, row.frequency_hz, groupDelayUnit), 4)}</td><td>${format(row.horizontal_beamwidth_deg)}</td>
       <td>${format(row.vertical_beamwidth_deg)}</td>
     </tr>`).join('');
   return `<section>
@@ -145,7 +155,7 @@ function channelSection(id: string, result: ResultPayload): string {
       <pre>${escapeHtml(JSON.stringify(radiatedPower, null, 2))}</pre>
     </details>` : ''}
     <details><summary>Derived acoustics table (${rows.length} rows)</summary>
-      <div class="table-wrap"><table><thead><tr><th>Hz</th><th>SPL dB</th><th>DI dB</th><th>Power response dB</th><th>Surface power W</th><th>Sphere power W</th><th>Agreement dB</th><th>Group delay ms</th><th>H beamwidth °</th><th>V beamwidth °</th></tr></thead><tbody>${table}</tbody></table></div>
+      <div class="table-wrap"><table><thead><tr><th>Hz</th><th>SPL dB</th><th>DI dB</th><th>Power response dB</th><th>Surface power W</th><th>Sphere power W</th><th>Agreement dB</th><th>Group delay ${escapeHtml(groupDelayUnit)}</th><th>H beamwidth °</th><th>V beamwidth °</th></tr></thead><tbody>${table}</tbody></table></div>
     </details>
     <details><summary>Result metadata</summary><pre>${escapeHtml(JSON.stringify(result.metadata ?? {}, null, 2))}</pre></details>
   </section>`;
@@ -154,9 +164,10 @@ function channelSection(id: string, result: ResultPayload): string {
 /** A single-file report: inline CSS/SVG only, with no network dependencies. */
 export function buildRunReportHtml(result: ResultPayload, options: RunReportOptions): string {
   const channels = resultChannels(result);
+  const groupDelayUnit = options.groupDelayUnit ?? 'ms';
   const sections = channels.length
-    ? channels.map(({ id, result: channel }) => channelSection(id, channel)).join('')
-    : channelSection('Result', result);
+    ? channels.map(({ id, result: channel }) => channelSection(id, channel, groupDelayUnit)).join('')
+    : channelSection('Result', result, groupDelayUnit);
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:">

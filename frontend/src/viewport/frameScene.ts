@@ -1,6 +1,7 @@
 import { Box3, Vector3 } from 'three';
 import type { DecodedFrame, FrameArray, FrameSurface } from '../api/frame';
-import type { SceneSurface, SurfaceMaterialClass } from './types';
+import { ROLE_MATERIAL_FAMILY } from './types';
+import type { SceneSurface, SourceRole, SurfaceMaterialClass } from './types';
 
 export interface FrameScene {
   surfaces: SceneSurface[];
@@ -27,15 +28,25 @@ export function isEnclosureRole(role: string): boolean {
 }
 
 /**
+ * The parametric preview has exactly one radiating surface: the cap across the
+ * throat, which is the compression driver's exit. That is the face a CAD Link
+ * document paints HF, so the two workspaces agree on what red means.
+ */
+export function sourceRoleForSurface(surface: Pick<FrameSurface, 'role'>): SourceRole | null {
+  return surface.role === 'source_cap' ? 'HF' : null;
+}
+
+/**
  * The radiating surface gets its own colour; everything structural shares one.
  * The rim and the rear cap are the same material as the horn wall, so they read
  * as the horn — only the source cap and the enclosure are visually distinct.
  */
 export function materialClassForSurface(surface: Pick<FrameSurface, 'role' | 'shading'>): SurfaceMaterialClass {
-  const family = isEnclosureRole(surface.role)
-    ? 'enclosure'
-    : surface.role === 'source_cap'
-      ? 'source'
+  const role = sourceRoleForSurface(surface);
+  const family = role
+    ? ROLE_MATERIAL_FAMILY[role]
+    : isEnclosureRole(surface.role)
+      ? 'enclosure'
       : 'horn';
   return `${family}-${surface.shading}` as SurfaceMaterialClass;
 }
@@ -90,6 +101,7 @@ export function frameToScene(frame: DecodedFrame): FrameScene {
       role: surface.role,
       shading: surface.shading,
       materialClass: materialClassForSurface(surface),
+      sourceRole: sourceRoleForSurface(surface),
       enclosure: isEnclosureRole(surface.role),
       positions,
       normals,

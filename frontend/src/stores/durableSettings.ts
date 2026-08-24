@@ -28,10 +28,12 @@ export const SETTINGS_NAMESPACES = {
   theme: 'wg2.theme',
   dockviewLayout: 'wg2.dockview.layout.v4',
   dockviewMode: 'wg2.dockview.mode.v4',
+  workspaceMode: 'wg2.workspace.mode.v1',
+  cadProject: 'wg2.cad.project.v1',
   paramHelp: 'wg-param-help-visible',
   paramSections: 'wg-param-sections',
   cadSolveProfiles: 'waveguide-v2-g3-cad-solve-profiles',
-  cadAcknowledgedFindings: 'waveguide-v2-g3-cad-acknowledged-findings',
+  driverLibrary: 'waveguide-v2-g3-driver-library',
   designDraft: 'wg2.autosave.v1',
 } as const;
 

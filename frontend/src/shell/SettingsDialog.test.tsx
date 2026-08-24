@@ -2,6 +2,7 @@ import { act, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { preferencesStore } from '../prefs/preferences';
+import { resetWorkspaceFolderStore } from '../stores/workspaceFolder';
 import { SettingsDialog, type Theme } from './SettingsDialog';
 
 function Harness() {
@@ -21,7 +22,7 @@ describe('SettingsDialog', () => {
   let root: Root;
   beforeEach(() => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-    localStorage.clear(); preferencesStore.resetForTests();
+    localStorage.clear(); preferencesStore.resetForTests(); resetWorkspaceFolderStore();
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
     host = document.createElement('div'); document.body.append(host); root = createRoot(host);
     act(() => root.render(<Harness/>));
@@ -70,8 +71,9 @@ describe('SettingsDialog', () => {
     const section = host.querySelector<HTMLElement>('[aria-labelledby="settings-workspace-title"]')!;
     expect(section).not.toBeNull();
     expect(section.textContent).toContain('/data/workspace');
+    expect(section.textContent).toContain('every CAD project’s archive folder');
     expect(section.textContent).toContain('Documents/Waveguide Generator/runs');
-    expect(section.textContent).toContain('path shown below is authoritative');
+    expect(section.textContent).toContain('path shown above is authoritative');
     expect(section.textContent).toContain('not result exports');
     expect(section.textContent).not.toContain('folder beside Waveguide Generator');
 
@@ -138,14 +140,82 @@ describe('SettingsDialog', () => {
 
     await act(async () => host.querySelector<HTMLButtonElement>('#open-settings')!.click());
     const cad = host.querySelector<HTMLElement>('#settings-cad')!;
-    expect(cad.textContent).toContain('/cad/exchange');
-    expect(cad.textContent).not.toContain('/exports');
-    const buttons = [...cad.querySelectorAll<HTMLButtonElement>('.cad-setup-folder button')];
+    const wglink = cad.querySelector<HTMLElement>('.cad-setup-folder:not(.cad-project-folder)')!;
+    expect(wglink.textContent).toContain('/cad/exchange');
+    // The exchange folder is its own setting: the output workspace shown in the
+    // project-folder block below must never leak into it.
+    expect(wglink.textContent).not.toContain('/exports');
+    const buttons = [...wglink.querySelectorAll<HTMLButtonElement>('button')];
     await act(async () => buttons.find((button) => button.textContent === 'Open folder')!.click());
     await act(async () => buttons.find((button) => button.textContent === 'Choose a new folder…')!.click());
     expect(cad.textContent).toContain('/cad/new-exchange');
     expect(fetchMock).toHaveBeenCalledWith('/api/cad-workspace/open', { method: 'POST' });
     expect(fetchMock).toHaveBeenCalledWith('/api/cad-workspace/select', { method: 'POST' });
+  });
+
+  it('offers the CAD project folder, and keeps it identical to the workspace one', async () => {
+    let stored = '/exports';
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path === '/api/workspace/path') return new Response(JSON.stringify({ selected: true, path: stored }));
+      if (path === '/api/workspace/open' && init?.method === 'POST') return new Response(JSON.stringify({ status: 'opened', path: stored }));
+      if (path === '/api/workspace/select' && init?.method === 'POST') {
+        stored = init.body ? (JSON.parse(String(init.body)) as { path: string }).path : '/picked/projects';
+        return new Response(JSON.stringify({ selected: true, path: stored }));
+      }
+      if (path === '/api/cad-workspace/path') return new Response(JSON.stringify({ selected: true, path: '/cad/exchange' }));
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await act(async () => host.querySelector<HTMLButtonElement>('#open-settings')!.click());
+    const projects = host.querySelector<HTMLElement>('.cad-project-folder')!;
+    const workspace = host.querySelector<HTMLElement>('[aria-labelledby="settings-workspace-title"]')!;
+    expect(projects.textContent).toContain('/exports');
+
+    const buttons = [...projects.querySelectorAll<HTMLButtonElement>('.settings-theme-options button')];
+    await act(async () => buttons.find((button) => button.textContent === 'Open folder')!.click());
+    expect(fetchMock).toHaveBeenCalledWith('/api/workspace/open', { method: 'POST' });
+
+    // The picker runs on the server, exactly as v1's did, so every browser can
+    // change the folder rather than only the ones with a directory picker.
+    await act(async () => buttons.find((button) => button.textContent === 'Choose a new folder…')!.click());
+    expect(fetchMock).toHaveBeenCalledWith('/api/workspace/select', { method: 'POST' });
+    expect(projects.textContent).toContain('/picked/projects');
+    // One setting: the Workspace section must not still be quoting the old path.
+    expect(workspace.textContent).toContain('/picked/projects');
+    expect(workspace.textContent).not.toContain('/exports');
+  });
+
+  it('accepts a typed project folder for a browser that is not on the server', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path === '/api/workspace/path') return new Response(JSON.stringify({ selected: false, path: '/exports' }));
+      if (path === '/api/workspace/select' && init?.method === 'POST') {
+        return new Response(JSON.stringify({ selected: true, path: (JSON.parse(String(init.body)) as { path: string }).path }));
+      }
+      if (path === '/api/cad-workspace/path') return new Response(JSON.stringify({ selected: true, path: '/cad/exchange' }));
+      return new Response('not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await act(async () => host.querySelector<HTMLButtonElement>('#open-settings')!.click());
+    const projects = host.querySelector<HTMLElement>('.cad-project-folder')!;
+    const field = projects.querySelector<HTMLInputElement>('.cad-folder-manual input')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(field, '/typed/projects');
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => projects.querySelector<HTMLButtonElement>('.cad-folder-manual button')!.click());
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/workspace/select', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: '/typed/projects' }),
+    });
+    expect(projects.textContent).toContain('/typed/projects');
+    // The field empties only because the path was accepted.
+    expect(field.value).toBe('');
   });
 
   it('chooses where the Fusion model is filed and reflects a refused write', async () => {
@@ -264,7 +334,9 @@ describe('SettingsDialog', () => {
     // The free-plan consequence must be stated before anything is sent.
     expect(section.textContent).toContain('every document public');
     // The key pair is pasted into a file by its owner, never typed into WG.
-    expect(section.querySelector('input')).toBeNull();
+    // Scoped to the setup steps: the project-folder block below them legitimately
+    // offers a path field, and a section-wide query would stop guarding the keys.
+    expect(section.querySelector('.cad-setup-steps input')).toBeNull();
   });
 
   it('says where to put a key pair that is not configured yet', async () => {
@@ -279,7 +351,7 @@ describe('SettingsDialog', () => {
     });
     expect(section.textContent).toContain('My account → Developer → API keys');
     expect(section.textContent).toContain('/home/x/.config/hornlab/onshape.env');
-    expect(section.querySelector('input')).toBeNull();
+    expect(section.querySelector('.cad-setup-steps input')).toBeNull();
   });
 
   it('warns when the Onshape key file is readable by other accounts', async () => {

@@ -5,6 +5,7 @@ import type { EChartsOption } from 'echarts';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
 import { compareSelection, provisionalResults, resultsCache, type JobResults, type ResultData } from '../api/results';
 import { preferencesStore } from '../prefs/preferences';
+import { latestCombine } from '../results/latestCombine';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetDesignStore } from '../stores/design';
 import { resetDocumentStore } from '../stores/document';
@@ -327,61 +328,28 @@ describe('results dock view switch', () => {
     expect(seriesNames(SPL_CHART)).toEqual(['#1 · primary · MF']);
   });
 
-  it('edits the crossover only in the combined view and hands it back to the rail', async () => {
-    const applied = { ...threeWay() };
-    (applied.channels!.combined.metadata!.combine as Record<string, unknown>).crossovers_hz = [1_400];
-    recombineMocks.recombine.mockResolvedValue(applied);
+  it('publishes the shown combine to the rail bridge, only in the combined view', async () => {
     publishJobs([job('primary', 1)]);
     compareSelection.setPrimary('primary');
     await render();
 
-    const field = host.querySelector<HTMLInputElement>('.result-recombine input')!;
-    expect(host.querySelector('.result-recombine-pair')?.textContent).toContain('MF → HF');
-    expect(field.getAttribute('aria-label')).toBe('Crossover drive-mf to drive-hf in hertz');
-
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(field, '1400');
-      field.dispatchEvent(new Event('input', { bubbles: true }));
-    });
-    await act(async () => {
-      host.querySelector<HTMLFormElement>('form.result-recombine')!
-        .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-      await Promise.resolve();
-    });
-    expect(recombineMocks.recombine).toHaveBeenCalledWith('primary', expect.objectContaining({
-      id: 'combined', members: ['drive-mf', 'drive-hf'], crossovers_hz: [1_400],
-    }));
-    expect(useCadReturnStore.getState().combineCrossoversHz).toEqual({ 'drive-mf→drive-hf': 1_400 });
-
-    await chooseView('HF');
+    // The strip is gone: crossover settings live in the rail alone, and the
+    // dock hands the rail what it needs through the bridge instead.
     expect(host.querySelector('form.result-recombine')).toBeNull();
-  });
+    const shown = latestCombine.getSnapshot()!;
+    expect(shown.jobId).toBe('primary');
+    expect(shown.channelId).toBe('combined');
+    expect(shown.canApply).toBe(true);
+    expect(shown.combine.members).toEqual(['drive-mf', 'drive-hf']);
 
-  it('does not hand a foreign run crossover back to the active CAD return', async () => {
-    useCadReturnStore.setState({ combineCrossoversHz: { 'drive-mf→drive-hf': 1_100 } });
+    // The bridge's callback is the dock's own swap-in.
     const applied = { ...threeWay() };
     (applied.channels!.combined.metadata!.combine as Record<string, unknown>).crossovers_hz = [1_400];
-    recombineMocks.recombine.mockResolvedValue(applied);
-    const foreign = job('foreign', 3);
-    foreign.cad_source!.ingest_id = 'wgi_foreign';
-    payloads.foreign = threeWay();
-    publishJobs([foreign]);
-    compareSelection.setPrimary('foreign');
-    await render();
+    act(() => shown.onApplied('primary', applied as never));
+    expect((latestCombine.getSnapshot()!.combine.crossovers_hz)).toEqual([1_400]);
 
-    const field = host.querySelector<HTMLInputElement>('.result-recombine input')!;
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(field, '1400');
-      field.dispatchEvent(new Event('input', { bubbles: true }));
-    });
-    await act(async () => {
-      host.querySelector<HTMLFormElement>('form.result-recombine')!
-        .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-      await Promise.resolve();
-    });
-
-    expect(recombineMocks.recombine).toHaveBeenCalledWith('foreign', expect.objectContaining({ crossovers_hz: [1_400] }));
-    expect(useCadReturnStore.getState().combineCrossoversHz).toEqual({ 'drive-mf→drive-hf': 1_100 });
+    await chooseView('HF');
+    expect(latestCombine.getSnapshot()).toBeNull();
   });
 
   it('names the shown channel on the summary card', async () => {

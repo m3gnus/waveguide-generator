@@ -603,7 +603,6 @@ describe('solve invocation mutex', () => {
       rigidSizeMm: 8,
       transitionMm: 12,
       skippedSourceIds: [],
-      acknowledgedFindingIds: [],
     });
     importedMeshStore.setCad({ name: 'Fusion speaker', source: 'cad', ingestId } as ImportedMeshScene);
     mocks.submitImported.mockResolvedValue('job-cad');
@@ -647,7 +646,6 @@ describe('solve invocation mutex', () => {
       driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }],
       sourceSizesMm: { 'source-hf': 4 },
       skippedSourceIds: [],
-      acknowledgedFindingIds: [],
     });
     mocks.submitImported.mockResolvedValue('job-cad');
     act(() => workspaceModeStore.setMode('cad'));
@@ -683,7 +681,6 @@ describe('solve invocation mutex', () => {
       driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }],
       sourceSizesMm: { 'source-hf': 4 },
       skippedSourceIds: [],
-      acknowledgedFindingIds: [],
     });
     const pending = deferred<string>();
     mocks.submitImported.mockReturnValue(pending.promise);

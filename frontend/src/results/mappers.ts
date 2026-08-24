@@ -5,6 +5,7 @@ import { combineMetadataOf, type ResultPayload } from './types';
 import { resolveResultView, type ResultView } from '../stores/resultView';
 import { drivePowerSeries, excursionSeries, hasElectricalImpedance } from './drivePower';
 import { displayPhaseDegrees, groupDelayMilliseconds, propagationReference } from './phaseAnalysis';
+import type { GroupDelayUnit } from '../prefs/preferences';
 
 export interface NamedResult {
   id: string;
@@ -335,8 +336,19 @@ export function phaseSeries(items: NamedResult[]) {
   }).filter(({ points }) => points.length > 0);
 }
 
-/** Group delay in ms, common time-of-flight removed. */
-export function groupDelaySeries(items: NamedResult[]) {
+/**
+ * One group delay sample, projected onto the unit it is read in.
+ *
+ * `groupDelayMilliseconds` stays the only estimate of tau; cycles is that same
+ * number counted in periods of the frequency it was measured at, tau[s] * f.
+ * At 1 kHz a 1 ms delay is exactly 1.0 cycles.
+ */
+export function groupDelayValue(milliseconds: number, frequencyHz: number, unit: GroupDelayUnit): number {
+  return unit === 'cycles' ? (milliseconds / 1_000) * frequencyHz : milliseconds;
+}
+
+/** Group delay, common time-of-flight removed, in ms or in cycles. */
+export function groupDelaySeries(items: NamedResult[], unit: GroupDelayUnit = 'ms') {
   return items.map(({ label, result }) => {
     const payload = result as ResultPayload;
     const frequencies = payload.spl_on_axis?.frequencies?.length
@@ -351,7 +363,7 @@ export function groupDelaySeries(items: NamedResult[]) {
       type: 'line' as const,
       showSymbol: false,
       connectNulls: false,
-      data: points.map(({ frequencyHz, value }) => [frequencyHz, value]),
+      data: points.map(({ frequencyHz, value }) => [frequencyHz, groupDelayValue(value, frequencyHz, unit)]),
     };
   }).filter(({ data }) => data.length > 0);
 }

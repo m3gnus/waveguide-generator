@@ -147,6 +147,16 @@ Documents/Waveguide Generator/
     <run>/                      run.json, results, derived sidecars, *_report.html
 ```
 
+A CAD-linked project's folder is one of these design folders, so the Workspace
+folder is also the folder every CAD project is kept in. It can be opened or moved
+from three places, all the same setting: **Settings → Workspace**, **Settings →
+CAD Link → Project folder**, and the **Projects folder** line under the project in
+the CAD Link panel. The folder is chosen by the server's native picker, as v1 did,
+so it works in every browser; a path can also be typed in Settings when WG is
+reached from another machine. Changing it does not move projects that already
+exist — new runs and captures go to the new folder, and the old folder keeps what
+it has.
+
 A design keeps one folder across a rename, and its parametric and CAD-link runs sit
 side by side, because they are the same design's history. `run.json` records what was
 solved, from which CAD document and return state, and with which settings.
@@ -305,3 +315,14 @@ in a different browser used to lose the lot. The uninstallers preserve the data
 directory unless `--data` is explicitly requested. Original-application runs can be imported automatically or through
 `scripts/migrate_v1.py`; the v1 source database is opened read-only and the current
 data is backed up before migration.
+
+### Driver library
+
+WG ships no driver data of its own. Drop CSV files of Thiele/Small parameters into
+`HornLab/driver-databases`, in the same per-platform application-support location as
+the application data directory above, and WG indexes them for search. Columns are
+matched case-insensitively against a fixed alias table (`Sd_cm2`/`Sd`, `Bl_Tm`/`Bl`,
+`Fs_Hz`/`Fs`, and so on); unrecognised columns are kept but never used to fill in a
+value that was not actually in the file. Rows for the same brand and model that only
+differ by impedance become one driver with an impedance-variant list. The folder is
+rescanned automatically whenever its files change, or on request through the API.

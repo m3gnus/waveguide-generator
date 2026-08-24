@@ -1,23 +1,34 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
 import {
-  acknowledgedFindingWire,
+  blockingFindingWire,
+  channelDriverWire,
   combineChain,
   combineChannelRole,
   combineDefaultHz,
   combineEnabledEffective,
   combineMembers,
   combineWire,
+  driverEditedKeys,
+  driverMissingGroups,
+  driverValues,
   DRIVER_REQUIRED_KEYS,
   resetCadReturnStore,
-  unacknowledgedBlocking,
   useCadReturnStore,
+  type DriverPreset,
 } from './cadReturn';
+import {
+  expandLegacy,
+  relinkPairs,
+  withChannel,
+  withDelayMode,
+  withGainMode,
+  withPair,
+} from '../results/crossoverSpec';
 import { buildImportedSubmission } from '../jobs/importedSubmission';
 import { resetDocumentStore, useDocumentStore } from './document';
 
 const solveProfileStorageKey = 'waveguide-v2-g3-cad-solve-profiles';
-const acknowledgedFindingStorageKey = 'waveguide-v2-g3-cad-acknowledged-findings';
 
 const bundle: CadReturnBundle = {
   name: 'speaker.wgreturn', bundlePath: 'wgreturn/speaker.wgreturn', modifiedAt: '2026-08-11T00:00:00Z', readable: true,
@@ -78,87 +89,20 @@ describe('CAD return store', () => {
     expect(useCadReturnStore.getState().selectArrivedBundle(changedInventory)).toBe('reset');
   });
 
-  it('pre-acknowledges the same finding id when it reappears after re-ingest', () => {
-    useDocumentStore.getState().setCadLink({
-      designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 1,
-    }, 'current');
-    useCadReturnStore.getState().selectBundle(bundle);
-    useCadReturnStore.getState().applyIngest(record(), useCadReturnStore.getState().beginIngestIntent());
-    expect(unacknowledgedBlocking(useCadReturnStore.getState())).toEqual(['finding-a']);
-    useCadReturnStore.getState().acknowledge('finding-a', true);
-    expect(unacknowledgedBlocking(useCadReturnStore.getState())).toEqual([]);
-    expect(acknowledgedFindingWire(record(), ['finding-a'])).toEqual(['sha256:wgi_one:finding-a']);
-    useCadReturnStore.getState().applyIngest(record('wgi_two'), useCadReturnStore.getState().beginIngestIntent());
-    expect(useCadReturnStore.getState().acknowledgedFindingIds).toEqual(['finding-a']);
-    expect(unacknowledgedBlocking(useCadReturnStore.getState())).toEqual([]);
-    expect(acknowledgedFindingWire(record('wgi_two'), useCadReturnStore.getState().acknowledgedFindingIds))
-      .toEqual(['sha256:wgi_two:finding-a']);
-  });
-
-  it('does not pre-acknowledge a new finding id after re-ingest', () => {
-    useDocumentStore.getState().setCadLink({
-      designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 1,
-    }, 'current');
-    const store = useCadReturnStore.getState();
-    store.selectBundle(bundle);
-    store.applyIngest(record(), store.beginIngestIntent());
-    store.acknowledge('finding-a', true);
-
-    const changed = {
-      ...record('wgi_changed'),
-      findings: [{ id: 'finding-b', kind: 'healing-performed', blocking: true }],
-    };
-    store.applyIngest(changed, store.beginIngestIntent());
-
-    expect(useCadReturnStore.getState().acknowledgedFindingIds).toEqual([]);
-    expect(unacknowledgedBlocking(useCadReturnStore.getState())).toEqual(['finding-b']);
-  });
-
-  it('persists acknowledgements for an unlinked return by document name and source inventory', () => {
-    const unlinkedRecord = {
+  it('puts every blocking finding on the wire without a gate', () => {
+    const twoFindings = {
       ...record(),
-      freshness: { verdict: 'unlinked' as const, instances: [], finding_id: 'unlinked-mode' },
       findings: [
-        { id: 'unlinked-mode', kind: 'freshness', blocking: false, verdict: 'unlinked' },
-        { id: 'healing-a', kind: 'healing-performed', blocking: true },
+        { id: 'finding-a', kind: 'freshness', blocking: true },
+        { id: 'finding-b', kind: 'healing-performed', blocking: true },
+        { id: 'finding-c', kind: 'informational', blocking: false },
       ],
     };
-    const unlinkedBundle = { ...bundle, instanceCount: 0 };
-    let store = useCadReturnStore.getState();
-    store.selectBundle(unlinkedBundle);
-    store.applyIngest(unlinkedRecord, store.beginIngestIntent());
-    store.acknowledge('healing-a', true);
-
-    resetCadReturnStore();
-    store = useCadReturnStore.getState();
-    store.selectBundle({ ...unlinkedBundle, modifiedAt: '2026-08-12T00:00:00Z' });
-    store.applyIngest({
-      ...unlinkedRecord,
-      ingest_id: 'wgi_reexport',
-      report_sha256: 'sha256:reexport',
-    }, store.beginIngestIntent());
-
-    expect(useCadReturnStore.getState().acknowledgedFindingIds).toEqual(['healing-a']);
-    expect(unacknowledgedBlocking(useCadReturnStore.getState())).toEqual([]);
-  });
-
-  it('drops a schema-invalid acknowledged-finding payload', () => {
-    localStorage.setItem(acknowledgedFindingStorageKey, JSON.stringify({
-      version: 1,
-      entries: [{
-        key: 'forged', identity: null, documentName: 'Speaker', inventory: [], findingIds: [42],
-      }],
-    }));
-    const unlinkedRecord = {
-      ...record(),
-      freshness: { verdict: 'unlinked' as const, instances: [], finding_id: 'unlinked-mode' },
-    };
-    const store = useCadReturnStore.getState();
-    store.selectBundle({ ...bundle, instanceCount: 0 });
-    expect(() => store.applyIngest(unlinkedRecord, store.beginIngestIntent())).not.toThrow();
-
-    expect(useCadReturnStore.getState().acknowledgedFindingIds).toEqual([]);
-    expect(localStorage.getItem(acknowledgedFindingStorageKey)).toBeNull();
+    expect(blockingFindingWire(twoFindings)).toEqual([
+      'sha256:wgi_one:finding-a',
+      'sha256:wgi_one:finding-b',
+    ]);
+    expect(blockingFindingWire(record('wgi_two'))).toEqual(['sha256:wgi_two:finding-a']);
   });
 
   it('supports explicit grouping and removes optional skipped sources from channels', () => {
@@ -172,11 +116,10 @@ describe('CAD return store', () => {
     expect(useCadReturnStore.getState().needsIngest).toBe(true);
   });
 
-  it('carries the solve setup across a same-inventory arrival but never acknowledgements', () => {
+  it('carries the solve setup across a same-inventory arrival', () => {
     const store = useCadReturnStore.getState();
     store.selectBundle(bundle);
     store.applyIngest(record(), store.beginIngestIntent());
-    store.acknowledge('finding-a', true);
     store.setSourceSize('source-hf', 2.25);
     store.setSourceChannel('source-hf', 'drive-mf');
     store.setExteriorOnly(true);
@@ -203,7 +146,6 @@ describe('CAD return store', () => {
     expect(state.frequencyStartHz).toBe(300);
     // The new geometry re-earns its evidence.
     expect(state.ingestRecord).toBeNull();
-    expect(state.acknowledgedFindingIds).toEqual([]);
     expect(state.needsIngest).toBe(true);
   });
 
@@ -250,6 +192,10 @@ describe('CAD return store', () => {
     store.selectBundle(bundle);
     store.setChannelDriverEnabled('drive-hf', true);
     DRIVER_REQUIRED_KEYS.forEach((key) => store.setChannelDriverField('drive-hf', key, 1));
+    // One mass and one compliance source complete the spec; which ones is the
+    // user's choice, exactly as `DriverSpec.validate_completeness` has it.
+    store.setChannelDriverField('drive-hf', 'mmd_g', 12);
+    store.setChannelDriverField('drive-hf', 'cms_m_per_n', 0.0003);
     store.applyIngest(record(), store.beginIngestIntent());
     const complete = useCadReturnStore.getState();
     expect(buildImportedSubmission(complete).geometry.drive_channels
@@ -290,9 +236,8 @@ describe('CAD return store', () => {
 
   it('refuses ingestion evidence smuggled into a stored profile', () => {
     // The persisted payload is machine-local and user-writable, so the restore
-    // path — not just the save path — has to guarantee that acknowledgements
-    // and ingest state never come back. A restored acknowledgement would let a
-    // blocking finding pass its gate without ever being seen.
+    // path — not just the save path — has to guarantee that ingest state and
+    // evidence never come back from storage.
     useDocumentStore.getState().setCadLink({
       designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 1,
     }, 'current');
@@ -301,7 +246,6 @@ describe('CAD return store', () => {
 
     const raw = JSON.parse(localStorage.getItem(solveProfileStorageKey)!);
     Object.assign(raw.profiles[0].settings, {
-      acknowledgedFindingIds: ['finding-a'],
       ingestRecord: { ingest_id: 'wgi_forged' },
       needsIngest: false,
       ingestedBundleIdentity: 'forged',
@@ -314,7 +258,6 @@ describe('CAD return store', () => {
 
     const state = useCadReturnStore.getState();
     expect(state.sourceSizesMm['source-hf']).toBe(2.25);
-    expect(state.acknowledgedFindingIds).toEqual([]);
     expect(state.ingestRecord).toBeNull();
     expect(state.needsIngest).toBe(true);
     expect(state.ingestedBundleIdentity).toBeNull();
@@ -363,18 +306,18 @@ describe('CAD return store', () => {
     store.setSourceSize('source-hf', 2.25);
     store.setRigidSize(9.5);
     store.setTransition(4.5);
+    // The crossover is set while both bands still have a channel: a spec names
+    // its members, so it cannot be edited once one of them is skipped away.
+    store.setCombineEnabled(true);
+    store.setCombineCrossover('drive-mf→drive-hf', 1_350);
+    store.updateCombineSpec((spec) => withDelayMode(withGainMode(spec, 'manual'), 'manual'));
     store.setSkipped('source-hf', true);
     store.setChannelMotion('drive-mf', 'axial');
     store.setExteriorOnly(true);
-    store.setCombineEnabled(true);
-    store.setCombineCrossover('drive-mf→drive-hf', 1_350);
-    store.setCombineLevelMatch(false);
-    store.setCombineAlign(false);
     store.setChannelDriverEnabled('drive-mf', true);
     store.setChannelDriverField('drive-mf', 'sd_cm2', 135);
     store.setDriveVoltage(4);
     store.setSweep({ frequencyStartHz: 300, frequencyEndHz: 12_000, frequencyCount: 31 });
-    store.acknowledge('finding-a', true);
     store.setAreaDriftOverride('source-mf', true);
     store.flagAreaDrift('source-mf');
     store.markIngestStale('Exact-ingest evidence must stay session-local.');
@@ -396,16 +339,13 @@ describe('CAD return store', () => {
       driveChannels: [{ id: 'drive-mf', source_ids: ['source-mf'], motion: 'axial' }],
       exteriorOnly: true,
       combineEnabled: true,
-      combineCrossoversHz: { 'drive-mf→drive-hf': 1_350 },
-      combineLevelMatch: false,
-      combineAlign: false,
+      combineSpec: expandLegacy(['drive-mf', 'drive-hf'], [1_350], false, false),
       channelDrivers: { 'drive-mf': { enabled: true, fields: { sd_cm2: 135 } } },
       driveVoltageV: 4,
       frequencyStartHz: 300,
       frequencyEndHz: 12_000,
       frequencyCount: 31,
       ingestRecord: null,
-      acknowledgedFindingIds: [],
       areaDriftOverrides: [],
       areaDriftSourceIds: [],
       needsIngest: true,
@@ -436,24 +376,6 @@ describe('CAD return store', () => {
       transitionMm: 8,
       combineEnabled: null,
     });
-  });
-
-  it('never restores finding acknowledgements with a solve profile', () => {
-    useDocumentStore.getState().setCadLink({
-      designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 3,
-    }, 'current');
-    const store = useCadReturnStore.getState();
-    store.selectBundle(bundle);
-    store.applyIngest(record(), store.beginIngestIntent());
-    store.acknowledge('finding-a', true);
-    store.setExteriorOnly(true);
-    expect(useCadReturnStore.getState().acknowledgedFindingIds).toEqual(['finding-a']);
-
-    resetCadReturnStore();
-    useCadReturnStore.getState().selectBundle(bundle);
-    expect(useCadReturnStore.getState().exteriorOnly).toBe(true);
-    expect(useCadReturnStore.getState().acknowledgedFindingIds).toEqual([]);
-    expect(useCadReturnStore.getState().ingestRecord).toBeNull();
   });
 
   it.each([
@@ -516,7 +438,6 @@ describe('CAD return store', () => {
     expect(state.needsIngest).toBe(true);
     expect(state.ingestStaleReason).toContain('source inventory or source sizing suggestions changed');
     expect(state.sourceSizesMm['source-hf']).toBe(2.25);
-    expect(state.acknowledgedFindingIds).toEqual([]);
   });
 });
 
@@ -577,7 +498,383 @@ describe('combined output', () => {
       upperRole: 'HF',
       defaultHz: 1_000,
       outsideSweep: false,
+      linked: true,
+      family: 'lr',
+      order: 4,
     }]);
+  });
+
+  it('falls back inside the sweep when the role default lies outside it', () => {
+    useCadReturnStore.getState().selectBundle(rebanded({ 'source-mf': 'LF', 'source-hf': 'MF' }));
+    // 100 Hz would be refused by the server's own band check on a 200 Hz sweep,
+    // so the log-spaced sqrt(200 * 20000) = 2000 Hz is used instead.
+    const [pair] = combineChain(useCadReturnStore.getState());
+    expect(pair).toMatchObject({ defaultHz: 100, outsideSweep: true, hz: 2_000 });
+    expect(combineWire(useCadReturnStore.getState())?.channels['drive-mf'].lp)
+      .toEqual({ family: 'lr', order: 4, fc_hz: 2_000 });
+
+    useCadReturnStore.getState().setSweep({ frequencyStartHz: 50, frequencyEndHz: 20_000, frequencyCount: 24 });
+    expect(combineChain(useCadReturnStore.getState())[0]).toMatchObject({ outsideSweep: false, hz: 100 });
+  });
+
+  it('keeps the log-spaced fallback and listing order for an unroled return', () => {
+    useCadReturnStore.getState().selectBundle(rebanded({ 'source-mf': 'AUX', 'source-hf': 'AUX' }));
+    expect(combineChain(useCadReturnStore.getState())).toEqual([{
+      key: 'drive-mf→drive-hf',
+      lower: 'drive-mf',
+      upper: 'drive-hf',
+      hz: 2_000,
+      lowerRole: undefined,
+      upperRole: undefined,
+      defaultHz: undefined,
+      outsideSweep: false,
+      linked: true,
+      family: 'lr',
+      order: 4,
+    }]);
+  });
+
+  it('adopts the spec a recombine was computed with, ignoring foreign members', () => {
+    useCadReturnStore.getState().selectBundle(bundle);
+    const applied = expandLegacy(['drive-mf', 'drive-hf'], [1_450]);
+    useCadReturnStore.getState().setCombineSpecFromResult(applied);
+    expect(useCadReturnStore.getState().combineSpec).toEqual(applied);
+    expect(combineChain(useCadReturnStore.getState())[0].hz).toBe(1_450);
+
+    // A run from another return names channels this one has not got.
+    useCadReturnStore.getState().setCombineSpecFromResult(
+      expandLegacy(['drive-lf', 'drive-mf', 'drive-hf'], [90, 900]),
+    );
+    expect(useCadReturnStore.getState().combineSpec).toEqual(applied);
+  });
+
+  it('keeps a family and slope change symmetric and submits it as the v2 wire', () => {
+    useCadReturnStore.getState().selectBundle(bundle);
+    useCadReturnStore.getState().updateCombineSpec(
+      (spec) => withPair(spec, 'drive-mf→drive-hf', { hz: 1_400, family: 'butterworth', order: 3 }),
+    );
+    const [pair] = combineChain(useCadReturnStore.getState());
+    expect(pair).toMatchObject({ hz: 1_400, family: 'butterworth', order: 3, linked: true });
+    const wire = combineWire(useCadReturnStore.getState())!;
+    expect(wire.channels['drive-mf'].lp).toEqual({ family: 'butterworth', order: 3, fc_hz: 1_400 });
+    expect(wire.channels['drive-hf'].hp).toEqual({ family: 'butterworth', order: 3, fc_hz: 1_400 });
+    expect(wire.reference).toBe('drive-hf');
+    expect(wire).not.toHaveProperty('crossovers_hz');
+  });
+
+  it('marks a pair unlinked when one channel is edited on its own', () => {
+    useCadReturnStore.getState().selectBundle(bundle);
+    useCadReturnStore.getState().updateCombineSpec((spec) => withChannel(spec, 'drive-mf', {
+      lp: { family: 'butterworth', order: 3, fcHz: 900 },
+    }));
+    expect(combineChain(useCadReturnStore.getState())[0]).toMatchObject({ linked: false, hz: 900 });
+    useCadReturnStore.getState().updateCombineSpec(relinkPairs);
+    expect(combineChain(useCadReturnStore.getState())[0]).toMatchObject({ linked: true, hz: 900 });
+  });
+
+  it('falls back to the base chain when the drive channels no longer match the override', () => {
+    useCadReturnStore.getState().selectBundle(bundle);
+    useCadReturnStore.getState().setCombineCrossover('drive-mf→drive-hf', 1_450);
+    useCadReturnStore.getState().setSourceChannel('source-hf', 'drive-mf');
+    expect(combineWire(useCadReturnStore.getState())).toBeUndefined();
+    useCadReturnStore.getState().setSourceChannel('source-hf', 'drive-hf');
+    expect(combineChain(useCadReturnStore.getState())[0].hz).toBe(1_450);
+  });
+
+  it('migrates a version 2 profile crossover map into one spec override', () => {
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 1,
+    }, 'current');
+    useCadReturnStore.getState().selectBundle(bundle);
+    useCadReturnStore.getState().setCombineEnabled(true);
+
+    const raw = JSON.parse(localStorage.getItem(solveProfileStorageKey)!);
+    raw.version = 2;
+    delete raw.profiles[0].settings.combineSpec;
+    raw.profiles[0].settings.combineCrossoversHz = { 'drive-mf→drive-hf': 1_350 };
+    raw.profiles[0].settings.combineLevelMatch = false;
+    raw.profiles[0].settings.combineAlign = null;
+    localStorage.setItem(solveProfileStorageKey, JSON.stringify(raw));
+
+    resetCadReturnStore();
+    useCadReturnStore.getState().selectBundle(bundle);
+    expect(useCadReturnStore.getState().combineSpec)
+      .toEqual(expandLegacy(['drive-mf', 'drive-hf'], [1_350], false, true));
+  });
+
+  it('migrates an untouched version 2 profile to no override at all', () => {
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 1,
+    }, 'current');
+    useCadReturnStore.getState().selectBundle(bundle);
+    useCadReturnStore.getState().setCombineEnabled(true);
+
+    const raw = JSON.parse(localStorage.getItem(solveProfileStorageKey)!);
+    raw.version = 2;
+    delete raw.profiles[0].settings.combineSpec;
+    raw.profiles[0].settings.combineCrossoversHz = {};
+    raw.profiles[0].settings.combineLevelMatch = null;
+    raw.profiles[0].settings.combineAlign = null;
+    localStorage.setItem(solveProfileStorageKey, JSON.stringify(raw));
+
+    resetCadReturnStore();
+    useCadReturnStore.getState().selectBundle(bundle);
+    expect(useCadReturnStore.getState().combineSpec).toBeNull();
+    expect(combineChain(useCadReturnStore.getState())[0].hz).toBe(1_000);
+  });
+
+  it('restores a profile written before the combined output defaulted on as no choice', () => {
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 1,
+    }, 'current');
+    useCadReturnStore.getState().selectBundle(bundle);
+    useCadReturnStore.getState().setCombineEnabled(false);
+
+    const raw = JSON.parse(localStorage.getItem(solveProfileStorageKey)!);
+    raw.version = 1;
+    raw.profiles[0].settings.combineEnabled = false;
+    localStorage.setItem(solveProfileStorageKey, JSON.stringify(raw));
+
+    resetCadReturnStore();
+    useCadReturnStore.getState().selectBundle(bundle);
+    expect(useCadReturnStore.getState().combineEnabled).toBeNull();
+    expect(combineEnabledEffective(useCadReturnStore.getState())).toBe(true);
+  });
+
+  it('restores an explicit off from a current profile', () => {
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 1,
+    }, 'current');
+    useCadReturnStore.getState().selectBundle(bundle);
+    useCadReturnStore.getState().setCombineEnabled(false);
+
+    resetCadReturnStore();
+    useCadReturnStore.getState().selectBundle(bundle);
+    expect(useCadReturnStore.getState().combineEnabled).toBe(false);
+    expect(combineEnabledEffective(useCadReturnStore.getState())).toBe(false);
+  });
+});
+
+const PRESET: DriverPreset = {
+  id: 'Acme::HD-1::8',
+  label: 'Acme HD-1',
+  source: 'database',
+  kind: 'cd',
+  z_ohm: 8,
+  xo_min_hz: 1_600,
+  base: { sd_cm2: 26, bl_t_m: 12.4, re_ohm: 6.2, le_mh: 0.12, mms_g: 2.4, fs_hz: 620, vas_l: 0.35, qms: 3.1 },
+};
+
+describe('a channel driver picked from the library', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    resetDocumentStore();
+    resetCadReturnStore();
+    useCadReturnStore.getState().selectBundle(bundle);
+    useCadReturnStore.getState().setChannelDriverEnabled('drive-hf', true);
+  });
+
+  it('submits the preset values under the user’s edits', () => {
+    const store = useCadReturnStore.getState();
+    store.setChannelDriverPreset('drive-hf', PRESET);
+    expect(driverValues(useCadReturnStore.getState().channelDrivers['drive-hf'])).toEqual(PRESET.base);
+
+    store.setChannelDriverField('drive-hf', 'bl_t_m', 11.9);
+    const form = useCadReturnStore.getState().channelDrivers['drive-hf'];
+    // The override lives beside the base rather than replacing it, which is
+    // what makes the edit reversible and countable.
+    expect(form.fields).toEqual({ bl_t_m: 11.9 });
+    expect(form.preset?.base.bl_t_m).toBe(12.4);
+    expect(driverValues(form)).toMatchObject({ bl_t_m: 11.9, sd_cm2: 26 });
+    expect(driverEditedKeys(form)).toEqual(['bl_t_m']);
+
+    // Typing the database value back is not an edit.
+    store.setChannelDriverField('drive-hf', 'bl_t_m', 12.4);
+    expect(driverEditedKeys(useCadReturnStore.getState().channelDrivers['drive-hf'])).toEqual([]);
+  });
+
+  it('counts a datasheet Mms and Fs as a complete spec', () => {
+    // The pre-picker rule wanted Mmd and Cms, neither of which a datasheet
+    // prints. A driver stating Mms and Fs is complete to the server, so it has
+    // to be complete to the rail as well.
+    useCadReturnStore.getState().setChannelDriverPreset('drive-hf', PRESET);
+    const form = useCadReturnStore.getState().channelDrivers['drive-hf'];
+    expect(driverMissingGroups(form)).toEqual([]);
+    expect(channelDriverWire(form)).toBeDefined();
+
+    const withoutMass = { ...form, preset: { ...PRESET, base: { ...PRESET.base, mms_g: undefined } } };
+    expect(driverMissingGroups(withoutMass)).toEqual([['mms_g', 'mmd_g']]);
+    expect(channelDriverWire(withoutMass)).toBeUndefined();
+  });
+
+  it('emits the label and never both masses', () => {
+    const store = useCadReturnStore.getState();
+    store.setChannelDriverPreset('drive-hf', PRESET);
+    // A hand-typed Mmd on top of a preset that already states Mms: sending
+    // both refuses the whole solve (DriverSpec.validate_completeness).
+    store.setChannelDriverField('drive-hf', 'mmd_g', 2.1);
+    const wire = channelDriverWire(useCadReturnStore.getState().channelDrivers['drive-hf'])!;
+
+    expect(wire.label).toBe('Acme HD-1');
+    expect(wire.mms_g).toBe(2.4);
+    expect(wire).not.toHaveProperty('mmd_g');
+
+    // A hand-entered driver with no preset still submits Mmd and no label.
+    store.setChannelDriverPreset('drive-hf', null);
+    (['sd_cm2', 'bl_t_m', 're_ohm'] as const).forEach((key) => store.setChannelDriverField('drive-hf', key, 1));
+    store.setChannelDriverField('drive-hf', 'mmd_g', 12);
+    store.setChannelDriverField('drive-hf', 'cms_m_per_n', 0.0003);
+    const manual = channelDriverWire(useCadReturnStore.getState().channelDrivers['drive-hf'])!;
+    expect(manual.mmd_g).toBe(12);
+    expect(manual).not.toHaveProperty('mms_g');
+    expect(manual).not.toHaveProperty('label');
+  });
+
+  it('treats a hand-entered driver as its own numbers, not as edits of a base', () => {
+    const store = useCadReturnStore.getState();
+    store.setChannelDriverPreset('drive-hf', {
+      id: 'manual:radian-745neo',
+      label: 'Radian 745Neo',
+      source: 'manual',
+      kind: 'cd',
+      z_ohm: null,
+      xo_min_hz: null,
+      base: {},
+    });
+    (['sd_cm2', 'bl_t_m', 're_ohm'] as const).forEach((key) => store.setChannelDriverField('drive-hf', key, 1));
+    store.setChannelDriverField('drive-hf', 'mms_g', 2.4);
+
+    const form = useCadReturnStore.getState().channelDrivers['drive-hf'];
+    // Every value is an override on an empty base, so counting them would put
+    // an "n edited" chip and a live reset on a driver with nothing to reset to.
+    expect(form.fields).toMatchObject({ sd_cm2: 1, mms_g: 2.4 });
+    expect(driverEditedKeys(form)).toEqual([]);
+    // Still incomplete: no compliance source yet.
+    expect(driverMissingGroups(form)).toEqual([['cms_m_per_n', 'vas_l', 'fs_hz']]);
+
+    store.setChannelDriverField('drive-hf', 'fs_hz', 620);
+    // The name reaches the wire exactly as a picked driver's does.
+    expect(channelDriverWire(useCadReturnStore.getState().channelDrivers['drive-hf'])).toEqual({
+      sd_cm2: 1, bl_t_m: 1, re_ohm: 1, mms_g: 2.4, fs_hz: 620, label: 'Radian 745Neo',
+    });
+  });
+
+  it('keeps the installation inputs when the driver changes or the edits are reset', () => {
+    const store = useCadReturnStore.getState();
+    store.setChannelDriverPreset('drive-hf', PRESET);
+    store.setChannelDriverField('drive-hf', 'count', 2);
+    store.setChannelDriverField('drive-hf', 'rear_volume_l', 1.5);
+    store.setChannelDriverField('drive-hf', 'sd_cm2', 30);
+    expect(driverEditedKeys(useCadReturnStore.getState().channelDrivers['drive-hf'])).toEqual(['sd_cm2']);
+
+    store.clearChannelDriverOverrides('drive-hf');
+    const reset = useCadReturnStore.getState().channelDrivers['drive-hf'];
+    expect(reset.fields).toEqual({ count: 2, rear_volume_l: 1.5 });
+    expect(driverValues(reset).sd_cm2).toBe(26);
+
+    // A different driver drops the edits with the driver they belonged to.
+    store.setChannelDriverField('drive-hf', 'sd_cm2', 30);
+    store.setChannelDriverPreset('drive-hf', { ...PRESET, id: 'Acme::HD-1::16', z_ohm: 16 });
+    expect(useCadReturnStore.getState().channelDrivers['drive-hf'].fields).toEqual({ count: 2, rear_volume_l: 1.5 });
+  });
+
+  it('carries the preset across sessions and reads a pre-picker profile as hand entry', () => {
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 1,
+    }, 'current');
+    // The link has to be in place before the profile is written.
+    useCadReturnStore.getState().setChannelDriverPreset('drive-hf', PRESET);
+    useCadReturnStore.getState().setChannelDriverField('drive-hf', 'xmax_mm', 1.2);
+
+    resetCadReturnStore();
+    useCadReturnStore.getState().selectBundle(bundle);
+    expect(useCadReturnStore.getState().channelDrivers['drive-hf']).toEqual({
+      enabled: true, fields: { xmax_mm: 1.2 }, preset: PRESET,
+    });
+
+    // A profile written before drivers could be picked carries no preset key
+    // at all. Its hand-typed fields are still the whole driver.
+    const raw = JSON.parse(localStorage.getItem(solveProfileStorageKey)!);
+    delete raw.profiles[0].settings.channelDrivers['drive-hf'].preset;
+    localStorage.setItem(solveProfileStorageKey, JSON.stringify(raw));
+    resetCadReturnStore();
+    useCadReturnStore.getState().selectBundle(bundle);
+    expect(useCadReturnStore.getState().channelDrivers['drive-hf']).toEqual({
+      enabled: true, fields: { xmax_mm: 1.2 }, preset: null,
+    });
+  });
+
+  it('tolerates a stored preset saved before xo_min_hz existed, and rejects a malformed one', () => {
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 1,
+    }, 'current');
+    useCadReturnStore.getState().setChannelDriverPreset('drive-hf', PRESET);
+
+    // A preset stored before this field existed carries no `xo_min_hz` key at
+    // all; that migrates to null rather than dropping the preset.
+    const raw = JSON.parse(localStorage.getItem(solveProfileStorageKey)!);
+    delete raw.profiles[0].settings.channelDrivers['drive-hf'].preset.xo_min_hz;
+    localStorage.setItem(solveProfileStorageKey, JSON.stringify(raw));
+    resetCadReturnStore();
+    useCadReturnStore.getState().selectBundle(bundle);
+    expect(useCadReturnStore.getState().channelDrivers['drive-hf'].preset).toEqual({ ...PRESET, xo_min_hz: null });
+
+    // A present but malformed value still fails the whole profile, like every
+    // other field parsed here.
+    raw.profiles[0].settings.channelDrivers['drive-hf'].preset.xo_min_hz = 'soon';
+    localStorage.setItem(solveProfileStorageKey, JSON.stringify(raw));
+    resetCadReturnStore();
+    useCadReturnStore.getState().selectBundle(bundle);
+    expect(useCadReturnStore.getState().channelDrivers).toEqual({});
+  });
+
+  it('refuses a malformed stored preset rather than restoring half of one', () => {
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 1,
+    }, 'current');
+    useCadReturnStore.getState().setChannelDriverPreset('drive-hf', PRESET);
+    useCadReturnStore.getState().setRigidSize(9.5);
+
+    const raw = JSON.parse(localStorage.getItem(solveProfileStorageKey)!);
+    raw.profiles[0].settings.channelDrivers['drive-hf'].preset.source = 'somewhere-else';
+    localStorage.setItem(solveProfileStorageKey, JSON.stringify(raw));
+
+    resetCadReturnStore();
+    useCadReturnStore.getState().selectBundle(bundle);
+    expect(useCadReturnStore.getState().channelDrivers).toEqual({});
+    expect(useCadReturnStore.getState().rigidSizeMm).toBe(8);
+  });
+});
+
+describe('listing-gone staleness self-heals', () => {
+  it('clears when the identical bundle reappears, and only then', () => {
+    // A poll against a restarting server reads an empty listing; that must
+    // not permanently block solving once the same bundle is listed again.
+    localStorage.clear();
+    resetDocumentStore();
+    resetCadReturnStore();
+    const store = useCadReturnStore.getState();
+    store.selectBundle(bundle);
+    store.applyIngest(record(), store.beginIngestIntent());
+    useCadReturnStore.getState().refreshSelectedBundle(null);
+    expect(useCadReturnStore.getState().needsIngest).toBe(true);
+    expect(useCadReturnStore.getState().ingestStaleReason).toContain('no longer appears');
+
+    useCadReturnStore.getState().refreshSelectedBundle(bundle);
+    expect(useCadReturnStore.getState().needsIngest).toBe(false);
+    expect(useCadReturnStore.getState().ingestStaleReason).toBeNull();
+
+    // A genuinely changed bundle keeps its flag.
+    useCadReturnStore.getState().refreshSelectedBundle({ ...bundle, modifiedAt: '2099-01-01T00:00:00Z' });
+    expect(useCadReturnStore.getState().needsIngest).toBe(true);
+  });
+});
+
+describe('combined output: band roles', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    resetDocumentStore();
+    resetCadReturnStore();
   });
 
   it('assigns a mixed-role channel its lowest band regardless of source order', () => {
@@ -622,81 +919,5 @@ describe('combined output', () => {
       defaultHz: 1_000,
       hz: 1_000,
     });
-  });
-
-  it('falls back inside the sweep when the role default lies outside it', () => {
-    useCadReturnStore.getState().selectBundle(rebanded({ 'source-mf': 'LF', 'source-hf': 'MF' }));
-    // 100 Hz would be refused by the server's own band check on a 200 Hz sweep,
-    // so the log-spaced sqrt(200 * 20000) = 2000 Hz is used instead.
-    const [pair] = combineChain(useCadReturnStore.getState());
-    expect(pair).toMatchObject({ defaultHz: 100, outsideSweep: true, hz: 2_000 });
-    expect(combineWire(useCadReturnStore.getState())?.crossovers_hz).toEqual([2_000]);
-
-    useCadReturnStore.getState().setSweep({ frequencyStartHz: 50, frequencyEndHz: 20_000, frequencyCount: 24 });
-    expect(combineChain(useCadReturnStore.getState())[0]).toMatchObject({ outsideSweep: false, hz: 100 });
-  });
-
-  it('keeps the log-spaced fallback and listing order for an unroled return', () => {
-    useCadReturnStore.getState().selectBundle(rebanded({ 'source-mf': 'AUX', 'source-hf': 'AUX' }));
-    expect(combineChain(useCadReturnStore.getState())).toEqual([{
-      key: 'drive-mf→drive-hf',
-      lower: 'drive-mf',
-      upper: 'drive-hf',
-      hz: 2_000,
-      lowerRole: undefined,
-      upperRole: undefined,
-      defaultHz: undefined,
-      outsideSweep: false,
-    }]);
-  });
-
-  it('adopts the crossovers a recombine was computed with, ignoring foreign members', () => {
-    useCadReturnStore.getState().selectBundle(bundle);
-    useCadReturnStore.setState({ ingestRecord: record() });
-    useCadReturnStore.getState().setCombineCrossoversFromResult('wgi_one', ['drive-mf', 'drive-hf'], [1_450]);
-    expect(useCadReturnStore.getState().combineCrossoversHz).toEqual({ 'drive-mf→drive-hf': 1_450 });
-    expect(combineChain(useCadReturnStore.getState())[0].hz).toBe(1_450);
-
-    // Identical channel ids do not make a result from another ingest current.
-    useCadReturnStore.getState().setCombineCrossoversFromResult('wgi_other', ['drive-mf', 'drive-hf'], [1_900]);
-    expect(useCadReturnStore.getState().combineCrossoversHz).toEqual({ 'drive-mf→drive-hf': 1_450 });
-
-    // A run from another return names channels this one has not got.
-    useCadReturnStore.getState().setCombineCrossoversFromResult('wgi_one', ['drive-lf', 'drive-mf', 'drive-hf'], [90, 900]);
-    expect(useCadReturnStore.getState().combineCrossoversHz).toEqual({ 'drive-mf→drive-hf': 900 });
-
-    useCadReturnStore.getState().setCombineCrossoversFromResult('wgi_one', ['drive-mf', 'drive-hf'], []);
-    expect(useCadReturnStore.getState().combineCrossoversHz).toEqual({ 'drive-mf→drive-hf': 900 });
-  });
-
-  it('restores a profile written before the combined output defaulted on as no choice', () => {
-    useDocumentStore.getState().setCadLink({
-      designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 1,
-    }, 'current');
-    useCadReturnStore.getState().selectBundle(bundle);
-    useCadReturnStore.getState().setCombineEnabled(false);
-
-    const raw = JSON.parse(localStorage.getItem(solveProfileStorageKey)!);
-    raw.version = 1;
-    raw.profiles[0].settings.combineEnabled = false;
-    localStorage.setItem(solveProfileStorageKey, JSON.stringify(raw));
-
-    resetCadReturnStore();
-    useCadReturnStore.getState().selectBundle(bundle);
-    expect(useCadReturnStore.getState().combineEnabled).toBeNull();
-    expect(combineEnabledEffective(useCadReturnStore.getState())).toBe(true);
-  });
-
-  it('restores an explicit off from a current profile', () => {
-    useDocumentStore.getState().setCadLink({
-      designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 1,
-    }, 'current');
-    useCadReturnStore.getState().selectBundle(bundle);
-    useCadReturnStore.getState().setCombineEnabled(false);
-
-    resetCadReturnStore();
-    useCadReturnStore.getState().selectBundle(bundle);
-    expect(useCadReturnStore.getState().combineEnabled).toBe(false);
-    expect(combineEnabledEffective(useCadReturnStore.getState())).toBe(false);
   });
 });

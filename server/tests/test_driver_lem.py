@@ -104,6 +104,26 @@ def test_channel_scaling_produces_electrical_picture_and_warnings() -> None:
     assert payload["cone_excursion_mm"]["quantity"] == "one_way_peak_displacement"
 
 
+def test_driver_label_passes_through_to_the_metadata_payload() -> None:
+    freqs = np.geomspace(20.0, 2_000.0, 8)
+    p_avg = np.full(freqs.size, 0.1 + 0.05j, dtype=np.complex128)
+    _scale_raw, payload = channel_drive_scaling(
+        freqs,
+        p_avg,
+        0.021,
+        _spec(label="  Acme 12ND  "),
+        drive_voltage_v=2.83,
+        rg_ohm=0.0,
+    )
+    assert payload["label"] == "Acme 12ND"
+    assert payload["spec"]["label"] == "Acme 12ND"
+
+
+def test_driver_label_defaults_to_none_and_strips_blank_to_none() -> None:
+    assert _spec().label is None
+    assert _spec(label="   ").label is None
+
+
 def test_excursion_converts_rms_phasor_magnitude_to_one_way_peak_mm() -> None:
     converted = one_way_peak_excursion_mm(np.asarray([0.001, 0.002]))
 

@@ -4,13 +4,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadReturnBundle, CadReturnIngestRecord, FusionCadStatus } from '../api/cadlink';
 import { importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { preferencesStore } from '../prefs/preferences';
+import { expandLegacy, toWire, withChannel, withPair } from '../results/crossoverSpec';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { consumeParkedSolveCommand, parkedSolveCommandStore } from '../stores/solveCommand';
+import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
+import { rememberCadProject, rememberedCadProject } from '../stores/cadProjectMemory';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
-import { CadLinkCoordinator, cadLinkCoordinatorBridge } from './CadLinkCoordinator';
+import {
+  CadLinkCoordinator,
+  cadLinkCoordinatorBridge,
+  showCadJobModel,
+} from './CadLinkCoordinator';
 import { cadSolveBlockerNow, jobsCoordinatorBridge, SolveEngineUnavailableError } from './JobsCoordinator';
 import { workspaceNavigation } from './workspaceNavigation';
 
@@ -105,8 +112,11 @@ describe('CadLinkCoordinator', () => {
     resetCadReturnStore();
     resetDesignStore();
     resetDocumentStore();
+    resetSolveOptionsStore();
     parkedSolveCommandStore.clear();
     workspaceModeStore.setMode('parametric');
+    localStorage.removeItem('wg2.workspace.mode.v1');
+    localStorage.removeItem('wg2.cad.project.v1');
     preferencesStore.resetForTests();
     host = document.createElement('div');
     document.body.append(host);
@@ -170,7 +180,7 @@ describe('CadLinkCoordinator', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
       calls.push(path);
-      if (path.endsWith('/returns')) return json({ items: [] });
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [] });
       if (path.endsWith('/fusion-status')) return json(closedFusion);
       if (path.endsWith('/solve-command')) return json({ command: null });
       return json({}, 404);
@@ -205,7 +215,7 @@ describe('CadLinkCoordinator', () => {
     const requests: Array<Record<string, unknown>> = [];
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
-      if (path.endsWith('/returns')) return json({ items: [] });
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [] });
       if (path.endsWith('/solve-command')) return json({ command: null });
       if (path.endsWith('/fusion-status')) {
         const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
@@ -361,7 +371,7 @@ describe('CadLinkCoordinator', () => {
     useDocumentStore.getState().setCadLink({
       designId: 'wgd_1', lineageId: 'wgl_1', baseEditVersion: 1,
     }, 'current');
-    let listing: { items: CadReturnBundle[] } = { items: [] };
+    let listing: { cadFolderConfigured: boolean; items: CadReturnBundle[] } = { cadFolderConfigured: true, items: [] };
     let pullRequests = 0;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
@@ -388,13 +398,13 @@ describe('CadLinkCoordinator', () => {
     expect(cadLinkCoordinatorBridge.getSnapshot().status).toContain('Waiting for Fusion…');
 
     // An uncorrelated bundle must not settle this pull.
-    listing = { items: [{ ...initialBundle, requestId: 'req_other' }] };
+    listing = { cadFolderConfigured: true, items: [{ ...initialBundle, requestId: 'req_other' }] };
     await act(async () => {
       await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
     });
 
     const correlated = { ...initialBundle, requestId: 'req_1', documentName: 'Speaker pulled' };
-    listing = { items: [correlated] };
+    listing = { cadFolderConfigured: true, items: [correlated] };
     await act(async () => {
       await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
     });
@@ -421,7 +431,7 @@ describe('CadLinkCoordinator', () => {
     }, 'current');
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
-      if (path.endsWith('/returns')) return json({ items: [] });
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [] });
       if (path.endsWith('/fusion-status')) return json(linkedFusion);
       if (path.endsWith('/request-fusion-return')) {
         return json({ status: 'requested', requestId: 'req_1', documentName: 'Speaker' });
@@ -466,7 +476,7 @@ describe('CadLinkCoordinator', () => {
     useDocumentStore.getState().setCadLink({
       designId: 'wgd_1', lineageId: 'wgl_1', baseEditVersion: 1,
     }, 'current');
-    let listing: { items: CadReturnBundle[] } = { items: [] };
+    let listing: { cadFolderConfigured: boolean; items: CadReturnBundle[] } = { cadFolderConfigured: true, items: [] };
     const ingested = ingestRecord;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
@@ -479,7 +489,7 @@ describe('CadLinkCoordinator', () => {
     // The readiness gate lives inside solveCurrentCadImport, so a blocked
     // chain is a refusal thrown from there — the same thing the real one does.
     const solveCurrentCadImport = vi.fn(async () => {
-      throw new Error('Acknowledge 1 blocking finding before solving.');
+      throw new Error('This return includes FEM air volumes. Explicitly choose an exterior-only Phase 2 solve.');
     });
     vi.spyOn(jobsCoordinatorBridge, 'getSnapshot').mockReturnValue({
       ...jobsCoordinatorBridge.getSnapshot(), solveCurrentCadImport,
@@ -487,7 +497,7 @@ describe('CadLinkCoordinator', () => {
     await renderCoordinator();
 
     const arrive = async () => {
-      listing = { items: [{ ...initialBundle, requestId: 'req_1', modifiedAt: '2026-08-13T12:00:00Z' }] };
+      listing = { cadFolderConfigured: true, items: [{ ...initialBundle, requestId: 'req_1', modifiedAt: '2026-08-13T12:00:00Z' }] };
       await act(async () => {
         await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
         await Promise.resolve();
@@ -504,11 +514,11 @@ describe('CadLinkCoordinator', () => {
     });
     expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe(ingestRecord.ingest_id);
     expect(outcome).toBe('blocked');
-    expect(cadLinkCoordinatorBridge.getSnapshot().error).toContain('Acknowledge 1 blocking finding');
+    expect(cadLinkCoordinatorBridge.getSnapshot().error).toContain('exterior-only Phase 2 solve');
 
     // With the gate satisfied the same chain reaches the solve.
     solveCurrentCadImport.mockImplementation(async () => 'submitted' as never);
-    listing = { items: [] };
+    listing = { cadFolderConfigured: true, items: [] };
     await act(async () => {
       const chain = cadLinkCoordinatorBridge.getSnapshot().pullAndSolve().then((value) => { outcome = value; });
       await Promise.resolve(); await Promise.resolve();
@@ -529,7 +539,7 @@ describe('CadLinkCoordinator', () => {
     let outcome: Record<string, unknown> | null = null;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
-      if (path.endsWith('/returns')) return json({ items: [initialBundle] });
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [initialBundle] });
       if (path.endsWith('/fusion-status')) return json(closedFusion);
       if (path.endsWith('/solve-command/outcome')) {
         reported.push(JSON.parse(String(init?.body)));
@@ -573,7 +583,7 @@ describe('CadLinkCoordinator', () => {
     let ingestCalls = 0;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
-      if (path.endsWith('/returns')) return json({ items: [otherProject] });
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [otherProject] });
       if (path.endsWith('/fusion-status')) return json(closedFusion);
       if (path.endsWith('/solve-command/outcome')) {
         reported.push(JSON.parse(String(init?.body)));
@@ -612,7 +622,7 @@ describe('CadLinkCoordinator', () => {
     let ingestIndex = 0;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
-      if (path.endsWith('/returns')) return json({ items: [initialBundle] });
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [initialBundle] });
       if (path.endsWith('/fusion-status')) return json(closedFusion);
       if (path.endsWith('/solve-command/outcome')) {
         reported.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
@@ -751,10 +761,12 @@ describe('CadLinkCoordinator', () => {
 
   it('parks a gated Fusion command, consumes it on the next solve, and never replays it', async () => {
     vi.useFakeTimers();
+    // A blocking finding no longer gates the solve; the FEM exterior-only
+    // choice is a real gate a user has to make, so it is what parks here.
     const blocking: CadReturnIngestRecord = {
       ...ingestRecord,
       ingest_id: 'wgi_blocked',
-      findings: [{ id: 'finding-a', kind: 'freshness', blocking: true, verdict: 'design_changed' }],
+      evidence: { fem_air_volumes: [{ required: true }] },
     };
     const harness = solveCommandHarness({ ingests: [blocking] });
     await renderCoordinator();
@@ -768,7 +780,7 @@ describe('CadLinkCoordinator', () => {
     expect(parkedSolveCommandStore.getSnapshot().command).toMatchObject({
       commandId: 'cmd-1',
       bundlePath: initialBundle.bundlePath,
-      blockers: ['Acknowledge 1 blocking finding before solving.'],
+      blockers: ['This return includes FEM air volumes. Explicitly choose an exterior-only Phase 2 solve.'],
     });
     expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
 
@@ -776,9 +788,9 @@ describe('CadLinkCoordinator', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(5_200); });
     expect(harness.solveCurrentCadImport).toHaveBeenCalledOnce();
 
-    // Acknowledging and solving consumes the very same request, with its job.
+    // Making the gated choice and solving consumes the very same request.
     await act(async () => {
-      useCadReturnStore.getState().acknowledgeAllBlocking();
+      useCadReturnStore.getState().setExteriorOnly(true);
       await cadLinkCoordinatorBridge.getSnapshot().solveParkedCommand();
     });
     expect(harness.submitted).toEqual(['wgi_blocked']);
@@ -796,7 +808,7 @@ describe('CadLinkCoordinator', () => {
     vi.useFakeTimers();
     const blocking: CadReturnIngestRecord = {
       ...ingestRecord,
-      findings: [{ id: 'finding-a', kind: 'freshness', blocking: true }],
+      evidence: { fem_air_volumes: [{ required: true }] },
     };
     const harness = solveCommandHarness({ ingests: [blocking] });
     await renderCoordinator();
@@ -840,7 +852,7 @@ describe('CadLinkCoordinator', () => {
   });
 
   it('detects, selects, and automatically ingests a newly arrived return', async () => {
-    let listing = { items: [initialBundle] };
+    let listing = { cadFolderConfigured: true, items: [initialBundle] };
     const ingestBodies: Array<Record<string, unknown>> = [];
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
@@ -862,7 +874,7 @@ describe('CadLinkCoordinator', () => {
     expect(workspaceModeStore.getSnapshot().mode).toBe('parametric');
 
     const arrived = { ...initialBundle, modifiedAt: '2026-08-13T12:00:00Z', documentName: 'Speaker rebuilt' };
-    listing = { items: [arrived] };
+    listing = { cadFolderConfigured: true, items: [arrived] };
     await act(async () => {
       await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
       await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
@@ -880,7 +892,7 @@ describe('CadLinkCoordinator', () => {
 
   it('does not double-ingest an arrival while its solve command is being consumed', async () => {
     const solveResponse = deferred<Response>();
-    let listing = { items: [initialBundle] };
+    let listing = { cadFolderConfigured: true, items: [initialBundle] };
     let ingestCalls = 0;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
@@ -898,7 +910,7 @@ describe('CadLinkCoordinator', () => {
     await renderCoordinator();
 
     const arrived = { ...initialBundle, modifiedAt: '2026-08-13T12:00:00Z', documentName: 'Command arrival' };
-    listing = { items: [arrived] };
+    listing = { cadFolderConfigured: true, items: [arrived] };
     await act(async () => {
       await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
       await Promise.resolve();
@@ -922,7 +934,7 @@ describe('CadLinkCoordinator', () => {
   });
 
   it('does not auto-ingest an arrival already owned by a parked solve command', async () => {
-    let listing = { items: [initialBundle] };
+    let listing = { cadFolderConfigured: true, items: [initialBundle] };
     let ingestCalls = 0;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
@@ -938,7 +950,7 @@ describe('CadLinkCoordinator', () => {
       commandId: 'cmd-parked', bundlePath: arrived.bundlePath, blockers: ['review settings'],
       parkedAt: '2026-08-13T12:00:00Z',
     });
-    listing = { items: [arrived] };
+    listing = { cadFolderConfigured: true, items: [arrived] };
 
     await act(async () => {
       await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
@@ -950,7 +962,7 @@ describe('CadLinkCoordinator', () => {
   });
 
   it('retires a parked solve command when a different newer return arrives', async () => {
-    let listing = { items: [initialBundle] };
+    let listing = { cadFolderConfigured: true, items: [initialBundle] };
     const reported: Array<Record<string, unknown>> = [];
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
@@ -975,7 +987,7 @@ describe('CadLinkCoordinator', () => {
       name: 'newer.wgreturn', bundlePath: 'wgreturn/newer.wgreturn',
       documentName: 'Newer return', modifiedAt: '2026-08-13T12:00:00Z',
     };
-    listing = { items: [arrived, initialBundle] };
+    listing = { cadFolderConfigured: true, items: [arrived, initialBundle] };
 
     await act(async () => {
       await cadLinkCoordinatorBridge.getSnapshot().refresh({ background: true, autoOpenNew: true });
@@ -1002,7 +1014,7 @@ describe('CadLinkCoordinator', () => {
     const ingestPaths: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
-      if (path.endsWith('/returns')) return json({ items: [initialBundle, selected] });
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [initialBundle, selected] });
       if (path.endsWith('/fusion-status')) return json(closedFusion);
       if (path.endsWith('/solve-command')) return json({ command: null });
       if (path.endsWith('/ingest')) {
@@ -1038,7 +1050,7 @@ describe('CadLinkCoordinator', () => {
     const ingestPaths: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
-      if (path.endsWith('/returns')) return json({ items: [initialBundle, older, newer] });
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [initialBundle, older, newer] });
       if (path.endsWith('/fusion-status')) return json(closedFusion);
       if (path.endsWith('/solve-command')) return json({ command: null });
       if (path.endsWith('/ingest')) {
@@ -1077,7 +1089,7 @@ describe('CadLinkCoordinator', () => {
       const path = String(input);
       if (path.endsWith('/returns')) {
         listingRequest += 1;
-        if (listingRequest === 1) return json({ items: [initialBundle] });
+        if (listingRequest === 1) return json({ cadFolderConfigured: true, items: [initialBundle] });
         return listingRequest === 2 ? olderResponse.promise : newerResponse.promise;
       }
       if (path.endsWith('/fusion-status')) return json(closedFusion);
@@ -1098,11 +1110,11 @@ describe('CadLinkCoordinator', () => {
       await Promise.resolve();
     });
     await act(async () => {
-      newerResponse.resolve(json({ items: [newer] }));
+      newerResponse.resolve(json({ cadFolderConfigured: true, items: [newer] }));
       await newerRefresh;
     });
     await act(async () => {
-      olderResponse.resolve(json({ items: [older] }));
+      olderResponse.resolve(json({ cadFolderConfigured: true, items: [older] }));
       await olderRefresh;
     });
 
@@ -1112,7 +1124,7 @@ describe('CadLinkCoordinator', () => {
   });
 
   it('marks an ingestion stale while the CAD Link panel is unmounted', async () => {
-    let listing = { items: [initialBundle] };
+    let listing = { cadFolderConfigured: true, items: [initialBundle] };
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
       if (path.endsWith('/returns')) return json(listing);
@@ -1125,7 +1137,7 @@ describe('CadLinkCoordinator', () => {
       useCadReturnStore.getState().setSourceSize('source-hf', 3);
     });
 
-    listing = { items: [{
+    listing = { cadFolderConfigured: true, items: [{
       ...initialBundle,
       // The revision timestamp can remain stable when a listing's parsed
       // source evidence changes; reconciliation must still invalidate ingest.
@@ -1156,7 +1168,7 @@ describe('CadLinkCoordinator', () => {
     const response = deferred<Response>();
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
-      if (path.endsWith('/returns')) return json({ items: [initialBundle] });
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [initialBundle] });
       if (path.endsWith('/fusion-status')) return json(closedFusion);
       if (path.endsWith('/ingest')) return response.promise;
       return json({}, 404);
@@ -1186,7 +1198,7 @@ describe('CadLinkCoordinator', () => {
     let ingestCalls = 0;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
-      if (path.endsWith('/returns')) return json({ items: [initialBundle] });
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [initialBundle] });
       if (path.endsWith('/fusion-status')) return json(closedFusion);
       if (path.endsWith('/ingest')) {
         ingestCalls += 1;
@@ -1249,7 +1261,7 @@ describe('CadLinkCoordinator', () => {
           sequence: 5, designHash: 'sha256:d', geometryHash: 'sha256:g', artifactSha256: 'sha256:a',
         });
       }
-      if (path.endsWith('/returns')) return json({ items: [] });
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [] });
       if (path.endsWith('/fusion-status')) return json(bothChanged);
       return json({}, 404);
     }));
@@ -1312,7 +1324,7 @@ describe('CadLinkCoordinator', () => {
         sendCalls += 1;
         return sendCalls === 1 ? older.promise : newer.promise;
       }
-      if (path.endsWith('/returns')) return json({ items: [initialBundle] });
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [initialBundle] });
       if (path.endsWith('/fusion-status')) return json(closedFusion);
       return json({}, 404);
     }));
@@ -1351,7 +1363,7 @@ describe('CadLinkCoordinator', () => {
   ] as const)('%s returns to parametric mode and invalidates retained CAD state', async (_path, replace) => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
-      if (path.endsWith('/returns')) return json({ items: [initialBundle] });
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [initialBundle] });
       if (path.endsWith('/fusion-status')) return json(closedFusion);
       return json({}, 404);
     }));
@@ -1365,7 +1377,6 @@ describe('CadLinkCoordinator', () => {
       cad.setChannelDriverField('custom-hf', 'sd_cm2', 54);
       cad.setCombineEnabled(true);
       cad.setCombineCrossover('custom-hf→custom-mf', 1_200);
-      cad.acknowledge('reviewed-finding', true);
       workspaceModeStore.setMode('cad');
     });
 
@@ -1374,8 +1385,7 @@ describe('CadLinkCoordinator', () => {
     const retainedRecord = useCadReturnStore.getState().ingestRecord;
     const retainedChannels = useCadReturnStore.getState().driveChannels;
     const retainedDrivers = useCadReturnStore.getState().channelDrivers;
-    const retainedCrossovers = useCadReturnStore.getState().combineCrossoversHz;
-    const retainedAcknowledgements = useCadReturnStore.getState().acknowledgedFindingIds;
+    const retainedCrossovers = useCadReturnStore.getState().combineSpec;
 
     act(replace);
 
@@ -1385,10 +1395,228 @@ describe('CadLinkCoordinator', () => {
     expect(state.ingestRecord).toBe(retainedRecord);
     expect(state.driveChannels).toBe(retainedChannels);
     expect(state.channelDrivers).toBe(retainedDrivers);
-    expect(state.combineCrossoversHz).toBe(retainedCrossovers);
-    expect(state.acknowledgedFindingIds).toBe(retainedAcknowledgements);
+    expect(state.combineSpec).toBe(retainedCrossovers);
     expect(state.needsIngest).toBe(true);
     expect(state.ingestStaleReason).toContain('design was replaced');
     expect(importedSubmissionBlocker()).toBe(state.ingestStaleReason);
+  });
+
+  it('keeps CAD Link active and selects only this project’s latest return on project open', async () => {
+    const oldDesignId = 'wgd_old_project';
+    const nextDesignId = 'wgd_next_project';
+    useDocumentStore.getState().setCadLink({
+      designId: oldDesignId, lineageId: 'wgl_old_project', baseEditVersion: 1,
+    }, 'current');
+    const matching = {
+      ...initialBundle,
+      name: 'matching.wgreturn',
+      bundlePath: 'wgreturn/matching.wgreturn',
+      documentName: 'Next project',
+      designIds: [nextDesignId],
+    };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [initialBundle, matching] });
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.endsWith('/solve-command')) return json({ command: null });
+      return json({}, 404);
+    }));
+    const activate = vi.spyOn(workspaceNavigation, 'activate');
+    await renderCoordinator();
+
+    act(() => {
+      useCadReturnStore.getState().selectBundle({ ...initialBundle, designIds: [oldDesignId] });
+      const generation = useCadReturnStore.getState().beginIngestIntent();
+      useCadReturnStore.getState().applyIngest(ingestRecord, generation);
+      workspaceModeStore.setMode('cad');
+    });
+    await act(async () => {
+      useDesignStore.getState().replaceDesign(designForFamily('R-OSSE'), {
+        loadSource: 'cad-project-switch',
+      });
+      useDocumentStore.getState().setCadLink({
+        designId: nextDesignId, lineageId: 'wgl_next_project', baseEditVersion: 2,
+      }, 'current');
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(workspaceModeStore.getSnapshot().mode).toBe('cad');
+    expect(activate).toHaveBeenCalledWith('cadlink');
+    expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(matching.bundlePath);
+    expect(useCadReturnStore.getState().ingestRecord).toBeNull();
+    expect(cadLinkCoordinatorBridge.getSnapshot().status).toContain('Selected the latest matching return');
+  });
+
+  it('restores driver, crossover, mesh, and sweep inputs from a historical CAD run', async () => {
+    const record = {
+      ...ingestRecord,
+      sources: [
+        ingestRecord.sources[0],
+        {
+          ...ingestRecord.sources[0],
+          id: 'source-mf', role: 'MF', default_drive_channel_id: 'drive-mf',
+        },
+      ],
+      mesh_sizes: {
+        rigid_size_mm: 7,
+        transition_mm: 14,
+        source_size_mm: { 'source-hf': 3, 'source-mf': 5 },
+      },
+    };
+    const job = {
+      id: 'historical-cad',
+      run_number: 82,
+      label: 'Tritonia run',
+      config_summary: { geometry_type: 'imported' },
+      cad_source: { ingest_id: record.ingest_id, document_name: 'Tritonia V' },
+      cad_setup: {
+        type: 'imported',
+        ingest_id: record.ingest_id,
+        drive_channels: [
+          { id: 'drive-mf', source_ids: ['source-mf'], motion: 'normal' },
+          {
+            id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal',
+            driver: {
+              sd_cm2: 82, bl_t_m: 11.4, re_ohm: 5.8, le_mh: 0.4,
+              mmd_g: 18.5, cms_m_per_n: 0.00042, rms_kg_per_s: 1.2,
+              xmax_mm: 6, count: 2, rear_volume_l: 1.5,
+            },
+          },
+        ],
+        combine: {
+          members: ['drive-mf', 'drive-hf'], crossovers_hz: [1_250],
+          level_match: false, align: true,
+        },
+        drive_voltage_v: 4,
+        mesh: {
+          rigid_size_mm: 8,
+          transition_mm: 16,
+          source_size_mm: { 'source-mf': 4, 'source-hf': 2.5 },
+        },
+        skipped_source_ids: [],
+        exterior_only: true,
+      },
+      solve_options: {
+        engine: 'metal', symmetry: 'auto', frequency_range: null,
+        num_frequencies: null, frequency_spacing: 'linear',
+        frequencies_hz: [400, 800, 1_600], verbose: true,
+        mesh_validation_mode: 'strict', polar_config: {
+          angle_range: [-90, 90, 19], distance: 2, norm_angle: 5,
+          inclination: 45, enabled_axes: ['horizontal'],
+          observation_origin: 'mouth', spherical_sampling: false,
+        },
+        stage_delay_ms: 0,
+      },
+    } as unknown as import('../api/jobsSocket').JobItem;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path === `/api/cadlink/ingest/${record.ingest_id}`) return json(record);
+      if (path.endsWith('/viewport-mesh')) return new Response(viewportMesh);
+      return json({}, 404);
+    }));
+
+    let shown = false;
+    await act(async () => { shown = await showCadJobModel(job); });
+
+    const state = useCadReturnStore.getState();
+    expect(shown).toBe(true);
+    expect(state.driveChannels).toEqual(job.cad_setup?.drive_channels?.map(({ driver: _driver, ...channel }) => channel));
+    expect(state.channelDrivers['drive-hf']).toEqual({
+      enabled: true,
+      fields: {
+        sd_cm2: 82, bl_t_m: 11.4, re_ohm: 5.8, le_mh: 0.4,
+        mmd_g: 18.5, cms_m_per_n: 0.00042, rms_kg_per_s: 1.2,
+        xmax_mm: 6, count: 2, rear_volume_l: 1.5,
+      },
+      // The stored setup names no driver, so this is still hand entry.
+      preset: null,
+    });
+    expect(state.combineEnabled).toBe(true);
+    // A job submitted before the per-channel spec carries only the legacy
+    // triple; drift compares one shape, so it is expanded on the way in.
+    expect(state.combineSpec).toEqual(expandLegacy(['drive-mf', 'drive-hf'], [1_250], false, true));
+    expect(state.driveVoltageV).toBe(4);
+    expect(state.sourceSizesMm).toEqual({ 'source-mf': 4, 'source-hf': 2.5 });
+    expect(state.rigidSizeMm).toBe(8);
+    expect(state.transitionMm).toBe(16);
+    expect(state.exteriorOnly).toBe(true);
+    expect(state.frequencyStartHz).toBe(400);
+    expect(state.frequencyEndHz).toBe(1_600);
+    expect(state.frequencyCount).toBe(3);
+    expect(useSolveOptionsStore.getState()).toMatchObject({
+      frequencyMode: 'list', frequencyListText: '400\n800\n1600',
+      frequencySpacing: 'linear', meshValidationMode: 'strict', verbose: true,
+    });
+
+    // A job submitted with the per-channel spec restores it verbatim, unlinked
+    // pair and manual gain included — the shape drift compares against.
+    const v2Spec = withChannel(
+      withPair(expandLegacy(['drive-mf', 'drive-hf'], [1_250]), 'drive-mf→drive-hf', { family: 'bessel', order: 3 }),
+      'drive-hf',
+      { gain: { mode: 'manual', db: -1.5 }, invert: true },
+    );
+    const v2Job = {
+      ...job,
+      cad_setup: { ...job.cad_setup, combine: toWire(v2Spec) },
+    } as unknown as import('../api/jobsSocket').JobItem;
+    await act(async () => { await showCadJobModel(v2Job); });
+    expect(useCadReturnStore.getState().combineSpec).toEqual(v2Spec);
+  });
+
+  it('reopens the remembered CAD project when the mode comes back empty', async () => {
+    rememberCadProject('wgl_remembered');
+    expect(rememberedCadProject()).toBe('wgl_remembered');
+    // The open design belongs to no return, exactly the state a reload in
+    // Parametric mode leaves behind: nothing auto-selects on the first listing.
+    useDocumentStore.getState().setCadLink({ designId: 'wgd_unrelated', lineageId: 'wgl_unrelated', baseEditVersion: 1 }, 'current');
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      calls.push(path);
+      if (path.endsWith('/api/cadlink/designs')) return json({ items: [{
+        designId: null, lineageId: 'wgl_remembered', filename: null,
+        documentName: initialBundle.documentName, archiveStem: initialBundle.documentName,
+        exportCount: 0, createdAt: '2026-08-23T14:34:20Z', updatedAt: '2026-08-23T19:15:10Z',
+      }] });
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [initialBundle] });
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.endsWith('/solve-command')) return json({ command: null });
+      return json({}, 404);
+    }));
+
+    await renderCoordinator();
+    expect(useCadReturnStore.getState().selectedBundle).toBeNull();
+
+    await act(async () => {
+      workspaceModeStore.setMode('cad');
+      for (let i = 0; i < 8; i += 1) await Promise.resolve();
+    });
+
+    expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(initialBundle.bundlePath);
+    expect(calls.some((path) => path.endsWith('/api/cadlink/designs'))).toBe(true);
+  });
+
+  it('never restores over a selection the listing already made', async () => {
+    rememberCadProject('wgl_remembered');
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/api/cadlink/designs')) return json({ items: [] });
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [initialBundle] });
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.endsWith('/solve-command')) return json({ command: null });
+      return json({}, 404);
+    }));
+    await renderCoordinator();
+    const other = { ...initialBundle, bundlePath: 'wgreturn/other.wgreturn', name: 'other.wgreturn' };
+    act(() => useCadReturnStore.getState().selectBundle(other));
+
+    await act(async () => {
+      workspaceModeStore.setMode('cad');
+      for (let i = 0; i < 8; i += 1) await Promise.resolve();
+    });
+
+    expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe('wgreturn/other.wgreturn');
   });
 });

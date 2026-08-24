@@ -14,7 +14,12 @@ from fastapi import FastAPI
 from pydantic import ValidationError
 
 from server.cadlink.store import CadLinkStore
-from server.jobs.models import ChannelCombineSpec, ImportedGeometrySource, SolveRequest
+from server.jobs.models import (
+    ChannelCombineSpec,
+    ImportedGeometrySource,
+    JobStatusResponse,
+    SolveRequest,
+)
 from server.jobs.api import create_jobs_router
 from server.jobs.runtime import ImportedSolveRefusal, JobRuntime, _replay_request
 from server.jobs.store import JobStore
@@ -214,6 +219,33 @@ def test_passive_cardioid_aperture_mapping_resolves_imported_lr_names() -> None:
     }
     assert port_names == ["PORT_EXIT_L", "PORT_EXIT_R"]
     assert mf_source_id == "source-mf"
+
+
+def test_passive_cardioid_aperture_mapping_resolves_the_renamed_role() -> None:
+    # PASSIVE_CARDIOID is the name the add-in authors since the rename; it
+    # wins over a legacy PORT_EXIT tag if both are somehow present.
+    aperture_tags, port_names, mf_source_id = metal._passive_cardioid_apertures(
+        {"passive_cardioid": 12, "PORT_EXIT": 10, "source-mf": 101},
+        {"sources": [{"id": "source-mf", "role": "MF"}]},
+    )
+
+    assert aperture_tags == {"passive_cardioid": [12], "MF": [101]}
+    assert port_names == ["passive_cardioid"]
+    assert mf_source_id == "source-mf"
+
+
+def test_passive_cardioid_aperture_mapping_resolves_renamed_lr_halves() -> None:
+    aperture_tags, port_names, _ = metal._passive_cardioid_apertures(
+        {"PASSIVE_CARDIOID_L": 3, "PASSIVE_CARDIOID_R": 4, "source-mf": 101},
+        {"sources": [{"id": "source-mf", "role": "MF"}]},
+    )
+
+    assert aperture_tags == {
+        "PASSIVE_CARDIOID_L": [3],
+        "PASSIVE_CARDIOID_R": [4],
+        "MF": [101],
+    }
+    assert port_names == ["PASSIVE_CARDIOID_L", "PASSIVE_CARDIOID_R"]
 
 
 def test_frequency_reconciliation_rejects_same_length_different_values() -> None:
@@ -802,9 +834,85 @@ def test_submit_persists_ingestion_mesh_summary_and_availability(tmp_path: Path)
             serialized = runtime._serialize_job(row)
             assert serialized["design_availability"]["source"] == "cad-import"
             assert serialized["design_availability"]["reopenable"] is False
+            assert serialized["cad_setup"] == row["config_json"]["geometry"]
             assert _replay_request(row).model_dump(mode="json") == SolveRequest.model_validate(
                 row["config_json"]
             ).model_dump(mode="json")
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_legacy_imported_job_recovers_project_provenance_from_ingest(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        runtime, _first_ingest_id, record = await _runtime_fixture(tmp_path)
+        cad_store = runtime.cadlink_store
+        assert cad_store is not None
+        saved = cad_store.save(
+            requested=None,
+            design_hash="sha256:" + "d" * 64,
+            filename="Tritonia-V.cfg",
+            snapshot_builder=lambda _identity: "legacy snapshot",
+        )
+        identity = saved["identity"]
+        cad_store.record_lineage_cad_names(
+            identity.lineage_id,
+            bundle_stem="Tritonia-V",
+            archive_stem="Tritonia-V-project",
+        )
+
+        def build(ingest_id: str, created_at: str) -> str:
+            return json.dumps({
+                **record,
+                "ingest_id": ingest_id,
+                "created_at": created_at,
+                "anchor": {
+                    **record["anchor"],
+                    "design_id": identity.design_id,
+                },
+                "document": {
+                    "name": "Tritonia V",
+                    "return_state_hash": "sha256:return-state",
+                },
+            })
+
+        ingest = cad_store.allocate_ingest(
+            manifest_sha256=MANIFEST_SHA,
+            artifact_sha256=ARTIFACT_SHA,
+            record_builder=build,
+        )
+        try:
+            job_id = await runtime.submit(_request(str(ingest["ingest_id"])))
+            runtime.store.mutate_job_metadata(job_id, {
+                # This is the shape written by the affected historical jobs.
+                "imported_geometry": {
+                    "ingest_id": ingest["ingest_id"],
+                    "anchor_design_id": identity.design_id,
+                },
+            })
+
+            item = await runtime.get_job(job_id)
+
+            assert item["cad_source"] == {
+                "ingest_id": ingest["ingest_id"],
+                "design_id": identity.design_id,
+                "lineage_id": identity.lineage_id,
+                "archive_stem": "Tritonia-V-project",
+                "manifest_sha256": MANIFEST_SHA,
+                "document_name": "Tritonia V",
+                "return_state_hash": "sha256:return-state",
+                "identity": None,
+            }
+            assert item["cad_setup"] == runtime.store.get_job_row(job_id)[
+                "config_json"
+            ]["geometry"]
+            assert (
+                JobStatusResponse.model_validate(item).cad_source.lineage_id
+                == identity.lineage_id
+            )
         finally:
             await runtime.shutdown()
 
@@ -1868,7 +1976,7 @@ def test_combined_channel_is_appended_with_contract_metadata(
         "combined channel: member drives differ; no single impedance exists"
     )
     payload = combined["metadata"]["combine"]
-    assert payload["type"] == "lr4_time_aligned_sum"
+    assert payload["type"] == "filtered_time_aligned_sum"
     assert payload["members"] == ["left", "right"]
     assert response["channels"]["left"]["metadata"]["role"] == "LF"
     assert payload["member_roles"] == ["LF", "HF"]
@@ -1924,6 +2032,106 @@ def test_combine_crossover_outside_the_solved_band_refuses() -> None:
         _request(
             "wgi_" + "0" * 26,
             combine={"members": ["left", "right"], "crossovers_hz": [5000.0]},
+        )
+    # A per-channel spec is held to the same band.
+    with pytest.raises(ValidationError, match="outside the solved band"):
+        _request(
+            "wgi_" + "0" * 26,
+            combine={
+                "members": ["left", "right"],
+                "channels": {
+                    "left": {"lp": {"family": "lr", "order": 4, "fc_hz": 5000.0}},
+                    "right": {"hp": {"family": "lr", "order": 4, "fc_hz": 5000.0}},
+                },
+            },
+        )
+
+
+def test_combine_spec_v2_validates_and_expands_the_legacy_form() -> None:
+    legacy = ChannelCombineSpec(members=["lf", "mf", "hf"], crossovers_hz=[300.0, 3000.0])
+    resolved = legacy.resolved()
+    assert resolved["reference"] == "hf"
+    assert resolved["channels"]["mf"] == {
+        "hp": {"family": "lr", "order": 4, "fc_hz": 300.0},
+        "lp": {"family": "lr", "order": 4, "fc_hz": 3000.0},
+        "gain": {"mode": "auto"},
+        "delay": {"mode": "auto"},
+        "invert": None,
+    }
+    assert legacy.linked_crossovers_hz() == [300.0, 3000.0]
+    assert legacy.corner_frequencies_hz() == [300.0, 3000.0]
+
+    off = ChannelCombineSpec(
+        members=["lf", "hf"], crossovers_hz=[900.0], level_match=False, align=False
+    ).resolved()["channels"]
+    assert off["lf"]["gain"] == {"mode": "manual", "db": 0.0}
+    assert off["lf"]["delay"] == {"mode": "manual", "ms": 0.0}
+
+    per_channel = ChannelCombineSpec.model_validate(
+        {
+            "members": ["lf", "hf"],
+            "reference": "lf",
+            "channels": {
+                "lf": {
+                    "lp": {"family": "butterworth", "order": 3, "fc_hz": 800.0},
+                    "gain": {"mode": "manual", "db": -1.5},
+                },
+                "hf": {
+                    "hp": {"family": "bessel", "order": 4, "fc_hz": 1200.0},
+                    "delay": {"mode": "manual", "ms": 0.4},
+                    "invert": True,
+                },
+            },
+        }
+    )
+    assert per_channel.resolved_reference == "lf"
+    # An unlinked pair has no single crossover to report.
+    assert per_channel.linked_crossovers_hz() == [None]
+    assert per_channel.corner_frequencies_hz() == [800.0, 1200.0]
+
+    with pytest.raises(ValidationError, match="crossovers_hz or a per-channel"):
+        ChannelCombineSpec(members=["lf", "hf"])
+    with pytest.raises(ValidationError, match="must name exactly the members"):
+        ChannelCombineSpec.model_validate(
+            {"members": ["lf", "hf"], "channels": {"lf": {}}}
+        )
+    with pytest.raises(ValidationError, match="is not one of the members"):
+        ChannelCombineSpec.model_validate(
+            {"members": ["lf", "hf"], "crossovers_hz": [900.0], "reference": "sub"}
+        )
+    with pytest.raises(ValidationError, match="must sit below its low-pass"):
+        ChannelCombineSpec.model_validate(
+            {
+                "members": ["lf", "hf"],
+                "channels": {
+                    "lf": {"lp": {"family": "lr", "order": 4, "fc_hz": 900.0}},
+                    "hf": {
+                        "hp": {"family": "lr", "order": 4, "fc_hz": 900.0},
+                        "lp": {"family": "lr", "order": 4, "fc_hz": 400.0},
+                    },
+                },
+            }
+        )
+    with pytest.raises(ValidationError, match="supports orders"):
+        ChannelCombineSpec.model_validate(
+            {
+                "members": ["lf", "hf"],
+                "channels": {
+                    "lf": {"lp": {"family": "lr", "order": 3, "fc_hz": 900.0}},
+                    "hf": {"hp": {"family": "lr", "order": 4, "fc_hz": 900.0}},
+                },
+            }
+        )
+    with pytest.raises(ValidationError, match="a manual gain needs db"):
+        ChannelCombineSpec.model_validate(
+            {
+                "members": ["lf", "hf"],
+                "crossovers_hz": [900.0],
+                "channels": {
+                    "lf": {"gain": {"mode": "manual"}},
+                    "hf": {},
+                },
+            }
         )
 
 
@@ -1989,11 +2197,66 @@ def test_recombine_from_stored_bases_updates_and_adds_channels(
     assert again["channel_order"] == ["left", "right", "combined"]
     assert again["channels"]["combined"]["metadata"]["combine"]["crossovers_hz"] == [800.0]
 
+    # The route's body model is this spec, so the per-channel form reaches the
+    # solver through exactly the same door as the legacy triple.
+    per_channel = ChannelCombineSpec.model_validate(
+        {
+            "members": ["left", "right"],
+            "reference": "left",
+            "channels": {
+                "left": {
+                    "lp": {"family": "butterworth", "order": 3, "fc_hz": 600.0},
+                    "gain": {"mode": "manual", "db": -1.0},
+                },
+                "right": {
+                    "hp": {"family": "butterworth", "order": 3, "fc_hz": 600.0},
+                    "delay": {"mode": "manual", "ms": 0.2},
+                },
+            },
+        }
+    )
+    per_channel_results = recombine_stored_results(
+        updated, outcome.channel_bases, per_channel, request
+    )
+    per_channel_payload = per_channel_results["channels"]["combined"]["metadata"][
+        "combine"
+    ]
+    assert per_channel_payload["type"] == "filtered_time_aligned_sum"
+    assert per_channel_payload["reference"] == "left"
+    assert per_channel_payload["crossovers_hz"] == [600.0]
+    assert per_channel_payload["channels"]["left"]["lp"] == {
+        "family": "butterworth",
+        "order": 3,
+        "fc_hz": 600.0,
+    }
+    assert per_channel_payload["gains_db"]["left"] == pytest.approx(-1.0)
+    assert per_channel_payload["delays_ms"]["right"] == pytest.approx(0.2)
+    assert set(per_channel_payload["pairs"]) == {"left-right"}
+
     with pytest.raises(RecombineError, match="outside the solved band"):
         recombine_stored_results(
             updated,
             outcome.channel_bases,
             ChannelCombineSpec(members=["left", "right"], crossovers_hz=[5000.0]),
+            request,
+        )
+    with pytest.raises(RecombineError, match="outside the solved band"):
+        recombine_stored_results(
+            updated,
+            outcome.channel_bases,
+            ChannelCombineSpec.model_validate(
+                {
+                    "members": ["left", "right"],
+                    "channels": {
+                        "left": {
+                            "lp": {"family": "lr", "order": 4, "fc_hz": 5000.0}
+                        },
+                        "right": {
+                            "hp": {"family": "lr", "order": 4, "fc_hz": 5000.0}
+                        },
+                    },
+                }
+            ),
             request,
         )
     with pytest.raises(RecombineError, match="unknown drive channels"):

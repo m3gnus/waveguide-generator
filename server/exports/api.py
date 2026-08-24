@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import shutil
 import tempfile
+import threading
 from typing import Any, Literal, Mapping
 
 from fastapi import APIRouter, FastAPI, Header, HTTPException, Query, Request
@@ -221,6 +222,16 @@ def _exchange_directories(first: Path, second: Path) -> None:
     if result != 0:
         error = ctypes.get_errno()
         raise OSError(error, os.strerror(error), str(first), str(second))
+
+
+# Resolving a bundle name and publishing under it has to be one step.
+# `_bundle_destination` decides a name is free by reading the wglink folder, so
+# two exports that want the same readable name both see it free until one of
+# them lands. The registry lock used to span the whole build and serialized
+# this by accident; since the build moved outside that lock, only this short
+# claim needs to be serialized. Process-wide because the wglink folder is
+# reached through one server process.
+_BUNDLE_NAME_LOCK = threading.Lock()
 
 
 def _replace_bundle(staged: Path, destination: Path) -> None:
@@ -512,10 +523,10 @@ def _export_wglink_sync(
                 "The design changed while the CAD export was starting. "
                 "Send it to CAD again."
             )
+        # Fail before the geometry work when the name is already unusable; the
+        # binding claim happens under the lock once the bundle is staged.
         try:
-            destination = _bundle_destination(
-                wglink_root, bundle_stem, identity.design_id
-            )
+            _bundle_destination(wglink_root, bundle_stem, identity.design_id)
         except ValueError as exc:
             raise _BundleNameConflict(str(exc)) from exc
         temporary_root = Path(tempfile.mkdtemp(prefix=".wg2-wglink-", dir=wglink_root))
@@ -588,7 +599,14 @@ def _export_wglink_sync(
             )
             manifest_json = product.manifest_path.read_text(encoding="utf-8")
             artifact_sha256 = str(manifest["files"]["waveguide.step"]["sha256"])
-            _replace_bundle(staged, destination)
+            with _BUNDLE_NAME_LOCK:
+                try:
+                    destination = _bundle_destination(
+                        wglink_root, bundle_stem, identity.design_id
+                    )
+                except ValueError as exc:
+                    raise _BundleNameConflict(str(exc)) from exc
+                _replace_bundle(staged, destination)
             return {
                 "manifest_json": manifest_json,
                 "geometry_hash": geometry_hash,

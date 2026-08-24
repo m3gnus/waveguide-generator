@@ -1,3 +1,4 @@
+import type { CrossoverChannelWire } from '../results/crossoverSpec';
 import { compareSelection, provisionalResults, type ResultData } from './results';
 
 /**
@@ -88,6 +89,47 @@ export interface JobItem {
   solve_wall_time_seconds?: number | null;
   /** Where an imported run came from. Absent on parametric runs. */
   cad_source?: CadSource | null;
+  /** Exact imported-geometry inputs persisted with a CAD run. */
+  cad_setup?: CadSetup | null;
+}
+
+export interface CadSetup {
+  type: 'imported';
+  ingest_id?: string;
+  drive_channels?: Array<{
+    id: string;
+    source_ids: string[];
+    motion?: 'normal' | 'axial';
+    driver?: Record<string, number> | null;
+  }>;
+  /** Both crossover generations: the per-channel v2 form every new submission
+   * writes, and the legacy triple older jobs still carry. */
+  combine?: {
+    id?: string;
+    members: string[];
+    reference?: string;
+    channels?: Record<string, CrossoverChannelWire>;
+    crossovers_hz?: number[];
+    level_match?: boolean;
+    align?: boolean;
+  } | null;
+  drive_voltage_v?: number;
+  mesh?: {
+    rigid_size_mm?: number;
+    transition_mm?: number;
+    source_size_mm?: Record<string, number>;
+  };
+  skipped_source_ids?: string[];
+  exterior_only?: boolean;
+  passive_cardioid_rear_volume_l?: number | null;
+  passive_cardioid_port_length_mm?: number | null;
+  model_port_area_m2?: number | null;
+  bem_port_area_m2?: number | null;
+  port_area_source?: 'user' | 'bem_aperture' | null;
+  passive_cardioid_foam_resistance_pa_s_m3?: number | null;
+  passive_cardioid_invert_port?: boolean;
+  passive_cardioid_coupled?: boolean;
+  [key: string]: unknown;
 }
 
 /** The CAD provenance a run keeps so its archive stays traceable. */
@@ -257,6 +299,10 @@ function isCadSource(value: unknown): value is CadSource {
     ));
 }
 
+function isCadSetup(value: unknown): value is CadSetup {
+  return isRecord(value) && value.type === 'imported' && isSafeJson(value);
+}
+
 function isAutoExportFormats(value: unknown): value is JobItem['auto_export_formats'] {
   // Older rows and future exporters may attach fields beyond the current
   // complete/failed UI projection. The UI treats unrecognised entries as not
@@ -323,6 +369,7 @@ function isJobItem(value: unknown): value is JobItem {
     || (isFiniteNumber(value.solve_wall_time_seconds) && value.solve_wall_time_seconds >= 0)
   )) return false;
   if (hasOwn(value, 'cad_source') && !(value.cad_source === null || isCadSource(value.cad_source))) return false;
+  if (hasOwn(value, 'cad_setup') && !(value.cad_setup === null || isCadSetup(value.cad_setup))) return false;
   return true;
 }
 

@@ -78,12 +78,27 @@ class SelectCadWorkspaceRequest(BaseModel):
     path: str = Field(min_length=1, max_length=4096)
 
 
+class SelectWorkspaceRequest(BaseModel):
+    """A folder typed instead of chosen from the native picker.
+
+    The picker runs on the machine hosting the server, which is the right
+    behaviour for the desktop launcher and useless when WG is reached from a
+    browser on another machine. Accepting a path keeps that case workable
+    without asking the browser for a directory handle only Chromium grants.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str = Field(min_length=1, max_length=4096)
+
+
 #: Where a captured CAD document is filed in the run archive.
 #:
-#: ``project`` keeps one copy per model state under ``runs/<project>/cad/``;
+#: ``project`` keeps only the newest model state under
+#: ``runs/<project>/cad/`` -- archiving a later state deletes the last;
 #: ``run`` additionally places that document beside the run that was solved
-#: from it, which is where people look for it; ``off`` asks the add-in not to
-#: carry the document at all.
+#: from it, which is where people look for it and is never pruned; ``off``
+#: asks the add-in not to carry the document at all.
 CaptureMode = Literal["off", "project", "run"]
 CAPTURE_MODES: tuple[str, ...] = ("off", "project", "run")
 
@@ -884,6 +899,14 @@ def create_workspace_router(state: WorkspaceState) -> APIRouter:
         except WorkspaceUnavailableError as exc:
             return _workspace_unavailable_response(exc)
 
+    def picker_start() -> Path | None:
+        """Where to open the dialog: only ever a hint, never a requirement."""
+
+        try:
+            return state.path()
+        except Exception:
+            return state.selected_path()
+
     @router.get("/path")
     async def workspace_path() -> Any:
         path = available_path()
@@ -893,8 +916,14 @@ def create_workspace_router(state: WorkspaceState) -> APIRouter:
         return {"path": str(path), "selected": selected is not None}
 
     @router.post("/select")
-    async def workspace_select() -> Any:
-        selected = await asyncio.to_thread(_select_workspace_folder)
+    async def workspace_select(payload: SelectWorkspaceRequest | None = None) -> Any:
+        selected = (
+            payload.path
+            if payload is not None
+            else await asyncio.to_thread(
+                _select_workspace_folder, "Select output folder", picker_start()
+            )
+        )
         if not selected:
             path = available_path()
             if isinstance(path, JSONResponse):
@@ -998,6 +1027,7 @@ __all__ = [
     "CaptureDocumentRequest",
     "WriteExportRequest",
     "SelectCadWorkspaceRequest",
+    "SelectWorkspaceRequest",
     "create_workspace_router",
     "create_cad_workspace_router",
     "mount_workspace",

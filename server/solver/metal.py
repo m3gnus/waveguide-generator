@@ -24,7 +24,11 @@ import numpy as np
 from hornlab_sim.methods import driver_coupling, radiation_impedance
 
 from server.cadlink.roles import canonical_source_role
-from server.jobs.models import ImportedGeometrySource, SolveRequest
+from server.jobs.models import (
+    ImportedGeometrySource,
+    PORT_APERTURE_NAME_GROUPS,
+    SolveRequest,
+)
 from server.mesh.builder import _solver_mesher_config, build_solver_mesh
 from server.preview.translate import has_closed_outer_body
 
@@ -689,24 +693,15 @@ def _passive_cardioid_apertures(
     entries = [(str(name), int(tag)) for name, tag in source_tags.items()]
     by_upper = {name.strip().upper(): (name, tag) for name, tag in entries}
 
-    exact = by_upper.get("PORT_EXIT")
-    if exact is not None:
-        port_entries = [exact]
-    else:
-        port_entries = [
-            by_upper[name]
-            for name in ("PORT_EXIT_L", "PORT_EXIT_R")
-            if name in by_upper
-        ]
-        if not port_entries:
-            port_entries = [
-                by_upper[name]
-                for name in ("MID_PORT_EXIT_LEFT", "MID_PORT_EXIT_RIGHT")
-                if name in by_upper
-            ]
+    port_entries: list[tuple[str, int]] = []
+    for group in PORT_APERTURE_NAME_GROUPS:
+        port_entries = [by_upper[name] for name in group if name in by_upper]
+        if port_entries:
+            break
     if not port_entries:
         raise ValueError(
-            "passive cardioid requires PORT_EXIT, PORT_EXIT_L/PORT_EXIT_R, or "
+            "passive cardioid requires PASSIVE_CARDIOID (or its _L/_R halves), "
+            "PORT_EXIT, PORT_EXIT_L/PORT_EXIT_R, or "
             "mid_port_exit_left/mid_port_exit_right in the ingestion source tag map"
         )
 
@@ -1261,7 +1256,7 @@ def _combined_channel_response(
     per_source_validity: Mapping[str, Any],
     channel_identity: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, Any]:
-    """Package the LR4 time-aligned sum as one more contract-shaped channel."""
+    """Package the filtered time-aligned sum as one more contract-shaped channel."""
 
     spec = geometry.combine
     assert spec is not None
@@ -1277,12 +1272,12 @@ def _combined_channel_response(
         if limits:
             member_validity_hz[member] = min(limits)
 
+    resolved = spec.resolved()
     combined_result, combine_payload = combine_drive_channels(
         sorted_results,
         members=list(spec.members),
-        crossovers_hz=list(spec.crossovers_hz),
-        level_match=spec.level_match,
-        align=spec.align,
+        channels=resolved["channels"],
+        reference=resolved["reference"],
         member_validity_hz=member_validity_hz,
         member_roles={
             member: channel_identity.get(member, {}).get("role")

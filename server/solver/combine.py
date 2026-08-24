@@ -2,12 +2,16 @@
 
 Ports the Fusion add-in's LR4 time-aligned on-axis sum
 (``solve_fusion_wg_metal.py`` — crossover weights, level match,
-phase-equivalent alignment delays) onto WG's solve-time channel results.
+phase-equivalent alignment delays) onto WG's solve-time channel results, then
+generalises it: any channel may carry its own high-pass and low-pass section
+from any supported family, its own gain and delay (auto or manual) and its own
+polarity (CADLINK-CROSSOVER-DRIVERS.md §2). A legacy LR4 spec expands into
+that per-channel form, so the two paths are one code path.
 Because every channel of one job shares a single observation grid, the
 add-in's grid harmonisation stage has no equivalent here.
 
 Convention boundary (the only one): weights are defined in the engineering
-``e^{+jωt}`` convention, where an LR4 transfer function and a delay
+``e^{+jωt}`` convention, where a filter transfer function and a delay
 ``e^{-jωτ}`` mean what filter theory says they mean. Raw solver fields are
 ``e^{-iωt}`` (``exp(+ikr)``), so a weight is applied to a raw field as its
 complex conjugate. See CAD-LINK-PHASE3.md §2.
@@ -15,14 +19,27 @@ complex conjugate. See CAD-LINK-PHASE3.md §2.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import io
 import json
+import math
 from types import SimpleNamespace
 from typing import Any, Mapping
 
 import numpy as np
 
+from .filters import Filter, channel_weight, pair_inverts
+
 _TWO_PI = 2.0 * np.pi
+
+# Alignment tuning (CADLINK-CROSSOVER-DRIVERS.md §2 "Alignment").
+_OVERLAP_FLOOR_DB = -40.0
+_COARSE_HALF_OCTAVE = 1.0 / 3.0
+_RESIDUAL_WARN_DEG = 30.0
+_MIN_FIT_POINTS = 3
+# The payload is serialized with allow_nan=False, so a perfect reverse null
+# reports as a floor rather than as -inf.
+_REVERSE_NULL_FLOOR_DB = -300.0
 
 # Serialized per-channel complex bases (persisted with a job) so a new
 # crossover can recombine in milliseconds without re-solving. The fields stay
@@ -142,27 +159,166 @@ def lr4_chain_weights(
     return weights
 
 
+@dataclass(frozen=True)
+class ResolvedChannel:
+    """One member's resolved crossover settings.
+
+    ``gain_db`` / ``delay_ms`` carry the manual value and are ignored in
+    ``auto`` mode; ``invert`` is ``None`` when the polarity follows the ideal
+    filter pair.
+    """
+
+    hp: Filter | None = None
+    lp: Filter | None = None
+    gain_mode: str = "auto"
+    gain_db: float | None = None
+    delay_mode: str = "auto"
+    delay_ms: float | None = None
+    invert: bool | None = None
+
+
+def _mode(value: Any, field: str) -> tuple[str, float | None]:
+    if value is None:
+        return "auto", None
+    if isinstance(value, Mapping):
+        mode = str(value.get("mode") or "auto").strip().lower()
+        raw = value.get(field)
+    else:
+        raise ValueError(f"combine channel {field} must be a mapping")
+    if mode not in ("auto", "manual"):
+        raise ValueError(f"combine channel {field} mode must be auto or manual")
+    if mode == "auto":
+        return "auto", None
+    number = 0.0 if raw is None else float(raw)
+    if not math.isfinite(number):
+        raise ValueError(f"combine channel manual {field} must be finite")
+    return "manual", number
+
+
+def normalize_channel(value: Any) -> ResolvedChannel:
+    """Build a :class:`ResolvedChannel` from a wire mapping."""
+
+    if isinstance(value, ResolvedChannel):
+        return value
+    if not isinstance(value, Mapping):
+        raise ValueError("a combine channel entry must be a mapping")
+    gain_mode, gain_db = _mode(value.get("gain"), "db")
+    delay_mode, delay_ms = _mode(value.get("delay"), "ms")
+    invert = value.get("invert")
+    hp = Filter.from_mapping(value.get("hp"))
+    lp = Filter.from_mapping(value.get("lp"))
+    if hp is not None and lp is not None and hp.fc_hz >= lp.fc_hz:
+        raise ValueError(
+            "a combine channel high-pass must sit below its low-pass: "
+            f"{hp.fc_hz:g} Hz is not below {lp.fc_hz:g} Hz"
+        )
+    return ResolvedChannel(
+        hp=hp,
+        lp=lp,
+        gain_mode=gain_mode,
+        gain_db=gain_db,
+        delay_mode=delay_mode,
+        delay_ms=delay_ms,
+        invert=None if invert is None else bool(invert),
+    )
+
+
+def expand_legacy_channels(
+    members: list[str],
+    crossovers_hz: list[float],
+    *,
+    level_match: bool = True,
+    align: bool = True,
+) -> dict[str, dict[str, Any]]:
+    """Expand the legacy LR4 chain into the per-channel wire form.
+
+    The one definition of what a legacy spec means: LR4 pairs, auto gain when
+    level matching is on and a manual 0 dB when it is off, auto delay when
+    alignment is on and a manual 0 ms when it is off, polarity from the pair.
+    """
+
+    crossovers = [float(value) for value in crossovers_hz]
+    if len(crossovers) != len(members) - 1:
+        raise ValueError(
+            "combine needs exactly one crossover between each adjacent member "
+            f"pair: {len(members)} members require {len(members) - 1} crossovers_hz"
+        )
+    gain: dict[str, Any] = {"mode": "auto"} if level_match else {"mode": "manual", "db": 0.0}
+    delay: dict[str, Any] = {"mode": "auto"} if align else {"mode": "manual", "ms": 0.0}
+    expanded: dict[str, dict[str, Any]] = {}
+    for index, name in enumerate(members):
+        expanded[name] = {
+            "hp": (
+                {"family": "lr", "order": 4, "fc_hz": crossovers[index - 1]}
+                if index > 0
+                else None
+            ),
+            "lp": (
+                {"family": "lr", "order": 4, "fc_hz": crossovers[index]}
+                if index < len(crossovers)
+                else None
+            ),
+            "gain": dict(gain),
+            "delay": dict(delay),
+            "invert": None,
+        }
+    return expanded
+
+
+def chain_weights(
+    freqs: np.ndarray,
+    members: list[str],
+    channels: Mapping[str, ResolvedChannel],
+) -> dict[str, np.ndarray]:
+    """Band-limiting weight per member (engineering convention)."""
+
+    frequencies = np.asarray(freqs, dtype=np.float64)
+    return {
+        name: channel_weight(frequencies, hp=channels[name].hp, lp=channels[name].lp)
+        for name in members
+    }
+
+
 def raw_channel_weights(
     freqs: np.ndarray,
     members: list[str],
-    crossovers_hz: list[float],
+    crossovers_hz: list[float] | None,
     gains_db: Mapping[str, float],
     delays_s: Mapping[str, float],
+    *,
+    channels: Mapping[str, Any] | None = None,
+    inverted: Mapping[str, bool] | None = None,
 ) -> dict[str, np.ndarray]:
     """Return factors applied to raw ``exp(+ikr)`` solver fields.
 
-    Crossover filters, gains, and delays are defined in the engineering
-    ``e^{+jωt}`` convention. Raw solver fields use ``e^{-iωt}``, so this is
-    the single convention boundary where every engineering weight is complex
-    conjugated before it is applied to pressure or Neumann traces.
+    Crossover filters, gains, delays and polarity are defined in the
+    engineering ``e^{+jωt}`` convention. Raw solver fields use ``e^{-iωt}``,
+    so this is the single convention boundary where every engineering weight
+    is complex conjugated before it is applied to pressure or Neumann traces.
+
+    Pass ``channels`` (the resolved per-member sections) for anything other
+    than a plain LR4 chain; ``crossovers_hz`` is the legacy shorthand for one.
     """
 
     frequencies = np.asarray(freqs, dtype=np.float64).reshape(-1)
-    lr4 = lr4_chain_weights(frequencies, members, crossovers_hz)
+    if channels is None:
+        if crossovers_hz is None:
+            raise ValueError("raw_channel_weights needs crossovers_hz or channels")
+        channels = {
+            name: normalize_channel(value)
+            for name, value in expand_legacy_channels(
+                list(members), list(crossovers_hz)
+            ).items()
+        }
+    else:
+        channels = {name: normalize_channel(channels[name]) for name in members}
+    bands = chain_weights(frequencies, list(members), channels)
+    polarity = inverted or {}
     weights_eng = {
-        name: lr4[name]
+        name: bands[name]
         * (10.0 ** (float(gains_db[name]) / 20.0))
         * np.exp(-1j * _TWO_PI * frequencies * float(delays_s[name]))
+        * (-1.0 if polarity.get(name) else 1.0)
         for name in members
     }
     return {name: np.conjugate(weights_eng[name]) for name in members}
@@ -176,64 +332,139 @@ def _interp_complex(freqs: np.ndarray, values: np.ndarray, target_hz: float) -> 
     return complex(mag * np.exp(1j * phase))
 
 
-def _ratio_group_delay_s(
-    freqs: np.ndarray,
-    lower: np.ndarray,
-    upper: np.ndarray,
-    target_hz: float,
-    *,
-    rel_window: float = 0.15,
-) -> float | None:
-    """Local group delay of ``lower/upper`` at ``target_hz``: ``d/dω arg``.
+@dataclass(frozen=True)
+class _PairFit:
+    """One adjacent pair's alignment result and its confidence evidence."""
 
-    Used only to pick the correct period branch of the phase-value
-    alignment, so a rough slope from a linear fit is enough.
+    delay_s: float
+    residual_deg: float | None
+    intercept_deg: float | None
+    points: int
+    fitted_delay_s: float | None = None
+    phase_at_fc_rad: float | None = None
+
+
+def _weighted_line_fit(
+    x: np.ndarray, y: np.ndarray, weights: np.ndarray
+) -> tuple[float, float, float] | None:
+    """Weighted least-squares ``y = slope*x + intercept``; also its RMS residual."""
+
+    total = float(np.sum(weights))
+    if total <= 0.0 or x.size < 2:
+        return None
+    sx = float(np.sum(weights * x))
+    sy = float(np.sum(weights * y))
+    sxx = float(np.sum(weights * x * x))
+    sxy = float(np.sum(weights * x * y))
+    determinant = total * sxx - sx * sx
+    if not np.isfinite(determinant) or determinant == 0.0:
+        return None
+    slope = (total * sxy - sx * sy) / determinant
+    intercept = (sxx * sy - sx * sxy) / determinant
+    if not (np.isfinite(slope) and np.isfinite(intercept)):
+        return None
+    residual = y - (slope * x + intercept)
+    rms = float(np.sqrt(np.sum(weights * residual * residual) / total))
+    return float(slope), float(intercept), rms
+
+
+def _wrap_pi(value: float) -> float:
+    return float((value + np.pi) % (2.0 * np.pi) - np.pi)
+
+
+def _pair_alignment(
+    freqs: np.ndarray,
+    ratio: np.ndarray,
+    weights: np.ndarray,
+    overlap: np.ndarray,
+    eval_hz: float,
+) -> tuple[_PairFit, list[str]]:
+    """Fit the raw arrival offset of one adjacent pair.
+
+    ``ratio`` is ``P_lower / P_upper`` from the raw on-axis spectra, so the
+    delay it returns is the physical arrival gap the filters must be handed a
+    coincident pair for. The coarse pass fits a +/-1/3-octave window where the
+    unwrap cannot slip a cycle; the refine pass removes that delay and refits
+    over the whole overlap region, where the residual phase is nearly flat.
     """
 
-    freqs = np.asarray(freqs, dtype=np.float64)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        ratio = np.asarray(lower, dtype=np.complex128) / np.asarray(
-            upper, dtype=np.complex128
-        )
-    if not np.all(np.isfinite(ratio)):
-        return None
-    window = (freqs >= target_hz * (1.0 - rel_window)) & (
-        freqs <= target_hz * (1.0 + rel_window)
+    notes: list[str] = []
+    x = _TWO_PI * freqs
+    coarse = (
+        overlap
+        & (freqs >= eval_hz * 2.0 ** -_COARSE_HALF_OCTAVE)
+        & (freqs <= eval_hz * 2.0**_COARSE_HALF_OCTAVE)
     )
-    if np.count_nonzero(window) < 3:
-        centre = int(np.argmin(np.abs(freqs - target_hz)))
-        lo_i = max(0, centre - 2)
-        hi_i = min(freqs.size, centre + 3)
-        sel = np.zeros(freqs.size, dtype=bool)
-        sel[lo_i:hi_i] = True
-        window = sel
-    f_sel = freqs[window]
-    if f_sel.size < 2:
-        return None
-    phase = np.unwrap(np.angle(ratio))[window]
-    slope = float(np.polyfit(_TWO_PI * f_sel, phase, 1)[0])
-    if not np.isfinite(slope):
-        return None
-    return slope
+    coarse_count = int(np.count_nonzero(coarse))
+    if coarse_count < _MIN_FIT_POINTS:
+        notes.append(
+            f"only {coarse_count} solved frequencies lie in the +/-1/3-octave "
+            f"window around {eval_hz:g} Hz; the alignment delay is fitted over "
+            "the whole overlap region instead and may pick the wrong cycle"
+        )
+        coarse = overlap
+    phase = np.unwrap(np.angle(ratio[coarse]))
+    fit = _weighted_line_fit(x[coarse], phase, weights[coarse])
+    if fit is None:
+        notes.append(
+            f"the pair overlap around {eval_hz:g} Hz carries no usable phase; "
+            "its alignment delay defaults to 0"
+        )
+        return _PairFit(0.0, None, None, int(np.count_nonzero(overlap))), notes
+    coarse_delay = fit[0]
+
+    residual_ratio = ratio * np.exp(-1j * x * coarse_delay)
+    refine_mask = overlap if int(np.count_nonzero(overlap)) >= 2 else coarse
+    refined = _weighted_line_fit(
+        x[refine_mask],
+        np.unwrap(np.angle(residual_ratio[refine_mask])),
+        weights[refine_mask],
+    )
+    if refined is None:
+        return (
+            _PairFit(coarse_delay, None, None, int(np.count_nonzero(refine_mask))),
+            notes,
+        )
+    slope, intercept, rms = refined
+    fitted_delay = coarse_delay + slope
+    at_fc = _interp_complex(freqs, ratio, eval_hz)
+    return (
+        _PairFit(
+            delay_s=fitted_delay,
+            fitted_delay_s=fitted_delay,
+            residual_deg=float(np.degrees(rms)),
+            intercept_deg=float(np.degrees(_wrap_pi(intercept))),
+            points=int(np.count_nonzero(refine_mask)),
+            phase_at_fc_rad=float(np.angle(at_fc)) if abs(at_fc) > 0.0 else None,
+        ),
+        notes,
+    )
 
 
-def _phase_equivalent_delay_s(
-    phase_diff_rad: float,
-    freq_hz: float,
-    *,
-    group_delay_hint_s: float | None = None,
-) -> float:
-    period_s = 1.0 / float(freq_hz)
-    principal_s = float(phase_diff_rad) / (_TWO_PI * float(freq_hz))
-    if group_delay_hint_s is None or not np.isfinite(group_delay_hint_s):
-        # Smallest |delay| branch — correct whenever the true inter-driver
-        # arrival gap is under half a period at the crossover.
-        return (principal_s + 0.5 * period_s) % period_s - 0.5 * period_s
-    # The phase at fc fixes the delay only modulo one period; the group delay
-    # of the unfiltered driver ratio is the physical arrival offset that
-    # selects the cycle. Global normalisation restores non-negative delays.
-    n = round((float(group_delay_hint_s) - principal_s) / period_s)
-    return principal_s + n * period_s
+def _pin_delay_s(fit: _PairFit, eval_hz: float, target_rad: float) -> float:
+    """Pin a pair's delay where the crossover actually sums.
+
+    The fit settles the period branch, which a phase value at one frequency
+    cannot do on its own; the delay itself then brings the raw ratio's phase
+    at ``eval_hz`` to ``target_rad`` (0 for a like-polarity pair, pi when the
+    applied polarity flips the raw pair) on the branch nearest the fitted
+    slope. On a real horn the raw ratio is rarely a pure delay, and the
+    least-squares line trades exactness at fc for the wings -- measured on a
+    three-way return as a reverse null of -8 dB instead of -15 dB.
+    """
+
+    if fit.phase_at_fc_rad is None:
+        return fit.delay_s
+    period = 1.0 / float(eval_hz)
+    principal = (fit.phase_at_fc_rad - target_rad) / (_TWO_PI * float(eval_hz))
+    cycles = round((fit.delay_s - principal) / period)
+    return principal + cycles * period
+
+
+def _raw_pair_flipped(fit: _PairFit) -> bool:
+    """True when the raw drivers of a pair sit closer to 180 than to 0 degrees."""
+
+    return fit.intercept_deg is not None and abs(fit.intercept_deg) > 90.0
 
 
 def _spl_db(pressure: np.ndarray, reference_pa: float) -> np.ndarray:
@@ -244,12 +475,21 @@ def _level_match_gains_db(
     freqs: np.ndarray,
     filtered_on_axis: Mapping[str, np.ndarray],
     members: list[str],
-    crossovers_hz: list[float],
+    channels: Mapping[str, ResolvedChannel],
 ) -> tuple[dict[str, float], dict[str, float], float]:
-    edges = [float(freqs[0]), *[float(xo) for xo in crossovers_hz], float(freqs[-1])]
+    """Today's rule: median filtered on-axis SPL per member in its passband.
+
+    A member's passband runs from its high-pass corner (or the bottom of the
+    solved band) to its low-pass corner (or the top). For a linked LR4 chain
+    that is exactly the legacy crossover-edge partition.
+    """
+
     medians: dict[str, float] = {}
-    for index, name in enumerate(members):
-        band = (freqs >= edges[index]) & (freqs <= edges[index + 1])
+    for name in members:
+        channel = channels[name]
+        low = float(channel.hp.fc_hz) if channel.hp is not None else float(freqs[0])
+        high = float(channel.lp.fc_hz) if channel.lp is not None else float(freqs[-1])
+        band = (freqs >= low) & (freqs <= high)
         spl = _spl_db(np.asarray(filtered_on_axis[name]), 20.0e-6)
         values = spl[band]
         finite = values[np.isfinite(values)]
@@ -269,26 +509,157 @@ def _on_axis_angle_index(angles: np.ndarray, point_count: int) -> int | None:
     return int(usable[np.argmin(np.abs(angles[usable]))])
 
 
+
+
+def _resolve_channels(
+    members: list[str],
+    channels: Mapping[str, Any] | None,
+    crossovers_hz: list[float] | None,
+    *,
+    level_match: bool,
+    align: bool,
+) -> dict[str, ResolvedChannel]:
+    """Accept either spec form and return the per-member resolved settings."""
+
+    if channels is None:
+        if crossovers_hz is None:
+            raise ValueError("combine needs either crossovers_hz or channels")
+        channels = expand_legacy_channels(
+            list(members),
+            list(crossovers_hz),
+            level_match=level_match,
+            align=align,
+        )
+    missing = [name for name in members if name not in channels]
+    if missing:
+        raise ValueError(f"combine channels miss the members {missing}")
+    return {name: normalize_channel(channels[name]) for name in members}
+
+
+def _pair_frequencies(
+    lower: ResolvedChannel, upper: ResolvedChannel
+) -> tuple[float | None, float | None]:
+    """``(linked crossover, evaluation frequency)`` of one adjacent pair.
+
+    A pair is *linked* when the lower member's low-pass and the upper
+    member's high-pass share a corner; that shared corner is the crossover
+    the payload reports. An unlinked pair has no single crossover, so it is
+    evaluated at the geometric mean of the two corners it does have.
+    """
+
+    corners = [
+        float(section.fc_hz)
+        for section in (lower.lp, upper.hp)
+        if section is not None
+    ]
+    if (
+        lower.lp is not None
+        and upper.hp is not None
+        and math.isclose(lower.lp.fc_hz, upper.hp.fc_hz, rel_tol=1.0e-9, abs_tol=0.0)
+    ):
+        return float(lower.lp.fc_hz), float(lower.lp.fc_hz)
+    if not corners:
+        return None, None
+    return None, float(np.exp(np.mean(np.log(corners))))
+
+
+def _phase_error_deg(
+    freqs: np.ndarray,
+    lower: np.ndarray,
+    upper: np.ndarray,
+    lower_channel: ResolvedChannel,
+    upper_channel: ResolvedChannel,
+    eval_hz: float,
+) -> float | None:
+    """How far the aligned pair sits from what its filter chains ask for.
+
+    The ideal pair already has a phase relationship of its own at the
+    crossover (0 degrees for LR4, 90 for BW3, plus whatever a middle band's
+    other section contributes there); what matters is the departure from it.
+    ``lower``/``upper`` carry the applied polarity, so an inverted channel
+    that sums correctly reads as 0, not 180.
+    """
+
+    point = np.asarray([float(eval_hz)], dtype=np.float64)
+    measured_low = _interp_complex(freqs, lower, eval_hz)
+    measured_high = _interp_complex(freqs, upper, eval_hz)
+    if abs(measured_low) <= 0.0 or abs(measured_high) <= 0.0:
+        return None
+    ideal_low = complex(
+        channel_weight(point, hp=lower_channel.hp, lp=lower_channel.lp)[0]
+    )
+    ideal_high = complex(
+        channel_weight(point, hp=upper_channel.hp, lp=upper_channel.lp)[0]
+    )
+    if abs(ideal_low) <= 0.0 or abs(ideal_high) <= 0.0:
+        return None
+    error = np.angle(measured_low / measured_high) - np.angle(ideal_low / ideal_high)
+    return float(np.degrees(_wrap_pi(float(error))))
+
+
+def _reverse_null_db(
+    lower: np.ndarray, upper: np.ndarray, overlap: np.ndarray
+) -> float | None:
+    """Depth of the null the pair makes when the upper member is flipped.
+
+    A deep reverse null is the classical evidence that the pair is aligned:
+    the two members are summing coherently, so inverting one cancels them.
+    Reported as the minimum of ``|lower − upper| / |lower + upper|`` over the
+    overlap region, in dB relative to the sum.
+    """
+
+    if not np.any(overlap):
+        return None
+    summed = np.abs(lower[overlap] + upper[overlap])
+    reversed_sum = np.abs(lower[overlap] - upper[overlap])
+    usable = summed > 0.0
+    if not np.any(usable):
+        return None
+    ratio = 20.0 * np.log10(
+        np.maximum(reversed_sum[usable], 1.0e-30) / summed[usable]
+    )
+    finite = ratio[np.isfinite(ratio)]
+    if finite.size == 0:
+        return None
+    return float(max(float(np.min(finite)), _REVERSE_NULL_FLOOR_DB))
+
+
 def combine_drive_channels(
     results_by_id: Mapping[str, Any],
     *,
     members: list[str],
-    crossovers_hz: list[float],
+    crossovers_hz: list[float] | None = None,
     level_match: bool = True,
     align: bool = True,
     member_validity_hz: Mapping[str, float] | None = None,
     member_roles: Mapping[str, str | None] | None = None,
+    channels: Mapping[str, Any] | None = None,
+    reference: str | None = None,
 ) -> tuple[Any, dict[str, Any]]:
     """Sum member channel results into one synthetic native-shaped result.
 
-    ``results_by_id`` holds the frequency-sorted native results. Returns the
-    synthetic result (same duck type ``build_solver_response`` consumes) and
-    the ``combine`` metadata payload. Raises ``ValueError`` when the members
-    do not share one observation grid — a solver contract violation, not a
-    user error.
+    ``results_by_id`` holds the frequency-sorted native results. Pass
+    ``channels`` (and optionally ``reference``) for the per-channel spec, or
+    the legacy ``crossovers_hz``/``level_match``/``align`` triple, which is
+    expanded into an LR4 per-channel spec before anything else runs. Returns
+    the synthetic result (same duck type ``build_solver_response`` consumes)
+    and the ``combine`` metadata payload. Raises ``ValueError`` when the
+    members do not share one observation grid — a solver contract violation,
+    not a user error.
     """
 
     warnings: list[str] = []
+    settings = _resolve_channels(
+        list(members),
+        channels,
+        None if crossovers_hz is None else list(crossovers_hz),
+        level_match=level_match,
+        align=align,
+    )
+    reference_id = str(reference) if reference else members[-1]
+    if reference_id not in members:
+        raise ValueError(f"combine reference {reference_id!r} is not a member")
+
     base = results_by_id[members[0]]
     freqs = np.asarray(base.frequencies_hz, dtype=np.float64).reshape(-1)
     angles = np.asarray(base.observation_angles_deg, dtype=np.float64)
@@ -320,11 +691,15 @@ def combine_drive_channels(
         )
 
     solved_band = (float(freqs[0]), float(freqs[-1]))
-    outside_band = [
-        float(value)
-        for value in crossovers_hz
-        if float(value) < solved_band[0] or float(value) > solved_band[1]
+    corners = [
+        float(section.fc_hz)
+        for name in members
+        for section in (settings[name].hp, settings[name].lp)
+        if section is not None
     ]
+    outside_band = sorted(
+        {value for value in corners if value < solved_band[0] or value > solved_band[1]}
+    )
     if outside_band:
         warnings.append(
             f"combine crossovers_hz {outside_band} lie outside the solved band "
@@ -332,77 +707,211 @@ def combine_drive_channels(
             "fall back to a full-band median"
         )
 
-    if freqs.size < 3:
-        warnings.append(
-            "fewer than 3 solved frequencies: alignment period-branch selection "
-            "has no group-delay estimate and uses the smallest-|delay| branch"
+    # Pair geometry: the reported crossover (linked pairs only) and the
+    # frequency every pair decision is taken at.
+    pair_names = [
+        f"{members[index]}-{members[index + 1]}" for index in range(len(members) - 1)
+    ]
+    linked_hz: list[float | None] = []
+    eval_hz: list[float] = []
+    for index in range(len(members) - 1):
+        linked, evaluated = _pair_frequencies(
+            settings[members[index]], settings[members[index + 1]]
         )
+        if evaluated is None:
+            evaluated = float(np.sqrt(solved_band[0] * solved_band[1]))
+            warnings.append(
+                f"pair {pair_names[index]} has no crossover section; its "
+                f"alignment is evaluated at {evaluated:g} Hz, the geometric "
+                "centre of the solved band"
+            )
+        linked_hz.append(linked)
+        eval_hz.append(float(min(max(evaluated, solved_band[0]), solved_band[1])))
+
     if member_validity_hz:
-        for index, xo in enumerate(crossovers_hz):
+        for index, evaluated in enumerate(eval_hz):
             for name in (members[index], members[index + 1]):
                 limit = member_validity_hz.get(name)
-                if limit is not None and float(xo) > float(limit):
+                if limit is not None and float(evaluated) > float(limit):
                     warnings.append(
-                        f"crossover {float(xo):g} Hz is above channel {name!r} "
-                        f"source validity limit {float(limit):g} Hz"
+                        f"crossover {float(evaluated):g} Hz is above channel "
+                        f"{name!r} source validity limit {float(limit):g} Hz"
                     )
 
     # Engineering-domain on-axis pressures drive every weight decision.
     pressures_eng = {
         name: np.conjugate(fields[name][:, 0, on_axis]) for name in members
     }
-    lr4 = lr4_chain_weights(freqs, members, crossovers_hz)
-    filtered = {name: pressures_eng[name] * lr4[name] for name in members}
+    bands = chain_weights(freqs, list(members), settings)
+    filtered = {name: pressures_eng[name] * bands[name] for name in members}
 
-    if level_match:
-        gains_db, medians_db, target_db = _level_match_gains_db(
-            freqs, filtered, members, crossovers_hz
+    auto_gains_db, medians_db, target_db = _level_match_gains_db(
+        freqs, filtered, list(members), settings
+    )
+    gains_db = {
+        name: (
+            auto_gains_db[name]
+            if settings[name].gain_mode == "auto"
+            else float(settings[name].gain_db or 0.0)
         )
-    else:
-        gains_db = {name: 0.0 for name in members}
+        for name in members
+    }
+    level_matched = any(settings[name].gain_mode == "auto" for name in members)
+    if not level_matched:
         medians_db = {}
         target_db = None
-    delays_s = {members[-1]: 0.0}
-    pair_eval_hz: dict[str, float] = {}
-    if align and len(members) > 1:
-        for index in range(len(members) - 2, -1, -1):
-            lower, upper = members[index], members[index + 1]
-            eval_hz = float(
-                min(max(crossovers_hz[index], freqs[0]), freqs[-1])
+
+    gain_scale = {name: 10.0 ** (gains_db[name] / 20.0) for name in members}
+    levelled = {name: filtered[name] * gain_scale[name] for name in members}
+
+    # Alignment: one fit per adjacent pair on the raw arrival difference, so
+    # the ideal filter pair sees a coincident pair of drivers.
+    pair_fits: list[_PairFit] = []
+    overlaps: list[np.ndarray] = []
+    for index in range(len(members) - 1):
+        lower, upper = members[index], members[index + 1]
+        weight = np.abs(levelled[lower]) * np.abs(levelled[upper])
+        usable = (
+            np.isfinite(weight)
+            & (np.abs(pressures_eng[lower]) > 0.0)
+            & (np.abs(pressures_eng[upper]) > 0.0)
+        )
+        peak = float(np.max(weight[usable])) if np.any(usable) else 0.0
+        overlap = (
+            usable & (weight > peak * 10.0 ** (_OVERLAP_FLOOR_DB / 20.0))
+            if peak > 0.0
+            else usable
+        )
+        overlaps.append(overlap)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            ratio = np.where(
+                usable,
+                pressures_eng[lower] / pressures_eng[upper],
+                1.0,
             )
-            pair_eval_hz[f"{lower}-{upper}"] = eval_hz
-            lower_at_xo = _interp_complex(freqs, filtered[lower], eval_hz)
-            upper_at_xo = _interp_complex(freqs, filtered[upper], eval_hz)
-            if abs(lower_at_xo) <= 0.0 or abs(upper_at_xo) <= 0.0:
+        fit, notes = _pair_alignment(freqs, ratio, weight, overlap, eval_hz[index])
+        pair_fits.append(fit)
+        for note in notes:
+            warnings.append(f"pair {pair_names[index]}: {note}")
+        if fit.residual_deg is not None and fit.residual_deg > _RESIDUAL_WARN_DEG:
+            warnings.append(
+                f"pair {pair_names[index]}: the alignment phase fit leaves a "
+                f"{fit.residual_deg:.1f} degree RMS residual; the delay it "
+                "reports is an estimate, not a measurement"
+            )
+
+    # Polarity: the ideal filter pair says whether the upper member flips
+    # (LR2, BW2); the raw drivers say whether they are already opposed
+    # (intercept near 180 degrees). Auto applies both, so an opposed pair is
+    # inverted and then aligned on its true delay instead of a half-period
+    # one. An explicit ``invert`` overrides the channel; the delay target
+    # follows whatever polarity is actually applied, so the pair still sums in
+    # phase at the crossover either way.
+    ideal_flips = [
+        pair_inverts(
+            settings[members[index]].lp,
+            settings[members[index + 1]].hp,
+            eval_hz[index],
+        )
+        for index in range(len(members) - 1)
+    ]
+    raw_flips = [_raw_pair_flipped(pair_fits[index]) for index in range(len(members) - 1)]
+    auto_inverted: dict[str, bool] = {members[0]: False}
+    for index in range(len(members) - 1):
+        auto_inverted[members[index + 1]] = auto_inverted[members[index]] != (
+            ideal_flips[index] != raw_flips[index]
+        )
+    inverted = {
+        name: (
+            auto_inverted[name]
+            if settings[name].invert is None
+            else bool(settings[name].invert)
+        )
+        for name in members
+    }
+    pair_delay_s: list[float] = []
+    for index in range(len(members) - 1):
+        lower, upper = members[index], members[index + 1]
+        applied_flip = inverted[lower] != inverted[upper]
+        raw_target = np.pi if applied_flip != ideal_flips[index] else 0.0
+        pair_delay_s.append(_pin_delay_s(pair_fits[index], eval_hz[index], raw_target))
+        if raw_flips[index]:
+            if applied_flip != ideal_flips[index]:
                 warnings.append(
-                    f"{lower}/{upper} pair pressure vanishes at {eval_hz:g} Hz; "
-                    "alignment delay for this pair defaults to 0"
+                    f"pair {pair_names[index]}: the raw drivers sit "
+                    f"{pair_fits[index].intercept_deg:.0f} degrees apart; "
+                    f"{upper!r} is inverted relative to {lower!r} so the pair "
+                    "sums in phase on its true delay"
                 )
-                delays_s[lower] = delays_s[upper]
-                continue
-            # The unfiltered ratio gives the cleaner arrival estimate: the
-            # LR4 phases cancel at fc but their group delays do not.
-            hint = _ratio_group_delay_s(
-                freqs, pressures_eng[lower], pressures_eng[upper], eval_hz
-            )
-            pair_delay = _phase_equivalent_delay_s(
-                float(np.angle(lower_at_xo / upper_at_xo)),
-                eval_hz,
-                group_delay_hint_s=hint,
-            )
-            delays_s[lower] = delays_s[upper] + pair_delay
-        min_delay = min(delays_s.values())
-        delays_s = {name: value - min_delay for name, value in delays_s.items()}
-    else:
-        delays_s = {name: 0.0 for name in members}
+            else:
+                warnings.append(
+                    f"pair {pair_names[index]}: the raw drivers sit "
+                    f"{pair_fits[index].intercept_deg:.0f} degrees apart but "
+                    "neither channel is inverted, so they are aligned with a "
+                    "half-period delay that only holds near the crossover; "
+                    "consider inverting one of them"
+                )
+
+    reference_index = members.index(reference_id)
+    auto_delay_s: dict[str, float] = {reference_id: 0.0}
+    for index in range(reference_index - 1, -1, -1):
+        auto_delay_s[members[index]] = (
+            auto_delay_s[members[index + 1]] + pair_delay_s[index]
+        )
+    for index in range(reference_index + 1, len(members)):
+        auto_delay_s[members[index]] = (
+            auto_delay_s[members[index - 1]] - pair_delay_s[index - 1]
+        )
+    delays_s = {
+        name: (
+            auto_delay_s[name]
+            if settings[name].delay_mode == "auto"
+            else float(settings[name].delay_ms or 0.0) / 1000.0
+        )
+        for name in members
+    }
+    aligned_any = any(settings[name].delay_mode == "auto" for name in members)
+
+    aligned = {
+        name: levelled[name] * np.exp(-1j * _TWO_PI * freqs * delays_s[name])
+        for name in members
+    }
+    pairs: dict[str, dict[str, Any]] = {}
+    for index in range(len(members) - 1):
+        lower, upper = members[index], members[index + 1]
+        pairs[pair_names[index]] = {
+            "eval_hz": eval_hz[index],
+            "fit_residual_deg": pair_fits[index].residual_deg,
+            "fit_delay_ms": (
+                None
+                if pair_fits[index].fitted_delay_s is None
+                else pair_fits[index].fitted_delay_s * 1000.0
+            ),
+            "phase_error_at_fc_deg": _phase_error_deg(
+                freqs,
+                aligned[lower] * (-1.0 if inverted[lower] else 1.0),
+                aligned[upper] * (-1.0 if inverted[upper] else 1.0),
+                settings[lower],
+                settings[upper],
+                eval_hz[index],
+            ),
+            "reverse_null_db": _reverse_null_db(
+                aligned[lower] * (-1.0 if inverted[lower] else 1.0),
+                aligned[upper] * (-1.0 if inverted[upper] else 1.0),
+                overlaps[index],
+            ),
+            "points": pair_fits[index].points,
+        }
 
     # The single convention boundary: engineering weight -> raw-field factor.
     weights_raw = raw_channel_weights(
         freqs,
-        members,
-        crossovers_hz,
+        list(members),
+        None,
         gains_db,
         delays_s,
+        channels=settings,
+        inverted=inverted,
     )
 
     combined_field = np.zeros_like(next(iter(fields.values())))
@@ -459,20 +968,40 @@ def combine_drive_channels(
     )
     roles = member_roles or {}
     payload: dict[str, Any] = {
-        "type": "lr4_time_aligned_sum",
+        "type": "filtered_time_aligned_sum",
         "members": list(members),
         "member_roles": [roles.get(name) for name in members],
-        "crossovers_hz": [float(value) for value in crossovers_hz],
+        "reference": reference_id,
+        "crossovers_hz": linked_hz,
+        "channels": {
+            name: {
+                "hp": settings[name].hp.as_payload() if settings[name].hp else None,
+                "lp": settings[name].lp.as_payload() if settings[name].lp else None,
+                "gain_db": gains_db[name],
+                "gain_mode": settings[name].gain_mode,
+                "gain_auto_db": auto_gains_db[name],
+                "delay_ms": delays_s[name] * 1000.0,
+                "delay_mode": settings[name].delay_mode,
+                "delay_auto_ms": auto_delay_s[name] * 1000.0,
+                "inverted": inverted[name],
+                "invert_mode": "auto" if settings[name].invert is None else "manual",
+            }
+            for name in members
+        },
+        "pairs": pairs,
+        # Flattened aliases: the legacy payload shape every current reader
+        # (results dock, VituixCAD export, field-plane synthesis) still uses.
         "level_match": {
-            "enabled": bool(level_match),
+            "enabled": bool(level_matched),
             "target_db": target_db,
             "medians_db": medians_db,
             "gains_db": gains_db,
         },
-        "align": bool(align),
+        "align": bool(aligned_any),
         "reference_angle_degrees": reference_angle_deg,
         "delays_ms": {name: delays_s[name] * 1000.0 for name in members},
-        "pair_eval_hz": pair_eval_hz,
+        "gains_db": dict(gains_db),
+        "pair_eval_hz": dict(zip(pair_names, eval_hz, strict=True)),
         "weight_convention": (
             "weights defined in engineering exp(+jwt); applied to exp(+ikr) "
             "solver fields as complex conjugates"

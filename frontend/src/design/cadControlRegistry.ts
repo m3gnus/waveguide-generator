@@ -6,9 +6,9 @@ export const CAD_CONTROL_SECTIONS = {
   realizedDimensions: 'Realized dimensions',
   frequencySweep: 'Frequency Sweep',
   directivityMap: 'Directivity Map',
-  driveChannels: 'Drive channels & drivers',
-  passiveCardioid: 'Passive cardioid',
+  driveChannels: 'Drivers',
   crossover: 'Crossover',
+  passiveCardioid: 'Passive cardioid',
   solveOptions: 'Solve options',
   meshDetail: 'Mesh detail',
 } as const;
@@ -75,8 +75,11 @@ export const CAD_CONTROLS = {
     ['polar', 'angular step', 'measurement distance', 'normalization angle', 'directivity planes', 'measurement origin', '3D balloon', 'field plane'],
   ),
   driveChannels: control(
-    'cad.drive-channels', 'Drive channels & drivers', CAD_CONTROL_SECTIONS.driveChannels, 'simulation',
-    ['source assignment', 'channel', 'driver', 'Thiele-Small', 'T/S'],
+    'cad.drive-channels', 'Drivers', CAD_CONTROL_SECTIONS.driveChannels, 'simulation',
+    // The section lost the solver's own vocabulary from its name, so the
+    // keywords have to carry it: "drive channel" is still what the wire, the
+    // server refusals and the CAD roles call this.
+    ['drive channel', 'drive channels', 'source assignment', 'channel', 'motion', 'driver', 'Thiele-Small', 'T/S'],
   ),
   channelAssignment: control(
     'cad.drive-channel.assignment', 'Drive channel', CAD_CONTROL_SECTIONS.driveChannels, 'simulation',
@@ -90,9 +93,72 @@ export const CAD_CONTROLS = {
     'cad.driver.enabled', 'Driver T/S', CAD_CONTROL_SECTIONS.driveChannels, 'simulation',
     ['Thiele-Small', 'voltage driven', 'driver model'], 'ingested-return', 'cad.drive-channels',
   ),
+  driverSearch: control(
+    'cad.driver.search', 'Find driver', CAD_CONTROL_SECTIONS.driveChannels, 'simulation',
+    ['driver library', 'search drivers', 'preset', 'database', 'brand', 'model', 'compression driver', 'woofer'],
+    'ingested-return', 'cad.drive-channels',
+  ),
+  driverEdit: control(
+    'cad.driver.edit', 'Edit T/S', CAD_CONTROL_SECTIONS.driveChannels, 'simulation',
+    ['Thiele-Small sheet', 'datasheet', 'override', 'Qes', 'Qts', 'sensitivity', 'impedance variant'],
+    'ingested-return', 'cad.drive-channels',
+  ),
   driveVoltage: control(
     'cad.driver.voltage', 'Drive voltage', CAD_CONTROL_SECTIONS.driveChannels, 'simulation',
     ['RMS', 'volts', '2.83 V', 'driveVoltageV'], 'ingested-return', 'cad.drive-channels',
+  ),
+  crossover: control(
+    'cad.crossover', 'Crossover', CAD_CONTROL_SECTIONS.crossover, 'simulation',
+    ['combined output', 'LR4', 'sum', 'adjacent bands'],
+  ),
+  combinedOutput: control(
+    'cad.crossover.enabled', 'Combined output', CAD_CONTROL_SECTIONS.crossover, 'simulation',
+    ['crossover', 'combine', 'sum'], 'ingested-return', 'cad.crossover',
+  ),
+  crossoverFrequency: control(
+    'cad.crossover.frequency', 'Crossover frequency', CAD_CONTROL_SECTIONS.crossover, 'simulation',
+    ['Hz', 'band transition', 'combineSpec'], 'ingested-return', 'cad.crossover',
+  ),
+  crossoverFamily: control(
+    'cad.crossover.family', 'Filter family & slope', CAD_CONTROL_SECTIONS.crossover, 'simulation',
+    ['Linkwitz-Riley', 'Butterworth', 'Bessel', 'linear phase', 'LR4', 'BW3', 'order', 'dB/oct'],
+    'ingested-return', 'cad.crossover',
+  ),
+  levelMatch: control(
+    'cad.crossover.level-match', 'Level match members', CAD_CONTROL_SECTIONS.crossover, 'simulation',
+    ['equalise', 'equalize', 'gain', 'auto', 'manual'], 'ingested-return', 'cad.crossover',
+  ),
+  timeAlign: control(
+    'cad.crossover.time-align', 'Time-align members', CAD_CONTROL_SECTIONS.crossover, 'simulation',
+    ['phase', 'delay', 'align', 'auto', 'manual'], 'ingested-return', 'cad.crossover',
+  ),
+  crossoverAdvanced: control(
+    'cad.crossover.advanced', 'Advanced crossover (per channel)', CAD_CONTROL_SECTIONS.crossover, 'simulation',
+    ['high-pass', 'low-pass', 'per channel', 'popover'], 'ingested-return', 'cad.crossover',
+  ),
+  crossoverReference: control(
+    'cad.crossover.reference', 'Alignment reference channel', CAD_CONTROL_SECTIONS.crossover, 'simulation',
+    ['0 ms', 'pinned', 'datum'], 'ingested-return', 'cad.crossover.advanced',
+  ),
+  crossoverHighPass: control(
+    'cad.crossover.high-pass', 'Channel high-pass', CAD_CONTROL_SECTIONS.crossover, 'simulation',
+    ['HP', 'per channel', 'corner'], 'ingested-return', 'cad.crossover.advanced',
+  ),
+  crossoverLowPass: control(
+    'cad.crossover.low-pass', 'Channel low-pass', CAD_CONTROL_SECTIONS.crossover, 'simulation',
+    ['LP', 'per channel', 'corner'], 'ingested-return', 'cad.crossover.advanced',
+  ),
+  crossoverGain: control(
+    'cad.crossover.gain', 'Channel gain', CAD_CONTROL_SECTIONS.crossover, 'simulation',
+    ['dB', 'level', 'trim', 'per channel'], 'ingested-return', 'cad.crossover.advanced',
+  ),
+  crossoverDelay: control(
+    'cad.crossover.delay', 'Channel delay', CAD_CONTROL_SECTIONS.crossover, 'simulation',
+    ['ms', 'offset', 'time', 'per channel'], 'ingested-return', 'cad.crossover.advanced',
+  ),
+  crossoverInvert: control(
+    'cad.crossover.invert', 'Channel polarity', CAD_CONTROL_SECTIONS.crossover, 'simulation',
+    ['invert', 'phase flip', 'per channel'], 'ingested-return', 'cad.crossover.advanced',
   ),
   passiveCardioid: control(
     'cad.passive-cardioid', 'Passive cardioid', CAD_CONTROL_SECTIONS.passiveCardioid, 'simulation',
@@ -113,26 +179,6 @@ export const CAD_CONTROLS = {
   cardioidCoupled: control(
     'cad.passive-cardioid.coupled', 'Coupled', CAD_CONTROL_SECTIONS.passiveCardioid, 'simulation',
     ['derived channel', 'cone excursion', 'passive_cardioid_coupled'], 'ingested-return', 'cad.passive-cardioid',
-  ),
-  crossover: control(
-    'cad.crossover', 'Crossover', CAD_CONTROL_SECTIONS.crossover, 'simulation',
-    ['combined output', 'LR4', 'sum', 'adjacent bands'],
-  ),
-  combinedOutput: control(
-    'cad.crossover.enabled', 'Combined output (LR4 sum)', CAD_CONTROL_SECTIONS.crossover, 'simulation',
-    ['crossover', 'combine', 'LR4'], 'ingested-return', 'cad.crossover',
-  ),
-  crossoverFrequency: control(
-    'cad.crossover.frequency', 'Crossover frequency', CAD_CONTROL_SECTIONS.crossover, 'simulation',
-    ['Hz', 'band transition', 'combineCrossoversHz'], 'ingested-return', 'cad.crossover',
-  ),
-  levelMatch: control(
-    'cad.crossover.level-match', 'Level match members', CAD_CONTROL_SECTIONS.crossover, 'simulation',
-    ['equalise', 'equalize', 'combineLevelMatch'], 'ingested-return', 'cad.crossover',
-  ),
-  timeAlign: control(
-    'cad.crossover.time-align', 'Time-align members', CAD_CONTROL_SECTIONS.crossover, 'simulation',
-    ['phase', 'delay', 'combineAlign'], 'ingested-return', 'cad.crossover',
   ),
   solveOptions: control(
     'cad.solve-options', 'Solve options', CAD_CONTROL_SECTIONS.solveOptions, 'simulation',
@@ -195,12 +241,29 @@ export const CAD_DRIVER_FIELD_CONTROLS: readonly CadDriverFieldDescriptor[] = [
   driverField('re_ohm', 'Re', 'Ω', 0.1),
   driverField('le_mh', 'Le', 'mH', 0.05),
   driverField('mmd_g', 'Mmd', 'g', 1),
+  driverField('mms_g', 'Mms', 'g', 1),
   driverField('cms_m_per_n', 'Cms', 'm/N', 0.0001),
+  driverField('vas_l', 'Vas', 'L', 1),
+  driverField('fs_hz', 'Fs', 'Hz', 5),
+  driverField('qms', 'Qms', '', 0.1),
   driverField('rms_kg_per_s', 'Rms', 'kg/s', 0.1),
   driverField('xmax_mm', 'Xmax', 'mm', 0.5),
   driverField('count', 'Count', '', 1),
   driverField('rear_volume_l', 'Rear vol', 'L', 0.5),
 ];
+
+/**
+ * The datasheet fields the *Edit T/S* sheet offers, in reading order.
+ *
+ * Mmd and Cms are deliberately absent: a picked driver states Mms, Fs and Vas,
+ * and offering their substitutes beside them invites a spec carrying two
+ * masses, which the server refuses outright. They remain available in the
+ * manual grid, which is what a hand-entered driver uses.
+ */
+export const CAD_DRIVER_SHEET_FIELDS: readonly CadDriverFieldDescriptor[] = [
+  'sd_cm2', 'bl_t_m', 're_ohm', 'le_mh', 'mms_g', 'fs_hz', 'vas_l', 'qms', 'xmax_mm',
+  'count', 'rear_volume_l',
+].map((key) => CAD_DRIVER_FIELD_CONTROLS.find((control) => control.driverKey === key)!);
 
 export interface CadCardioidFieldDescriptor extends CadControlDescriptor {
   formKey: PassiveCardioidNumberField;

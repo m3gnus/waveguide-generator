@@ -445,9 +445,17 @@ def test_workspace_routes_use_v2_data_layout(tmp_path: Path, monkeypatch) -> Non
         assert initial["path"] == str((tmp_path / "workspace").resolve())
         selected = tmp_path / "selected"
         selected.mkdir()
-        monkeypatch.setattr(workspace_api, "_select_workspace_folder", lambda: str(selected))
+        picker: list[tuple[str, object]] = []
+
+        def choose(prompt: str, start_in: object = None) -> str:
+            picker.append((prompt, start_in))
+            return str(selected)
+
+        monkeypatch.setattr(workspace_api, "_select_workspace_folder", choose)
         response = await endpoints["/api/workspace/select"]()
         assert response == {"selected": True, "path": str(selected.resolve())}
+        # The dialog opens on the folder in force, not at the filesystem root.
+        assert picker == [("Select output folder", (tmp_path / "workspace").resolve())]
         calls: list[tuple[list[str], dict[str, object]]] = []
         monkeypatch.setattr(
             workspace_api.subprocess,

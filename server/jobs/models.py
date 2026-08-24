@@ -277,6 +277,17 @@ class DriverSpec(JobModel):
     xmax_mm: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     count: int = Field(default=1, ge=1, le=64)
     rear_volume_l: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    #: A human name for this driver (e.g. from the driver library, or typed by
+    #: hand), carried through to solve metadata so results can name it.
+    label: str | None = Field(default=None, max_length=120)
+
+    @field_validator("label")
+    @classmethod
+    def normalize_label(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
 
     @model_validator(mode="after")
     def validate_completeness(self) -> "DriverSpec":
@@ -328,19 +339,100 @@ class DriveChannel(JobModel):
         return normalized
 
 
-class ChannelCombineSpec(JobModel):
-    """LR4 time-aligned sum of drive-channel bases (CAD-LINK-PHASE3.md §2).
+FilterFamily = Literal["lr", "butterworth", "bessel", "linear_phase"]
 
-    ``members`` is the chain in band order, lowest first; ``crossovers_hz``
-    sits between adjacent members. Structural defects refuse at submission;
+# The one table of what a family is offered in; mirrored by
+# ``server.solver.filters.FAMILY_ORDERS``, which is what actually evaluates it.
+_FILTER_FAMILY_ORDERS: dict[str, tuple[int, ...]] = {
+    "lr": (2, 4, 6, 8),
+    "butterworth": (1, 2, 3, 4, 5, 6, 7, 8),
+    "bessel": (2, 3, 4),
+    "linear_phase": (2, 4, 8),
+}
+
+
+class FilterSpec(JobModel):
+    """One high-pass or low-pass section of a drive channel."""
+
+    family: FilterFamily
+    order: int = Field(ge=1, le=8)
+    fc_hz: float = Field(gt=0.0, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def validate_order(self) -> "FilterSpec":
+        allowed = _FILTER_FAMILY_ORDERS[self.family]
+        if self.order not in allowed:
+            raise ValueError(
+                f"filter family {self.family!r} supports orders "
+                f"{', '.join(str(value) for value in allowed)}, not {self.order}"
+            )
+        return self
+
+
+class GainSpec(JobModel):
+    """A channel's level: matched automatically, or stated in dB."""
+
+    mode: Literal["auto", "manual"] = "auto"
+    db: float | None = Field(default=None, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def validate_manual(self) -> "GainSpec":
+        if self.mode == "manual" and self.db is None:
+            raise ValueError("a manual gain needs db")
+        return self
+
+
+class DelaySpec(JobModel):
+    """A channel's delay: aligned automatically, or stated in ms."""
+
+    mode: Literal["auto", "manual"] = "auto"
+    ms: float | None = Field(default=None, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def validate_manual(self) -> "DelaySpec":
+        if self.mode == "manual" and self.ms is None:
+            raise ValueError("a manual delay needs ms")
+        return self
+
+
+class ChannelFilterSpec(JobModel):
+    """Everything one member of the chain owns: band, level, delay, polarity."""
+
+    hp: FilterSpec | None = None
+    lp: FilterSpec | None = None
+    gain: GainSpec = Field(default_factory=GainSpec)
+    delay: DelaySpec = Field(default_factory=DelaySpec)
+    invert: bool | None = None
+
+    @model_validator(mode="after")
+    def validate_band(self) -> "ChannelFilterSpec":
+        if self.hp is not None and self.lp is not None and self.hp.fc_hz >= self.lp.fc_hz:
+            raise ValueError(
+                "a channel high-pass must sit below its low-pass: "
+                f"{self.hp.fc_hz:g} Hz is not below {self.lp.fc_hz:g} Hz"
+            )
+        return self
+
+
+class ChannelCombineSpec(JobModel):
+    """Filtered time-aligned sum of drive-channel bases.
+
+    ``members`` is the chain in band order, lowest first. Two spec forms are
+    accepted (CADLINK-CROSSOVER-DRIVERS.md §2): the per-channel ``channels``
+    map, and the legacy ``crossovers_hz``/``level_match``/``align`` triple,
+    which means an LR4 chain with auto gain and auto delay. ``resolved()`` is
+    the single place that turns the legacy form into the other one, so the
+    solver only ever sees one shape. Structural defects refuse at submission;
     solve-time observations become metadata warnings, never silent skips.
     """
 
     id: str = "combined"
     members: list[str] = Field(min_length=2)
-    crossovers_hz: list[float] = Field(min_length=1)
+    crossovers_hz: list[float] | None = Field(default=None, min_length=1)
     level_match: bool = True
     align: bool = True
+    reference: str | None = None
+    channels: dict[str, ChannelFilterSpec] | None = None
 
     @field_validator("id")
     @classmethod
@@ -362,21 +454,104 @@ class ChannelCombineSpec(JobModel):
 
     @model_validator(mode="after")
     def validate_crossovers(self) -> "ChannelCombineSpec":
-        if len(self.crossovers_hz) != len(self.members) - 1:
+        if self.crossovers_hz is None and self.channels is None:
             raise ValueError(
-                "combine needs exactly one crossover between each adjacent "
-                f"member pair: {len(self.members)} members require "
-                f"{len(self.members) - 1} crossovers_hz"
+                "combine needs either crossovers_hz or a per-channel channels map"
             )
-        for value in self.crossovers_hz:
-            if not math.isfinite(value) or value <= 0:
-                raise ValueError("crossovers_hz values must be finite and positive")
-        if any(
-            later <= earlier
-            for earlier, later in zip(self.crossovers_hz, self.crossovers_hz[1:])
-        ):
-            raise ValueError("crossovers_hz must be strictly ascending")
+        if self.crossovers_hz is not None:
+            if len(self.crossovers_hz) != len(self.members) - 1:
+                raise ValueError(
+                    "combine needs exactly one crossover between each adjacent "
+                    f"member pair: {len(self.members)} members require "
+                    f"{len(self.members) - 1} crossovers_hz"
+                )
+            for value in self.crossovers_hz:
+                if not math.isfinite(value) or value <= 0:
+                    raise ValueError("crossovers_hz values must be finite and positive")
+            if any(
+                later <= earlier
+                for earlier, later in zip(self.crossovers_hz, self.crossovers_hz[1:])
+            ):
+                raise ValueError("crossovers_hz must be strictly ascending")
+        if self.channels is not None and set(self.channels) != set(self.members):
+            raise ValueError(
+                "combine channels must name exactly the members: "
+                f"{sorted(self.members)} != {sorted(self.channels)}"
+            )
+        if self.reference is not None and self.reference not in self.members:
+            raise ValueError(
+                f"combine reference {self.reference!r} is not one of the members"
+            )
         return self
+
+    @property
+    def resolved_reference(self) -> str:
+        """The channel auto alignment pins at 0 ms: the highest band by default."""
+
+        return self.reference or self.members[-1]
+
+    def corner_frequencies_hz(self) -> list[float]:
+        """Every corner this spec asks for, in the order it names them."""
+
+        if self.channels is None:
+            return [float(value) for value in (self.crossovers_hz or [])]
+        corners: list[float] = []
+        for member in self.members:
+            channel = self.channels[member]
+            corners.extend(
+                float(section.fc_hz)
+                for section in (channel.hp, channel.lp)
+                if section is not None
+            )
+        return corners
+
+    def linked_crossovers_hz(self) -> list[float | None]:
+        """One entry per adjacent pair: its crossover, or ``None`` when unlinked.
+
+        A pair is linked when the lower member's low-pass and the upper
+        member's high-pass share a corner. Only then does "the crossover"
+        name a single frequency.
+        """
+
+        if self.channels is None:
+            return [float(value) for value in (self.crossovers_hz or [])]
+        linked: list[float | None] = []
+        for index in range(len(self.members) - 1):
+            lower = self.channels[self.members[index]].lp
+            upper = self.channels[self.members[index + 1]].hp
+            linked.append(
+                float(lower.fc_hz)
+                if lower is not None
+                and upper is not None
+                and math.isclose(lower.fc_hz, upper.fc_hz, rel_tol=1.0e-9, abs_tol=0.0)
+                else None
+            )
+        return linked
+
+    def resolved(self) -> dict[str, Any]:
+        """Return the per-channel form: ``{"reference", "channels"}``.
+
+        A legacy spec expands to LR4 pairs with auto gain when level matching
+        is on (manual 0 dB when it is off), auto delay when alignment is on
+        (manual 0 ms when it is off) and automatic polarity.
+        """
+
+        if self.channels is not None:
+            channels = {
+                member: self.channels[member].model_dump(mode="json")
+                for member in self.members
+            }
+        else:
+            # One definition of the legacy meaning, shared with the solver.
+            from server.solver.combine import expand_legacy_channels
+
+            channels = expand_legacy_channels(
+                list(self.members),
+                [float(value) for value in (self.crossovers_hz or [])],
+                level_match=self.level_match,
+                align=self.align,
+            )
+        return {"reference": self.resolved_reference, "channels": channels}
 
 
 class FieldPlaneSpec(JobModel):
@@ -529,6 +704,19 @@ class ImportedMeshSizes(JobModel):
 
 _INGEST_ID = re.compile(r"^wgi_[0-9A-HJKMNP-TV-Z]{26}$")
 _SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+
+#: One passive-cardioid aperture naming convention per row, tried in order;
+#: the first row with any member present in a source tag map wins.
+#: ``PASSIVE_CARDIOID`` is the name the WGLink add-in authors today; the rest
+#: keep every model tagged before the rename working unchanged.
+PORT_APERTURE_NAME_GROUPS: tuple[tuple[str, ...], ...] = (
+    ("PASSIVE_CARDIOID",),
+    ("PASSIVE_CARDIOID_L", "PASSIVE_CARDIOID_R"),
+    ("PORT_EXIT",),
+    ("PORT_EXIT_L", "PORT_EXIT_R"),
+    ("MID_PORT_EXIT_LEFT", "MID_PORT_EXIT_RIGHT"),
+)
 
 
 class ImportedGeometrySource(JobModel):
@@ -790,7 +978,7 @@ class SolveRequest(JobModel):
             return self
         outside = [
             value
-            for value in geometry.combine.crossovers_hz
+            for value in geometry.combine.corner_frequencies_hz()
             if value < band[0] or value > band[1]
         ]
         if outside:
@@ -1035,6 +1223,11 @@ class JobItem(JobModel):
     axisymmetric_eligibility_reasons: list[str] = Field(default_factory=list)
     solve_wall_time_seconds: float | None = None
     cad_source: CadSource | None = None
+    #: The exact imported-geometry request persisted with a CAD run. This is
+    #: deliberately a JSON object rather than today's ImportedGeometrySource:
+    #: old rows must remain inspectable even if their accepted wire predates a
+    #: later additive field or stricter validation rule.
+    cad_setup: dict[str, Any] | None = None
 
 
 class JobStatusResponse(JobItem):
