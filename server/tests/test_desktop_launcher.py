@@ -20,6 +20,20 @@ from launchers.statusapp.updater import (
 )
 
 
+#: Windows resolves the desktop window through pythonnet and a WebView2 registry
+#: probe, and ``_prepare_windows_webview`` reads the real ``sys.platform``, so on
+#: a Windows runner both of those are the genuine article. A machine without
+#: either -- which includes any CI runner that ships no Edge WebView2 -- sends
+#: every happy-path test here down the browser fallback, and that fallback ends
+#: in a modal MessageBoxW with nobody to select OK. These say "assume the window
+#: is available", which is what a test about window contracts means; the three
+#: tests that exercise the fallback pass their own values instead.
+WINDOWS_WEBVIEW_READY = {
+    "pythonnet_loader": lambda: object(),
+    "webview2_probe": lambda: True,
+}
+
+
 def _snapshot(state: ServiceState, url: str = "http://127.0.0.1:3199/") -> StatusSnapshot:
     return StatusSnapshot(
         backend=LampStatus(state, "backend ready"),
@@ -95,7 +109,7 @@ def test_primary_window_uses_controller_url_and_closing_stops_controller(
     webview, created = _stub_webview()
     monkeypatch.setitem(sys.modules, "webview", webview)
 
-    result = desktop.DesktopWindow(controller, poll_interval=0).run()  # type: ignore[arg-type]
+    result = desktop.DesktopWindow(controller, poll_interval=0, **WINDOWS_WEBVIEW_READY).run()  # type: ignore[arg-type]
 
     assert result == 0
     assert controller.starts == 1
@@ -113,7 +127,7 @@ def test_javascript_api_rejects_foreign_origins(monkeypatch: pytest.MonkeyPatch)
     controller = StubController()
     webview, created = _stub_webview()
     monkeypatch.setitem(sys.modules, "webview", webview)
-    window = desktop.DesktopWindow(controller, poll_interval=0)  # type: ignore[arg-type]
+    window = desktop.DesktopWindow(controller, poll_interval=0, **WINDOWS_WEBVIEW_READY)  # type: ignore[arg-type]
     assert window.run() == 0
     api = created[0][1]["js_api"]
 
@@ -137,7 +151,7 @@ def test_controller_startup_error_is_reported_before_a_window_exists(
     reported: list[str] = []
     monkeypatch.setattr(desktop, "_report_startup_failure", reported.append)
 
-    assert desktop.DesktopWindow(controller, poll_interval=0).run() == 1  # type: ignore[arg-type]
+    assert desktop.DesktopWindow(controller, poll_interval=0, **WINDOWS_WEBVIEW_READY).run() == 1  # type: ignore[arg-type]
     assert created == []
     assert controller.closes == 1
     assert "Backend:" in reported[0]
@@ -161,7 +175,7 @@ def test_missing_pywebview_reports_the_pip_requirements_repair(
         lambda message, *, detail=None: reported.append((message, detail)),
     )
 
-    assert desktop.DesktopWindow(controller, poll_interval=0).run() == 1  # type: ignore[arg-type]
+    assert desktop.DesktopWindow(controller, poll_interval=0, **WINDOWS_WEBVIEW_READY).run() == 1  # type: ignore[arg-type]
     message = reported[0][0]
     assert "pywebview" in message
     assert "pip" in message
@@ -307,7 +321,7 @@ def test_a_probe_timeout_during_server_import_is_not_final(
     reported: list[str] = []
     monkeypatch.setattr(desktop, "_report_startup_failure", reported.append)
 
-    assert desktop.DesktopWindow(controller, poll_interval=0).run() == 0  # type: ignore[arg-type]
+    assert desktop.DesktopWindow(controller, poll_interval=0, **WINDOWS_WEBVIEW_READY).run() == 0  # type: ignore[arg-type]
     assert reported == []
     assert len(created) == 1
     assert controller.polls >= 3
@@ -327,7 +341,7 @@ def test_a_stale_frontend_build_still_opens_the_window(
     webview, created = _stub_webview()
     monkeypatch.setitem(sys.modules, "webview", webview)
 
-    assert desktop.DesktopWindow(controller, poll_interval=0).run() == 0  # type: ignore[arg-type]
+    assert desktop.DesktopWindow(controller, poll_interval=0, **WINDOWS_WEBVIEW_READY).run() == 0  # type: ignore[arg-type]
     assert created[0][0] == (desktop.WINDOW_TITLE, stale.url)
 
 
@@ -356,7 +370,7 @@ def test_a_stale_frontend_still_counts_as_a_healthy_start_for_cleanup(
         pid=123,
         exit_code=None,
     )
-    window = desktop.DesktopWindow(StubController(poll_snapshot=stale_start))  # type: ignore[arg-type]
+    window = desktop.DesktopWindow(StubController(poll_snapshot=stale_start), **WINDOWS_WEBVIEW_READY)  # type: ignore[arg-type]
     monkeypatch.setattr(window, "_bundle_paths", lambda: (bundle, bundle, data))
     monkeypatch.setattr(desktop, "repair_bundle", lambda *a, **k: None)
 
@@ -384,7 +398,7 @@ def test_declining_to_clean_says_so_in_the_update_log(
         pid=123,
         exit_code=None,
     )
-    window = desktop.DesktopWindow(StubController(poll_snapshot=not_serving))  # type: ignore[arg-type]
+    window = desktop.DesktopWindow(StubController(poll_snapshot=not_serving), **WINDOWS_WEBVIEW_READY)  # type: ignore[arg-type]
     monkeypatch.setattr(window, "_bundle_paths", lambda: (bundle, bundle, data))
 
     window._finish_healthy_bundle_update(not_serving)
@@ -420,7 +434,7 @@ def test_the_cleanup_guard_is_never_stricter_than_the_loop_that_calls_it(
         pid=123,
         exit_code=None,
     )
-    window = desktop.DesktopWindow(StubController(poll_snapshot=serving))  # type: ignore[arg-type]
+    window = desktop.DesktopWindow(StubController(poll_snapshot=serving), **WINDOWS_WEBVIEW_READY)  # type: ignore[arg-type]
     assert window._frontend_ready(serving) is True
     monkeypatch.setattr(window, "_bundle_paths", lambda: (bundle, bundle, data))
     monkeypatch.setattr(desktop, "repair_bundle", lambda *a, **k: None)
@@ -439,7 +453,7 @@ def test_a_server_that_never_answers_is_reported_instead_of_waited_on_forever(
     reported: list[str] = []
     monkeypatch.setattr(desktop, "_report_startup_failure", reported.append)
 
-    window = desktop.DesktopWindow(controller, poll_interval=0, startup_timeout=0)  # type: ignore[arg-type]
+    window = desktop.DesktopWindow(controller, poll_interval=0, startup_timeout=0, **WINDOWS_WEBVIEW_READY)  # type: ignore[arg-type]
     assert window.run() == 1
     assert created == []
     assert controller.closes == 1
@@ -482,7 +496,7 @@ def test_an_in_app_update_request_hands_off_then_closes_the_window(
     reported: list[str] = []
     monkeypatch.setattr(desktop, "_report_startup_failure", reported.append)
 
-    assert desktop.DesktopWindow(controller, poll_interval=0).run() == 0  # type: ignore[arg-type]
+    assert desktop.DesktopWindow(controller, poll_interval=0, **WINDOWS_WEBVIEW_READY).run() == 0  # type: ignore[arg-type]
 
     assert controller.launched == ["v1.2.3"]
     assert window.destroyed == 1
@@ -504,7 +518,7 @@ def test_a_failed_update_handoff_is_reported_and_the_window_stays_open(
     reported: list[str] = []
     monkeypatch.setattr(desktop, "_report_startup_failure", reported.append)
 
-    assert desktop.DesktopWindow(controller, poll_interval=0).run() == 0  # type: ignore[arg-type]
+    assert desktop.DesktopWindow(controller, poll_interval=0, **WINDOWS_WEBVIEW_READY).run() == 0  # type: ignore[arg-type]
 
     assert controller.launched == []
     assert window.destroyed == 0
@@ -536,7 +550,7 @@ def test_bundle_handoff_stops_the_server_before_spawning_the_staged_updater(
     webview, window = _live_webview(polls=3)
     monkeypatch.setitem(sys.modules, "webview", webview)
 
-    assert desktop.DesktopWindow(controller, poll_interval=0, update_ready_delay=0).run() == 0  # type: ignore[arg-type]
+    assert desktop.DesktopWindow(controller, poll_interval=0, update_ready_delay=0, **WINDOWS_WEBVIEW_READY).run() == 0  # type: ignore[arg-type]
 
     assert events[:2] == ["close", "launch"]
     assert window.destroyed == 1
@@ -590,7 +604,7 @@ def test_first_healthy_bundle_start_removes_previous_layers_and_resigns(
         lambda bundle, **_kwargs: repaired.append(bundle),
     )
 
-    assert desktop.DesktopWindow(controller, poll_interval=0).run() == 0  # type: ignore[arg-type]
+    assert desktop.DesktopWindow(controller, poll_interval=0, **WINDOWS_WEBVIEW_READY).run() == 0  # type: ignore[arg-type]
 
     assert not previous.exists()
     assert event_loop_started == [True]
@@ -624,7 +638,7 @@ def test_failed_new_bundle_start_rolls_back_and_reports_the_result(
     monkeypatch.setattr(desktop, "_show_bundle_failure_dialog", shown.append)
     monkeypatch.setattr(desktop, "repair_bundle", lambda *_args, **_kwargs: None)
 
-    assert desktop.DesktopWindow(controller, poll_interval=0).run() == 1  # type: ignore[arg-type]
+    assert desktop.DesktopWindow(controller, poll_interval=0, **WINDOWS_WEBVIEW_READY).run() == 1  # type: ignore[arg-type]
 
     assert (app / "marker").read_text(encoding="utf-8") == "old"
     assert not previous.exists()
@@ -663,7 +677,7 @@ def test_missing_pywebview_rolls_back_bundle_after_http_readiness(
     monkeypatch.setattr(desktop, "_report_startup_failure", reported.append)
     monkeypatch.setattr(desktop, "_show_bundle_failure_dialog", shown.append)
 
-    assert desktop.DesktopWindow(controller, poll_interval=0).run() == 1  # type: ignore[arg-type]
+    assert desktop.DesktopWindow(controller, poll_interval=0, **WINDOWS_WEBVIEW_READY).run() == 1  # type: ignore[arg-type]
     assert (app / "marker").read_text(encoding="utf-8") == "old"
     assert not previous.exists()
     assert "pywebview is unavailable" in reported[0]
@@ -701,7 +715,7 @@ def test_macos_cleanup_sign_failure_restores_rollback_material(
     monkeypatch.setattr(desktop, "_report_startup_failure", reported.append)
     monkeypatch.setattr(desktop, "_show_bundle_failure_dialog", shown.append)
 
-    assert desktop.DesktopWindow(controller, poll_interval=0).run() == 0  # type: ignore[arg-type]
+    assert desktop.DesktopWindow(controller, poll_interval=0, **WINDOWS_WEBVIEW_READY).run() == 0  # type: ignore[arg-type]
     assert previous.is_dir()
     assert downloads.is_dir()
     assert repair_calls == 2
@@ -736,7 +750,7 @@ def test_startup_recovers_a_missing_live_layer_before_starting_the_server(
         lambda bundle, **_kwargs: repaired.append(bundle),
     )
 
-    assert desktop.DesktopWindow(controller, poll_interval=0).run() == 0  # type: ignore[arg-type]
+    assert desktop.DesktopWindow(controller, poll_interval=0, **WINDOWS_WEBVIEW_READY).run() == 0  # type: ignore[arg-type]
     assert (resources / "runtime" / "marker").read_text() == "old runtime"
     assert not runtime_previous.exists()
     assert repaired == [tmp_path / "Waveguide Generator.app"]
@@ -778,7 +792,7 @@ def test_second_bundle_update_with_pending_previous_stays_visible_and_running(
     monkeypatch.setattr(desktop, "_report_startup_failure", reported.append)
     monkeypatch.setattr(desktop, "_show_bundle_failure_dialog", shown.append)
 
-    assert desktop.DesktopWindow(controller, poll_interval=0, update_ready_delay=0).run() == 0  # type: ignore[arg-type]
+    assert desktop.DesktopWindow(controller, poll_interval=0, update_ready_delay=0, **WINDOWS_WEBVIEW_READY).run() == 0  # type: ignore[arg-type]
     assert controller.launched == []
     assert controller.closes == 1
     assert window.destroyed == 0
@@ -808,7 +822,7 @@ def test_failed_bundle_handoff_restarts_before_claiming_current_version_is_open(
     monkeypatch.setattr(desktop, "_report_startup_failure", reported.append)
     monkeypatch.setattr(desktop, "_show_bundle_failure_dialog", shown.append)
 
-    assert desktop.DesktopWindow(controller, poll_interval=0, update_ready_delay=0).run() == 0  # type: ignore[arg-type]
+    assert desktop.DesktopWindow(controller, poll_interval=0, update_ready_delay=0, **WINDOWS_WEBVIEW_READY).run() == 0  # type: ignore[arg-type]
     assert controller.starts == 2
     assert window.destroyed == 0
     assert "was restarted and remains open" in reported[0]
@@ -844,7 +858,7 @@ def test_failed_bundle_handoff_and_restart_close_the_dead_window(
     monkeypatch.setattr(desktop, "_report_startup_failure", reported.append)
     monkeypatch.setattr(desktop, "_show_bundle_failure_dialog", shown.append)
 
-    assert desktop.DesktopWindow(controller, poll_interval=0, update_ready_delay=0).run() == 1  # type: ignore[arg-type]
+    assert desktop.DesktopWindow(controller, poll_interval=0, update_ready_delay=0, **WINDOWS_WEBVIEW_READY).run() == 1  # type: ignore[arg-type]
     assert controller.starts == 2
     assert window.destroyed == 1
     assert "also could not restart" in reported[0]
@@ -910,7 +924,7 @@ def test_a_failed_windows_start_hands_the_rollback_to_a_detached_helper(
     monkeypatch.setattr(desktop, "_report_startup_failure", reported.append)
     monkeypatch.setattr(desktop, "_show_startup_failure_dialog", shown.append)
 
-    assert desktop.DesktopWindow(controller, poll_interval=0).run() == 1  # type: ignore[arg-type]
+    assert desktop.DesktopWindow(controller, poll_interval=0, **WINDOWS_WEBVIEW_READY).run() == 1  # type: ignore[arg-type]
 
     # Nothing moved in this process; the helper does it after this one exits.
     assert (bundle / "app" / "marker").read_text(encoding="utf-8") == "new"
@@ -945,7 +959,7 @@ def test_a_rollback_handoff_that_cannot_start_falls_back_to_this_process(
     monkeypatch.setattr(desktop, "_report_startup_failure", reported.append)
     monkeypatch.setattr(desktop, "_show_startup_failure_dialog", lambda _message: None)
 
-    assert desktop.DesktopWindow(controller, poll_interval=0).run() == 1  # type: ignore[arg-type]
+    assert desktop.DesktopWindow(controller, poll_interval=0, **WINDOWS_WEBVIEW_READY).run() == 1  # type: ignore[arg-type]
 
     assert (bundle / "app" / "marker").read_text(encoding="utf-8") == "old"
     assert (bundle / "runtime" / "marker").read_text(encoding="utf-8") == "old"
