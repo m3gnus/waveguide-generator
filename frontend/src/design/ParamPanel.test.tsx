@@ -1268,6 +1268,19 @@ describe('driver picker', () => {
     expect(channelDriverWire(form())).toBeUndefined();
   });
 
+  it('shows every impedance the driver comes in on its search row', async () => {
+    await mountWithLibrary();
+    const input = searchInput();
+    act(() => input.focus());
+    await settle();
+
+    // The search pre-selects the lowest-ohm variant; the row has to say the
+    // others exist, because the variant buttons only appear in the T/S sheet.
+    const row = channelCard().querySelector<HTMLElement>('[role="option"]')!;
+    expect(row.querySelector('.driver-chip')?.textContent).toBe('8|16 Ω');
+    expect(row.querySelector('.driver-result-facts')?.textContent).not.toContain('Ω');
+  });
+
   it('keeps the current driver when Escape closes the list', async () => {
     await mountWithLibrary();
     const input = searchInput();
