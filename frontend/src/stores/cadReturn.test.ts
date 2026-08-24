@@ -942,6 +942,65 @@ describe('the CAD project owns its solve settings', () => {
   });
 });
 
+describe('a picked driver re-reads its T/S from the library', () => {
+  const CATALOGUE_ROW = {
+    id: 'B&C::DE250::8', label: 'B&C DE250', source: 'database' as const,
+    kind: 'cd' as const, z_ohm: 8, xo_min_hz: 1_200,
+    // What a compression-driver sheet publishes before anyone fills in T/S:
+    // enough to name the driver, not enough to solve one.
+    base: { re_ohm: 5.4, bl_t_m: 17.5, le_mh: 0.62 },
+  };
+
+  beforeEach(() => {
+    localStorage.clear();
+    resetDocumentStore();
+    resetCadReturnStore();
+  });
+
+  it('takes the numbers the row has now, and keeps the user\'s edits', () => {
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_party');
+    useCadReturnStore.getState().setChannelDriverPreset('drive-hf', CATALOGUE_ROW);
+    useCadReturnStore.getState().setChannelDriverField('drive-hf', 'count', 2);
+    expect(channelDriverWire(useCadReturnStore.getState().channelDrivers['drive-hf'])).toBeUndefined();
+
+    // The library row gains its T/S.
+    const changed = useCadReturnStore.getState().refreshChannelDriverBases({
+      'drive-hf': {
+        presetId: 'B&C::DE250::8',
+        base: { re_ohm: 5.4, bl_t_m: 17.5, le_mh: 0.62, sd_cm2: 13.2, mms_g: 0.65, fs_hz: 550 },
+        xo_min_hz: 1_200,
+      },
+    });
+
+    expect(changed).toEqual(['drive-hf']);
+    const form = useCadReturnStore.getState().channelDrivers['drive-hf'];
+    expect(driverValues(form)).toMatchObject({ sd_cm2: 13.2, mms_g: 0.65, fs_hz: 550, count: 2 });
+    // Complete now, so it reaches the wire instead of being dropped.
+    expect(channelDriverWire(form)).toMatchObject({ sd_cm2: 13.2, label: 'B&C DE250' });
+  });
+
+  it('leaves a channel alone when its driver has changed underneath', () => {
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_party');
+    useCadReturnStore.getState().setChannelDriverPreset('drive-hf', CATALOGUE_ROW);
+
+    const changed = useCadReturnStore.getState().refreshChannelDriverBases({
+      'drive-hf': { presetId: 'Someone::Else::8', base: { sd_cm2: 999 } },
+    });
+
+    expect(changed).toEqual([]);
+    expect(driverValues(useCadReturnStore.getState().channelDrivers['drive-hf']).sd_cm2).toBeUndefined();
+  });
+
+  it('reports nothing when the row still says what it said', () => {
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_party');
+    useCadReturnStore.getState().setChannelDriverPreset('drive-hf', CATALOGUE_ROW);
+
+    expect(useCadReturnStore.getState().refreshChannelDriverBases({
+      'drive-hf': { presetId: 'B&C::DE250::8', base: { ...CATALOGUE_ROW.base }, xo_min_hz: 1_200 },
+    })).toEqual([]);
+  });
+});
+
 describe('listing-gone staleness self-heals', () => {
   it('clears when the identical bundle reappears, and only then', () => {
     // A poll against a restarting server reads an empty listing; that must

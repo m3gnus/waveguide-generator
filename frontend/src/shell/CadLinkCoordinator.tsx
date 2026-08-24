@@ -17,19 +17,23 @@ import { sendDesignToCad, type WgLinkExportResponse } from '../api/designIo';
 import { getOnshapeConnection, getOnshapeStatus, returnOnshapeToWg, type OnshapeConnection, type OnshapeStatus } from '../api/onshape';
 import { fromResult, parseWire } from '../results/crossoverSpec';
 import { preferencesStore, usePreferences } from '../prefs/preferences';
+import { getDriver } from '../api/drivers';
 import { useCadPreparationStore } from '../stores/cadPreparation';
 import {
   DRIVER_FIELD_KEYS,
   PASSIVE_CARDIOID_DEFAULTS,
+  driverBaseFromSpec,
   driversForChannels,
   projectChannelDrivers,
   useCadReturnStore,
   type CadDriveChannel,
   type ChannelDriverForm,
+  type DriverBaseUpdate,
   type DriverPreset,
   type PassiveCardioidForm,
 } from '../stores/cadReturn';
 import { recordCommittedAthPolars, subscribeRevision, useDesignStore } from '../stores/design';
+import { useDriverLibraryStore } from '../stores/driverLibrary';
 import { useDocumentStore, type DesignIdentity } from '../stores/document';
 import { documentSettingsSignature } from '../stores/designWire';
 import {
@@ -458,6 +462,50 @@ export async function showIngestedMeshInViewport(
  * CAD input surfaces the recalled document name and source inventory without
  * pretending the original return bundle is still available for rebuilding.
  */
+/**
+ * Re-read every picked driver's own numbers from the library it came from.
+ *
+ * A preset carries a copy of the row it was picked from, so a library row that
+ * gains its T/S later never reaches the channel already naming that driver:
+ * the form stays incomplete and the channel solves undriven. This is what
+ * makes "I filled in the compression drivers' T/S" reach a project that picked
+ * them before, whether its settings were just restored or a run was recalled.
+ *
+ * Advisory throughout. A library that cannot be read, or a row that is no
+ * longer there, leaves the stored numbers exactly as they are: they are what
+ * the last solve used, and losing them would be worse than not refreshing.
+ */
+export async function refreshChannelDriverBases(
+  fetcher: typeof fetch = fetch,
+): Promise<string[]> {
+  const forms = useCadReturnStore.getState().channelDrivers;
+  const saved = new Map(useDriverLibraryStore.getState().saved.map((driver) => [driver.id, driver]));
+  const updates: Record<string, DriverBaseUpdate> = {};
+  await Promise.all(Object.entries(forms).map(async ([channelId, form]) => {
+    const preset = form.preset;
+    if (!preset || preset.source === 'manual') return;
+    if (preset.source === 'mine') {
+      const driver = saved.get(preset.id);
+      if (driver) {
+        updates[channelId] = {
+          presetId: preset.id,
+          base: { ...driver.base, ...driver.overrides },
+          xo_min_hz: driver.xo_min_hz,
+        };
+      }
+      return;
+    }
+    const hit = await getDriver(preset.id, fetcher).catch(() => null);
+    if (!hit) return;
+    updates[channelId] = {
+      presetId: preset.id,
+      base: driverBaseFromSpec(hit.spec),
+      xo_min_hz: typeof hit.xo_min_hz === 'number' && Number.isFinite(hit.xo_min_hz) ? hit.xo_min_hz : null,
+    };
+  }));
+  return useCadReturnStore.getState().refreshChannelDriverBases(updates);
+}
+
 export async function showCadJobModel(
   job: JobItem,
   fetcher: typeof fetch = fetch,
@@ -525,6 +573,10 @@ export async function showCadJobModel(
       ingestStaleReason: null,
     });
     restoreCadJobSolveOptions(job);
+    // The project's drivers are now on the channels; this is what makes their
+    // T/S the library's current numbers rather than the ones they were picked
+    // with, which is the whole of re-solving an old run with updated drivers.
+    const rereadDrivers = await refreshChannelDriverBases(fetcher);
     const viewportGeneration = importedMeshStore.beginIntent();
     await showIngestedMeshInViewport(record, displayName, coordinator.reportViewportNotice, fetcher, viewportGeneration);
     const shown = importedMeshStore.getSnapshot().cad?.ingestId === ingestId;
@@ -532,7 +584,9 @@ export async function showCadJobModel(
       coordinator.reportStatus(`Cannot show ${displayName}: the archived CAD mesh artifacts are no longer available.`);
       return false;
     }
-    coordinator.reportStatus(`Showing ${displayName} from run #${job.run_number}.`);
+    coordinator.reportStatus(`Showing ${displayName} from run #${job.run_number}.${
+      rereadDrivers.length ? ` Re-read ${rereadDrivers.length} driver${rereadDrivers.length === 1 ? '' : 's'} from the library.` : ''
+    }`);
     return true;
   } catch (reason) {
     const missing = reason instanceof CadLinkApiError && reason.status === 404;
@@ -809,6 +863,9 @@ export function CadLinkCoordinator() {
         continuity = arrived
           ? useCadReturnStore.getState().selectArrivedBundle(arrived)
           : (useCadReturnStore.getState().selectBundle(opened), 'initial');
+        // Quietly here: these drivers were just restored, so the user has not
+        // seen the numbers this replaces, and the arrival owns the status line.
+        void refreshChannelDriverBases().catch(() => undefined);
         // Selecting evidence invalidates a load for the previous return, but
         // mode—not return discovery—decides what the viewport displays.
         importedMeshStore.beginIntent();
@@ -1143,6 +1200,15 @@ export function CadLinkCoordinator() {
   }, [fusionStatus?.link?.instanceId, reportViewportNotice]);
   ingestSelectedRef.current = ingestSelected;
 
+  /** Re-read restored drivers from the library, and say so when the numbers
+   * moved: a simulation input that changes on its own is not a silent event. */
+  const rereadDrivers = useCallback(() => {
+    void refreshChannelDriverBases().then((channels) => {
+      if (!channels.length || !mounted.current) return;
+      setStatus(`Re-read ${channels.length} driver${channels.length === 1 ? '' : 's'} from the driver library.`);
+    }).catch(() => { /* advisory: the stored numbers stand */ });
+  }, []);
+
   /** Manual list selection is preparation intent too. Selecting immediately
    * advances both generations, then a fresh ingest aborts any older request;
    * late fetch implementations that ignore abort are still rejected by the
@@ -1154,10 +1220,11 @@ export function CadLinkCoordinator() {
       return;
     }
     useCadReturnStore.getState().selectBundle(bundle, projectLineageId);
+    rereadDrivers();
     importedMeshStore.beginIntent();
     enterCadWorkspace();
     autoIngestSelected();
-  }, [autoIngestSelected]);
+  }, [autoIngestSelected, rereadDrivers]);
   selectBundleRef.current = selectBundle;
 
   // The panel's button: same work, feedback already presented, nothing thrown.
