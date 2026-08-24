@@ -75,6 +75,12 @@ function withQueryClient(children: ReactNode) {
   return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
 }
 
+/** Flip the Crossover section between its Basic and Advanced faces. */
+function crossoverView(host: HTMLElement, label: 'Basic' | 'Advanced'): void {
+  act(() => [...host.querySelectorAll<HTMLButtonElement>('[aria-label="Crossover view"] button')]
+    .find((button) => button.textContent === label)!.click());
+}
+
 describe('outer-body precedence', () => {
   it('matches all four server resolution branches', () => {
     const design = designForFamily('OSSE');
@@ -473,7 +479,7 @@ describe('ParamPanel inventory UX', () => {
     expect(buildImportedSubmission(useCadReturnStore.getState()).geometry).not.toHaveProperty('combine');
   });
 
-  it('warns when a pair sits below the upper channel driver\'s minimum crossover, in both simple and Advanced', () => {
+  it('warns when a pair sits below the upper channel driver\'s minimum crossover, in both Basic and Advanced', () => {
     act(() => {
       setCadReady();
       workspaceModeStore.setMode('cad');
@@ -491,15 +497,15 @@ describe('ParamPanel inventory UX', () => {
     // MF → HF defaults to 1000 Hz, below the driver's 1.6 kHz minimum.
     expect(host.textContent).toContain('Acme HD-1 minimum 1.6 kHz — current 1 kHz');
 
-    act(() => [...host.querySelectorAll<HTMLButtonElement>('button')]
-      .find((button) => button.textContent === 'Advanced ▸')!.click());
-    const panel = document.querySelector('.crossover-advanced')!;
+    crossoverView(host, 'Advanced');
+    const panel = host.querySelector('.crossover-advanced-inline')!;
     expect(panel.textContent).toContain('Acme HD-1 minimum 1.6 kHz — current 1 kHz');
 
     // Raising the pair above the minimum clears the note in both views.
     act(() => useCadReturnStore.getState().setCombineCrossover('drive-mf→drive-hf', 2_000));
-    expect(host.textContent).not.toContain('minimum');
     expect(panel.textContent).not.toContain('minimum');
+    crossoverView(host, 'Basic');
+    expect(host.textContent).not.toContain('minimum');
 
     // A driver whose source published no minimum never warns, whatever the
     // pair's frequency.
@@ -552,10 +558,8 @@ describe('ParamPanel inventory UX', () => {
       root.render(withQueryClient(<ParamPanel tab="simulation" />));
     });
 
-    const advanced = [...host.querySelectorAll<HTMLButtonElement>('button')]
-      .find((button) => button.textContent === 'Advanced ▸')!;
-    act(() => advanced.click());
-    const panel = document.querySelector('.crossover-advanced')!;
+    crossoverView(host, 'Advanced');
+    const panel = host.querySelector('.crossover-advanced-inline')!;
     expect(panel).not.toBeNull();
 
     const lowPass = panel.querySelector<HTMLInputElement>('[aria-label="Low-pass frequency in hertz"]')!;
@@ -565,26 +569,32 @@ describe('ParamPanel inventory UX', () => {
     });
     const spec = useCadReturnStore.getState().combineSpec!;
     expect(spec.channels['drive-mf'].lp).toEqual({ family: 'lr', order: 4, fcHz: 900 });
+
+    // The Basic view reports the pair it can no longer express.
+    crossoverView(host, 'Basic');
     expect(host.textContent).toContain('LP 900 Hz LR4 / HP 1 kHz LR4 — edit in Advanced');
     expect(host.querySelector<HTMLInputElement>('[aria-label="MF → HF slope"]')!.disabled).toBe(true);
+    expect(host.textContent).toContain('edited per channel');
 
-    act(() => [...document.querySelectorAll<HTMLButtonElement>('.crossover-advanced button')]
+    crossoverView(host, 'Advanced');
+    act(() => [...host.querySelectorAll<HTMLButtonElement>('.crossover-advanced-inline button')]
       .find((button) => button.textContent === 'Relink pairs')!.click());
     expect(useCadReturnStore.getState().combineSpec!.channels['drive-hf'].hp)
       .toEqual({ family: 'lr', order: 4, fcHz: 900 });
+    crossoverView(host, 'Basic');
     expect(host.textContent).not.toContain('edit in Advanced');
+    expect(host.textContent).not.toContain('edited per channel');
   });
 
-  it('takes one channel off automatic gain from the Advanced popover', () => {
+  it('takes one channel off automatic gain from the Advanced view', () => {
     act(() => {
       setCadReady();
       workspaceModeStore.setMode('cad');
       root.render(withQueryClient(<ParamPanel tab="simulation" />));
     });
-    act(() => [...host.querySelectorAll<HTMLButtonElement>('button')]
-      .find((button) => button.textContent === 'Advanced ▸')!.click());
+    crossoverView(host, 'Advanced');
 
-    const groups = [...document.querySelectorAll('.crossover-advanced .crossover-segment')]
+    const groups = [...host.querySelectorAll('.crossover-advanced-inline .crossover-segment')]
       .filter((group) => group.getAttribute('aria-label') === 'Gain mode');
     act(() => [...groups[0].querySelectorAll<HTMLButtonElement>('button')]
       .find((button) => button.textContent === 'Manual')!.click());
@@ -594,7 +604,7 @@ describe('ParamPanel inventory UX', () => {
     expect(spec.channels['drive-hf'].gain).toEqual({ mode: 'auto' });
     // Clearing a manual field is the same gesture as everywhere else: it gives
     // the value back to whatever computes it.
-    const field = document.querySelector<HTMLInputElement>('.crossover-advanced [aria-label="Gain in dB"]')!;
+    const field = host.querySelector<HTMLInputElement>('.crossover-advanced-inline [aria-label="Gain in dB"]')!;
     act(() => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(field, '');
       field.dispatchEvent(new Event('input', { bubbles: true }));
@@ -602,7 +612,9 @@ describe('ParamPanel inventory UX', () => {
     expect(useCadReturnStore.getState().combineSpec!.channels['drive-mf'].gain).toEqual({ mode: 'auto' });
     act(() => [...groups[0].querySelectorAll<HTMLButtonElement>('button')]
       .find((button) => button.textContent === 'Manual')!.click());
-    // The chain-wide segment can no longer claim one mode for two.
+    // Back in Basic, the chain-wide segment can no longer claim one mode for
+    // two, and the flag by the view toggle says why.
+    crossoverView(host, 'Basic');
     const levels = host.querySelector('[aria-label="Level match members mode"]')!;
     expect(levels.querySelector('button[aria-pressed="true"]')).toBeNull();
     expect(host.textContent).toContain('edited per channel');

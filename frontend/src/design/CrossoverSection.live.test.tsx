@@ -8,6 +8,7 @@ import { latestCombine, type ShownCombine } from '../results/latestCombine';
 import type { CombineMetadata } from '../results/types';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetDocumentStore } from '../stores/document';
+import { SETTINGS_NAMESPACES } from '../stores/durableSettings';
 import { CadCrossover } from './CrossoverSection';
 
 const recombineMocks = vi.hoisted(() => ({ recombine: vi.fn() }));
@@ -123,6 +124,40 @@ describe('live recombine from the rail', () => {
     setSlope('2');
     await act(async () => { vi.advanceTimersByTime(1_000); await Promise.resolve(); });
     expect(recombineMocks.recombine).not.toHaveBeenCalled();
+  });
+
+  it('renders the Advanced editor inline and remembers the chosen view durably', () => {
+    render();
+    // Basic is the default face: pair fields present, per-channel editor not.
+    expect(host.querySelector('[aria-label="MF → HF slope"]')).not.toBeNull();
+    expect(host.querySelector('.crossover-advanced-inline')).toBeNull();
+
+    const setView = (label: string) => act(() => {
+      [...host.querySelectorAll<HTMLButtonElement>('[aria-label="Crossover view"] button')]
+        .find((button) => button.textContent === label)!.click();
+    });
+    setView('Advanced');
+    const panel = host.querySelector('.crossover-advanced-inline');
+    expect(panel).not.toBeNull();
+    // Inline in the section, not a body portal.
+    expect(host.contains(panel)).toBe(true);
+    expect(panel!.textContent).toContain('Relink pairs');
+    // The basic fields give way rather than stacking under the editor.
+    expect(host.querySelector('[aria-label="MF → HF slope"]')).toBeNull();
+    // The choice lands in the durable namespace, one value per namespace.
+    expect(localStorage.getItem(SETTINGS_NAMESPACES.crossoverView)).toBe('advanced');
+
+    // A fresh mount reads it back: the view survives a browser restart.
+    act(() => root.unmount());
+    host.remove();
+    host = document.createElement('div'); document.body.append(host); root = createRoot(host);
+    render();
+    expect(host.querySelector('.crossover-advanced-inline')).not.toBeNull();
+
+    setView('Basic');
+    expect(localStorage.getItem(SETTINGS_NAMESPACES.crossoverView)).toBe('basic');
+    expect(host.querySelector('.crossover-advanced-inline')).toBeNull();
+    expect(host.querySelector('[aria-label="MF → HF slope"]')).not.toBeNull();
   });
 
   it('shows a failed recombine instead of pretending it applied', async () => {
