@@ -192,6 +192,7 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .panel-meta-warn { color: var(--amber); }
 .pill { padding: 2px 4px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov2); color: var(--fg2); font: var(--text-micro) var(--mono); letter-spacing: .04em; }
 .pill.accent { border-color: rgba(var(--acc-rgb), .28); background: rgba(var(--acc-rgb), .1); color: var(--acc); }
+.pill.result-power-check { flex: none; border-color: rgba(var(--amber-rgb), .38); background: rgba(var(--amber-rgb), .1); color: var(--amber); letter-spacing: 0; text-transform: none; white-space: nowrap; }
 .panel-text-action { min-height: 26px; padding-inline: 6px; border-radius: var(--r3); background: transparent; color: var(--fg2); font-size: var(--text-micro); }
 .panel-text-action:hover { background: var(--ov3); color: var(--fg); }
 .panel-text-action--danger { color: var(--red); }
@@ -379,15 +380,22 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .results-toolbar .panel-preferences-trigger { width: 19px; height: 19px; padding: 0; border: 0; border-radius: var(--r3); background: transparent; }
 .results-toolbar > b { color: var(--acc); font: var(--text-micro) var(--mono); }
 .result-compare-add { height: 19px; padding: 0 4px; border: 1px dashed var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg3); font-size: var(--text-micro); }
-/* Follow state is the dock's most consequential piece of status: it says
-   whether these charts will repaint when the next solve lands. */
-.result-follow { display: flex; align-items: center; gap: 4px; letter-spacing: .04em; }
-.result-follow i { width: 5px; height: 5px; border-radius: 50%; background: var(--fg4); }
-.results-toolbar .result-follow.on { border-color: rgba(var(--green-rgb), .38); background: rgba(var(--green-rgb), .1); color: var(--green); }
-.result-follow.on i { background: var(--green); box-shadow: 0 0 0 2px rgba(var(--green-rgb), .18); }
-.result-coherence-notice { display: inline-flex; flex: none; align-items: center; gap: 5px; max-width: min(660px, 52vw); padding: 2px 4px 2px 7px; border-left: 2px solid var(--amber); background: rgba(var(--amber-rgb), .09); color: var(--fg2); text-transform: none; white-space: nowrap; }
-.result-coherence-notice > span { overflow: hidden; text-overflow: ellipsis; }
-.results-toolbar .result-coherence-notice button { height: 19px; padding-inline: 5px; border-color: rgba(var(--amber-rgb), .32); background: rgba(var(--amber-rgb), .08); }
+/* A run that is not the model on screen says so on its own chip: an amber dot
+   and two words, the whole sentence in the tooltip, the two actions one click
+   away. Amber tokens rather than a hue of their own, so the marker reads the
+   same in both themes as every other caution in the workspace. */
+.result-chip-group { display: flex; flex: 0 1 auto; align-items: center; gap: 3px; min-width: 0; }
+.results-toolbar .result-chip.stale { border-color: rgba(var(--amber-rgb), .38); }
+.results-toolbar button.result-context-marker { display: flex; flex: none; align-items: center; gap: 4px; height: 19px; padding: 0 5px; border-color: rgba(var(--amber-rgb), .38); background: rgba(var(--amber-rgb), .1); color: var(--amber); }
+.results-toolbar button.result-context-marker:hover:not(:disabled) { border-color: rgba(var(--amber-rgb), .55); background: rgba(var(--amber-rgb), .18); color: var(--amber); }
+.results-toolbar button.result-context-marker i { width: 5px; height: 5px; flex: none; border-radius: 50%; background: var(--amber); box-shadow: 0 0 0 2px rgba(var(--amber-rgb), .18); }
+/* A solve nobody in this window started is offered here rather than shown. */
+.results-toolbar .result-new-run { display: flex; align-items: center; gap: 4px; border-color: rgba(var(--acc-rgb), .38); background: rgba(var(--acc-rgb), .1); color: var(--acc); }
+.result-new-run i { width: 5px; height: 5px; flex: none; border-radius: 50%; background: var(--acc); box-shadow: 0 0 0 2px rgba(var(--acc-rgb), .18); }
+.panel-preferences-popover.result-coherence-popover { display: grid; gap: 5px; width: max-content; max-width: min(300px, calc(100vw - 16px)); padding: 8px; }
+.result-coherence-popover p { margin: 0; color: var(--fg2); font-size: var(--text-micro); }
+.result-coherence-popover button { height: 22px; padding: 0 8px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); color: var(--fg1); font-size: var(--text-micro); text-align: left; }
+.result-coherence-popover button:hover { border-color: var(--hair-hi); background: var(--ov3); color: var(--fg); }
 /* The comparison chips and the compare picker are the elastic items: they
    shrink and ellipsize so the controls on the right are never clipped off a
    narrow dock. Everything else holds its size — note the chips are buttons, so
@@ -403,6 +411,15 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .result-chip > span { overflow: hidden; text-overflow: ellipsis; }
 .result-chip > .result-context-marker { flex: none; padding: 1px 3px; border: 1px solid rgba(var(--acc-rgb), .28); border-radius: var(--r3); background: rgba(var(--acc-rgb), .1); color: var(--acc); font: var(--text-micro) var(--mono); overflow: visible; }
 .result-chip.muted i { border-top: 1px dashed var(--fg2); }
+/* One segmented control, not a row of chips: the views are exclusive, and the
+   old independent-looking chips read as filters that could be combined. The
+   hairline between segments is a border on the group, so a selected segment
+   can paint edge to edge without the group's outline showing through it. */
+.result-view-switch { display: flex; flex: none; align-items: center; height: 19px; overflow: hidden; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ov1); }
+.results-toolbar .result-view-switch button { height: 100%; min-width: 44px; padding: 0 8px; border: 0; border-left: 1px solid var(--hair); border-radius: 0; background: transparent; color: var(--fg2); font-size: var(--text-micro); text-transform: none; white-space: nowrap; }
+.results-toolbar .result-view-switch button:first-child { border-left: 0; }
+.results-toolbar .result-view-switch button:hover:not(.on) { background: var(--ov3); color: var(--fg1); }
+.results-toolbar .result-view-switch button.on { background: rgba(var(--acc-rgb), .16); color: var(--acc); }
 .result-count-control { display: flex; align-items: center; gap: 4px; color: var(--fg3); font-size: var(--text-micro); text-transform: none; }
 .result-count-control select { height: 19px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg1); font-size: var(--text-micro); }
 /* Charts get everything the dock can spare: the gutters are hairline-thin and
@@ -556,7 +573,7 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .jobs-filter:focus-within { border-color: rgba(var(--acc-rgb), .5); box-shadow: 0 0 0 2px rgba(var(--acc-rgb), .08); }
 .jobs-filter svg { width: 12px; height: 12px; flex: none; }
 .jobs-filter input { width: 100%; min-width: 0; height: var(--field-h); background: transparent; color: var(--fg); font-size: var(--text-micro); }
-.jobs-filter input::placeholder { color: var(--fg4); }
+.jobs-filter input::placeholder { color: var(--fg2); }
 .jobs-kept-toggle { display: grid; place-items: center; width: 23px; height: 23px; flex: none; border-radius: var(--r3); background: transparent; color: var(--fg4); font-size: var(--text-base); }
 .jobs-kept-toggle:hover { background: var(--ov3); color: var(--amber); }
 .jobs-kept-toggle.on { background: color-mix(in srgb, var(--amber) 13%, transparent); color: var(--amber); }
@@ -849,6 +866,9 @@ textarea:disabled { opacity: .48; }
 .results-toolbar .panel-preferences-trigger { width: 21px; height: 21px; padding: 0; border-radius: var(--r3); }
 .result-chip,
 .result-compare-add { height: 21px; border-radius: var(--r3); font-size: var(--text-micro); }
+.results-toolbar button.result-context-marker,
+.results-toolbar .result-new-run,
+.results-toolbar .result-view-switch { height: 21px; }
 .result-count-control,
 .result-count-control select { font-size: var(--text-micro); }
 .result-count-control select { height: 21px; }

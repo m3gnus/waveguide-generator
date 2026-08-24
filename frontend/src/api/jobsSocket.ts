@@ -1,4 +1,4 @@
-import { compareSelection, provisionalResults, type JobResults } from './results';
+import { compareSelection, provisionalResults, type ResultData } from './results';
 
 /**
  * Reference-compares own properties. Nested values are compared by identity,
@@ -178,7 +178,7 @@ interface PartialResultMessage {
   jobId: string;
   revision: number;
   snapshot?: boolean;
-  result: JobResults;
+  result: ResultData;
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -326,7 +326,7 @@ function isJobItem(value: unknown): value is JobItem {
   return true;
 }
 
-function isJobResults(value: unknown, depth = 0): value is JobResults {
+function isJobResults(value: unknown, depth = 0): value is ResultData {
   if (depth >= 8 || !isRecord(value) || !isSafeJson(value)) return false;
   if (!isNumberArray(value.frequencies)) return false;
   for (const blockName of ['spl_on_axis', 'impedance'] as const) {
@@ -566,6 +566,16 @@ function parsePartialResult(message: JsonRecord): PartialResultMessage | null {
   if (!Number.isSafeInteger(message.revision) || Number(message.revision) < 1) return null;
   if (hasOwn(message, 'snapshot') && typeof message.snapshot !== 'boolean') return null;
   if (!isJobResults(message.result)) return null;
+  const result = message.result as ResultData & JsonRecord;
+  const multiChannelShape = hasOwn(result, 'channels')
+    || hasOwn(result, 'channel_order')
+    || result.result_kind === 'multi_channel';
+  if (multiChannelShape && !(
+    result.result_kind === 'multi_channel'
+    && result.result_contract_version === 2
+    && isRecord(result.channels)
+    && isStringArray(result.channel_order)
+  )) return null;
   return message as unknown as PartialResultMessage;
 }
 

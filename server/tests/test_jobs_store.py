@@ -10,8 +10,9 @@ import sqlite3
 import threading
 
 import pytest
+from pydantic import ValidationError
 
-from server.jobs.store import JobStore
+from server.jobs.store import JobStore, SubmissionConflictError
 
 
 def _job(job_id: str, status: str = "queued", *, created_at: str | None = None) -> dict:
@@ -55,6 +56,50 @@ EXPECTED_JOB_COLUMNS = [
 ]
 
 
+def _result_envelope(kind: str = "parametric") -> dict[str, object]:
+    digest = "a" * 64
+    envelope: dict[str, object] = {
+        "result_kind": kind,
+        "result_contract_version": 1 if kind == "parametric" else 2,
+        "client_request_id": None,
+        "client_metadata": {},
+        "provenance": {
+            "schema_version": 1,
+            "wg_version": "test",
+            "dependency_shas": {},
+            "request_sha256": digest,
+            "geometry_sha256": digest,
+            "solve_options_sha256": digest,
+            "request_identity": "execution",
+            "execution_request_sha256": digest,
+            "execution_geometry_sha256": digest,
+            "execution_solve_options_sha256": digest,
+            "effective_request_sha256": digest,
+            "effective_geometry_sha256": digest,
+            "effective_solve_options_sha256": digest,
+            "resolved_engine": "test",
+        },
+        "metadata": {
+            "field_plane_available": False,
+            "field_trace_bytes": None,
+            "unavailable_reason": "unsupported_solve_mode",
+        },
+        "frequencies": [100.0],
+    }
+    if kind == "multi_channel":
+        envelope.update(channels={"hf": {"frequencies": [100.0]}}, channel_order=["hf"])
+    return envelope
+
+
+def _complete(store: JobStore, job_id: str, results: dict[str, object]) -> None:
+    store.complete_job(
+        job_id,
+        results,
+        {"status": "complete", "completed_at": datetime.now().isoformat()},
+        {"status": "complete", "progress": 1.0},
+    )
+
+
 def test_v1_schema_columns_are_exact_and_live_under_wg2_data_dir(tmp_path: Path) -> None:
     store = JobStore.for_data_dir(tmp_path)
     store.initialize()
@@ -64,6 +109,9 @@ def test_v1_schema_columns_are_exact_and_live_under_wg2_data_dir(tmp_path: Path)
         result_columns = [
             row[1] for row in conn.execute("PRAGMA table_info(simulation_results)")
         ]
+        submission_columns = [
+            row[1] for row in conn.execute("PRAGMA table_info(job_submissions)")
+        ]
         tables = {
             row[0]
             for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
@@ -71,6 +119,7 @@ def test_v1_schema_columns_are_exact_and_live_under_wg2_data_dir(tmp_path: Path)
         version = conn.execute("PRAGMA user_version").fetchone()[0]
     assert columns == EXPECTED_JOB_COLUMNS
     assert result_columns == ["job_id", "results_json", "results_sha256"]
+    assert submission_columns == ["submission_key", "request_sha256", "job_id"]
     assert {
         "simulation_jobs",
         "simulation_results",
@@ -106,6 +155,73 @@ def test_created_jobs_get_consecutive_run_numbers(tmp_path: Path) -> None:
 
     assert store.get_job_row("first")["run_number"] == 1
     assert store.get_job_row("second")["run_number"] == 2
+
+
+def test_submission_key_replays_one_job_and_conflicts_on_another_hash(
+    tmp_path: Path,
+) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    first = _job("first")
+
+    claimed, created, _event = store.create_job_idempotent(
+        first,
+        submission_key="cad-solve:cmd-1",
+        request_sha256="a" * 64,
+        initial_event=("queued", {}),
+    )
+    replayed, replay_created, replay_event = store.create_job_idempotent(
+        _job("duplicate"),
+        submission_key="cad-solve:cmd-1",
+        request_sha256="a" * 64,
+        initial_event=("queued", {}),
+    )
+
+    assert (claimed, created) == ("first", True)
+    assert (replayed, replay_created, replay_event) == ("first", False, None)
+    assert store.get_job_row("duplicate") is None
+    with pytest.raises(SubmissionConflictError, match="different request"):
+        store.resolve_submission("cad-solve:cmd-1", "b" * 64)
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        {"frequencies": [100.0]},
+        {**_result_envelope(), "result_contract_version": 999},
+    ],
+    ids=["missing-identity", "unsupported-version"],
+)
+def test_complete_job_rejects_invalid_result_envelope_before_persistence(
+    tmp_path: Path, invalid: dict[str, object]
+) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    store.create_job(_job("invalid", "running"))
+
+    with pytest.raises(ValidationError):
+        _complete(store, "invalid", invalid)
+
+    assert store.get_job_row("invalid")["status"] == "running"
+    assert store.get_results("invalid") is None
+    with sqlite3.connect(store.db_path) as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM simulation_results WHERE job_id = ?", ("invalid",)
+        ).fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("kind", ["parametric", "multi_channel"])
+def test_complete_job_accepts_supported_result_envelopes(
+    tmp_path: Path, kind: str
+) -> None:
+    store = JobStore(tmp_path / f"{kind}.db")
+    store.initialize()
+    store.create_job(_job(kind, "running"))
+    result = _result_envelope(kind)
+
+    _complete(store, kind, result)
+
+    assert store.get_results(kind) == result
 
 
 def test_radiation_impedance_artifact_round_trip(tmp_path: Path) -> None:

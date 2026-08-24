@@ -252,6 +252,65 @@ describe('simulation summary groups', () => {
     expect(row(groups, 'Validity', 'Accuracy')?.value).toBe('Results might not be very accurate above 1.20 kHz.');
   });
 
+  it('names the channel by band and keeps the id the user authored', () => {
+    const wrapper: ResultPayload = {
+      frequencies: [],
+      channel_order: ['drive-mf', 'drive-hf'],
+      channels: {
+        'drive-mf': { frequencies: [100], metadata: { role: 'MF' } },
+        'drive-hf': { frequencies: [100], metadata: { role: 'HF' } },
+      },
+      metadata: { geometry_type: 'imported' },
+    };
+
+    const groups = summaryGroups({
+      result: wrapper.channels!['drive-mf'] as ResultPayload,
+      wrapper,
+      channelId: 'drive-mf',
+    });
+
+    expect(row(groups, 'Import', 'Channel')?.value).toBe(`MF (drive-mf) · ${grouped(2)} channels`);
+  });
+
+  it('states the crossovers and the alignment delays of a combined channel', () => {
+    const combined: ResultPayload = {
+      frequencies: [100],
+      metadata: {
+        combine: {
+          members: ['drive-lf', 'drive-mf', 'drive-hf'],
+          member_roles: ['LF', 'MF', 'HF'],
+          crossovers_hz: [100, 1_000],
+          align: true,
+          delays_ms: { 'drive-lf': 0, 'drive-mf': 0.25, 'drive-hf': 1.5 },
+        },
+      },
+    };
+
+    const groups = summaryGroups({ result: combined });
+
+    expect(row(groups, 'Combine', 'Crossover')?.value).toBe('LF → MF 100 Hz, MF → HF 1.00 kHz');
+    expect(row(groups, 'Combine', 'Delays')?.value).toBe('LF 0.00 ms · MF 0.25 ms · HF 1.50 ms');
+  });
+
+  it('falls back to channel ids for an unroled sum and omits delays when unaligned', () => {
+    const combined: ResultPayload = {
+      frequencies: [100],
+      metadata: {
+        combine: {
+          members: ['low', 'high'],
+          crossovers_hz: [800],
+          align: false,
+          delays_ms: { low: 0, high: 0.4 },
+        },
+      },
+    };
+
+    const groups = summaryGroups({ result: combined });
+
+    expect(row(groups, 'Combine', 'Crossover')?.value).toBe('low → high 800 Hz');
+    expect(row(groups, 'Combine', 'Delays')).toBeUndefined();
+  });
+
   it('uses a worded balloon status when no balloon block was returned', () => {
     const groups = summaryGroups({
       result: { frequencies: [100], metadata: { balloon_sampling: { status: 'missing_result' } } },

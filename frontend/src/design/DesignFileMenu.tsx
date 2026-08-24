@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
   downloadGeometryExport,
   downloadText,
-  hydrateDesignDocument,
   inspectDesignText,
   openDesignText,
   serializeDesignDocument,
@@ -12,22 +11,23 @@ import {
 } from '../api/designIo';
 import { resetDesignStore, useDesignStore } from '../stores/design';
 import { documentSettingsSignature, wgSolveSettingsFromStore } from '../stores/designWire';
-import { resetDocumentStore, useDocumentStore, type CadLinkClassification, type DesignIdentity } from '../stores/document';
+import { documentIsUnsaved, resetDocumentStore, useDocumentStore, type CadLinkClassification } from '../stores/document';
 import { useUnsavedChanges } from '../stores/unsavedChanges';
-import { designNameForOpenedFile, designNameSlug } from '../stores/designName';
+import { designNameSlug } from '../stores/designName';
 import { usePreferences } from '../prefs/preferences';
 import { Icon } from '../shell/icons';
-import {
-  polarConfigFromUi,
-  restoreSolveSettingsFromBlocks,
-  useSolveOptionsStore,
-} from '../stores/solveOptions';
+import { polarConfigFromUi, useSolveOptionsStore } from '../stores/solveOptions';
 import { createImportedMeshScene } from '../viewport/importedMesh';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { parseMSH } from '../viewport/mshParser';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { cadLinkCoordinatorBridge } from '../shell/CadLinkCoordinator';
-import { getCadLinkedDesign, listCadLinkedDesigns, type CadLinkedDesignSummary } from '../api/cadlink';
+import { listCadLinkedDesigns, type CadLinkedDesignSummary } from '../api/cadlink';
+import {
+  applyOpenedDesign as applyOpenedDocument,
+  editableIdentity,
+  openCadLinkedProject,
+} from './openCadProject';
 import { sentToCadMessage } from './useSendToCad';
 
 const ACCEPT = '.cfg,.txt,.mwg,text/plain';
@@ -39,14 +39,6 @@ const CLASSIFICATION_DISPLAY: Record<CadLinkClassification, { label: string; det
   foreign: { label: 'foreign', detail: 'Foreign: this identity is not yet known to this machine’s CAD-link registry.' },
   missing: { label: 'unlinked', detail: 'Unlinked: this file has no CAD-link identity yet. Its first CAD-linked export will create one.' },
 };
-
-function editableIdentity(identity: DesignIdentity | null | undefined): DesignIdentity | null {
-  return identity ? {
-    designId: identity.designId,
-    lineageId: identity.lineageId,
-    baseEditVersion: identity.baseEditVersion,
-  } : null;
-}
 
 function reportText(report: ImportReport): string {
   const migrations = report.migrationsApplied.length
@@ -78,11 +70,8 @@ export async function exportProfileArtifacts(
 export function DesignFileMenu() {
   const design = useDesignStore((state) => state.design);
   const revision = useDesignStore((state) => state.designRevision);
-  const replaceDesign = useDesignStore((state) => state.replaceDesign);
   const designName = useDocumentStore((state) => state.designName);
   const unsaved = useUnsavedChanges();
-  const setDesignName = useDocumentStore((state) => state.setDesignName);
-  const markSaved = useDocumentStore((state) => state.markSaved);
   const classification = useDocumentStore((state) => state.classification);
   const setCadLink = useDocumentStore((state) => state.setCadLink);
   const workspaceMode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
@@ -95,6 +84,7 @@ export function DesignFileMenu() {
   const [adoptionCandidate, setAdoptionCandidate] = useState<CadLinkOpenState['adoptionCandidate']>(null);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
+  const documentMutationGeneration = useRef(0);
   const openInput = useRef<HTMLInputElement>(null);
   const reportInput = useRef<HTMLInputElement>(null);
   const meshInput = useRef<HTMLInputElement>(null);
@@ -107,6 +97,31 @@ export function DesignFileMenu() {
     document.addEventListener('mousedown', close);
     return () => document.removeEventListener('mousedown', close);
   }, []);
+
+  useEffect(() => {
+    const changed = () => { documentMutationGeneration.current += 1; };
+    const unsubscribeDesign = useDesignStore.subscribe(changed);
+    const unsubscribeDocument = useDocumentStore.subscribe(changed);
+    const unsubscribeSolveOptions = useSolveOptionsStore.subscribe(changed);
+    return () => {
+      unsubscribeDesign();
+      unsubscribeDocument();
+      unsubscribeSolveOptions();
+    };
+  }, []);
+
+  function documentIsUnsavedNow(): boolean {
+    const designState = useDesignStore.getState();
+    const documentState = useDocumentStore.getState();
+    return documentIsUnsaved(
+      designState.designRevision,
+      documentState.savedRevision,
+      documentState.savedSettings,
+      documentSettingsSignature(),
+      documentState.designName,
+      documentState.savedDesignName,
+    );
+  }
 
   async function act(operation: () => Promise<void>) {
     if (busyRef.current) return;
@@ -127,27 +142,29 @@ export function DesignFileMenu() {
     const file = input.files?.[0];
     input.value = '';
     if (!file) return;
+    const openingGeneration = documentMutationGeneration.current;
     await act(async () => {
       const text = await file.text();
       if (reportOnly) {
         setMessage(reportText(await inspectDesignText(text)));
         return;
       }
-      applyOpenedDesign(await openDesignText(text), file.name);
+      // Parsing is deliberately side-effect free. The discard decision belongs
+      // immediately beside the one operation that replaces the document, so a
+      // malformed file cannot prompt and an edit made while either await was
+      // pending cannot be overwritten by a stale response.
+      const opened = await openDesignText(text);
+      const changedWhileOpening = openingGeneration !== documentMutationGeneration.current;
+      if ((changedWhileOpening || documentIsUnsavedNow())
+        && !window.confirm(`Discard unsaved changes and open ${file.name}?`)) return;
+      applyOpenedDesign(opened, file.name);
     });
   }
 
   function applyOpenedDesign(opened: Awaited<ReturnType<typeof openDesignText>>, filename: string) {
-    const openedDesign = hydrateDesignDocument(opened.design);
-    replaceDesign(openedDesign);
-    restoreSolveSettingsFromBlocks(openedDesign.extra_blocks);
-    // One name for the whole document: the picked file's, unless the file's
-    // own Report.Title is that same name spelled more fully.
-    setDesignName(designNameForOpenedFile(filename, openedDesign.extra_blocks));
-    setCadLink(editableIdentity(opened.cadlink?.identity), opened.cadlink?.classification ?? 'missing');
-    markSaved(useDesignStore.getState().designRevision, documentSettingsSignature());
+    const applied = applyOpenedDocument(opened, filename);
     setMessage(reportText(opened));
-    if (opened.cadlink?.classification === 'missing') setAdoptionCandidate(opened.cadlink.adoptionCandidate);
+    if (applied.adoptionCandidate) setAdoptionCandidate(applied.adoptionCandidate);
   }
 
   async function toggleProjects() {
@@ -173,9 +190,9 @@ export function DesignFileMenu() {
   async function openProject(project: CadLinkedDesignSummary) {
     if (unsaved && !window.confirm('Discard unsaved changes and open this CAD-linked design?')) return;
     await act(async () => {
-      const snapshot = await getCadLinkedDesign(project.designId);
-      applyOpenedDesign(await openDesignText(snapshot.text), snapshot.filename);
-      setMessage(`Opened CAD-linked design ${snapshot.filename}`);
+      const opened = await openCadLinkedProject(project.designId);
+      if (opened.adoptionCandidate) setAdoptionCandidate(opened.adoptionCandidate);
+      setMessage(`Opened CAD-linked design ${opened.filename}`);
     });
   }
 

@@ -10,7 +10,7 @@ describe('client preferences', () => {
   beforeEach(() => { localStorage.clear(); preferencesStore.resetForTests(); });
   it('persists the complete format selection and clamps the run sequence', () => {
     expect(EXPORT_FORMATS).toHaveLength(20);
-    expect(CHART_TYPES).toHaveLength(18);
+    expect(CHART_TYPES).toHaveLength(19);
     expect(MAP_REFERENCES).toEqual([-3, -6, -9, -12]);
     preferencesStore.update({ exportFormats: [] });
     preferencesStore.toggleFormat('csv');
@@ -22,6 +22,7 @@ describe('client preferences', () => {
   });
   it('uses useful manual defaults without opting into automatic file writing', () => {
     expect(loadPreferences(null)).toMatchObject({
+      chartTypes: ['frequency_response', 'directivity_map_h', 'directivity_map_v', 'directivity_index', 'impedance', 'summary'],
       exportFormats: ['csv', 'png'],
       autoExportFormats: [],
       autoExportOnComplete: false,
@@ -160,7 +161,7 @@ describe('client preferences', () => {
     expect(migrated.mapReference).toBe(-9);
   });
   it('keeps a current-version layout exactly as stored', () => {
-    const chartTypes = ['balloon', 'beam_map'];
+    const chartTypes = ['balloon', 'beam_map', 'power_response'];
     const stored = JSON.stringify({ version: STORAGE_VERSION, preferences: { chartTypes } });
     expect(loadPreferences(stored).chartTypes).toEqual(chartTypes);
     expect(readPreferences(stored).migrated).toBe(false);

@@ -136,3 +136,32 @@ def test_wall_clearance_report_limits_claims_to_committed_evidence() -> None:
     assert "no mesh-refinement or convergence run" in combined
     assert "unresolved and uninterpretable" in combined
     assert "do not independently validate" in combined
+
+def test_side_by_side_v1_migration_requires_explicit_provenance() -> None:
+    readme = _between(
+        _read("README.md"), "### Original-app run migration", "## Run the server directly"
+    )
+
+    assert "including a v1 checkout in a sibling folder" in readme
+    assert "set `WG1_ROOT`" in readme
+    assert "Automatic sibling discovery is deliberately disabled" in " ".join(
+        readme.split()
+    )
+    assert "looks for" in readme and "in sibling checkout folders" not in readme
+
+
+def test_user_guide_distinguishes_startup_returns_from_new_arrivals() -> None:
+    guide = _read("docs/USER-GUIDE.md")
+    workflow = _between(
+        guide,
+        "A newly arriving return",
+        "### Starting from a model drawn in Fusion",
+    )
+    normalized = " ".join(workflow.split())
+
+    assert "manually select from the History list" in normalized
+    assert "prepared automatically" in normalized
+    assert "On startup" in normalized
+    assert "Ready to prepare" in normalized
+    assert "Prepare simulation" in normalized
+    assert "appears only as the retry" not in normalized

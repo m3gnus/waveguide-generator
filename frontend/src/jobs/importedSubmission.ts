@@ -10,7 +10,7 @@ import {
   useCadReturnStore,
 } from '../stores/cadReturn';
 import type { CadDriveChannel } from '../stores/cadReturn';
-import { parseFrequencyList, useSolveOptionsStore } from '../stores/solveOptions';
+import { parseFrequencyList, polarValidationError, useSolveOptionsStore } from '../stores/solveOptions';
 
 const POLAR_AXIS_ORDER = ['horizontal', 'vertical', 'diagonal'] as const;
 
@@ -70,6 +70,8 @@ export function importedSubmissionBlocker(
     || typeof volume !== 'object'
     || (volume as Record<string, unknown>).required !== false
   ));
+  const directivityError = polarValidationError(solveStore.polar);
+  if (directivityError) return directivityError;
   if (!state.ingestRecord) return 'Ingest a CAD return before solving.';
   if (state.needsIngest) return state.ingestStaleReason ?? 'Sizing or source selection changed. Re-ingest before solving.';
   if (unacknowledged.length) {

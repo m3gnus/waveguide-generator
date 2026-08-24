@@ -24,6 +24,7 @@ let root: Root;
 const requested: string[] = [];
 
 beforeEach(() => {
+  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   resetDesignStore();
   resetDocumentStore();
   resetSolveOptionsStore();
@@ -79,7 +80,71 @@ function sendRequests(): string[] {
   return requested.filter((path) => path === '/api/cad-workspace/path' || path === '/api/export/wglink');
 }
 
+function openedResponse(r: number) {
+  return {
+    dialect: 'ath', migrationsApplied: [],
+    passthrough: { keysPreserved: [], blocksPreserved: [], keyCount: 0, blockCount: 0 },
+    design: { ...useDesignStore.getState().design, R: r },
+    cadlink: { identity: null, classification: 'missing', adoptionCandidate: null },
+  };
+}
+
+async function chooseLocalDesign(file: { name: string; text: () => Promise<string> }) {
+  const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+  Object.defineProperty(input, 'files', { configurable: true, value: [file] });
+  await act(async () => { input.dispatchEvent(new Event('change', { bubbles: true })); });
+}
+
 describe('design file export menu', () => {
+  it('confirms only after parsing before replacing an unsaved local design', async () => {
+    useDesignStore.getState().updateField('R', 321);
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      if (String(input) === '/api/design/open') return new Response(JSON.stringify(openedResponse(999)), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      return new Response('not found', { status: 404 });
+    });
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
+    act(() => root.render(<DesignFileMenu/>));
+
+    await chooseLocalDesign({ name: 'replacement.cfg', text: async () => 'R = 999' });
+    expect(confirm).toHaveBeenLastCalledWith('Discard unsaved changes and open replacement.cfg?');
+    expect(useDesignStore.getState().design.R).toBe(321);
+    expect(useDesignStore.getState().designRevision).toBe(2);
+
+    await chooseLocalDesign({ name: 'replacement.cfg', text: async () => 'R = 999' });
+    expect(useDesignStore.getState().design.R).toBe(999);
+    expect(useDocumentStore.getState()).toMatchObject({ designName: 'replacement', savedRevision: 3 });
+  });
+
+  it('does not apply a delayed open response over an edit made while it was pending', async () => {
+    let resolveOpen!: (response: Response) => void;
+    const pendingOpen = new Promise<Response>((resolve) => { resolveOpen = resolve; });
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL) => (
+      String(input) === '/api/design/open'
+        ? pendingOpen
+        : Promise.resolve(new Response('not found', { status: 404 }))
+    ));
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    act(() => root.render(<DesignFileMenu/>));
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+    Object.defineProperty(input, 'files', {
+      configurable: true,
+      value: [{ name: 'delayed.cfg', text: async () => 'R = 999' }],
+    });
+    act(() => input.dispatchEvent(new Event('change', { bubbles: true })));
+    await Promise.resolve();
+
+    act(() => useDesignStore.getState().updateField('R', 321));
+    await act(async () => {
+      resolveOpen(new Response(JSON.stringify(openedResponse(999)), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(confirm).toHaveBeenCalledWith('Discard unsaved changes and open delayed.cfg?');
+    expect(useDesignStore.getState().design.R).toBe(321);
+    expect(useDocumentStore.getState().designName).toBe('');
+  });
+
   it('imports standalone meshes from the file menu instead of the viewport toolbar', async () => {
     act(() => root.render(<DesignFileMenu/>));
     const input = container.querySelector<HTMLInputElement>('[aria-label="Import Gmsh mesh file"]');

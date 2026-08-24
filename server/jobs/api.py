@@ -3,24 +3,23 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Collection
+from collections.abc import Awaitable, Callable, Collection, Iterator, Mapping
 import json
 from pathlib import Path
 import re
-from typing import Annotated, Any, Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request, WebSocket
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, PlainTextResponse, Response
+from fastapi.responses import JSONResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.routing import APIRoute
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from server.jobs.events import CLOSE_ORIGIN_REJECTED, JobsProtocol
 from server.integration.contracts import ErrorEnvelope, error_envelope
 from server.jobs.models import (
-    CadIdentityProvenance,
     ChannelCombineSpec,
     ClearFailedResponse,
     DeleteResponse,
@@ -33,6 +32,7 @@ from server.jobs.models import (
     SolveRequest,
     StopResponse,
 )
+from server.jobs.result_contracts import ResultEnvelope
 from server.solver.errors import RecombineError
 from server.solver.field_plane import (
     FieldPlaneInvalidSelection,
@@ -59,59 +59,54 @@ from server.jobs.runtime import (
     UnknownEngineError,
     resolve_submission,
 )
-from server.jobs.store import JobStore
+from server.jobs.store import JobStore, SubmissionConflictError
 from server.engines.registry import EngineRegistry
 from server.platform.origin import websocket_request_allowed
 
 
-class ExtensibleResultModel(BaseModel):
-    model_config = ConfigDict(extra="allow")
+def _json_tokens(value: Any) -> Iterator[str]:
+    """Yield valid JSON without encoding one unbounded string or array at once."""
+
+    if isinstance(value, str):
+        yield '"'
+        for offset in range(0, len(value), 64 * 1024):
+            encoded = json.dumps(value[offset : offset + 64 * 1024], allow_nan=False)
+            yield encoded[1:-1]
+        yield '"'
+    elif isinstance(value, Mapping):
+        yield "{"
+        for index, (key, member) in enumerate(value.items()):
+            if index:
+                yield ","
+            yield json.dumps(str(key), allow_nan=False)
+            yield ":"
+            yield from _json_tokens(member)
+        yield "}"
+    elif isinstance(value, (list, tuple)):
+        yield "["
+        for index, member in enumerate(value):
+            if index:
+                yield ","
+            yield from _json_tokens(member)
+        yield "]"
+    else:
+        yield json.dumps(value, allow_nan=False, separators=(",", ":"))
 
 
-class ResultProvenance(BaseModel):
-    model_config = ConfigDict(extra="allow")
+def _json_chunks(value: Any) -> Iterator[bytes]:
+    """Coalesce tokens into bounded chunks for StreamingResponse's threadpool."""
 
-    schema_version: Literal[1]
-    wg_version: str
-    dependency_shas: dict[str, str]
-    request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    geometry_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    solve_options_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    request_identity: Literal["execution"]
-    execution_request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    execution_geometry_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    execution_solve_options_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    effective_request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    effective_geometry_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    effective_solve_options_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    resolved_engine: str
-    cad_identity: CadIdentityProvenance | None = None
-
-
-class ParametricResultEnvelope(ExtensibleResultModel):
-    result_kind: Literal["parametric"]
-    result_contract_version: Literal[1]
-    client_request_id: str | None
-    client_metadata: dict[str, JsonValue]
-    provenance: ResultProvenance
-    metadata: dict[str, Any]
-
-
-class MultiChannelResultEnvelope(ExtensibleResultModel):
-    result_kind: Literal["multi_channel"]
-    result_contract_version: Literal[2]
-    client_request_id: str | None
-    client_metadata: dict[str, JsonValue]
-    provenance: ResultProvenance
-    metadata: dict[str, Any]
-    channels: dict[str, dict[str, Any]]
-    channel_order: list[str]
-
-
-ResultEnvelope = Annotated[
-    ParametricResultEnvelope | MultiChannelResultEnvelope,
-    Field(discriminator="result_kind"),
-]
+    buffered: list[str] = []
+    buffered_characters = 0
+    for token in _json_tokens(value):
+        buffered.append(token)
+        buffered_characters += len(token)
+        if buffered_characters >= 256 * 1024:
+            yield "".join(buffered).encode("utf-8")
+            buffered.clear()
+            buffered_characters = 0
+    if buffered:
+        yield "".join(buffered).encode("utf-8")
 
 
 class RadiationImpedanceAperture(BaseModel):
@@ -337,6 +332,7 @@ def create_jobs_router(
         response_model=SolveAccepted,
         response_model_exclude_none=True,
         responses={
+            409: {"model": ErrorEnvelope, "description": "Submission key conflict"},
             422: {"model": ErrorEnvelope, "description": "Solve request refused"},
             503: {"model": ErrorEnvelope, "description": "Engine unavailable"},
         },
@@ -373,6 +369,14 @@ def create_jobs_router(
             return _error_response(
                 503,
                 code="engine_unavailable",
+                stage="submission",
+                message=str(exc),
+                client_request_id=body.client_request_id,
+            )
+        except SubmissionConflictError as exc:
+            return _error_response(
+                409,
+                code="submission_key_conflict",
                 stage="submission",
                 message=str(exc),
                 client_request_id=body.client_request_id,
@@ -471,8 +475,8 @@ def create_jobs_router(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except JobResourceUnavailableError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return Response(
-            content=json.dumps(snapshot, allow_nan=False),
+        return StreamingResponse(
+            _json_chunks(snapshot),
             media_type="application/json",
             headers={
                 "Cache-Control": "no-store",

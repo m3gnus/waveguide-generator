@@ -1,4 +1,4 @@
-import type { JobResults } from '../api/results';
+import type { ResultData } from '../api/results';
 import type { ResultPayload } from './types';
 
 export interface SourceFrequencyValidity {
@@ -84,7 +84,7 @@ export function resultFrequencyValidity(
 }
 
 /** Nested combine warnings are advisory result evidence, not failed solves. */
-export function resultCombineWarnings(result: JobResults): string[] {
+export function resultCombineWarnings(result: ResultData): string[] {
   const combine = record(record(result.metadata)?.combine);
   if (!Array.isArray(combine?.warnings)) return [];
   return combine.warnings.flatMap((warning) => {

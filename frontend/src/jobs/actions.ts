@@ -339,11 +339,16 @@ export async function submitImported(
   submission: ImportedSolveSubmission,
   fetcher: typeof fetch = fetch,
   label = 'cad-import',
+  clientRequestId?: string,
 ): Promise<string> {
   const response = await fetcher('/api/solve', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...submission, label }),
+    body: JSON.stringify({
+      ...submission,
+      label,
+      ...(clientRequestId ? { client_request_id: clientRequestId } : {}),
+    }),
   });
   if (!response.ok) throw new Error(await detail(response));
   return ((await response.json()) as { job_id: string }).job_id;

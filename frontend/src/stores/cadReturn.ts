@@ -95,7 +95,10 @@ interface CadReturnState {
   areaDriftOverrides: string[];
   areaDriftSourceIds: string[];
   exteriorOnly: boolean;
-  combineEnabled: boolean;
+  /** The user's explicit choice for the combined output, or null while they
+   * have made none. Null is not "off": `combineEnabledEffective` reads it as
+   * on for a multi-driver return, which is what the rail and the wire use. */
+  combineEnabled: boolean | null;
   combineCrossoversHz: Record<string, number>;
   combineLevelMatch: boolean | null;
   combineAlign: boolean | null;
@@ -134,6 +137,12 @@ interface CadReturnState {
   setExteriorOnly: (enabled: boolean) => void;
   setCombineEnabled: (enabled: boolean) => void;
   setCombineCrossover: (pairKey: string, hz: number) => void;
+  /** Adopt the crossovers a recombined result was computed with, so the dock
+   * and the rail hold one setting and the next solve starts where the last
+   * recombine left off. The run must carry the active return's immutable ingest
+   * id (the same identity `runMatchesContext` uses); matching channel ids alone
+   * are not lineage. Pairs naming channels this return has not got are ignored. */
+  setCombineCrossoversFromResult: (resultIngestId: string | null, members: string[], crossoversHz: number[]) => void;
   setCombineLevelMatch: (value: boolean | null) => void;
   setCombineAlign: (value: boolean | null) => void;
   setChannelDriverEnabled: (channelId: string, enabled: boolean) => void;
@@ -145,7 +154,15 @@ interface CadReturnState {
 
 const solveProfileStorage = namespaceStorage('cadSolveProfiles');
 const acknowledgedFindingStorage = namespaceStorage('cadAcknowledgedFindings');
-const SOLVE_PROFILE_STORAGE_VERSION = 1;
+const SOLVE_PROFILE_STORAGE_VERSION = 2;
+/**
+ * Version 1 stored the combined output as a plain boolean whose `false` was
+ * the old default rather than a decision. The combined output now defaults on
+ * for a multi-driver return, so a version 1 `false` is restored as "no choice
+ * yet" — otherwise every profile written before this change would silently
+ * keep the combined output off while the rail says it is on by default.
+ */
+const LEGACY_SOLVE_PROFILE_VERSION = 1;
 const ACKNOWLEDGED_FINDING_STORAGE_VERSION = 1;
 const MAX_SOLVE_PROFILES = 20;
 const MAX_ACKNOWLEDGED_FINDING_SETS = 20;
@@ -363,7 +380,7 @@ function parseSolveSettings(value: unknown, inventory: SourceInventoryEntry[]): 
   if (typeof value.rigidSizeMm !== 'number' || !Number.isFinite(value.rigidSizeMm)
     || typeof value.transitionMm !== 'number' || !Number.isFinite(value.transitionMm)
     || typeof value.exteriorOnly !== 'boolean'
-    || typeof value.combineEnabled !== 'boolean'
+    || (value.combineEnabled !== null && typeof value.combineEnabled !== 'boolean')
     || (value.combineLevelMatch !== null && typeof value.combineLevelMatch !== 'boolean')
     || (value.combineAlign !== null && typeof value.combineAlign !== 'boolean')
     || typeof value.driveVoltageV !== 'number' || !Number.isFinite(value.driveVoltageV)
@@ -407,11 +424,13 @@ function readStoredSolveProfiles(): StoredSolveProfile[] {
     const raw = solveProfileStorage.getItem('cadSolveProfiles');
     if (raw === null) return [];
     const parsed = JSON.parse(raw) as unknown;
-    if (!isObject(parsed) || parsed.version !== SOLVE_PROFILE_STORAGE_VERSION
+    if (!isObject(parsed)
+      || (parsed.version !== SOLVE_PROFILE_STORAGE_VERSION && parsed.version !== LEGACY_SOLVE_PROFILE_VERSION)
       || !Array.isArray(parsed.profiles) || parsed.profiles.length > MAX_SOLVE_PROFILES) {
       dropStoredSolveProfiles();
       return [];
     }
+    const legacyCombineChoice = parsed.version === LEGACY_SOLVE_PROFILE_VERSION;
     const profiles: StoredSolveProfile[] = [];
     for (const value of parsed.profiles) {
       if (!isObject(value) || typeof value.key !== 'string'
@@ -431,7 +450,14 @@ function readStoredSolveProfiles(): StoredSolveProfile[] {
         dropStoredSolveProfiles();
         return [];
       }
-      profiles.push({ key: value.key, ...identity, inventory, settings });
+      profiles.push({
+        key: value.key,
+        ...identity,
+        inventory,
+        settings: legacyCombineChoice && settings.combineEnabled === false
+          ? { ...settings, combineEnabled: null }
+          : settings,
+      });
     }
     if (new Set(profiles.map(({ key }) => key)).size !== profiles.length) {
       dropStoredSolveProfiles();
@@ -717,12 +743,12 @@ function retainedChannelDrivers(
   state: Pick<CadReturnState, 'channelDrivers' | 'driveChannels'>,
   nextChannels: CadDriveChannel[],
 ): Record<string, ChannelDriverForm> {
-  const before = new Map(state.driveChannels.map((channel) => [channel.id, channel.source_ids.join(' ')]));
+  const before = new Map(state.driveChannels.map((channel) => [channel.id, channel.source_ids.join('\u0000')]));
   return Object.fromEntries(Object.entries(state.channelDrivers).filter(([id]) => {
     const next = nextChannels.find((channel) => channel.id === id);
     if (!next || !channelAcceptsDriver(next)) return false;
     const previousMembers = before.get(id);
-    return previousMembers === undefined || previousMembers === next.source_ids.join(' ');
+    return previousMembers === undefined || previousMembers === next.source_ids.join('\u0000');
   }));
 }
 
@@ -745,7 +771,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
   ...initialFromBundle(null),
   areaDriftSourceIds: [],
   exteriorOnly: false,
-  combineEnabled: false,
+  combineEnabled: null,
   combineCrossoversHz: {},
   combineLevelMatch: null,
   combineAlign: null,
@@ -768,7 +794,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
       selectedBundle,
       ...initialFromBundle(selectedBundle),
       exteriorOnly: false,
-      combineEnabled: false,
+      combineEnabled: null,
       combineCrossoversHz: {},
       combineLevelMatch: null,
       combineAlign: null,
@@ -800,7 +826,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
         selectedBundle: bundle,
         ...initialFromBundle(bundle),
         exteriorOnly: false,
-        combineEnabled: false,
+        combineEnabled: null,
         combineCrossoversHz: {},
         combineLevelMatch: null,
         combineAlign: null,
@@ -988,6 +1014,23 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => ({
     set((state) => ({ combineCrossoversHz: { ...state.combineCrossoversHz, [pairKey]: hz } }));
     saveSolveProfile(get());
   },
+  setCombineCrossoversFromResult: (resultIngestId, members, crossoversHz) => {
+    if (resultIngestId === null || resultIngestId !== get().ingestRecord?.ingest_id) return;
+    set((state) => {
+      const known = new Set(state.driveChannels.map((channel) => channel.id));
+      const adopted = members.slice(0, -1).flatMap((lower, index): Array<[string, number]> => {
+        const upper = members[index + 1];
+        const hz = crossoversHz[index];
+        return known.has(lower) && known.has(upper) && typeof hz === 'number' && Number.isFinite(hz)
+          ? [[`${lower}→${upper}`, hz]]
+          : [];
+      });
+      return adopted.length
+        ? { combineCrossoversHz: { ...state.combineCrossoversHz, ...Object.fromEntries(adopted) } }
+        : {};
+    });
+    saveSolveProfile(get());
+  },
   setCombineLevelMatch: (combineLevelMatch) => { set({ combineLevelMatch }); saveSolveProfile(get()); },
   setCombineAlign: (combineAlign) => { set({ combineAlign }); saveSolveProfile(get()); },
   setChannelDriverEnabled: (channelId, enabled) => {
@@ -1124,9 +1167,74 @@ export function assignableChannelIds(ids: readonly string[], coupled: boolean): 
   return coupled ? ids.filter((id) => id !== PASSIVE_CARDIOID_CHANNEL_ID) : [...ids];
 }
 
-export interface CombinePair { key: string; lower: string; upper: string; hz: number }
+export interface CombinePair {
+  key: string;
+  lower: string;
+  upper: string;
+  /** The frequency this pair submits: the user's value when they set one, else
+   * the role default, else the log-spaced in-sweep fallback. */
+  hz: number;
+  lowerRole: string | undefined;
+  upperRole: string | undefined;
+  /** The role-based default for this pair, or undefined when either end has no
+   * banded role. */
+  defaultHz: number | undefined;
+  /** Whether that role default lies outside the current sweep, in which case
+   * the log-spaced fallback is used instead: the server refuses a crossover
+   * outside the solved band (`SolveRequest.validate_combine_band`), so a
+   * default must never be the reason a solve is rejected. */
+  outsideSweep: boolean;
+}
 
+// Keep this ranking in sync with _BAND_ROLE_RANK in server/solver/metal.py.
 const ROLE_BAND_RANK: Record<string, number> = { LF: 0, MF: 1, HF: 2 };
+
+/** Canonicalize band roles without rewriting structural CAD roles. */
+function canonicalSourceRole(role: string | undefined): string {
+  const rawRole = role ?? '';
+  const bandRole = rawRole.trim().toUpperCase();
+  return ROLE_BAND_RANK[bandRole] !== undefined ? bandRole : rawRole;
+}
+
+/** What a speaker designer expects to see in the field before touching it.
+ * Keyed lowest band first, matching the chain's own order. */
+const ROLE_DEFAULT_HZ: Record<string, number> = {
+  'LF→MF': 100,
+  'MF→HF': 1_000,
+  'LF→HF': 1_000,
+};
+
+/** The default crossover for a pair of banded roles, or undefined when either
+ * end is unroled or the two share a band. */
+export function combineDefaultHz(
+  lowerRole: string | undefined,
+  upperRole: string | undefined,
+): number | undefined {
+  return lowerRole && upperRole ? ROLE_DEFAULT_HZ[`${lowerRole}→${upperRole}`] : undefined;
+}
+
+/** The band a channel speaks for: the lowest banded role among its sources,
+ * which is the same rank that orders the chain. Undefined when no source
+ * carries one. */
+export function combineChannelRole(
+  state: Pick<CadReturnState, 'driveChannels' | 'selectedBundle'>,
+  channelId: string,
+): string | undefined {
+  const sources = state.selectedBundle?.sources ?? [];
+  const channel = state.driveChannels.find((item) => item.id === channelId);
+  return (channel?.source_ids ?? [])
+    .map((id) => canonicalSourceRole(sources.find((source) => source.id === id)?.role))
+    .filter((role) => ROLE_BAND_RANK[role] !== undefined)
+    .sort((a, b) => ROLE_BAND_RANK[a] - ROLE_BAND_RANK[b])[0];
+}
+
+/** Whether the combined output is on: the user's explicit choice, or on by
+ * default for a return with two or more drive channels. */
+export function combineEnabledEffective(
+  state: Pick<CadReturnState, 'combineEnabled' | 'driveChannels'>,
+): boolean {
+  return state.combineEnabled ?? state.driveChannels.length >= 2;
+}
 
 /** Chain members ordered lowest band first, from the return's source roles.
  * Channels whose sources carry no banded role keep their listed position at
@@ -1139,7 +1247,7 @@ export function combineMembers(
   return [...state.driveChannels]
     .map((channel, index) => {
       const ranks = channel.source_ids
-        .map((id) => ROLE_BAND_RANK[sources.find((source) => source.id === id)?.role ?? ''])
+        .map((id) => ROLE_BAND_RANK[canonicalSourceRole(sources.find((source) => source.id === id)?.role)])
         .filter((rank): rank is number => rank !== undefined);
       return { id: channel.id, index, rank: ranks.length ? Math.min(...ranks) : Number.POSITIVE_INFINITY };
     })
@@ -1147,8 +1255,9 @@ export function combineMembers(
     .map((entry) => entry.id);
 }
 
-/** Adjacent chain pairs with log-spaced default crossovers inside the
- * current sweep, so an untouched form is submittable. */
+/** Adjacent chain pairs, defaulted by the roles of the two bands they join and
+ * falling back to a log-spaced frequency inside the current sweep, so an
+ * untouched form is both submittable and what a designer would have typed. */
 export function combineChain(
   state: Pick<CadReturnState, 'driveChannels' | 'selectedBundle' | 'combineCrossoversHz' | 'frequencyStartHz' | 'frequencyEndHz'>,
 ): CombinePair[] {
@@ -1159,8 +1268,23 @@ export function combineChain(
   return members.slice(0, -1).map((lower, index) => {
     const upper = members[index + 1];
     const key = `${lower}→${upper}`;
-    const fallback = Math.round(Math.exp(logStart + ((index + 1) * (logEnd - logStart)) / members.length));
-    return { key, lower, upper, hz: state.combineCrossoversHz[key] ?? fallback };
+    const spaced = Math.round(Math.exp(logStart + ((index + 1) * (logEnd - logStart)) / members.length));
+    const lowerRole = combineChannelRole(state, lower);
+    const upperRole = combineChannelRole(state, upper);
+    const defaultHz = combineDefaultHz(lowerRole, upperRole);
+    const outsideSweep = defaultHz !== undefined
+      && (defaultHz < state.frequencyStartHz || defaultHz > state.frequencyEndHz);
+    const fallback = defaultHz !== undefined && !outsideSweep ? defaultHz : spaced;
+    return {
+      key,
+      lower,
+      upper,
+      hz: state.combineCrossoversHz[key] ?? fallback,
+      lowerRole,
+      upperRole,
+      defaultHz,
+      outsideSweep,
+    };
   });
 }
 
@@ -1179,7 +1303,7 @@ export function combineLevelMatchDefault(
 export function combineWire(
   state: Pick<CadReturnState, 'combineEnabled' | 'driveChannels' | 'selectedBundle' | 'combineCrossoversHz' | 'combineLevelMatch' | 'combineAlign' | 'channelDrivers' | 'frequencyStartHz' | 'frequencyEndHz'>,
 ): { members: string[]; crossovers_hz: number[]; level_match: boolean; align: boolean } | undefined {
-  if (!state.combineEnabled) return undefined;
+  if (!combineEnabledEffective(state)) return undefined;
   const pairs = combineChain(state);
   if (!pairs.length) return undefined;
   return {
@@ -1216,7 +1340,7 @@ export function resetCadReturnStore(): void {
     ...initialFromBundle(null),
     areaDriftSourceIds: [],
     exteriorOnly: false,
-    combineEnabled: false,
+    combineEnabled: null,
     combineCrossoversHz: {},
     combineLevelMatch: null,
     combineAlign: null,

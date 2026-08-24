@@ -365,14 +365,6 @@ export function parameterSectionIsVisible(
   return definition.visibleWhen?.({ mode, design }) ?? true;
 }
 
-export const PARAMETER_SECTIONS: ParameterSection[] = PARAMETER_SECTION_DEFINITIONS.map(({ title }) => title);
-
-export function tabForParameterSection(section: ParameterSection): ParameterTab {
-  const definition = PARAMETER_SECTION_DEFINITIONS.find((item) => item.title === section);
-  if (!definition) throw new Error(`Unknown parameter section: ${section}`);
-  return definition.tab;
-}
-
 /** The 43 daggered v1 fields, the morph target exponent, and the two legacy four-value baffle tuples. */
 export const EXPRESSION_PARAMETER_IDS = new Set([
   'rosse.R', 'rosse.a', 'rosse.a0', 'rosse.r0', 'rosse.k', 'rosse.m', 'rosse.b', 'rosse.r', 'rosse.q', 'rosse.tmax',

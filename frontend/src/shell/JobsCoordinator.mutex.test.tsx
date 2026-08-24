@@ -2,6 +2,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
+import { compareSelection } from '../api/results';
 import { preferencesStore } from '../prefs/preferences';
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import type { ImportedSolveSubmission } from '../jobs/actions';
@@ -9,6 +10,7 @@ import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resolveOuterBodyMode } from '../design/ParamPanel';
 import { designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
+import { parkedSolveCommandStore } from '../stores/solveCommand';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
@@ -158,6 +160,8 @@ describe('solve invocation mutex', () => {
     mocks.solvePlanError = null;
     mocks.solvePlanPending = false;
     mocks.planSolveDesign.mockResolvedValue(mocks.solvePlan);
+    compareSelection.clear();
+    parkedSolveCommandStore.clear();
     publishJobs([]);
     resetCadReturnStore();
     importedMeshStore.clear();
@@ -174,7 +178,10 @@ describe('solve invocation mutex', () => {
     act(() => root.unmount());
     host.remove();
     publishJobs([]);
+    compareSelection.clear();
+    parkedSolveCommandStore.clear();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     vi.clearAllMocks();
     workspaceModeStore.setMode('parametric');
   });
@@ -339,6 +346,22 @@ describe('solve invocation mutex', () => {
     expect(solve.title).toBe('Solve current design with AUTO (AXISYM)');
   });
 
+  // A result picked by hand pins the primary slot, and pinning outlived the
+  // solve that came after it: every later run finished into a rail that still
+  // showed the old one. Pressing Solve is a request to see that solve, so the
+  // submission claims the slot for its own run; shell/ResultsPanel hands it
+  // over once that run has results.
+  it('claims the primary slot for the run it submits', async () => {
+    mocks.submitDesign.mockResolvedValue('fresh-run');
+    compareSelection.setPrimary('pinned-run');
+
+    await act(async () => { await jobsCoordinatorBridge.getSnapshot().run(designForFamily('OSSE')); });
+
+    expect(compareSelection.getSnapshot()).toMatchObject({
+      primary: 'pinned-run', following: false, awaiting: 'fresh-run',
+    });
+  });
+
   it('submits again after the first invocation resolves', async () => {
     mocks.submitDesign.mockResolvedValue('job');
     const design = designForFamily('OSSE');
@@ -492,6 +515,75 @@ describe('solve invocation mutex', () => {
     expect(mocks.submitImported.mock.calls.map((call) => call[2])).toEqual(['horn1', 'horn2', 'horn3']);
   });
 
+  it('keys a parked CAD command submission by its command id', async () => {
+    useCadReturnStore.setState({
+      selectedBundle: {
+        name: 'speaker.wgreturn', bundlePath: 'wgreturn/speaker.wgreturn',
+        modifiedAt: '2026-08-22T00:00:00Z', readable: true, documentName: 'Speaker',
+        requestId: null, sourceCount: 0, instanceCount: 0, designIds: [], sources: [],
+      },
+    });
+    parkedSolveCommandStore.park({
+      commandId: 'cmd-1', bundlePath: 'wgreturn/speaker.wgreturn', blockers: [],
+      parkedAt: '2026-08-22T00:00:00Z',
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      JSON.stringify({ state: 'accepted', cleared: true }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    )));
+    mocks.submitImported.mockResolvedValue('job-cad');
+
+    await act(async () => {
+      await jobsCoordinatorBridge.getSnapshot().runImported(importedSubmission('wgi_command'));
+    });
+
+    expect(mocks.submitImported.mock.calls[0][3]).toBe('cad-solve:cmd-1');
+    expect(parkedSolveCommandStore.getSnapshot().command).toBeNull();
+  });
+
+  it('replays the identical keyed request after acknowledgement persistence fails', async () => {
+    useCadReturnStore.setState({
+      selectedBundle: {
+        name: 'speaker.wgreturn', bundlePath: 'wgreturn/speaker.wgreturn',
+        modifiedAt: '2026-08-22T00:00:00Z', readable: true, documentName: 'Speaker',
+        requestId: null, sourceCount: 0, instanceCount: 0, designIds: [], sources: [],
+      },
+    });
+    parkedSolveCommandStore.park({
+      commandId: 'cmd-retry', bundlePath: 'wgreturn/speaker.wgreturn', blockers: [],
+      parkedAt: '2026-08-22T00:00:00Z',
+    });
+    let outcomeAttempt = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      outcomeAttempt += 1;
+      return outcomeAttempt === 1
+        ? new Response(JSON.stringify({ detail: 'ledger unavailable' }), {
+          status: 503, headers: { 'Content-Type': 'application/json' },
+        })
+        : new Response(JSON.stringify({ state: 'accepted', cleared: true }), {
+          status: 200, headers: { 'Content-Type': 'application/json' },
+        });
+    }));
+    mocks.submitImported.mockResolvedValue('job-existing');
+    const submission = importedSubmission('wgi_command');
+
+    await act(async () => {
+      await expect(jobsCoordinatorBridge.getSnapshot().runImported(submission))
+        .rejects.toThrow('acknowledgement failed');
+    });
+    expect(parkedSolveCommandStore.getSnapshot().command?.commandId).toBe('cmd-retry');
+    await act(async () => {
+      await expect(jobsCoordinatorBridge.getSnapshot().runImported(submission))
+        .resolves.toBe('job-existing');
+    });
+
+    expect(mocks.submitImported.mock.calls.map((call) => [call[2], call[3]])).toEqual([
+      ['horn1', 'cad-solve:cmd-retry'],
+      ['horn1', 'cad-solve:cmd-retry'],
+    ]);
+    expect(parkedSolveCommandStore.getSnapshot().command).toBeNull();
+  });
+
   it('submits a full CAD solve from the main control without mounting CadLinkPanel', async () => {
     const ingestId = 'wgi_01J5A8QK3M9T2XVBH0RD7NWE6C';
     const record = {
@@ -636,6 +728,24 @@ describe('solve invocation mutex', () => {
     expect(solve.textContent).toBe('Solve CAD Link');
     expect(solve.disabled).toBe(true);
     expect(solve.title).toBe('Ingest a CAD return before solving.');
+  });
+
+  it.each([
+    ['equal sweep endpoints', { angleStart: 0, angleEnd: 0 }],
+    ['zero angular step', { angleStep: 0 }],
+    ['short measurement distance', { distance: 0.05 }],
+    ['no display planes', { enabledAxes: [] }],
+    ['more than 721 samples', { angleStart: 0, angleEnd: 180, angleStep: 0.1 }],
+  ])('disables the global Solve action in parametric and CAD modes for %s', async (_name, invalid) => {
+    await act(async () => { root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>); });
+    const solve = host.querySelector<HTMLButtonElement>('button')!;
+    act(() => useSolveOptionsStore.getState().updatePolar(invalid));
+    expect(solve.disabled).toBe(true);
+    expect(solve.title).toMatch(/Directivity|directivity/);
+
+    act(() => workspaceModeStore.setMode('cad'));
+    expect(solve.disabled).toBe(true);
+    expect(solve.title).toMatch(/Directivity|directivity/);
   });
 
   it('guards two fast retries routed through the coordinator bridge', async () => {

@@ -93,8 +93,21 @@ def _fingerprint_hash(value: object) -> str | None:
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
+def _read_return_manifest(returned_bundle: Path | None) -> Mapping[str, Any] | None:
+    if returned_bundle is None:
+        return None
+    try:
+        resolved = returned_bundle.expanduser().resolve()
+        if resolved.is_symlink() or not resolved.is_dir() or resolved.suffix != ".wgreturn":
+            return None
+        manifest = json.loads((resolved / "wgreturn.json").read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+    return manifest if isinstance(manifest, Mapping) else None
+
+
 def _returned_fingerprint_hash(
-    returned_bundle: Path | None,
+    manifest: Mapping[str, Any] | None,
     *,
     instance_id: str,
     design_id: str | None,
@@ -107,16 +120,9 @@ def _returned_fingerprint_hash(
     every design/export field while carrying different bodies.
     """
 
-    if returned_bundle is None:
+    if manifest is None:
         return None
-    try:
-        resolved = returned_bundle.expanduser().resolve()
-        if resolved.is_symlink() or not resolved.is_dir() or resolved.suffix != ".wgreturn":
-            return None
-        manifest = json.loads((resolved / "wgreturn.json").read_text(encoding="utf-8"))
-        instances = manifest.get("instances")
-    except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError):
-        return None
+    instances = manifest.get("instances")
     if not isinstance(instances, list):
         return None
     exact = [
@@ -144,50 +150,31 @@ def _returned_fingerprint_hash(
     return None
 
 
-def _returned_document_signature_hash(returned_bundle: Path | None) -> str | None:
-    if returned_bundle is None:
+def _returned_document_signature_hash(manifest: Mapping[str, Any] | None) -> str | None:
+    if manifest is None:
         return None
-    try:
-        resolved = returned_bundle.expanduser().resolve()
-        if resolved.is_symlink() or not resolved.is_dir() or resolved.suffix != ".wgreturn":
-            return None
-        manifest = json.loads((resolved / "wgreturn.json").read_text(encoding="utf-8"))
-        assembly = manifest.get("assembly")
-    except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError):
-        return None
+    assembly = manifest.get("assembly")
     if not isinstance(assembly, Mapping):
         return None
     return _string(assembly.get("signature_hash"))
 
 
-def _returned_scope_selection(returned_bundle: Path | None) -> str | None:
-    if returned_bundle is None:
+def _returned_scope_selection(manifest: Mapping[str, Any] | None) -> str | None:
+    if manifest is None:
         return None
-    try:
-        resolved = returned_bundle.expanduser().resolve()
-        if resolved.is_symlink() or not resolved.is_dir() or resolved.suffix != ".wgreturn":
-            return None
-        manifest = json.loads((resolved / "wgreturn.json").read_text(encoding="utf-8"))
-        scope = manifest.get("scope")
-    except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError):
-        return None
+    scope = manifest.get("scope")
     if not isinstance(scope, Mapping):
         return None
     return _string(scope.get("selection"))
 
 
-def _returned_document_summary(returned_bundle: Path | None) -> tuple[int | None, str | None]:
-    if returned_bundle is None:
+def _returned_document_summary(
+    manifest: Mapping[str, Any] | None,
+) -> tuple[int | None, str | None]:
+    if manifest is None:
         return None, None
-    try:
-        resolved = returned_bundle.expanduser().resolve()
-        if resolved.is_symlink() or not resolved.is_dir() or resolved.suffix != ".wgreturn":
-            return None, None
-        manifest = json.loads((resolved / "wgreturn.json").read_text(encoding="utf-8"))
-        assembly = manifest.get("assembly")
-        raw_sources = manifest.get("sources")
-    except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError):
-        return None, None
+    assembly = manifest.get("assembly")
+    raw_sources = manifest.get("sources")
     body_count = assembly.get("n_bodies_expected") if isinstance(assembly, Mapping) else None
     if isinstance(body_count, bool) or not isinstance(body_count, int):
         body_count = None
@@ -273,6 +260,7 @@ def read_fusion_status(
     instance_id: str | None = None,
     process_running: bool = False,
     returned_bundle: Path | None = None,
+    returned_manifest: Mapping[str, Any] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """Classify the active Fusion document against the design on screen."""
@@ -375,15 +363,17 @@ def read_fusion_status(
     base["selectedInstanceId"] = link["instanceId"]
     fusion_hash = link.get("designHash")
     current_body_hash = link.get("bodyFingerprintHash")
+    if returned_manifest is None:
+        returned_manifest = _read_return_manifest(returned_bundle)
     returned_body_hash = _returned_fingerprint_hash(
-        returned_bundle,
+        returned_manifest,
         instance_id=str(link["instanceId"]),
         design_id=design_id,
     )
     current_document_hash = link.get("documentSignatureHash")
-    returned_document_hash = _returned_document_signature_hash(returned_bundle)
-    returned_scope_selection = _returned_scope_selection(returned_bundle)
-    returned_body_count, returned_source_hash = _returned_document_summary(returned_bundle)
+    returned_document_hash = _returned_document_signature_hash(returned_manifest)
+    returned_scope_selection = _returned_scope_selection(returned_manifest)
+    returned_body_count, returned_source_hash = _returned_document_summary(returned_manifest)
     # WGLink's heartbeat describes the document root. A scoped return describes
     # only the selected subtree, so none of the document-level aggregates can
     # be compared meaningfully. ``None`` retains compatibility for callers that

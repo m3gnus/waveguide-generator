@@ -1,5 +1,6 @@
 import { downloadBlob, downloadText } from '../api/designIo';
 import type { CadIdentityProvenance, JobItem } from '../api/jobsSocket';
+import { placeRunCadDocument } from '../api/cadProjects';
 import { fetchJobArchiveSnapshot, fetchRadiationImpedancePresentation, type RadiationImpedancePresentation } from '../api/results';
 import { archiveFolderForJob, exportStemForJob, exportSubdirectoryForJob } from '../jobs/exportNaming';
 import { buildDesignRecord, buildRunRecord } from '../jobs/runArchive';
@@ -304,15 +305,6 @@ export interface WorkspaceWriteResponse {
   files: string[];
 }
 
-async function blobBase64(blob: Blob): Promise<string> {
-  const bytes = new Uint8Array(await blob.arrayBuffer());
-  const chunks: string[] = [];
-  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
-    chunks.push(String.fromCharCode(...bytes.subarray(offset, offset + 0x8000)));
-  }
-  return btoa(chunks.join(''));
-}
-
 function blobFromBase64(content: string, type = 'application/octet-stream'): Blob {
   const decoded = atob(content);
   const bytes = new Uint8Array(decoded.length);
@@ -331,7 +323,7 @@ function blobFromBase64(content: string, type = 'application/octet-stream'): Blo
  * chart preferences change the bytes too, so every repeat differed and the
  * whole bundle was rejected with a 409.
  */
-export type ExistingFilePolicy = 'merge_identical' | 'overwrite';
+export type ExistingFilePolicy = 'reject' | 'merge_identical' | 'overwrite';
 
 /** The folder a bundle is written to, which callers may group by design. */
 export function workspaceSubdirectory(context: ExportContext): string {
@@ -344,14 +336,23 @@ export async function writeWorkspaceFiles(
   fetcher: typeof fetch = fetch,
   existing: ExistingFilePolicy = 'merge_identical',
 ): Promise<WorkspaceWriteResponse> {
-  const encoded = await Promise.all(members.map(async ({ filename, blob }) => ({
-    relative_path: filename,
-    content_base64: await blobBase64(blob),
-  })));
+  const body = new FormData();
+  body.append('subdirectory', subdirectory);
+  body.append('existing', existing);
+  members.forEach(({ filename }) => body.append('relative_path', filename));
+  const compatibleBlobs = await Promise.all(members.map(async ({ blob }) => {
+    const crossRealmBlob = blob as unknown as {
+      arrayBuffer: () => Promise<ArrayBuffer>;
+      type: string;
+    };
+    return blob instanceof Blob
+      ? blob
+      : new Blob([await crossRealmBlob.arrayBuffer()], { type: crossRealmBlob.type });
+  }));
+  members.forEach(({ filename }, index) => body.append('file', compatibleBlobs[index], filename));
   const response = await fetcher('/api/workspace/write-export', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ subdirectory, members: encoded, existing }),
+    body,
   });
   if (!response.ok) throw await responseError(response);
   return response.json() as Promise<WorkspaceWriteResponse>;
@@ -574,16 +575,16 @@ async function writeManualPolarFrd(
     workspace = await selectResponse.json() as { selected?: boolean };
     if (!workspace.selected) throw new Error('Workspace selection was cancelled. No files were written.');
   }
-  const response = await fetcher('/api/workspace/write-export', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      subdirectory: workspaceSubdirectory(context),
-      members: files.map(({ filename, text }) => ({ relative_path: filename, text })),
-    }),
-  });
-  if (!response.ok) throw await responseError(response);
-  return ((await response.json()) as WorkspaceWriteResponse).files;
+  const written = await writeWorkspaceFiles(
+    workspaceSubdirectory(context),
+    files.map(({ filename, text }) => ({
+      filename,
+      blob: new Blob([text], { type: 'text/plain;charset=utf-8' }),
+    })),
+    fetcher,
+    'reject',
+  );
+  return written.files;
 }
 
 export async function runExportFormat(format: ExportFormat, context: ExportContext): Promise<string[]> {
@@ -956,5 +957,13 @@ export async function archiveRunToWorkspace(
   const pointer = await writeWorkspaceFiles(
     archiveFolderForJob(archiveJob), [textFile(buildDesignRecord(archiveJob))], fetcher, 'overwrite',
   );
+  // The captured Fusion model, when the capture setting files one per run. It
+  // is a convenience copy of something already archived at project level, so a
+  // failure here is reported and dropped rather than failing the archive.
+  try {
+    await placeRunCadDocument(archiveJob, subdirectory, exportStemForJob(archiveJob), fetcher);
+  } catch (error) {
+    console.warn('Could not file the run\u2019s CAD document', error);
+  }
   return [...bundle.files, ...mesh.files, ...record.files, ...pointer.files];
 }

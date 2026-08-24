@@ -572,6 +572,23 @@ def _record(mesh_path: Path, *, findings: list[dict[str, Any]] | None = None) ->
     }
 
 
+def _roled_record(mesh_path: Path) -> dict[str, Any]:
+    """A record whose sources carry driver bands, a name, and a rigid role.
+
+    ``left`` drives source-a and source-b, ``right`` drives source-c, so this
+    exercises a multi-source channel taking the first band it finds beside a
+    structural role that names no driver.
+    """
+
+    record = _record(mesh_path)
+    record["sources"] = [
+        {"id": "source-a", "required": True, "role": "hf", "label": "HF throat"},
+        {"id": "source-b", "required": True, "role": "rigid"},
+        {"id": "source-c", "required": False, "role": "LF"},
+    ]
+    return record
+
+
 def _identity_record_changes() -> dict[str, Any]:
     matrix = [
         [1.0, 0.0, 0.0, 0.0],
@@ -640,13 +657,32 @@ class _AlwaysRegistry:
 
 
 async def _runtime_fixture(
-    tmp_path: Path, record_changes: dict[str, Any] | None = None
+    tmp_path: Path,
+    record_changes: dict[str, Any] | None = None,
+    lineage_cad_names: dict[str, str | None] | None = None,
 ) -> tuple[JobRuntime, str, dict[str, Any]]:
     mesh_path = tmp_path / "imported.msh"
     mesh_path.write_text("$MeshFormat\n2.2 0 8\n$EndMeshFormat\n", encoding="utf-8")
     record = _record(mesh_path)
     record.update(record_changes or {})
     cad_store = CadLinkStore(tmp_path / "cadlink.db")
+    if lineage_cad_names is not None:
+        saved = cad_store.save(
+            requested=None,
+            design_hash="sha256:" + "5" * 64,
+            filename="anchored.cfg",
+            snapshot_builder=lambda identity: (
+                f"CadLink = {{\nDesignId = {identity.design_id}\n}}\n"
+            ),
+            saved_at="2026-08-20T12:00:00Z",
+        )
+        identity = saved["identity"]
+        record["anchor"]["design_id"] = identity.design_id
+        cad_store.record_lineage_cad_names(
+            identity.lineage_id,
+            bundle_stem=lineage_cad_names.get("bundle_stem"),
+            archive_stem=lineage_cad_names.get("archive_stem"),
+        )
 
     def build(ingest_id: str, created_at: str) -> str:
         return json.dumps({**record, "ingest_id": ingest_id, "created_at": created_at})
@@ -662,6 +698,39 @@ async def _runtime_fixture(
         cadlink_store=cad_store,
     )
     return runtime, str(row["ingest_id"]), record
+
+
+@pytest.mark.parametrize(
+    ("bundle_stem", "archive_stem", "expected"),
+    [
+        ("old-bundle-name", "claimed-archive-name", "claimed-archive-name"),
+        (None, "archive-without-bundle", "archive-without-bundle"),
+        ("legacy-bundle-name", None, "legacy-bundle-name"),
+    ],
+)
+def test_imported_jobs_use_the_lineage_archive_stem_before_legacy_bundle_stem(
+    tmp_path: Path,
+    bundle_stem: str | None,
+    archive_stem: str | None,
+    expected: str,
+) -> None:
+    async def scenario() -> None:
+        runtime, ingest_id, _ = await _runtime_fixture(
+            tmp_path,
+            lineage_cad_names={
+                "bundle_stem": bundle_stem,
+                "archive_stem": archive_stem,
+            },
+        )
+        try:
+            job_id = await runtime.submit(_request(ingest_id))
+            row = runtime.store.get_job_row(job_id)
+            assert row is not None
+            assert runtime._serialize_job(row)["cad_source"]["archive_stem"] == expected
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
 
 
 def test_coupled_cardioid_topology_is_rejected_during_submission(
@@ -1181,18 +1250,22 @@ def test_single_channel_imported_stream_accepts_metal_entry_shapes(
     response = metal.solve_imported_metal_from_msh_text(
         "msh",
         request,
-        _record(mesh_path),
+        _roled_record(mesh_path),
         result_callback=lambda index, result: streamed.append((index, result)),
     )
 
     assert response["result_kind"] == "multi_channel"
     assert response["channel_order"] == ["left"]
+    assert response["channels"]["left"]["metadata"]["role"] == "HF"
     assert len(streamed) == 1
     assert streamed[0][0] == 0
     provisional = streamed[0][1]
     assert provisional["result_kind"] == "multi_channel"
     assert provisional["channel_order"] == ["left"]
     assert list(provisional["channels"]) == ["left"]
+    # A live frame is labelled the same way the finished channel is.
+    assert provisional["channels"]["left"]["metadata"]["role"] == "HF"
+    assert provisional["channels"]["left"]["metadata"]["source_labels"] == ["HF throat"]
 
 
 def test_multi_source_orchestration_uses_channel_bases_and_anchor_frame(
@@ -1316,6 +1389,8 @@ def test_channel_driver_scaling_includes_retained_pressure_and_neumann_traces(
     result = _native_result()
     result.surface_pressure_complex = np.ones((2, 3), dtype=np.complex128)
     result.surface_neumann_complex = np.full((2, 2), 4 - 2j, dtype=np.complex128)
+    result.radiated_power_surface_w = np.asarray([1.0, 2.0])
+    result.radiated_power_sphere_w = np.asarray([3.0, 4.0])
     channel = SimpleNamespace(
         source_ids=["source-a"],
         driver=object(),
@@ -1344,6 +1419,14 @@ def test_channel_driver_scaling_includes_retained_pressure_and_neumann_traces(
     np.testing.assert_array_equal(
         result.surface_neumann_complex,
         np.full((2, 2), 4 - 2j, dtype=np.complex128) * scales[:, None],
+    )
+    np.testing.assert_array_equal(
+        result.radiated_power_surface_w,
+        np.asarray([1.0, 2.0]) * np.square(np.abs(scales)),
+    )
+    np.testing.assert_array_equal(
+        result.radiated_power_sphere_w,
+        np.asarray([3.0, 4.0]) * np.square(np.abs(scales)),
     )
 
 
@@ -1424,7 +1507,11 @@ def test_execution_uses_job_mesh_after_import_cache_is_deleted(tmp_path: Path) -
             assert imported_record["_execution_mesh_source"] == "job-artifact"
             assert imported_record["_execution_msh_text"].startswith("$MeshFormat")
             return EngineRunResult(
-                results={"channels": {"left": {}, "right": {}}, "metadata": {}},
+                results={
+                    "channels": {"left": {}, "right": {}},
+                    "channel_order": ["left", "right"],
+                    "metadata": {},
+                },
                 msh_text=imported_record["_execution_msh_text"],
                 mesh_stats={"triangle_count": 3},
             )
@@ -1635,6 +1722,12 @@ def test_coupled_cardioid_adds_derived_channel_and_defers_mf_driver_once(
         assert sources == [{101: 1.0 + 0.0j}, {10: 1.0 + 0.0j}]
         mf = _native_result_3f()
         port = _native_result_3f()
+        mf.radiated_power_surface_w = np.asarray([1.0, 2.0, 3.0])
+        mf.radiated_power_sphere_w = np.asarray([1.1, 2.1, 3.1])
+        mf.radiated_power_sphere_coverage_sr = 4.0 * np.pi
+        port.radiated_power_surface_w = np.asarray([0.5, 0.6, 0.7])
+        port.radiated_power_sphere_w = np.asarray([0.55, 0.65, 0.75])
+        port.radiated_power_sphere_coverage_sr = 4.0 * np.pi
         port.pressure_complex *= 0.5
         return [mf, port]
 
@@ -1667,7 +1760,13 @@ def test_coupled_cardioid_adds_derived_channel_and_defers_mf_driver_once(
     assert response["channels"]["mf"]["metadata"]["driver_coupling_deferred_to"] == (
         "passive_cardioid"
     )
+    assert response["channels"]["mf"]["metadata"]["radiated_power"]["surface_w"] == [
+        1.0,
+        2.0,
+        3.0,
+    ]
     derived = response["channels"]["passive_cardioid"]
+    assert "radiated_power" not in derived["metadata"]
     assert derived["metadata"]["impedance_units"] == "ohms"
     assert derived["metadata"]["impedance_drive"] == "voltage"
     assert derived["metadata"]["impedance_phase_convention"] == (
@@ -1678,6 +1777,44 @@ def test_coupled_cardioid_adds_derived_channel_and_defers_mf_driver_once(
     assert len(derived["impedance"]["real"]) == 3
     assert response["metadata"]["passive_cardioid"]["coupled"] is True
     assert isinstance(response["_radiation_impedance_npz"], bytes)
+
+
+def test_channels_carry_their_ingest_band_role_and_source_labels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(metal, "metal_status", lambda: {"available": True, "reason": "ok"})
+    monkeypatch.setattr(
+        metal, "ObservationConfig", lambda **kwargs: SimpleNamespace(**kwargs)
+    )
+    monkeypatch.setattr(metal, "native_config", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(
+        metal,
+        "native_solve_multi_source",
+        lambda _mesh, sources, _config, frequencies_hz=None: [
+            _native_result_3f() for _ in sources
+        ],
+    )
+    request = _request("wgi_" + "0" * 26)
+    mesh_path = tmp_path / "imported.msh"
+    mesh_path.write_text("msh", encoding="utf-8")
+
+    roled = metal.solve_imported_metal_from_msh_text(
+        "msh", request, _roled_record(mesh_path)
+    )
+    left = roled["channels"]["left"]["metadata"]
+    right = roled["channels"]["right"]["metadata"]
+    assert left["role"] == "HF"
+    assert left["source_ids"] == ["source-a", "source-b"]
+    assert left["source_labels"] == ["HF throat", "source-b"]
+    assert right["role"] == "LF"
+    assert "source_labels" not in right
+
+    unroled_record = _roled_record(mesh_path)
+    unroled_record["sources"][2] = {"id": "source-c", "required": False}
+    unroled = metal.solve_imported_metal_from_msh_text(
+        "msh", request, unroled_record
+    )
+    assert unroled["channels"]["right"]["metadata"]["role"] is None
 
 
 def test_combined_channel_is_appended_with_contract_metadata(
@@ -1707,7 +1844,11 @@ def test_combined_channel_is_appended_with_contract_metadata(
     )
     mesh_path = tmp_path / "imported.msh"
     mesh_path.write_text("msh", encoding="utf-8")
-    record = _record(mesh_path)
+    record = _roled_record(mesh_path)
+    # ``left`` deliberately lists HF before LF. Source order is authored CAD
+    # order, not crossover order, so its identity must still be the lower band.
+    record["sources"][1]["role"] = "LF"
+    record["sources"][2]["role"] = "HF"
 
     async def run() -> dict[str, Any]:
         outcome = await metal.MetalEngine().run(
@@ -1729,6 +1870,8 @@ def test_combined_channel_is_appended_with_contract_metadata(
     payload = combined["metadata"]["combine"]
     assert payload["type"] == "lr4_time_aligned_sum"
     assert payload["members"] == ["left", "right"]
+    assert response["channels"]["left"]["metadata"]["role"] == "LF"
+    assert payload["member_roles"] == ["LF", "HF"]
     assert payload["crossovers_hz"] == [500.0]
     assert combined["metadata"]["derived_from_channels"] == ["left", "right"]
     assert combined["metadata"]["drive_channel_id"] == "combined"
@@ -1806,7 +1949,7 @@ def test_recombine_from_stored_bases_updates_and_adds_channels(
     request = _request("wgi_" + "0" * 26)
     mesh_path = tmp_path / "imported.msh"
     mesh_path.write_text("msh", encoding="utf-8")
-    record = _record(mesh_path)
+    record = _roled_record(mesh_path)
 
     async def run() -> Any:
         return await metal.MetalEngine().run(
@@ -1827,7 +1970,15 @@ def test_recombine_from_stored_bases_updates_and_adds_channels(
     assert updated["channel_order"] == ["left", "right", "combined"]
     payload = updated["channels"]["combined"]["metadata"]["combine"]
     assert payload["crossovers_hz"] == [500.0]
+    assert payload["member_roles"] == ["HF", "LF"]
     assert updated["channels"]["combined"]["metadata"]["recombined"] is True
+    # The members keep the bands and names the solve stamped on them.
+    assert updated["channels"]["left"]["metadata"]["role"] == "HF"
+    assert updated["channels"]["left"]["metadata"]["source_labels"] == [
+        "HF throat",
+        "source-b",
+    ]
+    assert updated["channels"]["right"]["metadata"]["role"] == "LF"
     assert "impedance" not in updated["channels"]["combined"]
     # The original envelope is not mutated in place.
     assert outcome.results["channel_order"] == ["left", "right"]

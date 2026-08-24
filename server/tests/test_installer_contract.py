@@ -136,6 +136,17 @@ def invocation(source: str, script: str) -> int:
     return match.start()
 
 
+def normal_installation(source: str) -> str:
+    """Return the main install path, excluding transaction-repair helpers."""
+
+    marker = (
+        '# ── The prebuilt interface '
+        if source.startswith("#!/usr/bin/env bash")
+        else "echo Installing the prebuilt interface..."
+    )
+    return source.split(marker, 1)[1]
+
+
 def test_every_installer_file_exists_and_is_executable_where_that_matters():
     for path in (
         SHELL_INSTALLER,
@@ -212,6 +223,11 @@ def test_installers_enforce_the_prerequisites_they_consume():
         assert re.search(r"Git .*required|Git is required", source), (
             f"{path.name} must explain that Git is needed for the pinned modules"
         )
+
+
+def test_installer_uses_the_selected_python_without_base_executable_indirection() -> None:
+    for path in BOTH_INSTALLERS:
+        assert "sys._base_executable" not in read(path)
 
 
 def test_both_installers_enforce_the_same_git_version_floor():
@@ -299,11 +315,10 @@ def test_no_installer_requires_node():
 # v1: "installers preserve and replace an invalid virtual environment" and
 #     "both installers keep at most one incompatible venv backup"
 #
-# v2 has neither behaviour, because scripts/bootstrap.py owns the environment:
-# it fingerprints the dependency manifests, reinstalls when they move, and
-# refuses a directory that is not a usable venv rather than renaming it. The
-# property worth protecting is therefore the opposite one -- that no installer
-# takes it upon itself to delete or rename a 500 MB environment.
+# scripts/bootstrap.py normally owns the environment. Updates must leave it in
+# place so its manifest fingerprint keeps routine repair incremental. A cheap
+# POSIX clone may be restored after a failure; otherwise bootstrap repairs the
+# live environment against the restored checkout.
 # ---------------------------------------------------------------------------
 
 
@@ -313,13 +328,32 @@ def test_environment_creation_is_delegated_to_bootstrap():
         assert "bootstrap.py" in source, f"{path.name} must delegate to scripts/bootstrap.py"
 
 
-def test_no_installer_deletes_or_renames_the_environment_behind_the_user():
+def test_no_installer_moves_the_environment_out_of_the_way_for_an_update():
     for path in (*BOTH_INSTALLERS, BATCH_ENTRY_POINT, SHELL_ENTRY_POINT):
+        source = read(path)
+        assert not re.search(r'\bmv\s+[^\n]*["\']?[^\s"\']*\.venv', source)
+        assert not re.search(r'\bmove\s+[^\n]*["\']?[^\s"\']*\.venv', source, re.I)
+
+
+def test_only_rollback_may_remove_an_installer_environment():
+    for path in (BATCH_ENTRY_POINT, SHELL_ENTRY_POINT):
         assert not destroys_virtual_environment(read(path)), (
-            f"{path.name} destroys .venv. bootstrap.py decides what to do with an "
-            "environment; an installer that removes one silently discards a "
-            "multi-hundred-MB download the user may not be able to repeat."
+            f"{path.name} must leave environment replacement to the guarded installer."
         )
+    shell = read(SHELL_INSTALLER)
+    shell_transaction = shell.split("rollback_update() {", 1)[1].split(
+        "fail() {", 1
+    )[0]
+    assert destroys_virtual_environment(shell_transaction)
+    assert not destroys_virtual_environment(shell.replace(shell_transaction, ""))
+
+    batch = read(BATCH_INSTALLER)
+    batch_transaction = batch.split(":set_update_transaction_path", 1)[1].split(
+        ":update_from_git", 1
+    )[0]
+    assert destroys_virtual_environment(batch_transaction)
+    assert not destroys_virtual_environment(batch.replace(batch_transaction, ""))
+
     # The uninstallers are the ones allowed to. Requiring the detector to find
     # both makes this an actual positive control rather than a spelling check.
     assert destroys_virtual_environment(read(SHELL_UNINSTALLER))
@@ -382,7 +416,7 @@ def test_the_backend_check_runs_standalone():
 
 def test_the_interface_is_fetched_before_the_multi_minute_dependency_install():
     for path in BOTH_INSTALLERS:
-        source = read(path)
+        source = normal_installation(read(path))
         assert invocation(source, "fetch_spa.py") < invocation(source, "bootstrap.py"), (
             f"{path.name} must install the SPA before bootstrapping: fetch_spa.py is "
             "standard library only so it runs on the interpreter already found, and a "
@@ -393,14 +427,17 @@ def test_the_interface_is_fetched_before_the_multi_minute_dependency_install():
 
 def test_the_solve_check_comes_after_the_environment_exists():
     for path in BOTH_INSTALLERS:
-        source = read(path)
+        source = normal_installation(read(path))
         assert invocation(source, "bootstrap.py") < invocation(source, "check_backends.py")
 
 
 def test_both_platform_installers_install_wglink_from_wgs_existing_environment():
     for path in BOTH_INSTALLERS:
         source = read(path)
-        assert invocation(source, "bootstrap.py") < invocation(source, "install_wglink.py")
+        install_body = normal_installation(source)
+        assert invocation(install_body, "bootstrap.py") < invocation(
+            install_body, "install_wglink.py"
+        )
         assert "--skip-wglink" in source
         assert "--replace-wglink" in source
         assert "--wglink-archive" in source
@@ -499,6 +536,87 @@ def test_a_release_tag_can_be_installed_directly():
         assert "--tag" in source
         assert "git fetch --tags" in source
         assert "git checkout" in source
+
+
+def test_updates_preserve_code_and_runtime_until_post_switch_validation_passes():
+    shell = read(SHELL_INSTALLER)
+    shell_tag = shell.split('if [[ -n "$TAG" ]]', 1)[1].split(
+        "if ! git symbolic-ref", 1
+    )[0]
+    shell_branch = shell.split('before="$(git rev-parse HEAD)"', 1)[1].split(
+        'exec bash "$ROOT/scripts/install.sh"', 1
+    )[0]
+    assert shell_tag.index("begin_update_transaction") < shell_tag.index(
+        'git checkout --quiet "$TAG"'
+    )
+    assert shell_branch.index("begin_update_transaction") < shell_branch.index(
+        'git merge --ff-only "$upstream"'
+    )
+    shell_begin = shell.split("begin_update_transaction() {", 1)[1].split(
+        "commit_update_transaction() {", 1
+    )[0]
+    shell_rollback = shell.split("rollback_update() {", 1)[1].split(
+        "begin_update_transaction() {", 1
+    )[0]
+    assert 'cp -a -c "$ROOT/.venv" "$UPDATE_TRANSACTION/venv"' in shell_begin
+    assert 'cp --reflink=always "$ROOT/.venv/pyvenv.cfg"' in shell_begin
+    assert 'cp -a --reflink=auto "$ROOT/.venv" "$UPDATE_TRANSACTION/venv"' in shell_begin
+    assert '"$UPDATE_TRANSACTION/venv-repair"' in shell_begin
+    assert 'rm -rf "$UPDATE_TRANSACTION/venv"' in shell_begin
+    assert '"$BOOTSTRAP_PYTHON" "$ROOT/scripts/bootstrap.py"' in shell_rollback
+    assert 'cp -a "$ROOT/frontend/dist" "$UPDATE_TRANSACTION/dist"' in shell_begin
+    assert 'cp -a "$UPDATE_TRANSACTION/dist" "$ROOT/frontend/dist"' in shell_rollback
+    assert 'mv "$ROOT/.venv"' not in shell
+    assert 'mv "$ROOT/frontend/dist"' not in shell
+    assert not re.search(r'\bmv\s+[^\n]*frontend/dist', shell)
+    assert shell.index('"$ROOT/scripts/check_backends.py"') < shell.rindex(
+        "commit_update_transaction"
+    )
+    fail_body = shell.split("fail() {", 1)[1].split("while [[ $#", 1)[0]
+    assert "rollback_update" in fail_body
+    for message in (
+        "The requested SPA replacement could not be installed",
+        "The Python environment could not be prepared",
+        "No solve backend is usable",
+    ):
+        assert f'fail "{message}' in shell
+
+    batch = read(BATCH_INSTALLER)
+    batch_tag = batch.split(":checkout_tag", 1)[1].split(":tag_needs_clean_tree", 1)[0]
+    batch_branch = batch.split('git fetch --quiet', 1)[1].split(":already_current", 1)[0]
+    assert batch_tag.index("call :begin_update_transaction") < batch_tag.index(
+        'git checkout --quiet "%TAG%"'
+    )
+    assert batch_branch.index("call :begin_update_transaction") < batch_branch.index(
+        'git merge --ff-only "%AFTER_COMMIT%"'
+    )
+    batch_begin = batch.split("\n:begin_update_transaction\n", 1)[1].split(
+        "\n:rollback_update\n", 1
+    )[0]
+    batch_rollback = batch.split("\n:rollback_update\n", 1)[1].split(
+        "\n:commit_update_transaction\n", 1
+    )[0]
+    assert '"%UPDATE_TRANSACTION%\\venv-repair"' in batch_begin
+    assert '"%BOOTSTRAP_PYTHON%" "%WG_ROOT%\\scripts\\bootstrap.py"' in batch_rollback
+    assert re.search(
+        r'robocopy "frontend\\dist" "%UPDATE_TRANSACTION%\\dist"[^\n]*/E',
+        batch_begin,
+        re.I,
+    )
+    assert re.search(
+        r'robocopy "%UPDATE_TRANSACTION%\\dist" "frontend\\dist"[^\n]*/E',
+        batch_rollback,
+        re.I,
+    )
+    assert 'move /y ".venv"' not in batch.lower()
+    assert 'move /y "frontend\\dist"' not in batch.lower()
+    assert not re.search(r'\bmove\s+[^\n]*frontend\\dist', batch, re.I)
+    assert batch.index('"%WG_ROOT%\\scripts\\check_backends.py"') < batch.index(
+        "call :commit_update_transaction"
+    )
+    for label in (":spa_fatal", ":spa_replacement_failed", ":bootstrap_failed", ":no_solve_backend"):
+        failure = batch.split(label, 1)[1].split("exit /b 1", 1)[0]
+        assert "call :rollback_update" in failure
 
 
 # ---------------------------------------------------------------------------

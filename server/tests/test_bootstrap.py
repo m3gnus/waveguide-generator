@@ -307,3 +307,48 @@ def test_bootstrap_force_reinstalls_git_pins_after_manifest_change(tmp_path, mon
     forced_pin_installs = [command for command in pin_installs if "--force-reinstall" in command]
     assert len(forced_pin_installs) == 1
     assert "--no-deps" in forced_pin_installs[0]
+
+
+def test_bootstrap_force_reinstalls_all_declared_packages_and_removes_extras(
+    tmp_path, monkeypatch
+) -> None:
+    bootstrap = _load_bootstrap()
+    environment = tmp_path / ".venv"
+    python = bootstrap._venv_python(environment)
+    python.parent.mkdir(parents=True)
+    python.touch()
+    validations = iter(((True, "ready"), (True, "ready")))
+    commands: list[list[str]] = []
+
+    monkeypatch.setattr(bootstrap, "_require_supported_python", lambda: None)
+    monkeypatch.setattr(bootstrap, "_bootstrap_lock", lambda _environment: nullcontext())
+    monkeypatch.setattr(bootstrap, "_validate", lambda *_args: next(validations))
+    monkeypatch.setattr(bootstrap, "_write_stamp", lambda *_args: None)
+    monkeypatch.setattr(
+        bootstrap,
+        "_installed_distribution_names",
+        lambda _python: bootstrap._declared_distribution_names() | {"obsolete-package"},
+    )
+    monkeypatch.setattr(
+        bootstrap,
+        "_run",
+        lambda command, **_kwargs: commands.append(command) or SimpleNamespace(returncode=0),
+    )
+
+    bootstrap.bootstrap(environment, force=True)
+
+    install_commands = [command for command in commands if "install" in command]
+    assert len(install_commands) == 3
+    assert all("--force-reinstall" in command for command in install_commands)
+    locked_install = next(
+        command
+        for command in install_commands
+        if str(ROOT / "server" / "requirements-lock.txt") in command
+    )
+    lock_index = locked_install.index(str(ROOT / "server" / "requirements-lock.txt"))
+    assert locked_install[lock_index - 1] == "-r"
+    assert [
+        command
+        for command in commands
+        if "uninstall" in command and "obsolete-package" in command
+    ]

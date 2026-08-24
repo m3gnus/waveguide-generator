@@ -34,6 +34,7 @@ import { designNameSlug } from '../stores/designName';
 import { fusionWorkflowView } from './cadWorkflowView';
 import { jobsCoordinatorBridge, SolveEngineUnavailableError } from './JobsCoordinator';
 import { workspaceNavigation } from './workspaceNavigation';
+import { useModalDialogFocus } from './dialogFocus';
 
 interface RefreshOptions {
   background?: boolean;
@@ -46,6 +47,7 @@ interface CadLinkCoordinatorSnapshot {
   ingesting: boolean;
   ingestError: string | null;
   sendingToFusion: boolean;
+  pullingFromFusion: boolean;
   error: string | null;
   status: string | null;
   viewportNotice: string | null;
@@ -86,6 +88,7 @@ let bridgeSnapshot: CadLinkCoordinatorSnapshot = {
   ingesting: false,
   ingestError: null,
   sendingToFusion: false,
+  pullingFromFusion: false,
   error: null,
   status: null,
   viewportNotice: null,
@@ -314,7 +317,7 @@ export async function showCadJobModel(
         .filter((finding) => String(finding.kind).includes('area-drift'))
         .map((finding) => String(finding.source_id)))],
       exteriorOnly: false,
-      combineEnabled: false,
+      combineEnabled: null,
       combineCrossoversHz: {},
       combineLevelMatch: null,
       combineAlign: null,
@@ -365,6 +368,7 @@ export function CadLinkCoordinator() {
   const [ingesting, setIngesting] = useState(false);
   const [ingestError, setIngestError] = useState<string | null>(null);
   const [sendingToFusion, setSendingToFusion] = useState(false);
+  const [pullingFromFusion, setPullingFromFusion] = useState(false);
   const [pendingFusionConflict, setPendingFusionConflict] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
@@ -397,6 +401,7 @@ export function CadLinkCoordinator() {
     settle: (bundle: CadReturnBundle) => void;
     fail: (reason: Error) => void;
   } | null>(null);
+  const fusionPullPromise = useRef<Promise<CadReturnBundle> | null>(null);
   const onshape = preferences.cadApplication === 'onshape';
 
   useEffect(() => {
@@ -433,7 +438,9 @@ export function CadLinkCoordinator() {
 
   useEffect(() => subscribeRevision((event) => {
     if (event.reason !== 'load') return;
-    workspaceModeStore.setMode('parametric');
+    workspaceModeStore.setMode(
+      event.loadSource === 'cad-project-switch' ? 'cad' : 'parametric',
+    );
     // A replacement may be the document this return belongs to, so retain the
     // evidence and channel work for the freshness verdict instead of guessing
     // ownership here. The stale gate makes the old geometry unsendable now.
@@ -728,7 +735,9 @@ export function CadLinkCoordinator() {
 
   /** Ask Fusion for the active document and resolve with the exact correlated
    * return. Composable: the caller decides whether to ingest and solve. */
-  const pullFromFusion = useCallback(async (): Promise<CadReturnBundle> => {
+  const pullFromFusion = useCallback((): Promise<CadReturnBundle> => {
+    if (fusionPullPromise.current) return fusionPullPromise.current;
+    setPullingFromFusion(true);
     // Failures are reported here as well as thrown, so a fire-and-forget
     // caller still shows them and a composed caller can still stop.
     const fail = (reason: unknown): never => {
@@ -736,26 +745,32 @@ export function CadLinkCoordinator() {
       if (!(error instanceof SupersededError) && mounted.current) setError(error.message);
       throw error;
     };
-    if (!identity?.designId || !fusionStatus?.documentId || !fusionStatus.link) {
-      return fail(new Error('Fusion changed documents. Refresh CAD Link and try again.'));
-    }
-    setError(null);
-    const result = await requestFusionReturn({
-      designId: identity.designId,
-      documentId: fusionStatus.documentId,
-      instanceId: fusionStatus.link.instanceId,
-      expectedReturnStateHash: fusionStatus.link.documentSignatureHash,
-    }).catch(fail);
-    expectFusionReturn(result.requestId);
-    setStatus(`Requested current geometry from ${result.documentName}. Waiting for Fusion…`);
-    const arrival = new Promise<CadReturnBundle>((settle, reject) => {
-      // Only one pull can be outstanding: a newer one supersedes the old wait
-      // rather than leaving a promise nothing will ever settle.
-      pendingReturnWaiter.current?.fail(new SupersededError('Superseded by a newer request for Fusion geometry.'));
-      pendingReturnWaiter.current = { requestId: result.requestId, settle, fail: reject };
+    const operation = (async () => {
+      if (!identity?.designId || !fusionStatus?.documentId || !fusionStatus.link) {
+        return fail(new Error('Fusion changed documents. Refresh CAD Link and try again.'));
+      }
+      setError(null);
+      const result = await requestFusionReturn({
+        designId: identity.designId,
+        documentId: fusionStatus.documentId,
+        instanceId: fusionStatus.link.instanceId,
+        expectedReturnStateHash: fusionStatus.link.documentSignatureHash,
+      }).catch(fail);
+      expectFusionReturn(result.requestId);
+      setStatus(`Requested current geometry from ${result.documentName}. Waiting for Fusion…`);
+      const arrival = new Promise<CadReturnBundle>((settle, reject) => {
+        pendingReturnWaiter.current = { requestId: result.requestId, settle, fail: reject };
+      });
+      void refresh({ background: true, autoOpenNew: true });
+      return arrival.catch(fail);
+    })();
+    const tracked = operation.finally(() => {
+      if (fusionPullPromise.current !== tracked) return;
+      fusionPullPromise.current = null;
+      if (mounted.current) setPullingFromFusion(false);
     });
-    void refresh({ background: true, autoOpenNew: true });
-    return arrival.catch(fail);
+    fusionPullPromise.current = tracked;
+    return tracked;
   }, [expectFusionReturn, fusionStatus, identity?.designId, refresh]);
 
   const reportViewportNotice = useCallback((message: string | null) => setViewportNotice(message), []);
@@ -1129,6 +1144,7 @@ export function CadLinkCoordinator() {
       ingesting,
       ingestError,
       sendingToFusion,
+      pullingFromFusion,
       error,
       status,
       viewportNotice,
@@ -1162,6 +1178,7 @@ export function CadLinkCoordinator() {
       ingesting: false,
       ingestError: null,
       sendingToFusion: false,
+      pullingFromFusion: false,
       error: null,
       status: null,
       viewportNotice: null,
@@ -1201,6 +1218,7 @@ export function CadLinkCoordinator() {
     ingesting,
     pullAndSolve,
     pullFromFusion,
+    pullingFromFusion,
     sendingToFusion,
     solveParkedCommand,
     loading,
@@ -1221,17 +1239,23 @@ export function CadLinkCoordinator() {
     viewportNotice,
   ]);
 
+  const conflictDialog = useModalDialogFocus<HTMLDivElement>({
+    open: pendingFusionConflict,
+    onClose: cancelFusionConflict,
+    initialFocus: '[data-cad-conflict-cancel]',
+  });
+
   // The conflict dialog renders here, not in any one entry point, so the menu,
   // the rail card, and the panel all pass through the same confirmation.
   if (!pendingFusionConflict) return null;
   return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) cancelFusionConflict(); }}>
-    <div className="settings-dialog update-dialog" role="dialog" aria-modal="true" aria-labelledby="cad-conflict-title">
+    <div ref={conflictDialog} className="settings-dialog update-dialog" role="dialog" aria-modal="true" aria-labelledby="cad-conflict-title">
       <header><div><h2 id="cad-conflict-title">Both WG and Fusion changed</h2></div></header>
       <div className="update-dialog-body">
         <p>Sending rebuilds only the linked waveguide from WG. Separate cabinet and mid-woofer bodies stay in Fusion, but direct edits to the linked waveguide are replaced.</p>
         <p>To keep the Fusion edits instead, cancel and bring the Fusion geometry into WG first.</p>
         <div className="update-dialog-actions">
-          <button onClick={cancelFusionConflict}>Cancel</button>
+          <button data-cad-conflict-cancel onClick={cancelFusionConflict}>Cancel</button>
           <button className="primary" disabled={sendingToFusion} onClick={() => { void sendWgToFusion({ confirmed: true }).catch(() => undefined); }}>Continue: send WG changes</button>
         </div>
       </div>

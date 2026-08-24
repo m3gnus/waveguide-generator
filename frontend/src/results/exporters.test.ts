@@ -3,7 +3,7 @@ import { designForFamily } from '../stores/design';
 import { preferencesStore } from '../prefs/preferences';
 import type { ResultPayload } from './types';
 import type { RadiationImpedancePresentation } from '../api/results';
-import { archiveRunToWorkspace, buildChartRenderPayload, buildFrequencyCsv, buildFullResultsJson, buildImpedanceCsv, buildPolarCsv, buildRadiationImpedanceCsv, buildSummaryText, downloadMeshArtifact, runExportBundle, runExportFormat, runWorkspaceExportBundle, saveMeshArtifactToWorkspace } from './exporters';
+import { archiveRunToWorkspace, buildChartRenderPayload, buildFrequencyCsv, buildFullResultsJson, buildImpedanceCsv, buildPolarCsv, buildRadiationImpedanceCsv, buildSummaryText, downloadMeshArtifact, runExportBundle, runExportFormat, runWorkspaceExportBundle, saveMeshArtifactToWorkspace, writeWorkspaceFiles } from './exporters';
 import type { CadIdentityProvenance, JobItem } from '../api/jobsSocket';
 
 const cadIdentity: CadIdentityProvenance = {
@@ -27,6 +27,31 @@ const result: ResultPayload = {
   directivity: { horizontal: [[[-90, -12], [0, 0]], [[-90, [0.1, 0]], [0, [1, 0]]]] },
 };
 
+const finalResult = {
+  ...result,
+  result_kind: 'parametric' as const,
+  result_contract_version: 1 as const,
+  client_request_id: null,
+  client_metadata: {},
+  provenance: {
+    schema_version: 1,
+    wg_version: 'test',
+    dependency_shas: {},
+    request_sha256: 'a'.repeat(64),
+    geometry_sha256: 'a'.repeat(64),
+    solve_options_sha256: 'a'.repeat(64),
+    request_identity: 'execution',
+    execution_request_sha256: 'a'.repeat(64),
+    execution_geometry_sha256: 'a'.repeat(64),
+    execution_solve_options_sha256: 'a'.repeat(64),
+    effective_request_sha256: 'a'.repeat(64),
+    effective_geometry_sha256: 'a'.repeat(64),
+    effective_solve_options_sha256: 'a'.repeat(64),
+    resolved_engine: 'test',
+  },
+  metadata: {},
+};
+
 const radiation: RadiationImpedancePresentation = {
   schema_version: 1,
   quantity: 'average_aperture_pressure_per_volume_velocity',
@@ -47,6 +72,21 @@ const radiation: RadiationImpedancePresentation = {
     imaginary: [[11, 15]],
   },
 };
+
+function workspacePayload(init?: RequestInit) {
+  expect(init?.body).toBeInstanceOf(FormData);
+  const form = init?.body as FormData;
+  const paths = form.getAll('relative_path').map(String);
+  const files = form.getAll('file');
+  return {
+    subdirectory: String(form.get('subdirectory')),
+    existing: String(form.get('existing')),
+    members: paths.map((relative_path, index) => ({
+      relative_path,
+      blob: files[index] as Blob,
+    })),
+  };
+}
 
 describe('result exporters', () => {
   beforeEach(() => { preferencesStore.resetForTests(); });
@@ -287,6 +327,7 @@ describe('result exporters', () => {
 
     expect(saveText).toHaveBeenCalledTimes(2);
     expect(saveText.mock.calls[0][0]).toContain('power_response_db_spl_avg');
+    expect(saveText.mock.calls[0][0]).toContain('radiated_power_surface_w,radiated_power_sphere_w,power_agreement_db');
     expect(JSON.parse(saveText.mock.calls[1][0]).rows[0]).toMatchObject({
       frequency_hz: 100,
       power_response_db_spl_avg: 87,
@@ -549,7 +590,7 @@ describe('result exporters', () => {
 
     expect(files).toHaveLength(6);
     expect(requests.map(({ path }) => path)).toEqual(['/api/workspace/path', '/api/workspace/write-export']);
-    const payload = JSON.parse(String(requests[1].init?.body));
+    const payload = workspacePayload(requests[1].init);
     expect(payload.subdirectory).toBe('horn_1');
     expect(payload.members.map((member: { relative_path: string }) => member.relative_path)).toEqual([
       'hor/horn_1 -30.frd', 'hor/horn_1 0.frd', 'hor/horn_1 30.frd',
@@ -569,7 +610,7 @@ describe('result exporters', () => {
     let members: Array<{ relative_path: string }> = [];
     const fetcher = vi.fn<typeof fetch>(async (input, init) => {
       if (String(input) === '/api/workspace/path') return new Response(JSON.stringify({ selected: true }), { status: 200 });
-      members = (JSON.parse(String(init?.body)) as { members: Array<{ relative_path: string }> }).members;
+      members = workspacePayload(init).members;
       return new Response(JSON.stringify({
         directory: '/chosen/horn_1', files: members.map(({ relative_path }) => `/chosen/horn_1/${relative_path}`),
       }), { status: 200 });
@@ -610,7 +651,7 @@ describe('result exporters', () => {
     let writePayload: { members: Array<{ relative_path: string }> } | undefined;
     const fetcher = vi.fn<typeof fetch>(async (input, init) => {
       expect(String(input)).toBe('/api/workspace/write-export');
-      writePayload = JSON.parse(String(init?.body));
+      writePayload = workspacePayload(init);
       return new Response(JSON.stringify({
         directory: '/output/horn_1',
         files: writePayload!.members.map(({ relative_path }) => `/output/horn_1/${relative_path}`),
@@ -690,13 +731,13 @@ describe('result exporters', () => {
       failures: [],
     });
     const write = requests.find(({ path }) => path === '/api/workspace/write-export')!;
-    const payload = JSON.parse(String(write.init?.body));
+    const payload = workspacePayload(write.init);
     expect(payload).toMatchObject({ subdirectory: 'horn_1', existing: 'merge_identical' });
     expect(payload.members.map((member: { relative_path: string }) => member.relative_path)).toEqual([
       'horn_1.csv', 'horn_1_spl.png', 'horn_1_directivity_map.png',
     ]);
-    expect(payload.members[1].content_base64).toBe('AQID');
-    expect(payload.members[2].content_base64).toBe('BAUG');
+    expect(Array.from(new Uint8Array(await payload.members[1].blob.arrayBuffer()))).toEqual([1, 2, 3]);
+    expect(Array.from(new Uint8Array(await payload.members[2].blob.arrayBuffer()))).toEqual([4, 5, 6]);
   });
 
   it('auto-saves the mesh into the same per-run Workspace directory', async () => {
@@ -734,14 +775,14 @@ describe('result exporters', () => {
       const path = String(input);
       if (path === '/api/jobs/archive-cardioid/archive-snapshot') return new Response(JSON.stringify({
         schema_version: 1,
-        results: result,
+        results: finalResult,
         results_sha256: 'a'.repeat(64),
         mesh_artifact: null,
         pressure_bases: [{ channel_id: 'mf drive', content_base64: 'BAUG' }],
         radiation_impedance: { content_base64: 'AQID', presentation: radiation },
       }), { status: 200 });
       if (path === '/api/workspace/write-export') {
-        const payload = JSON.parse(String(init?.body)) as { subdirectory: string; members: Array<{ relative_path: string }> };
+        const payload = workspacePayload(init);
         writes.push(payload);
         return new Response(JSON.stringify({
           directory: `/workspace/${payload.subdirectory}`,
@@ -777,13 +818,13 @@ describe('result exporters', () => {
       design_revision: 1, polar_grid: {}, rating: null, exported_files: [], auto_export_completed_at: null,
       auto_export_formats: {}, archived_at: null, raw_results_file: null, mesh_artifact_file: null, log_tail: [],
     } satisfies JobItem;
-    const writes: Array<{ subdirectory: string; members: Array<{ relative_path: string; content_base64: string }> }> = [];
+    const writes: ReturnType<typeof workspacePayload>[] = [];
     const fetcher = vi.fn<typeof fetch>(async (input, init) => {
       if (String(input) === '/api/jobs/archive-mesh/archive-snapshot') return new Response(JSON.stringify({
-        schema_version: 1, results: result, results_sha256: 'b'.repeat(64),
+        schema_version: 1, results: finalResult, results_sha256: 'b'.repeat(64),
         mesh_artifact: 'exact mesh bytes', pressure_bases: [], radiation_impedance: null,
       }), { status: 200 });
-      const payload = JSON.parse(String(init?.body));
+      const payload = workspacePayload(init);
       writes.push(payload);
       return new Response(JSON.stringify({
         directory: `/workspace/${payload.subdirectory}`,
@@ -793,11 +834,37 @@ describe('result exporters', () => {
 
     await archiveRunToWorkspace(job, preferencesStore.getSnapshot(), fetcher);
 
-    expect(writes[1].members).toEqual([{
-      relative_path: '9_Mesh_Run.msh',
-      content_base64: 'ZXhhY3QgbWVzaCBieXRlcw==',
-    }]);
-    expect(JSON.parse(atob(writes[2].members[0].content_base64)).artifacts.mesh)
+    expect(writes[1].members.map(({ relative_path }) => relative_path)).toEqual([
+      '9_Mesh_Run.msh',
+    ]);
+    expect(await writes[1].members[0].blob.text()).toBe('exact mesh bytes');
+    expect(JSON.parse(await writes[2].members[0].blob.text()).artifacts.mesh)
       .toBe('9_Mesh_Run.msh');
+  });
+
+  it('sends a 64 MiB workspace member as multipart binary without base64 inflation', async () => {
+    const content = new Uint8Array(64 * 1024 * 1024);
+    content[0] = 0x89;
+    content[content.length - 1] = 0xff;
+    let requestBody: FormData | undefined;
+    const fetcher = vi.fn<typeof fetch>(async (_input, init) => {
+      requestBody = init?.body as FormData;
+      return new Response(JSON.stringify({ directory: '/workspace/large', files: ['/workspace/large/member.bin'] }), { status: 200 });
+    });
+
+    await writeWorkspaceFiles('large', [{
+      filename: 'member.bin', blob: new Blob([content]),
+    }], fetcher);
+
+    expect(requestBody).toBeInstanceOf(FormData);
+    const upload = requestBody!.get('file') as File;
+    expect(upload.size).toBe(content.byteLength);
+    expect(Array.from(requestBody!.keys())).toEqual([
+      'subdirectory', 'existing', 'relative_path', 'file',
+    ]);
+    expect(requestBody!.has('content_base64')).toBe(false);
+    const uploaded = new Uint8Array(await upload.arrayBuffer());
+    expect(uploaded[0]).toBe(0x89);
+    expect(uploaded[uploaded.length - 1]).toBe(0xff);
   });
 });

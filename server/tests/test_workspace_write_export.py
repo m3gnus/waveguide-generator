@@ -4,11 +4,14 @@ import asyncio
 import base64
 import json
 from pathlib import Path
+import tempfile
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
+from starlette.datastructures import FormData, UploadFile
 
 from server import app as app_module
 from server.platform import paths
@@ -79,6 +82,7 @@ def test_cad_workspace_is_separate_and_requires_a_selection(tmp_path: Path) -> N
         "proposed": str(proposed),
         "proposedExists": False,
         "captureDocument": True,
+        "captureMode": "run",
     }
     assert not proposed.exists()
     with pytest.raises(ValueError, match="No WGLink folder"):
@@ -92,6 +96,7 @@ def test_cad_workspace_is_separate_and_requires_a_selection(tmp_path: Path) -> N
         "schemaVersion": 1,
         "cadLinkPath": str(exchange.resolve()),
         "captureDocument": True,
+        "captureMode": "run",
     }
 
 
@@ -183,6 +188,144 @@ def test_binary_auto_export_merges_new_files_and_accepts_identical_retries(tmp_p
     assert (workspace / "horn_1/horn_1.csv").read_text() == "frequency,level\n100,90\n"
 
 
+def test_large_multipart_export_is_responsive_and_identical_retry_writes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state, workspace = selected_state(tmp_path)
+    content = b"x" * (64 * 1024 * 1024)
+
+    def multipart_request() -> tuple[SimpleNamespace, object]:
+        stream = tempfile.TemporaryFile()
+        stream.write(content)
+        stream.seek(0)
+        upload = UploadFile(stream, filename="large.bin")
+        form = FormData(
+            [
+                ("subdirectory", "large-run"),
+                ("existing", "merge_identical"),
+                ("relative_path", "large.bin"),
+                ("file", upload),
+            ]
+        )
+
+        async def read_form() -> FormData:
+            return form
+
+        return (
+            SimpleNamespace(
+                headers={"content-type": "multipart/form-data; boundary=test"},
+                form=read_form,
+            ),
+            stream,
+        )
+
+    async def write_with_ticker() -> tuple[dict[str, object], float]:
+        gaps: list[float] = []
+        stop = asyncio.Event()
+
+        async def ticker() -> None:
+            previous = asyncio.get_running_loop().time()
+            while not stop.is_set():
+                await asyncio.sleep(0.005)
+                current = asyncio.get_running_loop().time()
+                gaps.append(current - previous)
+                previous = current
+
+        request_value, stream = multipart_request()
+        ticker_task = asyncio.create_task(ticker())
+        await asyncio.sleep(0)
+        try:
+            response = await endpoint(state)(request_value)
+        finally:
+            stop.set()
+            await ticker_task
+            stream.close()
+        return response, max(gaps)
+
+    response, largest_gap = asyncio.run(write_with_ticker())
+    destination = workspace / "large-run" / "large.bin"
+    initial_mtime = destination.stat().st_mtime_ns
+    staging_calls: list[object] = []
+    original_mkdtemp = workspace_api.tempfile.mkdtemp
+
+    def counted_mkdtemp(*args, **kwargs):
+        staging_calls.append((args, kwargs))
+        return original_mkdtemp(*args, **kwargs)
+
+    monkeypatch.setattr(workspace_api.tempfile, "mkdtemp", counted_mkdtemp)
+    retry_request, retry_stream = multipart_request()
+    try:
+        retry = asyncio.run(endpoint(state)(retry_request))
+    finally:
+        retry_stream.close()
+
+    assert response == retry
+    assert destination.stat().st_size == len(content)
+    assert destination.read_bytes() == content
+    assert destination.stat().st_mtime_ns == initial_mtime
+    assert staging_calls == []
+    assert largest_gap < 0.03
+
+
+def test_multipart_transport_pairs_repeated_paths_with_binary_parts(tmp_path: Path) -> None:
+    state, workspace = selected_state(tmp_path)
+    boundary = b"wg-boundary"
+
+    def field(name: str, value: bytes, filename: str | None = None) -> bytes:
+        disposition = f'Content-Disposition: form-data; name="{name}"'
+        if filename is not None:
+            disposition += f'; filename="{filename}"'
+        content_type = (
+            b"Content-Type: application/octet-stream\r\n" if filename else b""
+        )
+        return (
+            b"--" + boundary + b"\r\n" + disposition.encode("ascii") + b"\r\n"
+            + content_type + b"\r\n" + value + b"\r\n"
+        )
+
+    body = b"".join(
+        [
+            field("subdirectory", b"binary-run"),
+            field("existing", b"merge_identical"),
+            field("relative_path", b"nested/first.bin"),
+            field("relative_path", b"second.bin"),
+            field("file", b"\x00\x01\xff", "first.bin"),
+            field("file", b"second\x00member", "second.bin"),
+            b"--" + boundary + b"--\r\n",
+        ]
+    )
+    delivered = False
+
+    async def receive() -> dict[str, object]:
+        nonlocal delivered
+        if delivered:
+            return {"type": "http.disconnect"}
+        delivered = True
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    from starlette.requests import Request
+
+    request_value = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/workspace/write-export",
+            "headers": [
+                (b"content-type", b"multipart/form-data; boundary=" + boundary)
+            ],
+        },
+        receive,
+    )
+    response = asyncio.run(endpoint(state)(request_value))
+
+    assert response["files"] == [
+        str(workspace / "binary-run/nested/first.bin"),
+        str(workspace / "binary-run/second.bin"),
+    ]
+    assert (workspace / "binary-run/nested/first.bin").read_bytes() == b"\x00\x01\xff"
+    assert (workspace / "binary-run/second.bin").read_bytes() == b"second\x00member"
+
+
 def test_merge_refuses_to_overwrite_a_different_existing_export(tmp_path: Path) -> None:
     state, workspace = selected_state(tmp_path)
     call(
@@ -242,6 +385,37 @@ def test_repeat_manual_export_replaces_changed_files(tmp_path: Path) -> None:
     ]
     assert (workspace / "horn_1/horn_1.json").read_text() == '{"timestamp": "second"}'
     assert (workspace / "horn_1/horn_1_summary.txt").read_text() == "new file"
+
+
+def test_archive_pointer_refuses_to_overwrite_another_lineage(tmp_path: Path) -> None:
+    state, workspace = selected_state(tmp_path)
+    original = json.dumps(
+        {"schemaVersion": 1, "folder": "Horn_A", "lineageId": "wgl_first"}
+    )
+    replacement = json.dumps(
+        {"schemaVersion": 1, "folder": "Horn_A", "lineageId": "wgl_second"}
+    )
+    call(
+        state,
+        workspace_api.WriteExportRequest(
+            subdirectory="Horn_A",
+            existing="merge_identical",
+            members=[{"relative_path": "design.json", "text": original}],
+        ),
+    )
+
+    with pytest.raises(HTTPException, match="another lineage") as caught:
+        call(
+            state,
+            workspace_api.WriteExportRequest(
+                subdirectory="Horn_A",
+                existing="overwrite",
+                members=[{"relative_path": "design.json", "text": replacement}],
+            ),
+        )
+
+    assert caught.value.status_code == 409
+    assert (workspace / "Horn_A/design.json").read_text() == original
 
 
 def test_overwrite_refuses_to_replace_a_directory_with_a_file(tmp_path: Path) -> None:
@@ -658,18 +832,67 @@ def test_capturing_the_cad_document_is_on_by_default_and_can_be_declined(
     data = tmp_path / "data"
     state = workspace_api.CadWorkspaceState(data, proposed_path=tmp_path / "proposed")
     assert state.capture_document is True
+    assert state.capture_mode == "run"
 
     result = asyncio.run(
         capture_endpoint(state)(workspace_api.CaptureDocumentRequest(enabled=False))
     )
 
-    assert result == {"captureDocument": False}
+    assert result == {"captureDocument": False, "captureMode": "off"}
     # The Fusion add-in reads this same file, so the choice has to be in it.
     assert json.loads((data / "cadlink_settings.json").read_text()) == {
         "schemaVersion": 1,
         "captureDocument": False,
+        "captureMode": "off",
     }
     assert workspace_api.CadWorkspaceState(data).capture_document is False
+
+
+def test_filing_the_cad_document_per_project_still_asks_the_addin_to_capture(
+    tmp_path: Path,
+) -> None:
+    """The add-in's switch is the boolean; the mode is only where WG files it.
+
+    An add-in that predates the mode key reads ``captureDocument`` alone, so
+    every mode other than ``off`` must keep writing it true.
+    """
+
+    data = tmp_path / "data"
+    state = workspace_api.CadWorkspaceState(data, proposed_path=tmp_path / "proposed")
+
+    result = asyncio.run(
+        capture_endpoint(state)(workspace_api.CaptureDocumentRequest(mode="project"))
+    )
+
+    assert result == {"captureDocument": True, "captureMode": "project"}
+    assert json.loads((data / "cadlink_settings.json").read_text()) == {
+        "schemaVersion": 1,
+        "captureDocument": True,
+        "captureMode": "project",
+    }
+    assert workspace_api.CadWorkspaceState(data).capture_mode == "project"
+
+
+def test_a_settings_file_that_only_knew_the_boolean_reads_as_a_mode(
+    tmp_path: Path,
+) -> None:
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "cadlink_settings.json").write_text(
+        json.dumps({"schemaVersion": 1, "captureDocument": True}), encoding="utf-8"
+    )
+    assert workspace_api.CadWorkspaceState(data).capture_mode == "run"
+
+    (data / "cadlink_settings.json").write_text(
+        json.dumps({"schemaVersion": 1, "captureDocument": False}), encoding="utf-8"
+    )
+    assert workspace_api.CadWorkspaceState(data).capture_mode == "off"
+
+
+def test_an_unknown_capture_mode_is_refused(tmp_path: Path) -> None:
+    state = workspace_api.CadWorkspaceState(tmp_path / "data")
+    with pytest.raises(ValueError):
+        state.set_capture_mode("everywhere")  # type: ignore[arg-type]
 
 
 def test_choosing_a_folder_does_not_erase_the_capture_choice(tmp_path: Path) -> None:
@@ -677,7 +900,7 @@ def test_choosing_a_folder_does_not_erase_the_capture_choice(tmp_path: Path) -> 
     exchange = tmp_path / "exchange"
     exchange.mkdir()
     state = workspace_api.CadWorkspaceState(data)
-    state.set_capture_document(False)
+    state.set_capture_mode("off")
 
     # Selecting used to rewrite the whole file, which dropped the other setting.
     state.select(exchange)

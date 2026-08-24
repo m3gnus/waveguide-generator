@@ -35,6 +35,7 @@ set "GIT_VERSION="
 set "SPA_SUMMARY="
 set "WGLINK_SUMMARY="
 set "VCREDIST_SUMMARY="
+set "UPDATE_TRANSACTION="
 
 :parse_args
 if "%~1"=="" goto args_done
@@ -123,7 +124,7 @@ echo   --wglink-archive PATH
 echo                       install this reviewed WGLink package instead of fetching it
 echo   --skip-wglink       leave Fusion's WGLink registration untouched
 echo   --replace-wglink    replace an existing non-WG developer install
-echo   --force             rebuild the environment and reinstall the SPA
+echo   --force             fully repair the environment and reinstall the SPA
 echo   --no-launch         finish without starting the application
 echo   --help              this message
 echo.
@@ -170,6 +171,14 @@ exit /b %ERRORLEVEL%
 "%BOOTSTRAP_PYTHON%" "%WG_ROOT%\scripts\run_update_guard.py" --launch "%WG_ROOT%\launchers\windows\launch-wg.bat" -- "%COMSPEC%" /d /c call "%~f0" %*
 exit /b %ERRORLEVEL%
 :update_lock_ready
+
+call :load_update_transaction
+if not defined UPDATE_TRANSACTION goto transaction_ready
+if defined AFTER_PULL goto transaction_ready
+echo   Found an interrupted update; rolling it back before trying again.
+call :rollback_update
+if errorlevel 1 exit /b 1
+:transaction_ready
 
 echo.
 echo Checking for code updates...
@@ -232,6 +241,10 @@ echo.
 echo Checking that a solve can run...
 ".venv\Scripts\python.exe" "%WG_ROOT%\scripts\check_backends.py"
 if errorlevel 1 goto no_solve_backend
+
+rem Code, interface, environment, and backend validation now agree. Only at
+rem this point is it safe to discard the previous runtime preserved for rollback.
+call :commit_update_transaction
 
 echo.
 echo Installing WGLink for Fusion 360...
@@ -400,6 +413,124 @@ exit /b 0
 set "STORE_ALIAS_SEEN=1"
 exit /b 0
 
+:set_update_transaction_path
+set "UPDATE_TRANSACTION="
+set "UPDATE_GIT_DIR="
+for /f "delims=" %%d in ('git rev-parse --git-dir 2^>nul') do if not defined UPDATE_GIT_DIR set "UPDATE_GIT_DIR=%%d"
+if not defined UPDATE_GIT_DIR exit /b 1
+for %%d in ("%UPDATE_GIT_DIR%") do set "UPDATE_TRANSACTION=%%~fd\wg-install-rollback"
+exit /b 0
+
+:load_update_transaction
+call :set_update_transaction_path
+if errorlevel 1 set "UPDATE_TRANSACTION="
+if not defined UPDATE_TRANSACTION exit /b 0
+if not exist "%UPDATE_TRANSACTION%\prior-head" set "UPDATE_TRANSACTION="
+exit /b 0
+
+:begin_update_transaction
+call :set_update_transaction_path
+if errorlevel 1 exit /b 1
+if exist "%UPDATE_TRANSACTION%" exit /b 1
+mkdir "%UPDATE_TRANSACTION%" >nul 2>&1
+if errorlevel 1 exit /b 1
+git rev-parse HEAD > "%UPDATE_TRANSACTION%\prior-head"
+if errorlevel 1 exit /b 1
+git symbolic-ref --quiet HEAD > "%UPDATE_TRANSACTION%\prior-ref" 2>nul
+if exist ".venv" goto preserve_venv
+type nul > "%UPDATE_TRANSACTION%\manage-venv"
+goto preserve_spa
+:preserve_venv
+rem Windows has no cheap, dependable clone primitive. Keep the live venv in
+rem place and let the restored checkout's lock-driven bootstrap repair it on
+rem rollback instead of copying hundreds of megabytes byte by byte.
+type nul > "%UPDATE_TRANSACTION%\venv-repair"
+:preserve_spa
+if defined SKIP_SPA exit /b 0
+if exist "frontend\dist" goto preserve_existing_spa
+type nul > "%UPDATE_TRANSACTION%\manage-spa"
+exit /b 0
+:preserve_existing_spa
+robocopy "frontend\dist" "%UPDATE_TRANSACTION%\dist" /E /NFL /NDL /NJH /NJS >nul
+if errorlevel 8 goto preserve_spa_failed
+type nul > "%UPDATE_TRANSACTION%\had-spa"
+exit /b 0
+:preserve_spa_failed
+if exist "%UPDATE_TRANSACTION%\dist" rmdir /s /q "%UPDATE_TRANSACTION%\dist"
+exit /b 1
+
+:rollback_update
+call :load_update_transaction
+if not defined UPDATE_TRANSACTION exit /b 0
+echo   Restoring the previous code and runtime after the failed update...
+set "ROLLBACK_FAILED="
+set "VENV_REPAIR_FAILED="
+set "PRIOR_HEAD="
+set "PRIOR_REF="
+set /p PRIOR_HEAD=<"%UPDATE_TRANSACTION%\prior-head"
+if exist "%UPDATE_TRANSACTION%\prior-ref" set /p PRIOR_REF=<"%UPDATE_TRANSACTION%\prior-ref"
+if defined PRIOR_REF goto rollback_branch
+git checkout --quiet --detach "%PRIOR_HEAD%"
+if errorlevel 1 set "ROLLBACK_FAILED=1"
+goto rollback_spa
+:rollback_branch
+git checkout --quiet "%PRIOR_REF:refs/heads/=%"
+if errorlevel 1 set "ROLLBACK_FAILED=1"
+git reset --hard "%PRIOR_HEAD%" >nul
+if errorlevel 1 set "ROLLBACK_FAILED=1"
+:rollback_spa
+if exist "%UPDATE_TRANSACTION%\had-spa" goto restore_spa
+if exist "%UPDATE_TRANSACTION%\manage-spa" if exist "frontend\dist" rmdir /s /q "frontend\dist"
+if exist "%UPDATE_TRANSACTION%\manage-spa" if exist "frontend\dist" set "ROLLBACK_FAILED=1"
+goto rollback_venv
+:restore_spa
+if not exist "%UPDATE_TRANSACTION%\dist" goto restore_spa_failed
+if exist "frontend\dist" rmdir /s /q "frontend\dist"
+if exist "frontend\dist" goto restore_spa_failed
+robocopy "%UPDATE_TRANSACTION%\dist" "frontend\dist" /E /NFL /NDL /NJH /NJS >nul
+if errorlevel 8 goto restore_spa_failed
+goto rollback_venv
+:restore_spa_failed
+set "ROLLBACK_FAILED=1"
+:rollback_venv
+if exist "%UPDATE_TRANSACTION%\manage-venv" if exist ".venv" rmdir /s /q ".venv"
+if exist "%UPDATE_TRANSACTION%\manage-venv" if exist ".venv" set "ROLLBACK_FAILED=1"
+if not exist "%UPDATE_TRANSACTION%\venv-repair" goto rollback_finished
+if not defined BOOTSTRAP_PYTHON goto venv_repair_failed
+"%BOOTSTRAP_PYTHON%" "%WG_ROOT%\scripts\bootstrap.py"
+if errorlevel 1 goto venv_repair_failed
+goto rollback_finished
+:venv_repair_failed
+set "ROLLBACK_FAILED=1"
+set "VENV_REPAIR_FAILED=1"
+:rollback_finished
+if defined ROLLBACK_FAILED goto rollback_incomplete
+rmdir /s /q "%UPDATE_TRANSACTION%"
+if exist "%UPDATE_TRANSACTION%" goto transaction_cleanup_failed
+set "UPDATE_TRANSACTION="
+echo   Previous installation restored.
+exit /b 0
+:transaction_cleanup_failed
+set "ROLLBACK_FAILED=1"
+:rollback_incomplete
+echo WARNING: Automatic rollback was incomplete. Recovery files remain at:
+echo          %UPDATE_TRANSACTION%
+if defined VENV_REPAIR_FAILED goto rollback_repair_incomplete
+exit /b 1
+:rollback_repair_incomplete
+echo          The restored checkout also needs its Python environment repaired.
+echo          Ensure CPython 3.13 and network access are available, then run the installer again.
+exit /b 1
+
+:commit_update_transaction
+call :load_update_transaction
+if not defined UPDATE_TRANSACTION exit /b 0
+del /q "%UPDATE_TRANSACTION%\prior-head" >nul 2>&1
+rmdir /s /q "%UPDATE_TRANSACTION%" >nul 2>&1
+if exist "%UPDATE_TRANSACTION%" echo   WARNING: could not remove the completed update backup at %UPDATE_TRANSACTION%.
+set "UPDATE_TRANSACTION="
+exit /b 0
+
 :update_from_git
 set "CODE_UPDATED="
 if defined TAG goto checkout_tag
@@ -418,10 +549,16 @@ for /f "delims=" %%s in ('git status --porcelain -uno') do goto dirty_tree
 set "BEFORE_COMMIT="
 set "AFTER_COMMIT="
 for /f "delims=" %%h in ('git rev-parse HEAD') do if not defined BEFORE_COMMIT set "BEFORE_COMMIT=%%h"
-git pull --ff-only
-if errorlevel 1 goto pull_failed
-for /f "delims=" %%h in ('git rev-parse HEAD') do if not defined AFTER_COMMIT set "AFTER_COMMIT=%%h"
+git fetch --quiet
+if errorlevel 1 goto fetch_failed
+for /f "delims=" %%h in ('git rev-parse "@{u}"') do if not defined AFTER_COMMIT set "AFTER_COMMIT=%%h"
 if /I "%BEFORE_COMMIT%"=="%AFTER_COMMIT%" goto already_current
+git merge-base --is-ancestor "%BEFORE_COMMIT%" "%AFTER_COMMIT%"
+if errorlevel 1 goto pull_failed
+call :begin_update_transaction
+if errorlevel 1 goto transaction_setup_failed
+git merge --ff-only "%AFTER_COMMIT%"
+if errorlevel 1 goto pull_failed
 echo   Code updated.
 set "CODE_UPDATED=1"
 exit /b 0
@@ -447,12 +584,17 @@ echo     git status
 echo   Everything below still runs against the code you have.
 exit /b 0
 :pull_failed
+call :rollback_update
 echo.
 echo ERROR: Code update failed. This installer only fast-forwards.
 echo        The branch has diverged from its upstream and cannot fast-forward.
 echo        Reconcile it by hand, then run this again. Diagnose with:
 echo          git status
 echo          git log --oneline -5
+exit /b 1
+:fetch_failed
+echo.
+echo ERROR: Code update failed while fetching the upstream branch.
 exit /b 1
 
 :checkout_tag
@@ -463,6 +605,8 @@ git fetch --tags --quiet
 if errorlevel 1 goto tag_fetch_failed
 git rev-parse --verify --quiet "refs/tags/%TAG%" >nul
 if errorlevel 1 goto tag_unknown
+call :begin_update_transaction
+if errorlevel 1 goto transaction_setup_failed
 git checkout --quiet "%TAG%"
 if errorlevel 1 goto tag_checkout_failed
 echo   Checked out %TAG% ^(detached HEAD; fast-forward updates are off until you
@@ -486,7 +630,12 @@ echo ERROR: No such tag: %TAG%
 echo        List what exists with:  git tag --list "v*"
 exit /b 1
 :tag_checkout_failed
+call :rollback_update
 echo ERROR: Could not check out %TAG%.
+exit /b 1
+:transaction_setup_failed
+echo ERROR: Could not preserve the current installation before updating.
+call :rollback_update
 exit /b 1
 
 
@@ -507,6 +656,7 @@ echo ERROR: Could not enter the project folder.
 exit /b 1
 
 :bad_project_folder
+call :rollback_update
 echo.
 echo ERROR: This does not look like a complete Waveguide Generator checkout.
 echo        Current folder: %WG_ROOT%
@@ -517,6 +667,7 @@ echo          git clone https://github.com/m3gnus/waveguide-generator.git
 exit /b 1
 
 :no_python
+call :rollback_update
 echo.
 echo ERROR: CPython 3.13 is required and was not found.
 echo        Waveguide Generator locks its dependency set against one interpreter series on
@@ -539,6 +690,7 @@ echo        App execution aliases ^> switch off "python.exe" and "python3.exe".
 exit /b 0
 
 :spa_fatal
+call :rollback_update
 echo.
 echo ERROR: The prebuilt interface could not be installed, and the existing
 echo        frontend\dist is not a checksum-verified copy of the requested version.
@@ -550,6 +702,7 @@ echo        then run this installer again with --skip-spa.
 exit /b 1
 
 :spa_replacement_failed
+call :rollback_update
 echo.
 echo ERROR: The requested SPA replacement could not be installed.
 echo        The existing interface was left intact, but an explicit --force,
@@ -558,6 +711,7 @@ echo        its download or checksum verification fails. See the reason above.
 exit /b 1
 
 :bootstrap_failed
+call :rollback_update
 echo.
 echo ERROR: The Python environment could not be prepared; review the errors above.
 echo        Common causes: no network access to PyPI or GitHub, or a proxy that
@@ -567,6 +721,7 @@ echo          "%BOOTSTRAP_PYTHON%" scripts\bootstrap.py --force
 exit /b 1
 
 :no_solve_backend
+call :rollback_update
 echo.
 echo ERROR: No solve backend is usable, so simulations would all fail.
 echo        Fix the reason reported above, then run this installer again.

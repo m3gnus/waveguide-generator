@@ -1,37 +1,19 @@
-import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { getOnshapeConnection, type OnshapeConnection } from '../api/onshape';
-import { getCadWorkspace, openCadWorkspace, selectCadWorkspace, setCaptureDocument } from '../api/cadWorkspace';
+import {
+  getCadWorkspace,
+  openCadWorkspace,
+  selectCadWorkspace,
+  setCaptureMode,
+  type CadCaptureMode,
+} from '../api/cadWorkspace';
 import { JobsPreferencesSurface, ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
 import { preferencesStore, usePreferences, type CadApplication } from '../prefs/preferences';
 import { Icon } from './icons';
 import type { SettingsSection } from './settingsNavigation';
+import { focusableSelector, useModalDialogFocus } from './dialogFocus';
 
 export type Theme = 'dark' | 'light';
-
-const focusableSelector = [
-  'button:not([disabled])',
-  'input:not([disabled])',
-  'select:not([disabled])',
-  'textarea:not([disabled])',
-  '[href]',
-  '[tabindex]:not([tabindex="-1"])',
-].join(',');
-
-export function trapDialogFocus(dialog: RefObject<HTMLElement | null>, event: KeyboardEvent): void {
-  if (event.key !== 'Tab') return;
-  const focusable = [...(dialog.current?.querySelectorAll<HTMLElement>(focusableSelector) ?? [])]
-    .filter((element) => !element.hidden && element.getAttribute('aria-hidden') !== 'true');
-  if (!focusable.length) return;
-  const first = focusable[0];
-  const last = focusable.at(-1)!;
-  if (event.shiftKey && (document.activeElement === first || !dialog.current?.contains(document.activeElement))) {
-    event.preventDefault();
-    last.focus();
-  } else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault();
-    first.focus();
-  }
-}
 
 async function workspacePath(endpoint: '/path' | '/open' | '/select', method?: 'POST'): Promise<string> {
   const response = await fetch(`/api/workspace${endpoint}`, method ? { method } : undefined);
@@ -72,7 +54,7 @@ function WorkspaceSettings() {
 
   return <section className="settings-theme workspace-settings" aria-labelledby="settings-workspace-title" aria-busy={busy !== undefined}>
     <h3 id="settings-workspace-title">Workspace</h3>
-    <p className="cad-settings-note">Manual and automatic run exports are saved here. The default is the <code>output</code> folder beside Waveguide Generator; AppData continues to hold internal databases and logs, not result exports.</p>
+    <p className="cad-settings-note">Manual and automatic run exports are saved here. The default is <code>Documents/Waveguide Generator/runs</code>; when you choose another workspace, the path shown below is authoritative. The application-data folder continues to hold internal databases and logs, not result exports.</p>
     <p className="workspace-settings-path" title={path}>{path ?? (error ? 'Unavailable' : 'Loading…')}</p>
     <div className="settings-theme-options">
       <button disabled={!path || busy !== undefined} onClick={() => void run('open')}>Open folder</button>
@@ -82,25 +64,55 @@ function WorkspaceSettings() {
   </section>;
 }
 
+/** The three places a returned Fusion model can end up, in plain terms. */
+const CAPTURE_CHOICES: Array<{ mode: CadCaptureMode; label: string; detail: string }> = [
+  {
+    mode: 'run',
+    label: 'With every run',
+    detail: 'In each run folder, beside the results it produced. Easiest to find; one copy per solve.',
+  },
+  {
+    mode: 'project',
+    label: 'Once per project',
+    detail: 'In runs/<project>/cad/, one copy per model state however many times it is solved. Saves space when sweeping one geometry.',
+  },
+  {
+    mode: 'off',
+    label: 'Don\u2019t keep one',
+    detail: 'Returns carry no model. Older runs cannot be reopened in Fusion from WG.',
+  },
+];
+
 function CadFolderSettings() {
   const [path, setPath] = useState<string | null>();
-  const [capture, setCapture] = useState(true);
+  const [capture, setCapture] = useState<CadCaptureMode>('run');
   const [busy, setBusy] = useState<'open' | 'select'>();
   const [error, setError] = useState<string>();
   const [manualPath, setManualPath] = useState('');
   const requestGeneration = useRef(0);
+  const captureGeneration = useRef(0);
+  const confirmedCapture = useRef<CadCaptureMode>('run');
+  const captureWrite = useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => {
     const request = ++requestGeneration.current;
+    const captureRequest = captureGeneration.current;
     void getCadWorkspace().then(
       (value) => {
         if (request !== requestGeneration.current) return;
         setPath(value.path);
-        setCapture(value.captureDocument !== false);
+        if (captureRequest === captureGeneration.current) {
+          const mode = value.captureMode ?? (value.captureDocument === false ? 'off' : 'run');
+          confirmedCapture.current = mode;
+          setCapture(mode);
+        }
       },
       (reason: unknown) => { if (request === requestGeneration.current) setError(String(reason)); },
     );
-    return () => { requestGeneration.current += 1; };
+    return () => {
+      requestGeneration.current += 1;
+      captureGeneration.current += 1;
+    };
   }, []);
 
   const run = async (action: 'open' | 'select', requestedPath?: string) => {
@@ -119,15 +131,28 @@ function CadFolderSettings() {
     }
   };
 
-  const toggleCapture = async (enabled: boolean) => {
-    // Optimistic: the checkbox is the state, and a refused write puts it back
-    // rather than leaving the box disagreeing with the file the add-in reads.
-    setCapture(enabled); setError(undefined);
+  const chooseCapture = async (mode: CadCaptureMode) => {
+    // Optimistic: the chosen option is the state, and a refused write puts the
+    // previous one back rather than leaving the radio disagreeing with the file
+    // the add-in reads.
+    const request = ++captureGeneration.current;
+    setCapture(mode); setError(undefined);
+    const write = captureWrite.current.then(async () => {
+      const saved = await setCaptureMode(mode);
+      confirmedCapture.current = saved;
+      return saved;
+    });
+    // A refusal must not poison the queue: the next choice still needs to be
+    // sent after it so the latest click is the last write on the server.
+    captureWrite.current = write.then(() => undefined, () => undefined);
     try {
-      setCapture(await setCaptureDocument(enabled));
+      const saved = await write;
+      if (request === captureGeneration.current) setCapture(saved);
     } catch (reason) {
-      setCapture(!enabled);
-      setError(reason instanceof Error ? reason.message : String(reason));
+      if (request === captureGeneration.current) {
+        setCapture(confirmedCapture.current);
+        setError(reason instanceof Error ? reason.message : String(reason));
+      }
     }
   };
 
@@ -143,15 +168,19 @@ function CadFolderSettings() {
       <label>WGLink folder path<input value={manualPath} onChange={(event) => setManualPath(event.target.value)} placeholder="/path/to/WGLink exchange"/></label>
       <button disabled={!manualPath.trim() || busy !== undefined} onClick={() => void run('select', manualPath.trim())}>Use this path</button>
     </details>
-    <label className="ui-check cad-settings-capture">
-      <input
-        type="checkbox"
-        checked={capture}
-        onChange={(event) => void toggleCapture(event.target.checked)}
-      />
-      Keep a copy of the Fusion model with each return
-    </label>
-    <p className="cad-settings-note">Filed under <code>runs/&lt;design&gt;/cad/</code>, one copy per model state rather than one per solve, so a run can be reopened in Fusion later. A Fusion archive is tens of megabytes; turn this off if the space matters more.</p>
+    <fieldset className="cad-settings-capture">
+      <legend>Keep a copy of the Fusion model</legend>
+      {CAPTURE_CHOICES.map(({ mode, label, detail }) => <label key={mode} className="ui-check">
+        <input
+          type="radio"
+          name="cad-capture-mode"
+          value={mode}
+          checked={capture === mode}
+          onChange={() => void chooseCapture(mode)}
+        />
+        <span><b>{label}</b><small>{detail}</small></span>
+      </label>)}
+    </fieldset>
     {error && <p className="workspace-settings-error" role="status">{error}</p>}
   </div>;
 }
@@ -248,32 +277,13 @@ export function SettingsDialog({ open, theme, focusSection, onThemeChange, onClo
   onThemeChange: (theme: Theme) => void;
   onClose: () => void;
 }) {
-  const dialog = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const focus = requestAnimationFrame(() => {
-      const section = focusSection ? dialog.current?.querySelector<HTMLElement>(`#settings-${focusSection}`) : null;
+  const initialFocus = useCallback((current: HTMLDivElement) => {
+      const section = focusSection ? current.querySelector<HTMLElement>(`#settings-${focusSection}`) : null;
       section?.scrollIntoView({ block: 'start' });
-      (section?.querySelector<HTMLElement>('select:not([disabled]), button:not([disabled])')
-        ?? dialog.current?.querySelector<HTMLElement>(focusableSelector))?.focus();
-    });
-    const keydown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        onClose();
-        return;
-      }
-      trapDialogFocus(dialog, event);
-    };
-    document.addEventListener('keydown', keydown);
-    return () => {
-      cancelAnimationFrame(focus);
-      document.removeEventListener('keydown', keydown);
-      previous?.focus();
-    };
-  }, [focusSection, onClose, open]);
+      return section?.querySelector<HTMLElement>('select:not([disabled]), button:not([disabled])')
+        ?? current.querySelector<HTMLElement>(focusableSelector);
+  }, [focusSection]);
+  const dialog = useModalDialogFocus<HTMLDivElement>({ open, onClose, initialFocus });
 
   if (!open) return null;
   return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>

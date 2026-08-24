@@ -112,6 +112,39 @@ describe('solve and directivity control help', () => {
     expect(unchanged.detail).toContain('no widening is required');
   });
 
+  it.each([
+    ['equal sweep endpoints', { angleStart: 0, angleEnd: 0 }, 'greater than its start'],
+    ['zero angular step', { angleStep: 0 }, 'greater than 0 degrees'],
+    ['short measurement distance', { distance: 0.05 }, 'at least 0.1 m'],
+    ['no display planes', { enabledAxes: [] }, 'at least one directivity plane'],
+    ['more than 721 samples', { angleStart: 0, angleEnd: 180, angleStep: 0.1 }, 'at most 721 angle samples'],
+  ])('keeps both parameter modes mounted for %s and shows one adjacent grid error', (_name, invalid, message) => {
+    act(() => useSolveOptionsStore.getState().updatePolar(invalid));
+
+    render(<DirectivityMapControls/>);
+    expect(host.querySelector('#polar-angle-start')).not.toBeNull();
+    expect(host.querySelector('.polar-grid-error')?.textContent).toContain(message);
+    expect(host.querySelector('#polar-angle-start')?.getAttribute('aria-invalid')).toBe('true');
+
+    render(<DirectivityMapControls effectiveDerivation={{ axes: { horizontal: { minimum_deg: -180, maximum_deg: 180 } } }}/>);
+    expect(host.querySelector('#polar-angle-start')).not.toBeNull();
+    expect(host.querySelector('.polar-grid-error')?.textContent).toContain(message);
+    expect(host.querySelector('.effective-grid-readout')).toBeNull();
+  });
+
+  it('keeps an incomplete numeric draft out of the committed grid', () => {
+    render(<DirectivityMapControls/>);
+    const distance = host.querySelector<HTMLInputElement>('#polar-distance')!;
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(distance, '');
+      distance.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(distance.getAttribute('aria-invalid')).toBe('true');
+    expect(useSolveOptionsStore.getState().polar.distance).toBe(defaultPolarUi.distance);
+    act(() => { distance.focus(); distance.blur(); });
+    expect(distance.value).toBe(String(defaultPolarUi.distance));
+  });
+
   it('describes the CAD sweep in imported-return terms', () => {
     render(<FrequencySweepControls idPrefix="cad-import" context="imported"/>);
     const copy = hoverText(host.querySelector('#cad-import-frequency-mode')!.closest('.select-row')!);

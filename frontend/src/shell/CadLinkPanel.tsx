@@ -16,6 +16,8 @@ import { useCapabilities } from '../jobs/useCapabilities';
 import { cadLinkCoordinatorBridge, returnBelongsToAnotherProject } from './CadLinkCoordinator';
 import { fusionWorkflowView, onshapeWorkflowView, type CadWorkflowView } from './cadWorkflowView';
 import { Icon } from './icons';
+import { fullTime, pluralized, relativeTime } from './cadTime';
+import { CadProjectHeader, CadProjectHistory } from './CadProjectPanel';
 import { requestSettings } from './settingsNavigation';
 import './cadLinkPanel.css';
 
@@ -51,28 +53,6 @@ function findingDetail(finding: CadReturnFinding): string {
     .filter(([key]) => !['id', 'kind', 'blocking', 'evidence_path'].includes(key))
     .map(([key, value]) => `${key.replaceAll('_', ' ')}: ${compactValue(value)}`);
   return details.join(' · ') || 'Recorded by CAD-return ingestion.';
-}
-
-function pluralized(count: number, singular: string, plural = `${singular}s`): string {
-  return `${count} ${count === 1 ? singular : plural}`;
-}
-
-function relativeTime(value: string): string {
-  const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) return 'time unavailable';
-  const elapsedSeconds = Math.max(0, Math.round((Date.now() - timestamp) / 1_000));
-  if (elapsedSeconds < 60) return 'just now';
-  const elapsedMinutes = Math.round(elapsedSeconds / 60);
-  if (elapsedMinutes < 60) return `${elapsedMinutes} min ago`;
-  const elapsedHours = Math.round(elapsedMinutes / 60);
-  if (elapsedHours < 24) return `${elapsedHours} hr ago`;
-  const elapsedDays = Math.round(elapsedHours / 24);
-  return `${elapsedDays} ${elapsedDays === 1 ? 'day' : 'days'} ago`;
-}
-
-function fullTime(value: string): string {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? 'Time unavailable' : date.toLocaleString();
 }
 
 function returnDisplayName(bundle: CadReturnBundle): string {
@@ -289,7 +269,6 @@ export function CadLinkPanel() {
   const setCadLink = useDocumentStore((current) => current.setCadLink);
   const cadCoordinator = useSyncExternalStore(cadLinkCoordinatorBridge.subscribe, cadLinkCoordinatorBridge.getSnapshot, cadLinkCoordinatorBridge.getSnapshot);
   const parkedCommand = useSyncExternalStore(parkedSolveCommandStore.subscribe, parkedSolveCommandStore.getSnapshot, parkedSolveCommandStore.getSnapshot).command;
-  const [requestingReturn, setRequestingReturn] = useState(false);
   const [confirmPublicDocument, setConfirmPublicDocument] = useState<string | null>(null);
   const [sendingToOnshape, setSendingToOnshape] = useState(false);
   const onshapeSendGeneration = useRef(0);
@@ -362,17 +341,9 @@ export function CadLinkPanel() {
   // design menu and the Geometry rail call the coordinator's unified path.
   const send = async () => { await sendToOnshape(); };
 
-  const bringFromFusion = async () => {
-    setRequestingReturn(true); cadCoordinator.clearFeedback();
-    try {
-      // The arrival itself is awaited by the coordinator's correlated waiter,
-      // which also owns the timeout message; this button only starts the pull.
-      void cadCoordinator.pullFromFusion().catch(() => undefined);
-    } catch (reason) {
-      cadCoordinator.reportError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setRequestingReturn(false);
-    }
+  const bringFromFusion = () => {
+    cadCoordinator.clearFeedback();
+    void cadCoordinator.pullFromFusion().catch(() => undefined);
   };
 
   const workflow = onshape ? onshapeWorkflowView(onshapeStatus) : fusionWorkflowView(fusionStatus);
@@ -410,6 +381,12 @@ export function CadLinkPanel() {
 
   return <div className="cadlink-panel panel-scroll">
     <h2 className="sr-only">CAD Link</h2>
+    {/* The project you are in, then its history, then the round trip. Asked
+        for in that order: what am I working on, how did it get here, what do I
+        do next. The history caps its own height so the workflow below it stays
+        one scroll away rather than N runs away. */}
+    <CadProjectHeader documentName={fusionStatus?.documentName ?? documentName ?? null}/>
+    <CadProjectHistory/>
     {metalUnavailable && <div className="cad-alert cad-alert-notice cad-solver-unavailable" role="status">
       <b>Imported CAD geometry cannot be solved on this machine.</b> Solving an
       ingested model needs the Metal backend, which is macOS-only; this host has
@@ -477,8 +454,8 @@ export function CadLinkPanel() {
     </section>}
     {!onshape && <section className="cad-workflow cad-return-workflow">
     <header className="cad-workflow-header no-step"><div><h3>FUSION → SIMULATION</h3><p>Bring Fusion geometry and source tags into WG.</p></div><button disabled={loading || ingesting} onClick={() => void cadCoordinator.refresh()}><Icon name="reset"/>{loading ? 'Loading…' : 'Refresh'}</button></header>
-    {fusionStatus?.fusionChangesAvailable && <div className="cad-direction-alert"><div><b>Fusion geometry has changed</b><span>The active Fusion body or source setup differs from the last design returned to WG.</span></div><div className="cad-confirm-actions"><button disabled={!canRequestFusionReturn || requestingReturn} onClick={() => void bringFromFusion()}>{requestingReturn ? 'Requesting…' : 'Bring changes into WG'}</button><button className="primary" disabled={!canRequestFusionReturn || requestingReturn} onClick={() => { void cadCoordinator.pullAndSolve(); }}>Bring changes in & solve</button></div></div>}
-    {!fusionStatus?.fusionChangesAvailable && canRequestFusionReturn && <button className="cad-secondary-action" disabled={requestingReturn} onClick={() => void bringFromFusion()}>{requestingReturn ? 'Requesting…' : 'Refresh geometry from Fusion'}</button>}
+    {fusionStatus?.fusionChangesAvailable && <div className="cad-direction-alert"><div><b>Fusion geometry has changed</b><span>The active Fusion body or source setup differs from the last design returned to WG.</span></div><div className="cad-confirm-actions"><button disabled={!canRequestFusionReturn || cadCoordinator.pullingFromFusion} onClick={bringFromFusion}>{cadCoordinator.pullingFromFusion ? 'Waiting for Fusion…' : 'Bring changes into WG'}</button><button className="primary" disabled={!canRequestFusionReturn || cadCoordinator.pullingFromFusion} onClick={() => { void cadCoordinator.pullAndSolve(); }}>{cadCoordinator.pullingFromFusion ? 'Waiting for Fusion…' : 'Bring changes in & solve'}</button></div></div>}
+    {!fusionStatus?.fusionChangesAvailable && canRequestFusionReturn && <button className="cad-secondary-action" disabled={cadCoordinator.pullingFromFusion} onClick={bringFromFusion}>{cadCoordinator.pullingFromFusion ? 'Waiting for Fusion…' : 'Refresh geometry from Fusion'}</button>}
     {parked && <div className="cad-direction-alert cad-parked-command" role="status">
       <div><b>Fusion asked for a solve</b><span>Waiting on: {parked.blockers.join(' · ')}</span></div>
       <div className="cad-confirm-actions">

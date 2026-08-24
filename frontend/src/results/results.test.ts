@@ -1,10 +1,49 @@
 import { describe, expect, it, vi } from 'vitest';
-import { CompareStore, fetchJobResults, fetchRadiationImpedancePresentation, mergeProvisionalResults, ProvisionalResultsStore, recombineJobResults, ResultsLruCache, resultsCache, type JobResults } from '../api/results';
-import { beamShapeSeries, complexToDb, directivityGrid, directivityIndexSeries, excursionChartSeries, expandResultChannels, impedanceComparable, impedanceSeries, impedanceSubtitle, polarCut, polarMirrorsAcrossAxis, polarSeries, splSeries, type NamedResult } from './mappers';
-import type { ResultPayload } from './types';
+import { CompareStore, fetchJobArchiveSnapshot, fetchJobResults, fetchRadiationImpedancePresentation, mergeProvisionalResults, parseFinalResultEnvelope, ProvisionalResultsStore, recombineJobResults, ResultsLruCache, resultsCache, type JobResults, type ResultData } from '../api/results';
+import { COMBINED_VIEW } from '../stores/resultView';
+import { beamShapeSeries, complexToDb, directivityGrid, directivityIndexSeries, excursionChartSeries, impedanceComparable, impedanceSeries, impedanceSubtitle, polarCut, polarMirrorsAcrossAxis, polarSeries, powerResponseMethodCaption, powerResponseSeries, selectResultChannels, splSeries, type NamedResult } from './mappers';
+import { combinedChannelId, type ResultPayload } from './types';
+
+/** A channel as the server stamps it from the ingest record's source roles. */
+function roled(payload: JobResults, role: string): JobResults {
+  return { ...payload, metadata: { ...payload.metadata, role } };
+}
+
+function combinedChannel(payload: JobResults, members: string[]): JobResults {
+  return {
+    ...payload,
+    metadata: { ...payload.metadata, combine: { members, crossovers_hz: [1_000] } },
+  };
+}
+
+function provenance() {
+  const digest = 'a'.repeat(64);
+  return {
+    schema_version: 1,
+    wg_version: 'test',
+    dependency_shas: {},
+    request_sha256: digest,
+    geometry_sha256: digest,
+    solve_options_sha256: digest,
+    request_identity: 'execution',
+    execution_request_sha256: digest,
+    execution_geometry_sha256: digest,
+    execution_solve_options_sha256: digest,
+    effective_request_sha256: digest,
+    effective_geometry_sha256: digest,
+    effective_solve_options_sha256: digest,
+    resolved_engine: 'test',
+  };
+}
 
 function result(offset = 0): JobResults {
   return {
+    result_kind: 'parametric',
+    result_contract_version: 1,
+    client_request_id: null,
+    client_metadata: {},
+    provenance: provenance(),
+    metadata: {},
     frequencies: [200, 1_000],
     spl_on_axis: { frequencies: [200, 1_000], spl: [90 + offset, 96 + offset], phase_degrees: [0, 20] },
     directivity: {
@@ -51,6 +90,62 @@ describe('results LRU', () => {
     expect(first).toBe(second);
   });
 
+  it('adopts the parametric v1 identity for a result migrated from the original application', async () => {
+    resultsCache.clear();
+    const { result_kind: _kind, result_contract_version: _version, provenance: _provenance, ...legacy } = result();
+    const fetcher = vi.fn(async () => new Response(JSON.stringify(legacy), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    const fetched = await fetchJobResults('migrated-v1', fetcher);
+    expect(fetched).toMatchObject({ result_kind: 'parametric', result_contract_version: 1 });
+    expect(resultsCache.has('migrated-v1')).toBe(true);
+  });
+
+  it.each([
+    ['half-declared identity', { ...result(), result_contract_version: undefined }, 'missing result_contract_version'],
+    ['unsupported version', { ...result(), result_contract_version: 999 }, 'unsupported result version 999'],
+  ])('rejects a %s final envelope without caching it', async (_case, payload, message) => {
+    resultsCache.clear();
+    const fetcher = vi.fn(async () => new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+
+    await expect(fetchJobResults('invalid-contract', fetcher)).rejects.toThrow(message);
+    expect(resultsCache.has('invalid-contract')).toBe(false);
+  });
+
+  it('accepts parametric v1 and multi-channel v2 final envelopes', () => {
+    expect(parseFinalResultEnvelope(result()).result_kind).toBe('parametric');
+    const multi = {
+      ...result(),
+      result_kind: 'multi_channel',
+      result_contract_version: 2,
+      channels: { hf: { frequencies: [200] } },
+      channel_order: ['hf'],
+    };
+    expect(parseFinalResultEnvelope(multi)).toMatchObject({
+      result_kind: 'multi_channel', result_contract_version: 2,
+    });
+  });
+
+  it('validates archive snapshots before caching their final result', async () => {
+    resultsCache.clear();
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      schema_version: 1,
+      results: { ...result(), result_contract_version: 999 },
+      results_sha256: 'a'.repeat(64),
+      mesh_artifact: null,
+      pressure_bases: [],
+      radiation_impedance: null,
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+    await expect(fetchJobArchiveSnapshot('archive-invalid', fetcher))
+      .rejects.toThrow('unsupported result version 999');
+    expect(resultsCache.has('archive-invalid')).toBe(false);
+  });
+
   it('treats an absent optional radiation artifact as no presentation', async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(
       JSON.stringify({ detail: 'This job has no passive-cardioid artifact' }),
@@ -66,7 +161,7 @@ describe('results LRU', () => {
     selection.toggleOverlay('keep');
     selection.toggleOverlay('deleted');
     selection.prune(new Set(['keep']));
-    expect(selection.getSnapshot()).toEqual({ primary: null, overlays: ['keep'], following: true });
+    expect(selection.getSnapshot()).toEqual({ primary: null, overlays: ['keep'], following: true, awaiting: null });
   });
 
   it('follows the newest solve until a result is chosen by hand', () => {
@@ -96,7 +191,33 @@ describe('results LRU', () => {
     selection.setPrimary('pinned');
     selection.toggleOverlay('gone');
     selection.prune(new Set(['pinned']));
-    expect(selection.getSnapshot()).toEqual({ primary: 'pinned', overlays: [], following: false });
+    expect(selection.getSnapshot()).toEqual({ primary: 'pinned', overlays: [], following: false, awaiting: null });
+  });
+
+  // A pin taken at any point in the session used to outlive every solve that
+  // came after it: the run the user had just started finished into a rail that
+  // still showed the old result. The submission claims the slot instead, and
+  // the claim is only cashed in when that run has something to show.
+  it('hands the pinned slot to a submitted run once it has results', () => {
+    const selection = new CompareStore();
+    selection.setPrimary('pinned');
+    selection.awaitRun('fresh');
+    expect(selection.getSnapshot()).toMatchObject({ primary: 'pinned', following: false, awaiting: 'fresh' });
+
+    // Jobs messages arrive throughout the solve, and the claimed run is not in
+    // the list at all until the server has registered it.
+    selection.prune(new Set(['pinned']));
+    expect(selection.getSnapshot().awaiting).toBe('fresh');
+
+    selection.followLatest('fresh');
+    expect(selection.getSnapshot()).toMatchObject({ primary: 'fresh', following: true, awaiting: null });
+  });
+
+  it('drops a claim when a result is picked by hand after the solve started', () => {
+    const selection = new CompareStore();
+    selection.awaitRun('fresh');
+    selection.setPrimary('chosen');
+    expect(selection.getSnapshot()).toMatchObject({ primary: 'chosen', following: false, awaiting: null });
   });
 
   it('holds one snapshot identity while the selection is unchanged', () => {
@@ -138,7 +259,7 @@ describe('results LRU', () => {
 
 describe('provisional frequency results', () => {
   it('appends frequency-shaped blocks and nested drive channels', () => {
-    const first: JobResults = {
+    const first: ResultData = {
       frequencies: [200],
       directivity: { horizontal: [[[0, 0], [90, -12]]] },
       spl_on_axis: { frequencies: [200], spl: [90], phase_degrees: [0] },
@@ -146,7 +267,7 @@ describe('provisional frequency results', () => {
       channel_order: ['hf'],
       metadata: { provisional: { completed_frequency_count: 1 } },
     };
-    const second: JobResults = {
+    const second: ResultData = {
       frequencies: [400],
       directivity: { horizontal: [[[0, 0], [90, -18]]] },
       spl_on_axis: { frequencies: [400], spl: [93], phase_degrees: [10] },
@@ -176,48 +297,73 @@ describe('provisional frequency results', () => {
 });
 
 describe('chart data mappers', () => {
-  it('expands imported drive channels into named comparable results', () => {
-    const payload: JobResults = {
+  it('does not classify an ordinary channel literally named combined as a sum', () => {
+    const payload: ResultData = {
+      frequencies: [],
+      channel_order: ['drive-hf', 'combined'],
+      channels: { 'drive-hf': roled(result(1), 'HF'), combined: result(2) },
+    };
+
+    expect(combinedChannelId(payload)).toBeNull();
+    expect(selectResultChannels('job-ordinary', 'Ordinary', payload, COMBINED_VIEW).map(({ id, label }) => ({ id, label })))
+      .toEqual([{ id: 'job-ordinary#drive-hf', label: 'Ordinary · HF' }]);
+    expect(selectResultChannels('job-ordinary', 'Ordinary', payload, 'combined').map(({ id, label }) => ({ id, label })))
+      .toEqual([{ id: 'job-ordinary#combined', label: 'Ordinary · combined' }]);
+  });
+
+  it('contributes only the chosen channel of an imported run', () => {
+    const payload: ResultData = {
       frequencies: [],
       channel_order: ['drive-hf', 'drive-mf'],
-      channels: { 'drive-mf': result(2), 'drive-hf': result(1) },
+      channels: { 'drive-mf': roled(result(2), 'MF'), 'drive-hf': roled(result(1), 'HF') },
     };
-    const expanded = expandResultChannels('job-12', 'Run 12', payload);
-    expect(expanded.map(({ id, label }) => ({ id, label }))).toEqual([
-      { id: 'job-12#drive-hf', label: 'Run 12 · drive-hf' },
-      { id: 'job-12#drive-mf', label: 'Run 12 · drive-mf' },
-    ]);
-    expect(expandResultChannels('job-13', 'Run 13', result())[0].result).toBeDefined();
+    expect(selectResultChannels('job-12', 'Run 12', payload, 'drive-mf').map(({ id, label }) => ({ id, label })))
+      .toEqual([{ id: 'job-12#drive-mf', label: 'Run 12 · MF' }]);
+    // No combined channel and no such view: the first channel stands in, and
+    // the label says which, so a comparison never draws an unnamed substitute.
+    expect(selectResultChannels('job-12', 'Run 12', payload, 'combined').map(({ label }) => label))
+      .toEqual(['Run 12 · HF']);
+    expect(selectResultChannels('job-13', 'Run 13', result(), 'combined'))
+      .toEqual([{ id: 'job-13', label: 'Run 13', result: result() }]);
+  });
+
+  it('appends the members of a combined sum as secondary entries', () => {
+    const payload: ResultData = {
+      frequencies: [],
+      channel_order: ['drive-mf', 'drive-hf', 'combined'],
+      channels: {
+        'drive-mf': roled(result(2), 'MF'),
+        'drive-hf': roled(result(1), 'HF'),
+        combined: combinedChannel(result(3), ['drive-mf', 'drive-hf']),
+      },
+    };
+    expect(selectResultChannels('job-9', 'Run 9', payload, 'combined').map(({ label, secondary }) => ({ label, secondary })))
+      .toEqual([
+        { label: 'Run 9 · Combined', secondary: undefined },
+        { label: 'Run 9 · MF', secondary: true },
+        { label: 'Run 9 · HF', secondary: true },
+      ]);
+    // A driver view is that driver alone: the sum is not a second opinion
+    // about it, and the members are not comparisons.
+    expect(selectResultChannels('job-9', 'Run 9', payload, 'drive-hf').map(({ label }) => label))
+      .toEqual(['Run 9 · HF']);
   });
 
   // The coupled campaign appends its derived output last in `channel_order`.
-  // It is a channel like any other here, which is the point: nothing about the
-  // chart list special-cases it, so it can only go missing if the ordering
-  // logic itself breaks.
-  it('lists the derived passive-cardioid channel alongside the drive channels', () => {
-    const payload: JobResults = {
+  // Nothing here special-cases it, which is the point: it is reachable as a
+  // view like any other channel.
+  it('falls back to the first channel and preserves an empty-channel wrapper', () => {
+    const payload: ResultData = {
       frequencies: [],
       channel_order: ['drive-mf', 'drive-port', 'passive_cardioid'],
       channels: { 'drive-mf': result(1), 'drive-port': result(2), passive_cardioid: result(3) },
     };
-    expect(expandResultChannels('job-77', 'Run 77', payload).map(({ id, label }) => ({ id, label }))).toEqual([
-      { id: 'job-77#drive-mf', label: 'Run 77 · drive-mf' },
-      { id: 'job-77#drive-port', label: 'Run 77 · drive-port' },
-      { id: 'job-77#passive_cardioid', label: 'Run 77 · passive_cardioid' },
-    ]);
-  });
-
-  it('appends unordered channels and preserves an empty-channel wrapper', () => {
-    const payload: JobResults = {
-      frequencies: [],
-      channel_order: ['drive-hf'],
-      channels: { 'drive-mf': result(2), 'drive-hf': result(1) },
-    };
-    expect(expandResultChannels('job', 'Run', payload).map(({ id }) => id)).toEqual([
-      'job#drive-hf', 'job#drive-mf',
-    ]);
-    const empty: JobResults = { frequencies: [123], channels: {} };
-    expect(expandResultChannels('empty', 'Empty', empty)).toEqual([{ id: 'empty', label: 'Empty', result: empty }]);
+    expect(selectResultChannels('job-77', 'Run 77', payload, 'passive_cardioid').map(({ id, label }) => ({ id, label })))
+      .toEqual([{ id: 'job-77#passive_cardioid', label: 'Run 77 · Cardioid' }]);
+    expect(selectResultChannels('job-77', 'Run 77', payload, 'drive-lf').map(({ id }) => id))
+      .toEqual(['job-77#drive-mf']);
+    const empty: ResultData = { frequencies: [123], channels: {} };
+    expect(selectResultChannels('empty', 'Empty', empty, 'combined')).toEqual([{ id: 'empty', label: 'Empty', result: empty }]);
   });
 
   it('maps independent frequency arrays into named SPL overlay series', () => {
@@ -253,7 +399,7 @@ describe('chart data mappers', () => {
         horizontal_beamwidth_deg: [120, 90, 60],
         vertical_beamwidth_deg: [100, 70, 45],
       },
-    } as JobResults;
+    } as ResultData;
     const [di] = directivityIndexSeries(payload);
     const beam = beamShapeSeries(payload);
 
@@ -267,15 +413,44 @@ describe('chart data mappers', () => {
     const payload = {
       frequencies: [200, 1_000],
       di: { frequencies: [200, 1_000], di: [null, null] },
-    } as JobResults;
+    } as ResultData;
     expect(directivityIndexSeries(payload)).toEqual([]);
+  });
+
+  it('maps the true balloon-integrated power response and keeps unavailable DI cells empty', () => {
+    const payload = {
+      frequencies: [200, 1_000, 5_000],
+      spl_on_axis: { frequencies: [200, 1_000, 5_000], spl: [90, 96, 100] },
+      di: { frequencies: [200, 1_000, 5_000], di: [2, null, 9] },
+      metadata: { directivity_index: {
+        definition: '10log10(reference-axis mean-square pressure / full-sphere mean-square pressure)',
+        domain: 'full_sphere',
+      } },
+    } as ResultPayload;
+
+    expect(powerResponseSeries(payload)).toEqual([expect.objectContaining({
+      name: 'full-sphere integral of the solved balloon',
+      data: [[200, 88], [1_000, null], [5_000, 91]],
+    })]);
+    expect(powerResponseMethodCaption({
+      ...payload,
+      balloon: { frequencies: [], theta_deg: [], phi_deg: [], spl_norm_db: [], hemisphere: true },
+    })).toContain('zero-radiation rear hemisphere');
+    expect(powerResponseSeries({ ...payload, di: { frequencies: [200], di: [null] } })).toEqual([]);
   });
 });
 
 describe('recombineJobResults', () => {
   it('posts the spec, replaces the cache entry, and surfaces server detail', async () => {
     resultsCache.clear();
-    const updated = { channels: { combined: { frequencies: [100] } }, channel_order: ['combined'] } as unknown as JobResults;
+    const updated = {
+      ...result(),
+      result_kind: 'multi_channel' as const,
+      result_contract_version: 2 as const,
+      frequencies: [100],
+      channels: { combined: { frequencies: [100] } },
+      channel_order: ['combined'],
+    };
     const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       expect(String(input)).toBe('/api/results/job-9/combine');
       expect(init?.method).toBe('POST');
@@ -284,11 +459,23 @@ describe('recombineJobResults', () => {
       });
       return new Response(JSON.stringify(updated), { status: 200, headers: { 'Content-Type': 'application/json' } });
     });
-    const result = await recombineJobResults('job-9', {
+    const responseResult = await recombineJobResults('job-9', {
       id: 'combined', members: ['mf', 'hf'], crossovers_hz: [900], level_match: true, align: true,
     }, fetcher as unknown as typeof fetch);
-    expect(result).toEqual(updated);
+    expect(responseResult).toEqual(updated);
     expect(resultsCache.get('job-9')).toEqual(updated);
+
+    resultsCache.clear();
+    const unsupported = vi.fn(async () => new Response(
+      JSON.stringify({ ...updated, result_contract_version: 999 }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    ));
+    await expect(recombineJobResults(
+      'job-unsupported',
+      { members: ['mf', 'hf'], crossovers_hz: [900] },
+      unsupported as unknown as typeof fetch,
+    )).rejects.toThrow('unsupported result version 999');
+    expect(resultsCache.has('job-unsupported')).toBe(false);
 
     const failing = vi.fn(async () => new Response(
       JSON.stringify({ detail: 'combine crossovers_hz [5000.0] lie outside the solved band [100, 1000] Hz' }),
@@ -384,7 +571,7 @@ describe('impedance comparison subtitle', () => {
 
   it('says nothing when every run shares the axis, or when there is no impedance at all', () => {
     expect(impedanceSubtitle([withImpedance('a', false), withImpedance('b', false)])).toBeNull();
-    expect(impedanceSubtitle([{ id: 'x', label: 'x', result: { frequencies: [500] } as JobResults }])).toBeNull();
+    expect(impedanceSubtitle([{ id: 'x', label: 'x', result: { frequencies: [500] } as ResultData }])).toBeNull();
   });
 
   it('keeps legacy impedance samples that use the top-level frequency grid', () => {
@@ -395,11 +582,11 @@ describe('impedance comparison subtitle', () => {
         frequencies: [500],
         impedance: { real: [8], imaginary: [1] },
         metadata: { impedance_units: 'ohms' },
-      } as JobResults,
+      } as ResultData,
     };
     const empty = {
       id: 'empty', label: 'empty',
-      result: { frequencies: [500], impedance: {} } as JobResults,
+      result: { frequencies: [500], impedance: {} } as ResultData,
     };
 
     expect(impedanceComparable([legacy, empty])).toMatchObject({

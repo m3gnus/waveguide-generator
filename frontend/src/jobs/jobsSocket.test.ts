@@ -295,6 +295,13 @@ describe('jobs websocket state machine', () => {
     socket.message({ v: 1, kind: 'partialResult', epoch: 1, jobId: 'job-1', revision: 1, result: { frequencies: [200], channels: [] } });
     socket.message({ v: 1, kind: 'partialResult', epoch: 1, jobId: 'job-1', revision: 1, result: { frequencies: [200], spl_on_axis: [] } });
     socket.message({ v: 1, kind: 'partialResult', epoch: 1, jobId: 'job-1', revision: 1, result: { frequencies: [200], directivity: { horizontal: 'wide' } } });
+    socket.message({
+      v: 1, kind: 'partialResult', epoch: 1, jobId: 'job-1', revision: 1,
+      result: {
+        result_kind: 'multi_channel', result_contract_version: 999,
+        frequencies: [200], channels: { hf: { frequencies: [200] } }, channel_order: ['hf'],
+      },
+    });
     const prototypeResult = JSON.parse('{"frequencies":[200],"__proto__":{"polluted":true}}');
     socket.message({ v: 1, kind: 'partialResult', epoch: 1, jobId: 'job-1', revision: 1, result: prototypeResult });
     expect(provisionalResults.get('job-1')).toBeUndefined();
@@ -307,6 +314,8 @@ describe('jobs websocket state machine', () => {
       jobId: 'job-1',
       revision: 1,
       result: {
+        result_kind: 'multi_channel',
+        result_contract_version: 2,
         frequencies: [200],
         spl_on_axis: { frequencies: [200], spl: [90], phase_degrees: [0] },
         directivity: { horizontal: [[[0, [1, 0]]]], vertical: [[[0, 0]]] },

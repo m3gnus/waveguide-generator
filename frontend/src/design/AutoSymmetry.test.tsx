@@ -25,6 +25,7 @@ describe('auto symmetry resolution', () => {
   let symmetryCalls: string[];
 
   beforeEach(() => {
+    vi.useFakeTimers();
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     localStorage.clear();
     resetDesignStore();
@@ -49,21 +50,15 @@ describe('auto symmetry resolution', () => {
     host.remove();
     client.clear();
     vi.unstubAllGlobals();
+    vi.clearAllTimers();
+    vi.useRealTimers();
   });
 
-  const tick = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });
+  const advance = (milliseconds: number) => act(async () => {
+    await vi.advanceTimersByTimeAsync(milliseconds);
+  });
 
-  /**
-   * Pump past the 400 ms debounce. `until` lets a case that expects a request
-   * stop as soon as it lands; a case asserting that nothing fires has to spend
-   * the whole budget, or it would pass simply by not having waited.
-   */
-  const settle = async (until?: () => boolean, budget = 250) => {
-    for (let attempt = 0; attempt < budget; attempt += 1) {
-      if (until?.()) return;
-      await tick();
-    }
-  };
+  const flushReact = () => advance(0);
 
   /** The resolved domain name, or 'resolving…' / '—' while it is not in yet. */
   const readout = () => host.querySelector('.resolved-mode b')?.textContent ?? '';
@@ -72,12 +67,17 @@ describe('auto symmetry resolution', () => {
     await act(async () => {
       root.render(<QueryClientProvider client={client}><ParamPanel tab="simulation" /></QueryClientProvider>);
     });
-    await settle(() => readout() === 'Half domain (YZ)');
+    await flushReact();
   };
 
-  const edit = async (value: number, until?: () => boolean) => {
+  const edit = async (value: number, expectedNewCalls: number) => {
+    const callsBefore = symmetryCalls.length;
     act(() => useDesignStore.getState().updateValue('mesh.wall_thickness', value));
-    await settle(until);
+    await advance(399);
+    expect(symmetryCalls).toHaveLength(callsBefore);
+    await advance(1);
+    await flushReact();
+    expect(symmetryCalls).toHaveLength(callsBefore + expectedNewCalls);
   };
 
   it('resolves once per settled shape and reads the answer back from cache', async () => {
@@ -85,12 +85,11 @@ describe('auto symmetry resolution', () => {
     expect(symmetryCalls).toHaveLength(1);
     expect(readout()).toBe('Half domain (YZ)');
 
-    await edit(9, () => symmetryCalls.length >= 2);
+    await edit(9, 1);
     expect(symmetryCalls).toHaveLength(2);
 
     // Back to a shape already resolved: served from cache, no new request.
-    // No early exit here -- the point is that the full budget elapses quietly.
-    await edit(5);
+    await edit(5, 0);
     expect(symmetryCalls).toHaveLength(2);
     expect(readout()).toBe('Half domain (YZ)');
   });
@@ -105,14 +104,15 @@ describe('auto symmetry resolution', () => {
     const revisionBefore = useDesignStore.getState().designRevision;
     act(() => useDesignStore.getState().updateValue('mesh.wall_thickness', 5));
     expect(useDesignStore.getState().designRevision).toBeGreaterThan(revisionBefore);
-    await settle();
+    await advance(400);
+    await flushReact();
     expect(symmetryCalls).toHaveLength(1);
     expect(symmetryCalls[0]).toBe(before);
   });
 
   it('sends the shape it resolved, in order, on each distinct payload', async () => {
     await mount();
-    await edit(9, () => symmetryCalls.length >= 2);
+    await edit(9, 1);
     expect(symmetryCalls).toHaveLength(2);
     const [first, second] = symmetryCalls.map((body) => JSON.parse(body) as { mesh: { wall_thickness: number } });
     expect(first.mesh.wall_thickness).toBe(5);
@@ -121,7 +121,6 @@ describe('auto symmetry resolution', () => {
 
   it('reports the resolver reasons rather than a bare dash', async () => {
     await mount();
-    await settle(() => host.textContent?.includes('mirrored about XZ') ?? false);
     expect(host.textContent).toContain('the profile is not mirrored about XZ');
   });
 });

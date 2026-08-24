@@ -26,6 +26,7 @@ from server.cadlink.api import (
     list_returns,
     post_ingest,
 )
+from server.cadlink.identity import SaveIdentity
 from server.cadlink.ingest import (
     IngestRefusal,
     _canonical,
@@ -276,7 +277,7 @@ def test_return_listing_reads_cheap_inventory_and_marks_bad_manifests(tmp_path: 
                 "sources": [
                     {
                         "id": "source-hf",
-                        "role": "HF",
+                        "role": " hf ",
                         "required": True,
                         "suggested_resolution_mm": 3.5,
                         "default_drive_channel_id": "drive-hf",
@@ -335,6 +336,56 @@ def test_return_listing_reads_cheap_inventory_and_marks_bad_manifests(tmp_path: 
     }
 
 
+def test_return_inventory_parses_only_new_or_changed_manifests(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = create_app(data_dir=tmp_path / "data")
+    workspace = tmp_path / "workspace"
+    manifests: list[Path] = []
+    for index in range(2):
+        bundle = workspace / "wgreturn" / f"speaker-{index}.wgreturn"
+        bundle.mkdir(parents=True)
+        manifest = bundle / "wgreturn.json"
+        manifest.write_text(
+            json.dumps(
+                {
+                    "document": {"name": f"Speaker {index}"},
+                    "instances": [
+                        {"instance_id": f"instance-{index}", "design_id": "wgd_speaker"}
+                    ],
+                    "sources": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        manifests.append(manifest)
+    app.state.cad_workspace.select(workspace)
+
+    from server.cadlink import api as cadlink_api
+
+    original_parse = cadlink_api._parse_return_manifest
+    parsed: list[Path] = []
+
+    def counted_parse(path: Path):
+        parsed.append(path)
+        return original_parse(path)
+
+    monkeypatch.setattr(cadlink_api, "_parse_return_manifest", counted_parse)
+
+    first = asyncio.run(list_returns(SimpleNamespace(app=app)))
+    second = asyncio.run(list_returns(SimpleNamespace(app=app)))
+    previous = manifests[1].stat().st_mtime_ns
+    manifests[1].write_text(
+        manifests[1].read_text(encoding="utf-8").replace("Speaker 1", "Speaker X"),
+        encoding="utf-8",
+    )
+    os.utime(manifests[1], ns=(previous + 1_000_000, previous + 1_000_000))
+    third = asyncio.run(list_returns(SimpleNamespace(app=app)))
+
+    assert len(first["items"]) == len(second["items"]) == len(third["items"]) == 2
+    assert parsed == [manifests[0].resolve(), manifests[1].resolve(), manifests[1].resolve()]
+
+
 def test_ingest_refuses_a_return_from_another_active_project(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
@@ -385,6 +436,7 @@ def test_design_registry_routes_list_heads_and_open_the_exact_snapshot(
             "editVersion": 1,
             "designHash": stored_hash,
             "filename": "speaker.cfg",
+            "archiveStem": "speaker",
             "branchedFromDesignId": None,
             "branchedFromEditVersion": None,
             "exportCount": 0,
@@ -401,6 +453,49 @@ def test_design_registry_routes_list_heads_and_open_the_exact_snapshot(
         "updatedAt": "2026-08-20T12:00:00Z",
         "text": saved["text"],
     }
+
+
+def test_design_registry_lists_one_project_using_its_newest_lineage_head(
+    tmp_path: Path,
+) -> None:
+    store = CadLinkStore(tmp_path / "cadlink.db")
+    app = SimpleNamespace(state=SimpleNamespace(cadlink_store=store))
+    first = store.save(
+        requested=None,
+        design_hash="sha256:" + hashlib.sha256(b"first").hexdigest(),
+        filename="first-name.cfg",
+        snapshot_builder=lambda identity: f"DesignId={identity.design_id};first",
+        saved_at="2026-08-20T10:00:00Z",
+    )
+    stale = SaveIdentity.model_validate(
+        {
+            "designId": first["identity"].design_id,
+            "lineageId": first["identity"].lineage_id,
+            "baseEditVersion": 1,
+        }
+    )
+    store.save(
+        requested=stale,
+        design_hash="sha256:" + hashlib.sha256(b"updated").hexdigest(),
+        filename="older-head-name.cfg",
+        snapshot_builder=lambda identity: f"DesignId={identity.design_id};updated",
+        saved_at="2026-08-21T10:00:00Z",
+    )
+    fork = store.save(
+        requested=stale,
+        design_hash="sha256:" + hashlib.sha256(b"fork").hexdigest(),
+        filename="canonical-name.cfg",
+        snapshot_builder=lambda identity: f"DesignId={identity.design_id};fork",
+        saved_at="2026-08-22T10:00:00Z",
+    )
+
+    listing = asyncio.run(list_designs(SimpleNamespace(app=app)))
+
+    assert len(listing["items"]) == 1
+    assert listing["items"][0]["designId"] == fork["identity"].design_id
+    assert listing["items"][0]["lineageId"] == first["identity"].lineage_id
+    assert listing["items"][0]["filename"] == "canonical-name.cfg"
+    assert listing["items"][0]["archiveStem"] == "canonical-name"
 
 
 def test_return_listing_allows_an_omitted_source_resolution_suggestion(
@@ -697,8 +792,15 @@ def test_ingestion_record_publishes_role_findings_and_numpy_metadata(
         isolated_integrity.update(kwargs)
         return built
 
+    build_calls = 0
+
+    def counted_build_isolated(*args, **kwargs):
+        nonlocal build_calls
+        build_calls += 1
+        return build_isolated(*args, **kwargs)
+
     monkeypatch.setattr(
-        "server.cadlink.ingest.build_imported_mesh_isolated", build_isolated
+        "server.cadlink.ingest.build_imported_mesh_isolated", counted_build_isolated
     )
     record = ingest_bundle(
         bundle_path,
@@ -729,6 +831,62 @@ def test_ingestion_record_publishes_role_findings_and_numpy_metadata(
     )
     assert isolated_integrity["expected_sha256"] == bundle.artifact_sha256
     assert isolated_integrity["expected_size_bytes"] == bundle.artifact_size_bytes
+
+    cached_mesh = Path(record["mesh_store_path"])
+    cached_sidecar = cached_mesh.with_suffix(".json")
+    sidecar = json.loads(cached_sidecar.read_text(encoding="utf-8"))
+    assert sidecar["content_sha256"] == mesh_text_sha256(str(built["msh_text"]))
+    cached_mesh.write_text("altered solver geometry", encoding="utf-8")
+
+    rebuilt = ingest_bundle(
+        bundle_path,
+        {
+            "rigid_size_mm": 20,
+            "transition_mm": 30,
+            "source_size_mm": {"source-hf": 8},
+        },
+        [],
+        CadLinkStore(tmp_path / "cadlink.db"),
+        tmp_path / "data",
+    )
+    assert rebuilt["mesh_cache_hit"] is False
+    assert build_calls == 2
+    assert cached_mesh.read_text(encoding="utf-8") == built["msh_text"]
+    assert rebuilt["mesh_content_sha256"] == record["mesh_content_sha256"]
+
+    mismatched_sidecar = json.loads(cached_sidecar.read_text(encoding="utf-8"))
+    mismatched_sidecar["transformed_geometry_hash"] = "sha256:" + "4" * 64
+    cached_sidecar.write_bytes(_canonical(mismatched_sidecar) + b"\n")
+    mismatched_key = ingest_bundle(
+        bundle_path,
+        {
+            "rigid_size_mm": 20,
+            "transition_mm": 30,
+            "source_size_mm": {"source-hf": 8},
+        },
+        [],
+        CadLinkStore(tmp_path / "cadlink.db"),
+        tmp_path / "data",
+    )
+    assert mismatched_key["mesh_cache_hit"] is False
+    assert build_calls == 3
+
+    legacy_sidecar = json.loads(cached_sidecar.read_text(encoding="utf-8"))
+    del legacy_sidecar["content_sha256"]
+    cached_sidecar.write_bytes(_canonical(legacy_sidecar) + b"\n")
+    legacy_cache = ingest_bundle(
+        bundle_path,
+        {
+            "rigid_size_mm": 20,
+            "transition_mm": 30,
+            "source_size_mm": {"source-hf": 8},
+        },
+        [],
+        CadLinkStore(tmp_path / "cadlink.db"),
+        tmp_path / "data",
+    )
+    assert legacy_cache["mesh_cache_hit"] is False
+    assert build_calls == 4
 
 
 def test_visual_mesh_failure_is_advisory_and_does_not_create_healing_finding(

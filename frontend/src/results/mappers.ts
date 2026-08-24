@@ -1,28 +1,57 @@
-import type { JobResults, NullableNumber, PolarSample } from '../api/results';
+import type { NullableNumber, PolarSample, ResultData } from '../api/results';
 import { applySmoothing, type SmoothingMode } from './smoothing';
-import { resultChannels, type ResultPayload } from './types';
+import { channelLabel } from './channelLabel';
+import { combineMetadataOf, type ResultPayload } from './types';
+import { resolveResultView, type ResultView } from '../stores/resultView';
 import { drivePowerSeries, excursionSeries, hasElectricalImpedance } from './drivePower';
 import { displayPhaseDegrees, groupDelayMilliseconds, propagationReference } from './phaseAnalysis';
 
 export interface NamedResult {
   id: string;
   label: string;
-  result: JobResults;
+  result: ResultData;
   /** The CAD envelope owns per-source evidence that its channel does not repeat. */
-  wrapper?: JobResults;
+  wrapper?: ResultData;
+  /**
+   * A member of the combined sum on screen, not a run being compared with it.
+   * Only the cards that are about the drivers themselves draw one; see
+   * `chartEntries`.
+   */
+  secondary?: boolean;
+  /** Which channel of `wrapper` this entry is, for export naming and labels. */
+  channelId?: string;
 }
 
-/** Expand an imported result's unit-drive bases into the same named flow as runs. */
-export function expandResultChannels(id: string, label: string, result: JobResults): NamedResult[] {
-  if (!result.channels) return [{ id, label, result }];
-  const channels = resultChannels(result as ResultPayload);
-  if (!channels.length) return [{ id, label, result }];
-  return channels.map(({ id: channel, result: channelResult }) => ({
+/**
+ * The channels one run contributes under the active view.
+ *
+ * The view selects the data for every chart, so this returns one entry per run
+ * rather than the flat list of every channel the dock used to overlay: the
+ * driver chips steered the single-run cards while the comparable charts drew
+ * all drivers at once, whichever chip was pressed.
+ *
+ * The Combined view is the one exception, and a deliberate one: the members are
+ * appended as `secondary`, because the classic crossover-sum plot needs them and
+ * because the sum itself has no impedance, no drive and no cone for the cards
+ * that measure those.
+ */
+export function selectResultChannels(id: string, label: string, result: ResultData, view: ResultView): NamedResult[] {
+  const payload = result as ResultPayload;
+  const active = resolveResultView(payload, view);
+  if (!active || !payload.channels) return [{ id, label, result }];
+  const entry = (channel: string, secondary: boolean): NamedResult => ({
     id: `${id}#${channel}`,
-    label: `${label} · ${channel}`,
-    result: channelResult,
+    label: `${label} · ${channelLabel(payload, channel)}`,
+    result: payload.channels![channel],
     wrapper: result,
-  }));
+    channelId: channel,
+    ...(secondary ? { secondary: true } : {}),
+  });
+  const combine = combineMetadataOf(payload.channels[active] as ResultPayload);
+  const members = combine
+    ? combine.members.filter((member) => member !== active && member in payload.channels!)
+    : [];
+  return [entry(active, false), ...members.map((member) => entry(member, true))];
 }
 
 function finite(value: unknown): value is number {
@@ -40,7 +69,7 @@ function patternDb(value: NullableNumber | [number, number]): number | null {
   return finite(value) ? value : null;
 }
 
-function frequencyAxis(result: JobResults, nested?: number[]): number[] {
+function frequencyAxis(result: ResultData, nested?: number[]): number[] {
   return nested?.length ? nested : result.frequencies;
 }
 
@@ -66,7 +95,7 @@ export interface DirectivityGrid {
   maxDb: number;
 }
 
-export function directivityGrid(result: JobResults, plane = 'horizontal'): DirectivityGrid {
+export function directivityGrid(result: ResultData, plane = 'horizontal'): DirectivityGrid {
   const frequencies = result.frequencies;
   const patterns = (result.directivity as Record<string, PolarSample[][]> | undefined)?.[plane] ?? [];
   const angles = [...new Set(patterns.flatMap((row) => row.map((sample) => Number(sample[0]))))]
@@ -94,14 +123,14 @@ export function nearestFrequencyIndex(frequencies: number[], target: number): nu
   ), 0);
 }
 
-export function polarSeries(result: JobResults, frequencyIndex: number, plane: 'horizontal' | 'vertical') {
+export function polarSeries(result: ResultData, frequencyIndex: number, plane: 'horizontal' | 'vertical') {
   const row = result.directivity?.[plane]?.[frequencyIndex] ?? [];
   // Radius first, angle second: the polar chart's series contract, and the
   // tuple type keeps the null-able level distinguishable from the angle.
   return row.map(([angle, value]) => [patternDb(value), angle] as [number | null, number]);
 }
 
-export function impedanceSeries(result: JobResults, mode: 'cartesian' | 'polar', smoothing: SmoothingMode = 'none') {
+export function impedanceSeries(result: ResultData, mode: 'cartesian' | 'polar', smoothing: SmoothingMode = 'none') {
   const frequencies = frequencyAxis(result, result.impedance?.frequencies);
   const real = applySmoothing(frequencies, result.impedance?.real ?? [], smoothing);
   const imaginary = applySmoothing(frequencies, result.impedance?.imaginary ?? [], smoothing);
@@ -132,6 +161,60 @@ export function directivityIndexSeries(result: ResultPayload, smoothing: Smoothi
       data: frequencies.map((frequency, index) => [frequency, smoothed[index] ?? null]),
     };
   });
+}
+
+const FULL_SPHERE_POWER_RESPONSE_METHOD = 'full-sphere integral of the solved balloon';
+
+/**
+ * Human-readable provenance for the spatially averaged power response.
+ *
+ * The curve is only as honest as its DI provenance.  Current results carry the
+ * mathematical definition plus the infinite-baffle rear-domain policy; older
+ * results may carry only the definition, so preserve an unfamiliar definition
+ * verbatim rather than relabelling it as the current spherical method.
+ */
+export function powerResponseMethodCaption(result: ResultPayload): string {
+  const raw = result.metadata?.directivity_index;
+  const metadata = raw && typeof raw === 'object' && !Array.isArray(raw)
+    ? raw as Record<string, unknown> : {};
+  const definition = typeof metadata.definition === 'string' ? metadata.definition.trim() : '';
+  const spherical = definition.toLocaleLowerCase().includes('full-sphere')
+    || metadata.domain === 'full_sphere'
+    || metadata.method === 'spherical_grid';
+  if (!spherical && definition) return definition;
+  const zeroRear = metadata.rear_hemisphere === 'zero_radiation' || result.balloon?.hemisphere === true;
+  return zeroRear
+    ? `${FULL_SPHERE_POWER_RESPONSE_METHOD} · zero-radiation rear hemisphere`
+    : FULL_SPHERE_POWER_RESPONSE_METHOD;
+}
+
+/** Spatially averaged SPL: on-axis SPL minus full-sphere directivity index. */
+export function powerResponseSeries(result: ResultPayload, smoothing: SmoothingMode = 'none') {
+  const frequencies = result.di?.frequencies?.length ? result.di.frequencies : result.frequencies;
+  const rawDi = result.di?.di;
+  const di = Array.isArray(rawDi)
+    ? rawDi
+    : rawDi?.horizontal ?? Object.values(rawDi ?? {})[0] ?? [];
+  const splFrequencies = result.spl_on_axis?.frequencies?.length
+    ? result.spl_on_axis.frequencies : result.frequencies;
+  const splByFrequency = new Map(splFrequencies.map((frequency, index) => [
+    frequency,
+    result.spl_on_axis?.spl?.[index] ?? null,
+  ]));
+  const raw = frequencies.map((frequency, index) => {
+    const onAxis = splByFrequency.get(frequency);
+    const directivityIndex = di[index];
+    return finite(onAxis) && finite(directivityIndex) ? onAxis - directivityIndex : null;
+  });
+  if (!raw.some(finite)) return [];
+  const values = applySmoothing(frequencies, raw, smoothing);
+  return [{
+    name: powerResponseMethodCaption(result),
+    type: 'line' as const,
+    showSymbol: false,
+    connectNulls: false,
+    data: frequencies.map((frequency, index) => [frequency, values[index] ?? null]),
+  }];
 }
 
 export function beamShapeSeries(result: ResultPayload) {
@@ -219,12 +302,18 @@ export function impedanceComparable(items: NamedResult[]): { items: NamedResult[
  * something to say. Naming the *other* unit is the point: "hidden" alone reads
  * as a failure, while "2 Ω runs hidden" says the runs are fine and the axis is
  * the constraint.
+ *
+ * The Combined view adds one word of its own: the sum has no impedance, so the
+ * curves on this card belong to its members, and a card that says "Impedance"
+ * over per-driver curves invites reading them as the run's.
  */
 export function impedanceSubtitle(items: NamedResult[]): string | null {
   const { units, excluded } = impedanceComparable(items);
-  if (!excluded) return null;
+  const perDriver = items.some(({ secondary }) => secondary) ? 'per driver' : null;
+  if (!excluded) return perDriver;
   const other = units.electrical ? NORMALIZED_ACOUSTIC_IMPEDANCE : ELECTRICAL_IMPEDANCE;
-  return `${excluded} ${other.axis} run${excluded === 1 ? '' : 's'} hidden · cannot share a ${units.axis} axis`;
+  const hidden = `${excluded} ${other.axis} run${excluded === 1 ? '' : 's'} hidden · cannot share a ${units.axis} axis`;
+  return perDriver ? `${perDriver} · ${hidden}` : hidden;
 }
 
 /** On-axis phase, referenced and detrended exactly as the exported PNG draws it. */
